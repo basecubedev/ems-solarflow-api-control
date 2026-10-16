@@ -8,7 +8,7 @@ No sleeps, no network.
 
 import contextlib
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from ems.controller import EMSController
 from ems.models import DeviceState
@@ -112,7 +112,6 @@ def run_control_cycle(
         sleep_enabled=False,
         runtime_state=RuntimeStateStub(),
     )
-    controller.run_startup_ac_mode_reconcile_once = Mock()
     with patch(
         "ems.controller.fetch_all_devices", return_value=states
     ), patch.multiple(
@@ -152,7 +151,6 @@ def run_installation_cycle(
         sleep_enabled=False,
         runtime_state=RuntimeStateStub(),
     )
-    controller.run_startup_ac_mode_reconcile_once = Mock()
     with patch.multiple(
         "ems.controller.cfg",
         MAX_TOTAL_POWER=max_total_power,

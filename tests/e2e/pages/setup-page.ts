@@ -87,13 +87,17 @@ export class SetupPage {
     return this.buildSelect.locator('option[data-channel="development"]');
   }
 
-  async selectDevelopmentBuild(tag: string) {
+  async selectChannelBuild(tag: string, channel: string) {
     await expect(
       this.buildSelect.locator(
-        `option[value="${tag}"][data-channel="development"]`,
+        `option[value="${tag}"][data-channel="${channel}"]`,
       ),
     ).toHaveCount(1);
     await this.selectBuild(tag);
+  }
+
+  async selectDevelopmentBuild(tag: string) {
+    await this.selectChannelBuild(tag, "development");
   }
 
   async latestValidation(): Promise<Record<string, any>> {

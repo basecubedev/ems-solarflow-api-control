@@ -30,7 +30,6 @@ import zoneinfo
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from dashboard import auth as dashboard_auth
@@ -794,13 +793,6 @@ def diagnose_path_is_clean(path):
     return "\x00" not in path and os.path.normpath(path)
 
 
-def diagnose_basic_url(value):
-    if not isinstance(value, str) or not value.strip():
-        return False
-    parsed = urlparse(value)
-    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
-
-
 def diagnose_git_info(checks):
     git_dir = os.path.join(BASE_DIR, ".git")
     if not os.path.exists(git_dir):
@@ -1189,26 +1181,6 @@ def diagnose_config_plausibility(checks, args, config_data):
                 "Dashboard binds to 0.0.0.0 without HTTPS and without configured auth",
                 docs="docs/dashboard.md",
             )
-
-    ha = config_data.get("ha", {})
-    if isinstance(ha, dict):
-        ha_enabled = bool(ha.get("enabled", False))
-        ha_control_enabled = bool(ha.get("control_enabled", False))
-        if ha_enabled:
-            if diagnose_basic_url(ha.get("url", "")):
-                diagnose_add(checks, "config", "ok", "ha_url_valid", "ha.url has a valid basic URL shape")
-            else:
-                diagnose_add(checks, "config", "error", "ha_url_invalid", "ha.url must be configured as http(s) URL when HA is enabled")
-            diagnose_add(
-                checks,
-                "config",
-                "ok" if bool(ha.get("token")) else "warning",
-                "ha_token_configured",
-                "Home Assistant token configured: yes" if bool(ha.get("token")) else "Home Assistant token configured: no",
-                configured=bool(ha.get("token")),
-            )
-        if ha_control_enabled and not ha_enabled:
-            diagnose_add(checks, "config", "warning", "ha_control_without_ha", "ha.control_enabled=true while ha.enabled=false")
 
     diagnose_grid_meter_config(checks, config_data)
     diagnose_zendure_mqtt_runtime(checks, config_data)
@@ -1648,8 +1620,6 @@ def diagnose_grid_meter_config(checks, config_data):
                 f"{label} TLS: {'enabled' if tls_enabled else 'disabled'}",
                 tls=tls_enabled, tls_insecure=False,
             )
-    elif meter_type in ("ha", "homeassistant", "home_assistant"):
-        diagnose_add(checks, "config", "ok", "grid_meter_ha_config", "Home Assistant grid meter type detected; only config completeness is checked by diagnose")
     else:
         diagnose_add(checks, "config", "warning", "grid_meter_type_unknown", f"Unknown grid meter type: {meter_type}", type=meter_type)
 
@@ -1798,14 +1768,41 @@ def diagnose_read_battery_full_charge_rows(database_path):
     return result, None
 
 
-def diagnose_battery_full_charge_status(device_state, assist_config, now):
+def diagnose_battery_full_charge_held_by(config_data, item, control_enabled):
+    """What keeps the assist from writing to a ``devices[]`` entry, as far as diagnose can see.
+
+    The state write gate of the entry's transport as the EMS resolves it from
+    the stored config (:func:`ems.config.resolve_config_state_write_gate`),
+    and control switched off: ``control_enabled`` is false while the system's
+    or the device's ``enabled`` switch is off (:func:`diagnose_control_enabled`,
+    :func:`diagnose_device_control_enabled`). The running EMS also holds it
+    while a gate is shut from the command line, or the device's report lacks
+    a field the assist writes, which diagnose does not see.
+    """
+
+    if zendure_mqtt_entries.is_zendure_mqtt_device_config(item):
+        return "transport_state_reconciliation_unsupported"
+    gate = config_mod.resolve_config_state_write_gate(
+        config_data,
+        zendure_mqtt_entries.control_gate_for_config_device(config_data, item),
+    )
+    if not gate.allowed or not control_enabled:
+        return "state_writes_not_allowed"
+    return None
+
+
+def diagnose_battery_full_charge_status(device_state, assist_config, now, held_by=None):
     if not device_state:
         return "unknown"
     if not device_state.get("has_battery"):
         return "ignored"
+    if held_by == "transport_state_reconciliation_unsupported":
+        return "not available over MQTT"
     if device_state.get("full_charge_assist_active"):
         if not assist_config.get("enabled"):
             return "disabled, abort pending"
+        if held_by is not None:
+            return "active, waiting for state writes"
         return "active"
     if device_state.get("ac_mode_restore_pending"):
         if not assist_config.get("enabled"):
@@ -1828,12 +1825,23 @@ def diagnose_battery_full_charge_status(device_state, assist_config, now):
     return "ok"
 
 
-def diagnose_battery_full_charge_assist_report(config_data):
+def diagnose_battery_full_charge_assist_report(config_data, runtime_data):
+    """The assist's settings and per-device state, its status read with ``runtime_data``'s switches."""
+
     assist_config = diagnose_battery_full_charge_assist_config(config_data)
     database_path = diagnose_battery_state_database_path(config_data)
     rows, error = diagnose_read_battery_full_charge_rows(database_path)
     devices = []
     now = datetime.now(timezone.utc)
+
+    system_enabled = diagnose_control_enabled(
+        runtime_data, config_mod.config_control_flags(config_data)
+    )
+    entries = {}
+    configured = config_data.get("devices") if isinstance(config_data, dict) else None
+    for item in configured if isinstance(configured, list) else []:
+        if isinstance(item, dict) and item.get("name"):
+            entries.setdefault(str(item["name"]), item)
 
     for name in diagnose_config_device_names(config_data):
         state = rows.get(name, {})
@@ -1858,7 +1866,13 @@ def diagnose_battery_full_charge_assist_report(config_data):
             "status": diagnose_battery_full_charge_status(
                 state,
                 assist_config,
-                now
+                now,
+                held_by=diagnose_battery_full_charge_held_by(
+                    config_data,
+                    entries.get(name),
+                    system_enabled
+                    and diagnose_device_control_enabled(runtime_data, name),
+                ),
             ),
         })
 
@@ -2085,7 +2099,6 @@ GRID_METER_PROVIDERS = {
     "tasmota_http": "Tasmota",
     "mqtt": "MQTT",
     "zendure_smartmeter_d0": "Zendure SmartMeter D0",
-    "ha": "Home Assistant",
 }
 
 
@@ -2454,6 +2467,32 @@ def diagnose_control_load_runtime(runtime_path):
     return data if isinstance(data, dict) else {}, None
 
 
+def diagnose_runtime_section(runtime_data, name):
+    section = runtime_data.get(name) if isinstance(runtime_data, dict) else None
+    return section if isinstance(section, dict) else {}
+
+
+def diagnose_control_enabled(runtime_data, flags):
+    """``system.enabled`` as the EMS reads it: runtime-state over the stored config's flag.
+
+    ``flags`` is :func:`ems.config.config_control_flags` of the stored config;
+    the value is parsed as ``EMSController.runtime_system_bool`` parses it.
+    """
+
+    return config_mod.safe_bool(
+        diagnose_runtime_section(runtime_data, "system").get("enabled"),
+        flags["enabled"],
+    )
+
+
+def diagnose_device_control_enabled(runtime_data, name):
+    """A device's ``enabled`` switch as the EMS reads it: runtime-state, else on."""
+
+    device = diagnose_runtime_section(runtime_data, "devices").get(name)
+    device = device if isinstance(device, dict) else {}
+    return config_mod.safe_bool(device.get("enabled"), True)
+
+
 def diagnose_loop_interval(config_data, runtime_data):
     system_runtime = runtime_data.get("system") if isinstance(runtime_data.get("system"), dict) else {}
     system_config = config_data.get("system") if isinstance(config_data.get("system"), dict) else {}
@@ -2542,7 +2581,9 @@ def diagnose_live_snapshot_root_causes(live):
             "Control cycles are failing",
             f"The last {failed} control cycles raised an error. Each stops where it raised "
             "and runs the steps before that point again; a device it no longer reaches "
-            "holds the limit it was last given, a charging one keeps charging.",
+            "holds the limit it was last given. From the third failed cycle in a row the "
+            "EMS returns each device it was charging, again once per resend window "
+            "while the charge holds.",
             "Look for event=control_cycle_failed in the EMS log.",
         )]
     if status == "stale":
@@ -2606,7 +2647,7 @@ def diagnose_control_snapshot(config_data, runtime_data, live_data, runtime_path
         "final_output_w": diagnose_sum_devices(diagnose_live_devices(live_data), ("output_w",)),
         "deadband_active": deadband_active,
         "deadband_w": deadband_w,
-        "control_enabled": bool(system_runtime.get("enabled", flags["enabled"])),
+        "control_enabled": diagnose_control_enabled(runtime_data, flags),
         "dry_run": flags["dry_run"],
         "template_placeholders": placeholders or [],
         "winter_mode": bool(winter_runtime.get("enabled", winter_config.get("enabled", False))),
@@ -3940,7 +3981,7 @@ def diagnose_collect(args):
     runtime_path = resolve_runtime_path(args, config_data)
     diagnose_parent_path(checks, "project", "runtime_state", runtime_path, "runtime-state path", check_write=True, missing_level="warning")
     battery_full_charge_report = diagnose_battery_full_charge_assist_report(
-        config_data
+        config_data, diagnose_control_load_runtime(runtime_path)[0]
     )
     battery_state_database_path = battery_full_charge_report[
         "state_database_path"

@@ -25,6 +25,7 @@ TIMEZONE_RE = re.compile(r"\A[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+){0,2}\Z"
 HOSTNAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 CONTAINER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 OPERATION_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+PLAN_REQUEST_RE = re.compile(r"[0-9a-f]{32}")
 ACCOUNT_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 PASSWORD_GENERATION_RE = re.compile(r"^[0-9a-f]{32}$")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
@@ -180,6 +181,17 @@ def is_prerelease_tag(tag):
     return "-" in validate_release_tag(tag)
 
 
+def validate_installable_tag(value, *, allow_prerelease):
+    """A release tag this host installs: a prerelease only where it allows them."""
+
+    tag = validate_release_tag(value)
+    if is_prerelease_tag(tag) and not allow_prerelease:
+        raise ValidationError(
+            "prerelease_not_allowed", f"{tag} is a prerelease and is not enabled on this host"
+        )
+    return tag
+
+
 def normalize_version(value):
     """Compare tags and OCI version labels without their optional ``v`` prefix."""
 
@@ -270,6 +282,15 @@ def validate_oci_labels(labels, *, requested_tag, expected_source, legacy_exempt
         )
 
     return {"legacy_exempt": False, "missing_labels": []}
+
+
+def is_localhost(name):
+    """Whether a hostname is one systemd treats as no hostname at all."""
+
+    name = name.lower().rstrip(".")
+    return name in ("localhost", "localhost.localdomain") or name.endswith(
+        (".localhost", ".localhost.localdomain")
+    )
 
 
 def validate_hostname(value):
@@ -426,6 +447,16 @@ def validate_operation_id(value):
     if not OPERATION_ID_RE.match(text):
         raise ValidationError("invalid_operation_id", "operation id must be 32 hex characters")
     return text
+
+
+def validate_plan_request(value):
+    """The id a console sent with a plan, or "" for none."""
+
+    if not isinstance(value, str):
+        raise ValidationError("invalid_plan_request", "plan request id must be a string")
+    if value and not PLAN_REQUEST_RE.fullmatch(value):
+        raise ValidationError("invalid_plan_request", "plan request id must be 32 hex characters")
+    return value
 
 
 def validate_confirmation_token(value):

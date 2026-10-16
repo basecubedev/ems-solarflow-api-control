@@ -571,18 +571,12 @@ def ask_devices(
     return devices
 
 
-def apply_system_basics(
-    config,
-    *,
-    noninteractive=False,
-    allow_placeholder_defaults=False,
-):
+def apply_system_basics(config, *, noninteractive=False):
     system = config.setdefault("system", {})
     dashboard = config.setdefault("dashboard", {})
     winter = config.setdefault("winter", {})
     assist = config.setdefault("battery_full_charge_assist", {})
     influxdb = config.setdefault("influxdb", {})
-    ha = config.setdefault("ha", {})
 
     system["max_total_power"] = ask_int(
         "Maximum total output power",
@@ -621,26 +615,6 @@ def apply_system_basics(
         bool(influxdb.get("enabled", False)),
         noninteractive=noninteractive,
     )
-    ha["enabled"] = ask_confirm(
-        "Home Assistant publishing enabled?",
-        bool(ha.get("enabled", False)),
-        noninteractive=noninteractive,
-    )
-    if ha["enabled"]:
-        ha["url"] = ask_text(
-            "Home Assistant URL",
-            ha.get("url") or "http://homeassistant.local:8123",
-            required=True,
-            noninteractive=noninteractive,
-            allow_placeholder_default=allow_placeholder_defaults,
-        )
-        ha["token"] = ask_secret_text(
-            "Home Assistant token",
-            ha.get("token"),
-            required=True,
-            noninteractive=noninteractive,
-            allow_placeholder_default=allow_placeholder_defaults,
-        )
 
 
 def apply_analytics(config):
@@ -679,11 +653,7 @@ def apply_answers(
         noninteractive=noninteractive,
         allow_placeholder_defaults=allow_placeholder_defaults,
     )
-    apply_system_basics(
-        updated,
-        noninteractive=noninteractive,
-        allow_placeholder_defaults=allow_placeholder_defaults,
-    )
+    apply_system_basics(updated, noninteractive=noninteractive)
     if analytics:
         apply_analytics(updated)
     return updated
@@ -738,7 +708,6 @@ def print_summary(config, config_path):
     winter = config.get("winter", {})
     assist = config.get("battery_full_charge_assist", {})
     influxdb = config.get("influxdb", {})
-    ha = config.get("ha", {})
     print(f"  max total power: {system.get('max_total_power', 0)} W")
     print(f"  dashboard: {'enabled' if dashboard.get('enabled') else 'disabled'}")
     print(f"  winter mode: {'enabled' if winter.get('enabled') else 'disabled'}")
@@ -750,12 +719,6 @@ def print_summary(config, config_path):
         "  InfluxDB analytics: "
         f"{'enabled' if influxdb.get('enabled') else 'disabled'}"
     )
-    print(
-        "  Home Assistant publishing: "
-        f"{'enabled' if ha.get('enabled') else 'disabled'}"
-    )
-    if ha.get("enabled"):
-        print(f"  Home Assistant URL: {ha.get('url') or '(not set)'}")
 
 
 def redacted_config(config):

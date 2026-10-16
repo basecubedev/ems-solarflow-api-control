@@ -58,10 +58,11 @@ their raw value for debugging, for example `Unknown AC state (value 9)`.
 When [battery full-charge assist](battery-full-charge-assist.md) is enabled
 and a battery-backed device has known assist state, the device card also shows
 a compact "Full-charge assist" section with the current status (active,
-assist window active, restore pending, or scheduled), last full-charge and
-next due timestamps, and pending restore flags. Devices without a detected
-battery, and devices when the feature is globally disabled, do not show this
-section.
+waiting for state writes or a device report that carries what it writes,
+unavailable over MQTT control, assist window active, restore pending, or
+scheduled), last full-charge and next due timestamps, and pending restore
+flags. Devices without a detected battery, and devices when the feature is
+globally disabled, do not show this section.
 
 ## Analytics View
 
@@ -85,8 +86,9 @@ History panel — are zoomed the same three ways:
 - **Mouse wheel** over the plot. It zooms around the pointer, so whatever is
   under it stays under it, and it never scrolls the page while the pointer is
   over a chart.
-- The **`+` and `−` buttons** in the chart's top-left corner. They zoom around
-  the middle of the visible window.
+- The **`+` and `−` buttons** in the chart's top-left corner, on a strip above
+  the plot so that they cover none of its axis labels. They zoom around the
+  middle of the visible window.
 
 `↺ Back to live` appears in the same corner as soon as a chart is zoomed, and
 it is the reset: it returns the chart to the live window and resumes the 30s
@@ -355,10 +357,16 @@ Power limits are checked against the configured EMS and device limits, not only
 generic type ranges. The routes follow the same allowlist, so a section is
 reachable exactly when it is writable — there is no second list to keep in sync.
 
+After a save the Control tab reloads the runtime state. A reload started
+earlier -- the 30-s refresh, a retry -- that answers after the save's reload
+has answered is dropped, and so is a failure older than the values on screen,
+so neither replaces the saved values with older ones. A failed reload is no
+values: an earlier reload answering after it is still shown.
+
 What the Control tab can change: EMS enabled / max total power / min output
 limit / loop interval; per device its enabled flag, **AC charging**, max power,
-PV priority and offgrid socket mode; Winter mode; **AC charging** for the whole
-installation; and Home Assistant publishing and helper control.
+PV priority and offgrid socket mode; Winter mode; and **AC charging** for the
+whole installation.
 
 Both AC-charging switches take effect on the next control cycle. Turning either
 one off stops a running charge in the same cycle, without a restart — stopping a
@@ -705,13 +713,22 @@ the visible series and KPI cards (no extra chart pages):
 - **Overview** / **Devices** — PV, Inverter Output, Battery Power; KPIs PV,
   Output, Charge, Discharge, Current SoC, Runtime Role.
 - **Grid** — Grid Power, Home Load and AC Charge; KPIs Grid Import, Grid
-  Export, Home, AC Charge, SoC.
-- **Battery** — Battery Power; KPIs Charge, Discharge, SoC, Runtime Role.
-- **PV** — PV Input and Inverter Output; KPIs PV, PV Peak, Output, SoC.
+  Export, Home, AC Charge, Current SoC.
+- **Battery** — Battery Power; KPIs Charge, Discharge, Current SoC, Runtime
+  Role.
+- **PV** — PV Input and Inverter Output; KPIs PV, PV Peak, Output, Current SoC.
 
-Energy KPIs are integrated from the selected period; Current SoC and Runtime
-Role come from the live snapshot. A step between two samples longer than three
-times the series' typical spacing is a gap in the record and is not
+Energy KPIs are integrated from the window the chart loaded, and each of them
+and PV Peak names that window: the period button (`PV · 24h`), or the span of a
+custom range or a zoom (`PV · 3d`, `Charge · 1.5h`, `Charge · 20m`). Current SoC
+and Runtime Role come from the live snapshot. With a device selected, PV,
+Output, Charge, Discharge, AC Charge, PV Peak, Current SoC and Runtime Role
+describe that device; Grid Import, Grid Export and Home always describe the grid
+meter, which measures the whole house. A device that reports no charge level
+shows `--` for Current SoC, not 0 %, and a read-only device (telemetry only, or
+an external device) has no runtime role: it shows `--` on its own and is left
+out of the role of all devices. A step between two samples longer than
+three times the series' typical spacing is a gap in the record and is not
 integrated, so an outage does not count as power held at its last value. A
 KPI's series is always part of its tab's fetched set — a KPI reading a series
 the tab does not request would render a permanent `--`, which reads like a
@@ -776,9 +793,17 @@ Performance and refresh behavior:
   missed because it was never sampled.
 - The Analytics tab auto-refreshes every 30s, but only while it is the active
   view; other views and a backgrounded browser tab do not trigger analytics
-  fetches. Each sub-tab loads only its own series. The lightweight History panel
-  refreshes on the same cadence while Aggregate/Devices is on screen. Either
-  panel's refresh pauses while [its chart is zoomed](#zooming-a-chart).
+  fetches. Each sub-tab loads only its own series. An Analytics answer for a
+  selection that is no longer on screen — a refresh overtaken by a device,
+  range, tab or zoom choice — is dropped, so the chart and KPIs show the latest
+  choice. An answer for the selection on screen is shown whenever it arrives,
+  also when it takes longer than the refresh interval or a later refresh for
+  the same selection failed first — unless the data on screen came from a later
+  request for that selection: the older answer, whether data, an error or
+  "unavailable", is then dropped and that data stays. The lightweight
+  History panel refreshes on the same cadence while Aggregate/Devices is on
+  screen, and keeps the same rule for its range and device. Either panel's
+  refresh pauses while [its chart is zoomed](#zooming-a-chart).
 - Both panels are mobile-friendly (controls, overlay chips, sub-tabs and KPI
   cards reflow; charts use reduced heights on small screens) and show explicit
   loading and empty/unavailable states.
@@ -796,8 +821,10 @@ Browser-CPU behavior (live updates):
   live snapshot.
 - The analytics and history charts are **reused in place** (`uPlot.setData`)
   across refreshes when their structure (series set, overlays, axes, selected
-  device) is unchanged; the chart is only destroyed/recreated when that
-  structure changes or the data becomes empty.
+  device) and the palette's colours are unchanged; the chart is only
+  destroyed/recreated when one of them changes or the data becomes empty. A
+  palette switch rebuilds the chart on screen at once, and a chart on a hidden
+  tab when it is next drawn.
 - `dashboard.animation_mode` (`normal` / `reduced` / `off`) reduces or disables
   the animated flow view's pipe motion and glow/blur filters to lower CPU/GPU
   load; `prefers-reduced-motion` is always honored on top of it. See
@@ -838,8 +865,8 @@ POST /api/auth/logout
 POST /api/auth/refresh
 GET  /api/runtime
 PATCH /api/runtime/system
-PATCH /api/runtime/ha
 PATCH /api/runtime/winter
+PATCH /api/runtime/ac_charge_control
 PATCH /api/runtime/device/<name>
 ```
 

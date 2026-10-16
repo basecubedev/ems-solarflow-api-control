@@ -26,8 +26,14 @@ is synchronised fails for reasons that look like anything but a wrong clock.
 That is checked first, and a clock this cannot confirm counts as unsynchronised.
 """
 
+import functools
 import hashlib
+import http.client
 import os
+import socket
+import ssl
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -43,6 +49,11 @@ MAX_SIGNATURE_BYTES = 64 * 1024
 
 CONNECT_TIMEOUT = 30
 CHUNK = 1024 * 1024
+# Wall-clock limits for one transfer: an index, a manifest or a signature, and
+# a package. A manager plan reads three documents inside a call the console
+# waits for, and a test keeps them inside it.
+DOCUMENT_DEADLINE = 120
+DOWNLOAD_DEADLINE = 900
 
 
 class FetchError(Exception):
@@ -73,22 +84,254 @@ def https_url(value, *, label):
     return text
 
 
-class HttpsFetcher:
-    """Read a URL, bounded, over https only — including after a redirect."""
+class _Deadline:
+    """One transfer's wall-clock limit, and the connections it ends.
 
-    def __init__(self, *, opener=None, timeout=CONNECT_TIMEOUT):
-        self._open = opener or urllib.request.urlopen
-        self.timeout = timeout
+    Checked between body reads on a monotonic clock. A read http.client keeps
+    alive inside one call -- a connect, a TLS handshake, a header, a chunk-size
+    line or a chunked trailer sent a byte at a time -- never returns to be
+    checked, so a timer at the same limit shuts down every connection the
+    transfer opened, and whatever that read raises or returns then is the
+    deadline's. ``held`` counts the sockets handed over.
+    """
 
-    def _response(self, url, label):
-        request = urllib.request.Request(https_url(url, label=label))
+    def __init__(self, seconds, clock, label, timer):
+        self._clock = clock
+        self._seconds = seconds
+        self._label = label
+        self._at = clock() + max(float(seconds), 0.0)
+        self._lock = threading.Lock()
+        self._connections = []
+        self._expired = False
+        self.held = 0
+        self._timer = timer(max(float(seconds), 0.0), self._expire)
+        self._timer.daemon = True
+
+    def __enter__(self):
+        self._timer.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._timer.cancel()
+        with self._lock:
+            connections, self._connections = self._connections, []
+        for connection in connections:
+            connection.close()
+        return False
+
+    def remaining(self):
+        left = self._at - self._clock()
+        if self._expired or left <= 0:
+            raise FetchError(
+                "release_download_timed_out",
+                f"{self._label} did not arrive within the {self._seconds:g} seconds "
+                "this appliance allows",
+            )
+        return left
+
+    def watch(self, sock):
+        """Hold ``sock``'s connection to the deadline; the seconds left for it.
+
+        A duplicate of the socket is kept: shutting it down ends the connection
+        whichever object reads it, a TLS wrapper included, which takes over the
+        original. A socket handed over after the deadline is refused.
+        """
+
+        twin = sock.dup()
+        with self._lock:
+            held = not self._expired
+            if held:
+                self._connections.append(twin)
+                self.held += 1
+        if not held:
+            twin.close()
+        return self.remaining()
+
+    def _expire(self):
+        with self._lock:
+            self._expired = True
+            connections, self._connections = self._connections, []
+        for connection in connections:
+            _end(connection)
+
+
+def _end(connection):
+    """Shut a connection down, waking any read blocked on it, and close it."""
+
+    try:
+        connection.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    connection.close()
+
+
+def _watched_socket(deadline, address, timeout=None, source_address=None):
+    """``socket.create_connection``, each socket held to ``deadline`` before it connects.
+
+    Every address the name resolves to is tried in turn, as there. The deadline
+    can end each connect, none waits longer than what is left of it, and one
+    that completes after the deadline is not used.
+    """
+
+    host, port = address
+    failure = OSError(f"{host} resolves to no address")
+    for family, kind, proto, _, target in socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM):
         try:
-            return self._open(request, timeout=self.timeout)
+            sock = socket.socket(family, kind, proto)
+            return _held_connect(deadline, sock, target, timeout, source_address)
+        except OSError as exc:
+            failure = exc
+    raise failure
+
+
+def _held_connect(deadline, sock, target, timeout, source_address):
+    """``sock`` connected to ``target``, held to ``deadline`` before it connects."""
+
+    try:
+        left = deadline.watch(sock)
+        sock.settimeout(min(left, timeout) if isinstance(timeout, (int, float)) else left)
+        if source_address:
+            sock.bind(source_address)
+        sock.connect(target)
+        deadline.remaining()
+    except BaseException:
+        sock.close()
+        raise
+    return sock
+
+
+class _InsecureRedirect(Exception):
+    """A redirect to anything but https, refused before it is followed."""
+
+
+class _UnheldConnection(Exception):
+    """A connection that opened without handing its socket to the deadline."""
+
+
+def _same_origin(first, second):
+    """Whether two URLs share scheme, host and port, the scope of a credential."""
+
+    try:
+        return _origin(first) == _origin(second)
+    except ValueError:
+        return False
+
+
+def _origin(url):
+    parts = urllib.parse.urlsplit(url)
+    return parts.scheme, parts.hostname, parts.port or {"https": 443, "http": 80}.get(parts.scheme)
+
+
+class _HttpsRedirectsOnly(urllib.request.HTTPRedirectHandler):
+    """A redirect is followed only to https, and refused before it is opened.
+
+    urllib copies every request header onto a redirect, whatever host it names;
+    an ``Authorization`` header goes along only to the same origin.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if urllib.parse.urlsplit(newurl).scheme != "https":
+            fp.close()
+            raise _InsecureRedirect(newurl)
+        follow = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if follow is not None and not _same_origin(newurl, req.full_url):
+            follow.remove_header("Authorization")
+        return follow
+
+
+class _WatchedHttpsHandler(urllib.request.HTTPSHandler):
+    """Opens each https connection with its socket held to ``deadline`` first.
+
+    ``_create_connection`` is the socket factory http.client connects through,
+    so each socket is held before it connects, and so before the TLS handshake,
+    a proxy tunnel or the request touches it. A connection that opened without
+    handing a socket over -- an http.client that no longer connects through
+    that factory -- is refused before its body is read; its TLS handshake and
+    response head, read by then, were bounded by the server alone. The TLS context is
+    the default one: the system trust store, the certificate chain and the
+    host name verified.
+    """
+
+    def __init__(self, deadline):
+        self._tls = ssl.create_default_context()
+        super().__init__(context=self._tls)
+        self._deadline = deadline
+
+    def https_open(self, req):
+        held = self._deadline.held
+        response = self.do_open(self._connection, req, context=self._tls)
+        if self._deadline.held == held:
+            response.close()
+            raise _UnheldConnection(req.full_url)
+        return response
+
+    def _connection(self, *args, **kwargs):
+        connection = http.client.HTTPSConnection(*args, **kwargs)
+        connection._create_connection = functools.partial(_watched_socket, self._deadline)
+        return connection
+
+
+def _open_watched(request, *, timeout, deadline):
+    """``urlopen`` whose every connection the transfer's deadline can end."""
+
+    opener = urllib.request.build_opener(_WatchedHttpsHandler(deadline), _HttpsRedirectsOnly())
+    return opener.open(request, timeout=timeout)
+
+
+class HttpsFetcher:
+    """Read a URL, bounded, over https only — including after a redirect.
+
+    Bounded in time as well as in size. A socket timeout bounds one wait, not a
+    transfer: a server sending a block every few seconds never trips it, nor
+    one sending the TLS handshake, the response headers or a chunked body's
+    framing a byte at a time, which http.client reads inside a single call. So
+    each transfer has a deadline, checked before every read of the body, and a
+    timer at the deadline shuts down every connection the transfer opened --
+    each held before it connects, a redirect's included, and redirects are
+    followed to https only. The transfer ends at its deadline as
+    ``release_download_timed_out``.
+    """
+
+    def __init__(
+        self,
+        *,
+        opener=None,
+        timeout=CONNECT_TIMEOUT,
+        document_deadline=DOCUMENT_DEADLINE,
+        download_deadline=DOWNLOAD_DEADLINE,
+        clock=None,
+        timer=None,
+    ):
+        self._open = opener or _open_watched
+        self.timeout = timeout
+        self.document_deadline = document_deadline
+        self.download_deadline = download_deadline
+        self._clock = clock or time.monotonic
+        self._timer = timer or threading.Timer
+
+    def _deadline(self, seconds, label):
+        return _Deadline(seconds, self._clock, label, self._timer)
+
+    def _response(self, url, label, deadline):
+        request = urllib.request.Request(https_url(url, label=label))
+        wait = min(self.timeout, deadline.remaining())
+        try:
+            return self._open(request, timeout=wait, deadline=deadline)
+        except _InsecureRedirect:
+            raise FetchError(
+                "release_source_insecure", f"{label} redirected to a non-https location"
+            ) from None
+        except _UnheldConnection:
+            raise FetchError(
+                "release_download_failed",
+                f"{label} came over a connection its deadline could not end",
+            ) from None
         except urllib.error.HTTPError as exc:
             raise FetchError(
                 "release_download_failed", f"{label} answered HTTP {exc.code}"
             )
-        except (urllib.error.URLError, OSError, ValueError) as exc:
+        except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as exc:
+            deadline.remaining()
             raise FetchError(
                 "release_download_failed",
                 f"{label} is unreachable: {exc.__class__.__name__}",
@@ -106,42 +349,65 @@ class HttpsFetcher:
                 f"{label} redirected to a non-https location",
             )
 
+    @staticmethod
+    def _blocks(response, deadline, label):
+        """The body as it arrives, until the server ends it or the deadline passes.
+
+        A body that breaks off is a failed download like an unreachable host:
+        every caller handles FetchError, and nothing else.
+        """
+
+        while True:
+            deadline.remaining()
+            try:
+                block = response.read1(CHUNK)
+            except (OSError, http.client.HTTPException) as exc:
+                deadline.remaining()
+                raise FetchError(
+                    "release_download_failed",
+                    f"{label} broke off: {exc.__class__.__name__}",
+                ) from None
+            if not block:
+                deadline.remaining()
+                return
+            yield block
+
     def read(self, url, *, label, max_bytes):
-        with self._response(url, label) as response:
-            self._still_https(response, label)
-            # One byte over the cap is read on purpose: it is what tells an
-            # oversized body apart from one that exactly fits.
-            payload = response.read(max_bytes + 1)
-        if len(payload) > max_bytes:
-            raise FetchError(
-                "release_download_too_large",
-                f"{label} is larger than the {max_bytes} byte limit this appliance accepts",
-            )
-        return payload
+        payload = bytearray()
+        with self._deadline(self.document_deadline, label) as deadline:
+            with self._response(url, label, deadline) as response:
+                self._still_https(response, label)
+                for block in self._blocks(response, deadline, label):
+                    payload += block
+                    if len(payload) > max_bytes:
+                        raise FetchError(
+                            "release_download_too_large",
+                            f"{label} is larger than the {max_bytes} byte limit this "
+                            "appliance accepts",
+                        )
+        return bytes(payload)
 
     def download(self, url, destination, *, label, expected_bytes):
         """Stream to ``destination``, hashing, refusing anything oversized."""
 
         digest = hashlib.sha256()
         written = 0
-        with self._response(url, label) as response:
-            self._still_https(response, label)
-            with open(destination, "wb") as handle:
-                while True:
-                    block = response.read(CHUNK)
-                    if not block:
-                        break
-                    written += len(block)
-                    if written > expected_bytes:
-                        raise FetchError(
-                            "release_download_too_large",
-                            f"{label} sends more than the {expected_bytes} bytes its "
-                            "verified manifest declares",
-                        )
-                    digest.update(block)
-                    handle.write(block)
-                handle.flush()
-                os.fsync(handle.fileno())
+        with self._deadline(self.download_deadline, label) as deadline:
+            with self._response(url, label, deadline) as response:
+                self._still_https(response, label)
+                with open(destination, "wb") as handle:
+                    for block in self._blocks(response, deadline, label):
+                        written += len(block)
+                        if written > expected_bytes:
+                            raise FetchError(
+                                "release_download_too_large",
+                                f"{label} sends more than the {expected_bytes} bytes its "
+                                "verified manifest declares",
+                            )
+                        digest.update(block)
+                        handle.write(block)
+                    handle.flush()
+                    os.fsync(handle.fileno())
         if written != expected_bytes:
             raise FetchError(
                 "release_download_truncated",

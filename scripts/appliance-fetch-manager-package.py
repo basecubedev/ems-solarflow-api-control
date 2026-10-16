@@ -27,7 +27,6 @@ import subprocess
 import sys
 from types import SimpleNamespace
 import urllib.error
-import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,13 +67,46 @@ MAX_DOCUMENT_BYTES = 1024 * 1024
 MAX_PACKAGE_BYTES = 256 * 1024 * 1024
 
 
+class _HttpStatus(Exception):
+    """An HTTP error status, carried past the transport's own refusal."""
+
+    def __init__(self, error):
+        super().__init__(error.code)
+        self.error = error
+
+
+def _open(request, **held):
+    request.add_header("User-Agent", "ems-appliance-build")
+    try:
+        return release_fetch._open_watched(request, **held)
+    except urllib.error.HTTPError as exc:
+        raise _HttpStatus(exc) from None
+
+
 def fetch(url, *, limit, label):
-    request = urllib.request.Request(url, headers={"User-Agent": "ems-appliance-build"})
-    with urllib.request.urlopen(request, timeout=30) as response:  # noqa: S310
-        payload = response.read(limit + 1)
-    if len(payload) > limit:
-        raise SystemExit(f"{label} is larger than this build will read")
-    return payload
+    """The body at ``url``, read through the appliance's own transport.
+
+    ``HttpsFetcher`` ends each transfer on a monotonic deadline from its first
+    connection attempt to its last byte, a document's or the package's, and
+    follows redirects to https only. An HTTP error status is raised as the
+    ``HTTPError`` it is, so a missing index stays a 404; any other failure is an
+    ``OSError``.
+    """
+
+    seconds = (
+        release_fetch.DOCUMENT_DEADLINE
+        if limit <= MAX_DOCUMENT_BYTES
+        else release_fetch.DOWNLOAD_DEADLINE
+    )
+    transport = release_fetch.HttpsFetcher(opener=_open, document_deadline=seconds)
+    try:
+        return transport.read(url, label=label, max_bytes=limit)
+    except _HttpStatus as status:
+        raise status.error from None
+    except release_fetch.FetchError as exc:
+        if exc.code == "release_download_too_large":
+            raise SystemExit(f"{label} is larger than this build will read") from None
+        raise OSError(f"{exc.code}: {exc.message}") from None
 
 
 def described_version(entry):

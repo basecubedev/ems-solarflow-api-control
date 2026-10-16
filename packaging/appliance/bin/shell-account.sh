@@ -33,6 +33,7 @@ HOME_DIR=${EMS_APPLIANCE_SHELL_HOME:-/var/lib/$ACCOUNT}
 # moved: anywhere else is a place an operator chose.
 UNUSABLE_HOME=/home/$ACCOUNT
 SHELL_PATH=${EMS_APPLIANCE_SHELL_PATH:-/bin/bash}
+FULL_NAME="EMS SolarFlow SSH shell"
 SUDOERS=${EMS_APPLIANCE_SHELL_SUDOERS:-/etc/sudoers.d/ems-shell}
 
 note() {
@@ -82,10 +83,18 @@ install_sudoers() {
 
 # An account this package created under the unusable default is repaired, and
 # only that one. "Left exactly as it is" protects an operator's choice; it was
-# never meant to preserve a home no key can ever be written to.
+# never meant to preserve a home no key can ever be written to. 0.3.3 and 0.3.4
+# left no marker, so the full name their adduser wrote is what tells their
+# account from an operator's own $ACCOUNT, which is never moved.
 migrate_unusable_home() {
-    current=$(getent passwd "$ACCOUNT" | cut -d: -f6)
+    entry=$(getent passwd "$ACCOUNT") || return 0
+    current=$(printf '%s\n' "$entry" | cut -d: -f6)
     [ "$current" = "$UNUSABLE_HOME" ] || return 0
+    name=$(printf '%s\n' "$entry" | cut -d: -f5 | cut -d, -f1)
+    if [ "$name" != "$FULL_NAME" ]; then
+        note "$ACCOUNT lives at $UNUSABLE_HOME but was not created by this package; leaving it there"
+        return 0
+    fi
     note "moving $ACCOUNT out of $UNUSABLE_HOME, which the agent cannot write"
     if usermod -d "$HOME_DIR" -m "$ACCOUNT" >/dev/null 2>&1; then
         note "$ACCOUNT now lives at $HOME_DIR"
@@ -107,7 +116,7 @@ fi
 
 [ -x "$SHELL_PATH" ] || SHELL_PATH=/bin/sh
 
-adduser --disabled-password --gecos "EMS SolarFlow SSH shell" \
+adduser --disabled-password --gecos "$FULL_NAME" \
         --home "$HOME_DIR" --shell "$SHELL_PATH" "$ACCOUNT" >/dev/null \
     || fail "the shell account could not be created"
 

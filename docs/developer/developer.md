@@ -67,7 +67,7 @@ for future API and dashboard use:
 - `run_control_quality_diagnosis(args)`
 
 These functions are read-only and reuse the same data path as the CLI. They do
-not write Zendure devices, Home Assistant, MQTT, or runtime control state.
+not write Zendure devices, MQTT, or runtime control state.
 
 ## Root Causes
 
@@ -215,7 +215,7 @@ result or enforce it — they never recompute it. The structural contracts in
 | Setup draft field authority | `admin/setup_planner.py` (`DRAFT_FIELD_AUTHORITY`) | device plan, catalog mutation, exact preview — each field named once |
 | Device-plan mutation authority | `admin/device_plan_registry.py` (contract + `device_plan_conflict`) plus the durable preview record and `workflow_authority_revision` in `admin/guided_setup_workflow.py` | Setup config preview, write and apply |
 | Browser-facing device ids | `admin/observation_identity.py` (`observation_id`, `physical_device_id`, `connection_id`) | discovery run, mDNS and scan responses; `admin.js` keys its collections on them |
-| MQTT TLS/broker semantics | `ems/config.py` (`normalize_mqtt_tls_mode`, `resolve_mqtt_tls_metadata`, `canonical_mqtt_tls_mode`, `mqtt_tls_mode_name`, `MQTT_TLS_OBSERVED_MODES`) | `admin/zendure_mqtt_broker_profiles.py`, `discovery_connections.py`, `mqtt_topic_discovery.py`, `zendure_mqtt_config_proposals.py` |
+| MQTT TLS/broker semantics | `ems/config.py` (`normalize_mqtt_tls_mode`, `resolve_mqtt_tls_metadata`, `canonical_mqtt_tls_mode`, `mqtt_tls_mode_name`, `MQTT_TLS_OBSERVED_MODES`) | `admin/zendure_mqtt_broker_profiles.py`, `discovery_connections.py`, `mqtt_topic_discovery.py`, `zendure_mqtt_config_proposals.py`, `maintenance_config.py` (the broker card's TLS view, merge and validation read the stored `tls_mode`, `tls` and `tls_insecure` through `resolve_mqtt_tls_metadata`) |
 | Secret classification | `admin/secret_policy.py` (catalog metadata via `ems/config_catalog.py::is_secret_catalog_field`) | draft strip, browser redaction, workflow fingerprint |
 | Catalog fields and editability | `ems/config_catalog.py` (`config_field_index`, `is_editable_catalog_field`, `grid_meter_variant_field_spec`) | `setup_config.py`, `maintenance_config.py`, `device_common_fields.py` |
 | Config mutation semantics | `ems/config_mutation.py` (`coerce_catalog_value`, `resolve_change`, `apply_config_changes`, `apply_grid_meter_changes`, `strip_incompatible_grid_meter_fields`, `mutation_diff`) | `admin/setup_config.py` and `admin/config_preview.py` (Setup adapter), `admin/maintenance_config.py` (Maintenance adapter), `admin/device_common_fields.py` (device value set) |

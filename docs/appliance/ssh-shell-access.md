@@ -133,12 +133,18 @@ rescue account — which never writes into its home, because it is a password
 account for a keyboard. A live appliance failed the key deployment with
 `[Errno 30] Read-only file system: '/home/ems-shell'` rather than refusing at
 any gate. An upgrade moves an account still sitting at that exact path, and
-only that path: anywhere else is somewhere an operator put it.
+only that path: anywhere else is somewhere an operator put it. It moves only the
+account those releases created, recognised by the full name their `adduser`
+wrote into it (`EMS SolarFlow SSH shell`, the first GECOS field): an `ems-shell`
+an operator created at `/home/ems-shell` under any other name is left where it
+is, and the upgrade says so.
 
 That guard is weaker than the ownership record `backup-account.sh` keeps for
-`ems-backup`. It is proportionate here because it can only ever fire on the one
-path two known releases shipped, and because the alternative is an account that
-no console can ever give a key to.
+`ems-backup`: 0.3.3 and 0.3.4 left no marker, and the full name is the only
+thing they wrote that an operator's own account would not carry. It is
+proportionate here because it can only ever fire on the one path two known
+releases shipped, and because the alternative is an account that no console can
+ever give a key to.
 
 ## Lifecycle
 

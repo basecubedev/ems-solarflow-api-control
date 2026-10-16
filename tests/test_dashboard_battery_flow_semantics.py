@@ -542,6 +542,7 @@ def test_frontend_battery_flow_scenarios_execute_against_app_js():
 
         const context = {
           console,
+          URLSearchParams,
           document: {
             getElementById: element,
             createElement: () => new FakeElement(),
@@ -836,6 +837,7 @@ def test_frontend_control_explain_view_executes_against_app_js():
 
         const context = {
           console,
+          URLSearchParams,
           document: {
             getElementById: element,
             createElement: () => new FakeElement(),
@@ -1056,7 +1058,7 @@ def test_frontend_control_explain_view_executes_against_app_js():
         assert(html.includes("360 W"), "WR2 allocated/effective target is visible");
         assert(html.includes("-10 W"), "WR1 adjustment delta is visible");
         assert(html.includes("+10 W"), "WR2 adjustment delta is visible");
-        assert(html.includes("pv only limit"), "limiting reason is visible");
+        assert(html.includes("PV-only limit"), "limiting reason is named, not printed as its code");
         assert(html.includes("PV priority applied"), "WR1 decision reason is visible");
         assert(html.includes("Remaining demand assigned"), "WR2 decision reason is visible");
         assert(html.includes("control-device-reason tone-neutral"), "device reasons stay visually secondary");
@@ -1071,8 +1073,8 @@ def test_frontend_control_explain_view_executes_against_app_js():
         assert(html.includes("role-neutral"), "neutral command/gate facts stay calm");
         assert(html.includes("role-config"), "configuration values use secondary role styling");
         assert(!html.includes("role-config control-result"), "configuration values are not primary results");
-        assert(html.includes("output limit update"), "write reason is visible");
-        assert(html.includes("deadband"), "deadband reason is visible");
+        assert(html.includes("Output limit update"), "write reason is named, not printed as its code");
+        assert(html.includes("Change is inside the deadband"), "deadband reason is named");
         assert(html.includes("1.20x"), "PV priority factor is formatted");
         assert(!html.includes("undefined"), "missing optional fields are hidden");
         assert(!html.includes("null"), "null optional fields are hidden");
@@ -1118,7 +1120,7 @@ def test_frontend_control_explain_view_executes_against_app_js():
         assert(blockedHtml.includes("Blocked"), "blocked write decision is visible");
         assert(blockedHtml.includes("tone-blocked"), "blocked write decision uses blocked tone");
         assert(blockedHtml.includes("Target is distributed according to device weight, SOC, PV availability, and configured limits."), "missing decision reason falls back gracefully");
-        assert(blockedHtml.includes("WR2 is blocked because offline."), "blocked devices get a concrete reason");
+        assert(blockedHtml.includes("WR2 is blocked: Device is offline."), "blocked devices get a concrete reason");
 
         assert(context.demoModeFromSearch("?demo=1") === true, "demo=1 activates demo mode");
         assert(context.demoModeFromSearch("?demo=true") === true, "demo=true activates demo mode");

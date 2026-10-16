@@ -456,6 +456,7 @@ def test_every_ac_charge_event_is_documented():
         "ac_charge_share_too_small",
         "ac_charge_not_permitted",
         "ac_charge_no_ceiling",
+        "ac_charge_held_by_full_charge_assist",
         "ac_charge_surplus",
     }
     mentioned -= not_events

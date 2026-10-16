@@ -83,6 +83,38 @@ def test_projection_matches_the_loaded_resolver(overrides):
             )
 
 
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {},
+        {"allow_state_reconciliation_writes": False},
+        {"dry_run": True},
+        {"simulation_mode": True},
+        {"allow_hardware_writes": False},
+        {"allow_mqtt_local_control_writes": False},
+        {"allow_mqtt_zendure_control_writes": False},
+        {"allow_hardware_writes": False, "allow_state_reconciliation_writes": False},
+    ],
+)
+def test_state_projection_matches_the_loaded_state_resolver(overrides):
+    """A state write a stored config allows is the one the running EMS allows."""
+
+    system = _system(**{"allow_state_reconciliation_writes": True, **overrides})
+    config = _config(system)
+    with (
+        _globals_matching(system),
+        patch.object(
+            cfg,
+            "ALLOW_STATE_RECONCILIATION_WRITES",
+            system["allow_state_reconciliation_writes"],
+        ),
+    ):
+        for gate in GATES:
+            assert cfg.resolve_config_state_write_gate(
+                config, gate
+            ) == cfg.resolve_state_write_gate(gate)
+
+
 def test_missing_gate_keys_resolve_to_release_defaults():
     config = _config({"enabled": True, "dry_run": False, "simulation_mode": False})
     for gate in GATES:
@@ -314,7 +346,6 @@ def test_quoted_false_gate_closes_the_loaded_runtime(tmp_path):
         simulate=False,
         replay=None,
         self_test=False,
-        no_ha=True,
     )
     snapshot = {name: getattr(cfg, name) for name in dir(cfg) if name.isupper()}
     try:
@@ -395,7 +426,7 @@ def test_an_invalid_simulation_mode_keeps_the_loop_running_dry(tmp_path, value):
     path.write_text(__import__("json").dumps(config))
     args = SimpleNamespace(
         config=str(path), dry_run=False, simulate=False, replay=None,
-        self_test=False, no_ha=True,
+        self_test=False,
     )
     snapshot = {name: getattr(cfg, name) for name in dir(cfg) if name.isupper()}
     try:

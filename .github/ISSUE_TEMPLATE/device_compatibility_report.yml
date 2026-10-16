@@ -50,7 +50,6 @@ body:
         - Shelly
         - EcoTracker HTTP
         - Tasmota HTTP
-        - Home Assistant entity
         - Other
     validations:
       required: true

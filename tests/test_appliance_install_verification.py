@@ -9,6 +9,7 @@ appear in the installation verdict.
 """
 
 import json
+import os
 
 from pathlib import Path
 
@@ -479,10 +480,8 @@ def write_account_record(paths, **fields):
     return payload
 
 
-def account_check(paths, monkeypatch, *, exists=True, shell="/usr/sbin/nologin", home=None):
+def _live_account(paths, monkeypatch, *, exists=True, shell="/usr/sbin/nologin", home=None):
     import pwd
-
-    from appliance.config import ApplianceConfig
 
     home = home or str(paths.state_dir / "backup-home")
 
@@ -498,9 +497,22 @@ def account_check(paths, monkeypatch, *, exists=True, shell="/usr/sbin/nologin",
         return Entry()
 
     monkeypatch.setattr(pwd, "getpwnam", getpwnam)
+
+
+def account_check(paths, monkeypatch, **account):
+    from appliance.config import ApplianceConfig
     from appliance.install_check import check_backup_account
 
+    _live_account(paths, monkeypatch, **account)
     return by_name(check_backup_account(paths, ApplianceConfig()))["backup_account"]
+
+
+def account_state(paths, monkeypatch, **account):
+    from appliance.config import ApplianceConfig
+    from appliance.install_check import backup_account_state
+
+    _live_account(paths, monkeypatch, **account)
+    return backup_account_state(paths, ApplianceConfig())
 
 
 def test_a_package_owned_account_is_reported_as_usable(tmp_path, monkeypatch):
@@ -542,6 +554,120 @@ def test_unresolved_key_conflicts_are_reported(tmp_path, monkeypatch):
 
     assert entry["status"] == STATUS_FAILED, entry
     assert "conflict" in entry["detail"]
+
+
+def _foreign_key_directory(tmp_path):
+    """A directory outside the backup home holding key files of every name."""
+
+    foreign = tmp_path / "foreign-ssh"
+    foreign.mkdir()
+    for name in (
+        "authorized_keys",
+        "authorized_keys.disabled-by-appliance",
+        "authorized_keys.disabled-by-appliance.conflict",
+    ):
+        (foreign / name).write_text("ssh-ed25519 AAAA foreign\n", encoding="utf-8")
+    return foreign
+
+
+def test_a_symlinked_key_directory_is_reported_and_nothing_behind_it_is_listed(
+    tmp_path, monkeypatch
+):
+    """verify-install runs as root: a ``.ssh`` that is a symlink is not read through."""
+
+    paths = appliance_paths(tmp_path)
+    write_account_record(paths)
+    home = paths.state_dir / "backup-home"
+    ssh_dir = home / ".ssh"
+    ssh_dir.symlink_to(_foreign_key_directory(tmp_path), target_is_directory=True)
+
+    state = account_state(paths, monkeypatch, home=str(home))
+    entry = account_check(paths, monkeypatch, home=str(home))
+
+    assert state["keys_conflicted"] == [], state
+    assert state["keys_active"] is False, state
+    assert state["keys_disabled"] is False, state
+    assert "conflict" not in entry["detail"], entry
+    assert entry["status"] == STATUS_FAILED, entry
+    assert str(ssh_dir) in entry["detail"], entry
+    assert state["keys_refused"] == "ssh_directory_unsafe", state
+
+
+def _plant_symlink(path, tmp_path):
+    path.symlink_to(_foreign_key_directory(tmp_path) / path.name)
+
+
+def _plant_directory(path, _tmp_path):
+    path.mkdir()
+
+
+def _plant_fifo(path, _tmp_path):
+    os.mkfifo(path)
+
+
+@pytest.mark.parametrize("plant", [_plant_symlink, _plant_directory, _plant_fifo])
+@pytest.mark.parametrize(
+    ("name", "flag"),
+    [
+        ("authorized_keys", "keys_active"),
+        ("authorized_keys.disabled-by-appliance", "keys_disabled"),
+    ],
+)
+def test_a_key_file_that_is_not_a_regular_file_is_reported_and_not_taken_for_a_key(
+    tmp_path, monkeypatch, name, flag, plant
+):
+    """A key file planted as a symlink, a directory or a FIFO answers for itself."""
+
+    paths = appliance_paths(tmp_path)
+    write_account_record(paths)
+    home = paths.state_dir / "backup-home"
+    (home / ".ssh").mkdir()
+    plant(home / ".ssh" / name, tmp_path)
+
+    state = account_state(paths, monkeypatch, home=str(home))
+    entry = account_check(paths, monkeypatch, home=str(home))
+
+    assert state[flag] is False, state
+    assert entry["status"] == STATUS_FAILED, entry
+    assert name in entry["detail"], entry
+    assert state["keys_unsafe"] == [name], state
+    assert state["keys_refused"] == "", state
+
+
+def test_a_conflict_file_planted_as_a_symlink_is_still_an_unresolved_conflict(
+    tmp_path, monkeypatch
+):
+    paths = appliance_paths(tmp_path)
+    write_account_record(paths)
+    home = paths.state_dir / "backup-home"
+    (home / ".ssh").mkdir()
+    conflict = home / ".ssh" / "authorized_keys.disabled-by-appliance.conflict"
+    _plant_symlink(conflict, tmp_path)
+
+    state = account_state(paths, monkeypatch, home=str(home))
+    entry = account_check(paths, monkeypatch, home=str(home))
+
+    assert state["keys_conflicted"] == [conflict.name], state
+    assert entry["status"] == STATUS_FAILED, entry
+    assert conflict.name in entry["detail"], entry
+
+
+def test_regular_key_files_are_reported_as_they_are(tmp_path, monkeypatch):
+    paths = appliance_paths(tmp_path)
+    write_account_record(paths)
+    home = paths.state_dir / "backup-home"
+    (home / ".ssh").mkdir()
+    (home / ".ssh" / "authorized_keys").write_text("ssh-ed25519 AAAA x\n", encoding="utf-8")
+
+    state = account_state(paths, monkeypatch, home=str(home))
+    entry = account_check(paths, monkeypatch, home=str(home))
+
+    assert state["keys_active"] is True, state
+    assert state["keys_disabled"] is False, state
+    assert entry["status"] == STATUS_OK, entry
+    assert "active" in entry["detail"], entry
+    assert state["keys_unsafe"] == [], state
+    assert state["keys_refused"] == "", state
 
 
 def test_a_missing_account_is_unavailable_not_broken(tmp_path, monkeypatch):

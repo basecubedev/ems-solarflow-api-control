@@ -112,11 +112,22 @@ def _record_entry_observation(previous, observed, settings):
     return replace(previous, entry_window=window)
 
 
+def charge_entries_within_limit(entries, now, settings):
+    """``(recent, allowed)``: the entry times of the trailing hour, and whether the hourly limit leaves one now.
+
+    The one count of ``max_entries_per_hour``: the direction decision reads it,
+    and so does the full-charge assist taking its AC input back after failed
+    cycles returned it, which enters a charge outside this decision.
+    """
+
+    recent = _recent_entries(entries, now)
+    return recent, len(recent) < max(1, settings.max_entries_per_hour)
+
+
 def _entry_rate_limited(state, now, settings):
     """Whether the hourly entry limit leaves no entry to take right now."""
 
-    recent = _recent_entries(state.entries, now)
-    return len(recent) >= max(1, settings.max_entries_per_hour)
+    return not charge_entries_within_limit(state.entries, now, settings)[1]
 
 
 def _entry_confirmed(state, settings):

@@ -9,19 +9,19 @@ air-gapped site.
 ``available()`` never filters. Whether a version may be installed is a property
 of the entry (``installable``, ``reason``), because a release candidate that
 exists and is refused is something the operator needs to see rather than
-something to hide. The refusal itself is enforced in ``protocol.py``, at request
-validation, and this is a projection of that policy -- never a second authority.
+something to hide. A candidate tag is refused in ``protocol.py``, at request
+validation; a tag only the index calls a prerelease is refused when the exact
+channel resolves, from the same entry the list shows, so the two never disagree.
 
 A mutable name such as ``latest`` is published by the registry too and is dropped
 here like any other non-version tag, so no channel can ever resolve to one.
 """
 
 import json
-import urllib.error
-import urllib.request
 from dataclasses import dataclass, replace
 
 from appliance.registry_tags import RegistryError, list_tags
+from appliance.release_fetch import FetchError, HttpsFetcher
 from appliance.validation import (
     CHANNEL_CURRENT,
     CHANNEL_EXACT,
@@ -130,21 +130,37 @@ def _with_installability(item, allow_prerelease):
     return replace(item, installable=False, reason=PRERELEASE_NOT_ALLOWED_REASON)
 
 
+# How a refused read of the index is reported, by the transport's code. A body
+# over the cap used to be cut and then fail as JSON, so it stays an invalid index.
+_INDEX_FETCH_CODES = {
+    "release_source_insecure": "release_index_insecure",
+    "release_download_too_large": "release_index_invalid",
+}
+
+
 class ReleaseCatalogue:
     def __init__(self, config, *, fetcher=None, registry=None):
         self.config = config
-        self._fetch = fetcher or self._http_fetch
+        self._fetch = fetcher or self._https_fetch
         self._list_tags = registry or list_tags
 
-    def _http_fetch(self, url):
-        request = urllib.request.Request(url, headers={"Accept": "application/json"})
+    def _https_fetch(self, url):
+        """The index, over https only, as the Manager's own index is read.
+
+        Over plain http whoever is on the path chooses the tag *Latest stable*
+        installs, an old release included, and ``file:`` would read the agent's
+        own disk; a redirect to http is refused as well. The call this serves
+        waits 30 s, so the read's deadline and each socket wait are
+        ``DEFAULT_TIMEOUT``.
+        """
+
+        transport = HttpsFetcher(timeout=DEFAULT_TIMEOUT, document_deadline=DEFAULT_TIMEOUT)
         try:
-            with urllib.request.urlopen(request, timeout=DEFAULT_TIMEOUT) as response:
-                return response.read(MAX_INDEX_BYTES).decode("utf-8", errors="replace")
-        except (urllib.error.URLError, OSError, ValueError) as exc:
-            raise ReleaseResolutionError(
-                "release_index_unreachable", f"release index is unreachable: {exc.__class__.__name__}"
-            )
+            payload = transport.read(url, label="the release index", max_bytes=MAX_INDEX_BYTES)
+        except FetchError as exc:
+            code = _INDEX_FETCH_CODES.get(exc.code, "release_index_unreachable")
+            raise ReleaseResolutionError(code, exc.message) from None
+        return payload.decode("utf-8", errors="replace")
 
     def _registry_payload(self):
         try:
@@ -152,8 +168,14 @@ class ReleaseCatalogue:
         except RegistryError as exc:
             raise ReleaseResolutionError(exc.code, exc.message) from exc
 
+    @property
+    def index_url(self):
+        """The configured release index, or "" where the registry is the list."""
+
+        return (self.config.release_index_url or "").strip()
+
     def available(self):
-        url = (self.config.release_index_url or "").strip()
+        url = self.index_url
         if url:
             try:
                 payload = json.loads(self._fetch(url))
@@ -184,13 +206,39 @@ def latest_stable_of(targets):
     )
 
 
+def _refuse_what_the_list_refuses(catalogue, tag):
+    """An exact tag the version list shows as refused is refused with its reason.
+
+    ``protocol.py`` refuses a candidate tag at request validation. A release
+    index may also call a plain tag a prerelease, and the list greys it out;
+    this is where the agent agrees. The registry lists tags alone, so it can
+    refuse nothing the tag rule has not, and is not asked. An index that cannot
+    be read refuses nothing here: the tag rule has already run, and an exact
+    tag is the way in when it is unreachable.
+    """
+
+    if not catalogue.index_url:
+        return
+    try:
+        listed = catalogue.available()
+    except ReleaseResolutionError:
+        return
+    for item in listed:
+        if item.tag == tag and not item.installable:
+            raise ReleaseResolutionError(
+                "prerelease_not_allowed", f"{tag} is listed as a prerelease: {item.reason}"
+            )
+
+
 def resolve_channel(channel, *, catalogue, current_tag, previous_known_good, requested_tag=None):
     """Turn a channel name into one concrete, validated release tag."""
 
     if channel == CHANNEL_EXACT:
         if not requested_tag:
             raise ReleaseResolutionError("release_tag_required", "an exact tag must be provided")
-        return ReleaseTarget(tag=validate_release_tag(requested_tag), channel=CHANNEL_EXACT)
+        tag = validate_release_tag(requested_tag)
+        _refuse_what_the_list_refuses(catalogue, tag)
+        return ReleaseTarget(tag=tag, channel=CHANNEL_EXACT)
 
     if channel == CHANNEL_CURRENT:
         if not current_tag:

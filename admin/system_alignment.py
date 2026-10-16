@@ -40,10 +40,12 @@ from admin.system_build import (
     classify_channel,
     decide_alignment,
     decide_upgrade_direction,
+    running_system_build,
     system_build_compatibility,
     system_build_keeps_current_admin,
     system_build_resource_strategy,
 )
+from admin.image_identity import ImageIdentity
 from admin.operation_coordinator import (
     OperationWorkerActive,
     OperationWorkerStatusUnavailable,
@@ -209,6 +211,20 @@ class SystemAlignmentError(Exception):
         self.message = message
 
 
+RUNNING_PAIR_TRANSITION_ACTIVE = "transition_active"
+RUNNING_PAIR_UNVERIFIED = "unverified"
+RUNNING_PAIR_CURRENT = "current"
+RUNNING_PAIR_RECORDED = "recorded"
+RUNNING_PAIR_UNPAIRED = "unpaired"
+RUNNING_PAIR_HEALTH_CHECKING = "checking"
+RUNNING_PAIR_HEALTH_FAILED = "failed"
+RUNNING_PAIR_HEALTH_UNAVAILABLE = "unavailable"
+_IMAGE_IDENTITY_FIELDS = (
+    "image_ref", "digest", "version_label", "revision", "channel",
+    "build_serial", "build_id", "release_tag", "contains_release",
+)
+
+
 class SystemAlignmentService:
     """Own the durable Admin/resources/EMS/healthcheck transition lifecycle."""
 
@@ -216,7 +232,8 @@ class SystemAlignmentService:
                  known_good_store, current_identity, persistent_ref, launcher,
                  current_ems_identity=None, release_archive_resources=None,
                  operation_coordinator=None, replacement_activity=None, now=None,
-                 installed_ems_identity=None, image_retention=None):
+                 installed_ems_identity=None, image_retention=None,
+                 running_pair_healthy=None, system_health_verdict=None):
         self._resolver = resolver
         self._transitions = transition_store
         self._embedded = embedded_resources
@@ -244,6 +261,8 @@ class SystemAlignmentService:
         # Bounded local image history. Optional: an Admin without it simply
         # keeps every image, which is the behaviour that existed before.
         self._image_retention = image_retention
+        self._running_pair_healthy = running_pair_healthy
+        self._system_health_verdict = system_health_verdict
         self._now = now
 
     # --- helpers ---------------------------------------------------------
@@ -665,8 +684,9 @@ class SystemAlignmentService:
             # Abandon is the escape out of a wedged transition: offered for
             # recoverable failures and, once expired, from any non-terminal
             # stage — but never while the worker is alive or its state unknown,
-            # and never while a claimed resource import may still write the
-            # shared cache under a stage that still reads ``admin_aligned``.
+            # never while a claimed resource import may still write the
+            # shared cache under a stage that still reads ``admin_aligned``,
+            # and never under a replacement still running, expired or not.
             base_cancellable = (
                 (
                     record.stage in CANCELLABLE_TRANSITION_STAGES
@@ -679,6 +699,7 @@ class SystemAlignmentService:
             )
             transition["cancel_available"] = bool(
                 base_cancellable
+                and replacement_active is not True
                 and worker_status_available
                 and worker_active is not True
             )
@@ -689,6 +710,136 @@ class SystemAlignmentService:
             ),
             "transition": transition,
             "known_good": known_good,
+        }
+
+    def known_good_admin_running(self, known_good):
+        """Whether the known-good record names the Admin that runs here.
+
+        ``False`` names a stale record: a Guided Upgrade cancelled after its
+        Admin was replaced, or an Admin the Appliance Manager reinstalled,
+        leaves the record on the pair it last verified. ``None`` when there is
+        no record or either digest cannot be read. Not part of ``status``:
+        that is read on every transition check, and this reads Docker.
+        """
+
+        if not isinstance(known_good, dict) or not known_good.get("admin_digest"):
+            return None
+        try:
+            running = self._identity_dict(self._current_identity()).get("digest")
+        except Exception:
+            return None
+        if not running:
+            return None
+        return str(running).strip() == str(known_good["admin_digest"]).strip()
+
+    def reconcile_known_good(self) -> dict:
+        """Set the known-good record to the System Build that runs here.
+
+        Owner decision 2026-10-13: what runs is the authority for the record.
+        Once no transition is in flight and the Admin and EMS containers both
+        run, a running pair whose image labels are one System Build, by the
+        pairing rule a resolution applies, is recorded when its EMS passes the
+        health check an upgrade requires (``system_health_verdict``, which
+        answers ``None`` while that check runs and records the pair through
+        ``_record_checked_pair`` once it passed); a record already naming it is
+        left as it is. A pair that is not one build is named and never
+        recorded. Not part of ``status``: this reads Docker.
+        """
+
+        return self._reconcile_running_pair(self._pair_health)
+
+    def _record_checked_pair(self, pair, record_before):
+        """Record ``pair`` once its health check passed, by the rules of a read.
+
+        Called from the check's thread. Nothing is recorded unless ``pair``
+        still runs and the record is still ``record_before``, the record the
+        read that started the check found.
+        """
+
+        def checked(admin, ems, known_good):
+            if (admin.digest, ems.digest) == pair and known_good == record_before:
+                return None
+            return {"health": RUNNING_PAIR_HEALTH_CHECKING,
+                    "message": "The running pair or its record changed during the health check."}
+
+        return self._reconcile_running_pair(checked)
+
+    def _reconcile_running_pair(self, pair_health):
+        if self.is_transition_pending():
+            return {"state": RUNNING_PAIR_TRANSITION_ACTIVE}
+        try:
+            healthy = self._running_pair_healthy() if self._running_pair_healthy else None
+            admin = self._image_identity(self._current_identity())
+            ems = self._image_identity(self._current_ems_identity())
+        except Exception:
+            return {"state": RUNNING_PAIR_UNVERIFIED}
+        named = {"admin": self._running_summary(admin), "ems": self._running_summary(ems)}
+        if healthy is not True or not admin.digest or not ems.digest:
+            return {"state": RUNNING_PAIR_UNVERIFIED, **named}
+        known_good = self._known_good.current()
+        if (
+            isinstance(known_good, dict)
+            and known_good.get("admin_digest") == admin.digest
+            and known_good.get("ems_digest") == ems.digest
+        ):
+            return {"state": RUNNING_PAIR_CURRENT, **named}
+        try:
+            build = running_system_build(admin, ems)
+        except SystemBuildError as exc:
+            return {"state": RUNNING_PAIR_UNPAIRED, **named, "message": exc.message}
+        health = pair_health(admin, ems, known_good)
+        if health is not None:
+            return {"state": RUNNING_PAIR_UNVERIFIED, **named, **health}
+        if self.is_transition_pending():
+            return {"state": RUNNING_PAIR_TRANSITION_ACTIVE}
+        try:
+            recorded = self._known_good.record(
+                build,
+                compatibility_mode=system_build_compatibility(build),
+                resource_strategy=system_build_resource_strategy(build),
+            )
+        except OSError:
+            return {
+                "state": RUNNING_PAIR_UNVERIFIED,
+                **named,
+                "message": "The known-good record could not be written.",
+            }
+        return {"state": RUNNING_PAIR_RECORDED, **named, "known_good": recorded}
+
+    def _pair_health(self, admin, ems, known_good):
+        """``None`` once the pair's EMS passed the upgrade's health check, else why not."""
+
+        if not callable(self._system_health_verdict):
+            return {"health": RUNNING_PAIR_HEALTH_UNAVAILABLE,
+                    "message": "No EMS health check is available to this Admin."}
+        pair = (admin.digest, ems.digest)
+        try:
+            passed = self._system_health_verdict(
+                pair, on_pass=lambda: self._record_checked_pair(pair, known_good)
+            )
+        except Exception:
+            passed = None
+        if passed is True:
+            return None
+        if passed is False:
+            return {"health": RUNNING_PAIR_HEALTH_FAILED,
+                    "message": "The EMS did not pass the health check an upgrade requires."}
+        return {"health": RUNNING_PAIR_HEALTH_CHECKING,
+                "message": "The EMS health check an upgrade requires is running."}
+
+    @classmethod
+    def _image_identity(cls, identity):
+        if isinstance(identity, ImageIdentity):
+            return identity
+        data = cls._identity_dict(identity) or {}
+        return ImageIdentity(**{name: data.get(name) for name in _IMAGE_IDENTITY_FIELDS})
+
+    @staticmethod
+    def _running_summary(identity):
+        return {
+            "release": identity.release_tag or identity.version_label,
+            "build_id": identity.build_id,
+            "digest": identity.digest,
         }
 
     @staticmethod
@@ -2195,6 +2346,11 @@ class SystemAlignmentService:
         ``transition_worker_status_unavailable``, and either leaves the durable
         record untouched. Without one (no observable workers) the durable
         cancel runs directly.
+
+        An Admin replacement the probe sees running refuses
+        ``mutation_in_progress`` first, past the deadline too: the sidecar
+        claimed before it and reads the record no more, so expiry does not
+        stop it.
         """
 
         record = self._current_record(operation_id)
@@ -2205,7 +2361,14 @@ class SystemAlignmentService:
         # refuses, because the replacement reporting back moves the stage to one
         # that is cancellable anyway, and no second sidecar is launched from
         # here. The store re-reads the stage under its own lock regardless.
-        replacement_inactive = self._replacement_state(record, fresh=True) is False
+        replacement = self._replacement_state(record, fresh=True)
+        if replacement is True:
+            raise SystemAlignmentError(
+                "mutation_in_progress",
+                "The Admin replacement is still running. Wait for it to finish "
+                "before abandoning the transition.",
+            )
+        replacement_inactive = replacement is False
         # The proof names the sidecar claim it was read against; a sidecar that
         # claims in between is the mutation this stage exists to protect, and
         # the store refuses a proof whose claim has moved.

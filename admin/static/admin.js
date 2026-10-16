@@ -1610,6 +1610,14 @@ function syncSourcePanels(data) {
     zendureCloudDevices.push(device);
   }
   renderZendureCloudDevices();
+  const refreshed = (data && data.refresh && data.refresh.sources) || {};
+  const cloud = refreshed.zendure_mqtt;
+  if (cloud && typeof cloud === "object") {
+    els.zendureCloudMessage.textContent =
+      cloud.ok === false
+        ? "Zendure cloud discovery failed: " + (cloud.message || "refresh failed")
+        : cloud.mqtt_message || "Zendure cloud discovery complete.";
+  }
   pollMdns().catch(() => {});
   loadMqttBrokers().catch(() => {});
   loadZendureCloudSettings().catch(() => {});
@@ -7149,7 +7157,6 @@ const GRID_METER_TYPE_CHOICES = new Set([
   "tasmota_http",
   "zendure_smartmeter_d0",
   "mqtt",
-  "ha",
 ]);
 
 // Discovery api_family → concrete grid-meter type. A known family resolves
@@ -8127,6 +8134,7 @@ const setupState = {
     current: null,
     error: null,
     releases: [],
+    warnings: [],
     resources: null,
     docker_image: null,
   },
@@ -8157,6 +8165,7 @@ const setupEls = {
   releaseReload: document.getElementById("release-reload"),
   releaseStatus: document.getElementById("release-status"),
   releaseError: document.getElementById("release-error"),
+  releaseWarnings: document.getElementById("release-warnings"),
   releaseSelectedVal: document.getElementById("release-selected-val"),
   releaseStatusVal: document.getElementById("release-status-val"),
   releaseBadges: document.getElementById("release-badges"),
@@ -9444,6 +9453,12 @@ async function onReleaseSelectChange() {
   presentSelectedSystemBuild(value || null);
 }
 
+function renderReleaseListingWarnings(element, warnings) {
+  if (!element) return;
+  element.textContent = warnings.join(" · ");
+  element.hidden = !warnings.length;
+}
+
 function setReleaseStatus(status, error) {
   setupState.release.status = status;
   setupState.release.error = error || null;
@@ -9463,6 +9478,7 @@ function setReleaseStatus(status, error) {
     setupEls.releaseError.hidden = !error;
     setupEls.releaseError.textContent = error || "";
   }
+  renderReleaseListingWarnings(setupEls.releaseWarnings, setupState.release.warnings);
   renderStepper();
 }
 
@@ -9674,6 +9690,7 @@ async function loadActiveConfigTemplate(expectedTag) {
 }
 
 async function loadReleases() {
+  setupState.release.warnings = [];
   setReleaseStatus("loading");
   try {
     const res = await fetch("/api/setup/releases");
@@ -9682,6 +9699,7 @@ async function loadReleases() {
       throw new Error(humanErrorText(data, "release list unavailable"));
     }
     const releases = Array.isArray(data.releases) ? data.releases : [];
+    setupState.release.warnings = Array.isArray(data.warnings) ? data.warnings : [];
     setupState.release.releases = releases;
     // One supported list drives both what is rendered and what can be selected:
     // a build in an unknown or hidden channel is dropped here and can therefore
@@ -9717,11 +9735,7 @@ async function loadReleases() {
       ) ||
       supportedReleases.find((item) => item.selectable !== false);
     if (!selected) {
-      throw new Error(
-        Array.isArray(data.warnings) && data.warnings.length
-          ? data.warnings[0]
-          : "No System Builds are available."
-      );
+      throw new Error("No System Builds are available.");
     }
     setupEls.releaseSelect.value = selected.tag;
     setupEls.releaseSelect.disabled = false;
@@ -9743,10 +9757,6 @@ async function loadReleases() {
     }
     if (selected.reason && setupEls.releaseStatus) {
       setupEls.releaseStatus.textContent = selected.reason;
-    }
-    if (Array.isArray(data.warnings) && data.warnings.length) {
-      setupEls.releaseStatus.textContent =
-        (selected.prepared ? "Cached resources are ready. " : "") + data.warnings[0];
     }
     renderReleaseResources();
     if (systemBuildResumeValidationTag) {
@@ -11361,6 +11371,7 @@ const upgradeEls = {
   reload: document.getElementById("upgrade-release-reload"),
   releaseStatus: document.getElementById("upgrade-release-status"),
   releaseError: document.getElementById("upgrade-release-error"),
+  releaseWarnings: document.getElementById("upgrade-release-warnings"),
   options: Array.from(document.querySelectorAll("[data-upgrade-option]")),
   validationCard: document.getElementById("upgrade-validation-card"),
   validationState: document.getElementById("upgrade-validation-state"),
@@ -11394,6 +11405,7 @@ const upgradeState = {
   current: { tag: null, image: null, state: null },
   runningAdmin: { tag: null, image: null },
   releases: [],
+  releaseWarnings: [],
   selected: null,
   prepared: false,
   preparedTag: null,
@@ -11420,6 +11432,7 @@ const upgradeState = {
   loading: false,
   loadingPromise: null,
   alignmentTransition: null,
+  alignmentStatus: null,
   migrationReview: null,
   migrationRevision: null,
   running: false,
@@ -11453,6 +11466,7 @@ const upgradeAdminEls = {
   current: document.getElementById("upgrade-admin-current"),
   target: document.getElementById("upgrade-admin-target"),
   status: document.getElementById("upgrade-admin-alignment-status"),
+  apart: document.getElementById("upgrade-admin-apart"),
 };
 
 // The reconnect overlay is shared with Guided Setup; it is retained here as the
@@ -11506,9 +11520,39 @@ function renderUpgradeAdminAlignment() {
   if (upgradeAdminEls.status && state && UPGRADE_ALIGNMENT_STATUS_TEXT[state]) {
     upgradeAdminEls.status.textContent = UPGRADE_ALIGNMENT_STATUS_TEXT[state];
   }
+  if (upgradeAdminEls.apart) {
+    const apart = upgradeAdminApartText(upgradeState.alignmentStatus, upgradeState.runningAdmin);
+    upgradeAdminEls.apart.textContent = apart;
+    upgradeAdminEls.apart.hidden = !apart;
+  }
+}
+
+function upgradeAdminApartText(status, runningAdmin) {
+  const record = status && status.known_good;
+  if (!record || status.known_good_admin_running !== false) return "";
+  let text =
+    "The last verified System Build on record is " +
+    (record.system_tag || "unknown") +
+    ", but the Admin running here is " +
+    ((runningAdmin && runningAdmin.tag) || "another build") +
+    ", not the Admin that record names.";
+  const transition = status.transition;
+  if (
+    transition &&
+    transition.mode === "guided_upgrade" &&
+    transition.stage === "cancelled" &&
+    transition.admin_alignment_required === true
+  ) {
+    text +=
+      " A Guided Upgrade to " +
+      (transition.system_tag || "another build") +
+      " that needed to replace the Admin was cancelled before it completed.";
+  }
+  return text + " Upgrading to one System Build aligns Admin and EMS and records the pair again.";
 }
 
 function applyUpgradeAlignmentTransition() {
+  upgradeState.alignmentStatus = systemAlignmentState || null;
   upgradeState.alignmentTransition =
     (systemAlignmentState && systemAlignmentState.transition) || null;
   renderUpgradeAdminAlignment();
@@ -11641,6 +11685,7 @@ function setUpgradeReleaseStatus() {
     upgradeEls.releaseError.hidden = !upgradeState.error;
     upgradeEls.releaseError.textContent = humanErrorText(upgradeState, "");
   }
+  renderReleaseListingWarnings(upgradeEls.releaseWarnings, upgradeState.releaseWarnings);
   if (upgradeEls.prepareBtn) {
     const release = upgradeSelectedRelease();
     const verifying = upgradeState.status === "preparing";
@@ -11712,9 +11757,10 @@ function renderUpgradeValidation(items, prepared) {
 // the plan fact beside it went on naming the release that had been replaced.
 function renderUpgradeCurrent() {
   const cur = upgradeState.current;
+  const admin = upgradeState.runningAdmin || {};
   // The readable release first: a digest-pinned install reports its image as
   // repo@sha256:<64 hex>, which is not a version and does not fit the line.
-  const label = cur.tag || cur.image || "Current version unknown";
+  const label = cur.tag || cur.image || "Unknown";
   if (upgradeEls.currentVersion) {
     upgradeEls.currentVersion.textContent = label;
   }
@@ -11722,7 +11768,8 @@ function renderUpgradeCurrent() {
     upgradeEls.currentDetail.textContent = cur.state || "—";
   }
   if (upgradeEls.factCurrent) {
-    upgradeEls.factCurrent.textContent = label;
+    upgradeEls.factCurrent.textContent =
+      "EMS " + label + " · Admin " + (admin.tag || "unknown");
   }
 }
 
@@ -12311,6 +12358,7 @@ function upgradeVerificationSurvivesReload(preserve, releases, selectedTag) {
 async function loadUpgradeReleases(pinnedTag, { preserveVerification = false } = {}) {
   upgradeState.status = "loading";
   upgradeState.error = null;
+  upgradeState.releaseWarnings = [];
   setUpgradeReleaseStatus();
   try {
     // Maintenance/upgrade flow: apply the upgrade-only build-identity gate.
@@ -12321,6 +12369,7 @@ async function loadUpgradeReleases(pinnedTag, { preserveVerification = false } =
     }
     const releases = Array.isArray(data.releases) ? data.releases : [];
     upgradeState.releases = releases;
+    upgradeState.releaseWarnings = Array.isArray(data.warnings) ? data.warnings : [];
     upgradeEls.select.innerHTML = "";
     // One selector grouped from the single shared System Build catalogue:
     // Latest, Stable, Unstable, then Experimental (always last).
@@ -12350,8 +12399,6 @@ async function loadUpgradeReleases(pinnedTag, { preserveVerification = false } =
       throw new Error(
         pinnedTag
           ? "The System Build being upgraded is no longer available."
-          : Array.isArray(data.warnings) && data.warnings.length
-          ? data.warnings[0]
           : "No System Builds are available."
       );
     }
@@ -14697,9 +14744,12 @@ function syncMaintenanceBrokerForm() {
         "Edit broker connections there; they are shown read-only here."
       : ((catalog.zendure_mqtt_broker && catalog.zendure_mqtt_broker.help) || "") +
         (broker.tls_stored_invalid
-          ? " The stored TLS settings are invalid. Choosing TLS here keeps a " +
-            "stored tls_insecure: true valid; for Plain, or when tls_insecure is " +
-            "not true or false, correct zendure_mqtt.tls_insecure in config.json."
+          ? " The stored TLS settings are invalid. Without a tls_mode, choosing " +
+            "TLS here keeps a stored tls_insecure: true valid; for Plain, or when " +
+            "tls_insecure is not true or false, " +
+            "correct zendure_mqtt.tls_insecure in config.json. " +
+            "A stored zendure_mqtt.tls_mode decides TLS on its own and is " +
+            "corrected in config.json too."
           : "");
   }
   [

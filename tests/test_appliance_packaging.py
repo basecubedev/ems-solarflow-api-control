@@ -1056,55 +1056,23 @@ def test_the_postinst_prepares_the_shell_account_and_the_build_ships_it():
     assert "shell-account.sh" in build
 
 
-def test_an_account_stranded_in_an_unwritable_home_is_moved(tmp_path):
-    """0.3.3 and 0.3.4 created ems-shell under /home, where the agent cannot
-    write a key. Those boxes already have the account, and the script leaves an
-    existing one alone on purpose -- that rule protects an operator's choice,
-    not a home no key can ever reach. Executed with a scripted getent and
-    usermod so the move is observed rather than read."""
+PACKAGE_SHELL_GECOS = "EMS SolarFlow SSH shell,,,"
+
+
+def run_shell_account_for_entry(tmp_path, entry):
+    """Run the script against an existing account whose passwd entry is ``entry``.
+
+    Executed with a scripted getent and usermod so a move is observed rather
+    than read; returns the result and the usermod calls.
+    """
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     (fake_bin / "getent").write_text(
         "#!/bin/sh\n"
         'case "$1" in\n'
-        '  passwd) echo "ems-shell:x:998:998::/home/ems-shell:/bin/bash"; exit 0 ;;\n'
+        f'  passwd) echo "{entry}"; exit 0 ;;\n'
         "  group) exit 2 ;;\n"
-        "esac\nexit 2\n",
-        encoding="utf-8",
-    )
-    (fake_bin / "usermod").write_text(
-        f'#!/bin/sh\necho "$@" >> {tmp_path}/usermod.calls\nexit 0\n', encoding="utf-8"
-    )
-    for tool in ("getent", "usermod"):
-        (fake_bin / tool).chmod(0o755)
-
-    sudoers = tmp_path / "sudoers.d"
-    sudoers.mkdir()
-    environment = dict(os.environ)
-    environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
-    environment["EMS_APPLIANCE_SHELL_SUDOERS"] = str(sudoers / "ems-shell")
-    result = subprocess.run(
-        ["sh", str(SHELL_ACCOUNT_SCRIPT)],
-        capture_output=True, text=True, env=environment, timeout=60, check=False,
-    )
-
-    assert result.returncode == 0, result.stderr
-    calls = (tmp_path / "usermod.calls").read_text(encoding="utf-8")
-    assert "-d /var/lib/ems-shell" in calls, calls
-    assert "-m" in calls, "the contents must move with the home, not be abandoned"
-
-
-def test_a_home_the_operator_chose_is_left_alone(tmp_path):
-    """Only the exact path this package shipped is moved. Anywhere else is a
-    decision somebody made, and an upgrade does not overrule it."""
-
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    (fake_bin / "getent").write_text(
-        "#!/bin/sh\n"
-        'case "$1" in\n'
-        '  passwd) echo "ems-shell:x:998:998::/srv/operator-chose-this:/bin/bash"; exit 0 ;;\n'
         "esac\nexit 2\n",
         encoding="utf-8",
     )
@@ -1121,9 +1089,54 @@ def test_a_home_the_operator_chose_is_left_alone(tmp_path):
         ["sh", str(SHELL_ACCOUNT_SCRIPT)],
         capture_output=True, text=True, env=environment, timeout=60, check=False,
     )
+    calls = tmp_path / "usermod.calls"
+    return result, calls.read_text(encoding="utf-8") if calls.exists() else ""
+
+
+@pytest.mark.parametrize("gecos", [PACKAGE_SHELL_GECOS, "EMS SolarFlow SSH shell"])
+def test_an_account_stranded_in_an_unwritable_home_is_moved(tmp_path, gecos):
+    """0.3.3 and 0.3.4 created ems-shell under /home, where the agent cannot
+    write a key. Those boxes already have the account, and the script leaves an
+    existing one alone on purpose -- that rule protects an operator's choice,
+    not a home no key can ever reach."""
+
+    result, calls = run_shell_account_for_entry(
+        tmp_path, f"ems-shell:x:998:998:{gecos}:/home/ems-shell:/bin/bash"
+    )
 
     assert result.returncode == 0, result.stderr
-    assert not (tmp_path / "usermod.calls").exists(), "an operator's home was moved"
+    assert "-d /var/lib/ems-shell" in calls, calls
+    assert "-m" in calls, "the contents must move with the home, not be abandoned"
+
+
+@pytest.mark.parametrize("gecos", ["", "Operator,,,", "EMS SolarFlow SSH shell (mine),,,"])
+def test_a_foreign_account_under_the_old_default_is_left_alone(tmp_path, gecos):
+    """An ems-shell this package did not create is the operator's, wherever it
+    lives. 0.3.3 and 0.3.4 left no marker; the full name their adduser wrote is
+    what tells their account from an operator's own."""
+
+    result, calls = run_shell_account_for_entry(
+        tmp_path, f"ems-shell:x:998:998:{gecos}:/home/ems-shell:/bin/bash"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert calls == "", f"a foreign account was moved: {calls}"
+    assert "not created by this package" in result.stdout, result.stdout
+
+
+def test_a_home_the_operator_chose_is_left_alone(tmp_path):
+    """Only the exact path this package shipped is moved. Anywhere else is a
+    decision somebody made, and an upgrade does not overrule it."""
+
+    result, calls = run_shell_account_for_entry(
+        tmp_path,
+        f"ems-shell:x:998:998:{PACKAGE_SHELL_GECOS}:/srv/operator-chose-this:/bin/bash",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert calls == "", "an operator's home was moved"
+
+
 def run_postrm_purge(tmp_path, *, account_exists=True, deluser_works=True):
     """Execute the purge branch with scripted account tooling.
 

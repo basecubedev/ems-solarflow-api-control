@@ -48,11 +48,11 @@ require_docker() {
     fi
 }
 
-# The replacement canary replaces one published Admin container with another,
-# both pinned by digest. Those identities come from the Development catalogue, so
-# the gate cannot derive them locally — name them instead of failing deep inside
-# the Playwright web server. scripts/resolve_canary_builds.py prints exactly
-# these values for a catalogue.
+# The replacement canary replaces the previous stable release's Admin with the
+# latest stable release's, both pinned by digest. Those identities come from the
+# GitHub releases and the registry, so the gate does not look them up itself —
+# name them instead of failing deep inside the Playwright web server.
+# scripts/resolve_canary_builds.py prints exactly these values.
 require_replacement_canary_env() {
     missing=""
     for name in ADMIN_REPLACEMENT_RUNTIME ADMIN_REPLACEMENT_EVENTS \

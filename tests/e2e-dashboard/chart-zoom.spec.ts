@@ -38,6 +38,50 @@ function span(window: Window) {
   return window.max - window.min;
 }
 
+type Box = { x: number; y: number; width: number; height: number };
+type AxisChart = {
+  axes: { scale: string; font: [string, number, number]; _splits: number[]; _values: (string | null)[] }[];
+  over: HTMLElement;
+  root: HTMLElement;
+  valToPos(value: number, scale: string): number;
+};
+
+/**
+ * The zoom controls' box and the box of the y axis's highest label.
+ *
+ * uPlot paints its axis on the canvas, so the label has no element of its own:
+ * its box is the axis gutter, from the canvas's left edge to the plot's, one
+ * line of the axis font high around the label's tick. That is wider than the
+ * text, so controls clear of it are clear of the label.
+ */
+async function zoomControlsAndTopAxisLabel(
+  page: Page,
+  chart: Chart
+): Promise<{ controls: Box; label: Box; text: string }> {
+  return page.evaluate((which) => {
+    const u = state[which as Chart].chart as unknown as AxisChart;
+    const axis = u.axes[1];
+    const shown = axis._splits
+      .map((split, index) => ({ split, text: axis._values[index] }))
+      .filter((tick): tick is { split: number; text: string } => tick.text != null);
+    const top = shown.reduce((high, tick) => (tick.split > high.split ? tick : high));
+    const plot = u.over.getBoundingClientRect();
+    const canvas = u.root.querySelector("canvas")!.getBoundingClientRect();
+    const centre = plot.top + u.valToPos(top.split, axis.scale);
+    const fontSize = axis.font[2];
+    const controls = document.getElementById(`${which}ZoomIn`)!.parentElement!.getBoundingClientRect();
+    return {
+      controls: { x: controls.x, y: controls.y, width: controls.width, height: controls.height },
+      label: { x: canvas.left, y: centre - fontSize / 2, width: plot.left - canvas.left, height: fontSize },
+      text: top.text,
+    };
+  }, chart);
+}
+
+function overlap(a: Box, b: Box) {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+}
+
 // Open a preview view and wait until its chart has actually been built -- the
 // canvas being in the DOM is not the same thing as uPlot owning a scale.
 async function openChart(page: Page, view: string, chart: Chart) {
@@ -187,5 +231,35 @@ test.describe("history chart zoom", () => {
     await expect(page.locator("#historyBackToLive")).toBeHidden();
     expect(await page.evaluate(() => state.history.zoom)).toBeNull();
     expect(await page.evaluate(() => historyShouldAutoRefresh())).toBe(true);
+  });
+});
+
+test.describe("chart zoom controls", () => {
+  for (const [view, chart] of [
+    ["analytics", "analytics"],
+    ["aggregated", "history"],
+  ] as const) {
+    test(`the ${chart} zoom buttons leave the y axis's top label uncovered`, async ({ page }) => {
+      await openChart(page, view, chart);
+      await page.locator(`#${chart}Chart`).scrollIntoViewIfNeeded();
+
+      const live = await zoomControlsAndTopAxisLabel(page, chart);
+      expect(live.text).not.toBe("");
+      expect(overlap(live.controls, live.label), JSON.stringify(live)).toBe(false);
+    });
+  }
+
+  test("Back to live joins the analytics zoom buttons without covering the label", async ({
+    page,
+  }) => {
+    await openChart(page, "analytics", "analytics");
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes("start=")),
+      page.locator("#analyticsZoomIn").click(),
+    ]);
+    await expect(page.locator("#analyticsBackToLive")).toBeVisible();
+
+    const zoomed = await zoomControlsAndTopAxisLabel(page, "analytics");
+    expect(overlap(zoomed.controls, zoomed.label), JSON.stringify(zoomed)).toBe(false);
   });
 });

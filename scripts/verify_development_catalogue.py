@@ -29,7 +29,7 @@ def _find(args, attempt):
             _attempt_source(args.source, attempt),
             cache_path=Path(directory) / "cache.json",
         )
-    return next((entry for entry in builds if entry.get("tag") == args.tag), None)
+    return next((entry for entry in builds or () if entry.get("tag") == args.tag), None)
 
 
 def _mismatches(entry, args):

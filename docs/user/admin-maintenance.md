@@ -196,6 +196,54 @@ You confirm the whole upgrade plan **once**. There is no second, Admin-specific
 confirmation, no standalone *Update Admin* button, and no option to skip Admin
 alignment (or leave the Admin on a different build) in the normal flow.
 
+**Admin and EMS are named separately.** *Current EMS* in the first step is the EMS
+container's release; the Admin's own release is read the same way, from the
+running Admin container's build labels by its immutable image id — the answer the
+Appliance Manager gives too. The Maintenance overview, the plan's *Current* fact
+(`EMS … · Admin …`) and `/api/admin/maintenance/admin-update/status`
+(`current_admin.release`) all use it; the Admin's environment is read only when no
+Admin container runs to answer.
+
+The System Build known-good record follows what runs and passes the health check
+an upgrade requires. An upgrade or setup that completes records its pair; besides
+that, whenever the System Build state is read (`/api/admin/system-alignment/status`)
+and no transition is in flight, the console reads the running Admin and EMS
+containers by their image ids. When both run — Docker reports them running, and a
+Docker health check, where the image has one, not failing — and their build labels
+are one System Build by the rule a resolution checks before it installs a pair, the
+record is set to that pair once its EMS passes the health check an upgrade requires
+before it records a pair (the EMS diagnosis, judged by the same fail-closed rule);
+`running_pair.state` is `recorded`, or `current` when the record already named it.
+An Admin and EMS that both moved without the console's completion, or a record that
+was never written, are picked up this way.
+
+The EMS image has no Docker health check, so Docker's word alone would count an
+EMS in a crash loop (`Up 2 seconds`) as healthy. That health check runs several
+`docker exec` commands, so the status read never waits for it: the first read for
+a pair the record does not name starts one check in the background and answers
+`running_pair.state: unverified` with `health: checking`. When the check passes,
+the console records the pair right then, however long the check took and whether
+or not the page is read again (outside a transition the console does not poll):
+by the same rules as a read, and only while the pair the check was run for still
+runs and the record is still the one that read found. If anything moved in
+between, nothing is written and a later read decides afresh. A
+failed check answers `health: failed` and leaves the record alone; its verdict
+counts for two minutes, after which the next read checks again, so a pair that
+never passes costs at most one diagnosis every two minutes while the page is read.
+A record that already names the running pair, or a pair that is not one build,
+runs no check at all.
+
+A Guided Upgrade cancelled after it replaced the Admin leaves the Admin on the
+target build and EMS on the old one. That is not one System Build, so it is never
+recorded: the record keeps the pair it last verified, `running_pair` names both
+builds (`state: unpaired`), and the Admin alignment step says the record does not
+name the Admin that runs, names the record's build, and names the cancelled
+upgrade if that is what left them apart. An Admin reinstalled from the Appliance
+Manager at another build than the EMS is named the same way. Upgrading to one
+System Build aligns both and records the pair again. While a transition is in
+flight, including a recoverable failure whose **Return to running build** reads
+the record, the record is not touched.
+
 If you are asked to log in again after the Admin Console restart, use the same
 EMS Dashboard/Admin password. The upgrade resumes exactly where it left off: the
 completed backup and current-state preflight are **not** repeated.

@@ -163,7 +163,6 @@ def _runtime_the_ems_seeds(tmp_path, config):
         simulate=False,
         replay=None,
         self_test=False,
-        no_ha=True,
     )
     snapshot = {name: getattr(cfg, name) for name in dir(cfg) if name.isupper()}
     try:

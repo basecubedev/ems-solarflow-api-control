@@ -7,7 +7,7 @@ The code is split by responsibility:
 - `ems/config.py`: config loading, safe parsing and runtime mode helpers
 - `ems/logging_utils.py`: structured event logging and logging setup
 - `ems/models.py`: telemetry and capability dataclasses
-- `ems/clients.py`: HTTP, Zendure, Shelly and Home Assistant clients
+- `ems/clients.py`: HTTP, Zendure and grid-meter clients
 - `ems/runtime_state.py`: mutable runtime-state handling
 - `ems/target_control.py`: capability detection and target calculation
 - `ems/controller.py`: EMS control loop
@@ -27,7 +27,6 @@ mutable runtime state.
 
 Default startup policy for the release template:
 
-- Home Assistant disabled by default.
 - Normal Zendure `outputLimit` writes enabled after local configuration.
 - State reconciliation writes enabled for the full regulation profile.
 - `dry_run=true` remains available as a manual no-write validation mode.
@@ -65,9 +64,9 @@ python tools/check_third_party_licenses.py
 ```
 
 These tests are deterministic simulated checks for pull requests. They do not
-require Home Assistant, Shelly, Zendure devices, InfluxDB, secrets, or network
-access, and they do not replace longer runtime tests, InfluxDB analysis, or
-real hardware validation.
+require Shelly, Zendure devices, InfluxDB, secrets, or network access, and they
+do not replace longer runtime tests, InfluxDB analysis, or real hardware
+validation.
 
 The GitHub Actions job `Repo power-control regression` runs these. The required
 status check for `main` is `Repo PR gate`, which waits on it and on every other

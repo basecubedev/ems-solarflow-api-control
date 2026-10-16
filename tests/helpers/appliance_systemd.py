@@ -47,6 +47,36 @@ INSTALL_ROOT = "/opt/ems-solarflow"
 APPLIANCE_CONF = "/etc/ems-appliance-manager/appliance.conf"
 RELEASE_INDEX_DIR = "/srv/release-index"
 RELEASE_INDEX_PORT = 18088
+RELEASE_INDEX_CA_CONFIG = """[req]
+distinguished_name = dn
+prompt = no
+x509_extensions = ca
+[dn]
+CN = ems-test-index-ca
+[ca]
+basicConstraints = critical, CA:TRUE
+keyUsage = critical, keyCertSign, cRLSign
+subjectKeyIdentifier = hash
+"""
+RELEASE_INDEX_LEAF_EXTENSIONS = """basicConstraints = CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = IP:127.0.0.1
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid
+"""
+RELEASE_INDEX_SERVER = """import http.server
+import ssl
+import sys
+
+server = http.server.ThreadingHTTPServer(
+    ("127.0.0.1", int(sys.argv[1])), http.server.SimpleHTTPRequestHandler
+)
+context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+context.load_cert_chain("index.crt", "index.key")
+server.socket = context.wrap_socket(server.socket, server_side=True)
+server.serve_forever()
+"""
 LOCAL_APT_DIR = "/srv/local-apt"
 SMOKE_PASSWORD = "packaged-smoke-password"
 HTTP_CLIENT = Path(__file__).with_name("appliance_http_client.py")
@@ -541,7 +571,11 @@ class SystemdContainer:
         return self.shell(f"ss -ltn | grep -q ':{port} '").returncode == 0
 
     def serve_release_index(self, tags, *, port=RELEASE_INDEX_PORT):
-        """A local HTTP release index the agent can actually fetch.
+        """A local https release index the agent can actually fetch.
+
+        The appliance reads an index over https only, so the fixture is a TLS
+        server whose certificate a test CA in the container's trust store
+        signed: the agent verifies it exactly as it would a mirror's.
 
         Deliberately no ``pkill``: the pattern would also match this shell's own
         command line, which names the server it is about to start.
@@ -552,12 +586,32 @@ class SystemdContainer:
             f"{RELEASE_INDEX_DIR}/releases.json",
             json.dumps([{"tag_name": tag, "prerelease": "-" in tag} for tag in tags]),
         )
-        url = f"http://127.0.0.1:{port}/releases.json"
+        url = f"https://127.0.0.1:{port}/releases.json"
         if self.port_listening(port):
             return url
 
+        self.write_file(f"{RELEASE_INDEX_DIR}/ca.cnf", RELEASE_INDEX_CA_CONFIG)
+        self.write_file(f"{RELEASE_INDEX_DIR}/leaf.ext", RELEASE_INDEX_LEAF_EXTENSIONS)
+        self.write_file(f"{RELEASE_INDEX_DIR}/serve.py", RELEASE_INDEX_SERVER)
+        issued = self.shell(
+            f"cd {RELEASE_INDEX_DIR} && "
+            "openssl req -x509 -newkey rsa:2048 -nodes -days 2 -config ca.cnf "
+            "-keyout ca.key -out ca.crt && "
+            "openssl req -newkey rsa:2048 -nodes -subj /CN=127.0.0.1 "
+            "-keyout index.key -out index.csr && "
+            "openssl x509 -req -in index.csr -CA ca.crt -CAkey ca.key -CAcreateserial "
+            "-days 2 -extfile leaf.ext -out index.crt && "
+            "cp ca.crt /usr/local/share/ca-certificates/ems-test-index-ca.crt && "
+            "update-ca-certificates",
+            timeout=120,
+        )
+        if issued.returncode != 0:
+            raise SystemdTierFailure(
+                f"the release index certificate could not be issued:\n{issued.stdout}\n"
+                f"{issued.stderr}"
+            )
         self.shell(
-            f"cd {RELEASE_INDEX_DIR} && nohup python3 -m http.server {port} --bind 127.0.0.1 "
+            f"cd {RELEASE_INDEX_DIR} && nohup python3 serve.py {port} "
             ">/tmp/release-index.log 2>&1 & sleep 2",
             timeout=120,
         )

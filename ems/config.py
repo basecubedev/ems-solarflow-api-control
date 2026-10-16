@@ -51,7 +51,6 @@ WINTER_DEFAULTS = {
     "winter_min_soc": 40,
     "ramp_step_percent": 3,
     "adjust_hour": 12,
-    "ac_charge_power": 200,
     "policies": configurable_class_defaults()
 }
 
@@ -232,7 +231,6 @@ GRID_METER_MODEL_TRANSPORTS = {
     ),
     ZENDURE_SMARTMETER_D0_GRID_METER_TYPE: ("Zendure Smart Meter D0", _LOCAL_MQTT_TRANSPORT),
     "mqtt": ("Generic MQTT meter", "MQTT"),
-    "ha": ("Home Assistant (legacy)", "Home Assistant"),
 }
 
 
@@ -614,12 +612,6 @@ def default_safe_config():
 
     return {
         "config_schema_version": CURRENT_CONFIG_SCHEMA_VERSION,
-        "ha": {
-            "enabled": False,
-            "control_enabled": False,
-            "url": "",
-            "token": ""
-        },
         "system": {
             "enabled": True,
             "dry_run": True,
@@ -628,7 +620,6 @@ def default_safe_config():
             "allow_mqtt_local_control_writes": False,
             "allow_mqtt_zendure_control_writes": False,
             "allow_state_reconciliation_writes": False,
-            "reconcile_ac_mode_on_start": True,
             "reconcile_smart_mode": True,
             "max_total_power": 800,
             "max_device_power": 800,
@@ -1244,17 +1235,8 @@ def template_placeholder_paths(config):
                 paths.append("grid_meter.ip" if by_ip else "grid_meter.url")
             if _missing_or_placeholder(grid_meter.get("power_path")):
                 paths.append("grid_meter.power_path")
-        elif meter_type != "ha" and _missing_or_placeholder(
-            grid_meter.get("ip"), address=True
-        ):
+        elif _missing_or_placeholder(grid_meter.get("ip"), address=True):
             paths.append("grid_meter.ip")
-
-    ha_config = config.get("ha")
-    if isinstance(ha_config, dict) and safe_bool(ha_config.get("enabled"), False):
-        if _missing_or_placeholder(ha_config.get("url")):
-            paths.append("ha.url")
-        if _missing_or_placeholder(ha_config.get("token")):
-            paths.append("ha.token")
 
     return paths
 
@@ -1707,17 +1689,12 @@ ARGS = None
 BASE_DIR = None
 CONFIG = None
 SYSTEM_ENABLED = True
-HA_URL = ""
-HA_TOKEN = ""
 MAX_TOTAL_POWER = 0
 MAX_DEVICE_POWER = 0
 DEADBAND = 0
 LOOP_INTERVAL = 5
 OUTPUT_CONTROL_CONFIG = OUTPUT_CONTROL_DEFAULTS.copy()
 RUNTIME_STATE_PATH = "runtime-state.json"
-REMAINING_TIME_POWER_SAMPLES = 10
-REMAINING_TIME_MIN_POWER_W = 10
-REMAINING_TIME_MAX_HOURS = 999
 MIN_OUTPUT_LIMIT = 0
 DRY_RUN = True
 SIMULATION_MODE = False
@@ -1743,10 +1720,7 @@ ALLOW_HARDWARE_WRITES = False
 ALLOW_MQTT_LOCAL_CONTROL_WRITES = False
 ALLOW_MQTT_ZENDURE_CONTROL_WRITES = False
 ALLOW_STATE_RECONCILIATION_WRITES = False
-RECONCILE_AC_MODE_ON_START = True
 RECONCILE_SMART_MODE = True
-HA_ENABLED = False
-HA_CONTROL_ENABLED = False
 LOG_LEVEL = "info"
 REDISTRIBUTE_CLAMPED_POWER = True
 PV_KWP_WEIGHTING = True
@@ -1809,13 +1783,13 @@ def load_config(args=None, base_dir=None):
 
 
 def initialize(args, base_dir):
-    global ARGS, BASE_DIR, CONFIG, SYSTEM_ENABLED, HA_URL, HA_TOKEN
+    global ARGS, BASE_DIR, CONFIG, SYSTEM_ENABLED
     global MAX_TOTAL_POWER, MAX_DEVICE_POWER, DEADBAND, LOOP_INTERVAL
     global OUTPUT_CONTROL_CONFIG, RUNTIME_STATE_PATH, MIN_OUTPUT_LIMIT
     global DRY_RUN, SIMULATION_MODE, ALLOW_HARDWARE_WRITES
     global ALLOW_MQTT_LOCAL_CONTROL_WRITES, ALLOW_MQTT_ZENDURE_CONTROL_WRITES
-    global ALLOW_STATE_RECONCILIATION_WRITES, RECONCILE_AC_MODE_ON_START
-    global RECONCILE_SMART_MODE, HA_ENABLED, HA_CONTROL_ENABLED, LOG_LEVEL
+    global ALLOW_STATE_RECONCILIATION_WRITES
+    global RECONCILE_SMART_MODE, LOG_LEVEL
     global REDISTRIBUTE_CLAMPED_POWER, PV_KWP_WEIGHTING
     global PV_CHARGE_BALANCE_ENABLED, PV_CHARGE_BALANCE_DEADBAND_PERCENT
     global PV_CHARGE_BALANCE_FULL_BIAS_PERCENT, PV_CHARGE_BALANCE_STRENGTH
@@ -1829,11 +1803,8 @@ def initialize(args, base_dir):
     ARGS = args
     BASE_DIR = base_dir
     CONFIG = load_config(args, base_dir)
-    ha_config = CONFIG.get("ha", {})
 
     SYSTEM_ENABLED = runtime_control_flag(CONFIG["system"], "enabled")
-    HA_URL = ha_config.get("url", "")
-    HA_TOKEN = ha_config.get("token", "")
     MAX_TOTAL_POWER = CONFIG["system"]["max_total_power"]
     MAX_DEVICE_POWER = CONFIG["system"]["max_device_power"]
     DEADBAND = CONFIG["system"]["deadband"]
@@ -1877,20 +1848,7 @@ def initialize(args, base_dir):
     ALLOW_STATE_RECONCILIATION_WRITES = runtime_control_flag(
         system_config, "allow_state_reconciliation_writes"
     )
-    RECONCILE_AC_MODE_ON_START = runtime_control_flag(
-        system_config, "reconcile_ac_mode_on_start"
-    )
     RECONCILE_SMART_MODE = runtime_control_flag(system_config, "reconcile_smart_mode")
-    HA_ENABLED = (
-        ha_config.get("enabled", False)
-        and not args.no_ha
-        and not SIMULATION_MODE
-        and not args.replay
-    )
-    HA_CONTROL_ENABLED = (
-        HA_ENABLED
-        and ha_config.get("control_enabled", False)
-    )
     LOG_LEVEL = CONFIG["system"].get("log_level", "info").lower()
 
     if args.simulate or args.replay:
@@ -2207,7 +2165,6 @@ CONTROL_FLAG_BLOCKING_SIDE = {
     "allow_mqtt_local_control_writes": False,
     "allow_mqtt_zendure_control_writes": False,
     "allow_state_reconciliation_writes": False,
-    "reconcile_ac_mode_on_start": False,
     "reconcile_smart_mode": False,
 }
 
@@ -2466,9 +2423,31 @@ def resolve_state_write_gate(control_gate="api") -> WriteGateDecision:
     that would block the write.
     """
 
-    gate = resolve_write_gate(control_gate)
+    return _with_state_reconciliation_gate(
+        resolve_write_gate(control_gate), ALLOW_STATE_RECONCILIATION_WRITES
+    )
+
+
+def resolve_config_state_write_gate(config, control_gate) -> WriteGateDecision:
+    """State-reconciliation gate decision a stored config produces once EMS loads it.
+
+    The read-only projection of :func:`resolve_state_write_gate`, through the
+    same rule: :func:`resolve_config_write_gate` for the transport and
+    ``allow_state_reconciliation_writes`` as :func:`config_control_flags`
+    projects it.
+    """
+
+    return _with_state_reconciliation_gate(
+        resolve_config_write_gate(config, control_gate),
+        config_control_flags(config)["allow_state_reconciliation_writes"],
+    )
+
+
+def _with_state_reconciliation_gate(gate, allow_state_reconciliation_writes):
+    """``gate`` with the global ``allow_state_reconciliation_writes`` gate added."""
+
     blocked = list(gate.blocked_by)
-    if not ALLOW_STATE_RECONCILIATION_WRITES:
+    if not allow_state_reconciliation_writes:
         blocked.append("allow_state_reconciliation_writes")
     return WriteGateDecision(
         allowed=not blocked,
@@ -2892,6 +2871,28 @@ def safe_soc_limit(value):
     if not math.isfinite(number) or not 0 <= number <= 100:
         return 0
     return int(number)
+
+
+def device_soc_limit(device_name, key, value):
+    """A device's configured ``min_soc``/``max_soc`` as every reader takes it (K14).
+
+    The whole percent the SoC writer always used (``safe_soc_limit``), or 0,
+    unmanaged, for a value that is no percent from 0 to 100; such a value is
+    named once, when the device is built. A missing or ``null`` value is
+    unmanaged without a word, as 0 is.
+    """
+
+    limit = safe_soc_limit(value)
+    if limit == 0 and value is not None and safe_float(value, -1.0) != 0:
+        log_event(
+            logging.WARNING,
+            "device_soc_limit_invalid",
+            device=device_name,
+            key=key,
+            value=value,
+            reason="left_unmanaged"
+        )
+    return limit
 
 
 def safe_percent(value, default=0):
@@ -3332,10 +3333,7 @@ def winter_month_active(now):
 
 
 def winter_feature_enabled(runtime_state=None):
-    """Return whether winter mode is enabled.
-
-    HA/runtime toggles can be layered here later. V1 is config-controlled.
-    """
+    """Return whether winter mode is enabled: the runtime toggle, else the config."""
 
     if runtime_state:
         winter = runtime_state.data.get("winter", {})
@@ -3534,9 +3532,3 @@ def estimate_winter_ramp_days(current_min_soc):
     remaining = max(0, winter_min_soc - current_min_soc)
 
     return int((remaining + step - 1) / step)
-
-
-def build_winter_ac_charge_limit_payload():
-    return {
-        "inputLimit": winter_config_int("ac_charge_power", 200, minimum=0)
-    }

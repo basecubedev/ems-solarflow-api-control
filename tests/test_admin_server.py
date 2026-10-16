@@ -2498,6 +2498,100 @@ def test_config_preview_accepts_zendure_cloud_mqtt_proposal(tmp_path):
         srv.server_close()
 
 
+class _HeldCloudSession:
+    """A cloud listener that lets sessions through until ``hold`` is set."""
+
+    def __init__(self):
+        self.hold = threading.Event()
+        self.listening = threading.Event()
+        self.release = threading.Event()
+
+    def listener(self, _connection):
+        return SimpleNamespace(listen=self._listen)
+
+    def _listen(self, _timeout_s, _on_message):
+        if self.hold.is_set():
+            self.listening.set()
+            self.release.wait(5)
+
+
+def test_config_preview_refuses_a_cloud_device_of_a_key_replaced_while_it_was_refreshed(
+    tmp_path,
+):
+    """Interleaving: a cloud refresh with key A listens on the cloud broker when
+    key B is saved through the token route, and ends after it.
+
+    Before, the refresh put A's device back into the trusted proposal set once
+    it ended, and config-preview resolved a selection of it for account B. Now
+    A's device is gone with A's key, and the selection is refused.
+    """
+
+    from admin.credential_store import CredentialStore
+
+    session = _HeldCloudSession()
+    discovery = ZendureCloudDiscovery(
+        CredentialStore().zendure,
+        device_list_fetcher=lambda _t, _to: _cloud_device_list_result(),
+        listener_factory=session.listener,
+        timeout_s=0.0,
+    )
+    discovery.save_token(_CLOUD_API_KEY)
+    assert discovery.refresh()["ok"] is True
+    srv, base = _serve(
+        release_manager=_FakeReleaseManager(tmp_path),
+        zendure_cloud_discovery=discovery,
+    )
+    refreshed = {}
+    try:
+        _, _, proposals_payload = _request(f"{base}/api/discovery/mqtt-proposals")
+        proposal = next(
+            p
+            for p in proposals_payload["proposals"]
+            if p["broker_ref"] == "zendure_cloud"
+        )
+        selection = {
+            "id": proposal["id"],
+            "broker_ref": proposal["broker_ref"],
+            "serial_number": proposal["serial_number"],
+            "device_id": proposal["device_id"],
+        }
+        session.hold.set()
+        refresh = threading.Thread(
+            target=lambda: refreshed.update(result=discovery.refresh()), daemon=True
+        )
+        refresh.start()
+        try:
+            assert session.listening.wait(5)
+            status, _, _ = _request(
+                f"{base}/api/discovery/zendure-cloud-mqtt/token",
+                method="POST",
+                body={"api_key": "another-app-key"},
+            )
+            assert status == 200
+        finally:
+            session.release.set()
+        refresh.join(5)
+        assert refreshed["result"]["ok"] is True
+
+        status, _, payload = _request(
+            f"{base}/api/setup/config-preview/validate",
+            method="POST",
+            body={
+                "devices": [],
+                "supported_grid_meter_count": 0,
+                "zendure_mqtt_proposals": [selection],
+            },
+        )
+        assert status == 400, payload
+        _, _, proposals_payload = _request(f"{base}/api/discovery/mqtt-proposals")
+        assert [
+            p for p in proposals_payload["proposals"] if p["broker_ref"] == "zendure_cloud"
+        ] == []
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
 def test_discovery_devices_excludes_cloud_candidates(tmp_path):
     discovery = _cloud_discovery(tmp_path)
     discovery.store.save_token(_CLOUD_API_KEY)
@@ -3143,6 +3237,70 @@ def test_scan_registry_failed_scan_keeps_known_progress():
     assert failed["progress"]["percent"] < 100
 
 
+def test_a_scan_of_a_network_already_being_scanned_joins_that_scan():
+    """Interleaving: a second scan of a network arrives while its first scan runs.
+
+    The second request, spelled as the same range or as another address in it,
+    gets the running scan rather than a second probe of every host. Another
+    network is scanned on its own, and once the first scan ends, its network
+    can be scanned again.
+    """
+
+    scanning = threading.Event()
+    release = threading.Event()
+    threads = []
+
+    def runner(cidr, timeout_ms=600, max_workers=32, progress_callback=None):
+        threads.append(threading.current_thread())
+        scanning.set()
+        release.wait(5)
+        return [], []
+
+    registry = ScanRegistry(scan_runner=runner)
+    try:
+        first = registry.start("192.168.1.0/24", [80], 600, 32)
+        assert scanning.wait(5)
+        again = registry.start("192.168.1.0/24", [80], 600, 32)
+        respelled = registry.start("192.168.1.7/24", [80], 1500, 64)
+        other = registry.start("192.168.2.0/24", [80], 600, 32)
+    finally:
+        release.set()
+    for thread in list(threads):
+        thread.join(5)
+
+    assert again["scan_id"] == first["scan_id"]
+    assert respelled["scan_id"] == first["scan_id"]
+    assert other["scan_id"] != first["scan_id"]
+    assert len(threads) == 2
+    assert registry.get(first["scan_id"])["status"] == "finished"
+
+    later = registry.start("192.168.1.0/24", [80], 600, 32)
+    for thread in threads[2:]:
+        thread.join(5)
+    assert later["scan_id"] != first["scan_id"]
+    assert len(threads) == 3
+
+
+def test_a_scan_whose_thread_cannot_start_does_not_hold_its_network(monkeypatch):
+    scanned = threading.Event()
+
+    def runner(cidr, timeout_ms=600, max_workers=32, progress_callback=None):
+        scanned.set()
+        return [], []
+
+    def refuse(self):
+        raise RuntimeError("can't start new thread")
+
+    registry = ScanRegistry(scan_runner=runner)
+    with monkeypatch.context() as patch:
+        patch.setattr(threading.Thread, "start", refuse)
+        with pytest.raises(RuntimeError):
+            registry.start("192.168.1.0/24", [80], 600, 32)
+
+    registry.start("192.168.1.0/24", [80], 600, 32)
+    assert scanned.wait(5)
+
+
 def test_scan_result_view_keeps_existing_fields_and_adds_progress():
     record = {
         "scan_id": "abc",
@@ -3716,8 +3874,8 @@ def test_production_server_wires_development_catalogue_source(tmp_path, monkeypa
     source = getattr(runtime.release_manager, "_development_source", None)
 
     assert callable(source)
-    # A missing fixture source degrades to an empty group without network access.
-    assert list(source()) == []
+    # A missing fixture source reads as unreadable, without network access.
+    assert source() is None
 
 
 def test_setup_release_prepare_verifies_resources_without_updating_admin(tmp_path):
@@ -4808,6 +4966,125 @@ def test_system_alignment_resource_verification_has_productive_route(tmp_path):
     assert status == 200
     assert payload["stage"] == "resources_verified"
     assert alignment.verify_calls == ["op-1"]
+
+
+class _JudgedKnownGoodAlignment(_FakeSystemAlignment):
+    def __init__(self, *, active, running):
+        super().__init__(stage="admin_reconnect_pending", active=active)
+        self.running = running
+        self.judged = []
+
+    def known_good_admin_running(self, known_good):
+        self.judged.append(known_good["system_tag"])
+        return self.running
+
+
+def test_the_status_route_names_a_known_good_record_the_running_admin_has_left(tmp_path):
+    """Field report 2026-10-03: the record named the pair a cancelled upgrade left."""
+
+    alignment = _JudgedKnownGoodAlignment(active=False, running=False)
+    srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
+    _attach_system_alignment(srv, alignment)
+    try:
+        status, _, payload = _request(f"{base}/api/admin/system-alignment/status")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert payload["known_good"]["system_tag"] == "v0.7.0"
+    assert payload["known_good_admin_running"] is False
+
+
+def test_the_status_route_leaves_the_known_good_record_alone_while_a_transition_runs(
+    tmp_path,
+):
+    """A replacement in flight proves nothing about the record, and polls stay cheap."""
+
+    alignment = _JudgedKnownGoodAlignment(active=True, running=False)
+    srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
+    _attach_system_alignment(srv, alignment)
+    try:
+        status, _, payload = _request(f"{base}/api/admin/system-alignment/status")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert payload["known_good_admin_running"] is None
+    assert alignment.judged == []
+
+
+class _ReconcilingKnownGoodAlignment(_JudgedKnownGoodAlignment):
+    def __init__(self, *, active, outcome):
+        super().__init__(active=active, running=True)
+        self.outcome = outcome
+        self.reconciled = 0
+
+    def reconcile_known_good(self):
+        self.reconciled += 1
+        return dict(self.outcome)
+
+
+def test_the_status_route_answers_with_the_record_the_running_pair_left(tmp_path):
+    """A-M13b: the record follows what runs, and is judged after it moved."""
+
+    recorded = {"system_tag": "v0.8.1", "admin_digest": "sha256:running"}
+    alignment = _ReconcilingKnownGoodAlignment(
+        active=False,
+        outcome={"state": "recorded", "admin": {}, "ems": {}, "known_good": recorded},
+    )
+    srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
+    _attach_system_alignment(srv, alignment)
+    try:
+        status, _, payload = _request(f"{base}/api/admin/system-alignment/status")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert payload["known_good"] == recorded
+    assert payload["running_pair"] == {"state": "recorded", "admin": {}, "ems": {}}
+    assert alignment.judged == ["v0.8.1"]
+    assert payload["known_good_admin_running"] is True
+
+
+def test_the_status_route_names_a_running_pair_of_two_builds(tmp_path):
+    outcome = {
+        "state": "unpaired",
+        "admin": {"release": "v0.8.1"},
+        "ems": {"release": "v0.7.0"},
+        "message": "admin and ems image build ids differ",
+    }
+    alignment = _ReconcilingKnownGoodAlignment(active=False, outcome=outcome)
+    srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
+    _attach_system_alignment(srv, alignment)
+    try:
+        status, _, payload = _request(f"{base}/api/admin/system-alignment/status")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert payload["running_pair"] == outcome
+    assert payload["known_good"]["system_tag"] == "v0.7.0"
+
+
+def test_the_status_route_reconciles_nothing_while_a_transition_runs(tmp_path):
+    alignment = _ReconcilingKnownGoodAlignment(
+        active=True, outcome={"state": "recorded", "known_good": {"system_tag": "x"}}
+    )
+    srv, base = _serve(release_manager=_TrackingReleaseManager(tmp_path))
+    _attach_system_alignment(srv, alignment)
+    try:
+        status, _, payload = _request(f"{base}/api/admin/system-alignment/status")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200
+    assert alignment.reconciled == 0
+    assert payload["running_pair"] is None
 
 
 def test_system_alignment_status_read_requires_session_authentication(tmp_path):

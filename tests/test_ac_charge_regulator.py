@@ -115,7 +115,6 @@ class Harness:
             sleep_enabled=False,
             runtime_state=runtime_state,
         )
-        self.controller.run_startup_ac_mode_reconcile_once = Mock()
         self.controller.set_output_limit = Mock()
         self.feature = {**AC_CHARGE_CONTROL_DEFAULTS, "enabled": feature}
         self.seconds_per_cycle = seconds_per_cycle
@@ -572,15 +571,14 @@ def test_a_running_charge_is_stopped_even_when_the_target_is_zero():
     A charging device reports outputLimit 0 and output 0 while drawing 600 W. A
     discharge-only reference reads that as idle, so an idle target looks like no
     change and the write is skipped -- leaving the hardware charging from the
-    grid with the EMS running and content. Local-HTTP devices are rescued by the
-    startup acMode reconcile; MQTT control devices have no such path, which is
-    how this would have reached hardware.
+    grid with the EMS running and content. The device here has no state
+    reconciler, as an MQTT control device has none, so only this write can end
+    the charge.
     """
 
     device_config = charging_device()
     device_config.supports_state_reconciliation = False
     harness = Harness([device_config], load=0)
-    harness.controller.run_startup_ac_mode_reconcile_once = Mock()
     writes = []
     harness.controller.set_output_limit = lambda dev, value, **_kwargs: writes.append(int(value))
 
@@ -1157,7 +1155,7 @@ def test_the_full_charge_assist_takes_a_device_away_mid_charge():
     assert harness.controller.charge_direction.charging is True
     assert harness.controller.runtime_intents["WR1"].reason == REGULATOR_CHARGE_REASON
 
-    harness.controller.full_charge_assist_intent = lambda dev: ac_input_intent(
+    harness.controller.full_charge_assist_intent = lambda dev, below=None: ac_input_intent(
         dev.name, "full_charge_assist", setpoint_w=600
     )
     harness.run(cycles=3, states=[item])
@@ -2173,9 +2171,12 @@ def test_switching_control_back_on_does_not_end_a_running_charge(soc):
 
 
 def following_mqtt_device(
-    item, name="WR1", double=FollowingHardware, **hardware_options
+    item, name="WR1", double=FollowingHardware, client_options=None, **hardware_options
 ):
-    """A real MQTT control client whose broker delivers to the hardware double."""
+    """A real MQTT control client whose broker delivers to the hardware double.
+
+    ``client_options`` are further keyword arguments for the client.
+    """
 
     from ems.zendure_mqtt.device_client import ZendureMqttDeviceClient
     from ems.zendure_mqtt.topics import FAMILY_LEGACY_JSON
@@ -2194,6 +2195,7 @@ def following_mqtt_device(
         min_soc=15,
         max_soc=100,
         smart_mode=1,
+        **(client_options or {}),
     )
     return dev, hardware
 
@@ -2740,7 +2742,7 @@ def test_a_charge_left_with_no_sign_of_discharge_steps_up_to_the_house_once(
     assert min(hardware.readings) >= -HOUSE_TOLERANCE_W, hardware.readings
 
 
-def maintenance_claim_without_a_charge(dev):
+def maintenance_claim_without_a_charge(dev, below=None):
     from ems.runtime_intents import (
         PRIORITY_MAINTENANCE,
         DeviceRuntimeIntent,

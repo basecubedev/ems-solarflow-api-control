@@ -2,8 +2,8 @@
 
 This project writes to real power hardware, so tests are the main guard against
 regressions in control logic, write gates and safety reconciliation. All the
-checks below run offline — no Home Assistant, Shelly, Zendure devices, InfluxDB,
-secrets, or network access are required.
+checks below run offline — no Shelly, Zendure devices, InfluxDB, secrets, or
+network access are required.
 
 See also [developer-setup.md](developer-setup.md) for the source checkout and
 environment, and [ci-release.md](ci-release.md) for how these run in CI.
@@ -285,15 +285,20 @@ Four things are worth knowing before adding a spec to either:
   Docker suites skip with a precise reason instead of failing.
 - Playwright tiers need `npm ci` and
   `npx playwright install chromium firefox`. No tier installs dependencies.
-- The RC `admin-replacement` gate replaces one published Admin container with
-  another, both pinned by digest, so it needs `ADMIN_REPLACEMENT_RUNTIME`,
-  `ADMIN_REPLACEMENT_EVENTS`, the source identity (`CANARY_SOURCE_TAG`,
-  `CANARY_SOURCE_REVISION`, `CANARY_SOURCE_BUILD_ID`,
-  `CANARY_SOURCE_ADMIN_DIGEST`) and the target identity (`CANARY_TAG`,
-  `CANARY_REVISION`, `CANARY_BUILD_ID`, `CANARY_ADMIN_DIGEST`,
-  `CANARY_EMS_DIGEST`). Both sides come from the Development catalogue;
-  `python3 scripts/resolve_canary_builds.py --catalogue <file>` prints them and
-  `./scripts/test-rc.sh` names the missing ones before running any gate.
+- The RC `admin-replacement` gate replaces the previous stable release's Admin
+  container with the latest stable release's, both pinned by digest, so it
+  needs `ADMIN_REPLACEMENT_RUNTIME`, `ADMIN_REPLACEMENT_EVENTS`, the source
+  identity (`CANARY_SOURCE_TAG`, `CANARY_SOURCE_REVISION`,
+  `CANARY_SOURCE_BUILD_ID`, `CANARY_SOURCE_ADMIN_DIGEST`) and the target
+  identity (`CANARY_TAG`, `CANARY_REVISION`, `CANARY_BUILD_ID`,
+  `CANARY_ADMIN_DIGEST`, `CANARY_EMS_DIGEST`).
+  `python3 scripts/resolve_canary_builds.py` prints them from the GitHub
+  releases and the registry (`--source-tag`/`--target-tag` name another stable
+  pair) and `./scripts/test-rc.sh` names the missing ones before running any
+  gate. The gate replays published stable releases only: the spec asserts the
+  `stable` channel, so it never exercises the candidate's own Admin. That
+  Admin is first replaced into by the weekly canary after it is released. A
+  listing that warns of releases it could not read blocks the resolve.
 
 ## Classifying a new test
 
@@ -375,6 +380,9 @@ The documentation-content ones carry the `documentation` marker, so
 - `tests/test_docker_docs_contract.py`, `tests/test_docker_first_setup.py` —
   the Docker Bootstrap installer/compose/docs promise.
 - `tests/test_issue_templates.py` — issue-template documentation links.
+- `tests/test_home_assistant_removed.py::test_no_document_page_or_form_offers_home_assistant`
+  — no document, frontend page or issue form offers the removed integration;
+  its docstring names the exceptions and why they stay.
 - `tests/test_test_classification.py` — the marker registry, the documented
   tier selections and the pull-request group partition.
 - `tests/test_ci_workflow_docker_split.py` — how the CI groups are split.
@@ -526,7 +534,14 @@ refuse fails on a runner instead of in the field. The runbook is
 The image build then consumes what that workflow published:
 `scripts/appliance-fetch-manager-package.py` reads the same index the fleet
 reads, takes the newest **stable** entry, verifies the signature and the digest,
-and hands the package to `appliance-build-rpi-image.sh --manager-package`. Its
+and hands the package to `appliance-build-rpi-image.sh --manager-package`. It
+reads through the appliance's own transport, `release_fetch.HttpsFetcher`:
+https only, redirects included, and each transfer ends on a deadline from its
+first connection attempt to its last byte (120 seconds for the index, a
+manifest or a signature, 900 seconds for the package), so a mirror that
+trickles cannot hold the image build. Only the name lookups, before the first
+connection and before a redirect's, are bounded by the resolver's own timeout
+instead. Its
 exit 3 means "no stable release published yet", which is a state this project is
 actually in and not a failure — the build then makes its own package and says
 so. A package that failed verification is a different matter and fails the job;

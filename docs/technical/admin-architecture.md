@@ -250,10 +250,16 @@ Concretely:
   is available the tag must also be a known, selectable release. The browser never
   supplies an image ref, a compose path, or a command.
 - **Digest decision.** `decide_admin_update` compares the running Admin image
-  identity (`EMS_ADMIN_CONTAINER_NAME` / `EMS_ADMIN_IMAGE`+`EMS_ADMIN_TAG`, plus
-  `docker image inspect`) against the target by digest. Equal digests mean the
-  release only retagged an unchanged Admin image (no update). Unknown digests are
-  treated as uncertain and require explicit confirmation.
+  identity against the target by digest. The identity is read from the running
+  Admin container (`EMS_ADMIN_CONTAINER_NAME`, else `ems-solarflow-admin`) by its
+  immutable image id, as `probe_running_admin` reads its release, never from the
+  image string `docker ps` reports (a short id, or on Docker 26 the bare
+  repository that resolves to a local `:latest`); its `image_ref` is the reference
+  the container was created from. A running Admin whose image nothing names is
+  unknown. `EMS_ADMIN_IMAGE`+`EMS_ADMIN_TAG` answer only when no Admin container
+  runs. Equal digests mean the release only retagged an unchanged Admin image (no
+  update). Unknown digests are treated as uncertain and require explicit
+  confirmation.
 - **Strict EMS-upgrade gate.** Fresh Setup, Automated Setup and Guided Upgrade
   resolve the same Admin/EMS pair and call `SystemAlignmentService`. Config and
   EMS mutations remain blocked until the transition reaches

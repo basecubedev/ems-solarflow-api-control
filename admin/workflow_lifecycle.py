@@ -43,6 +43,7 @@ from admin.admin_update import (
     TRANSITION_MODE_ALIGN_EXISTING,
     TRANSITION_MODE_GUIDED_UPGRADE,
     ADMIN_UPDATER_CONTAINER_PREFIX,
+    PendingTransitionStore,
     ReplacementActivity,
     admin_update_sidecar_container_name,
 )
@@ -369,11 +370,12 @@ class AdminWorkflowLifecycleService:
         self._revision = revision
         base = admin_data_dir or getattr(workflows, "admin_data_dir", None)
         self._admin_data_dir = Path(base) if base is not None else None
-        self._transition_path = (
-            Path(transition_store.path)
+        self._transition_store = (
+            transition_store
             if transition_store is not None
-            else self._state_dir() / "pending-transition.json"
+            else PendingTransitionStore(self._state_dir())
         )
+        self._transition_path = Path(self._transition_store.path)
         # Serializes the decide-then-act sequence of switch and recovery. Durable
         # state stays authoritative; this only stops two callers from acting on
         # one reading, and the fingerprint refuses the loser afterwards.
@@ -1380,43 +1382,29 @@ class AdminWorkflowLifecycleService:
             for name, path, reason in targets
         ]
         try:
-            directory = self._backup_directory(resolved_state_dir)
-            entries = []
-            for name, path, target_reason in verified:
-                raw = path.read_bytes()
-                (directory / path.name).write_bytes(raw)
-                entries.append(
-                    {
-                        "name": name,
-                        "reason": target_reason,
-                        "sha256": hashlib.sha256(raw).hexdigest(),
-                        "bytes": len(raw),
-                    }
-                )
-            manifest = {
-                "manifest_version": RECOVERY_MANIFEST_VERSION,
-                "created_at": self._clock()
-                .astimezone(timezone.utc)
-                .strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "mode": RECOVERY_MODE_RELEASE_STALE_STATE,
-                "reason": reason[:MAX_RECOVERY_REASON_CHARS],
-                "admin_revision": self._revision,
-                "lifecycle_fingerprint": view["fingerprint"],
-                "files": entries,
-            }
-            (directory / RECOVERY_MANIFEST_FILE).write_text(
-                json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-            for _name, path, _reason in verified:
-                path.unlink()
+            captured = [
+                (name, path, target_reason, self._state_file_bytes(path))
+                for name, path, target_reason in verified
+            ]
         except OSError as exc:
-            raise AdminWorkflowLifecycleError(
-                WORKFLOW_RECOVERY_FAILED,
-                f"The Admin workflow state could not be released: {exc}",
-                status=500,
-                lifecycle=view,
-            ) from exc
+            raise self._release_failed(exc, view) from exc
+        if any(raw is None for _name, _path, _reason, raw in captured):
+            raise self._lifecycle_changed(self.inspect())
+        self._require_fingerprint(self.inspect(), view["fingerprint"])
+        try:
+            with self._state_file_owners():
+                unchanged = all(
+                    self._state_file_bytes(path) == raw
+                    for _name, path, _reason, raw in captured
+                )
+                if unchanged:
+                    directory, entries = self._back_up_and_remove(
+                        captured, resolved_state_dir, view, reason
+                    )
+        except OSError as exc:
+            raise self._release_failed(exc, view) from exc
+        if not unchanged:
+            raise self._lifecycle_changed(self.inspect())
         return {
             "ok": True,
             "mode": RECOVERY_MODE_RELEASE_STALE_STATE,
@@ -1427,12 +1415,80 @@ class AdminWorkflowLifecycleService:
             },
         }
 
+    @staticmethod
+    def _state_file_bytes(path):
+        try:
+            return path.read_bytes()
+        except FileNotFoundError:
+            return None
+
+    @contextlib.contextmanager
+    def _state_file_owners(self):
+        """Hold the write lock of every store whose file a release may remove.
+
+        The release decided on bytes it read before; a store write that landed
+        after them would otherwise be removed with the file. Always taken in
+        this order, and nothing that waits on another lock runs inside.
+        """
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(self._transition_store.exclusive())
+            if self._upgrade_contexts is not None:
+                stack.enter_context(self._upgrade_contexts.exclusive())
+            stack.enter_context(self._workflows.exclusive())
+            yield
+
+    def _back_up_and_remove(self, captured, resolved_state_dir, view, reason):
+        directory = self._backup_directory(resolved_state_dir)
+        entries = []
+        for name, path, target_reason, raw in captured:
+            (directory / path.name).write_bytes(raw)
+            entries.append(
+                {
+                    "name": name,
+                    "reason": target_reason,
+                    "sha256": hashlib.sha256(raw).hexdigest(),
+                    "bytes": len(raw),
+                }
+            )
+        manifest = {
+            "manifest_version": RECOVERY_MANIFEST_VERSION,
+            "created_at": self._clock()
+            .astimezone(timezone.utc)
+            .strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "mode": RECOVERY_MODE_RELEASE_STALE_STATE,
+            "reason": reason[:MAX_RECOVERY_REASON_CHARS],
+            "admin_revision": self._revision,
+            "lifecycle_fingerprint": view["fingerprint"],
+            "files": entries,
+        }
+        (directory / RECOVERY_MANIFEST_FILE).write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        for _name, path, _reason, _raw in captured:
+            path.unlink()
+        return directory, entries
+
+    @staticmethod
+    def _release_failed(exc, view):
+        return AdminWorkflowLifecycleError(
+            WORKFLOW_RECOVERY_FAILED,
+            f"The Admin workflow state could not be released: {exc}",
+            status=500,
+            lifecycle=view,
+        )
+
     # --- shared refusals ------------------------------------------------------
 
     def _require_fingerprint(self, view, expected_fingerprint):
         if expected_fingerprint == view["fingerprint"]:
             return
-        raise AdminWorkflowLifecycleError(
+        raise self._lifecycle_changed(view)
+
+    @staticmethod
+    def _lifecycle_changed(view):
+        return AdminWorkflowLifecycleError(
             WORKFLOW_LIFECYCLE_CHANGED,
             "The Admin workflow state changed since this view was loaded. "
             "Review the current state and try again.",

@@ -22,6 +22,7 @@ from admin.releases import (
     legacy_release_resource_ref,
     legacy_release_resource_url,
 )
+from admin.system_build import SystemBuildError, SystemBuildResolver
 
 pytestmark = [
     pytest.mark.admin,
@@ -1544,6 +1545,7 @@ def test_development_source_failure_never_breaks_the_catalogue(tmp_path):
 
     assert [item["tag"] for item in result["releases"]][:1] == ["latest"]
     assert all(item["channel"] != "development" for item in result["releases"])
+    assert _DEVELOPMENT_UNREADABLE in result["warnings"]
 
 
 # --- production development build catalogue -------------------------------
@@ -1581,14 +1583,14 @@ def _write_catalogue(tmp_path, entries):
     return path
 
 
-def test_missing_catalogue_yields_empty_development_group(tmp_path):
-    assert load_development_builds(tmp_path / "does-not-exist.json") == []
+def test_a_missing_catalogue_cannot_be_read(tmp_path):
+    assert load_development_builds(tmp_path / "does-not-exist.json") is None
 
 
 def test_invalid_catalogue_json_is_fail_closed(tmp_path):
     path = tmp_path / "development-builds.json"
     path.write_text("{ not valid json", encoding="utf-8")
-    assert load_development_builds(path) == []
+    assert load_development_builds(path) is None
 
 
 def test_catalogue_lists_installable_canonical_pair(tmp_path):
@@ -1657,7 +1659,7 @@ def test_catalogue_rejects_duplicate_canonical_tags(tmp_path):
         tmp_path,
         [_catalogue_entry(), _catalogue_entry(display_name="duplicate")],
     )
-    assert load_development_builds(path) == []
+    assert load_development_builds(path) is None
 
 
 def test_dynamic_catalogue_fetch_is_bounded_and_cached(tmp_path):
@@ -1709,7 +1711,7 @@ def test_catalogue_outage_rejects_stale_cache(tmp_path):
         cache_path=cache,
         urlopen=unavailable,
         now=lambda: datetime.now(timezone.utc),
-    ) == []
+    ) is None
 
 
 def test_oversized_remote_catalogue_is_fail_closed_without_cache_fallback(tmp_path):
@@ -1722,7 +1724,7 @@ def test_oversized_remote_catalogue_is_fail_closed_without_cache_fallback(tmp_pa
         "https://catalogue.example/development-builds.json",
         cache_path=cache,
         urlopen=oversized,
-    ) == []
+    ) is None
 
 
 def test_stable_admin_source_can_observe_a_later_catalogue_publication(tmp_path):
@@ -1795,6 +1797,74 @@ def test_catalogue_source_preserves_exact_pair_metadata_in_release_item(tmp_path
     assert descriptor["admin_digest"] == entry["admin_digest"]
     assert descriptor["ems_digest"] == entry["ems_digest"]
     assert manager.development_build("dev-missing-aaaaaaa-1-1") is None
+
+
+_DEVELOPMENT_UNREADABLE = (
+    "The development build catalogue could not be read, so no development "
+    "builds are listed."
+)
+
+
+def _offline(_request, timeout):
+    raise urllib.error.URLError("offline")
+
+
+def _unreadable_catalogue_manager(tmp_path):
+    return ReleaseManager(
+        data_dir=tmp_path / "data",
+        urlopen=_opener(),
+        development_source=development_catalogue_source(
+            "https://catalogue.example/development-builds.json",
+            cache_path=tmp_path / "no-cache.json",
+            urlopen=_offline,
+        ),
+    )
+
+
+def test_a_development_catalogue_that_cannot_be_read_is_named_in_the_listing(tmp_path):
+    """"Could not be read" is not "there are no development builds".
+
+    An unreachable catalogue without a recent copy, a malformed one and an
+    oversized one all read as an empty catalogue, so the Experimental group
+    disappeared without a word, while the release catalogue beside it refuses
+    to make exactly that mistake.
+    """
+
+    result = _unreadable_catalogue_manager(tmp_path).list_releases()
+
+    assert all(item["channel"] != "development" for item in result["releases"])
+    assert _DEVELOPMENT_UNREADABLE in result["warnings"]
+
+
+def test_a_development_catalogue_naming_no_build_is_trusted_as_empty(tmp_path):
+    manager = ReleaseManager(
+        data_dir=tmp_path / "data",
+        urlopen=_opener(),
+        development_source=development_catalogue_source(
+            _write_catalogue(tmp_path, [])
+        ),
+    )
+
+    result = manager.list_releases()
+
+    assert all(item["channel"] != "development" for item in result["releases"])
+    assert _DEVELOPMENT_UNREADABLE not in result["warnings"]
+
+
+def test_a_development_build_is_not_called_uninstallable_while_its_catalogue_is_unreadable(
+    tmp_path,
+):
+    """Selecting a listed build re-reads the catalogue; an outage then is not a verdict."""
+
+    resolver = SystemBuildResolver(
+        docker=object(),
+        development_build_source=_unreadable_catalogue_manager(tmp_path).development_build,
+    )
+
+    with pytest.raises(SystemBuildError) as raised:
+        resolver.resolve(_CATALOGUE_TAG)
+
+    assert "could not be verified" in str(raised.value)
 
 
 # --- mocked opener host matching -----------------------------------------
@@ -1999,6 +2069,85 @@ def test_running_identity_and_active_release_use_same_immutable_image(tmp_path, 
     running = manager._running_identity()
     assert running.release_tag == "v0.8.0"
     assert running.digest == _DIGEST_A
+
+
+# --- the Admin image's code root is not the install ------------------------
+#
+# Review 4 (AL18): in the Admin container the code lives under /app and the EMS
+# install is bind-mounted where EMS_INSTALL_DIR names it. The release listing
+# read the compose file under /app, which the image does not ship, so an EMS
+# named only by the compose file's container_name was no container to it, and
+# the compose image never answered for the installed release.
+
+
+def _admin_image_layout(tmp_path, monkeypatch, compose):
+    import admin.releases as releases_module
+
+    install = tmp_path / "install"
+    install.mkdir()
+    (install / "docker-compose.yml").write_text(compose, encoding="utf-8")
+    app = tmp_path / "app"
+    (app / "admin").mkdir(parents=True)
+    monkeypatch.delenv("EMS_CONTAINER_NAME", raising=False)
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(install))
+    monkeypatch.setenv("EMS_ADMIN_DATA_DIR", str(tmp_path / "admin-data"))
+    monkeypatch.setattr(releases_module, "__file__", str(app / "admin" / "releases.py"))
+
+
+def test_the_release_listing_finds_the_ems_the_install_compose_names(tmp_path, monkeypatch):
+    _admin_image_layout(
+        tmp_path,
+        monkeypatch,
+        f"services:\n  ems:\n    image: {_ref('latest')}\n    container_name: compose-ems\n",
+    )
+    running_ref = _digest_ref(_DIGEST_A)
+    docker = _NameImageDocker(
+        containers={
+            "compose-ems": {
+                "container_name": "compose-ems",
+                "image": running_ref,
+                "status": "running",
+            }
+        },
+        images={running_ref: _labeled(_DIGEST_A, release_tag="v0.8.0", version="v0.8.0")},
+    )
+
+    manager = ReleaseManager(docker=docker)
+
+    assert manager.detect_active_release() == "v0.8.0"
+    assert manager._running_identity().digest == _DIGEST_A
+
+
+def test_the_release_listing_reads_the_install_compose_image(tmp_path, monkeypatch):
+    _admin_image_layout(
+        tmp_path, monkeypatch, f"services:\n  ems:\n    image: {_ref('v0.6.0')}\n"
+    )
+
+    manager = ReleaseManager(docker=_NameImageDocker(containers={}))
+
+    assert manager.detect_active_release() == "v0.6.0"
+
+
+@pytest.mark.parametrize(
+    ("env_name", "compose_name"),
+    ((None, None), (None, "compose-ems"), ("env-ems", None), ("env-ems", "compose-ems")),
+)
+def test_the_release_listing_names_the_ems_as_the_system_build_does(
+    tmp_path, monkeypatch, env_name, compose_name
+):
+    from admin.ems_tool import ems_container_name
+    from admin.install_context import detect_install_context
+
+    compose = f"services:\n  ems:\n    image: {_ref('latest')}\n"
+    if compose_name is not None:
+        compose += f"    container_name: {compose_name}\n"
+    _admin_image_layout(tmp_path, monkeypatch, compose)
+    if env_name is not None:
+        monkeypatch.setenv("EMS_CONTAINER_NAME", env_name)
+
+    manager = ReleaseManager()
+
+    assert manager._ems_container_name() == ems_container_name(detect_install_context())
 
 
 def _versioned_payload(*tags):
@@ -2313,6 +2462,46 @@ def test_the_running_identity_is_read_afresh_for_every_request(tmp_path):
     manager.verify_upgrade_target("v0.8.3")
 
     assert compared[-2:] == [169, 175]
+
+
+def test_an_image_read_for_one_listing_does_not_answer_the_next(tmp_path):
+    """A tag names whatever image Docker holds under it now.
+
+    The release manager lives as long as the Admin process. Images it had read
+    by tag were kept for that whole life, so a target that was not local at the
+    first listing stayed unverified after it was pulled, and a ``latest`` that
+    moved kept the build it had named before.
+    """
+
+    running = "sha256:" + "a" * 64
+
+    class _RunningDocker(_FakeDocker):
+        def inspect_container_image_id(self, _name):
+            return running
+
+    docker = _RunningDocker(
+        _running_container("latest"),
+        {running: _image(digest=running, build_serial=169, channel="latest")},
+    )
+    manager = ReleaseManager(
+        data_dir=tmp_path / "data",
+        project_dir=_project_compose(tmp_path, "latest"),
+        urlopen=_opener(payload=_two_line_payload()),
+        docker=docker,
+    )
+
+    def listed():
+        return {item["tag"]: item for item in manager.list_releases()["releases"]}
+
+    before = listed()
+    docker._images[_ref("v0.8.3")] = _image(digest=running, build_serial=169)
+    docker._images[_ref("latest")] = _image(digest=running, build_serial=169)
+    after = listed()
+
+    assert before["v0.8.3"]["upgrade_state"] == "identity_unknown"
+    assert after["v0.8.3"]["upgrade_state"] == "already_current"
+    assert after["v0.8.3"]["selectable"] is False
+    assert after["latest"]["upgrade_state"] == "already_current"
 
 
 def test_a_placed_development_install_is_not_called_uncomparable(tmp_path):

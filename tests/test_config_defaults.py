@@ -94,8 +94,7 @@ def test_config_template_energy_savings_matches_code_defaults():
 def test_config_template_standalone_live_control_defaults():
     template = json.loads(Path("config/config.template.json").read_text())
 
-    assert template["ha"]["enabled"] is False
-    assert template["ha"]["control_enabled"] is False
+    assert "ha" not in template
     assert template["grid_meter"]["type"] == "shelly"
     assert isinstance(template["grid_meter"]["ip"], str)
     assert template["grid_meter"]["ip"]
@@ -111,7 +110,6 @@ def test_config_template_standalone_live_control_defaults():
     assert template["system"]["allow_mqtt_local_control_writes"] is True
     assert template["system"]["allow_mqtt_zendure_control_writes"] is True
     assert template["system"]["allow_state_reconciliation_writes"] is True
-    assert template["system"]["reconcile_ac_mode_on_start"] is True
     assert template["system"]["reconcile_smart_mode"] is True
 
 
@@ -321,7 +319,6 @@ def base_minimal_config():
             "simulation_mode": False,
             "allow_hardware_writes": True,
             "allow_state_reconciliation_writes": True,
-            "reconcile_ac_mode_on_start": True,
             "reconcile_smart_mode": True,
             "max_total_power": 800,
             "max_device_power": 800,
@@ -828,7 +825,6 @@ def initialize_config_from_dict(tmp_path, values):
         simulate=False,
         replay=None,
         self_test=False,
-        no_ha=False,
     )
     cfg.initialize(args, str(tmp_path))
 
@@ -929,7 +925,6 @@ def test_normal_config_missing_gates_resolves_release_defaults_without_rewrite(
         simulate=False,
         replay=None,
         self_test=False,
-        no_ha=False,
     )
 
     try:
@@ -980,7 +975,6 @@ def test_safe_config_paths_keep_all_write_gates_disabled(tmp_path):
         simulate=True,
         replay=None,
         self_test=False,
-        no_ha=False,
     )
     loaded = cfg.load_config(args, str(tmp_path))
     assert loaded["system"]["allow_hardware_writes"] is False
@@ -1046,7 +1040,6 @@ def test_runtime_load_does_not_rewrite_config_file(tmp_path):
         simulate=False,
         replay=None,
         self_test=False,
-        no_ha=False,
     )
 
     try:
@@ -1911,94 +1904,6 @@ def test_mqtt_grid_meter_config_rejects_unknown_payload_format(tmp_path):
     try:
         with pytest.raises(ValueError, match="payload_format"):
             initialize_config_from_dict(tmp_path, values)
-    finally:
-        restore_config_module(snapshot)
-
-
-def test_omitted_ha_keys_default_to_disabled(tmp_path):
-    snapshot = snapshot_config_module()
-    config_path = tmp_path / "config.json"
-    config_path.write_text(json.dumps({
-        "ha": {
-            "url": "http://homeassistant.local:8123",
-            "token": "TOKEN"
-        },
-        "system": {
-            "enabled": True,
-            "dry_run": False,
-            "simulation_mode": False,
-            "allow_hardware_writes": True,
-            "allow_state_reconciliation_writes": True,
-            "reconcile_ac_mode_on_start": True,
-            "reconcile_smart_mode": True,
-            "max_total_power": 800,
-            "max_device_power": 800,
-            "deadband": 10,
-            "loop_interval": 5
-        },
-        "devices": [],
-        "shelly": {
-            "ip": "192.168.1.50"
-        }
-    }))
-    args = SimpleNamespace(
-        config=str(config_path),
-        dry_run=False,
-        simulate=False,
-        replay=None,
-        self_test=False,
-        no_ha=False
-    )
-
-    try:
-        cfg.initialize(args, str(tmp_path))
-
-        assert cfg.HA_ENABLED is False
-        assert cfg.HA_CONTROL_ENABLED is False
-        assert cfg.RECONCILE_AC_MODE_ON_START is True
-        assert cfg.RECONCILE_SMART_MODE is True
-    finally:
-        restore_config_module(snapshot)
-
-
-def test_omitted_ha_section_defaults_to_disabled(tmp_path):
-    snapshot = snapshot_config_module()
-    config_path = tmp_path / "config.json"
-    config_path.write_text(json.dumps({
-        "system": {
-            "enabled": True,
-            "dry_run": False,
-            "simulation_mode": False,
-            "allow_hardware_writes": True,
-            "allow_state_reconciliation_writes": True,
-            "reconcile_ac_mode_on_start": True,
-            "reconcile_smart_mode": True,
-            "max_total_power": 800,
-            "max_device_power": 800,
-            "deadband": 10,
-            "loop_interval": 5
-        },
-        "devices": [],
-        "shelly": {
-            "ip": "192.168.1.50"
-        }
-    }))
-    args = SimpleNamespace(
-        config=str(config_path),
-        dry_run=False,
-        simulate=False,
-        replay=None,
-        self_test=False,
-        no_ha=False
-    )
-
-    try:
-        cfg.initialize(args, str(tmp_path))
-
-        assert cfg.HA_ENABLED is False
-        assert cfg.HA_CONTROL_ENABLED is False
-        assert cfg.HA_URL == ""
-        assert cfg.HA_TOKEN == ""
     finally:
         restore_config_module(snapshot)
 

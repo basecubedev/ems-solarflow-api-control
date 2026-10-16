@@ -126,7 +126,7 @@ def compute_overlap_provenance(config, runtime_data):
     """Effective value + provenance for every overlapping whitelisted key.
 
     Returns a display-only map keyed by feature path (``system.*``, ``winter.*``,
-    ``ha.*``) plus a ``devices`` sub-map keyed by device name. Provenance is a
+    ``ac_charge_control.*``) plus a ``devices`` sub-map keyed by device name. Provenance is a
     value comparison, never key presence: the runtime file is seeded with every
     overlapping key at creation, so presence alone would always read as an
     override. This map must never be fed into the editable maintenance draft.

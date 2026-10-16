@@ -30,8 +30,29 @@ def parse_pack_count(value):
     return int(packs)
 
 
+DEVICE_STATE_PROPERTIES = frozenset(
+    {
+        "electricLevel", "minSoc", "socSet", "solarInputPower", "outputHomePower",
+        "packInputPower", "outputPackPower", "hyperTmp", "BatVolt", "rssi",
+        "remainOutTime", "solarPower1", "solarPower2", "solarPower3", "solarPower4",
+        "outputLimit", "socLimit", "packState", "faultLevel", "smartMode",
+        "gridOffMode", "acMode", "acStatus", "dcStatus", "gridState", "inputLimit",
+        "packNum", "socStatus", "batCalTime", "gridInputPower", "gridReverse",
+        "chargeLimit", "chargeMaxLimit",
+    }
+)
+
+
 @dataclass
 class DeviceState:
+    """One device report as the controller reads it.
+
+    Each ``*_reported`` flag is False when the report carried no usable value
+    for a field a reconciler writes (``acMode``, ``minSoc``, ``socSet``,
+    ``smartMode``, ``gridOffMode``, ``inputLimit``); the value then reads 0,
+    which is not a state the device is in (K10, K20).
+    """
+
     soc: float
 
     min_soc: float
@@ -82,9 +103,15 @@ class DeviceState:
     pack_num: int | None = None
     soc_status: int = 0
     battery_calibration_time: int | None = None
+    ac_mode_reported: bool = True
+    min_soc_reported: bool = True
+    max_soc_reported: bool = True
+    smart_mode_reported: bool = True
+    grid_off_mode_reported: bool = True
+    input_limit_reported: bool = True
 
 
-@dataclass
+@dataclass(frozen=True)
 class DeviceCapabilities:
     can_charge: bool
     can_discharge: bool

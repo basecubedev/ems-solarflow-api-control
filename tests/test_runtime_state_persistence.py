@@ -18,10 +18,6 @@ DEFAULTS = {
         "max_total_power": 800,
         "loop_interval": 5,
     },
-    "ha": {
-        "enabled": False,
-        "control_enabled": False,
-    },
     "winter": {
         "enabled": False,
     },
@@ -81,15 +77,15 @@ def test_runtime_state_creates_default_file_and_saves_atomically(tmp_path):
     assert data["system"]["enabled"] is True
     assert data["devices"]["WR1"]["max_power"] == 800
 
-    assert state.set_system("enabled", False) is True
-    assert state.set_system("enabled", False) is False
-    assert state.set_section("ha", "enabled", True) is True
+    state.update_section("system", {"enabled": False})
+    state.update_section("winter", {"enabled": True})
     assert state.set_device("WR1", "max_power", 650) is True
+    assert state.set_device("WR1", "max_power", 650) is False
     state.save_atomic()
 
     saved = json.loads(path.read_text())
     assert saved["system"]["enabled"] is False
-    assert saved["ha"]["enabled"] is True
+    assert saved["winter"]["enabled"] is True
     assert saved["devices"]["WR1"]["max_power"] == 650
 
 
@@ -144,8 +140,7 @@ def test_runtime_state_invalid_json_keeps_current_data_and_logs_warning(tmp_path
     path = tmp_path / "runtime-state.json"
     state = RuntimeState(str(path), DEFAULTS)
     state.load_or_create()
-    state.set_system("enabled", False)
-    state.save_atomic()
+    state.update_section("system", {"enabled": False})
 
     path.write_text("{not valid json")
 
@@ -171,7 +166,7 @@ def _write_externally(path, mutate):
     [
         lambda state: state.update_section("system", {"max_total_power": 600}),
         lambda state: state.update_device("WR1", {"max_power": 600}),
-        lambda state: (state.set_system("max_total_power", 600), state.save_atomic()),
+        lambda state: (state.set_device("WR1", "max_power", 600), state.save_atomic()),
     ],
     ids=["update_section", "update_device", "set_then_save"],
 )

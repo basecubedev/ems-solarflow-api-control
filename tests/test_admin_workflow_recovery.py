@@ -14,8 +14,11 @@ with their hashes, and never anything belonging to the installed system.
 See ``docs/technical/admin-workflow-state.md``.
 """
 
+import contextlib
+import fcntl
 import hashlib
 import json
+import pathlib
 import threading
 
 import pytest
@@ -27,6 +30,7 @@ from admin.workflow_lifecycle import (
     RECOVERY_MODE_SAFE,
     WORKFLOW_LIFECYCLE_CHANGED,
     WORKFLOW_RECOVERY_UNSAFE,
+    ReplacementActivity,
 )
 from admin.guided_upgrade import guided_upgrade_request_fingerprint
 from admin.guided_upgrade_context import GuidedUpgradeContextStore
@@ -428,6 +432,169 @@ def test_advanced_release_is_refused_after_the_state_changed(tmp_path):
     assert _backup_dirs(tmp_path) == []
 
 
+def test_a_setup_record_written_after_the_release_decided_is_kept(tmp_path):
+    """Interleaving: Guided Setup starts while the release proves no replacement runs.
+
+    The release has decided on the corrupt record and has not removed it yet
+    when the start rewrites the file with a fresh workflow. That record is not
+    the one the operator was shown, so it stays and the release is refused.
+    """
+
+    started = []
+
+    def a_setup_starts_meanwhile(_operation_id):
+        started.append(service._workflows.ensure_active())
+        return ReplacementActivity.INACTIVE
+
+    service = _service(tmp_path, install_state_probe=a_setup_starts_meanwhile)
+    _corrupt_setup_record(service)
+
+    with pytest.raises(AdminWorkflowLifecycleError) as excinfo:
+        _recover(service, RECOVERY_MODE_RELEASE_STALE_STATE)
+
+    assert excinfo.value.code == WORKFLOW_LIFECYCLE_CHANGED
+    assert service._workflows.load()["workflow_id"] == started[0]["workflow_id"]
+    assert _backup_dirs(tmp_path) == []
+
+
+def test_a_setup_record_written_after_the_fingerprint_recheck_is_kept(tmp_path):
+    """Interleaving: Guided Setup starts after the release re-checked the
+    fingerprint and before it takes the stores' write locks.
+
+    The re-check has passed on the corrupt record, so only the byte comparison
+    under the locks can see the fresh workflow that replaced it. That record
+    stays and the release is refused.
+    """
+
+    service = _service(tmp_path)
+    _corrupt_setup_record(service)
+    take_the_locks = service._state_file_owners
+    started = []
+
+    @contextlib.contextmanager
+    def a_setup_starts_before_the_locks():
+        started.append(service._workflows.ensure_active())
+        with take_the_locks():
+            yield
+
+    service._state_file_owners = a_setup_starts_before_the_locks
+
+    with pytest.raises(AdminWorkflowLifecycleError) as excinfo:
+        _recover(service, RECOVERY_MODE_RELEASE_STALE_STATE)
+
+    assert excinfo.value.code == WORKFLOW_LIFECYCLE_CHANGED
+    assert service._workflows.load()["workflow_id"] == started[0]["workflow_id"]
+    assert _backup_dirs(tmp_path) == []
+
+
+def test_an_upgrade_context_saved_after_the_release_decided_is_kept(tmp_path):
+    """Interleaving: a Guided Upgrade saves its context while the release proves
+    no replacement runs, after it decided on the unusable context it replaces."""
+
+    contexts = GuidedUpgradeContextStore(tmp_path / "state")
+    options = GuidedUpgradeContextStore._normalize_options({})
+
+    def an_upgrade_starts_meanwhile(_operation_id):
+        contexts.save(
+            operation_id="op-new",
+            target_system_tag="v0.9.1",
+            options=options,
+            request_fingerprint=guided_upgrade_request_fingerprint("v0.9.1", options),
+        )
+        return ReplacementActivity.INACTIVE
+
+    service = _service(
+        tmp_path,
+        upgrade_contexts=contexts,
+        install_state_probe=an_upgrade_starts_meanwhile,
+    )
+    write_upgrade_context(tmp_path, "op-old")
+
+    with pytest.raises(AdminWorkflowLifecycleError) as excinfo:
+        _recover(service, RECOVERY_MODE_RELEASE_STALE_STATE)
+
+    assert excinfo.value.code == WORKFLOW_LIFECYCLE_CHANGED
+    assert contexts.load(operation_id="op-new", target_system_tag="v0.9.1") is not None
+    assert _backup_dirs(tmp_path) == []
+
+
+def _free_for_another_thread(lock):
+    """Whether a thread other than the caller acquires ``lock`` without waiting."""
+
+    acquired = []
+
+    def probe():
+        got = lock.acquire(blocking=False)
+        if got:
+            lock.release()
+        acquired.append(got)
+
+    thread = threading.Thread(target=probe)
+    thread.start()
+    thread.join()
+    return acquired[0]
+
+
+def _free_for_another_open_file(lock_path):
+    """Whether a second open file description takes the flock without waiting."""
+
+    with open(lock_path, "a+b") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return False
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return True
+
+
+def _store_locks_free(service):
+    return {
+        "setup_workflow": _free_for_another_thread(service._workflows.exclusive()),
+        "upgrade_context": _free_for_another_thread(
+            service._upgrade_contexts.exclusive()
+        ),
+        "transition": _free_for_another_open_file(
+            service._transition_store.lock_path
+        ),
+    }
+
+
+def test_no_store_writer_can_write_while_the_release_backs_up_and_removes(tmp_path):
+    """Interleaving: the release has compared the bytes and is backing up and
+    unlinking the files when a Guided Setup start, a Guided Upgrade context save
+    or a transition write arrives.
+
+    Each of them takes the lock its store lends the release, so each must find
+    it held for the whole backup and removal, or a record written after the
+    comparison is removed unseen. Inside the removal step the Setup and upgrade
+    context locks are probed from another thread and the transition's flock
+    from another open file; afterwards every lock is free again.
+    """
+
+    service = _service(tmp_path)
+    _corrupt_setup_record(service)
+    back_up_and_remove = service._back_up_and_remove
+    during_removal = []
+
+    def observe_the_locks_then_remove(*args, **kwargs):
+        during_removal.append(_store_locks_free(service))
+        return back_up_and_remove(*args, **kwargs)
+
+    service._back_up_and_remove = observe_the_locks_then_remove
+
+    result = _recover(service, RECOVERY_MODE_RELEASE_STALE_STATE)
+
+    assert result["released"] == ["state/guided-setup-workflow.json"]
+    assert during_removal == [
+        {"setup_workflow": False, "upgrade_context": False, "transition": False}
+    ]
+    assert _store_locks_free(service) == {
+        "setup_workflow": True,
+        "upgrade_context": True,
+        "transition": True,
+    }
+
+
 def test_advanced_release_requires_confirmation_and_a_reason(tmp_path):
     service = _service(tmp_path)
     _corrupt_setup_record(service)
@@ -550,3 +717,26 @@ def test_the_manifest_copies_no_credential_material(tmp_path):
     assert "super-secret" not in manifest
     assert (backup / "credentials.json").exists() is False
     assert secrets_file.exists()
+
+
+def test_the_store_locks_are_held_at_each_unlink(tmp_path, monkeypatch):
+    """Interleaving: the release compared the bytes and backed the files up; a
+    Guided Setup start arriving just before a state file is unlinked must wait
+    for the locks, or its fresh record is removed unseen."""
+
+    service = _service(tmp_path)
+    target = _corrupt_setup_record(service)
+    real_unlink = pathlib.Path.unlink
+    at_unlink = []
+
+    def observe_then_unlink(self, *args, **kwargs):
+        if self == target:
+            at_unlink.append(_store_locks_free(service))
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "unlink", observe_then_unlink)
+    _recover(service, RECOVERY_MODE_RELEASE_STALE_STATE)
+
+    assert at_unlink == [
+        {"setup_workflow": False, "upgrade_context": False, "transition": False}
+    ]

@@ -4,7 +4,9 @@
 # Release-candidate tier: every gate an RC must pass, in order, with no
 # deselection of known failures. Requires a reachable Docker daemon, installed
 # Playwright browsers (npm ci && npx playwright install chromium firefox) and
-# the published image digests the Admin replacement canary replaces into.
+# the published image digests the Admin replacement canary replaces into. That
+# gate replays the published stable pair the CANARY_* variables name (by
+# default the previous and the latest); it never runs the candidate's own Admin.
 # Nothing is installed implicitly; missing prerequisites fail before the first
 # gate rather than an hour in.
 #

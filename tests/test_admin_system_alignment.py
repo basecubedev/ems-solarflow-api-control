@@ -792,6 +792,44 @@ def test_a_replacement_that_claims_after_the_probe_is_not_cancelled_under(tmp_pa
     assert transitions.read().stage == STAGE_ADMIN_RECONNECT_PENDING
 
 
+def test_a_replacement_still_running_past_the_deadline_is_not_cancelled_under(
+    tmp_path,
+):
+    """Interleaving pinned: the sidecar claimed the transition before its
+    deadline and is still pulling when the deadline passes and a cancel comes.
+
+    After its claim the sidecar reads the record no more: it rewrites Compose
+    and recreates the Admin whatever the record says. Expiry closes every
+    other forward path, not that one, so the stage stays shut while the probe
+    sees the sidecar, and opens again once it is gone.
+    """
+
+    clock = {"now": T0}
+    sidecar = {"state": "active"}
+    service, transitions, *_ = _service(
+        tmp_path,
+        build=_build(),
+        replacement_activity=lambda _op: sidecar["state"],
+        now=lambda: clock["now"],
+    )
+    started = service.start(requested_tag="v0.8.0", mode="guided_upgrade")
+    operation_id = started["operation_id"]
+    assert transitions.claim_admin_update(operation_id, now=T0) is True
+    clock["now"] = T0 + timedelta(hours=2)
+
+    transition = service.status(operation_active=_no_worker)["transition"]
+    assert transition["expired"] is True
+    assert transition["replacement_active"] is True
+    assert transition["cancel_available"] is False
+    with pytest.raises(SystemAlignmentError) as excinfo:
+        service.cancel(operation_id=operation_id)
+    assert excinfo.value.code == "mutation_in_progress"
+    assert transitions.read().stage == STAGE_ADMIN_RECONNECT_PENDING
+
+    sidecar["state"] = "inactive"
+    assert service.cancel(operation_id=operation_id)["stage"] == "cancelled"
+
+
 @pytest.mark.parametrize("tag,channel", [("v0.8.0", "stable"), ("v0.9.0-rc.1", "rc")])
 def test_non_development_transitions_need_no_risk_acknowledgement(tmp_path, tag, channel):
     build = _build(tag=tag, channel=channel)
@@ -1640,6 +1678,58 @@ def test_status_polling_is_read_only_and_keeps_target_and_known_good_visible(tmp
     assert first["transition"]["system_tag"] == "v0.8.0"
     assert first["known_good"] is None
     assert transitions.path.read_bytes() == before
+
+
+def _cancelled_upgrade_left_admin_ahead(tmp_path, *, running_digest):
+    """Field report 2026-10-03: a Guided Upgrade cancelled once its Admin was replaced.
+
+    The known-good record still names the v0.8.0 pair; the Admin that runs is
+    whatever ``running_digest`` says.
+    """
+
+    known_good = KnownGoodStore(tmp_path / "state")
+    known_good.record(_build(admin_digest="sha256:v080admin"))
+    running = ImageIdentity(
+        image_ref=f"{ADMIN_IMAGE_REPO}:v0.8.1", digest=running_digest,
+        revision=REVISION, build_id="v0.8.1-f7265fc",
+    )
+    service, transitions, _, _ = _service(
+        tmp_path, build=_build(tag="v0.8.1", admin_digest="sha256:v081admin"),
+        running=running, known_good=known_good,
+    )
+    started = service.start(requested_tag="v0.8.1", mode="guided_upgrade")
+    transitions.cancel(operation_id=started["operation_id"], now=T0 + timedelta(hours=2))
+    return service
+
+
+def test_a_known_good_record_the_running_admin_has_left_is_named(tmp_path):
+    service = _cancelled_upgrade_left_admin_ahead(tmp_path, running_digest="sha256:v081admin")
+
+    status = service.status()
+
+    assert status["transition"]["stage"] == STAGE_CANCELLED
+    assert status["known_good"]["system_tag"] == "v0.8.0"
+    assert service.known_good_admin_running(status["known_good"]) is False
+
+
+def test_a_known_good_record_naming_the_running_admin_is_current(tmp_path):
+    service = _cancelled_upgrade_left_admin_ahead(tmp_path, running_digest="sha256:v080admin")
+
+    assert service.known_good_admin_running(service.status()["known_good"]) is True
+
+
+@pytest.mark.parametrize(
+    "known_good, running_digest",
+    [(None, "sha256:v080admin"), ({"admin_digest": ""}, "sha256:v080admin"),
+     ({"admin_digest": "sha256:v080admin"}, None)],
+)
+def test_a_known_good_record_that_cannot_be_compared_is_not_judged(
+    tmp_path, known_good, running_digest
+):
+    running = ImageIdentity(image_ref=None, digest=running_digest)
+    service, *_ = _service(tmp_path, running=running)
+
+    assert service.known_good_admin_running(known_good) is None
 
 
 def _resources_verified_service(tmp_path, *, image_retention=None):

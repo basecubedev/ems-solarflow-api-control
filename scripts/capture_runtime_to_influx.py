@@ -177,7 +177,7 @@ def runtime_state_points(runtime_state, run_id, timestamp_ns):
         if line:
             lines.append(line)
 
-    for section_name in ("ha", "winter"):
+    for section_name in ("winter",):
         section = runtime_state.get(section_name, {})
         if not isinstance(section, dict):
             continue

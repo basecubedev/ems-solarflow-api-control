@@ -266,6 +266,7 @@
             <p id="release-status" class="scan-status" role="status" aria-live="polite">
               Loading System Builds…
             </p>
+            <p id="release-warnings" class="network-warning" role="status" aria-live="polite" hidden></p>
             <p id="release-error" class="scan-error" role="alert" hidden></p>
           </section>
           <section class="setup-block" id="setup-system-build" aria-label="Admin Server compatibility">
@@ -611,7 +612,7 @@
                     <span class="field-label">Label</span>
                     <input id="mqtt-credential-label" name="mqtt-credential-label"
                            type="text" autocomplete="off"
-                           placeholder="Home Assistant / Mosquitto">
+                           placeholder="Mosquitto">
                   </label>
                   <label class="field">
                     <span class="field-label">Username</span>
@@ -2049,7 +2050,7 @@
           </div>
           <div class="maintenance-facts">
             <div class="maintenance-fact">
-              <span class="maintenance-fact-label">Current</span>
+              <span class="maintenance-fact-label">Current EMS</span>
               <span class="maintenance-fact-value" id="upgrade-current-version">…</span>
             </div>
             <div class="maintenance-fact">
@@ -2074,6 +2075,7 @@
             <p id="upgrade-release-status" class="scan-status" role="status" aria-live="polite">
               Loading System Builds…
             </p>
+            <p id="upgrade-release-warnings" class="network-warning" role="status" aria-live="polite" hidden></p>
             <p id="upgrade-release-error" class="scan-error" role="alert" hidden></p>
           </section>
         </section>
@@ -2155,6 +2157,7 @@
           <p id="upgrade-admin-alignment-status" class="scan-status" role="status" aria-live="polite">
             A matching Admin is kept as-is. A mismatched Admin is updated automatically and the browser reconnects before EMS is deployed.
           </p>
+          <p id="upgrade-admin-apart" class="network-warning" role="status" aria-live="polite" hidden></p>
         </section>
 
         <section class="control-pipeline-stage guided-upgrade-stage" aria-label="Upgrade validation">

@@ -9,7 +9,6 @@ import time
 from ems import config as cfg
 from ems import paths
 from ems.clients import (
-    HAClient,
     ZendureClient,
     close_grid_meter_client,
     create_grid_meter_client,
@@ -51,11 +50,6 @@ def parse_args():
     parser.add_argument(
         "--config",
         help="Path to config file"
-    )
-    parser.add_argument(
-        "--no-ha",
-        action="store_true",
-        help="Disable Home Assistant reads and writes for this run"
     )
     parser.add_argument(
         "--simulate",
@@ -167,9 +161,7 @@ def main():
         simulation=cfg.SIMULATION_MODE,
         replay=bool(args.replay),
         allow_hardware_writes=cfg.ALLOW_HARDWARE_WRITES,
-        allow_state_reconciliation_writes=cfg.ALLOW_STATE_RECONCILIATION_WRITES,
-        ha_enabled=cfg.HA_ENABLED,
-        ha_control_enabled=cfg.HA_CONTROL_ENABLED
+        allow_state_reconciliation_writes=cfg.ALLOW_STATE_RECONCILIATION_WRITES
     )
 
     if args.self_test:
@@ -224,15 +216,6 @@ def main():
         sys.exit(1)
 
     session = create_session()
-
-    ha = None
-
-    if cfg.HA_ENABLED and not cfg.SIMULATION_MODE and not args.replay:
-        ha = HAClient(
-            cfg.HA_URL,
-            cfg.HA_TOKEN,
-            session
-        )
 
     devices = [
         ZendureClient(
@@ -346,7 +329,7 @@ def main():
     )
 
     if args.preflight:
-        ok = run_live_preflight(devices, shelly, ha)
+        ok = run_live_preflight(devices, shelly)
         close_grid_meter_client(shelly)
         sys.exit(0 if ok else 2)
 
@@ -507,7 +490,6 @@ def main():
     ems = EMSController(
         devices,
         shelly,
-        ha,
         runtime_state=runtime_state,
         dashboard_store=dashboard_store,
         influx_writer=influx_writer,

@@ -13,7 +13,7 @@ import json
 import time
 
 from ems import paths
-from ems.external_status import sanitize_external_mqtt_status
+from ems.external_status import SOURCE_ZENDURE_CLOUD_MQTT, sanitize_external_mqtt_status
 
 from admin.install_context import detect_install_context
 
@@ -76,6 +76,24 @@ def _read_live_status(context, *, now=None):
         payload["status"],
         sensitive_context=_read_config(context),
     ), None
+
+
+def live_cloud_session_connected(context):
+    """Whether the EMS's live status shows a connected Zendure cloud broker.
+
+    ``None`` when there is no live status to read: missing, stale or malformed.
+    """
+
+    status, _reason = _read_live_status(context)
+    if status is None:
+        return None
+    brokers = status.get("brokers")
+    return any(
+        isinstance(broker, dict)
+        and broker.get("source") == SOURCE_ZENDURE_CLOUD_MQTT
+        and broker.get("connected") is True
+        for broker in (brokers if isinstance(brokers, list) else ())
+    )
 
 
 def _unavailable(message=_UNAVAILABLE_MESSAGE, *, fallback_reason=None):

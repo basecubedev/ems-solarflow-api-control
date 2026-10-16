@@ -77,3 +77,27 @@ def test_cancel_is_only_offered_where_it_is_a_legal_transition():
 
     assert "CANCELLABLE_STATES.indexOf(operation.state)" in APP
     assert '"operation-uninterruptible"' in APP
+
+
+def test_a_rebuild_draws_a_waiting_control_as_waiting():
+    """The poll rebuilds the view while a request is out; a rebuilt control
+    that came back enabled could send the request a second time."""
+
+    assert "reapplyHolds()" in body("render")
+    assert "reapplyHolds()" in body("refreshBanner")
+
+
+@pytest.mark.parametrize(
+    "sender",
+    ["planOperation", "confirmDialog", "acknowledgeOperation", "cancelOperation", "submitGate", "logout"],
+)
+def test_every_request_a_press_sends_holds_its_control(sender):
+    assert "holdControl(" in body(sender), sender
+
+
+def test_cancel_and_escape_wait_while_a_confirmation_is_out():
+    """Cancelling the plan whose confirmation is on its way would withdraw the
+    operation the appliance is starting."""
+
+    assert "dialog-cancel" in body("confirmDialog")
+    assert 'isHeld(document.getElementById("dialog-cancel"))' in body("dismissDialog")

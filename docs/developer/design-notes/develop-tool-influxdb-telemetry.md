@@ -53,7 +53,6 @@ It does not:
 - call Zendure `/properties/write`
 - modify `runtime-state.json`
 - modify `config.json`
-- write Home Assistant states
 
 ## Components
 

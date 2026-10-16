@@ -147,7 +147,7 @@ python3 emsctl.py backup create --type config --password
 python3 emsctl.py config init
 python3 emsctl.py config upgrade --dry-run
 python3 emsctl.py config upgrade
-python3 -B ems-solarflow-api-control.py --dry-run --no-ha --once
+python3 -B ems-solarflow-api-control.py --dry-run --once
 # writes to the hardware for two minutes:
 python3 -B ems-solarflow-api-control.py --duration 120
 ```

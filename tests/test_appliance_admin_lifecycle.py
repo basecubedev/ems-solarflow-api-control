@@ -7,6 +7,8 @@ not become healthy. These tests drive the real service against a scripted
 Docker engine — no container is started.
 """
 
+import io
+
 import pytest
 
 from appliance.admin_lifecycle import TYPE_INSTALL, TYPE_ROLLBACK
@@ -24,6 +26,7 @@ from tests.helpers.appliance import (
     ADMIN_SERVICE,
     IMAGE_SOURCE,
     StaticCatalogue,
+    appliance_config,
     build_test_services,
 )
 
@@ -142,6 +145,115 @@ def test_install_plan_pulls_validates_and_waits_for_confirmation(tmp_path):
     assert plan["target_architecture"] == "arm64"
     assert planned["operation"]["state"] == "awaiting_confirmation"
     assert services.host.containers[ADMIN_CONTAINER]["State"]["Running"] is True
+
+
+INDEX_FLAGGED = [{"tag_name": "v1.1.0", "prerelease": True}, {"tag_name": "v1.0.0"}]
+MIRROR = "https://mirror.example.org/releases.json"
+
+
+def test_an_exact_tag_the_list_greys_out_is_refused_as_the_list_says(tmp_path):
+    """protocol.py refuses a candidate by its tag. A release index may also call
+    a plain tag a prerelease: the list then greys it out with the reason, and
+    the agent used to plan it anyway for a request that named it."""
+
+    services = healthy_appliance(
+        tmp_path, catalogue=StaticCatalogue(INDEX_FLAGGED, index_url=MIRROR)
+    )
+    services.host.publish_image("v1.1.0")
+    listed = {item["tag"]: item["installable"] for item in services.admin.releases()["available"]}
+
+    assert listed["v1.1.0"] is False
+    assert refused(services, channel="exact", tag="v1.1.0") == "prerelease_not_allowed"
+    assert f"{ADMIN_REPOSITORY}:v1.1.0" not in services.host.images
+
+
+def test_an_exact_tag_the_list_offers_is_planned(tmp_path):
+    services = healthy_appliance(
+        tmp_path,
+        catalogue=StaticCatalogue(INDEX_FLAGGED, allow_prerelease=True, index_url=MIRROR),
+    )
+    services.host.publish_image("v1.1.0")
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    planned = handlers.dispatch(
+        {"operation": "admin.plan_install", "channel": "exact", "tag": "v1.1.0"}
+    )
+
+    assert planned["plan"]["target_tag"] == "v1.1.0"
+
+
+def test_an_exact_tag_is_still_planned_when_the_list_cannot_be_read(tmp_path):
+    """Expert mode's exact tag is the documented way in when the index is
+    unreachable; the tag rule in protocol.py has already been applied."""
+
+    from appliance.releases import ReleaseResolutionError
+
+    unreachable = StaticCatalogue(
+        error=ReleaseResolutionError("release_index_unreachable", "no route"), index_url=MIRROR
+    )
+    services = healthy_appliance(tmp_path, catalogue=unreachable)
+    services.host.publish_image("v1.1.0")
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    planned = handlers.dispatch(
+        {"operation": "admin.plan_install", "channel": "exact", "tag": "v1.1.0"}
+    )
+
+    assert planned["plan"]["target_tag"] == "v1.1.0"
+
+
+class _AnswerThatBreaksOff(io.BytesIO):
+    """A registry answer whose headers arrived and whose body read is reset."""
+
+    url = "https://registry-1.docker.io/v2/"
+    headers = {}
+
+    def read(self, size=-1):
+        raise ConnectionResetError(104, "Connection reset by peer")
+
+    read1 = read
+
+
+def registry_that_breaks_off(asked):
+    from appliance import registry_tags
+    from appliance.releases import ReleaseCatalogue
+
+    def opener(request, timeout=None, deadline=None):
+        asked.append(request.full_url)
+        return _AnswerThatBreaksOff()
+
+    return ReleaseCatalogue(
+        appliance_config(),
+        registry=lambda repository: registry_tags.list_tags(repository, opener=opener),
+    )
+
+
+def test_an_exact_tag_is_planned_without_asking_the_registry(tmp_path):
+    """The registry lists tags alone, so its list refuses nothing protocol.py has
+    not refused already. Asking it anyway failed the plan as an agent error when
+    the registry reset mid-answer, on every appliance without a release index."""
+
+    asked = []
+    services = healthy_appliance(tmp_path, catalogue=registry_that_breaks_off(asked))
+    services.host.publish_image("v1.1.0")
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    planned = handlers.dispatch(
+        {"operation": "admin.plan_install", "channel": "exact", "tag": "v1.1.0"}
+    )
+
+    assert planned["plan"]["target_tag"] == "v1.1.0"
+    assert asked == []
+
+
+def test_a_registry_answer_that_breaks_off_leaves_the_list_empty_with_its_reason(tmp_path):
+    asked = []
+    services = healthy_appliance(tmp_path, catalogue=registry_that_breaks_off(asked))
+
+    listed = services.admin.releases()
+
+    assert asked
+    assert (listed["available"], listed["error"]) == ([], "release_registry_unreachable")
 
 
 def test_install_plan_refuses_an_image_with_a_foreign_source_label(tmp_path):

@@ -12,6 +12,10 @@ from datetime import datetime, timedelta
 from ems.models import parse_pack_count
 
 
+LAST_SEEN_REFRESH = timedelta(minutes=15)
+OBSERVED_TIMES = ("last_full_charge_at", "next_due_at")
+
+
 def ensure_database_directory(path):
     """Create the directory of the core EMS state database when it is missing."""
 
@@ -46,8 +50,17 @@ BATTERY_FULL_CHARGE_STATE_COLUMNS = (
 
 
 class BatteryFullChargeStateStore:
+    """Each device's full-charge assist state, written only when it changes (K8b).
+
+    An observation that changes nothing but its time stays in memory until
+    ``LAST_SEEN_REFRESH`` has passed since ``last_seen_at`` was written, or
+    until the next write of the row carries it; ``get_device_state`` reads it
+    from there, so readers in this process see every cycle's values.
+    """
+
     def __init__(self, path):
         self.path = path
+        self._unwritten = {}
         self.initialize()
 
     def connect(self):
@@ -175,6 +188,12 @@ class BatteryFullChargeStateStore:
         }
 
     def get_device_state(self, device, now=None):
+        stored = self._stored_device_state(device)
+        if stored is None:
+            return self.default_state(device, now) if now is not None else None
+        return {**stored, **self._unwritten.get(device, {})}
+
+    def _stored_device_state(self, device):
         with self.connect() as conn:
             row = conn.execute(
                 """
@@ -194,9 +213,7 @@ class BatteryFullChargeStateStore:
                 (device,),
             ).fetchone()
 
-        if row:
-            return self._row_to_dict(row)
-        return self.default_state(device, now) if now is not None else None
+        return self._row_to_dict(row) if row else None
 
     def all_device_states(self):
         with self.connect() as conn:
@@ -216,10 +233,21 @@ class BatteryFullChargeStateStore:
                 ORDER BY device
                 """
             ).fetchall()
-        return [self._row_to_dict(row) for row in rows]
+        return [
+            {**state, **self._unwritten.get(state["device"], {})}
+            for state in (self._row_to_dict(row) for row in rows)
+        ]
 
     def update_device_state(self, device, now, **values):
-        current = self.get_device_state(device, now)
+        """Write ``values`` when one of them changes the row; carry any observation held in memory."""
+
+        stored = self._stored_device_state(device)
+        if stored is None:
+            current = self.default_state(device, now)
+        else:
+            current = {**stored, **self._unwritten.get(device, {})}
+            if all(current.get(key) == value for key, value in values.items()):
+                return current
         current.update(values)
         current["device"] = device
         current["updated_at"] = self._timestamp(now)
@@ -255,9 +283,17 @@ class BatteryFullChargeStateStore:
                 """,
                 tuple(row[key] for key in BATTERY_FULL_CHARGE_STATE_COLUMNS),
             )
+        self._unwritten.pop(device, None)
         return self.get_device_state(device, now)
 
     def record_observation(self, device, state, has_battery, now, interval_days):
+        """Record one report; write it when a value changed or ``last_seen_at`` is due.
+
+        While the battery stays full, the time it was last seen full moves
+        with every report and is held in memory with the rest; leaving full
+        changes ``last_seen_soc_limit``, and that write carries it.
+        """
+
         values = {
             "has_battery": bool(has_battery),
             "last_seen_soc": float(state.soc),
@@ -274,7 +310,6 @@ class BatteryFullChargeStateStore:
                 "battery_calibration_time",
                 None
             ),
-            "last_seen_at": self._timestamp(now),
         }
 
         if has_battery and int(state.soc_limit) == 1:
@@ -283,7 +318,27 @@ class BatteryFullChargeStateStore:
                 now + timedelta(days=interval_days)
             )
 
+        values["last_seen_at"] = self._timestamp(now)
+        stored = self._stored_device_state(device)
+        if stored is not None and not self._observation_due(stored, values, now):
+            self._unwritten[device] = values
+            return {**stored, **values}
         return self.update_device_state(device, now, **values)
+
+    @staticmethod
+    def _observation_due(stored, values, now):
+        """Whether an observation goes to disk: a value besides its times changed, or the refresh is due."""
+
+        if any(
+            stored.get(key) != value
+            for key, value in values.items()
+            if key not in OBSERVED_TIMES and key != "last_seen_at"
+        ):
+            return True
+        try:
+            return now - datetime.fromisoformat(stored["last_seen_at"]) >= LAST_SEEN_REFRESH
+        except (TypeError, ValueError):
+            return True
 
     def get_full_charge_feature_enabled_state(self):
         with self.connect() as conn:
@@ -301,6 +356,10 @@ class BatteryFullChargeStateStore:
         return bool(row[0])
 
     def set_full_charge_feature_enabled_state(self, enabled, now):
+        """Record the feature switch when it changes; ``last_enabled_at`` is when it was last switched on."""
+
+        if self.get_full_charge_feature_enabled_state() is bool(enabled):
+            return
         timestamp = self._timestamp(now)
         enabled_value = 1 if enabled else 0
         with self.connect() as conn:
@@ -381,6 +440,8 @@ class BatteryFullChargeStateStore:
         return record
 
     def mark_assist_started(self, device, now, ac_charge_mode):
+        """Start an assist; the ``acMode`` restore is owed only once its ``acMode=1`` went out."""
+
         return self.update_device_state(
             device,
             now,
@@ -390,7 +451,6 @@ class BatteryFullChargeStateStore:
             restore_pending=True,
             max_soc_request_pending=True,
             ac_input_request_pending=bool(ac_charge_mode),
-            ac_mode_restore_pending=bool(ac_charge_mode),
         )
 
     def mark_assist_completed(self, device, now, interval_days):
@@ -447,12 +507,19 @@ def parse_iso_timestamp(value):
     return parsed
 
 
-def describe_full_charge_assist_status(config, enabled, has_battery, record, now):
+def describe_full_charge_assist_status(
+    config, enabled, has_battery, record, now, held_by=None
+):
     """Derive a normalized battery full-charge assist status for the API.
 
     This is the single place that decides the dashboard-facing ``status``
     and related derived fields, so the browser does not need to duplicate
-    assist window/overdue/restore logic.
+    assist window/overdue/restore logic. ``held_by`` is what keeps the assist
+    from writing to the device now
+    (:meth:`~ems.controller.EMSController.full_charge_assist_held_by`): on a
+    transport without state reconciliation it never runs (``unavailable``),
+    and an active one that cannot write what it needs is ``waiting``, not
+    running.
     """
 
     config = config or {}
@@ -476,6 +543,15 @@ def describe_full_charge_assist_status(config, enabled, has_battery, record, now
             "message": "No battery detected",
         }
 
+    if held_by == "transport_state_reconciliation_unsupported":
+        return {
+            "status": "unavailable",
+            "inside_assist_window": False,
+            "days_until_due": None,
+            "window_starts_at": None,
+            "message": "Full-charge assist is not available over MQTT control",
+        }
+
     if record is None:
         return {
             "status": "unknown",
@@ -494,7 +570,14 @@ def describe_full_charge_assist_status(config, enabled, has_battery, record, now
         window_starts_at = next_due_at - timedelta(days=assist_window_days)
         inside_assist_window = window_starts_at <= now <= next_due_at
 
-    if record.get("full_charge_assist_active"):
+    if record.get("full_charge_assist_active") and held_by is not None:
+        status = "waiting"
+        message = (
+            "Full-charge assist waiting for a device report that carries what it writes"
+            if held_by == "fields_not_reported"
+            else "Full-charge assist waiting for state writes"
+        )
+    elif record.get("full_charge_assist_active"):
         status = "active"
         message = "Full-charge assist active"
     elif record.get("restore_pending") or record.get("ac_mode_restore_pending"):

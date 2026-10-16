@@ -334,7 +334,7 @@ PREVIEW_MAINTENANCE = {
         "items": [
             {"kind": "add", "path": "config_upgrade.on_startup", "value": "check"},
             {"kind": "add", "path": "dashboard.session_idle_timeout_seconds", "value": 1800},
-            {"kind": "add", "path": "ha.token", "value": "<redacted>"},
+            {"kind": "add", "path": "influxdb.token", "value": "<redacted>"},
             {
                 "kind": "migrate",
                 "path": "config_schema_version",

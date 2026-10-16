@@ -11,7 +11,7 @@ its interval and tries again, and the log says so without flooding.
 import logging
 import time
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -100,7 +100,6 @@ def _run_a_cycle_that_raises_on_wr2(devices):
         sleep_enabled=False,
         runtime_state=RuntimeStateStub(),
     )
-    controller.run_startup_ac_mode_reconcile_once = Mock()
     written = []
 
     def set_output_limit(dev, value, charge_exit=None):
@@ -138,7 +137,10 @@ def test_a_failed_cycle_stops_where_it_raised():
 
 
 def test_a_failed_cycle_leaves_a_charge_it_did_not_reach_running(caplog):
-    """Unlike the crash it replaces, a failed cycle returns no charge."""
+    """Unlike the crash it replaces, one failed cycle returns no charge.
+
+    Three in a row do (R1-1, tests/test_failed_cycles_return_the_charge.py).
+    """
 
     charging = device("WR3")
     charging.charge_commanded = True

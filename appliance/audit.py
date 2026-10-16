@@ -10,8 +10,10 @@ import json
 import os
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 
+from appliance.auth import DEFAULT_FAILURE_WINDOW, throttle_sources
 from appliance.paths import own_by_root
 from appliance.redaction import redact_mapping, redact_text
 
@@ -143,6 +145,80 @@ class AuditLog(JsonlLog):
                 key: value for key, value in dict(detail).items() if _loggable(key)
             }
         return self.append(entry)
+
+
+AGGREGATED_REASONS = ("busy", "rate_limited")
+DEFAULT_REFUSAL_ENTRIES = 1024
+
+
+class RefusalAggregator:
+    """Web authentication events into the audit log, refusals that read no password counted.
+
+    A sign-in or password check refused as busy or rate-limited never read a
+    password, so a client can repeat it as fast as it connects; written one line
+    each, they rotate the log's one generation out. The first such refusal from a
+    source is written as it comes, its repeats within the window are counted,
+    and the count is written as one record once the window has ended (at the
+    next event) or the entry is evicted. A source is an IPv4 address or an IPv6
+    /64, the bound the login rate limiter uses. Every other event is written as
+    it comes. A count still open when the agent stops is lost; the first refusal
+    of its window is in the log.
+    """
+
+    def __init__(self, audit, *, window_seconds=DEFAULT_FAILURE_WINDOW,
+                 max_entries=DEFAULT_REFUSAL_ENTRIES, time_fn=None):
+        self.audit = audit
+        self.window_seconds = float(window_seconds)
+        self.max_entries = max(1, int(max_entries))
+        self._time = time_fn or time.monotonic
+        self._lock = threading.Lock()
+        self._open = OrderedDict()
+
+    def __len__(self):
+        with self._lock:
+            return len(self._open)
+
+    def record(self, event, *, user, source_ip, result, reason):
+        """Write or count one event; return the record it is written in."""
+
+        with self._lock:
+            now = self._time()
+            self._close_ended(now)
+            if reason not in AGGREGATED_REASONS:
+                return self._write(event, user, source_ip, result, reason)
+            address, network = throttle_sources(source_ip)
+            key = (event, result, reason, network or address)
+            window = self._open.get(key)
+            if window is not None:
+                window["repeated"] += 1
+                return window["entry"]
+            while len(self._open) >= self.max_entries:
+                self._close(*self._open.popitem(last=False))
+            entry = self._write(event, user, source_ip, result, reason)
+            self._open[key] = {"opened": now, "repeated": 0, "entry": entry, "user": user}
+            return entry
+
+    def _close_ended(self, now):
+        while self._open:
+            key, window = next(iter(self._open.items()))
+            if now - window["opened"] < self.window_seconds:
+                return
+            del self._open[key]
+            self._close(key, window)
+
+    def _close(self, key, window):
+        if not window["repeated"]:
+            return
+        event, result, reason, source = key
+        self._write(
+            event, window["user"], source, result, reason,
+            detail={"repeated": window["repeated"], "since": window["entry"].get("timestamp")},
+        )
+
+    def _write(self, event, user, source_ip, result, reason, *, detail=None):
+        return self.audit.record(
+            event, user=user, source_ip=source_ip, target=reason, result=result, detail=detail
+        )
 
 
 class WebLog(JsonlLog):

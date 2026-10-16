@@ -148,6 +148,15 @@ class GuidedUpgradeContextStore:
         self.path = self.state_dir / GUIDED_UPGRADE_CONTEXT_FILE
         self._lock = threading.Lock()
 
+    def exclusive(self):
+        """Hold the lock every write of this record takes.
+
+        For the stale-state release, which removes the file itself and must
+        not remove a record a writer replaced after it was read.
+        """
+
+        return self._lock
+
     @staticmethod
     def _normalize_options(options):
         return _normalized_options(options)

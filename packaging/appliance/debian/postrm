@@ -270,6 +270,58 @@ home_is_recorded() {
 
 # --- key material -----------------------------------------------------------
 
+key_material_left() {
+    incomplete="$incomplete $2"
+    echo "ems-appliance: $1" >&2
+}
+
+# --- BEGIN package key withdrawal (byte-identical in backup-account.sh and postrm)
+link_left_in_place() {
+    link_target=$(readlink "$1" 2>/dev/null | tr '\n' '?')
+    link_target=${link_target%\?}
+    key_material_left "$1 is a symbolic link to ${link_target:-a target that cannot be read}; nothing behind it was read, moved or removed" \
+        "the-link-$1-to-${link_target:-an-unreadable-target}"
+}
+
+key_links_found() {
+    if [ -L "$1" ]; then
+        link_left_in_place "$1"
+        return 0
+    fi
+    [ -d "$1" ] || return 1
+    links_found=1
+    for entry in "$1/authorized_keys" "$1/authorized_keys$DISABLED_SUFFIX" \
+                 "$1/authorized_keys$DISABLED_SUFFIX".conflict*; do
+        if [ -L "$entry" ]; then
+            link_left_in_place "$entry"
+            links_found=0
+        fi
+    done
+    return "$links_found"
+}
+
+home_left_in_place() {
+    if ! account_exists; then
+        if [ "$(record_value home_created_by_package)" = "true" ]; then
+            key_material_left "$1 was left in place because a key path in it is a symbolic link and $BACKUP_USER no longer exists. Remove every link named above, then move aside from $1 what you want to keep, then remove $1, $RECORD and $MANAGED_KEYS by hand" \
+                "the-home-directory-$1"
+        else
+            key_material_left "$1 was left in place because a key path in it is a symbolic link and $BACKUP_USER no longer exists; this package did not create $1, so it stays yours. Remove every link named above, then take the keys $MANAGED_KEYS lists by hash out of $1/.ssh, then remove $RECORD and $MANAGED_KEYS by hand" \
+                "the-ownership-record-$RECORD"
+        fi
+        return 0
+    fi
+    if usermod --expiredate 1 --lock "$BACKUP_USER" >/dev/null 2>&1; then
+        account_left="$BACKUP_USER was locked and expired"
+    else
+        account_left="$BACKUP_USER could not be locked or expired"
+        key_material_left "$BACKUP_USER could not be locked or expired; lock it by hand" \
+            "the-$BACKUP_USER-account"
+    fi
+    key_material_left "$1 was left in place because a key path in it is a symbolic link; $account_left, and its ownership record was kept. Remove every link named above, reinstall the package, then purge it again" \
+        "the-home-directory-$1"
+}
+
 quarantine_keys() {
     mkdir -p "$QUARANTINE_DIR" 2>/dev/null || return 1
     chmod 0700 "$QUARANTINE_DIR" 2>/dev/null || true
@@ -281,7 +333,8 @@ quarantine_keys() {
     return 0
 }
 
-# Only a key whose body hash this package recorded is this package's to remove.
+# Only a key this package wrote is this package's to remove. Attribution is the
+# recorded hash of the key body; anything else is preserved, never deleted.
 filter_key_file() {
     file=$1
     [ -f "$file" ] || return 0
@@ -304,7 +357,8 @@ filter_key_file() {
             rm -f "$file"
         else
             rm -f "$kept"
-            incomplete="$incomplete the-key-material-in-$file"
+            key_material_left "key material in $file could not be attributed to this package and was left in place" \
+                "the-key-material-in-$file"
         fi
     else
         rm -f "$kept" "$file"
@@ -314,14 +368,20 @@ filter_key_file() {
 
 withdraw_managed_keys() {
     directory=$1
+    if key_links_found "$directory"; then
+        return 1
+    fi
     [ -d "$directory" ] || return 0
     filter_key_file "$directory/authorized_keys"
     filter_key_file "$directory/authorized_keys$DISABLED_SUFFIX"
     for conflict in "$directory/authorized_keys$DISABLED_SUFFIX".conflict*; do
-        [ -e "$conflict" ] && filter_key_file "$conflict"
+        if [ -e "$conflict" ]; then
+            filter_key_file "$conflict"
+        fi
     done
     return 0
 }
+# --- END package key withdrawal
 
 # --- ACL entries ------------------------------------------------------------
 
@@ -570,7 +630,10 @@ purge_backup_account() {
 
     recorded_home=$(record_value home)
     created_home=$(record_value home_created_by_package)
-    withdraw_managed_keys "$recorded_home/.ssh"
+    if ! withdraw_managed_keys "$recorded_home/.ssh"; then
+        home_left_in_place "$recorded_home"
+        return 0
+    fi
 
     if account_exists; then
         deluser --quiet "$BACKUP_USER" >/dev/null 2>&1 || true

@@ -528,6 +528,81 @@ test.describe("Guided Upgrade", { tag: ["@workflow"] }, () => {
     expect(cleared.active).toBe(false);
   });
 
+  test("a cancelled upgrade that left Admin and EMS apart is named on the panel", async ({
+    page,
+    seedAdminScenario,
+  }) => {
+    // Field report 2026-10-03: the panel's only "Current" was the EMS's v0.8.8
+    // while Admin v0.8.10 ran, and the known-good record named the v0.8.8 pair.
+    await page.route("**/api/admin/maintenance/overview", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          install_state: { state: "standard_install", label: "Standard installation" },
+          paths: {
+            config: { path: "/install/config/config.json", exists: true },
+            data: { path: "/install/data", exists: true },
+            compose: { path: "/install/docker-compose.yml", exists: true },
+          },
+          docker: { available: true, server_version: "e2e" },
+          containers: {
+            ems: {
+              found: true,
+              running: true,
+              name: "ems",
+              image: "ghcr.io/basecubedev/ems-solarflow-api-control@sha256:" + "e".repeat(64),
+              tag: "v0.8.8",
+              status: "running",
+            },
+            influxdb: {
+              found: false, running: false, name: "influxdb", image: null, tag: null,
+              status: "missing",
+            },
+          },
+          components: {
+            admin: { image: "ghcr.io/basecubedev/ems-solarflow-admin:v0.8.10", tag: "v0.8.10" },
+            ems: { image: null, tag: "v0.8.8" },
+          },
+          links: { dashboard_url: "http://localhost:8080" },
+          warnings: [],
+        }),
+      }),
+    );
+    await page.route("**/api/admin/system-alignment/status", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          active: false,
+          transition: {
+            operation_id: "cancelled-op",
+            mode: "guided_upgrade",
+            stage: "cancelled",
+            system_tag: "v0.8.10",
+            admin_alignment_required: true,
+          },
+          known_good: { system_tag: "v0.8.8" },
+          known_good_admin_running: false,
+        }),
+      }),
+    );
+
+    await openUpgradePanel(page, seedAdminScenario);
+
+    await expect(page.locator("#upgrade-current-version")).toHaveText("v0.8.8");
+    await expect(page.locator("#upgrade-fact-current")).toHaveText(
+      "EMS v0.8.8 · Admin v0.8.10",
+    );
+    const apart = page.locator("#upgrade-admin-apart");
+    await expect(apart).toBeVisible();
+    await expect(apart).toContainText("The last verified System Build on record is v0.8.8");
+    await expect(apart).toContainText(
+      "A Guided Upgrade to v0.8.10 that needed to replace the Admin was cancelled",
+    );
+  });
+
   test("selecting targets is side-effect free", async ({
     page,
     seedAdminScenario,
@@ -694,6 +769,52 @@ test.describe("Guided Upgrade", { tag: ["@workflow"] }, () => {
     );
     // Execute reuses the verified build; it never calls the validate endpoint.
     expect(validations.count).toBe(0);
+  });
+});
+
+const LISTING_WARNINGS = [
+  "The development build catalogue could not be read, so no development builds are listed.",
+  "The current release cannot be compared safely; no downgrade claim was made.",
+];
+
+test.describe("Guided Upgrade release listing warnings", { tag: ["@workflow"] }, () => {
+  test("every listing warning is named while a build stays selectable", async ({
+    page,
+    seedAdminScenario,
+  }) => {
+    await page.route("**/api/setup/releases**", async (route: Route) => {
+      const response = await route.fetch();
+      const data = await response.json();
+      data.warnings = [...LISTING_WARNINGS];
+      await route.fulfill({ json: data });
+    });
+
+    const select = await openUpgradePanel(page, seedAdminScenario);
+
+    const warnings = page.locator("#upgrade-release-warnings");
+    await expect(warnings).toBeVisible();
+    for (const warning of LISTING_WARNINGS) {
+      await expect(warnings).toContainText(warning);
+    }
+    await expect(page.locator("#upgrade-release-error")).toBeHidden();
+    await select.selectOption("v9.9.10");
+    await expect(warnings).toBeVisible();
+  });
+
+  test("a listing without warnings shows no warning line", async ({
+    page,
+    seedAdminScenario,
+  }) => {
+    await page.route("**/api/setup/releases**", async (route: Route) => {
+      const response = await route.fetch();
+      const data = await response.json();
+      data.warnings = [];
+      await route.fulfill({ json: data });
+    });
+
+    await openUpgradePanel(page, seedAdminScenario);
+
+    await expect(page.locator("#upgrade-release-warnings")).toBeHidden();
   });
 });
 

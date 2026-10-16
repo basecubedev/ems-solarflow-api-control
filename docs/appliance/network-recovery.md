@@ -97,6 +97,16 @@ The Appliance Manager answers to the new name at once, without a restart. A
 page still open under the old name is refused with "this appliance does not
 answer to the name in the request": open the new URL, or the IP address.
 
+`/etc/hosts` follows the name. Debian resolves its own hostname through the
+`127.0.1.1` line, so without it `sudo` on the console reports "unable to resolve
+host" after a rename. The old name is replaced on loopback entries only, its
+`<old-name>.<domain>` form included; an address on the LAN mapped to the old
+name, comments and every other line stay as they were. A host that had no name
+of its own goes by systemd's fallback `localhost`, and that name is left where
+it is. When no loopback entry names the host, a `127.0.1.1` line is added. A
+missing `/etc/hosts` is not created and a symlinked one is not replaced; the
+operation's progress says what was done.
+
 ## Recovering access after a WLAN change
 
 If you can no longer reach the appliance:

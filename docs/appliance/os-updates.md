@@ -56,6 +56,13 @@ Basic mode offers **Install security updates**. Only the packages the appliance
 itself parsed out of a simulated apt run are upgraded — the browser never sends
 a package name.
 
+No install removes a package. The plan is read from `apt-get -s upgrade`, which
+never removes anything, while the security install runs `apt-get install
+--only-upgrade`, which under `-y` would remove whatever a new version conflicts
+with. Both scopes pass `--no-remove`, so apt refuses such an update before
+`dpkg` runs: the operation fails with `package_install_failed`, its output
+carries apt's reason, and nothing is installed or removed.
+
 Before installing, the plan shows:
 
 ```text
@@ -239,6 +246,18 @@ own fallback, or the armed reverter -- is folded back into the retained record
 before the next install is planned. Neither can amend it, so the record went on
 naming the package `dpkg` refused as the current one, and the next update
 rotated *that* into the way-back slot.
+
+An install whose unit systemd would not start is taken back before the console
+hears of the failure. The request is removed, so a start systemd still carries
+out finds nothing to install; the retained record names the running package as
+current again, and keeps the package a revert was putting back so the revert
+can be tried again; and the deadline is retired, because there is no install
+for it to judge. It used to stay armed: Install and Revert were refused for the
+whole window, and at its end the running package was installed over itself.
+The deadline stays armed when the agent cannot show that nothing runs -- the
+unit is reported starting or running, or it has written a result for the
+request -- because systemctl can report a failure for a job it did start. An
+install whose deadline could not be armed is taken back the same way.
 
 Execution is bound to the release the plan showed, by digest and by version,
 not merely to its release id: the index is read again at confirmation time, and

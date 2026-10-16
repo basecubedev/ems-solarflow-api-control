@@ -38,12 +38,12 @@ So:
 Two features are enabled in the template and act without an operator:
 
 - **Winter mode** (`winter.enabled: true`, months 10 to 3) raises `minSoc`
-  once a day up to `winter_min_soc` (40 %) and sets a winter AC charge
-  `inputLimit` of 200 W. On a device with PV, `minSoc` leads the SoC by at
-  most 3 points, and while the battery is below it the device exports at most
-  `min_output_limit` for up to three hours so PV charges the battery first. On a battery without PV
-  of its own (`pv_kwp: 0`) the noon step may lead the SoC by up to two steps,
-  and the firmware may then charge it from the grid at full AC power. See
+  once a day up to `winter_min_soc` (40 %). On a device with PV, `minSoc`
+  leads the SoC by at most 3 points, and while the battery is below it the
+  device exports at most `min_output_limit` for up to three hours so PV charges
+  the battery first. On a battery without PV of its own (`pv_kwp: 0`) the noon
+  step may lead the SoC by up to two steps, and the firmware may then charge it
+  from the grid at full AC power. See
   [winter-mode.md](../winter-mode.md#device-types-and-policies).
 - **Battery full-charge assist** (`battery_full_charge_assist.enabled: true`)
   raises `socSet` to 100 % every 28 days; with `enable_ac_charge_mode: true`
@@ -65,7 +65,7 @@ Turn either off in the config if you do not want it.
 - Check minimum and maximum battery SOC.
 - Make sure no other controller writes Zendure output limits. Use only one
   active controller: disable Zendure HEMS, Smart Matching, Zendure schedules /
-  energy plans, Home Assistant or ioBroker automations that set inverter power,
+  energy plans, ioBroker or other smart-home automations that set inverter power,
   and any second EMS instance. This matters especially for Zendure Cloud MQTT
   control — the cloud services write the same setpoints. The EMS cannot disable
   them for you; it reports `external_control_suspected` when a foreign writer
@@ -160,13 +160,12 @@ costs nothing like drawing from the grid on one does.
 ### What happens if the EMS stops while charging
 
 **Stopping the EMS leaves the devices as they are.** That is deliberate: a stop
-you asked for — `docker stop`, `docker compose down`, `systemctl stop`, Ctrl-C —
+by SIGTERM or SIGHUP — `docker stop`, `docker compose down`, `systemctl stop` —
 is usually a restart, and resetting every device for the length of an update
 would drop the house's cover and throw away a charge that then has to re-confirm
 its entry window. Discharging devices keep their `outputLimit` regardless;
 charging devices now keep theirs too. The EMS says so when it happens:
-`event=ac_charge_kept_across_stop` names the signal that stopped it and the
-device it left charging.
+`event=ac_charge_kept_across_stop` names the signal and the device left charging.
 
 A **charging** device therefore keeps drawing while the EMS is away. That is
 bounded — the charge ends at the device's configured maximum SoC — but it still
@@ -175,12 +174,12 @@ drawing until then. If a restart does not complete, or once the EMS is back
 after an abrupt stop, check the device and stop it in the Zendure app or with
 `emsctl.py device WR1 ac-mode output`.
 
-The EMS **does** return a charging device when it stops by itself: `--once`,
-`--max-cycles`, `--duration` or an error that ends it. In normal operation a
-failing cycle (`diagnose --control` names it) does not end the EMS: it stops
-where it raised, what it wrote before stands, and a charge it no longer reaches
-runs on, up to the maximum SoC. An unstoppable kill (power loss, `kill -9`, a
-container removed, not stopped) writes nothing; nothing times the command out.
+The EMS **does** return a charging device, the full-charge assist's grid charge
+included, on Ctrl-C, when it stops by itself (`--once`, `--max-cycles`,
+`--duration`, an error that ends it) and from the third failed cycle in a row,
+best effort (see [ac-charging.md](../ac-charging.md#safety)). An unstoppable
+kill (power loss, `kill -9`, a container removed, not stopped) writes nothing;
+nothing times it out.
 
 The same applies to a device that drops off the network mid-charge: the EMS
 cannot write to a device it cannot reach, so that one keeps charging until it is
@@ -237,12 +236,13 @@ The Admin Console is intended for a trusted local network. Optional HTTPS can
 protect local browser traffic, but the generated self-signed certificate is not
 a replacement for a VPN or a properly secured reverse proxy for remote access.
 
-Like the Dashboard, the Admin Console can write runtime *overrides*, but only for
-a fixed whitelist of keys (system power/loop limits, winter/HA enable, per-device
-enabled/max power/PV priority/off-grid mode) and only through the same validated
-runtime-write limits — never the hardware `outputLimit` or state-reconciliation
-write gates. No other key reaches `runtime-state.json` from the Admin; a fresh
-Setup only asks the EMS to rebuild it from the new config at its next start.
+Like the Dashboard, the Admin Console can write runtime *overrides*, but only
+for a fixed whitelist of keys (system power/loop limits, winter/AC-charging
+enable, per-device enabled/max power/PV priority/off-grid mode) and only through
+the same validated runtime-write limits — never the hardware `outputLimit` or
+state-reconciliation write gates. No other key reaches `runtime-state.json` from
+the Admin; a fresh Setup only asks the EMS to rebuild it from the new config at
+its next start.
 
 ## Technical safety model
 

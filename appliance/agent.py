@@ -45,7 +45,12 @@ from appliance import (
     timezone_config,
     validation,
 )
-from appliance.audit import RESULT_DENIED, RESULT_FAILURE, RESULT_SUCCESS
+from appliance.audit import (
+    RESULT_DENIED,
+    RESULT_FAILURE,
+    RESULT_SUCCESS,
+    RefusalAggregator,
+)
 from appliance.redaction import redact_text
 from appliance.release_fetch import FetchError
 from appliance.operations import (
@@ -57,6 +62,7 @@ from appliance.operations import (
 from appliance.paths import AGENT_SOCKET_NAME
 from appliance.protocol import (
     OPERATIONS,
+    PLAN_REQUEST_FIELD,
     ROOT_ACCESS_PLANS,
     SESSION_GENERATION_FIELD,
     ProtocolError,
@@ -206,6 +212,7 @@ class AgentHandlers:
         self.services = services
         self.context = ValidationContext(services.config)
         self._execute = executor or _thread_executor
+        self.web_audit = RefusalAggregator(services.audit)
 
     # --- entry point -----------------------------------------------------
 
@@ -226,6 +233,15 @@ class AgentHandlers:
         if spec.name == "operations.acknowledge":
             record = self.services.operations.acknowledge(args["operation_id"])
             return {"operation": record.to_dict()}
+        if spec.name == "operations.resume_plan":
+            record = self.services.operations.resume(
+                args["operation_id"], args[PLAN_REQUEST_FIELD]
+            )
+            return {
+                "operation": record.to_dict(),
+                "plan": (record.result or {}).get("plan") or {},
+                "confirmation_token": record.confirmation_token,
+            }
         if spec.name == "audit.record_web_event":
             return self._record_web_event(args, actor=actor, source_ip=source_ip)
         return self._read_only(spec, args)
@@ -237,14 +253,16 @@ class AgentHandlers:
 
         Every field was validated against a fixed set by the protocol, so
         nothing the browser sent can widen an action name or reach a path.
+        Refusals that read no password are counted per source and window by
+        ``RefusalAggregator``.
         """
 
-        entry = self.services.audit.record(
+        entry = self.web_audit.record(
             args["event"],
             user=actor,
             source_ip=source_ip,
-            target=args["reason"],
             result=args["result"],
+            reason=args["reason"],
         )
         return {
             "recorded": True,
@@ -301,7 +319,9 @@ class AgentHandlers:
         if spec.name in ROOT_ACCESS_PLANS and args.get("enabled", True):
             self._require_confirmed_password(args, operation_type, actor, source_ip)
         try:
-            operation = self.services.operations.create(operation_type, actor=actor)
+            operation = self.services.operations.create(
+                operation_type, actor=actor, plan_request=args.get(PLAN_REQUEST_FIELD, "")
+            )
         except OperationConflictError as exc:
             raise AgentError(exc.code, exc.message)
 

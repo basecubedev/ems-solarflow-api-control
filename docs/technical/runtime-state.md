@@ -40,10 +40,6 @@ Example:
     "loop_interval": 5,
     "min_output_limit": 35
   },
-  "ha": {
-    "enabled": false,
-    "control_enabled": false
-  },
   "winter": {
     "enabled": true
   },
@@ -122,7 +118,7 @@ eco      -> gridOffMode=1
 standard -> gridOffMode=0
 ```
 
-The CLI and Home Assistant only change the intent. The EMS is the only
+The CLI and the dashboard only change the intent. The EMS is the only
 component that writes `gridOffMode` to hardware.
 
 ## Device Lifecycle Reconciliation
@@ -196,8 +192,7 @@ Dashboard runtime-write whitelist:
 
 - `system.enabled`, `system.max_total_power`, `system.loop_interval`,
   `system.min_output_limit`
-- `winter.enabled`, `ac_charge_control.enabled` (and `ha.enabled` /
-  `ha.control_enabled`)
+- `winter.enabled`, `ac_charge_control.enabled`
 - per device: `enabled`, `max_power`, `pv_priority_factor`,
   `offgrid_socket_mode`, `ac_charge_enabled`
 
@@ -254,27 +249,14 @@ When a cycle fails before it decides, the `control` values are `null` rather
 than carried over; device telemetry is the last reading the EMS holds, dated by
 `last_seen_at`.
 
-## HA Fields
-
-| Field | Meaning |
-|---|---|
-| `enabled` | Enables or disables HA publishing in the EMS loop |
-| `control_enabled` | Enables or disables HA helper sync |
-
-These fields can only affect HA when HA is statically configured and the EMS has
-an HA client. They do not edit HA URL or token.
-
-The template default is standalone operation, so both HA runtime fields start as
-`false` unless Home Assistant is enabled in `config.json`.
-
 ## Winter Fields
 
 | Field | Meaning |
 |---|---|
 | `enabled` | Enables or disables winter mode at runtime |
 
-Winter months, SOC limits, ramp step, step hour, policies, and AC charge power
-stay static in `config.json`.
+Winter months, SOC limits, ramp step, step hour and policies stay static in
+`config.json`.
 
 ## AC Charging Fields
 
@@ -286,14 +268,14 @@ Seeded from `ac_charge_control.enabled` (on by default). The thresholds stay
 static in `config.json`; per device, `ac_charge_enabled` in the device entry
 stops one device drawing from the grid without a restart.
 
-## Home Assistant Sync
+## Former Home Assistant Fields
 
-Home Assistant helper values can act as a UI over runtime state. The EMS avoids
-writing HA every cycle and avoids interpreting its own HA writes as user changes.
-
-Helpers are optional. If a helper is missing, the EMS continues with local
-runtime-state values.
-
-HA sync failures do not block the EMS loop. The EMS logs the failed sync and
-continues with the previous local runtime-state values so telemetry fetch,
-safety decisions, and output-control decisions can still run.
+The Home Assistant integration is removed, and the EMS no longer seeds an `ha`
+section. A runtime state that still carries `ha.enabled` /
+`ha.control_enabled` loads unchanged, and the fields stay in the file as any key
+the EMS does not know: the merge with the defaults keeps unknown keys, and only
+device entries are reconciled on load, so the next EMS write leaves them as they
+are. Nothing reads them; a rollback to a release that still had the
+integration finds them as they were. The dashboard and `emsctl` no longer write
+them (`PATCH /api/runtime/ha` is answered `404 not_found`, as any unknown
+section is).

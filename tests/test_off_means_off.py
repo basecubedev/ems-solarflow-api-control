@@ -96,7 +96,7 @@ def run_cycle(item, runtime_state, *, drift):
 DRIFTS = [
     ("ac_mode", 1, ["acMode"]),
     ("smart_mode", 0, ["smartMode"]),
-    ("min_soc", 5, ["minSoc", "socSet"]),
+    ("min_soc", 5, ["minSoc"]),
 ]
 
 OFF = {

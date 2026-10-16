@@ -8,7 +8,6 @@ neither exists. Args are always an internal allowlisted argv suffix; never
 ``shell=True``.
 """
 
-import re
 import subprocess
 import time
 from dataclasses import dataclass
@@ -21,7 +20,7 @@ from admin.deployment import (
     DockerError,
     _safe_command_detail,
 )
-from admin.container_names import DEFAULT_EMS_CONTAINER
+from admin.container_names import resolve_ems_container_name
 
 # Container paths inside the published EMS image.
 CONTAINER_EMSCTL_PATH = "/app/emsctl.py"
@@ -69,11 +68,6 @@ EXEC_CLIENT_TIMEOUT_DETAIL = (
 BLOCKED_MESSAGE = (
     "No running EMS container and no Docker Compose context were found, so the "
     "EMS command could not be run against the installed system."
-)
-
-_COMPOSE_EMS_NAME_RE = re.compile(
-    r"^\s*container_name:\s*[\"']?([A-Za-z0-9][A-Za-z0-9_.-]*)[\"']?\s*(?:#.*)?$",
-    re.MULTILINE,
 )
 
 # Friendly, UI-safe descriptions of the EMS tool context a command ran in.
@@ -156,18 +150,15 @@ class EmsToolResult:
 
 
 def ems_container_name(context):
-    """EMS container name from ``context``'s compose file, else the default."""
+    """EMS container name for ``context``, by the shared container-name precedence."""
 
-    if not getattr(context, "compose_exists", False):
-        return DEFAULT_EMS_CONTAINER
-    try:
-        text = Path(context.compose_path).read_text(encoding="utf-8")
-    except OSError:
-        return DEFAULT_EMS_CONTAINER
-    for name in _COMPOSE_EMS_NAME_RE.findall(text):
-        if "influx" not in name.lower():
-            return name
-    return DEFAULT_EMS_CONTAINER
+    text = ""
+    if getattr(context, "compose_exists", False):
+        try:
+            text = Path(context.compose_path).read_text(encoding="utf-8")
+        except OSError:
+            text = ""
+    return resolve_ems_container_name(compose_text=text)
 
 
 def resolve_running_ems_container(docker, context):

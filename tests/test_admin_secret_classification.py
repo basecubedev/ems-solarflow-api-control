@@ -122,7 +122,6 @@ def test_the_mutation_fingerprint_never_returns_a_raw_value():
 
 CATALOGUED_SECRETS = frozenset({
     "grid_meter.mqtt.password",
-    "ha.token",
     "influxdb.token",
     "zendure_mqtt.app_key",
     "zendure_mqtt.password",
@@ -174,11 +173,9 @@ def test_a_catalogued_path_is_redacted_by_the_catalog_not_by_its_name():
             "influxdb.token_env": "INFLUXDB_TOKEN",
             "influxdb.secret_file": "deploy/docker/influxdb.env",
             "influxdb.token": PLAINTEXT,
-            "ha.token": PLAINTEXT,
         },
     })
 
     assert view["features"]["influxdb.token_env"] == "INFLUXDB_TOKEN"
     assert view["features"]["influxdb.secret_file"] == "deploy/docker/influxdb.env"
     assert view["features"]["influxdb.token"] != PLAINTEXT
-    assert view["features"]["ha.token"] != PLAINTEXT

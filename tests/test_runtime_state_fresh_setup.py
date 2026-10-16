@@ -44,7 +44,6 @@ OLD_STATE = {
 def _defaults(max_total_power=800):
     return {
         "system": {"enabled": True, "max_total_power": max_total_power, "loop_interval": 5},
-        "ha": {"enabled": False, "control_enabled": False},
         "winter": {"enabled": True},
         "ac_charge_control": {"enabled": True},
         "devices": {"INV_1": {"identity": "SN1", "enabled": True, "max_power": 800}},

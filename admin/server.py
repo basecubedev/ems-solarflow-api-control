@@ -121,6 +121,7 @@ from admin.guided_upgrade_context import (
     GuidedUpgradeContextStore,
 )
 from admin.install_context import detect_install_context
+from admin.installed_release import runs_healthy
 from admin.image_identity import identify_image
 from admin.operation_coordinator import OperationCoordinator
 from admin.install_state import (
@@ -133,7 +134,7 @@ from admin.container_actions import (
     build_maintenance_container_plan,
     run_maintenance_container_sync,
 )
-from admin.container_names import DEFAULT_EMS_CONTAINER
+from admin.ems_tool import ems_container_name
 from admin.maintenance import run_maintenance_overview
 from admin.maintenance_config import (
     PROPOSAL_IDENTITY_MISMATCH_CODE,
@@ -144,6 +145,7 @@ from admin.maintenance_config import (
     redact_config_for_browser,
     trusted_selection_conflicts_with_stored_device,
 )
+from admin.running_pair_health import RunningPairHealthCheck
 from admin.runtime_convergence import (
     mirror_changed_keys_to_runtime,
     reset_targets_to_config,
@@ -547,15 +549,29 @@ class ScanRegistry:
 
     Old scans are evicted once ``MAX_TRACKED_SCANS`` is exceeded so a long-lived
     preview cannot grow unbounded. State is intentionally not persisted.
+
+    A network is probed by one scan at a time: a request for a network that is
+    still being scanned joins that scan instead of probing every host again.
     """
 
     def __init__(self, scan_runner=scan_network):
         self._lock = threading.Lock()
         self._scans = {}
         self._order = []
+        self._in_flight = {}
         self._scan_runner = scan_runner
 
+    @staticmethod
+    def _network_key(cidr):
+        try:
+            return str(validate_cidr(cidr))
+        except CidrValidationError:
+            return str(cidr).strip()
+
     def start(self, cidr, ports, timeout_ms, max_workers):
+        """Start a scan of ``cidr``, or return the one still scanning its network."""
+
+        network = self._network_key(cidr)
         scan_id = uuid.uuid4().hex
         record = {
             "scan_id": scan_id,
@@ -577,15 +593,30 @@ class ScanRegistry:
             },
         }
         with self._lock:
+            running = self._scans.get(self._in_flight.get(network))
+            if running is not None:
+                return dict(running)
             self._scans[scan_id] = record
             self._order.append(scan_id)
+            self._in_flight[network] = scan_id
             self._evict_locked()
 
         thread = threading.Thread(
-            target=self._run, args=(scan_id, cidr, timeout_ms, max_workers), daemon=True
+            target=self._run,
+            args=(scan_id, network, cidr, timeout_ms, max_workers),
+            daemon=True,
         )
-        thread.start()
+        try:
+            thread.start()
+        except RuntimeError:
+            with self._lock:
+                self._retire_locked(network, scan_id)
+            raise
         return record
+
+    def _retire_locked(self, network, scan_id):
+        if self._in_flight.get(network) == scan_id:
+            del self._in_flight[network]
 
     def get(self, scan_id):
         with self._lock:
@@ -625,7 +656,7 @@ class ScanRegistry:
                 }
         return update
 
-    def _run(self, scan_id, cidr, timeout_ms, max_workers):
+    def _run(self, scan_id, network, cidr, timeout_ms, max_workers):
         try:
             devices, errors = self._scan_runner(
                 cidr, timeout_ms=timeout_ms, max_workers=max_workers,
@@ -640,6 +671,7 @@ class ScanRegistry:
             payload = {"status": "failed", "errors": [{"error": str(exc)}]}
 
         with self._lock:
+            self._retire_locked(network, scan_id)
             record = self._scans.get(scan_id)
             if record is None:
                 return
@@ -791,7 +823,7 @@ def _installed_ems_identity(docker):
 
 
 def _ems_container_identity(docker, *, running_only):
-    container_name = os.environ.get("EMS_CONTAINER_NAME", DEFAULT_EMS_CONTAINER)
+    container_name = ems_container_name(detect_install_context())
     try:
         container = docker.inspect_container(container_name)
     except DockerError:
@@ -817,6 +849,23 @@ def _ems_container_identity(docker, *, running_only):
     return identify_image(docker, image_ref) if image_ref else identify_image(docker, "")
 
 
+def _running_pair_healthy(docker):
+    """Whether Docker reports the Admin and EMS containers running, neither unhealthy.
+
+    Only what runs: the EMS image has no Docker health check, so whether its
+    EMS is healthy is the upgrade's own health check (``_build_system_alignment``).
+    """
+
+    names = (
+        os.environ.get("EMS_ADMIN_CONTAINER_NAME", DEFAULT_ADMIN_CONTAINER),
+        ems_container_name(detect_install_context()),
+    )
+    try:
+        return all(runs_healthy(docker.inspect_container(name)) for name in names)
+    except Exception:
+        return False
+
+
 def _build_system_alignment(
     *,
     release_manager,
@@ -824,8 +873,13 @@ def _build_system_alignment(
     docker,
     operation_coordinator=None,
     transition_store=None,
+    ems_cli=None,
 ):
-    """Compose the single productive alignment service for this Admin runtime."""
+    """Compose the single productive alignment service for this Admin runtime.
+
+    ``ems_cli`` runs the EMS health check an upgrade requires; the known-good
+    record follows a running pair only once it passes, and without it never.
+    """
 
     state_dir = Path(admin_data_dir) / "state"
     transition_store = transition_store or PendingTransitionStore(state_dir)
@@ -872,6 +926,10 @@ def _build_system_alignment(
         current_identity=lambda: _running_admin_identity(docker),
         current_ems_identity=lambda: _running_ems_identity(docker),
         installed_ems_identity=lambda: _installed_ems_identity(docker),
+        running_pair_healthy=lambda: _running_pair_healthy(docker),
+        system_health_verdict=(
+            RunningPairHealthCheck(ems_cli.run).verdict if ems_cli is not None else None
+        ),
         persistent_ref=admin_image_ref_from_env,
         launcher=launcher,
         operation_coordinator=operation_coordinator,
@@ -926,7 +984,8 @@ def create_admin_runtime(
     docker = docker or DockerCli()
     # Give the release manager a productive development-build catalogue source
     # (the CI-published, read-only JSON index) so installable development builds
-    # appear in Setup without any test injection; a missing catalogue is empty.
+    # appear in Setup without any test injection; one that cannot be read is
+    # named in the listing's warnings.
     release_manager = release_manager or ReleaseManager(
         docker=docker,
         development_source=development_catalogue_source(),
@@ -1004,6 +1063,7 @@ def create_admin_runtime(
         docker=docker,
         operation_coordinator=operation_coordinator,
         transition_store=transition_store,
+        ems_cli=ems_cli,
     )
     setup_intents = setup_intents or SetupIntentStore()
     setup_lifecycle = SetupLifecycleCoordinator()
@@ -2649,7 +2709,23 @@ class AdminHandler(BaseHTTPRequestHandler):
         return result
 
     def _handle_system_alignment_status(self):
-        self._send_json(self._alignment_status())
+        payload = self._alignment_status()
+        payload["known_good_admin_running"] = None
+        payload["running_pair"] = None
+        service = self.server.system_alignment
+        if payload.get("ok") is False or payload.get("active") is not False:
+            self._send_json(payload)
+            return
+        reconcile = getattr(service, "reconcile_known_good", None)
+        if callable(reconcile):
+            outcome = dict(reconcile())
+            if outcome.get("known_good") is not None:
+                payload["known_good"] = outcome.pop("known_good")
+            payload["running_pair"] = outcome
+        judge = getattr(service, "known_good_admin_running", None)
+        if callable(judge):
+            payload["known_good_admin_running"] = judge(payload.get("known_good"))
+        self._send_json(payload)
 
     def _handle_system_alignment_validate(self):
         # Read-only Fresh Setup verdict. Selecting the build in Guided Setup is the

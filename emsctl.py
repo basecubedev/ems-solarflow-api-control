@@ -50,8 +50,6 @@ TOP_LEVEL_COMMANDS = (
     "status",
     "system",
     "device",
-    "ha",
-    "ha-control",
     "winter",
     "ac-charge",
     "dashboard",
@@ -94,8 +92,6 @@ RUNTIME_EDIT_COMMANDS = frozenset(
     {
         "system",
         "device",
-        "ha",
-        "ha-control",
         "winter",
         "ac-charge",
         "interactive",
@@ -127,8 +123,6 @@ Command overview:
   status                         Show runtime-state.json
   system <action> [value]         Enable/disable EMS and tune global limits
   device <name> <action> [value]  Enable/disable devices and tune device values
-  ha enable|disable               Toggle Home Assistant publishing
-  ha-control enable|disable       Toggle Home Assistant helper control
   winter enable|disable|status    Toggle or inspect winter mode
   dashboard <command>             Manage dashboard write-mode authentication
   diagnose [--json]               Run read-only local diagnostics
@@ -246,12 +240,6 @@ Device runtime control:
   python3 emsctl.py device WR1 offgrid off
   python3 emsctl.py device WR1 offgrid eco
   python3 emsctl.py device WR1 offgrid standard
-
-HA publishing / helper control:
-  python3 emsctl.py ha enable
-  python3 emsctl.py ha disable
-  python3 emsctl.py ha-control enable
-  python3 emsctl.py ha-control disable
 
 Winter mode:
   python3 emsctl.py winter status
@@ -410,34 +398,6 @@ Examples:
         help="One of: " + ", ".join(DEVICE_ACTIONS),
     )
     device.add_argument("value", nargs="?", help="Required for max-power, offgrid, pv-priority-factor, ac-mode writes, and ac-charge-power.")
-
-    ha = subparsers.add_parser(
-        "ha",
-        help="Edit HA runtime publishing state.",
-        description="Enable or disable runtime Home Assistant publishing.",
-        epilog="""\
-Examples:
-  python3 emsctl.py ha enable
-  python3 emsctl.py ha disable
-""",
-        formatter_class=EMSHelpFormatter,
-    )
-    ha.add_argument("action", choices=["enable", "disable"], help="One of: enable, disable.")
-    ha.add_argument("value", nargs="?", help=argparse.SUPPRESS)
-
-    ha_control = subparsers.add_parser(
-        "ha-control",
-        help="Edit HA runtime helper-control state.",
-        description="Enable or disable runtime Home Assistant helper control.",
-        epilog="""\
-Examples:
-  python3 emsctl.py ha-control enable
-  python3 emsctl.py ha-control disable
-""",
-        formatter_class=EMSHelpFormatter,
-    )
-    ha_control.add_argument("action", choices=["enable", "disable"], help="One of: enable, disable.")
-    ha_control.add_argument("value", nargs="?", help=argparse.SUPPRESS)
 
     ac_charge = subparsers.add_parser(
         "ac-charge",
@@ -1335,7 +1295,6 @@ def completion_script_bash(config):
     command_case = "|".join(safe_completion_words(TOP_LEVEL_COMMANDS))
     system_actions = completion_word_list(SYSTEM_ACTIONS)
     device_actions = completion_word_list(DEVICE_ACTIONS)
-    ha_actions = "enable disable"
     winter_actions = "enable disable status"
     dashboard_actions = completion_word_list(DASHBOARD_ACTIONS)
     completion_shells = completion_word_list(COMPLETION_SHELLS)
@@ -1360,7 +1319,6 @@ _emsctl_py_completion()
   local commands="{commands}"
   local system_actions="{system_actions}"
   local device_actions="{device_actions}"
-  local ha_actions="{ha_actions}"
   local winter_actions="{winter_actions}"
   local dashboard_actions="{dashboard_actions}"
   local completion_shells="{completion_shells}"
@@ -1408,9 +1366,6 @@ _emsctl_py_completion()
         COMPREPLY=( $(compgen -W "$device_actions" -- "$cur") )
       fi
       ;;
-    ha|ha-control)
-      COMPREPLY=( $(compgen -W "$ha_actions" -- "$cur") )
-      ;;
     winter)
       COMPREPLY=( $(compgen -W "$winter_actions" -- "$cur") )
       ;;
@@ -1436,7 +1391,6 @@ def completion_script_zsh(config):
     commands = zsh_array(TOP_LEVEL_COMMANDS)
     system_actions = zsh_array(SYSTEM_ACTIONS)
     device_actions = zsh_array(DEVICE_ACTIONS)
-    ha_actions = "enable disable"
     winter_actions = "enable disable status"
     dashboard_actions = zsh_array(DASHBOARD_ACTIONS)
     completion_shells = zsh_array(COMPLETION_SHELLS)
@@ -1452,11 +1406,10 @@ def completion_script_zsh(config):
 
 _emsctl_py()
 {{
-  local -a commands system_actions device_actions ha_actions winter_actions dashboard_actions completion_shells offgrid_modes ac_modes devices
+  local -a commands system_actions device_actions winter_actions dashboard_actions completion_shells offgrid_modes ac_modes devices
   commands=({commands})
   system_actions=({system_actions})
   device_actions=({device_actions})
-  ha_actions=({ha_actions})
   winter_actions=({winter_actions})
   dashboard_actions=({dashboard_actions})
   completion_shells=({completion_shells})
@@ -1486,9 +1439,6 @@ _emsctl_py()
       elif [[ "$words[4]" == "ac-mode" ]]; then
         _describe 'AC mode' ac_modes
       fi
-      ;;
-    ha|ha-control)
-      _describe 'action' ha_actions
       ;;
     winter)
       _describe 'winter action' winter_actions
@@ -1558,13 +1508,6 @@ def runtime_defaults(config, existing=None):
                 minimum=0
             )
         },
-        "ha": {
-            "enabled": config_section(config, "ha").get("enabled", False),
-            "control_enabled": config_section(config, "ha").get(
-                "control_enabled",
-                False
-            )
-        },
         "winter": {
             "enabled": config_section(config, "winter").get("enabled", False)
         },
@@ -1591,7 +1534,7 @@ def merge_defaults(data, defaults):
         **system
     }
 
-    for section_name in ("ha", "winter", "ac_charge_control"):
+    for section_name in ("winter", "ac_charge_control"):
         section = merged.get(section_name)
         if not isinstance(section, dict):
             section = {}
@@ -2736,10 +2679,6 @@ def run_interactive(args, config):
         ("system-max-power", "System max-power"),
         ("system-loop-interval", "System loop-interval"),
         ("system-min-output-limit", "System min-output-limit"),
-        ("ha-enable", "HA publishing enable"),
-        ("ha-disable", "HA publishing disable"),
-        ("ha-control-enable", "HA helper-control enable"),
-        ("ha-control-disable", "HA helper-control disable"),
         ("winter-status", "Winter status"),
         ("winter-enable", "Winter enable"),
         ("winter-disable", "Winter disable"),
@@ -2758,7 +2697,7 @@ def run_interactive(args, config):
 
     print("EMS Control CLI interactive mode")
     print("Safely edits runtime-state.json only.")
-    print("Does not contact Zendure hardware or Home Assistant.")
+    print("Does not contact Zendure hardware.")
 
     while True:
         choice = prompt_choice("Select an action", menu_items)
@@ -2789,20 +2728,6 @@ def run_interactive(args, config):
                     state,
                     runtime_limits(config),
                 )
-                save_interactive(runtime_path, state)
-                continue
-
-            if choice.startswith("ha-control-"):
-                action = choice.removeprefix("ha-control-")
-                state, _ = load_runtime_state(runtime_path, config)
-                set_bool_section(make_args(action=action, value=None), state, "ha", "control_enabled")
-                save_interactive(runtime_path, state)
-                continue
-
-            if choice.startswith("ha-"):
-                action = choice.removeprefix("ha-")
-                state, _ = load_runtime_state(runtime_path, config)
-                set_bool_section(make_args(action=action, value=None), state, "ha", "enabled")
                 save_interactive(runtime_path, state)
                 continue
 
@@ -4495,10 +4420,6 @@ def main(argv=None):
                 print_device_ac_mode_status(args.name, devices[args.name])
                 return 0
             update_device(args, state, runtime_limits(config))
-        elif args.command == "ha":
-            set_bool_section(args, state, "ha", "enabled")
-        elif args.command == "ha-control":
-            set_bool_section(args, state, "ha", "control_enabled")
         elif args.command == "winter":
             set_bool_section(args, state, "winter", "enabled")
         elif args.command == "ac-charge":

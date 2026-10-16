@@ -65,20 +65,31 @@ def test_a_started_operation_forgets_what_its_form_held():
     node = shutil.which("node")
     if not node:
         pytest.skip("node is required for the console behaviour test")
+    helpers = ("isHeld", "holdControl", "anchorOf", "heldNodes", "markHeld", "unmarkHeld")
     script = (
-        extract("clearChoices")
-        + "\n"
-        + extract("confirmDialog")
+        "\n".join(extract(name) for name in ("clearChoices", "confirmDialog", *helpers))
         + """
 var state = { pending: { operation: { operation_id: "op" }, confirmation_token: "t", plan: {} },
-  pendingForget: "hostname-form-",
+  pendingForget: "hostname-form-", holds: [],
   choices: { "hostname-form-input": "ems-garage", "wifi-form-ssid": "Home" } };
 function api() { return Promise.resolve({ operation: { operation_id: "op" } }); }
 function closeDialog() {}
 function announce() {}
 function render() {}
 function showReconnect() {}
-var document = { getElementById: function () { return { hidden: true, textContent: "" }; } };
+function element() {
+  var attributes = {};
+  return { hidden: true, textContent: "", disabled: false, id: "",
+    getAttribute: function (name) { return name in attributes ? attributes[name] : null; },
+    setAttribute: function (name, value) { attributes[name] = String(value); },
+    removeAttribute: function (name) { delete attributes[name]; },
+    hasAttribute: function (name) { return name in attributes; } };
+}
+var elements = {};
+var document = {
+  getElementById: function (id) { return elements[id] || (elements[id] = element()); },
+  querySelectorAll: function () { return []; }
+};
 confirmDialog();
 setTimeout(function () {
   console.log(JSON.stringify({ choices: state.choices, forget: state.pendingForget }));
@@ -93,4 +104,8 @@ setTimeout(function () {
 
 
 def test_planning_records_which_choices_its_operation_takes():
-    assert "state.pendingForget = options.forget || null;" in extract("planOperation")
+    """Whether the plan's answer arrived or the plan was picked up after it was lost."""
+
+    assert "state.pendingForget = options.forget || null;" in extract("showPlan")
+    assert "showPlan(payload, options)" in extract("planOperation")
+    assert "showPlan(payload, lost.options)" in extract("resumeLostPlan")

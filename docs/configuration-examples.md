@@ -15,26 +15,18 @@ SOC limits, confirm battery and PV metadata, run
 [first-run-checklist.md](first-run-checklist.md), and monitor the first live
 run.
 
-## Example 1: One Zendure Device Without Home Assistant
+## Example 1: One Zendure Device
 
-Use this for standalone EMS operation without Home Assistant.
+Use this for standalone EMS operation with one inverter.
 
 ```json
 {
-  "ha": {
-    "enabled": false,
-    "control_enabled": false,
-    "url": "",
-    "token": ""
-  },
-
   "system": {
     "enabled": true,
     "dry_run": false,
     "simulation_mode": false,
     "allow_hardware_writes": true,
     "allow_state_reconciliation_writes": true,
-    "reconcile_ac_mode_on_start": true,
     "reconcile_smart_mode": true,
     "log_level": "info",
     "max_total_power": 800,
@@ -76,8 +68,7 @@ Use this for standalone EMS operation without Home Assistant.
     "summer_min_soc": 15,
     "winter_min_soc": 40,
     "ramp_step_percent": 3,
-    "adjust_hour": 12,
-    "ac_charge_power": 200
+    "adjust_hour": 12
   },
 
   "devices": [
@@ -127,28 +118,19 @@ python3 -B ems-solarflow-api-control.py --simulate --max-cycles 1
 python3 -B ems-solarflow-api-control.py --preflight
 ```
 
-## Example 2: Two Zendure Devices With Home Assistant
+## Example 2: Two Zendure Devices
 
-Use this when Home Assistant should receive EMS sensors and optionally provide
-runtime helper controls. The values below intentionally override some
-single-device template values for a two-inverter installation.
+Use this for an installation with two inverters. The values below intentionally
+override some single-device template values for a two-inverter installation.
 
 ```json
 {
-  "ha": {
-    "enabled": true,
-    "control_enabled": true,
-    "url": "http://homeassistant.local:8123",
-    "token": "YOUR_TOKEN_HERE"
-  },
-
   "system": {
     "enabled": true,
     "dry_run": false,
     "simulation_mode": false,
     "allow_hardware_writes": true,
     "allow_state_reconciliation_writes": true,
-    "reconcile_ac_mode_on_start": true,
     "reconcile_smart_mode": true,
     "max_total_power": 1600,
     "max_device_power": 800,
@@ -193,8 +175,6 @@ single-device template values for a two-inverter installation.
 
 Change:
 
-- `ha.url`
-- `ha.token`
 - both device IPs and serial numbers
 - `grid_meter.type`, `grid_meter.ip`, and Shelly `grid_meter.channels` if needed
 - PV and battery metadata
@@ -284,7 +264,6 @@ limits are reviewed.
     "dry_run": false,
     "allow_hardware_writes": true,
     "allow_state_reconciliation_writes": true,
-    "reconcile_ac_mode_on_start": true,
     "reconcile_smart_mode": true
   }
 }
@@ -292,10 +271,10 @@ limits are reviewed.
 
 This allows normal `outputLimit` writes and required regulation/state
 reconciliation. Runtime AC mode intent is evaluated during the control loop,
-but startup `acMode` reconciliation is conservative when telemetry is unknown.
+and `acMode` is written only over a mode the device reports (`1` or `2`).
 `ac_output` maps to `acMode=2`; `ac_input` maps to `acMode=1` and blocks normal
 output regulation. An explicit runtime `ac-mode output` command can still write
-`acMode=2` when the reported mode is `0`.
+`acMode=2` when the device reports no mode.
 
 Manual runtime AC charging uses the same loop-owned reconciliation path:
 
@@ -615,8 +594,7 @@ control.
     "summer_min_soc": 15,
     "winter_min_soc": 40,
     "ramp_step_percent": 3,
-    "adjust_hour": 12,
-    "ac_charge_power": 200
+    "adjust_hour": 12
   }
 }
 ```
@@ -634,8 +612,8 @@ in the default live profile:
 }
 ```
 
-`inputLimit` is only used in the winter/SOC reconciliation context. Do not use
-winter mode as a per-cycle mode write mechanism.
+Winter mode writes only `minSoc`, never `inputLimit`. Do not use winter mode
+as a per-cycle mode write mechanism.
 
 Run first:
 

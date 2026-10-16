@@ -203,6 +203,7 @@ class FakeHost:
         self.sshd_shell_match = SSHD_SHELL_DISABLED_MATCH
         self.sshd_config_valid = True
         self.reload_failures = set()
+        self.start_refusals = {}
         self.failing_tools = set()
 
     def write_export_mounts(
@@ -550,6 +551,10 @@ class FakeHost:
             if args[1] not in self.units and args[1] in self.absent_units:
                 return self._result("systemctl", args, 1, "", f"Failed to get unit file state for {args[1]}")
             return self._result("systemctl", args, 0, self.units.get(args[1], {}).get("enabled", "disabled"))
+        if args[:1] in (["enable"], ["start"]) and args[-1] in self.start_refusals:
+            unit = args[-1]
+            self.units.setdefault(unit, {})["active"] = self.start_refusals[unit]
+            return self._result("systemctl", args, 1, "", f"Failed to start {unit}")
         if args[:1] == ["enable"]:
             unit = args[-1]
             self.units.setdefault(unit, {}).update({"active": "active", "enabled": "enabled"})
@@ -827,13 +832,16 @@ class StaticCatalogue:
     """A fixed tag list, classified, ordered and gated by the production code.
 
     Deriving the prerelease flag, the order or the installability here a second
-    time is how a fake comes to offer a list no appliance would.
+    time is how a fake comes to offer a list no appliance would. ``index_url``
+    stands for a configured release index; without one the list is the
+    registry's.
     """
 
-    def __init__(self, tags=(), *, error=None, allow_prerelease=False):
+    def __init__(self, tags=(), *, error=None, allow_prerelease=False, index_url=""):
         self.tags = list(tags)
         self.error = error
         self.allow_prerelease = allow_prerelease
+        self.index_url = index_url
 
     def available(self):
         if self.error:

@@ -84,8 +84,9 @@ def test_a_read_only_call_answers_through_the_real_socket(host):
 # --- network under the full sandbox -----------------------------------------
 
 
-def test_the_running_agent_fetches_the_release_index_over_http(host):
-    """Not a copied RestrictAddressFamilies: the service itself does the fetch."""
+def test_the_running_agent_fetches_the_release_index_over_https(host):
+    """Not a copied RestrictAddressFamilies: the service itself does the fetch,
+    and verifies the server's certificate against the system trust store."""
 
     url = host.serve_release_index(RELEASE_TAGS)
     host.set_appliance_option("release_index_url", url)
@@ -115,7 +116,7 @@ def test_the_running_agent_fetches_the_release_index_over_http(host):
 
 
 def test_an_unreachable_release_index_is_reported_not_guessed(host):
-    host.set_appliance_option("release_index_url", "http://127.0.0.1:18099/nothing.json")
+    host.set_appliance_option("release_index_url", "https://127.0.0.1:18099/nothing.json")
     host.run(["systemctl", "restart", AGENT_UNIT], timeout=180)
     assert host.wait_for_path(SOCKET_PATH)
     try:

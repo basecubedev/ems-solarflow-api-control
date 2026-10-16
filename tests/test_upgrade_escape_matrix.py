@@ -76,6 +76,7 @@ LIVENESS = {
     "replacement gone, Admin is the target": (False, "inactive", True, False),
     "replacement unprovable": (False, "unknown", False, False),
     "deadline passed": (False, None, True, True),
+    "replacement running past the deadline": (False, "active", False, True),
 }
 
 # Hand-written from the rules, never from the implementation: (cancel, resume).
@@ -86,7 +87,9 @@ LIVENESS = {
 #     replacement proven gone whose Admin is not the target opens it;
 #   - `ems_operation_running` and `healthcheck_pending` are owned by a worker
 #     that the resume path can reconcile, so they resume rather than cancel;
-#   - expiry closes every forward path, so it opens cancel and closes resume.
+#   - expiry closes every forward path, so it opens cancel and closes resume;
+#   - except under a replacement still running: it claimed before the
+#     deadline and reads the record no more, so its stage stays shut.
 EXPECTED = {
     "admin_update_pending": {
         "worker running": (False, False),
@@ -97,6 +100,7 @@ EXPECTED = {
         "replacement gone, Admin is the target": (True, False),
         "replacement unprovable": (True, False),
         "deadline passed": (True, False),
+        "replacement running past the deadline": (True, False),
     },
     "admin_reconnect_pending": {
         "worker running": (False, False),
@@ -107,6 +111,7 @@ EXPECTED = {
         "replacement gone, Admin is the target": (False, False),
         "replacement unprovable": (False, False),
         "deadline passed": (True, False),
+        "replacement running past the deadline": (False, False),
     },
     "admin_aligned": {
         "worker running": (False, False),
@@ -117,6 +122,7 @@ EXPECTED = {
         "replacement gone, Admin is the target": (True, False),
         "replacement unprovable": (True, False),
         "deadline passed": (True, False),
+        "replacement running past the deadline": (True, False),
     },
     "resources_verified": {
         "worker running": (False, False),
@@ -127,6 +133,7 @@ EXPECTED = {
         "replacement gone, Admin is the target": (True, False),
         "replacement unprovable": (True, False),
         "deadline passed": (True, False),
+        "replacement running past the deadline": (True, False),
     },
     "ems_operation_pending": {
         "worker running": (False, True),
@@ -137,6 +144,7 @@ EXPECTED = {
         "replacement gone, Admin is the target": (True, True),
         "replacement unprovable": (True, True),
         "deadline passed": (True, False),
+        "replacement running past the deadline": (True, False),
     },
     "ems_operation_running": {
         "worker running": (False, True),
@@ -147,6 +155,7 @@ EXPECTED = {
         "replacement gone, Admin is the target": (False, True),
         "replacement unprovable": (False, True),
         "deadline passed": (True, False),
+        "replacement running past the deadline": (True, False),
     },
     "healthcheck_pending": {
         "worker running": (False, True),
@@ -157,6 +166,7 @@ EXPECTED = {
         "replacement gone, Admin is the target": (False, True),
         "replacement unprovable": (False, True),
         "deadline passed": (True, False),
+        "replacement running past the deadline": (True, False),
     },
     "failed_recoverable": {
         "worker running": (False, True),
@@ -167,6 +177,7 @@ EXPECTED = {
         "replacement gone, Admin is the target": (True, True),
         "replacement unprovable": (True, True),
         "deadline passed": (True, False),
+        "replacement running past the deadline": (True, False),
     },
 }
 

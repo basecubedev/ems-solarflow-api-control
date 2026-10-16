@@ -8,8 +8,10 @@ manage: a failed replacement is undone by restoring the saved deployment files
 and re-pinning the previous known-good digest.
 """
 
+import functools
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass
 
@@ -75,6 +77,7 @@ from appliance.validation import (
     validate_architecture,
     validate_digest,
     validate_image_repository,
+    validate_installable_tag,
     validate_oci_labels,
 )
 
@@ -290,6 +293,21 @@ def _cancel_boot_plans(client):
         _cancel(client, active["operation_id"])
 
 
+def _holding_the_history(method):
+    """Run an Admin plan or operation with the known-good history held still.
+
+    A record a status read is taking finishes first, and none starts until this
+    returns, so the plan reads the history that record left.
+    """
+
+    @functools.wraps(method)
+    def held(self, *args, **kwargs):
+        with self._admin_mutation:
+            return method(self, *args, **kwargs)
+
+    return held
+
+
 class AdminLifecycleError(Exception):
     def __init__(self, code, message):
         super().__init__(message)
@@ -338,6 +356,7 @@ class AdminLifecycleService:
         sleep=None,
         operation_log=None,
         bootstrap=None,
+        manager_pending=None,
     ):
         self.paths = paths
         self.config = config
@@ -354,6 +373,8 @@ class AdminLifecycleService:
         self._operation_log = operation_log
         self.last_repair_verification = None
         self.last_admin_transition = None
+        self.manager_pending = manager_pending
+        self._admin_mutation = threading.Lock()
 
     # --- detection -------------------------------------------------------
 
@@ -361,6 +382,13 @@ class AdminLifecycleService:
         return resolve_deployment(self.paths, self.config)
 
     def detect(self):
+        """Which Admin runs, its deployment and the known-good history.
+
+        The one write it makes is ``_adopt_running_admin``: a proven running
+        Admin the history does not name yet becomes its current entry first, so
+        the history returned here already names it.
+        """
+
         daemon = self.docker.daemon_state()
         deployment = self.deployment()
         container = self.docker.inspect_container(self.config.admin_container)
@@ -383,10 +411,6 @@ class AdminLifecycleService:
             "version": version,
             "revision": str(labels.get(LABEL_REVISION) or ""),
             "digest": image.digest if image else "",
-            "known_good": {
-                "current": self.known_good.current(),
-                "previous": self.known_good.previous(),
-            },
             "health": container.health if container.exists else HEALTH_NONE,
         }
         record["healthy"] = container.state == CONTAINER_RUNNING and container.health in (
@@ -401,7 +425,88 @@ class AdminLifecycleService:
         record["transition"] = admin_transition.read_transition(
             admin_transition.transition_path(self.paths, deployment)
         )
+        self._adopt_running_admin(record)
+        record["known_good"] = {
+            "current": self.known_good.current(),
+            "previous": self.known_good.previous(),
+        }
         return record
+
+    def _adopt_running_admin(self, state):
+        """Record the Admin that runs as known-good once it is proven; else nothing.
+
+        The Admin console replaces itself and writes nothing back here, so the
+        history went on naming the Admin this appliance installed last, and the
+        repair verification and the rollback order measured against it. What
+        runs is the authority, recorded as an install records the Admin it
+        replaces -- but only a release this appliance would install and roll
+        back to, that passes its own verification against the digest its
+        deployment asks for, and only while nothing changes it: no operation
+        holds the appliance when the record starts, no Manager install awaits
+        its verdict, no Admin transition is live. Admin operations and the plans
+        that read the history hold the same lock, so a plan made meanwhile reads
+        the history this record leaves, and an operation never runs half seen.
+        """
+
+        digest = str(state.get("digest") or "")
+        if not (digest and state.get("healthy")):
+            return None
+        if not self._admin_mutation.acquire(blocking=False):
+            return None
+        try:
+            if digest == str((self.known_good.current() or {}).get("admin_digest") or ""):
+                return None
+            if self.operations.active() is not None:
+                return None
+            if self.manager_pending is None or self.manager_pending():
+                return None
+            self._require_release_image(state)
+            if self._deployed_digest() != digest:
+                return None
+            if not self.verify_admin(expected_digest=digest, wait=False)["verified"]:
+                return None
+            self._require_no_admin_transition()
+            return self._record_running_admin(state, compose_hash=self._compose_hash())
+        except (AdminLifecycleError, DockerError, OSError, ValidationError):
+            return None
+        finally:
+            self._admin_mutation.release()
+
+    def _require_release_image(self, state):
+        """Refuse an Admin this appliance would not install, nor so roll back to.
+
+        A Development build is published to the same repository under a label
+        that is no release tag, and a candidate is refused where prereleases are
+        not enabled; the labels and the architecture are validated as an install
+        validates them.
+        """
+
+        image = state.get("image") or {}
+        tag = validate_installable_tag(
+            state.get("version"), allow_prerelease=self.config.images.allow_prerelease
+        )
+        validate_architecture(image.get("architecture", ""), self.config.supported_architectures)
+        validate_oci_labels(
+            image.get("labels") or {},
+            requested_tag=tag,
+            expected_source=self.config.images.expected_source,
+            legacy_exempt_tags=self.config.images.legacy_exempt_tags,
+        )
+
+    def _record_running_admin(self, state, *, compose_hash):
+        """Record the Admin ``detect`` saw running, pinned by its digest."""
+
+        repository = self.config.images.admin_repository
+        return self.known_good.record(
+            admin_image=f"{repository}:{state['version'] or 'unknown'}",
+            admin_digest=state["digest"],
+            admin_version=state["version"] or "unknown",
+            admin_reference=build_digest_ref(repository, state["digest"]),
+            revision=state["revision"],
+            architecture=(state.get("image") or {}).get("architecture", ""),
+            compose_hash=compose_hash,
+            environment_hash=environment_hash(self.deployment()),
+        )
 
     def releases(self):
         current = self.detect()
@@ -428,6 +533,7 @@ class AdminLifecycleService:
 
     # --- planning --------------------------------------------------------
 
+    @_holding_the_history
     def plan_install(self, operation, *, channel, tag=None, reinstall=False):
         """Pull and validate the target, then wait for an explicit confirmation."""
 
@@ -554,6 +660,7 @@ class AdminLifecycleService:
         operation.requested_target.update(values)
         return plan
 
+    @_holding_the_history
     def plan_rollback(self, operation):
         state = self.detect()
         self._advance(operation, "preflight")
@@ -792,8 +899,9 @@ class AdminLifecycleService:
         The Admin console replaces *itself* through System Build and Guided
         Upgrade, rewriting this deployment and writing nothing back here -- the
         appliance only ever reads Admin's records. The known-good entry is
-        therefore stale afterwards while the deployment and the container agree
-        with each other, and that agreement is what "should be running" means.
+        therefore stale afterwards, until a status read adopts the Admin that
+        runs, while the deployment and the container agree with each other, and
+        that agreement is what "should be running" means.
         """
 
         reference = str(self.deployment().image_reference or "")
@@ -1012,6 +1120,7 @@ class AdminLifecycleService:
 
     # --- execution -------------------------------------------------------
 
+    @_holding_the_history
     def execute(self, operation):
         try:
             validate_operation(
@@ -1073,18 +1182,17 @@ class AdminLifecycleService:
         saved = snapshot(deployment)
         before = self.detect()
 
-        self._advance(operation, "recording_known_good")
-        if before["healthy"] and before["digest"]:
-            self.known_good.record(
-                admin_image=f"{repository}:{before['version'] or 'unknown'}",
-                admin_digest=before["digest"],
-                admin_version=before["version"] or "unknown",
-                admin_reference=build_digest_ref(repository, before["digest"]),
-                revision=before["revision"],
-                architecture=(before.get("image") or {}).get("architecture", ""),
-                compose_hash=saved.compose_hash,
-                environment_hash=environment_hash(deployment),
-            )
+        recordable = bool(before["healthy"] and before["digest"])
+        refusal = ""
+        if recordable:
+            try:
+                self._require_release_image(before)
+            except ValidationError as exc:
+                recordable = False
+                refusal = f"the running Admin is not recorded: {exc.message}"
+        self._advance(operation, "recording_known_good", detail=refusal or None)
+        if recordable:
+            self._record_running_admin(before, compose_hash=saved.compose_hash)
 
         # The deployment file is pinned before the running Admin is touched, so
         # a write failure leaves the healthy container in place.
@@ -1325,9 +1433,10 @@ class AdminLifecycleService:
             self._require_no_admin_transition()
             self._require_planned_deployment(target)
             self._require_planned_current_admin(target)
-            # A rollback deploys an image this appliance installed and validated
-            # once; its labels belong to that older release, so the digest and
-            # the architecture are what have to still hold.
+            # A rollback deploys an image this appliance validated once, when it
+            # installed it or recorded it running; its labels belong to that
+            # older release, so the digest and the architecture are what have to
+            # still hold.
             self._require_planned_image(target, reference, require_labels=False)
         except AdminLifecycleError as exc:
             return self._preflight_failure(
@@ -2110,16 +2219,22 @@ class AdminLifecycleService:
         image = self.docker.inspect_image(container.image)
         return (image.digest or ""), dict(image.labels or {})
 
-    def verify_admin(self, *, expected_version="", expected_digest="", expect_running=True):
+    def verify_admin(
+        self, *, expected_version="", expected_digest="", expect_running=True, wait=True
+    ):
         """Prove what the Admin actually is, not that a Docker command returned 0.
 
         A running process is not a verified Admin: a container without a Docker
         health check would otherwise count as healthy while its HTTP endpoint
         never came up, and a container running the wrong image would count as a
-        successful install.
+        successful install. ``wait=False`` asks the container and the endpoint
+        once instead of waiting for them, for a status read that must not block.
         """
 
-        container = self._await_container(running=expect_running)
+        if wait:
+            container = self._await_container(running=expect_running)
+        else:
+            container = self.docker.inspect_container(self.config.admin_container)
         record = {
             "expect_running": expect_running,
             "container_exists": container.exists,
@@ -2160,9 +2275,12 @@ class AdminLifecycleService:
             if not record["digest_matches"]:
                 record["failures"].append("image_mismatch")
 
-        probe = self.health.wait_until_healthy(
-            self.config.admin_health_url, timeout=self.config.health_timeout_seconds
-        )
+        if wait:
+            probe = self.health.wait_until_healthy(
+                self.config.admin_health_url, timeout=self.config.health_timeout_seconds
+            )
+        else:
+            probe = self.health.probe(self.config.admin_health_url)
         record["api_reachable"] = bool(probe.reachable)
         record["api_status"] = int(getattr(probe, "status_code", 0) or 0)
         if not probe.reachable:

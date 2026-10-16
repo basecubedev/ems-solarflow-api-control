@@ -63,7 +63,7 @@ worker liveness:
 | B2a | `…/generated/config.meta.json` (beside B2) | `SetupWorkflowArtifacts.record_generated` | `read_generated_metadata` → `DeploymentService._generated_config_rejection` | same | same as B2 | **Guided Setup workflow** | Yes — carries `workflow_id`, `preview_id`, `draft_fingerprint`, `base_config_revision`, `prepared_config_sha256` |
 | B3 | `<admin_data>/state/.admin-deployment.json` (path fixed by the install-state contract) | `DeploymentService._write_marker` | `_prepared_marker`, `detect_install_state` | `_write_marker` (stamps `workflow_id`/`preview_id`) | `SetupWorkflowArtifacts.clear` via `POST /api/setup/abandon` / supersede | **Guided Setup workflow** (ownership in content + B0) | Yes — start refuses a marker from another workflow |
 | B4 | `<admin_data>/state/selected-release.json` | `ReleaseManager` / `embedded_resources` | `_selected_release_tag` | same | **none** on abandon (cache; the workflow's target lives in B0) | release cache | Yes |
-| B5 | `<admin_data>/state/known-good-system-build.json` | `KnownGoodStore.record` | `SystemAlignmentService` | `KnownGoodStore` | none — **durable installed-system state**, survives every workflow cancellation | installed system | Yes |
+| B5 | `<admin_data>/state/known-good-system-build.json` | `KnownGoodStore.record`: a completed transition, or `SystemAlignmentService.reconcile_known_good` from the running pair | `SystemAlignmentService` | `KnownGoodStore` | none — **durable installed-system state**, survives every workflow cancellation; follows the running Admin/EMS pair once it is one System Build, its EMS passes the upgrade's health check (`RunningPairHealthCheck`, run beside the status read) and no transition is in flight | installed system | Yes |
 | B6 | `<admin_data>/state/guided-upgrade-context.json` | `GuidedUpgradeContextStore.save` | `.load(operation_id, target_system_tag)` | same | `clear_for_operation(operation_id)` on Cancel upgrade and on completed upgrade (after the durable success); kept on `failed_recoverable` | Guided Upgrade | Yes |
 | B7 | `<admin_data>/state/pending-admin-update.json` | `PendingAdminUpdateStore.write` | `AdminUpdateService.status/resume` | same | `clear()` | Admin self-update | Yes |
 | B8 | `<admin_data>/releases/<tag>/…` | `ReleaseManager` | deployment/upgrade | same | `test_reset` only | Setup/Upgrade | Yes |
@@ -493,6 +493,7 @@ the visible stage hides — also while a **resource verification is claimed**:
 | `failed_recoverable` | present | yes | the attempt is over and a retry clears the claim |
 | any non-terminal stage, **expired** | any | yes *by the durable store* — but see the worker rule below | expiry closes every forward path; without this the record would wedge the store permanently |
 | `admin_reconnect_pending`, replacement **proven gone** | any | yes | the stage refuses because a sidecar may be mid-rewrite, and nothing in this process can see one; a sidecar proven absent whose Admin is proven not to be the target removes that reason without waiting for expiry |
+| `admin_reconnect_pending`, replacement **seen running**, expired or not | any | **no** — `mutation_in_progress` | the sidecar took `claim_admin_update()` before the deadline and reads the record no more: it pulls, rewrites Compose and recreates the Admin whatever the record says, so expiry closes nothing of its. `SystemAlignmentService.cancel()` refuses before the store is asked, and the refusal reaches every caller: the cancel primitive, Discard setup, the build supersede, a lifecycle switch and the safe recovery. A supersede that went through would hand the replacement workflow a fresh transition and a second sidecar beside the first. Once the sidecar is gone, the expired record is cancellable again |
 
 `SystemAlignmentService.status()` reports `cancel_available: false` for that
 window, so the console does not offer an action the store will refuse, and
@@ -1584,7 +1585,19 @@ A healthy, supported transition is never stale, and a state the normal domain
 operations *can* resolve is offered as `safe` instead. Each
 target's parent must resolve to the canonical Admin state directory, which must
 not be a symlink; otherwise the release is refused. The order is fixed: back up
-every file with its hash, write the manifest, then unlink. Never in scope:
+every file with its hash, write the manifest, then unlink.
+
+The release removes only the bytes it decided on. It reads every target, then
+inspects the lifecycle again and refuses with `workflow_lifecycle_changed` if
+the fingerprint moved, and finally, holding the write lock of every store whose
+file it may remove (transition, upgrade context, Setup workflow, in that
+order), compares each file with what it read before it backs anything up or
+unlinks it. A record a writer put there meanwhile, such as a Setup started or a
+Guided Upgrade context saved while the release was proving that no replacement
+runs, is kept and the release is refused with nothing backed up or removed. Each
+store lends its lock through `exclusive()`, which adds no removal path: the
+stores' own removals, such as `clear_for_operation` ending an upgrade context,
+stay as they were. Never in scope:
 `state/.admin-deployment.json`, `state/known-good-system-build.json`,
 `config/config.json`, `docker-compose.yml`, `data/runtime-state.json`,
 dashboard databases, InfluxDB data, backups and credential stores.

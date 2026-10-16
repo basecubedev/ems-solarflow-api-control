@@ -401,10 +401,6 @@ names another path.
 
 ## General
 
-### Do I need Home Assistant?
-
-No. Home Assistant is optional.
-
 ### Do I have to use Docker?
 
 No, but Docker is recommended for normal users. The appliance image runs the

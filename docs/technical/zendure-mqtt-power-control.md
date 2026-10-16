@@ -197,7 +197,9 @@ validation rejects a stored `power_write_profile` that **contradicts** the pinne
 `hardware_profile` (`power_write_profile_mismatch`) — including a writable value on
 a telemetry-only model — and the runtime device adapter fails closed on the same
 mismatch even if validation was bypassed. A missing value is fine: the registry
-re-derives it.
+re-derives it. The stored value is the top-level key, or `mqtt.power_write_profile`
+when the top-level one is absent; validation, the runtime and the migration read it
+through the same resolver (`zendure_mqtt_power_write_profile`).
 
 ## Supported hardware matrix
 
@@ -334,15 +336,30 @@ unsafe legacy write inference is never silently preserved.
 result in memory and runs the normal control validation before writing
 (`validate_migrated_zendure_mqtt_config`); an invalid result is refused
 (`ZendureMqttMigrationError`), never committed. A pin strips obsolete write
-metadata (stale `mqtt.write_protocol`, an inconsistent `power_write_profile`) and
-re-derives the canonical `power_write_profile` from the registry. Exact model
+metadata (stale `mqtt.write_protocol`, an inconsistent `power_write_profile`, a
+contradicting `mqtt.power_write_profile`) and re-derives the canonical top-level
+`power_write_profile` from the registry. Exact model
 evidence with **incomplete addressing** — a missing explicit `mqtt.device_id`
 route id, or (profile-backed) no `product_key` / (custom) no `write_topic` —
 disables control (`zendure_mqtt_control_disabled_unaddressable`) and preserves
-telemetry, the physical serial and broker/profile metadata rather than reporting
-success while leaving an unaddressable route. Every planned change carries a stable device
-identity (`index`, `device_id`) and exact `{path, before, after}` entries, so
-duplicate device names are never ambiguous — for example
+telemetry, the physical serial and the broker metadata rather than reporting
+success while leaving an unaddressable route. That disable, like the one for an
+unknown model, drops the model: it removes `hardware_profile` and
+`power_write_profile` both at the top level and under `mqtt`, whatever their
+values, so neither level keeps a model control could be re-enabled with. A
+disable that keeps the pinned model — `hardware_profile`, or
+`mqtt.hardware_profile` when the top-level key is absent, as validation reads it —
+because the broker source does not carry its write route
+(`zendure_mqtt_control_disabled_broker_source`) or the model is read-only
+(`zendure_mqtt_control_disabled_read_only_model`) removes a stored
+`power_write_profile` or `mqtt.power_write_profile` that contradicts that model, so
+the telemetry entry it leaves passes validation; a value validation accepts stays
+as it is. A broker-source disable whose model comes only from discovery evidence
+has no pinned model to keep and drops the model keys like the unaddressable one.
+Every planned change carries a stable device identity (`index`, `device_id`) and
+exact `{path, before, after}` entries, and apply writes those paths and no
+others, so duplicate device names are never ambiguous and every removal is in
+the plan the operator confirms — for example
 `{"path": "devices[2].hardware_profile", "before": null, "after": "hyper_2000"}`.
 
 ### Reachable through the product
@@ -473,7 +490,7 @@ Config validation rejects a control entry with no route id
 (`mqtt_device_id_missing`) or no write target (`write_target_missing`); the
 proposal mapper keeps such a device telemetry-only; migration disables control
 (`zendure_mqtt_control_disabled_unaddressable`) while preserving telemetry, the
-physical serial and broker/profile metadata; the properties/write builder returns
+physical serial and the broker metadata; the properties/write builder returns
 no message (never a `deviceId=null` payload); and Cloud device-scoped
 subscriptions contribute only for a complete `product_key`/`device_id` route.
 Both are single topic segments: a value containing `/`, `+`, `#` or NUL is
@@ -717,6 +734,21 @@ device:
   so a safety stop never waits for the old command's timeout and the way back
   from a charge never queues behind the charge it ends. Correlation stays
   strict — the retired command can never confirm the replacement;
+- every power command carries its direction, so a changed target that replaces
+  an exit from the EMS's own charge is an exit itself. Once three exits went to
+  a charge only grid draw shows (see
+  [safety-model.md](safety-model.md#zendure-outputlimit)), a changed target
+  while the last one is in flight is **held** (`charge_exit_pending`), so a
+  moving load cannot send a fourth. The shutdown release and every target that
+  preempts as above — a stop to 0 W, a cut by `safety_preempt_margin_w`, a new
+  charge — are not held and go out within the same cycle. With no command in
+  flight, a target other than the shutdown release or a new charge waits while
+  an exit's resend window is open and, once those three exits are spent, until
+  the charge is left to the device after the last one's window -- except a stop
+  to 0 W or a cut by `safety_preempt_margin_w` below the target the last exit
+  carried (K23). A reduction let through either hold is the device's target,
+  not an exit: it keeps the last exit's resend window and count, so the charge
+  is left to the device when it would have been;
 - once the active command reaches a terminal state on a broker reply
   (rejection, supersession, acknowledgement completion) → publish the latest
   pending target **once**. When the slot is freed by a timeout or by telemetry

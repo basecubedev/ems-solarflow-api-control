@@ -123,7 +123,11 @@ def build_dist(
     return dist, prefix, authority
 
 
-def gate_report(tmp_path, verdict="RESULT: PASS"):
+def gate_report(
+    tmp_path, verdict="RESULT: PASS (production release, 0 optional gate(s) NOT RUN)"
+):
+    """What appliance-release-gates.sh --mode production prints when it passes."""
+
     report = tmp_path / "release-gate-report.txt"
     report.write_text(f"source-authority PASS\n{verdict}\n")
     return report
@@ -580,7 +584,7 @@ def test_a_gate_report_the_attestation_never_measured_is_refused(tmp_path):
     dist, prefix, authority = build_dist(tmp_path)
     gate = gate_report(tmp_path)
     attestation = write_attestation(tmp_path, dist, prefix, authority, gate)
-    gate.write_text("source-authority PASS\nRESULT: PASS\n# edited afterwards\n")
+    gate.write_text(gate.read_text() + "# edited afterwards\n")
     output = tmp_path / "kit"
 
     result = run_kit(dist, output, "--gate-report", str(gate), "--attestation", str(attestation))

@@ -86,10 +86,6 @@ class RuntimeStateStub:
                 "loop_interval": 5,
                 "min_output_limit": 35,
             },
-            "ha": {
-                "enabled": True,
-                "control_enabled": True,
-            },
             "winter": {
                 "enabled": False,
             },

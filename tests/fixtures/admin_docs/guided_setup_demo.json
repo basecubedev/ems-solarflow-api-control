@@ -174,22 +174,6 @@
             "secret": false
           },
           {
-            "path": "system.reconcile_ac_mode_on_start",
-            "label": "Restore AC mode on startup",
-            "description": "Checks and restores the expected AC mode when EMS starts.",
-            "type": "boolean",
-            "level": "advanced",
-            "scope": "both",
-            "required": false,
-            "requires_restart": true,
-            "restart_required": true,
-            "backup_recommended": true,
-            "risk": "restart_required",
-            "default": true,
-            "template": true,
-            "secret": false
-          },
-          {
             "path": "system.reconcile_smart_mode",
             "label": "Restore smart mode",
             "description": "Checks and restores the expected device smart mode for live EMS control.",
@@ -870,8 +854,7 @@
               "zendure_smartmeter_3ct_http",
               "tasmota_http",
               "zendure_smartmeter_d0",
-              "mqtt",
-              "ha"
+              "mqtt"
             ],
             "default": "shelly",
             "template": true,
@@ -1144,14 +1127,6 @@
               "grid_meter.mqtt.value_path",
               "grid_meter.mqtt.max_age_seconds"
             ]
-          },
-          "ha": {
-            "label": "Home Assistant grid meter",
-            "description": "Legacy compatibility only; not recommended for new Admin setups.",
-            "fields": [],
-            "level": "deprecated",
-            "scope": "maintenance",
-            "risk": "deprecated"
           }
         }
       },
@@ -1472,24 +1447,6 @@
             "min": 0,
             "max": 23,
             "default": 12,
-            "template": true,
-            "secret": false
-          },
-          {
-            "path": "winter.ac_charge_power",
-            "label": "AC charge power",
-            "description": "Optional AC charging power used by the winter strategy when supported.",
-            "type": "number",
-            "level": "advanced",
-            "scope": "both",
-            "required": false,
-            "requires_restart": true,
-            "restart_required": true,
-            "backup_recommended": true,
-            "risk": "control_stability",
-            "unit": "W",
-            "min": 0,
-            "default": 200,
             "template": true,
             "secret": false
           }

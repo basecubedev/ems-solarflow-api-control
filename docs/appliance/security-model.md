@@ -66,6 +66,12 @@ reported rather than fatal: whoever can plant such a link already holds the web
 account, and failing the install would hand them a way to block every later
 package as well.
 
+The agent also reads `web/appliance.log` for the console when the web unit's
+journal has nothing to give. It opens that file, as every log file it tails,
+without following a link and refuses anything that is not a regular file: a
+link planted there had it read whatever the link pointed at, as root, and hand
+it back as the web log.
+
 The web account can neither write, read nor list the agent tree. That matters
 because an operation record carries the live confirmation token of its plan and
 a known-good file carries the rollback identity: a group-readable record would
@@ -412,6 +418,20 @@ no free-form action name, no dictionary, no path and no way to pass a password,
 a session cookie, a CSRF token or a public key. The operation does not take the
 host mutation lock, so a login during a running Admin install is still audited.
 
+A sign-in, password change or confirmation refused as `busy` or `rate_limited`
+never read a password, so a client can repeat it as fast as it connects. Written
+one line each, some ten thousand of them rotated the log's one 4 MB generation
+out; more generations would only have multiplied that number. The agent writes
+the first such refusal from a source as it comes and counts the repeats of the
+same event, result and reason for the next five minutes, the login rate
+limiter's window. A source is an IPv4 address or an IPv6 /64, as the rate
+limiter counts them, because an IPv6 host picks its own addresses inside its
+/64. The count is written as one record carrying `detail.repeated` and
+`detail.since` (the first refusal's timestamp), at the first event after the
+window or when more than 1024 windows are open at once. A wrong password, a
+success and a logout are written every time. A count still open when the agent
+stops is lost; the first refusal of its window is in the log.
+
 `sudo ems-appliance password-reset` runs as root and writes its own
 `password.reset` entry directly.
 
@@ -438,6 +458,16 @@ The durable operation store allows exactly one conflicting host mutation.
 Read-only status calls stay available. A stale browser cannot start a second
 operation: execution requires the operation ID plus the confirmation token of
 that plan, and a terminal operation cannot be restarted.
+
+A plan can outlast the browser's patience: an Admin install plan may pull for
+35 minutes, an update plan refresh its index for 22, and Firefox gives up on a
+response after five. The console therefore sends a random request id with every
+plan, and the agent keeps its SHA-256 digest on the operation record. Through
+`operations.resume_plan` it hands the plan and its confirmation token to a
+caller that presents the operation ID and that id again, and to nobody else: not
+for another id, not for a plan made without one, and not for a plan that is not
+waiting for confirmation. The id lives only in the page's memory, so a reloaded
+page cannot pick the plan up; it cancels it from the banner instead.
 
 ## What the package may delete
 

@@ -120,8 +120,10 @@ class SshService:
         from appliance.backup_confinement import build_activation
 
         activation = build_activation(paths=self.paths, config=self.config, runner=self.runner)
-        disabled = activation.disabled_keys_path()
-        if (disabled is not None and disabled.exists()) or activation.conflicted_key_files():
+        files = activation.key_files()
+        if files.refusal is not None:
+            raise SshServiceError(files.refusal.code, files.refusal.message)
+        if files.set_aside:
             raise SshServiceError(
                 "backup_access_withdrawn",
                 "backup access was disabled because its confinement could not be proven; "

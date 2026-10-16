@@ -308,6 +308,28 @@ def test_a_web_audit_event_is_written_to_the_audit_log(handlers, services):
     assert entry["user"] == "appliance-admin"
 
 
+def test_refusals_that_read_no_password_do_not_fill_the_audit_log(handlers, services):
+    """Each one used to be a line: some ten thousand sign-ins refused as
+    rate-limited rotated the log's one 4 MB generation out, and a client can send
+    them as fast as it connects because no password is derived for them."""
+
+    for _ in range(1000):
+        payload = handlers.dispatch(
+            {"operation": "audit.record_web_event", "event": "login.failure",
+             "result": "denied", "reason": "rate_limited"},
+            actor="appliance-admin",
+            source_ip="192.168.1.66",
+        )
+        assert payload["recorded"] is True
+
+    written = [
+        entry for entry in services.audit.tail(limit=5000)
+        if entry.get("source_ip") == "192.168.1.66"
+    ]
+    assert len(written) == 1, len(written)
+    assert written[0]["target"] == "rate_limited"
+
+
 def test_an_audit_event_creates_no_operation_record(handlers, services):
     handlers.dispatch(
         {"operation": "audit.record_web_event", "event": "logout", "result": "success"}

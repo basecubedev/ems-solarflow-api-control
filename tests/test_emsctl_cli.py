@@ -365,7 +365,7 @@ def test_emsctl_completion_bash_contains_commands_and_configured_device(tmp_path
     result = run_emsctl(tmp_path, "completion", "bash")
 
     assert result.returncode == 0, result.stderr
-    assert "status system device ha ha-control winter ac-charge dashboard influx stack diagnose grid-meter backup config interactive menu examples completion help" in result.stdout
+    assert "status system device winter ac-charge dashboard influx stack diagnose grid-meter backup config interactive menu examples completion help" in result.stdout
     assert "set-password change-password disable-auth auth-status" in result.stdout
     assert "off eco standard" in result.stdout
     assert "output input" in result.stdout
@@ -391,7 +391,7 @@ def test_emsctl_completion_zsh_contains_commands_and_configured_device(tmp_path)
     result = run_emsctl(tmp_path, "completion", "zsh")
 
     assert result.returncode == 0, result.stderr
-    assert "commands=(status system device ha ha-control winter ac-charge dashboard influx stack diagnose grid-meter backup config interactive menu examples completion help)" in result.stdout
+    assert "commands=(status system device winter ac-charge dashboard influx stack diagnose grid-meter backup config interactive menu examples completion help)" in result.stdout
     assert "dashboard_actions=(set-password change-password disable-auth auth-status)" in result.stdout
     assert "offgrid_modes=(off eco standard)" in result.stdout
     assert "ac_modes=(output input)" in result.stdout
@@ -495,8 +495,6 @@ def test_emsctl_updates_system_device_and_sections(tmp_path):
         ("device", "WR1", "offgrid", "eco"),
         ("device", "WR1", "ac-mode", "input"),
         ("device", "WR1", "ac-charge-power", "200"),
-        ("ha", "disable"),
-        ("ha-control", "disable"),
         ("winter", "enable"),
     ]
 
@@ -516,8 +514,6 @@ def test_emsctl_updates_system_device_and_sections(tmp_path):
     assert state["devices"]["WR1"]["runtime_role"] == "ac_input"
     assert state["devices"]["WR1"]["runtime_role_reason"] == "emsctl"
     assert state["devices"]["WR1"]["ac_charge_power_w"] == 200
-    assert state["ha"]["enabled"] is False
-    assert state["ha"]["control_enabled"] is False
     assert state["winter"]["enabled"] is True
 
 
@@ -1112,7 +1108,7 @@ def test_config_init_mqtt_new_password_is_stored_without_being_printed(
     assert password not in output.out + output.err
 
 
-def test_config_init_dry_run_redacts_home_assistant_token(tmp_path):
+def test_config_init_dry_run_redacts_a_token_left_in_an_old_ha_section(tmp_path):
     config_path = tmp_path / "config.json"
     write_config(config_path)
     config = json.loads(config_path.read_text())
@@ -2054,13 +2050,6 @@ def test_a_null_config_section_is_an_error_message_not_a_traceback(
     result = run_emsctl(tmp_path, "status")
 
     assert "Traceback" not in result.stderr
-
-
-def test_runtime_defaults_match_the_ems_for_home_assistant():
-    """A missing ha block means no HA sync in the EMS, so emsctl must agree."""
-
-    defaults = emsctl.runtime_defaults({"system": {}, "devices": []})
-    assert defaults["ha"] == {"enabled": False, "control_enabled": False}
 
 
 @pytest.mark.parametrize("argv", [["examples"], ["dashboard", "auth-status"]])

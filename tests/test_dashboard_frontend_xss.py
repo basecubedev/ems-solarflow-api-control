@@ -258,7 +258,7 @@ def test_dashboard_generated_templates_do_not_use_inline_style_attributes():
     assert 'style="' not in js
 
 
-def test_runtime_control_panel_orders_all_devices_before_winter_and_ha():
+def test_runtime_control_panel_orders_all_devices_before_winter_and_ac_charging():
     script = f"""
 const app = require({json.dumps(str(APP_JS))});
 app.state.auth = {{ configured: true, authenticated: true, csrfToken: "token" }};
@@ -270,7 +270,6 @@ app.state.runtime = {{
     WR3: {{ enabled: false, max_power: 600, offgrid_socket_mode: "standard", pv_priority_factor: 0.9 }}
   }},
   winter: {{ enabled: false }},
-  ha: {{ enabled: true, control_enabled: false }},
   _limits: {{
     system: {{ max_total_power: 1200, min_output_limit: 1200 }},
     devices: {{ WR1: 800, WR2: 800, WR3: 600 }},
@@ -284,7 +283,7 @@ console.log(JSON.stringify({{
   wr2: html.indexOf(">WR2<"),
   wr3: html.indexOf(">WR3<"),
   winter: html.indexOf("Winter Mode"),
-  ha: html.indexOf("Home Assistant"),
+  acCharge: html.indexOf("AC Charging"),
   wr3Present: html.includes(">WR3<")
 }}));
 """
@@ -292,7 +291,7 @@ console.log(JSON.stringify({{
 
     assert output["wr3Present"] is True
     assert output["ems"] < output["wr1"] < output["wr2"] < output["wr3"]
-    assert output["wr3"] < output["winter"] < output["ha"]
+    assert output["wr3"] < output["winter"] < output["acCharge"]
 
 
 def test_runtime_offgrid_select_uses_readable_labels_but_keeps_values():
@@ -324,7 +323,6 @@ app.state.runtime = {{
   system: {{ enabled: true, max_total_power: 1200, min_output_limit: 35, loop_interval: 5 }},
   devices: {{ WR1: {{ enabled: true, max_power: 800, offgrid_socket_mode: "off", pv_priority_factor: 1.0 }} }},
   winter: {{ enabled: false }},
-  ha: {{ enabled: true, control_enabled: false }},
   _limits: {{
     system: {{ max_total_power: 1200, min_output_limit: 1200 }},
     devices: {{ WR1: 800 }},
@@ -339,7 +337,7 @@ console.log(JSON.stringify({{ html: app.runtimeControlPanel() }}));
     assert ">Save EMS settings</button>" in html
     assert ">Save WR1 settings</button>" in html
     assert ">Save winter mode</button>" in html
-    assert ">Save HA settings</button>" in html
+    assert ">Save AC charging</button>" in html
     assert ">Apply</button>" not in html
 
 
@@ -353,7 +351,6 @@ app.state.runtime = {{
     WR1: {{ enabled: true, max_power: 400, offgrid_socket_mode: "off", pv_priority_factor: 0.5 }}
   }},
   winter: {{ enabled: false }},
-  ha: {{ enabled: true, control_enabled: false }},
   _limits: {{
     system: {{ max_total_power: 5000, min_output_limit: 5000 }},
     devices: {{ WR1: 800 }},
@@ -498,7 +495,6 @@ app.state.runtime = {{
   system: {{ enabled: true, max_total_power: 1600, min_output_limit: 35, loop_interval: 5 }},
   devices: {{}},
   winter: {{ enabled: false }},
-  ha: {{ enabled: true, control_enabled: false }},
   _limits: {{ system: {{ max_total_power: 5000, min_output_limit: 5000 }}, devices: {{}}, fallback_device_max_power: 800 }}
 }};
 app.renderControlExplain(snapshot, {{ forceRuntimeEditor: true }});
@@ -639,7 +635,6 @@ app.state.runtime = {{
   system: {{ enabled: true, max_total_power: 1600, min_output_limit: 35, loop_interval: 5 }},
   devices: {{}},
   winter: {{ enabled: false }},
-  ha: {{ enabled: true, control_enabled: false }},
   _limits: {{ system: {{ max_total_power: 5000, min_output_limit: 5000 }}, devices: {{}}, fallback_device_max_power: 800 }}
 }};
 app.renderControlExplain(app.state.snapshot, {{ forceRuntimeEditor: true }});
@@ -664,7 +659,6 @@ global.fetch = async (url, options = {{}}) => {{
         system: {{ enabled: true, max_total_power: 160, min_output_limit: 35, loop_interval: 5 }},
         devices: {{}},
         winter: {{ enabled: false }},
-        ha: {{ enabled: true, control_enabled: false }},
         _limits: {{ system: {{ max_total_power: 5000, min_output_limit: 5000 }}, devices: {{}}, fallback_device_max_power: 800 }}
       }})
     }};
@@ -790,7 +784,6 @@ app.state.runtime = {{
   system: {{ enabled: true, max_total_power: 1600, min_output_limit: 35, loop_interval: 5 }},
   devices: {{}},
   winter: {{ enabled: false }},
-  ha: {{ enabled: true, control_enabled: false }},
   _limits: {{ system: {{ max_total_power: 5000, min_output_limit: 5000 }}, devices: {{}}, fallback_device_max_power: 800 }}
 }};
 app.renderControlExplain({{ control_explain: null }}, {{ forceRuntimeEditor: true }});

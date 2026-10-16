@@ -25,6 +25,7 @@ HOLD_WINDOW = timedelta(hours=3)
 DARK_PV_W = 10
 MORNING_STEP_PV_W = 50
 STORED_TARGET_MAX_AGE = timedelta(days=7)
+MIN_SOC_UNMANAGED = 0
 
 
 def build_winter_store():
@@ -68,6 +69,7 @@ class WinterDeviceState:
     policy_warned: bool = False
     dark_date: str | None = None
     store_failed: bool = False
+    min_soc_unknown_said: bool = False
 
     def reset_plan(self):
         """Forget the target and the day's step, keeping what is known of the device."""
@@ -94,14 +96,6 @@ class WinterReserve:
         """The winter state of the device named ``name``."""
 
         return self.devices.setdefault(name, WinterDeviceState())
-
-    def last_step_date(self):
-        """The latest day any device took a step, or ``None``."""
-
-        return max(
-            (item.step_date for item in self.devices.values() if item.step_date),
-            default=None,
-        )
 
     def policy(self, dev, state):
         """Return the winter policy that applies to ``dev`` this cycle."""
@@ -141,7 +135,8 @@ class WinterReserve:
         device's reported minSoc is written only once it leads the SoC by at
         most ``MAX_RAISE_ABOVE_SOC`` (``cfg.winter_min_soc_raise_limit``); only
         a policy's own daily step may lead it further, and only when the
-        policy says so.
+        policy says so. A device whose report carries no minSoc gets
+        ``MIN_SOC_UNMANAGED``, which the SoC reconcile leaves unwritten.
         """
 
         policy = self.policy(dev, state)
@@ -173,7 +168,10 @@ class WinterReserve:
         """The winter/summer minSoc target before the raise limit is applied.
 
         In winter, minSoc rises once a day by the policy's step and, later that
-        day, follows a point below the SoC the battery reaches.
+        day, follows a point below the SoC the battery reaches. While the
+        report carries no minSoc nothing is planned: a 0 read for it would be
+        adopted as the floor, or stepped up from, and written over the
+        reserve (K18).
         """
 
         if not cfg.winter_feature_enabled(self._runtime_state()):
@@ -195,6 +193,11 @@ class WinterReserve:
             return None, False
 
         item = self.device(dev.name)
+
+        if not getattr(state, "min_soc_reported", True):
+            self.log_min_soc_unknown(dev, item)
+            return MIN_SOC_UNMANAGED, False
+        item.min_soc_unknown_said = False
 
         if not winter_active:
             return self.summer_min_soc(dev, state, item, now), False
@@ -234,6 +237,19 @@ class WinterReserve:
             self.follow_soc(dev, state, policy, item, now)
 
         return item.target, False
+
+    def log_min_soc_unknown(self, dev, item):
+        """Say once, until the report carries minSoc again, that winter leaves it alone."""
+
+        if item.min_soc_unknown_said:
+            return
+        item.min_soc_unknown_said = True
+        log_event(
+            logging.WARNING,
+            "winter_min_soc_unknown",
+            device=dev.name,
+            reason="min_soc_not_reported",
+        )
 
     def observe_pv(self, dev, state, item, today, now):
         """Note the day a device reported PV, and that it ever reported real PV.
@@ -514,18 +530,6 @@ class WinterReserve:
         """
 
         return self.clamped_target(dev, int(state.min_soc))
-
-    def ha_target(self, dev, state, active):
-        """The minSoc Home Assistant shows as this device's winter target."""
-
-        policy = self.policy(dev, state)
-        own_min_soc = state.min_soc if state.min_soc > 0 else dev.min_soc
-        if battery_presence(state) == BATTERY_ABSENT or policy.step is None:
-            return own_min_soc, policy
-        if not active:
-            return cfg.winter_summer_min_soc(), policy
-        target = self.device(dev.name).target
-        return (self.held_min_soc(dev, state) if target is None else target), policy
 
     def solar_charge_candidate(self, dev, state):
         """Whether ``dev`` is a battery below its minSoc that receives PV.

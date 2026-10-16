@@ -19,6 +19,7 @@ import os
 import re
 import stat
 import tempfile
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -393,7 +394,8 @@ class ZendureCloudTokenStore:
     Interface-compatible with the legacy ``admin.secret_store.ZendureTokenStore``
     so cloud discovery consumes it unchanged, but the file lives under
     ``config/secrets/`` and a legacy Admin-local token is migrated in on first
-    read.
+    read. Saving, deleting, a metadata write and that migration hold one lock,
+    so a read cannot migrate a token back that a delete or a save is replacing.
     """
 
     def __init__(self, config_dir=None, *, legacy_store=None):
@@ -402,6 +404,7 @@ class ZendureCloudTokenStore:
         self.token_path = self.secrets_dir / ZENDURE_SECRET_FILENAME
         self._files = _EncryptedFiles(self.secrets_dir)
         self._legacy_store = legacy_store
+        self._lock = threading.RLock()
 
     @property
     def key_path(self):
@@ -422,7 +425,8 @@ class ZendureCloudTokenStore:
             "token": blob,
             "metadata": {**_empty_zendure_metadata(), "saved_at": utc_now_iso()},
         }
-        perms_ok = self._files.write_record(ZENDURE_SECRET_FILENAME, record)
+        with self._lock:
+            perms_ok = self._files.write_record(ZENDURE_SECRET_FILENAME, record)
         return {
             "token_saved": True,
             "encrypted": encrypted,
@@ -440,20 +444,21 @@ class ZendureCloudTokenStore:
             return None
 
     def delete_token(self):
-        try:
-            removed = self._files.delete_file(ZENDURE_SECRET_FILENAME)
-        except CredentialStoreError as exc:
-            raise CredentialStoreError(
-                "Could not remove the stored Zendure token."
-            ) from exc
-        if self._legacy_store is not None:
+        with self._lock:
             try:
-                legacy = self._legacy_store.delete_token()
-            except Exception as exc:
+                removed = self._files.delete_file(ZENDURE_SECRET_FILENAME)
+            except CredentialStoreError as exc:
                 raise CredentialStoreError(
-                    "Could not remove the earlier Admin copy of the Zendure token."
+                    "Could not remove the stored Zendure token."
                 ) from exc
-            removed = removed or bool(legacy.get("removed"))
+            if self._legacy_store is not None:
+                try:
+                    legacy = self._legacy_store.delete_token()
+                except Exception as exc:
+                    raise CredentialStoreError(
+                        "Could not remove the earlier Admin copy of the Zendure token."
+                    ) from exc
+                removed = removed or bool(legacy.get("removed"))
         return {"token_saved": False, "removed": removed}
 
     def settings(self):
@@ -479,46 +484,52 @@ class ZendureCloudTokenStore:
         }
 
     def update_metadata(self, **fields):
-        record = self._files.read_record(ZENDURE_SECRET_FILENAME)
-        if not record:
-            return
-        metadata = record.get("metadata")
-        if not isinstance(metadata, dict):
-            metadata = _empty_zendure_metadata()
-        for key, value in fields.items():
-            if key in _ZENDURE_METADATA_FIELDS:
-                metadata[key] = value
-        record["metadata"] = metadata
-        self._files.write_record(ZENDURE_SECRET_FILENAME, record)
+        with self._lock:
+            record = self._files.read_record(ZENDURE_SECRET_FILENAME)
+            if not record:
+                return
+            metadata = record.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = _empty_zendure_metadata()
+            for key, value in fields.items():
+                if key in _ZENDURE_METADATA_FIELDS:
+                    metadata[key] = value
+            record["metadata"] = metadata
+            self._files.write_record(ZENDURE_SECRET_FILENAME, record)
 
     def _migrate_legacy_if_needed(self):
         """Import a legacy Admin-local token once, without deleting the source.
 
         Idempotent: skips when the new file already exists or no legacy token is
         available. The legacy file is left in place until the token is deleted,
-        which removes both copies so a deleted token never returns.
+        which removes both copies so a deleted token never returns. The check,
+        the read of the legacy token and the save hold the store's lock, which a
+        delete and a save take too.
         """
 
-        if self._legacy_store is None or self.token_path.exists():
+        if self._legacy_store is None:
             return
-        try:
-            token = self._legacy_store.load_token()
-        except Exception:
-            token = None
-        if not token:
-            return
-        try:
-            self.save_token(token)
-            legacy_settings = self._legacy_store.settings()
-        except Exception:
-            return
-        carry = {
-            key: legacy_settings.get(key)
-            for key in _ZENDURE_METADATA_FIELDS
-            if legacy_settings.get(key) is not None
-        }
-        if carry:
-            self.update_metadata(**carry)
+        with self._lock:
+            if self.token_path.exists():
+                return
+            try:
+                token = self._legacy_store.load_token()
+            except Exception:
+                token = None
+            if not token:
+                return
+            try:
+                self.save_token(token)
+                legacy_settings = self._legacy_store.settings()
+            except Exception:
+                return
+            carry = {
+                key: legacy_settings.get(key)
+                for key in _ZENDURE_METADATA_FIELDS
+                if legacy_settings.get(key) is not None
+            }
+            if carry:
+                self.update_metadata(**carry)
 
 
 class CredentialStore:

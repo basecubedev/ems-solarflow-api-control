@@ -64,7 +64,7 @@ def write_config(path):
                 "min_soc": 15,
             }
         ],
-        "grid_meter": {"type": "ha"},
+        "grid_meter": {"type": "shelly", "ip": "192.0.2.10"},
     }))
 
 

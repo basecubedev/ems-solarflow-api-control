@@ -10,6 +10,7 @@ unreachable source, and valid JSON that is simply not a list.
 """
 
 import json
+from http.client import IncompleteRead
 
 import pytest
 
@@ -216,3 +217,108 @@ def test_a_shape_the_index_should_not_have_yields_no_releases(payload):
 
 def test_the_parser_is_the_one_the_catalogue_uses():
     assert callable(releases.parse_release_index)
+
+
+# --- the transport an index is read over -------------------------------------
+
+
+class _IndexResponse:
+    def __init__(self, body, url):
+        self._body = body
+        self.url = url
+
+    def read(self, size=-1):
+        block, self._body = self._body, b""
+        return block
+
+    read1 = read
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _BreaksOff(_IndexResponse):
+    """An answer whose headers arrived and whose body read fails."""
+
+    def __init__(self, error, url):
+        super().__init__(b"", url)
+        self._error = error
+
+    def read(self, size=-1):
+        raise self._error
+
+    read1 = read
+
+
+def _network(monkeypatch, body=b'["v1.2.0", "v1.1.0"]', *, landing=None, answer=None):
+    """The fetcher's own opener, replaced: what was asked for, and an answer."""
+
+    from appliance import release_fetch
+
+    asked = []
+
+    def _open(request, *, timeout, deadline):
+        url = request.full_url
+        asked.append(url)
+        if answer is not None:
+            return answer(url)
+        return _IndexResponse(body, landing or url)
+
+    monkeypatch.setattr(release_fetch, "_open_watched", _open)
+    return asked
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["http://mirror.example.org/releases.json", "file:///etc/ems-appliance-manager/releases.json"],
+)
+def test_an_index_that_is_not_https_is_refused_and_never_read(monkeypatch, url):
+    """The index picks the tag *Latest stable* installs. Over plain http anyone on
+    the path picks it, an old release included; ``file:`` reads the root agent's
+    own disk. The Manager's own index has been https-only from the start."""
+
+    asked = _network(monkeypatch)
+
+    with pytest.raises(ReleaseResolutionError) as error:
+        ReleaseCatalogue(_Config(None, url=url)).available()
+
+    assert error.value.code == "release_index_insecure"
+    assert asked == []
+
+
+def test_an_index_that_redirects_to_http_is_refused(monkeypatch):
+    _network(monkeypatch, landing="http://mirror.example.org/releases.json")
+
+    with pytest.raises(ReleaseResolutionError) as error:
+        ReleaseCatalogue(_Config(None, url="https://mirror.example.org/releases.json")).available()
+
+    assert error.value.code == "release_index_insecure"
+
+
+def test_an_https_index_is_read(monkeypatch):
+    asked = _network(monkeypatch)
+
+    listed = ReleaseCatalogue(_Config(None, url="https://mirror.example.org/r.json")).available()
+
+    assert asked == ["https://mirror.example.org/r.json"]
+    assert [item.tag for item in listed] == ["v1.2.0", "v1.1.0"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [ConnectionResetError(104, "reset"), TimeoutError("timed out"), IncompleteRead(b'["v1')],
+    ids=["reset", "socket timeout", "incomplete"],
+)
+def test_an_index_whose_body_breaks_off_is_reported_unreachable(monkeypatch, error):
+    """The list answers empty with the reason, as it did before the index went
+    through HttpsFetcher, rather than failing the call as an agent error."""
+
+    _network(monkeypatch, answer=lambda url: _BreaksOff(error, url))
+
+    with pytest.raises(ReleaseResolutionError) as refused:
+        ReleaseCatalogue(_Config(None, url="https://mirror.example.org/r.json")).available()
+
+    assert refused.value.code == "release_index_unreachable"

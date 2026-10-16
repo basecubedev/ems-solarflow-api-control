@@ -190,8 +190,8 @@ Full model: [Safety](../safety.md) ·
 ## State reconciliation is still API-only
 
 MQTT does not yet replace every Local API function. State-reconciliation writes —
-`minSoc`, `socSet`, `smartMode`, `gridOffMode`, winter `inputLimit`, full-charge
-assist — additionally require `allow_state_reconciliation_writes=true` and are
+`minSoc`, `socSet`, `smartMode`, `gridOffMode`, full-charge assist —
+additionally require `allow_state_reconciliation_writes=true` and are
 **API-only**. MQTT control devices take the power command only: output, and a
 charge from surplus where the model allows it.
 

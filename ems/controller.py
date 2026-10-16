@@ -15,6 +15,7 @@ from ems.ac_charge_control import (
     ChargeDirectionSettings,
     ChargeDirectionState,
     allocate_charge_targets,
+    charge_entries_within_limit,
     charge_headroom_weight,
     count_silent_charge_cycles,
     decide_charge_direction,
@@ -46,6 +47,8 @@ from ems.power_direction import (
     AC_MODE_OUTPUT,
     derive_house_load_w,
     found_in_ac_input,
+    in_ac_input_direction,
+    out_of_charge,
     settling_out_of_charge,
 )
 from ems.runtime_intents import (
@@ -56,30 +59,29 @@ from ems.runtime_intents import (
     ac_input_intent,
     ac_output_intent,
     UNPROVEN_CHARGE_REASON,
+    FIRMWARE_CHARGE_REASON,
     firmware_charge_intent,
     is_floor_charge,
     resolve_device_intent,
     runtime_intent_from_role,
 )
 from ems.state_store import BatteryFullChargeStateStore
-from ems.winter_reserve import WinterReserve
+from ems.winter_policies import MAX_RAISE_ABOVE_SOC
+from ems.winter_reserve import MIN_SOC_UNMANAGED, WinterReserve
 from ems.target_control import (
     ControlExplanation,
     ControlLimitExplanation,
     DeviceControlExplanation,
     apply_min_output_limit,
     battery_presence,
-    calculate_remaining_time_hours,
     calculate_targets,
     detect_capabilities,
     derive_soc_runtime_state,
     firmware_recovery_or_ac_charge_active,
     pv_power,
-    startup_ac_mode_initialization_blocker,
 )
 
 
-STARTUP_AC_MODE_RECONCILE_REASON = "startup_ac_mode_reconcile"
 FULL_CHARGE_ASSIST_REASON = "battery_full_charge_assist"
 FULL_CHARGE_ASSIST_RESTORE_REASON = "battery_full_charge_assist_restore"
 
@@ -102,6 +104,7 @@ def finite_grid_load(value):
 
 
 CYCLE_FAILURE_WARN_EVERY = 12
+CYCLE_FAILURES_BEFORE_CHARGE_RELEASE = 3
 
 
 @dataclass
@@ -110,12 +113,25 @@ class FullChargeAssistCharge:
 
     No transport has this charge on record -- the assist writes it through
     the state reconciler -- so the controller keeps the same
-    :class:`~ems.charge_record.ChargeRecord` for it, and counts the exits it
-    sent since control went off.
+    :class:`~ems.charge_record.ChargeRecord` for it, bounded as a transport's
+    is for a charge only grid draw shows, and counts the exits it sent since a
+    cycle with control on last found the charge held over a known ``acMode``:
+    after a switch-off, by its restore over an unknown ``acMode``, or while
+    cycles fail. That cap bounds the exits to a charge the device still shows.
     """
 
     record: ChargeRecord
     exits: int = 0
+
+    def charge_exit_exhausted(self):
+        """Whether the charge is the device's: its exits spent on grid draw alone, a window ago."""
+
+        return self.record.exit_exhausted(time.monotonic())
+
+    def release_charge_record(self):
+        """The charge is not the EMS's from here; the record stays, closed."""
+
+        self.record.release()
 
 
 class EMSController:
@@ -125,7 +141,6 @@ class EMSController:
         self,
         devices,
         shelly,
-        ha=None,
         sleep_enabled=True,
         runtime_state=None,
         dashboard_store=None,
@@ -136,9 +151,11 @@ class EMSController:
     ):
         self.devices = devices
         self.shelly = shelly
-        self.ha = ha
         self.sleep_enabled = sleep_enabled
         self.cycle_failures = 0
+        self.cycles_through_since_release = None
+        self.assist_reentries = ()
+        self.assist_reentry_rate_limited = False
         self.runtime_state = runtime_state
         self.dashboard_store = dashboard_store
         self.zendure_mqtt_runtime = zendure_mqtt_runtime
@@ -157,10 +174,8 @@ class EMSController:
         self.last_fetch_at = None
         self.device_online = {}
         self.pv_priority_devices = None
-        self.battery_power_history = {}
-        self.initial_ac_mode_reconciled = {}
-        self.last_ha_seen = {}
-        self.last_ha_written = {}
+        self.ac_mode_unknown = set()
+        self.state_fields_unknown = set()
         self.commanded_total_w = None
         self.filtered_load_w = None
         self.grid_meter_holding = False
@@ -179,6 +194,7 @@ class EMSController:
         self.commanded_device_targets = {}
         self._last_winter_active = None
         self.winter = WinterReserve(lambda: self.runtime_state, store=winter_store)
+        self.min_soc_raise_waiting = {}
         self.night_min_soc_idle_active = False
         self.night_min_soc_idle_parked = set()
         self._dashboard_capabilities = []
@@ -831,6 +847,8 @@ class EMSController:
                     minimum=0
                 )
 
+            limited = ramp_limit > 0
+
             if bypass:
                 ramp_limit *= self.output_control_float(
                     "bypass_ramp_multiplier",
@@ -839,13 +857,18 @@ class EMSController:
                 )
 
             if stale:
-                ramp_limit *= self.output_control_float(
+                stale_limit = ramp_limit * self.output_control_float(
                     "stale_telemetry_ramp_factor",
                     0.5,
                     minimum=0.0
                 )
+                if self.commanded_total_w < 0 < delta:
+                    stale_limit = max(
+                        stale_limit, min(ramp_limit, -self.commanded_total_w)
+                    )
+                ramp_limit = stale_limit
 
-            if ramp_limit > 0 and abs(delta) > ramp_limit:
+            if limited and abs(delta) > ramp_limit:
                 ramped = (
                     self.commanded_total_w + ramp_limit
                     if delta > 0
@@ -1468,31 +1491,6 @@ class EMSController:
             minimum=minimum
         )
 
-    def runtime_section_bool(self, section_name, key, default):
-        if not self.runtime_state:
-            return default
-
-        return cfg.safe_bool(
-            self.runtime_state.get_section(section_name, key, default),
-            default
-        )
-
-    def runtime_ha_enabled(self):
-        ha_config = cfg.CONFIG.get("ha", {})
-        return self.runtime_section_bool(
-            "ha",
-            "enabled",
-            ha_config.get("enabled", False)
-        )
-
-    def runtime_ha_control_enabled(self):
-        ha_config = cfg.CONFIG.get("ha", {})
-        return self.runtime_section_bool(
-            "ha",
-            "control_enabled",
-            ha_config.get("control_enabled", False)
-        )
-
     def runtime_device_bool(self, device_name, key, default):
         if not self.runtime_state:
             return default
@@ -1533,13 +1531,14 @@ class EMSController:
         return str(value)
 
     def get_device_runtime_intent(self, dev, state):
-        """Return the current runtime reservation intent for a device."""
+        """Return the current runtime reservation intent for a device.
 
-        role = self.runtime_device_str(
-            dev.name,
-            "runtime_role",
-            DeviceRuntimeRole.AC_OUTPUT.value
-        )
+        A role stored in runtime state is the operator's; without one the
+        device gets the default ``ac_output`` claim.
+        """
+
+        stored_role = self.runtime_device_str(dev.name, "runtime_role", "").strip()
+        role = stored_role or DeviceRuntimeRole.AC_OUTPUT.value
         reason = self.runtime_device_str(
             dev.name,
             "runtime_role_reason",
@@ -1548,6 +1547,7 @@ class EMSController:
         intent = runtime_intent_from_role(dev.name, role, reason)
 
         if intent:
+            intent = replace(intent, operator_role=bool(stored_role))
             if intent.role is DeviceRuntimeRole.AC_INPUT:
                 return replace(
                     intent,
@@ -1606,8 +1606,8 @@ class EMSController:
         )
         return min(configured, max(0, self.charge_capacity_w))
 
-    def release_charging_devices(self):
-        """Return every device this EMS put into charge, before shutting down.
+    def release_charging_devices(self, failed_cycles=None):
+        """Return every device this EMS put into charge, before shutting down or after failed cycles.
 
         A charge outlives the process that started it: nothing in the device
         stops drawing from the grid until its own SoC ceiling does. This covers
@@ -1624,57 +1624,126 @@ class EMSController:
         reached a device: no charge is on the transport's record there, and
         the release runs for the regulator's target alone. Each event names
         the record the charge is known by.
+
+        The full-charge assist's charge is on no transport's record, since the
+        assist writes it through the state reconciler, so the release reads the
+        controller's record of it too (:meth:`full_charge_assist_charge_held`),
+        the one switching control off ends it by. Read off the transport alone,
+        it ran on to a full battery after the EMS was gone (AR-1).
+
+        ``failed_cycles`` is the release after that many failed cycles in a row
+        (R1-1): the EMS goes on, so it is not the last command and keeps the
+        records' resend window (:meth:`charge_release_due`), logged as
+        ``ac_charge_released_after_failed_cycles``. Best effort: whatever
+        raises for one device is logged as its ``ac_charge_release_failed`` and
+        the others are still released. The charge direction starts afresh, its
+        hourly entries kept, so a charge waits for its entry confirmation again.
         """
 
         for dev in self.devices:
-            if not self.charge_commanded_by_ems(dev):
-                continue
-
-            fields = {
-                "device": dev.name,
-                "previous_target_w": self.commanded_device_targets.get(dev.name),
-                "charge": (
-                    "ems_charge_on_record"
-                    if getattr(dev, "charge_commanded", False) is True
-                    else "regulator_target"
-                ),
-            }
             try:
-                written = self.write_target(dev, 0, CHARGE_EXIT_FINAL)
+                self.release_charging_device(dev, failed_cycles)
             except Exception as exc:
-                written = False
-                fields["error"] = exc
-            if getattr(written, "status", None) is WriteDispatchStatus.WITHHELD:
                 log_event(
-                    logging.INFO,
-                    "ac_charge_release_withheld",
-                    reason=written.reason,
-                    **cfg.resolve_device_write_gate(dev).as_log_fields(),
-                    **fields,
+                    logging.WARNING,
+                    "ac_charge_release_failed",
+                    device=dev.name,
+                    error=exc,
+                    **({} if failed_cycles is None else {"failed_cycles": failed_cycles}),
                 )
-            elif written:
-                log_event(logging.INFO, "ac_charge_released_on_shutdown", **fields)
-            else:
-                log_event(logging.WARNING, "ac_charge_release_failed", **fields)
-            self.commanded_device_targets[dev.name] = 0
 
-        self.charge_direction = ChargeDirectionState()
+        self.charge_direction = ChargeDirectionState(
+            entries=self.charge_direction.entries
+        )
         self.charge_capacity_w = 0
         self.device_charge_limits = {}
+
+    def release_charging_device(self, dev, failed_cycles):
+        """Send ``dev`` the release if one of the EMS's records holds a charge on it."""
+
+        regulator = self.charge_commanded_by_ems(dev)
+        assist = self.full_charge_assist_charge_held(dev)
+        if not regulator and not assist:
+            return
+        if failed_cycles is not None and not self.charge_release_due(dev, regulator):
+            return
+
+        fields = {
+            "device": dev.name,
+            "previous_target_w": self.commanded_device_targets.get(dev.name),
+            "charge": self.released_charge(dev, regulator),
+        }
+        if failed_cycles is not None:
+            fields["failed_cycles"] = failed_cycles
+        try:
+            written = self.write_target(dev, 0, CHARGE_EXIT_FINAL)
+        except Exception as exc:
+            written = False
+            fields["error"] = exc
+        if assist:
+            self.note_full_charge_assist_exit(dev, written)
+        if getattr(written, "status", None) is WriteDispatchStatus.WITHHELD:
+            log_event(
+                logging.INFO,
+                "ac_charge_release_withheld",
+                reason=written.reason,
+                **cfg.resolve_device_write_gate(dev).as_log_fields(),
+                **fields,
+            )
+        elif written and failed_cycles is None:
+            log_event(logging.INFO, "ac_charge_released_on_shutdown", **fields)
+        elif written:
+            log_event(
+                logging.INFO, "ac_charge_released_after_failed_cycles", **fields
+            )
+        else:
+            log_event(logging.WARNING, "ac_charge_release_failed", **fields)
+        self.commanded_device_targets[dev.name] = 0
+
+    def charge_release_due(self, dev, regulator):
+        """Whether a release that is not the last command may go out to ``dev`` now.
+
+        By the record the charge is held on, as the exit of a switch-off is:
+        the transport's or the assist's goes out again once per resend window
+        while the record says the charge runs, and not to a device the last
+        read did not reach; the regulator's target alone is released once,
+        since the release sets it to 0.
+        """
+
+        if not self.device_online.get(dev.name, True):
+            return False
+        if getattr(dev, "charge_commanded", False) is True:
+            return not self.charge_exit_pending(dev)
+        if regulator:
+            return True
+        charge = self.full_charge_assist_charges[dev.name]
+        return charge.record.exit_due(time.monotonic())
+
+    def released_charge(self, dev, regulator):
+        """The record a released charge is known by, for the release events."""
+
+        if getattr(dev, "charge_commanded", False) is True:
+            return "ems_charge_on_record"
+        if regulator:
+            return "regulator_target"
+        return FULL_CHARGE_ASSIST_REASON
 
     def charges_held_by_ems(self):
         """The devices this EMS is charging, with the watts each is drawing.
 
-        Named by :meth:`charge_commanded_by_ems`, the record the shutdown
-        release uses too. The draw is the commanded charge where the regulator
-        still holds one, else what the device last reported drawing. A target
-        behind a shut write gate (dry run, simulation) never reached the
-        device, so it holds nothing.
+        Named by the records the shutdown release reads:
+        :meth:`charge_commanded_by_ems` and the full-charge assist's
+        (:meth:`full_charge_assist_charge_held`). The draw is the commanded
+        charge where the regulator still holds one, else what the device last
+        reported drawing. A target behind a shut write gate (dry run,
+        simulation) never reached the device, so it holds nothing.
         """
 
         held = {}
         for dev in self.devices:
             if not self.charge_commanded_by_ems(dev):
+                if self.full_charge_assist_charge_held(dev):
+                    held[dev.name] = self.last_reported_charge_w(dev)
                 continue
             if (
                 getattr(dev, "charge_commanded", False) is not True
@@ -1685,11 +1754,51 @@ class EMSController:
             if target < 0:
                 held[dev.name] = abs(target)
                 continue
-            last = self.last_states.get(dev.name)
-            held[dev.name] = cfg.safe_int(
-                getattr(last, "grid_input", 0), 0, minimum=0
-            )
+            held[dev.name] = self.last_reported_charge_w(dev)
         return held
+
+    def last_reported_charge_w(self, dev):
+        return cfg.safe_int(
+            getattr(self.last_states.get(dev.name), "grid_input", 0), 0, minimum=0
+        )
+
+    def unanswered_device_intent(self, dev, previous):
+        """The claim on ``dev`` for a cycle in which it did not answer.
+
+        The claims that need no report are resolved as for a device that
+        answered; the firmware's own charge, which only a report shows, is
+        carried from the cycle before. Nothing is reconciled from it.
+        """
+
+        observed = (
+            previous
+            if previous is not None
+            and previous.reason in (FIRMWARE_CHARGE_REASON, UNPROVEN_CHARGE_REASON)
+            else None
+        )
+        return self.resolve_device_claims(
+            dev,
+            self.get_device_runtime_intent(dev, None),
+            regulator_charge_intent(
+                dev.name, ems_commanded_charge=self.charge_commanded_by_ems(dev)
+            ),
+            observed,
+        )
+
+    def resolve_device_claims(self, dev, runtime, regulator, observed):
+        """The winning claim on ``dev``: the operator's or default, the assist's, the regulator's, an observed one.
+
+        The assist's direction hold takes output control from the best of
+        the others (:meth:`full_charge_assist_intent`).
+        """
+
+        below = resolve_device_intent([runtime, regulator, observed])
+        return resolve_device_intent([
+            runtime,
+            self.full_charge_assist_intent(dev, below),
+            regulator,
+            observed,
+        ])
 
     def charge_commanded_by_ems(self, dev):
         """Whether this EMS is charging ``dev``, by its own record.
@@ -1721,9 +1830,16 @@ class EMSController:
         It can once it has watched the device, and for a device it could never
         have charged -- the feature or the device's switch off, or a model
         without an AC charge path -- no charge can be the EMS's own at all.
+        Nor is a charge unproven on a device this process had the full-charge
+        assist's charge on record for: that record owns the device's exit, with
+        its own cap, open or closed (:meth:`full_charge_assist_exit_due`).
         """
 
-        return dev.name in self.ac_input_watched or not self.charge_permitted(dev)
+        return (
+            dev.name in self.ac_input_watched
+            or dev.name in self.full_charge_assist_charges
+            or not self.charge_permitted(dev)
+        )
 
     def note_ac_input_provenance(self, dev_name, uncommanded, intent):
         """Remember whether the EMS can tell who put a device into AC input.
@@ -1853,6 +1969,34 @@ class EMSController:
             left_to="firmware" if is_floor_charge(state) else "holder",
         )
 
+    def leave_charge_shown_by_draw_alone(self, dev, state, holder=None):
+        """Leave the EMS's charge on ``dev`` to the device once its exits are spent on grid draw alone.
+
+        A device whose report carries no known ``acMode`` and no charging
+        ``acStatus`` shows a charge only by its grid draw, and one that draws a
+        few watts idle never shows it left: its transport's record stayed open
+        for good, the exit due once per resend window, output targets held to
+        one write per window, and a stop's release going to it. The record
+        bounds those exits (see :mod:`ems.charge_record`); once the last
+        window has passed, the record is released and a warning says so once.
+        ``holder`` keeps the record: ``dev``'s transport, or the full-charge
+        assist's charge on it (:class:`FullChargeAssistCharge`).
+        """
+
+        holder = dev if holder is None else holder
+        exhausted = getattr(holder, "charge_exit_exhausted", None)
+        if not callable(exhausted) or exhausted() is not True:
+            return
+        holder.release_charge_record()
+        log_event(
+            logging.WARNING,
+            "ac_charge_left_to_device",
+            device=dev.name,
+            exits=FOUND_EXIT_ATTEMPTS,
+            grid_input_w=state.grid_input,
+            **({} if holder is dev else {"charge": FULL_CHARGE_ASSIST_REASON}),
+        )
+
     def end_charges_on_disable(self, control_enabled):
         """Write the one command that ends a charge the EMS stops supervising.
 
@@ -1931,16 +2075,44 @@ class EMSController:
         input. The owner's answer of 2026-10-10 ends it like any charge the EMS
         started, so the controller keeps the record a transport keeps
         (:class:`~ems.charge_record.ChargeRecord`). While control is on and
-        the EMS holds the assist's charge -- state reconciliation allowed, and
-        the assist claiming the device with a setpoint, or restoring acMode --
-        the charge is on record at the assist's setpoint, and the record reads
+        the EMS holds the assist's charge -- state reconciliation allowed, the
+        assist's ``acMode=1`` gone out or shown in a report under its claim
+        (:meth:`full_charge_assist_held`), and the assist claiming the device
+        with a setpoint, or claiming acMode 2 back, as its restore and an
+        assist without its AC mode do -- the charge is on record at the
+        assist's setpoint, and the record reads
         every fresh report, as a transport's does, so a clamp shown before the
-        exit counts as the assist's. Each restore cycle with a fresh report --
+        exit counts as the assist's. It reads the report before the claim puts
+        the charge back on it, so an exit the device took ends the charge
+        there (R14-3), and the claim does so only over a report with a known
+        ``acMode``. With control on, a field the report does not carry causes
+        no write (R17-1): over a report without a known ``acMode`` the running
+        assist's claim holds the device only while the report shows it
+        charging (``acStatus``) and otherwise writes nothing and leaves output
+        control to the regulator, holding only the direction while the charge
+        is on record (:meth:`full_charge_assist_intent`), and either way the
+        record is left as it is -- not closed, since the charge may run on,
+        and not put back on record, so an exit already out stands with its
+        count; the exits still owed go out at a switch-off or a stop. After
+        ``FOUND_EXIT_ATTEMPTS`` exits that only grid draw followed the charge
+        is the device's, as on a transport's record
+        (:meth:`leave_charge_shown_by_draw_alone`, R16-2).
+        The record stays for the process once made, closed once nothing holds
+        the charge: the device's AC input is then attributable
+        (:meth:`ac_input_attributable`), its only exit the record's (R16-1).
+        Each restore cycle with a fresh report --
         the reconciler writes acMode 2 in it -- counts as the charge's exit,
         whether that write reached the device or not, so at worst the first
         exit after a switch-off waits one resend window. A device that leaves
         the charge during the restore is released and not put back on record
-        by it; one that takes the restore ends it. Once control is off,
+        by it; one that takes the restore ends it. Over a report without a
+        known ``acMode`` the reconciler writes nothing (K10), so the restore
+        is owed this exit as after a switch-off, ``FOUND_EXIT_ATTEMPTS`` times
+        at most (:meth:`confirm_full_charge_assist_ac_restore`); a cycle
+        without a fresh report keeps the count, so an offline spell gives that
+        restore no fresh three exits (K24). While failed
+        cycles return the charges the record only reads the reports: the
+        release is the one exit then, on its window and cap. Once control is off,
         the record is owed the exit, sent again once per resend window until
         the device reports it left the charge or shows a setpoint the assist
         never wrote, which is someone else's charge. Two things differ from a
@@ -1952,7 +2124,11 @@ class EMSController:
         gets the exit when it answers again. The record outlives the assist
         completing or being aborted while control is off; the assist, still
         due, goes on once control is back. A charge from before a restart with
-        control off was never held, and is left to the device.
+        control off was never on this record: neither the running assist nor
+        its restore claims the device while control is off, so it is any AC
+        input found after a start (:meth:`unproven_charge_exit`), sent that
+        exit where the EMS could have charged the device and otherwise left to
+        it (R14-1).
         """
 
         if not getattr(dev, "supports_state_reconciliation", True):
@@ -1960,50 +2136,114 @@ class EMSController:
         fresh = self.device_online.get(dev.name, True)
         state = self.last_states.get(dev.name) if fresh else None
         charge = self.full_charge_assist_charges.get(dev.name)
+        if charge is not None and state is not None:
+            self.observe_full_charge_assist_charge(charge, state)
+            self.leave_charge_shown_by_draw_alone(dev, state, charge)
         if not self.control_switched_off(dev):
+            if charge is not None and self.charges_returned_after_failed_cycles():
+                return False
             held = self.full_charge_assist_held(dev, state)
             if held is None:
-                self.full_charge_assist_charges.pop(dev.name, None)
+                if charge is not None and not self.full_charge_assist_stands_down(dev):
+                    charge.release_charge_record()
                 return False
             setpoint_w, restoring = held
             created = charge is None
             if created:
                 charge = FullChargeAssistCharge(record=ChargeRecord())
                 self.full_charge_assist_charges[dev.name] = charge
-            if created or not restoring:
                 charge.record.charge_sent(setpoint_w)
-            if state is not None:
+            if state is None:
+                return False
+            if created:
                 self.observe_full_charge_assist_charge(charge, state)
-                if restoring:
-                    charge.record.exit_sent(time.monotonic())
+            if not self.ac_mode_known(state):
+                return (
+                    restoring
+                    and charge.exits < FOUND_EXIT_ATTEMPTS
+                    and charge.record.exit_due(time.monotonic())
+                )
+            if restoring:
+                charge.record.exit_sent(time.monotonic())
+            else:
+                charge.record.charge_sent(setpoint_w)
             charge.exits = 0
             return False
         if charge is None or state is None:
             return False
-        self.observe_full_charge_assist_charge(charge, state)
         return (
             charge.exits < FOUND_EXIT_ATTEMPTS
             and charge.record.exit_due(time.monotonic())
         )
 
     def full_charge_assist_held(self, dev, state):
-        """``(setpoint, restoring)`` the EMS holds on ``dev``, or None."""
+        """``(setpoint, restoring)`` the EMS holds on ``dev``, or None.
+
+        Only a charge the assist entered: its ``acMode=1`` went out, or a report
+        showed ``acMode`` 1 under its claim, which is when it owes the restore of
+        ``acMode`` (:meth:`update_full_charge_assist_ac_pending`). A claim that
+        entered no AC input -- over an unknown ``acMode`` or ``inputLimit``, or
+        behind a shut gate -- holds no charge.
+        """
 
         if not self.device_state_writes_allowed(dev):
+            return None
+        store = self.battery_full_charge_store
+        record = store.get_device_state(dev.name) if store else None
+        if not record or not record.get("ac_mode_restore_pending"):
             return None
         intent = self.full_charge_assist_intent(dev)
         if intent is None:
             return None
-        if intent.reason == FULL_CHARGE_ASSIST_REASON:
-            if intent.setpoint_w is None:
-                return None
-            return intent.setpoint_w, False
-        if (
-            intent.reason == FULL_CHARGE_ASSIST_RESTORE_REASON
-            and intent.desired_ac_mode == AC_MODE_OUTPUT
-        ):
+        if intent.desired_ac_mode == AC_MODE_OUTPUT:
             return self.full_charge_assist_ac_charge_power(), True
+        if intent.reason == FULL_CHARGE_ASSIST_REASON and intent.setpoint_w is not None:
+            return intent.setpoint_w, False
         return None
+
+    def full_charge_assist_stands_down(self, dev):
+        """Whether the running assist can write nothing on ``dev`` for a report without a field it needs.
+
+        Its charge record is left as it is then (R17-1): nothing was written,
+        and the charge may run on. While that record is open the assist's
+        claim holds the direction (:meth:`full_charge_assist_intent`).
+        """
+
+        store = self.battery_full_charge_store
+        record = store.get_device_state(dev.name) if store else None
+        return bool(record and record.get("full_charge_assist_active")) and (
+            self.full_charge_assist_held_by(dev, record=record) == "fields_not_reported"
+        )
+
+    def full_charge_assist_holds_direction(self, dev):
+        """Whether the running assist holds ``dev``'s direction only: it stands down, its charge open on record.
+
+        Its claim then writes no ``acMode`` and keeps every claim below it
+        from writing one (:meth:`full_charge_assist_intent`), and the device
+        takes no regulator charge (:meth:`device_charge_allowed`).
+        """
+
+        charge = self.full_charge_assist_charges.get(dev.name)
+        return (
+            charge is not None
+            and charge.record.open
+            and self.full_charge_assist_stands_down(dev)
+        )
+
+    def full_charge_assist_charge_held(self, dev):
+        """Whether the assist's charge on ``dev`` is on the controller's record, its exit still owed.
+
+        The record :meth:`full_charge_assist_exit_due` keeps: open until the
+        device reports it left the charge, and owed no exit once
+        ``FOUND_EXIT_ATTEMPTS`` went out while control was off.
+        """
+
+        charge = self.full_charge_assist_charges.get(dev.name)
+        return (
+            charge is not None
+            and charge.record.open
+            and charge.exits < FOUND_EXIT_ATTEMPTS
+        )
 
     def observe_full_charge_assist_charge(self, charge, state):
         """Let the assist's charge record read one fresh report, as a transport's does.
@@ -2032,7 +2272,7 @@ class EMSController:
             "charge": FULL_CHARGE_ASSIST_REASON,
             **(self.charge_supervision_ended_by(dev, control_enabled) or {}),
         }
-        if written is False:
+        if not self.note_full_charge_assist_exit(dev, written):
             log_event(
                 logging.WARNING,
                 "ac_charge_end_failed",
@@ -2040,9 +2280,6 @@ class EMSController:
                 **fields,
             )
             return
-        charge = self.full_charge_assist_charges[dev.name]
-        charge.record.exit_sent(time.monotonic())
-        charge.exits += 1
         write_reason = getattr(written, "reason", None)
         if getattr(written, "status", None) is WriteDispatchStatus.WITHHELD:
             log_event(
@@ -2061,6 +2298,21 @@ class EMSController:
             )
         else:
             log_event(logging.INFO, "ac_charge_ended_on_disable", **fields)
+
+    def note_full_charge_assist_exit(self, dev, written):
+        """Count an exit sent to the assist's charge; return whether it reached the transport.
+
+        As on a transport's record, an exit the device answered, accepted or
+        not, opens the resend window, and one that never reached it
+        (``written is False``) is due again at once.
+        """
+
+        if written is False:
+            return False
+        charge = self.full_charge_assist_charges[dev.name]
+        charge.record.exit_sent(time.monotonic())
+        charge.exits += 1
+        return True
 
     def charge_exit_pending(self, dev):
         """Whether the exit owed to ``dev`` is out and its resend window still open.
@@ -2182,7 +2434,9 @@ class EMSController:
 
         Feature, operator, model, runtime capability, device activation, whoever
         owns the AC mode — and whether the device can absorb anything at all.
-        Any one of them saying no is enough.
+        Any one of them saying no is enough. A device whose direction the
+        full-charge assist holds for its charge on record takes no charge of
+        the regulator's over it (R19-1).
 
         Capacity belongs here and not only in the allocator: without it the
         system would enter charge direction with nothing to allocate to, and the
@@ -2202,6 +2456,9 @@ class EMSController:
         # A device the operator parked, maintenance is using or the firmware is
         # charging is not the surplus regulator's to command.
         if not self.device_intent_allows_command(dev):
+            return False
+
+        if self.full_charge_assist_holds_direction(dev):
             return False
 
         if charge_headroom_weight(state, dev, capability) <= 0:
@@ -2597,8 +2854,24 @@ class EMSController:
                 device_explanation.decision_reason = "ac_charge_share_too_small"
             elif dev.name in self.charge_blocked_by_ceiling:
                 device_explanation.decision_reason = "ac_charge_no_ceiling"
+            elif self.full_charge_assist_claims(dev):
+                device_explanation.decision_reason = "ac_charge_held_by_full_charge_assist"
             else:
                 device_explanation.decision_reason = "ac_charge_not_permitted"
+
+    def full_charge_assist_claims(self, dev):
+        """Whether the claim on ``dev`` this cycle is the full-charge assist's or its restore's.
+
+        Every such claim keeps the device from a charge of the regulator's:
+        it takes the device out of output control, or, as the direction hold,
+        makes it ineligible (:meth:`device_charge_allowed`).
+        """
+
+        intent = self.runtime_intents.get(dev.name)
+        return intent is not None and intent.reason in (
+            FULL_CHARGE_ASSIST_REASON,
+            FULL_CHARGE_ASSIST_RESTORE_REASON,
+        )
 
     def log_charge_direction(
         self, decision, stabilized_total, filtered_load_w, chargeable
@@ -2781,7 +3054,9 @@ class EMSController:
     def ac_mode_intent_log_fields(self, dev, state, intent):
         return {
             "device": dev.name,
-            "current_ac_mode": state.ac_mode,
+            "current_ac_mode": (
+                state.ac_mode if getattr(state, "ac_mode_reported", True) else None
+            ),
             "desired_ac_mode": intent.desired_ac_mode,
             "runtime_role": intent.role.value,
             "reason": intent.reason,
@@ -2793,11 +3068,33 @@ class EMSController:
             "output_pack_w": state.pack_out,
         }
 
-    def is_startup_ac_mode_reconcile_intent(self, intent):
-        return intent.reason == STARTUP_AC_MODE_RECONCILE_REASON
+    @staticmethod
+    def ac_mode_known(state):
+        """Whether ``state`` reports ``acMode`` as 1 or 2; anything else is unknown (K10)."""
+
+        return bool(getattr(state, "ac_mode_reported", True)) and cfg.safe_int(
+            getattr(state, "ac_mode", 0), 0
+        ) in (AC_MODE_INPUT, AC_MODE_OUTPUT)
 
     def reconcile_ac_mode_intent(self, dev, state, intent):
-        """Write acMode only when telemetry differs from desired runtime intent."""
+        """Write acMode only when telemetry differs from desired runtime intent.
+
+        A mode the report does not carry, or one other than 1 or 2, is unknown:
+        only a role the operator set is written over it (K10, owner decision
+        2026-10-12). Any other claim writes nothing, said once per device until
+        the mode is known again. Such a claim's ``acMode=1`` goes out only with
+        the charge power it commands: over an ``inputLimit`` the report does not
+        carry it is not written (:meth:`reconcile_runtime_ac_charge_power`).
+
+        Returns whether the device may be in the claimed mode: True when there
+        is nothing to write or the report already shows it, and when the write
+        went out, whatever its answer -- an error or a timeout can follow a
+        write the device carried out, as a transport's record of a charge
+        assumes. False when nothing was sent: an unknown mode or ``inputLimit``,
+        a shut gate, or a device with no way to write it.
+        :meth:`update_full_charge_assist_ac_pending` owes the way back from the
+        assist's ``acMode=1`` on it.
+        """
 
         if not self.state_reconciliation_supported(dev, "ac_mode_intent"):
             return True
@@ -2808,45 +3105,36 @@ class EMSController:
         fields = self.ac_mode_intent_log_fields(dev, state, intent)
         current_ac_mode = int(state.ac_mode)
         desired_ac_mode = int(intent.desired_ac_mode)
-        startup_reconcile = self.is_startup_ac_mode_reconcile_intent(intent)
+        known = self.ac_mode_known(state)
 
-        if current_ac_mode == desired_ac_mode:
-            log_event(
-                logging.DEBUG,
-                "ac_mode_intent_unchanged",
-                **fields
-            )
-            return True
-
-        if (
-            desired_ac_mode == AC_MODE_OUTPUT
-            and current_ac_mode not in (AC_MODE_INPUT, AC_MODE_OUTPUT)
-            and (current_ac_mode != 0 or startup_reconcile)
-        ):
-            log_event(
-                logging.WARNING,
-                "unknown_ac_mode",
-                **fields
-            )
+        if known:
+            self.ac_mode_unknown.discard(dev.name)
+            if current_ac_mode == desired_ac_mode:
+                log_event(
+                    logging.DEBUG,
+                    "ac_mode_intent_unchanged",
+                    **fields
+                )
+                return True
+        elif not intent.operator_role:
+            if dev.name not in self.ac_mode_unknown:
+                self.ac_mode_unknown.add(dev.name)
+                log_event(
+                    logging.WARNING,
+                    "unknown_ac_mode",
+                    **fields
+                )
             return False
 
         if (
-            current_ac_mode == AC_MODE_INPUT
-            and desired_ac_mode == AC_MODE_OUTPUT
-            and startup_reconcile
+            desired_ac_mode == AC_MODE_INPUT
+            and intent.setpoint_w is not None
+            and not intent.operator_role
+            and not self.state_field_known(
+                dev, state, "inputLimit", "input_limit_reported"
+            )
         ):
-            skip_reason = startup_ac_mode_initialization_blocker(state)
-            if skip_reason:
-                log_event(
-                    logging.INFO,
-                    "ac_mode_intent_skip",
-                    **{
-                        **fields,
-                        "reason": skip_reason,
-                        "runtime_role_reason": intent.reason,
-                    }
-                )
-                return False
+            return False
 
         if not self.device_state_writes_allowed(dev):
             log_event(
@@ -2870,7 +3158,7 @@ class EMSController:
             )
 
             if not ok:
-                return False
+                return getattr(ok, "status", None) is not WriteDispatchStatus.REJECTED
 
             log_event(
                 logging.INFO,
@@ -2888,7 +3176,7 @@ class EMSController:
                     "error": e,
                 }
             )
-            return False
+            return True
 
     def runtime_ac_charge_setpoint(self, device_name):
         """Return the operator's runtime AC charge power, or None.
@@ -2944,7 +3232,15 @@ class EMSController:
         return desired
 
     def reconcile_runtime_ac_charge_power(self, dev, state, intent):
-        """Write inputLimit when runtime AC input intent requests a new value."""
+        """Write inputLimit when runtime AC input intent requests a new value.
+
+        Over an ``inputLimit`` the report does not carry only the operator's
+        charge power is written, as only the operator's role is over an
+        unknown ``acMode`` (K10, K20). Any other claim's charge power and its
+        ``acMode=1`` go out together or not at all: neither over an unknown
+        ``inputLimit``, and the power not over an unknown ``acMode``, where
+        the mode cannot be written either.
+        """
 
         if not self.state_reconciliation_supported(dev, "runtime_ac_charge_power"):
             return True
@@ -2952,6 +3248,14 @@ class EMSController:
         desired_input_limit = intent.setpoint_w
         if desired_input_limit is None:
             return True
+
+        input_limit_known = self.state_field_known(
+            dev, state, "inputLimit", "input_limit_reported"
+        )
+        if not intent.operator_role and not (
+            input_limit_known and self.ac_mode_known(state)
+        ):
+            return False
 
         current_input_limit = cfg.safe_int(
             getattr(state, "input_limit_w", 0),
@@ -3178,10 +3482,7 @@ class EMSController:
         if self.full_charge_assist_enabled():
             return record
 
-        ac_restore_pending = (
-            bool(record.get("ac_mode_restore_pending"))
-            or bool(record.get("ac_input_request_pending"))
-        )
+        ac_restore_pending = bool(record.get("ac_mode_restore_pending"))
         record = self.battery_full_charge_store.update_device_state(
             dev.name,
             now,
@@ -3212,7 +3513,21 @@ class EMSController:
         now,
         feature_transition
     ):
-        """Track and advance EMS full-charge assist for fresh telemetry."""
+        """Track and advance EMS full-charge assist for fresh telemetry.
+
+        The assist writes ``socSet`` alone. ``minSoc`` stays with the SoC
+        reconcile while it runs: the assist needs no floor to reach Max-SoC,
+        and writing the configured ``min_soc`` here fought winter's target once
+        per loop and raised it without a look at the SoC (K15).
+
+        Its restore over a report without ``socSet`` cannot be written (K20)
+        and stays owed, holding no device out of output control meanwhile
+        (:meth:`full_charge_assist_intent`): the configured ``max_soc`` goes
+        out at the first report that carries ``socSet``. A due assist starts
+        only where a state reconciler may write (K25): behind a shut gate
+        nothing it needs could go out, so it stays due until the gate opens,
+        and on a transport without state reconciliation it never starts.
+        """
 
         store = self.battery_full_charge_store
         if not store:
@@ -3274,6 +3589,7 @@ class EMSController:
             write_ok = self.apply_soc_limits(
                 dev,
                 state,
+                desired_min_soc=MIN_SOC_UNMANAGED,
                 desired_max_soc=100,
                 reason=FULL_CHARGE_ASSIST_REASON
             )
@@ -3289,6 +3605,7 @@ class EMSController:
             write_ok = self.apply_soc_limits(
                 dev,
                 state,
+                desired_min_soc=MIN_SOC_UNMANAGED,
                 desired_max_soc=dev.max_soc,
                 reason=FULL_CHARGE_ASSIST_RESTORE_REASON
             )
@@ -3300,14 +3617,14 @@ class EMSController:
                     max_soc_request_pending=False
                 )
                 store.log_event(
-                    dev.name,
-                    "full_charge_assist_soc_restored",
-                    now,
-                    state=state
+                    dev.name, "full_charge_assist_soc_restored", now, state=state
                 )
             record = store.get_device_state(dev.name, now)
 
-        if feature_transition.get("current_enabled") and not self.control_switched_off(dev):
+        if (
+            feature_transition.get("current_enabled")
+            and self.full_charge_assist_held_by(dev, state, record) is None
+        ):
             start, event_type = self.should_start_full_charge_assist(
                 record,
                 state,
@@ -3333,6 +3650,7 @@ class EMSController:
                 write_ok = self.apply_soc_limits(
                     dev,
                     state,
+                    desired_min_soc=MIN_SOC_UNMANAGED,
                     desired_max_soc=100,
                     reason=FULL_CHARGE_ASSIST_REASON
                 )
@@ -3342,6 +3660,84 @@ class EMSController:
                         now,
                         max_soc_request_pending=False
                     )
+
+    def full_charge_assist_held_by(self, dev, state=None, record=None):
+        """What keeps the assist from writing what it needs to ``dev`` now, or None.
+
+        ``transport_state_reconciliation_unsupported`` on a transport without
+        state reconciliation (MQTT control), where nothing the assist needs
+        ever goes out; ``state_writes_not_allowed`` while a state write gate is
+        shut or control is switched off (K25); ``fields_not_reported`` while
+        the report lacks a field the assist still has to write
+        (:meth:`full_charge_assist_field_unreported`). The assist's start, its
+        claim and its waiting status read this. ``state`` and ``record``
+        default to the device's last report and its assist record.
+        """
+
+        if not getattr(dev, "supports_state_reconciliation", True):
+            return "transport_state_reconciliation_unsupported"
+        if not self.device_state_writes_allowed(dev):
+            return "state_writes_not_allowed"
+        if state is None:
+            state = self.last_states.get(dev.name)
+        if record is None and self.battery_full_charge_store:
+            record = self.battery_full_charge_store.get_device_state(dev.name)
+        if state is not None and self.full_charge_assist_field_unreported(
+            dev, state, record
+        ):
+            return "fields_not_reported"
+        return None
+
+    def full_charge_assist_field_unreported(self, dev, state, record):
+        """Whether ``state`` lacks a field the assist still has to write.
+
+        Nothing is written over a field the report does not carry: ``socSet``
+        (K20), until the assist's ``socSet=1000`` went out, and with its AC
+        charge mode ``acMode`` (K10) and ``inputLimit``, which go out together
+        or not at all, until it entered AC input. A start has all of them to
+        write. While the charge it entered runs and the report shows it -- a
+        known ``acMode``, or without one a charging ``acStatus`` -- nothing is
+        owed here: that charge is the EMS's own, on the record a switch-off or
+        a stop ends it by (:meth:`full_charge_assist_charge_open`). A report
+        that shows it neither way holds the device for nothing the assist
+        could write (R17-1). Once the device left it, the fields are owed
+        again as for an assist that never entered (R14-3).
+        """
+
+        running = bool(record and record.get("full_charge_assist_active"))
+        if (
+            running
+            and record.get("ac_mode_restore_pending")
+            and (self.ac_mode_known(state) or in_ac_input_direction(state))
+            and self.full_charge_assist_charge_open(dev, state)
+        ):
+            return False
+        if (
+            not running or record.get("max_soc_request_pending")
+        ) and not self.state_field_known(dev, state, "socSet", "max_soc_reported"):
+            return True
+        return self.full_charge_assist_ac_charge_mode() and not (
+            self.ac_mode_known(state)
+            and self.state_field_known(
+                dev, state, "inputLimit", "input_limit_reported"
+            )
+        )
+
+    def full_charge_assist_charge_open(self, dev, state):
+        """Whether the charge the assist entered on ``dev`` still runs.
+
+        By its record, as last observed: :meth:`full_charge_assist_exit_due`
+        reads each report before the assist's claim puts the charge back on
+        it, so an exit the device took ends it there. The record stays,
+        closed, for the life of the process, so only a process that never had
+        one -- after a restart -- lets ``state`` decide: the charge runs
+        unless the report shows the device out of it.
+        """
+
+        charge = self.full_charge_assist_charges.get(dev.name)
+        if charge is None:
+            return not out_of_charge(state)
+        return charge.record.open
 
     def full_charge_assist_max_soc(self, dev):
         """``100`` while an assist owns ``socSet`` for ``dev``, else ``None``."""
@@ -3360,9 +3756,12 @@ class EMSController:
         An active full-charge assist owns ``socSet``; writing the configured
         ``max_soc`` here flipped it back and let the firmware report
         ``socLimit == 1`` below 100 %, which completed the assist early.
+        ``minSoc`` is this reconcile's alone, an assist or not: winter's
+        target, or where winter plans nothing the configured ``min_soc``,
+        both held to the raise rule.
         """
 
-        desired_min_soc, winter_step = self.winter.reconciliation_target(
+        desired_min_soc, _ = self.winter.reconciliation_target(
             dev,
             state,
             winter_active,
@@ -3378,21 +3777,70 @@ class EMSController:
 
         self.apply_device_modes(dev, state)
 
-        if winter_step:
-            self.apply_winter_ac_charge_limit(dev)
-
     def confirm_full_charge_assist_ac_restore(self, dev, state, intent, now):
+        """Settle the assist's ``acMode`` restore once the device shows it done.
+
+        A report of ``acMode`` 2 settles it. Over an unknown mode nothing writes
+        ``acMode`` (K10), and the device may still sit in the assist's AC input,
+        so the restore is the exit to idle on the assist's charge record
+        (:meth:`full_charge_assist_exit_due`). That record reads this cycle's
+        report first, then decides: settled once the device reported it left
+        after an exit, or, once ``FOUND_EXIT_ATTEMPTS`` exits went out and the
+        last one's resend window has passed with the device still in the
+        charge, left to the device, as after a switch-off, and the record
+        closes. Until then the claim
+        keeps the device out of output control; after it, nothing does. A
+        transport without state reconciliation never had the assist's
+        ``acMode`` written, so a restore owed there -- from before the device
+        moved to it -- is settled at once, unwritten.
+        """
+
         if not self.battery_full_charge_store:
             return
-        if intent.reason != FULL_CHARGE_ASSIST_RESTORE_REASON:
+        if intent.desired_ac_mode != AC_MODE_OUTPUT or intent.reason not in (
+            FULL_CHARGE_ASSIST_REASON,
+            FULL_CHARGE_ASSIST_RESTORE_REASON,
+        ):
             return
 
         record = self.battery_full_charge_store.get_device_state(dev.name, now)
         if not record or not record.get("ac_mode_restore_pending"):
             return
 
-        if int(getattr(state, "ac_mode", 0) or 0) != 2:
-            return
+        event = "full_charge_assist_ac_mode_restored"
+        if not getattr(dev, "supports_state_reconciliation", True):
+            event = "full_charge_assist_ac_mode_restore_settled"
+            log_event(
+                logging.INFO,
+                event,
+                device=dev.name,
+                reason="transport_state_reconciliation_unsupported",
+            )
+        elif self.ac_mode_known(state):
+            if int(state.ac_mode) != AC_MODE_OUTPUT:
+                return
+        else:
+            charge = self.full_charge_assist_charges.get(dev.name)
+            if charge is None:
+                return
+            self.observe_full_charge_assist_charge(charge, state)
+            left = charge.record.open
+            if left and (
+                charge.exits < FOUND_EXIT_ATTEMPTS
+                or not charge.record.exit_window_passed(time.monotonic())
+            ):
+                return
+            if left:
+                charge.release_charge_record()
+            event = "full_charge_assist_ac_mode_restore_settled"
+            log_event(
+                logging.WARNING if left else logging.INFO,
+                event,
+                device=dev.name,
+                reason="ac_mode_not_reported",
+                exits=charge.exits,
+                **({"left_to": "device"} if left else {}),
+            )
 
         self.battery_full_charge_store.update_device_state(
             dev.name,
@@ -3401,7 +3849,7 @@ class EMSController:
         )
         self.battery_full_charge_store.log_event(
             dev.name,
-            "full_charge_assist_ac_mode_restored",
+            event,
             now,
             state=state
         )
@@ -3414,8 +3862,51 @@ class EMSController:
             minimum=0
         )
 
-    def full_charge_assist_intent(self, dev):
-        """Return the assist's claim on ``dev``, or None when it has none."""
+    def full_charge_assist_ac_charge_mode(self):
+        """Whether an active assist charges from AC now.
+
+        Its AC mode on, and its charge not held back after failed cycles
+        returned it (:meth:`assist_ac_input_withheld`): the reconciler would
+        put the charge back in every cycle that reaches it, against the
+        release once per resend window (R1-1).
+        """
+
+        return bool(
+            self.full_charge_assist_config().get("enable_ac_charge_mode", True)
+        ) and not self.assist_ac_input_withheld()
+
+    def full_charge_assist_intent(self, dev, below=None):
+        """Return the assist's claim on ``dev``, or None when it has none.
+
+        An assist without its AC mode leaves the direction alone, except where
+        it put the device into AC input before its AC mode was switched off
+        (AR-1), or while failed cycles hold its charge back: it claims
+        ``acMode`` 2 back, as its restore does, until the device reports it.
+        While cycles fail neither claim asks for ``acMode``: the reconciler
+        keeps no window, and the release after failed cycles is the way out,
+        on its record's window and cap. A restore of ``socSet`` alone claims
+        nothing while the device's report does not carry ``socSet``: it cannot
+        be written there (K20) and waits in the store for a report that does,
+        so it holds no device out of output control in the meantime. Nor does
+        any restore while the state write gate is shut (K22) or control is
+        switched off (R14-1, off is off): neither ``socSet`` nor ``acMode=2``
+        nor the exit to idle can go out then, and the restore stays owed in
+        the store until the EMS may write it again. A device in AC input after
+        a restart is then any AC input found after a start. A running
+        assist claims nothing while it cannot write what it needs
+        (:meth:`full_charge_assist_held_by`): behind that gate or with control
+        switched off (K25), on a transport without state reconciliation, or
+        over a report without a field it still has to write. It stays active
+        in the store and claims the device again once it can. Over such a
+        report while its charge is still open on the controller's record it
+        holds the direction instead (:meth:`full_charge_assist_holds_direction`),
+        as the regulator's charge claim does: no ``acMode`` of its own, at its
+        priority, so no claim below it -- a role the operator set included --
+        writes ``acMode`` over the unknown mode into the charge on record
+        (R17-1). Output control it leaves as ``below``, the best of the other
+        claims (:meth:`resolve_device_claims`), has it: the regulator's under
+        the default claim, nobody's under an operator park (R19-2).
+        """
 
         store = self.battery_full_charge_store
         if not store:
@@ -3425,8 +3916,30 @@ class EMSController:
         if not record or not record.get("has_battery"):
             return None
 
+        restore_ac_mode = (
+            AC_MODE_OUTPUT
+            if record.get("ac_mode_restore_pending")
+            and not self.charges_returned_after_failed_cycles()
+            else None
+        )
+
+        state_writes_allowed = self.device_state_writes_allowed(dev)
+
         if record.get("full_charge_assist_active"):
-            if self.full_charge_assist_config().get("enable_ac_charge_mode", True):
+            if self.full_charge_assist_holds_direction(dev):
+                return DeviceRuntimeIntent(
+                    device=dev.name,
+                    role=DeviceRuntimeRole.AC_INPUT,
+                    reason=FULL_CHARGE_ASSIST_REASON,
+                    desired_ac_mode=None,
+                    output_control_allowed=(
+                        below is None or below.output_control_allowed
+                    ),
+                    priority=PRIORITY_MAINTENANCE
+                )
+            if self.full_charge_assist_held_by(dev, record=record) is not None:
+                return None
+            if self.full_charge_assist_ac_charge_mode():
                 return ac_input_intent(
                     dev.name,
                     FULL_CHARGE_ASSIST_REASON,
@@ -3438,22 +3951,23 @@ class EMSController:
                 device=dev.name,
                 role=DeviceRuntimeRole.AC_OUTPUT,
                 reason=FULL_CHARGE_ASSIST_REASON,
-                desired_ac_mode=None,
+                desired_ac_mode=restore_ac_mode,
                 output_control_allowed=False,
                 priority=PRIORITY_MAINTENANCE
             )
 
         if (
-            record.get("restore_pending")
-            or record.get("ac_mode_restore_pending")
-        ):
+            record.get("ac_mode_restore_pending")
+            or (
+                record.get("restore_pending")
+                and getattr(self.last_states.get(dev.name), "max_soc_reported", True)
+            )
+        ) and state_writes_allowed:
             return DeviceRuntimeIntent(
                 device=dev.name,
                 role=DeviceRuntimeRole.AC_OUTPUT,
                 reason=FULL_CHARGE_ASSIST_RESTORE_REASON,
-                desired_ac_mode=(
-                    2 if record.get("ac_mode_restore_pending") else None
-                ),
+                desired_ac_mode=restore_ac_mode,
                 output_control_allowed=False,
                 priority=PRIORITY_MAINTENANCE
             )
@@ -3461,261 +3975,44 @@ class EMSController:
         return None
 
     def update_full_charge_assist_ac_pending(self, dev, intent, write_ok, now):
-        if not write_ok or not self.battery_full_charge_store:
+        """Settle the assist's AC input request, and owe the way back from it.
+
+        The restore of ``acMode`` is owed once the reconciler's ``acMode=1``
+        went out or the report shows ``acMode`` 1 under the assist's claim
+        (``write_ok``, :meth:`reconcile_ac_mode_intent`), not when the assist
+        starts. A write whose answer was an error or never came is owed too:
+        the device may have carried it out. One it refused costs one exit to
+        idle at most, since the next report shows ``acMode`` 2 and closes the
+        record that exit opened. An assist that entered no AC input owes none,
+        nor does one on a transport without state reconciliation, where no
+        ``acMode`` goes out. It is owed again when the assist took the device
+        back into AC input after its AC mode was off for a while.
+        """
+
+        if (
+            not write_ok
+            or not self.battery_full_charge_store
+            or intent.reason != FULL_CHARGE_ASSIST_REASON
+        ):
             return
 
         record = self.battery_full_charge_store.get_device_state(dev.name, now)
         if not record:
             return
 
+        changes = {}
+        if record.get("ac_input_request_pending"):
+            changes["ac_input_request_pending"] = False
         if (
-            intent.reason == FULL_CHARGE_ASSIST_REASON
-            and record.get("ac_input_request_pending")
+            intent.desired_ac_mode == AC_MODE_INPUT
+            and getattr(dev, "supports_state_reconciliation", True)
+            and not record.get("ac_mode_restore_pending")
         ):
+            changes["ac_mode_restore_pending"] = True
+        if changes:
             self.battery_full_charge_store.update_device_state(
-                dev.name,
-                now,
-                ac_input_request_pending=False
+                dev.name, now, **changes
             )
-
-    def ha_update_runtime_field(
-        self,
-        entity_id,
-        runtime_getter,
-        runtime_setter,
-        parser,
-        formatter=lambda value: value
-    ):
-        """Synchronize one HA helper with one runtime-state field."""
-
-        if not self.ha or not cfg.HA_CONTROL_ENABLED or not self.runtime_state:
-            return False
-
-        try:
-            ha_state = self.ha.get_state(entity_id)
-        except Exception as e:
-            log_event(
-                logging.WARNING,
-                "runtime_state_ha_read_error",
-                entity=entity_id,
-                error=e
-            )
-            return False
-
-        runtime_value = runtime_getter()
-
-        if ha_state is None:
-            return False
-
-        try:
-            parsed_ha = parser(ha_state, runtime_value)
-        except Exception as e:
-            log_event(
-                logging.WARNING,
-                "runtime_state_ha_read_error",
-                entity=entity_id,
-                state=ha_state,
-                error=e
-            )
-            return False
-
-        last_written = self.last_ha_written.get(entity_id)
-        last_seen = self.last_ha_seen.get(entity_id)
-
-        if (
-            last_seen is not None
-            and parsed_ha != last_seen
-            and parsed_ha != last_written
-        ):
-            changed = runtime_setter(parsed_ha)
-            self.last_ha_seen[entity_id] = parsed_ha
-
-            if changed:
-                log_event(
-                    logging.INFO,
-                    "runtime_state_ha_sync",
-                    direction="ha_to_runtime",
-                    entity=entity_id,
-                    value=parsed_ha
-                )
-
-            return changed
-
-        if parsed_ha != runtime_value and runtime_value != last_written:
-            self.ha.set_state(entity_id, formatter(runtime_value))
-            self.last_ha_written[entity_id] = runtime_value
-            self.last_ha_seen[entity_id] = runtime_value
-            log_event(
-                logging.INFO,
-                "runtime_state_ha_write",
-                entity=entity_id,
-                value=runtime_value
-            )
-            return False
-
-        self.last_ha_seen[entity_id] = parsed_ha
-        return False
-
-    def sync_ha_runtime_state(self):
-        """Use HA helpers as an optional UI over runtime-state."""
-
-        if not self.ha or not cfg.HA_CONTROL_ENABLED or not self.runtime_state:
-            return
-
-        changed = False
-
-        changed |= self.ha_update_runtime_field(
-            "input_boolean.ems_solarflow_ha_enabled",
-            lambda: self.runtime_ha_enabled(),
-            lambda value: self.runtime_state.set_section(
-                "ha",
-                "enabled",
-                value
-            ),
-            lambda value, default: cfg.safe_bool(value, default),
-            lambda value: "on" if value else "off"
-        )
-
-        changed |= self.ha_update_runtime_field(
-            "input_boolean.ems_solarflow_ha_control_enabled",
-            lambda: self.runtime_ha_control_enabled(),
-            lambda value: self.runtime_state.set_section(
-                "ha",
-                "control_enabled",
-                value
-            ),
-            lambda value, default: cfg.safe_bool(value, default),
-            lambda value: "on" if value else "off"
-        )
-
-        if (
-            not self.runtime_ha_enabled()
-            or not self.runtime_ha_control_enabled()
-        ):
-            if changed:
-                self.runtime_state.save_atomic()
-            return
-
-        changed |= self.ha_update_runtime_field(
-            "input_boolean.ems_solarflow_enable",
-            lambda: self.runtime_system_bool("enabled", cfg.SYSTEM_ENABLED),
-            lambda value: self.runtime_state.set_system("enabled", value),
-            lambda value, default: cfg.safe_bool(value, default),
-            lambda value: "on" if value else "off"
-        )
-
-        changed |= self.ha_update_runtime_field(
-            "input_number.ems_solarflow_max_power",
-            lambda: self.runtime_system_int(
-                "max_total_power",
-                cfg.MAX_TOTAL_POWER,
-                minimum=0
-            ),
-            lambda value: self.runtime_state.set_system(
-                "max_total_power",
-                value
-            ),
-            lambda value, default: cfg.safe_int(value, default, minimum=0)
-        )
-
-        changed |= self.ha_update_runtime_field(
-            "input_number.ems_solarflow_interval",
-            lambda: self.runtime_system_int(
-                "loop_interval",
-                cfg.LOOP_INTERVAL,
-                minimum=1
-            ),
-            lambda value: self.runtime_state.set_system(
-                "loop_interval",
-                value
-            ),
-            lambda value, default: cfg.safe_int(value, default, minimum=1)
-        )
-
-        changed |= self.ha_update_runtime_field(
-            "input_number.ems_solarflow_min_output_limit",
-            lambda: self.runtime_system_int(
-                "min_output_limit",
-                cfg.MIN_OUTPUT_LIMIT,
-                minimum=0
-            ),
-            lambda value: self.runtime_state.set_system(
-                "min_output_limit",
-                value
-            ),
-            lambda value, default: cfg.safe_int(value, default, minimum=0)
-        )
-
-        changed |= self.ha_update_runtime_field(
-            "input_boolean.ems_solarflow_winter_enabled",
-            lambda: cfg.winter_feature_enabled(self.runtime_state),
-            lambda value: self.runtime_state.set_section(
-                "winter",
-                "enabled",
-                value
-            ),
-            lambda value, default: cfg.safe_bool(value, default),
-            lambda value: "on" if value else "off"
-        )
-
-        for dev in self.devices:
-            base = f"ems_solarflow_{dev.name.lower()}"
-
-            changed |= self.ha_update_runtime_field(
-                f"input_boolean.{base}_enabled",
-                lambda dev=dev: self.runtime_device_bool(
-                    dev.name,
-                    "enabled",
-                    True
-                ),
-                lambda value, dev=dev: self.runtime_state.set_device(
-                    dev.name,
-                    "enabled",
-                    value
-                ),
-                lambda value, default: cfg.safe_bool(value, default),
-                lambda value: "on" if value else "off"
-            )
-
-            changed |= self.ha_update_runtime_field(
-                f"input_number.{base}_max_power",
-                lambda dev=dev: self.runtime_device_int(
-                    dev.name,
-                    "max_power",
-                    dev.max_power,
-                    minimum=0
-                ),
-                lambda value, dev=dev: self.runtime_state.set_device(
-                    dev.name,
-                    "max_power",
-                    value
-                ),
-                lambda value, default: cfg.safe_int(value, default, minimum=0)
-            )
-
-            changed |= self.ha_update_runtime_field(
-                f"input_select.{base}_offgrid_socket_mode",
-                lambda dev=dev: str(
-                    self.runtime_state.get_device(
-                        dev.name,
-                        "offgrid_socket_mode",
-                        "off"
-                    )
-                ),
-                lambda value, dev=dev: self.runtime_state.set_device(
-                    dev.name,
-                    "offgrid_socket_mode",
-                    value
-                ),
-                lambda value, default: (
-                    str(value).strip().lower()
-                    if str(value).strip().lower() in cfg.OFFGRID_SOCKET_MODES
-                    else default
-                )
-            )
-
-        if changed:
-            self.runtime_state.save_atomic()
 
     def write_target(self, dev, value, charge_exit=None):
         """``set_output_limit``, naming an exit's shape only where one was decided."""
@@ -3849,7 +4146,16 @@ class EMSController:
         desired_max_soc=None,
         reason="soc_reconcile"
     ):
-        """Apply configured SOC limits if required."""
+        """Write the bounds of the SoC window that differ from the report, and only those.
+
+        ``minSoc`` is what ``min_soc_to_write`` allows; ``MIN_SOC_UNMANAGED``
+        as ``desired_min_soc`` leaves it alone. ``socSet`` is
+        ``desired_max_soc``, or the configured ``max_soc``, and is not written
+        over a ``socSet`` the report does not carry (K20); a call that wanted
+        only that write then returns False. A bound the report already shows
+        is not sent again with the other: an unchanged ``minSoc`` written
+        onto the SoC is what makes an 800 Pro 2 draw from the grid (K21).
+        """
 
         if not self.state_reconciliation_supported(dev, "soc_limits"):
             return True
@@ -3863,15 +4169,8 @@ class EMSController:
             )
             return True
 
-        configured_min_soc = cfg.safe_soc_limit(dev.min_soc)
         configured_max_soc = cfg.safe_soc_limit(dev.max_soc)
-        effective_min_soc = (
-            cfg.safe_soc_limit(
-                cfg.safe_int(desired_min_soc, configured_min_soc, minimum=0)
-            )
-            if desired_min_soc is not None
-            else configured_min_soc
-        )
+        effective_min_soc = self.min_soc_to_write(dev, state, desired_min_soc)
         effective_max_soc = (
             cfg.safe_soc_limit(
                 cfg.safe_int(desired_max_soc, configured_max_soc, minimum=0)
@@ -3880,19 +4179,28 @@ class EMSController:
             else configured_max_soc
         )
 
-        managed = {}
-        differs = False
-        if effective_min_soc > 0:
-            managed["minSoc"] = int(effective_min_soc * 10)
-            differs |= int(state.min_soc) != int(effective_min_soc)
-        if effective_max_soc > 0:
-            managed["socSet"] = int(effective_max_soc * 10)
-            differs |= int(state.max_soc) != int(effective_max_soc)
+        max_soc_known = effective_max_soc <= 0 or self.state_field_known(
+            dev, state, "socSet", "max_soc_reported"
+        )
+        managed = effective_min_soc > 0 or (effective_max_soc > 0 and max_soc_known)
+        changes = {}
+        written = {}
+        if effective_min_soc > 0 and int(state.min_soc) != int(effective_min_soc):
+            changes["minSoc"] = int(effective_min_soc * 10)
+            written["min_soc"] = effective_min_soc
+        if (
+            effective_max_soc > 0
+            and max_soc_known
+            and int(state.max_soc) != int(effective_max_soc)
+        ):
+            changes["socSet"] = int(effective_max_soc * 10)
+            written["max_soc"] = effective_max_soc
+            written["max_soc_property"] = "socSet"
 
         if not managed:
-            return True
+            return max_soc_known
 
-        if not differs:
+        if not changes:
 
             log_event(
                 logging.DEBUG,
@@ -3908,9 +4216,7 @@ class EMSController:
                 logging.INFO,
                 "dry_run_soc_limits",
                 device=dev.name,
-                min_soc=effective_min_soc,
-                max_soc=effective_max_soc,
-                max_soc_property="socSet",
+                **written,
                 reason=reason,
                 **self.state_write_gate_fields(dev)
             )
@@ -3920,16 +4226,11 @@ class EMSController:
 
             ok = write_device_properties(
                 dev,
-                managed,
+                changes,
                 reason="soc_limits",
-                field="/".join(managed),
+                field="/".join(changes),
                 error_event="write_soc_limits_error",
-                log_fields={
-                    "min_soc": effective_min_soc,
-                    "max_soc": effective_max_soc,
-                    "max_soc_property": "socSet",
-                    "reason": reason,
-                }
+                log_fields={**written, "reason": reason}
             )
 
             if not ok:
@@ -3939,9 +4240,7 @@ class EMSController:
                 logging.INFO,
                 "write_soc_limits",
                 device=dev.name,
-                min_soc=effective_min_soc,
-                max_soc=effective_max_soc,
-                max_soc_property="socSet",
+                **written,
                 reason=reason
             )
             return True
@@ -3952,87 +4251,79 @@ class EMSController:
                 logging.WARNING,
                 "write_soc_limits_error",
                 device=dev.name,
-                min_soc=effective_min_soc,
-                max_soc=effective_max_soc,
-                max_soc_property="socSet",
+                **written,
                 reason=reason,
                 error=e
             )
             return False
 
-    def apply_winter_ac_charge_limit(self, dev):
-        """Apply conservative winter AC charge input limit."""
+    def state_field_known(self, dev, state, field, flag):
+        """Whether ``state`` carries ``field``; said once per device while it does not (K20)."""
 
-        if not self.state_reconciliation_supported(dev, "winter_ac_charge_limit"):
-            return
-
-        properties = cfg.build_winter_ac_charge_limit_payload()
-        fields = {
-            "device": dev.name,
-            "input_limit_w": properties["inputLimit"]
-        }
-
-        if not self.device_state_writes_allowed(dev):
-            fields.update(self.state_write_gate_fields(dev))
-
-            log_event(
-                logging.INFO,
-                "dry_run_winter_ac_charge_limit",
-                **fields
-            )
-            return
-
-        try:
-            ok = write_device_properties(
-                dev,
-                properties,
-                reason="winter_ac_charge_limit",
-                field="winter_ac_charge_limit",
-                error_event="write_winter_ac_charge_limit_error",
-                log_fields=fields
-            )
-
-            if not ok:
-                return
-
-            log_event(
-                logging.INFO,
-                "write_winter_ac_charge_limit",
-                **fields
-            )
-
-        except Exception as e:
+        key = (dev.name, field)
+        if getattr(state, flag, True):
+            self.state_fields_unknown.discard(key)
+            return True
+        if key not in self.state_fields_unknown:
+            self.state_fields_unknown.add(key)
             log_event(
                 logging.WARNING,
-                "write_winter_ac_charge_limit_error",
+                "unknown_state_field",
                 device=dev.name,
-                input_limit_w=properties["inputLimit"],
-                error=e
+                field=field,
+                reason="not_reported"
+            )
+        return False
+
+    def min_soc_to_write(self, dev, state, desired_min_soc):
+        """The ``minSoc`` a SoC write may carry, or 0 to leave it alone.
+
+        Nothing is written over a ``minSoc`` the report does not carry. A
+        ``desired_min_soc`` is winter mode's target, which winter holds to the
+        raise rule itself, with its policy's lead. The configured ``min_soc``
+        is held to the same rule (``cfg.winter_min_soc_raise_limit`` with
+        ``MAX_RAISE_ABOVE_SOC``): a raise is written once it leads the SoC by
+        at most that and does not land on it, a lowering at once (K15).
+        """
+
+        configured = cfg.safe_soc_limit(dev.min_soc)
+        if desired_min_soc is None and configured > MIN_SOC_UNMANAGED:
+            if not self.state_field_known(dev, state, "minSoc", "min_soc_reported"):
+                return MIN_SOC_UNMANAGED
+        if not getattr(state, "min_soc_reported", True):
+            return MIN_SOC_UNMANAGED
+        if desired_min_soc is not None:
+            return cfg.safe_soc_limit(
+                cfg.safe_int(desired_min_soc, MIN_SOC_UNMANAGED, minimum=0)
             )
 
-    def run_startup_ac_mode_reconcile_once(self, dev, state):
-        """Compatibility wrapper for legacy startup acMode reconciliation."""
-
-        if not self.state_reconciliation_supported(dev, "startup_ac_mode_reconcile"):
-            return
-
-        if self.initial_ac_mode_reconciled.get(dev.name, False):
-            return
-
-        self.initial_ac_mode_reconciled[dev.name] = True
-
-        if not cfg.RECONCILE_AC_MODE_ON_START:
-            log_event(
-                logging.INFO,
-                "startup_ac_mode_reconcile_disabled",
-                device=dev.name
+        held = cfg.safe_soc_limit(
+            cfg.winter_min_soc_raise_limit(
+                configured,
+                state.min_soc,
+                getattr(state, "soc", None),
+                MAX_RAISE_ABOVE_SOC
             )
+        )
+        self.log_min_soc_raise_waiting(dev, state, configured, held)
+        return held
+
+    def log_min_soc_raise_waiting(self, dev, state, target, held):
+        """Say when a configured raise starts to wait for the battery, then quietly."""
+
+        if held == target:
+            self.min_soc_raise_waiting.pop(dev.name, None)
             return
 
-        self.reconcile_ac_mode_intent(
-            dev,
-            state,
-            ac_output_intent(dev.name, STARTUP_AC_MODE_RECONCILE_REASON)
+        starts = self.min_soc_raise_waiting.get(dev.name) != target
+        self.min_soc_raise_waiting[dev.name] = target
+        log_event(
+            logging.INFO if starts else logging.DEBUG,
+            "min_soc_raise_waits_for_battery",
+            device=dev.name,
+            current_soc=getattr(state, "soc", None),
+            current_min_soc=state.min_soc,
+            target_min_soc=target
         )
 
     def apply_device_modes(self, dev, state):
@@ -4040,7 +4331,8 @@ class EMSController:
 
         ``gridOffMode`` is not one of them: the runtime ``offgrid_socket_mode``
         owns it (``apply_runtime_device_state``); a second writer here flipped
-        it back every reconcile interval.
+        it back every reconcile interval. ``smartMode`` is not written over a
+        value the report does not carry (K20).
         """
 
         if not self.state_reconciliation_supported(dev, "device_modes"):
@@ -4054,6 +4346,7 @@ class EMSController:
         if (
             cfg.RECONCILE_SMART_MODE
             and dev.smart_mode is not None
+            and self.state_field_known(dev, state, "smartMode", "smart_mode_reported")
             and int(state.smart_mode) != int(dev.smart_mode)
         ):
             properties["smartMode"] = int(dev.smart_mode)
@@ -4194,7 +4487,12 @@ class EMSController:
         )
 
     def apply_runtime_device_state(self, dev, state):
-        """Apply runtime-state device intents through safe reconciliation."""
+        """Apply runtime-state device intents through safe reconciliation.
+
+        Runtime defaults seed ``offgrid_socket_mode`` for every device, so no
+        stored value marks the operator's choice: ``gridOffMode`` is never
+        written over a value the report does not carry (K20).
+        """
 
         if not self.state_reconciliation_supported(dev, "runtime_device_state"):
             return
@@ -4234,6 +4532,10 @@ class EMSController:
             desired_offgrid_socket_mode
         ]
         self.warn_legacy_grid_off_mode(dev, desired_offgrid_socket_mode)
+        if not self.state_field_known(
+            dev, state, "gridOffMode", "grid_off_mode_reported"
+        ):
+            return
         current_grid_off_mode = int(state.grid_off_mode)
         fields = {
             "device": dev.name,
@@ -4287,500 +4589,6 @@ class EMSController:
                 desired_value=desired_grid_off_mode,
                 runtime_source="runtime-state",
                 error=e
-            )
-
-
-    def publish_sensor(
-        self,
-        entity,
-        value,
-        unit=None,
-        device_class=None,
-        state_class="measurement",
-        icon=None,
-        extra=None
-    ):
-        self.ha.set_state(
-            entity,
-            value,
-            unit=unit,
-            device_class=device_class,
-            state_class=state_class,
-            icon=icon,
-            extra_attributes=extra
-        )
-
-    def device_ha_availability_attributes(self, dev):
-        """Return HA attributes describing device telemetry freshness."""
-
-        online = self.device_online.get(dev.name, True)
-        seen = self.last_seen.get(dev.name)
-        attrs = {
-            "available": online,
-            "telemetry_source": "live" if online else "cached"
-        }
-
-        if seen is None:
-            attrs["last_seen"] = None
-
-            if not online:
-                attrs["telemetry_source"] = "zero_fallback"
-
-            return attrs
-
-        attrs["last_seen"] = datetime.fromtimestamp(seen).isoformat()
-        attrs["last_seen_age_s"] = round(time.time() - seen, 1)
-
-        return attrs
-
-    def device_ha_extra(self, dev, extra=None):
-        attrs = self.device_ha_availability_attributes(dev)
-
-        if extra:
-            attrs.update(extra)
-
-        return attrs
-
-    def publish_winter_to_ha(self, states):
-        """Publish winter-mode state and calculated targets to HA."""
-
-        now = datetime.now()
-        enabled = cfg.winter_feature_enabled(self.runtime_state)
-        active = cfg.winter_mode_active(now, self.runtime_state)
-        p = "sensor.ems_solarflow_"
-
-        self.ha.set_state(
-            "binary_sensor.ems_solarflow_winter_enabled",
-            "on" if enabled else "off",
-            extra_attributes={
-                "months": ",".join(str(m) for m in cfg.winter_months())
-            }
-        )
-
-        self.ha.set_state(
-            "binary_sensor.ems_solarflow_winter_active",
-            "on" if active else "off",
-            extra_attributes={
-                "month": now.month
-            }
-        )
-
-        self.ha.set_state(
-            "binary_sensor.ems_solarflow_winter_adjust_window",
-            "on" if now.hour == cfg.winter_adjust_hour() else "off",
-            extra_attributes={
-                "adjust_hour": cfg.winter_adjust_hour()
-            }
-        )
-
-        self.publish_sensor(
-            p + "winter_summer_min_soc",
-            cfg.winter_config_int("summer_min_soc", 15, minimum=0),
-            "%",
-            "battery"
-        )
-
-        self.publish_sensor(
-            p + "winter_min_soc",
-            cfg.winter_config_int("winter_min_soc", 40, minimum=0),
-            "%",
-            "battery"
-        )
-
-        self.publish_sensor(
-            p + "winter_ramp_step",
-            cfg.winter_step_percent(),
-            "%",
-            None
-        )
-
-        self.publish_sensor(
-            p + "winter_ac_charge_power",
-            cfg.winter_config_int("ac_charge_power", 200, minimum=0),
-            "W",
-            "power"
-        )
-
-        self.publish_sensor(
-            p + "winter_last_adjust_date",
-            self.winter.last_step_date() or "never",
-            state_class=None,
-            icon="mdi:calendar-clock"
-        )
-
-        for dev, state in zip(self.devices, states):
-            # A device with no battery holds no winter reserve and is not in
-            # winter reconciliation. Its sensors stay published -- dropping them
-            # leaves the last value standing in Home Assistant, reading as live
-            # -- but they report the device's own minimum and say it is not in
-            # winter, rather than a target for a ramp that will never run.
-            # Whether it is winter at all is a separate question, and the normal
-            # summer answer still comes from the reconciler below.
-            has_reserve = battery_presence(state) != BATTERY_ABSENT
-
-            base = p + dev.name.lower() + "_winter_"
-            own_min_soc = state.min_soc if state.min_soc > 0 else dev.min_soc
-            target, policy = self.winter.ha_target(dev, state, active)
-
-            self.publish_sensor(
-                base + "min_soc_target",
-                target,
-                "%",
-                "battery",
-                extra=self.device_ha_extra(
-                    dev,
-                    {
-                        "effective_min_soc": own_min_soc,
-                        "current_soc": state.soc,
-                        "winter_active": active and has_reserve and policy.step is not None,
-                        "policy": policy.name
-                    }
-                )
-            )
-
-            self.publish_sensor(
-                base + "estimated_ramp_days",
-                (
-                    cfg.estimate_winter_ramp_days(target)
-                    if has_reserve and policy.step is not None
-                    else 0
-                ),
-                "d",
-                None,
-                icon="mdi:calendar-range",
-                extra=self.device_ha_extra(dev)
-            )
-
-    def publish_to_ha(
-        self,
-        load,
-        states,
-        targets,
-        effective_targets,
-        current,
-        new
-    ):
-        """Publish values to Home Assistant."""
-
-        if not states:
-            log_event(logging.WARNING, "ha_publish_no_devices")
-            return
-
-        p = "sensor.ems_solarflow_"
-
-        solar_total = sum(d.solar for d in states)
-        pack_in_total = sum(d.pack_in for d in states)
-        pack_out_total = sum(d.pack_out for d in states)
-
-        battery_power = pack_out_total - pack_in_total
-        home = current + max(load, 0)
-        allocated_target_total = sum(targets)
-        effective_target_total = sum(effective_targets)
-
-        soc_avg = round(
-            sum(d.soc for d in states) / len(states),
-            1
-        )
-
-        # =====================
-        # GLOBAL
-        # =====================
-
-        self.publish_sensor(
-            p + "load",
-            round(load, 1),
-            "W",
-            "power"
-        )
-
-        self.publish_sensor(
-            p + "target_total",
-            round(effective_target_total, 1),
-            "W",
-            "power",
-            extra={
-                "controller_target_w": round(new, 1),
-                "allocated_target_w": round(allocated_target_total, 1)
-            }
-        )
-
-        self.publish_sensor(
-            p + "solar_total",
-            round(solar_total, 1),
-            "W",
-            "power"
-        )
-
-        self.publish_sensor(
-            p + "battery_power",
-            round(battery_power, 1),
-            "W",
-            "power"
-        )
-
-        self.publish_sensor(
-            p + "home",
-            round(home, 1),
-            "W",
-            "power"
-        )
-
-        self.publish_sensor(
-            p + "soc_avg",
-            soc_avg,
-            "%",
-            "battery"
-        )
-
-        self.publish_winter_to_ha(states)
-
-        # =====================
-        # PER DEVICE
-        # =====================
-
-        for i, dev in enumerate(self.devices):
-
-            d = states[i]
-
-            base = p + dev.name.lower() + "_"
-
-            def device_extra(extra=None):
-                return self.device_ha_extra(dev, extra)
-
-            self.ha.set_state(
-                f"binary_sensor.{dev.name.lower()}_available",
-                "on" if self.device_online.get(dev.name, True) else "off",
-                device_class="connectivity",
-                extra_attributes=device_extra()
-            )
-
-            # Core
-            self.publish_sensor(
-                base + "soc",
-                d.soc,
-                "%",
-                "battery",
-                extra=device_extra()
-            )
-
-            self.publish_sensor(
-                base + "min_soc",
-                d.min_soc,
-                "%",
-                "battery",
-                extra=device_extra()
-            )
-
-            self.publish_sensor(
-                base + "max_soc",
-                d.max_soc,
-                "%",
-                "battery",
-                extra=device_extra()
-            )
-
-            self.publish_sensor(
-                base + "solar",
-                d.solar,
-                "W",
-                "power",
-                extra=device_extra()
-            )
-
-            self.publish_sensor(
-                base + "output",
-                d.output,
-                "W",
-                "power",
-                extra=device_extra()
-            )
-
-            self.publish_sensor(
-                base + "ac_charge",
-                d.grid_input,
-                "W",
-                "power",
-                extra=device_extra()
-            )
-
-            self.publish_sensor(
-                base + "target",
-                effective_targets[i],
-                "W",
-                "power",
-                extra=device_extra({"allocated_target_w": targets[i]})
-            )
-
-            self.publish_sensor(
-                base + "output_limit",
-                d.output_limit,
-                "W",
-                "power",
-                extra=device_extra()
-            )
-
-            self.publish_sensor(
-                base + "soc_limit",
-                d.soc_limit,
-                state_class=None,
-                extra=device_extra()
-            )
-
-            self.publish_sensor(
-                base + "pack_state",
-                d.pack_state,
-                state_class=None,
-                extra=device_extra()
-            )
-
-            # Zendure API uses controller/inverter perspective:
-            # outputPackPower = charging
-            # packInputPower  = discharging
-            #
-            # EMS convention:
-            # Positive = charging
-            # Negative = discharging
-
-            device_battery_power = d.pack_out - d.pack_in
-            history = self.battery_power_history.setdefault(
-                dev.name,
-                deque(maxlen=cfg.REMAINING_TIME_POWER_SAMPLES)
-            )
-            history.append(device_battery_power)
-
-            avg_battery_power = sum(history) / len(history)
-            remaining_time = calculate_remaining_time_hours(
-                d,
-                dev,
-                avg_battery_power
-            )
-
-            self.publish_sensor(
-                base + "battery_power",
-                round(device_battery_power, 1),
-                "W",
-                "power",
-                extra=device_extra()
-            )
-
-            self.publish_sensor(
-                base + "battery_power_avg",
-                round(avg_battery_power, 1),
-                "W",
-                "power",
-                extra=device_extra()
-            )
-
-            self.publish_sensor(
-                base + "voltage",
-                d.voltage,
-                "V",
-                "voltage",
-                extra=device_extra()
-            )
-
-            self.publish_sensor(
-                base + "remaining_minutes",
-                d.remain_minutes,
-                "min",
-                state_class=None,
-                icon="mdi:timer-outline",
-                extra=device_extra()
-            )
-
-            self.publish_sensor(
-                base + "remaining_time",
-                remaining_time,
-                "h",
-                "duration",
-                icon="mdi:timer-outline",
-                extra=device_extra()
-            )
-
-            # Thermal / Signal
-            self.publish_sensor(
-                base + "temp",
-                d.temp,
-                "°C",
-                "temperature",
-                extra=device_extra()
-            )
-
-            self.publish_sensor(
-                base + "rssi",
-                d.rssi,
-                "dBm",
-                "signal_strength",
-                extra=device_extra()
-            )
-
-            # Panels
-            self.publish_sensor(
-                base + "panel1",
-                d.solar1,
-                "W",
-                "power",
-                extra=device_extra()
-            )
-
-            self.publish_sensor(
-                base + "panel2",
-                d.solar2,
-                "W",
-                "power",
-                extra=device_extra()
-            )
-
-            self.publish_sensor(
-                base + "panel3",
-                d.solar3,
-                "W",
-                "power",
-                extra=device_extra()
-            )
-
-            self.publish_sensor(
-                base + "panel4",
-                d.solar4,
-                "W",
-                "power",
-                extra=device_extra()
-            )
-
-            # Status
-            self.publish_sensor(
-                base + "fault_level",
-                d.fault_level,
-                state_class=None,
-                extra=device_extra()
-            )
-
-            self.ha.set_state(
-                f"binary_sensor.{dev.name.lower()}_fault",
-                "on" if d.fault_level > 0 else "off",
-                device_class="problem",
-                extra_attributes=device_extra({"fault_level": d.fault_level})
-            )
-
-            self.ha.set_state(
-                f"binary_sensor.{dev.name.lower()}_ac_active",
-                "on" if d.ac_status else "off",
-                device_class="power",
-                extra_attributes=device_extra()
-            )
-
-            self.ha.set_state(
-                f"binary_sensor.{dev.name.lower()}_dc_active",
-                "on" if d.dc_status else "off",
-                device_class="power",
-                extra_attributes=device_extra()
-            )
-
-            self.ha.set_state(
-                f"binary_sensor.{dev.name.lower()}_grid_online",
-                "on" if d.grid_state else "off",
-                device_class="connectivity",
-                extra_attributes=device_extra()
             )
 
     def publish_to_dashboard(
@@ -4903,10 +4711,19 @@ class EMSController:
         where it raised: nothing after that point is written, what came before
         it stands, and the next cycle tries again after the loop interval. A
         cycle that fails at the same point every time repeats the writes before
-        it; a device it no longer reaches holds its last limit, and a charging
-        one keeps charging, up to its maximum SoC. The first failure is logged
-        with its traceback, then one warning a minute while it lasts, and the
-        recovery once.
+        it; a device it no longer reaches holds its last limit. The first
+        failure is logged with its traceback, then one warning a minute while
+        it lasts, and the recovery once.
+
+        From the ``CYCLE_FAILURES_BEFORE_CHARGE_RELEASE``-th failure in a row
+        each failed cycle runs the release a stop runs, best effort, on the
+        records' resend window (R1-1, owner decision 2026-10-12), and the
+        full-charge assist takes no AC input until as many cycles in a row have
+        run through, and then within the hourly entry limit
+        (:meth:`assist_ac_input_withheld`). Only an exception out
+        of ``run_once`` counts: a failure the cycle handles itself (a device
+        that does not answer, a write it refuses) is no failed cycle, and a
+        cycle that hangs never ends to be counted.
         """
 
         try:
@@ -4924,13 +4741,89 @@ class EMSController:
                     consecutive=self.cycle_failures,
                     error=exc,
                 )
+            if self.charges_returned_after_failed_cycles():
+                self.release_charging_devices(failed_cycles=self.cycle_failures)
+                self.cycles_through_since_release = 0
+            elif self.cycles_through_since_release is not None:
+                self.cycles_through_since_release = 0
             if self.sleep_enabled:
                 time.sleep(self._loop_interval_after_failure())
             return False
         if self.cycle_failures:
             log_event(logging.INFO, "control_cycle_recovered", failed_cycles=self.cycle_failures)
             self.cycle_failures = 0
+        if self.cycles_through_since_release is not None:
+            self.cycles_through_since_release += 1
+            if self.cycles_through_since_release >= CYCLE_FAILURES_BEFORE_CHARGE_RELEASE:
+                self.end_assist_ac_input_withhold()
         return True
+
+    def end_assist_ac_input_withhold(self):
+        """Give a running full-charge assist its AC input back, within the hourly entry limit.
+
+        Each time the hold after a failed-cycle release ends while an assist
+        with its AC mode runs is one entry into AC input, counted against the
+        regulator's ``max_charge_entries_per_hour``: three failed cycles and
+        three that ran through, over and over, took the input back every six
+        cycles (K24). While the trailing hour leaves no entry, the hold stays,
+        said once as ``full_charge_assist_ac_input_rate_limited``.
+        """
+
+        if self.full_charge_assist_takes_ac_input():
+            now = time.monotonic()
+            settings = self.charge_settings()
+            entries, allowed = charge_entries_within_limit(
+                self.assist_reentries, now, settings
+            )
+            self.assist_reentries = entries
+            if not allowed:
+                if not self.assist_reentry_rate_limited:
+                    self.assist_reentry_rate_limited = True
+                    log_event(
+                        logging.WARNING,
+                        "full_charge_assist_ac_input_rate_limited",
+                        entries_last_hour=len(entries),
+                        max_entries_per_hour=settings.max_entries_per_hour,
+                    )
+                return
+            self.assist_reentries = entries + (now,)
+        self.assist_reentry_rate_limited = False
+        self.cycles_through_since_release = None
+
+    def full_charge_assist_takes_ac_input(self):
+        """Whether a running full-charge assist with its AC mode on holds any device."""
+
+        store = self.battery_full_charge_store
+        if not store or not self.full_charge_assist_config().get(
+            "enable_ac_charge_mode", True
+        ):
+            return False
+        return any(
+            (store.get_device_state(dev.name) or {}).get("full_charge_assist_active")
+            for dev in self.devices
+        )
+
+    def charges_returned_after_failed_cycles(self):
+        """Whether failed cycles in a row returned the EMS's charges, until one runs through."""
+
+        return self.cycle_failures >= CYCLE_FAILURES_BEFORE_CHARGE_RELEASE
+
+    def assist_ac_input_withheld(self):
+        """Whether the full-charge assist still takes no AC input after failed cycles returned it.
+
+        From the release until ``CYCLE_FAILURES_BEFORE_CHARGE_RELEASE`` cycles
+        in a row have run through, as many as failed before it, and longer
+        while the hourly entry limit leaves no entry
+        (:meth:`end_assist_ac_input_withhold`). Taken back after the first
+        cycle that ran through, the AC input went in and out every fourth
+        cycle under three failures and one pass (R1b); the regulator's charge
+        waits for its entry confirmation instead.
+        """
+
+        return (
+            self.charges_returned_after_failed_cycles()
+            or self.cycles_through_since_release is not None
+        )
 
     def _loop_interval_after_failure(self):
         try:
@@ -4946,15 +4839,6 @@ class EMSController:
 
         if self.runtime_state:
             self.runtime_state.load_if_changed()
-
-        try:
-            self.sync_ha_runtime_state()
-        except Exception as e:
-            log_event(
-                logging.WARNING,
-                "ha_runtime_sync_failed",
-                error=e
-            )
 
         load = finite_grid_load(self.shelly.get_power())
         self.update_grid_meter_holding(load)
@@ -5080,6 +4964,7 @@ class EMSController:
             detect_capabilities(state)
             for state in states
         ]
+        previous_intents = self.runtime_intents
         self.runtime_intents = {}
         for dev, state in zip(self.devices, states):
             self.runtime_intents[dev.name] = ac_output_intent(dev.name)
@@ -5089,8 +4974,12 @@ class EMSController:
             raw_states
         ):
             if not state:
+                self.runtime_intents[dev.name] = self.unanswered_device_intent(
+                    dev, previous_intents.get(dev.name)
+                )
                 continue
 
+            self.leave_charge_shown_by_draw_alone(dev, state)
             ems_commanded_charge = self.charge_commanded_by_ems(dev)
             self.settle_found_ac_input_exit(dev, state)
             uncommanded = firmware_charge_intent(
@@ -5099,14 +4988,14 @@ class EMSController:
                 ems_commanded_charge=ems_commanded_charge,
                 watched=self.ac_input_attributable(dev),
             )
-            intent = resolve_device_intent([
+            intent = self.resolve_device_claims(
+                dev,
                 self.get_device_runtime_intent(dev, state),
-                self.full_charge_assist_intent(dev),
                 regulator_charge_intent(
                     dev.name, ems_commanded_charge=ems_commanded_charge
                 ),
                 uncommanded,
-            ])
+            )
             self.note_ac_input_provenance(dev.name, uncommanded, intent)
             self.runtime_intents[dev.name] = intent
             ac_mode_write_ok = self.reconcile_ac_mode_intent(dev, state, intent)
@@ -5253,7 +5142,6 @@ class EMSController:
                 for i, _dev in enumerate(self.devices)
             ]
             effective_targets = list(targets)
-            current = sum(d.output for d in states)
             new = sum(effective_targets)
 
             logging.debug(
@@ -5262,16 +5150,6 @@ class EMSController:
                 f"Enabled={enabled} "
                 f"NightMinSocIdle=True"
             )
-
-            if self.ha and self.runtime_ha_enabled():
-                self.publish_to_ha(
-                    load,
-                    states,
-                    targets,
-                    effective_targets,
-                    current,
-                    new
-                )
 
             self.last_control_explanation = (
                 self.build_night_min_soc_idle_explanation(
@@ -5475,20 +5353,6 @@ class EMSController:
             f"Enabled={enabled}"
         )
 
-        # =====================
-        # PUBLISH TO HA
-        # =====================
-
-        if self.ha and self.runtime_ha_enabled():
-            self.publish_to_ha(
-                load,
-                states,
-                targets,
-                effective_targets,
-                current,
-                new
-            )
-
         self.publish_to_dashboard(
             load,
             states,
@@ -5575,8 +5439,7 @@ class EMSController:
             # at all. That is not academic: after a restart the EMS would
             # decide "this device should be off", compare 0 against 0, skip the
             # write, and leave the hardware charging from the grid with the EMS
-            # running and content. Local-HTTP devices are saved by the startup
-            # acMode reconcile; MQTT control devices have no such path.
+            # running and content.
             ends_a_charge = self.write_can_end_a_charge(
                 dev
             ) and not settling_out_of_charge(states[i])

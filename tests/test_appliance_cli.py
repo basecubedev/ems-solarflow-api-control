@@ -244,8 +244,12 @@ def _boot_services(monkeypatch, services):
 
 
 def armed_rollback(tmp_path, monkeypatch, *, dpkg_ok=True, declared=False, extra_axes=None,
-                   architecture=""):
-    """An appliance mid-update: v2 installed, v1 kept, a deadline armed for v2."""
+                   architecture="", armed=True, on_dpkg=None):
+    """An appliance mid-update: v2 installed, v1 kept, a deadline armed for v2.
+
+    The running package's reverter is where ``manager_verify`` takes it from, and
+    ``on_dpkg`` runs whenever the fake dpkg does.
+    """
 
     from appliance import artifact_trust, manager_retention, manager_verify, persistent_state
     from appliance.paths import resolve_paths
@@ -293,21 +297,25 @@ def armed_rollback(tmp_path, monkeypatch, *, dpkg_ok=True, declared=False, extra
 
         def run(self, tool, arguments, timeout=None):
             self.calls.append((tool, list(arguments)))
+            if tool == "dpkg" and on_dpkg is not None:
+                on_dpkg()
             ok = dpkg_ok or tool != "dpkg"
             return SimpleNamespace(ok=ok, stdout="", stderr="", returncode=0 if ok else 1)
 
     runner = Runner()
-    manager_verify.arm(
-        paths,
-        runner,
-        expected_version="0.2.0",
-        build_id="b2",
-        previous=str(Path(paths.packages_dir) / "previous.deb"),
-        now=1_000_000,
-        reverter=str(reverter),
-    )
-    assert manager_verify.read(paths).armed
+    if armed:
+        manager_verify.arm(
+            paths,
+            runner,
+            expected_version="0.2.0",
+            build_id="b2",
+            previous=str(Path(paths.packages_dir) / "previous.deb"),
+            now=1_000_000,
+            reverter=str(reverter),
+        )
+        assert manager_verify.read(paths).armed
 
+    monkeypatch.setattr(manager_verify, "PACKAGED_REVERTER", str(reverter))
     monkeypatch.setattr(os, "geteuid", lambda: 0)
     monkeypatch.setattr("appliance.commands.CommandRunner", lambda *a, **k: runner)
     return paths, runner
@@ -508,3 +516,124 @@ def test_a_console_rollback_that_fails_leaves_the_deadline_to_try(appliance_env,
 
     assert command_rollback_manager(Args(force=False)) != 0
     assert manager_verify.read(paths).armed
+
+
+def _expire(paths):
+    from appliance import manager_verify
+
+    record = manager_verify.deadline_path(paths)
+    payload = json.loads(record.read_text(encoding="utf-8"))
+    payload["deadline_epoch"] = 1
+    record.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_a_console_rollback_dpkg_refused_leaves_a_deadline_that_puts_back_what_was_running(
+    appliance_env, monkeypatch, capsys
+):
+    """The deadline left armed is the last way out, so it has to be able to take it.
+
+    Staging the rollback rotates the running package into ``previous.deb``. The
+    deadline the browser's install armed still expects that package and the
+    digest of the one the operator came back to, so when dpkg refuses the
+    rollback and leaves it half-configured, the expired deadline finds an
+    archive it does not recognise and settles ``revert_unavailable`` without
+    installing anything.
+    """
+
+    from appliance import artifact_trust, manager_verify
+    from appliance.cli import command_rollback_manager
+    from tests.test_appliance_manager_verify import fake_tools, run_reverter
+
+    paths, runner = armed_rollback(appliance_env, monkeypatch, dpkg_ok=False)
+
+    assert command_rollback_manager(Args(force=False)) != 0
+
+    previous = Path(paths.packages_dir) / "previous.deb"
+    deadline = manager_verify.read(paths)
+    assert deadline.armed
+    assert deadline.expected_version == "0.1.0"
+    assert deadline.previous_sha256 == artifact_trust.file_digest(previous)
+    assert "puts it back" in capsys.readouterr().err
+
+    _expire(paths)
+    tools = appliance_env / "tools"
+    log = fake_tools(tools, installed_version="0.1.0", installed_status="half-configured")
+    result = run_reverter(paths, tools, now=0)
+
+    assert result.returncode == 0, result.stderr
+    assert manager_verify.read_verdict(paths).verdict == manager_verify.VERDICT_REVERTED
+    assert f"dpkg --force-confold --install {previous}" in log.read_text(encoding="utf-8")
+
+
+def test_a_console_rollback_dpkg_refused_leaves_its_reverter_runnable(appliance_env, monkeypatch):
+    """The older package's postinst normalises agent state, the snapshot's mode with it.
+
+    ``install-manager.sh`` restores the mode for the browser's installs; the
+    console runs dpkg itself, and the older unit resolves the snapshot as a
+    program.
+    """
+
+    from appliance import manager_verify
+    from appliance.cli import command_rollback_manager
+
+    def postinst():
+        snapshot = manager_verify.reverter_path(paths)
+        if snapshot.exists():
+            snapshot.chmod(0o600)
+
+    paths, runner = armed_rollback(appliance_env, monkeypatch, dpkg_ok=False, on_dpkg=postinst)
+
+    assert command_rollback_manager(Args(force=False)) != 0
+    mode = manager_verify.reverter_path(paths).stat().st_mode & 0o777
+    assert mode == manager_verify.REVERTER_MODE
+
+
+def test_a_console_rollback_dpkg_accepted_retires_the_deadline_it_rearmed(
+    appliance_env, monkeypatch
+):
+    """Re-armed before dpkg runs, and retired after: a person judges a console rollback."""
+
+    from appliance import manager_verify
+    from appliance.cli import command_rollback_manager
+
+    seen = []
+    paths, runner = armed_rollback(
+        appliance_env,
+        monkeypatch,
+        on_dpkg=lambda: seen.append(manager_verify.read(paths).expected_version),
+    )
+
+    assert command_rollback_manager(Args(force=False)) == 0
+    assert seen == ["0.1.0"]
+    assert not manager_verify.read(paths).armed
+
+
+def test_a_console_rollback_without_a_deadline_arms_none(appliance_env, monkeypatch, capsys):
+    """No install was in flight; the command keeps to the person at the keyboard."""
+
+    from appliance import manager_verify
+    from appliance.cli import command_rollback_manager
+
+    paths, runner = armed_rollback(appliance_env, monkeypatch, dpkg_ok=False, armed=False)
+
+    assert command_rollback_manager(Args(force=False)) != 0
+    assert not manager_verify.read(paths).armed
+    assert "no deadline puts it back" in capsys.readouterr().err
+
+
+def test_a_console_rollback_says_when_its_deadline_could_not_be_rearmed(
+    appliance_env, monkeypatch, capsys
+):
+    from appliance import manager_verify
+    from appliance.cli import command_rollback_manager
+
+    paths, runner = armed_rollback(appliance_env, monkeypatch, dpkg_ok=False)
+    monkeypatch.setattr(
+        manager_verify, "PACKAGED_REVERTER", str(appliance_env / "no-such-reverter.sh")
+    )
+
+    assert command_rollback_manager(Args(force=False)) != 0
+    err = capsys.readouterr().err
+    assert "could not be re-armed" in err
+    assert "no deadline puts it back" in err
+    assert [call for call in runner.calls if call[0] == "dpkg"], "the way out stays open"

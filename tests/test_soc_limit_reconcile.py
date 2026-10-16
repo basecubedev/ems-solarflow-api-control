@@ -73,6 +73,29 @@ def test_both_bounds_unmanaged_writes_nothing():
     assert _reconcile(_device(0, 0), _state()) == (True, [])
 
 
+@pytest.mark.parametrize(
+    "device_bounds, state_bounds, expected",
+    [
+        ((15, 90), (15, 95, 15), {"socSet": 900}),
+        ((20, 95), (15, 95, 50), {"minSoc": 200}),
+        ((20, 90), (15, 95, 50), {"minSoc": 200, "socSet": 900}),
+    ],
+    ids=["min_soc on the soc unchanged", "soc_set unchanged", "both differ"],
+)
+def test_only_the_bounds_that_differ_are_written(device_bounds, state_bounds, expected):
+    """An unchanged ``minSoc`` went out again with every ``socSet`` change (K21).
+
+    Also while ``minSoc`` equals the SoC, where a ``minSoc`` write is the known
+    trigger of the 800 Pro 2's grid draw of about 1.2 kW (FI-2).
+    """
+
+    min_soc, max_soc, soc = state_bounds
+    result, writes = _reconcile(_device(*device_bounds), _state(min_soc, max_soc, soc))
+
+    assert result is True
+    assert writes == [expected]
+
+
 @pytest.mark.parametrize("min_soc, max_soc", [(0, 95), (15, 0)])
 def test_an_unmanaged_bound_never_counts_as_a_difference(min_soc, max_soc):
     result, writes = _reconcile(_device(min_soc, max_soc), _state(15, 95))
@@ -107,7 +130,7 @@ def test_periodic_reconcile_leaves_an_active_full_charge_assist_at_100(
             dev, _state(15, 50), winter_active=False, now=datetime(2026, 7, 1, 9, 0)
         )
 
-    assert writes == [{"minSoc": 150, "socSet": socset}]
+    assert writes == [{"socSet": socset}]
 
 
 DAY = datetime(2026, 11, 2, 9, 0)
@@ -195,7 +218,7 @@ def test_the_morning_step_raises_min_soc_three_points_above_the_soc():
     assert _winter_target(controller, _pv_state(20, soc=21, pv=60)) == (24, True)
 
 
-def test_the_morning_step_writes_the_raise_and_the_winter_input_limit():
+def test_the_morning_step_writes_the_raise_and_nothing_else():
     controller = _controller()
     dev = _device(15, 0)
     _min_soc_writes(controller, dev, _pv_state(20, soc=20, pv=0, max_soc=0))
@@ -209,7 +232,30 @@ def test_the_morning_step_writes_the_raise_and_the_winter_input_limit():
             dev, _pv_state(20, soc=20, pv=60, max_soc=0), winter_active=True, now=DAY
         )
 
-    assert writes == [{"minSoc": 230}, {"inputLimit": 200}]
+    assert writes == [{"minSoc": 230}]
+
+
+def test_an_assist_s_soc_set_goes_out_without_winter_s_min_soc_on_the_soc():
+    """Winter's target, unchanged and on the SoC, went out again with the assist's socSet (K21)."""
+
+    controller = EMSController(
+        devices=[],
+        shelly=None,
+        sleep_enabled=False,
+        battery_full_charge_store=_AssistStore(True),
+    )
+    _remember(controller, 20, step_date=DAY.date().isoformat())
+
+    with _captured_writes() as writes, patch.object(
+        cfg, "WINTER_CONFIG", dict(cfg.WINTER_DEFAULTS)
+    ), patch.object(cfg, "winter_feature_enabled", lambda runtime: True), patch.object(
+        controller, "apply_device_modes", lambda dev, state: None
+    ), _devices_configured():
+        controller.reconcile_device_state_limits(
+            _device(15, 95), _pv_state(20, soc=20, max_soc=95), winter_active=True, now=DAY
+        )
+
+    assert writes == [{"socSet": 1000}]
 
 
 def test_the_step_waits_while_the_battery_is_well_below_its_min_soc():
@@ -491,31 +537,3 @@ def test_an_out_of_range_soc_bound_is_never_written(min_soc, max_soc, expected):
 def test_safe_number_parsers_never_return_or_raise_on_non_finite_input(value):
     assert cfg.safe_int(value, 7) == 7
     assert cfg.safe_float(value, 7.0) == 7.0
-
-
-def test_home_assistant_shows_the_target_the_controller_holds():
-    class _Ha:
-        def __init__(self):
-            self.states = {}
-
-        def set_state(self, entity, value, **kwargs):
-            self.states[entity] = value
-
-    ha = _Ha()
-    dev = SimpleNamespace(name="WR1", min_soc=15, max_soc=95, enabled=True)
-    controller = EMSController(devices=[dev], shelly=None, ha=ha, sleep_enabled=False)
-    _remember(controller, 23)
-    controller.winter.device("WR1").step_date = DAY.date().isoformat()
-
-    with patch.object(cfg, "WINTER_CONFIG", dict(cfg.WINTER_DEFAULTS)), patch.object(
-        cfg, "winter_feature_enabled", lambda runtime: True
-    ), patch.object(cfg, "winter_month_active", lambda now: True), patch.object(
-        controller, "device_ha_extra", lambda dev, extra=None: extra
-    ):
-        controller.publish_winter_to_ha([_pv_state(20, soc=21)])
-
-    assert ha.states["sensor.ems_solarflow_wr1_winter_min_soc_target"] == 23
-    assert ha.states["sensor.ems_solarflow_wr1_winter_estimated_ramp_days"] == 6
-    assert ha.states["sensor.ems_solarflow_winter_ramp_step"] == 3
-    assert ha.states["sensor.ems_solarflow_winter_last_adjust_date"] == DAY.date().isoformat()
-    assert ha.states["binary_sensor.ems_solarflow_winter_adjust_window"] in ("on", "off")

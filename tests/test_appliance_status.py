@@ -265,6 +265,38 @@ def test_a_log_file_that_cannot_be_opened_is_not_an_empty_log(tmp_path):
     assert log["unreadable"] == "IsADirectoryError"
 
 
+def test_the_web_log_fallback_does_not_follow_a_link_the_web_service_planted(tmp_path):
+    """The web service owns the directory its log file sits in; the agent
+    reading that file for it runs as root. A link planted at appliance.log
+    had the agent read whatever it pointed at and hand it back as the web
+    log whenever the journal had nothing to say."""
+
+    services = appliance(tmp_path)
+    services.host.tools.discard("journalctl")
+    root_only = tmp_path / "root-only"
+    root_only.write_text("contents only root may read\n", encoding="utf-8")
+    services.paths.appliance_log.parent.mkdir(parents=True, exist_ok=True)
+    services.paths.appliance_log.symlink_to(root_only)
+
+    log = services.status.read_log("appliance_web", 20)
+
+    assert "only root may read" not in log["text"]
+    assert log["text"] == ""
+    assert log["unreadable"]
+
+
+def test_the_web_log_fallback_still_reads_the_web_log(tmp_path):
+    services = appliance(tmp_path)
+    services.host.tools.discard("journalctl")
+    services.paths.appliance_log.parent.mkdir(parents=True, exist_ok=True)
+    services.paths.appliance_log.write_text("web started\n", encoding="utf-8")
+
+    log = services.status.read_log("appliance_web", 20)
+
+    assert "web started" in log["text"]
+    assert log["unreadable"] == ""
+
+
 def test_a_log_that_is_simply_empty_still_says_empty(tmp_path):
     """The other side: the fix must not answer unreadable for every quiet log."""
 

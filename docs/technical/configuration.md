@@ -31,7 +31,7 @@ still read as a fallback, but new setups should use `config/config.json`. See
 migration states.
 
 `config.json` and `config/config.json` are local and ignored by Git. Do not
-commit real Home Assistant tokens, Zendure serial numbers, or local IP
+commit real tokens or passwords, Zendure serial numbers, or local IP
 addresses.
 
 ## Quick Start
@@ -41,13 +41,12 @@ addresses.
 2. Configure the real grid meter IP.
 3. Configure one or more real Zendure device IPs and serial numbers.
 4. Review power, SOC, battery, and PV limits for the installation.
-5. Keep Home Assistant disabled unless you want HA integration.
-6. Optionally run `docker compose exec ems python3 emsctl.py config init`
+5. Optionally run `docker compose exec ems python3 emsctl.py config init`
    (Docker) or `python3 emsctl.py config init` (native Python) for guided
    setup.
-7. Optionally set `dry_run=true` for a no-write validation run.
-8. Run diagnostics.
-9. Monitor the first live run before unattended operation.
+6. Optionally set `dry_run=true` for a no-write validation run.
+7. Run diagnostics.
+8. Monitor the first live run before unattended operation.
 
 The template profile is intended for normal standalone live control after real
 local values are configured and installation limits are reviewed:
@@ -159,7 +158,6 @@ compatibility, not the application version.
 
 `config.json` contains static installation and safety settings:
 
-- Home Assistant URL and token
 - grid meter type and IP
 - Zendure device IPs and serial numbers
 - static device metadata
@@ -178,41 +176,25 @@ new generated configs:
 - per-device runtime max power
 - per-device offgrid socket mode
 - per-device runtime PV priority factor
-- Home Assistant and winter runtime toggles
+- winter and AC charging runtime toggles
 
 The EMS creates the runtime-state file automatically on first start. Deleting it
 resets runtime values from `config.json` defaults. Do not maintain runtime
 state as a second static config.
 
-## Home Assistant Settings
+## Former Home Assistant Section
 
-`ha.enabled` enables Home Assistant publishing and optional helper reads. The
-template default is `false` for standalone operation.
-
-`ha.control_enabled` allows Home Assistant helpers to update runtime-state
-values. The template default is `false`. It does not grant Zendure
-hardware-write permission by itself.
-
-`ha.url` is the Home Assistant base URL, for example:
-
-```text
-http://homeassistant.local:8123
-```
-
-`ha.token` is a Home Assistant long-lived access token.
-
-Standalone mode:
-
-```json
-{
-  "ha": {
-    "enabled": false,
-    "control_enabled": false,
-    "url": "",
-    "token": ""
-  }
-}
-```
+The Home Assistant integration (status publishing and helper control) is
+removed, and with it the `ha` section and the `--no-ha` start option. An `ha`
+section left in an existing `config.json` is ignored, whatever its content: the
+EMS loads and starts as it would without it, and an enabled section with a
+placeholder token no longer holds the EMS in safe mode. Neither the startup
+config upgrade, `emsctl config upgrade` nor an Admin Maintenance apply adds or
+drops it, so a rollback to a release that still had the integration finds it as
+it was. A token in it stays a secret: diagnose, the support bundle and the
+Admin redact it like any other. Delete the section by hand once no rollback is
+planned. The former grid-meter type `ha`, which had no reader, is an unknown
+type now.
 
 ## System Settings
 
@@ -237,12 +219,13 @@ writes. The template value is `true` because this is part of the default
 regulation profile after local device limits and SOC limits have been reviewed.
 Required placeholders still force safe mode and block these writes.
 
-`system.reconcile_ac_mode_on_start` keeps the legacy startup compatibility gate
-enabled. Runtime AC mode intent is evaluated during the control loop, but
-startup reconciliation writes happen only when the reported `acMode` is a known
-value and differs from the desired runtime target. This prevents blind repeated
-startup writes while still keeping normal output devices aligned to `acMode=2`;
-explicit runtime output intent can still return a device to `acMode=2`.
+Runtime AC mode intent is evaluated during the control loop. `acMode` is
+written only when the device reports a known mode (`1` or `2`) that differs
+from the desired one, or for an AC role the operator set in runtime state
+(`emsctl device WR1 ac-mode output`, the dashboard): a report without `acMode`
+is an unknown mode, not `0`. The former `system.reconcile_ac_mode_on_start` key
+no longer exists; one left in an existing `config.json` is ignored, whatever its
+value.
 
 Runtime AC charge power is not a static device config value. Set it through
 runtime-state, for example with `python3 emsctl.py device WR1 ac-charge-power
@@ -251,7 +234,8 @@ device runtime role is `ac_input`; in `ac_output` mode the stored value is
 ignored for hardware writes.
 
 `system.reconcile_smart_mode` allows smart mode reconciliation and is required
-for the intended Zendure runtime/RAM mode behavior.
+for the intended Zendure runtime/RAM mode behavior. A device whose report
+carries no `smartMode` is not written one (`unknown_state_field`).
 
 `system.log_level` controls log verbosity. Common values are `info` and
 `debug`. The default `info` level focuses on lifecycle events (startup,
@@ -529,7 +513,16 @@ is also what the energy statistics treat as measured: a reading inside this
 window is integrated, so a single failed read leaves no hole (see
 [../dashboard.md](../dashboard.md)).
 
-`stale_telemetry_ramp_factor` reduces ramp speed when telemetry is stale.
+`stale_telemetry_ramp_factor` reduces ramp speed when telemetry is stale: the
+total ramp limits are multiplied by it. Telemetry is stale while any one
+device's last answer is older than `telemetry_max_age_seconds`, so a single
+unreachable device keeps it stale for as long as it does not answer. `0` holds
+the total target where it is until telemetry is fresh again (with
+`telemetry_max_age_seconds` at `0`, which makes every reading stale, it never
+moves). The factor never holds or slows a move that reduces a running AC
+charge: up to idle that move takes the configured ramp, so the way back from a
+grid charge is not held by stale telemetry. A ramp limit of `0` means no limit,
+and the factor does not make one.
 
 ## AC Charging
 
@@ -557,7 +550,7 @@ config upgrade does enable it for an installation that predates the feature, and
 | `charge_hysteresis_w` | How far below the start threshold charging continues |
 | `entry_confirm_cycles` | Observations that must show surplus before charging starts |
 | `entry_window_cycles` | How many recent loops those observations are counted within |
-| `max_charge_entries_per_hour` | Safety limit on how often a device may enter charging |
+| `max_charge_entries_per_hour` | Safety limit on how often a device may enter charging; it also bounds how often the full-charge assist takes its AC input back after failed cycles returned it |
 | `max_total_charge_power_w` | Highest combined charging power across all devices |
 
 The lower edge of the charge band is **derived**, not configured:
@@ -656,8 +649,9 @@ overrides it for one device; `auto` keeps the type default. A battery device
 with `pv_kwp: 0` is battery-only. See
 [winter-mode.md](../winter-mode.md#device-types-and-policies).
 
-`winter.ac_charge_power` is the conservative `inputLimit` used only during the
-winter/SOC reconciliation context.
+Winter mode writes no `inputLimit`. The former `winter.ac_charge_power` key no
+longer exists; one left in an existing `config.json` is ignored, whatever its
+value (see [winter-mode.md](../winter-mode.md#no-ac-charge-limit)).
 
 Winter logic runs as SOC reconciliation. It does not change normal output target
 calculation and must not create per-cycle mode writes.
@@ -686,7 +680,7 @@ Each Zendure device entry defines static installation data:
 }
 ```
 
-`name` is the local device name used in logs, Home Assistant entities, and CLI
+`name` is the local device name used in logs, the dashboard and CLI
 commands.
 
 `ip` is the local Zendure device IP address.
@@ -709,7 +703,15 @@ python3 emsctl.py device WR1 pv-priority-factor 1.3
 `battery_kwh` is the configured battery capacity used for battery weighting.
 
 `min_soc` and `max_soc` are static SOC boundaries in percent. Use `0` to leave
-the corresponding value unmanaged.
+the corresponding value unmanaged. Where winter mode plans nothing for the
+device, `min_soc` is written to it, but a raise only once it leads the SoC by at
+most three points and does not land on it (see
+[winter-mode.md](../winter-mode.md#why-three-points)); a lowering is written at
+once, and nothing is written while the device's report carries no `minSoc`.
+Both are read once, when the EMS starts, as whole percent: a value that is no
+number from 0 to 100 (`"abc"`, `150`, `-5`, `true`) is left unmanaged like `0`,
+and `event=device_soc_limit_invalid` names the device and key. The EMS still
+starts, as it does for an invalid `max_power`; the device keeps its own bound.
 
 `enabled` is optional and defaults to `true`. It means the same thing for every
 transport: `"enabled": false` removes the device from the control loop, for a
@@ -1540,7 +1542,6 @@ after you enter real local values and review installation-specific limits:
     "dry_run": false,
     "allow_hardware_writes": true,
     "allow_state_reconciliation_writes": true,
-    "reconcile_ac_mode_on_start": true,
     "reconcile_smart_mode": true
   }
 }

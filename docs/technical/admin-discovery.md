@@ -75,7 +75,17 @@ present, come from the CI-published release catalogue
 the content CDN on every listing; a copy from the last day stands in only when
 the CDN cannot be reached) -- see `docs/developer/ci-release.md`. The GitHub API
 is asked only when that catalogue cannot be read, and a catalogue that cannot be
-trusted counts as unreadable rather than as empty.
+trusted counts as unreadable rather than as empty. The **Experimental** group
+comes from the development-build catalogue (`development-builds.json` on the same
+branch, with the same one-day copy) under the same rule: one that cannot be read
+or trusted lists no development builds and the listing says so in its warnings,
+and selecting a development build while it cannot be read is refused as not
+verifiable rather than as a build the catalogue does not list. Only a readable
+catalogue that names no installable build is an empty group. Guided Setup and
+Guided Upgrade show every warning of the listing beside the selector, also when
+a build is selectable, on a line of their own under the status line, so a
+selection change, a Verify or a failure that rewrites the status leaves them in
+place.
 
 The synthetic `latest` option maps the rolling Docker channel to setup resources
 from the repository's `main` branch. It is selectable when those resources can be
@@ -131,7 +141,10 @@ install with no baseline and v0.7.0 proposed to an operator running a v0.8 build
 That placement is an inference and never overrules a digest or a build serial,
 which are readings of the running image itself; and
 when the target image is not local yet its identity cannot be settled from the
-listing alone, so it is `identity_unknown`. Each release carries its
+listing alone, so it is `identity_unknown`. Every listing and every preparation
+reads the running container and the images again: nothing read for one answers
+the next, so a target pulled since, or a `latest` tag that moved, is placed by
+the image Docker holds now. Each release carries its
 `upgrade_state`. Proven non-upgrades (`older_than_running_build`,
 `downgrade_blocked`, `already_current`) are non-selectable with a short reason
 (`latest` excepted, as above). A release whose setup resources could not be
@@ -282,7 +295,7 @@ first read.
   "local_api": {"enabled": true, "scan_ranges": [], "manual_hosts": []},
   "local_mqtt": {
     "enabled": true,
-    "credential_refs": ["home-assistant", "mosquitto"]
+    "credential_refs": ["home-broker", "mosquitto"]
   },
   "zendure_mqtt": {"enabled": true, "token_ref": "zendure-cloud"}
 }
@@ -541,6 +554,73 @@ a results reset). The device scan starts as soon as the first network is found
 and stays active until the gateway probe has finished adding networks and every
 LAN network has been scanned, so a slow gateway probe never cuts the run short.
 
+The backend probes a network with one scan at a time. `POST /api/discovery/scan`
+for a network that is still being scanned, from another tab, another session or
+a scan started again right after Cancel, answers with that running scan's
+`scan_id` instead of probing every host a second time; another address in the
+same range counts as the same network, whatever timeout or worker count the
+second request asked for. Once the scan has ended, the network can be scanned
+again.
+
+The local MQTT brokers and the Zendure cloud are each refreshed by one caller at
+a time, whichever route asks: Setup's run (`POST /api/discovery/run` with
+`{"refresh": true}`), Maintenance's `POST /api/discovery/mqtt-brokers/refresh`
+and `POST /api/discovery/zendure-cloud-mqtt/refresh`, or
+`POST /api/discovery/source/<source>/refresh`. The cloud listener signs in
+with the account's one MQTT client id, which a second session would drop, and a
+broker refresh's results are discarded once a newer one has started. A refresh
+asked for while one runs with the same inputs (for the cloud the saved Zendure
+key, for the brokers the known broker endpoints and the pooled discovery
+credentials) is answered with that refresh's result. One with other inputs, a
+key or a pooled credential saved in between, waits until the running refresh has
+ended and then reads its inputs again, so no caller is answered from
+credentials replaced before it asked.
+
+The cloud candidates belong to the key they were read with. Saving another key,
+or removing it, drops them, and a cloud refresh or the deviceList seed of a
+discovery run that ends after its key was removed or replaced keeps nothing of
+what it read: its devices do not enter the trusted proposal set that
+config-preview resolves selections against, and its status does not land on the
+record of a key saved since. The callers of such a refresh still get the answer
+read with the key they asked with. A credential test, the validation of a save
+included, records its status the same way: only on the record of the key it
+tested, and only while that key is the saved one, so testing a key that is not
+saved leaves the saved key's status alone. Each of these writes rewrites the
+whole record, token included, and holds the lock a key change takes, so a
+status written while the key is deleted cannot bring the key back.
+
+The EMS signs in to the Zendure cloud broker with the same client id: applying a
+cloud device stores the deviceList `client_id` in the EMS's cloud runtime record,
+and the EMS connects with it. A discovery listen under that id would drop the
+EMS's session for the whole window, and both would knock each other off on
+reconnect. So while an enabled `zendure_cloud_mqtt` broker profile of the
+installed config signs in with this account's client id — read as the EMS runtime
+builds its brokers, each cloud record resolved —, every cloud refresh reads the
+deviceList only and never connects. The same holds while the EMS's live status
+(`data/zendure-mqtt-status.json`, the snapshot the Maintenance telemetry status
+reads) shows a connected cloud broker and a cloud runtime record carries this
+client id: the default record, or one a broker profile names, enabled or not. That
+covers a broker change the config editor applied and lists under "Needs an EMS
+restart": disabling or removing the cloud profile leaves the EMS signed in under
+the id until it restarts. The result carries `mqtt_status: "ems_session"` and a
+`mqtt_message` saying live telemetry was not sampled, which the cloud panel shows;
+the discovery run's per-source `refresh` block carries the same two fields, and
+Setup's discovery run writes that message, or the cloud refresh's failure, into
+the cloud panel as well. A config that exists but cannot be read, or a connected
+cloud session no readable cloud record names, is treated the same way, since the
+EMS's session cannot be ruled out. A live status that is missing, stale (older
+than three minutes) or malformed adds nothing, and the config alone decides: the
+running EMS writes it on every loop, so it is missing or stale only while no EMS
+loop runs or the EMS could not build its MQTT runtime, and a fresh install, where
+no EMS has run yet, still listens. Without an installed config (a fresh install),
+with the cloud profile disabled and no connected cloud broker in the live status,
+or with a profile of another account, the refresh listens as before. The
+candidates are then those of a listen that saw no telemetry: model, serial,
+product key and route id come from the deviceList, so a proposal keeps its model
+and write route, while the topic family, metrics and capabilities only telemetry
+shows stay unknown and the proposal is flagged `waiting_for_mqtt_telemetry` and
+`unknown_topic_family`.
+
 ## Network suggestions
 
 The page lists detected local networks (`GET /api/discovery/networks`) so you can
@@ -648,7 +728,26 @@ Zendure topic families (`zensdk_ha_scalar`, `legacy_zendure_json`,
 catalog does not list, or a catalog topic whose payload the runtime would not
 read is no candidate at all, and neither is a catalog device that has not
 reported its required key (`inverterPower`), so a broker carrying only such
-topics reports "no hardware topics". A catalog device becomes a read-only
+topics reports "no hardware topics". A Zendure scalar device
+(`Zendure/<component>/<device>/<metric>`, or the cloud-prefixed
+`<appKey>/<component>/<device>/<metric>`) is found only on a topic whose metric
+is a property the EMS reads from a Zendure report — the
+`DEVICE_STATE_PROPERTIES` list `parse_device` reads, in `ems/models.py` — or on
+the exact D0 grid-meter topic `Zendure/sensor/<serial>/totalPower`; a
+`totalPower` under `number`, `select` or `sensors` finds none. Once found, the
+device takes every metric name it reports, also those that arrived before the
+property did (kept per device, bounded like a candidate's metrics, at most 64).
+Discovery keeps names, not values, so a capability the runtime infers from a
+value (multi MPPT from `chargeMaxLimit` of 2400 W or more) is not inferred
+here. An ESPHome
+entity publishes `<prefix>/sensor/<name>/state` (also under `switch`,
+`binary_sensor` or `number`, plus `command`, `availability` and MQTT discovery
+`config` topics), which has the same shape; each entity is a device of its own
+and none carries such a property, so the node is not offered as a Zendure
+device even when its prefix is `Zendure`. A node under any other prefix is not
+received, except under `iot/` or a leading `/`, where its topics are received
+and classified unknown. The EMS runtime classifier is unchanged by this rule. A
+catalog device becomes a read-only
 `external_mqtt` proposal (see
 [External Devices over MQTT](configuration.md#external-devices-over-mqtt-external_mqtt)),
 and only from a local broker. A topic
@@ -993,8 +1092,8 @@ or manual broker host/user/password. Requests may optionally carry
 `unsupported_credential_mode` 400. Manual MQTT broker credentials remain a
 separate feature in the Local MQTT broker section.
 
-Credential storage (`admin/credential_store.py`): the Zendure API key or HA
-token is encrypted at rest (`cryptography`/Fernet) under
+Credential storage (`admin/credential_store.py`): the Zendure API key or
+HA token is encrypted at rest (`cryptography`/Fernet) under
 `config/secrets/zendure-cloud.json`, with the Fernet key in
 `config/secrets/.secret-key`, both written `0600` best-effort.
 `config/discovery-connections.json` holds only the `token_ref`, never a raw key.
@@ -1002,7 +1101,11 @@ The `admin.secret_store.ZendureTokenStore` shim may still exist internally for
 compatibility, but the credential store is the current storage layer. The raw
 credential is never returned to the browser and never logged; only redacted
 metadata (last check time, status, device count, broker host/port, TLS mode) is exposed.
-`GET settings` reports key status without the key.
+`GET settings` reports key status without the key. A token an older Admin kept
+in its own data directory is imported on the first read and stays there until
+the token is deleted, which removes both copies. The import, a save, a delete and
+a metadata write hold one lock in the credential store, so a read that imports
+cannot bring back a token that a delete or a save is replacing at that moment.
 
 Cloud flow (`admin/zendure_cloud_auth.py`, `admin/zendure_cloud_mqtt.py`):
 
@@ -1021,7 +1124,9 @@ Cloud flow (`admin/zendure_cloud_auth.py`, `admin/zendure_cloud_mqtt.py`):
 - Connect to the returned broker with **TLS** (paho `tls_set()` before connect),
   MQTT 3.1, bounded per-device subscriptions (`/<pk>/<dev>/#`,
   `iot/<pk>/<dev>/#`, `<appKey>/#`), and enrich matching candidates with
-  observed topics/metrics (`discovery_status = mqtt_observed`).
+  observed topics/metrics (`discovery_status = mqtt_observed`). Skipped while
+  the EMS signs in with the returned client id (`mqtt_status: "ems_session"`,
+  see above).
 
 TLS rules: cloud MQTT is encrypted-only and never falls back to plaintext. The
 deviceList usually returns the broker without a port; because 1883 is the
@@ -1046,16 +1151,17 @@ API (all require Admin auth):
 
 - `GET /api/discovery/zendure-cloud-mqtt/settings` — redacted credential status.
 - `POST /api/discovery/zendure-cloud-mqtt/token` — save/replace the API key or
-  HA/deviceList token.
+  HA/deviceList token; another key drops the cached cloud candidates.
   Field `api_key` (or `token` as a backwards-compatible alias, but never both);
   explicit modes `zendure_api_key` and `ha_device_list_token` are accepted.
 - `DELETE /api/discovery/zendure-cloud-mqtt/token` — forget the credential +
   cache.
 - `POST /api/discovery/zendure-cloud-mqtt/test` — deviceList only (no MQTT
   connection); returns the device count and broker. Uses the supplied `api_key`
-  / token or the saved one.
+  / token or the saved one; the status is recorded only for the saved key.
 - `POST /api/discovery/zendure-cloud-mqtt/refresh` — full cloud discovery
-  (deviceList + read-only TLS MQTT listen), returns cloud candidates.
+  (deviceList + read-only TLS MQTT listen, deviceList only while the EMS holds
+  the account's MQTT session), returns cloud candidates.
 
 The deviceList request uses a generous ~25s timeout (clamped at ~30s) because the
 live Zendure endpoint can take ~14-15s to respond; a slow response surfaces a

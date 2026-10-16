@@ -249,10 +249,14 @@ A plan that gave up keeps the reason on its cancelled operation, shown on the
 operation in the console and by `ems-appliance operations`; one you cancelled
 yourself stays as you left it.
 
-Firefox gives up on a request after five minutes. If the browser reports a
-network error while the image is still being pulled, the plan goes on; when the
-operation then waits for confirmation, cancel it and plan again: the image is on
-the card by then, and the new plan takes seconds.
+Firefox gives up on a request after five minutes, and an install plan can take
+longer. The plan goes on regardless, and the page that asked for it keeps
+watching: once the plan waits for confirmation, it opens there as if the answer
+had arrived. The appliance hands a plan over only to the page that sent the
+random request id the plan was made with, so a page reloaded or opened elsewhere
+in the meantime cannot pick it up. There, cancel the operation from its banner
+and plan again: the image is on the card by then, and the new plan takes
+seconds.
 
 ## "image_version_mismatch" / "image_source_mismatch" / "image_labels_missing"
 
@@ -301,7 +305,9 @@ and enter an exact release tag.
 
 The chosen version is a release candidate and this host does not accept them.
 Candidates are still listed under **Unstable**, greyed out, and the same refusal
-applies to a candidate tag typed by hand in Expert mode. Set
+applies to a candidate tag typed by hand in Expert mode. A version a configured
+release index marks as a pre-release counts as a candidate even when its tag
+carries no pre-release suffix. Set
 `allow_prerelease = true` in `/etc/ems-appliance-manager/allowed-images.conf`
 and restart `ems-appliance-agent.service` to accept them.
 
@@ -313,6 +319,39 @@ list — *Current stable (reinstall)* and *Previous known-good* — still work, 
 Expert mode still accepts an exact release tag. Check the appliance's DNS and
 outbound HTTPS; a site that has neither can point `release_index_url` in
 `/etc/ems-appliance-manager/appliance.conf` at a mirror's JSON index instead.
+
+The lookup — the registry's challenge, its anonymous token and every page of
+tags — has 10 seconds in all, from the first connection attempt to the last
+byte, a body the registry keeps trickling included. Only the name lookups,
+before each of its connections, are bounded by the resolver's own timeout
+instead: a slow resolver can hold the lookup past its 10 seconds, and the
+next connection is then refused at once. A redirect is followed to
+https only, refused before an http hop is contacted, and the registry's token
+goes to the registry's own host alone: not along a redirect to another host,
+and not to a next page the registry names on one (`release_registry_invalid`).
+
+## "release_index_insecure"
+
+`release_index_url` is not an https URL, or the server it names redirected to
+plain http. The index decides which tag *Latest stable* installs, so it is never
+read over a transport anyone on the path can rewrite. Serve the mirror over
+https with a certificate the appliance trusts, or leave `release_index_url`
+empty to read the registry. As with an unreachable index, the exact-tag and
+recovery channels still work.
+
+## "release_download_timed_out"
+
+Reading the Manager package index, or planning or installing a Manager update,
+stopped because a download took longer than the appliance allows: 120 seconds
+for the package index, a manifest or its signature, 900 seconds for the package
+itself. The limit is on the whole transfer, not only on silence: it runs from
+the first connection attempt on — to every address the server's name resolves
+to, and a redirect's connection too — through the TLS handshake, the response
+headers and the body, so a server that does not answer, or keeps a trickle
+going anywhere in it, ends the operation at the limit too, and the operation
+lock is free again. Only the name lookups, before the first connection and
+before a redirect's, are bounded by the resolver's own timeout instead. Nothing
+was installed. Check the appliance's connection and plan the update again.
 
 ## "package_lock_held"
 

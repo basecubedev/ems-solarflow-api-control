@@ -497,14 +497,6 @@ def backup_account_state(paths, config):
     else:
         home, shell, exists = record.home, "", False
 
-    keys_dir = os.path.join(home, ".ssh") if home else ""
-    conflicts = []
-    if keys_dir and os.path.isdir(keys_dir):
-        conflicts = sorted(
-            item
-            for item in os.listdir(keys_dir)
-            if item.startswith("authorized_keys.disabled-by-appliance.conflict")
-        )
     return {
         "account": name,
         "exists": exists,
@@ -514,12 +506,28 @@ def backup_account_state(paths, config):
         "home": home,
         "shell": shell,
         "expected_shell": shell in NOLOGIN_SHELLS if exists else None,
-        "keys_active": bool(keys_dir and os.path.isfile(os.path.join(keys_dir, "authorized_keys"))),
-        "keys_disabled": bool(
-            keys_dir
-            and os.path.isfile(os.path.join(keys_dir, "authorized_keys.disabled-by-appliance"))
-        ),
-        "keys_conflicted": conflicts,
+        **_key_files(home),
+    }
+
+
+def _key_files(home):
+    """The account's key files as ``backup_confinement.read_key_files`` reads them.
+
+    A symlinked ``.ssh`` is not read through: its refusal is reported instead.
+    A key file that is not a regular file, a symlink included, is no key.
+    """
+
+    from appliance.backup_confinement import read_key_files
+
+    files = read_key_files(home)
+    refusal = files.refusal
+    return {
+        "keys_active": files.active,
+        "keys_disabled": files.disabled,
+        "keys_conflicted": list(files.conflicted),
+        "keys_unsafe": list(files.unsafe),
+        "keys_refused": refusal.code if refusal is not None else "",
+        "keys_refused_detail": refusal.message if refusal is not None else "",
     }
 
 
@@ -552,6 +560,15 @@ def check_backup_account(paths, config=None):
                 "withdraw it safely",
             )
         ]
+    if state["keys_refused"]:
+        return [
+            _check(
+                "backup_account",
+                STATUS_FAILED,
+                f"{state['account']} has a key directory backup access does not read "
+                f"through: {state['keys_refused_detail']}",
+            )
+        ]
     if state["keys_conflicted"]:
         return [
             _check(
@@ -560,6 +577,16 @@ def check_backup_account(paths, config=None):
                 f"{state['account']} has unresolved key files ("
                 + ", ".join(state["keys_conflicted"])
                 + "); authentication stays disabled until they are resolved",
+            )
+        ]
+    if state["keys_unsafe"]:
+        return [
+            _check(
+                "backup_account",
+                STATUS_FAILED,
+                f"{state['account']} has key files that are not regular files ("
+                + ", ".join(state["keys_unsafe"])
+                + "); backup access does not read them or move them back",
             )
         ]
     if not state["expected_shell"]:

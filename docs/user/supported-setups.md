@@ -149,7 +149,7 @@ physical hardware. Please report results (see below).
 
 | Generation | Example models | Connection | Status |
 |---|---|---|---|
-| New SolarFlow / ZenSDK | SolarFlow 800 Pro 2 (Validated); 800 / 800 Plus / 800 Pro / 1600 AC+ / 2400 AC / AC+ / Pro / 4000 AC+ (Family-supported) | Local API (preferred), plus output **control** over Zendure cloud MQTT | ZenSDK output control uses the exact-model `zensdk_properties_write` profile; **Validated on the maintainer's 800 Pro 2** (Local API + cloud MQTT), other ZenSDK models Family-supported. Over a **local** broker seen publishing scalar HA topics only, the device stays telemetry-only until that write path is verified on hardware. |
+| New SolarFlow / ZenSDK | SolarFlow 800 Pro 2 (Validated); 800 / 800 Plus / 800 Pro / 1600 AC+ / 2400 AC / AC+ / Pro / 4000 AC+ (Family-supported) | Local API (preferred), plus output **control** over Zendure cloud MQTT | ZenSDK output control uses the exact-model `zensdk_properties_write` profile; **Validated on the maintainer's 800 Pro 2** (Local API + cloud MQTT), other ZenSDK models Family-supported. Over a **local** broker seen publishing scalar `Zendure/sensor/…` topics only, the device stays telemetry-only until that write path is verified on hardware. |
 | Older Hub / Hyper | Hub 1200, Hub 2000, Hyper 2000, AIO 2400, Ace 1500, SuperBase V | MQTT control (local or cloud) | Reverse-engineered: exact listed models carry a legacy JSON write profile derived from external projects; that JSON report family is the local-broker path that stays enabled. Control still requires capability and transport gates; not confirmed on maintainer-owned physical hardware (Ace 1500 / SuperBase are telemetry-only). |
 | Any device via API key | Any Zendure device | Zendure cloud MQTT | Telemetry supported; Apply provisions the runtime broker credential; control requires an exact supported model and every control-eligibility condition above. |
 
@@ -255,7 +255,6 @@ real broker in tests; no installation has run it yet.
 
 ## Optional Integrations
 
-- Home Assistant is optional.
 - InfluxDB analytics is optional.
 - Native Python is supported for advanced/manual installs.
 - A **second inverter or battery EMS does not control** can be shown and
@@ -267,7 +266,7 @@ real broker in tests; no installation has run it yet.
 At least one supported Zendure connection — Local API, Local MQTT, or Zendure
 cloud MQTT — must be available for EMS control. The Local API is recommended for
 ZenSDK models because it is local, low-latency, and the only transport that also
-does full device-state reconciliation. Do not run Zendure HEMS, Home Assistant
+does full device-state reconciliation. Do not run Zendure HEMS, smart-home
 automations, MQTT writers, or any other controller in parallel if they write
 Zendure `outputLimit`. EMS assumes exclusive write control over `outputLimit`
 while active.

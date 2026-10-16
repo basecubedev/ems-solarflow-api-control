@@ -54,7 +54,7 @@ flowchart TD
     R --> S[Safety gates]
     S --> T[Zendure outputLimit API write]
 
-    A -. config .-> A_CFG["system.enabled<br/>system.dry_run<br/>system.allow_hardware_writes<br/>ha.enabled<br/>ha.control_enabled"]
+    A -. config .-> A_CFG["system.enabled<br/>system.dry_run<br/>system.allow_hardware_writes"]
     B -. config .-> B_CFG["shelly.ip<br/>system.loop_interval"]
     C -. config .-> C_CFG["devices[].ip<br/>devices[].sn<br/>system.output_control.telemetry_max_age_seconds"]
     D -. telemetry .-> D_CFG["PV, output, outputLimit, pack power<br/>socLimit, dcStatus, acStatus, packState"]
@@ -124,13 +124,13 @@ flowchart TD
 | `system.output_control.large_export_bypass_w` | Total ramp / bypass | Detects large export situations. The controller increases ramp speed during bypass behavior. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
 | `system.output_control.bypass_ramp_multiplier` | Total ramp and device ramp | Multiplies total and per-device ramp limits during large import/export bypass situations. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
 | `system.output_control.telemetry_max_age_seconds` | Telemetry freshness / stale ramp / energy statistics | Marks device telemetry as stale after this age. Stale telemetry reduces ramp speed, and a reading past this age is no longer integrated into the energy statistics. | [configuration.md](configuration.md), [dashboard.md](../dashboard.md), [troubleshooting.md](../user/troubleshooting.md) |
-| `system.output_control.stale_telemetry_ramp_factor` | Total ramp / stale telemetry | Multiplies total ramp speed when telemetry is stale. Lower values make stale-telemetry changes more conservative. | [configuration.md](configuration.md), [troubleshooting.md](../user/troubleshooting.md) |
+| `system.output_control.stale_telemetry_ramp_factor` | Total ramp / stale telemetry | Multiplies total ramp speed while telemetry is stale; one unreachable device keeps it stale. Lower values make stale-telemetry changes more conservative; `0` holds the total. A move that reduces a running charge keeps the configured ramp up to idle. | [configuration.md](configuration.md), [troubleshooting.md](../user/troubleshooting.md) |
 | `devices[].max_power` | Limits, clamping and redistribution | Sets the per-device output cap used during allocation, final target clamping, and effective target calculation. Runtime state can override it. | [configuration.md](configuration.md), [runtime-state.md](runtime-state.md) |
 | `devices[].pv_kwp` | PV-first weighting | Represents the configured PV size for this device and scales the PV-first allocation weight when `system.pv_kwp_weighting=true`. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
 | `devices[].pv_priority_factor` | PV-first weighting | Amplifies or reduces this device's PV-first allocation weight. Runtime state can override it. It does not create real PV power. | [configuration.md](configuration.md), [runtime-state.md](runtime-state.md), [control-logic.md](control-logic.md) |
 | `devices[].battery_kwh` | Battery top-up / battery weighting | Represents configured battery size and scales discharge/top-up allocation when `system.battery_kwh_weighting=true`. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
 | `devices[].min_soc` | SOC reconciliation / battery weighting / idle protection | Sets the discharge floor used for SOC reconciliation, usable battery weighting, top-up eligibility, and night/minSoc idle detection. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
-| `devices[].max_soc` | SOC reconciliation | Sets the upper SOC boundary used by reconciliation and remaining-time context. | [configuration.md](configuration.md), [safety.md](../user/safety.md) |
+| `devices[].max_soc` | SOC reconciliation | Sets the upper SOC boundary used by reconciliation. | [configuration.md](configuration.md), [safety.md](../user/safety.md) |
 
 ## Notes On Weights, Limits, Filters, And Writes
 

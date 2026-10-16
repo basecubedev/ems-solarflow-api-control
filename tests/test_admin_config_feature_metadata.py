@@ -98,9 +98,8 @@ def test_sections_have_stable_required_metadata():
         "energy_savings",
         "dashboard",
         "influxdb",
-        "ha",
     ]
-    assert [section["order"] for section in sections] == list(range(1, 13))
+    assert [section["order"] for section in sections] == list(range(1, 12))
     for section in sections:
         assert SECTION_KEYS <= section.keys()
         assert section["level"] in LEVELS
@@ -153,14 +152,6 @@ def test_user_facing_descriptions_are_nonempty_and_short():
         assert 0 < len(section["description"].strip()) <= 240
         for field in section["fields"]:
             assert 0 < len(field["description"].strip()) <= 240, field["path"]
-
-
-def test_home_assistant_metadata_is_deprecated_and_maintenance_only():
-    fields = get_config_feature_field_index()
-
-    for path in ("ha.enabled", "ha.control_enabled", "ha.url", "ha.token"):
-        assert fields[path]["level"] == "deprecated"
-        assert fields[path]["scope"] == "maintenance"
 
 
 # Promoted to primary (normal) so they render outside Advanced settings.
@@ -222,9 +213,8 @@ def test_setup_mode_excludes_maintenance_only_sections():
         for section in get_config_feature_sections(mode="maintenance")
     }
 
-    assert "ha" not in setup_ids
     assert "config_upgrade" not in setup_ids
-    assert {"ha", "config_upgrade"} <= maintenance_ids
+    assert "config_upgrade" in maintenance_ids
 
 
 def test_metadata_results_are_safe_to_mutate():

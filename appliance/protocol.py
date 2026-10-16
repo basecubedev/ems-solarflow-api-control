@@ -58,12 +58,15 @@ KIND_AUDIT_RESULT = "audit_result"
 KIND_AUDIT_REASON = "audit_reason"
 KIND_RELEASE_ID = "release_id"
 KIND_PASSWORD_GENERATION = "password_generation"
+KIND_PLAN_REQUEST = "plan_request"
 
 # The generation of the password a web session signed in with. A plan that
 # declares it can hand out a root shell, directly or by replacing the Manager
 # that guards one, and the agent refuses it unless that password is the one the
 # Appliance Manager confirmed.
 SESSION_GENERATION_FIELD = "session_generation"
+
+PLAN_REQUEST_FIELD = "plan_request"
 
 
 class ProtocolError(Exception):
@@ -104,11 +107,12 @@ def _spec(
     summary="",
     timeout_seconds=DEFAULT_OPERATION_TIMEOUT,
 ):
+    fields = tuple(fields) + ((_PLAN_REQUEST,) if takes_lock else ())
     return OperationSpec(
         name=name,
         mutating=mutating,
         takes_lock=takes_lock,
-        fields=tuple(fields),
+        fields=fields,
         summary=summary,
         timeout_seconds=timeout_seconds,
     )
@@ -117,6 +121,7 @@ def _spec(
 _SESSION_GENERATION = Field(
     SESSION_GENERATION_FIELD, KIND_PASSWORD_GENERATION, required=False, default=""
 )
+_PLAN_REQUEST = Field(PLAN_REQUEST_FIELD, KIND_PLAN_REQUEST, required=False, default="")
 
 READ_ONLY_OPERATIONS = (
     _spec(
@@ -388,6 +393,15 @@ MUTATING_OPERATIONS = (
         summary="Cancel a planned or failed operation",
     ),
     _spec(
+        "operations.resume_plan",
+        mutating=True,
+        fields=(
+            Field("operation_id", KIND_OPERATION_ID),
+            Field(PLAN_REQUEST_FIELD, KIND_PLAN_REQUEST),
+        ),
+        summary="Hand a plan waiting for confirmation to the console that started it",
+    ),
+    _spec(
         "operations.acknowledge",
         mutating=True,
         fields=(Field("operation_id", KIND_OPERATION_ID),),
@@ -430,12 +444,9 @@ def _coerce(field, value, context):
     if kind == KIND_RELEASE_CHANNEL:
         return validation.validate_release_channel(value)
     if kind == KIND_RELEASE_TAG:
-        tag = validation.validate_release_tag(value)
-        if validation.is_prerelease_tag(tag) and not context.allow_prerelease:
-            raise ValidationError(
-                "prerelease_not_allowed", f"{tag} is a prerelease and is not enabled on this host"
-            )
-        return tag
+        return validation.validate_installable_tag(
+            value, allow_prerelease=context.allow_prerelease
+        )
     if kind == KIND_CONTAINER:
         return validation.validate_container_name(value, context.containers)
     if kind == KIND_LOG_SOURCE:
@@ -480,6 +491,8 @@ def _coerce(field, value, context):
         return validation.validate_release_id(value)
     if kind == KIND_PASSWORD_GENERATION:
         return validation.validate_password_generation(value)
+    if kind == KIND_PLAN_REQUEST:
+        return validation.validate_plan_request(value)
     raise ProtocolError("invalid_field_kind", f"unknown field kind {kind!r}", field=field.name)
 
 

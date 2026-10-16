@@ -20,8 +20,8 @@ context when winter mode is enabled and active. Review SOC limits and battery
 capacity for the installation before unattended winter operation.
 
 `winter.enabled` can be toggled at runtime through `runtime-state.json`,
-`emsctl.py`, or the optional Home Assistant helper. The technical winter
-settings below remain static config.
+`emsctl.py`, or the dashboard's Control tab. The technical winter settings below
+remain static config.
 
 ## Configuration
 
@@ -34,7 +34,6 @@ settings below remain static config.
     "winter_min_soc": 40,
     "ramp_step_percent": 3,
     "adjust_hour": 12,
-    "ac_charge_power": 200,
     "policies": {
       "pv_battery": "solar_morning_step",
       "battery_only": "noon_step"
@@ -156,6 +155,15 @@ A start in heavy overcast before `adjust_hour` cannot tell, and may take a secon
 step that day; it stays within three points of the SoC. A step or a follow the
 database cannot keep is not taken.
 
+A report without `minSoc` is an unknown reserve, not 0 %: adopted as the floor,
+or stepped up from it, the 0 would be written over the reserve the ramp built.
+While the report carries none, winter mode plans nothing for the device and the
+reconcile writes no `minSoc` (`socSet` still); a device first seen that way is
+taken up, as above, once its report carries `minSoc` again. Nothing else writes
+over it either: not the configured `min_soc` with winter mode off or for a
+policy without a step, and not the full-charge assist, which writes no
+`minSoc` at all.
+
 ## PV Charges the Battery First
 
 While winter is active and state reconciliation writes are allowed, a device on
@@ -192,22 +200,26 @@ for this: `passMode` writes were accepted and ignored.
 
 ## Why Three Points
 
-Every raise winter mode writes over a device's reported `minSoc` -- a target
+Every raise the EMS writes over a device's reported `minSoc` -- a target
 remembered while winter mode was switched off or after a failed write, the
 configured floor after a restart, the summer reset of a device found below
-`summer_min_soc`, and the morning step -- waits until it leads the SoC by at
-most three points; only the `noon_step` policy's own step may lead further. A
-raise is never written as a part of itself: cut to three above the SoC and
-written again each reconcile, it would climb with the SoC all day. A device that
-reports no `minSoc` -- a missing value reads as 0 -- gets no raise the battery
-does not already hold, and without a usable SoC reading nothing rises. No raise
-lands on the SoC itself; see
+`summer_min_soc`, the morning step, and the configured `min_soc` where winter
+mode plans nothing (winter mode off, or a device on the policy `none`) -- waits
+until it leads the SoC by at most three points; only the `noon_step` policy's
+own step may lead further. A configured raise that waits logs
+`min_soc_raise_waits_for_battery`. A raise is never written as a part of
+itself: cut to three above the SoC and written again each reconcile, it would
+climb with the SoC all day. A device that reports a `minSoc` of 0 gets no raise
+the battery does not already hold, one whose report carries no `minSoc` gets no
+`minSoc` written at all, and without a usable SoC reading nothing rises. No
+raise lands on the SoC itself; see
 [Why One Point Below the SoC](#why-one-point-below-the-soc).
 
 On 2026-10-03 an adjustment raised `minSoc` from 25 to 30 at a SoC of 25, and
 both inverters charged from the grid at their full AC power, 1.2 to 1.4 kW each,
-for five minutes until they had reached it; the 200 W `inputLimit` below does
-not limit that while the inverter is in output mode. On 2026-10-05 `minSoc`
+for five minutes until they had reached it; the 200 W `inputLimit` winter mode
+then also wrote did not limit that while the inverter was in output mode (see
+[No AC Charge Limit](#no-ac-charge-limit)). On 2026-10-05 `minSoc`
 three and four points above the SoC caused no grid charging over five minutes;
 six points above it started about 1 kW of grid charging within five seconds.
 Once started, the firmware kept charging from the grid after `minSoc` was
@@ -237,28 +249,25 @@ installation; another firmware has not been measured.
 So the follow keeps `minSoc` one point below the SoC, and any other raise that
 would land exactly on the SoC -- the morning step at `winter_min_soc`, the noon
 step of a battery that sits a step above its `minSoc`, the restart floor, the
-summer reset, a target remembered while its write had not landed -- waits until
-the SoC has moved. A device that reports no
-`minSoc` is raised only to a value below what the battery holds.
+summer reset, a target remembered while its write had not landed, the
+configured `min_soc` where winter mode plans nothing -- waits until the SoC has
+moved. A device that reports a `minSoc` of 0 is raised only to a value below
+what the battery holds.
 
 What this does not prevent: a battery that discharges down to its `minSoc`
 draws the same burst. After a follow that is one point of discharge away.
 
-## AC Charge Limit
+## No AC Charge Limit
 
-When a daily step is taken, the EMS may write a conservative AC input limit:
-
-```json
-{"inputLimit": 200}
-```
-
-This write is only in the winter reconciliation context. It never includes:
-
-```text
-acMode
-smartMode
-outputLimit
-```
+Winter mode's reconcile writes `minSoc` alone. It used to write
+`inputLimit` = `winter.ac_charge_power` (200 W) with every daily step, meant to
+keep the grid charge a raised `minSoc` sets off small. In output mode the
+firmware ignores it -- on 2026-10-03 both inverters charged at 1.2 to 1.4 kW
+with it in place -- and in AC input mode `inputLimit` belongs to the runtime AC
+intent reconciler, whose charge power it replaced until that wrote it back. The
+write is gone, and `winter.ac_charge_power` with it; one left in an existing
+`config.json` is ignored, whatever its value. What keeps the grid charge away is
+the raise rule above.
 
 ## Safety
 
@@ -286,9 +295,7 @@ winter_pv_kwp_zero_but_pv_reported
 winter_follow_soc
 winter_raise_waits_for_battery
 winter_summer_reset
-dry_run_winter_ac_charge_limit
-write_winter_ac_charge_limit
-write_winter_ac_charge_limit_error
+winter_min_soc_unknown
 ```
 
 `winter_mode_state` is logged at `info` only when the active state changes;
@@ -301,15 +308,6 @@ day). `winter_policy_invalid` is a `warning` once per device, and
 `info` at the step and when it starts, `debug` while it lasts.
 `winter_summer_reset` is `debug` while its raise waits, except the first one
 that drops a target remembered in winter, which is `info`; otherwise it is
-`info`. Set `system.log_level=debug` to see every reconcile interval.
-
-## Home Assistant
-
-Winter status and calculated targets are published to HA. See
-[home-assistant.md](home-assistant.md).
-
-Runtime toggle:
-
-```text
-input_boolean.ems_solarflow_winter_enabled
-```
+`info`. `winter_min_soc_unknown` is a `warning` once per device until its report
+carries `minSoc` again. Set `system.log_level=debug` to see every reconcile
+interval.

@@ -18,6 +18,7 @@ const state = {
     // refresh that would reset it.
     zoom: null,
     applyingScale: false,
+    answers: answerOrder(),
   },
   // InfluxDB-backed long-term analytics shown in the dedicated Analytics tab.
   // ``available`` is null until probed; false renders the "not configured"
@@ -46,6 +47,7 @@ const state = {
     // Cached series-based KPI values, keyed by a stable data key. Live snapshot
     // updates reuse this cache instead of re-integrating the full series.
     kpiCache: { dataKey: null, values: {} },
+    answers: answerOrder(),
   },
   flowView: "aggregated",
   // Presentation only: how many rows an energy card carries. Basic is the
@@ -60,6 +62,7 @@ const state = {
     csrfToken: null,
   },
   runtime: null,
+  runtimeAnswers: answerOrder(),
   runtimeUnavailable: false,
   runtimeEditorDirty: false,
   lastSnapshotTimestamp: null,
@@ -148,7 +151,7 @@ const ANALYTICS_TABS = [
 const _kpiPos = (value) => Math.max(0, value);
 const _kpiNeg = (value) => Math.max(0, -value);
 
-// KPI registry: id -> { label(range), tone, compute(data, snapshot) }. Energy
+// KPI registry: id -> { label(period), tone, compute(data, snapshot) }. Energy
 // KPIs integrate the fetched series; soc/role read the live snapshot.
 const ANALYTICS_KPIS = {
   pv: { label: (r) => `PV · ${r}`, tone: "pv", compute: (d) => energyLabel(integrateSeries(d, "pv", _kpiPos)) },
@@ -159,10 +162,10 @@ const ANALYTICS_KPIS = {
   gridExport: { label: (r) => `Grid Export · ${r}`, tone: "grid", compute: (d) => energyLabel(integrateSeries(d, "grid", _kpiNeg)) },
   home: { label: (r) => `Home · ${r}`, tone: "output", compute: (d) => energyLabel(integrateSeries(d, "home", _kpiPos)) },
   acCharge: { label: (r) => `AC Charge · ${r}`, tone: "grid", compute: (d) => energyLabel(integrateSeries(d, "ac_charge", _kpiPos)) },
-  pvPeak: { label: () => "PV Peak", tone: "pv", compute: (d) => powerLabel(seriesPeak(d, "pv")) },
+  pvPeak: { label: (r) => `PV Peak · ${r}`, tone: "pv", compute: (d) => powerLabel(seriesPeak(d, "pv")) },
   // ``live`` KPIs read the cheap live snapshot (not the integrated series), so
   // they can be refreshed on every SSE/poll update without re-integrating.
-  soc: { label: () => "Current SoC", tone: "accent", live: true, compute: (_d, s) => (s ? `${Math.round(Number(s.average_soc || 0))}%` : "--") },
+  soc: { label: () => "Current SoC", tone: "accent", live: true, compute: (_d, s) => analyticsSocLabel(s) },
   role: { label: () => "Runtime Role", tone: "output", live: true, compute: (_d, s) => runtimeRoleLabel(s) },
 };
 
@@ -2545,7 +2548,7 @@ function controlPipelineFact(label, value, iconName = "rule", formatter = contro
 function controlContextRail(explain, devices, notes) {
   const limits = Array.isArray(explain.limits) ? explain.limits : [];
   const contextItems = [
-    controlContextItem("Mode", explain.mode, "rule", controlText),
+    controlContextItem("Mode", explain.mode, "rule", controlReason),
     controlContextItem("Max power", explain.max_total_power_w, "warning", watts),
     controlContextItem("Min output", explain.min_output_limit_w, "warning", watts),
     controlContextItem("Undistributed", explain.undistributed_target_w, "warning", watts),
@@ -2641,9 +2644,10 @@ function normalizeControlDeviceEntries(devices) {
 }
 
 function controlDeviceCard(name, device, explain, weightContext) {
-  const safeName = escapeHtml(device.device || name || "Device");
+  const displayName = String(device.device || name || "Device");
+  const safeName = escapeHtml(displayName);
   const writeDecision = controlDeviceWriteDecision(device, explain);
-  const reasonNote = controlDeviceReasonNote(safeName, device, explain, writeDecision);
+  const reasonNote = controlDeviceReasonNote(displayName, device, explain, writeDecision);
   const online = device.online;
   const onlinePill = hasExplainValue(online)
     ? `<span class="pill ${online ? "" : "muted"}">${icon(online ? "live" : "warning")}${online ? "Online" : "Offline"}</span>`
@@ -2687,22 +2691,23 @@ function controlDeviceReasonNote(name, device, explain, writeDecision) {
 }
 
 function controlDeviceDecisionReason(name, device, explain, writeDecision) {
+  const writeReason = controlReason(firstExplainValue(writeDecision.reason, device.write_reason, ""));
+  if (writeDecision.tone === "blocked") {
+    return `${name} is blocked: ${writeReason || "the device cannot be controlled"}.`;
+  }
+
   const explicitReason = firstExplainValue(device.decision_reason, device.reason);
   if (hasExplainValue(explicitReason)) {
     return controlReadableDecisionReason(explicitReason, name);
   }
 
-  const writeReason = controlReason(firstExplainValue(writeDecision.reason, device.write_reason, ""));
-  if (writeDecision.tone === "blocked") {
-    return `${name} is blocked because ${writeReason || "the device cannot be controlled"}.`;
-  }
   if (writeDecision.tone === "skip" && writeReason.toLowerCase().includes("deadband")) {
     return "Write skipped because the target change is inside the deadband.";
   }
 
   const limitingReason = firstExplainValue(device.limiting_reason, device.capability_reason);
   if (hasExplainValue(limitingReason)) {
-    return `${name} target is limited by ${controlReason(limitingReason)}.`;
+    return `${name} target is limited: ${controlReason(limitingReason)}.`;
   }
 
   const pvPriority = numericOrNull(device.pv_priority_factor);
@@ -2724,21 +2729,25 @@ function controlDeviceDecisionReason(name, device, explain, writeDecision) {
   return "Target is distributed according to device weight, SOC, PV availability, and configured limits.";
 }
 
+const CONTROL_DECISION_SENTENCES = {
+  pv_first_allocation: (name) => `${name} target is shaped by PV-first allocation and local solar availability.`,
+  full_soc_pv_priority: (name) => `${name} exports its own PV first because its battery is full and cannot store it.`,
+  pv_first_with_battery_topup: (name) => `${name} adds battery output to its PV share because PV alone does not cover the target.`,
+  solar_plus_battery_discharge: (name) => `${name} supplies its PV and the battery covers the rest of its share.`,
+  night_min_soc_idle: (name) => `${name} is parked at the minimum output while the batteries rest at their minimum SoC.`,
+  ac_charge_allocation: (name) => `${name} is charging from surplus, taking a share of it weighted by the room left in its battery.`,
+  ac_charge_share_too_small: (name) => `${name} may charge, but its share of this surplus was too small to be worth changing direction for, so it went to the other devices.`,
+  ac_charge_no_ceiling: (name) => `${name} may charge, but has no charge limit to charge at: it reports 0, or reports none and its model carries no rating.`,
+  ac_charge_not_permitted: (name) => `${name} is not charging this cycle: its model has no AC charge path, charging is switched off for it, or its battery is full, drained by another load or unavailable.`,
+  ac_charge_held_by_full_charge_assist: (name) => `${name} takes no share of the surplus: the full-charge assist holds it, for its own charge or the restore after it.`,
+};
+
 function controlReadableDecisionReason(reason, name) {
   const normalized = String(reason).trim().toLowerCase();
-  const map = {
-    pv_first_allocation: `${name} target is shaped by PV-first allocation and local solar availability.`,
-    pv_priority_applied: `${name} keeps more PV available for charging because local PV priority is active.`,
-    remaining_demand_assigned: `${name} carries the remaining house load after PV-priority allocation.`,
-    battery_discharge: `${name} supports the load from battery output according to the current target split.`,
-    ac_charge_allocation: `${name} is charging from surplus, taking a share of it weighted by the room left in its battery.`,
-    ac_charge_share_too_small: `${name} may charge, but its share of this surplus was too small to be worth changing direction for, so it went to the other devices.`,
-    ac_charge_no_ceiling: `${name} may charge, but has no charge limit to charge at: it reports 0, or reports none and its model carries no rating.`,
-    ac_charge_not_permitted: `${name} is not charging this cycle: its model has no AC charge path, charging is switched off for it, or its battery is full, drained by another load or unavailable.`,
-    deadband: "Write skipped because the target change is inside the deadband.",
-    output_limit_update: `${name} receives a write because the target differs from the current output limit.`,
-  };
-  return map[normalized] || controlReason(reason);
+  if (Object.prototype.hasOwnProperty.call(CONTROL_DECISION_SENTENCES, normalized)) {
+    return CONTROL_DECISION_SENTENCES[normalized](name);
+  }
+  return controlReason(reason);
 }
 
 function controlDeviceMeasurementPanel(device) {
@@ -2830,7 +2839,7 @@ function controlDeviceDecisionFlow(device, explain, weightContext, writeDecision
       resultLabel: "Adjusted target",
       resultValue: controlAdjustedTarget(device),
       resultFormatter: watts,
-      resultTone: device.capability_reason ? "blocked" : "",
+      resultTone: device.can_export === false ? "blocked" : "",
     },
     {
       title: "Final Target",
@@ -3155,11 +3164,56 @@ function controlText(value) {
   return String(value);
 }
 
-// Known firmware/EMS reason codes get an explicit readable phrase. Anything
-// not in the map falls back to the previous underscore-to-space behavior, so
-// unknown reasons stay legible without a localization framework.
-const CONTROL_REASON_LABELS = {
-  ac_input_runtime_role: "AC input mode is active; normal output writes are blocked",
+// Every code the EMS writes into a control explanation that the view shows as
+// a short value: the strategy, a limiting or write reason, a capability signal
+// and a limit name; CONTROL_DECISION_SENTENCES holds the sentence above a device
+// card. The codes live in the EMS, so both are paired registries and
+// tests/test_dashboard_control_labels_frontend.py walks both sides. A code that
+// is not here still falls back to its words, so a newer EMS stays legible.
+const CONTROL_CODE_LABELS = {
+  pv_first: "PV first",
+  battery_discharge: "Battery discharge",
+  night_min_soc_idle: "Night idle at minimum SoC",
+  ac_charge: "AC charging",
+  no_devices: "No devices",
+  max_total_power: "Maximum total power",
+  zero_floor: "No negative target",
+  pv_surplus_available: "PV surplus available",
+  full_soc_pv_priority: "PV first for full batteries",
+  pv_only_target_limit: "PV-only target",
+  battery_topup_after_pv_first: "Battery top-up after PV first",
+  battery_discharge_required: "Battery discharge required",
+  discharge_capacity: "Discharge capacity",
+  pv_only_final_limits: "PV-only final limits",
+  device_output_limits: "Device output limits",
+  undistributed_target: "Undistributed target",
+  min_output_limit: "Minimum output limit",
+  cannot_export: "Device cannot export",
+  no_pv_only_available: "No PV for a PV-only share",
+  cannot_discharge: "Battery cannot discharge",
+  no_battery_available: "No battery available",
+  no_usable_battery: "No usable battery capacity",
+  pv_only_limit: "PV-only limit",
+  max_output_limit: "Device output limit",
+  no_allocation: "No share of the target",
+  no_battery: "Device reports no battery pack",
+  below_min_soc: "Battery at or below minimum SoC",
+  soc_protection: "SoC protection",
+  offline: "Device is offline",
+  device_disabled: "Device is switched off",
+  control_disabled: "Control is switched off",
+  not_controllable: "Device cannot be controlled",
+  runtime_role_ac_input: "AC input mode is active; normal output writes are blocked",
+  runtime_role_ac_output: "Full-charge assist holds this device",
+  runtime_role_blocked: "Runtime role blocks output control",
+  ac_discharge_disabled: "Discharge is switched off for this device",
+  winter_solar_charge: "Winter mode keeps its PV for charging",
+  already_parked: "Already parked at minimum output",
+  already_at_min_output_limit: "Already at the minimum output limit",
+  park_at_min_output_limit: "Park at the minimum output limit",
+  deadband: "Change is inside the deadband",
+  output_limit_update: "Output limit update",
+  normal: "Normal",
   charge_inhibit: "Firmware reports Max-SoC / charge cutoff",
   discharge_inhibit: "Firmware reports Min-SoC / discharge protection",
   dc_inactive: "DC path is inactive",
@@ -3167,16 +3221,25 @@ const CONTROL_REASON_LABELS = {
   pack_standby: "Battery pack is in standby",
   fault_observed: "Firmware reports a fault signal",
   pv_evidence: "PV input detected",
-  no_battery: "Device reports no battery pack",
+  output_evidence: "Output detected",
+  output_limit_evidence: "Output limit set",
+  ac_evidence: "AC path active",
 };
 
-function controlReason(value) {
-  const text = controlText(value);
-  const normalized = text.trim().toLowerCase();
-  if (Object.prototype.hasOwnProperty.call(CONTROL_REASON_LABELS, normalized)) {
-    return CONTROL_REASON_LABELS[normalized];
+function controlCodeLabel(code) {
+  const normalized = code.trim().toLowerCase();
+  if (Object.prototype.hasOwnProperty.call(CONTROL_CODE_LABELS, normalized)) {
+    return CONTROL_CODE_LABELS[normalized];
   }
-  return text.replaceAll("_", " ");
+  return code.trim().replaceAll("_", " ");
+}
+
+function controlReason(value) {
+  return controlText(value)
+    .split(",")
+    .filter((code) => code.trim())
+    .map(controlCodeLabel)
+    .join(", ");
 }
 
 function decimal(value) {
@@ -3729,6 +3792,8 @@ function setFlowView(view, persist = true) {
 function fullChargeAssistMeta(status) {
   const meta = {
     active: { label: "Assist active", tone: "tone-send", icon: "charge" },
+    waiting: { label: "Assist waiting", tone: "tone-warn", icon: "history" },
+    unavailable: { label: "Assist unavailable", tone: "tone-skip", icon: "rule" },
     window: { label: "Assist window active", tone: "tone-warn", icon: "history" },
     restore_pending: { label: "Restore pending", tone: "tone-warn", icon: "warning" },
     overdue: { label: "Assist overdue", tone: "tone-warn", icon: "warning" },
@@ -3749,17 +3814,38 @@ function fullChargeAssistDescription(assist) {
       return isAssistAcChargeActive(assist)
         ? "EMS is helping this device reach firmware Max-SoC and is currently AC-charging for monthly battery calibration support."
         : "EMS is helping this device reach firmware Max-SoC.";
+    case "waiting":
+      return "The assist waits while it cannot write what it needs: state writes not allowed, control switched off, "
+        + "or a device report without socSet or, for its AC charge, acMode or inputLimit. "
+        + "It goes on once it can; until then it completes only if the firmware reaches Max-SoC by itself.";
+    case "unavailable":
+      return "The assist needs socSet and the AC input, which only the local API writes; MQTT control takes the power command only.";
     case "window":
       return "EMS may start a short assist charge before the due date to reach firmware Max-SoC.";
     case "overdue":
       return "Assist is overdue. EMS will start an assist charge as soon as conditions allow.";
     case "restore_pending":
-      return assist.ac_mode_restore_pending
-        ? "EMS will restore the configured Max-SoC and normal AC output mode (firmware acMode=2) when writes are available."
-        : "EMS will restore the configured Max-SoC when writes are available.";
+      return fullChargeAssistRestoreDescription(assist);
     default:
       return "";
   }
+}
+
+function fullChargeAssistRestoreDescription(assist) {
+  const sentences = [];
+  if (assist.restore_pending) {
+    sentences.push("EMS will write the configured Max-SoC at the first device report that carries socSet.");
+  }
+  if (assist.ac_mode_restore_pending) {
+    sentences.push(
+      "EMS will switch the device back to normal AC output mode (firmware acMode=2); "
+      + "while its report carries no acMode, it sends the exit to idle instead, three times at most."
+    );
+  }
+  if (sentences.length) {
+    sentences.push("The restore waits while state writes are not allowed or control is switched off.");
+  }
+  return sentences.join(" ");
 }
 
 function formatAssistTimestamp(value) {
@@ -3793,6 +3879,11 @@ function renderFullChargeAssist(device) {
     if (assist.restore_pending || assist.ac_mode_restore_pending) {
       rows.push(deviceValue("After charge", "Restore planned", "history"));
     }
+  } else if (assist.status === "waiting") {
+    rows.push(deviceValue("Started", formatAssistTimestamp(assist.assist_started_at), "history"));
+    rows.push(deviceValue("Firmware", fullChargeAssistFirmwareSummary(assist), "gauge"));
+  } else if (assist.status === "unavailable") {
+    rows.push(deviceValue("Last full charge", formatAssistTimestamp(assist.last_full_charge_at), "history"));
   } else if (assist.status === "overdue") {
     const overdueDays = Number.isFinite(assist.days_until_due) ? Math.abs(assist.days_until_due) : null;
     rows.push(deviceValue(
@@ -5040,7 +5131,6 @@ function runtimeControlPanel() {
   }
 
   const system = runtime.system || {};
-  const ha = runtime.ha || {};
   const winter = runtime.winter || {};
   const acCharge = runtime.ac_charge_control || {};
   const devices = Object.entries(runtime.devices || {});
@@ -5059,7 +5149,6 @@ function runtimeControlPanel() {
   )).join("");
   const winterStep = devices.length + 2;
   const acChargeStep = devices.length + 3;
-  const haStep = devices.length + 4;
 
   return `
     <section class="runtime-editor-panel control-stage-row" aria-label="Runtime write controls">
@@ -5104,18 +5193,6 @@ function runtimeControlPanel() {
           submitLabel: "Save AC charging",
           fields: `
           ${runtimeToggle("enabled", "AC charging", acCharge.enabled)}
-        `})}
-        ${runtimeStageCard({
-          endpoint: "/api/runtime/ha",
-          title: "Home Assistant",
-          subtitle: "External publishing and helper control",
-          step: haStep,
-          kind: "write",
-          iconName: "live",
-          submitLabel: "Save HA settings",
-          fields: `
-          ${runtimeToggle("enabled", "HA publishing", ha.enabled)}
-          ${runtimeToggle("control_enabled", "HA helper control", ha.control_enabled)}
         `})}
       </div>
     </section>
@@ -5451,6 +5528,30 @@ function setRuntimeFeedback(message, isError, endpoint) {
   });
 }
 
+// Answers to a request repeated for what is on screen -- a refresh, a pick, a
+// save's reload -- land in any order. One is applied only for the selection
+// still on screen and never over a newer answer for it; a failure is not
+// applied data, so it holds back no older answer that lands after it.
+function answerOrder() {
+  return { sequence: 0, applied: { key: null, request: 0 } };
+}
+
+function startAnswer(order) {
+  order.sequence += 1;
+  return order.sequence;
+}
+
+function answerIsCurrent(order, key, request, keyOnScreen) {
+  if (key !== keyOnScreen) return false;
+  return !(order.applied.key === key && request < order.applied.request);
+}
+
+function recordAnswer(order, key, request, applied) {
+  order.applied = applied ? { key, request } : { key: null, request: 0 };
+}
+
+const RUNTIME_STATE_URL = "/api/runtime";
+
 async function loadRuntimeState(options = {}) {
   const forceRuntimeEditor = Boolean(options.forceRuntimeEditor) || !isRuntimeEditorEditing();
   if (state.demoMode) {
@@ -5459,15 +5560,31 @@ async function loadRuntimeState(options = {}) {
     if (state.snapshot) renderControlExplain(state.snapshot, { forceRuntimeEditor });
     return;
   }
+  const order = state.runtimeAnswers;
+  const request = startAnswer(order);
+  let runtime = null;
   try {
-    const response = await fetch("/api/runtime");
+    const response = await fetch(RUNTIME_STATE_URL);
     if (!response.ok) throw new Error(`runtime state answered ${response.status}`);
-    state.runtime = await response.json();
+    runtime = await response.json();
+  } catch {
+    runtime = null;
+  }
+  if (!answerIsCurrent(order, RUNTIME_STATE_URL, request, RUNTIME_STATE_URL)) {
+    if (options.forceRuntimeEditor) {
+      clearRuntimeEditorState();
+      if (state.snapshot) renderControlExplain(state.snapshot, { forceRuntimeEditor: true });
+    }
+    return;
+  }
+  recordAnswer(order, RUNTIME_STATE_URL, request, runtime !== null);
+  if (runtime !== null) {
+    state.runtime = runtime;
     state.runtimeUnavailable = false;
     cancelRuntimeRetry();
     if (forceRuntimeEditor) clearRuntimeEditorState();
     if (state.snapshot) renderControlExplain(state.snapshot, { forceRuntimeEditor });
-  } catch {
+  } else {
     state.runtime = null;
     state.runtimeUnavailable = true;
     if (state.auth.authenticated) scheduleRuntimeRetry();
@@ -6042,10 +6159,6 @@ function demoRuntimeState() {
       loop_interval: 5,
       min_output_limit: 0,
     },
-    ha: {
-      enabled: false,
-      control_enabled: false,
-    },
     winter: {
       enabled: false,
     },
@@ -6241,25 +6354,30 @@ async function loadAnalytics(showLoading = true) {
     renderAnalytics();
     return;
   }
+  const url = analyticsFetchUrl();
+  const order = state.analytics.answers;
+  const request = startAnswer(order);
   if (showLoading) setAnalyticsLoading(true);
   let payload = null;
   try {
-    const response = await fetch(analyticsFetchUrl());
+    const response = await fetch(url);
     payload = response.ok ? await response.json() : null;
   } catch (error) {
     payload = null;
-  } finally {
-    setAnalyticsLoading(false);
   }
+  if (!answerIsCurrent(order, url, request, analyticsFetchUrl())) return;
+  setAnalyticsLoading(false);
   // A 200 payload with available:false means InfluxDB is not configured; show
   // the clean info state instead of an empty/broken chart.
   if (payload && payload.available === false) {
     setAnalyticsAvailable(false, payload);
     state.analytics.data = null;
+    recordAnswer(order, url, request, false);
     return;
   }
   setAnalyticsAvailable(true);
   state.analytics.data = payload;
+  recordAnswer(order, url, request, Boolean(payload));
   renderAnalytics();
 }
 
@@ -6635,6 +6753,21 @@ function cssColor(varName, fallback) {
   return value || fallback;
 }
 
+function chartColors(seriesIds) {
+  const axis = cssColor("--muted", "#8a94a3");
+  return {
+    series: seriesIds.map((id) => cssColor(ANALYTICS_SERIES_META[id].colorVar, "#888")),
+    axis,
+    grid: cssColor("--border", axis),
+    pct: cssColor("--accent", "#8b5cf6"),
+  };
+}
+
+function repaintChartsForPalette() {
+  if (state.analytics.chart && analyticsPanelVisible()) renderAnalyticsChart();
+  if (state.history.chart && historyVisible()) renderHistoryChart();
+}
+
 // Analytics chart display-only sign convention. The backend/API/SQLite/KPI sign
 // convention is unchanged (charging positive, discharging negative). For the
 // Analytics uPlot chart only we invert the battery line so charging reads below
@@ -6681,18 +6814,19 @@ function analyticsSeriesTooltip(seriesId, displayValue, unit) {
   return `${rounded} ${unit}`;
 }
 
-// Identity of the uPlot structure (series set, axes, scales). When this is
-// unchanged across a refresh the chart can be updated in place with setData()
+// Identity of the uPlot structure (series set, axes, scales, colours). When this
+// is unchanged across a refresh the chart can be updated in place with setData()
 // instead of being destroyed and recreated -- avoiding canvas setup, layout and
-// GC churn. A change (tab, series, overlays, device, axis/pct scale) forces a
-// rebuild.
-function analyticsChartSignature(chartSeries, usesPctScale) {
+// GC churn. A change (tab, series, overlays, device, axis/pct scale, the
+// palette's colours, which a canvas cannot read from CSS) forces a rebuild.
+function analyticsChartSignature(chartSeries, usesPctScale, colors) {
   return JSON.stringify({
     tab: state.analytics.tab,
     series: chartSeries,
     overlays: state.analytics.overlays,
     device: state.analytics.device || "",
     pct: usesPctScale,
+    colors,
   });
 }
 
@@ -6749,7 +6883,8 @@ function renderAnalyticsChart() {
   chartSeries.forEach((id) => {
     if (ANALYTICS_SERIES_META[id].scaleId === "pct") usesPctScale = true;
   });
-  const signature = analyticsChartSignature(chartSeries, usesPctScale);
+  const colors = chartColors(chartSeries);
+  const signature = analyticsChartSignature(chartSeries, usesPctScale, colors);
   // Battery is inverted here for display only; raw state.analytics.data is untouched.
   const seriesData = analyticsChartSeriesData(data, chartSeries);
 
@@ -6778,12 +6913,12 @@ function renderAnalyticsChart() {
   container.innerHTML = "";
 
   const seriesConfig = [{}];
-  chartSeries.forEach((id) => {
+  chartSeries.forEach((id, index) => {
     const meta = ANALYTICS_SERIES_META[id];
     const isOverlay = !currentAnalyticsTab().series.includes(id);
     seriesConfig.push({
       label: meta.label,
-      stroke: cssColor(meta.colorVar, "#888"),
+      stroke: colors.series[index],
       width: 2,
       dash: isOverlay ? [6, 4] : undefined,
       scale: meta.scaleId || "y",
@@ -6791,19 +6926,17 @@ function renderAnalyticsChart() {
     });
   });
 
-  const axisColor = cssColor("--muted", "#8a94a3");
-  const gridColor = "rgba(255,255,255,0.06)";
   const scales = { x: { time: true }, y: {} };
   const axes = [
-    { stroke: axisColor, grid: { stroke: gridColor }, ticks: { stroke: gridColor } },
-    { scale: "y", stroke: axisColor, grid: { stroke: gridColor }, ticks: { stroke: gridColor } },
+    { stroke: colors.axis, grid: { stroke: colors.grid }, ticks: { stroke: colors.grid } },
+    { scale: "y", stroke: colors.axis, grid: { stroke: colors.grid }, ticks: { stroke: colors.grid } },
   ];
   if (usesPctScale) {
     scales.pct = { range: [0, 100] };
     axes.push({
       scale: "pct",
       side: 1,
-      stroke: cssColor("--accent", "#8b5cf6"),
+      stroke: colors.pct,
       grid: { show: false },
       values: (_self, ticks) => ticks.map((t) => `${t}%`),
     });
@@ -6900,6 +7033,30 @@ function seriesPeak(data, id) {
   return max;
 }
 
+function analyticsSocLabel(snapshot) {
+  if (!snapshot) return "--";
+  if (!state.analytics.device) return `${Math.round(Number(snapshot.average_soc || 0))}%`;
+  const device = snapshot.devices ? snapshot.devices[state.analytics.device] : null;
+  if (!device || !deviceReportsSoc(device)) return "--";
+  const soc = device.soc ?? device.soc_percent;
+  if (soc == null || !Number.isFinite(Number(soc))) return "--";
+  return `${Math.round(Number(soc))}%`;
+}
+
+function analyticsSpanLabel(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  const tenths = (value) => String(Math.round(value * 10) / 10);
+  if (seconds < 3600) return `${Math.max(1, Math.round(seconds / 60))}m`;
+  if (seconds < 2 * 86400) return `${tenths(seconds / 3600)}h`;
+  return `${tenths(seconds / 86400)}d`;
+}
+
+function analyticsKpiPeriod(data) {
+  if (data && data.range && data.range !== "custom") return String(data.range);
+  const span = data ? analyticsSpanLabel((Date.parse(data.end) - Date.parse(data.start)) / 1000) : null;
+  return span || state.range;
+}
+
 function runtimeRoleLabel(snapshot) {
   if (!snapshot || !snapshot.devices) return "--";
   const names = state.analytics.device
@@ -6910,22 +7067,27 @@ function runtimeRoleLabel(snapshot) {
   let anyOutput = false;
   names.forEach((name) => {
     const device = snapshot.devices[name];
-    if (!device) return;
+    if (!device || device.read_only === true) return;
     if (Number(device.ac_mode) === 1) anyInput = true;
     else anyOutput = true;
   });
   if (anyInput && anyOutput) return "Mixed";
   if (anyInput) return "AC Input";
-  return "Output";
+  return anyOutput ? "Output" : "--";
 }
 
-// Stable identity for a loaded analytics dataset. When this is unchanged the
-// integrated (series-based) KPI values are guaranteed identical, so they can be
-// served from cache instead of re-integrated.
+// Stable identity for a loaded analytics dataset: its window, the devices it
+// was filtered to and its time axis. When this is unchanged the integrated
+// (series-based) KPI values are identical, so they can be served from cache
+// instead of re-integrated.
 function analyticsDataKey(data) {
   if (!data || !data.time) return "empty";
   return JSON.stringify({
     source: data.source || "",
+    range: data.range || "",
+    start: data.start || "",
+    end: data.end || "",
+    devices: Array.isArray(data.devices) ? data.devices.slice().sort() : [],
     from: data.time[0] || null,
     to: data.time[data.time.length - 1] || null,
     points: data.time.length,
@@ -6975,6 +7137,7 @@ function renderAnalyticsKpis() {
   if (!host) return;
   const cache = ensureAnalyticsKpiCache();
   const snapshot = state.snapshot;
+  const period = analyticsKpiPeriod(state.analytics.data);
   const cards = currentAnalyticsTab()
     .kpis.map((id) => {
       const spec = ANALYTICS_KPIS[id];
@@ -6982,7 +7145,7 @@ function renderAnalyticsKpis() {
       const value = spec.live
         ? spec.compute(null, snapshot)
         : cache.values[id];
-      return analyticsKpiCardHtml(id, spec.label(state.range), value, spec.tone);
+      return analyticsKpiCardHtml(id, spec.label(period), value, spec.tone);
     })
     .filter(Boolean);
   host.innerHTML = cards.join("");
@@ -7068,15 +7231,21 @@ async function loadHistory(showLoading = true) {
     renderHistoryChart();
     return;
   }
+  const url = historyFetchUrl();
+  const order = state.history.answers;
+  const request = startAnswer(order);
   if (showLoading) setHistoryLoading(true);
+  let payload = null;
   try {
-    const response = await fetch(historyFetchUrl());
-    state.history.data = response.ok ? await response.json() : null;
+    const response = await fetch(url);
+    payload = response.ok ? await response.json() : null;
   } catch (error) {
-    state.history.data = null;
-  } finally {
-    setHistoryLoading(false);
+    payload = null;
   }
+  if (!answerIsCurrent(order, url, request, historyFetchUrl())) return;
+  setHistoryLoading(false);
+  state.history.data = payload;
+  recordAnswer(order, url, request, Boolean(payload) && !(payload.meta && payload.meta.unavailable));
   renderHistoryChart();
 }
 
@@ -7135,10 +7304,11 @@ function renderHistoryChart() {
   // discharging) and null handling.
   const seriesData = analyticsChartSeriesData(data, seriesIds);
 
-  // The history chart structure only varies by the (fixed) series set and the
-  // selected device, so reuse the instance in place across refreshes when those
-  // are unchanged.
-  const signature = JSON.stringify({ series: seriesIds, device: state.history.device || "" });
+  // The history chart structure only varies by the (fixed) series set, the
+  // selected device and the palette's colours, so reuse the instance in place
+  // across refreshes when those are unchanged.
+  const colors = chartColors(seriesIds);
+  const signature = JSON.stringify({ series: seriesIds, device: state.history.device || "", colors });
   if (
     state.history.chart &&
     state.history.chartSignature === signature &&
@@ -7159,11 +7329,11 @@ function renderHistoryChart() {
   container.innerHTML = "";
 
   const seriesConfig = [{}];
-  seriesIds.forEach((id) => {
+  seriesIds.forEach((id, index) => {
     const meta = ANALYTICS_SERIES_META[id];
     seriesConfig.push({
       label: meta.label,
-      stroke: cssColor(meta.colorVar, "#888"),
+      stroke: colors.series[index],
       width: 2,
       scale: "y",
       // Reuse the Analytics tooltip so the inverted battery line reads back as
@@ -7172,16 +7342,14 @@ function renderHistoryChart() {
     });
   });
 
-  const axisColor = cssColor("--muted", "#8a94a3");
-  const gridColor = "rgba(255,255,255,0.06)";
   const opts = {
     width: container.clientWidth || 600,
     height: historyChartHeight(),
     series: seriesConfig,
     scales: { x: { time: true }, y: {} },
     axes: [
-      { stroke: axisColor, grid: { stroke: gridColor }, ticks: { stroke: gridColor } },
-      { scale: "y", stroke: axisColor, grid: { stroke: gridColor }, ticks: { stroke: gridColor } },
+      { stroke: colors.axis, grid: { stroke: colors.grid }, ticks: { stroke: colors.grid } },
+      { scale: "y", stroke: colors.axis, grid: { stroke: colors.grid }, ticks: { stroke: colors.grid } },
     ],
     cursor: { focus: { prox: 24 } },
     legend: { live: true },
@@ -7445,6 +7613,7 @@ function applyTheme(id) {
   } catch (err) {
     /* localStorage may be unavailable; the choice holds for this page. */
   }
+  repaintChartsForPalette();
   return theme;
 }
 
@@ -7754,6 +7923,10 @@ if (typeof module !== "undefined") {
     deviceBatteryVisual,
     renderDevices,
     renderControlExplain,
+    controlExplainHtml,
+    controlReason,
+    CONTROL_CODE_LABELS,
+    CONTROL_DECISION_SENTENCES,
     renderEnergyStats,
     setEnergyDetail,
     renderEnergySubtitle,
@@ -7791,6 +7964,7 @@ if (typeof module !== "undefined") {
     analyticsPanelVisible,
     analyticsShouldAutoRefresh,
     analyticsFetchUrl,
+    loadAnalytics,
     setAnalyticsAvailable,
     setSourceBadge,
     historyVisible,
@@ -7798,6 +7972,7 @@ if (typeof module !== "undefined") {
     loadHistory,
     HISTORY_SERIES,
     renderHistoryChart,
+    applyTheme,
     detectZoom,
     onAnalyticsXScale,
     onHistoryXScale,

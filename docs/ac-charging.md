@@ -108,9 +108,8 @@ are read-only:
    `charging=true` in the log. If it never appears, the installation is not
    exporting enough for long enough — check `charge_start_w` against your actual
    surplus before concluding anything about the hardware.
-2. **Does current actually flow?** The device tile's **AC Charge**, or
-   `sensor.ems_solarflow_<device>_ac_charge`. A number above zero while the EMS
-   commands a charge is the proof.
+2. **Does current actually flow?** The device tile's **AC Charge**. A number
+   above zero while the EMS commands a charge is the proof.
 3. **Does the EMS complain?** `event=ac_charge_not_delivered` is the negative
    result: the command was accepted and nothing flowed for six cycles. If it
    fires repeatedly, the catalogue row is wrong for that model — set
@@ -197,7 +196,12 @@ more, logged as `ac_charge_ended_on_disable`. Without it a disabled device kept
 drawing from the grid with nobody watching. The command has done its job when
 the device reports that it left the charge, not when it answered: a device that
 took it and charged on is sent it again once the resend window has passed (30 s,
-the MQTT confirmation window), and nothing in between.
+the MQTT confirmation window), and nothing in between. A device whose report
+carries neither `acMode` nor a charging `acStatus` shows its charge only by its
+grid draw, and one that draws a few watts while idle never shows it left: after
+three exits that only such draw followed, the EMS leaves the charge to the
+device once the last resend window has passed, said once as
+`ac_charge_left_to_device`, and sends it no further exit.
 
 A claim that takes a charging device from the regulator — an operator park
 (`runtime_role` `ac_input`) or a maintenance routine such as the full-charge
@@ -230,13 +234,19 @@ transport write gate. Charging is not gated separately: what prevents it is the
 permission set above, not a second gate. Making the way *back* depend on an
 extra gate would leave hardware drawing from the grid when that gate closed.
 
-A stop you asked for leaves a running charge alone: an update or a restart is
+A stop by SIGTERM or SIGHUP (`docker stop`, `docker compose down`,
+`systemctl stop`) leaves a running charge alone: an update or a restart is
 meant to preserve the last state, not reset it. The EMS does return a charging
-device when it stops by *itself* — `--once`, `--max-cycles`, `--duration`, an
-unhandled error — because nothing is coming back to supervise it. In normal
-operation a failing control cycle is not such a stop: the EMS keeps running, and
-a charge the cycle no longer reaches runs on. Either way the charge is bounded
-by the device's own maximum SoC. See [user/safety.md](user/safety.md).
+device on Ctrl-C and when it stops by *itself* — `--once`, `--max-cycles`,
+`--duration`, an unhandled error — because nothing is coming back to supervise
+it. In normal
+operation a failing control cycle is not such a stop: the EMS keeps running.
+From the third failed cycle in a row it returns a charging device best effort
+with the same release, logged as `ac_charge_released_after_failed_cycles`;
+the process goes on, so that release keeps the resend window and goes out
+again while the charge is on record, and a cycle that runs through lets the
+regulator charge again after its entry confirmation. The charge is bounded by
+the device's own maximum SoC either way. See [user/safety.md](user/safety.md).
 
 **While the regulator charges a device, it owns that device's AC direction.**
 Every cycle each device gets a default claim of `ac_output`, and the state
@@ -250,9 +260,9 @@ one command, see above — and a device found in AC input after a start gets the
 one exit described next.
 
 **After a start, AC input gets one exit; after that it is whoever holds it.**
-A stop you asked for leaves the EMS's charge running on purpose, and the next
-process has no record of it: telemetry cannot tell that charge from an app's
-or, at the battery floor, from the firmware's protection charge. So once per
+A stop by SIGTERM or SIGHUP leaves the EMS's charge running on purpose, and the
+next process has no record of it: telemetry cannot tell that charge from an
+app's or, at the battery floor, from the firmware's protection charge. So once per
 process start, a device the EMS could have charged that it finds in AC input —
 above the floor as at it, charging or not — gets the exit, on the power
 command's own gate; `allow_state_reconciliation_writes` does not have to allow
@@ -324,8 +334,10 @@ command the process writes, so it is sent whatever the resend window says, and
 `ac_charge_release_failed` when it did not, and `ac_charge_release_withheld`
 when the write gate kept it back (dry run, simulation). A dry run never puts a
 charge on a device, so its release is for the regulator's target only; each
-release event names the record it acted on, `charge=ems_charge_on_record` or
-`charge=regulator_target`. On an MQTT device whose commands are
+release event names the record it acted on, `charge=ems_charge_on_record`,
+`charge=regulator_target`, or `charge=battery_full_charge_assist` for the
+full-charge assist's charge, which the controller keeps on a record of its own
+(see [battery-full-charge-assist.md](battery-full-charge-assist.md)). On an MQTT device whose commands are
 acknowledged (Hyper 2000), a change of direction does not queue behind the
 command it replaces.
 
@@ -346,8 +358,9 @@ reference is taken from the measured AC input instead — otherwise "switch this
 device off" would compare 0 against 0, skip the write, and leave the hardware
 charging. A device that already shows the exit written (`acMode = 2`, no
 `inputLimit`) while its current runs down for about two seconds is not sent the
-exit again. Local-API devices are also covered by the startup `acMode` reconcile;
-MQTT control devices have no state reconciliation and so no such path.
+exit again. Local-API devices are also covered by the state reconciler's
+`acMode` reconcile; MQTT control devices have no state reconciliation and so no
+such path.
 
 **A charge does not outlive the meter that justifies it.** A grid-meter client
 that cannot reach its hardware returns the last good reading and marks it stale;
@@ -444,14 +457,13 @@ a device actually sends.
 
 A charging device reports `output` as 0, so anything that reads the output
 alone shows it as idle. The measured AC input power (`gridInputPower`) is
-carried alongside the output and surfaces in four places:
+carried alongside the output and surfaces in these places:
 
 | Surface | Name |
 |---|---|
 | Dashboard device tile | `ac_charge_w` |
 | Dashboard flow / snapshot total | `inverter_charge_w` |
 | Analytics | the **AC Charge** series and overlay |
-| Home Assistant | `sensor.ems_solarflow_<device>_ac_charge` |
 | `emsctl diagnose --control` | the configured band, limit, permitted devices and those the configured model refuses |
 | InfluxDB | `zendure_device.grid_input` |
 
@@ -496,10 +508,12 @@ ac_charge_end_withheld
 ac_charge_ended_on_disable
 ac_charge_entry_rate_limited
 ac_charge_handed_to_claim
+ac_charge_left_to_device
 ac_charge_not_delivered
 ac_charge_refused
 ac_charge_stopped_stale_meter
 ac_charge_kept_across_stop
+ac_charge_released_after_failed_cycles
 ac_charge_released_on_shutdown
 ac_charge_release_failed
 ac_charge_release_withheld
@@ -511,6 +525,15 @@ start: the one exit to AC input found after a start went out three times and
 the device stayed in AC input. `left_to=firmware` is a charge at the battery
 floor, left to the firmware's protection charge; `left_to=holder` is AC input
 above it, which gets what it got before charging existed.
+
+`ac_charge_left_to_device` is a `warning`, said once per charge: the device's
+report carries no known `acMode` and no charging `acStatus`, so after the EMS's
+exit only its grid draw (`grid_input_w`) showed the charge, after `exits=3`
+exits and the last one's resend window. It may be a few watts the device draws
+while idle; if the field shows a charge, end it in the Zendure app or with
+`emsctl.py device WR1 ac-mode output`. For the full-charge assist's charge it
+carries `charge=battery_full_charge_assist` (see
+[battery-full-charge-assist.md](battery-full-charge-assist.md)).
 
 `ac_charge_direction` is `info` when the direction changes and `debug`
 otherwise. `ac_charge_entry_rate_limited` is a `warning`: reaching the hourly
@@ -524,12 +547,16 @@ puts entry and exit at the same threshold; `ac_charge_band_collapsed` names that
 once at startup.
 
 `ac_charge_kept_across_stop` is an `info` and the counterpart of
-`ac_charge_released_on_shutdown`: a stop you asked for leaves a charging device
-as it is, because a restart is coming. It names the signal that ended the run
+`ac_charge_released_on_shutdown`: a stop by SIGTERM or SIGHUP leaves a charging
+device as it is, because a restart is coming. It names the signal that ended the run
 and every device the EMS last put into charge — by the same record the release
 uses, so a charge whose regulator target was reset or zeroed is named too — so
 a device still drawing after `docker compose down` is explained rather than
-surprising. The release event is what you see when the EMS stopped by itself.
+surprising. The release event is what you see when the EMS stopped by itself
+or by Ctrl-C.
+`ac_charge_released_after_failed_cycles` is the same release after failed
+cycles in a row, with `failed_cycles` and the same `charge` field; a release
+that could not be written or was withheld then carries `failed_cycles` too.
 
 `ac_charge_capacity_below_stop` is a `warning`, said once until the capacity is
 sufficient again: the

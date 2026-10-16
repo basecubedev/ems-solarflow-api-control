@@ -123,7 +123,10 @@ Roomy is easier to read from further away.
 
 The meaning of a colour never changes: PV stays the warm one, battery the green
 one, grid the violet one, and a blocked write stays red on every palette, at
-every shape and at every density.
+every shape and at every density. The charts on the Analytics tab and in the
+History panel follow the palette too: a switch repaints their lines, axes and
+grid at once, and a chart on a tab you are not looking at takes the new palette
+when you return to it.
 
 All three choices are remembered by the browser you made them in, which is what
 you want for a screen that stays on in one room -- none of them is installation

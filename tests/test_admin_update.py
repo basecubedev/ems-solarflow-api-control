@@ -70,7 +70,7 @@ class FakeDocker:
 
     def inspect_container(self, name):
         if self.container_image:
-            return {"image": self.container_image}
+            return {"image": self.container_image, "status": "running"}
         return None
 
     def inspect_image(self, image_ref):
@@ -299,6 +299,68 @@ def _service(tmp_path, images, container_image=CURRENT_REF, launcher=None, launc
         worker_launcher=launcher,
     )
     return svc, store, docker
+
+
+class _DigestPinnedAdminDocker:
+    """A running Admin created from a digest-pinned reference.
+
+    ``docker ps`` names its image by the short image id (Docker 29 with the
+    containerd store, as read on a Pi 3B+ on 2026-10-03), and only the image's
+    labels carry the release.
+    """
+
+    IMAGE_ID = "sha256:" + "a" * 64
+    LABELS = {
+        "de.basecubedev.ems.release_tag": "v0.8.10",
+        "org.opencontainers.image.version": "v0.8.10",
+    }
+
+    def __init__(self, environ_name="ems-solarflow-admin"):
+        self.name = environ_name
+
+    def probe(self):
+        return {"state": "ready"}
+
+    def inspect_container(self, name):
+        if name != self.name:
+            return None
+        return {"image": "aaaaaaaaaaaa", "status": "running"}
+
+    def inspect_container_image_id(self, name):
+        return self.IMAGE_ID if name == self.name else None
+
+    def inspect_image(self, image_ref):
+        if image_ref in ("aaaaaaaaaaaa", self.IMAGE_ID):
+            return {"image_ref": image_ref, "digest": "sha256:" + "d" * 64,
+                    "labels": dict(self.LABELS)}
+        return None
+
+
+def test_status_names_the_running_admin_release_from_its_image_labels(tmp_path):
+    """Field report 2026-10-03: the status named the running Admin with no version.
+
+    The Appliance Manager read v0.8.10 from the same container's labels; the
+    status carried only the short image id it was handed.
+    """
+
+    store = PendingAdminUpdateStore(tmp_path / "state")
+    svc = AdminUpdateService(
+        docker=_DigestPinnedAdminDocker(),
+        store=store,
+        environ={"EMS_ADMIN_CONTAINER_NAME": "ems-solarflow-admin"},
+    )
+
+    status = svc.status()
+
+    assert status["current_admin"]["release"] == "v0.8.10"
+    assert status["current_admin"]["source"] == "docker_inspect"
+
+
+def test_status_reads_the_default_admin_container_when_none_is_named(tmp_path):
+    store = PendingAdminUpdateStore(tmp_path / "state")
+    svc = AdminUpdateService(docker=_DigestPinnedAdminDocker(), store=store, environ={})
+
+    assert svc.status()["current_admin"]["release"] == "v0.8.10"
 
 
 def test_service_status_reports_unsupported_without_docker(tmp_path):

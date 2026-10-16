@@ -57,6 +57,7 @@ from ems.power_command import (
     ZenSdkOperationError,
     build_zensdk_power_operation,
 )
+from ems.power_direction import DEFAULT_SAFETY_PREEMPT_MARGIN_W, safety_reduction
 from ems.mqtt_control.zendure_profiles import (
     OPERATION_CHARGE,
     OPERATION_DISCHARGE,
@@ -92,12 +93,6 @@ _CONTROLLER_EMITTED_OPERATIONS = frozenset({OPERATION_DISCHARGE, OPERATION_IDLE}
 # Safe default acknowledgement timeout: a published command with no correlated
 # reply within this many seconds is timed out (never retried indefinitely).
 DEFAULT_COMMAND_ACK_TIMEOUT_SECONDS = 10.0
-
-# A changed target at least this many watts below the in-flight target (or a full
-# stop to 0 W) preempts the in-flight command and publishes immediately, so a
-# substantial safety reduction is never held behind an old command for its full
-# timeout. Smaller changes queue as the single latest pending target.
-DEFAULT_SAFETY_PREEMPT_MARGIN_W = 300
 
 # Five minutes spans many control cycles while keeping per-device evidence small.
 DEFAULT_COMMAND_EVIDENCE_MAX_RECORDS = 64
@@ -370,8 +365,8 @@ class ZendureMqttDeviceClient:
         # a real, bindable serial from that fallback.
         self.physical_serial = serial_number or None
         self.control_gate = control_gate_for_broker_source(source)
-        self.min_soc = min_soc
-        self.max_soc = max_soc
+        self.min_soc = cfg.device_soc_limit(name, "min_soc", min_soc)
+        self.max_soc = cfg.device_soc_limit(name, "max_soc", max_soc)
         self.ac_discharge_enabled = bool(ac_discharge_enabled)
         self.ac_charge_enabled = bool(ac_charge_enabled)
         self.max_charge_power_w = max_charge_power_w or 0
@@ -392,6 +387,15 @@ class ZendureMqttDeviceClient:
     @_serialized
     def charge_exit_due(self):
         return self._charge.exit_due(time.monotonic())
+
+    @_serialized
+    def charge_exit_exhausted(self):
+        """Whether the exit is spent on a charge only grid draw shows, and none of it is in flight."""
+
+        active = self._active_command
+        if active is not None and active.is_active:
+            return False
+        return self._charge.exit_exhausted(time.monotonic())
 
     @_serialized
     def found_exit_due(self):
@@ -427,7 +431,7 @@ class ZendureMqttDeviceClient:
 
     @_serialized
     def release_charge_record(self):
-        """The charge is someone else's from here: a claim that writes its own."""
+        """The charge is not the EMS's from here: a claim that writes its own, or the device's."""
 
         self._charge.release()
 
@@ -568,11 +572,21 @@ class ZendureMqttDeviceClient:
         device: a repeat of the in-flight target is coalesced (no republish); a
         changed non-safety target is queued as the single latest pending target; a
         safety reduction preempts the in-flight command and publishes immediately.
-        With no command in flight, a non-negative target is held back while an
-        exit from the EMS's own charge, or the one exit to AC input found after
-        a start, is out and its resend window open. A
-        changed target replacing an exit still in flight is not: every command
-        here carries the direction, so it is an exit itself.
+        With no command in flight, a non-negative target other than the
+        shutdown release is held back while an exit from the EMS's own charge
+        is out and its resend window open, and, once ``FOUND_EXIT_ATTEMPTS``
+        exits went to a charge only grid draw shows, until that charge is left
+        to the device; the one exit to AC input found after a start is held
+        while its own window is open or its attempts are spent. A changed
+        target replacing an exit still in flight is not held: every command
+        here carries the direction, so it is an exit itself. Once those exits
+        are spent it is, so a moving load sends no further exit -- except the
+        shutdown release and a target that preempts the command in flight: a
+        stop to 0 W, a cut by the safety margin, a new charge. With no command
+        in flight, a stop or such a cut below the target the last exit carried
+        is not held either (K23). A reduction let through either hold is the
+        device's target, not an exit: it keeps the last exit's resend window
+        and count, so the charge is left to the device when it would have been.
         The controller and its write gates are unchanged.
         """
 
@@ -600,6 +614,14 @@ class ZendureMqttDeviceClient:
         found_exit = charge_exit == CHARGE_EXIT_TO_OUTPUT
         active = self._active_command
         if active is not None and active.is_active:
+            held = (
+                not final
+                and self._charge.open
+                and self._charge.drawn_exits_spent()
+            )
+            if held and not self._should_preempt(active.target_w, target):
+                self._discard_pending_target("superseded_by_pending_charge_exit")
+                return dispatch.coalesced(target, command_state=CHARGE_EXIT_PENDING)
             if active.target_w == target and not final:
                 # The in-flight target is already committed; drop any stale pending.
                 self._discard_pending_target("superseded_by_active_target")
@@ -617,7 +639,9 @@ class ZendureMqttDeviceClient:
                 mark_superseded(active, now_monotonic=now)
                 self._release_superseded(active)
                 self._discard_pending_target("superseded_by_safety_target")
-                return self._publish_target(target, now, found_exit=found_exit)
+                return self._publish_target(
+                    target, now, found_exit=found_exit, reduction=held and target >= 0
+                )
             if self._should_supersede_latest(active):
                 mark_superseded(active, now_monotonic=now)
                 self._release_superseded(active)
@@ -636,7 +660,8 @@ class ZendureMqttDeviceClient:
                 correlation_id=correlation_id,
             )
 
-        if target >= 0 and not final and self._exit_held(now, found_exit):
+        held = target >= 0 and not final and self._exit_held(now, found_exit)
+        if held and not self._reduces_held_exit(target):
             self._discard_pending_target("superseded_by_pending_charge_exit")
             return dispatch.coalesced(target, command_state=CHARGE_EXIT_PENDING)
 
@@ -648,10 +673,14 @@ class ZendureMqttDeviceClient:
             self._pending_target = None
             self._pending_correlation_id = None
             return self._publish_target(
-                target, now, correlation_id=correlation_id, found_exit=found_exit
+                target,
+                now,
+                correlation_id=correlation_id,
+                found_exit=found_exit,
+                reduction=held,
             )
         self._discard_pending_target("superseded_by_fresh_target")
-        return self._publish_target(target, now, found_exit=found_exit)
+        return self._publish_target(target, now, found_exit=found_exit, reduction=held)
 
     def _exit_held(self, now, found_exit):
         """Whether an exit is out and its resend window still open."""
@@ -806,33 +835,41 @@ class ZendureMqttDeviceClient:
     def _should_preempt(self, active_target, new_target):
         """Whether a changed target must preempt the in-flight command for safety.
 
-        A full stop (0 W) always preempts any active command — including an active
-        charge. So does a change of direction into or out of a charge: the way
-        back from a charge must not queue behind the charge it ends, which on an
-        ack profile held the device drawing until the charge command timed out.
-        Otherwise only a substantial reduction of commanded discharge output
-        preempts; a rise, or a power change inside the charge direction, waits as
-        the pending target instead (no broker spam). The reduction must be at
-        least the safety margin AND strictly exceed the confirmation tolerance, so
-        a preempting command can never be cross-confirmed by stale telemetry still
+        :func:`~ems.power_direction.safety_reduction`: a full stop (0 W), a
+        change of direction into or out of a charge -- which on an ack profile
+        held the device drawing until the charge command timed out -- or a
+        reduction of discharge output by at least the safety margin. Anything
+        else waits as the pending target instead (no broker spam). The
+        reduction must also strictly exceed the confirmation tolerance, so a
+        preempting command can never be cross-confirmed by stale telemetry still
         reporting the old (superseded) target within tolerance — this holds even
         if the margin is misconfigured below the tolerance.
         """
 
-        if new_target == active_target:
-            return False
-        if new_target == 0:
-            return True
-        if (new_target < 0) != (active_target < 0):
-            return True
-        if new_target < 0 or new_target >= active_target:
-            return False
-        reduction = active_target - new_target
-        tolerance = self._confirmation_policy().confirmation_tolerance_w
-        return reduction >= self._safety_preempt_margin_w and reduction > tolerance
+        return safety_reduction(
+            active_target,
+            new_target,
+            margin_w=self._safety_preempt_margin_w,
+            tolerance_w=self._confirmation_policy().confirmation_tolerance_w,
+        )
 
-    def _publish_target(self, target, now, *, correlation_id=None, found_exit=False):
-        """Build and publish one correlated command; return a dispatch result."""
+    def _reduces_held_exit(self, target):
+        """Whether ``target`` preempts the target the held exit left on the device."""
+
+        return self._charge.reduces_exit(
+            target,
+            margin_w=self._safety_preempt_margin_w,
+            tolerance_w=self._confirmation_policy().confirmation_tolerance_w,
+        )
+
+    def _publish_target(
+        self, target, now, *, correlation_id=None, found_exit=False, reduction=False
+    ):
+        """Build and publish one correlated command; return a dispatch result.
+
+        ``reduction`` is a safety reduction let through an exit's hold, which
+        the charge record takes as the device's target and not as an exit.
+        """
 
         correlation_id = correlation_id or self._next_dispatch_correlation_id()
 
@@ -902,8 +939,10 @@ class ZendureMqttDeviceClient:
         if ok:
             if target < 0:
                 self._charge.charge_sent(abs(target))
+            elif reduction:
+                self._charge.reduction_sent(target)
             else:
-                self._charge.exit_sent(publish_completed)
+                self._charge.exit_sent(publish_completed, target)
                 if found_exit:
                     self._charge.found_exit_sent(publish_completed)
             self._remember_command_evidence(record, publish_completed)

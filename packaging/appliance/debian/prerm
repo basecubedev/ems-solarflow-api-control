@@ -24,7 +24,7 @@ case "$1" in
             disabled=1
         fi
         if [ "$disabled" -eq 0 ] && [ -x "$LIBDIR/backup-account.sh" ]; then
-            if "$LIBDIR/backup-account.sh" disable >/dev/null 2>&1; then
+            if "$LIBDIR/backup-account.sh" disable >/dev/null; then
                 disabled=1
             fi
         fi

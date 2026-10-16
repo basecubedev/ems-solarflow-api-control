@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import quote
 
 from admin.container_names import resolve_ems_container_name
+from admin.install_context import detect_install_context
 from admin.image_identity import (
     ROLLBACK_AVAILABLE,
     ALREADY_CURRENT,
@@ -76,6 +77,10 @@ ALREADY_CURRENT_REASON = "Already running this EMS build."
 ROLLBACK_REASON = (
     "Earlier patch in the release line you are running. Selectable as a "
     "rollback; it is not an upgrade."
+)
+DEVELOPMENT_CATALOGUE_UNREADABLE = (
+    "The development build catalogue could not be read, so no development "
+    "builds are listed."
 )
 # What the identity assessment actually weighed. These two are readings of the
 # running image itself; every other basis is a comparison against something that
@@ -375,13 +380,13 @@ class ReleaseManager:
         # An explicitly isolated data directory (tests and offline tooling) must
         # not accidentally treat the developer checkout's compose image as its
         # active deployment. Production construction omits ``data_dir`` and
-        # continues to inspect the real project root.
+        # reads the install's compose file, never the Admin's own code root.
         self.project_dir = (
             Path(project_dir)
             if project_dir is not None
             else self.data_dir.parent
             if explicit_data_dir
-            else Path(__file__).resolve().parent.parent
+            else None
         )
         self._urlopen = urlopen or urllib.request.urlopen
         self._resource_checker = resource_checker or self._check_remote_resources
@@ -640,7 +645,11 @@ class ReleaseManager:
         releases.sort(key=self._release_channel_sort_key)
         # Development builds are a distinct, always-last group in the same
         # catalogue (never mixed into the versioned sort above).
-        releases.extend(self._development_release_items())
+        development = self._development_release_items()
+        if development is None:
+            warnings.append(DEVELOPMENT_CATALOGUE_UNREADABLE)
+            development = []
+        releases.extend(development)
         # A valid locally-built pair is offered as its own explicit Experimental
         # entry — never merged into or presented as the rolling ``latest`` tag.
         local_item = self._local_release_item()
@@ -947,10 +956,22 @@ class ReleaseManager:
             compose_text=self._compose_text(), env=os.environ
         )
 
+    def _compose_files(self):
+        """The compose file of the install, as every Admin view finds it.
+
+        ``detect_install_context`` names it: in the Admin container that is the
+        install mounted at ``EMS_INSTALL_DIR``, not the image's own ``/app``.
+        An explicit ``project_dir`` names it instead.
+        """
+
+        if self.project_dir is None:
+            return (detect_install_context().compose_path,)
+        return tuple(self.project_dir / name for name in ("docker-compose.yml", "compose.yml"))
+
     def _compose_text(self):
-        for name in ("docker-compose.yml", "compose.yml"):
+        for path in self._compose_files():
             try:
-                return (self.project_dir / name).read_text(encoding="utf-8")
+                return path.read_text(encoding="utf-8")
             except OSError:
                 continue
         return ""
@@ -967,8 +988,7 @@ class ReleaseManager:
             return None
 
     def _compose_image_match(self):
-        for name in ("docker-compose.yml", "compose.yml"):
-            path = self.project_dir / name
+        for path in self._compose_files():
             try:
                 text = path.read_text(encoding="utf-8")
             except OSError:
@@ -1008,25 +1028,29 @@ class ReleaseManager:
         return identity
 
     def _forget_running_identity(self):
-        """Read the running container afresh on the next question about it.
+        """Read the running container and every image afresh on the next question.
 
         Placing the running build asks for its identity several times per
         listing; one ``docker ps`` per listing is the cost, not one per
-        question. The memo is dropped at both ends of a listing or a prepare,
-        because the container may be replaced between two requests -- an
-        executed upgrade followed by a verify is exactly that -- and nothing
-        read for one request may answer the next.
+        question. The memo and the images read by reference are dropped at
+        both ends of a listing or a prepare, because the container may be
+        replaced between two requests -- an executed upgrade followed by a
+        verify is exactly that -- a tag may move, a target may be pulled, and
+        nothing read for one request may answer the next.
         """
 
         self._running_identity_memo = None
+        self._identity_cache = {}
 
     def _identify(self, image_ref):
         ref = str(image_ref or "").strip()
         if not ref:
             return ImageIdentity()
-        if ref not in self._identity_cache:
-            self._identity_cache[ref] = identify_image(self._docker, ref)
-        return self._identity_cache[ref]
+        identity = self._identity_cache.get(ref)
+        if identity is None:
+            identity = identify_image(self._docker, ref)
+            self._identity_cache[ref] = identity
+        return identity
 
     def _target_identity(self, tag, pull=None):
         if self._docker is None:
@@ -1304,7 +1328,8 @@ class ReleaseManager:
         Admin/EMS pair is complete (``installable``) are surfaced; floating
         aliases, incomplete pairs and failed builds are dropped. Reuses the
         canonical dev-tag rules from ``system_build`` (imported lazily to avoid a
-        module import cycle). A failing source never breaks the catalogue.
+        module import cycle). A failing source never breaks the catalogue: it is
+        ``None``, which the listing names, not an empty development group.
         """
 
         source = self._development_source
@@ -1313,9 +1338,12 @@ class ReleaseManager:
         from admin.system_build import classify_channel, is_immutable_dev_tag
 
         try:
-            raw = list(source())
+            raw = source()
+            if raw is None:
+                return None
+            raw = list(raw)
         except Exception:
-            return []
+            return None
 
         items = []
         seen = set()
@@ -1368,15 +1396,18 @@ class ReleaseManager:
         return items
 
     def development_build(self, tag):
-        """Return the complete installable catalogue descriptor for ``tag``."""
+        """Return the complete installable catalogue descriptor for ``tag``.
+
+        Raises when the catalogue cannot be read: that is no answer about
+        ``tag``, and ``None`` would say the catalogue does not list it.
+        """
 
         source = self._development_source
         if source is None:
             return None
-        try:
-            entries = source()
-        except Exception:
-            return None
+        entries = source()
+        if entries is None:
+            raise ReleaseError(DEVELOPMENT_CATALOGUE_UNREADABLE, 503)
         for entry in entries:
             if (
                 isinstance(entry, dict)

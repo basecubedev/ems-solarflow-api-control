@@ -91,7 +91,6 @@ standard `config/config.json` layout; the third is a whole system.
 | Docker reference | [docker.md](docker.md) | Compose reference, first-run bootstrap and persisted data. |
 | Native Python / advanced | [native-python.md](native-python.md) | Manual venv setup with local config and dry-run checks. |
 | Standalone dashboard | [dashboard.md](dashboard.md) | Read-only live dashboard, Control Explain view and history. |
-| Home Assistant | [home-assistant.md](home-assistant.md) | Optional HA publishing, helpers and sensors. |
 | Winter mode | [winter-mode.md](winter-mode.md) | Optional winter minSoc ramp and reconciliation. |
 | Battery full-charge assist | [battery-full-charge-assist.md](battery-full-charge-assist.md) | Optional EMS-managed full-charge assist. |
 | AC charging | [ac-charging.md](ac-charging.md) | Charging from grid surplus. On by default. |
@@ -133,10 +132,10 @@ Architecture, internals and reference. You do not need this for a normal setup.
 | System-build pairing | [technical/system-build-pairing.md](technical/system-build-pairing.md) | Admin and EMS as one paired system build: pair identity, alignment, embedded resources, known-good. |
 | Admin workflow state | [technical/admin-workflow-state.md](technical/admin-workflow-state.md) | Persisted workflow-state inventory, config write paths, transition matrix and abandonment invariants. |
 | Configuration | [technical/configuration.md](technical/configuration.md) | Static `config.json` keys, safety flags, devices, grid meters and winter settings. |
-| Configuration examples | [configuration-examples.md](configuration-examples.md) | Copy/paste starting points for standalone, HA, dry-run and live writes. |
+| Configuration examples | [configuration-examples.md](configuration-examples.md) | Copy/paste starting points for one or two devices, dry-run and live writes. |
 | Control logic | [technical/control-logic.md](technical/control-logic.md) | Target calculation, filtering, allocation and write suppression. |
 | Control flow | [technical/control-flow.md](technical/control-flow.md) | Visual map of where config values affect one control cycle. |
-| Runtime state | [technical/runtime-state.md](technical/runtime-state.md) | Mutable operator state and fields changed by CLI or HA helpers. |
+| Runtime state | [technical/runtime-state.md](technical/runtime-state.md) | Mutable operator state and fields changed by the CLI or the dashboard. |
 | Safety model | [technical/safety-model.md](technical/safety-model.md) | Write gates, runtime write types and the Zendure fields EMS writes. |
 | Troubleshooting reference | [technical/troubleshooting-reference.md](technical/troubleshooting-reference.md) | Command-level diagnostics, log events and deeper failure analysis. |
 | Backup/restore internals | [technical/backup-restore.md](technical/backup-restore.md) | CLI backup, dry-run restore checks, encrypted backups and full restore. |

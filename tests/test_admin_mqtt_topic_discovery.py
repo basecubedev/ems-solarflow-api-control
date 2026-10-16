@@ -8,8 +8,11 @@ import types
 
 import pytest
 
+from admin.mqtt_discovery import _normalize_attempt_result
 from admin.mqtt_topic_discovery import (
     DEFAULT_SUBSCRIPTIONS,
+    MAX_METRICS_PER_CANDIDATE,
+    MAX_TOPICS_PER_CANDIDATE,
     FAMILY_LEGACY_JSON,
     FAMILY_LEGACY_JSON_ALT,
     FAMILY_LEGACY_JSON_WRITE,
@@ -23,6 +26,10 @@ from admin.mqtt_topic_discovery import (
     discover_broker_topics,
     parse_report_payload,
 )
+from admin.zendure_mqtt_config_proposals import build_proposals
+from ems.clients import DEVICE_STATE_PROPERTIES
+from ems.zendure_mqtt.snapshot import ZendureMqttAggregator
+from tests.helpers import payloads
 
 pytestmark = [
     pytest.mark.admin,
@@ -193,13 +200,209 @@ def test_topic_discovery_does_not_publish():
 
 def test_discovery_output_is_bounded():
     messages = [
-        (f"Zendure/sensor/DEV{index}/metric", None) for index in range(500)
+        (f"Zendure/sensor/DEV{index}/electricLevel", None) for index in range(500)
     ]
     aggregator = MqttTopicAggregator(_broker(), max_topics=50, max_candidates=10)
     for topic, payload in messages:
         aggregator.observe(topic, payload)
     assert aggregator.topics_seen_count == 50
-    assert len(aggregator.results()) <= 10
+    assert len(aggregator.results()) == 10
+
+
+_ESPHOME_NODE_TOPICS = (
+    ("Pool/sensor/pool_temperature/state", b"24.5"),
+    ("Pool/switch/pump/state", b"ON"),
+    ("Pool/switch/pump/command", b"ON"),
+    ("Pool/binary_sensor/flow/state", b"OFF"),
+    ("Pool/number/setpoint/state", b"28"),
+    ("homeassistant/sensor/pool/pool_temperature/config", b'{"name": "Pool temperature"}'),
+    ("homeassistant/switch/pump/config", b'{"name": "Pump"}'),
+)
+
+_ESPHOME_UNDER_ZENDURE_TOPICS = (
+    ("Zendure/sensor/pool_temperature/state", b"24.5"),
+    ("Zendure/switch/pump/state", b"ON"),
+    ("Zendure/binary_sensor/flow/state", b"OFF"),
+    ("Zendure/number/setpoint/state", b"28"),
+    ("Zendure/sensor/pool_temperature/availability", b"online"),
+    ("Zendure/Pool/sensor/pool_temperature/state", b"24.5"),
+)
+
+
+@pytest.mark.parametrize(
+    ("topic", "payload"), _ESPHOME_NODE_TOPICS + _ESPHOME_UNDER_ZENDURE_TOPICS
+)
+def test_an_esphome_or_home_assistant_topic_is_no_zendure_device(topic, payload):
+    """AL20: an entity's ``state``/``command``/``config`` topic is no Zendure property.
+
+    ``Pool/...`` matches the cloud scalar shape and ``Zendure/...`` the ZenSDK
+    one; only the second is on a subscription local discovery makes.
+    """
+
+    aggregator = MqttTopicAggregator(_broker())
+    aggregator.observe(topic, payload)
+
+    assert aggregator.results() == []
+
+
+def test_an_esphome_node_takes_no_candidate_slot_from_a_zendure_device():
+    """Topics that are not offered must not use up the bounded candidate list first."""
+
+    aggregator = MqttTopicAggregator(_broker(), max_candidates=1)
+    for topic, payload in _ESPHOME_NODE_TOPICS + _ESPHOME_UNDER_ZENDURE_TOPICS:
+        aggregator.observe(topic, payload)
+    for topic, payload in payloads.scalar_messages():
+        aggregator.observe(topic, payload)
+
+    assert [item["device_id"] for item in aggregator.results()] == [payloads.SCALAR_SERIAL]
+
+
+def test_a_broker_with_only_an_esphome_node_reports_no_hardware_topics():
+    listener = FakeMqttListener(_ESPHOME_NODE_TOPICS + _ESPHOME_UNDER_ZENDURE_TOPICS)
+
+    devices = discover_broker_topics(_broker(), listener_factory=lambda *a, **k: listener)
+
+    assert devices == []
+    assert _normalize_attempt_result(devices)["status"] == "mqtt_listened_no_topics"
+
+
+def test_zendure_devices_beside_an_esphome_node_are_found_with_their_metrics():
+    esphome = list(_ESPHOME_NODE_TOPICS + _ESPHOME_UNDER_ZENDURE_TOPICS)
+    messages = [
+        *esphome[:4],
+        *payloads.scalar_messages(),
+        *esphome[4:],
+        (payloads.d0_topic(), payloads.d0_total_power()),
+        *payloads.cloud_scalar_messages(),
+    ]
+
+    devices = discover_broker_topics(
+        _broker(), listener_factory=lambda *a, **k: FakeMqttListener(messages)
+    )
+
+    by_device = {(item["topic_family"], item["device_id"]): item for item in devices}
+    assert set(by_device) == {
+        (FAMILY_ZENSDK_HA_SCALAR, payloads.SCALAR_SERIAL),
+        (FAMILY_ZENSDK_HA_SCALAR, payloads.D0_SERIAL),
+        (FAMILY_ZENDURE_CLOUD_SCALAR, payloads.CLOUD_SERIAL),
+    }
+    scalar = by_device[(FAMILY_ZENSDK_HA_SCALAR, payloads.SCALAR_SERIAL)]
+    assert scalar["metrics_seen"] == list(payloads.SCALAR_METRICS)
+    assert scalar["topics_seen"] == [topic for topic, _ in payloads.scalar_messages()]
+    assert by_device[(FAMILY_ZENSDK_HA_SCALAR, payloads.D0_SERIAL)]["metrics_seen"] == [
+        "totalPower"
+    ]
+    cloud = by_device[(FAMILY_ZENDURE_CLOUD_SCALAR, payloads.CLOUD_SERIAL)]
+    assert cloud["metrics_seen"] == list(payloads.SCALAR_METRICS)
+
+
+_REAL_DEVICE_METRICS = {
+    "electricLevel": 55,
+    "outputHomePower": 300,
+    "outputLimit": 800,
+    "solarInputPower": 400,
+    "inverseMaxPower": 800,
+    "phaseSwitch": 0,
+    "gridOffPower": 0,
+    "acMode": 2,
+}
+
+
+@pytest.mark.parametrize("reads_first", [True, False], ids=["read_first", "read_last"])
+def test_discovery_infers_the_capabilities_the_runtime_infers(reads_first):
+    """R38-1: a found device takes every metric it reports, also those sent before."""
+
+    names = sorted(
+        _REAL_DEVICE_METRICS, key=lambda name: (name in DEVICE_STATE_PROPERTIES) != reads_first
+    )
+    messages = [
+        (payloads.scalar_topic(name), str(_REAL_DEVICE_METRICS[name]).encode()) for name in names
+    ]
+    discovery = MqttTopicAggregator(_broker())
+    runtime = ZendureMqttAggregator()
+    for topic, payload in messages:
+        discovery.observe(topic, payload)
+        runtime.observe(topic, payload)
+
+    (candidate,) = discovery.results()
+    (proposal,) = build_proposals([candidate])
+    (snapshot,) = runtime.snapshots()
+    assert candidate["metrics_seen"] == names
+    assert candidate["topics_seen"] == [topic for topic, _ in messages]
+    assert set(proposal["capabilities"]) == snapshot.capabilities == {
+        "ac_input_control",
+        "battery_storage",
+        "multi_mppt",
+        "offgrid_output",
+        "output_control",
+        "pv_input",
+    }
+
+
+def test_a_metric_under_a_key_without_a_found_device_finds_none():
+    """The same id under the cloud prefix is a device key of its own."""
+
+    aggregator = MqttTopicAggregator(_broker())
+    aggregator.observe("Zendure/sensor/SN1/electricLevel", b"43")
+    aggregator.observe("Zendure/sensor/SN1/availability", b"online")
+    aggregator.observe("appkeyAAAA/sensor/SN1/config", b"{}")
+
+    assert [
+        (item["topic_family"], item["device_id"], item["metrics_seen"])
+        for item in aggregator.results()
+    ] == [(FAMILY_ZENSDK_HA_SCALAR, "SN1", ["electricLevel", "availability"])]
+
+
+def test_what_a_device_sent_before_it_was_found_is_bounded_like_its_metrics():
+    aggregator = MqttTopicAggregator(_broker())
+    for index in range(MAX_METRICS_PER_CANDIDATE + 10):
+        aggregator.observe(f"Zendure/sensor/SN1/extra{index}", b"1")
+    aggregator.observe("Zendure/sensor/SN1/electricLevel", b"43")
+
+    (item,) = aggregator.results()
+    assert item["metrics_seen"] == [f"extra{index}" for index in range(MAX_METRICS_PER_CANDIDATE)]
+    assert len(item["topics_seen"]) == MAX_TOPICS_PER_CANDIDATE
+
+
+@pytest.mark.parametrize(
+    "topic",
+    [
+        "Zendure/number/D0SN/totalPower",
+        "Zendure/select/D0SN/totalPower",
+        "Zendure/sensors/D0SN/totalPower",
+    ],
+)
+def test_total_power_finds_a_device_only_on_the_exact_d0_topic(topic):
+    """R38-2: ``totalPower`` is read on ``Zendure/sensor/<serial>/totalPower`` only."""
+
+    aggregator = MqttTopicAggregator(_broker())
+    aggregator.observe(topic, b"-40")
+
+    assert aggregator.results() == []
+
+
+@pytest.mark.parametrize("family_topic", ["Zendure/sensor/SN1/{}", "appkeyAAAA/sensor/SN1/{}"])
+def test_every_property_parse_device_reads_finds_a_zendure_device(family_topic):
+    """The discovery reads the parser's own list, not a copy of it."""
+
+    for prop in sorted(DEVICE_STATE_PROPERTIES):
+        aggregator = MqttTopicAggregator(_broker())
+        aggregator.observe(family_topic.format(prop), b"1")
+        assert [item["metrics_seen"] for item in aggregator.results()] == [[prop]], prop
+
+
+def test_a_topic_published_into_the_zendure_tree_by_hand_still_classifies():
+    """A user's own ``Zendure/sensors/<x>/<property>`` topic keeps its reading."""
+
+    match = classify_topic("Zendure/sensors/X1/solarInputPower")
+    assert (match.family, match.device_id, match.metric) == (
+        FAMILY_ZENSDK_HA_SCALAR,
+        "X1",
+        "solarInputPower",
+    )
+    aggregator = MqttTopicAggregator(_broker())
+    aggregator.observe("Zendure/sensors/X1/solarInputPower", b"300")
+    assert [item["metrics_seen"] for item in aggregator.results()] == [["solarInputPower"]]
 
 
 def _install_fake_paho(monkeypatch):

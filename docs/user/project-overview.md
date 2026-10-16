@@ -112,7 +112,6 @@ Supported options include:
 - everHome EcoTracker
 - Tasmota-based meters
 - generic MQTT power meters
-- selected Home Assistant entities
 
 Support differs by model and connection type. The current compatibility overview is available in [Supported Setups](supported-setups.md).
 
@@ -203,7 +202,7 @@ Authenticated operators can create backups, preview restores and review configur
 
 ### Everyday runtime controls
 
-The normal installation remains configuration-based, but selected operating values can be changed without rebuilding the setup. Authenticated dashboard controls, the command-line tool and optional Home Assistant helpers can manage values such as:
+The normal installation remains configuration-based, but selected operating values can be changed without rebuilding the setup. Authenticated dashboard controls and the command-line tool can manage values such as:
 
 - enabling or pausing EMS control
 - total and per-device power limits
@@ -283,34 +282,6 @@ The system does not silently downgrade the EMS software when older data is resto
 
 ---
 
-## Optional Home Assistant integration
-
-Home Assistant is not required. EMS SolarFlow can run completely on its own.
-
-When enabled, Home Assistant can receive:
-
-- household load
-- solar and battery power
-- EMS targets
-- battery levels
-- device availability
-- device operating states
-- winter-mode status
-
-Optional helpers can also change selected runtime settings, such as:
-
-- enabling or disabling EMS control
-- total and per-device power limits
-- minimum output level
-- control interval
-- winter mode
-- device priority
-- off-grid socket mode
-
-Home Assistant remains an optional interface. The local EMS state and safety rules remain authoritative if Home Assistant is unavailable.
-
----
-
 ## Safe testing and operation
 
 EMS SolarFlow controls real power hardware, so write access is deliberately protected.
@@ -330,7 +301,7 @@ Safety features include:
 
 A new setup can therefore be observed and validated before live control is enabled.
 
-Only one controller should change the Zendure output limit at a time. Zendure HEMS, Home Assistant automations or other MQTT writers must not compete with EMS SolarFlow for the same control value.
+Only one controller should change the Zendure output limit at a time. Zendure HEMS, smart-home automations or other MQTT writers must not compete with EMS SolarFlow for the same control value.
 
 ---
 
@@ -338,7 +309,7 @@ Only one controller should change the Zendure output limit at a time. Zendure HE
 
 The EMS control loop, dashboard, configuration, short-term history and operational state all run on your own system.
 
-Home Assistant, InfluxDB and Zendure MQTT are optional. Newer supported devices can operate entirely through the local network using the Local API or Local MQTT.
+InfluxDB and Zendure MQTT are optional. Newer supported devices can operate entirely through the local network using the Local API or Local MQTT.
 
 The built-in web interfaces support password-protected operator access. The dashboard can also provide local HTTPS with a self-signed or user-provided certificate. Public internet exposure is not recommended; remote access should use a VPN or a properly secured reverse proxy.
 
@@ -361,7 +332,7 @@ A dedicated **appliance image** is also available for a Raspberry Pi that should
 | Ace 1500 / SuperBase V | MQTT | Telemetry-only |
 | Shelly Pro grid meter | Local HTTP | Validated on real hardware |
 | Zendure Smart Meter 3CT / D0 | HTTP or MQTT | Implemented; testers wanted |
-| Other supported grid meters | HTTP, MQTT or Home Assistant | Model-dependent |
+| Other supported grid meters | HTTP or MQTT | Model-dependent |
 | Appliance image (Raspberry Pi 3 / 4 / 5) | Pi 3B+ only, and without EMS on it | One 3B+ runs the image since 2026-08-29; no Pi 4 or Pi 5 has booted it |
 
 **Validated** means confirmed on real hardware.  

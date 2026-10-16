@@ -76,7 +76,7 @@ python3 emsctl.py diagnose
 Run a no-write validation if desired:
 
 ```bash
-python3 -B ems-solarflow-api-control.py --dry-run --no-ha --once
+python3 -B ems-solarflow-api-control.py --dry-run --once
 ```
 
 Run preflight:

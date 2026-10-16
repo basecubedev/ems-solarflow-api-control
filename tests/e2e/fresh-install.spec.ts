@@ -1,3 +1,4 @@
+import { type Route } from "@playwright/test";
 import { test, expect } from "./fixtures/admin";
 import { LoginPage } from "./pages/login-page";
 import { SetupPage } from "./pages/setup-page";
@@ -57,6 +58,38 @@ test.describe("Fresh Install — System Build selection", { tag: ["@smoke", "@se
     expect(updateEnabled || continueEnabled).toBeTruthy();
 
     await setup.continueToDevices();
+  });
+
+  test("every release listing warning is named beside the selector", async ({
+    page,
+  }) => {
+    const warnings = [
+      "The development build catalogue could not be read, so no development builds are listed.",
+      "The current release cannot be compared safely; no downgrade claim was made.",
+    ];
+    await page.route("**/api/setup/releases**", async (route: Route) => {
+      const response = await route.fetch();
+      const data = await response.json();
+      data.warnings = [...warnings];
+      await route.fulfill({ json: data });
+    });
+    const setup = new SetupPage(page);
+    await setup.chooseFreshInstall();
+
+    await expect(setup.buildSelect).toBeEnabled();
+    const line = page.locator("#release-warnings");
+    await expect(line).toBeVisible();
+    for (const warning of warnings) {
+      await expect(line).toContainText(warning);
+    }
+    await expect(page.locator("#release-error")).toBeHidden();
+
+    await setup.selectBuild("v0.7.0");
+
+    await expect(line).toBeVisible();
+    for (const warning of warnings) {
+      await expect(line).toContainText(warning);
+    }
   });
 
   test("modern build requiring an Admin update blocks Continue", async ({

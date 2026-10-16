@@ -8,12 +8,16 @@ Discovery-display-only:
 * never publishes, never issues properties/read|write or function/invoke,
 * never writes the EMS config,
 * always connects with TLS and never falls back to plaintext,
+* never signs in under the MQTT client id an enabled cloud broker profile of
+  the EMS connects with, since the broker drops the older session,
 * never returns or logs the raw API key/token, MQTT password/username, product
   key, device key, or serial in error text.
 
 The listener is injectable so the whole flow is testable without a real broker.
 """
 
+import json
+import threading
 import time
 from dataclasses import dataclass
 
@@ -33,7 +37,10 @@ from admin.mqtt_topic_discovery import (
     classify_topic,
     parse_report_payload,
 )
+from admin.install_context import detect_install_context
+from admin.zendure_mqtt_runtime_status import live_cloud_session_connected
 from admin.secret_store import ZendureTokenStore
+from admin.single_flight import SingleFlight
 from ems.config import MQTT_TLS_OBSERVED_MODES
 from admin.zendure_cloud_auth import (
     ZendureCloudError,
@@ -87,6 +94,17 @@ _ERR_NOT_CONFIGURED = (
 )
 _ERR_MQTT_FAILED = "TLS connection to Zendure MQTT broker failed."
 _ERR_NO_TELEMETRY = "No MQTT telemetry was observed within the discovery window."
+_MSG_EMS_SESSION = (
+    "Live MQTT telemetry was not sampled: the EMS signs in to the Zendure cloud "
+    "broker with this account's MQTT client ID, and a discovery session under it "
+    "would disconnect the EMS. The devices come from the Zendure device list."
+)
+_MSG_EMS_SESSION_UNKNOWN = (
+    "Live MQTT telemetry was not sampled: it could not be confirmed that the "
+    "EMS does not hold this account's Zendure cloud session, and a discovery "
+    "session might disconnect it. The devices come from the Zendure device list."
+)
+MQTT_STATUS_EMS_SESSION = "ems_session"
 _ERR_UNSUPPORTED_CREDENTIAL_MODE = (
     "Use a Zendure API key or HA/deviceList token for Zendure MQTT discovery."
 )
@@ -489,6 +507,73 @@ class CloudCandidateSet:
         )
 
 
+def ems_cloud_session_client_ids(secrets_dir=None):
+    """MQTT client ids the EMS signs in to the Zendure cloud broker with.
+
+    Built as the EMS runtime builds its brokers: ``load_zendure_mqtt_broker_configs``
+    over the installed config, each cloud runtime record resolved from
+    ``secrets_dir``. Every enabled ``zendure_cloud_mqtt`` profile's client id.
+    While the EMS's live status shows a connected cloud broker, the EMS may
+    still run a config it read earlier (a broker change waits for its restart),
+    so the client id of every cloud runtime record counts too: the default
+    record and any a broker profile names, enabled or not (only a cloud record
+    carries a client id). ``None`` when the config cannot be read, or when a
+    connected cloud session has no record to name it.
+    """
+
+    from ems.mqtt_credentials import FileMqttCredentialResolver
+    from ems.zendure_mqtt.runtime import load_zendure_mqtt_broker_configs
+
+    context = detect_install_context()
+    resolver = FileMqttCredentialResolver(secrets_dir)
+    config = {}
+    held = set()
+    if context.config_exists:
+        try:
+            config = json.loads(context.config_path.read_text(encoding="utf-8"))
+            brokers, _errors, _stale = load_zendure_mqtt_broker_configs(
+                config.get("zendure_mqtt"), credential_resolver=resolver
+            )
+        except Exception:
+            return None
+        held.update(
+            broker.client_id
+            for broker in brokers.values()
+            if broker.enabled
+            and broker.source == SOURCE_ZENDURE_CLOUD_MQTT
+            and broker.client_id
+        )
+    if live_cloud_session_connected(context):
+        recorded = _cloud_record_client_ids(config, resolver)
+        if not recorded:
+            return None
+        held.update(recorded)
+    return frozenset(held)
+
+
+def _cloud_record_client_ids(config, resolver):
+    """Client ids of the cloud runtime records the EMS may have connected with."""
+
+    from admin.credential_store import ZENDURE_CLOUD_CREDENTIALS_REF
+
+    refs = {ZENDURE_CLOUD_CREDENTIALS_REF}
+    zendure_mqtt = config.get("zendure_mqtt") if isinstance(config, dict) else None
+    profiles = zendure_mqtt.get("brokers") if isinstance(zendure_mqtt, dict) else None
+    for profile in (profiles.values() if isinstance(profiles, dict) else ()):
+        ref = profile.get("credentials_ref") if isinstance(profile, dict) else None
+        if isinstance(ref, str) and ref.strip():
+            refs.add(ref.strip())
+    client_ids = set()
+    for ref in sorted(refs):
+        try:
+            client_id = resolver.resolve(ref).client_id
+        except Exception:
+            continue
+        if client_id:
+            client_ids.add(client_id)
+    return client_ids
+
+
 def _default_device_list_fetcher(credential, timeout):
     api_url, app_key = resolve_device_list_credential(credential)
     return fetch_device_list(api_url, app_key, timeout)
@@ -543,15 +628,22 @@ class ZendureCloudDiscovery:
         listener_factory=None,
         timeout_s=DEFAULT_CLOUD_TIMEOUT_S,
         tls_mode=TLS_ENCRYPTED_NO_VERIFY,
+        ems_session_client_ids=None,
     ):
         self.store = store or ZendureTokenStore()
+        self._ems_session_client_ids = ems_session_client_ids or (
+            lambda: ems_cloud_session_client_ids(getattr(self.store, "secrets_dir", None))
+        )
         self._fetch = device_list_fetcher or _default_device_list_fetcher
         self._listener_factory = listener_factory or default_cloud_listener_factory
         self._timeout_s = max(0.0, min(float(timeout_s), MAX_CLOUD_TIMEOUT_S))
         self._tls_mode = tls_mode if tls_mode in TLS_MODES else TLS_SYSTEM_CA
         self._candidates = []
         self._trusted_candidates = []
+        self._candidates_key = None
+        self._candidates_lock = threading.Lock()
         self._last_seed_attempt = 0.0
+        self._refreshes = SingleFlight()
 
     # --- token management ------------------------------------------------
 
@@ -599,11 +691,10 @@ class ZendureCloudDiscovery:
             app_key=result.get("app_key"),
         )
         candidate_set.seed_devices(devices)
-        self._candidates = candidate_set.results()
-        self._trusted_candidates = candidate_set.trusted_results()
         try:
-            self.store.update_metadata(
-                last_checked=utc_now_iso(),
+            self._keep_result(
+                api_key,
+                (candidate_set.results(), candidate_set.trusted_results()),
                 last_status="ok",
                 last_error=None,
                 last_device_count=len(devices),
@@ -621,7 +712,10 @@ class ZendureCloudDiscovery:
         # closed without touching the credential store.
         credential = normalize_app_key(api_key)
         resolve_device_list_credential(credential)
-        self.store.save_token(credential)
+        with self._candidates_lock:
+            self.store.save_token(credential)
+            if credential != self._candidates_key:
+                self._forget_candidates()
         result = {
             "ok": True,
             "token_saved": True,
@@ -746,9 +840,9 @@ class ZendureCloudDiscovery:
         return [] if change.existed_before else [ref]
 
     def delete_token(self):
-        result = self.store.delete_token()
-        self._candidates = []
-        self._trusted_candidates = []
+        with self._candidates_lock:
+            result = self.store.delete_token()
+            self._forget_candidates()
         return {
             "ok": True,
             "token_saved": False,
@@ -763,15 +857,11 @@ class ZendureCloudDiscovery:
         try:
             result = self._fetch(api_key, DEVICE_LIST_TIMEOUT_S)
         except ZendureCloudError as exc:
-            self.store.update_metadata(
-                last_checked=utc_now_iso(),
-                last_status="error",
-                last_error=str(exc),
-            )
+            self._keep_result(api_key, last_status="error", last_error=str(exc))
             return {"ok": False, "error": "device_list_failed", "message": str(exc)}
         broker, tls_mode = self._broker_from_result(result)
-        self.store.update_metadata(
-            last_checked=utc_now_iso(),
+        self._keep_result(
+            api_key,
             last_status="ok",
             last_error=None,
             last_device_count=len(result.get("devices", [])),
@@ -788,17 +878,30 @@ class ZendureCloudDiscovery:
         }
 
     def refresh(self):
+        """Read the deviceList and listen on the cloud broker, one refresh at a time.
+
+        The broker session signs in with the account's one ``client_id``, and a
+        second session under it drops the first: a refresh asked for while one
+        with the same saved key runs joins it, one with another key waits. While
+        the EMS may hold a session under that ``client_id``, the refresh reads
+        the deviceList only and says so in ``mqtt_status``. A refresh that ends
+        after its key was removed or replaced answers its callers and keeps
+        nothing.
+        """
+
+        return self._refreshes.run(self._refresh_inputs, self._refresh)
+
+    def _refresh_inputs(self):
         api_key = self.store.load_token()
+        return api_key, api_key
+
+    def _refresh(self, api_key):
         if not api_key:
             return {"ok": False, "error": "not_configured", "message": _ERR_NOT_CONFIGURED}
         try:
             result = self._fetch(api_key, DEVICE_LIST_TIMEOUT_S)
         except ZendureCloudError as exc:
-            self.store.update_metadata(
-                last_checked=utc_now_iso(),
-                last_status="error",
-                last_error=str(exc),
-            )
+            self._keep_result(api_key, last_status="error", last_error=str(exc))
             return {"ok": False, "error": "device_list_failed", "message": str(exc)}
 
         devices = result.get("devices", [])
@@ -822,24 +925,26 @@ class ZendureCloudDiscovery:
             tls_mode=tls_mode,
         )
         mqtt_error = None
-        try:
-            listener = self._listener_factory(connection)
-            listener.listen(self._timeout_s, candidate_set.observe)
-        except CloudMqttError as exc:
-            mqtt_error = str(exc)
-        except Exception:  # a listener fault must never crash the Admin route
-            mqtt_error = _ERR_MQTT_FAILED
+        ems_session = self._ems_session(connection.client_id)
+        if ems_session is False:
+            try:
+                listener = self._listener_factory(connection)
+                listener.listen(self._timeout_s, candidate_set.observe)
+            except CloudMqttError as exc:
+                mqtt_error = str(exc)
+            except Exception:  # a listener fault must never crash the Admin route
+                mqtt_error = _ERR_MQTT_FAILED
 
-        self._candidates = candidate_set.results()
-        self._trusted_candidates = candidate_set.trusted_results()
+        candidates = candidate_set.results()
         observed = candidate_set.mqtt_observed_count()
         # Reaching this point means the deviceList succeeded, so the discovery run
         # is "ok" even if the best-effort live-MQTT enrichment failed. Only a
         # deviceList failure (handled above) is a hard error; a failed/empty MQTT
         # listen is surfaced as the transient ``mqtt_status``/``mqtt_message`` in
         # the payload, not as a persisted "error" that hides the found devices.
-        self.store.update_metadata(
-            last_checked=utc_now_iso(),
+        self._keep_result(
+            api_key,
+            (candidates, candidate_set.trusted_results()),
             last_status="ok",
             last_error=None,
             last_device_count=len(devices),
@@ -850,12 +955,17 @@ class ZendureCloudDiscovery:
             "ok": True,
             "device_list_count": len(devices),
             "mqtt_observed_count": observed,
-            "devices_found": len(self._candidates),
+            "devices_found": len(candidates),
             "tls_mode": tls_mode,
             "broker": broker,
-            "candidates": self._candidates,
+            "candidates": candidates,
         }
-        if mqtt_error:
+        if ems_session is not False:
+            payload["mqtt_status"] = MQTT_STATUS_EMS_SESSION
+            payload["mqtt_message"] = (
+                _MSG_EMS_SESSION if ems_session else _MSG_EMS_SESSION_UNKNOWN
+            )
+        elif mqtt_error:
             payload["mqtt_status"] = "error"
             payload["mqtt_message"] = mqtt_error
         elif observed == 0:
@@ -864,6 +974,41 @@ class ZendureCloudDiscovery:
         else:
             payload["mqtt_status"] = "ok"
         return payload
+
+    def _keep_result(self, api_key, found=None, **metadata):
+        """Keep what a read with ``api_key`` found, while ``api_key`` is the saved key.
+
+        ``found`` is ``(candidates, trusted_candidates)``. A read that outlived
+        the removal or replacement of its key, or a test of a key that is not
+        saved, keeps nothing: no candidates, and no metadata on the record of
+        another key. The record write rewrites the whole record, so it holds
+        the lock ``delete_token`` takes and cannot bring a deleted key back.
+        """
+
+        with self._candidates_lock:
+            if self.store.load_token() != api_key:
+                return
+            if found is not None:
+                self._candidates, self._trusted_candidates = found
+                self._candidates_key = api_key
+            self.store.update_metadata(last_checked=utc_now_iso(), **metadata)
+
+    def _forget_candidates(self):
+        self._candidates = []
+        self._trusted_candidates = []
+        self._candidates_key = None
+
+    def _ems_session(self, client_id):
+        """Whether the EMS signs in under ``client_id``; ``None`` when unknown."""
+
+        try:
+            held = self._ems_session_client_ids()
+        except Exception:
+            held = None
+        if held is None:
+            return None
+        wanted = str(client_id or "").strip()
+        return bool(wanted) and wanted in held
 
     def _broker_from_result(self, result):
         mqtt = result.get("mqtt", {}) if isinstance(result, dict) else {}

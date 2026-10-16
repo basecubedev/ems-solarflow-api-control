@@ -16,7 +16,6 @@ import fcntl
 import json
 import os
 import re
-import socket
 import subprocess
 import tempfile
 import threading
@@ -28,6 +27,7 @@ from enum import Enum
 from pathlib import Path
 
 from admin.image_identity import ImageIdentity, identify_image
+from admin.installed_release import probe_running_release, running_container_identity
 from admin.models import utc_now_iso
 from admin.releases import TAG_PATTERN
 from admin.system_build_id import SystemBuildIdKind, parse_system_build_id
@@ -242,53 +242,49 @@ def admin_image_ref_from_env(environ=None) -> str | None:
     return f"{image}:{tag}"
 
 
-def _safe_inspect_container(docker, name):
-    inspect = getattr(docker, "inspect_container", None)
-    if not callable(inspect):
-        return None
-    try:
-        return inspect(name)
-    except Exception:  # inspection must never crash identity detection
-        return None
+def _admin_container_name(environ):
+    return _clean(environ.get("EMS_ADMIN_CONTAINER_NAME")) or DEFAULT_ADMIN_CONTAINER
 
 
-def detect_current_admin_identity(docker=None, environ=None, hostname=None):
+def detect_current_admin_identity(docker=None, environ=None):
     """Detect the running Admin image identity and how it was found.
 
-    Tries Docker inspect (container name, then hostname), then the
-    ``EMS_ADMIN_IMAGE``/``EMS_ADMIN_TAG`` env fallback, enriching the ref with the
-    local image digest/labels. Never raises — an undetectable identity is
-    all-``None`` with source ``unknown``.
+    A running Admin container answers for itself, read as
+    :func:`probe_running_admin` reads it: by its immutable image id, never by
+    the image string ``docker ps`` reports, which for a digest-pinned container
+    is a short id or a bare repository Docker resolves to ``:latest``. One whose
+    image nothing names is unknown. The ``EMS_ADMIN_IMAGE``/``EMS_ADMIN_TAG``
+    environment answers only when no Admin container runs. Never raises.
     """
 
     environ = os.environ if environ is None else environ
-    image_ref = None
-    source = "unknown"
-
-    container_name = _clean(environ.get("EMS_ADMIN_CONTAINER_NAME"))
-    if docker is not None and container_name:
-        info = _safe_inspect_container(docker, container_name)
-        ref = _clean((info or {}).get("image"))
-        if ref:
-            image_ref, source = ref, "docker_inspect"
-
-    if image_ref is None and docker is not None:
-        host = _clean(hostname) or socket.gethostname()
-        info = _safe_inspect_container(docker, host)
-        ref = _clean((info or {}).get("image"))
-        if ref:
-            image_ref, source = ref, "docker_inspect"
-
-    if image_ref is None:
-        ref = admin_image_ref_from_env(environ)
-        if ref:
-            image_ref, source = ref, "env"
-
-    if image_ref is None:
-        return ImageIdentity(), source
     if docker is not None:
-        return identify_image(docker, image_ref), source
-    return ImageIdentity(image_ref=image_ref), source
+        running, identity = running_container_identity(
+            docker, _admin_container_name(environ)
+        )
+        if running:
+            if identity is None:
+                return ImageIdentity(), "unknown"
+            return identity, "docker_inspect"
+
+    image_ref = admin_image_ref_from_env(environ)
+    if image_ref is None:
+        return ImageIdentity(), "unknown"
+    if docker is not None:
+        return identify_image(docker, image_ref), "env"
+    return ImageIdentity(image_ref=image_ref), "env"
+
+
+def probe_running_admin(docker, environ=None):
+    """Probe the running Admin container as the running EMS container is probed.
+
+    The release comes from the container's own image labels, read by its
+    immutable image id, so a digest-pinned Admin is named as the Appliance
+    Manager names it. ``EMS_ADMIN_CONTAINER_NAME``, else the default name.
+    """
+
+    environ = os.environ if environ is None else environ
+    return probe_running_release(docker, _admin_container_name(environ))
 
 
 def resolve_admin_image_target(release_tag, docker=None) -> AdminImageTarget:
@@ -1237,6 +1233,15 @@ class PendingTransitionStore:
                 finally:
                     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
+    def exclusive(self):
+        """Hold the lock every write of this record takes, across processes.
+
+        For the stale-state release, which removes the file itself and must
+        not remove a record a writer replaced after it was read.
+        """
+
+        return self._locked()
+
     def _read_raw(self):
         try:
             raw = self.path.read_bytes()
@@ -1787,6 +1792,12 @@ class AdminUpdateService:
                 "pending": None,
             }
         current, source = self._current_identity()
+        running = probe_running_admin(self._docker, self._env())
+        current_admin = {
+            **_identity_view(current),
+            "release": running.identity.tag if running.identity is not None else None,
+            "source": source,
+        }
         try:
             pending = self._reconcile_pending(self._store.read())
         except PendingUpdateStateError as exc:
@@ -1795,13 +1806,13 @@ class AdminUpdateService:
                 "supported": True,
                 "error": exc.reason,
                 "message": exc.message,
-                "current_admin": {**_identity_view(current), "source": source},
+                "current_admin": current_admin,
                 "pending": None,
             }
         return {
             "ok": True,
             "supported": True,
-            "current_admin": {**_identity_view(current), "source": source},
+            "current_admin": current_admin,
             "pending": pending,
         }
 

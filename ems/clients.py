@@ -20,8 +20,9 @@ from ems.charge_record import (
 )
 from ems.health import CommHealth, redact_error, redact_url_credentials
 from ems.logging_utils import log_event
-from ems.models import DeviceState, parse_pack_count
-from ems.power_direction import AC_MODE_INPUT
+from ems.models import DEVICE_STATE_PROPERTIES, DeviceState, parse_pack_count
+from ems.power_direction import AC_MODE_INPUT, DEFAULT_SAFETY_PREEMPT_MARGIN_W
+from ems.zendure_mqtt.snapshot import observable_metrics
 
 
 def zendure_write_succeeded(error_event, dev, response, **fields):
@@ -136,178 +137,6 @@ def create_session():
 
     return session
 
-# =====================
-# HOME ASSISTANT CLIENT
-# =====================
-
-
-HA_REQUEST_TIMEOUT = (0.5, 1.0)
-HA_BACKOFF_INITIAL_S = 30.0
-HA_BACKOFF_MAX_S = 300.0
-
-
-class HAClient:
-    """Simple REST client for Home Assistant.
-
-    The control loop calls it before the device writes, once per sensor, so an
-    unreachable Home Assistant costs one short request and is then left alone
-    for a backoff that doubles with each further failure.
-    """
-
-    def __init__(self, base_url, token, session, clock=time.monotonic):
-        self.base_url = base_url.rstrip("/")
-        self.session = session
-        self._clock = clock
-        self._backoff_s = 0.0
-        self._retry_at = None
-
-        self.headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-
-    def _backing_off(self):
-        return self._retry_at is not None and self._clock() < self._retry_at
-
-    def _record_unreachable(self):
-        if self._backoff_s:
-            self._backoff_s = min(self._backoff_s * 2, HA_BACKOFF_MAX_S)
-        else:
-            self._backoff_s = HA_BACKOFF_INITIAL_S
-        self._retry_at = self._clock() + self._backoff_s
-        return self._backoff_s
-
-    def _record_reachable(self):
-        if self._backoff_s:
-            log_event(logging.INFO, "ha_reachable_again")
-        self._backoff_s = 0.0
-        self._retry_at = None
-
-    def set_state(
-        self,
-        entity_id,
-        state,
-        unit=None,
-        device_class=None,
-        state_class=None,
-        icon=None,
-        extra_attributes=None
-    ):
-        """Write a sensor state to HA."""
-
-        attributes = {}
-
-        if unit:
-            attributes["unit_of_measurement"] = unit
-
-        if device_class:
-            attributes["device_class"] = device_class
-
-        if state_class:
-            attributes["state_class"] = state_class
-
-        if icon:
-            attributes["icon"] = icon
-
-        if extra_attributes:
-            attributes.update(extra_attributes)
-
-        payload = {
-            "state": state,
-            "attributes": attributes
-        }
-
-        if self._backing_off():
-            return
-
-        try:
-            r = self.session.post(
-                f"{self.base_url}/api/states/{entity_id}",
-                headers=self.headers,
-                json=payload,
-                timeout=HA_REQUEST_TIMEOUT
-            )
-        except Exception as e:
-            log_event(
-                logging.WARNING,
-                "ha_write_error",
-                entity=entity_id,
-                error=e,
-                retry_in_s=f"{self._record_unreachable():g}"
-            )
-            return
-
-        self._record_reachable()
-        if r.status_code >= 300:
-            log_event(
-                logging.WARNING,
-                "ha_write_error",
-                entity=entity_id,
-                status_code=r.status_code
-            )
-
-    def get_state(self, entity_id):
-        """Read a state from HA."""
-
-        if self._backing_off():
-            return None
-
-        try:
-            r = self.session.get(
-                f"{self.base_url}/api/states/{entity_id}",
-                headers=self.headers,
-                timeout=HA_REQUEST_TIMEOUT
-            )
-        except Exception as e:
-            log_event(
-                logging.WARNING,
-                "ha_read_error",
-                entity=entity_id,
-                error=e,
-                retry_in_s=f"{self._record_unreachable():g}"
-            )
-            return None
-
-        self._record_reachable()
-        try:
-            if r.status_code != 200:
-                return None
-
-            data = r.json()
-
-            if not isinstance(data, dict):
-                return None
-
-            return data.get("state")
-
-        except Exception:
-            return None
-
-    def ping(self):
-        """Return True when Home Assistant API is reachable."""
-
-        try:
-            r = self.session.get(
-                f"{self.base_url}/api/",
-                headers=self.headers,
-                timeout=2
-            )
-
-            return r.status_code == 200
-
-        except Exception:
-            return False
-
-    def get_float(self, entity_id, default):
-        """Return HA state as float or fallback."""
-
-        val = self.get_state(entity_id)
-
-        try:
-            parsed = float(val)
-        except (TypeError, ValueError):
-            return default
-        return parsed if math.isfinite(parsed) else default
 
 def _observed_pack_count(data, props):
     """Return the reported pack count, unless the report contradicts itself.
@@ -324,19 +153,6 @@ def _observed_pack_count(data, props):
         return None
 
     return packs
-
-
-DEVICE_STATE_PROPERTIES = frozenset(
-    {
-        "electricLevel", "minSoc", "socSet", "solarInputPower", "outputHomePower",
-        "packInputPower", "outputPackPower", "hyperTmp", "BatVolt", "rssi",
-        "remainOutTime", "solarPower1", "solarPower2", "solarPower3", "solarPower4",
-        "outputLimit", "socLimit", "packState", "faultLevel", "smartMode",
-        "gridOffMode", "acMode", "acStatus", "dcStatus", "gridState", "inputLimit",
-        "packNum", "socStatus", "batCalTime", "gridInputPower", "gridReverse",
-        "chargeLimit", "chargeMaxLimit",
-    }
-)
 
 
 def parse_device(data):
@@ -386,6 +202,12 @@ def parse_device(data):
         pack_num=_observed_pack_count(data, props),
         soc_status=props.get("socStatus") or 0,
         battery_calibration_time=props.get("batCalTime"),
+        ac_mode_reported=props.get("acMode") is not None,
+        min_soc_reported=props.get("minSoc") is not None,
+        max_soc_reported=props.get("socSet") is not None,
+        smart_mode_reported=props.get("smartMode") is not None,
+        grid_off_mode_reported=props.get("gridOffMode") is not None,
+        input_limit_reported=props.get("inputLimit") is not None,
     )
 
 
@@ -438,6 +260,12 @@ def zero_device_state():
         pack_num=None,
         soc_status=0,
         battery_calibration_time=None,
+        ac_mode_reported=False,
+        min_soc_reported=False,
+        max_soc_reported=False,
+        smart_mode_reported=False,
+        grid_off_mode_reported=False,
+        input_limit_reported=False,
     )
 
 class ZendureClient:
@@ -476,8 +304,8 @@ class ZendureClient:
         self.ip = ip
         self.sn = sn
         self.session = session
-        self.min_soc = min_soc
-        self.max_soc = max_soc
+        self.min_soc = cfg.device_soc_limit(name, "min_soc", min_soc)
+        self.max_soc = cfg.device_soc_limit(name, "max_soc", max_soc)
         self.smart_mode = smart_mode
         self.grid_off_mode = grid_off_mode
         self.max_power = cfg.device_power_ceiling(max_power)
@@ -491,6 +319,7 @@ class ZendureClient:
         self.observed_product = None
         self._charge = ChargeRecord()
         self.observed_in_charge_mode = False
+        self._ignored_report_values_named = set()
         self.read_health = CommHealth(name, kind="read")
         self.write_health = CommHealth(name, kind="write")
 
@@ -500,6 +329,9 @@ class ZendureClient:
 
     def charge_exit_due(self):
         return self._charge.exit_due(time.monotonic())
+
+    def charge_exit_exhausted(self):
+        return self._charge.exit_exhausted(time.monotonic())
 
     def found_exit_due(self):
         return self._charge.found_exit_due(time.monotonic())
@@ -516,7 +348,7 @@ class ZendureClient:
         return self._charge.found_charge_left
 
     def release_charge_record(self):
-        """The charge is someone else's from here: a claim that writes its own."""
+        """The charge is not the EMS's from here: a claim that writes its own, or the device's."""
 
         self._charge.release()
 
@@ -539,12 +371,18 @@ class ZendureClient:
 
             if data.get("product"):
                 self.observed_product = str(data["product"])
-            state = parse_device(data)
+            report = data["properties"]
+            properties = observable_metrics(report)
+            self._note_ignored_report_values(report, properties)
+            state = parse_device({
+                "properties": properties,
+                "packData": data.get("packData") or report.get("packData"),
+            })
             self.observed_in_charge_mode = (
                 state.ac_mode == AC_MODE_INPUT and state.smart_mode == 1
             )
             self._charge.observe(
-                state, setpoint_reported="inputLimit" in data["properties"]
+                state, setpoint_reported="inputLimit" in properties
             )
             self.read_health.record_success((time.monotonic() - start) * 1000.0)
             return state
@@ -557,6 +395,21 @@ class ZendureClient:
             )
             logging.warning(f"{self.name} fetch failed: {e}")
             return None
+
+    def _note_ignored_report_values(self, report, readable):
+        """Name once each field ``parse_device`` reads that a report carried as no usable number."""
+
+        for name in sorted(DEVICE_STATE_PROPERTIES.intersection(report).difference(readable)):
+            if name in self._ignored_report_values_named:
+                continue
+            self._ignored_report_values_named.add(name)
+            log_event(
+                logging.INFO,
+                "http_report_value_ignored",
+                device=self.name,
+                metric=name,
+                reason="not_a_usable_number",
+            )
 
     def write_output_limit(self, value):
         """POST outputLimit to the local device API; return success."""
@@ -620,7 +473,11 @@ class ZendureClient:
         input it cannot attribute. One the device answered, accepted or
         refused, is held back the same way until the resend window has passed,
         and for good once it was answered ``FOUND_EXIT_ATTEMPTS`` times;
-        whether the device took it is the next report's to say.
+        whether the device took it is the next report's to say. A stop to 0 W,
+        or a cut by ``DEFAULT_SAFETY_PREEMPT_MARGIN_W`` below the target the
+        last exit carried, is not held behind the exit of the EMS's own charge
+        (K23): it goes out as the device's target, not as an exit, and keeps
+        that exit's resend window and count.
         ``charge_exit=CHARGE_EXIT_FINAL`` is the shutdown release: the atomic
         exit, whatever the window says.
 
@@ -658,12 +515,14 @@ class ZendureClient:
 
         if target >= 0:
             now = time.monotonic()
-            held = (
+            held = not final and (
                 not record.exit_due(now)
                 if record.open
                 else found_exit and not record.found_exit_due(now)
             )
-            if held and not final:
+            if held and not record.reduces_exit(
+                target, margin_w=DEFAULT_SAFETY_PREEMPT_MARGIN_W
+            ):
                 return dispatch.coalesced(target, command_state=CHARGE_EXIT_PENDING)
             field, properties = (
                 ("inputLimit", {"inputLimit": 0})
@@ -677,9 +536,12 @@ class ZendureClient:
                 "write_output_limit_error",
                 target_w=target,
             )
-            record.exit_sent(now)
-            if found_exit:
-                record.found_exit_sent(now)
+            if held:
+                record.reduction_sent(target)
+            else:
+                record.exit_sent(now, target)
+                if found_exit:
+                    record.found_exit_sent(now)
             return (
                 dispatch.published(target)
                 if ok
@@ -1623,7 +1485,12 @@ def _parse_mqtt_grid_power_payload(
 
 
 def fetch_all_devices(devices):
-    """Fetch all device states in parallel."""
+    """Fetch all device states in parallel.
+
+    A read that raises an error leaves its device's slot ``None`` and is
+    logged with the device's name; anything that is not an ``Exception``, an
+    exit among them, reaches the caller.
+    """
 
     results = [None] * len(devices)
 
@@ -1642,8 +1509,13 @@ def fetch_all_devices(devices):
 
             try:
                 results[i] = future.result()
-            except:
-                pass
+            except Exception as e:
+                log_event(
+                    logging.WARNING,
+                    "device_fetch_failed",
+                    device=getattr(devices[i], "name", i),
+                    error=e
+                )
 
     return results
 

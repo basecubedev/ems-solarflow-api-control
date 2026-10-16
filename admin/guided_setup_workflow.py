@@ -411,6 +411,15 @@ class GuidedSetupWorkflowStore:
         self._lock = threading.RLock()
         self._id_factory = id_factory or (lambda: secrets.token_urlsafe(32))
 
+    def exclusive(self):
+        """Hold the lock every write of this record takes.
+
+        For the stale-state release, which removes the file itself and must
+        not remove a record a writer replaced after it was read.
+        """
+
+        return self._lock
+
     # --- paths ------------------------------------------------------------
 
     def workflow_dir(self, workflow_id):

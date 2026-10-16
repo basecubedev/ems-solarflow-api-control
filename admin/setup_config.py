@@ -87,10 +87,9 @@ def hardware_section_catalog(mode):
 def build_setup_catalog():
     """Return the setup-mode catalog payload for the Admin UI.
 
-    Only sections/fields in the ``setup`` flow are included. Deprecated/legacy
-    integrations (e.g. Home Assistant control) stay out of the recommended setup
-    list because the catalog scopes them to maintenance. Secret fields are
-    marked and never carry a value.
+    Only sections/fields in the ``setup`` flow are included; the catalog scopes
+    deprecated and maintenance-only ones out of it. Secret fields are marked and
+    never carry a value.
     """
 
     sections = get_config_feature_sections(mode="setup")

@@ -219,6 +219,13 @@ cannot be reported as a success.
 Every mutation follows: **plan → preview → confirmation → execution →
 verification → result**.
 
+A control whose request the appliance has not answered yet -- a plan, Confirm,
+Acknowledge, Cancel, sign-in, sign-out and the password forms -- is disabled,
+marked `aria-busy` and says what it waits for ("Planning…", "Starting…"), so a
+second press sends nothing. The two-second poll that rebuilds the view draws it
+the same way until the answer arrives, and Cancel and Escape wait while a
+confirmation is on its way.
+
 ## Network endpoints
 
 ```text

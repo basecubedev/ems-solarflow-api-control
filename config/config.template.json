@@ -30,7 +30,6 @@
     "allow_mqtt_local_control_writes": true,
     "allow_mqtt_zendure_control_writes": true,
     "allow_state_reconciliation_writes": true,
-    "reconcile_ac_mode_on_start": true,
     "reconcile_smart_mode": true,
     "log_level": "info",
     "max_total_power": 800,
@@ -206,7 +205,6 @@
     "winter_min_soc": 40,
     "ramp_step_percent": 3,
     "adjust_hour": 12,
-    "ac_charge_power": 200,
     "policies": {
       "pv_battery": "solar_morning_step",
       "battery_only": "noon_step"
@@ -372,17 +370,5 @@
       { "max_range": "30d", "bucket": "5m", "window": "5m" },
       { "max_range": "365d", "bucket": "1h", "window": "1h" }
     ]
-  },
-
-  "ha": {
-    "_comment": [
-      "Legacy Home Assistant integration.",
-      "Disabled by default; not recommended for new Admin-guided setups.",
-      "Future Admin flows should prefer telemetry publishing instead of HA-based control."
-    ],
-    "enabled": false,
-    "control_enabled": false,
-    "url": "http://homeassistant.local:8123",
-    "token": "YOUR_TOKEN_HERE"
   }
 }

@@ -318,9 +318,6 @@ def config_args(config=None, runtime_state=None, dashboard_auth=None):
 def diagnose_args(tmp_path, **overrides):
     config_path = tmp_path / "config.json"
     write_config(config_path)
-    config = json.loads(config_path.read_text())
-    config["grid_meter"] = {"type": "ha"}
-    config_path.write_text(json.dumps(config))
     write_control_runtime(tmp_path)
     values = {
         "config": str(config_path),

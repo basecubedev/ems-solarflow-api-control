@@ -371,7 +371,15 @@ selected -> resolved -> Admin aligned -> EMS deployed -> health checked -> known
 ```
 
 Known-good ([`admin/known_good.py`](../../admin/known_good.py) `KnownGoodStore`) is
-written only after Admin and EMS are verified and health checks pass.
+written only after Admin and EMS are verified and health checks pass. That holds
+for the record a status read takes from the running pair too
+(`SystemAlignmentService.reconcile_known_good`): it is written only once the EMS
+passes the health check an upgrade requires (`validate_system_health_result` over
+the EMS diagnosis), which [`admin/running_pair_health.py`](../../admin/running_pair_health.py)
+runs in the background so the status read never waits for it. A check that passes
+records its pair when it ends, through the same rules, if that pair still runs and
+the record is still the one the read found; see
+[Admin maintenance](../user/admin-maintenance.md).
 
 ### Bounded local image history
 

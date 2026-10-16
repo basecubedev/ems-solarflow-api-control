@@ -8,19 +8,71 @@ control chain, see [control-flow.md](control-flow.md).
 ## Pipeline
 
 1. Reload `runtime-state.json` if changed.
-2. Optionally sync Home Assistant helper values with runtime state.
-3. Read Shelly house load.
-4. Read Zendure telemetry.
-5. Detect runtime capabilities.
-6. Run state reconciliation when due.
-7. Detect strict night/minSoc idle.
-8. Stabilize total target.
-9. Decide the charge direction.
-10. Allocate target across devices.
-11. Apply device ramp and limits.
-12. Apply `min_output_limit` while enabled (output direction only).
-13. Apply deadband and write gates.
-14. Write the power command only behind safety gates.
+2. Read Shelly house load.
+3. Read Zendure telemetry.
+4. Detect runtime capabilities.
+5. Run state reconciliation when due.
+6. Detect strict night/minSoc idle.
+7. Stabilize total target.
+8. Decide the charge direction.
+9. Allocate target across devices.
+10. Apply device ramp and limits.
+11. Apply `min_output_limit` while enabled (output direction only).
+12. Apply deadband and write gates.
+13. Write the power command only behind safety gates.
+
+## Reading Device Reports
+
+Both transports read a device's report through one filter
+(`observable_metrics` in `ems/zendure_mqtt/snapshot.py`): a field that is not a
+finite number below 2^53 is read as missing. Past 2^53 a float no longer holds
+every integer, and the full-charge state store keeps several of these fields as
+SQLite integers, which end at 2^63; a local API report with a `socLimit` of
+1e19 or an `acStatus` of 2^63 used to fail every control cycle there, before
+any device was written. The local API names each dropped field once in the log
+(`http_report_value_ignored`); for MQTT see
+[zendure-mqtt-power-control.md](zendure-mqtt-power-control.md).
+
+A missing field reads as 0, which for most fields is the reading itself. Every
+field a state reconciler writes is read as unknown instead, because a write
+follows from it (owner decision 2026-10-12: the EMS does not write blindly over
+a state it does not know): `acMode` (see
+[who owns a device's AC direction](#who-owns-a-devices-ac-direction)), `minSoc`,
+which no reconcile writes while the report carries none
+([winter-mode.md](../winter-mode.md#state-after-a-restart)), and `socSet`,
+`smartMode`, `gridOffMode` and `inputLimit` (K20). Over a missing `socSet`,
+`smartMode` or `gridOffMode` nothing is written; over a missing `inputLimit` only
+the charge power of an `ac_input` role the operator set, as for `acMode`. The
+full-charge assist's `acMode=1` and its charge power go out together or not at
+all, and its restore over a missing field never holds the device out of output
+control for good (see [safety-model.md](safety-model.md#socset-and-inputlimit)). Each
+such field is logged once per device as `unknown_state_field` (with `field=`;
+a `minSoc` winter mode plans as `winter_min_soc_unknown`) until the report
+carries it again. A report without a known `acMode` shows no direction either:
+the record of a charge, a transport's or the assist's, counts such a device out
+of the charge only while it draws nothing from the grid. A device that draws a
+few watts idle never shows that, so a transport's record leaves the charge to
+the device after three exits that only grid draw followed, once the last
+resend window has passed (`ac_charge_left_to_device`); the assist's record
+does the same for the exits of a switch-off, a release after failed cycles or
+its restore, beside its own cap of three exits, and with control on its
+running charge is sent no exit over such a report
+(see [battery-full-charge-assist.md](../battery-full-charge-assist.md#over-a-report-without-a-field-it-writes)).
+Before, a report without `smartMode` got
+`smartMode=1` every reconcile interval, and one without `gridOffMode` got the
+runtime offgrid mode every cycle, with nothing in the next report to say it took.
+
+`minSoc` has one writer, the periodic SoC reconcile, also while a full-charge
+assist runs (the assist writes `socSet` alone). It writes winter mode's target,
+or where winter mode plans nothing the configured `min_soc`, and holds every
+raise to one rule (`cfg.winter_min_soc_raise_limit`): written once it leads the
+SoC by at most three points and does not land on it, a lowering at once. Only
+the `noon_step` policy's own daily step may lead further. See
+[winter-mode.md](../winter-mode.md#why-three-points) for the field evidence. A
+SoC write carries only the bounds that differ from the report: an unchanged
+`minSoc` is not sent again with a `socSet` change (K21), also not while it
+equals the SoC, where a `minSoc` write makes an 800 Pro 2 draw about 1.2 kW from
+the grid for a few seconds.
 
 ## Stable Fast Output Control
 
@@ -105,7 +157,7 @@ sent. If it is not, the EMS writes the value once and then suppresses further
 `outputLimit` writes until the state is left.
 
 Night/minSoc idle is a control-idle state, not a system-idle state. The EMS loop
-continues to fetch device state, process runtime state, publish Home Assistant
+continues to fetch device state, process runtime state, publish dashboard
 telemetry, and expose status and safety visibility. Only repeated output-control
 writes are suppressed after the optional parking write.
 
@@ -378,10 +430,20 @@ the EMS's own, and is sent the exit again once per resend window (30 s). The
 exit counts as sent once the device answered it, accepted or rejected with an
 error, and the one exit to AC input found after a start (below) keeps the same
 window whether the device accepted or rejected it; only an exit the transport
-could not deliver is due again at once. Over
+could not deliver is due again at once. Between exits, while the resend
+window is open and, after three exits that only grid draw followed, until the
+charge is left to the device, every other output target waits -- except a
+safety reduction below the target the last exit carried: a stop to 0 W, or a
+cut by the safety margin (300 W on the local API, `safety_preempt_margin_w`
+over MQTT), goes out at once (K23). It is the device's target, not an exit, and
+keeps the last exit's window and count, so the charge is still left to the
+device when it would have been. Over
 MQTT a changed target still replaces an exit in flight at once; every MQTT
 command carries the direction, so that is an exit too. The shutdown release is
-the last command and is sent whatever the window says.
+the last command and is sent whatever the window says. The same release after
+three failed cycles in a row (R1-1) is not the last command: it keeps the
+window of the record the charge is on, so a device that charges on is sent it
+again once per window and one that reported it left is sent nothing more.
 
 Telemetry alone cannot say who put a device into AC input, so the EMS also asks
 whether it can tell. It can when it saw the device out of AC input (or in its
@@ -390,8 +452,8 @@ one holds it there — an operator's AC-input role, a maintenance routine —
 and once the device took the exit (below); then a
 charge at the floor is the firmware's from the first cycle. A failed read or an
 offline spell does not change that, because the transport's record of the EMS's
-own charge survives the gap. It cannot tell after a restart: a stop by signal
-leaves the EMS's charge running on purpose, so the process before may have left
+own charge survives the gap. It cannot tell after a restart: a stop by SIGTERM
+or SIGHUP leaves the EMS's charge running on purpose, so the process before may have left
 it drawing from the grid. A device found in AC input — above the floor as at
 it, charging or not — therefore stays with the power command until the device
 takes the exit (`smartMode = 1`, `acMode = 2`, `inputLimit = 0`, the target as
@@ -440,8 +502,17 @@ disagrees with the winning claim. A device the regulator is charging therefore
 needs a claim of its own, or the reconciler writes `acMode = 2` once per loop
 against the power command writing `acMode = 1`.
 
-A claim whose `desired_ac_mode` is `None` means *the power command owns this
-device's direction*, and the reconciler skips it. Three claims do that:
+It writes only over a mode it knows. A report without `acMode`, or with a
+value other than `1` or `2`, is an unknown mode, not `0`: over it only a role
+the operator set in runtime state (`emsctl device WR1 ac-mode output`, the
+dashboard's AC role) is written. The default claim and the full-charge assist
+write nothing, and `unknown_ac_mode` is logged once per device until the mode
+is known again (K10, owner decision 2026-10-12). Raw samples from two 800 Pro 2
+over 14 days carry `acMode` only as `1` or `2`.
+
+A claim whose `desired_ac_mode` is `None` writes no `acMode`, and the
+reconciler skips it. For three such claims it means *the power command owns
+this device's direction*:
 
 | Claim | Priority | Raised when |
 |---|---:|---|
@@ -451,6 +522,20 @@ device's direction*, and the reconciler skips it. Three claims do that:
 
 An operator park (150) and maintenance (200) outrank all three, so either still
 takes a device away mid-charge.
+
+The full-charge assist's direction hold (`battery_full_charge_assist`, 200) is
+a fourth, and under it nobody owns the direction. It stands while the assist's
+charge is open on its record and the report carries no known `acMode` and no
+charging `acStatus`, so the direction cannot be read. It keeps every claim
+below it, a role the operator set included, from writing `acMode` over the
+unknown mode into that charge, and the device takes no regulator charge while
+it stands. Output control is as the best claim below it has it: the
+regulator's under the default claim, nobody's under an operator park; the
+regulator's target then reaches the device only as the bare `outputLimit` a
+device in AC input ignores. The direction is written again only by the exits
+on the assist's record -- a switch-off's, a stop's, a release after failed
+cycles -- or by the assist itself once a report carries `acMode` (see
+[battery-full-charge-assist.md](../battery-full-charge-assist.md#over-a-report-without-a-field-it-writes)).
 
 ## Deadband
 
@@ -482,8 +567,19 @@ with the state reconciler stood down for that exit.
 
 If a device cannot be read, the EMS may use a cached state, or a zero fallback
 when no cached state exists, so the loop can continue safely. Offline devices
-are marked offline and skipped for output writes.
+are marked offline and skipped for output writes. A read that raises an error
+instead of returning no state is logged as `device_fetch_failed` with the
+device's name; an exit raised during a read is not absorbed.
 
 Cached telemetry is last-known data. Offline does not automatically mean the
 device is currently producing `0W`; it means the EMS does not have fresh device
 telemetry for that cycle.
+
+An offline device keeps the role its claims give it: the operator's runtime
+role, the full-charge assist's and the regulator's claims are resolved as for a
+device that answered, and a charge the firmware runs by itself, which only a
+report shows, is carried from the last cycle. A device parked in AC input
+therefore gets no share of the output while it does not answer; before, it fell
+back to the default `ac_output` role for every such cycle, and the allocator,
+which keeps an offline device in the allocation on its cached state, gave it
+one. Nothing is reconciled for a device without a report.

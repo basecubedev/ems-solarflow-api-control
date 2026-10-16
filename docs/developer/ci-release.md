@@ -169,13 +169,25 @@ pull request.
 seconds and the upstream-tree tests skip themselves unless a job fetches a real
 tree — without it nothing exercises the contract the image is built against.
 
-The Admin replacement journey is deliberately not duplicated. It may only run
-against immutable published digests, which
-`.github/workflows/admin-replacement-canary.yml` resolves from the Development
-build catalogue, verifies with `scripts/verify_development_catalogue.py` and
-pulls after a GHCR login. That workflow owns the gate end to end and runs on its
-own weekly schedule plus `workflow_dispatch`; a missing or mutable target fails
-it as a blocked precondition instead of skipping.
+The Admin replacement journey is deliberately not duplicated. It upgrades the
+Admin of the previous stable release to the Admin/EMS pair of the latest stable
+release — the upgrade an installation takes, for example v0.8.13 to v0.8.14 —
+and may only run against immutable published digests.
+`.github/workflows/admin-replacement-canary.yml` resolves the pair with
+`scripts/resolve_canary_builds.py`: which releases are stable, and in which
+order, is the Admin's own release listing over the release catalogue built from
+the GitHub Releases, so prereleases are never a side; each tag is then resolved
+to the digest of its registry manifest, and its build identity is read from the
+image labels and held to the Admin's own System Build pairing rule. The runner
+pulls the three images by digest and probes both Admins for the hooks of
+`tests/e2e/admin-test-contract.json` before the first container starts. That
+workflow owns the gate end to end and runs on its own weekly schedule plus
+`workflow_dispatch`, which can name a different stable source or target. No
+stable pair, a listing that warns of releases it could not read, labels that
+are not one System Build, identical Admin digests or an Admin without the
+contract's hooks fail it as a blocked precondition instead of skipping. Both sides are released Admins while the page objects come from the
+checkout, so a hook the page objects start to rely on keeps the canary red until
+two stable releases serve it.
 
 ## Generated config template
 
