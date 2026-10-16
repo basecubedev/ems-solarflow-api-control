@@ -20,6 +20,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -160,13 +161,16 @@ def test_the_verify_step_is_told_what_the_run_was_started_for():
 
 STUB = """#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$STUB_LOG"
+if [[ "$2" == "lists" ]]; then exec "$REAL_PYTHON" "$CATALOGUE_SCRIPT" "${@:2}"; fi
 [[ "$*" == *" verify "*"--expect-tag $STUB_LISTED" ]]
 """
 
 
 def _run_verify(tmp_path, *, listed, newest="v0.8.5", **env):
     """Run the verify step's script with ``python3`` replaced by a stub whose
-    catalogue lists exactly one tag; ``newest`` is what the publish job wrote."""
+    catalogue lists exactly one tag; ``newest`` is what the publish job wrote.
+    ``lists`` reaches the real script, so the step asks the catalogue's own
+    rule which tags it can list."""
 
     bash = shutil.which("bash")
     if not bash:
@@ -182,6 +186,8 @@ def _run_verify(tmp_path, *, listed, newest="v0.8.5", **env):
         "PATH": f"{stub_dir}{os.pathsep}{os.environ.get('PATH', '')}",
         "STUB_LOG": str(log),
         "STUB_LISTED": listed,
+        "REAL_PYTHON": sys.executable,
+        "CATALOGUE_SCRIPT": str(ROOT / "scripts" / "release_catalogue.py"),
         "NEWEST_TAG": newest,
         "GITHUB_REPOSITORY": "example/repo",
         "EXPECT_TAG": "",
@@ -239,6 +245,21 @@ def test_a_removed_release_falls_back_to_the_newest_entry_written(tmp_path, acti
 
     assert result.returncode == 0, result.stderr
     assert calls and calls[0].endswith("--expect-tag v0.8.5")
+
+
+@pytest.mark.parametrize("tag", ["appliance-manager-v0.3.13", "appliance-image-v0.3.9"])
+@pytest.mark.parametrize("action", ["published", "edited"])
+def test_a_release_the_catalogue_never_lists_falls_back_to_the_newest_entry_written(tmp_path, tag, action):
+    """A Manager or image Release shares the repository but never the EMS
+    catalogue. Pasting its notes fired ``edited``, and the job waited ten
+    minutes for a tag that cannot appear, red over a correct file."""
+
+    result, calls = _run_verify(
+        tmp_path, listed="v0.8.15", newest="v0.8.15", EVENT_NAME="release", EVENT_ACTION=action, RELEASE_TAG=tag
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert calls and calls[0].endswith("--expect-tag v0.8.15")
 
 
 def test_an_edited_draft_is_not_expected_in_the_file(tmp_path):
