@@ -2,6 +2,7 @@
 
 This is the documentation map. The root [README.md](../README.md) is the short
 router that points you at one of three setup paths; this page lists everything.
+Also online: <https://basecubedev.github.io/ems-solarflow-api-control/>
 
 Documentation is split by audience:
 

@@ -14,25 +14,12 @@ It reads local grid meter and Zendure telemetry, controls inverter output,
 and provides a local dashboard.
 
 > [!TIP]
-> **New to EMS SolarFlow?**
-> Read the [Project Overview](docs/user/project-overview.md) for a non-technical introduction to the main features, supported setups, dashboards, energy management, and system administration.
+> **New to EMS SolarFlow?** Start with the [Project Overview](docs/user/project-overview.md) or read the docs online at <https://basecubedev.github.io/ems-solarflow-api-control/>.
 
 > EMS controls real power hardware.
 > Read the [safety guide](docs/user/safety.md) before enabling live writes.
 
 [![Local EMS dashboard — aggregated system view](docs/assets/preview-aggregated.jpg)](docs/dashboard.md)
-
-## How it fits together
-
-```mermaid
-flowchart LR
-    manager["Appliance Manager :8088<br/>Raspberry Pi appliance only"] -- installs --> admin["Admin Console :8090<br/>setup, discovery, updates"]
-    admin -- "config.json, deploys" --> ems["EMS + Dashboard :8080<br/>the control loop"]
-    meter["Grid meter"] -- "house load" --> ems
-    ems == "outputLimit every 5 s" ==> zendure["Zendure devices"]
-```
-
-Only the EMS controls; stopping the Admin Console or the Appliance Manager does not stop control. [How the parts fit together](docs/user/how-it-fits-together.md)
 
 ## Supported hardware at a glance
 
