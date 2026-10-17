@@ -37,6 +37,7 @@ from admin.admin_update import (
     PendingTransitionStore,
 )
 from admin.development_catalogue import development_catalogue_source
+from admin.discovery import iter_scan_hosts, validate_cidr
 from admin.models import DiscoveredDevice, utc_now_iso
 from admin.setup_workflow import SETUP_TRANSITION_MODES, SetupWorkflowArtifacts
 from admin.embedded_resources import (
@@ -683,10 +684,31 @@ def _reset_test_mdns_provider(provider, seeded):
         provider._known_candidates.clear()
 
 
+def offline_network_scan(cidr, timeout_ms=None, max_workers=None, progress_callback=None):
+    """The deterministic Admin's network scan: every host checked, none contacted.
+
+    Browser specs put the devices they need into discovery through the seeded
+    mDNS path. A real sweep would reach the LAN the test machine sits on, over
+    HTTP and Modbus TCP alike.
+    """
+
+    hosts = iter_scan_hosts(validate_cidr(cidr))
+    for checked, ip in enumerate(hosts, start=1):
+        if progress_callback is not None:
+            progress_callback({
+                "total_hosts": len(hosts),
+                "checked_hosts": checked,
+                "found_devices": 0,
+                "failed_hosts": 0,
+                "current_ip": ip,
+            })
+    return [], []
+
+
 def build_test_runtime(*, data_dir):
     """Compose the deterministic Admin runtime for ``EMS_ADMIN_TEST_MODE``."""
 
-    from admin.server import create_admin_runtime
+    from admin.server import ScanRegistry, create_admin_runtime
 
     initial_running_tag = _initial_running_tag()
     docker = _TestDocker(initial_running_tag)
@@ -713,6 +735,7 @@ def build_test_runtime(*, data_dir):
     resource_hold = _install_resource_import_hold(system_alignment)
     mdns_provider, seeded_mdns_devices = _build_test_mdns_provider()
     runtime = create_admin_runtime(
+        registry=ScanRegistry(scan_runner=offline_network_scan),
         release_manager=release_manager,
         system_alignment=system_alignment,
         operation_coordinator=operation_coordinator,

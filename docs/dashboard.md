@@ -36,6 +36,13 @@ telemetry-only device that reports no charge level — an inverter without a
 battery — shows none: its card and its row in the live flow draw no SoC, and the
 average SoC leaves it out rather than counting an empty battery.
 
+An E3/DC storage system configured as a read-only device appears the same way,
+with a **Telemetry only** badge: PV, **Output** (its inverter's AC power),
+battery power and SOC, plus a **Grid** value with the grid power the E3/DC
+measures. It has no **Limit** and no **Firmware status** block, because the EMS
+never controls it and it has no Zendure firmware states. See
+[E3/DC as a read-only device](technical/configuration.md#e3dc-as-a-read-only-device).
+
 Each device card carries a compact **Firmware status** block below the main
 power tiles. It translates selected Zendure firmware status values into readable
 labels instead of raw numbers:

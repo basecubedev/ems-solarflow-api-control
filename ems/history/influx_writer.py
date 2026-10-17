@@ -183,7 +183,13 @@ def _is_number(value):
 
 
 def build_telemetry_lines(
-    devices, states, online_map, grid_power, target=None, timestamp_ns=None
+    devices,
+    states,
+    online_map,
+    grid_power,
+    target=None,
+    timestamp_ns=None,
+    read_only_tiles=(),
 ):
     """Build InfluxDB line protocol from one control-loop telemetry snapshot.
 
@@ -196,7 +202,10 @@ def build_telemetry_lines(
 
     ``house_load`` mirrors the dashboard telemetry semantics and is derived by
     the shared :func:`ems.power_direction.derive_house_load_w`, so a charging
-    device's own draw is not billed to the household.
+    device's own draw is not billed to the household. ``read_only_tiles`` are
+    the devices the EMS reads but does not control (an E3/DC); they are written
+    the same way, tagged with their own ``source``, and their output counts in
+    ``house_load`` as it does on the dashboard.
     """
     if timestamp_ns is None:
         timestamp_ns = time.time_ns()
@@ -221,6 +230,23 @@ def build_telemetry_lines(
             inverter_total += fields["output"]
         if _is_number(fields.get("grid_input")):
             charge_total += fields["grid_input"]
+        line = build_line_protocol("zendure_device", tags, fields, timestamp_ns)
+        if line:
+            lines.append(line)
+
+    for tile in read_only_tiles or ():
+        tags = {"device": tile["name"], "source": tile.get("source", "read_only")}
+        if not tile.get("online"):
+            line = build_line_protocol(
+                "zendure_device", tags, {"available": False}, timestamp_ns
+            )
+            if line:
+                lines.append(line)
+            continue
+        fields = {"available": True}
+        fields.update(_device_field_values(tile["state"]))
+        if _is_number(fields.get("output")):
+            inverter_total += fields["output"]
         line = build_line_protocol("zendure_device", tags, fields, timestamp_ns)
         if line:
             lines.append(line)

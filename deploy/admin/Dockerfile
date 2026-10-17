@@ -23,6 +23,7 @@ ARG DOCKER_COMPOSE_VERSION=2.32.4
 WORKDIR /app
 
 # Docker client (CLI + Compose plugin) as static binaries — no daemon package.
+# Both downloads retry: one 5xx from a release host otherwise fails the build.
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates curl; \
@@ -32,11 +33,13 @@ RUN set -eux; \
       arm) dockerArch=armhf; composeArch=armv7 ;; \
       *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL "https://download.docker.com/linux/static/stable/${dockerArch}/docker-${DOCKER_CLI_VERSION}.tgz" -o /tmp/docker.tgz; \
+    curl -fsSL --retry 5 --retry-all-errors \
+      "https://download.docker.com/linux/static/stable/${dockerArch}/docker-${DOCKER_CLI_VERSION}.tgz" -o /tmp/docker.tgz; \
     tar -xzf /tmp/docker.tgz -C /tmp docker/docker; \
     install -m 0755 /tmp/docker/docker /usr/local/bin/docker; \
     mkdir -p /usr/local/lib/docker/cli-plugins; \
-    curl -fsSL "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-linux-${composeArch}" \
+    curl -fsSL --retry 5 --retry-all-errors \
+      "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-linux-${composeArch}" \
       -o /usr/local/lib/docker/cli-plugins/docker-compose; \
     chmod 0755 /usr/local/lib/docker/cli-plugins/docker-compose; \
     apt-get purge -y curl; apt-get autoremove -y; \
@@ -65,6 +68,8 @@ COPY ems/config_catalog.py ./ems/config_catalog.py
 # The winter policy registry the catalog offers its policy options from.
 COPY ems/winter_policies.py ./ems/winter_policies.py
 COPY ems/config.py ./ems/config.py
+COPY ems/read_only_devices.py ./ems/read_only_devices.py
+COPY ems/e3dc_modbus.py ./ems/e3dc_modbus.py
 COPY ems/template_addresses.py ./ems/template_addresses.py
 # The canonical config mutation semantics both Admin workflows apply changes
 # through; Core-owned and client-free.

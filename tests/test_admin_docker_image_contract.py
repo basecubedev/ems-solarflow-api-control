@@ -80,6 +80,13 @@ def test_dockerfile_copies_shared_device_identity_and_status_sanitizer():
     assert "ems/external_status.py" in copies
 
 
+
+def test_dockerfile_copies_the_e3dc_modbus_reader():
+    """The network scan reads an E3/DC's magic word with the EMS's own client."""
+
+    copies = dict((dest, src) for src, dest in _dockerfile_app_copies())
+    assert "ems/e3dc_modbus.py" in copies
+
 def test_admin_image_contains_dashboard_auth_helper():
     # Admin shares the EMS Dashboard password; the auth helper must ship in the
     # image so the Admin server can hash/verify against config/dashboard-auth.json.

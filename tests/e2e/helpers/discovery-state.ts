@@ -20,6 +20,17 @@ export const SHELLY_METER: LocalApiDeviceSpec = {
   model: "Shelly Pro 3EM",
 };
 
+export const E3DC_SYSTEM: LocalApiDeviceSpec = {
+  ip: "192.168.100.94",
+  port: 502,
+  serial: "S10-E2E0000001",
+  role: "grid_meter",
+  api_family: "e3dc_modbus",
+  device_type: "e3dc_modbus",
+  display_name: "E3/DC S10 E AIO",
+  model: "S10 E AIO",
+};
+
 export function apiInverter(serial: string, ip: string): LocalApiDeviceSpec {
   return {
     ip,

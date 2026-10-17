@@ -311,7 +311,8 @@ This path edits an existing installation.
 
   Adding hardware also works like Fresh Install: the **Add more devices** row
   runs discovery (plus a manual scan), lists candidates as cards with
-  one-click **Add inverter / Add as grid meter** actions and their match
+  one-click **Add inverter / Add as grid meter / Add as read-only device**
+  (an E3/DC, see [device management](admin/device-management.md)) actions and their match
   state against the current config (In config, Not found, IP changed), and
   offers manual adding for devices discovery cannot reach. Adding a device —
   from discovery or manually — opens its configured card, where all device
