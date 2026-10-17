@@ -234,15 +234,44 @@ def test_the_fixed_download_tag_is_created_once_and_then_only_rewritten():
     assert "--clobber" in script, "the pointer file is not replaced in place"
 
 
-def test_the_fixed_download_tag_is_a_prerelease_like_everything_on_this_side():
-    """`/releases/latest` skips prereleases, and that alias belongs to EMS."""
+def command_containing(script, needle):
+    """The one shell command that holds ``needle``, continuation lines included.
+
+    Written after a character window quietly made this file lie: asserting
+    ``"--prerelease" in script[edit : edit + 400]`` passed with the flag deleted
+    from the edit branch, because the window reached into the `else` branch and
+    found the *create* call's flag. A test that reads a neighbouring command is
+    not a weaker test, it is a test of nothing.
+    """
+
+    lines = script.splitlines()
+    start = next(index for index, line in enumerate(lines) if needle in line)
+    end = start
+    while lines[end].rstrip().endswith("\\"):
+        end += 1
+    return "\n".join(lines[start : end + 1])
+
+
+def test_the_fixed_download_tag_is_a_prerelease_every_time_it_is_touched():
+    """`/releases/latest` skips prereleases, and that alias belongs to EMS.
+
+    Both branches have to say so, and the edit branch is the one that matters:
+    it is the only one that runs after the first build, so a pointer created by
+    hand -- or flipped in the web UI by someone who read "latest" as a promise
+    rather than a badge -- would otherwise stay a full release forever, with
+    every later build content to leave it that way.
+    """
 
     script = pointer_step()["run"]
-    create = script.index('gh release create "${POINTER_TAG}"')
 
-    assert "--prerelease" in script[create : create + 400], (
-        "the fixed download release is not marked prerelease, so it would take "
-        "the Latest badge from the EMS release that owns it"
+    assert "--prerelease" in command_containing(script, 'gh release create "${POINTER_TAG}"'), (
+        "a newly created pointer is not marked prerelease, so it would take the "
+        "Latest badge from the EMS release that owns it"
+    )
+    assert "--prerelease" in command_containing(script, 'gh release edit "${POINTER_TAG}"'), (
+        "the edit branch does not re-assert prerelease, so a pointer that is a "
+        "full release is never put back -- and that branch is the only one that "
+        "runs once the pointer exists"
     )
 
 
