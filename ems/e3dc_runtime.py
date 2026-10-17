@@ -226,74 +226,14 @@ class E3dcModbusSession:
         )
 
     def _detect_mapping(self):
-        """Find the address offset from the magic word, one short attempt each.
-
-        Unlike the probe's detection, a transport error ends the search at once:
-        this runs inside the control cycle, and a device that does not answer
-        one read will not answer five.
-        """
-
-        answers = []
-        for offset in modbus.ADDRESS_OFFSET_CANDIDATES:
-            try:
-                registers = self._client.read_registers(
-                    modbus.MAGIC_ADDRESS + offset,
-                    1,
-                    modbus.READ_HOLDING_REGISTERS,
-                    self.unit_id,
-                )
-            except modbus.ModbusExceptionResponse as exc:
-                answers.append(modbus.Attempt(self.unit_id, 3, offset, str(exc)))
-                continue
-            except modbus.ModbusError as exc:
-                if answers:
-                    raise modbus.ModbusError(
-                        f"connection to {self.host}:{self.port} lost after it answered "
-                        f"(last answer: {answers[-1].outcome}): {exc}"
-                    ) from exc
-                raise modbus.ModbusError(
-                    f"no Modbus answer from {self.host}:{self.port}: {exc}"
-                ) from exc
-            outcome = f"0x{registers[0]:04X}"
-            answers.append(modbus.Attempt(self.unit_id, 3, offset, outcome))
-            if registers[0] == modbus.MAGIC_VALUE:
-                return modbus.Mapping(
-                    self.unit_id, modbus.READ_HOLDING_REGISTERS, offset, registers[0]
-                )
-        if modbus.looks_like_sunspec(answers):
-            raise modbus.ModbusError(
-                "device answers in SunSpec mode; set the Modbus TCP protocol to E3DC"
-            )
-        last = answers[-1].outcome if answers else "no answer"
-        raise modbus.ModbusError(
-            f"magic word 0x{modbus.MAGIC_VALUE:04X} not found at unit id "
-            f"{self.unit_id} (last answer: {last})"
-        )
+        return modbus.detect_magic_mapping(self._client, self.unit_id, f"{self.host}:{self.port}")
 
     def _read_device_info(self):
-        """Manufacturer, model and firmware, from one block read.
+        """Manufacturer, model and firmware; empty when the block is refused."""
 
-        Unlike the probe, there is no field-by-field fallback with reconnects:
-        this runs inside the control cycle. A refusal only leaves the info
-        empty; a transport error is a failed poll.
-        """
-
-        try:
-            registers = self._client.read_registers(
-                self.mapping.wire_address(modbus.IDENTIFICATION_FIRST),
-                modbus.IDENTIFICATION_COUNT,
-                self.mapping.function_code,
-                self.mapping.unit_id,
-            )
-        except modbus.ModbusExceptionResponse:
-            return {}
+        info = modbus.read_identification(self._client, self.mapping)
         wanted = ("manufacturer", "model", "firmware_release", "modbus_firmware")
-        return {
-            key: _field_value(
-                modbus.IDENTIFICATION_FIELDS, modbus.IDENTIFICATION_FIRST, registers, key
-            )
-            for key in wanted
-        }
+        return {key: info[key] for key in wanted if key in info}
 
     def _poll_succeeded(self, reading):
         if self.consecutive_failures:

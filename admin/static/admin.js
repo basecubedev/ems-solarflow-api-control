@@ -7205,6 +7205,7 @@ const GRID_METER_FAMILY_TYPES = {
   zendure_grid_meter_http: "zendure_grid_meter_http",
   zendure_smartmeter_3ct_http: "zendure_grid_meter_http",
   tasmota_http: "tasmota_http",
+  e3dc_modbus: "e3dc_modbus",
 };
 
 // An explicit meter type (chosen manually) wins over discovery inference so a
@@ -15806,7 +15807,7 @@ function renderMaintenanceE3dcDevice(device, index) {
   return card.element;
 }
 
-function mconfigAddE3dcDevice() {
+function mconfigAddE3dcDevice(endpoint) {
   const devices = mconfigState.draft.devices || (mconfigState.draft.devices = []);
   const taken = new Set(devices.map((device) => String(device.name || "")));
   let name = "E3DC";
@@ -15815,9 +15816,9 @@ function mconfigAddE3dcDevice() {
     kind: "e3dc_modbus",
     original_name: null,
     name,
-    ip: "",
-    port: 502,
-    unit_id: 1,
+    ip: (endpoint && endpoint.ip) || "",
+    port: (endpoint && endpoint.port) || E3DC_MODBUS_DEFAULTS.port,
+    unit_id: E3DC_MODBUS_DEFAULTS.unit_id,
     enabled: true,
     has_enabled_key: true,
   });
@@ -15864,6 +15865,31 @@ function mconfigDisplayValue(value) {
 
 function mconfigDiscoveryRole(device) {
   return String(device.role_suggestion || "unknown");
+}
+
+const E3DC_MODBUS_DEFAULTS = { port: 502, unit_id: 1 };
+
+function mconfigIsE3dcCandidate(device) {
+  return String((device && device.api_family) || "").toLowerCase() === "e3dc_modbus";
+}
+
+function mconfigE3dcSetting(value, key) {
+  return value == null || String(value).trim() === "" ? E3DC_MODBUS_DEFAULTS[key] : Number(value);
+}
+
+function mconfigE3dcScanReaches(configured) {
+  return (
+    !validateManualScanInput(String(configured.ip || "") + "/24").error &&
+    mconfigE3dcSetting(configured.port, "port") === E3DC_MODBUS_DEFAULTS.port &&
+    mconfigE3dcSetting(configured.unit_id, "unit_id") === E3DC_MODBUS_DEFAULTS.unit_id
+  );
+}
+
+function mconfigSameE3dcEndpoint(configured, found) {
+  return (
+    mconfigDisplayValue(configured.ip) === mconfigDisplayValue(found.ip) &&
+    mconfigE3dcSetting(configured.port, "port") === mconfigE3dcSetting(found.port, "port")
+  );
 }
 
 // Both sides carry backend-issued ids: the physical identity where Core
@@ -15970,6 +15996,28 @@ function buildMaintenanceDiscoveryReview(discovered) {
         discovered: device,
       });
     }
+  });
+
+  supported.filter(mconfigIsE3dcCandidate).forEach((device) => {
+    const configured = devices.find(
+      (item) =>
+        mconfigIsE3dcDevice(item) &&
+        item.original_name != null &&
+        mconfigSameE3dcEndpoint(item, device)
+    );
+    results.push(
+      configured
+        ? { role: "read_only_device", state: "found", configured, discovered: device }
+        : { role: "read_only_device", state: "new", discovered: device }
+    );
+  });
+  devices.forEach((configured, index) => {
+    if (!mconfigIsE3dcDevice(configured) || configured.original_name == null) return;
+    if (!mconfigE3dcScanReaches(configured)) return;
+    const seen = supported.some(
+      (device) => mconfigIsE3dcCandidate(device) && mconfigSameE3dcEndpoint(configured, device)
+    );
+    if (!seen) results.push({ role: "read_only_device", state: "missing", configured, index });
   });
 
   maintenanceMqttProposals().forEach((proposal) => {
@@ -16350,6 +16398,12 @@ function mconfigDiscoveredAlreadyInDraft(item) {
   const found = item && item.discovered;
   if (!found || !mconfigState.draft) return false;
 
+  if (item.role === "read_only_device") {
+    return (mconfigState.draft.devices || []).some(
+      (device) => mconfigIsE3dcDevice(device) && mconfigSameE3dcEndpoint(device, found)
+    );
+  }
+
   if ((item.role || mconfigDiscoveryRole(found)) === "grid_meter") {
     const meter = mconfigState.draft.grid_meter || {};
     return Boolean(
@@ -16409,11 +16463,16 @@ function mconfigDiscoveryActionState(item) {
   // New candidates add fresh-install style: one role-specific action.
   const role = item.role || mconfigDiscoveryRole(item.discovered || {});
   return {
-    text: role === "grid_meter" ? "Add as grid meter" : "Add inverter",
+    text: MCONFIG_DISCOVERY_ADD_TEXT[role] || "Add inverter",
     disabled: false,
     cssClass: "is-add",
   };
 }
+
+const MCONFIG_DISCOVERY_ADD_TEXT = {
+  grid_meter: "Add as grid meter",
+  read_only_device: "Add as read-only device",
+};
 
 function mconfigMarkDraftChanged(source) {
   mconfigState.previewFingerprint = null;
@@ -16434,6 +16493,16 @@ function mconfigMarkDraftChanged(source) {
 function mconfigAddDiscovered(item) {
   const found = item.discovered;
   if (!found) return false;
+  if (item.role === "read_only_device") {
+    if (mconfigDiscoveredAlreadyInDraft(item)) {
+      mconfigRerenderDiscoveryReview();
+      return false;
+    }
+    mconfigAddE3dcDevice({ ip: found.ip, port: found.port });
+    mconfigMarkDraftChanged("discovery");
+    mconfigRerenderDiscoveryReview();
+    return true;
+  }
   if (item.role === "grid_meter") {
     const gridMeter = {
       present: true,
@@ -16842,9 +16911,13 @@ function renderMaintenanceDiscoveryCard(item) {
   const configured = item.configured || {};
   const role = item.role || mconfigDiscoveryRole(found) || "unknown";
   const isGridMeter = role === "grid_meter";
+  const isReadOnly = role === "read_only_device";
   const cardId =
     "maintenance-candidate-" +
-    String(found.id || observationKey(found) || configured.name || role);
+    (item.discovered
+      ? String(found.id || observationKey(found))
+      : "configured-" + String(item.index != null ? item.index : configured.name || role)) +
+    (isReadOnly ? "-read-only" : "");
 
   const endpoint = String(found.ip || configured.ip || "");
   const serial = found.serial_number || configured.sn || "";
@@ -16937,15 +17010,31 @@ function renderMaintenanceDiscoveryCard(item) {
 
   const relationship = mconfigConnectionRelationshipNote(item);
   if (relationship) body.appendChild(relationship);
+  if (isReadOnly) {
+    const note = document.createElement("p");
+    note.className = "maintenance-note muted";
+    note.textContent =
+      "Read-only device: the dashboard shows its PV, battery and grid values. " +
+      "The EMS only reads it and never controls it.";
+    body.appendChild(note);
+  }
 
   const card = mconfigHardwareCard({
     role: isGridMeter ? "grid_meter" : "inverter",
     id: cardId,
-    title: isGridMeter ? "Grid meter candidate" : "Inverter candidate",
+    title: isGridMeter
+      ? "Grid meter candidate"
+      : isReadOnly
+      ? "Read-only device candidate"
+      : "Inverter candidate",
     model: mconfigDiscoveryLabel(item),
     meta,
     statusText: MCONFIG_DISCOVERY_STATUS_TEXT[item.state] || "Configured",
-    connectionSource: isGridMeter ? "" : mconfigCandidateConnectionSource(item),
+    connectionSource: isGridMeter
+      ? ""
+      : isReadOnly
+      ? "modbus_tcp"
+      : mconfigCandidateConnectionSource(item),
     body,
     actions,
   });

@@ -1115,6 +1115,11 @@ Modbus TCP has to be switched on at the device, and it takes **two** switches:
 With only the first switch on, port 502 stays closed. A device in SunSpec mode
 is reported as such rather than as a missing device.
 
+The Admin network scan finds an E3/DC once both switches are on: it reads the
+magic word on port 502 with unit ID 1 and offers the system as grid meter and
+read-only device ([Admin discovery](admin-discovery.md)). A system set to
+another unit ID is not found and is entered by hand.
+
 Example:
 
 ```json

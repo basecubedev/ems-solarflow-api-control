@@ -82,6 +82,7 @@ _GRID_TYPES = {
     "zendure_grid_meter_http": "zendure_grid_meter_http",
     "zendure_smartmeter_3ct_http": "zendure_grid_meter_http",
     "tasmota_http": "tasmota_http",
+    E3DC_MODBUS_GRID_METER_TYPE: E3DC_MODBUS_GRID_METER_TYPE,
 }
 # Explicit meter types a manual (non-discovered) grid meter may declare. A manual
 # entry has no api_family/device_type, so its type must be chosen, not inferred.

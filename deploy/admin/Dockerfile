@@ -69,6 +69,7 @@ COPY ems/config_catalog.py ./ems/config_catalog.py
 COPY ems/winter_policies.py ./ems/winter_policies.py
 COPY ems/config.py ./ems/config.py
 COPY ems/read_only_devices.py ./ems/read_only_devices.py
+COPY ems/e3dc_modbus.py ./ems/e3dc_modbus.py
 COPY ems/template_addresses.py ./ems/template_addresses.py
 # The canonical config mutation semantics both Admin workflows apply changes
 # through; Core-owned and client-free.

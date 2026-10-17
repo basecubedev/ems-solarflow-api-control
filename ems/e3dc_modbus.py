@@ -409,6 +409,66 @@ def looks_like_sunspec(attempts):
     return any(attempt.outcome == f"0x{SUNSPEC_FIRST_WORD:04X}" for attempt in attempts)
 
 
+def detect_magic_mapping(client, unit_id, endpoint):
+    """Find the address offset from the magic word, one short attempt each.
+
+    Unlike ``detect_mapping``, a transport error ends the search at once: a
+    device that does not answer one read will not answer five. The control
+    cycle and the Admin network scan both run on that bound. Raises
+    ``ModbusError`` naming ``endpoint`` when no E3/DC answers.
+    """
+
+    answers = []
+    for offset in ADDRESS_OFFSET_CANDIDATES:
+        try:
+            registers = client.read_registers(
+                MAGIC_ADDRESS + offset, 1, READ_HOLDING_REGISTERS, unit_id
+            )
+        except ModbusExceptionResponse as exc:
+            answers.append(Attempt(unit_id, READ_HOLDING_REGISTERS, offset, str(exc)))
+            continue
+        except ModbusError as exc:
+            if answers:
+                raise ModbusError(
+                    f"connection to {endpoint} lost after it answered "
+                    f"(last answer: {answers[-1].outcome}): {exc}"
+                ) from exc
+            raise ModbusError(f"no Modbus answer from {endpoint}: {exc}") from exc
+        outcome = f"0x{registers[0]:04X}"
+        answers.append(Attempt(unit_id, READ_HOLDING_REGISTERS, offset, outcome))
+        if registers[0] == MAGIC_VALUE:
+            return Mapping(unit_id, READ_HOLDING_REGISTERS, offset, registers[0])
+    if looks_like_sunspec(answers):
+        raise ModbusError("device answers in SunSpec mode; set the Modbus TCP protocol to E3DC")
+    last = answers[-1].outcome if answers else "no answer"
+    raise ModbusError(
+        f"magic word 0x{MAGIC_VALUE:04X} not found at unit id {unit_id} (last answer: {last})"
+    )
+
+
+def read_identification(client, mapping):
+    """Every identification field, from one block read.
+
+    There is no field-by-field fallback: a refused block leaves the result
+    empty, and a transport error is raised to the caller.
+    """
+
+    try:
+        registers = client.read_registers(
+            mapping.wire_address(IDENTIFICATION_FIRST),
+            IDENTIFICATION_COUNT,
+            mapping.function_code,
+            mapping.unit_id,
+        )
+    except ModbusExceptionResponse:
+        return {}
+    values = {}
+    for item in IDENTIFICATION_FIELDS:
+        start = item.address - IDENTIFICATION_FIRST
+        values[item.key] = item.decode(registers[start:start + item.length])
+    return values
+
+
 @dataclass
 class Reading:
     field: Field

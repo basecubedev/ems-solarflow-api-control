@@ -4970,6 +4970,8 @@ def _run_maintenance_discovery_node(setup):
             "mconfigIsMqttDevice",
             "mconfigIsExternalDevice",
             "mconfigIsE3dcDevice",
+            "mconfigIsE3dcCandidate",
+            "mconfigSameE3dcEndpoint",
             "buildMaintenanceDiscoveryReview",
         )
     )

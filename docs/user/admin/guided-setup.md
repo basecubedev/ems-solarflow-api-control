@@ -111,7 +111,9 @@ safety*, *Advanced / System settings*, and a *Config validation* box.
 - **Grid meter** — type and address. Only one grid meter can be active.
   Choosing an **E3/DC** as grid meter also adds it as a read-only device, so
   its PV, battery, inverter and grid appear on the dashboard; the preview says
-  so, and Maintenance can remove it again.
+  so, and Maintenance can remove it again. The network scan finds an E3/DC
+  whose Modbus TCP is switched on with the default unit ID 1 and offers it
+  with port 502 filled in; when it is the only meter found, it is selected.
 - **Inverters** — each gets a short EMS name (`INV_1`, `INV_2`, …). This is the
   identifier used in `config.json`, logs and the dashboard. Edit it now if you
   want a different one.

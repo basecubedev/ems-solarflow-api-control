@@ -72,6 +72,14 @@ grid meter. The summary counts it as a read-only device, not as an inverter,
 and at least one Zendure inverter is still required. Nothing about it is
 written into the EMS runtime state.
 
+A scan in *Add more devices* that finds an E3/DC shows it twice: as a grid
+meter candidate (**Add as grid meter**) and as a read-only device candidate
+(**Add as read-only device**). Each action fills in the address and Modbus
+port the scan found; a read-only device already saved on that address and port
+is reported *In config*, and one on port 502 with unit ID 1 that the scan did
+not find *Not found*. The scan only finds an E3/DC with the default unit ID
+1; one set to another unit ID is added by hand.
+
 ### 4 — Change the grid meter
 
 **What you see:** the **Grid meter** subsection with a type selector.

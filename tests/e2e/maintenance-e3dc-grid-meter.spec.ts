@@ -1,7 +1,8 @@
-import { type Page } from "@playwright/test";
+import { type Page, type Route } from "@playwright/test";
 import { test, expect } from "./fixtures/admin";
 import { LoginPage } from "./pages/login-page";
 import { MaintenancePage } from "./pages/maintenance-page";
+import { E3DC_SYSTEM } from "./helpers/discovery-state";
 
 // Switching the grid meter to an E3/DC in Maintenance shows the Modbus fields
 // the catalog declares for it, and the real preview/apply writes the block the
@@ -168,4 +169,66 @@ test("Maintenance: switching to the E3/DC and back restores the meter's own port
   await expect(card.getByLabel(/^Port/)).toHaveValue("502");
   await card.getByLabel(/^Meter type/).selectOption("shelly");
   await expect(card.getByLabel(/^Port/)).toHaveValue("8080");
+});
+
+// The scan reports an E3/DC once; Maintenance offers it as a read-only device
+// and as the grid meter, and each action fills in the Modbus endpoint the scan
+// found.
+
+test("Maintenance: a scanned E3/DC is added as read-only device and as grid meter", { tag: ["@maintenance"] }, async ({
+  page,
+  seedAdminScenario,
+  seedDiscoveryState,
+}) => {
+  test.setTimeout(120_000);
+  const json = (route: Route, body: unknown) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+  await page.route("**/api/discovery/networks**", (route) => json(route, { networks: [] }));
+  await page.route("**/api/discovery/scan**", (route) => json(route, { scan_id: "e2e-scan" }));
+  await page.route("**/api/discovery/result/**", (route) =>
+    json(route, { status: "complete", devices: [] }),
+  );
+  const loginPage = new LoginPage(page);
+  await loginPage.open();
+  await loginPage.authenticate();
+  await seedAdminScenario("mixed_transports");
+  await seedDiscoveryState({ local_api_devices: [E3DC_SYSTEM] });
+  await page.reload();
+  await new MaintenancePage(page).openEditor();
+
+  await page.locator("#maintenance-discovery-start").click();
+  const results = page.locator("#maintenance-discovery-results");
+  const readOnly = results.locator('.mconfig-discovery-device-card[data-role="read_only_device"]');
+  await expect(readOnly).toHaveCount(1);
+  await expect(readOnly).toContainText("Read-only device candidate");
+  await expect(readOnly).toContainText("E3/DC S10 E AIO");
+  await readOnly.getByRole("button", { name: "Add as read-only device" }).click();
+  await expect(
+    results
+      .locator('.mconfig-discovery-device-card[data-role="read_only_device"]')
+      .getByRole("button", { name: "Added to draft" }),
+  ).toBeDisabled();
+  await expect(page.locator("#maintenance-config-inverters")).toContainText(
+    `${E3DC_SYSTEM.ip}:502`,
+  );
+
+  const meter = results
+    .locator('.mconfig-discovery-device-card[data-role="grid_meter"]')
+    .filter({ hasText: "e3dc_modbus" });
+  await meter.getByRole("button", { name: "Add as grid meter" }).click();
+
+  const preview = await previewConfig(page);
+  expect(preview.grid_meter).toEqual({ type: "e3dc_modbus", ip: E3DC_SYSTEM.ip, port: 502 });
+  const added = (preview.devices ?? []).filter(
+    (device: { type?: string }) => device.type === "e3dc_modbus",
+  );
+  expect(added).toHaveLength(1);
+  expect(added[0]).toMatchObject({
+    name: "E3DC",
+    type: "e3dc_modbus",
+    ip: E3DC_SYSTEM.ip,
+    port: 502,
+    unit_id: 1,
+    enabled: true,
+  });
 });

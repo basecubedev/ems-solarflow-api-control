@@ -534,6 +534,28 @@ def test_setup_preview_adds_no_device_for_another_meter():
     assert result["summary"]["read_only_devices"] == 0
 
 
+
+def test_setup_preview_takes_a_scanned_e3dc_as_meter_and_read_only_device():
+    """A scan candidate carries its family and Modbus port, not a chosen type."""
+
+    meter = _e3dc_meter(
+        grid_meter_type="",
+        api_family="e3dc_modbus",
+        device_type="e3dc_modbus",
+        display_name="E3/DC S10 E AIO",
+    )
+
+    result = _preview(meter)
+
+    assert result["ready"] is True, result["validation"]
+    assert result["config"]["grid_meter"] == {"type": "e3dc_modbus", "ip": "192.168.1.40", "port": 502}
+    assert result["config"]["devices"][-1] == {
+        "name": "E3DC",
+        "type": "e3dc_modbus",
+        "ip": "192.168.1.40",
+        "port": 502,
+    }
+
 @pytest.mark.parametrize(
     "existing, added",
     [

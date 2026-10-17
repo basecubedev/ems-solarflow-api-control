@@ -199,7 +199,9 @@ How the open questions of the probe phase were settled:
   cannot disagree about a register.
 - **The offset is probed at every connect,** as the manual prescribes, against
   the configured unit id with function code 3. Nothing about the offset is
-  configured. A device in SunSpec mode is named as such.
+  configured. A device in SunSpec mode is named as such. The Admin network
+  scan runs the same detection (`detect_magic_mapping`), at unit id 1, so a
+  system the scan offers is one the EMS can read.
 - **Read-only by construction.** Neither client has a write method, and the
   Modbus request builder refuses every function code other than 3 and 4. The
   E3/DC's battery and inverter stay under the E3/DC's own control; registers
@@ -227,11 +229,14 @@ observed on real hardware yet.
 ## What has not been proven
 
 - Whether the E3/DC accepts a second Modbus/TCP connection while the EMS
-  EMS holds one. `emsctl diagnose --hardware` and `emsctl grid-meter test`
-  open their own connection next to a running EMS.
-- Neither the grid meter nor the device tile has yet run against a real
-  E3/DC. Their Modbus reads go through the same code that read the S10 M4
-  below, and they are tested end to end against the probe's loopback device.
+  holds one. `emsctl diagnose --hardware`, `emsctl grid-meter test` and the
+  Admin network scan open their own connection next to a running EMS; a
+  refused scan connection would show a configured E3/DC as *Not found* in
+  Maintenance.
+- Neither the grid meter, the device tile nor the Admin scan probe has yet
+  run against a real E3/DC. Their Modbus reads go through the same code that
+  read the S10 M4 below, and they are tested end to end against the probe's
+  loopback device.
 - One installation: an **S10 M4**, Modbus firmware 1.2, system firmware
   `S10_2026_02`. Other models, firmware and meter layouts are untested.
 - "1 s" is a lower bound, not a measured period.

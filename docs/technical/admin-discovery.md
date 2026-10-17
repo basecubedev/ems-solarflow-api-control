@@ -270,6 +270,19 @@ placeholder for a later phase.
   - Shelly Pro / Gen2 meter — `GET /rpc/Shelly.GetStatus` → role `grid_meter`
   - Shelly 3EM Gen1 meter — `GET /status` → role `grid_meter`
   - everHome EcoTracker — `GET /v1/json` → role `grid_meter`
+- Reads the E3/DC magic word over Modbus TCP (port 502, unit ID 1, register
+  40001) and offers a host that answers `0xE3DC` as an E3/DC storage system →
+  role `grid_meter`, family `e3dc_modbus`, with its model, serial and firmware
+  from the identification block. Any other answer — another Modbus device, an
+  E3/DC in SunSpec mode, a refusal — is no candidate. The probe uses the EMS's
+  own read-only client and the same magic-word detection as the control loop,
+  runs after the HTTP probes, costs one TCP connect per host and stops at the
+  first transport error, so a closed port or a silent service costs at most one
+  timeout. Setup takes the candidate as grid meter, which also shows it as a
+  read-only device; Maintenance offers both roles as separate review rows
+  (*Add as grid meter*, *Add as read-only device*) and reports a saved
+  read-only E3/DC on the probed endpoint (port 502, unit ID 1) that the scan
+  did not find as *Not found*.
 - Shows each device with IP, API family/type, suggested role, serial (or
   `missing`), confidence, and config readiness.
 
@@ -916,7 +929,7 @@ trusted mapping.
 
 User-facing connection labels come from one helper (`connectionLabelFor`):
 `local_api` → **API**, `local_mqtt` → **MQTT**, `zendure_mqtt` → **Zendure
-MQTT**, anything unrecognized → **Unknown**. Internal enums, config types and
+MQTT**, `modbus_tcp` → **Modbus TCP**, anything unrecognized → **Unknown**. Internal enums, config types and
 transport identifiers are unchanged.
 
 **Use connection** never opens a confirmation dialog and never creates a second

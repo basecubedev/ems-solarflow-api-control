@@ -3,9 +3,9 @@
 
 Discovery is manual, bounded, and probe-based: for each host in a validated
 local CIDR it issues a few short-timeout HTTP GETs to known local device APIs
-and classifies the JSON response. No daemon, no shell-out, no ping/nmap/arp, no
-public ranges. Concurrency and timeouts are clamped to keep a scan cheap enough
-for a small Raspberry Pi.
+and classifies the JSON response, then reads the E3/DC magic word over Modbus
+TCP. No daemon, no shell-out, no ping/nmap/arp, no public ranges. Concurrency
+and timeouts are clamped to keep a scan cheap enough for a small Raspberry Pi.
 """
 
 import ipaddress
@@ -19,6 +19,12 @@ from admin.models import (
     ROLE_GRID_METER,
     ROLE_INVERTER,
     DiscoveredDevice,
+)
+from ems import e3dc_modbus
+from ems.config import (
+    E3DC_MODBUS_DEFAULT_PORT,
+    E3DC_MODBUS_DEFAULT_UNIT_ID,
+    E3DC_MODBUS_GRID_METER_TYPE,
 )
 
 logger = logging.getLogger("admin.discovery")
@@ -34,6 +40,7 @@ MAX_WORKERS_DEFAULT = 32
 # avoid sweeping ranges the operator did not clearly intend.
 MAX_HOSTS = 256
 DEFAULT_PORTS = (80,)
+E3DC_SCAN_PORT = E3DC_MODBUS_DEFAULT_PORT
 
 
 class CidrValidationError(ValueError):
@@ -460,12 +467,55 @@ def probe_ecotracker(session, ip, timeout_s):
     )
 
 
+def probe_e3dc_modbus(session, ip, timeout_s, port=None):
+    """Read the E3/DC magic word over Modbus TCP; only ``0xE3DC`` is a candidate.
+
+    ``session`` is unused: the probe shares the HTTP probes' signature, not
+    their transport. One connect per host, and the detection stops at the
+    first transport error, so a closed port or a silent service costs at most
+    one timeout. It probes the config default port and unit ID; the candidate
+    carries the port, and a system set to another unit ID is entered by hand.
+    """
+
+    client = e3dc_modbus.ReadOnlyModbusTcpClient(
+        ip, E3DC_SCAN_PORT if port is None else port, unit_id=E3DC_MODBUS_DEFAULT_UNIT_ID, timeout=timeout_s
+    )
+    try:
+        client.connect()
+        mapping = e3dc_modbus.detect_magic_mapping(client, E3DC_MODBUS_DEFAULT_UNIT_ID, f"{ip}:{client.port}")
+        try:
+            info = e3dc_modbus.read_identification(client, mapping)
+        except e3dc_modbus.ModbusError:
+            info = {}
+    except (e3dc_modbus.ModbusError, OSError, ValueError):
+        return None
+    finally:
+        client.close()
+    model = _first_str(info.get("model"))
+    return DiscoveredDevice(
+        ip=ip,
+        api_family=E3DC_MODBUS_GRID_METER_TYPE,
+        device_type=E3DC_MODBUS_GRID_METER_TYPE,
+        role_suggestion=ROLE_GRID_METER,
+        port=client.port,
+        protocol="modbus_tcp",
+        display_name=f"E3/DC {model}" if model else "E3/DC storage system",
+        serial_number=_first_str(info.get("serial_number")),
+        firmware=_first_str(info.get("firmware_release")),
+        model=model,
+        confidence=0.95,
+        config_ready=True,
+        missing_config_fields=[],
+    )
+
+
 PROBES = (
     probe_zendure,
     probe_zendure_grid_meter,
     probe_shelly_gen2,
     probe_shelly_3em_gen1,
     probe_ecotracker,
+    probe_e3dc_modbus,
 )
 
 
@@ -561,7 +611,8 @@ def scan_network(cidr, timeout_ms=TIMEOUT_MS_DEFAULT, max_workers=MAX_WORKERS_DE
                  session=None, progress_callback=None):
     """Scan a validated CIDR and return ``(devices, errors)``.
 
-    Runs bounded-parallel HTTP probes with a shared session. Partial results are
+    Runs bounded-parallel HTTP probes with a shared session, plus the Modbus
+    TCP probe for an E3/DC. Partial results are
     returned even when most hosts are unreachable. Raises ``CidrValidationError``
     on an invalid or disallowed CIDR before any network traffic.
 
