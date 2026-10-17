@@ -17948,11 +17948,11 @@ function renderMaintenanceConfigChange(entry, kind) {
   const value = document.createElement("span");
   value.className = "mconfig-change-value";
   if (kind === "changed") {
-    value.textContent = mconfigDisplayValue(entry.before) + " → " + mconfigDisplayValue(entry.after);
+    value.textContent = mconfigPreviewValue(entry.before) + " → " + mconfigPreviewValue(entry.after);
   } else if (kind === "added") {
-    value.textContent = "+ " + mconfigDisplayValue(entry.after);
+    value.textContent = "+ " + mconfigPreviewValue(entry.after);
   } else {
-    value.textContent = "− " + mconfigDisplayValue(entry.before);
+    value.textContent = "− " + mconfigPreviewValue(entry.before);
   }
   row.appendChild(value);
   row.dataset.appliesLive = entry.applies_live === true ? "true" : "false";
@@ -18010,7 +18010,7 @@ function mconfigChangeSummaryText(counts) {
   return parts.join(" · ");
 }
 
-function mconfigDisplayValue(value) {
+function mconfigPreviewValue(value) {
   if (value === null || value === undefined) return "—";
   if (typeof value === "boolean") return value ? "true" : "false";
   return String(value);
