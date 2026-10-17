@@ -12,7 +12,7 @@ carries that product as its first word. Three prefixes, and the set is closed:
 |---|---|---|
 | `Appliance ` | the Raspberry Pi product — Manager `.deb`, OS image, fleet index | `appliance-image.yml`, `appliance-manager-release.yml` |
 | `EMS ` | the paired EMS controller and Admin console | `docker-publish.yml`, `release-catalogue.yml`, `docker-feature-publish.yml`, `docker-feature-cleanup.yml`, `admin-replacement-canary.yml`, `generated-config-template.yml` |
-| `Repo ` | ships nothing, gates both | `simulated-regression-tests.yml`, `playwright-e2e.yml` |
+| `Repo ` | ships no product, gates both; publishes the documentation website | `simulated-regression-tests.yml`, `playwright-e2e.yml`, `docs-site.yml`, `docs-site-publish.yml` |
 
 There is deliberately no `Admin ` prefix: the two container images ship as one
 `build_id`/`channel` identity and `admin/releases.py` treats them as a single
@@ -434,6 +434,13 @@ ignored runtime/build artifacts and may leak local credentials. A
 working-directory archive may contain local Admin/EMS credentials (Zendure
 tokens, MQTT secrets, InfluxDB tokens) and must never be uploaded as a release
 artifact.
+
+## Documentation website
+
+Workflows: `.github/workflows/docs-site.yml`, named **Repo docs site**, builds
+and checks the site on every pull request, and `docs-site-publish.yml`, named
+**Repo docs site publish**, builds it on `main` and publishes it to GitHub
+Pages. See [docs-site.md](docs-site.md).
 
 ## Dependencies and security scanning
 

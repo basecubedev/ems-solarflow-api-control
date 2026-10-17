@@ -3,11 +3,11 @@
 """Verify ``THIRD_PARTY_LICENSES.md`` against the repository's own manifests.
 
 Direct declarations only: every entry in the requirements files and in
-``package.json``, every optional platform package in ``package-lock.json``, and
-every static asset that does not carry the project license header must have a
-row in the inventory. Transitive resolution needs a package manager and is
-deliberately out of scope — the runtime transitive table is maintained by hand
-and only checked for shape.
+``package.json``, every optional platform package in ``package-lock.json``,
+every GitHub Action a workflow uses, and every static asset that does not carry
+the project license header must have a row in the inventory. Transitive
+resolution needs a package manager and is deliberately out of scope — the
+runtime transitive table is maintained by hand and only checked for shape.
 
 Run it directly (``python tools/check_third_party_licenses.py``) or through
 ``tests/test_third_party_licenses.py``; both use ``collect_problems``.
@@ -64,9 +64,10 @@ COMPONENT_SECTIONS = (
 )
 
 APPLIANCE_CONTROL = "packaging/appliance/debian/control"
+WORKFLOW_DIR = ".github/workflows"
 
 PYTHON_RUNTIME_MANIFESTS = ("requirements.txt", "deploy/admin/requirements.txt")
-PYTHON_DEV_MANIFESTS = ("requirements-dev.txt",)
+PYTHON_DEV_MANIFESTS = ("requirements-dev.txt", "requirements-docs.txt")
 
 # Distribution expectations that follow from what a section *is*. The runtime
 # transitive table intentionally has none: a conditional dependency is listed
@@ -86,6 +87,8 @@ PROJECT_LICENSE_HEADER = "SPDX-License-Identifier: AGPL-3.0-or-later"
 _HEADING = re.compile(r"^(#{2,3})\s+(.+?)\s*$")
 _SEPARATOR = re.compile(r"^\|[\s:|-]+\|$")
 _CODE_SPAN = re.compile(r"`([^`]+)`")
+_USES = re.compile(r"^\s*(?:-\s+)?uses:\s*[\"']?([^\s\"'#]+)", re.MULTILINE)
+_WORKFLOW_FILES = ("*.yml", "*.yaml")
 _FENCE = re.compile(r"^```")
 
 
@@ -323,7 +326,7 @@ def _check_python(root, sections, problems):
         )
     for stale in sorted(documented_dev - declared_dev):
         problems.append(
-            f"{PYTHON_DEV!r} lists {stale!r}, which requirements-dev.txt does not declare"
+            f"{PYTHON_DEV!r} lists {stale!r}, which no development requirements file declares"
         )
 
     overlap = sorted(documented_runtime & documented_dev)
@@ -419,6 +422,36 @@ def _check_appliance(root, sections, problems):
             )
 
 
+def workflow_actions(root):
+    """The third-party actions the workflows use, as ``owner/repository``.
+
+    A local ``./`` workflow is project code and a ``docker://`` step names an
+    image, so neither is an action; an action in a subdirectory, such as
+    ``github/codeql-action/init``, is its repository."""
+
+    workflows = Path(root) / WORKFLOW_DIR
+    actions = set()
+    for pattern in _WORKFLOW_FILES:
+        for path in sorted(workflows.glob(pattern)):
+            for reference in _USES.findall(path.read_text(encoding="utf-8")):
+                if reference.startswith(("./", "docker://")):
+                    continue
+                actions.add("/".join(reference.partition("@")[0].split("/")[:2]))
+    return actions
+
+
+def _check_github_actions(root, sections, problems):
+    section = sections.get(GITHUB_ACTIONS)
+    if section is None or not (Path(root) / WORKFLOW_DIR).is_dir():
+        return
+    documented = set(component_keys(section))
+    used = workflow_actions(root)
+    for action in sorted(used - documented):
+        problems.append(f"{WORKFLOW_DIR} uses {action!r}, which is not in the {GITHUB_ACTIONS!r} section")
+    for stale in sorted(documented - used):
+        problems.append(f"{GITHUB_ACTIONS!r} lists {stale!r}, which no workflow uses")
+
+
 def collect_problems(root=ROOT):
     """Return every inventory problem as a human-readable line."""
 
@@ -434,6 +467,7 @@ def collect_problems(root=ROOT):
     _check_node(root, sections, problems)
     _check_vendored(root, sections, problems)
     _check_appliance(root, sections, problems)
+    _check_github_actions(root, sections, problems)
     return problems
 
 
@@ -450,7 +484,7 @@ def main(argv=None):
             print(f"  - {problem}", file=sys.stderr)
         return 1
     if not args.quiet:
-        print(f"{INVENTORY}: every direct dependency, optional package and vendored asset is documented.")
+        print(f"{INVENTORY}: every direct dependency, optional package, GitHub Action and vendored asset is documented.")
     return 0
 
 
