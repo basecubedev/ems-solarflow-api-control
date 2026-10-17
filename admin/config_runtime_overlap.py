@@ -20,6 +20,7 @@ import re
 from dashboard.runtime_write import DEVICE_FIELDS, SECTION_FIELDS, SYSTEM_FIELDS
 from ems import config as cfg
 from ems.config_catalog import device_common_defaults
+from ems.read_only_devices import is_read_only_device_config
 from ems.runtime_state import runtime_state_path_under
 
 _EMS_DEFAULTS = cfg.default_runtime_config()
@@ -53,13 +54,14 @@ def _device_defaults(config):
 _DEVICE_LEAF_RE = re.compile(r"^devices\[\d+\]\.([A-Za-z0-9_]+)$")
 
 
-def applies_live(path):
+def applies_live(path, config=None):
     """Does changing this config path take effect without an EMS restart?
 
     Only the whitelisted overlap keys are mirrored into runtime-state when the
     Admin applies a config, and only those are re-read by the running EMS.
     Everything else — every write gate, ``dry_run`` and ``simulation_mode``
-    included — stays inert until the container is recreated.
+    included — stays inert until the container is recreated. A read-only
+    device has no runtime-state entry at all, so nothing about it is live.
     """
 
     text = str(path or "")
@@ -67,9 +69,25 @@ def applies_live(path):
         return text[len("system.") :] in SYSTEM_FIELDS
     device = _DEVICE_LEAF_RE.match(text)
     if device is not None:
+        if config is not None and is_read_only_device_config(
+            _device_at_path(config, text)
+        ):
+            return False
         return device.group(1) in DEVICE_FIELDS
     section, _, key = text.partition(".")
     return bool(key) and key in SECTION_FIELDS.get(section, {})
+
+
+_DEVICE_INDEX_RE = re.compile(r"^devices\[(\d+)\]\.")
+
+
+def _device_at_path(config, path):
+    match = _DEVICE_INDEX_RE.match(str(path or ""))
+    devices = config.get("devices") if isinstance(config, dict) else None
+    if match is None or not isinstance(devices, list):
+        return None
+    index = int(match.group(1))
+    return devices[index] if index < len(devices) else None
 
 
 def resolve_runtime_state_path(context, config):
@@ -162,7 +180,7 @@ def compute_overlap_provenance(config, runtime_data):
     device_defaults = _device_defaults(config)
     config_devices = config.get("devices") if isinstance(config.get("devices"), list) else []
     for device in config_devices:
-        if not isinstance(device, dict):
+        if not isinstance(device, dict) or is_read_only_device_config(device):
             continue
         name = str(device.get("name") or "").strip()
         if not name:

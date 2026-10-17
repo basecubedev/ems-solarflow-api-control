@@ -113,6 +113,7 @@ Supported options include:
 - Zendure Smart Meter D0
 - everHome EcoTracker
 - Tasmota-based meters
+- E3/DC storage systems, read-only over Modbus TCP
 - generic MQTT power meters
 
 Support differs by model and connection type. The current compatibility overview is available in [Supported Setups](supported-setups.md).

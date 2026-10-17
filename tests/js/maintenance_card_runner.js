@@ -3,11 +3,15 @@
 // and prints what the card resolved to, so the hardware-role/transport contract
 // is tested against the shipped renderers instead of a hand-rebuilt copy.
 //
-// Input  (stdin JSON): {"card": "mqtt_proposal"|"hardware"|"configured_devices",
-//                       "payload": {...}, "draft": {...}, "pristine": {...}}
+// Input  (stdin JSON): {"card": "mqtt_proposal"|"hardware"|"configured_devices"
+//                       |"discovery_review", "payload": {...}, "draft": {...},
+//                       "pristine": {...}, "discovered": [...], "accept": n}
 // Output (stdout JSON): {className, dataset, transportPill, text, action}, or
 //                       for "configured_devices" one {classes, dataset, text,
-//                       controls, buttons} per card the draft's devices render.
+//                       controls, buttons} per card the draft's devices render,
+//                       or for "discovery_review" the review rows with their
+//                       rendered cards, and the draft after accepting row
+//                       ``accept`` (when given) through the real add action.
 //
 // A proposal payload without an explicit "state" resolves it through the real
 // mconfigMqttProposalReviewState against the supplied draft/pristine.
@@ -40,6 +44,14 @@ function extractFunction(name) {
     else if (source[i] === "}" && --depth === 0) return source.slice(start, i + 1);
   }
   throw new Error("unbalanced braces while extracting " + name);
+}
+
+function extractSet(name) {
+  const marker = "const " + name + " = new Set([";
+  const start = source.indexOf(marker);
+  if (start === -1) throw new Error("set not found in admin.js: " + name);
+  const end = source.indexOf("]);", start);
+  return source.slice(start, end + 3);
 }
 
 function extractConst(name) {
@@ -152,8 +164,29 @@ const HELPERS = [
   "mconfigTextControl",
   "mconfigExternalDeviceSummary",
   "renderMaintenanceExternalDevice",
+  "mconfigIsE3dcDevice",
+  "mconfigE3dcSummary",
+  "renderMaintenanceE3dcDevice",
   "renderMaintenanceInverter",
   "renderMaintenanceInverters",
+  "observationKey",
+  "isConfigCandidate",
+  "validateManualScanInput",
+  "mconfigDisplayValue",
+  "mconfigDiscoveryRole",
+  "mconfigIsE3dcCandidate",
+  "mconfigE3dcSetting",
+  "mconfigE3dcScanReaches",
+  "mconfigSameE3dcEndpoint",
+  "buildMaintenanceDiscoveryReview",
+  "mconfigDiscoveryLabel",
+  "mconfigDiscoveredAlreadyInDraft",
+  "mconfigDiscoveryActionState",
+  "mconfigAddDiscovered",
+  "mconfigAddE3dcDevice",
+  "gridMeterType",
+  "mconfigCandidateConnectionSource",
+  "renderMaintenanceDiscoveryCard",
 ];
 
 const input = JSON.parse(fs.readFileSync(0, "utf8"));
@@ -175,6 +208,12 @@ function renderMaintenanceZendureMqttDevice() { return editorStub("zendure_mqtt"
 function mconfigAttachOverrideBadge(row) { return row; }
 function mconfigDeviceOverrideEntry() { return null; }
 function mconfigRerenderDiscoveryReview() {}
+function mconfigFindInverterMatch() { return null; }
+function maintenanceMqttProposals() { return []; }
+function mconfigAppendSourceBadges() {}
+function renderMaintenanceGridMeter() {}
+function mconfigMarkDraftChanged() {}
+const mconfigIgnoredCandidates = new Set();
 const mconfigEls = { inverters: document.createElement("div") };
 const mconfigState = {
   openHardware: new Set(),
@@ -195,12 +234,24 @@ const factory = new Function(
     "\n" +
     extractConst("MCONFIG_DISCOVERY_STATUS_TEXT") +
     "\n" +
+    extractConst("MCONFIG_DISCOVERY_ADD_TEXT") +
+    "\n" +
+    extractConst("E3DC_MODBUS_DEFAULTS") +
+    "\n" +
+    extractConst("GRID_METER_FAMILY_TYPES") +
+    "\n" +
+    extractSet("GRID_METER_TYPE_CHOICES") +
+    "\n" +
     HELPERS.map(extractFunction).join("\n") +
     "\nscope.renderMaintenanceMqttProposalCard = renderMaintenanceMqttProposalCard;" +
     "\nscope.mconfigMqttProposalReviewState = mconfigMqttProposalReviewState;" +
     "\nscope.mconfigHardwareCard = mconfigHardwareCard;" +
     "\nscope.renderMaintenanceInverters = renderMaintenanceInverters;" +
-    "\nscope.mconfigEls = mconfigEls;"
+    "\nscope.mconfigEls = mconfigEls;" +
+    "\nscope.mconfigState = mconfigState;" +
+    "\nscope.buildMaintenanceDiscoveryReview = buildMaintenanceDiscoveryReview;" +
+    "\nscope.renderMaintenanceDiscoveryCard = renderMaintenanceDiscoveryCard;" +
+    "\nscope.mconfigAddDiscovered = mconfigAddDiscovered;"
 );
 factory(document, scope);
 
@@ -248,7 +299,26 @@ function describeConfiguredCard(element) {
   };
 }
 
+function reviewRows() {
+  return scope.buildMaintenanceDiscoveryReview(input.discovered || []).map((item) => ({
+    role: item.role,
+    state: item.state,
+    configured: item.configured ? item.configured.name || "" : null,
+    discovered: item.discovered ? item.discovered.id || "" : null,
+    card: describe(scope.renderMaintenanceDiscoveryCard(item)),
+  }));
+}
+
+function discoveryReview() {
+  const before = reviewRows();
+  if (input.accept === undefined) return { rows: before };
+  const item = scope.buildMaintenanceDiscoveryReview(input.discovered || [])[input.accept];
+  const accepted = scope.mconfigAddDiscovered(item);
+  return { rows: before, accepted, draft: scope.mconfigState.draft, after: reviewRows() };
+}
+
 function rendered() {
+  if (input.card === "discovery_review") return discoveryReview();
   if (input.card === "configured_devices") {
     scope.renderMaintenanceInverters();
     return scope.mconfigEls.inverters.children.map(describeConfiguredCard);

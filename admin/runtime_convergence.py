@@ -31,6 +31,7 @@ from dashboard.runtime_write import (
     apply_system_update,
     build_validation_context,
 )
+from ems.read_only_devices import is_read_only_device_config
 from ems.runtime_state import RuntimeState
 
 _DEVICE_PATH = re.compile(r"^devices\[(\d+)\]\.([A-Za-z0-9_]+)$")
@@ -44,7 +45,9 @@ def _device_name(config, index):
     if index < 0 or index >= len(devices):
         return None
     device = devices[index]
-    if not isinstance(device, dict):
+    # A read-only device never gets a runtime-state entry: the EMS neither
+    # reads nor honours one for a device it does not control.
+    if not isinstance(device, dict) or is_read_only_device_config(device):
         return None
     return str(device.get("name") or "").strip() or None
 

@@ -31,6 +31,7 @@ assert on stays real:
 | GitHub release metadata + archive      | CSRF enforcement                      |
 | Embedded resource bundle location      | `SystemAlignmentService` state machine|
 | Admin-replacement launcher             | Resource-strategy decisions           |
+| Network scan (every host checked, none contacted; devices come from the seeded mDNS path) | Scan registry, progress and result routes |
 | —                                      | Transition persistence                |
 | —                                      | Discovery authorization               |
 | —                                      | Server-driven button gating           |
