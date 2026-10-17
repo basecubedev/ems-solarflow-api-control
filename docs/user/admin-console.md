@@ -1,5 +1,7 @@
 # EMS SolarFlow Admin Console
 
+> **Video:** [Install Without Pi](https://www.youtube.com/watch?v=rx4xNv-EDIE)
+
 The Admin Console (product name **EMS SolarFlow Admin**) is the local browser UI
 for setup and maintenance. It runs next to EMS, not inside the control loop. EMS
 still owns the control logic; the Admin Console is UI and orchestration only.

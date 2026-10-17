@@ -1,5 +1,7 @@
 # Flashing the card
 
+> **Video:** [Install Raspberry Pi](https://www.youtube.com/watch?v=8yq6SYDR6sY)
+
 Writing the appliance image onto an SD card. About twenty minutes, most of it
 waiting.
 

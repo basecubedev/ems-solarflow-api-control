@@ -1,5 +1,7 @@
 # Control Logic
 
+> **Video:** [Energy Control Loop](https://www.youtube.com/watch?v=pkzMWn6v6Vw)
+
 The EMS calculates power targets from local load and device telemetry.
 
 For a visual user-facing map of where each `config.json` parameter affects the

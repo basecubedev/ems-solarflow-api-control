@@ -53,6 +53,7 @@ nav = [
       { "When it stops working" = "user/appliance/recovery.md" },
     ] },
     { "Everyday use and help" = [
+      { "Videos" = "user/videos.md" },
       { "Quickstart" = "quickstart.md" },
       { "First-run checklist" = "first-run-checklist.md" },
       { "Common commands" = "common-commands.md" },

@@ -1,5 +1,7 @@
 # Control pipeline
 
+> **Video:** [Energy Control Loop](https://www.youtube.com/watch?v=pkzMWn6v6Vw)
+
 ## Purpose
 
 Answer the question "why did EMS write *that* value?" — stage by stage, from the

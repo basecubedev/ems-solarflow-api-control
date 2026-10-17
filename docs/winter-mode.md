@@ -1,5 +1,7 @@
 # Winter Mode
 
+> **Video:** [Winter Mode Explained](https://www.youtube.com/watch?v=D_z-oyihlWY)
+
 Winter mode raises the battery reserve (`minSoc`) during the winter months. How
 a device's reserve rises is decided by its **winter policy**: each device type
 -- PV with a battery, a battery without PV of its own, PV only -- has a default

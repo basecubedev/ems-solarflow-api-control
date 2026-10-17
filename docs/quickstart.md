@@ -1,5 +1,7 @@
 # Quickstart
 
+> **Video:** [Install Without Pi](https://www.youtube.com/watch?v=rx4xNv-EDIE)
+
 This guide starts a normal Docker installation, creates or edits the config,
 runs diagnostics, and opens the dashboard.
 

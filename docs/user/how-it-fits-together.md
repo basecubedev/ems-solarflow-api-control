@@ -1,5 +1,7 @@
 # How EMS SolarFlow fits together
 
+> **Video:** [How the System Fits Together](https://www.youtube.com/watch?v=b1bVZoxTOu0)
+
 EMS SolarFlow has grown into three pieces of software with three web pages.
 This page shows which one does what, how they are set up one after the other,
 and where your power is actually controlled.

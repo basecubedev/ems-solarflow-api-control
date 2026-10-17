@@ -72,6 +72,7 @@ standard `config/config.json` layout; the third is a whole system.
 | Topic | Document | Use |
 |---|---|---|
 | How it fits together | [user/how-it-fits-together.md](user/how-it-fits-together.md) | The EMS, the Admin Console and the Appliance Manager: who does what, and where control happens. |
+| Videos | [user/videos.md](user/videos.md) | Videos on YouTube and their guides. |
 | Quickstart | [quickstart.md](quickstart.md) | Docker-first beginner setup from install check to dashboard. |
 | First-run checklist | [first-run-checklist.md](first-run-checklist.md) | Safe validation sequence after the first config edit. |
 | Common commands | [common-commands.md](common-commands.md) | Daily Docker-first command sheet with native equivalents. |

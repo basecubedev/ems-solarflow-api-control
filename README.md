@@ -14,7 +14,7 @@ It reads local grid meter and Zendure telemetry, controls inverter output,
 and provides a local dashboard.
 
 > [!TIP]
-> **New to EMS SolarFlow?** Start with the [Project Overview](docs/user/project-overview.md) or read the docs online at <https://basecubedev.github.io/ems-solarflow-api-control/>.
+> **New to EMS SolarFlow?** Start with the [Project Overview](docs/user/project-overview.md), read the docs online at <https://basecubedev.github.io/ems-solarflow-api-control/>, or watch the [videos](docs/user/videos.md) on [YouTube](https://www.youtube.com/channel/UCk7i1JfCVML8hqlvzenCJBg).
 
 > EMS controls real power hardware.
 > Read the [safety guide](docs/user/safety.md) before enabling live writes.
