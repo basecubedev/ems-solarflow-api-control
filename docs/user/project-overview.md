@@ -1,5 +1,7 @@
 # EMS SolarFlow
 
+> **Video:** [EMS SolarFlow API Control](https://www.youtube.com/watch?v=V2m0L1p1GyM)
+
 ## Smarter local control for Zendure solar and battery systems
 
 EMS SolarFlow brings your grid meter, Zendure inverters, batteries and solar production together in one energy management system.

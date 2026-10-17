@@ -1,5 +1,7 @@
 # AC Charging From Surplus
 
+> **Video:** [AC Charging from Leftover Solar](https://www.youtube.com/watch?v=A_RUnE56Jjo)
+
 The EMS charges battery devices from AC when the house exports more than it can
 place, instead of letting that surplus leave.
 

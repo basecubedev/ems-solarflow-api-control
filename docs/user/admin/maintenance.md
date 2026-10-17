@@ -1,5 +1,7 @@
 # Maintenance — manage an installed system
 
+> **Video:** [What You Can Configure](https://www.youtube.com/watch?v=Ymdq613eGAA)
+
 ## Purpose
 
 Inspect, change, update, back up and repair an EMS installation that already

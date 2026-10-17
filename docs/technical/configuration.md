@@ -1,5 +1,7 @@
 # Configuration Guide
 
+> **Video:** [What You Can Configure](https://www.youtube.com/watch?v=Ymdq613eGAA)
+
 The EMS uses one static installation config. With the recommended Docker setup,
 the file is:
 

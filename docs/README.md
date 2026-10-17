@@ -2,6 +2,7 @@
 
 This is the documentation map. The root [README.md](../README.md) is the short
 router that points you at one of three setup paths; this page lists everything.
+Also online: <https://basecubedev.github.io/ems-solarflow-api-control/>
 
 Documentation is split by audience:
 
@@ -71,6 +72,7 @@ standard `config/config.json` layout; the third is a whole system.
 | Topic | Document | Use |
 |---|---|---|
 | How it fits together | [user/how-it-fits-together.md](user/how-it-fits-together.md) | The EMS, the Admin Console and the Appliance Manager: who does what, and where control happens. |
+| Videos | [user/videos.md](user/videos.md) | Videos on YouTube and their guides. |
 | Quickstart | [quickstart.md](quickstart.md) | Docker-first beginner setup from install check to dashboard. |
 | First-run checklist | [first-run-checklist.md](first-run-checklist.md) | Safe validation sequence after the first config edit. |
 | Common commands | [common-commands.md](common-commands.md) | Daily Docker-first command sheet with native equivalents. |
