@@ -8,10 +8,14 @@ slow connection at all. Progress must still update; the view must not be torn
 out from under the person using it.
 """
 
+import json
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
+
+from tests.test_appliance_manager_frontend import node, requires_node
 
 pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
@@ -101,3 +105,49 @@ def test_cancel_and_escape_wait_while_a_confirmation_is_out():
 
     assert "dialog-cancel" in body("confirmDialog")
     assert 'isHeld(document.getElementById("dialog-cancel"))' in body("dismissDialog")
+
+
+def _load_into_with_focus_in(tag):
+    script = (
+        "var calls = [];\n"
+        "var state = { viewGeneration: 1, listingGenerations: {}, data: {} };\n"
+        "function render() { calls.push('render'); }\n"
+        "function refreshBanner() { calls.push('banner'); }\n"
+        f"var focused = {{ tagName: {json.dumps(tag)} }};\n"
+        "var main = { contains: function (candidate) { return candidate === focused; } };\n"
+        "var document = { activeElement: focused, getElementById: function () { return main; } };\n"
+        "function api() { return Promise.resolve({ appliance_version: '0.3.13' }); }\n"
+        + "\n".join(body(name) for name in ("isEditing", "renderPolled", "listingGeneration", "loadInto"))
+        + "\nloadInto('settings', '/api/settings').then(function () {\n"
+        "  console.log(JSON.stringify({ calls: calls, settings: state.data.settings }));\n"
+        "});\n"
+    )
+    result = subprocess.run([node, "-"], input=script, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout.strip().splitlines()[-1])
+
+
+@requires_node
+def test_a_view_read_arriving_while_a_field_is_typed_in_leaves_the_field_alone():
+    """The Settings read rebuilt the page under a password being typed.
+
+    A view fetches its data the first time it is drawn and rebuilt the whole
+    page when the answer came. On a slow appliance the answer arrived after the
+    operator had started typing, and a password field -- which is never kept
+    across a rebuild -- came back empty: the change was sent without the
+    current password and refused. The read now waits for the field like the
+    poll does; only the banner is refreshed.
+    """
+
+    result = _load_into_with_focus_in("INPUT")
+
+    assert result["calls"] == ["banner"]
+    assert result["settings"] == {"appliance_version": "0.3.13"}
+
+
+@requires_node
+def test_a_view_read_still_draws_the_page_when_no_field_is_in_use():
+    result = _load_into_with_focus_in("BUTTON")
+
+    assert result["calls"] == ["render"]
+    assert result["settings"] == {"appliance_version": "0.3.13"}
