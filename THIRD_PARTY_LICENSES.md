@@ -139,9 +139,10 @@ runners and are never part of a build artifact.
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream |
 |---|---|---|---|:---:|:---:|---|
 | `actions/checkout` | v7 | MIT | Checks out the repository in every job | ❌ | ❌ | https://github.com/actions/checkout |
-| `actions/setup-python` | v6 | MIT | Provisions the CI Python versions | ❌ | ❌ | https://github.com/actions/setup-python |
-| `actions/setup-node` | v5 | MIT | Provisions Node for Playwright and the frontend runners | ❌ | ❌ | https://github.com/actions/setup-node |
-| `actions/upload-artifact` | v5 | MIT | Publishes test reports and traces | ❌ | ❌ | https://github.com/actions/upload-artifact |
+| `actions/setup-python` | v7 | MIT | Provisions the CI Python versions | ❌ | ❌ | https://github.com/actions/setup-python |
+| `actions/setup-node` | v7 | MIT | Provisions Node for Playwright and the frontend runners | ❌ | ❌ | https://github.com/actions/setup-node |
+| `actions/upload-artifact` | v7 | MIT | Publishes test reports and traces | ❌ | ❌ | https://github.com/actions/upload-artifact |
+| `actions/download-artifact` | v8 | MIT | Collects the appliance build outputs between jobs for signing and publishing | ❌ | ❌ | https://github.com/actions/download-artifact |
 | `actions/upload-pages-artifact` | v5 | MIT | Hands the built documentation website to GitHub Pages | ❌ | ❌ | https://github.com/actions/upload-pages-artifact |
 | `actions/deploy-pages` | v5 | MIT | Publishes the documentation website on GitHub Pages | ❌ | ❌ | https://github.com/actions/deploy-pages |
 | `docker/build-push-action` | v7 | Apache-2.0 | Builds and pushes the EMS and Admin images | ❌ | ❌ | https://github.com/docker/build-push-action |
@@ -323,14 +324,14 @@ image.
 
 ## Maintaining This Inventory
 
-Run the checker after touching any manifest, vendored asset or container image:
+Run the checker after touching any manifest, workflow, vendored asset or container image:
 
 ```bash
 python tools/check_third_party_licenses.py
 ```
 
-It fails when a direct dependency, an optional lockfile package or a vendored
-static asset is missing, when a documented entry no longer exists in any
+It fails when a direct dependency, an optional lockfile package, a GitHub Action a
+workflow uses or a vendored static asset is missing, when a documented entry no longer exists in any
 manifest, when a component is listed twice in one section, or when a table is
 missing a required column. `tests/test_third_party_licenses.py` runs the same
 checks under `pytest -m documentation`.

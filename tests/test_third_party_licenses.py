@@ -54,7 +54,7 @@ COPIED_FILES = (
     "package.json",
     "package-lock.json",
 )
-COPIED_TREES = ("dashboard/static", "admin/static")
+COPIED_TREES = ("dashboard/static", "admin/static", ".github/workflows")
 
 # Image references that belong to this project rather than a third party.
 OWN_IMAGE_PREFIXES = ("ghcr.io/basecubedev/", "ems-solarflow-")
@@ -302,3 +302,28 @@ def test_a_development_dependency_marked_distributed_is_rejected(repo_copy):
     row = next(line for line in text.splitlines() if line.startswith("| `ruff`"))
     inventory.write_text(text.replace(row, row.replace("❌ | ❌", "❌ | ✅")), encoding="utf-8")
     assert any("Distributed=❌" in problem for problem in collect_problems(repo_copy))
+
+
+def test_the_copied_workflows_have_no_action_problem(repo_copy):
+    assert not any("GitHub Actions" in problem or "workflows" in problem for problem in collect_problems(repo_copy))
+
+
+def test_an_undocumented_github_action_is_rejected(repo_copy):
+    (repo_copy / ".github" / "workflows" / "added.yaml").write_text(
+        "jobs:\n  added:\n    steps:\n      - uses: example/new-action/setup@v1\n"
+        "      - uses: ./.github/workflows/local.yml\n"
+        "      - uses: docker://alpine:3.20\n",
+        encoding="utf-8",
+    )
+    problems = [problem for problem in collect_problems(repo_copy) if "GitHub Actions" in problem]
+
+    assert problems == [".github/workflows uses 'example/new-action', which is not in the 'GitHub Actions' section"]
+
+
+def test_a_github_action_no_workflow_uses_is_rejected(repo_copy):
+    inventory = repo_copy / "THIRD_PARTY_LICENSES.md"
+    text = inventory.read_text(encoding="utf-8")
+    row = next(line for line in text.splitlines() if line.startswith("| `actions/checkout`"))
+    inventory.write_text(text.replace(row, row + "\n" + row.replace("actions/checkout", "example/unused-action")), encoding="utf-8")
+
+    assert any("example/unused-action" in problem for problem in collect_problems(repo_copy))
