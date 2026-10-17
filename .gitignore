@@ -109,3 +109,6 @@ blob-report/
 
 # Appliance package build output (packaging/appliance/build-deb.sh)
 /dist/
+
+# Documentation website stage and output (scripts/docs_site.py)
+/build/

@@ -1,0 +1,59 @@
+name: Repo docs site
+
+# Builds and checks the documentation website from docs/ on every pull request
+# (docs/developer/docs-site.md). Publishing is docs-site-publish.yml, on main.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Repo docs site build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-docs.txt
+      - name: Install Zensical
+        run: python -m pip install -r requirements-docs.txt
+      - name: Stage docs
+        run: python3 scripts/docs_site.py stage
+      - name: Build site
+        run: zensical build --clean --strict
+      - name: Check links
+        run: python3 scripts/docs_site.py check
+
+  gate:
+    name: Repo docs site gate
+    # See the note on the gate in simulated-regression-tests.yml.
+    needs:
+      - build
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Refuse a run in which anything did not succeed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          python3 -c 'import json, os, sys
+          results = json.loads(os.environ["RESULTS"])
+          bad = sorted((name, outcome["result"]) for name, outcome in results.items()
+                       if outcome["result"] not in ("success", "skipped"))
+          for name, result in bad:
+              print(f"::error::{name} concluded {result}")
+          print(f"{len(results) - len(bad)} of {len(results)} jobs succeeded or were skipped")
+          sys.exit(1 if bad else 0)'

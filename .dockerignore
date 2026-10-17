@@ -27,6 +27,9 @@ scripts/
 !scripts/mqtt_write_latency_probe.py
 tasks/
 docs/develop/
+# Documentation website stage, output and Zensical's cache (scripts/docs_site.py).
+build/
+.cache/
 runtime-traces/
 CODEX_AGENT_GUIDE.md
 

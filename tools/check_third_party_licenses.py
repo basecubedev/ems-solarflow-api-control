@@ -66,7 +66,7 @@ COMPONENT_SECTIONS = (
 APPLIANCE_CONTROL = "packaging/appliance/debian/control"
 
 PYTHON_RUNTIME_MANIFESTS = ("requirements.txt", "deploy/admin/requirements.txt")
-PYTHON_DEV_MANIFESTS = ("requirements-dev.txt",)
+PYTHON_DEV_MANIFESTS = ("requirements-dev.txt", "requirements-docs.txt")
 
 # Distribution expectations that follow from what a section *is*. The runtime
 # transitive table intentionally has none: a conditional dependency is listed
@@ -323,7 +323,7 @@ def _check_python(root, sections, problems):
         )
     for stale in sorted(documented_dev - declared_dev):
         problems.append(
-            f"{PYTHON_DEV!r} lists {stale!r}, which requirements-dev.txt does not declare"
+            f"{PYTHON_DEV!r} lists {stale!r}, which no development requirements file declares"
         )
 
     overlap = sorted(documented_runtime & documented_dev)

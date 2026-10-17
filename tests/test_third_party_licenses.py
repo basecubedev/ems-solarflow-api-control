@@ -22,6 +22,8 @@ from tools.check_third_party_licenses import (
     NODE_DEV,
     OPTIONAL_PLATFORM,
     PYTHON_DEV,
+    PYTHON_DEV_MANIFESTS,
+    PYTHON_RUNTIME_MANIFESTS,
     RUNTIME_DIRECT,
     VENDORED,
     collect_problems,
@@ -47,6 +49,7 @@ COPIED_FILES = (
     "THIRD_PARTY_LICENSES.md",
     "requirements.txt",
     "requirements-dev.txt",
+    "requirements-docs.txt",
     "deploy/admin/requirements.txt",
     "package.json",
     "package-lock.json",
@@ -115,12 +118,29 @@ def test_every_direct_python_dependency_is_documented():
         for manifest in (
             "requirements.txt",
             "requirements-dev.txt",
+            "requirements-docs.txt",
             "deploy/admin/requirements.txt",
         )
         for name in read_python_manifest(ROOT / manifest)
     }
     assert declared, "no Python dependency was parsed at all"
     assert declared <= documented, sorted(declared - documented)
+
+
+def test_the_checker_reads_every_requirements_file():
+    """A requirements file the checker does not know about declares
+    dependencies nothing compares with the inventory."""
+
+    listed = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "*requirements*.txt"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+
+    assert listed
+    assert set(listed) == set(PYTHON_RUNTIME_MANIFESTS) | set(PYTHON_DEV_MANIFESTS)
 
 
 def test_every_direct_node_dependency_is_documented():
@@ -198,6 +218,11 @@ def test_an_undeclared_python_runtime_dependency_is_rejected(repo_copy):
 def test_an_undeclared_python_development_dependency_is_rejected(repo_copy):
     append(repo_copy / "requirements-dev.txt", "\nmypy\n")
     assert any("mypy" in problem for problem in collect_problems(repo_copy))
+
+
+def test_an_undeclared_documentation_dependency_is_rejected(repo_copy):
+    append(repo_copy / "requirements-docs.txt", "\nmkdocs-material\n")
+    assert any("mkdocs-material" in problem for problem in collect_problems(repo_copy))
 
 
 def test_an_undeclared_node_dependency_is_rejected(repo_copy):

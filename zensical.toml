@@ -1,0 +1,201 @@
+[project]
+site_name = "EMS SolarFlow"
+site_description = "Local-first energy management for Zendure SolarFlow batteries and inverters"
+site_url = "https://basecubedev.github.io/ems-solarflow-api-control/"
+repo_url = "https://github.com/basecubedev/ems-solarflow-api-control"
+repo_name = "basecubedev/ems-solarflow-api-control"
+edit_uri = "edit/main/docs/"
+docs_dir = "build/docs-site-src"
+site_dir = "build/docs-site"
+use_directory_urls = false
+copyright = "EMS SolarFlow · AGPL-3.0-or-later"
+
+nav = [
+  { "Home" = "README.md" },
+  { "User guide" = [
+    "user/index.md",
+    { "Setup paths" = [
+      { "Admin Console" = "user/admin-console.md" },
+      { "Docker Bootstrap" = "user/docker-bootstrap.md" },
+      { "How it fits together" = "user/how-it-fits-together.md" },
+    ] },
+    { "Admin Console guides" = [
+      "user/admin/index.md",
+      { "First start" = "user/admin/first-start.md" },
+      { "Guided Setup" = "user/admin/guided-setup.md" },
+      { "Guided Upgrade" = "user/admin/guided-upgrade.md" },
+      { "Maintenance" = "user/admin/maintenance.md" },
+      { "Device management" = "user/admin/device-management.md" },
+      { "MQTT connections" = "user/admin/mqtt.md" },
+      { "Backup and restore" = "user/admin/backup-restore.md" },
+      { "Diagnostics and recovery" = "user/admin/diagnostics-recovery.md" },
+      { "Setup reference" = "user/admin-setup.md" },
+      { "Maintenance reference" = "user/admin-maintenance.md" },
+      { "Backup and restore reference" = "user/admin-backup-restore.md" },
+    ] },
+    { "Dashboard guides" = [
+      "user/dashboard/index.md",
+      { "Overview and navigation" = "user/dashboard/overview.md" },
+      { "Device cards" = "user/dashboard/devices.md" },
+      { "Energy and analytics" = "user/dashboard/energy.md" },
+      { "Control pipeline" = "user/dashboard/control.md" },
+      { "Runtime settings" = "user/dashboard/runtime-settings.md" },
+      { "Diagnostics" = "user/dashboard/diagnostics.md" },
+    ] },
+    { "Raspberry Pi appliance" = [
+      "user/appliance/index.md",
+      { "Overview page" = "user/appliance/overview.md" },
+      { "Flashing the card" = "user/appliance/install.md" },
+      { "First start" = "user/appliance/first-start.md" },
+      { "Network" = "user/appliance/network.md" },
+      { "Updates" = "user/appliance/updates.md" },
+      { "Backups" = "user/appliance/backup.md" },
+      { "When it stops working" = "user/appliance/recovery.md" },
+    ] },
+    { "Everyday use and help" = [
+      { "Quickstart" = "quickstart.md" },
+      { "First-run checklist" = "first-run-checklist.md" },
+      { "Common commands" = "common-commands.md" },
+      { "Config layout" = "user/config-layout.md" },
+      { "Hardware requirements" = "user/hardware-requirements.md" },
+      { "Supported setups" = "user/supported-setups.md" },
+      { "Connection types" = "user/connection-types.md" },
+      { "External devices" = "user/external-devices.md" },
+      { "FAQ" = "user/faq.md" },
+      { "Troubleshooting" = "user/troubleshooting.md" },
+      { "Safety" = "user/safety.md" },
+      { "Project overview" = "user/project-overview.md" },
+    ] },
+    { "Install and features" = [
+      { "Install Docker" = "install-docker.md" },
+      { "Docker reference" = "docker.md" },
+      { "Native Python" = "native-python.md" },
+      { "Standalone dashboard" = "dashboard.md" },
+      { "Winter mode" = "winter-mode.md" },
+      { "Battery full-charge assist" = "battery-full-charge-assist.md" },
+      { "AC charging" = "ac-charging.md" },
+      { "Quality and maintenance" = "quality-and-maintenance.md" },
+    ] },
+  ] },
+  { "Technical reference" = [
+    { "Architecture" = "technical/architecture.md" },
+    { "Admin architecture" = "technical/admin-architecture.md" },
+    { "Admin discovery" = "technical/admin-discovery.md" },
+    { "System-build pairing" = "technical/system-build-pairing.md" },
+    { "Admin workflow state" = "technical/admin-workflow-state.md" },
+    { "Configuration" = "technical/configuration.md" },
+    { "Configuration examples" = "configuration-examples.md" },
+    { "Control logic" = "technical/control-logic.md" },
+    { "Control flow" = "technical/control-flow.md" },
+    { "Runtime state" = "technical/runtime-state.md" },
+    { "Safety model" = "technical/safety-model.md" },
+    { "Troubleshooting reference" = "technical/troubleshooting-reference.md" },
+    { "Backup/restore internals" = "technical/backup-restore.md" },
+    { "Analytics / InfluxDB" = "technical/influxdb.md" },
+    { "Dashboard performance" = "technical/dashboard-performance.md" },
+    { "Zendure MQTT power control" = "technical/zendure-mqtt-power-control.md" },
+    { "Zendure MQTT mock publisher" = "technical/zendure-mqtt-mock-service.md" },
+    { "CLI reference" = "cli.md" },
+    { "Observed firmware behavior" = "observed-firmware-no-energy-path.md" },
+  ] },
+  { "Appliance Manager" = [
+    { "Architecture" = "appliance/architecture.md" },
+    { "Installation" = "appliance/installation.md" },
+    { "Admin recovery" = "appliance/admin-recovery.md" },
+    { "Console recovery" = "appliance/console-recovery.md" },
+    { "OS updates" = "appliance/os-updates.md" },
+    { "Hardware gate" = "appliance/hardware-validation.md" },
+    { "SSH and backup access" = "appliance/ssh-backup-access.md" },
+    { "SSH shell access" = "appliance/ssh-shell-access.md" },
+    { "Network recovery" = "appliance/network-recovery.md" },
+    { "Security model" = "appliance/security-model.md" },
+    { "Manager releases" = "appliance/manager-releases.md" },
+    { "Troubleshooting" = "appliance/troubleshooting.md" },
+    { "Decision records" = [
+      { "One image, one writable root" = "appliance/adr/single-image-appliance.md" },
+      { "Manager self-update" = "appliance/adr/manager-self-update.md" },
+    ] },
+  ] },
+  { "Developer" = [
+    { "Agent rules" = "developer/agent-rules.md" },
+    { "Review coverage" = "developer/review-coverage.md" },
+    { "Developer setup" = "developer/developer-setup.md" },
+    { "Development notes" = "developer/development.md" },
+    { "Developer notes" = "developer/developer.md" },
+    { "Testing" = "developer/testing.md" },
+    { "Playwright E2E tests" = "developer/e2e-playwright.md" },
+    { "MQTT write-latency probe" = "developer/mqtt-write-latency-probe.md" },
+    { "CI / release" = "developer/ci-release.md" },
+    { "Documentation website" = "developer/docs-site.md" },
+    { "Dashboard style guide" = "developer/dashboard-style-guide.md" },
+    { "Design notes" = [
+      "developer/design-notes/README.md",
+      { "InfluxDB runtime telemetry" = "developer/design-notes/develop-tool-influxdb-telemetry.md" },
+      { "InfluxDB state transitions" = "developer/design-notes/develop-tool-influxdb-state-transition-analysis.md" },
+    ] },
+  ] },
+]
+
+[project.theme]
+language = "en"
+icon.logo = "lucide/battery-charging"
+icon.repo = "fontawesome/brands/github"
+features = [
+  "content.action.edit",
+  "content.action.view",
+  "content.code.copy",
+  "content.tabs.link",
+  "content.tooltips",
+  "navigation.footer",
+  "navigation.indexes",
+  "navigation.instant",
+  "navigation.instant.prefetch",
+  "navigation.path",
+  "navigation.sections",
+  "navigation.tabs",
+  "navigation.top",
+  "navigation.tracking",
+  "search.highlight",
+  "toc.follow",
+]
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme)"
+toggle.icon = "lucide/sun-moon"
+toggle.name = "Switch to light mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to system preference"
+
+[project.markdown_extensions]
+abbr = {}
+admonition = {}
+attr_list = {}
+def_list = {}
+footnotes = {}
+md_in_html = {}
+tables = {}
+toc.permalink = true
+toc.slugify = { object = "pymdownx.slugs.slugify", kwds = { case = "lower" } }
+pymdownx.betterem = {}
+pymdownx.details = {}
+pymdownx.highlight.anchor_linenums = true
+pymdownx.highlight.pygments_lang_class = true
+pymdownx.inlinehilite = {}
+pymdownx.keys = {}
+pymdownx.mark = {}
+pymdownx.tilde = {}
+pymdownx.tasklist.custom_checkbox = true
+pymdownx.tabbed.alternate_style = true
+pymdownx.superfences.custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
+]

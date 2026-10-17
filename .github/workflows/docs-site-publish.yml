@@ -1,0 +1,61 @@
+name: Repo docs site publish
+
+# Builds the documentation website from main and publishes it to GitHub Pages
+# (docs/developer/docs-site.md). The repository settings must have Pages set to
+# "GitHub Actions". The build steps are those of docs-site.yml, which checks
+# every pull request, plus the upload; tests/test_docs_site.py keeps them equal.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deployment at a time, and a running one is never cancelled: Pages would
+# otherwise be left on whichever half-finished upload came last.
+concurrency:
+  group: docs-site-publish
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Repo docs site publish build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-docs.txt
+      - name: Install Zensical
+        run: python -m pip install -r requirements-docs.txt
+      - name: Stage docs
+        run: python3 scripts/docs_site.py stage
+      - name: Build site
+        run: zensical build --clean --strict
+      - name: Check links
+        run: python3 scripts/docs_site.py check
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: build/docs-site
+
+  deploy:
+    name: Repo docs site publish deploy
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
