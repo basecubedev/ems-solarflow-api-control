@@ -116,15 +116,16 @@ as 02:30–03:15, keeps its length: 03:30–04:15.
 
 Rules run in the zone the EMS's other hour-based windows use — `TZ`, else
 `/etc/localtime` (in Docker see [docker.md](docker.md#time-zone)). The Schedule
-tab and `emsctl schedule list` name it. A `TZ` that names no zone runs on UTC,
-as it does for those windows; one without daylight saving, such as `UTC0` or
-`CET-1`, is the fixed offset it names. A POSIX rule string with daylight saving,
-such as `CET-1CEST,M3.5.0,M10.5.0/3`, is one the scheduler cannot follow across
-a clock change: nothing fires, `schedule_zone_unsupported` is logged, and the
-dashboard and `emsctl schedule` say to set a zone name such as `Europe/Berlin`;
-`emsctl schedule status`, `pause`, `resume`, `show`, `remove`, `disable` and
-`move` still work, and the Schedule tab still lists, pauses, moves and deletes
-rules.
+tab and `emsctl schedule list` name it, and the tab says so when the browser's
+clock is in another zone: rule times are always the EMS's. A `TZ` that names no
+zone runs on UTC, as it does for those windows; one without daylight saving,
+such as `UTC0` or `CET-1`, is the fixed offset it names. A POSIX rule string
+with daylight saving, such as `CET-1CEST,M3.5.0,M10.5.0/3`, is one the scheduler
+cannot follow across a clock change: nothing fires, `schedule_zone_unsupported`
+is logged, and the dashboard and `emsctl schedule` say to set a zone name such
+as `Europe/Berlin`; `emsctl schedule status`, `pause`, `resume`, `show`,
+`remove`, `disable` and `move` still work, and the Schedule tab still lists,
+pauses, moves and deletes rules.
 
 Nothing fires while the clock reads a time before this release: a Raspberry Pi
 without a clock of its own boots far in the past until NTP answers, and

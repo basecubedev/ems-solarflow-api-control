@@ -131,6 +131,7 @@ class ScheduleApi:
         return {
             "enabled": book.enabled,
             "zone": "unsupported" if self.zone is None else str(getattr(self.zone, "key", None) or self.zone),
+            "zone_offset_minutes": None if self.zone is None else _offset_minutes(now, self.zone),
             "zone_message": ZONE_UNSUPPORTED if self.zone is None else None,
             "clock_trusted": clock_trusted(now),
             "rules": [self._rule_view(rule, book, devices, status.get("refused")) for rule in book.rules],
@@ -289,6 +290,13 @@ class ScheduleApi:
         if message:
             view["message"] = f"Not written: {message}"
         return view
+
+
+def _offset_minutes(now, zone):
+    """The zone's offset from UTC at ``now``, which the browser holds its own
+    against to say when rule times are not the viewer's."""
+
+    return int(now.astimezone(zone).utcoffset().total_seconds() // 60)
 
 
 def _zoneless(method, path, body):

@@ -183,11 +183,34 @@ test.describe("schedule tab, a rule made with emsctl", () => {
   });
 });
 
+test.describe("schedule tab, a viewer in the EMS's time zone", () => {
+  test.use({ timezoneId: "Europe/Berlin" });
+
+  test.beforeEach(async ({ page }) => {
+    await clearRules(page);
+  });
+
+  test("names no time zone difference when there is none", async ({ page }) => {
+    await openSchedule(page);
+
+    await expect(page.locator(".schedule-summary")).toContainText("Time zone Europe/Berlin");
+    await expect(page.locator(".schedule-summary")).not.toContainText("this browser on");
+  });
+});
+
 test.describe("schedule tab, a viewer in another time zone", () => {
   test.use({ timezoneId: "America/New_York" });
 
   test.beforeEach(async ({ page }) => {
     await clearRules(page);
+  });
+
+  test("says that rule times are the EMS's when the browser's clock is in another zone", async ({ page }) => {
+    await openSchedule(page);
+
+    await expect(page.locator(".schedule-summary")).toContainText(
+      /The EMS runs on Europe\/Berlin \(UTC\+0[12]:00\), this browser on UTC−0[45]:00: rule times are the EMS's/,
+    );
   });
 
   test("dates and times are the EMS's, and a window over the weekend survives an edit", async ({ page }) => {

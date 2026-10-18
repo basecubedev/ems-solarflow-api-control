@@ -4451,12 +4451,25 @@ function renderScheduleView() {
   if (state.schedule.editor) previewScheduleSoon();
 }
 
+function scheduleOffsetText(minutes) {
+  if (!minutes) return "UTC";
+  const sign = minutes > 0 ? "+" : "−";
+  const whole = Math.abs(minutes);
+  return `UTC${sign}${String(Math.floor(whole / 60)).padStart(2, "0")}:${String(whole % 60).padStart(2, "0")}`;
+}
+
 function renderScheduleHeader(overview) {
   const running = overview.enabled !== false;
   const clock = overview.clock_trusted
     ? ""
     : `<span class="pill tone-warn">Clock not trusted — nothing fires until it is</span>`;
-  const zone = overview.zone_message ? `<span class="pill tone-warn">${escapeHtml(overview.zone_message)}</span>` : "";
+  const browserOffset = -new Date().getTimezoneOffset();
+  const zone = overview.zone_message
+    ? overview.zone_message
+    : overview.zone_offset_minutes != null && overview.zone_offset_minutes !== browserOffset
+      ? `The EMS runs on ${overview.zone} (${scheduleOffsetText(overview.zone_offset_minutes)}), this browser on ${scheduleOffsetText(browserOffset)}: rule times are the EMS's.`
+      : "";
+  const zoneNote = zone ? `<p class="schedule-help"><span class="pill tone-warn">Time zone</span> ${escapeHtml(zone)}</p>` : "";
   return `
     <div class="control-pipeline-stage schedule-summary">
       <div class="control-stage-head control-stage-header">
@@ -4469,10 +4482,11 @@ function renderScheduleHeader(overview) {
         </div>
       </div>
       <div class="schedule-toolbar">
-        ${clock}${zone}
+        ${clock}
         <button type="button" class="primary-button compact" data-schedule-action="new" ${overview.zone_message ? "disabled" : ""}><span class="button-ring" aria-hidden="true"><i></i></span>New rule</button>
         <button type="button" class="primary-button compact" data-schedule-action="${running ? "pause" : "resume"}"><span class="button-ring" aria-hidden="true"><i></i></span>${running ? "Pause all" : "Resume"}</button>
       </div>
+      ${zoneNote}
     </div>`;
 }
 

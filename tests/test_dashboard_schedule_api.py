@@ -80,6 +80,7 @@ def test_a_rule_is_created_and_listed_with_its_sentence_and_next_switch_point(ap
     status, overview = api.handle("GET", "/api/schedule")
     assert status == 200
     assert overview["zone"] == "Europe/Berlin" and overview["enabled"] is True
+    assert overview["zone_offset_minutes"] == 120
     assert [rule["id"] for rule in overview["rules"]] == [created["id"]]
     assert overview["next"][0]["text"] == "standard"
     assert {action["id"] for action in overview["actions"]} >= {"offgrid_socket", "charge_from_grid"}
@@ -240,6 +241,7 @@ def test_without_a_zone_the_scheduler_can_follow_rules_can_be_listed_paused_and_
 
     status, overview = api.handle("GET", "/api/schedule")
     assert status == 200 and overview["zone"] == "unsupported" and "POSIX" in overview["zone_message"]
+    assert overview["zone_offset_minutes"] is None
     assert overview["rules"][0]["status"] == "paused" and overview["next"] == []
     assert api.handle("PATCH", "/api/schedule", {"enabled": False})[0] == 200
     for method, path in (("POST", "/api/schedule/preview"), ("POST", "/api/schedule/rules"),
