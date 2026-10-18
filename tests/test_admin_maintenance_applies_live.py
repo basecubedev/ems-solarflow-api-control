@@ -7,7 +7,7 @@ every write gate, dry_run and simulation_mode included — is inert until the EM
 container is recreated. The console used to say that nowhere, so an owner could
 turn a gate off, see "Config applied", and still be controlled.
 
-The whitelist has one owner (dashboard.runtime_write, read through
+The whitelist has one owner (ems.runtime_commands, read through
 admin.config_runtime_overlap). This asks that question of the owner rather than
 keeping a second copy of the answer.
 """
@@ -73,7 +73,7 @@ def test_everything_else_waits_for_a_restart(path):
 
 
 def test_the_answer_comes_from_the_whitelist_and_not_from_a_copy():
-    from dashboard.runtime_write import DEVICE_FIELDS, SECTION_FIELDS, SYSTEM_FIELDS
+    from ems.runtime_commands import DEVICE_FIELDS, SECTION_FIELDS, SYSTEM_FIELDS
 
     for key in SYSTEM_FIELDS:
         assert applies_live("system." + key) is True

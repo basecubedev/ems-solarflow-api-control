@@ -813,16 +813,20 @@ h2 { display: inline-flex; align-items: center; gap: calc(7px * var(--d)); }
    carry the heading). The tab bar in .flow-heading-controls stays visible. */
 .shell.view-diagnose > .devices-section,
 .shell.view-diagnose > .chart-panel,
+.shell.view-schedule > .devices-section,
+.shell.view-schedule > .chart-panel,
 .shell.view-logs > .devices-section,
 .shell.view-logs > .chart-panel,
 .shell.view-maintenance > .devices-section,
 .shell.view-maintenance > .chart-panel { display: none; }
 .shell.view-diagnose .flow-panel > .section-heading > h2,
+.shell.view-schedule .flow-panel > .section-heading > h2,
 .shell.view-logs .flow-panel > .section-heading > h2,
 .shell.view-maintenance .flow-panel > .section-heading > h2 { display: none; }
 /* With the heading hidden the flex row loses its space-between anchor, so keep
    the tab bar right-aligned. */
 .shell.view-diagnose .flow-panel > .section-heading,
+.shell.view-schedule .flow-panel > .section-heading,
 .shell.view-logs .flow-panel > .section-heading,
 .shell.view-maintenance .flow-panel > .section-heading { justify-content: flex-end; }
 .section-heading { position: relative; justify-content: space-between; gap: calc(10px * var(--d)); margin-bottom: calc(7px * var(--d)); }
@@ -1508,6 +1512,10 @@ h2 { display: inline-flex; align-items: center; gap: calc(7px * var(--d)); }
 .flow-wrap.view-diagnose .device-flow-view,
 .flow-wrap.view-diagnose .control-explain-view,
 .flow-wrap.view-diagnose .energy-stats-view,
+.flow-wrap.view-schedule #flowSvg,
+.flow-wrap.view-schedule .device-flow-view,
+.flow-wrap.view-schedule .control-explain-view,
+.flow-wrap.view-schedule .energy-stats-view,
 .flow-wrap.view-logs #flowSvg,
 .flow-wrap.view-logs .device-flow-view,
 .flow-wrap.view-logs .control-explain-view,
@@ -2707,6 +2715,55 @@ canvas { width: 100%; min-height: 94px; border: var(--o-border) solid color-mix(
   canvas { min-height: 72px; }
 }
 
+/* Schedule tab — Control / Energy stage style (see docs/developer/dashboard-style-guide.md) */
+.schedule-view { position: relative; z-index: 1; padding: calc(4px * var(--d)) calc(2px * var(--d)); }
+.schedule-heading h2 { margin: 0; }
+.schedule-heading p { margin: calc(2px * var(--d)) 0 0; color: var(--muted); font-size: 12px; }
+.schedule-body { display: flex; flex-direction: column; gap: calc(8px * var(--d)); }
+.schedule-summary,
+.schedule-next,
+.schedule-rule,
+.schedule-editor { padding: calc(10px * var(--d)) calc(12px * var(--d)); }
+.schedule-toolbar,
+.schedule-rule-actions,
+.schedule-modes {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(6px * var(--d));
+  margin-top: calc(8px * var(--d));
+}
+.schedule-rules { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: calc(8px * var(--d)); }
+.schedule-rule-line { margin: calc(4px * var(--d)) 0 0; color: var(--muted); font-size: 12px; }
+.schedule-rule-next { color: var(--text); }
+.schedule-next-row { display: flex; flex-wrap: wrap; gap: calc(8px * var(--d)); }
+.schedule-next-time { min-width: 108px; color: var(--text); font-variant-numeric: tabular-nums; }
+.schedule-next-value { color: var(--text); }
+.schedule-step { border: 0; margin: calc(10px * var(--d)) 0 0; padding: 0; min-width: 0; }
+.schedule-step legend { padding: 0; margin-bottom: calc(6px * var(--d)); }
+.schedule-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(4px * var(--d));
+  min-height: var(--o-control-height);
+  padding: var(--o-control-inset);
+  border-radius: var(--o-control-radius);
+  border: 1px solid var(--border);
+  background: var(--tone-inner);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.schedule-chip:has(input:checked) { border-color: color-mix(in srgb, var(--accent2) 32%, transparent); }
+.schedule-toolbar .primary-button.compact,
+.schedule-rule-actions .primary-button.compact,
+.schedule-modes .primary-button.compact { width: auto; margin-top: 0; padding: 0 calc(14px * var(--d)); }
+.schedule-editor .runtime-field > input,
+.schedule-editor .runtime-field > .runtime-readonly-value { grid-column: 2; min-width: 0; }
+.schedule-help { margin: calc(6px * var(--d)) 0 0; color: var(--muted); font-size: 12px; }
+.schedule-preview { color: var(--text); font-size: 13px; }
+.schedule-sentence { margin: 0 0 calc(4px * var(--d)); }
+.schedule-preview-error { margin: 0; color: var(--text); }
 /* Diagnose tab — Control / Energy stage style (see docs/developer/dashboard-style-guide.md) */
 /* position/z-index lift the panel above the decorative .flow-wrap::before grid
    overlay so its (statically positioned) profile buttons remain clickable. */

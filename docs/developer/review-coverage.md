@@ -405,9 +405,9 @@ reproduction; confirm or drop them before fixing.
 
 ## Dashboard and emsctl parity
 
-The dashboard is the daily operations UI; emsctl is the shell tool. After
-review 1 both write the runtime state through the same validation in
-`dashboard/runtime_write.py`.
+The dashboard is the daily operations UI; emsctl is the shell tool. Both
+write the runtime state through the same command path, `ems/runtime_commands.py`:
+the same validators and the same writer.
 
 | Function | emsctl | Dashboard |
 |---|---|---|

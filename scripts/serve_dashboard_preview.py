@@ -24,8 +24,10 @@ Open, for example:
 
 Safety: the preview never contacts real Zendure/Shelly/MQTT/InfluxDB/Home
 Assistant endpoints, never reads secrets from config.json, and never writes
-runtime-state, auth files, or the dashboard database. It binds to loopback by
-default.
+runtime-state, auth files, or the dashboard database. The Schedule tab runs the
+real schedule routes over a scratch copy of the scenario's runtime state in a
+temporary directory of its own, removed when the process exits. It binds to
+loopback by default.
 """
 
 import argparse
@@ -456,6 +458,9 @@ class PreviewHandler(BaseHTTPRequestHandler):
         if path == "/api/logs":
             self._send_logs(parsed.query)
             return
+        if path == "/api/schedule" or path.startswith("/api/schedule/"):
+            self._send_schedule("GET", parsed, {})
+            return
         if path == "/api/maintenance/status":
             self._send_json(PREVIEW_MAINTENANCE["status"])
             return
@@ -567,12 +572,16 @@ class PreviewHandler(BaseHTTPRequestHandler):
             return {}
 
     def _handle_write(self):
-        """Preview-only write handler: never mutates disk, config, or devices."""
+        """Preview-only write handler: never mutates config, devices or the
+        installation; schedule writes land in the preview's scratch directory."""
 
         parsed = urlparse(self.path)
         path = parsed.path
         body = self._read_json_body()
 
+        if path == "/api/schedule" or path.startswith("/api/schedule/"):
+            self._send_schedule(self.command, parsed, body)
+            return
         if path == "/api/auth/login":
             # Let reviewers exercise the write UI without a real password.
             self._send_json({
@@ -842,6 +851,14 @@ class PreviewHandler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
+    def _send_schedule(self, method, parsed, body):
+        api = getattr(self.server, "schedule_api", None)
+        if api is None:
+            self._send_json({"error": "schedule_unavailable"}, status=404)
+            return
+        status, payload = api.handle(method, parsed.path, body if isinstance(body, dict) else {}, parsed.query)
+        self._send_json(payload, status=status)
+
     def _send_json(self, payload, status=200):
         self._send_bytes(
             json.dumps(payload, sort_keys=True).encode("utf-8"),
@@ -891,11 +908,58 @@ def start_server(
             f"could not bind preview server to {host}:{port} ({exc}). "
             "Is the port already in use? Try a different --port."
         )
+    server.schedule_api = _preview_schedule_api(server)
     import threading
 
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server
+
+
+def _preview_schedule_api(server):
+    """The real schedule routes over a scratch copy of the scenario's runtime state.
+
+    The rules and the runtime state they change live in a temporary directory
+    of this process's own, removed when it exits, so the Schedule tab can be
+    exercised end to end without touching an installation.
+    """
+
+    import atexit
+    import shutil
+    import tempfile
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    from dashboard.schedule_api import ScheduleApi
+    from ems.runtime_commands import build_validation_context
+    from ems.runtime_state import RuntimeState
+    from ems.schedule_store import ScheduleStore
+
+    runtime = build_scenario(server.scenario_name, device_count=server.device_count)["runtime"]
+    limits = runtime.get("_limits", {})
+    scratch = tempfile.mkdtemp(prefix="ems-dashboard-preview-schedule-")
+    atexit.register(shutil.rmtree, scratch, True)
+    state_path = os.path.join(scratch, "runtime-state.json")
+    with open(state_path, "w", encoding="utf-8") as handle:
+        json.dump({key: value for key, value in runtime.items() if key != "_limits"}, handle)
+    runtime_state = RuntimeState(state_path, {"devices": {}})
+    runtime_state.load_if_changed(force=True)
+    devices = sorted(runtime.get("devices", {}))
+    config = {
+        "system": {"max_total_power": limits.get("system", {}).get("max_total_power", 800)},
+        "devices": [
+            {"name": name, "max_power": limits.get("devices", {}).get(name, 800)} for name in devices
+        ],
+    }
+    context = build_validation_context(config)
+    return ScheduleApi(
+        ScheduleStore(os.path.join(scratch, "schedules.json")),
+        runtime_state=runtime_state,
+        devices=lambda: {name: None for name in devices},
+        validation_context=lambda: context,
+        zone=ZoneInfo("Europe/Berlin"),
+        clock=lambda: datetime.now(timezone.utc),
+    )
 
 
 def _print_urls(host, port, scenario):

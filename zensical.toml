@@ -75,6 +75,7 @@ nav = [
       { "Winter mode" = "winter-mode.md" },
       { "Battery full-charge assist" = "battery-full-charge-assist.md" },
       { "AC charging" = "ac-charging.md" },
+      { "Scheduler" = "scheduler.md" },
       { "Quality and maintenance" = "quality-and-maintenance.md" },
     ] },
   ] },

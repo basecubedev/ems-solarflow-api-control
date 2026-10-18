@@ -69,7 +69,7 @@ worker liveness:
 | B8 | `<admin_data>/releases/<tag>/…` | `ReleaseManager` | deployment/upgrade | same | `test_reset` only | Setup/Upgrade | Yes |
 | B9 | `<admin_data>/backups/config/*.json` | `ConfigApplyService._backup` | restore flows | same | Backup UI | Backup/restore | No |
 | B10 | `<install>/config/config.json` | installer / Admin | EMS runtime, Maintenance, Setup preview | `ConfigApplyService.apply_prepared`, `DeploymentService._write_config` | n/a | **live config** | n/a |
-| B11 | `<install>/data/runtime-state.json` | EMS | EMS, Admin runtime convergence | EMS + `dashboard/runtime_write.py` | n/a | EMS runtime | n/a |
+| B11 | `<install>/data/runtime-state.json` | EMS | EMS, Admin runtime convergence | EMS + `ems/runtime_commands.py` | n/a | EMS runtime | n/a |
 | B12 | `<install>/data/runtime-state.json.reset-requested` (`{"reason", "config_sha256"}`) | W1/W3 (fresh Setup) | `start_runtime_state` at EMS start | W1/W3 write it; every edit moves it to the config it writes when it names the one replaced (W4–W6 through `apply_maintenance`, the Guided Upgrade config step, emsctl, the dashboard and the startup upgrade through `write_config_json_atomic`) | the EMS start that settles it: honoured while the installed config is the one it names, dropped otherwise | fresh Setup | Yes — resets B11 at the next start. W3 leaves it before the config, or right after the permission repair when `data/` refuses it until then; a prepare failing before that repair leaves the config without it until it is repeated |
 | B13 | `<install>/data/runtime-state.json.before-setup-<UTC time>` | `start_runtime_state` | operator | none | none | EMS runtime backup | No |
 
@@ -118,7 +118,7 @@ planning state; L1–L8 outlive a session.
 | W6 Guided Upgrade migration | `GuidedUpgradeExecutor._apply_mqtt_migration` | Guided Upgrade | migration output | live `config/config.json`; moves a pending B12 along | `migration["revision"]` | yes | n/a |
 | W7 Backup restore | `admin/backup_restore.py` | Backup/restore | backup set | live `config/config.json`; a pending runtime reset request (B12) that names another config is dropped at the next EMS start | set-scoped | yes | n/a |
 | W8 Legacy migration | `migrate_legacy_root_config` | Install-state | legacy root config | standard config | layout-state guarded | yes | n/a |
-| W9 Runtime convergence | `dashboard/runtime_write.py` whitelist | Maintenance apply | live config | `data/runtime-state.json` | n/a | no | n/a |
+| W9 Runtime convergence | `ems/runtime_commands.py` whitelist | Maintenance apply | live config | `data/runtime-state.json` | n/a | no | n/a |
 
 ### 2.1 The traced scenario
 

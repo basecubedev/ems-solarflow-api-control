@@ -11,10 +11,11 @@ import math
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 from dashboard import auth as dashboard_auth
-from dashboard import runtime_write
+from ems import runtime_commands
+from ems.runtime_state import RuntimeState
 
 
 from ems.paths import (
@@ -22,13 +23,19 @@ from ems.paths import (
     LAYOUT_LEGACY_ROOT_ONLY,
     detect_config_layout_state,
     resolve_config_path as resolve_ems_config_path,
+    resolve_control_status_path,
     resolve_runtime_path,
     resolve_dashboard_auth_path,
+    resolve_schedules_path,
     standard_config_path,
 )
+from ems import schedule_cli
+from ems.schedule_store import ScheduleStore
+from ems.scheduler import local_zone
 
 from ems.diagnostics import (
     diagnose_json_file,
+    diagnose_live_snapshot,
     diagnose_text,
     diagnose_write_support_bundle,
     run_control_diagnosis as run_control_diagnosis,
@@ -52,6 +59,7 @@ TOP_LEVEL_COMMANDS = (
     "device",
     "winter",
     "ac-charge",
+    "schedule",
     "dashboard",
     "influx",
     "stack",
@@ -94,15 +102,12 @@ RUNTIME_EDIT_COMMANDS = frozenset(
         "device",
         "winter",
         "ac-charge",
+        "schedule",
         "interactive",
         "menu",
     }
 )
-DEVICE_AC_MODE_VALUES = ("output", "input")
-DEVICE_AC_MODE_RUNTIME_ROLES = {
-    "output": "ac_output",
-    "input": "ac_input",
-}
+DEVICE_AC_MODE_VALUES = tuple(word for word, _ in runtime_commands.DEVICE_COMMANDS["ac-mode"].choices)
 DEVICE_AC_MODE_ROLE_ALIASES = {
     "normal_output": "ac_output",
     "ac_output": "ac_output",
@@ -420,6 +425,8 @@ Examples:
         help="One of: enable, disable, status.",
     )
     ac_charge.add_argument("value", nargs="?", help=argparse.SUPPRESS)
+
+    schedule_cli.add_schedule_parser(subparsers, EMSHelpFormatter)
 
     winter = subparsers.add_parser(
         "winter",
@@ -1208,19 +1215,6 @@ def float_value(value, field, minimum=0.0):
     return parsed
 
 
-def _config_device_identity(item):
-    for key in ("sn", "serial_number"):
-        value = item.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    mqtt = item.get("mqtt")
-    if isinstance(mqtt, dict):
-        value = mqtt.get("device_id")
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
-
-
 def config_device_defaults(config):
     from ems.config import (
         http_control_device_configs,
@@ -1264,7 +1258,7 @@ def config_device_defaults(config):
             ),
             "ac_charge_enabled": bool(item.get("ac_charge_enabled", True)),
         }
-        identity = _config_device_identity(item)
+        identity = config_mod.config_device_identity(item)
         if identity:
             entry["identity"] = identity
         devices[name] = entry
@@ -1522,73 +1516,28 @@ def runtime_defaults(config, existing=None):
     }
 
 
-def merge_defaults(data, defaults):
-    if not isinstance(data, dict):
-        data = {}
+def open_runtime_state(path, config):
+    """The runtime state emsctl reads and edits, as the EMS's RuntimeState.
 
-    merged = dict(data)
+    Returns it with whether the file is still to be created. An unreadable file
+    is refused rather than replaced by defaults.
+    """
 
-    system = merged.get("system")
-    if not isinstance(system, dict):
-        system = {}
-    merged["system"] = {
-        **defaults.get("system", {}),
-        **system
-    }
+    existing = None
+    signature = None
+    if os.path.exists(path):
+        try:
+            existing, signature = RuntimeState.read_file(path)
+        except Exception as exc:
+            raise ValueError(f"cannot read runtime state {path}: {exc}") from exc
+        if not isinstance(existing, dict):
+            raise ValueError(f"runtime state {path} must contain a JSON object")
 
-    for section_name in ("winter", "ac_charge_control"):
-        section = merged.get(section_name)
-        if not isinstance(section, dict):
-            section = {}
-        merged[section_name] = {
-            **defaults.get(section_name, {}),
-            **section
-        }
-
-    devices = merged.get("devices")
-    if not isinstance(devices, dict):
-        devices = {}
-
-    from ems.runtime_state import reconcile_runtime_devices
-
-    merged_devices, _changes = reconcile_runtime_devices(
-        devices, defaults.get("devices", {}), prune=False
-    )
-    merged["devices"] = merged_devices
-    return merged
-
-
-def load_runtime_state(path, config):
-    if not os.path.exists(path):
-        data = {}
-        state = merge_defaults(data, runtime_defaults(config, data))
-        return state, True
-
-    try:
-        with open(path) as f:
-            data = json.load(f)
-    except Exception as exc:
-        raise ValueError(f"cannot read runtime state {path}: {exc}") from exc
-
-    if not isinstance(data, dict):
-        raise ValueError(f"runtime state {path} must contain a JSON object")
-
-    return merge_defaults(data, runtime_defaults(config, data)), False
-
-
-def save_atomic(path, data):
-    parent = os.path.dirname(path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-
-    tmp_path = f"{path}.{os.getpid()}.tmp"
-    with open(tmp_path, "w") as f:
-        json.dump(data, f, indent=2, sort_keys=True)
-        f.write("\n")
-        f.flush()
-        os.fsync(f.fileno())
-
-    os.replace(tmp_path, path)
+    runtime_state = RuntimeState(path, runtime_defaults(config, existing))
+    if existing is None:
+        return runtime_state, True
+    runtime_state.adopt(existing, signature)
+    return runtime_state, False
 
 
 def ensure_no_value(args):
@@ -1644,113 +1593,54 @@ def print_device_ac_mode_status(device_name, device):
 def runtime_limits(config):
     """Bounds every runtime writer shares, derived from the static config."""
 
-    return runtime_write.build_validation_context(config)
+    return runtime_commands.build_validation_context(config)
 
 
-def _validated(label, validate, *args):
+RUNTIME_COMMAND_SCOPES = runtime_commands.EMSCTL_SCOPES
+
+
+def handle_schedule_command(args, config):
+    """emsctl schedule: rules beside this installation's runtime state."""
+
+    runtime_path = resolve_runtime_path(args, config)
+    devices = config_mod.device_identities(config_device_defaults(config), config.get("devices", []))
+    reported = None
+    status_path = resolve_control_status_path(runtime_path)
+    if status_path.exists():
+        with contextlib.suppress(OSError, ValueError):
+            reported = json.loads(status_path.read_text(encoding="utf-8"))
+    known, zone = schedule_cli.zone_of_running_ems(reported)
+    control_status = diagnose_live_snapshot(runtime_path)["data"] or None
     try:
-        return validate(*args)
-    except runtime_write.RuntimeWriteError as exc:
-        raise ValueError(f"{label}: {exc}") from exc
-
-
-def update_system(args, state, limits=None):
-    system = state.setdefault("system", {})
-    fields = {
-        "max-power": "max_total_power",
-        "loop-interval": "loop_interval",
-        "min-output-limit": "min_output_limit",
-    }
-
-    match args.action:
-        case "enable":
-            ensure_no_value(args)
-            system["enabled"] = True
-        case "disable":
-            ensure_no_value(args)
-            system["enabled"] = False
-        case action if action in fields:
-            if args.value is None:
-                raise ValueError(f"system {action} requires a value")
-            key = fields[action]
-            system.update(
-                _validated(
-                    f"system {action}",
-                    runtime_write.validate_system_values,
-                    {key: args.value},
-                    limits,
-                )
-            )
-        case _:
-            raise ValueError(f"unknown system action {args.action}")
-
-
-def update_device(args, state, limits=None):
-    devices = state.setdefault("devices", {})
-    if args.name not in devices:
-        known = ", ".join(sorted(devices)) or "(none)"
-        raise ValueError(f"unknown device {args.name}; known devices: {known}")
-
-    device = devices[args.name]
-    if not isinstance(device, dict):
-        raise ValueError(f"device {args.name} runtime state must be an object")
-
-    fields = {
-        "max-power": "max_power",
-        "offgrid": "offgrid_socket_mode",
-        "pv-priority-factor": "pv_priority_factor",
-        "ac-charge-power": "ac_charge_power_w",
-    }
-
-    def validated(key, value):
-        if value is None:
-            raise ValueError(f"device {args.name} {args.action} requires a value")
-        return _validated(
-            f"device {args.name} {args.action}",
-            runtime_write.validate_device_values,
-            args.name,
-            {key: value},
-            limits,
+        return schedule_cli.handle_schedule_command(
+            args,
+            store=ScheduleStore(resolve_schedules_path(runtime_path)),
+            devices=devices,
+            validation_context=runtime_limits(config),
+            zone=zone if known else local_zone(),
+            now=datetime.now(timezone.utc),
+            control_status=control_status,
         )
-
-    match args.action:
-        case "enable":
-            ensure_no_value(args)
-            device["enabled"] = True
-        case "disable":
-            ensure_no_value(args)
-            device["enabled"] = False
-        case "ac-mode":
-            value = str(args.value or "").strip().lower()
-            if value not in DEVICE_AC_MODE_RUNTIME_ROLES:
-                raise ValueError("device ac-mode value must be 'output' or 'input'")
-            role = DEVICE_AC_MODE_RUNTIME_ROLES[value]
-            if role == "ac_input":
-                validated("runtime_role", role)
-            device["runtime_role"] = role
-            device["runtime_role_reason"] = "emsctl"
-        case "ac-charge":
-            value = str(args.value or "").strip().lower()
-            if value not in ("on", "off"):
-                raise ValueError("device ac-charge value must be 'on' or 'off'")
-            device["ac_charge_enabled"] = value == "on"
-        case action if action in fields:
-            device.update(validated(fields[action], args.value))
-        case _:
-            raise ValueError(f"unknown device action {args.action}")
+    except schedule_cli.ScheduleCommandError as exc:
+        raise ValueError(f"schedule {args.schedule_command}: {exc}") from exc
 
 
-def set_bool_section(args, state, section_name, key):
-    ensure_no_value(args)
-    section = state.setdefault(section_name, {})
+def run_runtime_command(runtime_state, config, command, action, value=None, device=None):
+    """Run one runtime edit through the EMS's command path, as emsctl."""
 
-    match args.action:
-        case "enable":
-            section[key] = True
-        case "disable":
-            section[key] = False
-        case _:
-            raise ValueError(f"unknown {section_name} action {args.action}")
+    label = f"device {device} {action}" if command == "device" else f"{command} {action}"
+    try:
+        return runtime_commands.run_command(
+            runtime_state,
+            RUNTIME_COMMAND_SCOPES[command],
+            action,
+            value,
+            device=device,
+            validation_context=runtime_limits(config),
+            source="emsctl",
+        )
+    except runtime_commands.RuntimeWriteError as exc:
+        raise ValueError(f"{label}: {exc}") from exc
 
 
 def print_status(path, state):
@@ -2665,14 +2555,9 @@ def prompt_device_name(state):
     return name
 
 
-def save_interactive(runtime_path, state):
-    save_atomic(runtime_path, state)
-    print(f"updated {runtime_path}")
-
-
 def run_interactive(args, config):
     runtime_path = resolve_runtime_path(args, config)
-    load_runtime_state(runtime_path, config)
+    open_runtime_state(runtime_path, config)
 
     menu_items = [
         ("status", "Show status"),
@@ -2708,7 +2593,8 @@ def run_interactive(args, config):
             return 0
 
         try:
-            state, _ = load_runtime_state(runtime_path, config)
+            runtime_state, _ = open_runtime_state(runtime_path, config)
+            state = runtime_state.snapshot()
             if choice == "status":
                 print_status(runtime_path, state)
                 continue
@@ -2724,13 +2610,9 @@ def run_interactive(args, config):
                     value = prompt_text(f"system {action}")
                     if value is None:
                         continue
-                state, _ = load_runtime_state(runtime_path, config)
-                update_system(
-                    make_args(action=action, value=value),
-                    state,
-                    runtime_limits(config),
-                )
-                save_interactive(runtime_path, state)
+                runtime_state, _ = open_runtime_state(runtime_path, config)
+                run_runtime_command(runtime_state, config, "system", action, value)
+                print(f"updated {runtime_path}")
                 continue
 
             if choice == "winter-status":
@@ -2739,9 +2621,9 @@ def run_interactive(args, config):
 
             if choice.startswith("winter-"):
                 action = choice.removeprefix("winter-")
-                state, _ = load_runtime_state(runtime_path, config)
-                set_bool_section(make_args(action=action, value=None), state, "winter", "enabled")
-                save_interactive(runtime_path, state)
+                runtime_state, _ = open_runtime_state(runtime_path, config)
+                run_runtime_command(runtime_state, config, "winter", action)
+                print(f"updated {runtime_path}")
                 continue
 
             if choice.startswith("device-"):
@@ -2758,13 +2640,9 @@ def run_interactive(args, config):
                     value = prompt_text("Offgrid mode (off, eco, standard)")
                     if value is None:
                         continue
-                state, _ = load_runtime_state(runtime_path, config)
-                update_device(
-                    make_args(name=name, action=action, value=value),
-                    state,
-                    runtime_limits(config),
-                )
-                save_interactive(runtime_path, state)
+                runtime_state, _ = open_runtime_state(runtime_path, config)
+                run_runtime_command(runtime_state, config, "device", action, value, device=name)
+                print(f"updated {runtime_path}")
                 continue
 
             if choice.startswith("dashboard-"):
@@ -4376,19 +4254,23 @@ def main(argv=None):
         if args.command == "grid-meter":
             return handle_grid_meter_command(args, config)
 
+        if args.command == "schedule":
+            return handle_schedule_command(args, config)
+
         runtime_path = resolve_runtime_path(args, config)
-        state, created = load_runtime_state(runtime_path, config)
+        runtime_state, created = open_runtime_state(runtime_path, config)
+        state = runtime_state.snapshot()
 
         if args.command == "status":
             if created:
-                save_atomic(runtime_path, state)
+                runtime_state.save_atomic()
             print_status(runtime_path, state)
             return 0
 
         if args.command == "winter" and args.action == "status":
             ensure_no_value(args)
             if created:
-                save_atomic(runtime_path, state)
+                runtime_state.save_atomic()
             print_status(runtime_path, {
                 "winter": state.get("winter", {})
             })
@@ -4397,41 +4279,40 @@ def main(argv=None):
         if args.command == "ac-charge" and args.action == "status":
             ensure_no_value(args)
             if created:
-                save_atomic(runtime_path, state)
+                runtime_state.save_atomic()
             print_status(runtime_path, {
                 "ac_charge_control": state.get("ac_charge_control", {})
             })
             return 0
 
-        if args.command == "system":
-            update_system(args, state, runtime_limits(config))
-        elif args.command == "device":
+        if args.command == "device" and args.action == "ac-mode" and args.value is None:
             devices = state.get("devices", {})
-            if args.action == "ac-mode" and args.value is None:
-                if not isinstance(devices, dict) or args.name not in devices:
-                    known = (
-                        ", ".join(sorted(devices))
-                        if isinstance(devices, dict)
-                        else ""
-                    )
-                    raise ValueError(
-                        f"unknown device {args.name}; known devices: {known or '(none)'}"
-                    )
-                if created:
-                    save_atomic(runtime_path, state)
-                print_device_ac_mode_status(args.name, devices[args.name])
-                return 0
-            update_device(args, state, runtime_limits(config))
-        elif args.command == "winter":
-            set_bool_section(args, state, "winter", "enabled")
-        elif args.command == "ac-charge":
-            set_bool_section(args, state, "ac_charge_control", "enabled")
-        else:
-            raise ValueError(f"unknown command {args.command}")
+            if not isinstance(devices, dict) or args.name not in devices:
+                known = (
+                    ", ".join(sorted(devices))
+                    if isinstance(devices, dict)
+                    else ""
+                )
+                raise ValueError(
+                    f"unknown device {args.name}; known devices: {known or '(none)'}"
+                )
+            if created:
+                runtime_state.save_atomic()
+            print_device_ac_mode_status(args.name, devices[args.name])
+            return 0
 
-        save_atomic(runtime_path, state)
+        if args.command not in RUNTIME_COMMAND_SCOPES:
+            raise ValueError(f"unknown command {args.command}")
+        result = run_runtime_command(
+            runtime_state,
+            config,
+            args.command,
+            args.action,
+            args.value,
+            device=getattr(args, "name", None),
+        )
         if args.command == "device" and args.action == "ac-charge-power":
-            watts = state["devices"][args.name]["ac_charge_power_w"]
+            watts = result["state"]["ac_charge_power_w"]
             print(f"Set {args.name} AC charge power to {watts} W.")
         else:
             print(f"updated {runtime_path}")

@@ -72,6 +72,7 @@ def test_top_level_dashboard_tabs_use_workflow_order():
         {"view": "energy", "label": "Energy"},
         {"view": "analytics", "label": "Analytics"},
         {"view": "control", "label": "Control"},
+        {"view": "schedule", "label": "Schedule"},
         {"view": "diagnose", "label": "Diagnose"},
         {"view": "logs", "label": "Logs"},
         {"view": "maintenance", "label": "Maintenance"},

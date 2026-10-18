@@ -2120,6 +2120,37 @@ def mqtt_control_device_configs(devices=None):
     ]
 
 
+def config_device_identity(item):
+    """The serial a device's config entry names: ``sn``, else
+    ``serial_number``, else its MQTT device id; None without one."""
+
+    for key in ("sn", "serial_number"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    mqtt = item.get("mqtt")
+    if isinstance(mqtt, dict):
+        value = mqtt.get("device_id")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def device_identities(names, devices=None):
+    """``{name: config_device_identity}`` for the controlled devices ``names``.
+
+    emsctl, the dashboard and the control loop name devices to the scheduler
+    through this, so a rule saved by one follows its device through a rename
+    by the same serial in the others.
+    """
+
+    by_name = {
+        item.get("name"): config_device_identity(item)
+        for item in http_control_device_configs(devices) + mqtt_control_device_configs(devices)
+    }
+    return {name: by_name.get(name) for name in names}
+
+
 def _writes_enabled():
     """Shared safety precondition for every control-write gate."""
 

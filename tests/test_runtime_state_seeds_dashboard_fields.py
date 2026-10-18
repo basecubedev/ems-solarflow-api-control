@@ -18,7 +18,7 @@ from types import SimpleNamespace
 import pytest
 
 import ems.config as cfg
-from dashboard.runtime_write import DEVICE_FIELDS, SECTION_FIELDS, SYSTEM_FIELDS
+from ems.runtime_commands import DEVICE_FIELDS, SECTION_FIELDS, SYSTEM_FIELDS
 from ems.runtime_state import RuntimeState, build_runtime_defaults, merge_runtime_defaults
 
 pytestmark = [

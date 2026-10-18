@@ -9,7 +9,8 @@ control chain, see [control-flow.md](control-flow.md).
 
 ## Pipeline
 
-1. Reload `runtime-state.json` if changed.
+1. Reload `runtime-state.json` if changed, then apply the
+   [schedule](../scheduler.md)'s due switch points as runtime values.
 2. Read Shelly house load.
 3. Read Zendure telemetry.
 4. Detect runtime capabilities.

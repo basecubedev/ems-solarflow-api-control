@@ -5,7 +5,9 @@ import io
 import json
 import os
 import sqlite3
+import stat
 import tarfile
+from pathlib import Path
 
 import pytest
 
@@ -276,6 +278,23 @@ def test_collect_includes_config_and_runtime(tmp_path):
     kinds = {entry["kind"] for entry in included}
     assert "config" in kinds
     assert "runtime_state" in kinds
+
+
+def test_collect_includes_the_schedules_beside_the_runtime_state(tmp_path):
+    """Restore puts back what the backup holds, the rules included."""
+
+    base, config, config_path = write_project(tmp_path)
+    included, _ = backup.collect_config_backup_files(config, base_dir=base, config_path=config_path)
+    runtime = next(entry for entry in included if entry["kind"] == "runtime_state")
+    assert "schedules" not in {entry["kind"] for entry in included}
+
+    schedules = Path(runtime["abs_path"]).with_name("schedules.json")
+    schedules.write_text('{"schema_version": 1, "rules": []}\n')
+    included, _ = backup.collect_config_backup_files(config, base_dir=base, config_path=config_path)
+
+    entry = next(entry for entry in included if entry["kind"] == "schedules")
+    assert entry["abs_path"] == str(schedules)
+    assert entry["sensitive"] is False
 
 
 def test_collect_auth_and_cert_only_when_present(tmp_path):
@@ -1401,3 +1420,68 @@ def test_a_finished_restore_names_the_archive_and_says_to_restart(
 
     assert f"Restored from:\n  {archive}" in out
     assert hint in out
+
+
+def _schedules_file(applied, rules=()):
+    return json.dumps({"schema_version": 1, "enabled": True, "rules": list(rules), "applied": applied})
+
+
+@pytest.mark.parametrize("runtime_decision", ["keep", "replace"])
+def test_a_restore_takes_what_was_applied_from_where_the_runtime_state_comes_from(tmp_path, runtime_decision):
+    """The applied records describe the runtime state the scheduler wrote to.
+    Kept, the current runtime state keeps the current records; restored, the
+    backup's runtime state comes with the backup's, so a window that ran when
+    the backup was taken is ended rather than left on."""
+
+    base, config, config_path = write_project(tmp_path)
+    schedules = Path(base) / "data" / "schedules.json"
+    rule = {"id": "r_0000beef", "name": "Backed up"}
+    then = {"devices.WR1.runtime_role,devices.WR1.ac_charge_power_w": {
+        "rule": "r_0000beef", "at": "2026-10-12T00:00:00Z", "value": 600,
+        "window": {"action": "charge_from_grid", "device": "WR1", "end_value": 0, "ends_at": "2026-10-12T03:00:00Z"}}}
+    schedules.write_text(_schedules_file(then, [rule]))
+    path = create(tmp_path, config, base, config_path)
+    now = {"system.max_total_power": {"rule": "r_0000beef", "at": "2026-10-19T04:00:00Z", "value": 1000}}
+    schedules.write_text(_schedules_file(now))
+    (Path(base) / "data" / "runtime-state.json").write_text('{"runtime": "since"}\n')
+
+    backup.restore_backup(path, base_dir=base, conflict_resolver=lambda entry: (
+        runtime_decision if entry["kind"] == "runtime_state" else "replace"))
+
+    restored = json.loads(schedules.read_text())
+    assert restored["rules"] == [rule]
+    assert restored["applied"] == (now if runtime_decision == "keep" else then)
+
+
+def test_a_restore_writes_the_runtime_state_under_its_lock(tmp_path, monkeypatch):
+    """An edit holds runtime-state.json.lock from its re-read to its save; a
+    restore landing in between would be written over with the old state."""
+
+    import fcntl
+
+    base, config, config_path = write_project(tmp_path)
+    path = create(tmp_path, config, base, config_path)
+    runtime = Path(base) / "data" / "runtime-state.json"
+    runtime.write_text('{"runtime": "since"}\n')
+    monkeypatch.setattr("ems.backup.STARTUP_LOCK_TIMEOUT_SECONDS", 0.05)
+
+    with open(f"{runtime}.lock", "a") as holder:
+        fcntl.flock(holder, fcntl.LOCK_EX)
+        with pytest.raises(backup.BackupError, match="another process holds its lock"):
+            backup.restore_backup(path, base_dir=base, on_conflict="replace")
+
+    assert runtime.read_text() == '{"runtime": "since"}\n'
+
+
+def test_restored_schedules_keep_the_mode_of_the_file_they_replace(tmp_path):
+    base, config, config_path = write_project(tmp_path)
+    schedules = Path(base) / "data" / "schedules.json"
+    schedules.write_text(json.dumps({"schema_version": 1, "enabled": True, "rules": [], "applied": {}}))
+    path = create(tmp_path, config, base, config_path)
+    schedules.write_text(json.dumps({"schema_version": 1, "enabled": False, "rules": [], "applied": {}}))
+    os.chmod(schedules, 0o640)
+
+    backup.restore_backup(path, base_dir=base, on_conflict="replace")
+
+    assert stat.S_IMODE(os.stat(schedules).st_mode) == 0o640
+    assert json.loads(schedules.read_text())["enabled"] is True

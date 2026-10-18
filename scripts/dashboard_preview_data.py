@@ -30,6 +30,7 @@ FLOW_VIEWS = (
     "devices",
     "analytics",
     "control",
+    "schedule",
     "energy",
     "diagnose",
     "logs",

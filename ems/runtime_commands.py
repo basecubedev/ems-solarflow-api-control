@@ -1,6 +1,17 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-import math
+"""The one path every runtime-state edit takes.
+
+emsctl, the dashboard, the Admin's config->runtime mirror and the scheduler
+change operator values only through these commands and writers: one whitelist,
+one set of validators, one writer that re-reads the file before it saves.
+"""
+
 import copy
+import logging
+import math
+from dataclasses import dataclass
+
+from ems.logging_utils import log_event
 
 
 OFFGRID_SOCKET_MODES = ("off", "eco", "standard")
@@ -41,6 +52,139 @@ class RuntimeWriteError(ValueError):
     pass
 
 
+@dataclass(frozen=True)
+class RuntimeCommand:
+    """An emsctl-named edit: the key it sets and the value, fixed or given."""
+
+    key: str
+    value: object = None
+    choices: tuple = ()
+
+
+SYSTEM_COMMANDS = {
+    "enable": RuntimeCommand("enabled", True),
+    "disable": RuntimeCommand("enabled", False),
+    "max-power": RuntimeCommand("max_total_power"),
+    "loop-interval": RuntimeCommand("loop_interval"),
+    "min-output-limit": RuntimeCommand("min_output_limit"),
+}
+
+DEVICE_COMMANDS = {
+    "enable": RuntimeCommand("enabled", True),
+    "disable": RuntimeCommand("enabled", False),
+    "max-power": RuntimeCommand("max_power"),
+    "offgrid": RuntimeCommand("offgrid_socket_mode"),
+    "pv-priority-factor": RuntimeCommand("pv_priority_factor"),
+    "ac-mode": RuntimeCommand(
+        "runtime_role", choices=(("output", "ac_output"), ("input", "ac_input"))
+    ),
+    "ac-charge": RuntimeCommand("ac_charge_enabled", choices=(("on", True), ("off", False))),
+    "ac-charge-power": RuntimeCommand("ac_charge_power_w"),
+}
+
+SECTION_COMMANDS = {
+    "enable": RuntimeCommand("enabled", True),
+    "disable": RuntimeCommand("enabled", False),
+}
+
+EMSCTL_SCOPES = {
+    "system": "system",
+    "device": "device",
+    "winter": "winter",
+    "ac-charge": "ac_charge_control",
+}
+
+
+def emsctl_line(scope, action, value=None, *, device=None):
+    """The emsctl command line that runs ``action`` in ``scope``."""
+
+    command = next((name for name, named in EMSCTL_SCOPES.items() if named == scope), None)
+    if command is None:
+        raise RuntimeWriteError(f"unsupported runtime scope {scope}")
+    words = ["emsctl", command, *([device] if device else []), action]
+    if value is not None:
+        words.append(str(value))
+    return " ".join(words)
+
+
+def runtime_command(scope, action):
+    """The command ``action`` names in ``scope``: system, device or a section."""
+
+    if scope == "system":
+        table = SYSTEM_COMMANDS
+    elif scope == "device":
+        table = DEVICE_COMMANDS
+    elif scope in SECTION_FIELDS:
+        table = SECTION_COMMANDS
+    else:
+        raise RuntimeWriteError(f"unsupported runtime scope {scope}")
+    if action not in table:
+        raise RuntimeWriteError(f"unknown {scope} command {action}")
+    return table[action]
+
+
+def command_values(scope, action, value=None):
+    """The runtime values a command sets, before validation."""
+
+    command = runtime_command(scope, action)
+    if command.value is not None:
+        if value is not None:
+            raise RuntimeWriteError("does not take a value")
+        return {command.key: command.value}
+    if value is None or (isinstance(value, str) and not value.strip()):
+        raise RuntimeWriteError("requires a value")
+    if not command.choices:
+        return {command.key: value}
+    choices = dict(command.choices)
+    word = str(value).strip().lower()
+    if word not in choices:
+        allowed = " or ".join(repr(choice) for choice in choices)
+        raise RuntimeWriteError(f"value must be {allowed}")
+    return {command.key: choices[word]}
+
+
+def validate_command(scope, action, value=None, *, device=None, validation_context=None):
+    """The values a command would save, validated, without saving them."""
+
+    payload = command_values(scope, action, value)
+    if scope == "system":
+        return validate_system_values(payload, validation_context)
+    if scope == "device":
+        return validate_device_values(device, payload, validation_context)
+    return validate_section_values(scope, payload)
+
+
+def run_command(
+    runtime_state, scope, action, value=None, *, device=None, validation_context=None, source
+):
+    """Validate and save one command; ``source`` names the caller."""
+
+    return run_commands(
+        runtime_state, scope, ((action, value),), device=device,
+        validation_context=validation_context, source=source,
+    )
+
+
+def run_commands(runtime_state, scope, commands, *, device=None, validation_context=None, source):
+    """Validate several commands of one scope together and save them in one write.
+
+    All or nothing: a refused value leaves every other one unwritten.
+    """
+
+    payload = {}
+    for action, value in commands:
+        payload.update(command_values(scope, action, value))
+    if scope == "system":
+        return apply_system_update(runtime_state, payload, validation_context, source=source)
+    if scope == "device":
+        return apply_device_update(
+            runtime_state, device, payload, validation_context, source=source
+        )
+    return apply_section_update(
+        runtime_state, scope, payload, validation_context, source=source
+    )
+
+
 def runtime_payload(runtime_state):
     if runtime_state is None:
         return {}
@@ -51,34 +195,53 @@ def runtime_payload(runtime_state):
     return copy.deepcopy(data) if isinstance(data, dict) else {}
 
 
-def apply_system_update(runtime_state, payload, validation_context=None):
+def apply_system_update(runtime_state, payload, validation_context=None, *, source):
     values = _validate_payload(
         payload,
         _system_fields(validation_context),
     )
     section = _update_section(runtime_state, "system", values)
+    _log_update(source, "system", values)
     return {"system": section}
 
 
-def apply_section_update(runtime_state, section_name, payload, validation_context=None):
+def apply_section_update(
+    runtime_state, section_name, payload, validation_context=None, *, source
+):
     if section_name not in SECTION_FIELDS:
         raise RuntimeWriteError(f"unsupported runtime section {section_name}")
     values = _validate_payload(payload, SECTION_FIELDS[section_name])
     section = _update_section(runtime_state, section_name, values)
+    _log_update(source, section_name, values)
     return {section_name: section}
 
 
-def apply_device_update(runtime_state, device_name, payload, validation_context=None):
+def apply_device_update(
+    runtime_state, device_name, payload, validation_context=None, *, source
+):
     values = validate_device_values(device_name, payload, validation_context)
     if "runtime_role" in values:
-        values["runtime_role_reason"] = "dashboard"
+        values["runtime_role_reason"] = source
     try:
         device = _update_device(runtime_state, device_name, values)
     except KeyError as exc:
         raise RuntimeWriteError(str(exc).strip("'")) from exc
     except ValueError as exc:
         raise RuntimeWriteError(str(exc)) from exc
+    _log_update(source, "device", values, device=device_name)
     return {"device": device_name, "state": device}
+
+
+def _log_update(source, scope, values, device=None):
+    where = {"device": device} if device else {}
+    log_event(
+        logging.INFO,
+        "runtime_values_updated",
+        source=source,
+        scope=scope,
+        changed=",".join(f"{key}={values[key]}" for key in sorted(values)),
+        **where,
+    )
 
 
 def validate_system_values(payload, validation_context=None):
@@ -87,10 +250,18 @@ def validate_system_values(payload, validation_context=None):
     return _validate_payload(payload, _system_fields(validation_context))
 
 
+def validate_section_values(section_name, payload):
+    """Validated values for a runtime section such as ``winter``."""
+
+    if section_name not in SECTION_FIELDS:
+        raise RuntimeWriteError(f"unsupported runtime section {section_name}")
+    return _validate_payload(payload, SECTION_FIELDS[section_name])
+
+
 def validate_device_values(device_name, payload, validation_context=None):
     """Validated per-device values, including the AC role and charge power.
 
-    The AC role is refused for a device the EMS cannot switch: over MQTT the
+    AC charging is refused for a device the EMS cannot switch: over MQTT the
     acMode is not reconciled, so ``ac_input`` would only stop output
     regulation and leave the device feeding in at its last limit.
     """
@@ -98,7 +269,11 @@ def validate_device_values(device_name, payload, validation_context=None):
     if isinstance(payload, dict) and not ac_role_supported(
         device_name, validation_context
     ):
-        refused = sorted(set(payload) & set(DEVICE_AC_FIELDS))
+        refused = sorted(
+            key
+            for key in set(payload) & set(DEVICE_AC_FIELDS)
+            if not _back_to_ac_output(key, payload[key])
+        )
         if refused:
             raise RuntimeWriteError(
                 f"{refused[0]} is not available for {device_name}: it is "
@@ -106,6 +281,13 @@ def validate_device_values(device_name, payload, validation_context=None):
             )
     fields = {**_device_fields(device_name, validation_context), **DEVICE_AC_FIELDS}
     return _validate_payload(payload, fields)
+
+
+def _back_to_ac_output(key, value):
+    """``ac_output`` is the default and stops nothing, so it is never refused:
+    a role left at ``ac_input`` from before a move to MQTT must be clearable."""
+
+    return key == "runtime_role" and str(value or "").strip().lower() == "ac_output"
 
 
 def ac_role_supported(device_name, validation_context=None):

@@ -124,7 +124,7 @@ python3 ems-solarflow-api-control.py
 - `data/runtime-state.json` — mutable runtime/operator state, created and
   updated by the EMS and by `emsctl.py`. The Admin console also mirrors the
   whitelisted overlapping keys it changed into it on maintenance apply (config →
-  runtime convergence, one-directional, via the same `dashboard/runtime_write.py`
+  runtime convergence, one-directional, via the same `ems/runtime_commands.py`
   whitelist). Not a second static config.
 
 The entry script (`ems-solarflow-api-control.py`) only does bootstrap/coordination:
@@ -148,6 +148,9 @@ construction, controller startup, main loop. All real implementation lives in `e
 - `diagnostics.py` — read-only `diagnose` service layer (versioned contract); imported by both `emsctl.py` and the dashboard
 - `control_status.py` — per-cycle live control snapshot (`control-status.json` beside runtime-state) that `diagnose --control` reads; non-authoritative, never raises into the loop
 - `paths.py` — shared project-path resolvers (`BASE_DIR`, `resolve_*_path`); import-side-effect-free
+- `runtime_commands.py` — the one command path for runtime-state edits (whitelist, validators, emsctl-named commands); emsctl, the dashboard, the Admin mirror and the scheduler all write through it
+- `file_io.py` — the cross-process file lock, atomic write and file signature that `runtime-state.json` and `schedules.json` share
+- `scheduler.py` — fires due schedule switch points through `runtime_commands`; `schedule_store.py` (`schedules.json`), `schedule_model.py`, `schedule_recurrence.py`, `schedule_actions.py`, `schedule_text.py` and `schedule_cli.py` (`emsctl schedule`) around it; see `docs/scheduler.md`
 
 Edit the smallest relevant module rather than the entry script or `controller.py`
 when the change is localized (e.g. target math → `target_control.py`, runtime
@@ -217,7 +220,7 @@ import `emsctl` (so the dashboard can import it directly).
 
 ### Control pipeline (per loop, see `docs/technical/control-logic.md`)
 
-1. Reload `runtime-state.json` if changed
+1. Reload `runtime-state.json` if changed, then apply the schedule's due switch points as runtime values (`scheduler.py`)
 2. Read Shelly/EcoTracker/Tasmota house load
 3. Read Zendure telemetry
 4. Detect runtime capabilities

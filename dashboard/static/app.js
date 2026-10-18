@@ -77,6 +77,13 @@ const state = {
     report: null,
     running: false,
   },
+  schedule: {
+    overview: null,
+    error: "",
+    editor: null,
+    previewSequence: 0,
+    previewOk: false,
+  },
   logs: {
     cursor: 0,
     lines: [],
@@ -3685,7 +3692,7 @@ function renderDeviceFirmwareStatus(device) {
 }
 
 function setFlowView(view, persist = true) {
-  const nextView = ["aggregated", "devices", "energy", "analytics", "control", "diagnose", "logs", "maintenance"].includes(view)
+  const nextView = ["aggregated", "devices", "energy", "analytics", "control", "schedule", "diagnose", "logs", "maintenance"].includes(view)
     ? view
     : "aggregated";
   const previousView = state.flowView;
@@ -3696,6 +3703,7 @@ function setFlowView(view, persist = true) {
   const controlView = $("controlExplainView");
   const energyView = $("energyStatsView");
   const diagnoseView = $("diagnoseView");
+  const scheduleView = $("scheduleView");
   const logsView = $("logsView");
   const maintenanceView = $("maintenanceView");
   const analyticsView = $("analyticsView");
@@ -3707,6 +3715,7 @@ function setFlowView(view, persist = true) {
   if (controlView) controlView.hidden = nextView !== "control";
   if (energyView) energyView.hidden = nextView !== "energy";
   if (diagnoseView) diagnoseView.hidden = nextView !== "diagnose";
+  if (scheduleView) scheduleView.hidden = nextView !== "schedule";
   if (logsView) logsView.hidden = nextView !== "logs";
   if (maintenanceView) maintenanceView.hidden = nextView !== "maintenance";
   if (analyticsView) analyticsView.hidden = nextView !== "analytics";
@@ -3717,6 +3726,7 @@ function setFlowView(view, persist = true) {
     wrap.classList.toggle("view-control", nextView === "control");
     wrap.classList.toggle("view-energy", nextView === "energy");
     wrap.classList.toggle("view-diagnose", nextView === "diagnose");
+    wrap.classList.toggle("view-schedule", nextView === "schedule");
     wrap.classList.toggle("view-logs", nextView === "logs");
     wrap.classList.toggle("view-maintenance", nextView === "maintenance");
   }
@@ -3724,6 +3734,7 @@ function setFlowView(view, persist = true) {
     shell.classList.toggle("view-analytics", nextView === "analytics");
     shell.classList.toggle("view-energy", nextView === "energy");
     shell.classList.toggle("view-diagnose", nextView === "diagnose");
+    shell.classList.toggle("view-schedule", nextView === "schedule");
     shell.classList.toggle("view-logs", nextView === "logs");
     shell.classList.toggle("view-maintenance", nextView === "maintenance");
   }
@@ -3759,6 +3770,10 @@ function setFlowView(view, persist = true) {
 
   if (nextView === "diagnose") {
     renderDiagnoseView();
+  }
+
+  if (nextView === "schedule" && previousView !== nextView) {
+    enterScheduleView();
   }
 
   // On an actual view change, immediately render the now-visible view from the
@@ -4301,6 +4316,725 @@ function initDiagnose() {
   if (copyButton) {
     copyButton.addEventListener("click", () => copyDiagnoseJson());
   }
+}
+
+// Every judgement the Schedule view shows -- whether a draft can be saved, the
+// sentence it reads as, its next switch points, the window it clashes with --
+// comes from /api/schedule. The page only collects the draft and renders.
+
+const SCHEDULE_PRESET_LABELS = {
+  once: "Once",
+  daily: "Every day",
+  every_2nd_day: "Every 2nd day",
+  weekdays: "Weekdays (Mon–Fri)",
+  weekends: "Weekends (Sat–Sun)",
+  sundays: "Sundays only",
+  weekly: "Every week",
+  every_2nd_week: "Every 2nd week",
+  monthly: "Every month",
+  monthly_last_day: "Last day of the month",
+  yearly: "Every year",
+  custom: "Custom…",
+};
+const SCHEDULE_PRESET_ORDER = Object.keys(SCHEDULE_PRESET_LABELS);
+const SCHEDULE_WEEKDAYS = [["mo", "Mon"], ["tu", "Tue"], ["we", "Wed"], ["th", "Thu"], ["fr", "Fri"], ["sa", "Sat"], ["su", "Sun"]];
+const SCHEDULE_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const SCHEDULE_WINTER_MONTHS = [10, 11, 12, 1, 2, 3];
+const SCHEDULE_STATUS_TONE = {
+  waiting: ["tone-send", "Waiting"],
+  paused: ["tone-skip", "Paused"],
+  orphaned: ["tone-warn", "Device gone"],
+  refused: ["tone-warn", "Refused"],
+  finished: ["tone-skip", "Finished"],
+  broken: ["tone-blocked", "Broken"],
+};
+
+function scheduleToday() {
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+function scheduleAction(id) {
+  const overview = state.schedule.overview;
+  return (overview?.actions || []).find((action) => action.id === id) || null;
+}
+
+function scheduleWhen(at) {
+  const text = String(at || "");
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}:\d{2})/.exec(text);
+  if (!match) return text;
+  const calendarDay = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  const day = calendarDay.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
+  return `${day} ${match[4]}`;
+}
+
+function scheduleAuthState() {
+  if (!state.auth.configured) {
+    return `<div class="diagnose-empty">Configure a dashboard password to use the schedule.</div>`;
+  }
+  if (!state.auth.authenticated) {
+    return `<div class="diagnose-empty">Login required to see and change the schedule.</div>`;
+  }
+  return "";
+}
+
+async function scheduleRequest(method, path, body) {
+  const options = { method, credentials: "same-origin", headers: {} };
+  if (method !== "GET") {
+    options.headers["Content-Type"] = "application/json";
+    options.headers["X-CSRF-Token"] = state.auth.csrfToken;
+    options.body = JSON.stringify(body || {});
+  }
+  try {
+    const response = await fetch(path, options);
+    const payload = await response.json().catch(() => ({}));
+    return { ok: response.ok, status: response.status, payload };
+  } catch {
+    return { ok: false, status: 0, payload: { message: "The EMS did not answer." } };
+  }
+}
+
+function setScheduleStatus(message) {
+  const status = $("scheduleStatus");
+  if (status) status.textContent = message || "";
+}
+
+async function enterScheduleView() {
+  if (!state.auth.authenticated) {
+    renderScheduleView();
+    return;
+  }
+  await loadSchedule();
+}
+
+async function loadSchedule() {
+  if (!state.auth.authenticated) return;
+  const answer = await scheduleRequest("GET", "/api/schedule");
+  if (!answer.ok) {
+    state.schedule.overview = null;
+    state.schedule.error = `The schedule could not be loaded (${answer.status}): ${dashboardErrorText(answer.payload, "unknown error")}`;
+  } else {
+    state.schedule.overview = answer.payload;
+    state.schedule.error = "";
+  }
+  renderScheduleView();
+}
+
+function renderScheduleView() {
+  const body = $("scheduleBody");
+  if (!body) return;
+  const authState = scheduleAuthState();
+  if (authState) {
+    body.innerHTML = authState;
+    return;
+  }
+  const overview = state.schedule.overview;
+  if (!overview && state.schedule.error) {
+    body.innerHTML = `
+      <div class="diagnose-empty">
+        <p>${escapeHtml(state.schedule.error)}</p>
+        <button type="button" class="primary-button compact" data-schedule-action="reload"><span class="button-ring" aria-hidden="true"><i></i></span>Try again</button>
+      </div>`;
+    return;
+  }
+  if (!overview) {
+    body.innerHTML = `<div class="diagnose-empty">Loading the schedule…</div>`;
+    return;
+  }
+  body.innerHTML = `
+    ${renderScheduleHeader(overview)}
+    ${state.schedule.editor ? renderScheduleEditor(state.schedule.editor, overview) : ""}
+    ${renderScheduleNext(overview.next || [])}
+    ${renderScheduleRules(overview.rules || [])}
+  `;
+  if (state.schedule.editor) previewScheduleSoon();
+}
+
+function scheduleOffsetText(minutes) {
+  if (!minutes) return "UTC";
+  const sign = minutes > 0 ? "+" : "−";
+  const whole = Math.abs(minutes);
+  return `UTC${sign}${String(Math.floor(whole / 60)).padStart(2, "0")}:${String(whole % 60).padStart(2, "0")}`;
+}
+
+function renderScheduleHeader(overview) {
+  const running = overview.enabled !== false;
+  const clock = overview.clock_trusted
+    ? ""
+    : `<span class="pill tone-warn">Clock not trusted — nothing fires until it is</span>`;
+  const browserOffset = -new Date().getTimezoneOffset();
+  const zone = overview.zone_message
+    ? overview.zone_message
+    : overview.zone_offset_minutes != null && overview.zone_offset_minutes !== browserOffset
+      ? `The EMS runs on ${overview.zone} (${scheduleOffsetText(overview.zone_offset_minutes)}), this browser on ${scheduleOffsetText(browserOffset)}: rule times are the EMS's.`
+      : "";
+  const zoneNote = zone ? `<p class="schedule-help"><span class="pill tone-warn">Time zone</span> ${escapeHtml(zone)}</p>` : "";
+  return `
+    <div class="control-pipeline-stage schedule-summary">
+      <div class="control-stage-head control-stage-header">
+        <div class="control-stage-kicker">
+          <span class="control-stage-dot" aria-hidden="true">${icon("history")}</span>
+        </div>
+        <div class="control-stage-title-block">
+          <h3 class="control-stage-title">Schedules ${running ? "on" : "paused"}</h3>
+          <span class="control-stage-subtitle">Time zone ${escapeHtml(overview.zone || "")} · the latest switch point wins, scheduled or set by hand</span>
+        </div>
+      </div>
+      <div class="schedule-toolbar">
+        ${clock}
+        <button type="button" class="primary-button compact" data-schedule-action="new" ${overview.zone_message ? "disabled" : ""}><span class="button-ring" aria-hidden="true"><i></i></span>New rule</button>
+        <button type="button" class="primary-button compact" data-schedule-action="${running ? "pause" : "resume"}"><span class="button-ring" aria-hidden="true"><i></i></span>${running ? "Pause all" : "Resume"}</button>
+      </div>
+      ${zoneNote}
+    </div>`;
+}
+
+function renderScheduleNext(points) {
+  const rows = points.length
+    ? points.map((point) => `
+        <li class="schedule-next-row">
+          <span class="schedule-next-time">${escapeHtml(scheduleWhen(point.at))}</span>
+          <span>${escapeHtml(point.name)}</span>
+          <span class="schedule-next-value">→ ${escapeHtml(point.text)}</span>
+        </li>`).join("")
+    : `<li class="diagnose-line-ok">Nothing in the next seven days.</li>`;
+  return `
+    <div class="control-pipeline-stage schedule-next">
+      <div class="diagnose-section-head"><span class="diagnose-section-title">Next seven days</span></div>
+      <ul class="diagnose-lines">${rows}</ul>
+    </div>`;
+}
+
+function renderScheduleRules(rules) {
+  if (!rules.length) {
+    return `<div class="diagnose-empty">No rules yet. Press “New rule” to add one.</div>`;
+  }
+  return `<div class="schedule-rules">${rules.map(renderScheduleRule).join("")}</div>`;
+}
+
+function renderScheduleRule(rule, index) {
+  const [tone, label] = SCHEDULE_STATUS_TONE[rule.status] || ["tone-skip", rule.status || ""];
+  const id = escapeHtml(rule.id || "");
+  if (rule.status === "broken") {
+    return `
+      <div class="control-pipeline-stage schedule-rule">
+        <div class="diagnose-section-head">
+          <span class="diagnose-section-title">${id || "Unreadable entry"}</span>
+          <span class="pill ${tone}">${escapeHtml(label)}</span>
+        </div>
+        <p class="schedule-rule-line">${escapeHtml(rule.message || "")}</p>
+        <div class="schedule-rule-actions">
+          <button type="button" class="primary-button compact" data-schedule-action="delete" data-rule-id="${id}"><span class="button-ring" aria-hidden="true"><i></i></span>Delete</button>
+        </div>
+      </div>`;
+  }
+  const next = rule.next ? `Next: ${scheduleWhen(rule.next.at)} → ${rule.next.text}` : "No coming switch point";
+  return `
+    <div class="control-pipeline-stage schedule-rule">
+      <div class="diagnose-section-head">
+        <span class="diagnose-section-title">${escapeHtml(rule.name)}</span>
+        <span class="pill ${tone}">${escapeHtml(label)}</span>
+      </div>
+      <p class="schedule-rule-line">${escapeHtml(rule.summary)}</p>
+      <p class="schedule-rule-line">${escapeHtml(rule.action_summary)}</p>
+      ${rule.message ? `<p class="schedule-rule-line">${escapeHtml(rule.message)}</p>` : ""}
+      <p class="schedule-rule-line schedule-rule-next">${escapeHtml(next)}</p>
+      <div class="schedule-rule-actions">
+        <button type="button" class="primary-button compact" data-schedule-action="edit" data-rule-id="${id}"><span class="button-ring" aria-hidden="true"><i></i></span>Edit</button>
+        <button type="button" class="primary-button compact" data-schedule-action="toggle" data-rule-id="${id}"><span class="button-ring" aria-hidden="true"><i></i></span>${rule.enabled ? "Switch off" : "Switch on"}</button>
+        <button type="button" class="primary-button compact" data-schedule-action="skip" data-rule-id="${id}" ${rule.next ? "" : "disabled"}><span class="button-ring" aria-hidden="true"><i></i></span>Skip next</button>
+        <button type="button" class="primary-button compact" data-schedule-action="apply" data-rule-id="${id}" ${rule.status === "paused" ? "disabled" : ""}><span class="button-ring" aria-hidden="true"><i></i></span>Apply now</button>
+        <button type="button" class="primary-button compact" data-schedule-action="up" data-rule-id="${id}" aria-label="Move ${escapeHtml(rule.name)} up" ${index === 0 ? "disabled" : ""}><span class="button-ring" aria-hidden="true"><i></i></span>▲</button>
+        <button type="button" class="primary-button compact" data-schedule-action="down" data-rule-id="${id}" aria-label="Move ${escapeHtml(rule.name)} down"><span class="button-ring" aria-hidden="true"><i></i></span>▼</button>
+        <button type="button" class="primary-button compact" data-schedule-action="delete" data-rule-id="${id}"><span class="button-ring" aria-hidden="true"><i></i></span>Delete</button>
+      </div>
+    </div>`;
+}
+
+function scheduleNewDraft(overview) {
+  const action = (overview.actions || []).find((item) => !item.per_device || item.devices.length) || overview.actions[0];
+  return {
+    id: null,
+    revision: null,
+    name: "",
+    enabled: true,
+    action: action.id,
+    device: action.per_device ? action.devices[0] : null,
+    value: "",
+    end_value: "",
+    mode: "window",
+    date: scheduleToday(),
+    from: "18:00",
+    to: "23:00",
+    end_date: scheduleToday(),
+    preset: "daily",
+    custom: { freq: "weekly", interval: 1, by_weekday: [], monthly: "day", month_day: 1, set_pos: 1, set_day: "mo" },
+    months: [],
+    ends: "never",
+    until: "",
+    count: 10,
+    exceptions: [],
+  };
+}
+
+function scheduleDraftFromRule(rule) {
+  const when = rule.when || {};
+  const repeat = when.repeat || null;
+  const draft = {
+    ...scheduleNewDraft(state.schedule.overview),
+    id: rule.id,
+    revision: rule.revision,
+    name: rule.name,
+    enabled: rule.enabled,
+    action: rule.action.id,
+    device: rule.target.device || null,
+    value: rule.action.value,
+    end_value: rule.action.end_value ?? "",
+    mode: when.end ? "window" : "point",
+    date: String(when.start).slice(0, 10),
+    from: String(when.start).slice(11, 16),
+    to: when.end ? String(when.end).slice(11, 16) : "",
+    end_date: scheduleEndDate(when),
+    exceptions: when.exceptions || [],
+    months: repeat?.by_month || [],
+  };
+  draft.preset = scheduleRepeatEditable(repeat) ? schedulePresetOf(repeat) : "kept";
+  draft.keptRepeat = draft.preset === "kept" ? repeat : null;
+  if (repeat) {
+    draft.custom = {
+      freq: repeat.freq,
+      interval: repeat.interval || 1,
+      by_weekday: repeat.by_weekday || [],
+      monthly: repeat.by_set_pos ? "weekday" : (repeat.by_month_day || [])[0] === -1 ? "last" : "day",
+      month_day: (repeat.by_month_day || [])[0] > 0 ? repeat.by_month_day[0] : 1,
+      set_pos: repeat.by_set_pos || 1,
+      set_day: (repeat.by_weekday || ["mo"])[0],
+    };
+    draft.ends = repeat.until ? "until" : repeat.count ? "count" : "never";
+    draft.until = repeat.until || "";
+    draft.count = repeat.count || 10;
+  }
+  return draft;
+}
+
+function scheduleRepeatEditable(repeat) {
+  if (!repeat) return true;
+  const monthDays = repeat.by_month_day || [];
+  const weekdays = repeat.by_weekday || [];
+  if (repeat.freq !== "monthly" && repeat.freq !== "yearly") return !monthDays.length;
+  if (monthDays.length > 1 || (monthDays.length === 1 && monthDays[0] < -1)) return false;
+  if (weekdays.length && (repeat.by_set_pos == null || weekdays.length > 1)) return false;
+  return true;
+}
+
+function schedulePresetOf(repeat) {
+  if (!repeat) return "once";
+  const presets = state.schedule.overview?.presets || {};
+  const core = {
+    freq: repeat.freq,
+    interval: repeat.interval || 1,
+    by_weekday: repeat.by_weekday || [],
+    by_month_day: repeat.by_month_day || [],
+    by_set_pos: repeat.by_set_pos ?? null,
+  };
+  for (const name of SCHEDULE_PRESET_ORDER) {
+    const preset = presets[name];
+    if (!preset) continue;
+    const candidate = {
+      freq: preset.freq,
+      interval: preset.interval || 1,
+      by_weekday: preset.by_weekday || [],
+      by_month_day: preset.by_month_day || [],
+      by_set_pos: preset.by_set_pos ?? null,
+    };
+    if (JSON.stringify(candidate) === JSON.stringify(core)) return name;
+  }
+  return "custom";
+}
+
+function scheduleField(label, control, iconName = "rule") {
+  return `
+    <label class="runtime-field control-pipeline-fact role-config">
+      <span class="value-icon" aria-hidden="true">${icon(iconName)}</span>
+      <span class="control-label">${escapeHtml(label)}</span>
+      ${control}
+    </label>`;
+}
+
+function scheduleSelect(name, selected, options) {
+  return `<select name="${escapeHtml(name)}">${options.map(([value, text]) => `
+    <option value="${escapeHtml(value)}" ${String(value) === String(selected ?? "") ? "selected" : ""}>${escapeHtml(text)}</option>`).join("")}</select>`;
+}
+
+function scheduleValueLimit(action, device, overview) {
+  const limits = overview.limits || {};
+  if (action.id === "total_output_limit") return limits.system?.max_total_power ?? 5000;
+  if (action.id === "minimum_output_limit") return limits.system?.min_output_limit ?? 5000;
+  if (action.id === "charge_from_grid") return limits.ac_charge_power_max ?? 5000;
+  if (action.id === "device_output_limit") return (limits.devices || {})[device] ?? limits.fallback_device_max_power ?? 5000;
+  return 5000;
+}
+
+function scheduleValueControl(name, action, value, draft, overview) {
+  if (action.value_type === "switch") {
+    return scheduleSelect(name, value === true || value === "true" ? "true" : value === false || value === "false" ? "false" : "", [["", "Choose…"], ["true", "On"], ["false", "Off"]]);
+  }
+  if (action.value_type === "choice") {
+    return scheduleSelect(name, value, [["", "Choose…"], ...action.choices.map((choice) => [choice, gridOffModeOptionLabel(choice)])]);
+  }
+  if (action.value_type === "factor") {
+    return `<span class="runtime-number-wrap"><input type="number" name="${escapeHtml(name)}" value="${escapeHtml(value ?? "")}" min="0.01" max="100" step="0.01"><span>x</span></span>`;
+  }
+  const max = scheduleValueLimit(action, draft.device, overview);
+  const unit = action.value_type === "charge" ? "W (0 stops)" : "W";
+  return `<span class="runtime-number-wrap"><input type="number" name="${escapeHtml(name)}" value="${escapeHtml(value ?? "")}" min="0" max="${escapeHtml(max)}" step="1"><span>${escapeHtml(unit)}</span></span>`;
+}
+
+function renderScheduleEditor(draft, overview) {
+  const action = scheduleAction(draft.action) || overview.actions[0];
+  const groups = (overview.groups || []).map((group) => {
+    const items = overview.actions.filter((item) => item.group === group.id);
+    if (!items.length) return "";
+    return `<optgroup label="${escapeHtml(group.label)}">${items.map((item) => `
+      <option value="${escapeHtml(item.id)}" ${item.id === action.id ? "selected" : ""} ${item.per_device && !item.devices.length ? "disabled" : ""}>${escapeHtml(item.label)}</option>`).join("")}</optgroup>`;
+  }).join("");
+  const target = action.per_device
+    ? scheduleField("Applies to", scheduleSelect("device", draft.device, [
+      ...action.devices.map((name) => [name, name]),
+      ...(draft.device && !action.devices.includes(draft.device) ? [[draft.device, `${draft.device} (not available)`]] : []),
+    ]), "inverter")
+    : scheduleField("Applies to", `<span class="runtime-readonly-value">The whole system</span>`, "inverter");
+  const window = draft.mode === "window";
+  const once = draft.preset === "once";
+  const custom = draft.preset === "custom";
+  const weekdays = SCHEDULE_WEEKDAYS.map(([day, label]) => `
+    <label class="schedule-chip"><input type="checkbox" name="weekday" value="${day}" ${draft.custom.by_weekday.includes(day) ? "checked" : ""}>${label}</label>`).join("");
+  const months = SCHEDULE_MONTHS.map((label, index) => `
+    <label class="schedule-chip"><input type="checkbox" name="month" value="${index + 1}" ${draft.months.includes(index + 1) ? "checked" : ""}>${label}</label>`).join("");
+  return `
+    <form id="scheduleForm" class="control-pipeline-stage schedule-editor" novalidate>
+      <div class="control-stage-head control-stage-header">
+        <div class="control-stage-kicker"><span class="control-stage-dot" aria-hidden="true">${icon("rule")}</span></div>
+        <div class="control-stage-title-block">
+          <h3 class="control-stage-title">${draft.id ? "Edit rule" : "New rule"}</h3>
+          <span class="control-stage-subtitle">What · When · Repeat · Check</span>
+        </div>
+      </div>
+      <fieldset class="schedule-step">
+        <legend class="control-label">1 · What</legend>
+        <div class="control-stage-values control-pipeline-values">
+          ${scheduleField("Name", `<input type="text" name="name" maxlength="80" value="${escapeHtml(draft.name)}" placeholder="Evening socket">`)}
+          ${scheduleField("Action", `<select name="action">${groups}</select>`)}
+          ${target}
+          ${scheduleField(window ? "Set to" : "Set to", scheduleValueControl("value", action, draft.value, draft, overview), "gauge")}
+        </div>
+        <p class="schedule-help">${escapeHtml(action.help)}</p>
+      </fieldset>
+      <fieldset class="schedule-step">
+        <legend class="control-label">2 · When</legend>
+        <div class="schedule-modes" role="radiogroup" aria-label="Kind of rule">
+          <label class="schedule-chip"><input type="radio" name="mode" value="point" ${window ? "" : "checked"}>At a time</label>
+          <label class="schedule-chip"><input type="radio" name="mode" value="window" ${window ? "checked" : ""}>From – to</label>
+        </div>
+        <div class="control-stage-values control-pipeline-values">
+          ${scheduleField(once ? "On" : "Starting", `<input type="date" name="date" value="${escapeHtml(draft.date)}">`, "history")}
+          ${scheduleField(window ? "From" : "At", `<input type="time" name="from" value="${escapeHtml(draft.from)}">`, "history")}
+          ${window ? scheduleField("To", `<input type="time" name="to" value="${escapeHtml(draft.to)}">`, "history") : ""}
+          ${window ? scheduleField(once ? "Until date" : "First window ends", `<input type="date" name="end_date" value="${escapeHtml(draft.end_date)}">`, "history") : ""}
+          ${window ? scheduleField("Then set to", scheduleValueControl("end_value", action, draft.end_value, draft, overview), "gauge") : ""}
+        </div>
+        ${window ? `<p class="schedule-help">A “to” earlier than “from” on the same date ends the next day.</p>` : ""}
+      </fieldset>
+      <fieldset class="schedule-step">
+        <legend class="control-label">3 · Repeat</legend>
+        <div class="schedule-modes">
+          ${draft.keptRepeat ? `<label class="schedule-chip"><input type="radio" name="preset" value="kept" ${draft.preset === "kept" ? "checked" : ""}>As saved</label>` : ""}
+          ${SCHEDULE_PRESET_ORDER.map((name) => `
+            <label class="schedule-chip"><input type="radio" name="preset" value="${name}" ${draft.preset === name ? "checked" : ""}>${escapeHtml(SCHEDULE_PRESET_LABELS[name])}</label>`).join("")}
+        </div>
+        ${draft.preset === "kept" ? `<p class="schedule-help">This repeat was made with emsctl and goes beyond the editor; it is kept exactly as saved.</p>` : ""}
+        ${custom ? `
+        <div class="control-stage-values control-pipeline-values">
+          ${scheduleField("Every", `<span class="runtime-number-wrap"><input type="number" name="interval" min="1" max="366" step="1" value="${escapeHtml(draft.custom.interval)}">${scheduleSelect("freq", draft.custom.freq, [["daily", "day(s)"], ["weekly", "week(s)"], ["monthly", "month(s)"], ["yearly", "year(s)"]])}</span>`)}
+          ${draft.custom.freq === "monthly" || draft.custom.freq === "yearly" ? scheduleField("On", scheduleSelect("monthly", draft.custom.monthly, [["day", "day of the month"], ["last", "last day"], ["weekday", "n-th weekday"]])) : ""}
+          ${(draft.custom.freq === "monthly" || draft.custom.freq === "yearly") && draft.custom.monthly === "day" ? scheduleField("Day", `<input type="number" name="month_day" min="1" max="31" value="${escapeHtml(draft.custom.month_day)}">`) : ""}
+          ${(draft.custom.freq === "monthly" || draft.custom.freq === "yearly") && draft.custom.monthly === "weekday" ? scheduleField("Which", `${scheduleSelect("set_pos", draft.custom.set_pos, [[1, "1st"], [2, "2nd"], [3, "3rd"], [4, "4th"], [-1, "last"]])}${scheduleSelect("set_day", draft.custom.set_day, SCHEDULE_WEEKDAYS)}`) : ""}
+        </div>
+        ${draft.custom.freq === "weekly" || draft.custom.freq === "daily" ? `<div class="schedule-modes" aria-label="On these days">${weekdays}</div>` : ""}` : ""}
+        ${once || draft.preset === "kept" ? "" : `
+        <div class="schedule-modes" aria-label="Only in these months">
+          <span class="control-label">Only in</span>${months}
+          <button type="button" class="primary-button compact" data-schedule-action="winter-months"><span class="button-ring" aria-hidden="true"><i></i></span>Oct–Mar</button>
+          <button type="button" class="primary-button compact" data-schedule-action="all-months"><span class="button-ring" aria-hidden="true"><i></i></span>All months</button>
+        </div>
+        <div class="control-stage-values control-pipeline-values">
+          ${scheduleField("Ends", scheduleSelect("ends", draft.ends, [["never", "never"], ["until", "on a date"], ["count", "after a number of times"]]))}
+          ${draft.ends === "until" ? scheduleField("Last date", `<input type="date" name="until" value="${escapeHtml(draft.until)}">`) : ""}
+          ${draft.ends === "count" ? scheduleField("Times", `<input type="number" name="count" min="1" max="1000" value="${escapeHtml(draft.count)}">`) : ""}
+        </div>`}
+      </fieldset>
+      <fieldset class="schedule-step">
+        <legend class="control-label">4 · Check</legend>
+        <div id="schedulePreview" class="schedule-preview" role="status" aria-live="polite">Checking…</div>
+      </fieldset>
+      <div class="schedule-rule-actions">
+        <button type="submit" id="scheduleSave" class="primary-button compact" disabled><span class="button-ring" aria-hidden="true"><i></i></span>Save rule</button>
+        <button type="button" class="primary-button compact" data-schedule-action="cancel"><span class="button-ring" aria-hidden="true"><i></i></span>Cancel</button>
+      </div>
+    </form>`;
+}
+
+function scheduleReadForm(form) {
+  const draft = { ...state.schedule.editor, custom: { ...state.schedule.editor.custom } };
+  const data = new FormData(form);
+  const text = (name, fallback = "") => (data.has(name) ? String(data.get(name)) : fallback);
+  draft.name = text("name", draft.name);
+  const actionChanged = text("action", draft.action) !== draft.action;
+  draft.action = text("action", draft.action);
+  const action = scheduleAction(draft.action);
+  if (actionChanged) {
+    draft.value = "";
+    draft.end_value = "";
+    draft.device = action?.per_device ? action.devices[0] || null : null;
+  } else {
+    draft.device = action?.per_device ? text("device", draft.device || "") : null;
+    draft.value = text("value", "");
+    draft.end_value = text("end_value", "");
+  }
+  draft.mode = text("mode", draft.mode);
+  const previousDate = draft.date;
+  draft.date = text("date", draft.date);
+  draft.from = text("from", draft.from);
+  draft.to = text("to", draft.to || "23:00");
+  draft.end_date = text("end_date", draft.end_date || draft.date);
+  if (previousDate && draft.date !== previousDate && draft.end_date) {
+    draft.end_date = scheduleShiftDate(draft.end_date, scheduleDaysBetween(previousDate, draft.date));
+  }
+  draft.preset = text("preset", draft.preset);
+  draft.custom.freq = text("freq", draft.custom.freq);
+  draft.custom.interval = Number(text("interval", draft.custom.interval)) || 1;
+  draft.custom.monthly = text("monthly", draft.custom.monthly);
+  draft.custom.month_day = Number(text("month_day", draft.custom.month_day)) || 1;
+  draft.custom.set_pos = Number(text("set_pos", draft.custom.set_pos)) || 1;
+  draft.custom.set_day = text("set_day", draft.custom.set_day);
+  if (form.querySelector('[name="weekday"]')) draft.custom.by_weekday = data.getAll("weekday").map(String);
+  if (form.querySelector('[name="month"]')) draft.months = data.getAll("month").map(Number);
+  draft.ends = text("ends", draft.ends);
+  draft.until = text("until", draft.until);
+  draft.count = Number(text("count", draft.count)) || 1;
+  return draft;
+}
+
+function scheduleTypedValue(action, raw) {
+  if (raw === "" || raw === null || raw === undefined) return null;
+  if (action.value_type === "switch") return raw === "true" || raw === true;
+  if (action.value_type === "choice") return String(raw);
+  if (action.value_type === "factor") return Number(raw);
+  return Number.isInteger(Number(raw)) ? Number(raw) : raw;
+}
+
+function scheduleShiftDate(date, days) {
+  const [year, month, day] = date.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
+}
+
+function scheduleDaysBetween(from, to) {
+  const [a, b] = [from, to].map((date) => {
+    const [year, month, day] = date.split("-").map(Number);
+    return Date.UTC(year, month - 1, day);
+  });
+  return Math.round((b - a) / 86_400_000);
+}
+
+function scheduleRepeatOf(draft) {
+  if (draft.preset === "once") return null;
+  if (draft.preset === "kept" && draft.keptRepeat) return { ...draft.keptRepeat };
+  let repeat;
+  if (draft.preset === "custom") {
+    const custom = draft.custom;
+    repeat = { freq: custom.freq, interval: custom.interval };
+    if ((custom.freq === "weekly" || custom.freq === "daily") && custom.by_weekday.length) repeat.by_weekday = custom.by_weekday;
+    if (custom.freq === "monthly" || custom.freq === "yearly") {
+      if (custom.monthly === "day") repeat.by_month_day = [custom.month_day];
+      if (custom.monthly === "last") repeat.by_month_day = [-1];
+      if (custom.monthly === "weekday") {
+        repeat.by_weekday = [custom.set_day];
+        repeat.by_set_pos = custom.set_pos;
+      }
+    }
+  } else {
+    repeat = { ...(state.schedule.overview.presets[draft.preset] || { freq: "daily" }) };
+  }
+  if (draft.months.length && draft.months.length < 12) repeat.by_month = draft.months;
+  if (draft.ends === "until" && draft.until) repeat.until = draft.until;
+  if (draft.ends === "count") repeat.count = draft.count;
+  return repeat;
+}
+
+function scheduleEndDate(when) {
+  const startDate = String(when.start).slice(0, 10);
+  if (!when.end) return startDate;
+  const endDate = String(when.end).slice(0, 10);
+  const overnight = endDate === scheduleShiftDate(startDate, 1)
+    && String(when.end).slice(11, 16) <= String(when.start).slice(11, 16);
+  return overnight ? startDate : endDate;
+}
+
+function schedulePayload(draft) {
+  const action = scheduleAction(draft.action);
+  const window = draft.mode === "window";
+  const when = { start: `${draft.date}T${draft.from}` };
+  if (window) {
+    let endDate = draft.end_date && draft.end_date > draft.date ? draft.end_date : draft.date;
+    if (endDate === draft.date && draft.to <= draft.from) endDate = scheduleShiftDate(draft.date, 1);
+    when.end = `${endDate}T${draft.to}`;
+  }
+  const repeat = scheduleRepeatOf(draft);
+  if (repeat) when.repeat = repeat;
+  if (draft.exceptions.length) when.exceptions = draft.exceptions;
+  const payload = {
+    name: draft.name,
+    enabled: draft.enabled,
+    target: action.per_device ? { scope: "device", device: draft.device } : { scope: "system" },
+    action: { id: action.id, value: scheduleTypedValue(action, draft.value) },
+    when,
+  };
+  if (window) payload.action.end_value = scheduleTypedValue(action, draft.end_value);
+  return payload;
+}
+
+let schedulePreviewTimer = null;
+
+function previewScheduleSoon() {
+  if (schedulePreviewTimer) clearTimeout(schedulePreviewTimer);
+  schedulePreviewTimer = setTimeout(previewSchedule, 250);
+}
+
+async function previewSchedule() {
+  const draft = state.schedule.editor;
+  const box = $("schedulePreview");
+  const save = $("scheduleSave");
+  if (!draft || !box) return;
+  const sequence = ++state.schedule.previewSequence;
+  const answer = await scheduleRequest("POST", "/api/schedule/preview", { rule: schedulePayload(draft), id: draft.id });
+  if (sequence !== state.schedule.previewSequence || !$("schedulePreview")) return;
+  const preview = answer.payload || {};
+  state.schedule.previewOk = Boolean(answer.ok && preview.ok);
+  if (save) save.disabled = !state.schedule.previewOk;
+  if (!answer.ok || !preview.ok) {
+    box.innerHTML = `<p class="schedule-preview-error"><span class="pill tone-warn">Cannot be saved</span> ${escapeHtml(dashboardErrorText(preview, "The EMS refused this rule."))}</p>`;
+    return;
+  }
+  const next = (preview.next || []).slice(0, 5).map((point) => `<li>${escapeHtml(scheduleWhen(point.at))} → ${escapeHtml(point.text)}</li>`).join("");
+  box.innerHTML = `
+    <p class="schedule-sentence">${escapeHtml(preview.summary)}</p>
+    <p class="schedule-sentence">${escapeHtml(preview.action)}</p>
+    <ul class="diagnose-lines">${next || "<li>No switch point in the next seven days.</li>"}</ul>
+    <p class="schedule-help">Equals: ${escapeHtml((preview.equals || []).join(" … then … "))}</p>
+    ${preview.first_action ? `<p class="schedule-help">First action: ${escapeHtml(scheduleWhen(preview.first_action))}. A switch point before saving never fires.</p>` : ""}`;
+}
+
+async function saveSchedule() {
+  const draft = state.schedule.editor;
+  if (!draft || !state.schedule.previewOk) return;
+  const save = $("scheduleSave");
+  if (save) save.disabled = true;
+  const payload = schedulePayload(draft);
+  const answer = draft.id
+    ? await scheduleRequest("PUT", `/api/schedule/rules/${encodeURIComponent(draft.id)}`, { revision: draft.revision, rule: payload })
+    : await scheduleRequest("POST", "/api/schedule/rules", { rule: payload });
+  if (!answer.ok) {
+    const conflict = answer.status === 409 ? " Close the editor and open the rule again." : "";
+    setScheduleStatus(`${dashboardErrorText(answer.payload, "Saving failed.")}${conflict}`);
+    if (save) save.disabled = false;
+    return;
+  }
+  state.schedule.editor = null;
+  setScheduleStatus(`Saved “${answer.payload.name}”.`);
+  await loadSchedule();
+}
+
+async function scheduleRuleAction(kind, ruleId) {
+  const rule = (state.schedule.overview?.rules || []).find((item) => item.id === ruleId);
+  const path = `/api/schedule/rules/${encodeURIComponent(ruleId)}`;
+  let answer = null;
+  if (kind === "edit" && rule) {
+    state.schedule.editor = scheduleDraftFromRule(rule);
+    renderScheduleView();
+    return;
+  }
+  if (kind === "toggle" && rule) {
+    const payload = { name: rule.name, enabled: !rule.enabled, target: rule.target, action: rule.action, when: rule.when };
+    answer = await scheduleRequest("PUT", path, { revision: rule.revision, rule: payload });
+  } else if (kind === "skip" && rule) {
+    answer = await scheduleRequest("POST", `${path}/skip`, { revision: rule.revision });
+  } else if (kind === "apply") {
+    answer = await scheduleRequest("POST", `${path}/apply-now`, {});
+  } else if (kind === "up" || kind === "down") {
+    answer = await scheduleRequest("POST", `${path}/move`, { direction: kind });
+  } else if (kind === "delete") {
+    if (!window.confirm(`Delete ${rule ? `“${rule.name}”` : ruleId}?`)) return;
+    const revision = rule?.revision ? `?revision=${encodeURIComponent(rule.revision)}` : "";
+    answer = await scheduleRequest("DELETE", `${path}${revision}`, {});
+  }
+  if (!answer) return;
+  setScheduleStatus(answer.ok
+    ? kind === "apply" ? `Set to ${answer.payload.text}.` : ""
+    : dashboardErrorText(answer.payload, "The EMS refused this."));
+  await loadSchedule();
+}
+
+function initSchedule() {
+  const body = $("scheduleBody");
+  if (!body) return;
+  body.addEventListener("click", async (event) => {
+    const button = event.target.closest?.("[data-schedule-action]");
+    if (!button || button.disabled) return;
+    const kind = button.dataset.scheduleAction;
+    if (kind === "reload") {
+      await loadSchedule();
+    } else if (kind === "new") {
+      state.schedule.editor = scheduleNewDraft(state.schedule.overview);
+      renderScheduleView();
+    } else if (kind === "cancel") {
+      state.schedule.editor = null;
+      renderScheduleView();
+    } else if (kind === "pause" || kind === "resume") {
+      const answer = await scheduleRequest("PATCH", "/api/schedule", { enabled: kind === "resume" });
+      setScheduleStatus(answer.ok ? "" : dashboardErrorText(answer.payload, "The EMS refused this."));
+      await loadSchedule();
+    } else if (kind === "winter-months" || kind === "all-months") {
+      state.schedule.editor = { ...state.schedule.editor, months: kind === "winter-months" ? SCHEDULE_WINTER_MONTHS : [] };
+      renderScheduleView();
+    } else if (button.dataset.ruleId) {
+      await scheduleRuleAction(kind, button.dataset.ruleId);
+    }
+  });
+  body.addEventListener("change", (event) => {
+    const form = event.target.closest?.("#scheduleForm");
+    if (!form) return;
+    const before = state.schedule.editor;
+    const draft = scheduleReadForm(form);
+    state.schedule.editor = draft;
+    const shape = (item) => [item.action, item.mode, item.preset, item.ends, item.custom.freq, item.custom.monthly, item.device].join("|");
+    if (shape(before) !== shape(draft)) {
+      renderScheduleView();
+    } else {
+      previewScheduleSoon();
+    }
+  });
+  body.addEventListener("input", (event) => {
+    const form = event.target.closest?.("#scheduleForm");
+    if (!form || event.target.type === "radio" || event.target.tagName === "SELECT") return;
+    state.schedule.editor = scheduleReadForm(form);
+    previewScheduleSoon();
+  });
+  body.addEventListener("submit", (event) => {
+    if (event.target.id !== "scheduleForm") return;
+    event.preventDefault();
+    saveSchedule();
+  });
 }
 
 const LOG_LEVEL_TONE = {
@@ -5676,6 +6410,15 @@ function renderAuthState() {
   if (state.flowView === "diagnose") {
     if (!state.auth.authenticated) state.diagnose.report = null;
     renderDiagnoseView();
+  }
+  if (state.flowView === "schedule") {
+    if (!state.auth.authenticated) {
+      state.schedule.overview = null;
+      state.schedule.editor = null;
+      renderScheduleView();
+    } else if (!state.schedule.overview) {
+      loadSchedule();
+    }
   }
   // Keep the Logs tab in sync: start/stop the poll loop on login/logout.
   if (state.flowView === "logs") {
@@ -7871,6 +8614,7 @@ function initDashboardApp() {
   initAuthControls();
   initRuntimeForms();
   initDiagnose();
+  initSchedule();
   initLogs();
   initMaintenance();
   initSessionHeartbeat();

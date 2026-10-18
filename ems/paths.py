@@ -155,6 +155,16 @@ def resolve_control_status_path(runtime_state_path):
     return Path(runtime_state_path).with_name(CONTROL_STATUS_FILENAME)
 
 
+SCHEDULES_FILENAME = "schedules.json"
+
+
+def resolve_schedules_path(runtime_state_path):
+    """Resolve the schedule rules beside the runtime-state file, as the EMS,
+    emsctl and the dashboard all find the runtime state from one path."""
+
+    return Path(runtime_state_path).with_name(SCHEDULES_FILENAME)
+
+
 def resolve_compose_path(explicit_path=None, *, base_dir=None):
     """Resolve the EMS Compose file."""
 

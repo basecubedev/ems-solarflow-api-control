@@ -21,7 +21,7 @@ from admin.config_runtime_overlap import (
     config_effective_value,
     resolve_runtime_state_path,
 )
-from dashboard.runtime_write import (
+from ems.runtime_commands import (
     DEVICE_FIELDS,
     SECTION_FIELDS,
     SYSTEM_FIELDS,
@@ -89,11 +89,15 @@ def _merged_value(config, kind, holder, key):
 
 def _apply_one(runtime_state, validation_context, kind, holder, key, value):
     if kind == "system":
-        apply_system_update(runtime_state, {key: value}, validation_context)
+        apply_system_update(runtime_state, {key: value}, validation_context, source="admin")
     elif kind == "section":
-        apply_section_update(runtime_state, holder, {key: value}, validation_context)
+        apply_section_update(
+            runtime_state, holder, {key: value}, validation_context, source="admin"
+        )
     else:
-        apply_device_update(runtime_state, holder, {key: value}, validation_context)
+        apply_device_update(
+            runtime_state, holder, {key: value}, validation_context, source="admin"
+        )
 
 
 def _write_targets(context, config, targets):

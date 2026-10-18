@@ -85,7 +85,7 @@ present. Long-range analytics is a separate, optional thing; see
 ## Navigation
 
 ```text
-Overview · Devices · Energy · Analytics · Control · Diagnose · Logs · Maintenance
+Overview · Devices · Energy · Analytics · Control · Schedule · Diagnose · Logs · Maintenance
 ```
 
 ![The dashboard at a narrow viewport, showing the tiles stacked and the tab bar wrapped onto two rows](../../assets/screenshots/dashboard/dashboard-overview-narrow.png)
@@ -96,7 +96,7 @@ phone.
 
 The selected tab is remembered between visits.
 
-Diagnose, Logs and Maintenance are **operator-only**. Without a session they show
+Schedule, Diagnose, Logs and Maintenance are **operator-only**. Without a session they show
 a short "login required" message instead of empty panels.
 
 ## What happens in the background

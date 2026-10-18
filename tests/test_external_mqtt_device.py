@@ -20,7 +20,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from dashboard.runtime_write import ac_role_supported, build_validation_context
+from ems.runtime_commands import ac_role_supported, build_validation_context
 from ems.config import http_control_device_configs, mqtt_control_device_configs
 from ems.zendure_mqtt.config_entries import (
     EXTERNAL_MQTT_TYPE,

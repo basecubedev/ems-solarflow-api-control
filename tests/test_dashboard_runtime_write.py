@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from dashboard.runtime_write import (
+from ems.runtime_commands import (
     RuntimeWriteError,
     apply_device_update,
     apply_system_update,
@@ -58,13 +58,13 @@ def test_runtime_write_uses_config_aware_power_limits(tmp_path):
     )
 
     with pytest.raises(RuntimeWriteError, match="max_total_power must be between 0 and 1200"):
-        apply_system_update(runtime_state, {"max_total_power": 5000}, context)
+        apply_system_update(runtime_state, {"max_total_power": 5000}, context, source="dashboard")
 
     with pytest.raises(RuntimeWriteError, match="max_power must be between 0 and 800"):
-        apply_device_update(runtime_state, "WR1", {"max_power": 1200}, context)
+        apply_device_update(runtime_state, "WR1", {"max_power": 1200}, context, source="dashboard")
 
-    apply_system_update(runtime_state, {"max_total_power": 1000}, context)
-    apply_device_update(runtime_state, "WR1", {"max_power": 700}, context)
+    apply_system_update(runtime_state, {"max_total_power": 1000}, context, source="dashboard")
+    apply_device_update(runtime_state, "WR1", {"max_power": 700}, context, source="dashboard")
     assert runtime_state.snapshot()["system"]["max_total_power"] == 1000
     assert runtime_state.snapshot()["devices"]["WR1"]["max_power"] == 700
 
@@ -89,8 +89,8 @@ def test_lowering_system_power_does_not_lower_later_edit_ceiling(tmp_path):
         runtime_state,
     )
 
-    apply_system_update(runtime_state, {"max_total_power": 800}, context)
-    apply_system_update(runtime_state, {"max_total_power": 1600}, context)
+    apply_system_update(runtime_state, {"max_total_power": 800}, context, source="dashboard")
+    apply_system_update(runtime_state, {"max_total_power": 1600}, context, source="dashboard")
 
     assert runtime_state.snapshot()["system"]["max_total_power"] == 1600
     assert effective_limits(context)["system"]["max_total_power"] == 1600
@@ -116,8 +116,8 @@ def test_lowering_system_power_does_not_lower_min_output_limit_ceiling(tmp_path)
         runtime_state,
     )
 
-    apply_system_update(runtime_state, {"max_total_power": 800}, context)
-    apply_system_update(runtime_state, {"min_output_limit": 1600}, context)
+    apply_system_update(runtime_state, {"max_total_power": 800}, context, source="dashboard")
+    apply_system_update(runtime_state, {"min_output_limit": 1600}, context, source="dashboard")
 
     snapshot = runtime_state.snapshot()
     assert snapshot["system"]["max_total_power"] == 800
@@ -155,8 +155,8 @@ def test_lowering_device_power_does_not_lower_device_ceiling(tmp_path):
         runtime_state,
     )
 
-    apply_device_update(runtime_state, "WR1", {"max_power": 400}, context)
-    apply_device_update(runtime_state, "WR1", {"max_power": 800}, context)
+    apply_device_update(runtime_state, "WR1", {"max_power": 400}, context, source="dashboard")
+    apply_device_update(runtime_state, "WR1", {"max_power": 800}, context, source="dashboard")
 
     assert runtime_state.snapshot()["devices"]["WR1"]["max_power"] == 800
     assert effective_limits(context)["devices"]["WR1"] == 800
@@ -202,7 +202,7 @@ def test_runtime_numeric_limits_reject_invalid_high_and_low_values(tmp_path):
     ]
     for payload, message in invalid_system_updates:
         with pytest.raises(RuntimeWriteError, match=message):
-            apply_system_update(runtime_state, payload, context)
+            apply_system_update(runtime_state, payload, context, source="dashboard")
 
     invalid_device_updates = [
         ({"max_power": 801}, "max_power must be between 0 and 800"),
@@ -211,7 +211,7 @@ def test_runtime_numeric_limits_reject_invalid_high_and_low_values(tmp_path):
     ]
     for payload, message in invalid_device_updates:
         with pytest.raises(RuntimeWriteError, match=message):
-            apply_device_update(runtime_state, "WR1", payload, context)
+            apply_device_update(runtime_state, "WR1", payload, context, source="dashboard")
 
 
 def test_runtime_write_limit_fallback_uses_configured_system_max(tmp_path):
@@ -236,8 +236,8 @@ def test_runtime_write_limit_fallback_uses_configured_system_max(tmp_path):
     limits = effective_limits(context)
 
     with pytest.raises(RuntimeWriteError, match="max_total_power must be between 0 and 800"):
-        apply_system_update(runtime_state, {"max_total_power": 801}, context)
-    apply_system_update(runtime_state, {"max_total_power": 800}, context)
+        apply_system_update(runtime_state, {"max_total_power": 801}, context, source="dashboard")
+    apply_system_update(runtime_state, {"max_total_power": 800}, context, source="dashboard")
 
     assert runtime_state.snapshot()["system"]["max_total_power"] == 800
     assert limits["system"]["max_total_power"] == 800
@@ -264,7 +264,7 @@ def test_explicit_runtime_hard_limit_can_exceed_configured_system_max(tmp_path):
         runtime_state,
     )
 
-    apply_system_update(runtime_state, {"max_total_power": 1200}, context)
+    apply_system_update(runtime_state, {"max_total_power": 1200}, context, source="dashboard")
 
     assert runtime_state.snapshot()["system"]["max_total_power"] == 1200
     assert effective_limits(context)["system"]["max_total_power"] == 1200
@@ -295,7 +295,7 @@ def test_runtime_state_dashboard_updates_are_thread_safe(tmp_path):
     context = build_validation_context(runtime_state=runtime_state)
 
     def update(value):
-        apply_system_update(runtime_state, {"max_total_power": value}, context)
+        apply_system_update(runtime_state, {"max_total_power": value}, context, source="dashboard")
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(update, range(100, 900, 10)))
@@ -357,6 +357,7 @@ def test_the_dashboard_sets_the_ac_role_and_charge_power_like_emsctl(tmp_path):
         "WR1",
         {"runtime_role": "ac_input", "ac_charge_power_w": 600},
         context,
+        source="dashboard",
     )
 
     assert result["state"]["runtime_role"] == "ac_input"
@@ -372,7 +373,7 @@ def test_the_ac_role_is_refused_for_an_mqtt_device(tmp_path, payload):
     runtime_state, context = _ac_runtime(tmp_path)
 
     with pytest.raises(RuntimeWriteError, match="connected over MQTT"):
-        apply_device_update(runtime_state, "CLOUD", payload, context)
+        apply_device_update(runtime_state, "CLOUD", payload, context, source="dashboard")
     assert "runtime_role" not in runtime_state.snapshot()["devices"]["CLOUD"]
     assert effective_limits(context)["ac_role_unsupported"] == ["CLOUD"]
 
@@ -388,4 +389,4 @@ def test_the_ac_role_is_refused_for_an_mqtt_device(tmp_path, payload):
 def test_ac_values_are_validated(tmp_path, payload, message):
     runtime_state, context = _ac_runtime(tmp_path)
     with pytest.raises(RuntimeWriteError, match=message):
-        apply_device_update(runtime_state, "WR1", payload, context)
+        apply_device_update(runtime_state, "WR1", payload, context, source="dashboard")

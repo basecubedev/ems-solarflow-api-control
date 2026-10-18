@@ -22,16 +22,6 @@ from dashboard.auth import (
     verify_password_file,
 )
 from dashboard.https import HANDSHAKE_TIMEOUT_SECONDS, wrap_listening_socket
-from dashboard.runtime_write import (
-    SECTION_FIELDS,
-    RuntimeWriteError,
-    apply_device_update,
-    apply_section_update,
-    apply_system_update,
-    attach_limits,
-    build_validation_context,
-    runtime_payload,
-)
 from dashboard.sqlite_store import SUPPORTED_RANGES
 from dashboard.static_files import build_static_asset_index, static_asset_key
 
@@ -563,6 +553,10 @@ class SSEConnectionLimiter:
                 self.by_ip[remote_addr] = current - 1
 
 
+def _is_schedule_path(path):
+    return path == "/api/schedule" or path.startswith("/api/schedule/")
+
+
 class DashboardHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -586,10 +580,12 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         sse_max_connections=MAX_SSE_CONNECTIONS,
         sse_max_connections_per_ip=MAX_SSE_CONNECTIONS_PER_IP,
         sse_max_connection_seconds=SSE_MAX_CONNECTION_SECONDS,
+        schedule_api=None,
     ):
         super().__init__(address, handler)
         self.store = store
         self.runtime_state = runtime_state
+        self.schedule_api = schedule_api
         self.log_buffer = log_buffer
         self.log_redaction = bool(log_redaction)
         # UI-only hint for the frontend bootstrap (no control/auth impact).
@@ -616,9 +612,11 @@ class DashboardHTTPServer(ThreadingHTTPServer):
             absolute_max_seconds=session_absolute_max_seconds,
         )
         self.login_limiter = LoginRateLimiter()
-        self.runtime_validation = runtime_validation or build_validation_context(
-            runtime_state=runtime_state
-        )
+        if not runtime_validation:
+            from ems.runtime_commands import build_validation_context
+
+            runtime_validation = build_validation_context(runtime_state=runtime_state)
+        self.runtime_validation = runtime_validation
         # Capture redaction context while the startup config is known-good.
         # Later atomic replacement/read failures retain this last-good copy.
         _external_mqtt_config_context(self)
@@ -765,7 +763,13 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self._send_json(self._auth_status_payload())
             return
 
+        if _is_schedule_path(parsed.path):
+            self._handle_schedule("GET", parsed)
+            return
+
         if parsed.path == "/api/runtime":
+            from ems.runtime_commands import attach_limits, runtime_payload
+
             self._send_json(
                 _external_mqtt_status_payload(
                     self.server,
@@ -846,9 +850,19 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self._handle_maintenance_config_upgrade_apply()
             return
 
+        if _is_schedule_path(parsed.path):
+            self._handle_schedule("POST", parsed)
+            return
+
         self._send_json({"error": "read_only"}, status=405)
 
     def do_PUT(self):
+        parsed = urlparse(self.path)
+
+        if _is_schedule_path(parsed.path):
+            self._handle_schedule("PUT", parsed)
+            return
+
         self._send_json({"error": "read_only"}, status=405)
 
     def do_PATCH(self):
@@ -858,10 +872,48 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self._handle_runtime_patch(parsed.path)
             return
 
+        if _is_schedule_path(parsed.path):
+            self._handle_schedule("PATCH", parsed)
+            return
+
         self._send_json({"error": "read_only"}, status=405)
 
     def do_DELETE(self):
+        parsed = urlparse(self.path)
+
+        if _is_schedule_path(parsed.path):
+            self._handle_schedule("DELETE", parsed)
+            return
+
         self._send_json({"error": "read_only"}, status=405)
+
+    def _handle_schedule(self, method, parsed):
+        """Schedule routes: a session to read, a session and CSRF to change."""
+
+        if method == "GET":
+            auth_error = self._require_read_auth()
+            body = {}
+        else:
+            body_error = self._json_body_preflight()
+            if body_error:
+                self._send_json(body_error[0], status=body_error[1])
+                return
+            auth_error = self._require_write_auth()
+            body = None
+        if auth_error:
+            self._send_json(auth_error[0], status=auth_error[1])
+            return
+        if self.server.schedule_api is None:
+            self._send_json({"error": "schedule_unavailable"}, status=404)
+            return
+        if body is None:
+            try:
+                body = self._read_json_body()
+            except ValueError as exc:
+                self._send_json({"error": "bad_request", "message": str(exc)}, status=400)
+                return
+        status, payload = self.server.schedule_api.handle(method, parsed.path, body, parsed.query)
+        self._send_json(payload, status=status)
 
     def log_message(self, fmt, *args):
         logging.debug("dashboard_http " + fmt, *args)
@@ -1631,6 +1683,15 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             return None
 
     def _handle_runtime_patch(self, path):
+        from ems.file_io import lock_timed_out
+        from ems.runtime_commands import (
+            SECTION_FIELDS,
+            RuntimeWriteError,
+            apply_device_update,
+            apply_section_update,
+            apply_system_update,
+        )
+
         body_error = self._json_body_preflight()
         if body_error:
             self._send_json(body_error[0], status=body_error[1])
@@ -1648,6 +1709,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     self.server.runtime_state,
                     payload,
                     self.server.runtime_validation,
+                    source="dashboard",
                 )
             elif path[len("/api/runtime/"):] in SECTION_FIELDS:
                 # Routed from the write whitelist rather than from a literal per
@@ -1659,6 +1721,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     path[len("/api/runtime/"):],
                     payload,
                     self.server.runtime_validation,
+                    source="dashboard",
                 )
             elif path.startswith("/api/runtime/device/"):
                 browser_name = unquote(path.rsplit("/", 1)[-1])
@@ -1670,17 +1733,22 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     device_name,
                     payload,
                     self.server.runtime_validation,
+                    source="dashboard",
                 )
             else:
                 self._send_json({"error": "not_found"}, status=404)
                 return
         except RuntimeWriteError as exc:
+            busy = lock_timed_out(exc)
             self._send_json(
                 _external_mqtt_status_payload(
                     self.server,
-                    {"error": "invalid_runtime_update", "message": str(exc)},
+                    {
+                        "error": "runtime_state_busy" if busy else "invalid_runtime_update",
+                        "message": f"{exc}; try again" if busy else str(exc),
+                    },
                 ),
-                status=400,
+                status=503 if busy else 400,
             )
             return
         except ValueError as exc:
@@ -1936,6 +2004,7 @@ def start_dashboard_server(
     sse_max_connections=MAX_SSE_CONNECTIONS,
     sse_max_connections_per_ip=MAX_SSE_CONNECTIONS_PER_IP,
     sse_max_connection_seconds=SSE_MAX_CONNECTION_SECONDS,
+    schedule_api=None,
 ):
     server = DashboardHTTPServer(
         (host, int(port)),
@@ -1955,6 +2024,7 @@ def start_dashboard_server(
         sse_max_connections=sse_max_connections,
         sse_max_connections_per_ip=sse_max_connections_per_ip,
         sse_max_connection_seconds=sse_max_connection_seconds,
+        schedule_api=schedule_api,
     )
 
     if ssl_enabled:

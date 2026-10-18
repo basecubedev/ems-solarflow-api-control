@@ -28,7 +28,8 @@ from ems import influx_setup
 from ems.build_info import collect_build_info
 from ems.config import normalize_influxdb_config, safe_bool
 from ems.diagnostics import DIAGNOSE_SCHEMA_VERSION, SUPPORT_BUNDLE_VERSION
-from ems.paths import BASE_DIR
+from ems.file_io import STARTUP_LOCK_TIMEOUT_SECONDS, FileLockTimeout, exclusive_file_lock
+from ems.paths import BASE_DIR, resolve_schedules_path
 
 APP_NAME = "ems-solarflow-api-control"
 BACKUP_FORMAT_VERSION = 1
@@ -228,6 +229,7 @@ def collect_config_backup_files(
             base_dir,
         )
     candidates.append((rt_path, "runtime_state", False))
+    candidates.append((str(resolve_schedules_path(rt_path)), "schedules", False))
 
     # dashboard auth / cert / key — included only when present.
     if dashboard_auth_path:
@@ -1603,6 +1605,35 @@ def plan_restore(
     return {"manifest": manifest, "files": plan}
 
 
+def _restore_schedules(target, data, *, keep_applied):
+    """The schedule rules from the backup, under the schedules' own lock.
+
+    What the scheduler applied goes with the runtime state it was applied
+    to: the backup's when its runtime state is restored too, so a window
+    that ran when the backup was taken is ended; the current file's when the
+    current runtime state stays (ScheduleStore.restore).
+    """
+
+    from ems.schedule_store import ScheduleStore, ScheduleStoreError
+
+    try:
+        ScheduleStore(target).restore(data, write=_atomic_write, keep_applied=keep_applied)
+    except (ScheduleStoreError, OSError) as exc:
+        raise BackupError(f"restore could not write {target}: {exc}") from exc
+
+
+def _restore_runtime_state(target, data):
+    """The runtime state from the backup, under runtime-state.json.lock: an
+    edit holds it from its re-read to its save, and must not land the state
+    it read before the restore over the restored one."""
+
+    try:
+        with exclusive_file_lock(f"{target}.lock", STARTUP_LOCK_TIMEOUT_SECONDS):
+            _atomic_write(target, data)
+    except FileLockTimeout as exc:
+        raise BackupError(f"restore could not write {target}: another process holds its lock") from exc
+
+
 def _atomic_write(target, data):
     """Replace ``target`` atomically, reporting a refusal as a restore failure.
 
@@ -1794,9 +1825,11 @@ def restore_backup(
                     "nothing was written"
                 )
 
-        for entry in entries:
+        runtime_from_backup = False
+        for entry in sorted(entries, key=lambda item: item.get("kind") == "schedules"):
             status = entry["status"]
             if status == "identical":
+                runtime_from_backup = runtime_from_backup or entry.get("kind") == "runtime_state"
                 actions.append({"path": entry["path"], "action": "skip_identical"})
                 continue
             if status == "outside_project":
@@ -1828,6 +1861,11 @@ def restore_backup(
             try:
                 if entry.get("kind") == "sqlite":
                     _restore_sqlite(entry["target"], entry["_data"])
+                elif entry.get("kind") == "schedules":
+                    _restore_schedules(entry["target"], entry["_data"], keep_applied=not runtime_from_backup)
+                elif entry.get("kind") == "runtime_state":
+                    _restore_runtime_state(entry["target"], entry["_data"])
+                    runtime_from_backup = True
                 else:
                     _atomic_write(entry["target"], entry["_data"])
             except BackupError as exc:

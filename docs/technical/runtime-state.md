@@ -16,6 +16,10 @@ data/ems_state.sqlite
 data/control-status.json
 = live control snapshot the running EMS rewrites after every cycle; read by
   diagnose, never by the EMS
+
+data/schedules.json
+= schedule rules and the switch point last applied to each runtime value;
+  see scheduler.md
 ```
 
 The EMS creates the runtime state file on first start from config defaults. The
@@ -121,6 +125,33 @@ standard -> gridOffMode=0
 The CLI and the dashboard only change the intent. The EMS is the only
 component that writes `gridOffMode` to hardware.
 
+## One command path
+
+Every edit of an operator value -- `emsctl`, the dashboard, the Admin's [config
+→ runtime mirror](#config--runtime-convergence-admin-maintenance) -- goes
+through `ems/runtime_commands.py`: one whitelist, one set of validators, named
+commands that are `emsctl`'s (`system max-power`, `device NAME offgrid`, `winter
+enable`, …), and one writer. The writer re-reads the file immediately before it
+saves, so a value another process saved in the meantime is kept, and writes
+through a temp file named after its process and thread and a random token, so
+two processes saving at once never share one. Each save is logged as
+`event=runtime_values_updated` with its `source` (`emsctl`, `dashboard`,
+`admin`); an AC role also records it in `runtime_role_reason`.
+
+Every save holds an exclusive lock on `runtime-state.json.lock` -- an edit from
+its re-read to its rename, the EMS's start-up reconcile from its read to its
+save -- so two processes cannot interleave there. An edit waits at most two
+seconds for it and then fails with "runtime state ... is busy"; the start-up
+reconcile waits thirty and then goes on, logging `runtime_state_lock_busy`, and
+so does re-creating a file removed while the EMS runs, after two seconds. A
+writer waits for the lock before it takes the process's own, so the control
+loop's reads never queue behind it. A writer that cannot open the lock file -- a
+directory it may not create files in -- or whose filesystem has no flock -- an
+NFS mount without a lock daemon -- saves without it, as every writer did before,
+and `file_lock_unavailable` says so once. Temp files a killed writer left
+(`runtime-state.json.<pid>.<thread>.<token>.tmp`, the same for `schedules.json`)
+are removed when the EMS starts once they are an hour old.
+
 ## Device Lifecycle Reconciliation
 
 The EMS is authoritative for runtime device state. On every load it reconciles
@@ -165,7 +196,9 @@ on the new config settles it (`start_runtime_state`). While the installed
 config is the one the request names, the existing file is kept as
 `runtime-state.json.before-setup-<UTC time>` and the state is built from the
 config's values (`runtime_state_reset_by_setup`); a device switched off in the
-dashboard is therefore active again. A request naming any other config -- a
+dashboard is therefore active again. The schedule rules beside it are set aside
+the same way, as `schedules.json.before-setup-<UTC time>`: they name devices and
+limits of the installation the Setup replaced. A request naming any other config -- a
 backup restored since, a Setup write that never arrived -- is dropped
 (`runtime_reset_request_dropped`), so a restore keeps the runtime state it puts
 back, and an automatic rollback onto the Setup's config still resets. Every edit

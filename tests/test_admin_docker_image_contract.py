@@ -331,3 +331,30 @@ def test_mirrored_image_provisions_cloud_runtime_credentials(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout.strip()) == ["zendure-cloud"]
+
+
+def test_mirrored_image_restores_schedules_from_a_backup(tmp_path):
+    """An Admin restore puts schedules.json back through the schedule store,
+    under its lock: the image must ship that store and what it imports."""
+
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    _mirror_image_files(app_root)
+    target = tmp_path / "data" / "schedules.json"
+
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+    script = (
+        "from ems.backup import _restore_schedules\n"
+        f"_restore_schedules({str(target)!r}, b'{{\"schema_version\": 1, \"rules\": [], \"applied\": {{}}}}', keep_applied=True)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-B", "-c", script],
+        cwd=app_root,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(target.read_text())["schema_version"] == 1
