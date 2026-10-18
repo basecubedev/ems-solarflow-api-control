@@ -1450,12 +1450,12 @@
     return api(path).then(function (payload) {
       if (generation !== state.viewGeneration || listing !== listingGeneration(key)) return undefined;
       state.data[key] = payload;
-      render();
+      renderPolled();
       return payload;
     }).catch(function (exc) {
       if (generation !== state.viewGeneration || listing !== listingGeneration(key)) return;
       state.data[key] = { error: exc.code, message: exc.message };
-      render();
+      renderPolled();
     });
   }
 
