@@ -65,6 +65,7 @@
               <button type="button" data-flow-view="energy" role="tab" aria-selected="false">Energy</button>
               <button type="button" data-flow-view="analytics" role="tab" aria-selected="false">Analytics</button>
               <button type="button" data-flow-view="control" role="tab" aria-selected="false">Control</button>
+              <button type="button" data-flow-view="schedule" role="tab" aria-selected="false">Schedule</button>
               <button type="button" data-flow-view="diagnose" role="tab" aria-selected="false">Diagnose</button>
               <button type="button" data-flow-view="logs" role="tab" aria-selected="false">Logs</button>
               <button type="button" data-flow-view="maintenance" role="tab" aria-selected="false">Maintenance</button>
@@ -220,6 +221,18 @@
                 </div>
               </div>
               <div id="energyStats" class="energy-stats-board"></div>
+            </section>
+          </div>
+          <div id="scheduleView" class="schedule-view" hidden>
+            <section class="schedule-panel" aria-label="Schedule">
+              <div class="section-heading schedule-heading">
+                <div>
+                  <h2>Schedule</h2>
+                  <p>Set runtime values at given times. Each switch point does what the matching emsctl command does.</p>
+                </div>
+              </div>
+              <p id="scheduleStatus" class="diagnose-status" role="status" aria-live="polite"></p>
+              <div id="scheduleBody" class="schedule-body"></div>
             </section>
           </div>
           <div id="diagnoseView" class="diagnose-view" hidden>
