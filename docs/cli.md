@@ -537,6 +537,18 @@ python3 emsctl.py --config /etc/ems/config.json completion bash
 python3 emsctl.py --config /etc/ems/config.json completion zsh
 ```
 
+## Schedule Commands
+
+`emsctl schedule` lists, adds, changes and previews schedule rules; the running
+EMS applies them. See [scheduler.md](scheduler.md#emsctl-schedule) for every
+command and the `--repeat` syntax.
+
+```bash
+python3 emsctl.py schedule list
+python3 emsctl.py schedule add --name "Evening socket" --device WR1 --action offgrid_socket \
+    --value standard --from 18:00 --to 23:00 --end-value off --repeat weekdays
+```
+
 ## Status
 
 ```bash
@@ -968,8 +980,10 @@ restore password.
 
 ## Validation
 
-The CLI rejects invalid input without changing the file. It applies the same
-bounds as the dashboard, so both tools accept exactly the same values:
+The CLI rejects invalid input without changing the file. It goes through the
+same command path as the dashboard (`ems/runtime_commands.py`, see
+[runtime-state.md](technical/runtime-state.md#one-command-path)), so both tools
+accept exactly the same values:
 
 - unknown device
 - a watt value that is not a whole number, is negative, or exceeds its limit:

@@ -16,6 +16,10 @@ data/ems_state.sqlite
 data/control-status.json
 = live control snapshot the running EMS rewrites after every cycle; read by
   diagnose, never by the EMS
+
+data/schedules.json
+= schedule rules and the switch point last applied to each runtime value;
+  see scheduler.md
 ```
 
 The EMS creates the runtime state file on first start from config defaults. The
@@ -145,7 +149,7 @@ loop's reads never queue behind it. A writer that cannot open the lock file -- a
 directory it may not create files in -- or whose filesystem has no flock -- an
 NFS mount without a lock daemon -- saves without it, as every writer did before,
 and `file_lock_unavailable` says so once. Temp files a killed writer left
-(`runtime-state.json.<pid>.<thread>.<token>.tmp`)
+(`runtime-state.json.<pid>.<thread>.<token>.tmp`, the same for `schedules.json`)
 are removed when the EMS starts once they are an hour old.
 
 ## Device Lifecycle Reconciliation
@@ -192,7 +196,9 @@ on the new config settles it (`start_runtime_state`). While the installed
 config is the one the request names, the existing file is kept as
 `runtime-state.json.before-setup-<UTC time>` and the state is built from the
 config's values (`runtime_state_reset_by_setup`); a device switched off in the
-dashboard is therefore active again. A request naming any other config -- a
+dashboard is therefore active again. The schedule rules beside it are set aside
+the same way, as `schedules.json.before-setup-<UTC time>`: they name devices and
+limits of the installation the Setup replaced. A request naming any other config -- a
 backup restored since, a Setup write that never arrived -- is dropped
 (`runtime_reset_request_dropped`), so a restore keeps the runtime state it puts
 back, and an automatic rollback onto the Setup's config still resets. Every edit

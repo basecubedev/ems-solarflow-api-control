@@ -239,6 +239,10 @@ runtime_state_loaded
 runtime_state_changed
 runtime_state_saved
 runtime_state_load_error
+runtime_values_updated
+schedule_switch_applied
+schedule_switch_refused
+schedule_store_load_error
 ```
 
 More detail: [runtime-state.md](runtime-state.md),
