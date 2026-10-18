@@ -10,14 +10,14 @@ a live override of the installed config value.
 This module is the single, read-only source for which keys overlap and how to
 decide provenance; where the runtime-state file lives it takes from
 ``ems.runtime_state.runtime_state_path_under``. It never writes: runtime writes
-go through ``dashboard.runtime_write`` (same whitelist), config writes through
+go through ``ems.runtime_commands`` (same whitelist), config writes through
 the atomic config apply service.
 """
 
 import json
 import re
 
-from dashboard.runtime_write import DEVICE_FIELDS, SECTION_FIELDS, SYSTEM_FIELDS
+from ems.runtime_commands import DEVICE_FIELDS, SECTION_FIELDS, SYSTEM_FIELDS
 from ems import config as cfg
 from ems.config_catalog import device_common_defaults
 from ems.read_only_devices import is_read_only_device_config

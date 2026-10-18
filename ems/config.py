@@ -2120,6 +2120,22 @@ def mqtt_control_device_configs(devices=None):
     ]
 
 
+def config_device_identity(item):
+    """The serial a device's config entry names: ``sn``, else
+    ``serial_number``, else its MQTT device id; None without one."""
+
+    for key in ("sn", "serial_number"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    mqtt = item.get("mqtt")
+    if isinstance(mqtt, dict):
+        value = mqtt.get("device_id")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
 def _writes_enabled():
     """Shared safety precondition for every control-write gate."""
 

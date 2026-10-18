@@ -21,7 +21,7 @@ import pytest
 
 import emsctl
 from admin.runtime_convergence import _classify as admin_runtime_target
-from dashboard.runtime_write import RuntimeWriteError, apply_device_update, build_validation_context
+from ems.runtime_commands import RuntimeWriteError, apply_device_update, build_validation_context
 from ems import config as cfg
 from ems import e3dc_modbus as modbus
 from ems.controller import EMSController
@@ -171,7 +171,7 @@ def test_no_runtime_writer_accepts_a_read_only_device_name():
     runtime_state = RuntimeStateStub(devices={"api": {}})
     context = build_validation_context(config, runtime_state)
     with pytest.raises(RuntimeWriteError):
-        apply_device_update(runtime_state, "e3dc", {"max_power": 100}, context)
+        apply_device_update(runtime_state, "e3dc", {"max_power": 100}, context, source="dashboard")
 
 
 # --- whole control cycles with every gate open ---------------------------------------

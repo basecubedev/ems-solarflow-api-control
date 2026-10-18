@@ -243,7 +243,7 @@ def test_backfill_then_rename_migrates_settings_end_to_end(tmp_path):
 # --- emsctl parity ----------------------------------------------------------
 
 
-def test_emsctl_merge_migrates_rename_without_losing_settings():
+def test_emsctl_merge_migrates_rename_without_losing_settings(tmp_path):
     import emsctl
 
     config = {
@@ -263,8 +263,13 @@ def test_emsctl_merge_migrates_rename_without_losing_settings():
         }
     }
 
-    merged = emsctl.merge_defaults(existing, emsctl.runtime_defaults(config, existing))
+    path = tmp_path / "runtime-state.json"
+    path.write_text(json.dumps(existing))
 
+    runtime_state, created = emsctl.open_runtime_state(str(path), config)
+    merged = runtime_state.snapshot()
+
+    assert created is False
     assert merged["devices"]["INV_2"]["max_power"] == 650
     assert merged["devices"]["INV_2"]["pv_priority_factor"] == 2.0
     assert "WR2" not in merged["devices"]

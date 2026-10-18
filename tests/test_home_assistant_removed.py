@@ -34,7 +34,7 @@ from admin.maintenance_config import (
     redact_config_for_browser,
 )
 from dashboard.auth import write_password_file
-from dashboard.runtime_write import (
+from ems.runtime_commands import (
     SECTION_FIELDS,
     RuntimeWriteError,
     apply_section_update,
@@ -270,7 +270,7 @@ def test_the_dashboard_write_refuses_an_ha_section_like_any_unknown_one(tmp_path
     before = path.read_bytes()
 
     with pytest.raises(RuntimeWriteError, match=f"unsupported runtime section {section}"):
-        apply_section_update(state, section, {"enabled": True})
+        apply_section_update(state, section, {"enabled": True}, source="dashboard")
 
     assert path.read_bytes() == before
 

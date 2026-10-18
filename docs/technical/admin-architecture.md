@@ -40,7 +40,7 @@ The Admin Console is config-authoritative and does not reconcile the
 runtime-state device lifecycle. Besides restoring a backup, it touches runtime
 state in two ways only. Config → runtime convergence: on maintenance Apply it mirrors the whitelisted
 overlapping scalar keys it changed into `runtime-state.json`, but only through
-the EMS-owned runtime-write whitelist (`dashboard/runtime_write.py`) — the same
+the EMS-owned runtime-write whitelist (`ems/runtime_commands.py`) — the same
 validated writer the Dashboard uses — so it introduces no second runtime format
 and stays inside the whitelist safety property. And a fresh Setup leaves a reset
 request beside the file, which only the EMS starting on the new config honours

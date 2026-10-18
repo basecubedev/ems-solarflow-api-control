@@ -22,16 +22,6 @@ from dashboard.auth import (
     verify_password_file,
 )
 from dashboard.https import HANDSHAKE_TIMEOUT_SECONDS, wrap_listening_socket
-from dashboard.runtime_write import (
-    SECTION_FIELDS,
-    RuntimeWriteError,
-    apply_device_update,
-    apply_section_update,
-    apply_system_update,
-    attach_limits,
-    build_validation_context,
-    runtime_payload,
-)
 from dashboard.sqlite_store import SUPPORTED_RANGES
 from dashboard.static_files import build_static_asset_index, static_asset_key
 
@@ -616,9 +606,11 @@ class DashboardHTTPServer(ThreadingHTTPServer):
             absolute_max_seconds=session_absolute_max_seconds,
         )
         self.login_limiter = LoginRateLimiter()
-        self.runtime_validation = runtime_validation or build_validation_context(
-            runtime_state=runtime_state
-        )
+        if not runtime_validation:
+            from ems.runtime_commands import build_validation_context
+
+            runtime_validation = build_validation_context(runtime_state=runtime_state)
+        self.runtime_validation = runtime_validation
         # Capture redaction context while the startup config is known-good.
         # Later atomic replacement/read failures retain this last-good copy.
         _external_mqtt_config_context(self)
@@ -766,6 +758,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/runtime":
+            from ems.runtime_commands import attach_limits, runtime_payload
+
             self._send_json(
                 _external_mqtt_status_payload(
                     self.server,
@@ -1631,6 +1625,15 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             return None
 
     def _handle_runtime_patch(self, path):
+        from ems.file_io import lock_timed_out
+        from ems.runtime_commands import (
+            SECTION_FIELDS,
+            RuntimeWriteError,
+            apply_device_update,
+            apply_section_update,
+            apply_system_update,
+        )
+
         body_error = self._json_body_preflight()
         if body_error:
             self._send_json(body_error[0], status=body_error[1])
@@ -1648,6 +1651,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     self.server.runtime_state,
                     payload,
                     self.server.runtime_validation,
+                    source="dashboard",
                 )
             elif path[len("/api/runtime/"):] in SECTION_FIELDS:
                 # Routed from the write whitelist rather than from a literal per
@@ -1659,6 +1663,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     path[len("/api/runtime/"):],
                     payload,
                     self.server.runtime_validation,
+                    source="dashboard",
                 )
             elif path.startswith("/api/runtime/device/"):
                 browser_name = unquote(path.rsplit("/", 1)[-1])
@@ -1670,17 +1675,22 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     device_name,
                     payload,
                     self.server.runtime_validation,
+                    source="dashboard",
                 )
             else:
                 self._send_json({"error": "not_found"}, status=404)
                 return
         except RuntimeWriteError as exc:
+            busy = lock_timed_out(exc)
             self._send_json(
                 _external_mqtt_status_payload(
                     self.server,
-                    {"error": "invalid_runtime_update", "message": str(exc)},
+                    {
+                        "error": "runtime_state_busy" if busy else "invalid_runtime_update",
+                        "message": f"{exc}; try again" if busy else str(exc),
+                    },
                 ),
-                status=400,
+                status=503 if busy else 400,
             )
             return
         except ValueError as exc:

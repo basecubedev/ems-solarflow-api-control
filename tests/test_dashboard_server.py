@@ -22,7 +22,7 @@ from dashboard.server import (
     start_dashboard_server,
 )
 from dashboard.auth import LoginRateLimiter
-from dashboard.runtime_write import build_validation_context
+from ems.runtime_commands import build_validation_context
 
 pytestmark = [
     pytest.mark.integration,
@@ -1719,7 +1719,7 @@ def test_every_whitelisted_runtime_section_is_reachable(tmp_path):
     apart again.
     """
 
-    from dashboard.runtime_write import SECTION_FIELDS
+    from ems.runtime_commands import SECTION_FIELDS
 
     auth_file = tmp_path / "auth.json"
     write_password_file(auth_file, "secret-password")
@@ -1795,3 +1795,30 @@ def test_a_history_range_longer_than_the_retention_names_the_retention(tmp_path)
 
     assert week["meta"]["retention_hours"] == 48
     assert "retention_hours" not in day["meta"]
+
+
+def test_a_runtime_write_behind_another_processes_lock_is_answered_busy_not_invalid(tmp_path, monkeypatch):
+    import fcntl
+
+    from ems.runtime_state import RuntimeState
+
+    monkeypatch.setattr("ems.runtime_state.LOCK_TIMEOUT_SECONDS", 0.05)
+    auth_file = tmp_path / "dashboard-auth.json"
+    write_password_file(auth_file, "secret-password")
+    runtime_state = RuntimeState(str(tmp_path / "runtime-state.json"), {"system": {"max_total_power": 800}})
+    runtime_state.load_or_create()
+    server, base_url = with_server(StoreStub(), runtime_state=runtime_state, auth_file=str(auth_file))
+
+    try:
+        _, login_headers, login = json_response(
+            f"{base_url}/api/auth/login", method="POST", payload={"password": "secret-password"})
+        headers = {"Cookie": login_headers["Set-Cookie"], "X-CSRF-Token": login["csrf_token"]}
+        with open(tmp_path / "runtime-state.json.lock", "a") as holder:
+            fcntl.flock(holder, fcntl.LOCK_EX)
+            status, _, payload = json_response(
+                f"{base_url}/api/runtime/system", method="PATCH", payload={"max_total_power": 700}, headers=headers)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert (status, payload["error"]) == (503, "runtime_state_busy")

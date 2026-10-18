@@ -129,10 +129,10 @@ COPY ems/mqtt_control/power_capability.py ./ems/mqtt_control/power_capability.py
 COPY ems/mqtt_credentials.py ./ems/mqtt_credentials.py
 COPY dashboard/auth.py ./dashboard/auth.py
 # Config->runtime convergence: Admin Maintenance apply mirrors whitelisted keys
-# into runtime-state through the Dashboard's runtime_write helpers (same
-# whitelist), reached from admin.config_runtime_overlap during startup, so the
-# image must ship it or `python -m admin` fails to import.
-COPY dashboard/runtime_write.py ./dashboard/runtime_write.py
+# into runtime-state through the EMS's one runtime command path (the whitelist
+# the Dashboard and emsctl use), reached from admin.config_runtime_overlap during
+# startup, so the image must ship it or `python -m admin` fails to import.
+COPY ems/runtime_commands.py ./ems/runtime_commands.py
 # Shared HTTPS helper: the optional Admin HTTPS listener reuses the Dashboard's
 # certificate generation and SSLContext code instead of duplicating it.
 COPY dashboard/https.py ./dashboard/https.py
