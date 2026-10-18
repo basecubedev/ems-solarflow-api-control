@@ -309,3 +309,35 @@ def test_the_ems_opens_its_runtime_state_through_the_start_that_settles_a_reques
     assert "cfg.config_path()" in call
     assert "RuntimeState(" not in body
     assert body.index("if args.preflight:") < body.index("start_runtime_state(")
+
+
+def test_a_honoured_setup_sets_the_schedules_aside_with_the_state(tmp_path):
+    """A fresh setup takes nothing from the installation it replaces: its rules
+    name devices and limits of the old one."""
+
+    path = _installed(tmp_path)
+    schedules = tmp_path / "schedules.json"
+    schedules.write_text('{"schema_version": 1, "rules": []}\n', encoding="utf-8")
+    old_rules = schedules.read_bytes()
+    config, digest = _config(tmp_path)
+    request_runtime_reset(str(path), digest)
+
+    start_runtime_state(str(path), _defaults(), str(config))
+
+    assert not schedules.exists()
+    (kept,) = sorted(tmp_path.glob("schedules.json.before-setup-*"))
+    assert kept.read_bytes() == old_rules
+
+
+def test_a_dropped_request_leaves_the_schedules_alone(tmp_path):
+    path = _installed(tmp_path)
+    schedules = tmp_path / "schedules.json"
+    schedules.write_text('{"schema_version": 1, "rules": []}\n', encoding="utf-8")
+    config, digest = _config(tmp_path)
+    request_runtime_reset(str(path), digest)
+    config.write_text('{"restored": "backup"}\n', encoding="utf-8")
+
+    start_runtime_state(str(path), _defaults(), str(config))
+
+    assert schedules.exists()
+    assert sorted(tmp_path.glob("schedules.json.before-setup-*")) == []

@@ -21,6 +21,9 @@ runtime-state.json
 runtime-state.json.tmp
 runtime-state.json.*.tmp
 runtime-state.json.lock
+schedules.json
+schedules.json.*.tmp
+schedules.json.lock
 
 # local config (the versioned template stays tracked)
 /config.json

@@ -549,6 +549,44 @@ def test_a_writers_re_read_of_a_file_nobody_else_changed_logs_no_load(tmp_path, 
     assert len([message for message in messages if "event=runtime_state_saved" in message]) == 2
 
 
+def test_a_setup_reset_sets_the_files_aside_under_their_locks(tmp_path, monkeypatch):
+    """Interleaving: an emsctl edit reads the old file while the starting EMS
+    sets it aside; written back, it would undo the reset. The set-aside holds
+    both locks, so another process's attempt to take them fails meanwhile."""
+
+    import fcntl
+
+    from ems.runtime_state import config_digest, request_runtime_reset, start_runtime_state
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"devices": []}))
+    path = tmp_path / "runtime-state.json"
+    path.write_text(json.dumps({"system": {"max_total_power": 123}}))
+    (tmp_path / "schedules.json").write_text(json.dumps({"schema_version": 1, "rules": [], "applied": {}}))
+    request_runtime_reset(str(path), config_digest(config_path.read_bytes()))
+    real_replace = os.replace
+    held = []
+
+    def taken(lock):
+        with open(lock, "a") as probe:
+            try:
+                fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(probe, fcntl.LOCK_UN)
+            return False
+
+    def watching(source, target):
+        if ".before-setup-" in str(target):
+            held.append((os.path.basename(str(source)), taken(f"{source}.lock")))
+        return real_replace(source, target)
+
+    monkeypatch.setattr("ems.runtime_state.os.replace", watching)
+    start_runtime_state(str(path), DEFAULTS, str(config_path))
+
+    assert held == [("runtime-state.json", True), ("schedules.json", True)]
+
+
 def test_a_temp_file_of_another_container_with_the_same_pid_is_left_alone(tmp_path):
     """The EMS and the Admin both run as PID 1 in their containers and write
     the same bind-mounted directory; a write must not reuse the other's

@@ -133,6 +133,10 @@ COPY dashboard/auth.py ./dashboard/auth.py
 # the Dashboard and emsctl use), reached from admin.config_runtime_overlap during
 # startup, so the image must ship it or `python -m admin` fails to import.
 COPY ems/runtime_commands.py ./ems/runtime_commands.py
+COPY ems/schedule_actions.py ./ems/schedule_actions.py
+COPY ems/schedule_recurrence.py ./ems/schedule_recurrence.py
+COPY ems/schedule_model.py ./ems/schedule_model.py
+COPY ems/schedule_store.py ./ems/schedule_store.py
 # Shared HTTPS helper: the optional Admin HTTPS listener reuses the Dashboard's
 # certificate generation and SSLContext code instead of duplicating it.
 COPY dashboard/https.py ./dashboard/https.py

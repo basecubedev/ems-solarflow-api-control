@@ -19,7 +19,7 @@ from ems.file_io import (
     file_signature,
     remove_stale_temp_files,
 )
-from ems.paths import install_root_for_config
+from ems.paths import install_root_for_config, resolve_schedules_path
 from ems.logging_utils import log_event
 
 
@@ -303,17 +303,19 @@ def start_runtime_state(path, defaults, config_path):
     A fresh setup's request is settled first. While the config at
     ``config_path`` is still the one it names, the existing file is kept as
     ``<path>.before-setup-<UTC time>`` and set aside, so the state is built
-    from that config; a request naming any other config -- a restored backup,
+    from that config, and the schedule rules beside it are set aside the same
+    way; a request naming any other config -- a restored backup,
     a write that failed -- is dropped. Only an EMS start calls this; anything
-    else that opens the file leaves the request for it. The file is set aside
-    under its lock, so an emsctl edit in flight cannot write the old state
-    back over the reset; a lock held past thirty seconds is logged as
+    else that opens the file leaves the request for it. Both files are set
+    aside under their locks, so an emsctl edit in flight cannot write the old
+    state back over the reset; a lock held past thirty seconds is logged as
     runtime_state_lock_busy and the reset goes on without it.
     """
 
-    removed = remove_stale_temp_files(path)
-    if removed:
-        log_event(logging.INFO, "stale_temp_files_removed", path=path, files=",".join(removed))
+    for stale_path in (path, str(resolve_schedules_path(path))):
+        removed = remove_stale_temp_files(stale_path)
+        if removed:
+            log_event(logging.INFO, "stale_temp_files_removed", path=stale_path, files=",".join(removed))
     state = RuntimeState(path, defaults)
     with state._file_lock(strict=False):
         _settle_runtime_reset(path, config_path)
@@ -330,11 +332,22 @@ def _settle_runtime_reset(path, config_path):
             moved = os.path.exists(path)
             if moved:
                 os.replace(path, backup)
+            schedules = str(resolve_schedules_path(path))
+            schedules_backup = None
+            with contextlib.ExitStack() as stack:
+                try:
+                    stack.enter_context(exclusive_file_lock(f"{schedules}.lock", STARTUP_LOCK_TIMEOUT_SECONDS))
+                except FileLockTimeout:
+                    log_event(logging.WARNING, "runtime_state_lock_busy", path=schedules)
+                if os.path.exists(schedules):
+                    schedules_backup = _setup_backup_path(schedules)
+                    os.replace(schedules, schedules_backup)
             log_event(
                 logging.INFO,
                 "runtime_state_reset_by_setup",
                 path=path,
                 backup=backup if moved else None,
+                schedules_backup=schedules_backup,
             )
         else:
             log_event(
