@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
+import contextlib
 import json
 import logging
 import os
@@ -9,6 +10,15 @@ import threading
 import time
 
 from ems import config as cfg
+from ems.file_io import (
+    LOCK_TIMEOUT_SECONDS,
+    STARTUP_LOCK_TIMEOUT_SECONDS,
+    FileLockTimeout,
+    atomic_write_bytes,
+    exclusive_file_lock,
+    file_signature,
+    remove_stale_temp_files,
+)
 from ems.paths import install_root_for_config
 from ems.logging_utils import log_event
 
@@ -295,10 +305,23 @@ def start_runtime_state(path, defaults, config_path):
     ``<path>.before-setup-<UTC time>`` and set aside, so the state is built
     from that config; a request naming any other config -- a restored backup,
     a write that failed -- is dropped. Only an EMS start calls this; anything
-    else that opens the file leaves the request for it.
+    else that opens the file leaves the request for it. The file is set aside
+    under its lock, so an emsctl edit in flight cannot write the old state
+    back over the reset; a lock held past thirty seconds is logged as
+    runtime_state_lock_busy and the reset goes on without it.
     """
 
+    removed = remove_stale_temp_files(path)
+    if removed:
+        log_event(logging.INFO, "stale_temp_files_removed", path=path, files=",".join(removed))
     state = RuntimeState(path, defaults)
+    with state._file_lock(strict=False):
+        _settle_runtime_reset(path, config_path)
+        state.load_or_create()
+    return state
+
+
+def _settle_runtime_reset(path, config_path):
     marker = runtime_reset_request_path(path)
     if os.path.exists(marker):
         wanted = pending_runtime_reset(path)
@@ -321,8 +344,6 @@ def start_runtime_state(path, defaults, config_path):
                 reason="config_replaced",
             )
         os.remove(marker)
-    state.load_or_create()
-    return state
 
 
 class RuntimeState:
@@ -330,14 +351,52 @@ class RuntimeState:
 
     def __init__(self, path, defaults):
         self.path = path
-        self.tmp_path = f"{path}.tmp"
         self.defaults = defaults
         self.data = merge_runtime_defaults({}, defaults)
-        self.last_mtime = None
+        self.last_signature = None
         self.lock = threading.RLock()
+        self._held = threading.local()
+
+    @contextlib.contextmanager
+    def _file_lock(self, *, strict, timeout=None):
+        """The cross-process lock, once per thread however deeply nested.
+
+        The flock is waited for before the in-process lock is taken, so the
+        control loop's readers never queue behind a writer that waits for
+        another process. ``strict`` refuses a change when the lock stays taken
+        (ValueError, which every runtime writer reports); otherwise the write
+        waits ``timeout``, at start-up thirty seconds, and then goes on, so a
+        stalled emsctl cannot keep the EMS from starting.
+        """
+
+        if getattr(self._held, "depth", 0):
+            self._held.depth += 1
+            try:
+                with self.lock:
+                    yield
+            finally:
+                self._held.depth -= 1
+            return
+        if timeout is None:
+            timeout = LOCK_TIMEOUT_SECONDS if strict else STARTUP_LOCK_TIMEOUT_SECONDS
+        with contextlib.ExitStack() as stack:
+            try:
+                stack.enter_context(exclusive_file_lock(f"{self.path}.lock", timeout))
+            except FileLockTimeout as exc:
+                if strict:
+                    raise ValueError(
+                        f"runtime state {self.path} is busy: another process holds its lock"
+                    ) from exc
+                log_event(logging.WARNING, "runtime_state_lock_busy", path=self.path)
+            self._held.depth = 1
+            try:
+                with self.lock:
+                    yield
+            finally:
+                self._held.depth = 0
 
     def load_or_create(self):
-        with self.lock:
+        with self._file_lock(strict=False):
             if not os.path.exists(self.path):
                 self.data = merge_runtime_defaults({}, self.defaults)
                 log_event(
@@ -360,14 +419,32 @@ class RuntimeState:
         the file converges to a clean state.
         """
 
-        try:
-            mtime = os.path.getmtime(self.path)
-        except FileNotFoundError:
+        with self._file_lock(strict=False):
+            return self._reconcile_locked()
+
+    @staticmethod
+    def read_file(path):
+        """The file's JSON and its :func:`file_signature`, from one open."""
+
+        with open(path) as f:
+            signature = file_signature(os.fstat(f.fileno()))
+            return json.load(f), signature
+
+    def adopt(self, loaded, signature):
+        """Take ``loaded``, read at ``signature``, as the state in memory."""
+
+        with self.lock:
+            self.data = merge_runtime_defaults(loaded, self.defaults)
+            self.last_signature = signature
+
+    def _reconcile_locked(self):
+        if not os.path.exists(self.path):
             return self.load_or_create()
 
         try:
-            with open(self.path) as f:
-                loaded = json.load(f)
+            loaded, signature = self.read_file(self.path)
+        except FileNotFoundError:
+            return self.load_or_create()
         except Exception as e:
             log_event(
                 logging.WARNING,
@@ -419,7 +496,7 @@ class RuntimeState:
             )
 
         self.data = merged
-        self.last_mtime = mtime
+        self.last_signature = signature
 
         log_event(
             logging.INFO,
@@ -453,20 +530,35 @@ class RuntimeState:
             )
 
     def load_if_changed(self, force=False):
+        """Re-read the file when it changed. A missing file is created, and
+        that waits for the cross-process lock outside ``self.lock``, since a
+        writer holding the flock takes ``self.lock`` next, and no longer than
+        an edit would: the control loop calls this every cycle."""
+
         with self.lock:
             try:
-                mtime = os.path.getmtime(self.path)
+                signature = file_signature(os.stat(self.path))
             except FileNotFoundError:
-                return self.load_or_create()
+                signature = None
+            if signature is not None:
+                return self._load_changed(signature, force)
+        with self._file_lock(strict=False, timeout=LOCK_TIMEOUT_SECONDS):
+            return self.load_or_create()
 
-            if not force and self.last_mtime == mtime:
+    def _load_changed(self, signature, force):
+        """Re-read when the file's signature changed, or always with ``force``;
+        only a new signature is logged, so a writer's forced re-read of a file
+        nobody else changed says nothing."""
+
+        with self.lock:
+            if not force and self.last_signature == signature:
                 return self.data
 
             try:
-                with open(self.path) as f:
-                    loaded = json.load(f)
+                loaded, signature = self.read_file(self.path)
+                new = signature != self.last_signature
 
-                if not force and self.last_mtime is not None:
+                if new and self.last_signature is not None:
                     log_event(
                         logging.INFO,
                         "runtime_state_changed",
@@ -474,13 +566,14 @@ class RuntimeState:
                     )
 
                 self.data = merge_runtime_defaults(loaded, self.defaults)
-                self.last_mtime = mtime
+                self.last_signature = signature
 
-                log_event(
-                    logging.INFO,
-                    "runtime_state_loaded",
-                    path=self.path
-                )
+                if new:
+                    log_event(
+                        logging.INFO,
+                        "runtime_state_loaded",
+                        path=self.path
+                    )
 
             except Exception as e:
                 log_event(
@@ -492,26 +585,23 @@ class RuntimeState:
 
             return self.data
 
-    def _refresh_from_disk(self):
-        """Pick up another process's write before changing anything."""
+    def _refresh_from_disk(self, *, force=False):
+        """Pick up another process's write before changing anything.
+
+        A change saved at once re-reads unconditionally, because two writes
+        within one tick of the filesystem's coarse clock carry the same mtime.
+        ``set_device`` keeps its unsaved changes and re-reads only on a new
+        mtime.
+        """
 
         if self.path and os.path.exists(self.path):
-            self.load_if_changed()
+            self.load_if_changed(force=force)
 
     def save_atomic(self):
-        with self.lock:
-            parent = os.path.dirname(self.path)
-            if parent:
-                os.makedirs(parent, exist_ok=True)
-
-            with open(self.tmp_path, "w") as f:
-                json.dump(self.data, f, indent=2, sort_keys=True)
-                f.write("\n")
-                f.flush()
-                os.fsync(f.fileno())
-
-            os.replace(self.tmp_path, self.path)
-            self.last_mtime = os.path.getmtime(self.path)
+        with self._file_lock(strict=False):
+            raw = (json.dumps(self.data, indent=2, sort_keys=True) + "\n").encode("utf-8")
+            atomic_write_bytes(self.path, raw)
+            self.last_signature = file_signature(os.stat(self.path))
 
             log_event(
                 logging.INFO,
@@ -524,8 +614,8 @@ class RuntimeState:
             return copy.deepcopy(self.data)
 
     def update_section(self, section_name, values):
-        with self.lock:
-            self._refresh_from_disk()
+        with self._file_lock(strict=True):
+            self._refresh_from_disk(force=True)
             section = self.data.setdefault(section_name, {})
             if not isinstance(section, dict):
                 raise ValueError(f"runtime section {section_name} must be an object")
@@ -535,8 +625,8 @@ class RuntimeState:
             return result
 
     def update_device(self, device_name, values):
-        with self.lock:
-            self._refresh_from_disk()
+        with self._file_lock(strict=True):
+            self._refresh_from_disk(force=True)
             devices = self.data.setdefault("devices", {})
             if device_name not in devices:
                 known = ", ".join(sorted(devices)) or "(none)"
