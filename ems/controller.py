@@ -5,7 +5,7 @@ import math
 import time
 from collections import deque
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from ems import config as cfg
 from ems.ac_charge_control import (
@@ -149,9 +149,12 @@ class EMSController:
         influx_writer=None,
         zendure_mqtt_runtime=None,
         read_only_devices=None,
+        scheduler=None,
     ):
         self.devices = devices
         self.shelly = shelly
+        self.scheduler = scheduler
+        self._schedule_failure = None
         self.sleep_enabled = sleep_enabled
         self.cycle_failures = 0
         self.cycles_through_since_release = None
@@ -4856,6 +4859,23 @@ class EMSController:
         except Exception:
             return max(1, int(cfg.LOOP_INTERVAL))
 
+    def tick_scheduler(self):
+        """Apply the schedule's due switch points as runtime values, before the
+        cycle reads them. A failure never stops the cycle; it is logged once,
+        and again only when it changes or after the scheduler ran cleanly."""
+
+        if self.scheduler is None:
+            return
+        try:
+            self.scheduler.tick(datetime.now(timezone.utc))
+        except Exception as exc:
+            failure = f"{type(exc).__name__}: {exc}"
+            if failure != self._schedule_failure:
+                log_event(logging.WARNING, "schedule_tick_failed", error=exc)
+            self._schedule_failure = failure
+        else:
+            self._schedule_failure = None
+
     def run_once(self):
         """Execute one EMS cycle."""
 
@@ -4864,6 +4884,7 @@ class EMSController:
 
         if self.runtime_state:
             self.runtime_state.load_if_changed()
+        self.tick_scheduler()
 
         load = finite_grid_load(self.shelly.get_power())
         self.update_grid_meter_holding(load)

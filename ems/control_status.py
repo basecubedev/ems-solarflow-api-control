@@ -163,6 +163,9 @@ class ControlStatusWriter:
             status = build_control_status(
                 controller, now=now, now_monotonic=now_monotonic
             )
+            scheduler = getattr(controller, "scheduler", None)
+            if scheduler is not None:
+                status["schedule"] = scheduler.status(datetime.fromtimestamp(now, timezone.utc))
             self._record_sample(status)
             status["grid_samples"] = list(self.grid_samples)
             _write_atomically(self.path, status)

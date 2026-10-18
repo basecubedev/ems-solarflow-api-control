@@ -5,6 +5,7 @@ import os
 import signal
 import sys
 import time
+from datetime import datetime, timezone
 
 from ems import config as cfg
 from ems import paths
@@ -19,7 +20,10 @@ from ems.controller import EMSController
 from ems.e3dc_runtime import E3dcSessions, build_e3dc_device_runtime
 from ems.device_identity import broker_sources_from_config
 from ems.logging_utils import log_event, setup_logging
+from ems.runtime_commands import build_validation_context
 from ems.runtime_state import build_runtime_defaults, start_runtime_state
+from ems.schedule_store import ScheduleStore
+from ems.scheduler import Scheduler, local_zone
 from ems.simulation import (
     built_in_simulation_frames,
     load_replay_frames,
@@ -343,6 +347,19 @@ def main():
         build_runtime_defaults(devices),
         cfg.config_path(),
     )
+    runtime_validation = build_validation_context(cfg.CONFIG, runtime_state)
+    schedule_zone = local_zone()
+    schedule_store = ScheduleStore(paths.resolve_schedules_path(cfg.runtime_state_path()))
+    schedule_devices = cfg.device_identities([dev.name for dev in devices])
+    scheduler = None
+    if not cfg.SIMULATION_MODE and not getattr(args, "replay", None):
+        scheduler = Scheduler(
+            schedule_store,
+            runtime_state,
+            zone=schedule_zone,
+            validation_context=runtime_validation,
+            devices=schedule_devices,
+        )
 
     dashboard_store = None
 
@@ -351,9 +368,9 @@ def main():
         False
     ):
         try:
+            from dashboard.schedule_api import ScheduleApi
             from dashboard.server import start_dashboard_server
             from dashboard.sqlite_store import DashboardStore
-            from dashboard.runtime_write import build_validation_context
             from ems.log_buffer import get_log_buffer
 
             dashboard_store = DashboardStore(
@@ -417,10 +434,16 @@ def main():
                     ),
                     43200
                 ),
-                runtime_validation=build_validation_context(
-                    cfg.CONFIG,
-                    runtime_state
-                )
+                runtime_validation=runtime_validation,
+                schedule_api=ScheduleApi(
+                    schedule_store,
+                    runtime_state=runtime_state,
+                    devices=lambda: schedule_devices,
+                    validation_context=lambda: runtime_validation,
+                    zone=schedule_zone,
+                    clock=lambda: datetime.now(timezone.utc),
+                    scheduler=scheduler,
+                ),
             )
         except Exception as e:
             log_event(
@@ -501,6 +524,7 @@ def main():
         zendure_mqtt_runtime=zendure_mqtt_runtime,
         read_only_devices=e3dc_devices,
         winter_store=None if cfg.SIMULATION_MODE else build_winter_store(),
+        scheduler=scheduler,
     )
     control_status = ControlStatusWriter(
         paths.resolve_control_status_path(cfg.runtime_state_path())
