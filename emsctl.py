@@ -11,7 +11,7 @@ import math
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 from dashboard import auth as dashboard_auth
 from ems import runtime_commands
@@ -23,13 +23,19 @@ from ems.paths import (
     LAYOUT_LEGACY_ROOT_ONLY,
     detect_config_layout_state,
     resolve_config_path as resolve_ems_config_path,
+    resolve_control_status_path,
     resolve_runtime_path,
     resolve_dashboard_auth_path,
+    resolve_schedules_path,
     standard_config_path,
 )
+from ems import schedule_cli
+from ems.schedule_store import ScheduleStore
+from ems.scheduler import local_zone
 
 from ems.diagnostics import (
     diagnose_json_file,
+    diagnose_live_snapshot,
     diagnose_text,
     diagnose_write_support_bundle,
     run_control_diagnosis as run_control_diagnosis,
@@ -53,6 +59,7 @@ TOP_LEVEL_COMMANDS = (
     "device",
     "winter",
     "ac-charge",
+    "schedule",
     "dashboard",
     "influx",
     "stack",
@@ -95,6 +102,7 @@ RUNTIME_EDIT_COMMANDS = frozenset(
         "device",
         "winter",
         "ac-charge",
+        "schedule",
         "interactive",
         "menu",
     }
@@ -418,6 +426,7 @@ Examples:
     )
     ac_charge.add_argument("value", nargs="?", help=argparse.SUPPRESS)
 
+    schedule_cli.add_schedule_parser(subparsers, EMSHelpFormatter)
 
     winter = subparsers.add_parser(
         "winter",
@@ -1588,6 +1597,32 @@ def runtime_limits(config):
 
 
 RUNTIME_COMMAND_SCOPES = runtime_commands.EMSCTL_SCOPES
+
+
+def handle_schedule_command(args, config):
+    """emsctl schedule: rules beside this installation's runtime state."""
+
+    runtime_path = resolve_runtime_path(args, config)
+    devices = config_mod.device_identities(config_device_defaults(config), config.get("devices", []))
+    reported = None
+    status_path = resolve_control_status_path(runtime_path)
+    if status_path.exists():
+        with contextlib.suppress(OSError, ValueError):
+            reported = json.loads(status_path.read_text(encoding="utf-8"))
+    known, zone = schedule_cli.zone_of_running_ems(reported)
+    control_status = diagnose_live_snapshot(runtime_path)["data"] or None
+    try:
+        return schedule_cli.handle_schedule_command(
+            args,
+            store=ScheduleStore(resolve_schedules_path(runtime_path)),
+            devices=devices,
+            validation_context=runtime_limits(config),
+            zone=zone if known else local_zone(),
+            now=datetime.now(timezone.utc),
+            control_status=control_status,
+        )
+    except schedule_cli.ScheduleCommandError as exc:
+        raise ValueError(f"schedule {args.schedule_command}: {exc}") from exc
 
 
 def run_runtime_command(runtime_state, config, command, action, value=None, device=None):
@@ -4218,6 +4253,9 @@ def main(argv=None):
 
         if args.command == "grid-meter":
             return handle_grid_meter_command(args, config)
+
+        if args.command == "schedule":
+            return handle_schedule_command(args, config)
 
         runtime_path = resolve_runtime_path(args, config)
         runtime_state, created = open_runtime_state(runtime_path, config)
