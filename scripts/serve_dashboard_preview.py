@@ -46,7 +46,11 @@ ROOT = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, SCRIPT_DIR)
 sys.path.insert(0, ROOT)
 
-from dashboard.static_files import build_static_asset_index, static_asset_key  # noqa: E402
+from dashboard.static_files import (  # noqa: E402
+    STATIC_CONTENT_TYPES,
+    build_static_asset_index,
+    lookup_static_asset,
+)
 from dashboard_preview_data import (  # noqa: E402
     DEFAULT_SCENARIO,
     FLOW_VIEWS,
@@ -75,9 +79,7 @@ DEFAULT_CAPTURE_VIEWS = (
 )
 SAFE_RESPONSE_CONTENT_TYPES = {
     "application/json; charset=utf-8",
-    "application/javascript; charset=utf-8",
-    "text/css; charset=utf-8",
-    "text/html; charset=utf-8",
+    *STATIC_CONTENT_TYPES.values(),
 }
 
 
@@ -408,6 +410,9 @@ class PreviewHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
+        if path == "/api/ui-config":
+            self._send_json({"animation_mode": "normal"})
+            return
         if path in ("/preview", "/preview/"):
             self._send_landing()
             return
@@ -835,7 +840,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         })
 
     def _send_static(self, request_path):
-        asset = STATIC_ASSETS.get(static_asset_key(request_path))
+        asset = lookup_static_asset(STATIC_ASSETS, request_path)
         if asset is None:
             self.send_error(404, "Not Found")
             return

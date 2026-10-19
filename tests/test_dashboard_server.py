@@ -22,6 +22,7 @@ from dashboard.server import (
     start_dashboard_server,
 )
 from dashboard.auth import LoginRateLimiter
+from dashboard.static_files import build_static_asset_index, lookup_static_asset
 from ems.runtime_commands import build_validation_context
 
 pytestmark = [
@@ -1533,6 +1534,28 @@ def test_dashboard_server_serves_static_index_and_blocks_missing_paths():
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_a_directory_request_serves_that_directory_index_and_nothing_outside(tmp_path):
+    """A second entry page lives at ``/<dir>/``; the root mapping stays as it was."""
+
+    (tmp_path / "index.html").write_text("root", encoding="utf-8")
+    (tmp_path / "second" / "assets").mkdir(parents=True)
+    (tmp_path / "second" / "index.html").write_text("second", encoding="utf-8")
+    (tmp_path / "second" / "assets" / "font.woff2").write_bytes(b"woff2")
+    (tmp_path / "second" / "licenses.json").write_text("[]", encoding="utf-8")
+    assets = build_static_asset_index(str(tmp_path))
+
+    assert lookup_static_asset(assets, "/")[0].endswith("index.html")
+    for path in ("/second/", "/second"):
+        full_path, content_type = lookup_static_asset(assets, path)
+        assert full_path == str(tmp_path / "second" / "index.html")
+        assert content_type.startswith("text/html")
+    assert lookup_static_asset(assets, "/second/assets/font.woff2")[1] == "font/woff2"
+    assert lookup_static_asset(assets, "/second/licenses.json")[1].startswith("application/json")
+    assert lookup_static_asset(assets, "/second/assets/") is None
+    assert lookup_static_asset(assets, "/second/../../etc/passwd") is None
+    assert lookup_static_asset(assets, "/missing/") is None
 
 
 def test_auth_refresh_requires_session_and_csrf_and_slides(tmp_path):

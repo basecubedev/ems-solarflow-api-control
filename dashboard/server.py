@@ -23,7 +23,7 @@ from dashboard.auth import (
 )
 from dashboard.https import HANDSHAKE_TIMEOUT_SECONDS, wrap_listening_socket
 from dashboard.sqlite_store import SUPPORTED_RANGES
-from dashboard.static_files import build_static_asset_index, static_asset_key
+from dashboard.static_files import build_static_asset_index, lookup_static_asset
 
 
 BACKUP_FILE_RE = re.compile(r"^ems-[A-Za-z0-9._-]+\.tar\.gz(?:\.enc)?$")
@@ -1909,7 +1909,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self.server.sse_limiter.release(remote)
 
     def _send_static(self, request_path):
-        asset = STATIC_ASSETS.get(static_asset_key(request_path))
+        asset = lookup_static_asset(STATIC_ASSETS, request_path)
         if asset is None:
             self.send_error(404)
             return

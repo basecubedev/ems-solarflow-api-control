@@ -8,6 +8,8 @@ STATIC_CONTENT_TYPES = {
     ".css": "text/css; charset=utf-8",
     ".html": "text/html; charset=utf-8",
     ".js": "application/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".woff2": "font/woff2",
 }
 DEFAULT_CONTENT_TYPE = "application/octet-stream"
 
@@ -44,3 +46,19 @@ def static_asset_key(request_path):
     if normalized in ("", ".", "..") or normalized.startswith("../"):
         return None
     return normalized
+
+
+def lookup_static_asset(assets, request_path):
+    """Resolve a request to an indexed asset, serving ``<dir>/index.html`` for a directory.
+
+    The Modern dashboard is a second entry page at ``/modern/``; the root page
+    keeps its own mapping in :func:`static_asset_key`.
+    """
+
+    key = static_asset_key(request_path)
+    if key is None:
+        return None
+    asset = assets.get(key)
+    if asset is not None:
+        return asset
+    return assets.get(f"{key}/index.html")
