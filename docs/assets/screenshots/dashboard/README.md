@@ -33,12 +33,26 @@ by `scripts/capture_dashboard_previews.py`.
 | `dashboard-appearance-palettes.png` | Appearance — the same cockpit in Signal, Void and Copper | `appearance gallery` |
 | `dashboard-appearance-styles.png` | Appearance — the same cockpit in Glass, Console and Brutal | `appearance gallery` |
 | `dashboard-appearance-density.png` | Appearance — the same cockpit at Compact, Normal and Roomy | `appearance gallery` |
+| `dashboard-modern-overview.png` | Modern — Overview in Graphite | `normal` |
+| `dashboard-modern-midnight-devices.png` | Modern — Overview in Midnight and German, energy flow per device | `normal` |
+| `dashboard-modern-phone.png` | Modern — Overview on a phone, with the bottom bar | `normal` |
 
 The three `*-appearance-*` strips are written by
 [`scripts/capture_appearance_gallery.py`](../../../../scripts/capture_appearance_gallery.py)
 rather than by the capture script above: each is one page photographed three
 times with a single appearance axis changed, which is the only way to document
 a choice whose entire effect is how something looks.
+
+The three `dashboard-modern-*` images are written by the Playwright spec
+[`tests/e2e-dashboard/capture-docs.spec.ts`](../../../../tests/e2e-dashboard/capture-docs.spec.ts)
+against the same preview server, in Chromium. Modern renders its history after
+the load event, so its capture waits for the chart instead of retrying a
+height:
+
+```bash
+EMS_DASHBOARD_CAPTURE_DOCS=1 npx playwright test \
+  --config=playwright.dashboard.config.ts --project=chromium capture-docs
+```
 
 ## How to refresh
 

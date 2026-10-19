@@ -41,6 +41,7 @@ nav = [
       { "Control pipeline" = "user/dashboard/control.md" },
       { "Runtime settings" = "user/dashboard/runtime-settings.md" },
       { "Diagnostics" = "user/dashboard/diagnostics.md" },
+      { "Modern dashboard" = "user/dashboard/modern.md" },
     ] },
     { "Raspberry Pi appliance" = [
       "user/appliance/index.md",

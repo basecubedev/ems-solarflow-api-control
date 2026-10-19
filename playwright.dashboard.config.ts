@@ -26,6 +26,9 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 export default defineConfig({
   testDir: "./tests/e2e-dashboard",
+  // The Modern docs captures write into the tracked PNGs under
+  // docs/assets/screenshots/dashboard/, so a default run must not collect them.
+  testIgnore: process.env.EMS_DASHBOARD_CAPTURE_DOCS ? [] : ["capture-docs.spec.ts"],
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,

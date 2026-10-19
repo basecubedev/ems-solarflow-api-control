@@ -16,6 +16,7 @@ once you log in, lets you change a small set of runtime values.
 | Understand *why* EMS wrote that value | [Control pipeline](control.md) |
 | Change a live setting | [Runtime settings](runtime-settings.md) |
 | Collect evidence, read logs, back up | [Diagnostics and maintenance](diagnostics.md) |
+| Use the newer layout, in your language | [The Modern dashboard](modern.md) |
 
 ## The two visual families
 
