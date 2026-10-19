@@ -31,6 +31,7 @@ loopback by default.
 """
 
 import argparse
+import calendar
 import json
 import os
 import threading
@@ -530,7 +531,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         for item in items:
             iso = str(item.get("timestamp", "")).replace("Z", "+00:00")
             try:
-                epoch = int(time.mktime(time.strptime(iso[:19], "%Y-%m-%dT%H:%M:%S")))
+                epoch = calendar.timegm(time.strptime(iso[:19], "%Y-%m-%dT%H:%M:%S"))
             except (ValueError, TypeError):
                 continue
             time_axis.append(epoch)
