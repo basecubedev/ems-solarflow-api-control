@@ -254,6 +254,21 @@ Each brings its own deterministic server: the Manager's is the scripted
 assets with synthetic API payloads -- no hardware, no MQTT, no history
 database, no secrets.
 
+The cockpit has a second front end, Modern, built from
+`frontend/dashboard-modern/`. Its unit tests need Node but no browser, and its
+build output is committed, so a source change is not finished until it is
+rebuilt:
+
+```bash
+npm run test:dashboard-modern     # node --test, a second or two
+npm run build:dashboard-modern    # rewrites dashboard/static/modern/
+```
+
+`tests/test_dashboard_modern.py` rebuilds into a scratch directory and fails
+when the committed output differs; the dashboard Playwright job does the same
+with `git diff --exit-code`. Its browser specs are
+`tests/e2e-dashboard/modern.spec.ts`, in the same suite as Classic's.
+
 Four things are worth knowing before adding a spec to either:
 
 - **Measure with a real exit code.** `npx playwright test | tail -20` reports

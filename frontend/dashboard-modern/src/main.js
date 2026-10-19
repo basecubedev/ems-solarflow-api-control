@@ -1,0 +1,20 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+import "./styles/tokens.css";
+import "./styles/base.css";
+import { mount } from "svelte";
+import App from "./App.svelte";
+import { applyDocumentPrefs, rememberModern, watchSystemMotion } from "./state/prefs.svelte.js";
+import { startLive } from "./state/live.svelte.js";
+import { loadAuth, watchActivity, watchSession } from "./state/auth.svelte.js";
+import { watchHash } from "./app/router.svelte.js";
+
+applyDocumentPrefs();
+watchSystemMotion();
+rememberModern();
+watchHash();
+loadAuth();
+watchSession();
+watchActivity();
+startLive();
+
+mount(App, { target: document.getElementById("app") });

@@ -290,6 +290,15 @@ Use established Admin and Dashboard patterns. Before Dashboard UI work, read
 style family (`Aggregate / Device` or `Control / Energy stage`), reuse existing
 tokens/classes, and do not create a new visual system.
 
+The Modern dashboard (`frontend/dashboard-modern/`, served at `/modern/`) is
+the one sanctioned exception: it is a second front end with its own visual
+system, and [`dashboard-modern-style-guide.md`](dashboard-modern-style-guide.md)
+is its rule set. Read that guide instead before Modern work. Modern shares the
+API, the auth/CSRF gates and the energy colours with Classic and keeps
+Classic's vocabulary through paired-registry tests; it never borrows Classic's
+classes, and Classic never borrows Modern's. A Modern source change is
+committed together with its rebuilt output in `dashboard/static/modern/`.
+
 Keep semantic labels, inputs, selects and buttons, keyboard accessibility,
 escaped dynamic text, and authentication/CSRF gates. Prefer `textContent` and
 safe DOM APIs. Raw dynamic values MUST NOT be written to `innerHTML`.
