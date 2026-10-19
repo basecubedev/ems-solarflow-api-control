@@ -57,7 +57,8 @@ chosen from its broker `source`; the write is published to
 `mqtt.write_topic`).
 
 State reconciliation writes (`minSoc`, `socSet`, `smartMode`, `gridOffMode`,
-full-charge-assist `socSet`/`acMode`/`inputLimit`)
+full-charge-assist `socSet`/`acMode`/`inputLimit`, and the device settings
+`lampSwitch`, `Fanmode`/`Fanspeed`, `buzzerSwitch`, `autoHeat`)
 additionally require:
 
 ```text
@@ -213,6 +214,16 @@ the reconciler runs and only behind the state-reconciliation write gate, and
 never over a report that carries no `gridOffMode`: runtime defaults seed
 `offgrid_socket_mode` for every device, so nothing marks the operator's choice
 apart from the default (K20).
+
+## Device settings
+
+`lampSwitch`, `Fanmode`/`Fanspeed`, `buzzerSwitch` and `autoHeat` are written
+only for a setting the operator set (absent or `null` in runtime-state writes
+nothing), over the local API only, behind the state-reconciliation write gate
+and off is off, and only for a catalogue model that has the setting and a
+report that carries it. Each setting is its own write; how often a value the
+device does not take is sent again is in
+[Device settings](runtime-state.md#device-settings).
 
 ## acMode
 

@@ -39,6 +39,10 @@ SAMPLES = {
     "winter_mode": [True, False],
     "ems_control": [False, True],
     "device_control": [False, True],
+    "light": ["off", "on", "unmanaged"],
+    "fan": ["auto", "1", "2", "off"],
+    "buzzer": ["off", "on"],
+    "auto_heat": ["on", "off"],
     "minimum_output_limit": [40],
 }
 
@@ -47,8 +51,7 @@ def _whitelisted_paths():
     paths = {f"system.{key}" for key in runtime_commands.SYSTEM_FIELDS}
     for section, fields in runtime_commands.SECTION_FIELDS.items():
         paths |= {f"{section}.{key}" for key in fields}
-    device_fields = {**runtime_commands.DEVICE_FIELDS, **runtime_commands.DEVICE_AC_FIELDS}
-    paths |= {f"devices.WR1.{key}" for key in device_fields}
+    paths |= {f"devices.WR1.{key}" for key in runtime_commands.WRITABLE_DEVICE_FIELDS}
     return paths
 
 

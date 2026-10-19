@@ -14,6 +14,7 @@ import sys
 from datetime import datetime, timezone
 
 from dashboard import auth as dashboard_auth
+from ems import device_settings
 from ems import runtime_commands
 from ems.runtime_state import RuntimeState
 
@@ -95,6 +96,10 @@ DEVICE_ACTIONS = (
     "ac-mode",
     "ac-charge",
     "ac-charge-power",
+    "light",
+    "fan",
+    "buzzer",
+    "auto-heat",
 )
 RUNTIME_EDIT_COMMANDS = frozenset(
     {
@@ -245,6 +250,10 @@ Device runtime control:
   python3 emsctl.py device WR1 offgrid off
   python3 emsctl.py device WR1 offgrid eco
   python3 emsctl.py device WR1 offgrid standard
+  python3 emsctl.py device WR1 light off
+  python3 emsctl.py device WR1 fan auto
+  python3 emsctl.py device WR1 fan 2
+  python3 emsctl.py device WR1 light unmanaged
 
 Winter mode:
   python3 emsctl.py winter status
@@ -383,6 +392,12 @@ Actions:
   pv-priority-factor VALUE       Set PV-first allocation weight
   ac-mode [output|input]         Set or show runtime AC mode role
   ac-charge-power WATTS          Set runtime AC charge inputLimit in watts
+  light on|off|unmanaged         Keep the inverter's light on or off
+  fan auto|1|2|off|unmanaged     Keep the inverter's fan on auto, a speed, or off
+  buzzer on|off|unmanaged        Keep the beeper on or off, where the inverter has one
+  auto-heat on|off|unmanaged     Keep battery heating on or off, where the inverter has it
+
+  unmanaged hands a setting back to the device and the Zendure app.
 
 Examples:
   python3 emsctl.py device WR1 disable
@@ -392,6 +407,8 @@ Examples:
   python3 emsctl.py device WR1 ac-charge-power 200
   python3 emsctl.py device WR1 offgrid eco
   python3 emsctl.py device WR1 pv-priority-factor 1.2
+  python3 emsctl.py device WR1 light off
+  python3 emsctl.py device WR1 fan auto
 """,
         formatter_class=EMSHelpFormatter,
     )
@@ -402,7 +419,7 @@ Examples:
         metavar="action",
         help="One of: " + ", ".join(DEVICE_ACTIONS),
     )
-    device.add_argument("value", nargs="?", help="Required for max-power, offgrid, pv-priority-factor, ac-mode writes, and ac-charge-power.")
+    device.add_argument("value", nargs="?", help="Required for max-power, offgrid, pv-priority-factor, ac-mode writes, ac-charge-power and the device settings.")
 
     ac_charge = subparsers.add_parser(
         "ac-charge",
@@ -1297,6 +1314,11 @@ def completion_script_bash(config):
     offgrid_modes = completion_word_list(OFFGRID_SOCKET_MODES)
     ac_modes = completion_word_list(DEVICE_AC_MODE_VALUES)
     devices = completion_word_list(config_device_names(config))
+    setting_values = "".join(
+        f'        elif [[ "$prev" == "{setting.command}" ]]; then\n'
+        f'          COMPREPLY=( $(compgen -W "{completion_word_list(setting_words(setting))}" -- "$cur") )\n'
+        for setting in device_settings.SETTINGS
+    )
 
     return f"""\
 # Bash completion for emsctl.py
@@ -1357,7 +1379,7 @@ _emsctl_py_completion()
           COMPREPLY=( $(compgen -W "$offgrid_modes" -- "$cur") )
         elif [[ "$prev" == "ac-mode" ]]; then
           COMPREPLY=( $(compgen -W "$ac_modes" -- "$cur") )
-        fi
+{setting_values}        fi
       else
         COMPREPLY=( $(compgen -W "$device_actions" -- "$cur") )
       fi
@@ -1379,6 +1401,10 @@ complete -F _emsctl_py_completion emsctl
 """
 
 
+def setting_words(setting):
+    return (*setting.words, device_settings.UNMANAGED)
+
+
 def zsh_array(words):
     return " ".join(safe_completion_words(words))
 
@@ -1393,6 +1419,11 @@ def completion_script_zsh(config):
     offgrid_modes = zsh_array(OFFGRID_SOCKET_MODES)
     ac_modes = zsh_array(DEVICE_AC_MODE_VALUES)
     devices = zsh_array(config_device_names(config))
+    setting_values = "".join(
+        f'      elif [[ "$words[4]" == "{setting.command}" ]]; then\n'
+        f"        _values '{setting.command}' {zsh_array(setting_words(setting))}\n"
+        for setting in device_settings.SETTINGS
+    )
 
     return f"""\
 #compdef emsctl.py emsctl
@@ -1434,7 +1465,7 @@ _emsctl_py()
         _describe 'offgrid mode' offgrid_modes
       elif [[ "$words[4]" == "ac-mode" ]]; then
         _describe 'AC mode' ac_modes
-      fi
+{setting_values}      fi
       ;;
     winter)
       _describe 'winter action' winter_actions
@@ -1643,12 +1674,27 @@ def run_runtime_command(runtime_state, config, command, action, value=None, devi
         raise ValueError(f"{label}: {exc}") from exc
 
 
-def print_status(path, state):
+def print_status(path, state, device_settings=None):
     payload = {
         "runtime_state_path": path,
         "state": state
     }
+    if device_settings:
+        payload["device_settings"] = device_settings
     print(json.dumps(payload, indent=2, sort_keys=True))
+
+
+def live_device_settings(runtime_path):
+    """Each device's settings as the running EMS last saw them, from its live snapshot."""
+
+    devices = (diagnose_live_snapshot(runtime_path)["data"] or {}).get("devices")
+    if not isinstance(devices, dict):
+        return {}
+    return {
+        name: entry["settings"]
+        for name, entry in devices.items()
+        if isinstance(entry, dict) and isinstance(entry.get("settings"), dict) and entry["settings"]
+    }
 
 
 def prompt_new_password(args, password_attr="password"):
@@ -4264,7 +4310,7 @@ def main(argv=None):
         if args.command == "status":
             if created:
                 runtime_state.save_atomic()
-            print_status(runtime_path, state)
+            print_status(runtime_path, state, live_device_settings(runtime_path))
             return 0
 
         if args.command == "winter" and args.action == "status":

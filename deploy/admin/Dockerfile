@@ -89,6 +89,7 @@ COPY ems/control_status.py ./ems/control_status.py
 COPY ems/health.py ./ems/health.py
 COPY ems/clients.py ./ems/clients.py
 COPY ems/models.py ./ems/models.py
+COPY ems/device_settings.py ./ems/device_settings.py
 COPY ems/logging_utils.py ./ems/logging_utils.py
 # Config->runtime convergence: admin.runtime_convergence reconciles the
 # whitelisted maintenance keys into runtime-state via the EMS runtime-state

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # Battery presence is three-valued because absence cannot be inferred from
 # silence: `packNum` missing means nobody said, not that there is no pack.
@@ -39,6 +39,7 @@ DEVICE_STATE_PROPERTIES = frozenset(
         "gridOffMode", "acMode", "acStatus", "dcStatus", "gridState", "inputLimit",
         "packNum", "socStatus", "batCalTime", "gridInputPower", "gridReverse",
         "chargeLimit", "chargeMaxLimit",
+        "lampSwitch", "Fanmode", "Fanspeed", "buzzerSwitch", "autoHeat",
     }
 )
 
@@ -50,7 +51,8 @@ class DeviceState:
     Each ``*_reported`` flag is False when the report carried no usable value
     for a field a reconciler writes (``acMode``, ``minSoc``, ``socSet``,
     ``smartMode``, ``gridOffMode``, ``inputLimit``); the value then reads 0,
-    which is not a state the device is in (K10, K20).
+    which is not a state the device is in (K10, K20). ``setting_properties``
+    holds the ``ems.device_settings`` properties the report carries.
     """
 
     soc: float
@@ -109,6 +111,7 @@ class DeviceState:
     smart_mode_reported: bool = True
     grid_off_mode_reported: bool = True
     input_limit_reported: bool = True
+    setting_properties: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

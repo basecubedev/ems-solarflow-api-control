@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 
 from ems import config as cfg
+from ems import device_settings
 from ems.ac_charge_control import (
     CHARGE_SILENCE_CYCLES,
     OWN_DRAIN_MARGIN_W,
@@ -189,6 +190,8 @@ class EMSController:
         self.grid_meter_holding = False
         self.control_enabled = None
         self._legacy_grid_off_mode_warned = set()
+        self.device_settings = device_settings.DeviceSettingsReconciler()
+        self.device_settings_failing = set()
         # The total before the ramp limits it. The charge direction's exit reads
         # this, so a sudden house load does not wait for the ramp.
         self.desired_total_w = None
@@ -4610,6 +4613,48 @@ class EMSController:
                 error=e
             )
 
+    def apply_device_settings(self, dev, state):
+        """Keep light, fan, buzzer and battery heating where the operator set them.
+
+        Only a setting the operator set is written (``ems.device_settings``),
+        behind the state gates and off is off, over the local API only. The
+        settings are not control: a failure here is logged once and never
+        ends the cycle that regulates the output.
+        """
+
+        stored = device_settings.stored_settings(self.runtime_state, dev.name)
+        if not stored:
+            self.device_settings.forget(dev.name)
+            self.device_settings_failing.discard(dev.name)
+            return
+        if not self.state_reconciliation_supported(dev, "device_settings"):
+            return
+
+        try:
+            self.device_settings.reconcile(
+                dev,
+                getattr(state, "setting_properties", None) or {},
+                stored,
+                allowed=self.device_state_writes_allowed(dev),
+                gate_fields=lambda: self.state_write_gate_fields(dev),
+                write=lambda properties, fields: write_device_properties(
+                    dev,
+                    properties,
+                    reason="device_settings",
+                    field=",".join(properties),
+                    error_event="write_device_settings_error",
+                    log_fields=fields,
+                ),
+            )
+        except Exception as exc:
+            if dev.name not in self.device_settings_failing:
+                self.device_settings_failing.add(dev.name)
+                logging.warning(
+                    "event=device_settings_failed device=%s error=%s", dev.name, exc, exc_info=True
+                )
+            return
+        self.device_settings_failing.discard(dev.name)
+
     def publish_to_dashboard(
         self,
         load,
@@ -5155,6 +5200,7 @@ class EMSController:
                     dev,
                     state
                 )
+                self.apply_device_settings(dev, state)
 
         self.end_charges_on_disable(enabled)
 

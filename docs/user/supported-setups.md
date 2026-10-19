@@ -99,6 +99,21 @@ the command is accepted and no current flows. The EMS watches for exactly that
 and logs `ac_charge_not_delivered` — if you see it, please open a report with the
 trace so the row can be corrected.
 
+### Device settings
+
+Every ZenSDK model above can have its light, fan, buzzer and battery heating
+kept by the EMS over the Local API, each where the device's report carries it
+(see [Device settings](../technical/runtime-state.md#device-settings)):
+
+- **Light** (`lampSwitch`) and **Fan** (`Fanmode`, `Fanspeed`) — written and
+  read back on the maintainer's SolarFlow 800 Pro 2.
+- **Buzzer** (`buzzerSwitch`) and **Battery heating** (`autoHeat`) — offered
+  only where the inverter reports them; the 800 Pro 2 reports neither, so they
+  follow Zendure-HA and have not been written on hardware.
+
+Over MQTT, and on the Hub, Hyper and AIO models, the EMS writes no device
+settings.
+
 Each Zendure device configured over the **Local API** needs a local IP address,
 serial number, max power, battery size, PV size / priority metadata, and min/max
 SOC limits. Devices reached over **Local MQTT** or **Zendure cloud MQTT** are

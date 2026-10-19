@@ -97,7 +97,7 @@ def test_every_runtime_edit_emsctl_offers_is_a_command_of_the_one_path():
 def test_every_command_sets_a_whitelisted_key():
     fields = {
         "system": runtime_commands.SYSTEM_FIELDS,
-        "device": {**runtime_commands.DEVICE_FIELDS, **runtime_commands.DEVICE_AC_FIELDS},
+        "device": runtime_commands.WRITABLE_DEVICE_FIELDS,
     }
     for scope, table in (("system", SYSTEM_COMMANDS), ("device", DEVICE_COMMANDS)):
         for action, command in table.items():

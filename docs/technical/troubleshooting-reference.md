@@ -1007,6 +1007,12 @@ write_device_modes
 device_modes_unchanged
 dry_run_runtime_device_state_write
 write_runtime_device_state
+dry_run_device_settings_write
+write_device_settings
+write_device_settings_error
+device_setting_not_applied
+device_setting_not_taken
+device_settings_failed
 ```
 
 The `*_unchanged` events (`soc_limits_unchanged`, `device_modes_unchanged`,
@@ -1023,6 +1029,23 @@ on it. A device that reports a `minSoc` of 0 waits until the SoC is above the
 target. It is `info` when the wait starts and `debug` while it lasts, and the
 raise is written once the SoC comes within reach (see
 [winter-mode.md](../winter-mode.md#why-three-points)).
+
+The [device settings](runtime-state.md#device-settings) say each thing once:
+`dry_run_device_settings_write` (`info`) names the gate or switch that holds a
+setting back, with `blocked_by`, until the value to write changes;
+`device_setting_not_applied` names a setting that is set but not written,
+with `reason=model_does_not_list` (the catalogue has no such setting for the
+model), `not_reported` (the report does not carry it) or `invalid_value` (a
+hand-edited value the setting does not have, at `warning`); and
+`device_setting_not_taken` (`warning`, said once) means the inverter did not
+show the value after three writes, so the EMS holds it for a while
+(`retry_after_s` is the time left); when it sends again is in
+[Device settings](runtime-state.md#device-settings). A hand-edited value is
+named once for each value. `device_settings_failed`
+(`warning`, with a traceback, once per device until it passes again or a
+control cycle sees all its settings handed back) means the
+settings reconciler itself failed; the control cycle goes on without it, so
+please report it with the log.
 
 `pv_first_priority_changed` (`info`) records which devices hold the exclusive
 PV-first claim whenever that set moves. It is steady for as long as a battery

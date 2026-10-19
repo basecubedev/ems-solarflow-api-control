@@ -75,6 +75,7 @@ class ZendureHardwareProfile:
     rated_charge_power_w: int = 0
     # Source-backed MQTT-writable properties; empty = no verified contract.
     state_property_writes: tuple[str, ...] = ()
+    device_settings: tuple[str, ...] = ()
 
     @property
     def writable(self) -> bool:
@@ -99,6 +100,7 @@ class ZendureHardwareProfile:
 
 
 _ZENSDK_STATE_PROPERTIES = ("smartMode", "acMode", "outputLimit", "inputLimit")
+_ZENSDK_DEVICE_SETTINGS = ("light", "fan", "buzzer", "auto_heat")
 
 _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
     ZendureHardwareProfile(
@@ -114,6 +116,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         charge_evidence=CHARGE_EVIDENCE_NONE,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
+        device_settings=_ZENSDK_DEVICE_SETTINGS,
     ),
     ZendureHardwareProfile(
         canonical_name="solarflow_800_pro",
@@ -129,6 +132,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         rated_charge_power_w=1000,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
+        device_settings=_ZENSDK_DEVICE_SETTINGS,
     ),
     ZendureHardwareProfile(
         canonical_name="solarflow_800_pro_2",
@@ -145,6 +149,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         charge_evidence=CHARGE_EVIDENCE_MEASURED,
         rated_charge_power_w=1000,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
+        device_settings=_ZENSDK_DEVICE_SETTINGS,
     ),
     ZendureHardwareProfile(
         canonical_name="solarflow_800_plus",
@@ -159,6 +164,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         charge_evidence=CHARGE_EVIDENCE_NONE,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
+        device_settings=_ZENSDK_DEVICE_SETTINGS,
     ),
     ZendureHardwareProfile(
         canonical_name="solarflow_1600_ac_plus",
@@ -174,6 +180,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         rated_charge_power_w=1600,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
+        device_settings=_ZENSDK_DEVICE_SETTINGS,
     ),
     ZendureHardwareProfile(
         canonical_name="solarflow_2400_ac",
@@ -189,6 +196,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         rated_charge_power_w=2400,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
+        device_settings=_ZENSDK_DEVICE_SETTINGS,
     ),
     ZendureHardwareProfile(
         canonical_name="solarflow_2400_ac_plus",
@@ -204,6 +212,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         rated_charge_power_w=2400,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
+        device_settings=_ZENSDK_DEVICE_SETTINGS,
     ),
     ZendureHardwareProfile(
         canonical_name="solarflow_2400_pro",
@@ -218,6 +227,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         charge_evidence=CHARGE_EVIDENCE_NONE,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
+        device_settings=_ZENSDK_DEVICE_SETTINGS,
     ),
     ZendureHardwareProfile(
         # Only the Mix variant of the 4000 exists; the plain "SolarFlow 4000 AC+"
@@ -244,6 +254,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         rated_charge_power_w=3200,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
+        device_settings=_ZENSDK_DEVICE_SETTINGS,
     ),
     ZendureHardwareProfile(
         # No profile existed for this model at all, so it resolved to unknown and
@@ -266,6 +277,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         rated_charge_power_w=3000,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
+        device_settings=_ZENSDK_DEVICE_SETTINGS,
     ),
     ZendureHardwareProfile(
         canonical_name="hyper_2000",

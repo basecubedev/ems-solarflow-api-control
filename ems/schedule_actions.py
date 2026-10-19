@@ -12,6 +12,7 @@ Import-side-effect-free.
 import math
 from dataclasses import dataclass
 
+from ems.device_settings import SETTINGS, UNMANAGED
 from ems.runtime_commands import OFFGRID_SOCKET_MODES
 
 GROUP_LABELS = {
@@ -20,6 +21,7 @@ GROUP_LABELS = {
     "ac_charging": "AC charging",
     "battery": "Battery",
     "control": "EMS control",
+    "device_settings": "Device settings",
     "advanced": "Advanced",
 }
 GROUPS = tuple(GROUP_LABELS)
@@ -51,6 +53,10 @@ class ScheduleAction:
     command: str = ""
     choices: tuple = ()
     per_device: bool = False
+    choice_labels: tuple = ()
+
+    def choice_label(self, choice):
+        return dict(self.choice_labels).get(choice, choice)
 
 
 ACTIONS = (
@@ -164,6 +170,25 @@ ACTIONS = (
         keys=("enabled",),
         value_type=SWITCH,
         per_device=True,
+    ),
+    *(
+        ScheduleAction(
+            id=setting.key,
+            group="device_settings",
+            label=setting.label,
+            help=setting.help,
+            scope="device",
+            keys=(setting.key,),
+            value_type=CHOICE,
+            command=setting.command,
+            choices=(*setting.words, UNMANAGED),
+            per_device=True,
+            choice_labels=(
+                *((value.word, value.label) for value in setting.values),
+                (UNMANAGED, "Device decides"),
+            ),
+        )
+        for setting in SETTINGS
     ),
     ScheduleAction(
         id="minimum_output_limit",

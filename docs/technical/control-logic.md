@@ -65,6 +65,11 @@ Before, a report without `smartMode` got
 `smartMode=1` every reconcile interval, and one without `gridOffMode` got the
 runtime offgrid mode every cycle, with nothing in the next report to say it took.
 
+The device settings (light, fan, buzzer, battery heating) are reconciled every
+cycle by their own reconciler, beside the offgrid mode, and only where the
+operator set one: a missing property is unknown there too and is not written
+over (see [Device settings](runtime-state.md#device-settings)).
+
 `minSoc` has one writer, the periodic SoC reconcile, also while a full-charge
 assist runs (the assist writes `socSet` alone). It writes winter mode's target,
 or where winter mode plans nothing the configured `min_soc`, and holds every
