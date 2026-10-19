@@ -414,6 +414,7 @@ the same validators and the same writer.
 | EMS on/off, total max power, min output limit, loop interval | `system …` | EMS / System card |
 | Device on/off, max power, PV priority, offgrid socket | `device NAME …` | Device cards |
 | AC role (output / AC charging) and AC charge power | `device NAME ac-mode`, `ac-charge-power` | Device cards (not for MQTT devices) |
+| Light, fan, buzzer, battery heating | `device NAME light`, `fan`, `buzzer`, `auto-heat` | Device cards, where the inverter has the setting (not for MQTT devices) |
 | Winter mode on/off | `winter enable/disable` | Winter Mode card |
 | Status and diagnosis | `status`, `diagnose …`, support bundle | Live views, Diagnose tab, support bundle |
 | Backups and restore | `backup …` (incl. encrypted, conflict modes, diff) | Maintenance tab (unencrypted, replace) |

@@ -67,6 +67,13 @@ Reported by the device itself, not inferred:
 | **SOC calibration** | `No calibration` |
 | **Packs** | Number of battery packs |
 
+### Device settings
+
+Light, fan, buzzer and battery heating as the inverter reports them, for each
+one it has. **On → Off** means the value set on the
+[Runtime Settings](runtime-settings.md) card is not on the inverter yet. See
+[Device settings](../../technical/runtime-state.md#device-settings).
+
 ## Connection and control readiness
 
 Which transport a device uses is configured in the Admin Console — see
@@ -82,7 +89,7 @@ dashboard tells you about it:
 **MQTT control devices take the power command only** — output, and a charge from
 surplus where the model and its **AC charging** switch allow it (see
 [AC charging from surplus](../../ac-charging.md)). State reconciliation
-(`minSoc`, `socSet`, `smartMode`, `gridOffMode`, full-charge assist) and the manual AC role are API-only, so those fields do not
+(`minSoc`, `socSet`, `smartMode`, `gridOffMode`, full-charge assist), the device settings and the manual AC role are API-only, so those fields do not
 change for an MQTT-controlled device.
 
 ## Read-only and write-blocked devices

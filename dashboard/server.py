@@ -581,11 +581,13 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         sse_max_connections_per_ip=MAX_SSE_CONNECTIONS_PER_IP,
         sse_max_connection_seconds=SSE_MAX_CONNECTION_SECONDS,
         schedule_api=None,
+        device_settings=None,
     ):
         super().__init__(address, handler)
         self.store = store
         self.runtime_state = runtime_state
         self.schedule_api = schedule_api
+        self.device_settings = device_settings
         self.log_buffer = log_buffer
         self.log_redaction = bool(log_redaction)
         # UI-only hint for the frontend bootstrap (no control/auth impact).
@@ -776,6 +778,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                     attach_limits(
                         runtime_payload(self.server.runtime_state),
                         self.server.runtime_validation,
+                        _offered_device_settings(self.server),
                     ),
                 )
             )
@@ -1982,6 +1985,13 @@ def hmac_compare(left, right):
     return hmac.compare_digest(str(left), str(right))
 
 
+def _offered_device_settings(server):
+    """The device settings each device has, as the EMS last saw them; none without the EMS."""
+
+    provider = getattr(server, "device_settings", None)
+    return provider() if callable(provider) else None
+
+
 def start_dashboard_server(
     store,
     host="0.0.0.0",
@@ -2005,6 +2015,7 @@ def start_dashboard_server(
     sse_max_connections_per_ip=MAX_SSE_CONNECTIONS_PER_IP,
     sse_max_connection_seconds=SSE_MAX_CONNECTION_SECONDS,
     schedule_api=None,
+    device_settings=None,
 ):
     server = DashboardHTTPServer(
         (host, int(port)),
@@ -2025,6 +2036,7 @@ def start_dashboard_server(
         sse_max_connections_per_ip=sse_max_connections_per_ip,
         sse_max_connection_seconds=sse_max_connection_seconds,
         schedule_api=schedule_api,
+        device_settings=device_settings,
     )
 
     if ssl_enabled:

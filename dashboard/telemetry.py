@@ -29,6 +29,33 @@ def _device_runtime(controller, device_name, key, default):
     return controller.runtime_state.get_device(device_name, key, default)
 
 
+def _device_settings_card(controller, dev, state):
+    """Each device setting a device has, by label as it reports it, and the value set where it differs."""
+
+    from ems import device_settings
+
+    view = device_settings.settings_view(
+        dev,
+        getattr(state, "setting_properties", None) or {},
+        device_settings.desired_words(
+            device_settings.stored_settings(getattr(controller, "runtime_state", None), dev.name)
+        ),
+    )
+    card = {}
+    for key, entry in view.items():
+        if not entry["offered"]:
+            continue
+        setting = device_settings.SETTINGS_BY_KEY[key]
+        reported = setting.value(entry["reported"])
+        desired = setting.value(entry["desired"]) if entry["desired"] != entry["reported"] else None
+        card[key] = {
+            "label": setting.label,
+            "reported": reported.label if reported else None,
+            "desired": desired.label if desired else None,
+        }
+    return card
+
+
 def _control_explain_payload(controller):
     explanation = getattr(controller, "last_control_explanation", None)
 
@@ -358,6 +385,7 @@ def build_dashboard_snapshot(
             "battery_full_charge_assist": _battery_full_charge_assist_payload(
                 controller, dev, state, now_dt
             ),
+            "settings": _device_settings_card(controller, dev, state),
         }
 
     for tile in _telemetry_only_tiles(controller):
