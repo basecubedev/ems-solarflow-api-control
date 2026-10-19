@@ -27,6 +27,40 @@ async function openModern(page, hash = "#/overview") {
 }
 
 test.describe("Modern dashboard @smoke", () => {
+  test("demo mode and a browser too old for Modern stay on Classic whatever the choice", async ({ page }) => {
+    await page.goto("/?ui=modern", { waitUntil: "domcontentloaded" });
+    await expect(page).toHaveURL(/\/modern\/$/);
+    await page.goto("/?Demo=TRUE", { waitUntil: "domcontentloaded" });
+    await expect(page.locator("#themeSelect")).toBeVisible();
+    await expect(page).toHaveURL(/\/\?Demo=TRUE$/);
+    await page.goto("/?demo=0", { waitUntil: "domcontentloaded" });
+    await expect(page).toHaveURL(/\/modern\/$/);
+
+    await page.addInitScript(() => {
+      delete HTMLElement.prototype.popover;
+    });
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await expect(page.locator("#themeSelect")).toBeVisible();
+    await expect(page).not.toHaveURL(/modern/);
+  });
+
+  test("Classic links to Modern, Modern back to Classic, and the choice is remembered", async ({ page }) => {
+    await page.goto("/?ui=classic", { waitUntil: "domcontentloaded" });
+    await expect(page.locator("#themeSelect")).toBeVisible();
+    await page.locator("#modernLink").click();
+    await expect(page).toHaveURL(/\/modern\/$/);
+    await expect(page.getByTestId("ems-state")).toBeVisible();
+
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await expect(page).toHaveURL(/\/modern\//);
+
+    await page.getByTestId("switch-classic").click();
+    await expect(page).toHaveURL(/\/\?ui=classic$/);
+    await expect(page.locator("#themeSelect")).toBeVisible();
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await expect(page).not.toHaveURL(/modern/);
+  });
+
   test("the overview shows the status, the energy flow and the live values", async ({ page }) => {
     await openModern(page);
     await expect(page.getByTestId("kpi-status")).toHaveAttribute("data-level", "ok");
