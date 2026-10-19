@@ -46,8 +46,9 @@ bar uses the same password as Classic and the Admin Console.
 - In Modern, the foot of the sidebar has **Classic view** (on a phone, under
   **More**).
 
-The browser remembers the choice: opening the dashboard's address again takes
-you to the view you used last. Adding `?ui=classic` or `?ui=modern` to the
+Modern is the default: a browser that has never chosen opens Modern at the
+dashboard's address. The browser remembers the choice: opening the address
+again takes you to the view you used last. Adding `?ui=classic` or `?ui=modern` to the
 address sets the choice explicitly, which is useful for a bookmark or for a
 screen that stays on in one room. Each browser keeps its own choice, so a
 tablet in the hall can show Modern while a laptop shows Classic.

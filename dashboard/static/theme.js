@@ -46,7 +46,7 @@
      the syntax and the modal dialogs Modern also relies on, and the CSP rules
      out a syntax probe. */
   var UI_KEY = "ems-dashboard-ui";
-  var DEFAULT_UI = "classic";
+  var DEFAULT_UI = "modern";
 
   function chosenUi() {
     var asked = /(?:^|[?&])ui=(classic|modern)(?:&|$)/.exec(window.location.search);

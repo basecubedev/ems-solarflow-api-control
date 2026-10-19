@@ -11,7 +11,9 @@ Every day. This is the tab to leave open.
 
 ## Prerequisites
 
-- EMS running, and the dashboard reachable at `http://<host>:8080`.
+- EMS running, and the dashboard reachable at `http://<host>:8080`. This guide
+  describes the Classic view, `http://<host>:8080/?ui=classic`; a browser that
+  has never chosen opens [the Modern dashboard](modern.md).
 - No login needed for this tab.
 
 ## What you see

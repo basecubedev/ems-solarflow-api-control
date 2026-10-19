@@ -61,6 +61,12 @@ test.describe("Modern dashboard @smoke", () => {
     await expect(page).not.toHaveURL(/modern/);
   });
 
+  test("a browser that has never chosen opens Modern", async ({ page }) => {
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await expect(page).toHaveURL(/\/modern\/$/);
+    await expect(page.getByTestId("ems-state")).toBeVisible();
+  });
+
   test("the overview shows the status, the energy flow and the live values", async ({ page }) => {
     await openModern(page);
     await expect(page.getByTestId("kpi-status")).toHaveAttribute("data-level", "ok");
