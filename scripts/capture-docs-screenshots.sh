@@ -40,6 +40,9 @@ fi
 if [ "$target" = all ] || [ "$target" = dashboard ]; then
     printf '== EMS Dashboard ==\n'
     python3 scripts/capture_dashboard_docs.py
+    printf '== EMS Dashboard, Modern ==\n'
+    EMS_DASHBOARD_CAPTURE_DOCS=1 npx playwright test \
+        --config=playwright.dashboard.config.ts --project=chromium capture-docs
 fi
 
 printf '\nDone. Review the diff before committing:\n'

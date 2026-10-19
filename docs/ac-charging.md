@@ -472,7 +472,7 @@ carried alongside the output and surfaces in these places:
 This is the measured value, not the commanded charge target. The two differ by
 the device's own ramp, which was measured at 100–170 W/s.
 
-In the aggregated flow diagram a charging fleet draws a **grid → inverter**
+In Classic's aggregated flow diagram a charging fleet draws a **grid → inverter**
 pipe, and the inverter node states `Charging <W>` above its output. Its value
 stays the output it feeds the house, because in a mixed fleet one device can
 export while another charges. What the charger takes off the meter is not drawn
@@ -484,11 +484,22 @@ the charge is actually covered by a sibling inverter rather than by the grid,
 the grid node still reads the truth (near zero) while the pipe overstates its
 role. Preview it with `serve_dashboard_preview.py --scenario ac-charging`.
 
-The per-device view draws the same flow per row: while a device charges, the
+Classic's per-device view draws the same flow per row: while a device charges, the
 line between house and inverter turns round and takes the grid colour, and the
 inverter node states `Charging <W>` above the output it shows for as long as
 that line is drawn, so the path grid ↔ house ↔ inverter ↔ battery is complete
 in either direction.
+
+The Modern dashboard draws no grid → inverter pipe in either mode. Its
+**System** flow joins the inverters at the home as the per-device view does:
+the inverter → home line carries the fleet's output minus its charge and
+turns round and takes the grid colour when the charge is the larger. The
+difference shows once it reaches 5 % of the larger side and rests again below
+2.5 %, so a fleet charging about as much as it feeds does not flicker; the grid
+→ home line carries the whole meter reading. The inverter states
+`AC charging <W>` beneath its output. Per device, a charging inverter's line
+turns round in the grid colour as in Classic, and its node shows the charge
+as a negative figure.
 
 Energy statistics count charged energy separately (**AC Charge**, kWh) and
 deliberately attach no monetary value to it.

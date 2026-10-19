@@ -1,0 +1,4 @@
+# Build output of frontend/dashboard-modern/ (npm run build:dashboard-modern).
+# Minified code keeps the whitespace its template literals hold, so git must
+# not flag it, and a review reads the source rather than the bundle.
+dashboard/static/modern/** -whitespace linguist-generated=true

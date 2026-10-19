@@ -14,6 +14,12 @@ browser — it is the shared EMS/Admin password), or with
 Both write the same `config/dashboard-auth.json`; the EMS Dashboard's own web UI
 does not create it.
 
+The same server answers two front ends: Classic at `/` and
+[Modern](user/dashboard/modern.md) at `/modern/`. Both use the API below, the
+same session and the same CSRF token. Which one `/` opens is a per-browser
+choice that `?ui=classic` or `?ui=modern` sets, and a browser that has not
+chosen opens Modern; the server itself has no setting for it.
+
 ## Control Explain View
 
 The Control view shows the detailed calculation flow from measurements to final
@@ -251,8 +257,8 @@ page at `http://127.0.0.1:8767/preview` for links to every view, or go straight 
 a view (`/preview/aggregated`, `/preview/devices`, `/preview/control`,
 `/preview/energy`, `/preview/diagnose`, `/preview/logs`,
 `/preview/maintenance`). Scenarios cover a healthy system, a fleet where one
-device AC-charges the surplus of another (`ac-charging`, the only state that
-draws the grid → inverter pipe and, per device, the house → inverter charge line), mixed firmware-status values (including unknown
+device AC-charges the surplus of another (`ac-charging`, the only state in which
+Classic draws the grid → inverter pipe and, per device, the house → inverter charge line), mixed firmware-status values (including unknown
 values), an offline device, and read-only/write-mode authentication states. See
 [developer.md](developer/developer.md#local-dashboard-preview) for details.
 

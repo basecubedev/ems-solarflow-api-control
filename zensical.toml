@@ -41,6 +41,7 @@ nav = [
       { "Control pipeline" = "user/dashboard/control.md" },
       { "Runtime settings" = "user/dashboard/runtime-settings.md" },
       { "Diagnostics" = "user/dashboard/diagnostics.md" },
+      { "Modern dashboard" = "user/dashboard/modern.md" },
     ] },
     { "Raspberry Pi appliance" = [
       "user/appliance/index.md",
@@ -132,6 +133,7 @@ nav = [
     { "CI / release" = "developer/ci-release.md" },
     { "Documentation website" = "developer/docs-site.md" },
     { "Dashboard style guide" = "developer/dashboard-style-guide.md" },
+    { "Modern dashboard style guide" = "developer/dashboard-modern-style-guide.md" },
     { "Design notes" = [
       "developer/design-notes/README.md",
       { "InfluxDB runtime telemetry" = "developer/design-notes/develop-tool-influxdb-telemetry.md" },

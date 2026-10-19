@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "Source of the Modern dashboard. Dependencies are declared in the repository root package.json; this file only marks the directory as ES modules."
+}

@@ -25,6 +25,7 @@ ADMIN_GUIDES = ROOT / "docs" / "user" / "admin"
 DASHBOARD_GUIDES = ROOT / "docs" / "user" / "dashboard"
 ADMIN_SHOTS = ROOT / "docs" / "assets" / "screenshots" / "admin"
 DASHBOARD_SHOTS = ROOT / "docs" / "assets" / "screenshots" / "dashboard"
+MODERN_CAPTURE_SPEC = ROOT / "tests" / "e2e-dashboard" / "capture-docs.spec.ts"
 
 REQUIRED_ADMIN_GUIDES = [
     "index.md",
@@ -234,12 +235,13 @@ def _capture_outputs(module_path):
 
 
 def test_capture_manifest_matches_the_committed_screenshots():
-    """Two scripts write into this directory, so the manifest is the union.
+    """Several writers share these directories, so the manifest is the union.
 
     capture_admin_docs.py photographs the console's pages; the appearance
     gallery photographs the same page three times with one axis changed. A
     single-writer check would have read the gallery's output as an orphan and
-    the gallery's manifest as a lie.
+    the gallery's manifest as a lie. The Modern dashboard's pages come from a
+    Playwright spec, named by its test titles.
     """
 
     declared = _capture_outputs(ROOT / "scripts" / "capture_admin_docs.py")
@@ -259,6 +261,10 @@ def test_capture_manifest_matches_the_committed_screenshots():
         name
         for name in _capture_outputs(ROOT / "scripts" / "capture_appearance_gallery.py")
         if name.startswith("dashboard-")
+    }
+    declared |= {
+        f"{name}.png"
+        for name in re.findall(r'test\("(dashboard-[a-z0-9-]+)"', read(MODERN_CAPTURE_SPEC))
     }
     committed = {p.name for p in DASHBOARD_SHOTS.glob("*.png")}
     assert declared == committed, (
