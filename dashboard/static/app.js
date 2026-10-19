@@ -1573,6 +1573,7 @@ function deviceCardHtml(name, device, previousSocWidths) {
         ${device.output_limit_applicable === false ? "" : deviceValue("Limit", watts(device.output_limit_w), "warning")}
       </div>
       ${device.firmware_status_applicable === false ? "" : renderDeviceFirmwareStatus(device)}
+      ${renderDeviceSettings(device)}
       ${renderFullChargeAssist(device)}
     </article>`;
 }
@@ -3691,6 +3692,27 @@ function renderDeviceFirmwareStatus(device) {
   `;
 }
 
+function renderDeviceSettings(device) {
+  const facts = Object.values(device?.settings || {})
+    .filter((entry) => entry && entry.reported)
+    .map((entry) => deviceValue(
+      escapeHtml(entry.label),
+      entry.desired ? `${entry.reported} → ${entry.desired}` : entry.reported,
+      "rule",
+    ));
+  if (!facts.length) return "";
+  return `
+    <div class="device-firmware device-settings">
+      <div class="device-firmware-head">
+        <span class="device-firmware-title">${icon("rule")} Device settings</span>
+      </div>
+      <div class="device-values device-firmware-values">
+        ${facts.join("")}
+      </div>
+    </div>
+  `;
+}
+
 function setFlowView(view, persist = true) {
   const nextView = ["aggregated", "devices", "energy", "analytics", "control", "schedule", "diagnose", "logs", "maintenance"].includes(view)
     ? view
@@ -4681,7 +4703,8 @@ function scheduleValueControl(name, action, value, draft, overview) {
     return scheduleSelect(name, value === true || value === "true" ? "true" : value === false || value === "false" ? "false" : "", [["", "Choose…"], ["true", "On"], ["false", "Off"]]);
   }
   if (action.value_type === "choice") {
-    return scheduleSelect(name, value, [["", "Choose…"], ...action.choices.map((choice) => [choice, gridOffModeOptionLabel(choice)])]);
+    const labels = action.choice_labels || {};
+    return scheduleSelect(name, value, [["", "Choose…"], ...action.choices.map((choice) => [choice, labels[choice] ?? gridOffModeOptionLabel(choice)])]);
   }
   if (action.value_type === "factor") {
     return `<span class="runtime-number-wrap"><input type="number" name="${escapeHtml(name)}" value="${escapeHtml(value ?? "")}" min="0.01" max="100" step="0.01"><span>x</span></span>`;
@@ -5875,12 +5898,14 @@ function runtimeControlPanel() {
   const fallbackDeviceMax = Number(limits.fallback_device_max_power || 5000);
   const acUnsupported = new Set(limits.ac_role_unsupported || []);
   const acChargeMax = Number(limits.ac_charge_power_max || 5000);
+  const settingsOffered = limits.device_settings_offered || {};
   const deviceForms = devices.map(([name, device], index) => runtimeDeviceForm(
     name,
     device || {},
     Number(deviceLimits[name] || fallbackDeviceMax),
     index + 2,
-    { supported: !acUnsupported.has(name), maxChargePower: acChargeMax }
+    { supported: !acUnsupported.has(name), maxChargePower: acChargeMax },
+    runtimeDeviceSettings(device || {}, limits.device_settings || [], settingsOffered[name] || []),
   )).join("");
   const winterStep = devices.length + 2;
   const acChargeStep = devices.length + 3;
@@ -5974,6 +5999,36 @@ function runtimeAcRoleFields(device, ac) {
   `;
 }
 
+function runtimeDeviceSettings(device, catalogue, offered) {
+  const has = new Set(offered);
+  return catalogue
+    .filter((setting) => has.has(setting.key) || (device[setting.key] ?? null) !== null)
+    .map((setting) => ({ ...setting, offered: has.has(setting.key) }));
+}
+
+function runtimeSettingWord(value) {
+  return value === undefined || value === null ? "unmanaged" : String(value).trim().toLowerCase();
+}
+
+function runtimeSettingFields(device, settings) {
+  return settings.map((setting) => {
+    const current = runtimeSettingWord(device[setting.key]);
+    const known = current === "unmanaged" || setting.values.some((value) => value.value === current);
+    const values = setting.offered ? setting.values : setting.values.filter((value) => value.value === current);
+    return runtimeSelect(setting.key, setting.label, current, [
+      { value: "unmanaged", label: "Device decides" },
+      ...values,
+      ...(known ? [] : [{ value: current, label: `${current} (not a value)` }]),
+    ]);
+  }).join("");
+}
+
+function runtimeSettingNotes(payload) {
+  return [
+    payload.auto_heat === "off" ? "With battery heating off, the battery does not warm itself in the cold." : "",
+  ].filter(Boolean);
+}
+
 function runtimeReadonlyFact(label, value) {
   return `
     <div class="runtime-field control-pipeline-fact role-config">
@@ -5984,7 +6039,7 @@ function runtimeReadonlyFact(label, value) {
   `;
 }
 
-function runtimeDeviceForm(name, device, maxPower = 5000, step = 1, ac = { supported: true, maxChargePower: 5000 }) {
+function runtimeDeviceForm(name, device, maxPower = 5000, step = 1, ac = { supported: true, maxChargePower: 5000 }, settings = []) {
   const endpoint = `/api/runtime/device/${encodeURIComponent(name)}`;
   return runtimeStageCard({
     endpoint,
@@ -6005,6 +6060,7 @@ function runtimeDeviceForm(name, device, maxPower = 5000, step = 1, ac = { suppo
         { value: "standard", label: gridOffModeOptionLabel("standard") },
       ])}
       ${runtimeAcRoleFields(device, ac)}
+      ${runtimeSettingFields(device, settings)}
     `,
   });
 }
@@ -6160,31 +6216,106 @@ function runtimeChangeWarning(form, payload) {
   const device = runtimeFormSubject(form);
   const endpoint = String(form?.dataset?.runtimeEndpoint || "");
   if (endpoint === "/api/runtime/system" && payload.enabled === false) {
-    return "Turn the EMS off? It stops writing to every inverter; each keeps its last output limit until the EMS is on again. A charge the EMS started gets one command that ends it.";
+    const kept = Object.entries(state.runtime?.devices || {})
+      .some(([name, entry]) => entry?.enabled !== false && runtimeSettingsKept(name, {}).length);
+    return [
+      "Turn the EMS off? It stops writing to every inverter; each keeps its last output limit until the EMS is on again. A charge the EMS started gets one command that ends it.",
+      kept ? "The device settings it keeps stay as they are on the inverters while it is off; once it is on, it sets them again as you set them." : "",
+    ].filter(Boolean).join(" ");
   }
   if (!device) return null;
+  const change = runtimeSettingChange(payload);
+  const notes = runtimeSettingNotes(payload);
+  const runtime = state.runtime || {};
   if (payload.enabled === false) {
-    return `Take ${device} out of EMS control? The EMS writes nothing more to it, and it keeps its last output limit until you enable it again. A charge the EMS started on it gets one command that ends it.`;
+    const emsOn = runtime.system?.enabled === false ? " and the EMS is on" : "";
+    return [
+      `Take ${device} out of EMS control? The EMS writes nothing more to it, and it keeps its last output limit until you enable it again. A charge the EMS started on it gets one command that ends it.`,
+      change?.kept.length ? `The ${runtimeSettingNames(change.kept)} ${runtimeVerb(change.kept, "is", "are")} saved and written once you enable ${device} again${emsOn}.` : "",
+      runtimeSettingsLeft(device, payload),
+      ...notes,
+      change?.handed.length ? runtimeHandedBack(change.handed) : "",
+    ].filter(Boolean).join(" ");
   }
-  const offNote = controlOffNote(device);
+  const offNote = controlOffNote(device, payload);
+  let opening = null;
   if (payload.runtime_role === "ac_input") {
-    return [`Switch ${device} to AC charging? The EMS stops regulating its output and lets it charge from the grid at the AC charge power.`, offNote].filter(Boolean).join(" ");
+    opening = `Switch ${device} to AC charging? The EMS stops regulating its output and lets it charge from the grid at the AC charge power.`;
+  } else if (payload.runtime_role === "ac_output" && offNote) {
+    opening = `Switch ${device} back to output?`;
+  } else if (payload.offgrid_socket_mode !== undefined) {
+    opening = `Change the offgrid socket of ${device}? The EMS writes the new mode to the inverter.`;
   }
-  if (payload.runtime_role === "ac_output" && offNote) {
-    return `Switch ${device} back to output? ${offNote} To stop a charge meanwhile, use the Zendure app.`;
-  }
-  if (payload.offgrid_socket_mode !== undefined) {
-    return [`Change the offgrid socket of ${device}? The EMS writes the new mode to the inverter.`, offNote].filter(Boolean).join(" ");
-  }
-  return null;
+  if (!opening && !change) return null;
+  const kept = change?.kept || [];
+  const handed = change?.handed || [];
+  return [
+    opening || runtimeSettingQuestion(device, kept, handed),
+    kept.length && opening ? `The ${runtimeSettingNames(kept)} ${runtimeVerb(kept, "is", "are")} set as well and kept there.` : "",
+    kept.length && !opening ? `The EMS writes the new ${runtimeVerb(kept, "value", "values")} to the inverter and keeps ${runtimeVerb(kept, "it", "them")} there.` : "",
+    ...notes,
+    opening || kept.length ? offNote : "",
+    payload.runtime_role === "ac_output" && offNote ? "To stop a charge meanwhile, use the Zendure app." : "",
+    handed.length ? runtimeHandedBack(handed) : "",
+  ].filter(Boolean).join(" ");
 }
 
-function controlOffNote(device) {
+function runtimeVerb(settings, one, many) {
+  return settings.length > 1 ? many : one;
+}
+
+function runtimeSettingNames(settings) {
+  const names = settings.map((setting) => setting.label.toLowerCase());
+  return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : (names[0] || "");
+}
+
+function runtimeSettingChange(payload) {
+  const settings = (state.runtime?._limits?.device_settings || []).filter((setting) => payload[setting.key] !== undefined);
+  if (!settings.length) return null;
+  return {
+    kept: settings.filter((setting) => payload[setting.key] !== "unmanaged"),
+    handed: settings.filter((setting) => payload[setting.key] === "unmanaged"),
+  };
+}
+
+function runtimeSettingQuestion(device, kept, handed) {
+  if (kept.length && handed.length) {
+    return `Change the ${runtimeSettingNames(kept)} of ${device} and hand its ${runtimeSettingNames(handed)} back to the inverter?`;
+  }
+  return kept.length
+    ? `Change the ${runtimeSettingNames(kept)} of ${device}?`
+    : `Hand the ${runtimeSettingNames(handed)} of ${device} back to the inverter?`;
+}
+
+function runtimeHandedBack(handed) {
+  return `The EMS writes nothing for the ${runtimeSettingNames(handed)} from now on; the inverter and the Zendure app decide ${runtimeVerb(handed, "it", "them")}.`;
+}
+
+function runtimeSettingsKept(device, payload) {
+  const stored = state.runtime?.devices?.[device] || {};
+  const offered = new Set(state.runtime?._limits?.device_settings_offered?.[device] || []);
+  return (state.runtime?._limits?.device_settings || []).filter((setting) => payload[setting.key] === undefined
+    && offered.has(setting.key)
+    && setting.values.some((value) => value.value === runtimeSettingWord(stored[setting.key])));
+}
+
+function runtimeSettingsLeft(device, payload) {
+  const left = runtimeSettingsKept(device, payload);
+  if (!left.length) return "";
+  return `Its ${runtimeSettingNames(left)} ${runtimeVerb(left, "stays as it is", "stay as they are")} on the inverter while the EMS does not control ${device}; after that the EMS sets ${runtimeVerb(left, "it", "them")} again as you set ${runtimeVerb(left, "it", "them")}.`;
+}
+
+function controlOffNote(device, payload = {}) {
   const runtime = state.runtime || {};
-  if (runtime.system?.enabled === false) {
+  const emsOff = runtime.system?.enabled === false;
+  const deviceOff = runtime.devices?.[device]?.enabled === false && payload.enabled !== true;
+  if (emsOff && deviceOff) {
+    return `The EMS is off and ${device} is out of EMS control, so this takes effect once the EMS is on and you enable ${device} again.`;
+  }
+  if (emsOff) {
     return "The EMS is off, so this takes effect once it is on again.";
   }
-  if (runtime.devices?.[device]?.enabled === false) {
+  if (deviceOff) {
     return `${device} is out of EMS control, so this takes effect once you enable it again.`;
   }
   return "";
@@ -8664,6 +8795,7 @@ if (typeof module !== "undefined") {
     acPathLabel,
     acPathIcon,
     renderDeviceFirmwareStatus,
+    renderDeviceSettings,
     deviceFirmwareStatusFacts,
     deviceBatteryVisual,
     renderDevices,
@@ -8795,6 +8927,7 @@ if (typeof module !== "undefined") {
     sendSessionHeartbeat,
     runtimeControlPanel,
     runtimeDeviceForm,
+    runtimeDeviceSettings,
     changedRuntimePayload,
     dashboardErrorText,
     snapshotIsStale,

@@ -19,6 +19,7 @@ from ems.control_status import ControlStatusWriter
 from ems.controller import EMSController
 from ems.e3dc_runtime import E3dcSessions, build_e3dc_device_runtime
 from ems.device_identity import broker_sources_from_config
+from ems.device_settings import offered_by_device
 from ems.logging_utils import log_event, setup_logging
 from ems.runtime_commands import build_validation_context
 from ems.runtime_state import build_runtime_defaults, start_runtime_state
@@ -443,7 +444,9 @@ def main():
                     zone=schedule_zone,
                     clock=lambda: datetime.now(timezone.utc),
                     scheduler=scheduler,
+                    device_settings=lambda: offered_by_device(devices),
                 ),
+                device_settings=lambda: offered_by_device(devices),
             )
         except Exception as e:
             log_event(

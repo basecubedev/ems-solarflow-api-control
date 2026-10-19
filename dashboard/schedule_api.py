@@ -10,6 +10,7 @@ from dataclasses import replace
 from datetime import timedelta
 from urllib.parse import parse_qs, unquote
 
+from ems.device_settings import SETTINGS_BY_KEY
 from ems.file_io import lock_timed_out
 from ems.runtime_commands import RuntimeWriteError, effective_limits, emsctl_line, run_commands, validate_command
 from ems.schedule_actions import ACTIONS, CHARGE, GROUP_LABELS, action_commands
@@ -42,7 +43,10 @@ class RuntimeStateUnwritable(Exception):
 
 
 class ScheduleApi:
-    def __init__(self, store, *, runtime_state, devices, validation_context, zone, clock, scheduler=None):
+    def __init__(
+        self, store, *, runtime_state, devices, validation_context, zone, clock, scheduler=None,
+        device_settings=None,
+    ):
         self.store = store
         self.runtime_state = runtime_state
         self.devices = devices
@@ -50,6 +54,7 @@ class ScheduleApi:
         self.zone = zone
         self.clock = clock
         self.scheduler = scheduler
+        self.device_settings = device_settings
 
     def handle(self, method, path, body=None, query=""):
         """``(status, payload)`` for one request under /api/schedule."""
@@ -145,7 +150,14 @@ class ScheduleApi:
         }
 
     def catalogue(self, devices, context):
+        """Every action, with the devices it is offered for.
+
+        A device setting is offered only for a device that has it, as its last
+        report shows (``ems.device_settings``).
+        """
+
         unsupported = set(effective_limits(context)["ac_role_unsupported"])
+        offered = self.device_settings() if self.device_settings is not None else {}
         devices = sorted(devices)
         return [
             {
@@ -155,10 +167,11 @@ class ScheduleApi:
                 "help": action.help,
                 "value_type": action.value_type,
                 "choices": list(action.choices),
+                "choice_labels": dict(action.choice_labels),
                 "per_device": action.per_device,
                 "devices": [
                     name for name in devices
-                    if action.value_type != CHARGE or name not in unsupported
+                    if _offered(action, name, unsupported, offered)
                 ] if action.per_device else [],
             }
             for action in ACTIONS
@@ -297,6 +310,14 @@ def _offset_minutes(now, zone):
     against to say when rule times are not the viewer's."""
 
     return int(now.astimezone(zone).utcoffset().total_seconds() // 60)
+
+
+def _offered(action, device, ac_unsupported, settings):
+    if action.value_type == CHARGE:
+        return device not in ac_unsupported
+    if set(action.keys) <= set(SETTINGS_BY_KEY):
+        return set(action.keys) <= set(settings.get(device) or ())
+    return True
 
 
 def _zoneless(method, path, body):

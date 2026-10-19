@@ -149,6 +149,7 @@ construction, controller startup, main loop. All real implementation lives in `e
 - `control_status.py` — per-cycle live control snapshot (`control-status.json` beside runtime-state) that `diagnose --control` reads; non-authoritative, never raises into the loop
 - `paths.py` — shared project-path resolvers (`BASE_DIR`, `resolve_*_path`); import-side-effect-free
 - `runtime_commands.py` — the one command path for runtime-state edits (whitelist, validators, emsctl-named commands); emsctl, the dashboard, the Admin mirror and the scheduler all write through it
+- `device_settings.py` — light, fan, buzzer and battery heating: the settings the operator can hand to the EMS and the one reconciler that keeps them (state gates, off is off, local API only)
 - `file_io.py` — the cross-process file lock, atomic write and file signature that `runtime-state.json` and `schedules.json` share
 - `scheduler.py` — fires due schedule switch points through `runtime_commands`; `schedule_store.py` (`schedules.json`), `schedule_model.py`, `schedule_recurrence.py`, `schedule_actions.py`, `schedule_text.py` and `schedule_cli.py` (`emsctl schedule`) around it; see `docs/scheduler.md`
 
@@ -280,7 +281,8 @@ hardware generations are not yet validated on physical hardware (see
 `write_topics.py`).
 
 State reconciliation writes (`minSoc`, `socSet`, `smartMode`, `gridOffMode`,
-full-charge-assist `socSet`/`acMode`/`inputLimit`)
+full-charge-assist `socSet`/`acMode`/`inputLimit`, the device settings
+`lampSwitch`/`Fanmode`/`Fanspeed`/`buzzerSwitch`/`autoHeat`)
 additionally require `allow_state_reconciliation_writes=true` and control
 switched on (system and device: off is off, see `device_state_writes_allowed`),
 and are API-only (MQTT control devices are output-only,

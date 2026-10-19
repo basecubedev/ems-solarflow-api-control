@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ems import config as cfg
+from ems import device_settings
 from ems.logging_utils import log_event
 
 CONTROL_STATUS_SCHEMA_VERSION = 1
@@ -92,6 +93,13 @@ def _device_entry(controller, dev, explanation):
         "allocated_target_w": _number(getattr(decided, "allocated_target_w", None)),
         "effective_target_w": _number(getattr(decided, "effective_target_w", None)),
         "limiting_reason": getattr(decided, "limiting_reason", None),
+        "settings": device_settings.settings_view(
+            dev,
+            getattr(state, "setting_properties", None) or {},
+            device_settings.desired_words(
+                device_settings.stored_settings(getattr(controller, "runtime_state", None), name)
+            ),
+        ),
     }
 
 

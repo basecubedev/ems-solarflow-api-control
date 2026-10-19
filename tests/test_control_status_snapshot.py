@@ -66,6 +66,7 @@ DEVICE_KEYS = {
     "allocated_target_w",
     "effective_target_w",
     "limiting_reason",
+    "settings",
 }
 
 

@@ -959,6 +959,7 @@ def _preview_schedule_api(server):
         validation_context=lambda: context,
         zone=ZoneInfo("Europe/Berlin"),
         clock=lambda: datetime.now(timezone.utc),
+        device_settings=lambda: limits.get("device_settings_offered", {}),
     )
 
 

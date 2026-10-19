@@ -26,6 +26,7 @@ hand.
 | Winter mode | `winter.enabled` | `emsctl winter enable\|disable` |
 | EMS control | `system.enabled` | `emsctl system enable\|disable` |
 | Device control | `devices.X.enabled` | `emsctl device X enable\|disable` |
+| Light, Fan, Buzzer, Battery heating | `devices.X.light`, `.fan`, `.buzzer`, `.auto_heat`; *Device decides* hands one back | `emsctl device X light on\|off\|unmanaged`, `fan auto\|1\|2\|off\|unmanaged`, `buzzer …`, `auto-heat …` |
 | Minimum output limit | `system.min_output_limit` | `emsctl system min-output-limit W` |
 
 That is every runtime value the EMS has except `system.loop_interval`, a tuning
@@ -35,6 +36,9 @@ absolute, as with `emsctl`: "raise the power in the morning" is "06:00 set to
 
 *EMS control* and *Device control* off mean the EMS lets go: the inverter keeps
 its last output value. To lower the output, use the output limits.
+
+The Schedule tab offers a [device setting](technical/runtime-state.md#device-settings)
+only for an inverter that has it, as its last report shows.
 
 ## How a rule fires
 

@@ -11,6 +11,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from ems import config as cfg
+from ems import device_settings
 from ems.charge_record import (
     CHARGE_EXIT_FINAL,
     CHARGE_EXIT_IN_INPUT,
@@ -208,6 +209,7 @@ def parse_device(data):
         smart_mode_reported=props.get("smartMode") is not None,
         grid_off_mode_reported=props.get("gridOffMode") is not None,
         input_limit_reported=props.get("inputLimit") is not None,
+        setting_properties=device_settings.reported_properties(props),
     )
 
 
@@ -317,6 +319,7 @@ class ZendureClient:
         self.ac_charge_enabled = bool(ac_charge_enabled)
         self.max_charge_power_w = max_charge_power_w or 0
         self.observed_product = None
+        self.observed_settings = {}
         self._charge = ChargeRecord()
         self.observed_in_charge_mode = False
         self._ignored_report_values_named = set()
@@ -378,6 +381,7 @@ class ZendureClient:
                 "properties": properties,
                 "packData": data.get("packData") or report.get("packData"),
             })
+            self.observed_settings = state.setting_properties
             self.observed_in_charge_mode = (
                 state.ac_mode == AC_MODE_INPUT and state.smart_mode == 1
             )

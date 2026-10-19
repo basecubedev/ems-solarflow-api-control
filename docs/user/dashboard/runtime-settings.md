@@ -58,7 +58,7 @@ the visual cue that these are decision-affecting controls, not read-outs.
 | # | Card | Subtitle | Fields |
 | --- | --- | --- | --- |
 | 01 | **EMS / System** | Global runtime limits and loop control | `EMS enabled`, `Max total power` (W), `Min output limit` (W), `Loop interval` (s) |
-| 02/03 | **Device cards** (`WR1`, `WR2`, …) | Device runtime write values | `Device enabled`, `AC charging`, `Max power` (W), `PV priority` (×), `Offgrid socket`, `AC role`, `AC charge power` (W) |
+| 02/03 | **Device cards** (`WR1`, `WR2`, …) | Device runtime write values | `Device enabled`, `AC charging`, `Max power` (W), `PV priority` (×), `Offgrid socket`, `AC role`, `AC charge power` (W), and `Light`, `Fan`, `Buzzer`, `Battery heating` where the inverter has them |
 | 04 | **Winter mode** | Seasonal charging behavior | `Winter mode` |
 | 05 | **AC Charging** | Charge the batteries from grid surplus | `AC charging` |
 
@@ -81,6 +81,16 @@ says. The EMS still regulates such a device through its power command — its
 output, and a charge from surplus where its model can charge from AC and its
 **AC charging** switch allows it.
 
+**Light**, **Fan**, **Buzzer** and **Battery heating** are the inverter's own
+settings, the same as `emsctl.py device WR1 light` and its siblings. A card
+shows one only where the inverter has it: a local-API device whose model has
+the setting and whose report carries it; one set earlier that the inverter no
+longer shows stays on the card with only its value and *Device decides*, so it
+can be handed back. *Device decides* leaves it to the
+inverter and the Zendure app, which is where every setting starts; any other
+value is kept on the inverter by the EMS. Details:
+[Device settings](../../technical/runtime-state.md#device-settings).
+
 ### 4 — Apply
 
 **What you select:** the save button on the card you changed.
@@ -92,7 +102,7 @@ meantime (emsctl, another tab) is left alone. The cards reload
 the current values every 30 seconds while you are not editing.
 
 Turning the EMS or a device off, switching a device to AC charging, and changing
-the offgrid socket ask for confirmation first.
+the offgrid socket or a device setting ask for confirmation first.
 
 **Expected result:** a confirmation on the card, and the change becomes visible in
 the [Control pipeline](control.md) below within a loop interval.
@@ -121,6 +131,7 @@ Do not take the form's word for it. Scroll down to the pipeline:
 | Device max power | Yes | Yes | No |
 | PV priority | Yes | Yes | No |
 | Offgrid socket | Yes | Yes | No |
+| Light, fan, buzzer, battery heating | Yes | Yes | No |
 | Winter mode | Yes | Yes | No |
 | AC charging (installation and device) | Yes | Yes | No |
 | Adding or removing a device | — | — | **Admin Console + restart** |

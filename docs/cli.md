@@ -525,8 +525,8 @@ source <(python3 emsctl.py completion zsh)
 ```
 
 The generated completion covers top-level commands, command actions, dashboard
-subcommands, offgrid modes (`off`, `eco`, `standard`), and configured device
-names when `config.json` is readable. Completion generation does not create or
+subcommands, offgrid modes (`off`, `eco`, `standard`), the values of the
+device settings, and configured device names when `config.json` is readable. Completion generation does not create or
 modify `runtime-state.json`.
 
 Use explicit config paths when generating completion for a non-default
@@ -564,7 +564,9 @@ python3 emsctl.py --runtime-state data/runtime-state.json status
 ```
 
 `status` creates the configured runtime-state file from config defaults when
-the file is missing.
+the file is missing. While the EMS runs, `device_settings` lists each device's
+[settings](technical/runtime-state.md#device-settings) as the EMS last saw
+them: `reported` on the inverter, `desired` as set.
 
 ## System Commands
 
@@ -606,7 +608,17 @@ python3 emsctl.py device WR2 pv-priority-factor 0.7
 python3 emsctl.py device WR1 offgrid off
 python3 emsctl.py device WR1 offgrid eco
 python3 emsctl.py device WR1 offgrid standard
+python3 emsctl.py device WR1 light on|off|unmanaged
+python3 emsctl.py device WR1 fan auto|1|2|off|unmanaged
+python3 emsctl.py device WR1 buzzer on|off|unmanaged
+python3 emsctl.py device WR1 auto-heat on|off|unmanaged
 ```
+
+`light`, `fan`, `buzzer` and `auto-heat` are the inverter's own settings. The
+EMS keeps one where you set it, on a local-API device whose model has the
+setting and whose report carries it (on a SolarFlow 800 Pro 2: light and fan),
+and leaves it to the device and the Zendure app after `unmanaged`. Details:
+[Device settings](technical/runtime-state.md#device-settings).
 
 `pv-priority-factor` adjusts the device's PV-first allocation weight at
 runtime. Values above `1.0` increase the device's PV-first share, values below

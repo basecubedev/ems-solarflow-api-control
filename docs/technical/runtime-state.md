@@ -100,6 +100,7 @@ an AC charge surplus is confirmed (see
 | `max_power` | Runtime per-device power limit |
 | `offgrid_socket_mode` | Operator intent for Zendure offgrid socket mode; the only writer of `gridOffMode`. A legacy config `devices[].grid_off_mode` only seeds it for a new device; when it differs from the runtime value, `event=legacy_grid_off_mode_ignored` names the command that sets it. |
 | `pv_priority_factor` | Runtime PV-first allocation weight override |
+| `light`, `fan`, `buzzer`, `auto_heat` | Device settings the EMS keeps on the inverter; absent or `null` leaves them to the device (see [Device settings](#device-settings)) |
 | `identity` | Stable hardware identity (serial) used to track a device across renames; managed by the EMS |
 
 `pv_priority_factor` defaults from `config.json` and can be changed at runtime:
@@ -124,6 +125,60 @@ standard -> gridOffMode=0
 
 The CLI and the dashboard only change the intent. The EMS is the only
 component that writes `gridOffMode` to hardware.
+
+## Device settings
+
+Light, fan, buzzer and battery heating are settings of the inverter itself. By
+default the EMS leaves them alone: a device entry carries none of the keys, and
+nothing is written. Once you set one, the EMS keeps the inverter at that value,
+also when the Zendure app changes it back; `unmanaged` hands it to the device
+and the app again.
+
+| Key | emsctl | Values | Zendure property |
+|---|---|---|---|
+| `light` | `device NAME light` | `on`, `off` | `lampSwitch` 1 / 0 |
+| `fan` | `device NAME fan` | `auto`, `1`, `2`, `off` | `Fanmode` 1 with `Fanspeed` 0 / 1 / 2; `Fanmode` 0 |
+| `buzzer` | `device NAME buzzer` | `on`, `off` | `buzzerSwitch` 1 / 0 |
+| `auto_heat` | `device NAME auto-heat` | `on`, `off` | `autoHeat` 1 / 0 |
+
+```bash
+python3 emsctl.py device WR1 light off
+python3 emsctl.py device WR1 fan auto
+python3 emsctl.py device WR1 light unmanaged
+```
+
+`fan auto` lets the inverter run its fan by its own temperature, and is what
+the inverter does unless told otherwise. `fan off` keeps the fan off; an
+inverter that runs too warm lowers its power by itself.
+
+A setting is written only where all of this holds:
+
+- the device is connected over the local API; over MQTT the EMS writes no
+  device settings, and `emsctl` and the dashboard refuse to set one there
+  (`unmanaged` is always accepted);
+- its model is in the hardware catalogue with the setting, which the ZenSDK
+  models (SolarFlow 800, 800 Pro, 800 Pro 2, 800 Plus, 1600 AC+, 2400 AC,
+  2400 AC+, 2400 Pro, 3000 and 4000 Mix AC+) are, and its report carries the
+  setting's properties; the dashboard and the Schedule tab offer a setting
+  only then, and the device's runtime card keeps one set earlier listed with
+  its value, so it can be handed back;
+- `allow_state_reconciliation_writes` is on, the EMS is not in dry run,
+  simulation or replay, and neither the EMS nor the device is switched off
+  (off is off).
+
+The EMS reads the report every cycle and writes only what differs, each
+setting in its own `properties/write`, so one the inverter refuses holds back
+no other; a write that gets no answer ends that inverter's settings for the
+cycle, so an inverter that does not answer costs one timeout. A value the
+inverter has not taken is sent again 30 s after the last send at the earliest.
+Once it has been sent three times and the report still does not show it 30 s
+after the third, it is named once with `event=device_setting_not_taken` and
+held until an hour after the third send, then sent three times more. Another
+value or handing it back, once a control cycle has seen it, the inverter
+showing it, or a restart of the EMS starts the count afresh. `lampSwitch`, `Fanmode` and `Fanspeed` were written on a
+SolarFlow 800 Pro 2; `buzzerSwitch` and `autoHeat` follow Zendure-HA and have
+not been written on hardware yet. `emsctl status` lists each setting as the
+running EMS last saw it, beside the value set.
 
 ## One command path
 
@@ -275,7 +330,7 @@ Shape (`schema_version: 1`):
 | `control.grid_power_w`, `control.filtered_load_w` | Grid meter reading the cycle used and its filtered value (positive is import) |
 | `control.commanded_total_w`, `control.allocated_target_total_w`, `control.effective_target_total_w` | The cycle's totals; `effective_target_total_w` is what the EMS commands |
 | `grid_meter.consecutive_read_failures`, `grid_meter.measured_at` | From the meter's health record; `null` for a meter without one |
-| `devices.<name>` | `online`, `last_seen_at`, `max_power_w`, `soc`, `min_soc`, `pv_input_w`, `output_w`, `output_limit_w`, `battery_charge_w`, `battery_discharge_w`, `allocated_target_w`, `effective_target_w`, `limiting_reason`; telemetry fields are `null` for a device that never answered |
+| `devices.<name>` | `online`, `last_seen_at`, `max_power_w`, `soc`, `min_soc`, `pv_input_w`, `output_w`, `output_limit_w`, `battery_charge_w`, `battery_discharge_w`, `allocated_target_w`, `effective_target_w`, `limiting_reason`; telemetry fields are `null` for a device that never answered. `settings` holds each [device setting](#device-settings) the device has or that is set, as `{offered, reported, desired}` |
 | `grid_samples` | The last 30 cycles' `{cycle_at, grid_power_w, measured_at}` |
 
 When a cycle fails before it decides, the `control` values are `null` rather

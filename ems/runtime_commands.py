@@ -11,6 +11,7 @@ import logging
 import math
 from dataclasses import dataclass
 
+from ems import device_settings
 from ems.logging_utils import log_event
 
 
@@ -37,6 +38,12 @@ DEVICE_AC_FIELDS = {
     "runtime_role": ("enum", ("ac_output", "ac_input")),
     "ac_charge_power_w": ("int", (0, GENERIC_MAX_POWER_W)),
 }
+
+DEVICE_SETTING_FIELDS = {
+    setting.key: ("setting", setting.words) for setting in device_settings.SETTINGS
+}
+
+WRITABLE_DEVICE_FIELDS = {**DEVICE_FIELDS, **DEVICE_AC_FIELDS, **DEVICE_SETTING_FIELDS}
 
 SECTION_FIELDS = {
     "winter": {
@@ -80,6 +87,10 @@ DEVICE_COMMANDS = {
     ),
     "ac-charge": RuntimeCommand("ac_charge_enabled", choices=(("on", True), ("off", False))),
     "ac-charge-power": RuntimeCommand("ac_charge_power_w"),
+    **{
+        setting.command: RuntimeCommand(setting.key)
+        for setting in device_settings.SETTINGS
+    },
 }
 
 SECTION_COMMANDS = {
@@ -259,11 +270,12 @@ def validate_section_values(section_name, payload):
 
 
 def validate_device_values(device_name, payload, validation_context=None):
-    """Validated per-device values, including the AC role and charge power.
+    """Validated per-device values, including the AC role, charge power and settings.
 
     AC charging is refused for a device the EMS cannot switch: over MQTT the
     acMode is not reconciled, so ``ac_input`` would only stop output
-    regulation and leave the device feeding in at its last limit.
+    regulation and leave the device feeding in at its last limit. A device
+    setting is refused there too: over MQTT the EMS writes none.
     """
 
     if isinstance(payload, dict) and not ac_role_supported(
@@ -279,8 +291,28 @@ def validate_device_values(device_name, payload, validation_context=None):
                 f"{refused[0]} is not available for {device_name}: it is "
                 "connected over MQTT, where the EMS cannot switch the AC mode"
             )
-    fields = {**_device_fields(device_name, validation_context), **DEVICE_AC_FIELDS}
+        refused = sorted(
+            key
+            for key in set(payload) & set(DEVICE_SETTING_FIELDS)
+            if not _unmanaged(payload[key])
+        )
+        if refused:
+            raise RuntimeWriteError(
+                f"{refused[0]} is not available for {device_name}: it is "
+                "connected over MQTT, where the EMS writes no device settings"
+            )
+    fields = {
+        **_device_fields(device_name, validation_context),
+        **DEVICE_AC_FIELDS,
+        **DEVICE_SETTING_FIELDS,
+    }
     return _validate_payload(payload, fields)
+
+
+def _unmanaged(value):
+    """Handing a setting back to the device writes nothing, so it is never refused."""
+
+    return value is None or str(value).strip().lower() == device_settings.UNMANAGED
 
 
 def _back_to_ac_output(key, value):
@@ -360,9 +392,12 @@ def build_validation_context(config=None, runtime_state=None):
     }
 
 
-def attach_limits(payload, validation_context):
+def attach_limits(payload, validation_context, offered_settings=None):
+    """The runtime payload with its bounds, and the device settings each device has."""
+
     result = copy.deepcopy(payload) if isinstance(payload, dict) else {}
     result["_limits"] = effective_limits(validation_context)
+    result["_limits"]["device_settings_offered"] = dict(offered_settings or {})
     return result
 
 
@@ -389,6 +424,7 @@ def effective_limits(validation_context=None):
         ),
         "ac_charge_power_max": DEVICE_AC_FIELDS["ac_charge_power_w"][1][1],
         "ac_role_unsupported": list(context.get("ac_role_unsupported") or ()),
+        "device_settings": device_settings.catalogue(),
     }
 
 
@@ -533,6 +569,15 @@ def _validate_value(key, value, value_type, rule):
         normalized = str(value or "").strip().lower()
         if normalized not in rule:
             allowed = ", ".join(rule)
+            raise RuntimeWriteError(f"{key} must be one of: {allowed}")
+        return normalized
+
+    if value_type == "setting":
+        if _unmanaged(value):
+            return None
+        normalized = str(value).strip().lower() if not isinstance(value, bool) else ""
+        if normalized not in rule:
+            allowed = ", ".join((*rule, device_settings.UNMANAGED))
             raise RuntimeWriteError(f"{key} must be one of: {allowed}")
         return normalized
 

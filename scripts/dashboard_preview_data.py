@@ -12,6 +12,7 @@ access, no secrets, no SQLite history, and no runtime-state files are touched.
 import math
 import time
 
+from ems.device_settings import catalogue as device_settings_catalogue
 from ems.energy_channels import ENERGY_CHANNELS
 
 SCENARIOS = (
@@ -501,8 +502,17 @@ def _runtime(devices):
             "system": {"max_total_power": 5000, "min_output_limit": 5000},
             "devices": {name: 800 for name in devices},
             "fallback_device_max_power": 800,
+            "device_settings": device_settings_catalogue(),
+            "device_settings_offered": preview_device_settings(devices),
         },
     }
+
+
+def preview_device_settings(devices):
+    """The first inverter has a light and a fan, as a SolarFlow 800 Pro 2 does."""
+
+    names = list(devices)
+    return {name: ["light", "fan"] if index == 0 else [] for index, name in enumerate(names)}
 
 
 def _lerp_curve(hour, points):
@@ -747,6 +757,12 @@ def build_scenario(scenario=DEFAULT_SCENARIO, device_count=None, freeze_timestam
         )
 
     devices = scale_devices(_devices_for(scenario), device_count)
+    for name, offered in preview_device_settings(devices).items():
+        if offered:
+            devices[name]["settings"] = {
+                "light": {"label": "Light", "reported": "On", "desired": None},
+                "fan": {"label": "Fan", "reported": "Auto", "desired": None},
+            }
     # Grid is held very close to zero (-5 W) to show the EMS regulating tightly
     # against the house load; an offline device breaks that balance.
     grid_power_w = 120 if scenario == "offline-device" else -5
