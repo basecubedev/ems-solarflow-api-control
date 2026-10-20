@@ -1337,14 +1337,17 @@ Admin state, backups, staging, and logs. Step 05 is the only wizard step that ru
 writability first, recreates an EMS that already runs (`up -d --force-recreate
 ems`, since Compose leaves a running service alone when only its mounted config
 changed), then reports Compose service state and dashboard reachability. If `config/` or `data/` later have incorrect ownership, the wizard
-can repair only those directories and retry the preflight. It does not remove
-runtime data or Docker volumes.
+can repair only those directories and retry the preflight. It leaves
+`data/influxdb` alone: the bundled InfluxDB runs as its own user and owns that
+directory, and taking it away from a running InfluxDB makes it refuse every
+write until it restarts. It does not remove runtime data or Docker volumes.
 
 The repair is normally automatic. As a Linux-only manual fallback from the
 install root:
 
 ```bash
 sudo chown -R "$(id -u):$(id -g)" config data
+docker restart ems-influxdb   # only with bundled Analytics: it takes its data back on start
 ```
 
 ### Install-context detection inside the container

@@ -321,7 +321,7 @@ require_writable_admin_dir() {
     fi
     err "Admin data directory is not writable: $install_dir/data/admin"
     err "Fix the host ownership and retry:"
-    err "  sudo chown -R \"\$(id -u):\$(id -g)\" data"
+    err "  sudo chown -R \"\$(id -u):\$(id -g)\" data/admin"
     exit 1
 }
 

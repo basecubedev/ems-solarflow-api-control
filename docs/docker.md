@@ -246,10 +246,15 @@ If Docker or your host creates directories with unexpected ownership, stop the
 container and adjust the directory ownership on the host before starting it:
 
 ```bash
+docker compose down
 mkdir -p config data
 sudo chown -R "$(id -u):$(id -g)" config data
 docker compose up -d
 ```
+
+Stop every container first, as `docker compose down` does: the bundled
+InfluxDB owns `data/influxdb` as its own user and takes it back each time it
+starts, but one that keeps running after the `chown` can no longer write.
 
 The runtime state file is created automatically on startup if it does not
 exist. Older setups may have used `runtime-state.json` in the project root. If
