@@ -19,6 +19,7 @@ class FakeInfluxClient:
         self.tasks = {}  # id -> {id, name, flux, status, lastRunStatus, ...}
         self._task_seq = 0
         self.calls = []
+        self.old_points = set()  # buckets holding points older than any retention asked about
 
     def get_org_id(self):
         return "org-1"
@@ -43,6 +44,23 @@ class FakeInfluxClient:
         self.buckets[name] = retention_seconds
         self.calls.append(("update_bucket", name, retention_seconds))
         return self.find_bucket(name), "updated"
+
+    def ensure_bucket(self, name, retention_seconds=0):
+        if name in self.buckets:
+            return self.find_bucket(name), False
+        self.buckets[name] = int(retention_seconds or 0)
+        self.calls.append(("create_bucket", name, self.buckets[name]))
+        return self.find_bucket(name), True
+
+    def update_bucket_retention(self, bucket_id, retention_seconds):
+        name = bucket_id[len("b-"):]
+        self.buckets[name] = int(retention_seconds or 0)
+        self.calls.append(("update_bucket", name, self.buckets[name]))
+        return self.find_bucket(name)
+
+    def has_points_before(self, name, seconds_ago):
+        self.calls.append(("has_points_before", name, seconds_ago))
+        return name in self.old_points
 
     # tasks
     def list_tasks(self, limit=500):
@@ -514,6 +532,103 @@ class SyncTest(unittest.TestCase):
         report = schema.sync(client, config)
         self.assertIn("home2_raw", [b["name"] for b in report["buckets"]])
         self.assertIn("home2-downsample-1m", [t["name"] for t in report["tasks"]])
+
+
+class SafeSyncTest(unittest.TestCase):
+    """The sync that runs unattended creates what is missing and deletes nothing."""
+
+    def setUp(self):
+        self.config = normalize_influxdb_config({"enabled": True, "bucket_prefix": "ems"})
+
+    def _fresh_install(self):
+        client = FakeInfluxClient()
+        client.buckets["ems_raw"] = 0
+        return client
+
+    def test_it_creates_the_missing_buckets_and_tasks(self):
+        client = self._fresh_install()
+        report = schema.sync(client, self.config, safe=True)
+
+        self.assertEqual(sorted(client.buckets), ["ems_1h", "ems_1m", "ems_5m", "ems_raw"])
+        self.assertEqual(len(client.tasks), 3)
+        self.assertEqual(
+            [b["action"] for b in report["buckets"]], ["updated", "created", "created", "created"]
+        )
+
+    def test_a_raw_bucket_kept_forever_is_shortened_only_while_that_deletes_nothing(self):
+        client = self._fresh_install()
+        schema.sync(client, self.config, safe=True)
+
+        self.assertEqual(client.buckets["ems_raw"], 14 * 86400)
+        self.assertIn(("has_points_before", "ems_raw", 14 * 86400), client.calls)
+
+    def test_a_retention_that_would_delete_data_is_kept_and_reported(self):
+        """An appliance that never had its schema synced keeps months of raw
+        telemetry in a bucket that never expires; nothing else holds that
+        history, because the downsampling tasks only aggregate forward."""
+
+        client = self._fresh_install()
+        client.old_points.add("ems_raw")
+        report = schema.sync(client, self.config, safe=True)
+
+        self.assertEqual(client.buckets["ems_raw"], 0)
+        raw = report["buckets"][0]
+        self.assertEqual(raw["action"], "kept")
+        self.assertEqual(raw["reason"], "older_data")
+        self.assertEqual(raw["live_retention_seconds"], 0)
+        self.assertEqual(raw["retention_seconds"], 14 * 86400)
+
+    def test_a_probe_that_fails_keeps_the_retention(self):
+        client = self._fresh_install()
+
+        def failing(name, seconds_ago):
+            raise ConnectionError("query timed out")
+
+        client.has_points_before = failing
+        report = schema.sync(client, self.config, safe=True)
+
+        self.assertEqual(client.buckets["ems_raw"], 0)
+        self.assertEqual(report["buckets"][0]["action"], "kept")
+        self.assertEqual(report["buckets"][0]["reason"], "probe_failed")
+
+    def test_a_longer_retention_is_applied_without_asking(self):
+        client = FakeInfluxClient()
+        schema.sync(client, self.config)
+        client.buckets["ems_1h"] = 30 * 86400
+        client.calls.clear()
+
+        schema.sync(client, self.config, safe=True)
+
+        self.assertEqual(client.buckets["ems_1h"], 1825 * 86400)
+        self.assertNotIn("has_points_before", [call[0] for call in client.calls])
+
+    def test_tasks_an_operator_changed_are_left_as_they_are(self):
+        client = FakeInfluxClient()
+        schema.sync(client, self.config)
+        ids = {task["name"]: task_id for task_id, task in client.tasks.items()}
+        client.tasks[ids["ems-downsample-1m"]]["status"] = "inactive"
+        client.tasks[ids["ems-downsample-5m"]]["flux"] += "\n// edited"
+        client.calls.clear()
+
+        report = schema.sync(client, self.config, safe=True)
+
+        self.assertEqual(client.calls, [])
+        self.assertEqual(client.tasks[ids["ems-downsample-1m"]]["status"], "inactive")
+        actions = {task["name"]: task["action"] for task in report["tasks"]}
+        self.assertEqual(actions["ems-downsample-1m"], "kept")
+        self.assertEqual(actions["ems-downsample-5m"], "kept")
+        self.assertEqual(actions["ems-downsample-1h"], "unchanged")
+
+    def test_it_retires_nothing(self):
+        client = FakeInfluxClient()
+        schema.sync(client, self.config)
+        trimmed = {**self.config, "downsampling": self.config["downsampling"][:1]}
+        client.calls.clear()
+
+        report = schema.sync(client, trimmed, safe=True)
+
+        self.assertEqual(report["disabled_tasks"], [])
+        self.assertTrue(all(task["status"] == "active" for task in client.tasks.values()))
 
 
 class FluxBuildTest(unittest.TestCase):

@@ -1436,7 +1436,7 @@ def test_prune_still_accepts_its_dry_run(monkeypatch):
     seen = {}
     monkeypatch.setattr(
         emsctl, "run_influx_schema_command",
-        lambda cfg, action, js, dry_run=False: seen.update(
+        lambda cfg, action, js, dry_run=False, safe=False: seen.update(
             action=action, dry_run=dry_run
         ) or 0,
     )
@@ -1522,3 +1522,72 @@ def test_a_symlinked_secret_file_lends_no_owner_to_the_new_file(tmp_path):
     assert not path.is_symlink()
     assert path.read_text() == "A=2\n"
     assert target.read_text() == "A=1\n"
+
+
+# --- influx sync --safe: what runs without anyone watching ---------------
+
+
+def test_the_parser_accepts_a_safe_sync():
+    assert emsctl.parse_args(["influx", "sync", "--safe"]).safe is True
+    assert emsctl.parse_args(["influx", "sync"]).safe is False
+
+
+def test_safe_is_refused_outside_sync(capsys):
+    args = emsctl.parse_args(["influx", "status", "--safe"])
+
+    assert emsctl.handle_influx_command(args, {"influxdb": {"enabled": True}}) == 2
+    assert "--safe applies to 'influx sync' only" in capsys.readouterr().err
+
+
+def test_a_safe_sync_reaches_the_schema_op(monkeypatch):
+    seen = {}
+
+    def fake(influx_config, action, json_output, dry_run=False, safe=False):
+        seen.update(action=action, safe=safe)
+        return 0
+
+    monkeypatch.setattr(emsctl, "run_influx_schema_command", fake)
+    args = emsctl.parse_args(["influx", "sync", "--safe", "--json"])
+
+    assert emsctl.handle_influx_command(args, {"influxdb": {"enabled": True}}) == 0
+    assert seen == {"action": "sync", "safe": True}
+
+
+def test_a_kept_bucket_says_why_it_was_left_alone(capsys):
+    emsctl.print_influx_sync(
+        {
+            "buckets": [
+                {
+                    "name": "ems_raw",
+                    "action": "kept",
+                    "retention_seconds": 14 * 86400,
+                    "live_retention_seconds": 0,
+                }
+            ],
+            "tasks": [],
+            "disabled_tasks": [],
+        }
+    )
+
+    out = capsys.readouterr().out
+    assert "bucket ems_raw: kept (retention infinite, config 14d: shortening it would delete older data)" in out
+
+
+def test_a_kept_bucket_whose_probe_failed_says_so(capsys):
+    emsctl.print_influx_sync(
+        {
+            "buckets": [
+                {
+                    "name": "ems_raw",
+                    "action": "kept",
+                    "reason": "probe_failed",
+                    "retention_seconds": 14 * 86400,
+                    "live_retention_seconds": 0,
+                }
+            ],
+            "tasks": [],
+            "disabled_tasks": [],
+        }
+    )
+
+    assert "could not check for older data" in capsys.readouterr().out

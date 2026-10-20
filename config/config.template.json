@@ -309,7 +309,7 @@
       "auto_init lets setup commands create bundled InfluxDB secrets.",
       "It can also start the bundled container during setup.",
       "The EMS control loop never starts Docker by itself.",
-      "auto_sync applies bucket, retention, and task schema during setup.",
+      "auto_sync applies the schema during setup; the EMS adds what is missing.",
       "Set both values false when managing InfluxDB fully by hand."
     ],
     "auto_init": true,

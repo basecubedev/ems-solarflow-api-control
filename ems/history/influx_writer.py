@@ -49,7 +49,9 @@ from ems.logging_utils import log_event
 # cannot serve; a test holds the two remediation commands together.
 SCHEMA_SYNC_HINT = (
     "Analytics ranges that read a downsampled bucket stay empty until the "
-    "schema is created. Run: python3 emsctl.py influx sync"
+    "schema is created. The EMS creates it by itself and keeps retrying unless "
+    "influxdb.auto_sync is off. To create it now, run: "
+    "python3 emsctl.py influx sync --safe"
 )
 # Same symptom, opposite fix, so it is said separately: no sync creates this
 # bucket, because the two halves of the influxdb config disagree about which

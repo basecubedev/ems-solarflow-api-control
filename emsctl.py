@@ -638,6 +638,7 @@ Examples:
   python3 emsctl.py influx status --json
   python3 emsctl.py influx sync
   python3 emsctl.py influx sync --json
+  python3 emsctl.py influx sync --safe
   python3 emsctl.py influx prune --dry-run
   python3 emsctl.py influx prune
 """,
@@ -677,6 +678,14 @@ Examples:
         "--dry-run",
         action="store_true",
         help="prune: list what would be deleted without deleting anything.",
+    )
+    influx.add_argument(
+        "--safe",
+        action="store_true",
+        help=(
+            "sync: create what is missing and delete nothing; leave existing "
+            "tasks and any retention whose shortening would drop data as they are."
+        ),
     )
 
     stack = subparsers.add_parser(
@@ -1789,7 +1798,7 @@ def run_influx_cli(argv, env, *, json_output=False):
 
 def execute_influx_schema_op(
     influx_config, action, ready_timeout_s=None, request_timeout_s=None,
-    dry_run=False,
+    dry_run=False, safe=False,
 ):
     """Run a schema 'sync'/'status'/'prune' op, no printing. Returns (code, result).
 
@@ -1818,9 +1827,15 @@ def execute_influx_schema_op(
     runs inside check sequences whose ceiling is the sum of them. The two are
     independent: a caller can fail fast on an unreachable URL and still let the
     work that follows take its time. Both are overridable.
+
+    A sync or prune holds the schema lock the running EMS's own sync takes, so
+    the two never write the schema at the same time; ``safe`` is the sync that
+    creates what is missing and deletes nothing (``schema.sync``).
     """
+    from ems.file_io import FileLockTimeout
     from ems.history import schema
     from ems.history.influx_client import HistoryInfluxClient, wait_for_influx_ready
+    from ems.history.schema_keeper import schema_sync_lock
     from ems import influx_setup
 
     url = influx_setup.runtime_influx_url(influx_config)
@@ -1868,13 +1883,26 @@ def execute_influx_schema_op(
     except TimeoutError as exc:
         return 1, {"action": action, "ok": False, "url": url, "error": str(exc)}
 
+    writes = action in ("sync", "prune")
     try:
-        if action == "sync":
-            report = schema.sync(client, influx_config)
-        elif action == "prune":
-            report = schema.prune(client, influx_config, dry_run=dry_run)
-        else:
-            report = schema.status(client, influx_config)
+        lock = schema_sync_lock(influx_setup.SCHEMA_LOCK_WAIT_SECONDS) if writes else contextlib.nullcontext()
+        with lock:
+            if action == "sync":
+                report = schema.sync(client, influx_config, safe=safe)
+            elif action == "prune":
+                report = schema.prune(client, influx_config, dry_run=dry_run)
+            else:
+                report = schema.status(client, influx_config)
+    except FileLockTimeout:
+        return 1, {
+            "action": action,
+            "ok": False,
+            "url": url,
+            "error": (
+                f"another analytics schema sync is still running; run 'influx {action}' "
+                "again once it has finished"
+            ),
+        }
     except Exception as exc:  # network/HTTP errors surface as a clean failure
         return 1, {
             "action": action,
@@ -1886,11 +1914,13 @@ def execute_influx_schema_op(
     return 0, {"action": action, "ok": True, "url": url, "report": report}
 
 
-def run_influx_schema_command(influx_config, action, json_output, dry_run=False):
+def run_influx_schema_command(influx_config, action, json_output, dry_run=False, safe=False):
     """Standalone 'influx sync'/'status'/'prune' handler (owns its own output)."""
     from ems import influx_setup
 
-    code, result = execute_influx_schema_op(influx_config, action, dry_run=dry_run)
+    code, result = execute_influx_schema_op(
+        influx_config, action, dry_run=dry_run, safe=safe
+    )
 
     # Surface the local data directory for the bundled backend so operators know
     # where history is persisted on disk (and what to include in backups).
@@ -1979,6 +2009,11 @@ def handle_influx_command(args, config):
             f"--dry-run applies to 'influx prune' only, not '{args.action}'",
             code=2,
         )
+    if getattr(args, "safe", False) and args.action != "sync":
+        return fail(
+            f"--safe applies to 'influx sync' only, not '{args.action}'",
+            code=2,
+        )
 
     if args.action == "init":
         return handle_influx_init(args, influx_config)
@@ -1992,6 +2027,7 @@ def handle_influx_command(args, config):
     return run_influx_schema_command(
         influx_config, args.action, args.json,
         dry_run=bool(getattr(args, "dry_run", False)),
+        safe=bool(getattr(args, "safe", False)),
     )
 
 
@@ -2426,12 +2462,26 @@ def handle_stack_command(args, config):
 
 def print_influx_sync(report):
     print("InfluxDB schema sync")
+    def days(seconds):
+        return f"{seconds // 86400}d" if seconds else "infinite"
+
     for bucket in report["buckets"]:
-        retention = bucket["retention_seconds"]
-        retention_label = (
-            f"{retention // 86400}d" if retention else "infinite"
+        if bucket["action"] == "kept":
+            why = (
+                "could not check for older data"
+                if bucket.get("reason") == "probe_failed"
+                else "shortening it would delete older data"
+            )
+            print(
+                f"  bucket {bucket['name']}: kept (retention "
+                f"{days(bucket.get('live_retention_seconds', 0))}, config "
+                f"{days(bucket['retention_seconds'])}: {why})"
+            )
+            continue
+        print(
+            f"  bucket {bucket['name']}: {bucket['action']} "
+            f"(retention {days(bucket['retention_seconds'])})"
         )
-        print(f"  bucket {bucket['name']}: {bucket['action']} (retention {retention_label})")
     for task in report["tasks"]:
         print(f"  task {task['name']}: {task['action']}")
     for task in report["disabled_tasks"]:

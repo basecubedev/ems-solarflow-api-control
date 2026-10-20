@@ -10,6 +10,8 @@ lacks: updating retention on an existing bucket, and full task lifecycle
 Import-side-effect-free.
 """
 
+import json
+
 from scripts.influx_utils import (  # noqa: F401  (re-exported for convenience)
     InfluxHTTPClient,
     build_line_protocol,
@@ -72,6 +74,29 @@ class HistoryInfluxClient(InfluxHTTPClient):
             existing.get("id"), retention_seconds
         )
         return updated, "updated"
+
+    def has_points_before(self, bucket_name, seconds_ago, timeout=10):
+        """Whether the bucket holds any point older than ``seconds_ago``.
+
+        ``first()`` is answered by the storage engine, one point per series,
+        so a bucket holding months of data is not read through. The timeout is
+        its own: a probe that does not answer leaves the retention as it is.
+        """
+
+        flux = (
+            f"from(bucket: {json.dumps(bucket_name)}) "
+            f"|> range(start: 0, stop: -{int(seconds_ago)}s) "
+            "|> first() |> keep(columns: [\"_time\"]) |> group() |> limit(n: 1)"
+        )
+        response = self.session.post(
+            f"{self.base_url}/api/v2/query",
+            params={"org": self.org},
+            json={"query": flux},
+            headers=self.headers,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        return bool(parse_influx_csv(response.text))
 
     # -- tasks -------------------------------------------------------------
 
