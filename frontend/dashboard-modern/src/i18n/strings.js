@@ -192,6 +192,12 @@ export const STRINGS = {
   "today.vsYesterday": s("vs. yesterday by {time}", "ggü. gestern bis {time}", "t.o.v. gisteren tot {time}", "vs hier à {time}"),
   "today.noComparison": s("no comparison yet", "noch kein Vergleich", "nog geen vergelijking", "pas encore de comparaison"),
   "today.hourlyAria": s("Hourly energy today", "Energie pro Stunde heute", "Energie per uur vandaag", "Énergie par heure aujourd’hui"),
+  "today.hourlyAriaScale": s(
+    "Hourly energy today, top line {v}",
+    "Energie pro Stunde heute, obere Linie {v}",
+    "Energie per uur vandaag, bovenste lijn {v}",
+    "Énergie par heure aujourd’hui, ligne du haut {v}",
+  ),
 
   "chart.title": s("Power today", "Leistung heute", "Vermogen vandaag", "Puissance aujourd’hui"),
   "chart.titleRange": s("Power, last {range}", "Leistung, letzte {range}", "Vermogen, laatste {range}", "Puissance, derniers {range}"),

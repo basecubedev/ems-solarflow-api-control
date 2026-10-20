@@ -72,6 +72,17 @@ function localHour(day, hour) {
   return Math.floor(new Date(day.getFullYear(), day.getMonth(), day.getDate(), hour).getTime() / 1000);
 }
 
+const NICE_STEPS = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
+
+/** The top of an hourly bar scale: the next round figure at or above the largest bar, or null when nothing is above zero. */
+export function niceCeiling(value) {
+  const number = Math.abs(Number(value));
+  if (!Number.isFinite(number) || number <= 0) return null;
+  const power = 10 ** Math.floor(Math.log10(number));
+  const step = NICE_STEPS.find((candidate) => candidate * power >= number * (1 - 1e-9));
+  return Number((step * power).toPrecision(6));
+}
+
 /**
  * Energy per local clock hour of one day; an hour without a measured step is
  * null, not zero. On the day the clocks go back, hour 2 holds both 02:00 hours;

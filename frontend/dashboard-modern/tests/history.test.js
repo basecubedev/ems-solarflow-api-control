@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { integrateKwh, hourlyKwh, gapRanges, withGapBreaks, sameTimeComparison, sampleSpacing, localDayStart } from "../src/lib/history.js";
+import { integrateKwh, hourlyKwh, gapRanges, withGapBreaks, sameTimeComparison, sampleSpacing, localDayStart, niceCeiling } from "../src/lib/history.js";
 
 const MIDNIGHT = localDayStart(new Date(1_800_000_000 * 1000));
 
@@ -78,4 +78,17 @@ test("no comparison when the history does not reach back to yesterday morning", 
   const dayStart = MIDNIGHT;
   const time = [dayStart - 3600, dayStart, dayStart + 3600];
   assert.equal(sameTimeComparison({ time, series: { pv: [1, 1, 1] } }, "pv", dayStart + 3600, dayStart), null);
+});
+
+test("the hourly bars are scaled to the next round figure above the largest", () => {
+  assert.equal(niceCeiling(0.52), 0.6);
+  assert.equal(niceCeiling(0.6), 0.6);
+  assert.equal(niceCeiling(0.61), 0.8);
+  assert.equal(niceCeiling(1.2), 1.5);
+  assert.equal(niceCeiling(-0.07), 0.08);
+  assert.equal(niceCeiling(9.1), 10);
+  assert.equal(niceCeiling(0.3), 0.3);
+  assert.equal(niceCeiling(0), null);
+  assert.equal(niceCeiling(null), null);
+  assert.equal(niceCeiling(Number.NaN), null);
 });

@@ -2,6 +2,7 @@
 // The Modern dashboard at /modern/, against the same preview server and the
 // same API as Classic. Never `waitUntil: "networkidle"`: /api/events stays open.
 import { expect, test } from "@playwright/test";
+import { pinTheDay } from "./pin-the-day";
 
 const SIGNED_IN = {
   auth_configured: true,
@@ -154,6 +155,59 @@ test.describe("Modern dashboard @smoke", () => {
     await expect(page.getByTestId("chart-zoom-reset")).toBeVisible();
     await page.getByRole("button", { name: "7 d", exact: true }).click();
     await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(0);
+  });
+
+  test("a today tile names the top of its scale and its hours, and puts the comparison beside the figure", async ({ page }) => {
+    await page.setViewportSize({ width: 900, height: 900 });
+    await pinTheDay(page);
+    await openModern(page);
+    const tile = page.getByTestId("today-tiles").locator("section").first();
+    await expect(tile.getByTestId("today-scale")).toHaveText(/^\d[\d.,]* k?Wh$/);
+    await expect(tile.locator(".hours span")).toHaveText(["00", "06", "12", "18", "24"]);
+    await expect(tile.locator(".delta span")).toContainText("vs. yesterday by 18:30");
+    const [value, delta, note] = await Promise.all([".value", ".delta b", ".delta span"].map((selector) => tile.locator(selector).boundingBox()));
+    expect(delta.x).toBeGreaterThan(value.x + value.width);
+    expect(note.x).toBeGreaterThan(value.x + value.width);
+    expect(note.y + note.height).toBeLessThanOrEqual(value.y + value.height + 4);
+  });
+
+  test("with the side menu open the today tiles keep their bars level in every language", async ({ page }) => {
+    await pinTheDay(page);
+    for (const width of [1024, 1280]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const lang of ["en", "de", "nl", "fr"]) {
+        await page.goto("about:blank");
+        await page.addInitScript((value) => window.localStorage.setItem("ems-modern.lang", value), lang);
+        await openModern(page);
+        const tiles = page.getByTestId("today-tiles").locator("section");
+        await expect(tiles).toHaveCount(4);
+        const boxes = await tiles.evaluateAll((nodes) =>
+          nodes.map((node) => {
+            const tile = node.getBoundingClientRect();
+            return { left: Math.round(tile.left), top: Math.round(tile.top), plot: Math.round(node.querySelector("svg.spark").getBoundingClientRect().top) };
+          }),
+        );
+        expect(new Set(boxes.map((box) => box.left)).size, `${width} px, ${lang}: columns`).toBe(2);
+        for (const row of new Set(boxes.map((box) => box.top))) {
+          const plots = new Set(boxes.filter((box) => box.top === row).map((box) => box.plot));
+          expect(plots.size, `${width} px, ${lang}: bars level in the row at ${row}`).toBe(1);
+        }
+      }
+    }
+  });
+
+  test("on a narrow tile the comparison wraps below the figure rather than over it", async ({ page }) => {
+    await pinTheDay(page);
+    for (const width of [360, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("about:blank");
+      await openModern(page);
+      for (const tile of await page.getByTestId("today-tiles").locator("section").all()) {
+        await expect(tile.locator(".delta b")).toBeVisible();
+        const [value, delta] = await Promise.all([".value", ".delta b"].map((selector) => tile.locator(selector).boundingBox()));
+        expect(delta.x >= value.x + value.width - 1 || delta.y >= value.y + value.height - 1, `${width} px`).toBe(true);
+      }
+    }
   });
 
   test("an inverter charging from the grid runs its line to the home backwards in the grid's colour", async ({ page }) => {

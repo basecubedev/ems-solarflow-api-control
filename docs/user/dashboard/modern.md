@@ -102,6 +102,10 @@ two in the afternoon, today's solar is compared with yesterday's solar until
 two in the afternoon, not with the whole of yesterday. When the history for
 yesterday is not there yet, the tile says so instead of showing a comparison.
 
+Each bar is one hour. The dashed line at the top of the bars is the figure
+written above it, so a bar that reaches the line stands for that much energy
+in its hour; the hours 00, 06, 12, 18 and 24 are marked underneath.
+
 ## Appearance
 
 The **Appearance** button in the top bar holds five choices:

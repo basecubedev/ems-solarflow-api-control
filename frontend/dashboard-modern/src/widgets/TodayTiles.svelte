@@ -7,7 +7,7 @@
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { live } from "../state/live.svelte.js";
   import { channelKwh } from "../lib/energy.js";
-  import { hourlyKwh, sameTimeComparison, localDayStart } from "../lib/history.js";
+  import { hourlyKwh, sameTimeComparison, localDayStart, niceCeiling } from "../lib/history.js";
 
   let { history = null } = $props();
 
@@ -18,7 +18,16 @@
     { id: "grid", label: "today.gridImport", icon: "utility-pole", token: "--grid", channel: "grid_import", positiveOnly: true, good: -1 },
   ];
 
+  const PLOT_HEIGHT = 64;
+  const SCALE_FLOOR_KWH = 0.01;
+  const HOUR_TICKS = [0, 6, 12, 18, 24];
+
   const f = $derived(fmt());
+
+  function barHeight(kwh, ceiling) {
+    if (!ceiling) return 2;
+    return Math.max(2, (Math.abs(kwh) / ceiling) * PLOT_HEIGHT);
+  }
   const today = $derived(live.snapshot?.energy_stats?.today);
   const nowSeconds = $derived(Math.floor(live.now / 1000));
   const dayStart = $derived(localDayStart(new Date(live.now)));
@@ -43,8 +52,9 @@
       const values = history?.series?.[tile.id];
       const hours = values ? hourlyKwh(history.time, values, dayStart, { transform: transformFor(tile) }) : Array(24).fill(null);
       const comparison = history ? sameTimeComparison(history, tile.id, nowSeconds, dayStart, transformFor(tile)) : null;
-      const max = Math.max(0.0001, ...hours.map((v) => Math.abs(v || 0)));
-      return { ...tile, value: tileValue(tile), hours, max, comparison };
+      const peak = Math.max(0, ...hours.map((v) => Math.abs(v || 0)));
+      const ceiling = peak > 0 ? niceCeiling(Math.max(peak, SCALE_FLOOR_KWH)) : null;
+      return { ...tile, value: tileValue(tile), hours, ceiling, comparison };
     }),
   );
 </script>
@@ -53,24 +63,37 @@
   {#each tiles as tile (tile.id)}
     <section class="card tile" style:--c={`var(${tile.token})`} aria-label={t(tile.label)}>
       <div class="head"><Icon name={tile.icon} size="sm" />{t(tile.label)}</div>
-      <svg class="spark" viewBox="0 0 240 46" preserveAspectRatio="none" role="img" aria-label={t("today.hourlyAria")}>
-        {#each tile.hours as kwh, hour (hour)}
-          {#if kwh === null}
-            {#if hour <= currentHour}<rect x={hour * 10 + 1.5} y="44" width="7" height="2" rx="1" class="empty-bar"></rect>{/if}
-          {:else}
-            <rect
-              x={hour * 10 + 1.5}
-              y={46 - Math.max(2, (Math.abs(kwh) / tile.max) * 44)}
-              width="7"
-              height={Math.max(2, (Math.abs(kwh) / tile.max) * 44)}
-              rx="1.5"
-              class="bar-rect"
-              class:now={hour === currentHour}
-              class:negative={kwh < 0}
-            ><title>{`${String(hour).padStart(2, "0")}:00 · ${f.energy(kwh, { signed: tile.net })}`}</title></rect>
-          {/if}
-        {/each}
-      </svg>
+      <div class="plot">
+        {#if tile.ceiling}<span class="scale num" data-testid="today-scale" aria-hidden="true">{f.energy(tile.ceiling)}</span>{/if}
+        <svg
+          class="spark"
+          class:scaled={tile.ceiling}
+          viewBox="0 0 240 {PLOT_HEIGHT}"
+          preserveAspectRatio="none"
+          role="img"
+          aria-label={tile.ceiling ? t("today.hourlyAriaScale", { v: f.energy(tile.ceiling) }) : t("today.hourlyAria")}
+        >
+          {#each tile.hours as kwh, hour (hour)}
+            {#if kwh === null}
+              {#if hour <= currentHour}<rect x={hour * 10 + 1.5} y={PLOT_HEIGHT - 2} width="7" height="2" rx="1" class="empty-bar"></rect>{/if}
+            {:else}
+              <rect
+                x={hour * 10 + 1.5}
+                y={PLOT_HEIGHT - barHeight(kwh, tile.ceiling)}
+                width="7"
+                height={barHeight(kwh, tile.ceiling)}
+                rx="1.5"
+                class="bar-rect"
+                class:now={hour === currentHour}
+                class:negative={kwh < 0}
+              ><title>{`${String(hour).padStart(2, "0")}:00 · ${f.energy(kwh, { signed: tile.net })}`}</title></rect>
+            {/if}
+          {/each}
+        </svg>
+        <div class="hours num" aria-hidden="true">
+          {#each HOUR_TICKS as hour (hour)}<span style:left={`${(hour / 24) * 100}%`}>{String(hour).padStart(2, "0")}</span>{/each}
+        </div>
+      </div>
       <div class="foot">
         <div class="value num">{f.energy(tile.value, { signed: tile.net })}</div>
         <div class="delta num">
@@ -88,21 +111,36 @@
 
 <style>
   .today { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s5); }
-  .tile { padding: var(--s4) var(--s5); }
+  .tile { padding: var(--s4) var(--s5); container-type: inline-size; }
   .head { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--m-muted); font-weight: 520; }
   .head :global(svg.i) { color: var(--c); }
-  .spark { display: block; width: 100%; height: 46px; margin: 10px 0 8px; }
+  .plot { position: relative; margin: 8px 0 10px; padding-top: 14px; }
+  .scale { position: absolute; top: 0; right: 0; font-size: 10.5px; line-height: 12px; color: var(--m-muted); }
+  .spark { display: block; width: 100%; height: 64px; }
+  .spark.scaled { border-top: 1px dashed var(--m-line-strong); }
+  .hours { position: relative; height: 12px; margin-top: 4px; font-size: 10px; line-height: 12px; color: var(--m-muted-2); }
+  .hours span { position: absolute; top: 0; transform: translateX(-50%); }
+  .hours span:first-child { transform: none; }
+  .hours span:last-child { transform: translateX(-100%); }
   .bar-rect { fill: var(--c); opacity: 0.7; }
   .bar-rect.now { opacity: 1; }
   .bar-rect.negative { opacity: 0.45; }
   .empty-bar { fill: var(--m-line-strong); }
-  .foot { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-  .value { font-size: 20px; font-weight: 650; letter-spacing: -0.02em; white-space: nowrap; }
-  .delta { font-size: 12px; color: var(--m-muted); text-align: right; display: flex; flex-direction: column; }
-  .delta b { font-weight: 600; }
+  .foot {
+    display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "value delta" "value note";
+    column-gap: 8px; align-items: end;
+  }
+  .value { grid-area: value; font-size: 20px; font-weight: 650; letter-spacing: -0.02em; white-space: nowrap; }
+  .delta { display: contents; font-size: 12px; color: var(--m-muted); }
+  .delta b { grid-area: delta; justify-self: end; font-weight: 600; white-space: nowrap; }
+  .delta span { grid-area: note; justify-self: end; text-align: right; }
   .up { color: var(--m-ok); }
   .down { color: var(--danger); }
-  @media (max-width: 1280px) { .foot { flex-direction: column; align-items: flex-start; } .delta { text-align: left; } }
-  @media (max-width: 1000px) { .today { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-  @media (max-width: 760px) { .today { gap: var(--s3); } .value { font-size: 18px; } }
+  @container (max-width: 250px) {
+    .foot { display: flex; flex-wrap: wrap; align-items: baseline; }
+    .delta b { margin-left: auto; }
+    .delta span { flex-basis: 100%; text-align: left; }
+  }
+  @media (max-width: 1280px) { .today { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 760px) { .today { gap: var(--s3); } .tile { padding: var(--s4); } .value { font-size: 18px; } }
 </style>

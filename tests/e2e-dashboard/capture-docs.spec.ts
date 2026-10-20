@@ -14,44 +14,13 @@
 //
 // Every capture here has a row in that directory's README.md.
 //
-// The preview's synthetic day is the last 24 hours, whatever the clock says, so
-// a capture just after midnight would document an empty chart. The page's clock
-// is pinned to 18:30 today and the synthetic day is laid on today and on
-// yesterday from midnight, yesterday at 85 %, so every capture shows the same
-// day and the same comparison.
+// pinTheDay (pin-the-day.ts) fixes the day every capture shows, so a capture
+// just after midnight does not document an empty chart.
 import { expect, test } from "@playwright/test";
 import { mkdirSync } from "node:fs";
+import { pinTheDay } from "./pin-the-day";
 
 const SHOTS = "docs/assets/screenshots/dashboard";
-const SHOT_TIME = new Date();
-SHOT_TIME.setHours(18, 30, 0, 0);
-
-async function pinTheDay(page) {
-  await page.clock.install({ time: SHOT_TIME });
-  const now = Math.floor(SHOT_TIME.getTime() / 1000);
-  const midnight = Math.floor(new Date(SHOT_TIME.getFullYear(), SHOT_TIME.getMonth(), SHOT_TIME.getDate()).getTime() / 1000);
-  const yesterday = Math.floor(new Date(SHOT_TIME.getFullYear(), SHOT_TIME.getMonth(), SHOT_TIME.getDate() - 1).getTime() / 1000);
-  await page.route("**/api/history/series**", async (route) => {
-    const response = await route.fetch();
-    const body = await response.json();
-    const first = body.time[0];
-    const time = [];
-    const series = Object.fromEntries(Object.keys(body.series).map((id) => [id, []]));
-    for (const [start, share] of [[yesterday, 0.85], [midnight, 1]]) {
-      body.time.forEach((stamp, index) => {
-        const at = start + (stamp - first);
-        if (at > now) return;
-        time.push(at);
-        for (const id of Object.keys(series)) {
-          const value = body.series[id][index];
-          series[id].push(value === null ? null : value * share);
-        }
-      });
-    }
-    await route.fulfill({ response, json: { ...body, time, series } });
-  });
-}
-
 async function openOverview(page) {
   await pinTheDay(page);
   await page.goto("/modern/#/overview", { waitUntil: "domcontentloaded" });
