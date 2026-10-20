@@ -13,6 +13,7 @@ import json
 import re
 import shutil
 import subprocess
+import urllib.parse
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -133,6 +134,19 @@ def test_the_page_carries_no_inline_script_or_style():
     assert page.style_attributes == []
     bundle = MODERN_JS.read_text(encoding="utf-8")
     assert not re.search(r'style=\\?"', bundle), "a template would set a style attribute the CSP blocks"
+
+
+def test_the_tab_icon_is_the_mark_in_the_token_colours():
+    """The favicon is built from src/brand/mark.js at build time; its colours must be the scheme's own."""
+
+    page = (MODERN / "index.html").read_text(encoding="utf-8")
+    links = re.findall(r'<link rel="icon" type="image/svg\+xml" href="data:image/svg\+xml,([^"]+)">', page)
+    assert len(links) == 1, links
+    svg = urllib.parse.unquote(links[0])
+    root = _root_block((SOURCE / "src" / "styles" / "tokens.css").read_text(encoding="utf-8"))
+    for token in ("--pv", "--battery", "--output", "--grid", "--m-surface-2", "--m-line-strong", "--m-text"):
+        assert f'"{root[token].strip()}"' in svg, token
+    assert "var(" not in svg
 
 
 def test_the_shared_energy_colours_have_the_contract_values():

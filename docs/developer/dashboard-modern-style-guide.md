@@ -62,6 +62,12 @@ the violet one. A series, a flow line and a tile that are about the grid wear
 `--grid`; nothing else does. Text never wears an energy colour -- a small mark
 beside the text, a dot or an icon, carries the identity.
 
+The one exception is the product's mark: the inverter's bolt in a ring of all
+four energy colours, each quarter where the flow diagram puts it. It is drawn
+once, in `src/brand/mark.js`, and shown in the side menu (with "EMS" beneath it
+when the menu is folded), in the phone's top bar and as the browser tab's icon,
+which the build makes from the same drawing with the colours of `tokens.css`.
+
 ## Space and type
 
 - The layout's distances -- a card's padding, the gaps between cards and

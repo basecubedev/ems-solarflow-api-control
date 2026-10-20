@@ -1,5 +1,6 @@
 <script>
   import Icon from "../ui/Icon.svelte";
+  import BrandMark from "../ui/BrandMark.svelte";
   import { PAGES } from "./pages.js";
   import { router, href } from "./router.svelte.js";
   import { t } from "../i18n/i18n.svelte.js";
@@ -13,7 +14,8 @@
 
 <aside class="sidebar">
   <a class="brand" href={href("overview")} aria-label={t("app.name")}>
-    <span class="brand-mark"><Icon name="zap" /></span>
+    <BrandMark />
+    <span class="brand-short" aria-hidden="true">EMS</span>
     <span class="brand-text">
       <span class="brand-name">{t("app.name")}</span><br />
       <span class="brand-sub">{t("app.sub")}</span>

@@ -43,11 +43,12 @@ svg.i.lg { width: 22px; height: 22px; }
 }
 .brand { display: flex; align-items: center; gap: 12px; padding: 0 var(--s2); text-decoration: none; }
 .brand-mark {
-  width: 36px; height: 36px; border-radius: 11px; display: grid; place-items: center; flex: none;
-  background: linear-gradient(145deg, color-mix(in srgb, var(--m-accent) 85%, var(--m-white)), var(--m-accent));
-  color: var(--m-accent-ink); box-shadow: 0 6px 18px color-mix(in srgb, var(--m-accent) 25%, transparent);
+  display: block; width: 36px; height: 36px; flex: none; border-radius: 11px;
+  background: var(--m-surface-2); border: 1px solid var(--m-line-strong);
 }
-.brand-mark svg.i { width: 20px; height: 20px; stroke-width: 2.3; }
+.brand-short { display: none; font-size: 9.5px; font-weight: 700; letter-spacing: 0.14em; color: var(--m-muted); }
+.topbar-title { display: flex; align-items: center; gap: var(--s3); min-width: 0; }
+.topbar-mark { display: none; flex: none; }
 .brand-name { font-weight: 650; font-size: 15px; letter-spacing: -0.01em; }
 .brand-sub { font-size: 12px; color: var(--m-muted); }
 .nav { display: flex; flex-direction: column; gap: 2px; }
@@ -234,7 +235,8 @@ dialog.modal::backdrop { background: var(--m-scrim, rgba(3, 5, 8, 0.72)); }
 .app.rail { grid-template-columns: 76px minmax(0, 1fr); }
 .app.rail :is(.brand-text, .nav a span, .nav-group-label, .sidebar-foot .ghost-link span, .version, .nav a .lock) { display: none; }
 .app.rail .nav a { justify-content: center; padding: 11px; }
-.app.rail .brand { justify-content: center; padding: 0; }
+.app.rail .brand { flex-direction: column; justify-content: center; gap: 6px; padding: 0; }
+.app.rail .brand-short { display: block; }
 .app.rail .sidebar-foot .ghost-link { justify-content: center; }
 
 @media (max-width: 1280px) {
@@ -244,7 +246,11 @@ dialog.modal::backdrop { background: var(--m-scrim, rgba(3, 5, 8, 0.72)); }
 @media (max-width: 760px) {
   .app, .app.rail { grid-template-columns: minmax(0, 1fr); }
   .sidebar { display: none; }
-  .topbar { padding: var(--s3) var(--s4); }
+  .topbar { padding: var(--s3) var(--s4); gap: var(--s3); }
+  .topbar-title { flex: 1 1 100%; }
+  .topbar-title .ellipsis { white-space: normal; }
+  .topbar-mark { display: block; }
+  .topbar-mark .brand-mark { width: 32px; height: 32px; border-radius: 10px; }
   .topbar .hide-sm { display: none; }
   .content { padding: var(--s4); gap: var(--s4); padding-bottom: 96px; }
   .facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }

@@ -11,7 +11,7 @@ const s = (en, de, nl, fr) => ({ en, de, nl, fr });
 
 export const STRINGS = {
   "app.name": s("EMS SolarFlow", "EMS SolarFlow", "EMS SolarFlow", "EMS SolarFlow"),
-  "app.sub": s("Energy management", "Energiemanagement", "Energiebeheer", "Gestion de l’énergie"),
+  "app.sub": s("Control your energy.", "Deine Energie im Griff.", "Grip op je energie.", "Maîtrisez votre énergie."),
   "app.skip": s("Skip to content", "Zum Inhalt springen", "Naar inhoud", "Aller au contenu"),
 
   "nav.main": s("Main navigation", "Hauptnavigation", "Hoofdnavigatie", "Navigation principale"),

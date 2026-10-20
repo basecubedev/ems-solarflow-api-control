@@ -213,6 +213,22 @@ test.describe("Modern dashboard @smoke", () => {
     }
   });
 
+  test("the mark stays when the side menu folds, with EMS beneath it, and heads the phone's top bar", async ({ page }) => {
+    await page.setViewportSize({ width: 1000, height: 800 });
+    await openModern(page);
+    const brand = page.locator(".sidebar .brand");
+    await expect(brand.locator(".brand-mark")).toBeVisible();
+    await expect(brand.locator(".brand-short")).toHaveText("EMS");
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await expect(brand.locator(".brand-short")).toBeHidden();
+    await expect(brand.locator(".brand-text")).toBeVisible();
+    await expect(brand.locator(".brand-name")).toHaveText("EMS SolarFlow");
+    await page.setViewportSize({ width: 390, height: 844 });
+    const mark = page.locator(".topbar-mark");
+    await expect(mark.locator(".brand-mark")).toBeVisible();
+    await expect(mark).toHaveAttribute("href", "#/overview");
+  });
+
   test("the side menu shows its text on request and keeps that choice", async ({ page }) => {
     await page.setViewportSize({ width: 1000, height: 800 });
     await openModern(page);
@@ -426,6 +442,9 @@ test.describe("Modern dashboard on a phone @smoke", () => {
         await page.reload({ waitUntil: "domcontentloaded" });
         const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
         expect(overflow, `${width} px, ${lang}`).toBeLessThanOrEqual(0);
+        const [mark, title] = await Promise.all([page.locator(".topbar-mark"), page.locator(".page-title")].map((node) => node.boundingBox()));
+        expect(title.x, `title beside the mark at ${width} px, ${lang}`).toBeGreaterThan(mark.x + mark.width);
+        expect(title.y, `title beside the mark at ${width} px, ${lang}`).toBeLessThan(mark.y + mark.height);
         await page.getByTestId("nav-more").click();
         const content = page.locator("dialog.sheet .sheet-content");
         const sheetOverflow = () => content.evaluate((node) => node.scrollWidth - node.clientWidth);

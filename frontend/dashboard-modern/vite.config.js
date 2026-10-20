@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { markSvg } from "./src/brand/mark.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "../..");
@@ -13,6 +14,34 @@ const NOTICES = {
   "Inter.LICENSE": resolve(ROOT, "node_modules/@fontsource-variable/inter/LICENSE"),
   "Lucide.LICENSE": resolve(ROOT, "node_modules/lucide-static/LICENSE"),
 };
+
+const TOKENS = resolve(HERE, "src/styles/tokens.css");
+
+/**
+ * The browser tab's icon: the side menu's mark in the default scheme's
+ * colours, read from tokens.css. It is a data: URI, which the dashboard's CSP
+ * admits for images, so the server needs no new file type.
+ */
+function favicon() {
+  const css = readFileSync(TOKENS, "utf8");
+  const start = css.indexOf(":root {");
+  const root = css.slice(start, css.indexOf("}", start));
+  const token = (name) => {
+    const match = root.match(new RegExp(`${name}:\\s*([^;]+);`));
+    if (!match) throw new Error(`tokens.css has no ${name} in its first :root block`);
+    return match[1].trim();
+  };
+  const svg = markSvg({
+    "--pv": token("--pv"),
+    "--battery": token("--battery"),
+    "--output": token("--output"),
+    "--grid": token("--grid"),
+    tile: token("--m-surface-2"),
+    line: token("--m-line-strong"),
+    bolt: token("--m-text"),
+  });
+  return `<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,${encodeURIComponent(svg)}">`;
+}
 
 const SHAPE = /<(?:path|circle|ellipse|line|polygon|polyline|rect)\b[^<>]*\/>/g;
 
@@ -58,6 +87,7 @@ function emsPage() {
       order: "post",
       handler(html) {
         return html
+          .replace("<!--favicon-->", favicon())
           .replace("<!--icons-->", iconSprite())
           .replace(
             "<!--vendored-->",
