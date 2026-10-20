@@ -1,3 +1,19 @@
 {
-  "builds": []
+  "builds": [
+    {
+      "admin_digest": "sha256:9fcacc4abca49e55801e68a02ab4cd0fbf6f8fc59d8907ffbc5233bdd25f3c16",
+      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-dashboard-modern-9e701202a3-5ec3b04-39389920156-1",
+      "build_id": "dev-feat-dashboard-modern-9e701202a3-5ec3b04-39389920156-1",
+      "channel": "development",
+      "created_at": "2026-10-20T08:06:16Z",
+      "display_name": "Feature feat-dashboard-modern",
+      "ems_digest": "sha256:47f0cdb6c795f2b6296e8b1e95795999f7251a8b8cc87fb94d930744f526ffab",
+      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-feat-dashboard-modern-9e701202a3-5ec3b04-39389920156-1",
+      "installable": true,
+      "revision": "5ec3b045c620baca3a0c0ed57924ee4bb26c724c",
+      "run_attempt": 1,
+      "run_id": "39389920156",
+      "tag": "dev-feat-dashboard-modern-9e701202a3-5ec3b04-39389920156-1"
+    }
+  ]
 }
