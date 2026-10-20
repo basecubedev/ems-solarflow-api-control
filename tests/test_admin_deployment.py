@@ -1271,6 +1271,184 @@ def test_permission_repair_uses_only_prepared_config_and_data_mounts(tmp_path):
     assert all("docker rm" not in value for value in command)
 
 
+def _run_repair_script_on(workspace, recorder=None, chown_prelude=""):
+    """Run the repair's own shell script against a real tree, as this user.
+
+    The script is written for /workspace inside a container; here it runs on
+    the host with that prefix pointed at ``workspace``. Chowning to the
+    current user's own ids is allowed without root, so the whole script runs.
+    Ownership cannot change that way, so ``recorder`` -- a directory -- puts a
+    chown first on PATH that writes down every argument list before it runs
+    the real one.
+    """
+
+    import os
+    import shutil
+    import subprocess
+
+    scripts = []
+
+    def _run(command, **_kwargs):
+        scripts.append(command[-1])
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    DockerCli(run=_run).repair_workspace_permissions(
+        workspace, "ems:test", os.getuid(), os.getgid()
+    )
+    script = scripts[0].replace("/workspace", str(workspace))
+    env = dict(os.environ)
+    if recorder is not None:
+        recorder.mkdir()
+        fake = recorder / "chown"
+        fake.write_text(
+            "#!/bin/sh\n"
+            f'printf "%s\\n" "$*" >> "{recorder / "calls"}"\n'
+            + chown_prelude
+            + f'exec {shutil.which("chown")} "$@"\n'
+        )
+        fake.chmod(0o755)
+        env["PATH"] = f"{recorder}:{env['PATH']}"
+    subprocess.run(["sh", "-c", script], check=True, env=env)
+    return scripts[0]
+
+
+def test_permission_repair_gives_everything_but_influxdb_to_the_ems_user(tmp_path):
+    """InfluxDB runs as its own user (uid 1000 in the image) and owns
+    data/influxdb. The repair used to chown it recursively with everything
+    else in data/; a running InfluxDB then could not create a WAL segment or a
+    shard ("permission denied"), and every write was refused with HTTP 500
+    until the container restarted -- seen on a Pi after the setup wizard ran
+    again."""
+
+    workspace = tmp_path / "deployment"
+    engine = workspace / "data" / "influxdb" / "engine"
+    engine.mkdir(parents=True)
+    (workspace / "config").mkdir()
+    (workspace / "data" / "runtime-state.json").write_text("{}")
+    (workspace / "data" / "backups").mkdir()
+    recorder = tmp_path / "bin"
+    engine.chmod(0o500)
+
+    try:
+        _run_repair_script_on(workspace, recorder)
+        assert engine.stat().st_mode & 0o777 == 0o500
+    finally:
+        engine.chmod(0o700)
+
+    calls = (recorder / "calls").read_text().splitlines()
+    data = workspace / "data"
+    walked = " ".join(calls)
+    assert str(data / "influxdb") not in walked
+    assert f"-R {os.getuid()}:{os.getgid()} {workspace / 'config'}" in calls
+    assert f"{os.getuid()}:{os.getgid()} {data}" in calls
+    assert str(data / "backups") in walked
+    assert str(data / "runtime-state.json") in walked
+    assert not any(call.endswith(f" {data}") and call.startswith("-R") for call in calls)
+
+
+def test_an_entry_the_ems_removes_during_the_repair_is_not_a_failure(tmp_path):
+    """The running EMS replaces its own files in data/ every cycle; one that is
+    listed and then gone by the time chown reaches it made the repair fail."""
+
+    workspace = tmp_path / "deployment"
+    (workspace / "config").mkdir(parents=True)
+    (workspace / "data").mkdir()
+    (workspace / "data" / "control-status.json.vanishing.tmp").write_text("{}")
+    (workspace / "data" / "runtime-state.json").write_text("{}")
+    prelude = 'for a; do case "$a" in *vanishing*) rm -f "$a";; esac; done\n'
+
+    _run_repair_script_on(workspace, tmp_path / "bin", chown_prelude=prelude)
+
+    assert (workspace / "data" / "runtime-state.json").exists()
+
+
+def test_an_entry_chown_cannot_change_still_fails_the_repair(tmp_path):
+    import subprocess
+
+    workspace = tmp_path / "deployment"
+    (workspace / "config").mkdir(parents=True)
+    (workspace / "data").mkdir()
+    (workspace / "data" / "stubborn").write_text("")
+    prelude = 'for a; do case "$a" in *stubborn*) exit 1;; esac; done\n'
+
+    with pytest.raises(subprocess.CalledProcessError):
+        _run_repair_script_on(workspace, tmp_path / "bin", chown_prelude=prelude)
+
+
+def test_a_failed_repair_is_tried_once_more_before_it_is_reported(tmp_path):
+    """Protected interleaving: the first run meets a file the EMS is replacing
+    inside a directory; the repair is idempotent, so a second run settles it."""
+
+    answers = iter([1, 0])
+    calls = []
+
+    def _run(command, **_kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=next(answers), stdout="", stderr="vanished")
+
+    workspace = tmp_path / "deployment"
+    (workspace / "config").mkdir(parents=True)
+    (workspace / "data").mkdir()
+
+    DockerCli(run=_run).repair_workspace_permissions(workspace, "ems:test", 1000, 1000)
+
+    assert len(calls) == 2
+
+
+def test_a_repair_that_fails_twice_is_reported(tmp_path):
+    calls = []
+
+    def _run(command, **_kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=1, stdout="", stderr="Operation not permitted")
+
+    workspace = tmp_path / "deployment"
+    (workspace / "config").mkdir(parents=True)
+    (workspace / "data").mkdir()
+
+    with pytest.raises(DockerError) as raised:
+        DockerCli(run=_run).repair_workspace_permissions(workspace, "ems:test", 1000, 1000)
+
+    assert raised.value.code == "workspace_permission_repair_failed"
+    assert len(calls) == 2
+
+
+def test_permission_repair_still_opens_the_owner_rights_it_did_before(tmp_path):
+    workspace = tmp_path / "deployment"
+    (workspace / "config").mkdir(parents=True)
+    own = workspace / "data" / "backups"
+    own.mkdir(parents=True)
+    runtime = workspace / "data" / "runtime-state.json"
+    runtime.write_text("{}")
+    own.chmod(0o500)
+    runtime.chmod(0o400)
+
+    try:
+        _run_repair_script_on(workspace)
+
+        assert own.stat().st_mode & 0o777 == 0o700
+        assert runtime.stat().st_mode & 0o777 == 0o600
+    finally:
+        own.chmod(0o700)
+
+
+def test_permission_repair_follows_no_symbolic_link_out_of_the_workspace(tmp_path):
+    """The repair runs as root. A link in data/ to a file elsewhere must not
+    hand that file's mode to the EMS user, which chmod -R never did."""
+
+    workspace = tmp_path / "deployment"
+    (workspace / "config").mkdir(parents=True)
+    (workspace / "data").mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("")
+    outside.chmod(0o400)
+    (workspace / "data" / "link").symlink_to(outside)
+
+    _run_repair_script_on(workspace)
+
+    assert outside.stat().st_mode & 0o777 == 0o400
+
+
 def test_listing_images_keeps_both_identities_of_each_image(tmp_path):
     """A removal names the local ID; a protection record stores the digest."""
 

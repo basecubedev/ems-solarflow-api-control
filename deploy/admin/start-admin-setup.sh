@@ -163,7 +163,7 @@ prepare_admin_data_dir() {
     echo "Cannot create Admin data directory: $admin_data_dir" >&2
     echo "Fix the host ownership and retry:" >&2
     echo "  sudo mkdir -p '$admin_data_dir'" >&2
-    echo "  sudo chown -R ${PUID}:${PGID} '$project_root/data'" >&2
+    echo "  sudo chown -R ${PUID}:${PGID} '$admin_data_dir'" >&2
     exit 1
   fi
   require_runtime_writable_dir "$admin_data_dir"

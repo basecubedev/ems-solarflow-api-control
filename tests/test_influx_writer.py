@@ -1198,3 +1198,87 @@ def test_a_client_that_cannot_be_built_is_not_also_called_unconfigured(caplog):
 
     assert "event=influx_writer_client_error" in caplog.text
     assert "event=influx_writer_unconfigured" not in caplog.text
+
+
+# -- a write InfluxDB answered is not a missing InfluxDB -------------------
+
+def _http_error(status):
+    error = RuntimeError(f"{status} Server Error")
+    error.response = SimpleNamespace(status_code=status)
+    return error
+
+
+def test_a_refused_write_names_the_answer_and_where_its_cause_is_logged():
+    """A Pi whose InfluxDB lost access to its own data directory answered
+    every write with HTTP 500 for days, and the log said "not reachable" --
+    sending the operator to install a database that was running."""
+
+    writer = InfluxTelemetryWriter({**CONFIG, "mode": "bundled"}, client_factory=FakeClient)
+
+    hint = writer._write_error_hint(_http_error(500))
+
+    assert "not reachable" not in hint
+    assert "HTTP 500" in hint
+    assert "docker logs ems-influxdb" in hint
+
+
+def test_a_refused_token_and_a_missing_bucket_get_their_own_answer():
+    writer = InfluxTelemetryWriter({**CONFIG, "mode": "external"}, client_factory=FakeClient)
+
+    assert "token" in writer._write_error_hint(_http_error(401))
+    missing = writer._write_error_hint(_http_error(404))
+    assert "ems_raw" in missing
+    assert "python3 emsctl.py influx sync --safe" in missing
+    assert "the InfluxDB server log" in writer._write_error_hint(_http_error(503))
+
+
+def test_a_write_that_never_reached_influxdb_keeps_the_setup_hint():
+    writer = InfluxTelemetryWriter({**CONFIG, "mode": "bundled"}, client_factory=FakeClient)
+
+    assert writer._write_error_hint(ConnectionError("refused")) == writer._setup_hint()
+
+
+def test_influxdbs_own_reason_travels_with_the_failed_write(caplog):
+    """For a 400 or 422 the reason is in InfluxDB's answer, not in its log."""
+
+    error = _http_error(422)
+    error.response.text = '{"code":"unprocessable entity",\n "message":"failure writing points: field type conflict"}'
+
+    class Refusing(FakeClient):
+        def write_lines(self, bucket, lines):
+            raise error
+
+    written = threading.Event()
+    writer = InfluxTelemetryWriter(CONFIG, client_factory=Refusing)
+    original = writer._maybe_log_error
+
+    def recording(event, **fields):
+        original(event, **fields)
+        written.set()
+
+    writer._maybe_log_error = recording
+    with caplog.at_level(logging.WARNING):
+        writer.start()
+        try:
+            writer.enqueue(["m f=1i 1"])
+            assert written.wait(5)
+        finally:
+            writer.stop()
+
+    assert "field type conflict" in caplog.text
+    assert "\n" not in caplog.records[-1].getMessage()
+
+
+def test_a_database_that_starts_refusing_is_named_at_once_not_after_the_outage_pause(caplog):
+    """Failures move from "not reachable" to an HTTP 500 when InfluxDB comes
+    back unable to write; the new answer carries a different hint and must not
+    wait out the pause the connection errors built up."""
+
+    writer = InfluxTelemetryWriter(CONFIG, client_factory=FakeClient, error_log_interval_s=3600)
+    with caplog.at_level(logging.WARNING):
+        writer._maybe_log_error("influx_writer_write_error", error=ConnectionError("refused"))
+        writer._maybe_log_error("influx_writer_write_error", error=ConnectionError("refused"))
+        writer._maybe_log_error("influx_writer_write_error", error=_http_error(500))
+
+    assert caplog.text.count("event=influx_writer_write_error") == 2
+    assert "500 Server Error" in caplog.text

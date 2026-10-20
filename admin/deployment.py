@@ -33,6 +33,7 @@ from admin.install_context import detect_install_context
 from admin.models import utc_now_iso
 from admin.releases import DOCKER_IMAGE_REPOSITORY, ReleaseError, default_admin_data_dir
 from admin.setup_workflow import GENERATED_CONFIG_OWNER, read_generated_metadata
+from ems.influx_setup import DEFAULT_DATA_DIR as INFLUX_DATA_DIR
 from ems.runtime_state import (
     config_digest,
     request_runtime_reset,
@@ -751,28 +752,60 @@ class DockerCli:
             )
 
     def repair_workspace_permissions(self, workspace, image, puid, pgid):
+        """Give config/ and data/ to the EMS runtime user, except InfluxDB's data.
+
+        The bundled InfluxDB runs as its own user and its image sets that
+        user's ownership on its data directory each time it starts. Handing
+        the directory to the EMS user takes it away from a running InfluxDB:
+        it cannot open a new WAL segment or shard, and every write is refused
+        until the container restarts. So data/influxdb is not walked at all.
+
+        Every other entry of data/ is chowned and chmodded recursively by the
+        tools themselves, which change a symbolic link rather than follow it;
+        a link at the top level gets ``chown -h`` and no chmod, which would
+        follow it. The running EMS replaces its own files in data/ all the
+        time, so an entry that is gone by the time it is reached is not a
+        failure, and the whole repair, being idempotent, is tried once more
+        before a failure is reported.
+        """
+
         workspace = _validated_workspace(workspace)
+        owner = f"{puid}:{pgid}"
+        influx = f"/workspace/{INFLUX_DATA_DIR}"
+        each_entry = (
+            "for p; do "
+            f'if [ -L "$p" ]; then chown -h {owner} "$p" || [ ! -L "$p" ] || exit 1; continue; fi; '
+            f'if ! {{ chown -R {owner} "$p" && chmod -R u+rwX "$p"; }}; then '
+            '[ -e "$p" ] && exit 1; fi; '
+            "done; true"
+        )
         command = self._workspace_command(
             workspace,
             image,
             "0:0",
             (
-                f"chown -R {puid}:{pgid} /workspace/config /workspace/data && "
-                "chmod -R u+rwX /workspace/config /workspace/data"
+                f"chown -R {owner} /workspace/config && "
+                "chmod -R u+rwX /workspace/config && "
+                f"chown {owner} /workspace/data && "
+                "chmod u+rwX /workspace/data && "
+                f"find /workspace/data -mindepth 1 -maxdepth 1 ! -path {influx} "
+                f"-exec sh -c '{each_entry}' sh {{}} +"
             ),
         )
-        result = self._run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=CONTAINER_LIFECYCLE_TIMEOUT_SECONDS,
-        )
-        if result.returncode != 0:
-            raise DockerError(
-                "workspace_permission_repair_failed",
-                "Could not repair the deployment workspace permissions.",
-                _safe_command_detail(result.stderr or result.stdout),
+        for _attempt in range(2):
+            result = self._run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=CONTAINER_LIFECYCLE_TIMEOUT_SECONDS,
             )
+            if result.returncode == 0:
+                return
+        raise DockerError(
+            "workspace_permission_repair_failed",
+            "Could not repair the deployment workspace permissions.",
+            _safe_command_detail(result.stderr or result.stdout),
+        )
 
     @staticmethod
     def _workspace_command(workspace, image, user, script):

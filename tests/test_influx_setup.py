@@ -1436,7 +1436,7 @@ def test_prune_still_accepts_its_dry_run(monkeypatch):
     seen = {}
     monkeypatch.setattr(
         emsctl, "run_influx_schema_command",
-        lambda cfg, action, js, dry_run=False, safe=False: seen.update(
+        lambda cfg, action, js, dry_run=False, **_options: seen.update(
             action=action, dry_run=dry_run
         ) or 0,
     )
@@ -1542,7 +1542,7 @@ def test_safe_is_refused_outside_sync(capsys):
 def test_a_safe_sync_reaches_the_schema_op(monkeypatch):
     seen = {}
 
-    def fake(influx_config, action, json_output, dry_run=False, safe=False):
+    def fake(influx_config, action, json_output, dry_run=False, safe=False, **_options):
         seen.update(action=action, safe=safe)
         return 0
 
@@ -1591,3 +1591,65 @@ def test_a_kept_bucket_whose_probe_failed_says_so(capsys):
     )
 
     assert "could not check for older data" in capsys.readouterr().out
+
+
+def test_status_says_whether_telemetry_arrives(capsys):
+    base = {
+        "bucket_prefix": "ems",
+        "healthy": True,
+        "buckets": [],
+        "tasks": [],
+        "missing_buckets": [],
+        "missing_tasks": [],
+        "raw_bucket": "ems_raw",
+        "raw_window_seconds": 900,
+        "raw_checked": True,
+    }
+    emsctl.print_influx_status({**base, "raw_latest": None})
+    emsctl.print_influx_status({**base, "raw_latest": "2026-10-20T18:00:00Z"})
+
+    out = capsys.readouterr().out
+    assert "telemetry: NONE in ems_raw for 15 minutes" in out
+    assert "telemetry: newest point in ems_raw at 2026-10-20T18:00:00Z" in out
+
+
+def test_a_simulating_ems_is_not_expected_to_write_telemetry(monkeypatch):
+    seen = {}
+
+    def fake(influx_config, action, json_output, dry_run=False, safe=False, telemetry_expected=True):
+        seen["telemetry_expected"] = telemetry_expected
+        return 0
+
+    monkeypatch.setattr(emsctl, "run_influx_schema_command", fake)
+    args = emsctl.parse_args(["influx", "status", "--json"])
+    influx = {"influxdb": {"enabled": True}}
+
+    emsctl.handle_influx_command(args, {**influx, "system": {"simulation_mode": True}})
+    assert seen == {"telemetry_expected": False}
+    emsctl.handle_influx_command(args, {**influx, "system": {"simulation_mode": False}})
+    assert seen == {"telemetry_expected": True}
+
+
+@pytest.mark.parametrize(
+    ("value", "simulates"),
+    [(True, True), (False, False), ("false", False), ("true", False), (1, False), (None, False)],
+)
+def test_simulation_is_read_as_the_ems_reads_it(value, simulates):
+    """The EMS treats a value that is not a JSON boolean as not simulating, so
+    it starts the telemetry writer; "false" is a truthy string."""
+
+    assert emsctl.config_simulates({"system": {"simulation_mode": value}}) is simulates
+    assert emsctl.config_simulates({}) is False
+
+
+def test_status_does_not_call_telemetry_missing_where_none_is_written(capsys):
+    emsctl.print_influx_status(
+        {
+            "bucket_prefix": "ems", "healthy": True, "buckets": [], "tasks": [],
+            "missing_buckets": [], "missing_tasks": [], "raw_bucket": "ems_raw",
+            "raw_window_seconds": 900, "raw_checked": True, "raw_latest": None,
+            "telemetry_expected": False,
+        }
+    )
+
+    assert "telemetry:" not in capsys.readouterr().out

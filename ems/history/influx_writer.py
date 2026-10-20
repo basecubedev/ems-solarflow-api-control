@@ -40,7 +40,11 @@ from ems.history.schema import (
     planned_task_names,
     query_profile_bucket_names,
 )
-from ems.influx_setup import INFLUX_PROBE_REQUEST_TIMEOUT_SECONDS, is_container_runtime
+from ems.influx_setup import (
+    INFLUX_CONTAINER_NAME,
+    INFLUX_PROBE_REQUEST_TIMEOUT_SECONDS,
+    is_container_runtime,
+)
 from ems.power_direction import derive_house_load_w
 from ems.logging_utils import log_event
 
@@ -95,6 +99,21 @@ def _now():
 
 class _WriterStopping(Exception):
     """Raised inside the schema check when the writer has been asked to stop."""
+
+
+def _response_status(exc):
+    """The HTTP status InfluxDB answered with, or None when it did not answer."""
+
+    return getattr(getattr(exc, "response", None), "status_code", None)
+
+
+def _response_excerpt(exc, limit=200):
+    """InfluxDB's own reason for an error answer, on one short line, or None."""
+
+    text = getattr(getattr(exc, "response", None), "text", None)
+    if not isinstance(text, str) or not text.strip():
+        return None
+    return " ".join(text.split())[:limit]
 
 
 def _is_permission_error(exc):
@@ -417,11 +436,13 @@ class InfluxTelemetryWriter:
                 # Drop the cached client so the next attempt reconnects, and
                 # never let the failure escape to the control loop.
                 self._client = None
+                detail = _response_excerpt(exc)
                 self._maybe_log_error(
                     "influx_writer_write_error",
                     error=exc,
                     line_count=len(batch),
-                    hint=self._setup_hint(),
+                    hint=self._write_error_hint(exc),
+                    **({"detail": detail} if detail else {}),
                 )
                 self._sleep_backoff(backoff)
                 backoff = min(backoff * 2, self._max_backoff)
@@ -626,6 +647,37 @@ class InfluxTelemetryWriter:
             + way_out
         )
 
+    def _write_error_hint(self, exc):
+        """What to do about a failed write: InfluxDB's answer, when it gave one.
+
+        A write InfluxDB answered with an error status reached a running
+        database, so the setup steps for a missing one are the wrong advice.
+        """
+
+        status = _response_status(exc)
+        if status is None:
+            return self._setup_hint()
+        if status in (401, 403):
+            return (
+                f"InfluxDB refused the token (HTTP {status}). Check influxdb.token "
+                "or the secret file against the running InfluxDB."
+            )
+        if status == 404:
+            return (
+                f"InfluxDB has no bucket {self.bucket} (HTTP 404). The EMS creates "
+                "it by itself unless influxdb.auto_sync is off; to create it now, "
+                "run: python3 emsctl.py influx sync --safe"
+            )
+        where = (
+            f"docker logs {INFLUX_CONTAINER_NAME}"
+            if self.config.get("mode") == "bundled"
+            else "the InfluxDB server log"
+        )
+        return (
+            f"InfluxDB answered but did not store the data (HTTP {status}). "
+            f"Its own log names the cause: {where}"
+        )
+
     def _maybe_log_error(self, event, **fields):
         """Log one writer failure, each kind on its own widening interval.
 
@@ -635,12 +687,13 @@ class InfluxTelemetryWriter:
         """
 
         now = time.time()
-        last, interval = self._error_log_state.get(event, (None, self._error_log_interval))
+        kind = (event, _response_status(fields.get("error")))
+        last, interval = self._error_log_state.get(kind, (None, self._error_log_interval))
         if last is not None and now - last < interval:
             return
         if last is not None:
             interval = min(interval * 2, self._max_error_log_interval)
-        self._error_log_state[event] = (now, interval)
+        self._error_log_state[kind] = (now, interval)
         log_event(logging.WARNING, event, bucket=self.bucket, **fields)
 
     def _note_write_succeeded(self):
