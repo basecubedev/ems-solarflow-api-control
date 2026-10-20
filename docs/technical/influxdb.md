@@ -461,8 +461,9 @@ EMS syncs the schema itself:
   goes missing later comes back. A complete schema costs a few lookups and no
   writes; a bucket whose retention differs costs one more query, once.
 
-It runs the **safe** sync, the same as `influx sync --safe`: it creates the
-buckets and tasks that are missing and deletes nothing.
+It runs the **safe** sync, the same as `influx sync --safe` and the same the
+Admin console runs for **Restart EMS now** and **Repair analytics**: it creates
+the buckets and tasks that are missing and deletes nothing.
 
 - A retention is shortened only when no point in the bucket is old enough to
   fall out of it. An appliance whose raw bucket has kept months of telemetry
@@ -537,7 +538,8 @@ way the Analytics tab says so:
 ```text
 Analytics history is enabled, but a bucket this range reads is missing.
 Unless influxdb.auto_sync is off, the EMS creates it by itself; it checks every
-half hour. To create it now, run: python3 emsctl.py influx sync --safe
+half hour. To create it now, use Repair analytics in the Admin console's
+Maintenance, or run: python3 emsctl.py influx sync --safe
 ```
 
 The EMS also says so without anyone opening the tab. Once the telemetry writer

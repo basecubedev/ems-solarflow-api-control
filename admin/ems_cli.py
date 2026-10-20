@@ -50,6 +50,27 @@ UNAVAILABLE_MESSAGE = (
 # reclassifies this one known result for display.
 INFLUX_DISABLED_TEXT = "influxdb is disabled in config"
 INFLUX_DISABLED_MESSAGE = "InfluxDB is disabled in config. Analytics is not configured."
+INFLUX_SCHEMA_INCOMPLETE_MESSAGE = (
+    "The analytics schema is incomplete (missing: {missing}). Repair analytics "
+    "in EMS services creates it now; while influxdb.auto_sync is on, the EMS "
+    "also creates it by itself."
+)
+FULL_SYNC_COMMAND = "docker compose exec ems python3 emsctl.py influx sync"
+INFLUX_RETENTION_LONGER_MESSAGE = (
+    "Retention is longer than the config: {buckets}. Restart EMS now and Repair "
+    "analytics shorten a retention only when no data falls out of it; to apply "
+    "it anyway, which deletes the older data, run in the installation directory: "
+    + FULL_SYNC_COMMAND
+)
+INFLUX_RETENTION_SHORTER_MESSAGE = (
+    "Retention is shorter than the config: {buckets}. Repair analytics "
+    "lengthens it; nothing is deleted."
+)
+INFLUX_TASKS_OFF_MESSAGE = (
+    "Downsampling tasks are switched off: {tasks}. Neither the EMS nor Repair "
+    "analytics switches a task back on; run in the installation directory: "
+    + FULL_SYNC_COMMAND
+)
 INFLUX_DISABLED_HINT = (
     "Enable Analytics / bundled InfluxDB in Configuration & Hardware if you want "
     "history and analytics."
@@ -288,6 +309,10 @@ class EmsCliDiagnostics:
         if check_id == "influx_status" and _influx_disabled_in_output(stdout, stderr):
             status = "disabled"
             message = INFLUX_DISABLED_MESSAGE
+        elif check_id == "influx_status" and status == "ok":
+            message = _influx_schema_message(parsed)
+            if message:
+                status = "warning"
         return _check_result(
             check_id, spec, status, exit_code, stdout, stderr,
             _elapsed_ms(started), out_trunc or err_trunc, parsed, message,
@@ -298,6 +323,74 @@ def _status_for(exit_code, spec):
     if exit_code == 0:
         return "ok"
     return "warning" if spec["warn_on_fail"] else "failed"
+
+
+def _influx_schema_message(parsed):
+    """What `influx status` found incomplete, worded for its fix; it exits 0 either way.
+
+    Its ``missing_tasks`` counts a task that exists but is switched off, which no
+    repair creates, so those are named apart from the ones that are absent.
+    """
+
+    report = parsed.get("report") if isinstance(parsed, dict) else None
+    if not isinstance(report, dict):
+        return None
+
+    def names(key):
+        values = report.get(key)
+        return [str(value) for value in values] if isinstance(values, list) else []
+
+    present = {
+        str(task.get("name"))
+        for task in report.get("tasks") or []
+        if isinstance(task, dict)
+    }
+    missing_tasks = names("missing_tasks")
+    absent = names("missing_buckets") + [name for name in missing_tasks if name not in present]
+    off = [name for name in missing_tasks if name in present]
+    longer, shorter = [], []
+    for bucket in report.get("buckets") or []:
+        if not isinstance(bucket, dict) or not bucket.get("exists"):
+            continue
+        live = _seconds(bucket.get("retention_seconds"))
+        wanted = _seconds(bucket.get("expected_retention_seconds"))
+        if live is None or wanted is None or live == wanted:
+            continue
+        text = f"{bucket.get('name')} keeps {_days(live)} (config {_days(wanted)})"
+        (longer if _keeps_longer(live, wanted) else shorter).append(text)
+    parts = []
+    if absent:
+        parts.append(INFLUX_SCHEMA_INCOMPLETE_MESSAGE.format(missing=", ".join(absent)))
+    if off:
+        parts.append(INFLUX_TASKS_OFF_MESSAGE.format(tasks=", ".join(off)))
+    if longer:
+        parts.append(INFLUX_RETENTION_LONGER_MESSAGE.format(buckets="; ".join(longer)))
+    if shorter:
+        parts.append(INFLUX_RETENTION_SHORTER_MESSAGE.format(buckets="; ".join(shorter)))
+    return " ".join(parts) or None
+
+
+def _seconds(value):
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def _keeps_longer(live, wanted):
+    """0 is forever, so it is longer than any finite retention."""
+
+    if live == 0:
+        return wanted != 0
+    return wanted != 0 and live > wanted
+
+
+def _days(seconds):
+    try:
+        seconds = int(seconds or 0)
+    except (TypeError, ValueError):
+        return "unknown"
+    return f"{seconds // 86400} days" if seconds else "forever"
 
 
 def _influx_disabled_in_output(stdout, stderr):

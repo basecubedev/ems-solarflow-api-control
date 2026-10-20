@@ -326,7 +326,7 @@ class FakeCompose:
         self.calls.append(
             ("up", tuple(profiles), tuple(services), force_recreate)
         )
-        if "up" in self.fail:
+        if "up" in self.fail or any(f"up:{service}" in self.fail for service in services):
             raise DockerError("compose_start_failed", "boom")
 
     def stop(self, workspace, services, profiles=(), on_line=None):
@@ -341,6 +341,12 @@ class FakeCompose:
         self.calls.append(("run_oneoff", service, tuple(command)))
         returncode = self.sync_returncode if "sync" in command else self.init_returncode
         return returncode, None
+
+
+SYNC_WARNING = (
+    "Could not sync the analytics schema. The EMS creates it by itself once "
+    "InfluxDB answers; Repair analytics does it at once."
+)
 
 
 def make_actions(tmp_path, config, overview, compose, run_influx_init=None):
@@ -376,7 +382,8 @@ def test_sync_recreates_ems_without_deleting_data(tmp_path):
 
 
 INIT_CMD = ("python3", "emsctl.py", "influx", "init", "--no-start", "--json")
-SYNC_CMD = ("python3", "emsctl.py", "influx", "sync", "--json")
+SYNC_CMD = ("python3", "emsctl.py", "influx", "sync", "--safe", "--json")
+REPAIR_CMD = SYNC_CMD
 
 
 def test_sync_full_bundled_flow_init_start_sync_recreate(tmp_path):
@@ -439,42 +446,54 @@ def test_sync_skips_init_when_auto_init_disabled(tmp_path):
     assert ("run_oneoff", "ems", SYNC_CMD) in compose.calls
 
 
-def test_failed_influx_start_aborts_before_sync_and_recreate(tmp_path):
-    compose = FakeCompose(fail=("up",))
+def test_a_failed_influx_start_still_restarts_the_ems_and_names_analytics(tmp_path):
+    """Analytics is optional; the EMS controls the hardware without it.
+
+    A bundled InfluxDB that does not start leaves the schema sync nothing to
+    talk to, so it is skipped, but it does not keep the EMS from restarting
+    against the config the operator just applied.
+    """
+
+    compose = FakeCompose(fail=("up:influxdb",))
     actions = make_actions(tmp_path, influx_config(), make_overview(), compose)
     result = actions.sync()
-    assert result["ok"] is False
+
+    assert result["ok"] is True
+    assert result["status"] == "completed_with_warnings"
     assert ("run_oneoff", "ems", SYNC_CMD) not in compose.calls
-    # Only the failing influx start up-call ran; EMS was never recreated.
     assert compose.calls == [
         ("run_oneoff", "ems", INIT_CMD),
         ("up", ("with-analytics",), ("influxdb",), False),
+        ("up", (), ("ems",), True),
+    ]
+    assert result["warnings"] == [
+        "Could not start bundled InfluxDB; Analytics stays unavailable until it runs."
     ]
 
 
-def test_failed_influx_sync_aborts_before_ems_recreate(tmp_path):
+def test_a_failed_schema_sync_still_restarts_the_ems(tmp_path):
+    """The sync used to stop the apply here, and the EMS kept running the old
+    config -- or none at all on a fresh install. The EMS now completes the schema
+    itself once InfluxDB answers, so a sync that fails is a warning."""
+
     compose = FakeCompose(sync_returncode=1)
     actions = make_actions(tmp_path, influx_config(), make_overview(), compose)
     result = actions.sync()
-    assert result["ok"] is False
-    assert result["status"] == "error"
-    assert result["message"] == "Could not sync InfluxDB analytics schema."
-    # EMS is not recreated when the schema sync fails.
-    assert ("up", (), ("ems",), True) not in compose.calls
-    assert result["steps"][-1] == {
-        "service": "influxdb",
-        "action": "sync",
-        "status": "error",
-    }
+
+    assert result["ok"] is True
+    assert result["status"] == "completed_with_warnings"
+    assert ("up", (), ("ems",), True) in compose.calls
+    assert {"service": "influxdb", "action": "sync", "status": "error"} in result["steps"]
+    assert result["steps"][-1] == {"service": "ems", "action": "recreate", "status": "ok"}
+    assert result["warnings"] == [SYNC_WARNING]
 
 
-def test_a_container_left_behind_is_named_in_the_summary_not_only_the_step(tmp_path):
-    """The page renders this summary and not the step detail on a failure.
+def test_a_container_left_behind_is_named_in_the_warning_not_only_the_step(tmp_path):
+    """The page renders the warning and not the step detail.
 
     A leftover container is the one part of the failure the operator has to act
-    on: the advice after a timeout is to try again, and doing that beside a sync
-    still running puts two of them into InfluxDB at once. Hiding it in a field
-    nothing shows is the same as not reporting it.
+    on: retrying beside a sync still running puts two of them into InfluxDB at
+    once. Hiding it in a field nothing shows is the same as not reporting it.
     """
 
     from admin.deployment import DockerError
@@ -500,12 +519,12 @@ def test_a_container_left_behind_is_named_in_the_summary_not_only_the_step(tmp_p
     )
     result = actions.sync()
 
-    assert result["ok"] is False
-    assert "ems-oneoff-abc123456789" in result["message"]
-    assert "Could not sync InfluxDB analytics schema." in result["message"]
+    [warning] = result["warnings"]
+    assert "ems-oneoff-abc123456789" in warning
+    assert SYNC_WARNING in warning
 
 
-def test_a_failure_with_nothing_left_behind_keeps_the_plain_summary(tmp_path):
+def test_a_failure_with_nothing_left_behind_keeps_the_plain_warning(tmp_path):
     """Widening every failure message would bury the one that needs acting on."""
 
     from admin.deployment import DockerError
@@ -525,16 +544,16 @@ def test_a_failure_with_nothing_left_behind_keeps_the_plain_summary(tmp_path):
     actions = make_actions(tmp_path, influx_config(), make_overview(), PlainFailure())
     result = actions.sync()
 
-    assert result["message"] == "Could not sync InfluxDB analytics schema."
+    assert result["warnings"] == [SYNC_WARNING]
 
 
-def test_a_sync_killed_by_its_own_ceiling_is_a_visible_failure(tmp_path):
+def test_a_sync_killed_by_its_own_ceiling_is_a_visible_warning(tmp_path):
     """Why the ceiling is sized for a slow sync rather than a stuck one.
 
     A stuck sync is killed, and what it leaves behind is a schema with buckets
-    and no downsampling tasks. That trade is only acceptable because it is not
-    silent: the step is an error, EMS is not recreated against a half-built
-    schema, and the EMS itself logs the gap if nobody reads the Admin message.
+    and no downsampling tasks. That trade is acceptable because it is neither
+    silent nor final: the step is an error the page shows, and the EMS, which is
+    restarted all the same, completes the schema itself.
     """
 
     import subprocess
@@ -552,17 +571,41 @@ def test_a_sync_killed_by_its_own_ceiling_is_a_visible_failure(tmp_path):
     actions = make_actions(tmp_path, influx_config(), make_overview(), compose)
     result = actions.sync()
 
-    assert result["ok"] is False
-    assert result["message"] == "Could not sync InfluxDB analytics schema."
-    assert ("up", (), ("ems",), True) not in compose.calls
+    assert result["ok"] is True
+    assert result["warnings"] == [SYNC_WARNING]
+    assert ("up", (), ("ems",), True) in compose.calls
 
-    step = result["steps"][-1]
+    step = next(step for step in result["steps"] if step["action"] == "sync")
     assert step["service"] == "influxdb"
-    assert step["action"] == "sync"
     assert step["status"] == "error"
     # What the real ComposeCli raises on a kill is pinned next to it, in
     # tests/test_admin_deployment.py; here it only has to reach the operator.
     assert step["detail"]
+
+
+def test_an_ems_that_cannot_be_restarted_is_the_failure_and_analytics_rides_along(tmp_path):
+    compose = FakeCompose(sync_returncode=1, fail=("up:ems",))
+    actions = make_actions(tmp_path, influx_config(), make_overview(), compose)
+    result = actions.sync()
+
+    assert result["ok"] is False
+    assert result["status"] == "error"
+    assert result["message"] == "Could not recreate the EMS container."
+    assert result["warnings"] == [SYNC_WARNING]
+
+
+def test_a_failed_stop_of_a_disabled_influxdb_still_restarts_the_ems(tmp_path):
+    influx = {"found": True, "running": True, "status": "running", "name": "ems-influxdb"}
+    compose = FakeCompose(fail=("stop",))
+    actions = make_actions(
+        tmp_path, influx_config(enabled=False), make_overview(influx=influx), compose
+    )
+    result = actions.sync()
+
+    assert result["ok"] is True
+    assert result["status"] == "completed_with_warnings"
+    assert ("up", (), ("ems",), True) in compose.calls
+    assert result["warnings"] == ["Could not stop bundled InfluxDB; it keeps running."]
 
 
 def test_sync_stops_influx_when_disabled(tmp_path):
@@ -590,14 +633,38 @@ def test_sync_does_not_stop_ems_when_system_disabled(tmp_path):
     assert "stop" not in _verbs(compose)
 
 
-def test_failed_influx_init_stops_sync_before_compose_up(tmp_path):
+def test_analytics_alone_failing_is_said_once_not_twice(tmp_path):
+    overview = make_overview()
+    overview["paths"]["config"]["exists"] = True
+    compose = FakeCompose(sync_returncode=1)
+    actions = make_actions(tmp_path, influx_config(), overview, compose)
+    plan = actions.plan()
+    plan["actions"] = [item for item in plan["actions"] if item["service"] != "ems"]
+    actions.plan = lambda: plan
+
+    result = actions.sync()
+
+    assert result["ok"] is False
+    assert result["message"] == "Analytics could not be set up."
+    assert result["warnings"] == [SYNC_WARNING]
+
+
+def test_failed_influx_init_skips_analytics_and_still_restarts_the_ems(tmp_path):
     compose = FakeCompose(init_returncode=1)
     actions = make_actions(tmp_path, influx_config(), make_overview(), compose)
     result = actions.sync()
-    assert result["ok"] is False
-    assert result["status"] == "error"
-    # Init failed, so nothing was started or recreated.
-    assert "up" not in _verbs(compose)
+
+    assert result["ok"] is True
+    assert result["status"] == "completed_with_warnings"
+    # No secrets, so InfluxDB is neither started nor synced; the EMS is.
+    assert compose.calls == [
+        ("run_oneoff", "ems", INIT_CMD),
+        ("up", (), ("ems",), True),
+    ]
+    assert result["warnings"] == [
+        "Could not initialise bundled InfluxDB secrets; Analytics stays "
+        "unavailable until that works."
+    ]
 
 
 def test_sync_unavailable_when_docker_missing(tmp_path):
@@ -721,4 +788,167 @@ def test_an_unreadable_config_runs_nothing_and_says_why(tmp_path):
     assert plan["actions"] == []
     assert "config/config.json cannot be read" in plan["message"]
     assert result["ok"] is False
+    assert compose.calls == []
+
+
+# --- repair analytics -----------------------------------------------------
+
+RUNNING_INFLUX = {"found": True, "running": True, "status": "running", "name": "ems-influxdb"}
+
+
+def test_repair_runs_only_the_schema_sync_against_a_running_bundled_influxdb(tmp_path):
+    compose = FakeCompose()
+    actions = make_actions(
+        tmp_path, influx_config(), make_overview(influx=RUNNING_INFLUX), compose
+    )
+    result = actions.repair_analytics()
+
+    assert result["ok"] is True
+    assert result["status"] == "completed"
+    assert compose.calls == [("run_oneoff", "ems", REPAIR_CMD)]
+    assert result["steps"] == [{"service": "influxdb", "action": "repair", "status": "ok"}]
+    assert "Nothing was deleted" in result["message"]
+
+
+def test_no_admin_button_runs_a_sync_that_can_delete_data():
+    """Restart EMS now says it deletes no data, and runs after every applied
+    config. The full sync shortens a retention and drops what falls out of it,
+    so an Admin button only ever runs the safe one."""
+
+    from admin.container_actions import SAFE_SYNC_COMMAND
+
+    assert "--safe" in SAFE_SYNC_COMMAND
+    assert SYNC_CMD == SAFE_SYNC_COMMAND
+
+
+def test_repair_runs_against_an_external_influxdb_too(tmp_path):
+    compose = FakeCompose()
+    actions = make_actions(
+        tmp_path, influx_config(mode="external"), make_overview(), compose
+    )
+    result = actions.repair_analytics()
+
+    assert result["ok"] is True
+    assert compose.calls == [("run_oneoff", "ems", REPAIR_CMD)]
+
+
+def test_repair_ignores_auto_sync_off_because_the_operator_asked(tmp_path):
+    compose = FakeCompose()
+    actions = make_actions(
+        tmp_path,
+        influx_config(auto_sync=False),
+        make_overview(influx=RUNNING_INFLUX),
+        compose,
+    )
+
+    assert actions.repair_analytics()["ok"] is True
+    assert compose.calls == [("run_oneoff", "ems", REPAIR_CMD)]
+
+
+def test_repair_of_a_stopped_bundled_influxdb_points_to_the_restart(tmp_path):
+    compose = FakeCompose()
+    actions = make_actions(tmp_path, influx_config(), make_overview(), compose)
+    result = actions.repair_analytics()
+
+    assert result["ok"] is False
+    assert result["status"] == "influx_not_running"
+    assert "Restart EMS now" in result["message"]
+    assert compose.calls == []
+
+
+def test_repair_with_analytics_off_runs_nothing(tmp_path):
+    compose = FakeCompose()
+    actions = make_actions(
+        tmp_path, influx_config(enabled=False), make_overview(influx=RUNNING_INFLUX), compose
+    )
+    result = actions.repair_analytics()
+
+    assert result["ok"] is False
+    assert result["status"] == "analytics_disabled"
+    assert compose.calls == []
+
+
+class FailingRepair(FakeCompose):
+    """An emsctl sync that exits 1 with its --json error in the output tail."""
+
+    def __init__(self, error):
+        super().__init__()
+        self.error = error
+
+    def run_oneoff(
+        self, workspace, service, command,
+        timeout=ONEOFF_TIMEOUT_SECONDS, input_text=None,
+    ):
+        self.calls.append(("run_oneoff", service, tuple(command)))
+        tail = json.dumps({"action": "sync", "error": self.error, "ok": False}, indent=2)
+        return 1, tail
+
+
+def test_a_failed_repair_names_the_cause_and_what_happens_next(tmp_path):
+    compose = FailingRepair("influx sync failed: 401 Client Error: Unauthorized")
+    actions = make_actions(
+        tmp_path, influx_config(), make_overview(influx=RUNNING_INFLUX), compose
+    )
+    result = actions.repair_analytics()
+
+    assert result["ok"] is False
+    assert result["status"] == "error"
+    assert result["message"] == (
+        "Could not create the analytics schema: influx sync failed: 401 Client "
+        "Error: Unauthorized. The EMS keeps trying by itself."
+    )
+    assert result["steps"][0]["status"] == "error"
+
+
+def test_a_failed_repair_with_auto_sync_off_promises_no_retry(tmp_path):
+    compose = FailingRepair("no InfluxDB token")
+    actions = make_actions(
+        tmp_path,
+        influx_config(auto_sync=False),
+        make_overview(influx=RUNNING_INFLUX),
+        compose,
+    )
+
+    assert actions.repair_analytics()["message"] == (
+        "Could not create the analytics schema: no InfluxDB token."
+    )
+
+
+def test_a_repair_pressed_while_the_restart_runs_waits_its_turn(monkeypatch):
+    """Protected interleaving: Restart EMS now holds the container-action lock
+    (it is mid-sync) when Repair analytics arrives. The repair runs nothing and
+    says so, instead of starting a second schema sync beside the first."""
+
+    from admin import container_actions
+
+    constructed = []
+
+    class Recording:
+        def __init__(self):
+            constructed.append(self)
+
+        def repair_analytics(self):
+            return {"ok": True, "status": "completed"}
+
+    monkeypatch.setattr(container_actions, "MaintenanceContainerActions", Recording)
+
+    with container_actions._CONTAINER_ACTION_LOCK:
+        busy = container_actions.run_maintenance_analytics_repair()
+        also_busy = container_actions.run_maintenance_container_sync()
+
+    assert busy["status"] == "busy"
+    assert also_busy["status"] == "busy"
+    assert constructed == []
+    assert container_actions.run_maintenance_analytics_repair()["ok"] is True
+
+
+def test_repair_is_unavailable_without_docker(tmp_path):
+    compose = FakeCompose()
+    actions = make_actions(
+        tmp_path, influx_config(), make_overview(docker_available=False), compose
+    )
+    result = actions.repair_analytics()
+
+    assert result["ok"] is False
+    assert result["status"] == "unavailable"
     assert compose.calls == []

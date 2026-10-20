@@ -14,6 +14,7 @@ volume-removing command are intentionally not used.
 
 import json
 import re
+import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,7 +22,7 @@ from pathlib import Path
 from admin.deployment import EMS_SERVICE, DockerCompose
 from admin.install_context import detect_install_context
 from admin.maintenance import run_maintenance_overview
-from ems.influx_setup import INFLUX_READY_TIMEOUT_SECONDS
+from ems.influx_setup import INFLUX_READY_TIMEOUT_SECONDS, SCHEMA_LOCK_WAIT_SECONDS
 
 ANALYTICS_PROFILE = "with-analytics"
 INFLUX_SERVICE = "influxdb"
@@ -30,7 +31,9 @@ INFLUX_SERVICE = "influxdb"
 # outlive the wait and still leave room for its own requests. The count comes
 # from the operator's `influxdb.downsampling`: nineteen on a fresh install of
 # the shipped chain, five more per level. The allowance covers one level beyond
-# what we ship; a longer chain needs this raised, and a test says so by counting.
+# what we ship, plus the one data probe the repair's safe sync makes before it
+# shortens a retention; a longer chain needs this raised, and a test says so by
+# counting.
 #
 # Sized for a sync that is slow, not for one where every request runs into its
 # own timeout. That worst case is roughly twenty minutes, which cannot be held
@@ -47,14 +50,15 @@ INFLUX_SERVICE = "influxdb"
 # simply be run again. Closing it means making the sync asynchronous, not
 # raising this number.
 #
-# Being killed here is not silent -- the call says it timed out, the step is an
-# error, EMS is not recreated against a half-built schema, and the EMS itself
-# then logs `influx_schema_incomplete`. The sync is idempotent, so the way out
-# is to run it again.
-INFLUX_SYNC_REQUEST_ALLOWANCE = 24
+# Being killed here is neither silent nor final -- the call says it timed out,
+# the step is an error the page shows as a warning, and the EMS, restarted all
+# the same, completes the schema itself (ems/history/schema_keeper.py). The sync
+# is idempotent, so running it again is safe as well.
+INFLUX_SYNC_REQUEST_ALLOWANCE = 25
 INFLUX_SYNC_SLOW_REQUEST_SECONDS = 10
 INFLUX_SYNC_TIMEOUT_SECONDS = (
     INFLUX_READY_TIMEOUT_SECONDS
+    + SCHEMA_LOCK_WAIT_SECONDS
     + INFLUX_SYNC_REQUEST_ALLOWANCE * INFLUX_SYNC_SLOW_REQUEST_SECONDS
     + 30
 )
@@ -137,6 +141,11 @@ def influx_auto_init_enabled(config):
     if not isinstance(influx, dict):
         return False
     return influx.get("auto_init") is not False
+
+
+def _analytics_enabled(config):
+    influx = config.get("influxdb") if isinstance(config, dict) else None
+    return isinstance(influx, dict) and bool(influx.get("enabled"))
 
 
 def influx_auto_sync_enabled(config):
@@ -436,7 +445,7 @@ def _influx_sync_action(desired, available, config):
         INFLUX_SERVICE,
         "sync",
         "Sync InfluxDB schema",
-        "Analytics buckets, retention and tasks will be reconciled.",
+        "Missing analytics buckets and downsampling tasks will be created; no data is deleted.",
     )
 
 
@@ -526,6 +535,7 @@ def build_container_sync_plan(config, overview):
         ),
         "auto_init": influx_auto_init_enabled(config),
         "auto_sync": influx_auto_sync_enabled(config),
+        "analytics_enabled": _analytics_enabled(config),
     }
     if not available:
         plan["message"] = _UNAVAILABLE_MESSAGE
@@ -544,18 +554,58 @@ def _default_run_influx_sync(compose, workspace):
     return compose.run_oneoff(
         workspace,
         EMS_SERVICE,
-        ["python3", "emsctl.py", "influx", "sync", "--json"],
+        list(SAFE_SYNC_COMMAND),
         timeout=INFLUX_SYNC_TIMEOUT_SECONDS,
     )
 
 
-def _with_leftover(message, exc):
-    """Carry a container the failure could not clean up into the summary.
+_INIT_WARNING = (
+    "Could not initialise bundled InfluxDB secrets; Analytics stays unavailable "
+    "until that works."
+)
+_START_WARNING = "Could not start bundled InfluxDB; Analytics stays unavailable until it runs."
+_STOP_WARNING = "Could not stop bundled InfluxDB; it keeps running."
+# Both the restart and the repair run the safe sync: an Admin button never
+# deletes analytics data. A shorter retention or a retired task is applied by
+# `emsctl influx sync`, which an operator runs on purpose.
+SAFE_SYNC_COMMAND = ("python3", "emsctl.py", "influx", "sync", "--safe", "--json")
+_EMSCTL_ERROR = re.compile(r'"error":\s*("(?:[^"\\]|\\.)*")')
+_SYNC_WARNING = (
+    "Could not sync the analytics schema. The EMS creates it by itself once "
+    "InfluxDB answers; Repair analytics does it at once."
+)
 
-    The step detail is not rendered on the failure path -- the page shows only
-    this summary -- and a leftover container is the one part of the failure the
-    operator has to act on: retrying beside it is what puts two schema syncs
-    into InfluxDB at once.
+
+def _emsctl_error(detail):
+    """The ``error`` field of an emsctl ``--json`` failure, from the output tail."""
+
+    match = _EMSCTL_ERROR.search(detail or "")
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(1))
+    except ValueError:
+        return None
+
+
+def _repair_failure(detail, auto_sync):
+    error = _emsctl_error(detail)
+    message = (
+        f"Could not create the analytics schema: {error.rstrip('.')}."
+        if error
+        else "Could not create the analytics schema."
+    )
+    if auto_sync:
+        message += " The EMS keeps trying by itself."
+    return message
+
+
+def _with_leftover(message, exc):
+    """Carry a container the failure could not clean up into the warning.
+
+    The step detail is not rendered -- the page shows only the warning -- and a
+    leftover container is the one part of the failure the operator has to act
+    on: retrying beside it is what puts two schema syncs into InfluxDB at once.
     """
 
     if not getattr(exc, "leftover", None):
@@ -667,30 +717,23 @@ class MaintenanceContainerActions:
             plan["desired"][INFLUX_SERVICE]["desired"] == DESIRED_RUNNING
         )
 
-        # 1. Bundled InfluxDB secrets before the container is started. On failure
-        #    do not start/sync/recreate anything; surface a clear error.
+        # Analytics is optional and the EMS controls the hardware without it, so
+        # an InfluxDB step that fails is a warning: the EMS is restarted against
+        # the applied config all the same, and it completes the schema itself
+        # once InfluxDB answers (ems/history/schema_keeper.py).
+        warnings = []
+
+        # 1. Bundled InfluxDB secrets before the container is started. Without
+        #    them InfluxDB is neither started nor synced.
+        influx_ready = influx_desired_running
         if influx_desired_running and plan.get("auto_init"):
-            try:
-                returncode, detail = self.run_influx_init(self.compose, workspace)
-            except Exception as exc:  # never leak a traceback to the UI
-                return self._failure(
-                    _with_leftover(
-                        "Could not initialise bundled InfluxDB secrets.", exc
-                    ),
-                    steps,
-                    plan,
-                    step={"service": INFLUX_SERVICE, "action": "init", "status": "error"},
-                    detail=str(exc),
-                )
-            if returncode != 0:
-                return self._failure(
-                    "Could not initialise bundled InfluxDB secrets.",
-                    steps,
-                    plan,
-                    step={"service": INFLUX_SERVICE, "action": "init", "status": "error"},
-                    detail=detail,
-                )
-            steps.append({"service": INFLUX_SERVICE, "action": "init", "status": "ok"})
+            step, warning = self._run_analytics_step(
+                "init", lambda: self.run_influx_init(self.compose, workspace), _INIT_WARNING
+            )
+            steps.append(step)
+            if warning:
+                warnings.append(warning)
+                influx_ready = False
 
         # 2. Stop a disabled/external bundled InfluxDB before touching EMS.
         if influx_action is not None and influx_action["action"] == "stop":
@@ -702,10 +745,10 @@ class MaintenanceContainerActions:
             )
             steps.append(step)
             if step["status"] != "ok":
-                return self._failure("Could not stop bundled InfluxDB.", steps, plan)
+                warnings.append(_STOP_WARNING)
 
         # 3. Start bundled InfluxDB if it is desired and not yet running.
-        if influx_action is not None and influx_action["action"] == "start":
+        if influx_ready and influx_action is not None and influx_action["action"] == "start":
             step = self._run_step(
                 influx_action,
                 lambda: (
@@ -717,30 +760,18 @@ class MaintenanceContainerActions:
             )
             steps.append(step)
             if step["status"] != "ok":
-                return self._failure("Could not start bundled InfluxDB.", steps, plan)
+                warnings.append(_START_WARNING)
+                influx_ready = False
 
         # 4. Reconcile the InfluxDB schema before EMS starts against it. The EMS
         #    Influx helper waits for readiness, so Admin does not poll here.
-        if influx_desired_running and plan.get("auto_sync"):
-            try:
-                returncode, detail = self.run_influx_sync(self.compose, workspace)
-            except Exception as exc:  # never leak a traceback to the UI
-                return self._failure(
-                    _with_leftover("Could not sync InfluxDB analytics schema.", exc),
-                    steps,
-                    plan,
-                    step={"service": INFLUX_SERVICE, "action": "sync", "status": "error"},
-                    detail=str(exc),
-                )
-            if returncode != 0:
-                return self._failure(
-                    "Could not sync InfluxDB analytics schema.",
-                    steps,
-                    plan,
-                    step={"service": INFLUX_SERVICE, "action": "sync", "status": "error"},
-                    detail=detail,
-                )
-            steps.append({"service": INFLUX_SERVICE, "action": "sync", "status": "ok"})
+        if influx_ready and plan.get("auto_sync"):
+            step, warning = self._run_analytics_step(
+                "sync", lambda: self.run_influx_sync(self.compose, workspace), _SYNC_WARNING
+            )
+            steps.append(step)
+            if warning:
+                warnings.append(warning)
 
         # 5. Recreate EMS last so it starts against the ready Analytics backend.
         if ems_action is not None and ems_action["action"] == "recreate":
@@ -752,15 +783,107 @@ class MaintenanceContainerActions:
             )
             steps.append(step)
             if step["status"] != "ok":
-                return self._failure("Could not recreate the EMS container.", steps, plan)
+                return self._failure(
+                    "Could not recreate the EMS container.", steps, plan, warnings=warnings
+                )
+        elif warnings:
+            return self._failure("Analytics could not be set up.", steps, plan, warnings=warnings)
 
-        return {
+        result = {
             "ok": True,
-            "status": "completed",
+            "status": "completed_with_warnings" if warnings else "completed",
             "plan": plan,
             "steps": steps,
             "overview": self._overview_provider(),
         }
+        if warnings:
+            result["warnings"] = warnings
+        return result
+
+    def repair_analytics(self):
+        """Create the missing analytics schema now, on the operator's request.
+
+        The running EMS does the same by itself while ``auto_sync`` is on; this
+        is the way to do it at once, and the only way when it is off, which is
+        why ``auto_sync`` does not gate it. It runs the safe sync, which deletes
+        no data and leaves what an operator changed by hand, and it touches no
+        container: a bundled InfluxDB that is not running is started by the
+        ordinary restart, which syncs as well.
+        """
+
+        plan = self.plan()
+        if not plan.get("available"):
+            return {
+                "ok": False,
+                "status": "unavailable",
+                "message": plan.get("message", _UNAVAILABLE_MESSAGE),
+                "steps": [],
+            }
+        config = self._load_config(self._install_context_provider())
+        if not _analytics_enabled(config):
+            return {
+                "ok": False,
+                "status": "analytics_disabled",
+                "message": "Analytics is switched off in the configuration; there is no schema to repair.",
+                "steps": [],
+            }
+        bundled = config["influxdb"].get("mode", "bundled") == "bundled"
+        if bundled and not plan["current"][INFLUX_SERVICE]["running"]:
+            return {
+                "ok": False,
+                "status": "influx_not_running",
+                "message": (
+                    "Bundled InfluxDB is not running. Restart EMS now starts it "
+                    "and creates the analytics schema."
+                ),
+                "steps": [],
+            }
+        step = {"service": INFLUX_SERVICE, "action": "repair", "status": "ok"}
+        try:
+            returncode, detail = self.run_influx_sync(self.compose, plan["install_root"])
+        except Exception as exc:  # never leak a traceback to the UI
+            message = _with_leftover(_repair_failure(None, plan.get("auto_sync")), exc)
+            return {
+                "ok": False,
+                "status": "error",
+                "message": message,
+                "steps": [{**step, "status": "error", "detail": str(exc)}],
+            }
+        if returncode != 0:
+            failed = {**step, "status": "error"}
+            if detail:
+                failed["detail"] = detail
+            return {
+                "ok": False,
+                "status": "error",
+                "message": _repair_failure(detail, plan.get("auto_sync")),
+                "steps": [failed],
+            }
+        return {
+            "ok": True,
+            "status": "completed",
+            "message": (
+                "The analytics schema was checked and anything missing was created. "
+                "Nothing was deleted, and what was changed by hand was left as it is; "
+                "Run the checks shows anything still incomplete."
+            ),
+            "steps": [step],
+        }
+
+    def _run_analytics_step(self, action, run, warning):
+        """Run an InfluxDB one-off; return its step and the warning, if it failed."""
+
+        step = {"service": INFLUX_SERVICE, "action": action, "status": "ok"}
+        try:
+            returncode, detail = run()
+        except Exception as exc:  # never leak a traceback to the UI
+            return {**step, "status": "error", "detail": str(exc)}, _with_leftover(warning, exc)
+        if returncode != 0:
+            failed = {**step, "status": "error"}
+            if detail:
+                failed["detail"] = detail
+            return failed, warning
+        return step, None
 
     def _run_step(self, action, run):
         try:
@@ -775,18 +898,21 @@ class MaintenanceContainerActions:
             }
         return {"service": action["service"], "action": action["action"], "status": "ok"}
 
-    def _failure(self, message, steps, plan, step=None, detail=None):
+    def _failure(self, message, steps, plan, step=None, detail=None, warnings=()):
         if step is not None:
             if detail:
                 step = {**step, "detail": detail}
             steps.append(step)
-        return {
+        result = {
             "ok": False,
             "status": "error",
             "message": message,
             "plan": plan,
             "steps": steps,
         }
+        if warnings:
+            result["warnings"] = list(warnings)
+        return result
 
 
 def build_maintenance_container_plan():
@@ -795,7 +921,28 @@ def build_maintenance_container_plan():
     return MaintenanceContainerActions().plan()
 
 
+# One container action at a time: a repair pressed while the restart syncs would
+# put two schema syncs side by side, and both report into the same status line.
+_CONTAINER_ACTION_LOCK = threading.Lock()
+_BUSY_MESSAGE = "Another container action is still running; try again once it has finished."
+
+
+def _one_at_a_time(run):
+    if not _CONTAINER_ACTION_LOCK.acquire(blocking=False):
+        return {"ok": False, "status": "busy", "message": _BUSY_MESSAGE, "steps": []}
+    try:
+        return run()
+    finally:
+        _CONTAINER_ACTION_LOCK.release()
+
+
 def run_maintenance_container_sync():
     """Run the confirmed container sync and return its result."""
 
-    return MaintenanceContainerActions().sync()
+    return _one_at_a_time(lambda: MaintenanceContainerActions().sync())
+
+
+def run_maintenance_analytics_repair():
+    """Run the confirmed analytics schema repair and return its result."""
+
+    return _one_at_a_time(lambda: MaintenanceContainerActions().repair_analytics())

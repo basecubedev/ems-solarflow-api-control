@@ -183,6 +183,10 @@ def test_the_admin_sync_call_outlives_the_work_it_contains():
     assert INFLUX_SYNC_REQUEST_ALLOWANCE >= _counted_schema_requests(
         "sync", levels=_TEMPLATE_LEVELS + 1
     )
+    # The Admin's repair runs the safe sync inside the same ceiling.
+    assert INFLUX_SYNC_REQUEST_ALLOWANCE >= _counted_schema_requests(
+        "sync", levels=_TEMPLATE_LEVELS + 1, safe=True
+    )
 
 
 def _recorded_wait_for(action, **kwargs):

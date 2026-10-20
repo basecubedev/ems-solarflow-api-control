@@ -340,6 +340,133 @@ def test_influx_enabled_failure_is_a_warning_not_a_failure(tmp_path):
     assert result["summary"]["status"] == "warning"
 
 
+def test_an_incomplete_analytics_schema_is_a_warning_not_ok(tmp_path):
+    """`influx status` exits 0 whatever it finds, so the exit code alone read a
+    fresh install with no downsampled buckets as a healthy one."""
+
+    from admin.ems_cli import INFLUX_SCHEMA_INCOMPLETE_MESSAGE
+
+    _standard_install(tmp_path)
+    report = {
+        "action": "status",
+        "ok": True,
+        "report": {
+            "healthy": False,
+            "missing_buckets": ["ems_1m", "ems_5m", "ems_1h"],
+            "missing_tasks": ["ems-downsample-1m"],
+        },
+    }
+    run = FakeRun(
+        results={("influx", "status", "--json"): _completed(0, json.dumps(report))},
+        default=_completed(0, "{}"),
+    )
+    service = _service(tmp_path, docker=FakeDocker(container=_running_ems()), run=run)
+
+    result = service.run(check_ids=["influx_status"])
+    check = result["checks"][0]
+
+    assert check["status"] == "warning"
+    assert check["message"] == INFLUX_SCHEMA_INCOMPLETE_MESSAGE.format(
+        missing="ems_1m, ems_5m, ems_1h, ems-downsample-1m"
+    )
+    assert result["summary"]["status"] == "warning"
+
+
+def test_a_task_switched_off_is_named_apart_from_one_that_is_absent(tmp_path):
+    from admin.ems_cli import INFLUX_SCHEMA_INCOMPLETE_MESSAGE, INFLUX_TASKS_OFF_MESSAGE
+
+    _standard_install(tmp_path)
+    report = {
+        "action": "status",
+        "ok": True,
+        "report": {
+            "healthy": False,
+            "missing_buckets": [],
+            "missing_tasks": ["ems-downsample-1m", "ems-downsample-5m"],
+            "tasks": [{"name": "ems-downsample-1m", "status": "inactive"}],
+        },
+    }
+    run = FakeRun(
+        results={("influx", "status", "--json"): _completed(0, json.dumps(report))},
+        default=_completed(0, "{}"),
+    )
+    service = _service(tmp_path, docker=FakeDocker(container=_running_ems()), run=run)
+
+    check = service.run(check_ids=["influx_status"])["checks"][0]
+
+    assert check["status"] == "warning"
+    assert check["message"] == " ".join(
+        [
+            INFLUX_SCHEMA_INCOMPLETE_MESSAGE.format(missing="ems-downsample-5m"),
+            INFLUX_TASKS_OFF_MESSAGE.format(tasks="ems-downsample-1m"),
+        ]
+    )
+
+
+def test_a_retention_that_differs_is_named_with_the_way_that_applies_it(tmp_path):
+    """Restart EMS now runs the safe sync, which never shortens a retention. A
+    retention edited in Settings would otherwise stay unapplied without a word."""
+
+    from admin.ems_cli import INFLUX_RETENTION_LONGER_MESSAGE, INFLUX_RETENTION_SHORTER_MESSAGE
+
+    _standard_install(tmp_path)
+    report = {
+        "action": "status",
+        "ok": True,
+        "report": {
+            "healthy": True,
+            "missing_buckets": [],
+            "missing_tasks": [],
+            "buckets": [
+                {"name": "ems_raw", "exists": True, "retention_seconds": 0,
+                 "expected_retention_seconds": 14 * 86400},
+                {"name": "ems_1m", "exists": True, "retention_seconds": 90 * 86400,
+                 "expected_retention_seconds": 90 * 86400},
+                {"name": "ems_1h", "exists": True, "retention_seconds": 30 * 86400,
+                 "expected_retention_seconds": 1825 * 86400},
+                {"name": "ems_5m", "exists": False, "retention_seconds": None,
+                 "expected_retention_seconds": 365 * 86400},
+            ],
+            "tasks": [],
+        },
+    }
+    run = FakeRun(
+        results={("influx", "status", "--json"): _completed(0, json.dumps(report))},
+        default=_completed(0, "{}"),
+    )
+    service = _service(tmp_path, docker=FakeDocker(container=_running_ems()), run=run)
+
+    check = service.run(check_ids=["influx_status"])["checks"][0]
+
+    assert check["status"] == "warning"
+    assert check["message"] == " ".join(
+        [
+            INFLUX_RETENTION_LONGER_MESSAGE.format(buckets="ems_raw keeps forever (config 14 days)"),
+            INFLUX_RETENTION_SHORTER_MESSAGE.format(buckets="ems_1h keeps 30 days (config 1825 days)"),
+        ]
+    )
+    assert "docker compose exec ems python3 emsctl.py influx sync" in check["message"]
+
+
+def test_a_complete_analytics_schema_stays_ok(tmp_path):
+    _standard_install(tmp_path)
+    report = {
+        "action": "status",
+        "ok": True,
+        "report": {"healthy": True, "missing_buckets": [], "missing_tasks": []},
+    }
+    run = FakeRun(
+        results={("influx", "status", "--json"): _completed(0, json.dumps(report))},
+        default=_completed(0, "{}"),
+    )
+    service = _service(tmp_path, docker=FakeDocker(container=_running_ems()), run=run)
+
+    check = service.run(check_ids=["influx_status"])["checks"][0]
+
+    assert check["status"] == "ok"
+    assert check["message"] is None
+
+
 def test_influx_disabled_in_config_is_expected_not_warning(tmp_path):
     from admin.ems_cli import INFLUX_DISABLED_MESSAGE
 
