@@ -15,6 +15,7 @@
   import Schedule from "./pages/Schedule.svelte";
   import { router } from "./app/router.svelte.js";
   import { t } from "./i18n/i18n.svelte.js";
+  import { prefs } from "./state/prefs.svelte.js";
 
   const COMPONENTS = { overview: Overview, devices: Devices, energy: Energy, analytics: Analytics, control: Control, schedule: Schedule, diagnose: Diagnose, logs: Logs, maintenance: Maintenance };
   const Page = $derived(COMPONENTS[router.page] || Overview);
@@ -27,7 +28,7 @@
     event.preventDefault();
     document.getElementById("content")?.focus();
   }}>{t("app.skip")}</a>
-<div class="app">
+<div class="app" class:rail={prefs.navIconsOnly}>
   <Sidebar />
   <div class="main">
     <Topbar />

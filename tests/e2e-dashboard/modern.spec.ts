@@ -183,10 +183,37 @@ test.describe("Modern dashboard @smoke", () => {
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Devices");
   });
 
+  test("on a desktop the side menu shows its text from the start", async ({ page }) => {
+    for (const width of [1024, 1280]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto("about:blank");
+      await openModern(page);
+      await expect(page.locator(".app")).not.toHaveClass(/\brail\b/);
+      await expect(page.locator(".sidebar").getByRole("link", { name: "Overview" }).locator("span")).toBeVisible();
+    }
+  });
+
+  test("the side menu shows its text on request and keeps that choice", async ({ page }) => {
+    await page.setViewportSize({ width: 1000, height: 800 });
+    await openModern(page);
+    const overview = page.locator(".sidebar").getByRole("link", { name: "Overview" });
+    await expect(overview.locator("span")).toBeHidden();
+    await page.getByTestId("nav-labels").click();
+    await expect(overview.locator("span")).toBeVisible();
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(page.locator(".sidebar").getByRole("link", { name: "Overview" }).locator("span")).toBeVisible();
+
+    await page.getByTestId("appearance-button").click();
+    await page.getByTestId("appearance").getByRole("button", { name: "Icons" }).click();
+    await expect(page.locator(".sidebar").getByRole("link", { name: "Overview" }).locator("span")).toBeHidden();
+  });
+
   test("on a phone the sidebar gives way to a bottom bar", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await openModern(page);
     await expect(page.locator(".sidebar")).toBeHidden();
+    await expect(page.locator(".app")).toHaveClass(/\brail\b/);
+    expect((await page.locator(".main").boundingBox()).width).toBe(390);
     const bottom = page.locator(".bottom-nav");
     await expect(bottom).toBeVisible();
     await bottom.getByRole("link", { name: "Devices" }).click();

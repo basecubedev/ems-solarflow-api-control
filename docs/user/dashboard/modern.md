@@ -95,18 +95,22 @@ yesterday is not there yet, the tile says so instead of showing a comparison.
 
 ## Appearance
 
-The **Appearance** button in the top bar holds four choices:
+The **Appearance** button in the top bar holds five choices:
 
 | | |
 | --- | --- |
 | **Colour scheme** | **Graphite** (the default, neutral near-black) or **Midnight** (deep navy) |
 | **Language** | English, Deutsch, Nederlands, Français -- numbers and dates follow the language |
 | **Density** | **Normal** or **Compact** |
+| **Side menu** | **Auto** (text beside the icons on a desktop, icons only below 1024 px), **With text** or **Icons** |
 | **Motion** | the moving dots in the energy flow on or off |
 
 The colours of the energy types are the same in both schemes and in Classic:
 PV is the warm one, battery the green one, output the cyan one and grid the
 violet one.
+
+The button at the foot of the side menu switches its text on and off as
+well, and remembers the choice like the menu above.
 
 Modern's choices are separate from Classic's palette, style and density menus;
 changing one never changes the other. Like Classic's, they belong to the

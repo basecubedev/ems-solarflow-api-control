@@ -3,13 +3,14 @@ import "./styles/tokens.css";
 import "./styles/base.css";
 import { mount } from "svelte";
 import App from "./App.svelte";
-import { applyDocumentPrefs, rememberModern, watchSystemMotion } from "./state/prefs.svelte.js";
+import { applyDocumentPrefs, rememberModern, watchScreenWidth, watchSystemMotion } from "./state/prefs.svelte.js";
 import { startLive } from "./state/live.svelte.js";
 import { loadAuth, watchActivity, watchSession } from "./state/auth.svelte.js";
 import { watchHash } from "./app/router.svelte.js";
 
 applyDocumentPrefs();
 watchSystemMotion();
+watchScreenWidth();
 rememberModern();
 watchHash();
 loadAuth();

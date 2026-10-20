@@ -26,6 +26,8 @@ export const STRINGS = {
   "nav.maintenance": s("Maintenance", "Wartung", "Onderhoud", "Maintenance"),
   "nav.more": s("More", "Mehr", "Meer", "Plus"),
   "nav.signInRequired": s("Sign-in required", "Anmeldung erforderlich", "Aanmelding vereist", "Connexion requise"),
+  "nav.showLabels": s("Show menu text", "Menütext einblenden", "Menutekst tonen", "Afficher le texte du menu"),
+  "nav.hideLabels": s("Hide menu text", "Menütext ausblenden", "Menutekst verbergen", "Masquer le texte du menu"),
   "nav.classic": s("Classic view", "Klassische Ansicht", "Klassieke weergave", "Vue classique"),
   "nav.classicSwitch": s("Switch to classic view", "Zur klassischen Ansicht", "Naar klassieke weergave", "Passer à la vue classique"),
 
@@ -94,6 +96,10 @@ export const STRINGS = {
   "appearance.density": s("Density", "Dichte", "Dichtheid", "Densité"),
   "appearance.density.normal": s("Normal", "Normal", "Normaal", "Normale"),
   "appearance.density.compact": s("Compact", "Kompakt", "Compact", "Compacte"),
+  "appearance.nav": s("Side menu", "Seitenmenü", "Zijmenu", "Menu latéral"),
+  "appearance.nav.auto": s("Auto", "Automatisch", "Automatisch", "Auto"),
+  "appearance.nav.labels": s("With text", "Mit Text", "Met tekst", "Avec texte"),
+  "appearance.nav.icons": s("Icons", "Symbole", "Pictogrammen", "Icônes"),
   "appearance.motion": s("Motion", "Animation", "Animatie", "Animations"),
   "appearance.motionServerOff": s("Animation is switched off for this installation.", "Animationen sind für diese Installation abgeschaltet.", "Animaties zijn voor deze installatie uitgeschakeld.", "Les animations sont désactivées pour cette installation."),
 

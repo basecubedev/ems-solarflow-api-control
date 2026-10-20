@@ -12,6 +12,8 @@ export const LANGUAGES = Object.freeze(["en", "de", "nl", "fr"]);
 export const DENSITIES = Object.freeze(["normal", "compact"]);
 export const MOTIONS = Object.freeze(["on", "off"]);
 export const FLOW_MODES = Object.freeze(["system", "devices"]);
+export const NAV_MODES = Object.freeze(["auto", "labels", "icons"]);
+const NARROW_SIDEBAR = "(max-width: 1023px)";
 
 const SPEC = {
   theme: { key: "ems-modern.theme", allowed: THEMES, fallback: "graphite" },
@@ -19,6 +21,7 @@ const SPEC = {
   density: { key: "ems-modern.density", allowed: DENSITIES, fallback: "normal" },
   motion: { key: "ems-modern.motion", allowed: MOTIONS, fallback: "on" },
   flow: { key: "ems-modern.flow", allowed: FLOW_MODES, fallback: "system" },
+  nav: { key: "ems-modern.nav", allowed: NAV_MODES, fallback: "auto" },
 };
 
 export const UI_CHOICE_KEY = "ems-dashboard-ui";
@@ -48,11 +51,18 @@ class Prefs {
   density = $state(read("density"));
   motion = $state(read("motion"));
   flow = $state(read("flow"));
+  nav = $state(read("nav"));
+  narrowScreen = $state(false);
   serverAnimation = $state("normal");
   systemReducedMotion = $state(false);
 
   get animate() {
     return this.motion === "on" && this.serverAnimation !== "off" && !this.systemReducedMotion;
+  }
+
+  /** "auto" keeps the text beside the icons on a desktop and drops it below 1024 px. */
+  get navIconsOnly() {
+    return this.nav === "icons" || (this.nav === "auto" && this.narrowScreen);
   }
 }
 
@@ -72,6 +82,16 @@ export function applyDocumentPrefs() {
   root.dataset.density = prefs.density;
   root.dataset.motion = prefs.animate ? "on" : "off";
   root.lang = prefs.lang;
+}
+
+export function watchScreenWidth() {
+  const query = globalThis.matchMedia?.(NARROW_SIDEBAR);
+  if (!query) return;
+  const update = () => {
+    prefs.narrowScreen = query.matches;
+  };
+  update();
+  query.addEventListener?.("change", update);
 }
 
 export function watchSystemMotion() {

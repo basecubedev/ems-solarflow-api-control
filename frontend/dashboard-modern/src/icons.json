@@ -1,6 +1,7 @@
 [
   "archive",
   "arrow-down",
+  "arrow-left-right",
   "arrow-up",
   "battery",
   "battery-charging",
@@ -41,7 +42,8 @@
   "lock-open",
   "moon",
   "move-horizontal",
-  "panel-left",
+  "panel-left-close",
+  "panel-left-open",
   "pause",
   "pencil",
   "piggy-bank",

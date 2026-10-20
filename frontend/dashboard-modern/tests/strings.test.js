@@ -80,6 +80,7 @@ test("every generated key family is complete", () => {
     ...["bundled", "external"].map((key) => `maint.influx.${key}`),
     ...["ok", "warning", "error", "devices"].map((key) => `diagnose.metric.${key}`),
     ...["output", "input", "mixed"].map((key) => `analytics.role.${key}`),
+    ...["auto", "labels", "icons"].map((key) => `appearance.nav.${key}`),
     ...["inputs", "weighting", "raw", "adjust", "final"].map((key) => `control.deviceStage.${key}`),
   ];
   const missing = [...new Set(required)].filter((key) => !STRINGS[key]);
@@ -94,7 +95,7 @@ test("no orphan keys: each key is used literally or belongs to a generated famil
     "maint.type.", "maint.kind.", "maint.influx.", "schedule.preset.", "schedule.weekday.", "schedule.freq.", "schedule.pos.",
     "schedule.status.", "schedule.group.", "schedule.action.", "schedule.choice.", "runtime.offgrid.",
     "runtime.warn.", "setting.", "settingValue.", "control.write.", "control.stage.", "control.deviceStage.", "status.", "transport.",
-    "flow.", "assist.", "error.", "appearance.density.", "schedule.monthly.", "schedule.ends.", "energy.periodSub.", "energy.context.",
+    "flow.", "assist.", "error.", "appearance.density.", "appearance.nav.", "schedule.monthly.", "schedule.ends.", "energy.periodSub.", "energy.context.",
   ];
   const orphans = Object.keys(STRINGS).filter((key) => !text.includes(`"${key}"`) && !families.some((prefix) => key.startsWith(prefix)));
   assert.deepEqual(orphans, []);

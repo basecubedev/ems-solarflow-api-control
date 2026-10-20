@@ -112,7 +112,7 @@ svg.i.lg { width: 22px; height: 22px; }
 .btn.danger { background: color-mix(in srgb, var(--m-fault) 85%, var(--m-black)); color: var(--m-white); box-shadow: none; }
 .btn.small { height: 28px; padding: 0 11px; font-size: 12.5px; }
 
-.content { padding: var(--s6); display: grid; gap: var(--s5); grid-template-columns: repeat(12, minmax(0, 1fr)); align-content: start; }
+.content { container: content / inline-size; padding: var(--s6); display: grid; gap: var(--s5); grid-template-columns: repeat(12, minmax(0, 1fr)); align-content: start; }
 .span-12 { grid-column: span 12; }
 .span-8 { grid-column: span 8; }
 .span-6 { grid-column: span 6; }
@@ -231,17 +231,18 @@ dialog.modal::backdrop { background: var(--m-scrim, rgba(3, 5, 8, 0.72)); }
 
 .bottom-nav { display: none; }
 
+.app.rail { grid-template-columns: 76px minmax(0, 1fr); }
+.app.rail :is(.brand-text, .nav a span, .nav-group-label, .sidebar-foot .ghost-link span, .version, .nav a .lock) { display: none; }
+.app.rail .nav a { justify-content: center; padding: 11px; }
+.app.rail .brand { justify-content: center; padding: 0; }
+.app.rail .sidebar-foot .ghost-link { justify-content: center; }
+
 @media (max-width: 1280px) {
-  .app { grid-template-columns: 76px minmax(0, 1fr); }
-  .brand-text, .nav a span, .nav-group-label, .sidebar-foot .ghost-link span, .version, .nav a .lock { display: none; }
-  .nav a { justify-content: center; padding: 11px; }
-  .brand { justify-content: center; padding: 0; }
-  .sidebar-foot .ghost-link { justify-content: center; }
   .span-8, .span-4 { grid-column: span 12; }
   .span-6 { grid-column: span 12; }
 }
 @media (max-width: 760px) {
-  .app { grid-template-columns: minmax(0, 1fr); }
+  .app, .app.rail { grid-template-columns: minmax(0, 1fr); }
   .sidebar { display: none; }
   .topbar { padding: var(--s3) var(--s4); }
   .topbar .hide-sm { display: none; }

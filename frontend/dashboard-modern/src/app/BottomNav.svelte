@@ -32,7 +32,7 @@
       </a>
     {/each}
   </nav>
-  <button class="ghost-link" type="button" onclick={() => chooseClassic()}><Icon name="panel-left" /><span>{t("nav.classicSwitch")}</span></button>
+  <button class="ghost-link" type="button" onclick={() => chooseClassic()}><Icon name="arrow-left-right" /><span>{t("nav.classicSwitch")}</span></button>
 </div>
 
 <style>
