@@ -448,6 +448,64 @@ def test_a_retention_that_differs_is_named_with_the_way_that_applies_it(tmp_path
     assert "docker compose exec ems python3 emsctl.py influx sync" in check["message"]
 
 
+def _status_check(tmp_path, report):
+    _standard_install(tmp_path)
+    run = FakeRun(
+        results={
+            ("influx", "status", "--json"): _completed(
+                0, json.dumps({"action": "status", "ok": True, "report": report})
+            )
+        },
+        default=_completed(0, "{}"),
+    )
+    service = _service(tmp_path, docker=FakeDocker(container=_running_ems()), run=run)
+    return service.run(check_ids=["influx_status"])["checks"][0]
+
+
+def test_a_complete_schema_that_receives_nothing_is_a_warning(tmp_path):
+    """On a Pi whose InfluxDB had lost access to its data directory the schema
+    was complete and every check read ok, while no write had landed for days."""
+
+    from admin.ems_cli import INFLUX_NO_TELEMETRY_MESSAGE
+
+    check = _status_check(
+        tmp_path,
+        {
+            "healthy": True,
+            "missing_buckets": [],
+            "missing_tasks": [],
+            "raw_bucket": "ems_raw",
+            "raw_window_seconds": 900,
+            "raw_checked": True,
+            "raw_latest": None,
+        },
+    )
+
+    assert check["status"] == "warning"
+    assert check["message"] == INFLUX_NO_TELEMETRY_MESSAGE.format(bucket="ems_raw", minutes=15)
+
+
+@pytest.mark.parametrize(
+    "freshness",
+    [
+        {"raw_checked": True, "raw_latest": "2026-10-20T18:00:00Z"},
+        {"raw_checked": False, "raw_latest": None},
+        {"raw_checked": True, "raw_latest": None, "telemetry_expected": False},
+        {},
+    ],
+    ids=["arriving", "not-asked", "simulation", "older-ems"],
+)
+def test_telemetry_that_arrives_or_was_not_asked_about_stays_ok(tmp_path, freshness):
+    check = _status_check(
+        tmp_path,
+        {"healthy": True, "missing_buckets": [], "missing_tasks": [], "raw_bucket": "ems_raw",
+         "raw_window_seconds": 900, **freshness},
+    )
+
+    assert check["status"] == "ok"
+    assert check["message"] is None
+
+
 def test_a_complete_analytics_schema_stays_ok(tmp_path):
     _standard_install(tmp_path)
     report = {

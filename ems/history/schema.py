@@ -443,8 +443,37 @@ def sync(client, influx_config, safe=False, known_kept=()):
     return report
 
 
+# How far back `status` looks for the newest raw point. The EMS writes every
+# cycle, so a quarter of an hour without one means nothing is arriving -- or
+# three write intervals, where `raw_write_interval_seconds` throttles it more.
+RAW_FRESHNESS_SECONDS = 15 * 60
+
+
+def raw_freshness_window(influx_config):
+    try:
+        interval = float(influx_config.get("raw_write_interval_seconds") or 0)
+    except (TypeError, ValueError):
+        interval = 0.0
+    return int(max(RAW_FRESHNESS_SECONDS, 3 * interval))
+
+
+def _raw_freshness(client, name, exists, window):
+    """``(newest point or None, whether it could be asked)`` for the raw bucket."""
+
+    if not exists:
+        return None, False
+    try:
+        return client.latest_point_time(name, window), True
+    except Exception:
+        return None, False
+
+
 def status(client, influx_config):
-    """Read live bucket/task state for diagnostics. Returns a report dict."""
+    """Read live bucket/task state for diagnostics. Returns a report dict.
+
+    Beside the schema it reports whether telemetry is arriving: a complete
+    schema says nothing about writes InfluxDB refuses.
+    """
     prefix = influx_config["bucket_prefix"]
     owned_bucket_prefix = f"{prefix}_"
     owned_task_prefix = f"{prefix}{TASK_NAME_INFIX}"
@@ -488,6 +517,11 @@ def status(client, influx_config):
     active = {task["name"] for task in tasks if task["status"] == "active"}
     missing_tasks = [name for name in planned_task_names(influx_config) if name not in active]
     healthy = healthy and not missing_buckets and not missing_tasks
+    raw = bucket_name(prefix, "raw")
+    window = raw_freshness_window(influx_config)
+    raw_latest, raw_checked = _raw_freshness(
+        client, raw, any(b["name"] == raw and b["exists"] for b in buckets), window
+    )
 
     return {
         "bucket_prefix": prefix,
@@ -497,4 +531,8 @@ def status(client, influx_config):
         "healthy": healthy,
         "missing_buckets": missing_buckets,
         "missing_tasks": missing_tasks,
+        "raw_bucket": raw,
+        "raw_window_seconds": window,
+        "raw_checked": raw_checked,
+        "raw_latest": raw_latest,
     }

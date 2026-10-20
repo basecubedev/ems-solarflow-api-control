@@ -526,6 +526,28 @@ Run: python3 emsctl.py influx init
 If you see these, run `python3 emsctl.py influx init` (bundled) or check the
 `url`/`token` and reachability of your external InfluxDB.
 
+### InfluxDB answers but refuses the writes
+
+A write InfluxDB answered with an error status reached a running database, so
+the hint names its answer instead: a refused token (401, 403), a missing raw
+bucket (404, which the EMS creates by itself unless `auto_sync` is off), or any
+other status with the place InfluxDB logs its cause — `docker logs ems-influxdb`
+for the bundled one. The log line carries the start of InfluxDB's answer as
+`detail`, which for a 400 or 422 is the whole reason. `influx status` reports whether telemetry is arriving at
+all (`raw_latest`, the newest raw point of the last 15 minutes, or of three
+write intervals where `raw_write_interval_seconds` is longer), and the Admin
+console's **Run the checks** warns when none is — except in simulation, where
+the EMS writes no telemetry.
+
+One cause seen on an appliance: the bundled InfluxDB runs as its own user
+inside its container and owns `data/influxdb`. Handing that directory to
+another user while InfluxDB runs — a recursive `chown` of `data/` — leaves it
+unable to open a new WAL segment or shard, and every write is refused with
+HTTP 500 and `permission denied` in its log until it restarts. Its image gives
+the directory back to its user on every start, so `docker restart ems-influxdb`
+ends it; the Admin console's own permission repair leaves `data/influxdb`
+alone for this reason.
+
 ### Analytics is empty although InfluxDB is reachable
 
 A different fault with a different fix. Each range reads the bucket its query

@@ -20,6 +20,7 @@ class FakeInfluxClient:
         self._task_seq = 0
         self.calls = []
         self.old_points = set()  # buckets holding points older than any retention asked about
+        self.latest = {}  # bucket -> newest point time in the asked window
 
     def get_org_id(self):
         return "org-1"
@@ -57,6 +58,10 @@ class FakeInfluxClient:
         self.buckets[name] = int(retention_seconds or 0)
         self.calls.append(("update_bucket", name, self.buckets[name]))
         return self.find_bucket(name)
+
+    def latest_point_time(self, name, seconds_back):
+        self.calls.append(("latest_point_time", name, seconds_back))
+        return self.latest.get(name)
 
     def has_points_before(self, name, seconds_ago):
         self.calls.append(("has_points_before", name, seconds_ago))
@@ -629,6 +634,59 @@ class SafeSyncTest(unittest.TestCase):
 
         self.assertEqual(report["disabled_tasks"], [])
         self.assertTrue(all(task["status"] == "active" for task in client.tasks.values()))
+
+
+class TelemetryArrivingTest(unittest.TestCase):
+    """A complete schema says nothing about writes InfluxDB refuses."""
+
+    def setUp(self):
+        self.config = normalize_influxdb_config({"enabled": True, "bucket_prefix": "ems"})
+        self.client = FakeInfluxClient()
+        schema.sync(self.client, self.config)
+
+    def test_status_names_the_newest_raw_point(self):
+        self.client.latest["ems_raw"] = "2026-10-20T18:00:00Z"
+
+        report = schema.status(self.client, self.config)
+
+        self.assertTrue(report["raw_checked"])
+        self.assertEqual(report["raw_latest"], "2026-10-20T18:00:00Z")
+        self.assertEqual(report["raw_bucket"], "ems_raw")
+        self.assertEqual(report["raw_window_seconds"], 15 * 60)
+
+    def test_no_point_in_the_window_is_reported_as_none(self):
+        report = schema.status(self.client, self.config)
+
+        self.assertTrue(report["raw_checked"])
+        self.assertIsNone(report["raw_latest"])
+
+    def test_a_throttled_writer_gets_a_window_of_three_intervals(self):
+        throttled = {**self.config, "raw_write_interval_seconds": 600}
+        self.client.calls.clear()
+
+        report = schema.status(self.client, throttled)
+
+        self.assertEqual(report["raw_window_seconds"], 1800)
+        self.assertIn(("latest_point_time", "ems_raw", 1800), self.client.calls)
+
+    def test_a_query_that_fails_is_not_a_missing_point(self):
+        def failing(name, seconds_back):
+            raise ConnectionError("query timed out")
+
+        self.client.latest_point_time = failing
+        report = schema.status(self.client, self.config)
+
+        self.assertFalse(report["raw_checked"])
+        self.assertIsNone(report["raw_latest"])
+
+    def test_a_missing_raw_bucket_is_not_asked(self):
+        del self.client.buckets["ems_raw"]
+        self.client.calls.clear()
+
+        report = schema.status(self.client, self.config)
+
+        self.assertFalse(report["raw_checked"])
+        self.assertNotIn("latest_point_time", [call[0] for call in self.client.calls])
 
 
 class FluxBuildTest(unittest.TestCase):

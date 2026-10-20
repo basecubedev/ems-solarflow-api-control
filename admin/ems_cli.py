@@ -66,6 +66,13 @@ INFLUX_RETENTION_SHORTER_MESSAGE = (
     "Retention is shorter than the config: {buckets}. Repair analytics "
     "lengthens it; nothing is deleted."
 )
+INFLUX_NO_TELEMETRY_MESSAGE = (
+    "No telemetry has reached {bucket} in the last {minutes} minutes. While the "
+    "EMS runs on real hardware it writes every cycle, so InfluxDB is refusing "
+    "the writes or the EMS is not writing: the EMS log shows "
+    "influx_writer_write_error with the reason, and for the bundled InfluxDB "
+    "`docker logs ems-influxdb` names its side."
+)
 INFLUX_TASKS_OFF_MESSAGE = (
     "Downsampling tasks are switched off: {tasks}. Neither the EMS nor Repair "
     "analytics switches a task back on; run in the installation directory: "
@@ -89,12 +96,13 @@ INFLUX_DISABLED_HINT = (
 # Admin diagnostics and the guided-upgrade health gate can spend.
 #
 # The request count comes from the operator's `influxdb.downsampling`, not from
-# this file: one lookup per planned bucket plus the task list, so a chain of L
-# levels costs L+2. Eight covers six levels, twice what the template ships. A
+# this file: one lookup per planned bucket, the task list and the query for the
+# newest raw point, so a chain of L levels costs L+3. Nine covers six levels,
+# twice what the template ships. A
 # test counts the template's and asserts the room on top, because a check killed
 # by its own ceiling is reported as a hard failure -- the opposite of the
 # warning this check is marked for.
-INFLUX_STATUS_CHECK_REQUEST_ALLOWANCE = 8
+INFLUX_STATUS_CHECK_REQUEST_ALLOWANCE = 9
 INFLUX_STATUS_CHECK_TIMEOUT_SECONDS = (
     INFLUX_PROBE_READY_TIMEOUT_SECONDS
     + INFLUX_STATUS_CHECK_REQUEST_ALLOWANCE * 2 * INFLUX_PROBE_REQUEST_TIMEOUT_SECONDS
@@ -359,6 +367,17 @@ def _influx_schema_message(parsed):
         text = f"{bucket.get('name')} keeps {_days(live)} (config {_days(wanted)})"
         (longer if _keeps_longer(live, wanted) else shorter).append(text)
     parts = []
+    if (
+        report.get("raw_checked") is True
+        and not report.get("raw_latest")
+        and report.get("telemetry_expected") is not False
+    ):
+        parts.append(
+            INFLUX_NO_TELEMETRY_MESSAGE.format(
+                bucket=report.get("raw_bucket") or "the raw bucket",
+                minutes=(_seconds(report.get("raw_window_seconds")) or 0) // 60,
+            )
+        )
     if absent:
         parts.append(INFLUX_SCHEMA_INCOMPLETE_MESSAGE.format(missing=", ".join(absent)))
     if off:

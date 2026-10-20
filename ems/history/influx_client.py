@@ -98,6 +98,18 @@ class HistoryInfluxClient(InfluxHTTPClient):
         response.raise_for_status()
         return bool(parse_influx_csv(response.text))
 
+    def latest_point_time(self, bucket_name, seconds_back):
+        """The newest point's time in the last ``seconds_back``, or None."""
+
+        flux = (
+            f"from(bucket: {json.dumps(bucket_name)}) "
+            f"|> range(start: -{int(seconds_back)}s) "
+            "|> last() |> keep(columns: [\"_time\"]) |> group() "
+            "|> sort(columns: [\"_time\"], desc: true) |> limit(n: 1)"
+        )
+        rows = parse_influx_csv(self.query_csv(flux))
+        return rows[0].get("_time") if rows else None
+
     # -- tasks -------------------------------------------------------------
 
     def list_tasks(self, limit=500, timeout=None):

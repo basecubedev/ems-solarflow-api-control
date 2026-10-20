@@ -455,3 +455,22 @@ def test_a_probe_that_failed_is_asked_again_and_not_called_older_data(caplog):
     assert client.buckets["ems_raw"] == 14 * DAY
     assert "influx_schema_retention_kept" not in caplog.text
     assert caplog.text.count("event=influx_schema_retention_unchecked") == 1
+
+
+@pytest.mark.parametrize(
+    ("csv", "expected"),
+    [
+        (",result,table,_time\r\n,_result,0,2026-10-20T18:00:00Z\r\n", "2026-10-20T18:00:00Z"),
+        ("\r\n", None),
+    ],
+    ids=["a-point", "nothing-in-the-window"],
+)
+def test_the_freshness_query_asks_for_the_newest_point_in_its_window(csv, expected):
+    from ems.history.influx_client import HistoryInfluxClient
+
+    session = _CsvSession(csv)
+    client = HistoryInfluxClient("http://influxdb:8086", "ems", "t", session=session)
+
+    assert client.latest_point_time("ems_raw", 900) == expected
+    [query] = session.queries
+    assert query.startswith('from(bucket: "ems_raw") |> range(start: -900s) |> last()')

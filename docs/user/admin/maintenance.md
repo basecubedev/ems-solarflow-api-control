@@ -209,8 +209,9 @@ checked in **dry-run mode only** — no config file is written.
 
 **Expected result:** a list of checks with their outcomes. The **InfluxDB
 status** check warns when the analytics schema is incomplete and names the
-missing buckets and tasks, a downsampling task that is switched off, and a
-retention that differs from the config.
+missing buckets and tasks, a downsampling task that is switched off, a
+retention that differs from the config, and when no telemetry has reached
+InfluxDB in the last 15 minutes.
 
 **If it differs:** for deeper evidence and a support bundle, use the CLI — see
 [Diagnostics and recovery](diagnostics-recovery.md).

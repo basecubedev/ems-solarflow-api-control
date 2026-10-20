@@ -1914,13 +1914,21 @@ def execute_influx_schema_op(
     return 0, {"action": action, "ok": True, "url": url, "report": report}
 
 
-def run_influx_schema_command(influx_config, action, json_output, dry_run=False, safe=False):
-    """Standalone 'influx sync'/'status'/'prune' handler (owns its own output)."""
+def run_influx_schema_command(
+    influx_config, action, json_output, dry_run=False, safe=False, telemetry_expected=True
+):
+    """Standalone 'influx sync'/'status'/'prune' handler (owns its own output).
+
+    ``telemetry_expected`` is false where the EMS starts no telemetry writer
+    (simulation), so a status there does not report raw data as missing.
+    """
     from ems import influx_setup
 
     code, result = execute_influx_schema_op(
         influx_config, action, dry_run=dry_run, safe=safe
     )
+    if action == "status" and isinstance(result.get("report"), dict):
+        result["report"]["telemetry_expected"] = bool(telemetry_expected)
 
     # Surface the local data directory for the bundled backend so operators know
     # where history is persisted on disk (and what to include in backups).
@@ -2028,7 +2036,33 @@ def handle_influx_command(args, config):
         influx_config, args.action, args.json,
         dry_run=bool(getattr(args, "dry_run", False)),
         safe=bool(getattr(args, "safe", False)),
+        telemetry_expected=not config_simulates(config),
     )
+
+
+def config_simulates(config):
+    """Whether the EMS runs this config in simulation, read the way it reads it.
+
+    A value that is not a JSON boolean is not simulation for the EMS (it runs
+    without hardware writes instead), so ``"false"`` must not read as true here.
+    """
+    from ems.config import (
+        CONTROL_FLAG_BLOCKING_SIDE,
+        control_flag_default,
+        optional_json_bool,
+    )
+
+    system = config.get("system") if isinstance(config.get("system"), dict) else {}
+    try:
+        return bool(
+            optional_json_bool(
+                system.get("simulation_mode"),
+                "simulation_mode",
+                default=control_flag_default("simulation_mode"),
+            )
+        )
+    except ValueError:
+        return CONTROL_FLAG_BLOCKING_SIDE["simulation_mode"]
 
 
 # Shown when 'influx init' runs against a disabled config. Matches the dashboard
@@ -2527,7 +2561,16 @@ def print_influx_status(report):
     for name in report.get("missing_tasks", ()):
         print(f"    {name}: MISSING")
     if report.get("missing_buckets") or report.get("missing_tasks"):
-        print("  run 'python3 emsctl.py influx sync' to create what is missing")
+        print("  run 'python3 emsctl.py influx sync --safe' to create what is missing")
+    if report.get("raw_checked") and report.get("telemetry_expected", True):
+        minutes = report["raw_window_seconds"] // 60
+        if report.get("raw_latest"):
+            print(f"  telemetry: newest point in {report['raw_bucket']} at {report['raw_latest']}")
+        else:
+            print(
+                f"  telemetry: NONE in {report['raw_bucket']} for {minutes} minutes "
+                "(the EMS log shows influx_writer_write_error if InfluxDB refuses the writes)"
+            )
 
 
 def confirm_disable_auth(args, auth_path):
