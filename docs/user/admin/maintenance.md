@@ -64,6 +64,7 @@ Read this before clicking something you are unsure about.
 | Control & safety | Yes | No | No |
 | System status (files, services, version) | Yes | No | No |
 | Restart EMS now (EMS services) | No | No | Yes |
+| Repair analytics (EMS services) | No | No | No |
 | Something looks wrong? | Yes | No | No |
 | Device telemetry | Yes | No | No |
 | Settings & devices — editing and searching | Yes | No | No |
@@ -107,7 +108,36 @@ the page: hidden always means "we asked and the answer was no", never "we could
 not tell".
 
 **What it changes:** nothing. Opening and closing cards is display only. The
-one action on this page is **Restart EMS now**, in *EMS services*.
+two actions on this page are in *EMS services*: **Restart EMS now**, and
+**Repair analytics** while Analytics is switched on.
+
+### EMS services — Restart EMS now and Repair analytics
+
+**Restart EMS now** recreates the EMS with the saved settings and starts or
+stops the bundled InfluxDB to match them. When Analytics is on it also creates
+the missing analytics buckets and downsampling tasks, the same way **Repair
+analytics** does: nothing is deleted. A shorter retention you configured, or a
+downsampling entry you removed, is applied by a full schema sync, which you run
+on purpose because it deletes the data that falls out of the new retention — in
+the installation directory, `docker compose exec ems python3 emsctl.py influx sync`.
+**Run the checks** names a retention that differs from the config. Analytics is
+optional, so a step of it that fails (InfluxDB does not start, or
+the schema cannot be created yet) does not stop the restart: the EMS is
+restarted all the same, and the result names what did not work.
+
+**Repair analytics** creates the missing analytics buckets and downsampling
+tasks now. It deletes nothing and changes nothing else: no container is started,
+stopped or recreated, a task you changed by hand stays as it is, and a bucket
+that holds data older than its configured retention keeps it. You rarely need
+it: while `influxdb.auto_sync` is on (the default), the running EMS does the
+same by itself within minutes of InfluxDB answering, and checks again every half
+hour. Use it when the Analytics tab says a bucket is missing and you do not want
+to wait, or when `auto_sync` is off. A bundled InfluxDB that is not running is
+started by **Restart EMS now**, not by the repair. If the repair fails, the
+message names the cause, for example a token InfluxDB does not accept.
+
+**Restart EMS now** and **Repair analytics** do not run at the same time: while
+one runs, the other is unavailable.
 
 ### What needs your attention
 
@@ -177,7 +207,10 @@ mode** fact, and **Run the checks**.
 **What it changes:** nothing. Checks are read-only, and the config upgrade is
 checked in **dry-run mode only** — no config file is written.
 
-**Expected result:** a list of checks with their outcomes.
+**Expected result:** a list of checks with their outcomes. The **InfluxDB
+status** check warns when the analytics schema is incomplete and names the
+missing buckets and tasks, a downsampling task that is switched off, and a
+retention that differs from the config.
 
 **If it differs:** for deeper evidence and a support bundle, use the CLI — see
 [Diagnostics and recovery](diagnostics-recovery.md).

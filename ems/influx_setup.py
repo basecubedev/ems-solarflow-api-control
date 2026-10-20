@@ -50,6 +50,9 @@ INFLUX_PROBE_REQUEST_TIMEOUT_SECONDS = 5
 # few `ems` files the Admin image carries, and the client pulls in `requests`,
 # which that image has no reason to hold. A test walks the pair instead.
 INFLUX_SYNC_REQUEST_TIMEOUT_SECONDS = 15
+# How long an emsctl schema sync waits for one already running before it gives
+# up; the running EMS's own sync takes seconds and does not wait at all.
+SCHEMA_LOCK_WAIT_SECONDS = 60.0
 
 INFLUX_SERVICE = "influxdb"
 INFLUX_CONTAINER_NAME = "ems-influxdb"

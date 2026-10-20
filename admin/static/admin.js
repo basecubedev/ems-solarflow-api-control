@@ -10159,6 +10159,7 @@ const maintenanceEls = {
   runtimeContainersRecheck: document.getElementById("maintenance-runtime-containers-recheck"),
   runtimeDiagnostics: document.getElementById("maintenance-runtime-diagnostics"),
   runtimeContainersStatus: document.getElementById("maintenance-runtime-containers-status"),
+  runtimeAnalyticsRepair: document.getElementById("maintenance-runtime-analytics-repair"),
   zendureMqttSummary: document.getElementById("maintenance-zendure-mqtt-summary"),
   zendureMqttState: document.getElementById("maintenance-zendure-mqtt-state"),
   zendureMqttEndpoint: document.getElementById("maintenance-zendure-mqtt-endpoint"),
@@ -18539,6 +18540,9 @@ function renderRuntimeServiceStatus(plan) {
     : containerSummaryTone(ems.tone, influx.tone);
   setMaintenanceFact(maintenanceEls.containersSummary, summaryText, tone);
   setMaintenanceCardTone("maintenance-containers", tone);
+  if (maintenanceEls.runtimeAnalyticsRepair) {
+    maintenanceEls.runtimeAnalyticsRepair.hidden = !(plan.available && plan.analytics_enabled);
+  }
 }
 
 function containerSummaryTone(...tones) {
@@ -18579,6 +18583,7 @@ function setContainerSyncBusy(isBusy) {
     button.disabled = isBusy;
     button.textContent = isBusy ? "Syncing…" : CONTAINER_SYNC_LABEL;
   });
+  if (maintenanceEls.runtimeAnalyticsRepair) maintenanceEls.runtimeAnalyticsRepair.disabled = isBusy;
 }
 
 async function syncMaintenanceContainers(statusEl, reason = "manual") {
@@ -18592,14 +18597,16 @@ async function syncMaintenanceContainers(statusEl, reason = "manual") {
       body: JSON.stringify({ confirm: true, reason }),
     });
     const data = await resp.json().catch(() => ({}));
+    const warnings = Array.isArray(data.warnings) ? data.warnings : [];
     if (!resp.ok || !data.ok) {
-      throw new Error(humanErrorText(data, "Container sync failed."));
+      throw new Error([humanErrorText(data, "Container sync failed."), ...warnings].join(" "));
     }
     const stepSummary = formatContainerSyncSteps(data.steps);
     if (statusEl) {
-      statusEl.textContent = stepSummary
+      const done = stepSummary
         ? `Container sync completed: ${stepSummary}.`
         : "Container sync completed.";
+      statusEl.textContent = [done, ...warnings].join(" ");
     }
     // Refresh facts only; the container plan (and any visible post-apply panel)
     // is reloaded explicitly so the guided view is preserved.
@@ -18612,6 +18619,48 @@ async function syncMaintenanceContainers(statusEl, reason = "manual") {
     if (statusEl) statusEl.textContent = err.message || String(err);
   } finally {
     setContainerSyncBusy(false);
+  }
+}
+
+const ANALYTICS_REPAIR_LABEL = "Repair analytics";
+const ANALYTICS_REPAIR_CONFIRM =
+  "Create the missing analytics buckets and downsampling tasks now? Nothing is " +
+  "deleted, and no container or setting is changed. The EMS does the same by " +
+  "itself while influxdb.auto_sync is on.";
+
+function setAnalyticsRepairBusy(isBusy) {
+  const button = maintenanceEls.runtimeAnalyticsRepair;
+  if (button) {
+    button.disabled = isBusy;
+    button.textContent = isBusy ? "Repairing…" : ANALYTICS_REPAIR_LABEL;
+  }
+  [mconfigEls.containersSync, maintenanceEls.runtimeContainersSync]
+    .filter(Boolean)
+    .forEach((other) => {
+      other.disabled = isBusy;
+    });
+}
+
+async function repairAnalytics() {
+  const statusEl = maintenanceEls.runtimeContainersStatus;
+  if (!window.confirm(ANALYTICS_REPAIR_CONFIRM)) return;
+  setAnalyticsRepairBusy(true);
+  if (statusEl) statusEl.textContent = "Creating the analytics schema…";
+  try {
+    const resp = await fetch("/api/admin/maintenance/analytics/repair", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: true }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.ok) {
+      throw new Error(humanErrorText(data, "The analytics repair failed."));
+    }
+    if (statusEl) statusEl.textContent = data.message || "The analytics schema is in place.";
+  } catch (err) {
+    if (statusEl) statusEl.textContent = err.message || String(err);
+  } finally {
+    setAnalyticsRepairBusy(false);
   }
 }
 
@@ -18649,6 +18698,9 @@ if (maintenanceEls.runtimeContainersRecheck) {
 }
 if (maintenanceEls.runtimeDiagnostics) {
   maintenanceEls.runtimeDiagnostics.addEventListener("click", runDiagnostics);
+}
+if (maintenanceEls.runtimeAnalyticsRepair) {
+  maintenanceEls.runtimeAnalyticsRepair.addEventListener("click", repairAnalytics);
 }
 
 // The Admin UI opens on a router screen that detects the install state and

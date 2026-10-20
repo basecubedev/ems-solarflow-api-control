@@ -36,6 +36,15 @@ pytestmark = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def _schema_lock_outside_the_checkout(tmp_path, monkeypatch):
+    """A sync takes the schema lock in the data directory; keep it in tmp_path."""
+
+    from ems.history import schema_keeper
+
+    monkeypatch.setattr(schema_keeper, "schema_lock_path", lambda: tmp_path / "influx-schema.lock")
+
+
 # What the appliance measured, and the floor any budget here has to clear.
 # InfluxDB 2.7 on a Pi 3B+ with an SD card: container start 19:52:45, listening
 # on 8086 at 19:53:19. A first start also runs the setup wrapper, which creates
@@ -55,7 +64,7 @@ def test_the_readiness_budget_covers_the_slowest_supported_hardware():
 _TEMPLATE_LEVELS = 3
 
 
-def _counted_schema_requests(action, existing=("ems_raw",), levels=None):
+def _counted_schema_requests(action, existing=("ems_raw",), levels=None, **options):
     """How many HTTP requests one schema operation makes, counted by running it.
 
     Derived rather than assumed: the ceilings that contain these operations are
@@ -88,6 +97,7 @@ def _counted_schema_requests(action, existing=("ems_raw",), levels=None):
         def __init__(self, payload):
             self._payload = payload
             self.status_code = 200
+            self.text = ""
 
         def raise_for_status(self):
             return None
@@ -128,7 +138,7 @@ def _counted_schema_requests(action, existing=("ems_raw",), levels=None):
             return _Response({"id": "b"})
 
     client = HistoryInfluxClient("http://influxdb:8086", "ems", "t", session=_Session())
-    getattr(schema, action)(client, influx)
+    getattr(schema, action)(client, influx, **options)
 
     return len(calls)
 
@@ -172,6 +182,10 @@ def test_the_admin_sync_call_outlives_the_work_it_contains():
     # on the constant states and this is what checks it.
     assert INFLUX_SYNC_REQUEST_ALLOWANCE >= _counted_schema_requests(
         "sync", levels=_TEMPLATE_LEVELS + 1
+    )
+    # The Admin's repair runs the safe sync inside the same ceiling.
+    assert INFLUX_SYNC_REQUEST_ALLOWANCE >= _counted_schema_requests(
+        "sync", levels=_TEMPLATE_LEVELS + 1, safe=True
     )
 
 
@@ -491,7 +505,7 @@ def test_both_surfaces_send_the_operator_to_the_same_command():
     from dashboard.server import ANALYTICS_SCHEMA_HINT
     from ems.history.influx_writer import SCHEMA_SYNC_HINT
 
-    command = "python3 emsctl.py influx sync"
+    command = "python3 emsctl.py influx sync --safe"
 
     assert command in ANALYTICS_SCHEMA_HINT
     assert command in SCHEMA_SYNC_HINT
@@ -1021,3 +1035,70 @@ def test_each_lookup_is_given_the_time_that_is_left():
     assert budgets[0] <= provider_module.MISSING_BUCKETS_PROBE_SECONDS
     # Never more than what is left, so the sequence cannot outrun its deadline.
     assert budgets == sorted(budgets, reverse=True)
+
+
+def _run_schema_op(action, **kwargs):
+    config = {
+        "org": "ems",
+        "token": "t",
+        "token_env": "INFLUXDB_TOKEN",
+        "bucket_prefix": "ems",
+        "url": "http://influxdb:8086",
+        "host_url": "http://127.0.0.1:8086",
+    }
+    seen = {}
+
+    def fake_sync(client, influx_config, safe=False):
+        seen["safe"] = safe
+        return {"buckets": [], "tasks": [], "disabled_tasks": []}
+
+    import emsctl
+
+    with patch("ems.history.influx_client.wait_for_influx_ready"), patch(
+        "ems.history.schema.sync", fake_sync
+    ), patch.object(emsctl, "resolve_influx_token_with_secret_file", return_value="t"):
+        code, result = emsctl.execute_influx_schema_op(config, action, **kwargs)
+    return code, result, seen
+
+
+def test_the_safe_option_reaches_the_schema_sync():
+    assert _run_schema_op("sync", safe=True)[2] == {"safe": True}
+    assert _run_schema_op("sync")[2] == {"safe": False}
+
+
+def test_a_sync_waits_for_one_already_running_and_then_says_so(monkeypatch):
+    """Protected interleaving: the running EMS's keeper holds the schema lock when
+    an operator's `influx sync` arrives. The sync does not write beside it; it
+    gives up after its wait with a message instead."""
+
+    from ems import influx_setup
+    from ems.file_io import FileLockTimeout
+    from ems.history import schema_keeper
+
+    waited = {}
+
+    def busy(timeout):
+        waited["timeout"] = timeout
+        raise FileLockTimeout("held by another process")
+
+    monkeypatch.setattr(schema_keeper, "schema_sync_lock", busy)
+
+    code, result, seen = _run_schema_op("sync")
+
+    assert code == 1
+    assert waited["timeout"] == influx_setup.SCHEMA_LOCK_WAIT_SECONDS
+    assert "another analytics schema sync is still running" in result["error"]
+    assert seen == {}
+
+
+def test_a_status_read_takes_no_lock(monkeypatch):
+    from ems.history import schema_keeper
+
+    monkeypatch.setattr(
+        schema_keeper, "schema_sync_lock", lambda timeout: pytest.fail("status must not lock")
+    )
+
+    with patch("ems.history.schema.status", return_value={}):
+        code, _result, _seen = _run_schema_op("status")
+
+    assert code == 0

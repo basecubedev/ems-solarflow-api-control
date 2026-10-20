@@ -700,7 +700,8 @@ same columnar shape as `/api/history/series`, with `source` set to `influxdb`.
 
 A query whose bucket was never created answers the same way, with
 `{"available": false, "reason": "schema_incomplete", "bucket": ..., "missing_buckets": [...]}`
-and a hint naming `emsctl influx sync`. The hint changes when no sync would
+and a hint that the EMS creates the bucket by itself, naming `emsctl influx sync --safe`
+and the Admin console's Repair analytics to do it at once. The hint changes when no sync would
 create that bucket — a `query_profiles` entry naming a bucket that no
 `downsampling` entry produces — because there the config disagrees with itself
 and the command would change nothing. Each range reads the bucket its query

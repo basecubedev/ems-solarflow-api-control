@@ -261,7 +261,7 @@ docker compose -f docker-compose.admin.yml up -d
 
 This path inspects an existing installation and repairs it.
 
-- **The whole page** is read-only apart from **Restart EMS now**. It shows the install state, the resolved
+- **The whole page** is read-only apart from **Restart EMS now** and **Repair analytics**. It shows the install state, the resolved
   `config/config.json`, `data/`, and `docker-compose.yml` paths, the EMS and
   InfluxDB containers, the Admin image and EMS image as separate component
   identities, and a link to the local dashboard

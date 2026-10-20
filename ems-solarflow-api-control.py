@@ -458,7 +458,10 @@ def main():
     # Native InfluxDB telemetry writer: active only when influxdb is enabled and
     # we are reading real hardware (not simulation/replay). Started lazily and
     # non-blocking; InfluxDB being unavailable never blocks or stops the EMS.
+    # Beside it, the schema keeper creates the analytics buckets and tasks the
+    # writer's data flows into, and keeps asking until InfluxDB accepts them.
     influx_writer = None
+    influx_schema_keeper = None
     if (
         cfg.INFLUXDB_CONFIG
         and cfg.INFLUXDB_CONFIG.get("enabled")
@@ -473,6 +476,12 @@ def main():
         except Exception as e:
             log_event(logging.WARNING, "influx_writer_start_failed", error=e)
             influx_writer = None
+        try:
+            from ems.history.schema_keeper import start_schema_keeper
+
+            influx_schema_keeper = start_schema_keeper(cfg.INFLUXDB_CONFIG)
+        except Exception as e:
+            log_event(logging.WARNING, "influx_schema_keeper_start_failed", error=e)
 
     # Zendure MQTT telemetry runtime. It reads snapshots and drives no writes;
     # any control device shares its broker service so a broker used by both keeps
@@ -629,6 +638,8 @@ def main():
         e3dc_sessions.close()
         if influx_writer:
             influx_writer.stop()
+        if influx_schema_keeper is not None:
+            influx_schema_keeper.stop()
         if zendure_mqtt_runtime is not None:
             zendure_mqtt_runtime.stop()
         if zendure_mqtt_control_runtime is not None:

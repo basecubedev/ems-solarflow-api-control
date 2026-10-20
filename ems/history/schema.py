@@ -312,8 +312,62 @@ def prune(client, influx_config, dry_run=False):
     return report
 
 
-def sync(client, influx_config):
-    """Reconcile InfluxDB to the config. Returns a structured report dict."""
+def _retention_blocker(client, name, current, wanted):
+    """Why moving a bucket from ``current`` to ``wanted`` is not safe, or None.
+
+    0 means kept forever. ``older_data``: points would fall out. A probe that
+    fails is ``probe_failed``: the safe sync leaves the retention as it is
+    rather than guess, and asks again next time.
+    """
+
+    if wanted == 0 or (current != 0 and wanted >= current):
+        return None
+    try:
+        return "older_data" if client.has_points_before(name, wanted) else None
+    except Exception:
+        return "probe_failed"
+
+
+def _safe_bucket(client, name, retention, known_kept=()):
+    """Create a missing bucket; correct a retention only where that deletes nothing.
+
+    A bucket in ``known_kept`` was found holding older data before and is not
+    asked again: its answer does not change while its retention does not.
+    """
+
+    wanted = int(retention or 0)
+    live = client.find_bucket(name)
+    if live is None:
+        _bucket, created = client.ensure_bucket(name, wanted)
+        action = "created" if created else "unchanged"
+        return {"name": name, "action": action, "retention_seconds": wanted}
+    current = client.bucket_retention_seconds(live)
+    if current == wanted:
+        return {"name": name, "action": "unchanged", "retention_seconds": wanted}
+    reason = "older_data" if name in known_kept else _retention_blocker(client, name, current, wanted)
+    if reason is None:
+        client.update_bucket_retention(live.get("id"), wanted)
+        return {"name": name, "action": "updated", "retention_seconds": wanted}
+    return {
+        "name": name,
+        "action": "kept",
+        "reason": reason,
+        "retention_seconds": wanted,
+        "live_retention_seconds": current,
+    }
+
+
+def sync(client, influx_config, safe=False, known_kept=()):
+    """Reconcile InfluxDB to the config. Returns a structured report dict.
+
+    ``safe`` is the sync that runs without anyone watching: the EMS's own and
+    the Admin's repair. It creates what is missing and changes nothing an
+    operator may have meant -- no task is updated, re-activated or disabled --
+    and no data is deleted: a retention is shortened only when no point is old
+    enough to fall out of it. A bucket or task it leaves alone is reported
+    ``kept``; ``known_kept`` names buckets a caller already knows hold older
+    data, so they are not probed again.
+    """
     prefix = influx_config["bucket_prefix"]
     org_id = client.get_org_id()
 
@@ -322,6 +376,9 @@ def sync(client, influx_config):
     # 1) Buckets + retention.
     for key, retention in planned_buckets(influx_config).items():
         name = bucket_name(prefix, key)
+        if safe:
+            report["buckets"].append(_safe_bucket(client, name, retention, known_kept))
+            continue
         _bucket, action = client.ensure_bucket_retention(name, retention)
         report["buckets"].append(
             {"name": name, "action": action, "retention_seconds": retention}
@@ -354,7 +411,10 @@ def sync(client, influx_config):
         needs_flux = _normalize_flux(existing.get("flux")) != _normalize_flux(flux)
         needs_status = existing.get("status") != "active"
 
-        if needs_flux or needs_status:
+        if safe:
+            action = "kept" if needs_flux or needs_status else "unchanged"
+            report["tasks"].append({"name": name, "action": action})
+        elif needs_flux or needs_status:
             client.update_task(
                 existing.get("id"),
                 flux=flux if needs_flux else None,
@@ -367,6 +427,8 @@ def sync(client, influx_config):
     # 3) Retire what the config no longer wants. The reason travels with the
     #    entry because a duplicate's name is also in ``tasks``, and without it
     #    the two report the same name saying opposite things.
+    if safe:
+        return report
     for name, task, reason in _retired_tasks(tasks_by_name, influx_config):
         if task.get("status") == "inactive":
             report["disabled_tasks"].append(

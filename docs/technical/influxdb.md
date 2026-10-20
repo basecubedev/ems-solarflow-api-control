@@ -166,9 +166,12 @@ the filesystem supports it.
   secrets and start InfluxDB for you). It does **not** mean the EMS controller
   starts Docker containers during the normal control loop — it never does.
 - **`auto_sync: true`** tells the setup commands to apply the bucket, retention
-  and task schema automatically once InfluxDB is reachable. With
-  `auto_sync: false`, `influx init` still prepares and starts bundled InfluxDB,
-  then prints the next step to run manually:
+  and task schema automatically once InfluxDB is reachable, and lets the
+  running EMS keep it in place (see
+  [The EMS keeps the schema in place](#the-ems-keeps-the-schema-in-place)).
+  With `auto_sync: false`, nothing creates the schema by itself: `influx init`
+  still prepares and starts bundled InfluxDB, then prints the next step to run
+  manually:
 
   ```bash
   python3 emsctl.py influx sync
@@ -385,6 +388,10 @@ reconciled from `config.json` by `emsctl.py influx`:
 #    that is still configured
 python3 emsctl.py influx sync
 
+# Create only what is missing and delete nothing (what the EMS and the Admin
+# console's Repair analytics run):
+python3 emsctl.py influx sync --safe
+
 # Report live buckets, tasks and task health:
 python3 emsctl.py influx status
 python3 emsctl.py influx status --json
@@ -402,10 +409,14 @@ writes the second time.
 
 Rerunning a `sync` is always safe; running two **at the same time** is not.
 InfluxDB does not make task names unique, so two syncs that both find a task
-missing both create it, and the extra keeps writing the same window. A later
-`sync` switches the duplicate to `inactive` and reports it as
-`disabled (duplicate)`; it is not deleted, because disabling is reversible and
-deleting is not. `influx prune` is the separate second step that removes it.
+missing both create it, and the extra keeps writing the same window. Every sync
+on the host therefore takes one lock (see
+[The EMS keeps the schema in place](#the-ems-keeps-the-schema-in-place)); a
+duplicate can still come from an older release or from a sync run on another
+machine against the same InfluxDB. A later `sync` switches the duplicate to
+`inactive` and reports it as `disabled (duplicate)`; it is not deleted, because
+disabling is reversible and deleting is not. `influx prune` is the separate
+second step that removes it.
 
 A second `downsampling` entry with the same `target` asks for the same task, so
 it is reported as `disabled (duplicate_target)` instead — that one is a
@@ -434,6 +445,55 @@ Admin removes the container of a one-off run it killed, so a retry does not
 normally meet the first run still working. When that removal fails — a wedged
 Docker daemon can defeat it — the error names the container it left behind, and
 that container has to go before the action is tried again.
+
+### The EMS keeps the schema in place
+
+The setup commands run the sync once, and not every installation path reaches
+them: a fresh appliance install starts InfluxDB and the EMS together, and
+InfluxDB's own first-start setup creates only `<prefix>_raw` (kept forever,
+not for `raw_days`). So while `enabled` and `auto_sync` are true, the running
+EMS syncs the schema itself:
+
+- about 20 seconds after it starts;
+- again after 30 s, 1, 2, 5 and then every 10 minutes for as long as InfluxDB
+  does not answer or refuses — it never gives up;
+- and every 30 minutes once the schema is in place, so a bucket or task that
+  goes missing later comes back. A complete schema costs a few lookups and no
+  writes; a bucket whose retention differs costs one more query, once.
+
+It runs the **safe** sync, the same as `influx sync --safe` and the same the
+Admin console runs for **Restart EMS now** and **Repair analytics**: it creates
+the buckets and tasks that are missing and deletes nothing.
+
+- A retention is shortened only when no point in the bucket is old enough to
+  fall out of it. An appliance whose raw bucket has kept months of telemetry
+  forever keeps it, because that bucket is then the only history there is — the
+  downsampling tasks only aggregate forward from the moment they exist. The EMS
+  says so once as `event=influx_schema_retention_kept` and does not ask that
+  bucket again while it runs; `influx sync` (without `--safe`) applies the
+  configured retention and deletes the older data. A check that fails — InfluxDB
+  still settling, a query that times out — keeps the retention for that round
+  and is asked again in the next one; the first such failure for a bucket is
+  logged as `event=influx_schema_retention_unchecked`.
+- A task that exists is left as it is, even when it is switched off or its Flux
+  differs from the config, and nothing is retired. The EMS names such tasks once
+  as `event=influx_schema_task_kept`; `influx sync` reconciles them.
+
+It logs what it created or changed as `event=influx_schema_synced`
+(`created_buckets=…`, `created_tasks=…`, `updated_buckets=…`), and a failure as
+`event=influx_schema_sync_failed` with `attempt` and `retry_in_s`. The first
+three failures are expected while a board's InfluxDB starts and are logged at
+info level; a long outage is logged once an hour. A token InfluxDB refuses is
+named once as `event=influx_schema_sync_not_permitted`, with `status=401` (the
+token is unknown — InfluxDB's data was reset or restored) or `status=403` (the
+token may not create buckets or tasks).
+
+Every schema write on the host — the EMS's own, `influx sync`, `influx prune`
+and the Admin console's — takes one lock, `data/influx-schema.lock`, so two of
+them never create the same task side by side. `influx sync` waits up to a
+minute for one already running and then stops with a message; the EMS does not
+wait and asks again half a minute later. The EMS's sync works on its own thread,
+so neither a slow InfluxDB nor a failing sync touches the control loop.
 
 ## Runtime behavior and troubleshooting
 
@@ -477,7 +537,9 @@ way the Analytics tab says so:
 
 ```text
 Analytics history is enabled, but a bucket this range reads is missing.
-Run: python3 emsctl.py influx sync
+Unless influxdb.auto_sync is off, the EMS creates it by itself; it checks every
+half hour. To create it now, use Repair analytics in the Admin console's
+Maintenance, or run: python3 emsctl.py influx sync --safe
 ```
 
 The EMS also says so without anyone opening the tab. Once the telemetry writer
@@ -509,9 +571,11 @@ instant and wrong a moment later, and treating the first one as final would
 leave a false warning standing for as long as the EMS runs.
 
 `python3 emsctl.py influx status` lists them under `missing_buckets` alongside
-an empty `tasks`. The usual cause is a schema sync that ran while InfluxDB was
-still starting; the sync waits for readiness, and a second run against a
-container that is already up succeeds. Note that the downsampling tasks
+an empty `tasks`. The usual causes are a schema sync that ran while InfluxDB was
+still starting, and an install path that never ran one. With `auto_sync` on,
+the EMS settles both within minutes of InfluxDB answering
+([The EMS keeps the schema in place](#the-ems-keeps-the-schema-in-place)); a
+sync run by hand against a container that is already up succeeds at once. Note that the downsampling tasks
 aggregate forward from the moment they are created — the raw data is kept, but
 the longer ranges fill in over the following hours rather than at once.
 

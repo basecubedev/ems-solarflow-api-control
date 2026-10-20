@@ -3049,6 +3049,96 @@ def test_maintenance_container_sync_requires_confirm(monkeypatch):
         srv.server_close()
 
 
+def test_maintenance_analytics_repair_requires_confirmation(monkeypatch):
+    from admin import server as server_module
+
+    called = {"count": 0}
+
+    def _fake_repair():
+        called["count"] += 1
+        return {"ok": True, "status": "completed", "message": "in place", "steps": []}
+
+    monkeypatch.setattr(server_module, "run_maintenance_analytics_repair", _fake_repair)
+    srv, base = _serve()
+    try:
+        status, _, payload = _request(
+            f"{base}/api/admin/maintenance/analytics/repair", method="POST", body={}
+        )
+        assert status == 400
+        assert called["count"] == 0
+
+        status, _, payload = _request(
+            f"{base}/api/admin/maintenance/analytics/repair",
+            method="POST",
+            body={"confirm": True, "path": "/custom/config.json"},
+        )
+        assert status == 400
+        assert "unsupported" in payload["error"]
+        assert called["count"] == 0
+
+        status, _, ok = _request(
+            f"{base}/api/admin/maintenance/analytics/repair",
+            method="POST",
+            body={"confirm": True},
+        )
+        assert status == 200
+        assert ok["message"] == "in place"
+        assert called["count"] == 1
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        ({"ok": False, "status": "influx_not_running", "message": "start it"}, 409),
+        ({"ok": False, "status": "analytics_disabled", "message": "off"}, 409),
+        ({"ok": False, "status": "unavailable", "message": "no docker"}, 409),
+        ({"ok": False, "status": "busy", "message": "wait"}, 409),
+        ({"ok": False, "status": "error", "message": "failed"}, 500),
+    ],
+)
+def test_maintenance_analytics_repair_maps_outcomes_to_status(monkeypatch, result, expected):
+    from admin import server as server_module
+
+    monkeypatch.setattr(server_module, "run_maintenance_analytics_repair", lambda: result)
+    srv, base = _serve()
+    try:
+        status, _, payload = _request(
+            f"{base}/api/admin/maintenance/analytics/repair",
+            method="POST",
+            body={"confirm": True},
+        )
+        assert status == expected
+        assert payload["message"] == result["message"]
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_a_container_sync_refused_as_busy_is_a_conflict(monkeypatch):
+    from admin import server as server_module
+
+    monkeypatch.setattr(
+        server_module,
+        "run_maintenance_container_sync",
+        lambda: {"ok": False, "status": "busy", "message": "wait", "steps": []},
+    )
+    srv, base = _serve()
+    try:
+        status, _, payload = _request(
+            f"{base}/api/admin/maintenance/containers/sync",
+            method="POST",
+            body={"confirm": True},
+        )
+        assert status == 409
+        assert payload["message"] == "wait"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
 def test_maintenance_container_sync_rejects_unsupported_fields(monkeypatch):
     from admin import server as server_module
 

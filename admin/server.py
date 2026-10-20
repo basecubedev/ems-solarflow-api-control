@@ -132,6 +132,7 @@ from admin.install_state import (
 )
 from admin.container_actions import (
     build_maintenance_container_plan,
+    run_maintenance_analytics_repair,
     run_maintenance_container_sync,
 )
 from admin.ems_tool import ems_container_name
@@ -1768,6 +1769,9 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/admin/maintenance/containers/sync":
             self._handle_maintenance_container_sync()
+            return
+        if path == "/api/admin/maintenance/analytics/repair":
+            self._handle_maintenance_analytics_repair()
             return
         if path == "/api/admin/maintenance/upgrade/validate":
             self._handle_maintenance_upgrade_validate()
@@ -3605,7 +3609,45 @@ class AdminHandler(BaseHTTPRequestHandler):
             )
             return
         status = 200
-        if result.get("status") == "unavailable":
+        if result.get("status") in ("unavailable", "busy"):
+            status = 409
+        elif not result.get("ok"):
+            status = 500
+        self._send_json(result, status=status)
+
+    def _handle_maintenance_analytics_repair(self):
+        # Confirmed mutation: runs the analytics schema sync in a one-off EMS
+        # container. It starts, stops and recreates nothing.
+        if self._reject_unrelated_transition_write():
+            return
+        body = self._read_json_body()
+        if body is None:
+            return
+        if not isinstance(body, dict):
+            self._send_json({"error": "expected a JSON object"}, status=400)
+            return
+        if set(body) - {"confirm"}:
+            self._send_json({"error": "unsupported repair field"}, status=400)
+            return
+        if body.get("confirm") is not True:
+            self._send_json(
+                {"error": "explicit repair confirmation is required"}, status=400
+            )
+            return
+        try:
+            result = run_maintenance_analytics_repair()
+        except Exception:  # never leak a traceback to the UI
+            self._send_json(
+                {
+                    "ok": False,
+                    "status": "error",
+                    "message": "The analytics repair failed unexpectedly.",
+                },
+                status=500,
+            )
+            return
+        status = 200
+        if result.get("status") in ("unavailable", "busy", "analytics_disabled", "influx_not_running"):
             status = 409
         elif not result.get("ok"):
             status = 500
