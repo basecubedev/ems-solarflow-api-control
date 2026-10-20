@@ -4,6 +4,7 @@
   import { router, href } from "./router.svelte.js";
   import { t } from "../i18n/i18n.svelte.js";
   import { chooseClassic } from "../state/prefs.svelte.js";
+  import { auth } from "../state/auth.svelte.js";
 
   let { version = "" } = $props();
   const main = PAGES.filter((page) => page.group === "main");
@@ -22,14 +23,14 @@
     {#each main as page (page.id)}
       <a href={href(page.id)} aria-current={router.page === page.id ? "page" : undefined} title={t(`nav.${page.id}`)} data-page={page.id}>
         <Icon name={page.icon} /><span>{t(`nav.${page.id}`)}</span>
-        {#if page.operator}<svg class="i lock" aria-label={t("nav.signInRequired")} role="img"><use href="#i-lock"></use></svg>{/if}
+        {#if page.operator && !auth.authenticated}<svg class="i lock" aria-label={t("nav.signInRequired")} role="img"><use href="#i-lock"></use></svg>{/if}
       </a>
     {/each}
     <div class="nav-group-label">{t("nav.system")}</div>
     {#each system as page (page.id)}
       <a href={href(page.id)} aria-current={router.page === page.id ? "page" : undefined} title={t(`nav.${page.id}`)} data-page={page.id}>
         <Icon name={page.icon} /><span>{t(`nav.${page.id}`)}</span>
-        <svg class="i lock" aria-label={t("nav.signInRequired")} role="img"><use href="#i-lock"></use></svg>
+        {#if !auth.authenticated}<svg class="i lock" aria-label={t("nav.signInRequired")} role="img"><use href="#i-lock"></use></svg>{/if}
       </a>
     {/each}
   </nav>

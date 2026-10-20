@@ -68,6 +68,59 @@ export function finalTarget(device) {
   return first(device.final_target_w, device.effective_target_w, device.adjusted_target_w, device.allocated_target_w, device.raw_target_w);
 }
 
+/** Classic's per-device decision helpers, in Classic's fallback order. */
+export function rawTarget(device) {
+  return first(device.raw_target_w, device.raw_allocation_w);
+}
+
+export function deviceWeight(device) {
+  return first(device.effective_weight, device.pv_weight, device.capacity_weight);
+}
+
+export function baseWeight(device) {
+  const explicit = first(device.base_weight, device.base_pv_weight);
+  if (has(explicit)) return explicit;
+  const pvWeight = numeric(device.pv_weight);
+  if (pvWeight !== null) {
+    const denominator = (numeric(device.pv_priority_factor) || 1) * (numeric(device.charge_balance_multiplier) || 1);
+    if (denominator > 0) return pvWeight / denominator;
+  }
+  return first(device.capacity_weight, device.pv_only_limit_w);
+}
+
+export function totalWeight(entries) {
+  const total = entries.reduce((sum, [, device]) => sum + (numeric(deviceWeight(device)) || 0), 0);
+  return total > 0 ? total : null;
+}
+
+export function deviceShare(device, explain, weights) {
+  const explicit = numeric(first(device.share, device.share_percent));
+  if (explicit !== null) return explicit > 1 ? explicit / 100 : explicit;
+  const raw = numeric(rawTarget(device));
+  const requested = numeric(explain?.requested_total_w);
+  if (raw !== null && requested && requested > 0) return raw / requested;
+  const weight = numeric(deviceWeight(device));
+  return weight !== null && weights ? weight / weights : null;
+}
+
+export function adjustedTarget(device) {
+  return first(device.adjusted_target_w, device.effective_target_w, device.allocated_target_w, finalTarget(device));
+}
+
+export function adjustmentDelta(device) {
+  const explicit = first(device.adjustment_delta_w, device.adjustment_delta);
+  if (has(explicit)) return explicit;
+  const raw = numeric(rawTarget(device));
+  const final = numeric(finalTarget(device));
+  return raw === null || final === null ? null : final - raw;
+}
+
+export function outputDelta(device) {
+  const final = numeric(finalTarget(device));
+  const output = numeric(device.output_w);
+  return final === null || output === null ? null : final - output;
+}
+
 export function finalTotal(explain) {
   return first(explain.final_target_total_w, explain.effective_target_total_w, explain.allocated_target_total_w, explain.commanded_total_w, explain.requested_total_w);
 }
@@ -115,4 +168,9 @@ export function globalWrite(devices, explain) {
 
 export function activeLimits(explain) {
   return (Array.isArray(explain?.limits) ? explain.limits : []).filter((limit) => limit && limit.active);
+}
+
+/** Classic's "Inactive gates": the limits the EMS checked and did not apply this cycle. */
+export function inactiveLimits(explain) {
+  return (Array.isArray(explain?.limits) ? explain.limits : []).filter((limit) => limit && !limit.active && has(limit.name));
 }

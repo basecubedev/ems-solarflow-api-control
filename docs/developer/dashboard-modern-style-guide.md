@@ -93,7 +93,7 @@ beside the text, a dot or an icon, carries the identity.
 | `ui/Fact` | a label and a value in a row |
 | `ui/Status` | a state pill: a tone class, a word and, where it helps, an icon; the word carries the meaning |
 | `ui/Bar` | a share of a whole, e.g. SoC |
-| `ui/TimeChart` | every time series; uPlot, colours resolved from the tokens |
+| `ui/TimeChart` | every time series; uPlot, colours resolved from the tokens; a drag zooms, and a refresh keeps the zoom |
 | `ui/ConfirmDialog` | every write; a native `<dialog>` that says what will change |
 | `ui/OperatorGate` | a page or a panel that needs the operator to be signed in |
 | `ui/Empty` | why there is nothing to show, and what would change that |

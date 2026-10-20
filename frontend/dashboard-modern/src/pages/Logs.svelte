@@ -1,6 +1,7 @@
 <script>
   import Card from "../ui/Card.svelte";
   import Segmented from "../ui/Segmented.svelte";
+  import Icon from "../ui/Icon.svelte";
   import OperatorGate from "../ui/OperatorGate.svelte";
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { query } from "../lib/api.js";
@@ -78,6 +79,7 @@
         {#each SERVICE_LEVELS as value (value)}<option {value}>{value}</option>{/each}
       </select>
     </label>
+    <button class="btn secondary small" type="button" onclick={() => (lines = [])} title={t("logs.clearHint")}><Icon name="eraser" size="sm" />{t("logs.clear")}</button>
 {/snippet}
 
 <OperatorGate>

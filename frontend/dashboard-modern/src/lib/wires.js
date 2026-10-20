@@ -27,7 +27,16 @@ export function down(x1, y1, x2, y2) {
   return [[x1, y1], [x1, y2], [x2, y2]];
 }
 
-export function roundedPath(points, radius = 12) {
+export const CORNER_RADIUS = 12;
+
+function cornerRadius(points, i, radius) {
+  const [px, py] = points[i - 1];
+  const [x, y] = points[i];
+  const [nx, ny] = points[i + 1];
+  return Math.min(radius, Math.hypot(x - px, y - py) / 2, Math.hypot(nx - x, ny - y) / 2);
+}
+
+export function roundedPath(points, radius = CORNER_RADIUS) {
   if (!points.length) return "";
   let d = `M${points[0][0]},${points[0][1]}`;
   for (let i = 1; i < points.length; i += 1) {
@@ -54,15 +63,26 @@ export function roundedPath(points, radius = 12) {
   return d;
 }
 
-/** Straight runs of a polyline, each with its length and angle, for the transform-animated dot layers. */
-export function runs(points) {
+/**
+ * Straight runs of a polyline, each with its length and angle, for the
+ * transform-animated dot layers. A run stops where the track starts to bend,
+ * so no dot sits outside a rounded corner.
+ */
+export function runs(points, radius = CORNER_RADIUS) {
   const out = [];
+  const last = points.length - 1;
   for (let i = 1; i < points.length; i += 1) {
     const [x1, y1] = points[i - 1];
     const [x2, y2] = points[i];
-    const length = Math.hypot(x2 - x1, y2 - y1);
+    const full = Math.hypot(x2 - x1, y2 - y1);
+    if (full < 1) continue;
+    const head = i - 1 > 0 ? cornerRadius(points, i - 1, radius) : 0;
+    const tail = i < last ? cornerRadius(points, i, radius) : 0;
+    const length = full - head - tail;
     if (length < 1) continue;
-    out.push({ x: x1, y: y1, length, angle: (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI });
+    const ux = (x2 - x1) / full;
+    const uy = (y2 - y1) / full;
+    out.push({ x: x1 + ux * head, y: y1 + uy * head, length, angle: (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI });
   }
   return out;
 }

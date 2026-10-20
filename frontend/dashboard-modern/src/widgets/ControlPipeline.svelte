@@ -13,7 +13,7 @@
   const explain = $derived(snapshot?.control_explain || null);
   const devices = $derived(deviceEntries(explain));
   const write = $derived(explain ? globalWrite(devices, explain) : "none");
-  const split = (pick) => devices.map(([name, d]) => `${name} ${f.power(pick(d))}`).join(" · ") || "—";
+  const split = (pick) => devices.map(([name, d]) => `${name} ${f.power(pick(d))}`).join("\n") || "—";
   const counts = $derived.by(() => {
     const result = {};
     devices.forEach(([, d]) => {
@@ -68,7 +68,7 @@
   dl { margin: 4px 0 0; display: grid; gap: 4px; font-size: 12px; }
   dl div { display: flex; flex-direction: column; }
   dt { color: var(--m-muted-2); }
-  dd { margin: 0; overflow-wrap: anywhere; }
+  dd { margin: 0; overflow-wrap: anywhere; white-space: pre-line; }
   .muted { margin: 0; }
   @media (max-width: 1280px) { .pipeline { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
   @media (max-width: 760px) { .pipeline { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createFlowActivity, createFlowScale, createHouseLines, ribbonWidth, batteryDirection, gridDirection, gridHomeWatts, RIBBON_IDLE_PX, RIBBON_MAX_PX } from "../src/lib/flow.js";
+import { createFlowActivity, createFlowScale, createHouseLines, busFlows, ribbonWidth, batteryDirection, gridDirection, gridHomeWatts, RIBBON_IDLE_PX, RIBBON_MAX_PX } from "../src/lib/flow.js";
 
 test("a flow switches on at 8 W and off only below 3 W, as in Classic", () => {
   const activity = createFlowActivity();
@@ -45,10 +45,17 @@ test("the AC charge is not drawn twice on the grid to home line", () => {
 
 test("a device's house line needs 8 W and twice the other side to change direction, as in Classic", () => {
   const lines = createHouseLines();
-  assert.deepEqual(lines.direction("WR1", 0, 5, 1), { charging: false, watts: 0 });
+  assert.deepEqual(lines.direction("WR1", 0, 5, 1), { charging: false, active: false, watts: 0 });
   assert.equal(lines.direction("WR1", 300, 0, 2).charging, false);
   assert.equal(lines.direction("WR1", 300, 400, 3).charging, false);
   assert.equal(lines.direction("WR1", 300, 600, 4).charging, true);
   assert.equal(lines.direction("WR1", 400, 300, 5).charging, true);
   assert.equal(lines.direction("WR1", 700, 300, 6).charging, false);
+});
+
+test("the bus adds the inverters' lines toward the home and the trunk carries them all", () => {
+  const joined = busFlows([300, -200, 400, 0], { above: [0, 1], below: [2] });
+  assert.deepEqual(joined.segments, { "bus-above0": 300, "bus-above1": 100, "bus-below0": 400 });
+  assert.equal(joined.total, 500);
+  assert.deepEqual(busFlows([250], {}), { segments: {}, total: 250 });
 });

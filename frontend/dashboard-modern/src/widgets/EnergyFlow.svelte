@@ -16,7 +16,7 @@
   import { live } from "../state/live.svelte.js";
   import { prefs, setPref } from "../state/prefs.svelte.js";
   import { devices as allDevices, isStale } from "../state/derived.svelte.js";
-  import { createFlowActivity, createFlowScale, createHouseLines, ribbonWidth, batteryDirection, gridDirection, gridHomeWatts } from "../lib/flow.js";
+  import { createFlowActivity, createFlowScale, createHouseLines, busFlows, ribbonWidth, batteryDirection, gridDirection, gridHomeWatts } from "../lib/flow.js";
   import { box, elbow, vertical, down, roundedPath, runs } from "../lib/wires.js";
   import { flowDots, DOT_PERIOD_PX } from "../lib/flowAnim.js";
   import { channelKwh } from "../lib/energy.js";
@@ -31,6 +31,7 @@
   let stage = $state();
   let size = $state({ width: 0, height: 0 });
   let geometry = $state.raw({});
+  let bus = $state.raw({ above: [], below: [] });
 
   const snapshot = $derived(live.snapshot);
   const today = $derived(snapshot?.energy_stats?.today);
@@ -79,23 +80,28 @@
       specs.push({ id: "grid", token: "--grid", watts: gridHomeWatts(v.gridW, v.chargeW), reverse: v.gridW < 0 });
       if (v.chargeW > 0) specs.push({ id: "charge", token: "--grid", watts: v.chargeW, reverse: false });
     } else {
+      const flows = deviceList.map((device) => {
+        const house = houses.get(device.name);
+        if (!device.online || !house?.active) return 0;
+        return house.charging ? -house.watts : house.watts;
+      });
+      const joined = busFlows(flows, bus);
+      const total = joined.total;
       scale.update(Math.max(
         Math.abs(system.gridW),
+        Math.abs(total),
         ...deviceList.map((d) => Math.max(Math.abs(d.pvW || 0), Math.abs(d.outputW || 0), Math.abs(d.batteryW || 0), Math.abs(d.chargeW || 0))),
       ));
+      const toward = (id, watts) => ({ id, token: watts < 0 ? "--grid" : "--output", watts: Math.abs(watts), reverse: watts < 0 });
+      Object.entries(joined.segments).forEach(([id, watts]) => specs.push(toward(id, watts)));
+      specs.push(toward("trunk", total));
       deviceList.forEach((device, index) => {
         const on = device.online;
         specs.push({ id: `pv${index}`, token: "--pv", watts: on ? device.pvW : 0, reverse: false });
         if (device.socReported || device.batteryW !== null) {
           specs.push({ id: `bat${index}`, token: "--battery", watts: on ? device.batteryW : 0, reverse: (device.batteryW || 0) > 0 });
         }
-        const house = houses.get(device.name);
-        specs.push({
-          id: `out${index}`,
-          token: house.charging ? "--grid" : "--output",
-          watts: house.watts,
-          reverse: house.charging,
-        });
+        specs.push(toward(`out${index}`, flows[index]));
       });
       specs.push({ id: "grid", token: "--grid", watts: system.gridW, reverse: system.gridW < 0 });
     }
@@ -133,7 +139,11 @@
     } else {
       const { home, grid } = nodes;
       if (!home || !grid) return;
-      const count = deviceList.length;
+      const hubs = deviceList.map((_, index) => nodes[`hub${index}`]).filter(Boolean);
+      if (!hubs.length) return;
+      const busX = Math.round(Math.max(...hubs.map((hub) => hub.r)) + (home.l - Math.max(...hubs.map((hub) => hub.r))) / 2);
+      const junction = home.cy;
+      const rows = [];
       deviceList.forEach((_, index) => {
         const pv = nodes[`pv${index}`];
         const bat = nodes[`bat${index}`];
@@ -142,10 +152,20 @@
         const inset = (hub.r - hub.l) * 0.07;
         if (pv) points[`pv${index}`] = elbow(pv.r, pv.cy, hub.l + inset, hub.cy - (bat ? 12 : 0));
         if (bat) points[`bat${index}`] = elbow(bat.r, bat.cy, hub.l + inset, hub.cy + (pv ? 12 : 0));
-        const spread = count > 1 ? Math.min(16, (home.b - home.t - 24) / (count - 1)) : 0;
-        points[`out${index}`] = elbow(hub.r - inset, hub.cy, home.l, home.cy + (index - (count - 1) / 2) * spread);
+        points[`out${index}`] = [[hub.r - inset, hub.cy], [busX, hub.cy]];
+        rows.push({ index, y: hub.cy });
       });
+      const above = rows.filter((row) => row.y < junction - 0.5).sort((a, b) => a.y - b.y);
+      const below = rows.filter((row) => row.y > junction + 0.5).sort((a, b) => b.y - a.y);
+      above.forEach((row, k) => {
+        points[`bus-above${k}`] = [[busX, row.y], [busX, above[k + 1]?.y ?? junction]];
+      });
+      below.forEach((row, k) => {
+        points[`bus-below${k}`] = [[busX, row.y], [busX, below[k + 1]?.y ?? junction]];
+      });
+      points.trunk = [[busX, junction], [home.l, junction]];
       points.grid = vertical(grid.cx, grid.t, home.b);
+      bus = { above: above.map((row) => row.index), below: below.map((row) => row.index) };
     }
     geometry = points;
   }
@@ -327,7 +347,8 @@
 
 <style>
   .flow-skeleton { height: 360px; }
-  .flow-stage { position: relative; }
+  :global(.flow-card) { display: flex; flex-direction: column; }
+  .flow-stage { position: relative; margin: auto 0; }
   .flow-stage.system { height: 360px; }
   .flow-stage.system.narrow { height: 440px; }
   .flow-stage.stale { opacity: 0.55; }

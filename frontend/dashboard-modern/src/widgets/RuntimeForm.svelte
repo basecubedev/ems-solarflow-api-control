@@ -148,11 +148,11 @@
   .title { margin: 0; font-size: 14px; font-weight: 620; }
   .sub { font-size: 12px; color: var(--m-muted); }
   .fields { display: flex; flex-direction: column; gap: 6px; }
-  .row { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); background: var(--m-surface-2); border-radius: var(--m-radius-inner); padding: 6px 10px; min-height: 40px; font-size: 13px; }
+  .row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px var(--s3); background: var(--m-surface-2); border-radius: var(--m-radius-inner); padding: 6px 10px; min-height: 40px; font-size: 13px; }
   .row > span:first-child { color: var(--m-muted); }
   .number { display: inline-flex; align-items: center; gap: 6px; }
   .number .input { width: 110px; text-align: right; }
-  .row select.input { width: auto; max-width: 60%; }
+  .row select.input { width: auto; max-width: 100%; margin-left: auto; }
   .unit { color: var(--m-muted); font-size: 12px; min-width: 14px; }
   .readonly .value { font-size: 12.5px; }
   .help { margin: 0 0 4px; font-size: 11.5px; color: var(--m-muted-2); }

@@ -67,6 +67,19 @@
     }
   }
 
+  const METRIC_ORDER = ["ok", "warning", "error", "devices"];
+
+  function metricsInOrder(metrics) {
+    const rank = (key) => (METRIC_ORDER.includes(key) ? METRIC_ORDER.indexOf(key) : METRIC_ORDER.length);
+    return Object.entries(metrics).sort(([a], [b]) => rank(a) - rank(b) || a.localeCompare(b));
+  }
+
+  function metricLabel(key) {
+    if (METRIC_ORDER.includes(key)) return t(`diagnose.metric.${key}`);
+    const words = key.replaceAll("_", " ");
+    return words.charAt(0).toUpperCase() + words.slice(1);
+  }
+
   const tone = (status) => TONES[String(status || "").toLowerCase()] || "c-idle";
 </script>
 
@@ -84,7 +97,7 @@
         <button class="profile inner" type="button" onclick={() => run(profile)} disabled={Boolean(running)} aria-busy={running === profile ? "true" : "false"} data-profile={profile}>
           <span class="name">{t(`diagnose.profile.${profile}`)}</span>
           <span class="desc">{t(`diagnose.profile.${profile}.desc`)}</span>
-          {#if running === profile}<span class="running">{t("diagnose.running")}</span>{/if}
+          <span class="go"><Icon name={running === profile ? "loader" : "play"} size="sm" />{running === profile ? t("diagnose.running") : t("diagnose.runProfile")}</span>
         </button>
       {/each}
     </div>
@@ -95,8 +108,8 @@
     <Card title={t(`diagnose.profile.${report.profile || "install"}`)} subtitle={diagnosis.timestamp ? f.dateTime(diagnosis.timestamp) : ""} span="span-12" actions={reportActions}>
       {#if diagnosis.metrics && Object.keys(diagnosis.metrics).length}
         <div class="metrics">
-          {#each Object.entries(diagnosis.metrics) as [key, value] (key)}
-            <div class="fact"><div class="fact-label">{key.replaceAll("_", " ")}</div><div class="fact-value num">{String(value)}</div></div>
+          {#each metricsInOrder(diagnosis.metrics) as [key, value] (key)}
+            <div class="fact"><div class="fact-label">{metricLabel(key)}</div><div class="fact-value num">{String(value)}</div></div>
           {/each}
         </div>
       {/if}
@@ -150,6 +163,7 @@
   .profile { text-align: left; border: 1px solid var(--m-line); cursor: pointer; display: flex; flex-direction: column; gap: 4px; color: var(--m-text); }
   .profile:hover:not(:disabled) { border-color: var(--m-line-strong); background: var(--m-surface-3); }
   .profile:disabled { cursor: progress; opacity: 0.7; }
+  .profile .go { margin-top: auto; padding-top: var(--s2); display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--m-accent); }
   .name { font-weight: 620; }
   .desc { font-size: 12px; color: var(--m-muted); }
   .running { font-size: 12px; color: var(--m-accent); }

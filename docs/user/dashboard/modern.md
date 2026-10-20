@@ -30,7 +30,7 @@ on the EMS.
 | --- | --- |
 | **Overview** | the system status, the energy flow, the batteries, the active rules, today's energy and the power chart |
 | **Devices** | one card per inverter and battery, and the grid meter |
-| **Energy** | delivered energy for today, yesterday, the last 7 days, 4 weeks and 12 months, the best day, each month, each year and the lifetime, as charts or as a table |
+| **Energy** | delivered energy for today, yesterday, the last 7 days, 4 weeks and 12 months, the best day, each month, each year and the lifetime, with savings and self-sufficiency; **Expert** adds every energy channel and since when it is measured |
 | **Analytics** | the time-series views Classic's Analytics tab offers, over 1 hour to 365 days |
 | **Control** | the control pipeline, each device's decision and the runtime settings |
 | **Schedule** | the scheduler's rules, with a preview the EMS checks before a rule can be saved |
@@ -65,12 +65,25 @@ The flow on the Overview page has two modes, chosen with the switch above it:
 - **System** -- one line each for PV, battery, home and grid, totalled over all
   devices.
 - **Per device** -- one row per inverter with its own PV, battery and output,
-  so you can see which device does what.
+  so you can see which device does what. The inverters' lines join into one
+  line into the home, which grows as each inverter adds its share.
 
 The thickness of a line follows the power on it, and the moving dots show its
 direction. The choice is remembered.
 
 ![Modern dashboard in the Midnight colour scheme and in German, with the energy flow drawn per inverter](../../assets/screenshots/dashboard/dashboard-modern-midnight-devices.png)
+
+## Energy by month, and charts you can zoom
+
+On the **Energy** page every month of the year is a bar. Click a bar (or
+select it with the keyboard) to see that month's figures underneath: energy,
+savings and self-sufficiency, and in **Expert** the grid import and export,
+the battery's charged and discharged energy, the PV yield, the home's use and
+since when those channels are measured. **Table** lists all twelve months.
+
+Every chart with a time axis zooms: drag across the stretch you want to look
+at, and **Reset zoom** brings the whole range back. A zoomed chart keeps its
+zoom while new data arrives.
 
 ## Today compared with yesterday
 

@@ -8,13 +8,14 @@
   import Icon from "../ui/Icon.svelte";
   import { t, fmt, codesText } from "../i18n/i18n.svelte.js";
   import { live } from "../state/live.svelte.js";
-  import { activeLimits, codeItems } from "../lib/control.js";
+  import { activeLimits, inactiveLimits, codeItems, has } from "../lib/control.js";
 
   const f = $derived(fmt());
   const snapshot = $derived(live.snapshot);
   const explain = $derived(snapshot?.control_explain || null);
   const enabled = $derived(snapshot?.controller?.enabled !== false);
   const limits = $derived(activeLimits(explain));
+  const inactive = $derived(inactiveLimits(explain).map((limit) => codesText(codeItems(limit.name)) || limit.name));
   const notes = $derived((Array.isArray(explain?.notes) ? explain.notes : []).filter(Boolean));
 </script>
 
@@ -33,13 +34,15 @@
         mode: codesText(codeItems(explain.mode)) || "—",
       })}
     </p>
-    <div class="facts six">
+    <div class="facts eight">
       <Fact label={t("control.load")} icon="house" tone="c-out" value={f.power(explain.filtered_load_w)} />
       <Fact label={t("control.requested")} icon="gauge" value={f.power(explain.requested_total_w)} />
       <Fact label={t("control.effective")} icon="crosshair" value={f.power(explain.effective_target_total_w)} />
       <Fact label={t("control.commanded")} icon="send" value={f.power(explain.commanded_total_w)} />
       <Fact label={t("control.maxTotal")} icon="sliders-horizontal" value={f.power(explain.max_total_power_w)} />
       <Fact label={t("control.deadband")} icon="move-horizontal" value={f.power(explain.deadband_w)} />
+      <Fact label={t("control.minOutput")} icon="sliders-horizontal" value={f.power(explain.min_output_limit_w)} missing={!has(explain.min_output_limit_w)} />
+      <Fact label={t("control.undistributed")} icon="gauge" value={f.power(explain.undistributed_target_w)} missing={!has(explain.undistributed_target_w)} />
     </div>
   {/if}
   {#if explain}
@@ -55,6 +58,7 @@
         {:else}
           <p class="muted">{t("control.noLimits")}</p>
         {/if}
+        {#if inactive.length}<p class="muted inactive-gates">{t("control.inactiveGates")}: {inactive.join(", ")}</p>{/if}
       </div>
       {#if notes.length}
         <div>
@@ -69,13 +73,13 @@
 <style>
   .sentence { font-size: 16px; margin: 0 0 var(--s4); display: flex; gap: 10px; align-items: center; }
   .sentence.warn { color: var(--m-warn); }
-  .six { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .eight { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .inactive-gates { font-size: 12.5px; margin: var(--s2) 0 0; }
   .lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--s4); margin-top: var(--s4); }
   .sub { font-size: 13px; font-weight: 600; margin: 0 0 var(--s2); }
   ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
   li .dot { display: inline-block; width: 7px; height: 7px; margin-right: 8px; box-shadow: none; vertical-align: middle; }
   p.muted { margin: 0; font-size: 13px; }
   .skeleton { height: 120px; }
-  @media (max-width: 1280px) { .six { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-  @media (max-width: 760px) { .six { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 760px) { .eight { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 </style>

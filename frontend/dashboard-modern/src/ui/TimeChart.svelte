@@ -6,7 +6,9 @@
   /**
    * One uPlot instance per chart, kept across data refreshes (setData) and
    * rebuilt only when its structure changes: the series, the colour scheme,
-   * the language or the height. That is Classic's chart contract.
+   * the language or the height. That is Classic's chart contract. A mouse
+   * drag across the plot zooms into that stretch; a refresh of the same data
+   * keeps the zoom, and a new range, device or view (``scope``) drops it.
    */
   let {
     series,
@@ -18,12 +20,16 @@
     showTable = false,
     label = "",
     emptyText = "",
+    scope = "",
   } = $props();
 
   let host = $state();
   let chart = null;
   let signature = "";
   let cursorIndex = $state(null);
+  let zoomed = $state(false);
+  let zoomWindow = null;
+  let zoomScope = scope;
 
   const f = $derived(fmt());
   const prepared = $derived.by(() => {
@@ -122,10 +128,30 @@
     ctx.restore();
   }
 
+  function zoomToSelection(u) {
+    const { left, width } = u.select;
+    if (width < 6) return;
+    const min = u.posToVal(left, "x");
+    const max = u.posToVal(left + width, "x");
+    u.setSelect({ left: 0, top: 0, width: 0, height: 0 }, false);
+    zoomWindow = { min, max };
+    zoomed = true;
+    u.setScale("x", { min, max });
+  }
+
+  function resetZoom() {
+    zoomWindow = null;
+    zoomed = false;
+    const stamps = prepared.time;
+    if (chart && stamps.length) chart.setScale("x", { min: stamps[0], max: stamps[stamps.length - 1] });
+  }
+
   function build() {
     const uPlot = globalThis.uPlot;
     if (!host || !uPlot) return;
     chart?.destroy();
+    zoomWindow = null;
+    zoomed = false;
     const font = "12px InterVariable, sans-serif";
     const axis = {
       stroke: token("--m-muted"),
@@ -139,9 +165,12 @@
         height,
         padding: [8, 18, 0, 0],
         legend: { show: false },
-        cursor: { y: false, drag: { x: false, y: false }, points: { size: 7, width: 2 } },
+        cursor: { y: false, drag: { x: true, y: false, setScale: false }, points: { size: 7, width: 2 } },
         scales: {
-          x: { time: true, range: xRange ? () => xRange : undefined },
+          x: {
+            time: true,
+            range: (u, min, max) => (zoomWindow ? [zoomWindow.min, zoomWindow.max] : xRange ? [xRange[0], xRange[1]] : [min, max]),
+          },
           y: kind === "percent"
             ? { range: [0, 100] }
             : { range: (u, min, max) => [Math.min(0, Math.floor((min || 0) / 500) * 500), Math.max(500, Math.ceil((max || 0) / 500) * 500)] },
@@ -170,6 +199,7 @@
         ],
         hooks: {
           setCursor: [(u) => (cursorIndex = u.cursor.idx ?? null)],
+          setSelect: [zoomToSelection],
           draw: [drawGaps],
         },
       },
@@ -181,6 +211,11 @@
   $effect(() => {
     const next = [series.map((s) => s.id).join(","), prefs.theme, prefs.lang, height, kind, xRange ? xRange.join("-") : ""].join("|");
     if (!host || !hasData) return;
+    if (scope !== zoomScope) {
+      zoomScope = scope;
+      zoomWindow = null;
+      zoomed = false;
+    }
     tickSpan = shown.to - shown.from;
     if (next !== signature || !chart) {
       signature = next;
@@ -222,6 +257,13 @@
         <i></i>{s.label}<b class="num">{shownIndex !== null ? valueText(prepared.lists[index][shownIndex], s) : "—"}</b>
       </span>
     {/each}
+    <span class="zoom">
+      {#if zoomed}
+        <button class="btn secondary small" type="button" onclick={resetZoom} data-testid="chart-zoom-reset">{t("chart.zoomReset")}</button>
+      {:else}
+        <span class="zoom-hint">{t("chart.zoomHint")}</span>
+      {/if}
+    </span>
   </div>
   <div class="chart" bind:this={host} role="img" aria-label={label}></div>
   {#if showTable}
@@ -248,10 +290,13 @@
 <style>
   .legend { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s4); align-items: center; margin-bottom: var(--s3); font-size: 12.5px; min-height: 20px; }
   .legend-time { color: var(--m-muted); min-width: 44px; }
+  .zoom { margin-left: auto; }
+  .zoom-hint { font-size: 11.5px; color: var(--m-muted-2); }
+  @media (pointer: coarse) { .zoom-hint { display: none; } }
   .legend-item { display: inline-flex; align-items: center; gap: 7px; color: var(--m-muted); }
   .legend-item i { width: 10px; height: 10px; border-radius: 3px; background: var(--c); }
   .legend-item b { color: var(--m-text); font-weight: 600; min-width: 54px; }
-  .chart { width: 100%; min-height: 120px; }
+  .chart { width: 100%; min-height: 120px; cursor: crosshair; }
   .chart :global(.u-over) { cursor: crosshair; }
   .chart-empty { min-height: 160px; justify-content: center; }
   .table-scroll { max-height: 420px; overflow: auto; margin-top: var(--s4); }

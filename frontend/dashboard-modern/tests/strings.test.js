@@ -56,6 +56,8 @@ test("every generated key family is complete", () => {
   const required = [
     ...PAGES.flatMap((page) => [`nav.${page.id}`, `page.${page.id}.sub`]),
     ...PERIODS.map((period) => period.label),
+    ...PERIODS.map((period) => `energy.periodSub.${period.kind}`),
+    ...["currency", "monthsWithData", "years", "bestDay", "lifetime", "channelsSince"].map((key) => `energy.context.${key}`),
     ...RULES.map((rule) => rule.label),
     ...ANALYTICS_VIEWS.map((view) => `analytics.view.${view.id}`),
     ...ANALYTICS_RANGES.map((range) => `chart.range.${range}`),
@@ -76,6 +78,9 @@ test("every generated key family is complete", () => {
     ...["send", "skip", "blocked", "warn", "none"].map((key) => `control.write.${key}`),
     ...["ok", "warning", "error", "unknown", "info"].map((key) => `diagnose.status.${key}`),
     ...["bundled", "external"].map((key) => `maint.influx.${key}`),
+    ...["ok", "warning", "error", "devices"].map((key) => `diagnose.metric.${key}`),
+    ...["output", "input", "mixed"].map((key) => `analytics.role.${key}`),
+    ...["inputs", "weighting", "raw", "adjust", "final"].map((key) => `control.deviceStage.${key}`),
   ];
   const missing = [...new Set(required)].filter((key) => !STRINGS[key]);
   assert.deepEqual(missing, []);
@@ -85,11 +90,11 @@ test("no orphan keys: each key is used literally or belongs to a generated famil
   const text = sources().join("\n");
   const families = [
     "nav.", "page.", "rule.", "code.", "decision.", "fw.", "channel.", "energy.state.", "energy.detail.", "chart.range.",
-    "series.", "analytics.view.", "analytics.kpi.", "diagnose.profile.", "diagnose.status.", "diagnose.global.",
+    "series.", "analytics.view.", "analytics.kpi.", "analytics.role.", "diagnose.profile.", "diagnose.status.", "diagnose.global.", "diagnose.metric.",
     "maint.type.", "maint.kind.", "maint.influx.", "schedule.preset.", "schedule.weekday.", "schedule.freq.", "schedule.pos.",
     "schedule.status.", "schedule.group.", "schedule.action.", "schedule.choice.", "runtime.offgrid.",
-    "runtime.warn.", "setting.", "settingValue.", "control.write.", "control.stage.", "status.", "transport.",
-    "flow.", "assist.", "error.", "appearance.density.", "schedule.monthly.", "schedule.ends.",
+    "runtime.warn.", "setting.", "settingValue.", "control.write.", "control.stage.", "control.deviceStage.", "status.", "transport.",
+    "flow.", "assist.", "error.", "appearance.density.", "schedule.monthly.", "schedule.ends.", "energy.periodSub.", "energy.context.",
   ];
   const orphans = Object.keys(STRINGS).filter((key) => !text.includes(`"${key}"`) && !families.some((prefix) => key.startsWith(prefix)));
   assert.deepEqual(orphans, []);

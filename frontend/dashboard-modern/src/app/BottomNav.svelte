@@ -4,6 +4,7 @@
   import { router, href } from "./router.svelte.js";
   import { t } from "../i18n/i18n.svelte.js";
   import { chooseClassic } from "../state/prefs.svelte.js";
+  import { auth } from "../state/auth.svelte.js";
 
   const pages = MOBILE_PAGES.map(pageById);
   const others = PAGES.filter((page) => !MOBILE_PAGES.includes(page.id));
@@ -27,7 +28,7 @@
     {#each others as page (page.id)}
       <a href={href(page.id)} onclick={close} aria-current={router.page === page.id ? "page" : undefined}>
         <Icon name={page.icon} /><span>{t(`nav.${page.id}`)}</span>
-        {#if page.operator}<svg class="i lock" aria-label={t("nav.signInRequired")} role="img"><use href="#i-lock"></use></svg>{/if}
+        {#if page.operator && !auth.authenticated}<svg class="i lock" aria-label={t("nav.signInRequired")} role="img"><use href="#i-lock"></use></svg>{/if}
       </a>
     {/each}
   </nav>

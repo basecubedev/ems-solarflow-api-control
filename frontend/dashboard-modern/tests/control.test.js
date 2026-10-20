@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { writeDecision, globalWrite, codeItems, decisionItem, finalTotal } from "../src/lib/control.js";
+import {
+  writeDecision, globalWrite, codeItems, decisionItem, finalTotal,
+  rawTarget, deviceWeight, baseWeight, totalWeight, deviceShare, adjustedTarget, adjustmentDelta, outputDelta,
+} from "../src/lib/control.js";
 
 test("the EMS's own write decision wins", () => {
   assert.equal(writeDecision({ write_decision: "send", write_reason: "output_limit_update" }, {}).tone, "send");
@@ -31,4 +34,18 @@ test("known codes become label keys and unknown codes keep their words", () => {
 test("the final total falls back through the explanation's fields", () => {
   assert.equal(finalTotal({ effective_target_total_w: 800, requested_total_w: 900 }), 800);
   assert.equal(finalTotal({ requested_total_w: 900 }), 900);
+});
+
+test("per-device decision figures follow Classic's fallbacks", () => {
+  const device = { raw_target_w: 320, effective_weight: 1, pv_weight: 1.5, pv_priority_factor: 1.5, charge_balance_multiplier: 1, allocated_target_w: 320, output_w: 300 };
+  assert.equal(rawTarget(device), 320);
+  assert.equal(deviceWeight(device), 1);
+  assert.equal(baseWeight(device), 1);
+  assert.equal(totalWeight([["WR1", device], ["WR2", { effective_weight: 3 }]]), 4);
+  assert.equal(deviceShare(device, { requested_total_w: 800 }, 4), 0.4);
+  assert.equal(deviceShare({ effective_weight: 1 }, {}, 4), 0.25);
+  assert.equal(deviceShare({ share_percent: 60 }, {}, null), 0.6);
+  assert.equal(adjustedTarget(device), 320);
+  assert.equal(adjustmentDelta(device), 0);
+  assert.equal(outputDelta(device), 20);
 });

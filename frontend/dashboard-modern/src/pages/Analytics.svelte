@@ -7,7 +7,7 @@
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { getJson } from "../lib/api.js";
   import { fetchSeries } from "../lib/historyApi.js";
-  import { ANALYTICS_RANGES, ANALYTICS_VIEWS, ANALYTICS_OVERLAYS, SERIES_STYLE, viewById, requestedSeries, computeKpi, KPIS } from "../lib/analytics.js";
+  import { ANALYTICS_RANGES, ANALYTICS_VIEWS, ANALYTICS_OVERLAYS, SERIES_STYLE, viewById, requestedSeries, computeKpi, runtimeRole, KPIS } from "../lib/analytics.js";
   import { devices } from "../state/derived.svelte.js";
   import { live } from "../state/live.svelte.js";
 
@@ -121,6 +121,8 @@
     const d = devices().find((item) => item.name === device);
     return d?.socReported ? d.soc : null;
   });
+  const role = $derived(runtimeRole(live.snapshot, device));
+  const zoomScope = $derived(`${view.id}|${range}|${device}|${applied ? `${applied.start}-${applied.end}` : ""}`);
 </script>
 
 {#if !status}
@@ -167,6 +169,10 @@
       <div class="kpi-label">{t("analytics.kpi.soc")}</div>
       <div class="kpi-value num">{f.percent(socNow)}</div>
     </div>
+    <div class="card kpi c-out">
+      <div class="kpi-label">{t("analytics.kpi.role")}</div>
+      <div class="kpi-value">{role ? t(`analytics.role.${role}`) : "—"}</div>
+    </div>
   </div>
 
   {#snippet actions()}
@@ -180,13 +186,13 @@
     {#if error && !data}
       <div class="empty error">{t("error.load")}</div>
     {:else}
-      <TimeChart series={chartSeries} time={data?.time || []} values={data?.series || {}} {showTable} label={t(`analytics.view.${view.id}`)} />
+      <TimeChart series={chartSeries} time={data?.time || []} values={data?.series || {}} {showTable} label={t(`analytics.view.${view.id}`)} scope={zoomScope} />
     {/if}
   </Card>
 
   {#if overlays.includes("soc")}
     <Card title={t("series.soc")} span="span-12">
-      <TimeChart series={[{ id: "soc", label: t("series.soc"), token: "--battery", unit: "%", fill: false }]} time={socData?.time || []} values={socData?.series || {}} kind="percent" height={180} label={t("series.soc")} />
+      <TimeChart series={[{ id: "soc", label: t("series.soc"), token: "--battery", unit: "%", fill: false }]} time={socData?.time || []} values={socData?.series || {}} kind="percent" height={180} label={t("series.soc")} scope={zoomScope} />
     </Card>
   {/if}
 {/if}

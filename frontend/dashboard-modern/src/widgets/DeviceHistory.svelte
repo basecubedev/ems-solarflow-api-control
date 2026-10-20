@@ -71,7 +71,7 @@
   {#if error && !data}
     <div class="empty error">{t("error.load")}</div>
   {:else}
-    <TimeChart {series} time={data?.time || []} values={data?.series || {}} {showTable} label={t("chart.titleRange", { range: t(`chart.range.${range}`) })} />
+    <TimeChart {series} time={data?.time || []} values={data?.series || {}} {showTable} label={t("chart.titleRange", { range: t(`chart.range.${range}`) })} scope={`${range}|${device}`} />
     {#if data?.meta?.retention_hours}<p class="note"><Icon name="info" />{t("chart.retention", { h: data.meta.retention_hours })}</p>{/if}
   {/if}
 </Card>

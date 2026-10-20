@@ -59,9 +59,27 @@ export function createHouseLines(activity = createFlowActivity()) {
         else charging = charge > output;
       }
       lines.set(key, { direction: charging ? "charging" : outputActive ? "feeding" : "idle", sequence });
-      return { charging, watts: charging ? charge : output };
+      return { charging, active: charging || outputActive, watts: charging ? charge : output };
     },
   };
+}
+
+/**
+ * The bus that joins the inverters' house lines on their way to the home. Each
+ * segment carries what the lines beyond it bring toward the junction, and the
+ * trunk carries them all: positive feeds the home, negative is AC charging
+ * drawn from it. ``above`` and ``below`` list device indexes from the far end.
+ */
+export function busFlows(flows, { above = [], below = [] } = {}) {
+  const segments = {};
+  [["above", above], ["below", below]].forEach(([side, order]) => {
+    let sum = 0;
+    order.forEach((index, k) => {
+      sum += flows[index] || 0;
+      segments[`bus-${side}${k}`] = sum;
+    });
+  });
+  return { segments, total: flows.reduce((sum, value) => sum + (value || 0), 0) };
 }
 
 /** A full scale chosen from the system's own output, with hysteresis so widths do not jump between rungs. */

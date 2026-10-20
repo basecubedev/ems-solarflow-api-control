@@ -117,6 +117,41 @@ test.describe("Modern dashboard @smoke", () => {
     await expect(page.locator(".kpi").filter({ hasText: "Current SoC" })).toContainText("60%");
   });
 
+  test("a month opens with every figure Classic shows for it, channels in Expert", async ({ page }) => {
+    await openModern(page, "#/energy");
+    await page.getByRole("button", { name: "Expert" }).click();
+    await page.getByRole("button", { name: /^Sept: / }).click();
+    const detail = page.getByTestId("month-detail");
+    await expect(detail).toContainText("September");
+    await expect(detail).toContainText("66.9 kWh");
+    await expect(detail).toContainText(/Grid import\s*28\.9 kWh/);
+    await expect(detail).toContainText("Measured since");
+    await expect(page.locator("dl.context")).toContainText("Channels measured since");
+  });
+
+  test("the rules say why they are on, and a chart zooms and resets", async ({ page }) => {
+    await openModern(page);
+    await expect(page.getByTestId("active-rules")).toContainText("preview control loop active");
+    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    const plot = page.locator(".chart .u-over").first();
+    await expect(plot).toBeVisible();
+    const box = await plot.boundingBox();
+    await page.mouse.move(box.x + box.width * 0.3, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.6, box.y + box.height / 2, { steps: 6 });
+    await page.mouse.up();
+    await page.getByTestId("chart-zoom-reset").click();
+    await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(0);
+
+    await page.mouse.move(box.x + box.width * 0.3, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.6, box.y + box.height / 2, { steps: 6 });
+    await page.mouse.up();
+    await expect(page.getByTestId("chart-zoom-reset")).toBeVisible();
+    await page.getByRole("button", { name: "7 d", exact: true }).click();
+    await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(0);
+  });
+
   test("a value that stops arriving turns the status stale instead of staying normal", async ({ page }) => {
     await page.clock.install();
     let feeding = true;
@@ -261,6 +296,15 @@ test.describe("Modern dashboard writes @smoke", () => {
     await page.clock.fastForward(61_000);
     await expect(page.getByTestId("logs-output")).toHaveCount(0);
     await expect(page.locator("#content").getByText("Sign in to see this page.")).toBeVisible();
+  });
+
+  test("Clear empties the log view, the EMS keeps its log", async ({ page }) => {
+    await page.route("**/api/auth/status", (route) => route.fulfill({ json: SIGNED_IN }));
+    await openModern(page, "#/logs");
+    const output = page.getByTestId("logs-output");
+    await expect(output).toContainText("control_cycle");
+    await page.getByRole("button", { name: "Clear" }).click();
+    await expect(output).toContainText("No log lines");
   });
 
   test("a sign-out the server refuses says so and leaves the session as it is", async ({ page }) => {

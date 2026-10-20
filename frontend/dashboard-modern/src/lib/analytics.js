@@ -58,6 +58,23 @@ export function requestedSeries(view, overlays) {
   return ids;
 }
 
+/** Classic's runtimeRoleLabel: AC input wherever a writable device has acMode 1, output elsewhere. */
+export function runtimeRole(snapshot, deviceName = "") {
+  const devices = snapshot?.devices || {};
+  const names = deviceName ? [deviceName] : Object.keys(devices);
+  let input = false;
+  let output = false;
+  names.forEach((name) => {
+    const device = devices[name];
+    if (!device || device.read_only === true) return;
+    if (Number(device.ac_mode) === 1) input = true;
+    else output = true;
+  });
+  if (input && output) return "mixed";
+  if (input) return "input";
+  return output ? "output" : null;
+}
+
 export function computeKpi(id, data) {
   const kpi = KPIS[id];
   if (!kpi || !data) return null;

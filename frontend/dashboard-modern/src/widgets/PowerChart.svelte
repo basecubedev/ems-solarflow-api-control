@@ -87,6 +87,7 @@
       {xRange}
       {showTable}
       label={heading}
+      scope={`${range}|${devices || ""}`}
     />
     {#if data?.meta?.retention_hours}
       <p class="note"><Icon name="info" />{t("chart.retention", { h: data.meta.retention_hours })}</p>

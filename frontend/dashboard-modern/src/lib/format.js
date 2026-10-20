@@ -40,10 +40,12 @@ export function createFormat(lang) {
   });
   const dateFormat = new Intl.DateTimeFormat(locale, { day: "numeric", month: "long", year: "numeric" });
   const shortDateFormat = new Intl.DateTimeFormat(locale, { day: "numeric", month: "short" });
+  const numericDateFormat = new Intl.DateTimeFormat(locale, { day: "2-digit", month: "2-digit", year: "numeric" });
   const dateTimeFormat = new Intl.DateTimeFormat(locale, {
     day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
   });
   const monthFormat = new Intl.DateTimeFormat(locale, { month: "short" });
+  const monthYearFormat = new Intl.DateTimeFormat(locale, { month: "long", year: "numeric" });
   const weekdayFormat = new Intl.DateTimeFormat(locale, { weekday: "short" });
   const currencyCache = new Map();
 
@@ -107,12 +109,12 @@ export function createFormat(lang) {
   }
 
   /** A calendar date such as "2026-06-14" is a day, not an instant: it must not shift with the time zone. */
-  function date(value, { short = false } = {}) {
+  function date(value, { short = false, numeric = false } = {}) {
     if (!value) return MISSING;
     const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})$/);
     const parsed = match ? new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])) : toDate(value);
     if (!valid(parsed)) return String(value);
-    return (short ? shortDateFormat : dateFormat).format(parsed);
+    return (numeric ? numericDateFormat : short ? shortDateFormat : dateFormat).format(parsed);
   }
 
   function dateTime(value) {
@@ -127,10 +129,16 @@ export function createFormat(lang) {
     return monthFormat.format(new Date(2026, index, 1));
   }
 
+  function monthYear(year, monthNumber) {
+    const index = Number(monthNumber) - 1;
+    if (!Number.isInteger(index) || index < 0 || index > 11 || !Number.isInteger(Number(year))) return MISSING;
+    return monthYearFormat.format(new Date(Number(year), index, 1));
+  }
+
   function weekday(value) {
     const parsed = toDate(value);
     return valid(parsed) ? weekdayFormat.format(parsed) : MISSING;
   }
 
-  return { lang, locale, power, energy, percent, money, number, time, date, dateTime, month, weekday };
+  return { lang, locale, power, energy, percent, money, number, time, date, dateTime, month, monthYear, weekday };
 }

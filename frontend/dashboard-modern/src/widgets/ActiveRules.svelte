@@ -17,7 +17,10 @@
 <Card title={t("rules.title")} subtitle={t("rules.sub")}>
   <ul class="rules" data-testid="active-rules">
     {#each active as rule (rule.key)}
-      <li class="rule" title={rule.reason}><span class="dot ok"></span><Icon name={rule.icon} size="sm" /><span class="ellipsis">{t(rule.label)}</span></li>
+      <li class="rule">
+        <span class="dot ok"></span><Icon name={rule.icon} size="sm" />
+        <span class="rule-text"><span class="rule-name">{t(rule.label)}</span>{#if rule.reason && rule.reason !== "active"}<span class="rule-reason">{rule.reason}</span>{/if}</span>
+      </li>
     {:else}
       <li class="rule off">{t("rules.none")}</li>
     {/each}
@@ -27,7 +30,10 @@
       <summary><Icon name="chevron-right" />{t("rules.inactive", { n: inactive.length })}</summary>
       <ul class="rules body">
         {#each inactive as rule (rule.key)}
-          <li class="rule off" title={rule.reason}><span class="dot idle"></span><span class="ellipsis">{t(rule.label)}</span></li>
+          <li class="rule off">
+            <span class="dot idle"></span><Icon name={rule.icon} size="sm" />
+            <span class="rule-text"><span class="rule-name">{t(rule.label)}</span>{#if rule.reason && rule.reason !== "inactive"}<span class="rule-reason">{t("rules.inactiveReason", { reason: rule.reason })}</span>{/if}</span>
+          </li>
         {/each}
       </ul>
     </details>
@@ -38,6 +44,9 @@
   .rules { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
   .rule { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border-radius: var(--m-radius-inner); background: var(--m-surface-2); font-size: 13px; min-width: 0; }
   .rule :global(svg.i) { color: var(--m-muted); }
-  .rule .dot { width: 7px; height: 7px; box-shadow: none; }
+  .rule .dot { width: 7px; height: 7px; box-shadow: none; flex: none; }
+  .rule-text { display: flex; flex-direction: column; min-width: 0; }
+  .rule-reason { font-size: 11.5px; color: var(--m-muted); overflow-wrap: anywhere; }
+  .rule.off .rule-reason { color: var(--m-muted-2); }
   .rule.off { background: transparent; border: 1px dashed var(--m-line); color: var(--m-muted); }
 </style>

@@ -152,6 +152,10 @@
 
   const items = $derived(Array.isArray(upgrade?.items) ? upgrade.items : []);
   const valueCount = $derived(Number(upgrade?.add_count || 0) + Number(upgrade?.migration_count || 0));
+  const commentsOnly = $derived(
+    Boolean(upgrade?.apply_available) && !valueCount && !upgrade?.format_changed
+      && Number(upgrade?.comment_add_count || 0) + Number(upgrade?.comment_refresh_count || 0) > 0,
+  );
   const size = (bytes) => (typeof bytes === "number" ? `${f.number(Math.max(1, Math.round(bytes / 1024)))} KiB` : "—");
 </script>
 
@@ -165,7 +169,7 @@
       <div class="facts two">
         <Fact label={t("maint.config")} value={status.config_path || "—"} title={status.config_path} />
         <Fact label={t("maint.backupDir")} value={status.backup_dir || "—"} title={status.backup_dir} />
-        <Fact label={t("maint.backupTypes")} value={(status.backup_types || []).map(typeLabel).join(", ") || "—"} />
+        <Fact label={t("maint.backupTypes")} value={(status.backup_types || []).map(typeLabel).join(", ") || "—"} wrap />
         <Fact label="InfluxDB" value={status.influxdb?.enabled ? `${influxMode(status.influxdb.mode)}${status.influxdb.backup_supported ? "" : ` (${t("maint.noBackup")})`}` : t("common.off")} />
         <Fact label={t("maint.restore")} value={status.restore_available_in_dashboard ? t("maint.available") : t("maint.cliOnly")} />
       </div>
@@ -183,6 +187,11 @@
 
   <Card title={t("maint.backups")} subtitle={t("maint.backupsSub")} span="span-12">
     <p class="warn"><Icon name="triangle-alert" size="sm" />{t("maint.secretsWarning")}</p>
+    <dl class="types">
+      {#each BACKUP_TYPES as type (type)}
+        <div><dt>{typeLabel(type)}</dt><dd>{t(`maint.type.${type}.desc`)}</dd></div>
+      {/each}
+    </dl>
     <div class="row-wrap">
       {#each BACKUP_TYPES as type (type)}
         <button class="btn secondary small" type="button" disabled={running} onclick={() => createBackup(type)} title={t(`maint.type.${type}.desc`)}>
@@ -289,6 +298,9 @@
               <li><code>{item.path}</code>{#if kind === "add"}<span class="muted"> = {JSON.stringify(item.value)}</span>{:else if kind === "migrate"}<span class="muted">: {JSON.stringify(item.old_value)} → {JSON.stringify(item.value)}</span>{/if}</li>
             {/each}
           </ul>
+          {#if kind === "comment_refresh" && Number(upgrade.comment_refresh_count) > 0}
+            <p class="muted">{t("maint.commentRefreshCount", { n: upgrade.comment_refresh_count })}</p>
+          {/if}
         {/if}
       {/each}
       {#if upgrade.format_changed}<p class="muted">{t("maint.formatChanged")}</p>{/if}
@@ -296,7 +308,7 @@
     {/if}
     <div class="row-wrap">
       <button class="btn secondary small" type="button" onclick={checkUpgrade}>{t("maint.check")}</button>
-      <button class="btn small" type="button" disabled={running || !upgrade?.apply_available} onclick={() => (confirm = { open: true, kind: "upgrade" })}>{t("maint.apply")}</button>
+      <button class="btn small" type="button" disabled={running || !upgrade?.apply_available} onclick={() => (confirm = { open: true, kind: "upgrade" })}>{commentsOnly ? t("maint.applyComments") : t("maint.apply")}</button>
     </div>
   </Card>
 </OperatorGate>
@@ -314,6 +326,11 @@
 <style>
   .message { padding: var(--s3) var(--s4); border-radius: var(--m-radius-inner); background: var(--m-surface-2); border: 1px solid var(--m-line-strong); }
   .notes { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; color: var(--m-muted); font-size: 13px; }
+  .types { margin: 0 0 var(--s3); display: grid; gap: 4px; font-size: 12.5px; }
+  .types div { display: flex; gap: var(--s2); flex-wrap: wrap; }
+  .types dt { font-weight: 600; }
+  .types dt::after { content: " —"; color: var(--m-muted); font-weight: 400; }
+  .types dd { margin: 0; color: var(--m-muted); }
   .warn { display: flex; gap: 8px; align-items: center; color: var(--m-warn); font-size: 12.5px; margin: 0 0 var(--s3); }
   .row-wrap { margin: var(--s3) 0; }
   .mono { font-family: var(--m-mono); font-size: 12px; overflow-wrap: anywhere; }

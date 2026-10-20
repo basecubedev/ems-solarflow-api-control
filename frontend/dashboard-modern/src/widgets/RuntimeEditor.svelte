@@ -122,6 +122,6 @@
 </Card>
 
 <style>
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: var(--s4); align-items: stretch; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: var(--s4); align-items: start; }
   .skeleton { height: 120px; }
 </style>
