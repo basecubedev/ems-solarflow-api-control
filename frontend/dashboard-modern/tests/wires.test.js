@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { runs, elbow, CORNER_RADIUS } from "../src/lib/wires.js";
 
-test("dot runs stop where the track bends, so no dot leaves a rounded corner", () => {
+test("dash runs stop where the track bends, so no dash leaves a rounded corner", () => {
   const points = elbow(0, 0, 100, 60);
   const [first, middle, last] = runs(points);
   assert.equal(first.x, 0);
@@ -15,5 +15,13 @@ test("dot runs stop where the track bends, so no dot leaves a rounded corner", (
 });
 
 test("a straight wire keeps its whole length", () => {
-  assert.deepEqual(runs([[0, 10], [80, 10]]), [{ x: 0, y: 10, length: 80, angle: 0 }]);
+  assert.deepEqual(runs([[0, 10], [80, 10]]), [{ x: 0, y: 10, length: 80, angle: 0, before: 0 }]);
+});
+
+test("each run knows how far along the rounded track it starts, so the dashes keep their spacing round a corner", () => {
+  const [first, middle, last] = runs(elbow(0, 0, 100, 60));
+  const corner = (Math.PI / 2) * CORNER_RADIUS;
+  assert.equal(first.before, 0);
+  assert.ok(Math.abs(middle.before - (first.length + corner)) < 1e-9);
+  assert.ok(Math.abs(last.before - (middle.before + middle.length + corner)) < 1e-9);
 });

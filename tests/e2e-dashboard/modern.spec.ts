@@ -156,6 +156,22 @@ test.describe("Modern dashboard @smoke", () => {
     await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(0);
   });
 
+  test("an inverter charging from the grid runs its line to the home backwards in the grid's colour", async ({ page }) => {
+    await page.route("**/api/events", (route) => route.abort());
+    await page.route("**/api/live", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      for (const device of Object.values(body.devices)) Object.assign(device, { output_w: 0, ac_charge_w: 500 });
+      await route.fulfill({ response, json: { ...body, inverter_output_w: 0, inverter_charge_w: 1000 } });
+    });
+    await openModern(page);
+    const flow = page.getByTestId("energy-flow");
+    await expect(flow.locator('[data-wire="out"]')).toHaveAttribute("stroke", "var(--grid)", { timeout: 10_000 });
+    const firstFrame = () => flow.locator('[data-run="out"] .dashes').first().evaluate((node) => node.getAnimations()[0]?.effect.getKeyframes()[0].transform);
+    await expect.poll(firstFrame).toBe("translateX(0px)");
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  });
+
   test("a value that stops arriving turns the status stale instead of staying normal", async ({ page }) => {
     await page.clock.install();
     let feeding = true;
@@ -227,6 +243,47 @@ test.describe("Modern dashboard on a phone @smoke", () => {
     await expect(bottom).toBeVisible();
     await bottom.getByRole("link", { name: "Devices" }).click();
     await expect(page.getByTestId("device-card").first()).toBeVisible();
+  });
+
+  test("the system flow on a phone runs the inverter down into the home and the grid into the home beside it", async ({ page }) => {
+    await openModern(page);
+    const flow = page.getByTestId("energy-flow");
+    await expect(flow).toHaveAttribute("data-mode", "system");
+    const box = async (selector) => flow.locator(selector).boundingBox();
+    await expect(async () => {
+      const [hub, bat, home, grid, out, line] = await Promise.all(
+        ["[data-node=hub]", "[data-node=bat]", "[data-node=home]", "[data-node=grid]", '[data-wire="out"]', '[data-wire="grid"]'].map(box),
+      );
+      expect(home.y).toBeGreaterThan(bat.y + bat.height);
+      expect(Math.abs(grid.y - home.y)).toBeLessThan(1);
+      expect(grid.x + grid.width).toBeLessThan(home.x);
+      expect(Math.abs(out.x + out.width / 2 - (home.x + home.width / 2))).toBeLessThan(1);
+      expect(out.y).toBeGreaterThan(hub.y + hub.height / 2);
+      expect(Math.abs(out.y + out.height - home.y)).toBeLessThan(8);
+      expect(Math.abs(line.y + line.height / 2 - (home.y + home.height / 2))).toBeLessThan(1);
+      expect(Math.abs(line.x - (grid.x + grid.width))).toBeLessThan(8);
+      expect(Math.abs(line.x + line.width - home.x)).toBeLessThan(8);
+    }).toPass();
+  });
+
+  test("the flow per device stacks the inverters above the home, with room for every line", async ({ page }) => {
+    await page.addInitScript(() => window.localStorage.setItem("ems-modern.flow", "devices"));
+    await openModern(page);
+    const flow = page.getByTestId("energy-flow");
+    await expect(flow).toHaveAttribute("data-mode", "devices");
+    await expect(flow.locator('[data-wire="bus-above1"]')).toBeAttached();
+    const box = async (selector) => flow.locator(selector).boundingBox();
+    const [hub0, hub1, home, grid, pv0] = await Promise.all(["[data-node=hub0]", "[data-node=hub1]", "[data-node=home]", "[data-node=grid]", "[data-node=pv0]"].map(box));
+    expect(home.y).toBeGreaterThan(hub1.y + hub1.height);
+    expect(Math.abs(grid.y - home.y)).toBeLessThan(1);
+    expect(grid.x + grid.width).toBeLessThan(home.x);
+    expect(hub0.x - (pv0.x + pv0.width)).toBeGreaterThanOrEqual(24);
+    await expect(flow.locator('[data-wire="trunk"]')).toHaveCount(0);
+    const bus = await flow.locator('[data-wire="bus-above1"]').boundingBox();
+    expect(bus.x).toBeGreaterThan(hub0.x + hub0.width + 12);
+    expect(bus.x).toBeGreaterThan(home.x + 24);
+    expect(bus.x + bus.width).toBeLessThan(home.x + home.width - 16);
+    expect(Math.abs(bus.y + bus.height - home.y)).toBeLessThan(8);
   });
 
   test("More opens a sheet that Esc, the scrim, the handle, a swipe and a page close", async ({ page }) => {

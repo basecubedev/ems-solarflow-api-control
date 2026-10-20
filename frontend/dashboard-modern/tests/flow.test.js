@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createFlowActivity, createFlowScale, createHouseLines, busFlows, ribbonWidth, batteryDirection, gridDirection, gridHomeWatts, RIBBON_IDLE_PX, RIBBON_MAX_PX } from "../src/lib/flow.js";
+import { createFlowActivity, createFlowScale, createHouseLines, createFleetLine, busFlows, ribbonWidth, batteryDirection, gridDirection, flowBucket, FLOW_BUCKETS, RIBBON_IDLE_PX, RIBBON_MAX_PX } from "../src/lib/flow.js";
 
 test("a flow switches on at 8 W and off only below 3 W, as in Classic", () => {
   const activity = createFlowActivity();
@@ -37,10 +37,70 @@ test("direction words follow the sign conventions of the snapshot", () => {
   assert.equal(gridDirection(500, false), "offline");
 });
 
-test("the AC charge is not drawn twice on the grid to home line", () => {
-  assert.equal(gridHomeWatts(900, 600), 300);
-  assert.equal(gridHomeWatts(400, 600), 0);
-  assert.equal(gridHomeWatts(-300, 0), 300);
+test("a flow moves faster and shines brighter from 150 W and again from 600 W, as in Classic", () => {
+  assert.equal(flowBucket(149), "low");
+  assert.equal(flowBucket(-150), "medium");
+  assert.equal(flowBucket(599), "medium");
+  assert.equal(flowBucket(600), "high");
+  const order = ["low", "medium", "high"].map((name) => FLOW_BUCKETS[name]);
+  for (let i = 1; i < order.length; i += 1) {
+    assert.ok(order[i].speed > order[i - 1].speed);
+    assert.ok(order[i].alpha > order[i - 1].alpha);
+    assert.ok(order[i].glow > order[i - 1].glow);
+  }
+});
+
+test("the System line carries output minus charge, and rests while the two are about even", () => {
+  const line = createFleetLine();
+  let sequence = 0;
+  const watts = (output, charge) => line.watts(output, charge, (sequence += 1));
+  assert.equal(watts(800, 0), 800);
+  assert.equal(watts(800, 600), 200);
+  assert.equal(watts(410, 400), 0);
+  assert.equal(watts(395, 410), 0);
+  assert.equal(watts(380, 410), -30);
+  assert.equal(watts(400, 412), -12);
+  assert.equal(watts(400, 405), 0);
+  assert.equal(watts(400, 799), -399);
+  assert.equal(watts(400, 800), -400);
+  assert.equal(watts(0, 600), -600);
+  assert.equal(watts(0, 0), 0);
+});
+
+test("the System line needs 5 % of the larger side to show and rests below half of that", () => {
+  const line = createFleetLine();
+  let sequence = 0;
+  const watts = (output, charge) => line.watts(output, charge, (sequence += 1));
+  assert.equal(watts(1000, 951), 0);
+  assert.equal(watts(1000, 950), 50);
+  assert.equal(watts(1000, 975), 25);
+  assert.equal(watts(1000, 976), 0);
+  assert.equal(watts(951, 1000), 0);
+  assert.equal(watts(950, 1000), -50);
+});
+
+test("the System line needs 8 W to show, as every flow does, and reads a missing figure as nothing", () => {
+  const line = createFleetLine();
+  assert.equal(line.watts(7, 0, 1), 0);
+  assert.equal(line.watts(8, 0, 2), 8);
+  assert.equal(line.watts(3, 0, 3), 3);
+  assert.equal(line.watts(2, 0, 4), 0);
+  assert.equal(line.watts(null, 600, 5), -600);
+  assert.equal(line.watts(Number.NaN, undefined, 6), 0);
+});
+
+test("a full reversal between two snapshots turns the System line straight round", () => {
+  const line = createFleetLine();
+  assert.equal(line.watts(800, 0, 1), 800);
+  assert.equal(line.watts(0, 800, 2), -800);
+  assert.equal(line.watts(800, 0, 3), 800);
+});
+
+test("the System line forgets a direction older than one snapshot", () => {
+  const line = createFleetLine();
+  assert.equal(line.watts(0, 600, 1), -600);
+  assert.equal(line.watts(400, 412, 2), -12);
+  assert.equal(line.watts(400, 412, 9), 0);
 });
 
 test("a device's house line needs 8 W and twice the other side to change direction, as in Classic", () => {

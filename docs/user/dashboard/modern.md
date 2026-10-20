@@ -68,8 +68,17 @@ The flow on the Overview page has two modes, chosen with the switch above it:
   so you can see which device does what. The inverters' lines join into one
   line into the home, which grows as each inverter adds its share.
 
-The thickness of a line follows the power on it, and the moving dots show its
-direction. The choice is remembered.
+The choice is remembered. In both modes the inverters' line runs to the home and the grid's line meets
+the home on its own, the way the meter sees the house. An inverter that
+charges from the grid turns its line the grid's colour and runs it from the
+home back to the inverter. In the System view that line carries the
+inverters' output minus their charge: it turns round once the charge is the
+larger, and it rests while the two are about even. On a phone the home and the grid sit side by side
+at the bottom, and the inverters' line runs down into the home.
+
+The lines are drawn as glowing pipes in the colour of their energy. The
+thickness of a pipe follows the power on it, and the moving dashes show its
+direction; a stronger flow moves faster and shines brighter.
 
 ![Modern dashboard in the Midnight colour scheme and in German, with the energy flow drawn per inverter](../../assets/screenshots/dashboard/dashboard-modern-midnight-devices.png)
 
@@ -103,7 +112,7 @@ The **Appearance** button in the top bar holds five choices:
 | **Language** | English, Deutsch, Nederlands, Français -- numbers and dates follow the language |
 | **Density** | **Normal** or **Compact** |
 | **Side menu** | **Auto** (text beside the icons on a desktop, icons only below 1024 px), **With text** or **Icons** |
-| **Motion** | the moving dots in the energy flow, and on a phone the sheet sliding in, on or off |
+| **Motion** | the moving dashes in the energy flow, and on a phone the sheet sliding in, on or off |
 
 The colours of the energy types are the same in both schemes and in Classic:
 PV is the warm one, battery the green one, output the cyan one and grid the
@@ -151,7 +160,7 @@ and shows the same values as the other view.
 | The choice is forgotten after closing the browser | The browser does not keep site data | Bookmark the address with `?ui=modern` or `?ui=classic` |
 | `?ui=modern` still opens Classic | The address is in demo mode, or the browser is too old for Modern | Leave out `demo=1`, or update the browser |
 | A tile says "no comparison yet" | There is no history for yesterday up to this time | It fills in once the dashboard has a day of history |
-| The dots in the flow do not move | Motion is off here, the installation has animation switched off, or the system asks for reduced motion | Check **Appearance → Motion** |
+| The dashes in the flow do not move | Motion is off here, the installation has animation switched off, or the system asks for reduced motion | Check **Appearance → Motion** |
 
 ## Recovery or next steps
 

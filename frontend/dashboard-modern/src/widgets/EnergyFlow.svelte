@@ -16,17 +16,21 @@
   import { live } from "../state/live.svelte.js";
   import { prefs, setPref } from "../state/prefs.svelte.js";
   import { devices as allDevices, isStale } from "../state/derived.svelte.js";
-  import { createFlowActivity, createFlowScale, createHouseLines, busFlows, ribbonWidth, batteryDirection, gridDirection, gridHomeWatts } from "../lib/flow.js";
-  import { box, elbow, vertical, down, roundedPath, runs } from "../lib/wires.js";
-  import { flowDots, DOT_PERIOD_PX } from "../lib/flowAnim.js";
+  import { createFlowActivity, createFlowScale, createHouseLines, createFleetLine, busFlows, ribbonWidth, batteryDirection, gridDirection, flowBucket, FLOW_BUCKETS } from "../lib/flow.js";
+  import { box, elbow, vertical, roundedPath, runs } from "../lib/wires.js";
+  import { flowDashes, dashTexture, dashPhase, DASH_PERIOD_PX } from "../lib/flowAnim.js";
   import { channelKwh } from "../lib/energy.js";
   import { finite } from "../lib/format.js";
 
   let { span = "span-8", fixedMode = null } = $props();
 
+  const GLOW_BANDS = [{ grow: 12, share: 0.12 }, { grow: 7, share: 0.2 }, { grow: 4, share: 0.3 }];
+  const NARROW_GLOW_BANDS = [{ grow: 8, share: 0.12 }, { grow: 5, share: 0.2 }, { grow: 3, share: 0.3 }];
+
   const activity = createFlowActivity();
   const scale = createFlowScale();
   const houseLines = createHouseLines();
+  const fleetLine = createFleetLine();
 
   let stage = $state();
   let size = $state({ width: 0, height: 0 });
@@ -71,14 +75,14 @@
   const wireSpecs = $derived.by(() => {
     if (!system) return [];
     const specs = [];
+    const toward = (id, watts) => ({ id, token: watts < 0 ? "--grid" : "--output", watts: Math.abs(watts), reverse: watts < 0 });
     if (mode === "system") {
       const v = system;
       scale.update(Math.max(Math.abs(v.pvW || 0), Math.abs(v.batteryW), Math.abs(v.outputW || 0), Math.abs(v.gridW), v.chargeW));
       specs.push({ id: "pv", token: "--pv", watts: v.pvW, reverse: false });
       if (v.hasBattery) specs.push({ id: "bat", token: "--battery", watts: v.batteryW, reverse: v.batteryW > 0 });
-      specs.push({ id: "out", token: "--output", watts: v.outputW, reverse: false });
-      specs.push({ id: "grid", token: "--grid", watts: gridHomeWatts(v.gridW, v.chargeW), reverse: v.gridW < 0 });
-      if (v.chargeW > 0) specs.push({ id: "charge", token: "--grid", watts: v.chargeW, reverse: false });
+      specs.push(toward("out", fleetLine.watts(v.outputW, v.chargeW, live.sequence)));
+      specs.push({ id: "grid", token: "--grid", watts: v.gridW, reverse: v.gridW < 0 });
     } else {
       const flows = deviceList.map((device) => {
         const house = houses.get(device.name);
@@ -92,7 +96,6 @@
         Math.abs(total),
         ...deviceList.map((d) => Math.max(Math.abs(d.pvW || 0), Math.abs(d.outputW || 0), Math.abs(d.batteryW || 0), Math.abs(d.chargeW || 0))),
       ));
-      const toward = (id, watts) => ({ id, token: watts < 0 ? "--grid" : "--output", watts: Math.abs(watts), reverse: watts < 0 });
       Object.entries(joined.segments).forEach(([id, watts]) => specs.push(toward(id, watts)));
       specs.push(toward("trunk", total));
       deviceList.forEach((device, index) => {
@@ -107,7 +110,8 @@
     }
     return specs.map((spec) => {
       const active = activity.isActive(`${mode}:${spec.id}`, spec.watts);
-      return { ...spec, active, width: ribbonWidth(spec.watts, active, scale.reference) };
+      const width = ribbonWidth(spec.watts, active, scale.reference);
+      return { ...spec, active, width, ...FLOW_BUCKETS[flowBucket(spec.watts)], texture: dashTexture(width) };
     });
   });
 
@@ -122,27 +126,26 @@
     if (mode === "system") {
       const { pv, bat, hub, home, grid } = nodes;
       if (!hub || !home || !grid) return;
+      const inset = (hub.r - hub.l) * 0.07;
       if (narrow) {
-        if (pv) points.pv = down(pv.cx, pv.b, hub.l, hub.cy - 10);
-        if (bat) points.bat = down(bat.cx, bat.t, hub.l, hub.cy + 10);
-        points.out = down(home.cx, home.b, hub.r, hub.cy).reverse();
-        points.grid = vertical(grid.cx, grid.t, home.b);
-        points.charge = down(grid.cx - 22, grid.t, hub.r, hub.cy + 14);
+        if (pv) points.pv = elbow(pv.r, pv.cy, hub.l + inset, hub.cy - (bat ? 12 : 0));
+        if (bat) points.bat = elbow(bat.r, bat.cy, hub.l + inset, hub.cy + (pv ? 12 : 0));
+        points.out = vertical(hub.cx, hub.b - inset, home.t);
+        points.grid = elbow(grid.r, grid.cy, home.l, home.cy);
       } else {
-        const inset = (hub.r - hub.l) * 0.07;
         if (pv) points.pv = elbow(pv.r, pv.cy, hub.l + inset, hub.cy - 22);
         if (bat) points.bat = elbow(bat.r, bat.cy, hub.l + inset, hub.cy + 22);
-        points.out = elbow(hub.r - inset, hub.cy - 8, home.l, home.cy);
+        points.out = elbow(hub.r - inset, hub.cy, home.l, home.cy);
         points.grid = vertical(grid.cx, grid.t, home.b);
-        points.charge = elbow(grid.l, grid.cy, hub.r - inset, hub.cy + 14);
       }
     } else {
       const { home, grid } = nodes;
       if (!home || !grid) return;
       const hubs = deviceList.map((_, index) => nodes[`hub${index}`]).filter(Boolean);
       if (!hubs.length) return;
-      const busX = Math.round(Math.max(...hubs.map((hub) => hub.r)) + (home.l - Math.max(...hubs.map((hub) => hub.r))) / 2);
-      const junction = home.cy;
+      const hubsRight = Math.max(...hubs.map((hub) => hub.r));
+      const busX = Math.round(narrow ? (hubsRight + home.r) / 2 : hubsRight + (home.l - hubsRight) / 2);
+      const junction = narrow ? home.t : home.cy;
       const rows = [];
       deviceList.forEach((_, index) => {
         const pv = nodes[`pv${index}`];
@@ -163,8 +166,12 @@
       below.forEach((row, k) => {
         points[`bus-below${k}`] = [[busX, row.y], [busX, below[k + 1]?.y ?? junction]];
       });
-      points.trunk = [[busX, junction], [home.l, junction]];
-      points.grid = vertical(grid.cx, grid.t, home.b);
+      if (narrow) {
+        points.grid = elbow(grid.r, grid.cy, home.l, home.cy);
+      } else {
+        points.trunk = [[busX, junction], [home.l, junction]];
+        points.grid = vertical(grid.cx, grid.t, home.b);
+      }
       bus = { above: above.map((row) => row.index), below: below.map((row) => row.index) };
     }
     geometry = points;
@@ -239,26 +246,39 @@
     >
       <svg class="wires" aria-hidden="true" width={size.width} height={size.height}>
         {#each drawn as wire (wire.id)}
-          <path class="wire-track" class:idle={!wire.active} d={wire.d} stroke={`var(${wire.token})`} stroke-width={wire.width} data-wire={wire.id}></path>
+          {#if wire.active}
+            {#each narrow ? NARROW_GLOW_BANDS : GLOW_BANDS as band (band.grow)}
+              <path class="wire-glow" d={wire.d} stroke={`var(${wire.token})`} stroke-width={wire.width + band.grow} stroke-opacity={wire.glow * band.share}></path>
+            {/each}
+          {/if}
+        {/each}
+        {#each drawn as wire (wire.id)}
+          <path class="wire-track" class:idle={!wire.active} d={wire.d} stroke={`var(${wire.token})`} stroke-width={wire.active ? wire.width + 2 : wire.width} data-wire={wire.id}></path>
         {/each}
       </svg>
-      <div class="dots-layer" aria-hidden="true">
+      <div class="dash-layer" aria-hidden="true">
         {#each drawn as wire (wire.id)}
           {#if wire.active}
             {#each wire.runs as run, index (index)}
               <div
                 class="run"
+                data-run={wire.id}
                 style:left={`${run.x}px`}
                 style:top={`${run.y - wire.width / 2}px`}
                 style:width={`${run.length}px`}
                 style:height={`${wire.width}px`}
                 style:transform={`rotate(${run.angle}deg)`}
+                style:opacity={wire.alpha}
                 style:--c={`var(${wire.token})`}
               >
                 <div
-                  class="dots"
-                  style:width={`${run.length + DOT_PERIOD_PX}px`}
-                  use:flowDots={{ active: wire.active, reverse: wire.reverse, animate: prefs.animate && !stale, slow: prefs.serverAnimation === "reduced" }}
+                  class="dashes"
+                  style:width={`${run.length + DASH_PERIOD_PX}px`}
+                  style:background-image={wire.texture.image}
+                  style:background-size={wire.texture.size}
+                  style:background-position={dashPhase(run.before)}
+                  style:transform={`translateX(-${DASH_PERIOD_PX}px)`}
+                  use:flowDashes={{ active: wire.active, reverse: wire.reverse, animate: prefs.animate && !stale, slow: prefs.serverAnimation === "reduced", speed: wire.speed }}
                 ></div>
               </div>
             {/each}
@@ -328,13 +348,13 @@
             </div>
           </div>
         {/each}
-        <div class="node c-out col-r" data-node="home" style:grid-row={`1 / span ${deviceList.length}`}>
+        <div class="node c-out col-r home-node" data-node="home" style:grid-row={narrow ? `${deviceList.length * 2 + 1}` : `1 / span ${deviceList.length}`}>
           <div class="icon-tile sm"><Icon name="house" /></div>
           <div class="node-label">{t("flow.home")}</div>
           <div class="node-value num">{f.power(system.homeW)}</div>
           <div class="node-foot"><span>{t("common.today")}</span><b class="num">{f.energy(homeToday)}</b></div>
         </div>
-        <div class="node c-grid col-r" class:offline={!system.gridValid} data-node="grid" style:grid-row={`${deviceList.length + 1} / span ${deviceList.length}`}>
+        <div class="node c-grid col-r grid-node" class:offline={!system.gridValid} data-node="grid" style:grid-row={narrow ? `${deviceList.length * 2 + 1}` : `${deviceList.length + 1} / span ${deviceList.length}`}>
           <div class="icon-tile sm"><Icon name="utility-pole" /></div>
           <div class="node-label ellipsis" title={`${t("flow.grid")} · ${gridWord(system.gridW, system.gridValid)}`}>{t("flow.grid")} · {gridWord(system.gridW, system.gridValid)}</div>
           <div class="node-value num">{system.gridValid ? f.power(system.gridW, { signed: true }) : "—"}</div>
@@ -350,21 +370,14 @@
   :global(.flow-card) { display: flex; flex-direction: column; }
   .flow-stage { position: relative; margin: auto 0; }
   .flow-stage.system { height: 360px; }
-  .flow-stage.system.narrow { height: 440px; }
   .flow-stage.stale { opacity: 0.55; }
   .wires { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
-  .wire-track { fill: none; stroke-linecap: round; stroke-linejoin: round; opacity: 0.26; }
+  .wire-glow, .wire-track { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  .wire-track { opacity: 0.22; }
   .wire-track.idle { stroke-dasharray: 3 7; opacity: 0.35; }
-  .dots-layer { position: absolute; inset: 0; pointer-events: none; }
+  .dash-layer { position: absolute; inset: 0; pointer-events: none; }
   .run { position: absolute; transform-origin: 0 50%; overflow: hidden; border-radius: 999px; }
-  .dots {
-    height: 100%;
-    background-image: radial-gradient(circle at center, var(--c) 0 34%, transparent 40%);
-    background-size: 20px 100%;
-    background-repeat: repeat-x;
-    transform: translateX(-20px);
-    will-change: transform;
-  }
+  .dashes { height: 100%; background-repeat: repeat-x; will-change: transform; }
 
   .node {
     position: absolute; width: 214px; padding: 14px 16px; border-radius: 16px; z-index: 1;
@@ -411,17 +424,33 @@
   .flow-stage.devices .col-l { grid-column: 1; }
   .flow-stage.devices .col-r { grid-column: 5; }
 
-  .flow-stage.system.narrow .node { width: calc(50% - 6px); padding: 10px 12px; grid-template-columns: minmax(0, 1fr); }
+  .flow-stage.system.narrow { height: auto; display: grid; grid-template-columns: minmax(0, 1fr) 32px 128px; row-gap: 10px; align-items: center; }
+  .flow-stage.system.narrow .node, .flow-stage.system.narrow .hub { position: relative; left: auto; right: auto; top: auto; bottom: auto; transform: none; }
+  .flow-stage.system.narrow .node { width: 100%; padding: 10px 12px; grid-template-columns: minmax(0, 1fr); }
   .flow-stage.system.narrow .node .icon-tile { display: none; }
   .flow-stage.system.narrow .node-value { font-size: 19px; }
   .flow-stage.system.narrow .node-foot { flex-direction: column; gap: 0; }
-  .flow-stage.system.narrow .hub { width: 104px; height: 104px; }
-  .flow-stage.devices.narrow { grid-template-columns: minmax(0, 1fr) 12px 72px 12px minmax(0, 1fr); row-gap: 10px; }
-  .flow-stage.devices.narrow .node { padding: 9px 10px; grid-template-columns: minmax(0, 1fr); }
+  .flow-stage.system.narrow .hub { width: 104px; height: 104px; grid-column: 3; grid-row: 1 / span 2; justify-self: center; }
+  .flow-stage.system.narrow:not(:has(.n-bat)) .hub { grid-row: 1; }
+  .flow-stage.system.narrow .n-pv { grid-column: 1; grid-row: 1; }
+  .flow-stage.system.narrow .n-bat { grid-column: 1; grid-row: 2; }
+  .flow-stage.system.narrow :is(.n-home, .n-grid) { grid-row: 3; align-self: stretch; margin-top: 14px; grid-template-rows: auto auto 1fr; }
+  .flow-stage.system.narrow :is(.n-home, .n-grid) .node-foot { align-self: end; }
+  .flow-stage.system.narrow .n-home { grid-column: 3; }
+  .flow-stage.system.narrow .n-grid { grid-column: 1; }
+  .flow-stage.system.narrow .n-grid .node-label { white-space: normal; }
+  .flow-stage.devices.narrow { grid-template-columns: minmax(0, 1fr) 32px 80px 48px; row-gap: 10px; }
+  .flow-stage.devices.narrow .node { padding: 9px 12px; grid-template-columns: minmax(0, 1fr); }
   .flow-stage.devices.narrow .node .icon-tile { display: none; }
-  .flow-stage.devices.narrow .node-value { font-size: 16px; }
-  .flow-stage.devices.narrow .hub { width: 72px; height: 72px; }
-  .flow-stage.devices.narrow .hub :global(svg.i), .flow-stage.devices.narrow .hub-label { display: none; }
-  .flow-stage.devices.narrow .hub-value { font-size: 13px; }
+  .flow-stage.devices.narrow .node-value { font-size: 17px; }
+  .flow-stage.devices.narrow .hub { width: 80px; height: 80px; }
+  .flow-stage.devices.narrow .hub :global(svg.i) { display: none; }
+  .flow-stage.devices.narrow .hub-label { max-width: 64px; margin-top: 0; }
+  .flow-stage.devices.narrow .hub-value { font-size: 14px; }
   .flow-stage.devices.narrow .node-foot { flex-direction: column; gap: 0; }
+  .flow-stage.devices.narrow .home-node, .flow-stage.devices.narrow .grid-node { align-self: stretch; margin-top: 14px; grid-template-rows: auto auto 1fr; }
+  .flow-stage.devices.narrow :is(.home-node, .grid-node) .node-foot { align-self: end; }
+  .flow-stage.devices.narrow .home-node { grid-column: 3 / 5; }
+  .flow-stage.devices.narrow .grid-node { grid-column: 1; }
+  .flow-stage.devices.narrow .grid-node .node-label { white-space: normal; }
 </style>

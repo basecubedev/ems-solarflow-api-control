@@ -122,11 +122,21 @@ two seconds when the stream does not answer within three, and promoted back to
 the stream after thirty -- the transport contract of Classic, in
 `src/lib/transport.js`. A hidden tab releases its stream after thirty seconds.
 
-The energy flow moves its dots with `element.animate()` on a transform. The
-flow layer carries no CSS animation, no `@keyframes` and no `filter`: the
-reasons and the measurements are in
+The energy flow draws Classic's pipes: a translucent track, a halo around it
+and rounded dashes moving along it, faster and brighter in Classic's three
+power buckets (150 W and 600 W). The dashes move with `element.animate()` on a
+transform, one animated layer per straight run, and are painted into that
+layer's own background with gradients, so each layer is rasterised once and
+then only moved. The halo is three wider, fainter strokes in the static SVG,
+never a blur. The flow layer carries no CSS animation, no `@keyframes` and no
+`filter`: the reasons and the measurements are in
 [Dashboard performance](../technical/dashboard-performance.md), and a contract
-test holds the built stylesheet to it. Motion stops when the operator turns it
+test holds the built stylesheet to it. Measured against the dots it replaced,
+headless in Chromium and Firefox at two and eight devices, on a desktop and a
+phone: the same frame rate and the same number of paint and raster events. The
+number of animated layers is the same except in the System view on a phone,
+which has seven instead of six, because the solar and battery lines now bend
+twice on their way to the inverter. Motion stops when the operator turns it
 off, when the server's `animation_mode` is `off`, and when the system asks for
 reduced motion. The phone's sheet slides the same way, with `element.animate()`
 on a transform, and stays still under the same three conditions.

@@ -255,8 +255,8 @@ page at `http://127.0.0.1:8767/preview` for links to every view, or go straight 
 a view (`/preview/aggregated`, `/preview/devices`, `/preview/control`,
 `/preview/energy`, `/preview/diagnose`, `/preview/logs`,
 `/preview/maintenance`). Scenarios cover a healthy system, a fleet where one
-device AC-charges the surplus of another (`ac-charging`, the only state that
-draws the grid → inverter pipe and, per device, the house → inverter charge line), mixed firmware-status values (including unknown
+device AC-charges the surplus of another (`ac-charging`, the only state in which
+Classic draws the grid → inverter pipe and, per device, the house → inverter charge line), mixed firmware-status values (including unknown
 values), an offline device, and read-only/write-mode authentication states. See
 [developer.md](developer/developer.md#local-dashboard-preview) for details.
 

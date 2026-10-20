@@ -2,7 +2,7 @@
 /**
  * Geometry of the energy-flow wires: orthogonal polylines between measured
  * node boxes, a rounded SVG path for the track, and straight runs for the
- * moving dots. Pure, so the layout can be tested without a browser.
+ * moving dashes. Pure, so the layout can be tested without a browser.
  */
 
 export function box(rect, origin) {
@@ -20,11 +20,6 @@ export function elbow(x1, y1, x2, y2) {
 
 export function vertical(x, y1, y2) {
   return [[x, y1], [x, y2]];
-}
-
-/** Vertical then horizontal, for the stacked phone layout. */
-export function down(x1, y1, x2, y2) {
-  return [[x1, y1], [x1, y2], [x2, y2]];
 }
 
 export const CORNER_RADIUS = 12;
@@ -65,12 +60,15 @@ export function roundedPath(points, radius = CORNER_RADIUS) {
 
 /**
  * Straight runs of a polyline, each with its length and angle, for the
- * transform-animated dot layers. A run stops where the track starts to bend,
- * so no dot sits outside a rounded corner.
+ * transform-animated dash layers. A run stops where the track starts to bend,
+ * so no dash sits outside a rounded corner. ``before`` is how far along the
+ * rounded track the run starts, so the dashes keep their spacing round a
+ * corner.
  */
 export function runs(points, radius = CORNER_RADIUS) {
   const out = [];
   const last = points.length - 1;
+  let travelled = 0;
   for (let i = 1; i < points.length; i += 1) {
     const [x1, y1] = points[i - 1];
     const [x2, y2] = points[i];
@@ -79,10 +77,12 @@ export function runs(points, radius = CORNER_RADIUS) {
     const head = i - 1 > 0 ? cornerRadius(points, i - 1, radius) : 0;
     const tail = i < last ? cornerRadius(points, i, radius) : 0;
     const length = full - head - tail;
-    if (length < 1) continue;
-    const ux = (x2 - x1) / full;
-    const uy = (y2 - y1) / full;
-    out.push({ x: x1 + ux * head, y: y1 + uy * head, length, angle: (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI });
+    if (length >= 1) {
+      const ux = (x2 - x1) / full;
+      const uy = (y2 - y1) / full;
+      out.push({ x: x1 + ux * head, y: y1 + uy * head, length, angle: (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI, before: travelled });
+    }
+    travelled += Math.max(0, length) + (Math.PI / 2) * tail;
   }
   return out;
 }

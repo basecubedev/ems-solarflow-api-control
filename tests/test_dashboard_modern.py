@@ -221,12 +221,12 @@ def test_no_colour_literal_outside_the_token_blocks():
 
 
 def test_the_flow_layer_has_no_css_animation_and_no_filter():
-    """The flow moves with element.animate() and literal keyframes (reports/dashboard-perf)."""
+    """The flow moves with element.animate() and literal keyframes, and its glow is wider strokes, never a filter (reports/dashboard-perf)."""
 
     css = MODERN_CSS.read_text(encoding="utf-8")
     assert "@keyframes" not in css
     for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
-        if any(name in selector for name in (".flow-stage", ".wires", ".run", ".dots", ".hub", ".node")):
+        if any(name in selector for name in (".flow-stage", ".wires", ".wire-", ".dash-layer", ".run", ".dashes", ".hub", ".node")):
             assert "animation" not in body, selector
             assert "filter" not in body, selector
 
