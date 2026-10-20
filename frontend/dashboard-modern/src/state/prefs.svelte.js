@@ -5,6 +5,8 @@
  * switching back finds Classic exactly as it was left.
  */
 
+import { pinnedPages } from "../app/pages.js";
+
 export const THEMES = Object.freeze(["graphite", "midnight"]);
 /** A scheme's name is a name, the same in every language. */
 export const THEME_NAMES = Object.freeze({ graphite: "Graphite", midnight: "Midnight" });
@@ -25,6 +27,7 @@ const SPEC = {
 };
 
 export const UI_CHOICE_KEY = "ems-dashboard-ui";
+const MOBILE_PAGES_KEY = "ems-modern.mobilePages";
 
 function read(name) {
   const spec = SPEC[name];
@@ -33,6 +36,14 @@ function read(name) {
     return spec.allowed.includes(stored) ? stored : spec.fallback;
   } catch {
     return spec.fallback;
+  }
+}
+
+function readMobilePages() {
+  try {
+    return pinnedPages(globalThis.localStorage?.getItem(MOBILE_PAGES_KEY));
+  } catch {
+    return pinnedPages(null);
   }
 }
 
@@ -52,6 +63,7 @@ class Prefs {
   motion = $state(read("motion"));
   flow = $state(read("flow"));
   nav = $state(read("nav"));
+  mobilePages = $state.raw(readMobilePages());
   narrowScreen = $state(false);
   serverAnimation = $state("normal");
   systemReducedMotion = $state(false);
@@ -74,6 +86,12 @@ export function setPref(name, value) {
   prefs[name] = value;
   write(spec.key, value);
   applyDocumentPrefs();
+}
+
+/** The four pages of a phone's bar, in the order the bar shows them. */
+export function setMobilePages(ids) {
+  prefs.mobilePages = pinnedPages(ids);
+  write(MOBILE_PAGES_KEY, prefs.mobilePages.join(","));
 }
 
 export function applyDocumentPrefs() {

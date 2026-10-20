@@ -95,6 +95,7 @@ beside the text, a dot or an icon, carries the identity.
 | `ui/Bar` | a share of a whole, e.g. SoC |
 | `ui/TimeChart` | every time series; uPlot, colours resolved from the tokens; a drag zooms, and a refresh keeps the zoom |
 | `ui/ConfirmDialog` | every write; a native `<dialog>` that says what will change |
+| `ui/Sheet` | a panel from the bottom edge on a phone (the bar's **More**); a native modal `<dialog>` that Esc, the scrim and a tap or a swipe down on its handle close; the element marked `data-focus` takes the focus |
 | `ui/OperatorGate` | a page or a panel that needs the operator to be signed in |
 | `ui/Empty` | why there is nothing to show, and what would change that |
 
@@ -127,7 +128,8 @@ reasons and the measurements are in
 [Dashboard performance](../technical/dashboard-performance.md), and a contract
 test holds the built stylesheet to it. Motion stops when the operator turns it
 off, when the server's `animation_mode` is `off`, and when the system asks for
-reduced motion.
+reduced motion. The phone's sheet slides the same way, with `element.animate()`
+on a transform, and stays still under the same three conditions.
 
 ## Text and numbers
 

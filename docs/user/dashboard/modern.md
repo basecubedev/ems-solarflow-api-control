@@ -103,7 +103,7 @@ The **Appearance** button in the top bar holds five choices:
 | **Language** | English, Deutsch, Nederlands, Français -- numbers and dates follow the language |
 | **Density** | **Normal** or **Compact** |
 | **Side menu** | **Auto** (text beside the icons on a desktop, icons only below 1024 px), **With text** or **Icons** |
-| **Motion** | the moving dots in the energy flow on or off |
+| **Motion** | the moving dots in the energy flow, and on a phone the sheet sliding in, on or off |
 
 The colours of the energy types are the same in both schemes and in Classic:
 PV is the warm one, battery the green one, output the cyan one and grid the
@@ -119,10 +119,24 @@ motion setting cannot turn it back on.
 
 ## On a phone
 
-On a narrow screen the sidebar gives way to a bar at the bottom with Overview,
-Devices, Energy, Control and **More** for the rest.
+On a narrow screen the sidebar gives way to a bar at the bottom with four
+pages -- Overview, Devices, Energy and Control until you choose others -- and
+**More** for the rest.
 
 ![Modern dashboard on a phone, with the status tiles on top and the navigation bar at the bottom](../../assets/screenshots/dashboard/dashboard-modern-phone.png)
+
+- **More** opens a sheet from the bottom edge with the other pages, the
+  language, the colour scheme, signing in or out and the switch to Classic. A
+  lock marks the pages that need you to be signed in. Tap outside the sheet,
+  tap or swipe down its handle, or press Esc to close it.
+- On a page that is not in the bar, the fifth button shows that page's name,
+  so the bar always says where you are. Tapping it opens the sheet.
+- **Choose the pages in the bar**, in the sheet, picks the four. Tap two
+  pages to swap them: a page under **More** with one in the bar takes its
+  place, and two pages in the bar change their order. **Default pages** brings
+  back the original four. The browser remembers the choice.
+
+![Modern dashboard on a phone with the More sheet open: the other pages as tiles, the quick settings and the switch to Classic](../../assets/screenshots/dashboard/dashboard-modern-phone-more.png)
 
 ## Expected result
 

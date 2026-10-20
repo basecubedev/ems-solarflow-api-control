@@ -36,6 +36,7 @@ by `scripts/capture_dashboard_previews.py`.
 | `dashboard-modern-overview.png` | Modern — Overview in Graphite | `normal` |
 | `dashboard-modern-midnight-devices.png` | Modern — Overview in Midnight and German, energy flow per device | `normal` |
 | `dashboard-modern-phone.png` | Modern — Overview on a phone, with the bottom bar | `normal` |
+| `dashboard-modern-phone-more.png` | Modern — the More sheet on a phone | `normal` |
 
 The three `*-appearance-*` strips are written by
 [`scripts/capture_appearance_gallery.py`](../../../../scripts/capture_appearance_gallery.py)

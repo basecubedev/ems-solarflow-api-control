@@ -98,4 +98,14 @@ test.describe("Modern documentation captures @docs", () => {
     await expect(page.locator(".bottom-nav")).toBeVisible();
     await page.screenshot({ path: `${SHOTS}/dashboard-modern-phone.png` });
   });
+
+  test("dashboard-modern-phone-more", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openOverview(page);
+    await page.getByTestId("nav-more").click();
+    const sheet = page.locator("dialog.sheet");
+    await expect(sheet).toBeVisible();
+    await sheet.evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
+    await page.screenshot({ path: `${SHOTS}/dashboard-modern-phone-more.png` });
+  });
 });

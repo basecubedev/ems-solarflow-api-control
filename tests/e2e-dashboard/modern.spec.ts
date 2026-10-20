@@ -21,6 +21,10 @@ async function clearScheduleRules(request) {
   }
 }
 
+async function settled(locator) {
+  await locator.evaluate((node) => Promise.all(node.getAnimations().map((animation) => animation.finished)));
+}
+
 async function openModern(page, hash = "#/overview") {
   await page.goto(`/modern/${hash}`, { waitUntil: "domcontentloaded" });
   await expect(page.getByTestId("ems-state")).toBeVisible();
@@ -207,9 +211,14 @@ test.describe("Modern dashboard @smoke", () => {
     await page.getByTestId("appearance").getByRole("button", { name: "Icons" }).click();
     await expect(page.locator(".sidebar").getByRole("link", { name: "Overview" }).locator("span")).toBeHidden();
   });
+});
 
-  test("on a phone the sidebar gives way to a bottom bar", async ({ page }) => {
+test.describe("Modern dashboard on a phone @smoke", () => {
+  test.beforeEach(async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
+  });
+
+  test("the sidebar gives way to a bottom bar", async ({ page }) => {
     await openModern(page);
     await expect(page.locator(".sidebar")).toBeHidden();
     await expect(page.locator(".app")).toHaveClass(/\brail\b/);
@@ -218,6 +227,156 @@ test.describe("Modern dashboard @smoke", () => {
     await expect(bottom).toBeVisible();
     await bottom.getByRole("link", { name: "Devices" }).click();
     await expect(page.getByTestId("device-card").first()).toBeVisible();
+  });
+
+  test("More opens a sheet that Esc, the scrim, the handle, a swipe and a page close", async ({ page }) => {
+    await openModern(page);
+    const more = page.getByTestId("nav-more");
+    const sheet = page.getByRole("dialog", { name: "More" });
+    await more.click();
+    await expect(sheet).toBeVisible();
+    await expect(sheet.getByRole("link", { name: /^Analytics/ })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeHidden();
+    await expect(more).toBeFocused();
+
+    await more.click();
+    await expect(sheet).toBeVisible();
+    await page.mouse.click(195, 30);
+    await expect(sheet).toBeHidden();
+
+    await more.click();
+    await sheet.getByTestId("sheet-handle").click();
+    await expect(sheet).toBeHidden();
+
+    await more.click();
+    await settled(sheet);
+    const handle = await sheet.getByTestId("sheet-handle").boundingBox();
+    await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(handle.x + handle.width / 2, handle.y + 40, { steps: 4 });
+    await page.mouse.move(handle.x + handle.width / 2, handle.y + 140, { steps: 4 });
+    await page.mouse.up();
+    await expect(sheet).toBeHidden();
+
+    await more.click();
+    await sheet.getByRole("link", { name: /^Analytics/ }).click();
+    await expect(sheet).toBeHidden();
+    await expect(page).toHaveURL(/#\/analytics$/);
+  });
+
+  test("a short drag on the handle springs back instead of closing", async ({ page }) => {
+    await openModern(page);
+    await page.getByTestId("nav-more").click();
+    const sheet = page.getByRole("dialog", { name: "More" });
+    await settled(sheet);
+    const handle = await sheet.getByTestId("sheet-handle").boundingBox();
+    await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(handle.x + handle.width / 2, handle.y + 40, { steps: 4 });
+    await page.mouse.up();
+    await settled(sheet);
+    await expect(sheet).toHaveJSProperty("open", true);
+    await expect(sheet).not.toHaveAttribute("style", /translateY/);
+    await sheet.getByTestId("sheet-handle").press("Enter");
+    await expect(sheet).toBeHidden();
+  });
+
+  test("on a page under More, the fifth button names that page and opens the sheet", async ({ page }) => {
+    await openModern(page, "#/logs");
+    const more = page.getByTestId("nav-more");
+    await expect(more).toHaveAttribute("aria-current", "page");
+    await expect(more).toHaveAccessibleName("Logs — more pages");
+    await expect(more).toContainText("Logs");
+    await more.click();
+    const sheet = page.getByRole("dialog", { name: "More" });
+    const logs = sheet.getByRole("link", { name: /^Logs/ });
+    await expect(logs).toHaveAttribute("aria-current", "page");
+    await expect(logs).toBeFocused();
+
+    await expect(sheet.getByRole("link", { name: /^Overview/ })).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await page.locator(".bottom-nav").getByRole("link", { name: "Overview" }).click();
+    await expect(more).not.toHaveAttribute("aria-current", "page");
+    await expect(more).toHaveAccessibleName("More");
+  });
+
+  test("signed out, operator pages carry a lock, and the sheet signs in, sets the language and the scheme", async ({ page }) => {
+    await openModern(page);
+    await page.getByTestId("nav-more").click();
+    const sheet = page.locator("dialog.sheet");
+    for (const id of ["schedule", "diagnose", "logs", "maintenance"]) {
+      await expect(sheet.locator(`[data-page="${id}"] .lock`)).toBeVisible();
+    }
+    await expect(sheet.locator('[data-page="analytics"] .lock')).toHaveCount(0);
+
+    await sheet.getByRole("button", { name: "Midnight" }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-m-theme", "midnight");
+    await sheet.getByRole("button", { name: "DE" }).click();
+    await expect(page.locator("html")).toHaveAttribute("lang", "de");
+    await expect(sheet.getByRole("link", { name: /^Analysen/ })).toBeVisible();
+
+    await sheet.getByTestId("sheet-sign-in").click();
+    await expect(page.getByRole("dialog", { name: "Am Dashboard anmelden" })).toBeVisible();
+    await expect(sheet).toBeHidden();
+  });
+
+  test("the reader picks the bar's four pages, and the choice survives a reload", async ({ page }) => {
+    await openModern(page);
+    const bar = page.locator(".bottom-nav");
+    await page.getByTestId("nav-more").click();
+    const sheet = page.getByRole("dialog", { name: "More" });
+    await sheet.getByTestId("customize-bar").click();
+    await sheet.getByTestId("bar-pages").getByRole("button", { name: "Control" }).click();
+    await expect(sheet.getByTestId("bar-pages").getByRole("button", { name: "Control" })).toHaveAttribute("aria-pressed", "true");
+    await sheet.getByTestId("more-pages").getByRole("button", { name: "Analytics" }).click();
+    await expect(sheet.getByTestId("bar-pages").getByRole("button")).toHaveText(["Overview", "Devices", "Energy", "Analytics"]);
+    await expect(sheet.getByTestId("bar-pages").getByRole("button", { name: "Analytics" })).toBeFocused();
+    await expect(sheet.locator(".hint")).toHaveText("In the bar: Overview, Devices, Energy, Analytics");
+    await expect(bar.getByRole("link")).toHaveText(["Overview", "Devices", "Energy", "Analytics"]);
+
+    await sheet.getByTestId("bar-pages").getByRole("button", { name: "Overview" }).click();
+    await sheet.getByTestId("bar-pages").getByRole("button", { name: "Energy" }).click();
+    await expect(bar.getByRole("link")).toHaveText(["Energy", "Devices", "Overview", "Analytics"]);
+    await sheet.getByTestId("customize-done").click();
+    await expect(sheet.getByTestId("customize-bar")).toBeFocused();
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(bar.getByRole("link")).toHaveText(["Energy", "Devices", "Overview", "Analytics"]);
+    await page.getByTestId("nav-more").click();
+    await expect(sheet.getByRole("link", { name: /^Control/ })).toBeVisible();
+    await sheet.getByTestId("customize-bar").click();
+    await sheet.getByTestId("reset-bar").click();
+    await expect(bar.getByRole("link")).toHaveText(["Overview", "Devices", "Energy", "Control"]);
+    await expect(sheet.getByTestId("reset-bar")).toHaveCount(0);
+    await expect(sheet.getByTestId("customize-done")).toBeFocused();
+  });
+
+  test("an operator page in the bar carries the lock while signed out", async ({ page }) => {
+    await page.addInitScript(() => window.localStorage.setItem("ems-modern.mobilePages", "overview,logs,ghost,logs"));
+    await openModern(page);
+    const bar = page.locator(".bottom-nav");
+    await expect(bar.getByRole("link")).toHaveText(["Overview", "Logs", "Devices", "Energy"]);
+    await expect(bar.getByRole("link", { name: "Logs Sign-in required" })).toBeVisible();
+  });
+
+  test("the bar and the sheet fit a narrow phone in every language", async ({ page }) => {
+    await openModern(page, "#/maintenance");
+    for (const width of [360, 390, 414]) {
+      await page.setViewportSize({ width, height: 800 });
+      for (const lang of ["en", "de", "nl", "fr"]) {
+        await page.evaluate((value) => window.localStorage.setItem("ems-modern.lang", value), lang);
+        await page.reload({ waitUntil: "domcontentloaded" });
+        const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+        expect(overflow, `${width} px, ${lang}`).toBeLessThanOrEqual(0);
+        await page.getByTestId("nav-more").click();
+        const content = page.locator("dialog.sheet .sheet-content");
+        const sheetOverflow = () => content.evaluate((node) => node.scrollWidth - node.clientWidth);
+        expect(await sheetOverflow(), `sheet at ${width} px, ${lang}`).toBeLessThanOrEqual(0);
+        await page.getByTestId("customize-bar").click();
+        expect(await sheetOverflow(), `editing at ${width} px, ${lang}`).toBeLessThanOrEqual(0);
+      }
+    }
   });
 });
 
