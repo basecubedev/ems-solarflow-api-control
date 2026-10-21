@@ -318,23 +318,19 @@ test.describe("Modern Admin: an unfinished workflow", { tag: ["@smoke", "@workfl
 test.describe("Modern Admin: on a phone", { tag: ["@smoke"] }, () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
-  test("a version chosen in the list opens the guided upgrade with it chosen and nothing verified", async ({ page, seedAdminScenario }) => {
+  test("a version tapped in the list opens the guided upgrade here and verifies it", async ({ page, seedAdminScenario }) => {
     await openModern(page);
     await seedAdminScenario("mqtt_migration");
     await page.goto("/modern/#/updates");
     await page.reload();
     await expect(page.getByTestId("releases")).toBeVisible();
-    const verified = { count: 0 };
-    page.on("request", (request) => {
-      if (request.url().includes("/maintenance/upgrade/validate")) verified.count += 1;
-    });
+    const validated = page.waitForResponse((response) => response.url().endsWith("/api/admin/maintenance/upgrade/validate"));
     await page.locator('[data-tag="v9.9.10"]').getByTestId("choose-release").click();
-    await expect(page).toHaveURL(/\/#maintenance-upgrade$/);
-    await expect(page.locator("#upgrade-release-select")).toHaveValue("v9.9.10");
-    await expect(page.locator("#upgrade-release-select")).toBeEnabled();
-    await page.reload();
-    await expect(page.locator("#upgrade-release-select")).toBeEnabled();
-    expect(verified.count).toBe(0);
+    expect((await validated).ok()).toBeTruthy();
+    await expect(page.getByTestId("upgrade")).toHaveAttribute("data-stage", "ready");
+    await expect(page).toHaveURL(/\/modern\/#\/updates$/);
+    await expect(page.getByRole("heading", { name: "Update to v9.9.10" })).toBeInViewport();
+    await expect(page.getByTestId("upgrade-migration")).toContainText("format. 1 device loses");
   });
 
   test("the bar holds four pages and More holds the rest", async ({ page }) => {

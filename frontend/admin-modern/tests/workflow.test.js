@@ -21,8 +21,10 @@ test("only a workflow that holds the console raises the banner, and it opens the
   assert.equal(activeWorkflow({ ok: false, owner: "guided_setup", state: "active" }), null);
   assert.equal(activeWorkflow({ ok: true, owner: "none", state: "idle" }), null);
   assert.equal(activeWorkflow({ ok: true, owner: "guided_upgrade", state: "idle" }), null);
-  assert.deepEqual(activeWorkflow({ ok: true, owner: "guided_setup", state: "active" }), { owner: "guided_setup", state: "active", classic: "setup", recoverable: false });
+  assert.deepEqual(activeWorkflow({ ok: true, owner: "guided_setup", state: "active" }), { owner: "guided_setup", state: "active", classic: "setup", native: null, recoverable: false });
   assert.equal(activeWorkflow({ ok: true, owner: "guided_upgrade", state: "cleanup_pending", recoverable: true }).classic, "maintenance-upgrade");
+  assert.equal(activeWorkflow({ ok: true, owner: "guided_upgrade", state: "active" }).native, "updates");
+  assert.equal(activeWorkflow({ ok: true, owner: "align_existing_install", state: "active" }).native, null);
 });
 
 test("the recovery card speaks unless the answer is a proven idle state with nothing to reset", () => {

@@ -20,13 +20,18 @@ export const STALE_REASONS = Object.freeze([
 export const ownerKey = (owner) => `workflow.owner.${WORKFLOW_OWNERS.includes(owner) ? owner : "unknown"}`;
 export const stateKey = (state) => (WORKFLOW_STATES.includes(state) ? `workflow.state.${state}` : "workflow.state.unknown");
 
-/** A guided workflow that holds the console, with the Classic page that continues it; null when none does. */
+/**
+ * A guided workflow that holds the console, with the page that continues it:
+ * this console's Updates page for a Guided Upgrade, which it runs itself, and
+ * Classic's for the others. Null when none holds it.
+ */
 export function activeWorkflow(lifecycle) {
   if (!lifecycle || lifecycle.ok !== true) return null;
   const owner = String(lifecycle.owner || "none");
   if (owner === "none" || lifecycle.state === "idle") return null;
   const classic = owner === "guided_setup" ? "setup" : "maintenance-upgrade";
-  return { owner, state: String(lifecycle.state || ""), classic, recoverable: Boolean(lifecycle.recoverable) };
+  const native = owner === "guided_upgrade" ? "updates" : null;
+  return { owner, state: String(lifecycle.state || ""), classic, native, recoverable: Boolean(lifecycle.recoverable) };
 }
 
 /** Whether the recovery card has anything to say: a proven idle state with no reset on offer says nothing. */

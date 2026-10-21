@@ -4,17 +4,20 @@
   import { system, ensure } from "../state/system.svelte.js";
   import { activeWorkflow, ownerKey, stateKey } from "../lib/workflow.js";
   import { classicPage } from "../state/prefs.svelte.js";
+  import { href, router } from "../app/router.svelte.js";
 
   /**
-   * A Guided Setup or Upgrade holds the console. Modern does not run those
-   * workflows yet, so it says so on every page and hands over to Classic,
-   * which resumes them from the server's durable record.
+   * A Guided Setup or Upgrade holds the console. It is said on every page:
+   * a Guided Upgrade with the way to this console's Updates page, which
+   * follows it, and a Guided Setup with the hand-over to Classic, which
+   * resumes it from the server's durable record. The page that already shows
+   * the workflow needs no banner for it.
    */
   ensure("lifecycle");
   const workflow = $derived(activeWorkflow(system.lifecycle.data));
 </script>
 
-{#if workflow}
+{#if workflow && !(workflow.native && router.page === workflow.native)}
   <div class="banner span-12" role="status" data-testid="workflow-banner">
     <span class="icon-tile sm c-warn"><Icon name="route" /></span>
     <div class="text">
@@ -23,7 +26,11 @@
     </div>
     <div class="actions">
       {#if workflow.recoverable}<a class="btn secondary small" href="#/system">{t("workflow.openRecovery")}</a>{/if}
-      <a class="btn small" href={classicPage(workflow.classic)} data-testid="workflow-continue"><Icon name="arrow-up-right" size="sm" />{t("workflow.continue")}</a>
+      {#if workflow.native}
+        <a class="btn small" href={href(workflow.native)} data-testid="workflow-continue"><Icon name="circle-arrow-up" size="sm" />{t("workflow.showUpgrade")}</a>
+      {:else}
+        <a class="btn small" href={classicPage(workflow.classic)} data-testid="workflow-continue"><Icon name="arrow-up-right" size="sm" />{t("workflow.continue")}</a>
+      {/if}
     </div>
   </div>
 {/if}
