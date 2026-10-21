@@ -2299,6 +2299,24 @@
     revert_unavailable: ["bad", "the install did not prove itself and this appliance had kept no earlier package"]
   };
 
+  /* When a release was built, to the minute and in this browser's time:
+     two builds on one day are told apart by their time. A time without a
+     zone is the index's UTC, as every other one in it; a value without a
+     time of day keeps its date alone. */
+  function releaseStamp(value) {
+    var text = String(value || "");
+    var zoned = /(Z|[+-]\d{2}:?\d{2})$/.test(text);
+    var parsed = new Date(zoned ? text : text + "Z");
+    if (!/T\d{2}:\d{2}/.test(text) || isNaN(parsed.getTime())) {
+      return text.slice(0, 10);
+    }
+    function pad(part) {
+      return ("0" + part).slice(-2);
+    }
+    return parsed.getFullYear() + "-" + pad(parsed.getMonth() + 1) + "-" + pad(parsed.getDate()) +
+      " " + pad(parsed.getHours()) + ":" + pad(parsed.getMinutes());
+  }
+
   function managerLabel(entry) {
     var described = entry.described || entry;
     var version = described.release_version;
@@ -2306,9 +2324,9 @@
       return entry.release_id;
     }
     var parts = [version];
-    var day = String(described.created_at || "").slice(0, 10);
-    if (day) {
-      parts.push(day);
+    var stamp = releaseStamp(described.created_at);
+    if (stamp) {
+      parts.push(stamp);
     }
     var direction = MANAGER_DIRECTIONS[entry.direction];
     if (direction) {
@@ -2378,8 +2396,8 @@
       return el("p", { class: "control-stage-subtitle", "data-test": "manager-sources-empty",
         text: "The package index offers nothing." });
     }
-    /* Two builds of one version on one day read the same; only then is the
-       release id added, so the ordinary list stays readable. */
+    /* Two builds of one version within the same minute read the same; only
+       then is the release id added, so the ordinary list stays readable. */
     var labels = {};
     var counts = {};
     offered.forEach(function (entry) {

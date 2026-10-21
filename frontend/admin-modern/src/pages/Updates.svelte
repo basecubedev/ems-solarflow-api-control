@@ -69,7 +69,7 @@
               {#if release.running}<span class="badge">{t("updates.running")}</span>{/if}
             </div>
             <div class="muted small">
-              {#if release.publishedAt}<span class="num">{f.date(release.publishedAt)}</span>{/if}{#if release.publishedAt && release.note}<span aria-hidden="true"> · </span>{/if}{#if release.note?.key}{t(release.note.key)}{:else if release.note}<span lang="en">{release.note.text}</span>{/if}
+              {#if release.publishedAt}<span class="num">{f.dateTime(release.publishedAt)}</span>{/if}{#if release.publishedAt && release.note}<span aria-hidden="true"> · </span>{/if}{#if release.note?.key}{t(release.note.key)}{:else if release.note}<span lang="en">{release.note.text}</span>{/if}
             </div>
           </div>
           {#if release.state}<Status tone={release.tone} text={t(`updates.state.${release.state}`)} />{/if}
