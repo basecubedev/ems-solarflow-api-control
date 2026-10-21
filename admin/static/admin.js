@@ -8011,7 +8011,7 @@ const MAINTENANCE_PANEL_IDS = {
 // the load promise so a caller (e.g. a resume that must select the transition
 // tag before continuing) can await full completion; ``pinnedTag`` is forwarded
 // to the upgrade planning load.
-function setMaintenancePath(path, pinnedTag, settingsTab) {
+function setMaintenancePath(path, pinnedTag, settingsTab, preferredTag) {
   const next = MAINTENANCE_PATHS.includes(path) ? path : "hub";
   // The borrowed singleton forms go home before the panel that holds them is
   // hidden: parkInlineConfigs() refuses to reclaim a node mounted elsewhere, so
@@ -8038,7 +8038,7 @@ function setMaintenancePath(path, pinnedTag, settingsTab) {
   if (next === "upgrade") {
     // Same-session navigation may keep an existing verification for the same
     // selected build (no forced re-verify just for returning to the panel).
-    return loadUpgradePlanning(pinnedTag, { preserveVerification: true });
+    return loadUpgradePlanning(pinnedTag, { preserveVerification: true, preferredTag });
   }
   if (next === "backup") {
     return loadBackups();
@@ -8082,9 +8082,10 @@ function maintenanceSettingsTabForHash(hash) {
 }
 
 // #maintenance-upgrade-v0.9.0 opens the Guided Upgrade with that release
-// chosen: the Modern console's release list hands a release over this way. It
-// only names a candidate; the catalogue decides whether it can be chosen, and
-// choosing still verifies nothing.
+// chosen: the Modern console hands a release over this way. It only names a
+// candidate: one the catalogue does not let the upgrade choose leaves the
+// usual default selected, unlike a resume, which pins its tag and fails closed.
+// Choosing still verifies nothing.
 function maintenanceUpgradeTagForHash(hash) {
   const prefix = "maintenance-upgrade-";
   if (!hash.startsWith(prefix)) return null;
@@ -8118,8 +8119,9 @@ function applyHashRoute() {
     if (upgradeTag) history.replaceState(null, "", "#maintenance-upgrade");
     setMaintenancePath(
       maintenancePathForHash(hash),
-      upgradeTag || undefined,
+      undefined,
       maintenanceSettingsTabForHash(hash),
+      upgradeTag,
     );
   }
 }
@@ -11440,10 +11442,13 @@ if (mqttMigrationEls.refresh) {
 // --- Guided upgrade planning + execute -----------------------------------
 // Reads the maintenance overview for the current version, lists releases, and
 // (using the existing setup prepare flow) can download a target release.
-// "Plan upgrade" only renders the summary; the guarded "Upgrade EMS" button is
-// the sole mutating action and POSTs the confirmed executor, which is enabled
-// only once a target is selected, prepared, and planned. Every dynamic value is
-// escaped before it reaches the DOM.
+// The plan only renders the summary, and it is built by itself as soon as the
+// selected build is verified, and again when an option changes: verifying is
+// the operator's click, planning is not a second one. "Plan upgrade" stays for
+// a plan that could not be built. The guarded "Upgrade EMS" button is the sole
+// mutating action and POSTs the confirmed executor, which is enabled only once
+// a target is selected, prepared, and planned. Every dynamic value is escaped
+// before it reaches the DOM.
 
 const upgradeEls = {
   currentVersion: document.getElementById("upgrade-current-version"),
@@ -11914,7 +11919,7 @@ function renderUpgradePlan() {
 
   if (!upgradeState.planned) {
     renderUpgradeValidation(
-      [{ tone: "info", text: "Review the target release and options, then plan the upgrade." }],
+      [{ tone: "info", text: "Verify the selected System Build; the upgrade plan follows by itself." }],
       false
     );
     updateUpgradeActionButtons();
@@ -12009,7 +12014,7 @@ function updateUpgradeActionButtons() {
     }
   }
   for (const el of upgradeEls.options) {
-    el.disabled = upgradeState.running || upgradeState.planning || upgradeState.completed;
+    el.disabled = upgradeState.running || upgradeState.completed;
   }
   updateExecuteButton();
 }
@@ -12018,7 +12023,7 @@ function setUpgradeRunning(running) {
   upgradeState.running = running;
   if (upgradeEls.select) upgradeEls.select.disabled = running || !upgradeState.releases.length;
   for (const el of upgradeEls.options) {
-    el.disabled = running || upgradeState.planning || upgradeState.completed;
+    el.disabled = running || upgradeState.completed;
   }
   if (running && upgradeEls.prepareBtn) upgradeEls.prepareBtn.disabled = true;
   if (!running) setUpgradeReleaseStatus();
@@ -12085,6 +12090,7 @@ async function pollUpgradeJob(jobId) {
     if (data.status === "succeeded" || data.status === "failed") {
       stopUpgradePolling();
       const result = data.result || { ok: data.status === "succeeded", steps: data.steps };
+      if (!result.ok && !upgradeState.preparedFingerprint) clearUpgradeVerification();
       renderUpgradeResult(result);
       setUpgradeRunning(false);
       // Read once when the panel opened, and the operator who pressed "Upgrade
@@ -12359,6 +12365,13 @@ async function planUpgrade() {
     upgradeState.planning = false;
     upgradeState.planned = false;
     upgradeState.plannedFingerprint = null;
+    if (
+      upgradeState.selected === selectedTag &&
+      upgradeState.preparedFingerprint === fingerprint &&
+      upgradeCanPlan()
+    ) {
+      return planUpgrade();
+    }
     updateUpgradeActionButtons();
     renderUpgradeValidation(
       [
@@ -12439,7 +12452,7 @@ function upgradeVerificationSurvivesReload(preserve, releases, selectedTag) {
   );
 }
 
-async function loadUpgradeReleases(pinnedTag, { preserveVerification = false } = {}) {
+async function loadUpgradeReleases(pinnedTag, { preserveVerification = false, preferredTag = null } = {}) {
   upgradeState.status = "loading";
   upgradeState.error = null;
   upgradeState.releaseWarnings = [];
@@ -12470,10 +12483,14 @@ async function loadUpgradeReleases(pinnedTag, { preserveVerification = false } =
       upgradeEls.select.appendChild(optgroup);
     }
     let selectedTag = selectUpgradeReleaseTag(releases, data, pinnedTag);
+    const preferred = !pinnedTag && preferredTag
+      ? releases.find((item) => item.tag === preferredTag && item.selectable !== false)
+      : null;
+    if (preferred) selectedTag = preferred.tag;
     // On a same-session navigation (no explicit pin) keep the current selection
     // when it is still offered, so returning to the panel does not silently jump
     // to the default build and drop a verification for the selected one.
-    if (!pinnedTag && preserveVerification && upgradeState.selected) {
+    if (!pinnedTag && !preferred && preserveVerification && upgradeState.selected) {
       const keep = releases.find(
         (item) => item.tag === upgradeState.selected && item.selectable !== false
       );
@@ -12482,7 +12499,7 @@ async function loadUpgradeReleases(pinnedTag, { preserveVerification = false } =
     if (!selectedTag) {
       throw new Error(
         pinnedTag
-          ? "The chosen System Build is no longer available."
+          ? "The System Build being upgraded is no longer available."
           : "No System Builds are available."
       );
     }
@@ -12519,7 +12536,7 @@ async function loadUpgradeReleases(pinnedTag, { preserveVerification = false } =
 // same promise, so there is never a second parallel loadUpgradePlanning pass and
 // a caller can reliably await full completion. ``pinnedTag`` forces the selector
 // to the resumed transition tag.
-function loadUpgradePlanning(pinnedTag, { preserveVerification = false } = {}) {
+function loadUpgradePlanning(pinnedTag, { preserveVerification = false, preferredTag = null } = {}) {
   if (upgradeState.loadingPromise) {
     if (!pinnedTag) return upgradeState.loadingPromise;
     // A pinned load is a resume. The run already in flight may carry no pin --
@@ -12528,13 +12545,13 @@ function loadUpgradePlanning(pinnedTag, { preserveVerification = false } = {}) {
     // closed in silence. Wait it out, then load once more with the pin applied.
     return upgradeState.loadingPromise
       .catch(() => undefined)
-      .then(() => loadUpgradePlanning(pinnedTag, { preserveVerification }));
+      .then(() => loadUpgradePlanning(pinnedTag, { preserveVerification, preferredTag }));
   }
   upgradeState.loading = true;
   upgradeState.loadingPromise = (async () => {
     try {
       await loadUpgradeCurrentVersion();
-      await loadUpgradeReleases(pinnedTag, { preserveVerification });
+      await loadUpgradeReleases(pinnedTag, { preserveVerification, preferredTag });
       await loadUpgradeMigrationReview();
       // Admin alignment is automatic and driven by the shared system-alignment
       // transition; the planning page only reads the current state (recovery of
@@ -12547,6 +12564,7 @@ function loadUpgradePlanning(pinnedTag, { preserveVerification = false } = {}) {
       upgradeState.loadingPromise = null;
       updateUpgradeActionButtons();
     }
+    if (upgradeCanPlan()) await planUpgrade();
   })();
   return upgradeState.loadingPromise;
 }
@@ -12787,6 +12805,7 @@ async function prepareUpgradeTarget() {
   renderUpgradeAdminAlignment();
   setUpgradeReleaseStatus();
   renderUpgradePlan();
+  if (upgradeCanPlan()) await planUpgrade();
 }
 
 if (upgradeEls.form) {
@@ -12807,6 +12826,7 @@ for (const el of upgradeEls.options) {
   el.addEventListener("change", () => {
     invalidateUpgradePlan();
     renderUpgradePlan();
+    if (upgradeCanPlan()) planUpgrade();
   });
 }
 if (upgradeEls.planBtn) {
@@ -13035,6 +13055,7 @@ async function resumeGuidedUpgrade(operationId) {
       return;
     }
     if (!res.ok || !data.ok || !data.job_id) {
+      if (!upgradeState.preparedFingerprint) clearUpgradeVerification();
       renderUpgradeResult(data);
       setUpgradeRunning(false);
       return;
@@ -20789,9 +20810,6 @@ function systemAlignmentStageStates(data) {
       if (adminRequired === false) {
         states[2] = "skipped";
         states[3] = "skipped";
-        states[4] = "active";
-      } else {
-        states[2] = "active";
       }
       break;
     case "admin_update_pending":
@@ -21087,7 +21105,7 @@ function renderSystemAlignmentStatus(data) {
       selection_started: "Selecting the System Build…",
       validation_running: "Verifying the Admin and EMS images…",
       validation_failed: "System Build verification failed.",
-      validated: "System Build verified. Preparing to align…",
+      validated: "System Build verified.",
       admin_update_pending: "Updating the Admin Console…",
       admin_alignment_started: "Updating the Admin Console…",
       admin_reconnect_pending:
@@ -21392,9 +21410,11 @@ async function returnToRunningSystemBuild() {
       }
       if (!res.ok) throw new Error(humanErrorText(data, "Return failed."));
       renderSystemAlignmentStatus(data);
-      if (data.reconnect !== false) {
+      if (data.reconnect === true) {
         showReconnectOverlay(data.message || "Returning to the running System Build…");
-        waitForAdminReconnect(previousAdminInstanceId, transition.operation_id);
+        waitForAdminReconnect(previousAdminInstanceId, data.operation_id || null);
+      } else {
+        loadSystemAlignmentStatus();
       }
     } catch (err) {
       if (systemAlignmentEls.warning) {

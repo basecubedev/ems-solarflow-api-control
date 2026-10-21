@@ -40,7 +40,7 @@ async function openPlannedUpgrade(
   await expect(page.locator("#upgrade-release-status")).toHaveText(
     /System Build verified/i,
   );
-  await page.locator("#upgrade-plan-btn").click();
+  await expect(page.locator("#upgrade-plan-btn")).toHaveText("Plan ready");
   await expect(page.locator("#upgrade-validation")).toContainText(
     /MQTT configuration migration required for 1 device/i,
   );
@@ -211,7 +211,6 @@ test.describe("Guided Upgrade", { tag: ["@workflow"] }, () => {
     await expect(page.locator("#upgrade-release-status")).toHaveText(
       /System Build verified/i,
     );
-    await page.locator("#upgrade-plan-btn").click();
     await expect(page.locator("#upgrade-plan-btn")).toHaveText("Plan ready");
     await expect(page.locator("#upgrade-execute-btn")).toBeEnabled();
 
@@ -219,17 +218,12 @@ test.describe("Guided Upgrade", { tag: ["@workflow"] }, () => {
     await expect(page.locator("#upgrade-validation")).not.toContainText(/lose/i);
   });
 
-  test("one plan click is busy immediately and produces one executable plan", async ({
+  test("the plan builds itself once the build is verified, busy until its review answers", async ({
     page,
     seedAdminScenario,
   }) => {
     const select = await openUpgradePanel(page, seedAdminScenario);
     await select.selectOption("v9.9.10");
-    await page.locator("#upgrade-prepare-btn").click();
-    await expect(page.locator("#upgrade-release-status")).toHaveText(
-      /System Build verified/i,
-    );
-    await expect(page.locator("#upgrade-plan-btn")).toBeEnabled();
 
     const gate = responseGate();
     let reviewRequests = 0;
@@ -247,13 +241,17 @@ test.describe("Guided Upgrade", { tag: ["@workflow"] }, () => {
       },
     );
 
-    await page.locator("#upgrade-plan-btn").click();
+    await page.locator("#upgrade-prepare-btn").click();
     await seen;
+    await expect(page.locator("#upgrade-release-status")).toHaveText(
+      /System Build verified/i,
+    );
     await expect(page.locator("#upgrade-plan-btn")).toHaveText("Planning…");
     await expect(page.locator("#upgrade-plan-btn")).toBeDisabled();
     await expect(page.locator("#upgrade-validation")).toContainText(
       /Refreshing migration review and building the upgrade plan/i,
     );
+    await expect(page.locator("#upgrade-execute-btn")).toBeDisabled();
     expect(reviewRequests).toBe(1);
 
     gate.release();
@@ -306,21 +304,17 @@ test.describe("Guided Upgrade", { tag: ["@workflow"] }, () => {
     await expect(page.locator("#upgrade-release-status")).toHaveText(
       /System Build verified/i,
     );
-    await expect(page.locator("#upgrade-plan-btn")).toBeEnabled();
-    await page.locator("#upgrade-plan-btn").click();
     await expect(page.locator("#upgrade-plan-btn")).toHaveText("Plan ready");
     await expect(page.locator("#upgrade-execute-btn")).toBeEnabled();
     expect(reviewRequests).toBe(1);
   });
 
-  test("rapid plan clicks share one migration review", async ({
+  test("plan clicks while the plan builds itself share its one migration review", async ({
     page,
     seedAdminScenario,
   }) => {
     const select = await openUpgradePanel(page, seedAdminScenario);
     await select.selectOption("v9.9.10");
-    await page.locator("#upgrade-prepare-btn").click();
-    await expect(page.locator("#upgrade-plan-btn")).toBeEnabled();
 
     const gate = responseGate();
     let reviewRequests = 0;
@@ -338,9 +332,10 @@ test.describe("Guided Upgrade", { tag: ["@workflow"] }, () => {
       },
     );
 
-    await page.locator("#upgrade-plan-btn").dispatchEvent("click");
-    await page.locator("#upgrade-plan-btn").dispatchEvent("click");
+    await page.locator("#upgrade-prepare-btn").click();
     await seen;
+    await page.locator("#upgrade-plan-btn").dispatchEvent("click");
+    await page.locator("#upgrade-plan-btn").dispatchEvent("click");
     await expect(page.locator("#upgrade-plan-btn")).toHaveText("Planning…");
     expect(reviewRequests).toBe(1);
     gate.release();
@@ -355,8 +350,6 @@ test.describe("Guided Upgrade", { tag: ["@workflow"] }, () => {
   }) => {
     const select = await openUpgradePanel(page, seedAdminScenario);
     await select.selectOption("v9.9.10");
-    await page.locator("#upgrade-prepare-btn").click();
-    await expect(page.locator("#upgrade-plan-btn")).toBeEnabled();
 
     const gate = responseGate();
     let markSeen: () => void = () => {};
@@ -372,7 +365,7 @@ test.describe("Guided Upgrade", { tag: ["@workflow"] }, () => {
       },
     );
 
-    await page.locator("#upgrade-plan-btn").click();
+    await page.locator("#upgrade-prepare-btn").click();
     await seen;
     await select.selectOption("v9.9.11");
     await expect(select).toHaveValue("v9.9.11");
@@ -387,7 +380,7 @@ test.describe("Guided Upgrade", { tag: ["@workflow"] }, () => {
     await expect(select).toHaveValue("v9.9.11");
   });
 
-  test("changing a planned option invalidates the visible plan", async ({
+  test("changing an option builds the plan again for the new choice", async ({
     page,
     seedAdminScenario,
   }) => {
@@ -397,11 +390,13 @@ test.describe("Guided Upgrade", { tag: ["@workflow"] }, () => {
 
     await page.locator('[data-upgrade-option="backup"]').uncheck();
 
-    await expect(page.locator("#upgrade-plan-btn")).toHaveText("Plan upgrade");
-    await expect(page.locator("#upgrade-plan-btn")).toBeEnabled();
-    await expect(page.locator("#upgrade-execute-btn")).toBeDisabled();
+    await expect(page.locator("#upgrade-plan-btn")).toHaveText("Plan ready");
+    await expect(page.locator("#upgrade-execute-btn")).toBeEnabled();
     await expect(page.locator("#upgrade-validation")).not.toContainText(
       /Create a pre-upgrade backup/i,
+    );
+    await expect(page.locator("#upgrade-validation")).toContainText(
+      /Backup is disabled/i,
     );
   });
 

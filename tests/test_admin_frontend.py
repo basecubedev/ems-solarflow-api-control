@@ -4095,7 +4095,7 @@ def test_upgrade_planning_dedupes_concurrent_loads():
     # sharing an unpinned run would hand the resume the server default.
     assert "upgradeState.loadingPromise" in fn
     assert "if (!pinnedTag) return upgradeState.loadingPromise;" in fn
-    assert ".then(() => loadUpgradePlanning(pinnedTag, { preserveVerification }))" in fn
+    assert ".then(() => loadUpgradePlanning(pinnedTag, { preserveVerification, preferredTag }))" in fn
 
 
 def test_guided_upgrade_execute_button_not_gated_on_admin_status():
@@ -11254,7 +11254,7 @@ def test_durable_transition_stage_wins_over_generic_validated_status():
         (
             "validated",
             True,
-            ["done", "done", "active", "pending", "pending", "pending", "pending"],
+            ["done", "done", "pending", "pending", "pending", "pending", "pending"],
         ),
         (
             "admin_aligned",
