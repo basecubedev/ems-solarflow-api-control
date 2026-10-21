@@ -1894,9 +1894,26 @@ class SystemAlignmentService:
             )
         except TransitionStateError as exc:
             if getattr(exc, "reason", None) == "admin_identity_mismatch":
+                if (
+                    self._dispatch.in_flight(operation_id)
+                    or self._replacement_state(current, fresh=True) is True
+                ):
+                    raise SystemAlignmentError(
+                        "admin_replacement_in_progress",
+                        "the Admin replacement is still running",
+                    ) from exc
                 self._record_reconnect_mismatch(operation_id, exc)
             self._raise_store(exc)
         return self._result(record)
+
+    def replacement_answers(self, operation_id) -> bool:
+        """Whether the Admin answering now is the one ``operation_id`` installs.
+
+        A retry that has just launched a replacement is still answered by the
+        Admin it replaces; only a proven match says the swap has happened.
+        """
+
+        return self._running_admin_is_target(self._current_record(operation_id)) is True
 
     def _record_reconnect_mismatch(self, operation_id, exc):
         """Keep the proof that the replacement did not happen.
