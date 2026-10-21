@@ -71,6 +71,15 @@ console's address, Modern opens again.
 A guided setup or upgrade that is in progress is shown on every Modern page,
 with **Continue in the classic view**.
 
+What Modern shows but does not change itself yet:
+
+| Where | Shown in Modern | Done in Classic |
+| --- | --- | --- |
+| **Updates** | The versions and which one is recommended | Verifying a version and running the upgrade. Choosing a version in Modern opens it there, already selected |
+| **Settings & devices** | Every device, the grid meter, the features and the safety switches | Changing them, adding devices, putting live values back |
+| **System** | An older MQTT setup that waits for migration | Reviewing and applying the migration, under **System status** |
+| **Overview** | That nothing is set up yet | The guided setup |
+
 ## Signing in
 
 The sign-in uses the same password as Classic and the EMS dashboard. On a
