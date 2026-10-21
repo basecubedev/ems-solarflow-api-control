@@ -56,6 +56,8 @@ new Function(
     "function renderUpgradeAdminAlignment() {}\n" +
     "function renderUpgradePlan() {}\n" +
     "function updateUpgradeActionButtons() {}\n" +
+    "function upgradeCanPlan() { return false; }\n" +
+    "async function planUpgrade() {}\n" +
     extractFunction("loadUpgradePlanning") +
     "\nscope.run = async (calls) => {\n" +
     "  await Promise.all(calls.map((pin) => loadUpgradePlanning(pin || undefined)));\n" +
