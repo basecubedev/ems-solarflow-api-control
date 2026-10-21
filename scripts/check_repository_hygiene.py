@@ -19,6 +19,7 @@ import fnmatch
 import json
 import subprocess
 import sys
+import threading
 
 DEFAULT_MAX_BYTES = 512 * 1024
 
@@ -149,7 +150,15 @@ def tracked_blobs(repo, rev):
 
 
 def blob_prefixes(repo, shas):
-    """Read a bounded prefix of every blob through one git process."""
+    """Read a bounded prefix of every blob through one git process.
+
+    git answers while it is still reading requests, so the requests go in from
+    a second thread while this one reads the answers. Writing every request
+    before reading any answer deadlocked once both pipes were full: with about
+    1700 tracked blobs the request outgrew the 64 KiB pipe buffer, git blocked
+    on its full stdout, this process on git's full stdin, and CI waited six
+    hours for the job limit.
+    """
     if not shas:
         return {}
     process = subprocess.Popen(
@@ -159,9 +168,16 @@ def blob_prefixes(repo, shas):
         stderr=subprocess.DEVNULL,
     )
     request = "".join(f"{sha}\n" for sha in shas).encode("ascii")
-    process.stdin.write(request)
-    process.stdin.flush()
-    process.stdin.close()
+
+    def feed():
+        try:
+            process.stdin.write(request)
+            process.stdin.close()
+        except BrokenPipeError:
+            return
+
+    writer = threading.Thread(target=feed, daemon=True)
+    writer.start()
 
     prefixes = {}
     out = process.stdout
@@ -185,6 +201,7 @@ def blob_prefixes(repo, shas):
     finally:
         out.close()
         process.wait()
+        writer.join()
     return prefixes
 
 
