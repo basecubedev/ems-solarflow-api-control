@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { ApiError, getJson, sendJson } from "../lib/api.js";
+import { ApiError, getJson, sendJson } from "../../../shared/lib/api.js";
 
 export const HEARTBEAT_MIN_INTERVAL_MS = 60000;
 export const SESSION_CHECK_INTERVAL_MS = 60000;

@@ -2,8 +2,8 @@
   import EnergyPeriods from "../widgets/EnergyPeriods.svelte";
   import MonthBars from "../widgets/MonthBars.svelte";
   import YearsLifetime from "../widgets/YearsLifetime.svelte";
-  import Segmented from "../ui/Segmented.svelte";
-  import Empty from "../ui/Empty.svelte";
+  import Segmented from "../../../shared/ui/Segmented.svelte";
+  import Empty from "../../../shared/ui/Empty.svelte";
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { live } from "../state/live.svelte.js";
   import { energyState, energyKwh, channelsSince } from "../lib/energy.js";

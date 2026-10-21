@@ -3,7 +3,7 @@
 </script>
 
 <script>
-  import Card from "../ui/Card.svelte";
+  import Card from "../../../shared/ui/Card.svelte";
   import { t, fmt, codesText } from "../i18n/i18n.svelte.js";
   import { live } from "../state/live.svelte.js";
   import { deviceEntries, finalTarget, finalTotal, commandableTotal, globalWrite, writeDecision, activeLimits, codeItems } from "../lib/control.js";

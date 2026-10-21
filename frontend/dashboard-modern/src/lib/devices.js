@@ -6,7 +6,7 @@
  * a dash, so "not reported" can never be read as "0 W".
  */
 
-import { finite } from "./format.js";
+import { finite } from "../../../shared/lib/format.js";
 
 function deviceName(device, index) {
   return String(device?.device || device?.name || `Device ${index + 1}`);

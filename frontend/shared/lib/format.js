@@ -10,6 +10,14 @@ export const LOCALES = Object.freeze({ en: "en-GB", de: "de-DE", nl: "nl-NL", fr
 export const MISSING = "—";
 const MINUS = "−";
 
+/** [unit, seconds per unit, use below this many seconds]; a year is everything past. */
+const RELATIVE_UNITS = Object.freeze([
+  ["minute", 60, 2700],
+  ["hour", 3600, 79200],
+  ["day", 86400, 2246400],
+  ["month", 2629800, 28927800],
+]);
+
 export function localeFor(lang) {
   return LOCALES[lang] || LOCALES.en;
 }
@@ -44,9 +52,13 @@ export function createFormat(lang) {
   const dateTimeFormat = new Intl.DateTimeFormat(locale, {
     day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
   });
+  const dateTimeYearFormat = new Intl.DateTimeFormat(locale, {
+    day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  });
   const monthFormat = new Intl.DateTimeFormat(locale, { month: "short" });
   const monthYearFormat = new Intl.DateTimeFormat(locale, { month: "long", year: "numeric" });
   const weekdayFormat = new Intl.DateTimeFormat(locale, { weekday: "short" });
+  const relativeFormat = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
   const currencyCache = new Map();
 
   function power(value, { signed = false } = {}) {
@@ -55,9 +67,9 @@ export function createFormat(lang) {
     const rounded = Math.round(number);
     const magnitude = Math.abs(rounded);
     const sign = signOf(rounded, signed);
-    if (magnitude >= 10000) return `${sign}${one.format(Math.abs(number) / 1000)} kW`;
-    if (magnitude >= 1000) return `${sign}${two.format(Math.abs(number) / 1000)} kW`;
-    return `${sign}${int.format(magnitude)} W`;
+    if (magnitude >= 10000) return `${sign}${one.format(Math.abs(number) / 1000)}\u00a0kW`;
+    if (magnitude >= 1000) return `${sign}${two.format(Math.abs(number) / 1000)}\u00a0kW`;
+    return `${sign}${int.format(magnitude)}\u00a0W`;
   }
 
   /** Under one kilowatt-hour the watt-hour is the honest unit; one decimal of a kWh is a 100 Wh step. */
@@ -66,9 +78,9 @@ export function createFormat(lang) {
     if (number === null) return MISSING;
     const wh = Math.round(number * 1000);
     const sign = signOf(wh, signed);
-    if (Math.abs(wh) < 1000) return `${sign}${int.format(Math.abs(wh))} Wh`;
+    if (Math.abs(wh) < 1000) return `${sign}${int.format(Math.abs(wh))}\u00a0Wh`;
     const digits = Math.abs(number) >= 1000 ? 0 : 1;
-    return `${sign}${decimals(digits).format(Math.abs(number))} kWh`;
+    return `${sign}${decimals(digits).format(Math.abs(number))}\u00a0kWh`;
   }
 
   function percent(value, { fraction = false } = {}) {
@@ -89,7 +101,7 @@ export function createFormat(lang) {
       }
     }
     const formatter = currencyCache.get(code);
-    return formatter ? formatter.format(number) : `${two.format(number)} ${code}`;
+    return formatter ? formatter.format(number) : `${two.format(number)}\u00a0${code}`;
   }
 
   function number(value, digits = 0) {
@@ -117,10 +129,20 @@ export function createFormat(lang) {
     return (numeric ? numericDateFormat : short ? shortDateFormat : dateFormat).format(parsed);
   }
 
+  /** A moment with its day; the year is added once it is not this year's, so last October never reads as this one. */
   function dateTime(value) {
     if (!value) return MISSING;
     const parsed = toDate(value);
-    return valid(parsed) ? dateTimeFormat.format(parsed) : String(value);
+    if (!valid(parsed)) return String(value);
+    return (parsed.getFullYear() === new Date().getFullYear() ? dateTimeFormat : dateTimeYearFormat).format(parsed);
+  }
+
+  /** A moment shown as a clock time when it was today, else with its day: an old result must not read as recent. */
+  function when(value, { seconds = false } = {}) {
+    if (value === null || value === undefined || value === "") return MISSING;
+    const parsed = toDate(value);
+    if (!valid(parsed)) return String(value);
+    return parsed.toDateString() === new Date().toDateString() ? time(parsed, { seconds }) : dateTime(parsed);
   }
 
   function month(monthNumber) {
@@ -140,5 +162,29 @@ export function createFormat(lang) {
     return valid(parsed) ? weekdayFormat.format(parsed) : MISSING;
   }
 
-  return { lang, locale, power, energy, percent, money, number, time, date, dateTime, month, monthYear, weekday };
+  /** How long ago (or how far ahead) an instant is, in the largest unit that keeps the number small. */
+  function relative(value, now = Date.now()) {
+    if (value === null || value === undefined || value === "") return MISSING;
+    const parsed = toDate(value);
+    if (!valid(parsed)) return MISSING;
+    const seconds = Math.round((parsed.getTime() - now) / 1000);
+    const size = Math.abs(seconds);
+    if (size < 45) return relativeFormat.format(0, "second");
+    for (const [unit, span, below] of RELATIVE_UNITS) {
+      if (size < below) return relativeFormat.format(Math.round(seconds / span), unit);
+    }
+    return relativeFormat.format(Math.round(seconds / 31536000), "year");
+  }
+
+  /** A file size in the largest unit under 1024, with the reader's decimal mark. */
+  function bytes(value) {
+    const parsed = finite(value);
+    if (parsed === null || parsed < 0) return MISSING;
+    if (parsed < 1024) return `${int.format(parsed)}\u00a0B`;
+    if (parsed < 1024 * 1024) return `${one.format(parsed / 1024)}\u00a0KB`;
+    if (parsed < 1024 * 1024 * 1024) return `${one.format(parsed / (1024 * 1024))}\u00a0MB`;
+    return `${one.format(parsed / (1024 * 1024 * 1024))}\u00a0GB`;
+  }
+
+  return { lang, locale, power, energy, percent, money, number, time, date, dateTime, when, month, monthYear, weekday, relative, bytes };
 }

@@ -3,9 +3,9 @@
 </script>
 
 <script>
-  import Card from "../ui/Card.svelte";
-  import Bar from "../ui/Bar.svelte";
-  import Icon from "../ui/Icon.svelte";
+  import Card from "../../../shared/ui/Card.svelte";
+  import Bar from "../../../shared/ui/Bar.svelte";
+  import Icon from "../../../shared/ui/Icon.svelte";
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { devices } from "../state/derived.svelte.js";
 

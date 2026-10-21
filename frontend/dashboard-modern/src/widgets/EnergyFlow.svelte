@@ -9,18 +9,18 @@
 </script>
 
 <script>
-  import Card from "../ui/Card.svelte";
-  import Segmented from "../ui/Segmented.svelte";
-  import Icon from "../ui/Icon.svelte";
+  import Card from "../../../shared/ui/Card.svelte";
+  import Segmented from "../../../shared/ui/Segmented.svelte";
+  import Icon from "../../../shared/ui/Icon.svelte";
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { live } from "../state/live.svelte.js";
-  import { prefs, setPref } from "../state/prefs.svelte.js";
+  import { prefs, flowPref, setFlowMode } from "../state/prefs.svelte.js";
   import { devices as allDevices, isStale } from "../state/derived.svelte.js";
   import { createFlowActivity, createFlowScale, createHouseLines, createFleetLine, busFlows, ribbonWidth, batteryDirection, gridDirection, flowBucket, FLOW_BUCKETS } from "../lib/flow.js";
   import { box, elbow, vertical, roundedPath, runs } from "../lib/wires.js";
   import { flowDashes, dashTexture, dashPhase, DASH_PERIOD_PX } from "../lib/flowAnim.js";
   import { channelKwh } from "../lib/energy.js";
-  import { finite } from "../lib/format.js";
+  import { finite } from "../../../shared/lib/format.js";
 
   let { span = "span-8", fixedMode = null } = $props();
 
@@ -43,7 +43,7 @@
   const deviceList = $derived(allDevices().filter((device) => device.enabled || device.online));
   const deviceKey = $derived(deviceList.map((device) => `${device.name}:${device.socReported || device.batteryW !== null}`).join("|"));
   const narrow = $derived(size.width > 0 && size.width < 600);
-  const mode = $derived((fixedMode || prefs.flow) === "devices" && deviceList.length > 0 ? "devices" : "system");
+  const mode = $derived((fixedMode || flowPref.mode) === "devices" && deviceList.length > 0 ? "devices" : "system");
   const houses = $derived(
     new Map(deviceList.map((device) => [
       device.name,
@@ -224,9 +224,9 @@
 {#snippet actions()}
   <Segmented
     options={[{ value: "system", label: t("flow.system") }, { value: "devices", label: t("flow.perDevice") }]}
-    value={prefs.flow}
+    value={flowPref.mode}
     label={t("flow.title")}
-    onchange={(value) => setPref("flow", value)}
+    onchange={setFlowMode}
   />
 {/snippet}
 

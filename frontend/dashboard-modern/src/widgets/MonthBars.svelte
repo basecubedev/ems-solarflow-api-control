@@ -3,8 +3,8 @@
 </script>
 
 <script>
-  import Card from "../ui/Card.svelte";
-  import Icon from "../ui/Icon.svelte";
+  import Card from "../../../shared/ui/Card.svelte";
+  import Icon from "../../../shared/ui/Icon.svelte";
   import EnergyFacts from "./EnergyFacts.svelte";
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { monthlyView, channelMeta, channelsSince } from "../lib/energy.js";

@@ -7,7 +7,9 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = join(HERE, "../src");
-const ICONS = JSON.parse(readFileSync(join(SRC, "icons.json"), "utf8"));
+const OWN = JSON.parse(readFileSync(join(SRC, "icons.json"), "utf8"));
+const SHARED = JSON.parse(readFileSync(join(HERE, "../../shared/icons.json"), "utf8"));
+const ICONS = [...SHARED, ...OWN];
 const LUCIDE = join(HERE, "../../../node_modules/lucide-static/icons");
 
 function sources(dir = SRC) {
@@ -30,6 +32,10 @@ test("every icon the components name is in the sprite list", () => {
   }
   assert.ok(used.size > 20);
   assert.deepEqual([...used].filter((name) => !ICONS.includes(name)).sort(), []);
+});
+
+test("the app lists no icon the shared list already has", () => {
+  assert.deepEqual(OWN.filter((name) => SHARED.includes(name)), []);
 });
 
 test("every listed icon exists in the pinned Lucide package", { skip: !existsSync(LUCIDE) && "node_modules not installed" }, () => {

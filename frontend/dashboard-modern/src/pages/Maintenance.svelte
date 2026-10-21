@@ -1,10 +1,10 @@
 <script>
-  import Card from "../ui/Card.svelte";
-  import Fact from "../ui/Fact.svelte";
-  import Empty from "../ui/Empty.svelte";
-  import Icon from "../ui/Icon.svelte";
-  import Status from "../ui/Status.svelte";
-  import ConfirmDialog from "../ui/ConfirmDialog.svelte";
+  import Card from "../../../shared/ui/Card.svelte";
+  import Fact from "../../../shared/ui/Fact.svelte";
+  import Empty from "../../../shared/ui/Empty.svelte";
+  import Icon from "../../../shared/ui/Icon.svelte";
+  import Status from "../../../shared/ui/Status.svelte";
+  import ConfirmDialog from "../../../shared/ui/ConfirmDialog.svelte";
   import OperatorGate from "../ui/OperatorGate.svelte";
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { auth, authorizedSend, operatorGet } from "../state/auth.svelte.js";

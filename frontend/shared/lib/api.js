@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * HTTP helpers for the dashboard API. Writes carry the session's CSRF token;
+ * HTTP helpers for the EMS and Admin APIs. Writes carry the session's CSRF token;
  * the server decides whether a write is allowed, never this file.
  */
 

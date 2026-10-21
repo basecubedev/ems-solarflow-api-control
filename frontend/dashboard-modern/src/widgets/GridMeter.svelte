@@ -3,9 +3,9 @@
 </script>
 
 <script>
-  import Icon from "../ui/Icon.svelte";
-  import Fact from "../ui/Fact.svelte";
-  import Status from "../ui/Status.svelte";
+  import Icon from "../../../shared/ui/Icon.svelte";
+  import Fact from "../../../shared/ui/Fact.svelte";
+  import Status from "../../../shared/ui/Status.svelte";
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { live } from "../state/live.svelte.js";
   import { channelKwh } from "../lib/energy.js";

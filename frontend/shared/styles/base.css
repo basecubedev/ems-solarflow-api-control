@@ -96,6 +96,7 @@ svg.i.lg { width: 22px; height: 22px; }
 .dot.warn { --c: var(--m-warn); }
 .dot.fault { --c: var(--m-fault); }
 .dot.idle { --c: var(--m-muted-2); }
+.dot.acc { --c: var(--m-accent); }
 .icon-btn {
   width: 32px; height: 32px; display: grid; place-items: center; border-radius: 10px; flex: none;
   border: 1px solid var(--m-line); background: var(--m-surface-1); color: var(--m-muted); cursor: pointer;
@@ -181,7 +182,7 @@ svg.i.lg { width: 22px; height: 22px; }
 .fact-label svg.i { width: 13px; height: 13px; color: var(--c, var(--m-muted)); }
 .fact-value { font-weight: 640; font-size: 15px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fact-value.na { color: var(--m-muted-2); font-weight: 500; }
-.fact-value.wrap { white-space: normal; overflow-wrap: anywhere; }
+.fact-value.wrap, .fact-label.wrap { white-space: normal; overflow-wrap: anywhere; }
 
 details.more { margin-top: var(--s3); }
 details.more > summary { cursor: pointer; color: var(--m-muted); font-size: 12.5px; list-style: none; display: inline-flex; align-items: center; gap: 6px; }
@@ -192,6 +193,7 @@ details.more > .body { margin-top: var(--s3); }
 
 .note { display: flex; gap: 8px; align-items: flex-start; color: var(--m-muted); font-size: 12px; margin-top: var(--s3); }
 .note svg.i { width: 14px; height: 14px; margin-top: 1px; }
+.note.warn svg.i { color: var(--m-warn); }
 .empty { display: flex; gap: var(--s3); align-items: center; color: var(--m-muted); padding: var(--s4); border: 1px dashed var(--m-line-strong); border-radius: var(--m-radius-inner); }
 .empty.error { color: var(--m-text); border-color: color-mix(in srgb, var(--m-fault) 45%, transparent); }
 .skeleton { border-radius: var(--m-radius-inner); background: linear-gradient(90deg, var(--m-surface-2), var(--m-surface-3), var(--m-surface-2)); background-size: 200% 100%; min-height: 80px; }
