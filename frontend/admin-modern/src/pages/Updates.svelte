@@ -26,6 +26,21 @@
   const shown = $derived(showAll ? releases : releases.slice(0, RELEASES_SHOWN));
 </script>
 
+{#snippet about(release)}
+  <div class="words">
+    <div class="tag">
+      <span class="num">{release.tag}</span>
+      <span class="badge channel">{t(`updates.channel.${release.channel}`)}</span>
+      {#if release.recommended}<span class="badge">{t("updates.recommended")}</span>{/if}
+      {#if release.running}<span class="badge">{t("updates.running")}</span>{/if}
+    </div>
+    <div class="muted small">
+      {#if release.publishedAt}<span class="num">{f.dateTime(release.publishedAt)}</span>{/if}{#if release.publishedAt && release.note}<span aria-hidden="true"> · </span>{/if}{#if release.note?.key}{t(release.note.key)}{:else if release.note}<span lang="en">{release.note.text}</span>{/if}
+    </div>
+  </div>
+  {#if release.state}<Status tone={release.tone} text={t(`updates.state.${release.state}`)} />{/if}
+{/snippet}
+
 <Card title={t("updates.current")} subtitle={t("updates.currentSub")} span="span-6">
   <div class="facts two">
     <div class="fact"><div class="fact-label">{t("version.admin")}</div><div class="fact-value num" class:na={!overview?.components?.admin?.tag && !pair?.admin?.release}>{overview?.components?.admin?.tag || pair?.admin?.release || t("version.unknown")}</div></div>
@@ -58,21 +73,18 @@
   {:else if !releases.length}
     <Empty text={t("updates.noReleases")} />
   {:else}
+    {#if releases.some((release) => release.upgrade)}<p class="muted hint">{t("updates.chooseHint")}</p>{/if}
     <ul class="releases" data-testid="releases">
       {#each shown as release (release.tag)}
-        <li class="release inner" class:off={!release.selectable} data-tag={release.tag}>
-          <div class="words">
-            <div class="tag">
-              <span class="num">{release.tag}</span>
-              <span class="badge channel">{t(`updates.channel.${release.channel}`)}</span>
-              {#if release.recommended}<span class="badge">{t("updates.recommended")}</span>{/if}
-              {#if release.running}<span class="badge">{t("updates.running")}</span>{/if}
-            </div>
-            <div class="muted small">
-              {#if release.publishedAt}<span class="num">{f.dateTime(release.publishedAt)}</span>{/if}{#if release.publishedAt && release.note}<span aria-hidden="true"> · </span>{/if}{#if release.note?.key}{t(release.note.key)}{:else if release.note}<span lang="en">{release.note.text}</span>{/if}
-            </div>
-          </div>
-          {#if release.state}<Status tone={release.tone} text={t(`updates.state.${release.state}`)} />{/if}
+        <li data-tag={release.tag}>
+          {#if release.upgrade}
+            <a class="release inner choice" href={classicPage(release.upgrade)} data-testid="choose-release">
+              {@render about(release)}
+              <span class="go">{t("updates.choose")}<Icon name="chevron-right" size="sm" /></span>
+            </a>
+          {:else}
+            <div class="release inner off">{@render about(release)}</div>
+          {/if}
         </li>
       {/each}
     </ul>
@@ -92,6 +104,10 @@
   .releases { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s2); }
   .release { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
   .release.off { opacity: 0.6; }
+  .choice { color: inherit; text-decoration: none; border: 1px solid var(--m-line); transition: border-color 0.15s; }
+  .choice:hover { border-color: var(--m-line-strong); background: var(--m-surface-3); }
+  .go { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-size: 13px; font-weight: 620; color: var(--m-accent); }
+  .hint { font-size: 13px; margin: 0 0 var(--s3); }
   .release .words { flex: 1 1 280px; min-width: 0; }
   .tag { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 620; }
   .badge.channel { background: var(--m-surface-3); color: var(--m-muted); }

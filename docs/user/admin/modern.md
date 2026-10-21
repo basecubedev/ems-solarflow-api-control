@@ -36,7 +36,7 @@ changes nothing on the host.
 | Page | What it shows and does |
 | --- | --- |
 | **Overview** | One answer to "is everything in order": what needs your attention, ranked, each with the way out of it; tiles for EMS, the analytics database, control and the last backup; what your settings allow EMS to do; the versions and the link to the dashboard |
-| **Updates** | What runs now, the versions the guided upgrade can install, and the way into it |
+| **Updates** | What runs now and the versions the guided upgrade can install. Choosing a version opens the guided upgrade with that version selected |
 | **Settings & devices** | Your devices, the grid meter, the features and the safety switches as EMS applies them; editing opens the Classic editor at the right tab |
 | **Services** | EMS and the analytics database as they run; what should run and what a restart changes; **Restart EMS now** and **Repair analytics** |
 | **Backups** | Create a backup, see what is in one, download it, bring one back, restore it after a preview, delete it |

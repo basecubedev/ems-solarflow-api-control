@@ -18,6 +18,7 @@ import { SETTINGS_TABS } from "../src/lib/settings.js";
 import { PAGES } from "../src/app/pages.js";
 import { FINDINGS } from "../src/lib/health.js";
 import { dashboardHref } from "../src/lib/links.js";
+import { upgradePage } from "../src/lib/updates.js";
 
 const CLASSIC = readFileSync(new URL("../../../admin/static/admin.js", import.meta.url), "utf8");
 
@@ -104,4 +105,24 @@ test("Classic and Modern send a browser to the same dashboard address", () => {
     const location = { hostname };
     assert.equal(classic({ location })(url), dashboardHref(url, location), `${hostname} ${url}`);
   }
+});
+
+test("a release this console hands over is the release Classic's Guided Upgrade chooses", () => {
+  const start = CLASSIC.indexOf("function maintenanceUpgradeTagForHash(");
+  const source = CLASSIC.slice(start, CLASSIC.indexOf("\n}\n", start) + 2);
+  const classic = new Function(`${source}\nreturn maintenanceUpgradeTagForHash;`)();
+  const path = CLASSIC.slice(CLASSIC.indexOf("function maintenancePathForHash("), CLASSIC.indexOf("\n}\n", CLASSIC.indexOf("function maintenancePathForHash(")) + 2);
+  const aliases = CLASSIC.match(/const MAINTENANCE_PATH_ALIASES = \{[^}]*\};/)[0];
+  const pathFor = new Function(`${aliases}\n${path}\nreturn maintenancePathForHash;`)();
+  for (const tag of ["v0.9.0", "v0.9.0-rc.1", "latest", "v1.0.0+build.7", "tag with spaces", "ä/ö#?"]) {
+    const page = upgradePage({ tag, selectable: true });
+    assert.equal(classic(page), tag, tag);
+    assert.equal(pathFor(page), "upgrade", tag);
+  }
+  assert.equal(classic("maintenance-upgrade"), null);
+  assert.equal(classic("maintenance-upgrade-%E0%A4%A"), null);
+  assert.equal(upgradePage({ tag: "v1", selectable: false }), null);
+  const route = CLASSIC.slice(CLASSIC.indexOf("function applyHashRoute"), CLASSIC.indexOf("// --- setup wizard"));
+  assert.ok(route.includes("maintenanceUpgradeTagForHash(hash)"));
+  assert.ok(route.includes('history.replaceState(null, "", "#maintenance-upgrade")'));
 });

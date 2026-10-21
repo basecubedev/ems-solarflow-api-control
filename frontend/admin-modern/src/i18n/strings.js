@@ -582,6 +582,8 @@ export const STRINGS = {
   "updates.classicNote": s("The guided upgrade runs in the classic view for now. Nothing changes before you confirm there.", "Das geführte Upgrade läuft vorerst in der klassischen Ansicht. Bevor du dort bestätigst, ändert sich nichts.", "De begeleide upgrade loopt voorlopig in de klassieke weergave. Er verandert niets voordat je daar bevestigt.", "La mise à niveau guidée s’exécute pour l’instant dans la vue classique. Rien ne change avant votre confirmation."),
   "updates.releases": s("Available versions", "Verfügbare Versionen", "Beschikbare versies", "Versions disponibles"),
   "updates.releasesSub": s("What the guided upgrade can install", "Was das geführte Upgrade installieren kann", "Wat de begeleide upgrade kan installeren", "Ce que la mise à niveau guidée peut installer"),
+  "updates.chooseHint": s("Choose a version to open the guided upgrade with it. Nothing changes before you confirm there.", "Wähle eine Version, um das geführte Upgrade damit zu öffnen. Bevor du dort bestätigst, ändert sich nichts.", "Kies een versie om de begeleide upgrade ermee te openen. Er verandert niets voordat je daar bevestigt.", "Choisissez une version pour ouvrir la mise à niveau guidée avec elle. Rien ne change avant votre confirmation."),
+  "updates.choose": s("Choose", "Auswählen", "Kiezen", "Choisir"),
   "updates.recommendedIs": s("Recommended: {tag}", "Empfohlen: {tag}", "Aanbevolen: {tag}", "Recommandée : {tag}"),
   "updates.recommended": s("Recommended", "Empfohlen", "Aanbevolen", "Recommandée"),
   "updates.running": s("Running now", "Läuft gerade", "Draait nu", "En service"),

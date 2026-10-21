@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { CHANNELS, UPGRADE_STATES, PAIR_STATES, noteView, pairView, releaseList } from "../src/lib/updates.js";
+import { CHANNELS, UPGRADE_STATES, PAIR_STATES, noteView, pairView, releaseList, upgradePage } from "../src/lib/updates.js";
 
 const read = (path) => readFileSync(new URL(`../../../admin/${path}`, import.meta.url), "utf8");
 
@@ -53,4 +53,18 @@ test("a note the server is known to write is said in the reader's language, anyt
 test("a release that cannot be chosen says why, not a warning about its metadata", () => {
   const [release] = releaseList({ releases: [{ tag: "v1", channel: "stable", reason: "Docker setup resources could not be verified.", upgrade_warning: "Legacy image metadata missing. Upgrade check uses SemVer fallback." }] });
   assert.equal(release.note.key, "updates.note.resourcesUnverified");
+});
+
+test("a release the catalogue lets the upgrade choose opens it, chosen; any other opens nothing", () => {
+  const list = releaseList({
+    releases: [
+      { tag: "v0.9.0-rc.1", selectable: true },
+      { tag: "latest" },
+      { tag: "v0.8.0", selectable: false, upgrade_state: "older_than_running_build" },
+      { tag: "", selectable: true },
+    ],
+  });
+  assert.deepEqual(list.map((release) => release.upgrade), ["maintenance-upgrade-v0.9.0-rc.1", "maintenance-upgrade-latest", null, null]);
+  assert.equal(upgradePage({ tag: "a b/c", selectable: true }), "maintenance-upgrade-a%20b%2Fc");
+  assert.equal(upgradePage(null), null);
 });

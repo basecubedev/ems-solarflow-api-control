@@ -8081,6 +8081,20 @@ function maintenanceSettingsTabForHash(hash) {
   return MAINTENANCE_SETTINGS_TABS.includes(tab) ? tab : null;
 }
 
+// #maintenance-upgrade-v0.9.0 opens the Guided Upgrade with that release
+// chosen: the Modern console's release list hands a release over this way. It
+// only names a candidate; the catalogue decides whether it can be chosen, and
+// choosing still verifies nothing.
+function maintenanceUpgradeTagForHash(hash) {
+  const prefix = "maintenance-upgrade-";
+  if (!hash.startsWith(prefix)) return null;
+  try {
+    return decodeURIComponent(hash.slice(prefix.length)) || null;
+  } catch {
+    return null;
+  }
+}
+
 // Deep links (#maintenance, #maintenance-manual, #maintenance-settings-safety)
 // resolve to the right panel even from the landing gate: the gate is a landing
 // screen, not a wall a bookmark has to get past. Only Maintenance opens this
@@ -8088,7 +8102,9 @@ function maintenanceSettingsTabForHash(hash) {
 // address must never resurrect an unconfirmed wizard — that resume belongs to
 // resumeGuidedSetupFromTransition. An address naming no maintenance view
 // reveals nothing, which is what keeps showLanding()'s cleared hash from
-// re-opening the panel it just closed.
+// re-opening the panel it just closed. A release a Modern hand-off names is read
+// once: the address goes back to #maintenance-upgrade, so a reload does not
+// choose it again over the owner's later pick.
 function applyHashRoute() {
   const hash = currentHashView();
   const view = adminViewForHash(hash);
@@ -8098,9 +8114,11 @@ function applyHashRoute() {
   }
   setAdminView(view);
   if (view === "maintenance") {
+    const upgradeTag = maintenanceUpgradeTagForHash(hash);
+    if (upgradeTag) history.replaceState(null, "", "#maintenance-upgrade");
     setMaintenancePath(
       maintenancePathForHash(hash),
-      undefined,
+      upgradeTag || undefined,
       maintenanceSettingsTabForHash(hash),
     );
   }
@@ -12464,7 +12482,7 @@ async function loadUpgradeReleases(pinnedTag, { preserveVerification = false } =
     if (!selectedTag) {
       throw new Error(
         pinnedTag
-          ? "The System Build being upgraded is no longer available."
+          ? "The chosen System Build is no longer available."
           : "No System Builds are available."
       );
     }

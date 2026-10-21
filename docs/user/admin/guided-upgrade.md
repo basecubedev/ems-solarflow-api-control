@@ -33,6 +33,11 @@ belong to [Backup and restore](backup-restore.md).
 
 **What it changes:** nothing. It opens the panel.
 
+In the Modern console, open **Updates** instead. **Start the guided upgrade**
+opens this panel with the recommended build. Choosing a version in **Available
+versions** opens it with that version already selected. Both open the panel in
+the Classic view.
+
 ### 2 — Review the current state and pick the target
 
 ![Guided upgrade panel showing target System Build selection, upgrade options, admin alignment and the upgrade plan](../../assets/screenshots/admin/admin-guided-upgrade-plan.png)
