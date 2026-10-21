@@ -275,7 +275,8 @@ npm run build:admin-modern        # rewrites admin/static/modern/
 a scratch directory and fail when the committed output differs; the dashboard
 Playwright job does the same for both with `git diff --exit-code`. The browser
 specs are `tests/e2e-dashboard/modern.spec.ts`, in the same suite as Classic's
-cockpit, and `tests/e2e/admin-modern.spec.ts`, in the Admin suite.
+cockpit, and `tests/e2e/admin-modern.spec.ts` and
+`tests/e2e/admin-modern-upgrade.spec.ts`, in the Admin suite.
 
 Four things are worth knowing before adding a spec to either:
 

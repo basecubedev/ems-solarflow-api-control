@@ -230,7 +230,7 @@ dialog.modal {
   background: var(--m-surface-2); color: var(--m-text); box-shadow: var(--m-shadow-pop); width: min(420px, calc(100vw - 32px));
 }
 dialog.modal::backdrop { background: var(--m-scrim, rgba(3, 5, 8, 0.72)); }
-.modal-actions { display: flex; justify-content: flex-end; gap: var(--s2); margin-top: var(--s4); }
+.modal-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s4); }
 
 .bottom-nav { display: none; }
 

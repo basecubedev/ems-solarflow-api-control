@@ -36,7 +36,7 @@ changes nothing on the host.
 | Page | What it shows and does |
 | --- | --- |
 | **Overview** | One answer to "is everything in order": what needs your attention, ranked, each with the way out of it; tiles for EMS, the analytics database, control and the last backup; what your settings allow EMS to do; the versions and the link to the dashboard |
-| **Updates** | What runs now, the versions the guided upgrade can install, and the way into it |
+| **Updates** | What runs now, the versions you can update to, and the update itself: choose a version, then confirm once. Progress and the result are shown on the page |
 | **Settings & devices** | Your devices, the grid meter, the features and the safety switches as EMS applies them; editing opens the Classic editor at the right tab |
 | **Services** | EMS and the analytics database as they run; what should run and what a restart changes; **Restart EMS now** and **Repair analytics** |
 | **Backups** | Create a backup, see what is in one, download it, bring one back, restore it after a preview, delete it |
@@ -60,16 +60,25 @@ until you press **New design**. Adding `?ui=classic` or `?ui=modern` to the
 address sets the choice explicitly. A browser too old for Modern always opens
 Classic.
 
-Some workflows run in Classic for now: **Guided setup**, the **Guided
-upgrade**, editing **settings and devices**, and applying an **older MQTT
-setup's migration**. Modern names them and opens them in Classic with one
-click, at the right page, without changing your choice. The guided setup is the
-one exception: Classic never starts it from an address, so that button opens
-Classic's start page, where it is the first choice. When you go back to the
-console's address, Modern opens again.
+Some workflows run in Classic for now: **Guided setup**, editing **settings
+and devices**, and applying an **older MQTT setup's migration**. Modern names
+them and opens them in Classic with one click, at the right page, without
+changing your choice. The guided setup is the one exception: Classic never
+starts it from an address, so that button opens Classic's start page, where it
+is the first choice. When you go back to the console's address, Modern opens
+again.
 
-A guided setup or upgrade that is in progress is shown on every Modern page,
-with **Continue in the classic view**.
+An update that is running is shown on every Modern page, with **Show the
+update**. A guided setup in progress is shown the same way, with **Continue in
+the classic view**.
+
+What Modern shows but does not change itself yet:
+
+| Where | Shown in Modern | Done in Classic |
+| --- | --- | --- |
+| **Settings & devices** | Every device, the grid meter, the features and the safety switches | Changing them, adding devices, putting live values back |
+| **System** | An older MQTT setup that waits for migration | Reviewing and applying the migration, under **System status** |
+| **Overview** | That nothing is set up yet | The guided setup |
 
 ## Signing in
 
@@ -77,10 +86,48 @@ The sign-in uses the same password as Classic and the EMS dashboard. On a
 fresh host, the first visit creates it. The language can be chosen right on
 the sign-in screen.
 
-A session that ends -- you signed out in another tab, it expired, or a restore
-put back an older password file -- brings the sign-in back. If the Admin
-Console restarts, for example after an update of itself, the page reconnects on
-its own and reloads with the new version.
+A session that ends -- you signed out in another tab, it expired, a restore
+put back an older password file, or the Admin Console itself was updated --
+brings the sign-in back. If the Admin Console restarts, for example after an
+update of itself, the page reconnects on its own and reloads with the new
+version; sessions do not survive the restart, so it asks you to sign in again.
+
+## Updating
+
+1. Open **Updates**. **Update to …** takes the recommended version; any other
+   version in **Available versions** is chosen by tapping it.
+2. The version is checked at once: the Admin console and EMS images are
+   downloaded if needed and verified as a pair, and the update is planned
+   right after. Nothing on the device changes.
+   The page then shows what the update will do: the version now and after, an
+   MQTT setup that is migrated, whether the Admin console restarts too.
+3. Choose the options. **Back up first** is on and recommended; so are bringing
+   the settings file up to date and running the checks afterwards.
+4. Press **Update to …** and confirm once.
+5. The page follows the update in five steps: check the new version, back up,
+   update the Admin console, install EMS, check that everything runs. The
+   running step says what happens, and a clock shows how long it has run.
+   You can leave the page; the update keeps running on the device.
+6. If the Admin console is updated too, it restarts in the middle. The page
+   waits for the new one and reloads from it. Sign in again with the same
+   password: the page then opens **Updates** and follows the update on. The
+   update keeps running meanwhile. On a Raspberry Pi the restart can take
+   several minutes; after two the page says so and offers to reload.
+7. At the end the page says **Update complete**, what ran before and what runs
+   now, when it finished, how long it took and which backup was made first.
+   **Updates** keeps naming the last update afterwards.
+
+If the server refuses the update before it starts -- for example because the
+version may not replace the one that runs -- the page says **The update did not
+start** and that nothing was changed. If the update stops later, the page says
+where it stopped when the server names the step, and whether anything may have
+changed already. It offers the ways out the console can take at that moment:
+**Try again** continues the update from where it stopped and installs again
+when the installation failed, **Go back to the version that runs** sets the
+Admin console back to the version that was verified with the EMS that runs,
+and **Cancel the update** gives it up. A backup can always be restored under **Backups**. The full reference is
+[Guided Upgrade](guided-upgrade.md); **Use the classic view instead** on the
+**Updates** page opens it there.
 
 ## Backups
 
@@ -132,6 +179,8 @@ do before it does it.
 | --- | --- | --- |
 | The address opens Classic | This browser chose Classic, or it is too old for Modern | Press **New design**, or open the address with `?ui=modern` |
 | A button opens the Classic view | That workflow has not moved to Modern yet | Finish it there; the console's address brings you back to Modern |
+| An update waits at **Update the Admin console** | The Admin console is restarting with the new version | Wait; after two minutes the page offers **Reload page**. The update goes on either way |
+| The sign-in appears in the middle of an update | The Admin Console was replaced by the new version, and sessions end with it | Sign in with the same password; the page then follows the update on |
 | A message is in English | It comes from the server and has no translation yet | It is still accurate; report it if it matters to you |
 | **Restart EMS now** is greyed out | Docker or the container setup is not available here, or nothing needs to change | Read **What a restart does** on the Services page |
 | The sign-in comes back after a restore | The restore put back the password file from the backup | Sign in with the password from the backup |

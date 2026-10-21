@@ -25,6 +25,7 @@
   import { resumeJobs } from "./state/backupJobs.svelte.js";
   import { forgetSessionError } from "./state/diagnostics.svelte.js";
   import { forgetSessionRefusal } from "./state/services.svelte.js";
+  import { resumeUpgrade } from "./state/upgrade.svelte.js";
   import { dashboardHref } from "./lib/links.js";
 
   const COMPONENTS = { overview: Overview, updates: Updates, settings: Settings, services: Services, backups: Backups, diagnostics: Diagnostics, system: System };
@@ -38,6 +39,7 @@
         forgetSessionErrors();
         forgetSessionError();
         forgetSessionRefusal();
+        resumeUpgrade();
       });
     }
   });

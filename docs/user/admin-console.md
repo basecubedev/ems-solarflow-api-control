@@ -34,7 +34,8 @@ The console's address opens its newer design, **Modern**, at `/modern/`, in
 English, German, Dutch or French and on a phone as well; see
 [The Modern Admin console](admin/modern.md). This guide and the ones it links
 describe **Classic**, which Modern's **Classic view** opens and which keeps the
-guided setup, the guided upgrade and the settings editor for now.
+guided setup and the settings editor for now. The guided upgrade runs in both
+(see [Updating](admin/modern.md#updating)).
 
 Mutating actions preview the change and ask for confirmation. Config apply,
 guided upgrade and restore back up what they replace first.

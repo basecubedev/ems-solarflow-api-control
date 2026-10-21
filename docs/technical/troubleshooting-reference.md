@@ -1201,8 +1201,8 @@ If **Upgrade system** stops with *System Build verification is no longer current
 when no verification was sent), the target image or build metadata changed after
 you verified it — most often a mutable tag such as `latest` re-pushed to a new
 digest. No preflight, backup, migration, or deployment ran. Select **Verify System
-Build** again to re-resolve and re-verify the current pair, then re-plan and
-retry. This check is deliberate: it guarantees the executed System Build is
+Build** again to re-resolve and re-verify the current pair; the plan is rebuilt
+by itself, then retry. This check is deliberate: it guarantees the executed System Build is
 exactly the one you verified.
 
 Two more HTTP 409 refusals happen at the same point, before any preflight: the
