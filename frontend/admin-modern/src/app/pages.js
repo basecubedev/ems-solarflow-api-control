@@ -8,19 +8,21 @@ export { swapPinned } from "../../../shared/shell/pages.js";
  * the same page (#maintenance-status and so on), which the switch to Classic
  * opens; tests/classic-parity.test.js requires each to be one Classic routes.
  * "shortLabel" names the page in the phone bar where its full name is long.
+ * Updates and the settings come right after the overview: they are what an
+ * owner opens most, to update and to switch features such as winter mode.
  */
 export const PAGES = Object.freeze([
   { id: "overview", icon: "layout-dashboard", group: "main", classic: "maintenance" },
-  { id: "services", icon: "server", group: "main", classic: "maintenance-status" },
-  { id: "settings", icon: "sliders-horizontal", group: "main", classic: "maintenance-settings", shortLabel: "nav.settings.short" },
-  { id: "backups", icon: "archive", group: "main", classic: "maintenance-backup" },
   { id: "updates", icon: "circle-arrow-up", group: "main", classic: "maintenance-upgrade" },
+  { id: "settings", icon: "sliders-horizontal", group: "main", classic: "maintenance-settings", shortLabel: "nav.settings.short" },
+  { id: "services", icon: "server", group: "main", classic: "maintenance-status" },
+  { id: "backups", icon: "archive", group: "main", classic: "maintenance-backup" },
   { id: "diagnostics", icon: "stethoscope", group: "system", classic: "maintenance-status" },
   { id: "system", icon: "hard-drive", group: "system", classic: "maintenance-status" },
 ]);
 
 /** The four pages a phone's bar holds until the reader picks their own. */
-export const MOBILE_PAGES = Object.freeze(["overview", "services", "backups", "updates"]);
+export const MOBILE_PAGES = Object.freeze(["overview", "updates", "settings", "services"]);
 
 export const pageSet = createPageSet({
   pages: PAGES,

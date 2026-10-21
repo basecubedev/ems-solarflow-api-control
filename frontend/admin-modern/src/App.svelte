@@ -27,7 +27,7 @@
   import { forgetSessionRefusal } from "./state/services.svelte.js";
   import { dashboardHref } from "./lib/links.js";
 
-  const COMPONENTS = { overview: Overview, services: Services, settings: Settings, backups: Backups, updates: Updates, diagnostics: Diagnostics, system: System };
+  const COMPONENTS = { overview: Overview, updates: Updates, settings: Settings, services: Services, backups: Backups, diagnostics: Diagnostics, system: System };
   const Page = $derived(COMPONENTS[router.page] || Overview);
   const dashboard = $derived(dashboardHref(system.overview.data?.links?.dashboard_url));
 

@@ -13,10 +13,15 @@ test("every page in the navigation has the component that renders it, and no oth
   assert.deepEqual(ids, PAGES.map((page) => page.id));
 });
 
+test("updates and the settings come right after the overview, in the menu and on the phone bar", () => {
+  assert.deepEqual(PAGES.slice(0, 3).map((page) => page.id), ["overview", "updates", "settings"]);
+  assert.deepEqual(MOBILE_PAGES.slice(0, 3), ["overview", "updates", "settings"]);
+});
+
 test("the phone bar holds four known pages and falls back to its default", () => {
   assert.equal(MOBILE_PAGES.length, 4);
   assert.ok(MOBILE_PAGES.every((id) => PAGES.some((page) => page.id === id)));
-  assert.deepEqual(pinnedPages("system,ghost,backups"), ["system", "backups", "overview", "services"]);
+  assert.deepEqual(pinnedPages("system,ghost,backups"), ["system", "backups", "overview", "updates"]);
   assert.deepEqual(pinnedPages(null), [...MOBILE_PAGES]);
 });
 

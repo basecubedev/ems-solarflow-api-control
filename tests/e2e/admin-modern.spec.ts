@@ -323,6 +323,7 @@ test.describe("Modern Admin: on a phone", { tag: ["@smoke"] }, () => {
     const bar = page.locator(".bottom-nav");
     await expect(bar).toBeVisible();
     await expect(bar.locator("a")).toHaveCount(4);
+    await expect(bar.locator("a .slot-label")).toHaveText(["Overview", "Updates", "Settings", "Services"]);
     await page.getByTestId("nav-more").click();
     const sheet = page.getByRole("dialog", { name: "More" });
     await expect(sheet.getByRole("link", { name: "Diagnostics" })).toBeVisible();

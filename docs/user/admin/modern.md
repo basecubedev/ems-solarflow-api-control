@@ -36,10 +36,10 @@ changes nothing on the host.
 | Page | What it shows and does |
 | --- | --- |
 | **Overview** | One answer to "is everything in order": what needs your attention, ranked, each with the way out of it; tiles for EMS, the analytics database, control and the last backup; what your settings allow EMS to do; the versions and the link to the dashboard |
-| **Services** | EMS and the analytics database as they run; what should run and what a restart changes; **Restart EMS now** and **Repair analytics** |
-| **Settings & devices** | Your devices, the grid meter, the features and the safety switches as EMS applies them; editing opens the Classic editor at the right tab |
-| **Backups** | Create a backup, see what is in one, download it, bring one back, restore it after a preview, delete it |
 | **Updates** | What runs now, the versions the guided upgrade can install, and the way into it |
+| **Settings & devices** | Your devices, the grid meter, the features and the safety switches as EMS applies them; editing opens the Classic editor at the right tab |
+| **Services** | EMS and the analytics database as they run; what should run and what a restart changes; **Restart EMS now** and **Repair analytics** |
+| **Backups** | Create a backup, see what is in one, download it, bring one back, restore it after a preview, delete it |
 | **Diagnostics** | The read-only checks of the installed EMS, with the EMS diagnosis in full |
 | **System** | The files of the installation, the device telemetry over MQTT, an older MQTT setup that waits for migration, and the reset of a guided workflow that can no longer finish |
 
@@ -106,7 +106,7 @@ The full reference is [Backup and restore](backup-restore.md).
 ## On a phone
 
 On a narrow screen the side menu gives way to a bar at the bottom with four
-pages -- Overview, Services, Backups and Updates until you choose others -- and
+pages -- Overview, Updates, Settings and Services until you choose others -- and
 **More** for the rest, the language, the colour scheme, signing out and the
 switch to Classic.
 
