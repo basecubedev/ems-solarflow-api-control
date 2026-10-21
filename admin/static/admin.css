@@ -1452,6 +1452,7 @@ code {
 .secondary-button.compact { min-height: 32px; padding: 0 calc(12px * var(--d)); font-size: 11px; }
 .secondary-button:hover { border-color: var(--accent2); }
 .secondary-button:disabled { opacity: .5; cursor: default; }
+a.secondary-button { display: inline-flex; align-items: center; text-decoration: none; }
 
 .device-sources { display: flex; align-items: center; gap: calc(6px * var(--d)); flex-wrap: wrap; }
 .source-badge {

@@ -313,10 +313,13 @@ State whether the change uses:
 
 Do not introduce a new dashboard visual system.
 
-The Modern dashboard (`frontend/dashboard-modern/`, Svelte 5 + Vite, served at
-`/modern/`) is the one exception: read
-`docs/developer/dashboard-modern-style-guide.md` instead, and commit every
-source change together with `npm run build:dashboard-modern` output.
+The Modern front ends are the one exception: the Modern dashboard
+(`frontend/dashboard-modern/`) and the Modern Admin console
+(`frontend/admin-modern/`), Svelte 5 + Vite, both served at their server's
+`/modern/` and both built from the shared design system in `frontend/shared/`.
+Read `docs/developer/dashboard-modern-style-guide.md` instead, and commit every
+source change together with `npm run build:dashboard-modern` and/or
+`npm run build:admin-modern` output.
 
 ## Documentation Index
 

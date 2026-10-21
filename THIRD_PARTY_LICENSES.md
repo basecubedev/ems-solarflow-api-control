@@ -95,21 +95,23 @@ documentation website only in [`requirements-docs.txt`](requirements-docs.txt).
 
 Declared in [`package.json`](package.json); `playwright` and `playwright-core`
 are resolved through [`package-lock.json`](package-lock.json). The private
-`ems-admin-e2e` package carries the Playwright end-to-end tests and the build
-of the Modern dashboard (`npm run build:dashboard-modern`). The build runs on
-a developer or CI machine, never in an image; its output is committed under
-`dashboard/static/modern/`, and what of it reaches a browser is listed under
+`ems-admin-e2e` package carries the Playwright end-to-end tests and the builds
+of the two Modern front ends, the dashboard (`npm run build:dashboard-modern`)
+and the Admin console (`npm run build:admin-modern`), both made from the design
+system in `frontend/shared/`. The builds run on a developer or CI machine,
+never in an image; their output is committed under `dashboard/static/modern/`
+and `admin/static/modern/`, and what of it reaches a browser is listed under
 Vendored Components below. Svelte, Vite and the Vite plugin are build tools;
 Inter and Lucide are copied into the output.
 
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream |
 |---|---|---|---|:---:|:---:|---|
 | `@playwright/test` | `^1.61.1` (locked 1.61.1) | Apache-2.0 | Admin Console end-to-end test runner | ❌ | ❌ | https://github.com/microsoft/playwright |
-| `@fontsource-variable/inter` | `5.3.0` | OFL-1.1 | Source of the Inter variable font copied into the Modern dashboard build | ❌ | ❌ | https://github.com/fontsource/font-files |
-| `@sveltejs/vite-plugin-svelte` | `7.3.1` | MIT | Compiles the Modern dashboard's Svelte components during the Vite build | ❌ | ❌ | https://github.com/sveltejs/vite-plugin-svelte |
-| `lucide-static` | `1.59.0` | ISC | Source of the icon paths copied into the Modern dashboard sprite | ❌ | ❌ | https://github.com/lucide-icons/lucide |
-| `svelte` | `5.57.2` | MIT | Component compiler of the Modern dashboard; its runtime is bundled (Vendored Components) | ❌ | ❌ | https://github.com/sveltejs/svelte |
-| `vite` | `8.3.4` | MIT | Builds the Modern dashboard into `dashboard/static/modern/` | ❌ | ❌ | https://github.com/vitejs/vite |
+| `@fontsource-variable/inter` | `5.3.0` | OFL-1.1 | Source of the Inter variable font copied into the Modern builds | ❌ | ❌ | https://github.com/fontsource/font-files |
+| `@sveltejs/vite-plugin-svelte` | `7.3.1` | MIT | Compiles the Modern front ends' Svelte components during the Vite build | ❌ | ❌ | https://github.com/sveltejs/vite-plugin-svelte |
+| `lucide-static` | `1.59.0` | ISC | Source of the icon paths copied into the Modern sprites | ❌ | ❌ | https://github.com/lucide-icons/lucide |
+| `svelte` | `5.57.2` | MIT | Component compiler of the Modern front ends; its runtime is bundled (Vendored Components) | ❌ | ❌ | https://github.com/sveltejs/svelte |
+| `vite` | `8.3.4` | MIT | Builds the Modern front ends into `dashboard/static/modern/` and `admin/static/modern/` | ❌ | ❌ | https://github.com/vitejs/vite |
 | `playwright` | 1.61.1 | Apache-2.0 | Browser automation library behind the test runner | ❌ | ❌ | https://github.com/microsoft/playwright |
 | `playwright-core` | 1.61.1 | Apache-2.0 | Browser protocol driver used by `playwright` | ❌ | ❌ | https://github.com/microsoft/playwright |
 
@@ -170,10 +172,10 @@ output, with the material it bundles or copies, is described below the table.
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream | Files |
 |---|---|---|---|:---:|:---:|---|---|
 | `uPlot` | 1.6.31 | MIT | Canvas charts on the Dashboard History and Analytics tabs | ✅ | ✅ | https://github.com/leeoniya/uPlot | `dashboard/static/uPlot.iife.min.js`, `dashboard/static/uPlot.min.css`, `dashboard/static/uPlot.LICENSE` |
-| `svelte` | 5.57.2 (runtime) | MIT | Component runtime bundled into the Modern dashboard | ✅ | ✅ | https://github.com/sveltejs/svelte | `dashboard/static/modern/assets/modern.js`, notice in `dashboard/static/modern/licenses.json` |
-| `clsx` | 2.1.1 | MIT | Class-name helper the Svelte runtime bundles | ✅ | ✅ | https://github.com/lukeed/clsx | `dashboard/static/modern/assets/modern.js`, notice in `dashboard/static/modern/licenses.json` |
-| `Inter` (`@fontsource-variable/inter`) | 4.1 via 5.3.0 | OFL-1.1 | The Modern dashboard's typeface, latin subset | ✅ | ✅ | https://github.com/rsms/inter | `dashboard/static/modern/assets/inter-latin-wght-normal.woff2`, `dashboard/static/modern/assets/modern.css` (`@font-face`), `dashboard/static/modern/Inter.LICENSE` |
-| `Lucide` (`lucide-static`) | 1.59.0 | ISC AND MIT (Feather-derived icons) | Icon paths of the Modern dashboard's inline sprite | ✅ | ✅ | https://github.com/lucide-icons/lucide | `dashboard/static/modern/index.html` (the `<svg class="icon-sprite">` block), `dashboard/static/modern/Lucide.LICENSE` |
+| `svelte` | 5.57.2 (runtime) | MIT | Component runtime bundled into the Modern dashboard and Admin console | ✅ | ✅ | https://github.com/sveltejs/svelte | `dashboard/static/modern/assets/modern.js`, `admin/static/modern/assets/admin.js`, notices in `dashboard/static/modern/licenses.json` and `admin/static/modern/licenses.json` |
+| `clsx` | 2.1.1 | MIT | Class-name helper the Svelte runtime bundles | ✅ | ✅ | https://github.com/lukeed/clsx | `dashboard/static/modern/assets/modern.js`, `admin/static/modern/assets/admin.js`, notices in `dashboard/static/modern/licenses.json` and `admin/static/modern/licenses.json` |
+| `Inter` (`@fontsource-variable/inter`) | 4.1 via 5.3.0 | OFL-1.1 | The Modern front ends' typeface, latin subset | ✅ | ✅ | https://github.com/rsms/inter | `dashboard/static/modern/assets/inter-latin-wght-normal.woff2`, `dashboard/static/modern/assets/modern.css` (`@font-face`), `dashboard/static/modern/Inter.LICENSE`, `admin/static/modern/assets/inter-latin-wght-normal.woff2`, `admin/static/modern/assets/admin.css` (`@font-face`), `admin/static/modern/Inter.LICENSE` |
+| `Lucide` (`lucide-static`) | 1.59.0 | ISC AND MIT (Feather-derived icons) | Icon paths of the Modern front ends' inline sprites | ✅ | ✅ | https://github.com/lucide-icons/lucide | `dashboard/static/modern/index.html` and `admin/static/modern/index.html` (the `<svg class="icon-sprite">` block), `dashboard/static/modern/Lucide.LICENSE`, `admin/static/modern/Lucide.LICENSE` |
 | `rpi-image-gen` | v2.7.0 | BSD-3-Clause | Upstream files copied verbatim as the image contract the appliance is built against (`image-rpios`) | ❌ | ❌ | https://github.com/raspberrypi/rpi-image-gen | `tests/fixtures/rpi_image_gen/` (seventeen files, listed with their SHA-256 in `source-manifest.json`), `tests/fixtures/rpi_image_gen/UPSTREAM.LICENSE` |
 
 Provenance, verified on 2026-08-04 against the upstream `1.6.31` tag:
@@ -199,22 +201,23 @@ marked ✗. Their exact bytes and the release they came from are recorded in
 [`tests/fixtures/rpi_image_gen/source-manifest.json`](tests/fixtures/rpi_image_gen/source-manifest.json);
 refresh them with `scripts/appliance-fetch-rpi-image-gen.sh`.
 
-No other third-party source is vendored. The Modern dashboard is a build
-output, not hand-written source. Its bundle
-`dashboard/static/modern/assets/modern.js` and stylesheet
-`dashboard/static/modern/assets/modern.css` combine the project's own
-AGPL-3.0-or-later code (in `frontend/dashboard-modern/`) with the Svelte
-runtime and `clsx`. Vite writes the MIT notices of every bundled package into
-`dashboard/static/modern/licenses.json`, which ships beside the bundle, and
-`tests/test_dashboard_modern.py` fails when a package in that file has no row
-above or a licence outside the permissive set. The Inter font file is
+No other third-party source is vendored. The Modern dashboard and the Modern
+Admin console are build outputs, not hand-written source. Their bundles
+(`dashboard/static/modern/assets/modern.js`, `admin/static/modern/assets/admin.js`)
+and stylesheets combine the project's own AGPL-3.0-or-later code (in
+`frontend/shared/`, `frontend/dashboard-modern/` and `frontend/admin-modern/`)
+with the Svelte runtime and `clsx`. Vite writes the MIT notices of every
+bundled package into a `licenses.json` that ships beside each bundle, and
+`tests/test_dashboard_modern.py` and `tests/test_admin_modern.py` fail when a
+package in that file has no row above or a licence outside the permissive set. The Inter font file is
 unmodified (OFL-1.1 permits bundling it with software), and the Lucide icon
 paths are copied verbatim into the page's inline sprite (ISC; the icons Lucide
 took over from Feather stay MIT, "Copyright (c) 2013-present Cole Bemis").
 Neither is bundled code, so the build copies each package's own licence file
-beside them: `dashboard/static/modern/Inter.LICENSE` carries the OFL text and
-`dashboard/static/modern/Lucide.LICENSE` both notices, with the Feather list.
-Classic (`dashboard/static/` outside `modern/`) and `admin/static/` remain
+beside them: `Inter.LICENSE` carries the OFL text and `Lucide.LICENSE` both
+notices, with the Feather list, in `dashboard/static/modern/` and in
+`admin/static/modern/`. Classic (`dashboard/static/` and `admin/static/`
+outside their `modern/` folders) remains
 project-authored HTML, CSS, inline SVG symbols and plain browser JavaScript;
 they use system font stacks only and bundle no font file.
 

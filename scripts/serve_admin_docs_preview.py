@@ -39,6 +39,7 @@ from urllib.parse import parse_qs, urlparse
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SCRIPT_DIR)
 STATIC_DIR = os.path.join(ROOT, "admin", "static")
+MODERN_PREFIX = "/modern"
 FIXTURE_DIR = os.path.join(ROOT, "tests", "fixtures", "admin_docs")
 DRIVE_SCRIPT = os.path.join(SCRIPT_DIR, "admin_docs_preview.js")
 
@@ -136,6 +137,7 @@ def build_routes():
             "migration_review_none"
         ],
         "/api/admin/maintenance/admin-update/status": upgrade["admin_update_status"],
+        "/api/admin/workflow-lifecycle": overview["recovery_preview_idle"]["lifecycle"],
         "/api/setup/config-template": setup["config_template"],
         "/api/setup/config/catalog": setup["config_catalog"],
         "/api/discovery/networks": setup["networks"],
@@ -212,6 +214,21 @@ class DocsPreviewHandler(BaseHTTPRequestHandler):
             return
         self._send_bytes(body, content_type)
 
+    def _send_modern(self, path):
+        """The Modern console's build output, as the Admin server serves it."""
+
+        if ROOT not in sys.path:
+            sys.path.insert(0, ROOT)
+        from dashboard.static_files import build_static_asset_index, lookup_static_asset
+
+        asset = lookup_static_asset(build_static_asset_index(STATIC_DIR), path)
+        if asset is None:
+            self.send_error(404)
+            return
+        full_path, content_type = asset
+        with open(full_path, "rb") as handle:
+            self._send_bytes(handle.read(), content_type)
+
     def _send_index(self):
         try:
             with open(os.path.join(STATIC_DIR, "index.html"), encoding="utf-8") as handle:
@@ -232,6 +249,9 @@ class DocsPreviewHandler(BaseHTTPRequestHandler):
         path = parsed.path
         if path in ("/", "/index.html"):
             self._send_index()
+            return
+        if path == MODERN_PREFIX or path.startswith(MODERN_PREFIX + "/"):
+            self._send_modern(path)
             return
         if path == "/admin.js":
             self._send_static("admin.js", "application/javascript")

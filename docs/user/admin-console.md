@@ -30,6 +30,11 @@ two flows. It never acts silently.
 - **Manage my existing system** — for updates, config changes, diagnostics,
   backups and restore. See the [Admin maintenance guide](admin-maintenance.md).
 
+A newer design of the same console, **Modern**, opens at `/modern/` on the
+same address, in English, German, Dutch or French and on a phone as well. The
+**New design** button in the header opens it; see
+[The Modern Admin console](admin/modern.md).
+
 Mutating actions preview the change and ask for confirmation. Config apply,
 guided upgrade and restore back up what they replace first.
 

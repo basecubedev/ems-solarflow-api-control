@@ -256,20 +256,26 @@ Each brings its own deterministic server: the Manager's is the scripted
 assets with synthetic API payloads -- no hardware, no MQTT, no history
 database, no secrets.
 
-The cockpit has a second front end, Modern, built from
-`frontend/dashboard-modern/`. Its unit tests need Node but no browser, and its
-build output is committed, so a source change is not finished until it is
-rebuilt:
+The cockpit and the Admin console each have a second front end, Modern,
+built from `frontend/dashboard-modern/` and `frontend/admin-modern/` on the
+shared design system in `frontend/shared/`. Their unit tests need Node but no
+browser, and their build output is committed, so a source change is not
+finished until it is rebuilt -- both builds, when the change is in
+`frontend/shared/`:
 
 ```bash
-npm run test:dashboard-modern     # node --test, a second or two
+npm run test:frontend-shared      # node --test, a second or two each
+npm run test:dashboard-modern
+npm run test:admin-modern
 npm run build:dashboard-modern    # rewrites dashboard/static/modern/
+npm run build:admin-modern        # rewrites admin/static/modern/
 ```
 
-`tests/test_dashboard_modern.py` rebuilds into a scratch directory and fails
-when the committed output differs; the dashboard Playwright job does the same
-with `git diff --exit-code`. Its browser specs are
-`tests/e2e-dashboard/modern.spec.ts`, in the same suite as Classic's.
+`tests/test_dashboard_modern.py` and `tests/test_admin_modern.py` rebuild into
+a scratch directory and fail when the committed output differs; the dashboard
+Playwright job does the same for both with `git diff --exit-code`. The browser
+specs are `tests/e2e-dashboard/modern.spec.ts`, in the same suite as Classic's
+cockpit, and `tests/e2e/admin-modern.spec.ts`, in the Admin suite.
 
 Four things are worth knowing before adding a spec to either:
 

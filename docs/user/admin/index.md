@@ -22,6 +22,7 @@ overview, install command, login, networking and HTTPS.
 | Save a snapshot, or roll one back | [Backup and restore](backup-restore.md) |
 | Something is wrong and you need evidence | [Diagnostics and recovery](diagnostics-recovery.md) |
 | Open the console for the very first time | [First start and login](first-start.md) |
+| Use the newer design, in your language or on a phone | [The Modern Admin console](modern.md) |
 
 ## Setup or Maintenance?
 

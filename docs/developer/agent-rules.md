@@ -290,14 +290,20 @@ Use established Admin and Dashboard patterns. Before Dashboard UI work, read
 style family (`Aggregate / Device` or `Control / Energy stage`), reuse existing
 tokens/classes, and do not create a new visual system.
 
-The Modern dashboard (`frontend/dashboard-modern/`, served at `/modern/`) is
-the one sanctioned exception: it is a second front end with its own visual
-system, and [`dashboard-modern-style-guide.md`](dashboard-modern-style-guide.md)
-is its rule set. Read that guide instead before Modern work. Modern shares the
-API, the auth/CSRF gates and the energy colours with Classic and keeps
-Classic's vocabulary through paired-registry tests; it never borrows Classic's
-classes, and Classic never borrows Modern's. A Modern source change is
-committed together with its rebuilt output in `dashboard/static/modern/`.
+The Modern front ends are the one sanctioned exception: the Modern dashboard
+(`frontend/dashboard-modern/`, the dashboard's `/modern/`) and the Modern Admin
+console (`frontend/admin-modern/`, the Admin server's `/modern/`) are second
+front ends with one visual system of their own, built from the shared design
+system in `frontend/shared/`, and
+[`dashboard-modern-style-guide.md`](dashboard-modern-style-guide.md) is their
+rule set. Every rule there binds both apps alike. Read that guide instead before
+Modern work. A part, helper, string or token both apps can use lives once in
+`frontend/shared/`, never copied into one app. Modern shares the API, the
+auth/CSRF gates and the energy colours with Classic and keeps Classic's
+vocabulary through paired-registry tests; it never borrows Classic's classes,
+and Classic never borrows Modern's. A Modern source change is committed
+together with its rebuilt output in `dashboard/static/modern/` or
+`admin/static/modern/` -- both, when the change is in `frontend/shared/`.
 
 Keep semantic labels, inputs, selects and buttons, keyboard accessibility,
 escaped dynamic text, and authentication/CSRF gates. Prefer `textContent` and

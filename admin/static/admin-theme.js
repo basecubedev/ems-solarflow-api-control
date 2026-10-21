@@ -34,4 +34,34 @@
     /* Private mode and blocked site data both throw here. The default theme is
        the right answer, not a failure before the first paint. */
   }
+
+  /* The browser's choice between Classic and Modern (/modern/), decided here
+     before the first paint, the way the dashboard's theme.js decides it.
+     ?ui=classic or ?ui=modern changes the choice. Classic stays the default
+     while Modern does not yet cover every workflow. An address that names a
+     Classic page (#maintenance-settings and the like) is a hand-off from
+     Modern to a page it does not have yet, so it opens here whatever the
+     choice. A browser too old for Modern stays on Classic; the Popover API is
+     the newest thing Modern needs. */
+  var UI_KEY = "ems-admin-ui";
+  var DEFAULT_UI = "classic";
+
+  function chosenUi() {
+    var asked = /(?:^|[?&])ui=(classic|modern)(?:&|$)/.exec(window.location.search);
+    try {
+      if (asked) window.localStorage.setItem(UI_KEY, asked[1]);
+      var stored = window.localStorage.getItem(UI_KEY);
+      if (stored === "classic" || stored === "modern") return stored;
+    } catch (exc) {
+      if (asked) return asked[1];
+    }
+    return asked ? asked[1] : DEFAULT_UI;
+  }
+
+  var ui = chosenUi();
+  var canRunModern = typeof HTMLElement !== "undefined" && "popover" in HTMLElement.prototype;
+  var handOff = window.location.hash.length > 1;
+  if (ui === "modern" && canRunModern && !handOff) {
+    window.location.replace("/modern/");
+  }
 })();

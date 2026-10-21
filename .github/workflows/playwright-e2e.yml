@@ -247,13 +247,17 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
-      # The Modern dashboard is committed as build output so that no install
-      # path needs Node; this is what keeps that output the build of its source.
-      - name: Check the Modern dashboard build
+      # The Modern dashboard and the Modern Admin console are committed as build
+      # output so that no install path needs Node; this is what keeps that
+      # output the build of its source, the shared design system included.
+      - name: Check the Modern builds
         run: |
+          npm run test:frontend-shared
           npm run test:dashboard-modern
+          npm run test:admin-modern
           npm run build:dashboard-modern
-          git diff --exit-code -- dashboard/static/modern
+          npm run build:admin-modern
+          git diff --exit-code -- dashboard/static/modern admin/static/modern
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium firefox

@@ -254,7 +254,7 @@ from admin.system_build import (
 )
 from dashboard.auth import LoginRateLimiter, SessionStore, auth_file_fingerprint
 from dashboard.https import HANDSHAKE_TIMEOUT_SECONDS
-from dashboard.static_files import build_static_asset_index, static_asset_key
+from dashboard.static_files import build_static_asset_index, lookup_static_asset
 from ems import backup as backup_mod
 from ems.device_identity import (
     PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
@@ -7514,8 +7514,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         return parsed
 
     def _send_static(self, request_path):
-        key = static_asset_key(request_path)
-        asset = self.server.static_assets.get(key) if key is not None else None
+        asset = lookup_static_asset(self.server.static_assets, request_path)
         if asset is None:
             self._send_json({"error": "not found"}, status=404)
             return

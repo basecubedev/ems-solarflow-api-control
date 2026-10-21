@@ -8,6 +8,8 @@
     "summary": { "total": 2, "latest_created_at": "2026-07-05 09:12 UTC" },
     "influxdb": {
       "supported": false,
+      "reason": "disabled",
+      "mode": "bundled",
       "message": "Bundled InfluxDB is not enabled — skipped."
     },
     "sets": [],
