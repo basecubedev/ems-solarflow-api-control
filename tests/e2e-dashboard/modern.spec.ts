@@ -113,10 +113,10 @@ test.describe("Modern dashboard @smoke", () => {
     await expect(page.getByTestId("grid-meter")).toBeVisible();
 
     await page.goto("/modern/#/energy", { waitUntil: "domcontentloaded" });
-    await expect(page.getByTestId("energy-periods")).toContainText(/Last 7 days\s*18\.4\d? kWh/);
+    await expect(page.getByTestId("energy-periods")).toContainText(/Last 7 days\s*18\.4\d?\skWh/);
     await page.getByRole("button", { name: "Table" }).click();
     await expect(page.locator("table.data tbody tr")).toHaveCount(12);
-    await expect(page.locator("table.data")).toContainText(/\d kWh/);
+    await expect(page.locator("table.data")).toContainText(/\d\skWh/);
 
     await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".kpi").filter({ hasText: "Current SoC" })).toContainText("60%");
@@ -129,7 +129,7 @@ test.describe("Modern dashboard @smoke", () => {
     const detail = page.getByTestId("month-detail");
     await expect(detail).toContainText("September");
     await expect(detail).toContainText("66.9 kWh");
-    await expect(detail).toContainText(/Grid import\s*28\.9 kWh/);
+    await expect(detail).toContainText(/Grid import\s*28\.9\skWh/);
     await expect(detail).toContainText("Measured since");
     await expect(page.locator("dl.context")).toContainText("Channels measured since");
   });
@@ -162,7 +162,7 @@ test.describe("Modern dashboard @smoke", () => {
     await pinTheDay(page);
     await openModern(page);
     const tile = page.getByTestId("today-tiles").locator("section").first();
-    await expect(tile.getByTestId("today-scale")).toHaveText(/^\d[\d.,]* k?Wh$/);
+    await expect(tile.getByTestId("today-scale")).toHaveText(/^\d[\d.,]*\sk?Wh$/);
     await expect(tile.locator(".hours span")).toHaveText(["00", "06", "12", "18", "24"]);
     await expect(tile.locator(".delta span")).toContainText("vs. yesterday by 18:30");
     const [value, delta, note] = await Promise.all([".value", ".delta b", ".delta span"].map((selector) => tile.locator(selector).boundingBox()));

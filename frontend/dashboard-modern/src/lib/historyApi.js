@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { getJson, query } from "./api.js";
+import { getJson, query } from "../../../shared/lib/api.js";
 
 /** The local SQLite history (Overview, Devices) or the InfluxDB analytics series. */
 export async function fetchSeries({ source = "history", range, start, end, series, devices, signal }) {

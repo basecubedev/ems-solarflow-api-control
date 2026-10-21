@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { createLiveTransport } from "../lib/transport.js";
-import { getJson } from "../lib/api.js";
+import { getJson } from "../../../shared/lib/api.js";
 import { prefs, applyDocumentPrefs } from "./prefs.svelte.js";
 
 /**

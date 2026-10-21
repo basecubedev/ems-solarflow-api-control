@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { MARK_RING, markSvg } from "../src/brand/mark.js";
+import { MARK_RING, markSvg } from "../brand/mark.js";
 
 function ends(d) {
   const numbers = d.match(/-?\d+(\.\d+)?/g).map(Number);

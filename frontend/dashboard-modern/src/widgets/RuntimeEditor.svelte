@@ -3,8 +3,8 @@
 </script>
 
 <script>
-  import Card from "../ui/Card.svelte";
-  import Empty from "../ui/Empty.svelte";
+  import Card from "../../../shared/ui/Card.svelte";
+  import Empty from "../../../shared/ui/Empty.svelte";
   import RuntimeForm from "./RuntimeForm.svelte";
   import { t } from "../i18n/i18n.svelte.js";
   import { auth } from "../state/auth.svelte.js";

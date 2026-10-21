@@ -3,20 +3,22 @@
   import Icon from "../ui/Icon.svelte";
   import Sheet from "../ui/Sheet.svelte";
   import Segmented from "../ui/Segmented.svelte";
-  import { MOBILE_PAGES, PAGES, pageById, swapPinned } from "./pages.js";
-  import { router, href } from "./router.svelte.js";
+  import { swapPinned } from "./pages.js";
   import { t } from "../i18n/i18n.svelte.js";
-  import { prefs, setPref, setMobilePages, chooseClassic, THEMES, THEME_NAMES, LANGUAGES } from "../state/prefs.svelte.js";
-  import { auth, logout } from "../state/auth.svelte.js";
+  import { prefs, setPref, THEMES, THEME_NAMES, LANGUAGES } from "../state/prefs.svelte.js";
+  import { useShell } from "./context.js";
 
+  const shell = useShell();
+  const { pageSet, session } = shell;
+  const { router, href, setPinned } = shell.nav;
   const themes = THEMES.map((value) => ({ value, label: THEME_NAMES[value] }));
   const languages = LANGUAGES.map((value) => ({ value, label: value.toUpperCase() }));
 
-  const pinned = $derived(prefs.mobilePages.map(pageById));
-  const others = $derived(PAGES.filter((page) => !prefs.mobilePages.includes(page.id)));
-  const current = $derived(prefs.mobilePages.includes(router.page) ? null : pageById(router.page));
+  const pinned = $derived(router.pinned.map(pageSet.pageById));
+  const others = $derived(pageSet.pages.filter((page) => !router.pinned.includes(page.id)));
+  const current = $derived(router.pinned.includes(router.page) ? null : pageSet.pageById(router.page));
   const focusId = $derived(current?.id ?? others[0]?.id);
-  const customized = $derived(prefs.mobilePages.join() !== MOBILE_PAGES.join());
+  const customized = $derived(router.pinned.join() !== pageSet.mobile.join());
 
   let open = $state(false);
   let editing = $state(false);
@@ -27,7 +29,8 @@
   let content = $state();
 
   const name = (id) => t(`nav.${id}`);
-  const locked = (page) => page.operator && !auth.authenticated;
+  /** The bar's own label: a page may name a shorter one ("shortLabel") for the narrow slot; its full name stays the title. */
+  const slotName = (page) => (page.shortLabel ? t(page.shortLabel) : name(page.id));
 
   async function focusIn(selector) {
     await tick();
@@ -63,33 +66,33 @@
       picked = picked === id ? null : id;
       return;
     }
-    const next = swapPinned(prefs.mobilePages, picked, id);
+    const next = swapPinned(router.pinned, picked, id);
     if (!next) {
       picked = id;
       return;
     }
-    setMobilePages(next);
+    setPinned(next);
     picked = null;
-    announced = t("nav.barNow", { pages: prefs.mobilePages.map(name).join(", ") });
+    announced = t("nav.barNow", { pages: router.pinned.map(name).join(", ") });
     focusIn(`button.tile[data-page="${id}"]`);
   }
 
   function resetBar() {
-    setMobilePages(MOBILE_PAGES);
+    setPinned(pageSet.mobile);
     picked = null;
-    announced = t("nav.barNow", { pages: prefs.mobilePages.map(name).join(", ") });
+    announced = t("nav.barNow", { pages: router.pinned.map(name).join(", ") });
     focusIn('[data-testid="customize-done"]');
   }
 
   function signIn() {
     open = false;
-    auth.loginOpen = true;
+    session.signIn();
   }
 
   async function signOut() {
     signOutFailed = false;
     try {
-      await logout();
+      await session.signOut();
     } catch {
       signOutFailed = true;
     }
@@ -100,8 +103,8 @@
   {#each pinned as page (page.id)}
     <a href={href(page.id)} aria-current={router.page === page.id ? "page" : undefined} data-page={page.id}>
       <Icon name={page.icon} />
-      <span class="slot-label" title={name(page.id)}>{name(page.id)}</span>
-      {#if locked(page)}<svg class="i slot-badge" aria-label={t("nav.signInRequired")} role="img"><use href="#i-lock"></use></svg>{/if}
+      <span class="slot-label" title={name(page.id)}>{slotName(page)}</span>
+      {#if shell.locked(page)}<svg class="i slot-badge" aria-label={t("nav.signInRequired")} role="img"><use href="#i-lock"></use></svg>{/if}
     </a>
   {/each}
   <button
@@ -116,7 +119,7 @@
   >
     {#if current}
       <Icon name={current.icon} />
-      <span class="slot-label" title={name(current.id)}>{name(current.id)}</span>
+      <span class="slot-label" title={name(current.id)}>{slotName(current)}</span>
       <Icon name="chevron-up" size="slot-badge" />
     {:else}
       <Icon name="ellipsis" />
@@ -162,7 +165,7 @@
             data-page={page.id}
           >
             <Icon name={page.icon} /><span>{name(page.id)}</span>
-            {#if locked(page)}<svg class="i lock" aria-label={t("nav.signInRequired")} role="img"><use href="#i-lock"></use></svg>{/if}
+            {#if shell.locked(page)}<svg class="i lock" aria-label={t("nav.signInRequired")} role="img"><use href="#i-lock"></use></svg>{/if}
           </a>
         {/each}
       </nav>
@@ -175,9 +178,9 @@
           <Segmented options={themes} value={prefs.theme} label={t("appearance.theme")} onchange={(v) => setPref("theme", v)} />
         </div>
         <div class="pop-row">
-          <span class="session"><Icon name={auth.authenticated ? "lock-open" : "lock"} size="sm" />{auth.authenticated ? t("auth.writeMode") : t("auth.readOnly")}</span>
-          {#if auth.authenticated}
-            <button class="btn secondary small" type="button" onclick={signOut}>{t("auth.signOut")}</button>
+          <span class="session"><Icon name={session.icon} size="sm" />{session.label}</span>
+          {#if session.authenticated}
+            <button class="btn secondary small" type="button" onclick={signOut} data-testid="sheet-sign-out">{t("auth.signOut")}</button>
           {:else}
             <button class="btn small" type="button" onclick={signIn} data-testid="sheet-sign-in">{t("auth.signIn")}</button>
           {/if}
@@ -185,8 +188,11 @@
         {#if signOutFailed}<p class="form-error" role="alert">{t("auth.signOutFailed")}</p>{/if}
       </div>
       <div class="sheet-links">
+        {#each shell.links as link (link.href)}
+          <a class="ghost-link" href={link.href} data-testid={link.testid ? `sheet-${link.testid}` : undefined}><Icon name={link.icon} /><span>{t(link.label)}</span></a>
+        {/each}
         <button class="ghost-link" type="button" onclick={startEditing} data-testid="customize-bar"><Icon name="pencil" /><span>{t("nav.customize")}</span></button>
-        <button class="ghost-link" type="button" onclick={() => chooseClassic(pageById(router.page).classicView)}><Icon name="arrow-left-right" /><span>{t("nav.classicSwitch")}</span></button>
+        <button class="ghost-link" type="button" onclick={() => shell.classic(router.page)}><Icon name="arrow-left-right" /><span>{t("nav.classicSwitch")}</span></button>
       </div>
     {/if}
   </div>

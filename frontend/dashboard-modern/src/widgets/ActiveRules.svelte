@@ -3,8 +3,8 @@
 </script>
 
 <script>
-  import Card from "../ui/Card.svelte";
-  import Icon from "../ui/Icon.svelte";
+  import Card from "../../../shared/ui/Card.svelte";
+  import Icon from "../../../shared/ui/Icon.svelte";
   import { t } from "../i18n/i18n.svelte.js";
   import { live } from "../state/live.svelte.js";
   import { ruleStates } from "../lib/status.js";

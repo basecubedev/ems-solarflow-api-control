@@ -3,10 +3,10 @@
 </script>
 
 <script>
-  import Card from "../ui/Card.svelte";
-  import Segmented from "../ui/Segmented.svelte";
+  import Card from "../../../shared/ui/Card.svelte";
+  import Segmented from "../../../shared/ui/Segmented.svelte";
   import TimeChart from "../ui/TimeChart.svelte";
-  import Icon from "../ui/Icon.svelte";
+  import Icon from "../../../shared/ui/Icon.svelte";
   import { t } from "../i18n/i18n.svelte.js";
   import { fetchSeries } from "../lib/historyApi.js";
   import { localDayStart } from "../lib/history.js";

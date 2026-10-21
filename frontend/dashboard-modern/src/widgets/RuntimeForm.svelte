@@ -1,7 +1,7 @@
 <script>
   import { untrack } from "svelte";
-  import Icon from "../ui/Icon.svelte";
-  import ConfirmDialog from "../ui/ConfirmDialog.svelte";
+  import Icon from "../../../shared/ui/Icon.svelte";
+  import ConfirmDialog from "../../../shared/ui/ConfirmDialog.svelte";
   import { t } from "../i18n/i18n.svelte.js";
   import { authorizedSend } from "../state/auth.svelte.js";
   import { loadRuntime, live } from "../state/live.svelte.js";

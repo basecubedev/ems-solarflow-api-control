@@ -1,10 +1,10 @@
 <script>
-  import Card from "../ui/Card.svelte";
-  import Segmented from "../ui/Segmented.svelte";
-  import Icon from "../ui/Icon.svelte";
+  import Card from "../../../shared/ui/Card.svelte";
+  import Segmented from "../../../shared/ui/Segmented.svelte";
+  import Icon from "../../../shared/ui/Icon.svelte";
   import OperatorGate from "../ui/OperatorGate.svelte";
   import { t, fmt } from "../i18n/i18n.svelte.js";
-  import { query } from "../lib/api.js";
+  import { query } from "../../../shared/lib/api.js";
   import { auth, authorizedSend, operatorGet } from "../state/auth.svelte.js";
   import { errorText } from "../lib/errors.js";
 

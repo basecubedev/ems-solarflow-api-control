@@ -6,7 +6,7 @@
  * only partly measured.
  */
 
-import { finite } from "./format.js";
+import { finite } from "../../../shared/lib/format.js";
 
 export const PERIODS = Object.freeze([
   { key: "today", label: "energy.today", kind: "today" },

@@ -3,7 +3,7 @@
   import GridMeter from "../widgets/GridMeter.svelte";
   import DeviceHistory from "../widgets/DeviceHistory.svelte";
   import EnergyFlow from "../widgets/EnergyFlow.svelte";
-  import Empty from "../ui/Empty.svelte";
+  import Empty from "../../../shared/ui/Empty.svelte";
   import { t } from "../i18n/i18n.svelte.js";
   import { live } from "../state/live.svelte.js";
   import { devices } from "../state/derived.svelte.js";

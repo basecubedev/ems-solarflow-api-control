@@ -1,11 +1,11 @@
 <script>
-  import Card from "../ui/Card.svelte";
-  import Segmented from "../ui/Segmented.svelte";
+  import Card from "../../../shared/ui/Card.svelte";
+  import Segmented from "../../../shared/ui/Segmented.svelte";
   import TimeChart from "../ui/TimeChart.svelte";
-  import Empty from "../ui/Empty.svelte";
-  import Icon from "../ui/Icon.svelte";
+  import Empty from "../../../shared/ui/Empty.svelte";
+  import Icon from "../../../shared/ui/Icon.svelte";
   import { t, fmt } from "../i18n/i18n.svelte.js";
-  import { getJson } from "../lib/api.js";
+  import { getJson } from "../../../shared/lib/api.js";
   import { fetchSeries } from "../lib/historyApi.js";
   import { ANALYTICS_RANGES, ANALYTICS_VIEWS, ANALYTICS_OVERLAYS, SERIES_STYLE, viewById, requestedSeries, computeKpi, runtimeRole, KPIS } from "../lib/analytics.js";
   import { devices } from "../state/derived.svelte.js";

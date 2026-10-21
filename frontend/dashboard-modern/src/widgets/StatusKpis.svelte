@@ -3,12 +3,12 @@
 </script>
 
 <script>
-  import Icon from "../ui/Icon.svelte";
+  import Icon from "../../../shared/ui/Icon.svelte";
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { live } from "../state/live.svelte.js";
   import { systemStatus } from "../state/derived.svelte.js";
   import { selfSufficiency, channelKwh } from "../lib/energy.js";
-  import { finite } from "../lib/format.js";
+  import { finite } from "../../../shared/lib/format.js";
 
   const LOOK = {
     ok: { tone: "c-ok", icon: "circle-check" },
