@@ -48,10 +48,23 @@
   var UI_KEY = "ems-admin-ui";
   var DEFAULT_UI = "modern";
 
+  /* Once stored, ?ui= has done its work and leaves the address, so going back
+     to that page later does not choose again what the reader has changed since.
+     Where storage is blocked it stays, as the only carrier of the choice. */
+  function forgetAsked() {
+    var search = window.location.search.replace(/([?&])ui=(?:classic|modern)(&|$)/, function (match, lead, tail) {
+      return tail ? lead : "";
+    });
+    window.history.replaceState(window.history.state, "", window.location.pathname + (search === "?" ? "" : search) + window.location.hash);
+  }
+
   function chosenUi() {
     var asked = /(?:^|[?&])ui=(classic|modern)(?:&|$)/.exec(window.location.search);
     try {
-      if (asked) window.localStorage.setItem(UI_KEY, asked[1]);
+      if (asked) {
+        window.localStorage.setItem(UI_KEY, asked[1]);
+        forgetAsked();
+      }
       var stored = window.localStorage.getItem(UI_KEY);
       if (stored === "classic" || stored === "modern") return stored;
     } catch (exc) {

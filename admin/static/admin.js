@@ -9174,7 +9174,12 @@ function renderStartSuccess() {
   const link = setupEls.startDashboardLink;
   const show = start.running && !start.conflict;
   if (success) success.hidden = !show;
-  if (link) link.href = startDashboardHref();
+  if (link) {
+    const href = startDashboardHref();
+    if (href) link.href = href;
+    else link.removeAttribute("href");
+    link.hidden = !href;
+  }
 }
 
 function startStatusText() {
@@ -9192,21 +9197,30 @@ function startStatusText() {
   return "Ready to start the prepared deployment.";
 }
 
-// Prefer the prepared config host/port. When the Admin UI is opened from another
-// machine, localhost would point at the user's own device, so swap in the
-// current browser hostname while keeping the dashboard scheme and port.
-function startDashboardHref() {
-  const url = setupState.start.dashboard_url || "http://localhost:8080";
+// The dashboard's address as this browser reaches it. The server names it as
+// http(s)://localhost:<port>, which only holds on the machine itself: opened
+// from another device, localhost is that device. The dashboard runs on the host
+// this console was reached at, so that host is kept and only the scheme and the
+// port are taken from the server. Anything but http(s) is no link at all. The
+// Modern console does the same (frontend/admin-modern/src/lib/links.js).
+function dashboardHrefForBrowser(url) {
+  const hostname = window.location.hostname;
+  if (typeof url !== "string" || !url || !hostname) return null;
+  let parsed;
   try {
-    const parsed = new URL(url);
-    const host = window.location.hostname;
-    if (host && host !== "localhost" && host !== "127.0.0.1") {
-      parsed.hostname = host;
-    }
-    return parsed.href;
+    parsed = new URL(url);
   } catch (err) {
-    return url;
+    return null;
   }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  const host = hostname.includes(":") && !hostname.startsWith("[") ? "[" + hostname + "]" : hostname;
+  const port = parsed.port ? ":" + parsed.port : "";
+  return parsed.protocol + "//" + host + port + "/";
+}
+
+// The prepared config's scheme and port, on the host this browser used.
+function startDashboardHref() {
+  return dashboardHrefForBrowser(setupState.start.dashboard_url || "http://localhost:8080");
 }
 
 async function refreshStartStatus() {
@@ -10151,6 +10165,7 @@ const maintenanceEls = {
   influxImage: document.getElementById("maintenance-influx-image"),
   dashboard: document.getElementById("maintenance-dashboard"),
   dashboardLink: document.getElementById("maintenance-dashboard-link"),
+  containersDashboardLink: document.getElementById("maintenance-containers-dashboard-link"),
   refresh: document.getElementById("maintenance-refresh"),
   runtimeEmsDesired: document.getElementById("maintenance-runtime-ems-desired"),
   runtimeInfluxDesired: document.getElementById("maintenance-runtime-influx-desired"),
@@ -10563,35 +10578,38 @@ function renderMaintenance(data) {
     containers.influxdb && containers.influxdb.image
   );
 
-  const dashboard = data.links && data.links.dashboard_url;
+  const dashboard = dashboardHrefForBrowser(data.links && data.links.dashboard_url);
   renderMaintenanceDashboard(dashboard);
-  renderMaintenanceSummaries(data);
+  renderMaintenanceSummaries(data, dashboard);
   renderMaintenanceFindings(data.health);
 }
 
-// The dashboard link href is set through the DOM property (never innerHTML) so
-// the config-derived URL cannot inject markup.
-function renderMaintenanceDashboard(url) {
-  const link = maintenanceEls.dashboardLink;
-  const label = maintenanceEls.dashboard;
-  if (link) {
-    if (url) {
-      link.href = url;
+// Both dashboard links -- the Version & dashboard card's and the one beside the
+// container restart -- point where this browser reaches the dashboard (href, from
+// dashboardHrefForBrowser), or are hidden while that is unknown. The href is set
+// through the DOM property (never innerHTML) so the config-derived URL cannot
+// inject markup.
+function renderMaintenanceDashboard(href) {
+  [maintenanceEls.dashboardLink, maintenanceEls.containersDashboardLink].forEach((link) => {
+    if (!link) return;
+    if (href) {
+      link.href = href;
       link.hidden = false;
     } else {
       link.removeAttribute("href");
       link.hidden = true;
     }
-  }
+  });
+  const label = maintenanceEls.dashboard;
   if (label) {
-    label.hidden = Boolean(url);
-    setMaintenanceFact(label, url ? "" : "unavailable", "muted");
+    label.hidden = Boolean(href);
+    setMaintenanceFact(label, href ? "" : "unavailable", "muted");
   }
 }
 
 // Collapsed headers must stay informative: each summary condenses the card's key
 // facts into one line so the state is readable without expanding.
-function renderMaintenanceSummaries(data) {
+function renderMaintenanceSummaries(data, dashboard) {
   const state = data.install_state || {};
   const healthy = MAINTENANCE_HEALTHY_STATES.includes(state.state);
   const paths = data.paths || {};
@@ -10615,7 +10633,6 @@ function renderMaintenanceSummaries(data) {
   const emsTag = containers.ems && containers.ems.tag;
   const components = data.components || {};
   const adminTag = components.admin && components.admin.tag;
-  const dashboard = data.links && data.links.dashboard_url;
   const versionsText =
     (adminTag ? "Admin " + adminTag : "Admin version unknown") +
     " · " +

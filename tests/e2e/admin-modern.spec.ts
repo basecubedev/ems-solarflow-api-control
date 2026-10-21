@@ -33,7 +33,7 @@ test.describe("Modern Admin: the switch", { tag: ["@smoke"] }, () => {
     expect(await page.evaluate((key) => localStorage.getItem(key), UI_KEY)).toBe("modern");
 
     await page.getByTestId("switch-classic").click();
-    await expect(page).toHaveURL(/\/\?ui=classic#maintenance$/);
+    await expect(page).toHaveURL(/\/#maintenance$/);
     await expect(page.locator("#modern-admin-link")).toBeVisible();
     expect(await page.evaluate((key) => localStorage.getItem(key), UI_KEY)).toBe("classic");
     await page.goto("/");
@@ -46,6 +46,18 @@ test.describe("Modern Admin: the switch", { tag: ["@smoke"] }, () => {
     expect(await page.evaluate((key) => localStorage.getItem(key), UI_KEY)).toBe("modern");
     await page.goto("/");
     await expect(page).toHaveURL(/\/modern\/$/);
+  });
+
+  test("going back to the Classic page after New design does not choose Classic again", async ({ page }) => {
+    await openModern(page);
+    await page.getByTestId("switch-classic").click();
+    await expect(page).toHaveURL(/\/#maintenance$/);
+    await page.locator("#modern-admin-link").click();
+    await expect(page).toHaveURL(/\/modern\/$/);
+    await page.goBack();
+    await expect(page).toHaveURL(/\/#maintenance$/);
+    await expect(page.locator("#modern-admin-link")).toBeVisible();
+    expect(await page.evaluate((key) => localStorage.getItem(key), UI_KEY)).toBe("modern");
   });
 
   test("a guided setup begun in Classic stays in Classic across a reload, though Modern is the default", async ({ page }) => {

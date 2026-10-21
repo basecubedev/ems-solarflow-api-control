@@ -17,6 +17,7 @@ import { CHECK_STATUSES, RUN_MODES } from "../src/lib/diagnostics.js";
 import { SETTINGS_TABS } from "../src/lib/settings.js";
 import { PAGES } from "../src/app/pages.js";
 import { FINDINGS } from "../src/lib/health.js";
+import { dashboardHref } from "../src/lib/links.js";
 
 const CLASSIC = readFileSync(new URL("../../../admin/static/admin.js", import.meta.url), "utf8");
 
@@ -80,4 +81,27 @@ test("every Classic page this console hands over to is one Classic routes", () =
   ];
   assert.deepEqual([...new Set(handed.filter((hash) => !routable.has(hash)))], ["setup"]);
   assert.ok(!CLASSIC.slice(CLASSIC.indexOf("function applyHashRoute"), CLASSIC.indexOf("// --- setup wizard")).includes('"setup"'));
+});
+
+test("Classic and Modern send a browser to the same dashboard address", () => {
+  const start = CLASSIC.indexOf("function dashboardHrefForBrowser(");
+  const source = CLASSIC.slice(start, CLASSIC.indexOf("\n}\n", start) + 2);
+  const classic = new Function("window", `${source}\nreturn dashboardHrefForBrowser;`);
+  const cases = [
+    ["192.168.1.5", "http://localhost:8080"],
+    ["ems.local", "https://localhost:8443"],
+    ["127.0.0.1", "http://localhost:8080/x?y=1"],
+    ["[fe80::1]", "http://localhost:8080"],
+    ["192.168.1.5", "javascript:alert(1)"],
+    ["192.168.1.5", "not a url"],
+    ["192.168.1.5", ""],
+    ["192.168.1.5", null],
+    ["192.168.1.5", "http://u:p@localhost:8080"],
+    ["fe80::1", "http://localhost:8080"],
+    ["", "http://localhost:8080"],
+  ];
+  for (const [hostname, url] of cases) {
+    const location = { hostname };
+    assert.equal(classic({ location })(url), dashboardHref(url, location), `${hostname} ${url}`);
+  }
 });
