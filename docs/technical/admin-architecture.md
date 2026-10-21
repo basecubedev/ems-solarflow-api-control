@@ -57,9 +57,10 @@ at `/` (`index.html`, `admin.js`) and Modern at `/modern/`, a build of
 files behind the same headers below; both call the same API with the same
 session and CSRF token, and neither gains an endpoint or an authority the other
 lacks. Modern runs the maintenance writes it covers (container sync, analytics
-repair, diagnostics, backups and restore, workflow recovery) with exactly the
-bodies Classic sends, and hands the guided workflows and the settings editor to
-Classic's pages. `/` opens Modern unless the browser chose Classic
+repair, diagnostics, backups and restore, workflow recovery, and the Guided
+Upgrade: validate, execute, resume, the job poll, the system-alignment
+recovery routes and the workflow switch) with exactly the bodies Classic sends,
+and hands Guided Setup and the settings editor to Classic's pages. `/` opens Modern unless the browser chose Classic
 (`ems-admin-ui`) or the address names a Classic page, decided before the first
 paint by `admin-theme.js`; see the
 [Modern front ends style guide](../developer/dashboard-modern-style-guide.md).

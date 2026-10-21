@@ -235,20 +235,41 @@ from what the Admin server is.
   followed until it ends, and a read with no answer is retried and said so, as
   the job keeps running on the server.
 - **Hand-overs to Classic.** A workflow Modern does not run yet -- Guided Setup,
-  the Guided Upgrade, the settings editor, the MQTT migration -- is named and
-  opened in Classic at its page (`/#maintenance-settings-devices` and so on).
-  An address with a Classic page in it opens Classic whatever the browser chose,
-  so a hand-over never changes the choice. A hand-over may carry what the
-  reader chose: a version picked on Updates opens
-  `/#maintenance-upgrade-<tag>`, which Classic reads once
-  (`maintenanceUpgradeTagForHash`) and selects. A guided workflow that holds
-  the console is shown on every page with the way to continue it.
+  the settings editor, the MQTT migration -- is named and opened in Classic at
+  its page (`/#maintenance-settings-devices` and so on). An address with a
+  Classic page in it opens Classic whatever the browser chose, so a hand-over
+  never changes the choice. A hand-over may carry what the reader chose: the
+  Updates page's way to Classic's Guided Upgrade opens
+  `/#maintenance-upgrade-<tag>` for the version on screen, which Classic reads
+  once (`maintenanceUpgradeTagForHash`) and selects. A guided workflow that
+  holds the console is shown on every page with the way to continue it.
+- **The Guided Upgrade runs here.** `state/upgrade.svelte.js` holds the one run
+  this console follows, beside the pages, and sends what Classic sends:
+  validate, the migration review, execute, resume, the job poll and the
+  system-alignment recovery routes. Choosing a version verifies it and reads
+  the migration review at once, so the owner confirms one plan with one
+  button. `lib/upgrade.js` turns the job's steps and the transition's stage
+  into five phases (check, back up, Admin console, install, verify) and is
+  walked against the executor's steps and options. When the Admin console is
+  replaced, `auth.svelte.js` reloads the page from the new one, and
+  `resumeUpgrade()` at sign-in finds the run in the durable transition and
+  follows it on; the version before and the start time travel in
+  `sessionStorage` (`ems-admin.upgrade`), and only the server's transition
+  decides what happens (`follow()`). While the Admin console is replaced, the
+  page never asks to resume: the old console would record the swap as failed,
+  so it waits for the new one, which moves the run on by itself
+  (`resume_pending_guided_upgrade`). A start that got no answer is watched for
+  in the transition, a refusal says the update did not start, and the ways out
+  of a failure are the ones the transition offers (`resume_available`,
+  `return_available`, `cancel_available`). Each new screen of the flow is shown
+  from the top of the page and takes the focus.
 - **Modern is the default**, as on the dashboard: `admin/static/admin-theme.js`
   redirects `/` to `/modern/` unless the browser chose Classic
   (`ems-admin-ui`), the address names a Classic page, or the browser lacks the
-  Popover API. The guided setup and upgrade keep their `#setup` /
-  `#maintenance-upgrade` address, so a reload or the reconnect after an Admin
-  update stays in Classic. Classic's Playwright specs choose Classic first
+  Popover API. The guided setup and Classic's guided upgrade keep their
+  `#setup` / `#maintenance-upgrade` address, so a reload or the reconnect after
+  an Admin update stays in Classic; Modern's own upgrade reloads at
+  `/modern/#/updates`. Classic's Playwright specs choose Classic first
   through the configs' `use.storageState` (`tests/e2e/helpers/classic-ui.ts`,
   see [e2e-playwright.md](e2e-playwright.md)); the appearance gallery photographs
   Classic at `/?ui=classic`.
@@ -256,7 +277,8 @@ from what the Admin server is.
 ## What the Modern Admin only shows or hands to Classic
 
 The goal is a Modern console that works on its own. Until then, this list
-holds everything Modern only shows or opens in Classic, as of 2026-10-21.
+holds everything Modern only shows or opens in Classic, as of 2026-10-21. The
+Guided Upgrade was the first to move: Modern runs it itself.
 Classic stays the reference for each item. Remove an entry in the change that
 makes it native.
 
@@ -264,11 +286,10 @@ makes it native.
 
 | # | Workflow | Modern today | Classic endpoints a native version needs |
 | --- | --- | --- | --- |
-| 1 | **Guided Upgrade**: verify, options (backup, config check, added keys, diagnostics), plan, execute, resume, Admin/EMS alignment, return to the running build | Updates lists the versions. **Start the guided upgrade** opens `/#maintenance-upgrade`. Choosing a version opens `/#maintenance-upgrade-<tag>` with it selected (`maintenanceUpgradeTagForHash`). The workflow banner continues there | POST `/api/admin/maintenance/upgrade/{validate,execute,resume}` and the job poll; POST `/api/admin/system-alignment/{resume,verify-resources,return-to-running-build,cancel}`; POST `/api/admin/workflow-lifecycle/switch{/preview,}` when a setup has to be discarded first |
-| 2 | **Settings editor**: devices, grid meter, features, safety, expert; add an inverter, MQTT or E3/DC device; **Put live values back** | Settings shows everything read-only, with the overridden badges. Each card opens the matching Classic tab (`/#maintenance-settings-<tab>`) | POST `/api/admin/maintenance/config/{preview,apply,reset-runtime}`; the discovery routes for adding devices (`/api/discovery/scan`, refreshes, `connections/mqtt-credentials`) |
-| 3 | **Older MQTT setup migration**: review and apply | System names the waiting migration and opens `/#maintenance-status`. The Classic section opens collapsed there | GET `/api/admin/maintenance/zendure-mqtt/migration-review`; POST `.../migration-apply` with `{revision, confirm, backup}` |
-| 4 | **Guided Setup**: system build, discovery, MQTT brokers and credentials, Zendure cloud key, device plan, config, deployment, abandon | Overview offers **Set up in the Classic view**. Classic never opens the wizard from an address, so it lands on the start page, where **Fresh install** is the first choice | `/api/setup/{workflow,releases,device-plan,config-preview,config/*,deployment/*,abandon}`, `/api/setup/system-build/*`, `/api/admin/system-alignment/validate`, `/api/discovery/*` with the `/api/setup/discovery/*` aliases |
-| 5 | **Start gate**: choose the start path, replace an existing install, migrate a root `config.json` to the standard layout | Not reachable from Modern. System shows a root `config.json` (`legacy_root_config`) without a way to migrate it | POST `/api/admin/start-path`; POST `/api/admin/config/migrate-legacy` |
+| 1 | **Settings editor**: devices, grid meter, features, safety, expert; add an inverter, MQTT or E3/DC device; **Put live values back** | Settings shows everything read-only, with the overridden badges. Each card opens the matching Classic tab (`/#maintenance-settings-<tab>`) | POST `/api/admin/maintenance/config/{preview,apply,reset-runtime}`; the discovery routes for adding devices (`/api/discovery/scan`, refreshes, `connections/mqtt-credentials`) |
+| 2 | **Older MQTT setup migration**: review and apply | System names the waiting migration and opens `/#maintenance-status`. The Classic section opens collapsed there | GET `/api/admin/maintenance/zendure-mqtt/migration-review`; POST `.../migration-apply` with `{revision, confirm, backup}` |
+| 3 | **Guided Setup**: system build, discovery, MQTT brokers and credentials, Zendure cloud key, device plan, config, deployment, abandon | Overview offers **Set up in the Classic view**. Classic never opens the wizard from an address, so it lands on the start page, where **Fresh install** is the first choice | `/api/setup/{workflow,releases,device-plan,config-preview,config/*,deployment/*,abandon}`, `/api/setup/system-build/*`, `/api/admin/system-alignment/validate`, `/api/discovery/*` with the `/api/setup/discovery/*` aliases |
+| 4 | **Start gate**: choose the start path, replace an existing install, migrate a root `config.json` to the standard layout | Not reachable from Modern. System shows a root `config.json` (`legacy_root_config`) without a way to migrate it | POST `/api/admin/start-path`; POST `/api/admin/config/migrate-legacy` |
 
 ### Display-only details inside native pages
 
@@ -277,7 +298,7 @@ makes it native.
 | Updates | The Admin/EMS pair state (not a pair, not verified); the catalogue's warnings | The Guided Upgrade aligns the pair |
 | Services | Docker not reachable; there is no start or stop per service, only **Restart EMS now** (sync) and **Repair analytics** | Fix Docker on the host |
 | Diagnostics | The checks' results; the report cannot be copied or exported | Classic has no export either |
-| System | Missing installation paths; broker and device problems from MQTT telemetry | The settings editor (2), the Guided Setup (4) |
+| System | Missing installation paths; broker and device problems from MQTT telemetry | The settings editor (1), the Guided Setup (3) |
 | Backups | Encrypted backups cannot be created (existing ones can be inspected and restored) | Classic cannot create them either; the backend accepts `encrypt`/`password` on create (`admin/backup_restore.py`) |
 
 ### Missing from both consoles
@@ -314,7 +335,8 @@ output is committed with stable file names, so the Python servers and the
 Docker images need no Node at all. A change to the source is committed together
 with its rebuilt output; CI rebuilds and refuses a difference. The browser tests
 are `tests/e2e-dashboard/modern.spec.ts` in the dashboard suite and
-`tests/e2e/admin-modern.spec.ts` in the Admin suite. The checks every Modern
+`tests/e2e/admin-modern.spec.ts` and `tests/e2e/admin-modern-upgrade.spec.ts` in
+the Admin suite. The checks every Modern
 build has to pass live in `tests/modern_frontend.py`, the design system's own
 (colour schemes, contrast) in `tests/test_modern_design_system.py`.
 
