@@ -2,12 +2,13 @@
 
 ## Purpose
 
-The Admin Console has two views of the same server. **Classic** is the console
-the other guides in this section describe. **Modern** is a newer design at
-`/modern/` on the same address and port: the same password, the same checks
-and the same actions, arranged like the Modern dashboard, in English, German,
-Dutch or French. The two are one product: the same colours, the same menu, the
-same mark.
+The Admin Console has two views of the same server. **Modern** is the one the
+console's address opens: a newer design at `/modern/` on the same address and
+port, arranged like the Modern dashboard, in English, German, Dutch or French.
+**Classic** is the console the other guides in this section describe; it keeps
+the workflows Modern does not run yet. Both have the same password, the same
+checks and the same actions. Modern and the Modern dashboard are one product:
+the same colours, the same menu, the same mark.
 
 Both views talk to the same Admin server and write through the same checks.
 Nothing you do in one is hidden from the other, and switching between them
@@ -53,10 +54,11 @@ installation. It leads back to the overview.
 2. In Modern, the foot of the side menu has **Classic view** (on a phone, under
    **More**). It opens the same page in Classic.
 
-Classic is still the default while Modern does not cover every workflow. The
-browser remembers your choice: once you have opened Modern, the console's
-address opens Modern. Adding `?ui=classic` or `?ui=modern` to the address sets
-the choice explicitly.
+Modern is the default, as on the EMS dashboard. The browser remembers your
+choice: once you have switched to Classic, the console's address opens Classic
+until you press **New design**. Adding `?ui=classic` or `?ui=modern` to the
+address sets the choice explicitly. A browser too old for Modern always opens
+Classic.
 
 Some workflows run in Classic for now: **Guided setup**, the **Guided
 upgrade**, editing **settings and devices**, and applying an **older MQTT
@@ -128,7 +130,7 @@ do before it does it.
 
 | Symptom | Meaning | What to do |
 | --- | --- | --- |
-| The address opens Classic | Classic is the default, or this browser chose it | Press **New design**, or open the address with `?ui=modern` |
+| The address opens Classic | This browser chose Classic, or it is too old for Modern | Press **New design**, or open the address with `?ui=modern` |
 | A button opens the Classic view | That workflow has not moved to Modern yet | Finish it there; the console's address brings you back to Modern |
 | A message is in English | It comes from the server and has no translation yet | It is still accurate; report it if it matters to you |
 | **Restart EMS now** is greyed out | Docker or the container setup is not available here, or nothing needs to change | Read **What a restart does** on the Services page |

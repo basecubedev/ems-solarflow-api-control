@@ -6,8 +6,8 @@
 import { expect, test, ADMIN_PASSWORD } from "./fixtures/admin";
 import type { Page } from "@playwright/test";
 import { post } from "./helpers/setup-authority";
-
-const UI_KEY = "ems-admin-ui";
+import { ADMIN_UI_KEY as UI_KEY } from "./helpers/classic-ui";
+import { SetupPage } from "./pages/setup-page";
 
 async function signIn(page: Page, password = ADMIN_PASSWORD) {
   await expect(page.getByTestId("sign-in-screen")).toBeVisible();
@@ -22,18 +22,15 @@ async function openModern(page: Page, hash = "") {
   await expect(page.locator(".app")).toBeVisible();
 }
 
+test.use({ storageState: { cookies: [], origins: [] } });
+
 test.describe("Modern Admin: the switch", { tag: ["@smoke"] }, () => {
-  test("Classic offers it, Modern remembers it, and Classic takes the browser back", async ({ page }) => {
+  test("the console opens in Modern, Classic is one click away and stays chosen, New design comes back", async ({ page }) => {
     await page.goto("/");
-    await expect(page.locator("#modern-admin-link")).toBeVisible();
-    await page.locator("#modern-admin-link").click();
     await expect(page).toHaveURL(/\/modern\/$/);
     await signIn(page);
     await expect(page.locator(".app")).toBeVisible();
     expect(await page.evaluate((key) => localStorage.getItem(key), UI_KEY)).toBe("modern");
-
-    await page.goto("/");
-    await expect(page).toHaveURL(/\/modern\/$/);
 
     await page.getByTestId("switch-classic").click();
     await expect(page).toHaveURL(/\/\?ui=classic#maintenance$/);
@@ -41,6 +38,39 @@ test.describe("Modern Admin: the switch", { tag: ["@smoke"] }, () => {
     expect(await page.evaluate((key) => localStorage.getItem(key), UI_KEY)).toBe("classic");
     await page.goto("/");
     await expect(page).toHaveURL(/\/$/);
+    await expect(page.locator("#modern-admin-link")).toBeVisible();
+
+    await page.locator("#modern-admin-link").click();
+    await expect(page).toHaveURL(/\/modern\/$/);
+    await expect(page.locator(".app")).toBeVisible();
+    expect(await page.evaluate((key) => localStorage.getItem(key), UI_KEY)).toBe("modern");
+    await page.goto("/");
+    await expect(page).toHaveURL(/\/modern\/$/);
+  });
+
+  test("a guided setup begun in Classic stays in Classic across a reload, though Modern is the default", async ({ page }) => {
+    const signedIn = await page.request.post("/api/admin/auth/login", { data: { password: ADMIN_PASSWORD } });
+    expect(signedIn.ok()).toBeTruthy();
+    await page.goto("/#maintenance");
+    await page.locator('.workspace-back[data-back="landing"]:visible').first().click();
+    await expect(page.locator("#view-start")).toBeVisible();
+    await expect(page).toHaveURL(/\/$/);
+    await new SetupPage(page).chooseFreshInstall();
+    await expect(page).toHaveURL(/\/#setup$/);
+    await page.reload();
+    await expect(page).toHaveURL(/\/#setup$/);
+    await expect(page.locator("#modern-admin-link")).toBeVisible();
+    expect(await page.evaluate((key) => localStorage.getItem(key), UI_KEY)).toBeNull();
+  });
+
+  test("the guided upgrade's Classic page stays in Classic across a reload", async ({ page }) => {
+    const signedIn = await page.request.post("/api/admin/auth/login", { data: { password: ADMIN_PASSWORD } });
+    expect(signedIn.ok()).toBeTruthy();
+    await page.goto("/#maintenance-upgrade");
+    await expect(page.locator("#modern-admin-link")).toBeVisible();
+    await page.reload();
+    await expect(page).toHaveURL(/\/#maintenance-upgrade$/);
+    await expect(page.locator("#modern-admin-link")).toBeVisible();
   });
 
   test("a Classic page Modern hands over to opens in Classic whatever the choice", async ({ page }) => {

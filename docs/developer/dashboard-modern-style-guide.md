@@ -240,9 +240,15 @@ from what the Admin server is.
   An address with a Classic page in it opens Classic whatever the browser chose,
   so a hand-over never changes the choice. A guided workflow that holds the
   console is shown on every page with the way to continue it.
-- **Classic stays the default** until Modern covers every workflow:
-  `admin/static/admin-theme.js` redirects `/` to `/modern/` only for a browser
-  that chose Modern (`ems-admin-ui`), the way the dashboard's `theme.js` does.
+- **Modern is the default**, as on the dashboard: `admin/static/admin-theme.js`
+  redirects `/` to `/modern/` unless the browser chose Classic
+  (`ems-admin-ui`), the address names a Classic page, or the browser lacks the
+  Popover API. The guided setup and upgrade keep their `#setup` /
+  `#maintenance-upgrade` address, so a reload or the reconnect after an Admin
+  update stays in Classic. Classic's Playwright specs choose Classic first
+  through the configs' `use.storageState` (`tests/e2e/helpers/classic-ui.ts`,
+  see [e2e-playwright.md](e2e-playwright.md)); the appearance gallery photographs
+  Classic at `/?ui=classic`.
 
 ## Building and testing
 

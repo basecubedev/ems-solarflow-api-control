@@ -166,9 +166,9 @@ each one waits for your confirmation.
 | --- | --- |
 | See what my system is doing right now | Dashboard (`:8080`) |
 | Understand why the EMS wrote a value | Dashboard → **Control** |
-| Add, change or remove a device | Admin Console (`:8090`) → **Maintenance** |
-| Update EMS and Admin | Admin Console → **Guided Upgrade** |
-| Back up or restore the EMS | Admin Console → **Backup / restore** |
+| Add, change or remove a device | Admin Console (`:8090`) → **Settings & devices** → **Edit devices** |
+| Update EMS and Admin | Admin Console → **Updates** → **Start the guided upgrade** |
+| Back up or restore the EMS | Admin Console → **Backups** |
 | Update the operating system or the Appliance Manager | Appliance Manager (`:8088`) → **Updates** |
 | Install, update, repair or roll back the Admin Console | Appliance Manager → **Admin** |
 | Change the network or WLAN of the Pi | Appliance Manager → **Network** |

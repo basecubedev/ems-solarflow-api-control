@@ -140,7 +140,7 @@ def test_the_classic_page_offers_the_switch_and_decides_before_it_paints():
     assert 'href="/modern/"' in page
     early = (STATIC / "admin-theme.js").read_text(encoding="utf-8")
     assert 'var UI_KEY = "ems-admin-ui";' in early
-    assert 'var DEFAULT_UI = "classic";' in early
+    assert 'var DEFAULT_UI = "modern";' in early
     assert 'window.location.replace("/modern/")' in early
     prefs = (SOURCE / "src" / "state" / "prefs.svelte.js").read_text(encoding="utf-8")
     assert 'UI_CHOICE_KEY = "ems-admin-ui"' in prefs

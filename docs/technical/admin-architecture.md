@@ -59,8 +59,9 @@ session and CSRF token, and neither gains an endpoint or an authority the other
 lacks. Modern runs the maintenance writes it covers (container sync, analytics
 repair, diagnostics, backups and restore, workflow recovery) with exactly the
 bodies Classic sends, and hands the guided workflows and the settings editor to
-Classic's pages. Which of the two `/` opens is the browser's own choice
-(`ems-admin-ui`), applied before the first paint by `admin-theme.js`; see the
+Classic's pages. `/` opens Modern unless the browser chose Classic
+(`ems-admin-ui`) or the address names a Classic page, decided before the first
+paint by `admin-theme.js`; see the
 [Modern front ends style guide](../developer/dashboard-modern-style-guide.md).
 
 ## Standard deployment layout

@@ -115,6 +115,9 @@ the install worked**; if it does not appear,
 came up. Host networking is the default (best for local discovery); add
 `--bridge --bind 0.0.0.0` only if you need Docker bridge networking.
 
+The address opens the console's Modern view. The guided setup begins on the
+Classic start page below, at `http://127.0.0.1:8090/#setup`.
+
 ![Admin Console start page](docs/assets/screenshots/admin/admin-landing.png)
 
 Full guide, with demo videos of a fresh install and a guided update:
