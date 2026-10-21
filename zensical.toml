@@ -22,6 +22,7 @@ nav = [
     { "Admin Console guides" = [
       "user/admin/index.md",
       { "First start" = "user/admin/first-start.md" },
+      { "Modern design" = "user/admin/modern.md" },
       { "Guided Setup" = "user/admin/guided-setup.md" },
       { "Guided Upgrade" = "user/admin/guided-upgrade.md" },
       { "Maintenance" = "user/admin/maintenance.md" },

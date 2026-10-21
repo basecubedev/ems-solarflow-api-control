@@ -1262,7 +1262,8 @@ host networking with a Compose override instead of `--bridge`:
 python3 scripts/serve_admin_preview.py --host 127.0.0.1 --port 8090
 ```
 
-Then open http://127.0.0.1:8090, enter a local CIDR, and start a scan.
+Then open http://127.0.0.1:8090/#setup (the Classic view, where the discovery
+runs), enter a local CIDR, and start a scan.
 
 ## Docker setup (default: deployment-capable)
 

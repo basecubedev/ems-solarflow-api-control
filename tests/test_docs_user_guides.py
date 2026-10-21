@@ -220,6 +220,7 @@ def test_capture_tooling_present():
         "scripts/serve_admin_docs_preview.py",
         "scripts/serve_dashboard_preview.py",
         "scripts/admin_docs_preview.js",
+        "scripts/capture_admin_modern_docs.mjs",
     ):
         assert (ROOT / rel).is_file(), rel
     assert (ADMIN_SHOTS / "README.md").is_file()
@@ -241,7 +242,8 @@ def test_capture_manifest_matches_the_committed_screenshots():
     gallery photographs the same page three times with one axis changed. A
     single-writer check would have read the gallery's output as an orphan and
     the gallery's manifest as a lie. The Modern dashboard's pages come from a
-    Playwright spec, named by its test titles.
+    Playwright spec, named by its test titles, and the Modern Admin console's
+    from capture_admin_modern_docs.mjs.
     """
 
     declared = _capture_outputs(ROOT / "scripts" / "capture_admin_docs.py")
@@ -250,6 +252,7 @@ def test_capture_manifest_matches_the_committed_screenshots():
         for name in _capture_outputs(ROOT / "scripts" / "capture_appearance_gallery.py")
         if name.startswith("admin-")
     }
+    declared |= set(re.findall(r'file: "(admin-[a-z0-9-]+\.png)"', read(ROOT / "scripts" / "capture_admin_modern_docs.mjs")))
     committed = {p.name for p in ADMIN_SHOTS.glob("*.png")}
     assert declared == committed, (
         f"admin capture manifest drifted: only declared={sorted(declared - committed)} "

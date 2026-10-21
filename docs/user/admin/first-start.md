@@ -27,11 +27,14 @@ what the session, reconnect and logout behaviour mean.
 Open:
 
 ```text
-http://127.0.0.1:8090
+http://127.0.0.1:8090/#setup
 ```
 
-From another device on your LAN, use `http://<host-ip>:8090` (host networking is
-the default).
+From another device on your LAN, use `http://<host-ip>:8090/#setup` (host
+networking is the default). The `#setup` at the end opens the Classic view that
+these steps show. The plain address opens the [Modern view](modern.md), which
+creates the same password and offers **Set up in the Classic view**; opening
+`#setup` does not change which view the plain address opens later.
 
 **Expected result:** the page loads and shows either the password-creation card,
 the login card, or the task selection if your session is still valid.

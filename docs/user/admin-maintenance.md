@@ -19,9 +19,11 @@ the source of truth and owns the standard `config/config.json` layout.
 
 ## Opening Maintenance
 
-Start the Admin Console and open `http://127.0.0.1:8090` (see
-[Admin setup](admin-setup.md#start)). The start screen detects the current
-install and recommends the safest flow. Any existing installation is routed to
+Start the Admin Console and open `http://127.0.0.1:8090/#setup` (see
+[Admin setup](admin-setup.md#start)). The address opens the Classic start
+screen this guide begins with; the plain address opens the
+[Modern view](admin/modern.md), whose **Classic view** button opens Classic too.
+The start screen detects the current install and recommends the safest flow. Any existing installation is routed to
 **Manage my existing system**; the setup wizard is never started automatically.
 A legacy root `config.json` is offered a migration to `config/config.json` first
 (see [config-layout.md](config-layout.md)).

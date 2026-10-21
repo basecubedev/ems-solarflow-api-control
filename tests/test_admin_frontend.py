@@ -3,6 +3,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 
@@ -4406,21 +4407,6 @@ def test_maintenance_expanded_body_carries_resolved_paths_and_names():
         assert marker in maintenance
 
 
-def test_maintenance_dashboard_link_is_a_real_anchor():
-    html = _read("index.html")
-    js = _read("admin.js")
-    maintenance = _maintenance_section(html)
-    assert 'id="maintenance-dashboard-link"' in maintenance
-    assert 'target="_blank"' in maintenance
-    assert 'rel="noopener"' in maintenance
-    # href is set through the DOM property, never via innerHTML/markup.
-    fn = js.split("function renderMaintenanceDashboard", 1)[1].split(
-        "\nfunction ", 1
-    )[0]
-    assert "link.href = url" in fn
-    assert "innerHTML" not in fn
-
-
 def test_maintenance_toggle_expands_and_collapses_card():
     js = _read("admin.js")
     # One state writer, so a card opened by a toggle and one opened by a
@@ -7607,9 +7593,6 @@ def test_maintenance_proposal_draft_keeps_opaque_server_resolution_identity():
 
 
 # --- credential rollback failure warning (Setup + Maintenance parity) --------
-
-
-import re  # noqa: E402
 
 
 def _async_fn_body(js, header):

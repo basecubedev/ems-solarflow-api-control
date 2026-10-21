@@ -35,6 +35,8 @@ esac
 if [ "$target" = all ] || [ "$target" = admin ]; then
     printf '== Admin Console ==\n'
     python3 scripts/capture_admin_docs.py
+    printf '== Admin Console, Modern ==\n'
+    node scripts/capture_admin_modern_docs.mjs
 fi
 
 if [ "$target" = all ] || [ "$target" = dashboard ]; then

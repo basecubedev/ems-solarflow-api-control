@@ -5,10 +5,10 @@ Start with the Admin Console if you installed EMS through the recommended path.
 ## Start here
 
 1. Open the Admin Console.
-2. Go to **Maintenance**.
-3. Check **Overview** for container and config status.
-4. Open **Diagnostics** and run the recommended checks.
-5. Follow the shown warning or next step.
+2. Read the **Overview**: it says whether everything is in order and what needs
+   doing, with the way out of each finding.
+3. Open **Diagnostics** and run the checks.
+4. Follow the shown warning or next step.
 
 The Admin Console runs at `http://127.0.0.1:8090` on the machine where you
 installed it. If it runs on another LAN host, use that host's IP instead.
