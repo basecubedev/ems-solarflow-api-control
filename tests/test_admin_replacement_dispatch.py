@@ -64,7 +64,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from admin.admin_update import make_transition_record
+from admin.admin_update import ReplacementActivity, make_transition_record
 from admin.system_alignment import SystemAlignmentError
 from tests.test_admin_reconnect_stage_commit import (
     STAGE_RECONNECT_PENDING,
@@ -1046,3 +1046,61 @@ def test_a_guided_upgrade_recovery_request_launches_once_and_aligns(tmp_path):
     assert payload["operation_id"] == operation_id
     assert payload["stage"] == "resources_verified"
     assert transitions.read().stage == "resources_verified"
+
+
+def test_a_recovery_request_answered_by_the_old_admin_waits_for_the_swap(tmp_path):
+    """A real replacement runs out of process: the request that launched it is
+    still answered by the Admin being replaced. Resuming in that request would
+    read the old identity and record the swap as failed before it could happen,
+    so the route reports the reconnect and leaves the transition waiting."""
+
+    attempts = []
+
+    def launcher(record):
+        attempts.append(record)
+
+    service, transitions, build, _launched = _aligning_service(
+        tmp_path, launcher=launcher
+    )
+    operation_id = _seed_failed_recoverable(transitions, build, mode="guided_upgrade")
+    srv, base = _serve()
+    _attach_system_alignment(srv, service)
+    try:
+        status, _headers, payload = _request(
+            f"{base}{RECOVER}",
+            method="POST",
+            body={"operation_id": operation_id, "tag": build.canonical_tag},
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 200, payload
+    assert len(attempts) == 1
+    assert payload["reconnect"] is True
+    assert payload["stage"] == "admin_reconnect_pending"
+    durable = transitions.read()
+    assert durable.stage == "admin_reconnect_pending"
+    assert durable.error_code is None
+
+
+def test_a_resume_during_a_running_replacement_records_no_failure(tmp_path):
+    """Asked to resume while the replacement is proven still running, the old
+    Admin answers that it is in progress instead of consuming the operation."""
+
+    attempts = []
+    service, transitions, build, _launched = _aligning_service(
+        tmp_path, launcher=attempts.append
+    )
+    operation_id = _seed_failed_recoverable(transitions, build, mode="guided_upgrade")
+    service.retry(operation_id=operation_id)
+    assert transitions.read().stage == "admin_reconnect_pending"
+    service._replacement_activity = lambda _operation_id: ReplacementActivity.ACTIVE
+
+    with pytest.raises(SystemAlignmentError) as raised:
+        service.resume(operation_id=operation_id)
+
+    assert raised.value.code == "admin_replacement_in_progress"
+    durable = transitions.read()
+    assert durable.stage == "admin_reconnect_pending"
+    assert durable.error_code is None

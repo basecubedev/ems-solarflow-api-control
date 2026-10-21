@@ -1240,10 +1240,17 @@ def _submit_guided_upgrade_job(
     """Submit (or re-attach to) the single EMS upgrade job for this operation.
 
     Keyed by ``operation_id`` so several execute/resume requests can never
-    start a second job: a repeat returns the existing job's live snapshot.
-    ``None`` means abandonment won the claim race.
+    start a second job: a repeat returns the existing job's live snapshot. A
+    failed job is that answer only until a retry reopens the EMS operation;
+    from then on, whichever route continues -- execute or resume -- starts the
+    new attempt. ``None`` means abandonment won the claim race.
     """
 
+    existing = runtime.upgrade_jobs.for_operation(operation_id)
+    if existing is not None and existing.snapshot().get("status") == "failed":
+        stage = (_upgrade_alignment_status(runtime).get("transition") or {}).get("stage")
+        if stage in _RETRIED_EMS_STAGES:
+            runtime.upgrade_jobs.forget_operation(operation_id, existing.job_id)
     job = UpgradeJob(uuid.uuid4().hex, plan_upgrade_steps(run_context.options))
     job, _created = runtime.upgrade_jobs.get_or_submit(
         operation_id,
@@ -1259,11 +1266,21 @@ def _submit_guided_upgrade_job(
 
 
 def _advance_guided_upgrade_reconnect(runtime, operation_id, transition):
-    """Advance a reconnected Admin to ``resources_verified`` when possible."""
+    """Advance a reconnected Admin to ``resources_verified`` when possible.
+
+    Asked while the replacement still runs, the Admin being replaced answers
+    that it is in progress; the continuation then waits like any caller that
+    arrived before the swap, instead of reporting a failure.
+    """
 
     stage = transition.get("stage")
     if stage == "admin_reconnect_pending":
-        result = runtime.system_alignment.resume(operation_id=operation_id)
+        try:
+            result = runtime.system_alignment.resume(operation_id=operation_id)
+        except SystemAlignmentError as exc:
+            if getattr(exc, "code", None) == "admin_replacement_in_progress":
+                return stage
+            raise
         stage = result.get("stage")
     if stage == "admin_aligned":
         result = runtime.system_alignment.verify_resources(operation_id=operation_id)
@@ -1280,6 +1297,11 @@ def _continuation_lock(runtime):
     return getattr(runtime, "guided_upgrade_continuation_lock", None) or (
         _CONTINUATION_FALLBACK_LOCK
     )
+
+
+# A failed job answers for its operation until a retry reopens the EMS
+# operation at one of these stages; only then does a continuation start anew.
+_RETRIED_EMS_STAGES = frozenset({"resources_verified", "ems_operation_pending"})
 
 
 def continue_guided_upgrade(runtime, operation_id):
@@ -1300,13 +1322,15 @@ def continue_guided_upgrade(runtime, operation_id):
 
 def _continue_guided_upgrade_locked(runtime, operation_id):
     existing = runtime.upgrade_jobs.for_operation(operation_id)
-    if existing is not None:
+    if existing is not None and existing.snapshot().get("status") != "failed":
         # A duplicate continuation re-attaches to the single existing job --
         # even after completion, when the durable context has been cleared.
         return {"outcome": "reattached", "job": existing, "stage": None}
     transition = _upgrade_alignment_status(runtime).get("transition") or {}
     target_release = transition.get("system_tag")
     stage = _advance_guided_upgrade_reconnect(runtime, operation_id, transition)
+    if existing is not None and stage not in _RETRIED_EMS_STAGES:
+        return {"outcome": "reattached", "job": existing, "stage": stage}
     if stage in {"admin_update_pending", "admin_reconnect_pending"}:
         return {"outcome": "waiting", "job": None, "stage": stage}
     if stage == "failed_recoverable":
@@ -2805,6 +2829,14 @@ class AdminHandler(BaseHTTPRequestHandler):
                 result = transition
 
             stage = result.get("stage")
+            if (
+                stage == "admin_reconnect_pending"
+                and manual_retry
+                and result.get("reconnect")
+                and not self._replacement_answers(operation_id)
+            ):
+                self._send_json(result)
+                return
             if stage == "admin_reconnect_pending":
                 result = self.server.system_alignment.resume(operation_id=operation_id)
                 stage = result.get("stage")
@@ -2855,6 +2887,17 @@ class AdminHandler(BaseHTTPRequestHandler):
             elif mode in SETUP_TRANSITION_MODES:
                 self._complete_setup_workflow()
         self._send_json(result)
+
+    def _replacement_answers(self, operation_id):
+        """Whether the Admin a just-launched retry installs already answers.
+
+        Until it does, this request is answered by the Admin being replaced,
+        and resuming would record the swap as failed before it could happen.
+        A service without the check keeps the earlier resume-at-once path.
+        """
+
+        answers = getattr(self.server.system_alignment, "replacement_answers", None)
+        return answers(operation_id) if callable(answers) else True
 
     def _complete_setup_workflow(self):
         """Mark the active Guided Setup workflow completed (terminal)."""

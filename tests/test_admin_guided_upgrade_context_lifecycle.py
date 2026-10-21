@@ -25,7 +25,11 @@ from admin.guided_upgrade import (
     guided_upgrade_request_fingerprint,
 )
 from admin.guided_upgrade_context import GuidedUpgradeContextStore
-from admin.server import continue_guided_upgrade, resume_pending_guided_upgrade
+from admin.server import (
+    _submit_guided_upgrade_job,
+    continue_guided_upgrade,
+    resume_pending_guided_upgrade,
+)
 from admin.system_alignment import SystemAlignmentError
 from tests.test_admin_server import _control_export_manager, _request, _serve
 from tests.test_admin_setup_cancellation_ownership import (
@@ -349,6 +353,98 @@ def test_a_recoverable_failure_keeps_the_context(tmp_path):
         srv.server_close()
 
 
+class _ScriptedUpgradeExecutor(_StubUpgradeExecutor):
+    """A stub whose successive runs return successive scripted outcomes."""
+
+    def __init__(self, *results):
+        super().__init__(results[0])
+        self._results = list(results)
+
+    def run(self, run_context, *, pre_alignment=None, progress=None):
+        self._result = self._results[min(self.run_calls, len(self._results) - 1)]
+        return super().run(run_context, pre_alignment=pre_alignment, progress=progress)
+
+
+class _RetriableUpgradeAlignment(_ExecutableUpgradeAlignment):
+    """The execute fake, able to rebuild its pair the way a continuation does."""
+
+    def transition_build(self, *, operation_id):
+        del operation_id
+        return self._system_build(TAG)
+
+
+def test_a_retried_ems_failure_runs_a_new_job_instead_of_the_failed_one(tmp_path):
+    """The failed job answers until a retry reopens the EMS operation; the
+    continuation after that retry must deploy again, not re-show the failure."""
+
+    executor = _ScriptedUpgradeExecutor(
+        {"ok": False, "reason": "ems_upgrade_failed", "message": "pull failed"},
+        {"ok": True, "status": "success", "diagnostics": {"available": True, "summary": {"status": "ok"}}},
+    )
+    alignment = _RetriableUpgradeAlignment()
+    srv, base = _serve(
+        release_manager=_release_manager(tmp_path),
+        system_alignment=alignment,
+        guided_upgrade=executor,
+        guided_upgrade_context=GuidedUpgradeContextStore(tmp_path / "state"),
+    )
+    try:
+        status, _, payload = _execute(base)
+        assert status == 202, payload
+        assert _wait_for_stage(alignment, {"failed_recoverable"}), alignment.stage
+        failed_job = payload["job_id"]
+
+        still_failed = continue_guided_upgrade(srv, "op-1")
+        assert still_failed["outcome"] == "reattached"
+        assert still_failed["job"].job_id == failed_job
+        assert executor.run_calls == 1
+
+        alignment.stage = "ems_operation_pending"
+        alignment._claimed = False
+        retried = continue_guided_upgrade(srv, "op-1")
+        assert retried["outcome"] == "started"
+        assert retried["job"].job_id != failed_job
+        assert _wait_for_stage(alignment, {"completed"}), alignment.stage
+        assert executor.run_calls == 2
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_execute_after_a_retry_starts_a_new_job_too(tmp_path):
+    """Classic continues a retried run through execute, not resume: the job
+    submission itself drops the failed job once the EMS operation reopened."""
+
+    executor = _ScriptedUpgradeExecutor(
+        {"ok": False, "reason": "ems_upgrade_failed", "message": "pull failed"},
+        {"ok": True, "status": "success", "diagnostics": {"available": True, "summary": {"status": "ok"}}},
+    )
+    alignment = _RetriableUpgradeAlignment()
+    srv, base = _serve(
+        release_manager=_release_manager(tmp_path),
+        system_alignment=alignment,
+        guided_upgrade=executor,
+        guided_upgrade_context=GuidedUpgradeContextStore(tmp_path / "state"),
+    )
+    try:
+        status, _, payload = _execute(base)
+        assert status == 202, payload
+        assert _wait_for_stage(alignment, {"failed_recoverable"}), alignment.stage
+        failed_job = payload["job_id"]
+        _, run_context = executor.preflight(TAG, _options(), confirm=True, system_build=None)
+
+        alignment.stage = "ems_operation_pending"
+        alignment._claimed = False
+        job = _submit_guided_upgrade_job(srv, "op-1", executor, run_context, SimpleNamespace(steps=[]))
+
+        assert job.job_id != failed_job
+        assert _wait_for_stage(alignment, {"completed"}), alignment.stage
+        assert executor.run_calls == 2
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
 # --- the replaced Admin continues its own upgrade --------------------------
 #
 # After the Admin container is replaced, the only thing that ever continued the
@@ -641,3 +737,38 @@ def test_cancel_requires_the_exact_operation_id(tmp_path, operation_id):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+class _SwappingUpgradeAlignment(_ExecutableUpgradeAlignment):
+    """Still answered by the Admin being replaced: resume says it is in progress."""
+
+    def __init__(self):
+        super().__init__()
+        self.stage = "admin_reconnect_pending"
+        self.active = True
+
+    def resume(self, *, operation_id, **kwargs):
+        del operation_id, kwargs
+        raise SystemAlignmentError(
+            "admin_replacement_in_progress", "the Admin replacement is still running"
+        )
+
+    def transition_build(self, *, operation_id):
+        del operation_id
+        return self._system_build(TAG)
+
+
+def test_a_continuation_during_the_swap_waits_instead_of_failing(tmp_path):
+    executor = _StubUpgradeExecutor({"ok": True})
+    alignment = _SwappingUpgradeAlignment()
+    srv, _base = _reconnected(tmp_path, alignment, executor)
+    try:
+        outcome = continue_guided_upgrade(srv, "op-1")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert outcome["outcome"] == "waiting"
+    assert outcome["stage"] == "admin_reconnect_pending"
+    assert executor.run_calls == 0
+    assert alignment.stage == "admin_reconnect_pending"
