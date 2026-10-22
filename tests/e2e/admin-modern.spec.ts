@@ -171,12 +171,13 @@ test.describe("Modern Admin: overview and status", { tag: ["@smoke"] }, () => {
     await expect(page.getByText("Docker or the container setup is not available")).toBeVisible();
   });
 
-  test("the settings show the devices and hand editing to the Classic editor", async ({ page, seedAdminScenario }) => {
+  test("the settings list the devices and hand device editing to the Classic editor", async ({ page, seedAdminScenario }) => {
     await seededAt(page, seedAdminScenario, "#/settings");
+    await expect(page.getByTestId("settings-features")).toContainText("Winter mode");
+    await page.getByRole("button", { name: "Devices", exact: true }).click();
     await expect(page.getByTestId("devices").locator("li")).toHaveCount(3);
     await expect(page.getByTestId("devices")).toContainText("Zendure via the Zendure cloud");
     await expect(page.getByRole("link", { name: "Edit devices" })).toHaveAttribute("href", "/#maintenance-settings-devices");
-    await expect(page.getByTestId("features")).toContainText("Winter mode");
   });
 
   test("the checks say plainly when there is no EMS to check", async ({ page, seedAdminScenario }) => {
@@ -191,6 +192,54 @@ test.describe("Modern Admin: overview and status", { tag: ["@smoke"] }, () => {
     await expect(page.getByText("Settings file", { exact: true })).toBeVisible();
     await expect(page.getByText("local_mixed")).toBeVisible();
     await expect(page.getByTestId("recovery-summary")).toHaveCount(0);
+  });
+});
+
+test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
+  test("a feature is switched on, checked and saved, and the saved settings say so", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings");
+    const winter = page.locator('[data-section="winter"]');
+    const toggle = winter.getByRole("checkbox", { name: "Winter mode on or off" });
+    const before = await toggle.isChecked();
+    await toggle.click();
+    await expect(page.getByTestId("change-count")).toHaveText("1 unsaved change");
+
+    await page.getByTestId("review").click();
+    const review = page.getByTestId("settings-review");
+    await expect(review).toContainText("Settings are valid");
+    await expect(review).toContainText("winter.enabled");
+    await page.getByTestId("apply").click();
+    await page.getByRole("dialog", { name: "Save the checked changes?" }).getByTestId("confirm").click();
+    await expect(page.getByTestId("settings-applied")).toContainText("Saved, with a backup of the previous settings:");
+
+    await page.reload();
+    await expect(page.locator('[data-section="winter"]').getByRole("checkbox", { name: "Winter mode on or off" })).toBeChecked({ checked: !before });
+    await expect(page.getByTestId("settings-changes")).toHaveCount(0);
+  });
+
+  test("the overview's Control & safety card opens the safety settings", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "");
+    await page.getByRole("link", { name: "Change", exact: true }).click();
+    await expect(page).toHaveURL(/#\/settings\/safety$/);
+    await expect(page.getByTestId("settings-safety")).toContainText("Allow hardware writes");
+  });
+
+  test("an edit survives a reload, the search finds it, and discard leaves the file alone", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings");
+    await page.getByRole("button", { name: "Expert", exact: true }).click();
+    await page.getByTestId("settings-search").fill("loop interval");
+    const field = page.locator('[data-path="system.loop_interval"] input');
+    await expect(field).toBeVisible();
+    await field.fill("7");
+    await expect(page.getByTestId("change-count")).toHaveText("1 unsaved change");
+
+    await page.reload();
+    await expect(page.getByTestId("change-count")).toHaveText("1 unsaved change");
+    await page.getByTestId("discard").click();
+    await expect(page.getByTestId("settings-changes")).toHaveCount(0);
+    await page.getByRole("button", { name: "Expert", exact: true }).click();
+    await page.getByTestId("settings-search").fill("loop interval");
+    await expect(page.locator('[data-path="system.loop_interval"] input')).not.toHaveValue("7");
   });
 });
 

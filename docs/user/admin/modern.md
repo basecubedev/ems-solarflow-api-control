@@ -37,7 +37,7 @@ changes nothing on the host.
 | --- | --- |
 | **Overview** | One answer to "is everything in order": what needs your attention, ranked, each with the way out of it; tiles for EMS, the analytics database, control and the last backup; what your settings allow EMS to do; the versions and the link to the dashboard |
 | **Updates** | What runs now, the versions you can update to, and the update itself: choose a version, then confirm once. Progress and the result are shown on the page |
-| **Settings & devices** | Your devices, the grid meter, the features and the safety switches as EMS applies them; editing opens the Classic editor at the right tab |
+| **Settings & devices** | The features, the safety switches and the expert settings, changed, checked and saved here; your devices and the grid meter as EMS applies them, which you change in the Classic editor |
 | **Services** | EMS and the analytics database as they run; what should run and what a restart changes; **Restart EMS now** and **Repair analytics** |
 | **Backups** | Create a backup, see what is in one, download it, bring one back, restore it after a preview, delete it |
 | **Diagnostics** | The read-only checks of the installed EMS, with the EMS diagnosis in full |
@@ -60,8 +60,8 @@ until you press **New design**. Adding `?ui=classic` or `?ui=modern` to the
 address sets the choice explicitly. A browser too old for Modern always opens
 Classic.
 
-Some workflows run in Classic for now: **Guided setup**, editing **settings
-and devices**, and applying an **older MQTT setup's migration**. Modern names
+Some workflows run in Classic for now: **Guided setup**, editing **devices
+and the grid meter**, and applying an **older MQTT setup's migration**. Modern names
 them and opens them in Classic with one click, at the right page, without
 changing your choice. The guided setup is the one exception: Classic never
 starts it from an address, so that button opens Classic's start page, where it
@@ -76,9 +76,38 @@ What Modern shows but does not change itself yet:
 
 | Where | Shown in Modern | Done in Classic |
 | --- | --- | --- |
-| **Settings & devices** | Every device, the grid meter, the features and the safety switches | Changing them, adding devices, putting live values back |
+| **Settings & devices** | Every device and the grid meter | Changing them, adding devices, searching the network |
 | **System** | An older MQTT setup that waits for migration | Reviewing and applying the migration, under **System status** |
 | **Overview** | That nothing is set up yet | The guided setup |
+
+## Changing settings
+
+**Settings & devices** has four tabs. **Features** switches winter mode,
+full-charge assist, AC charging, energy savings, the dashboard and analytics on
+or off and sets how each works. **Safety** holds what EMS may write to your
+devices, dry run and simulation, and the output limits. **Expert** holds the
+system basics and the control tuning. **Devices** lists your devices and the
+grid meter; **Edit devices** opens the Classic editor for them.
+
+1. Change what you want. Each field names its unit, says what it does and, when
+   it is empty, which default applies. Advanced and expert fields are folded
+   away under each feature. The search box finds a setting by its name, its
+   description or its config path, across all tabs.
+2. A bar at the foot of the page counts your unsaved changes. They stay when you
+   change pages or reload; **Discard** drops them without touching anything.
+3. **Check changes** has the server check the result: whether it is valid, and
+   every value that would change, split into what takes effect at once and what
+   needs an EMS restart. **The settings file this would write** shows the file
+   itself.
+4. **Save and apply** writes it, after a backup of the current settings unless
+   you turn **Back up my settings first** off, and asks once more first. A
+   change made after the check has to be checked again.
+5. When a change needs an EMS restart, **Restart EMS now** does it; **Follow it
+   in Services** shows how it goes.
+
+A value changed in the dashboard while EMS runs is marked **Running: …** beside
+the field. **Put saved values back** makes EMS use the saved values again, at
+once.
 
 ## Signing in
 

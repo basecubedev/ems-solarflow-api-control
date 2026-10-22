@@ -141,7 +141,7 @@
   </div>
 
   <Card title={t("control.title")} subtitle={t("control.sub")} span="span-6">
-    {#snippet actions()}<a class="btn secondary small" href={href("settings")}>{t("control.change")}</a>{/snippet}
+    {#snippet actions()}<a class="btn secondary small" href={`${href("settings")}/safety`}>{t("control.change")}</a>{/snippet}
     <StaleNote resource={system.config} />
     {#if system.config.data?.status === "ok"}
       <ControlState control={system.config.data.summary?.control} overrides={system.config.data.overrides} />
