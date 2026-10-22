@@ -159,7 +159,7 @@ test("no orphan keys: each key is used literally or belongs to a generated famil
     "settings.tab.", "settings.edit.when.", "settings.edit.level.", "settings.risk.", "settings.edit.unsaved.", "settings.edit.overrides.",
     "settings.edit.invalid.", "settings.edit.resetLine.", "system.migrationConfirmDevices.", "alignment.stage.",
     "devices.field.", "devices.enabledHint.", "devices.mqtt.state.", "devices.reason.", "devices.mqtt.note.", "devices.external.model.",
-    "devices.external.state.", "devices.external.note.",
+    "devices.external.state.", "devices.external.note.", "discovery.target.", "discovery.outcome.", "discovery.title.", "discovery.status.", "discovery.note.", "discovery.action.",
     "feature.",
   ];
   const orphans = Object.keys(STRINGS).filter((key) => !APP_KEYS.includes(key) && !text.includes(`"${key}"`) && !families.some((prefix) => key.startsWith(prefix)));

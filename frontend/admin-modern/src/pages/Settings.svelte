@@ -10,6 +10,7 @@
   import SettingField from "../widgets/SettingField.svelte";
   import SettingsSection from "../widgets/SettingsSection.svelte";
   import DevicesEditor from "../widgets/DevicesEditor.svelte";
+  import DiscoveryPanel from "../widgets/DiscoveryPanel.svelte";
   import { t, tn } from "../i18n/i18n.svelte.js";
   import { system, ensure, reload } from "../state/system.svelte.js";
   import { settings, setValue, discard, discardHardware, previewDraft, applyDraft, resetOverrides } from "../state/settings.svelte.js";
@@ -17,7 +18,6 @@
   import { EDIT_TABS, changeGroups, restartNeeded, fieldMatches, levelled, liveOverride, previewValue, safetyBlocks, sharedRisk, tabSections } from "../lib/settings.js";
   import { errorView } from "../lib/errors.js";
   import { href } from "../app/router.svelte.js";
-  import { classicPage } from "../state/prefs.svelte.js";
 
   ensure("config");
 
@@ -159,11 +159,9 @@
       {/if}
     </Card>
   {:else}
-    <div class="lead span-12 inner" role="note">
-      <span class="icon-tile sm c-acc"><Icon name="search" /></span>
-      <p>{t("settings.editLead")}</p>
-      <a class="btn secondary small" href={classicPage("maintenance-settings-devices")} data-testid="edit-settings"><Icon name="arrow-up-right" size="sm" />{t("settings.searchInClassic")}</a>
-    </div>
+    <Card title={t("discovery.title")} subtitle={t("discovery.sub")} span="span-12">
+      <DiscoveryPanel {config} />
+    </Card>
     <Card title={t("settings.devices")} subtitle={tn("settings.devicesSub", devices.length)} span="span-12">
       <DevicesEditor {config} />
     </Card>
@@ -273,8 +271,6 @@
   .search { display: flex; align-items: center; gap: var(--s2); flex: 1 1 220px; min-width: 0; color: var(--m-muted); }
   .live-note { align-items: center; flex-wrap: wrap; }
   .live-note span { flex: 1 1 240px; }
-  .lead { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; border: 1px solid var(--m-line); }
-  .lead p { margin: 0; flex: 1 1 260px; color: var(--m-muted); font-size: 13.5px; }
   .sections, .blocks { display: flex; flex-direction: column; gap: var(--s3); }
   .block { display: flex; flex-direction: column; gap: var(--s2); }
   .block + .block { border-top: 1px solid var(--m-line); padding-top: var(--s4); }

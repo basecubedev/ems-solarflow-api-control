@@ -8,6 +8,7 @@ import type { Page } from "@playwright/test";
 import { post } from "./helpers/setup-authority";
 import { ADMIN_UI_KEY as UI_KEY } from "./helpers/classic-ui";
 import { SetupPage } from "./pages/setup-page";
+import { E3DC_SYSTEM, apiInverter } from "./helpers/discovery-state";
 
 async function signIn(page: Page, password = ADMIN_PASSWORD) {
   await expect(page.getByTestId("sign-in-screen")).toBeVisible();
@@ -171,7 +172,7 @@ test.describe("Modern Admin: overview and status", { tag: ["@smoke"] }, () => {
     await expect(page.getByText("Docker or the container setup is not available")).toBeVisible();
   });
 
-  test("the settings edit the devices here and hand only the network search to Classic", async ({ page, seedAdminScenario }) => {
+  test("the settings edit the devices here, with the network search beside them and no way to Classic", async ({ page, seedAdminScenario }) => {
     await seededAt(page, seedAdminScenario, "#/settings");
     await expect(page.getByTestId("settings-features")).toContainText("Winter mode");
     await page.getByRole("button", { name: "Devices", exact: true }).click();
@@ -179,7 +180,8 @@ test.describe("Modern Admin: overview and status", { tag: ["@smoke"] }, () => {
     await expect(editor.locator("[data-device^='inverter-'], [data-device^='mqtt-']")).toHaveCount(3);
     await expect(editor).toContainText("Zendure via the Zendure cloud");
     await expect(editor.locator('[data-device="zendure-broker"]')).toContainText("read only");
-    await expect(page.getByTestId("edit-settings")).toHaveAttribute("href", "/#maintenance-settings-devices");
+    await expect(page.getByTestId("discovery-start")).toBeVisible();
+    await expect(page.locator(".content a[href^='/#']")).toHaveCount(0);
   });
 
   test("the checks say plainly when there is no EMS to check", async ({ page, seedAdminScenario }) => {
@@ -303,6 +305,91 @@ test.describe("Modern Admin: older MQTT setup", { tag: ["@smoke"] }, () => {
     expect(sent.postDataJSON()).toMatchObject({ confirm: true, backup: true });
     await expect(page.getByTestId("migration-result")).toHaveText("The MQTT setup is up to date.");
     await expect(page.getByTestId("migration-apply")).toHaveCount(0);
+  });
+});
+
+const EXTERNAL = "E2EMODERN0001";
+
+function externalBroker() {
+  const host = "192.168.100.72";
+  return {
+    host,
+    port: 1883,
+    devices: [
+      {
+        broker_id: `mqtt:${host}:1883`,
+        broker_host: host,
+        broker_port: 1883,
+        source_type: "local_mqtt",
+        topic_family: "ems_solarflow",
+        device_id: EXTERNAL,
+        serial_number: null,
+        display_name: "External device",
+        metrics_seen: ["electricLevel", "outputHomePower"],
+        topics_seen: [`ems-solarflow/${EXTERNAL}/inverterPower`, `ems-solarflow/${EXTERNAL}/batterySoc`],
+      },
+    ],
+  };
+}
+
+async function quietNetwork(page: Page) {
+  const reply = (body: unknown) => (route: import("@playwright/test").Route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+  await page.route("**/api/discovery/networks**", reply({ networks: [] }));
+  await page.route("**/api/discovery/scan**", reply({ scan_id: "e2e-scan" }));
+  await page.route("**/api/discovery/result/**", reply({ status: "complete", devices: [] }));
+  await page.route("**/api/discovery/mqtt-brokers/refresh**", reply({ ok: true }));
+  await page.route("**/api/discovery/zendure-cloud-mqtt/settings**", reply({ token_saved: false, tls_mode: "system_ca" }));
+}
+
+async function searched(page: Page, seedAdminScenario: (scenario: string) => Promise<void>, seedDiscoveryState: (state: object) => Promise<void>) {
+  await quietNetwork(page);
+  await openModern(page);
+  await seedAdminScenario("mixed_transports");
+  await seedDiscoveryState({ local_api_devices: [apiInverter("E2ENEWINV01", "192.168.50.41"), E3DC_SYSTEM], local_mqtt_brokers: [externalBroker()] });
+  await page.goto("/modern/#/settings/devices");
+  await page.reload();
+  await page.getByTestId("discovery-start").click();
+  await expect(page.getByTestId("discovery-outcome")).toContainText("The search finished");
+  return page.getByTestId("discovery-items");
+}
+
+test.describe("Modern Admin: network search", { tag: ["@smoke"] }, () => {
+  test("found devices are added from the search, checked and saved", async ({ page, seedAdminScenario, seedDiscoveryState }) => {
+    test.setTimeout(120_000);
+    const items = await searched(page, seedAdminScenario, seedDiscoveryState);
+    const inverter = items.locator("li").filter({ hasText: "192.168.50.41" });
+    await inverter.getByRole("button", { name: "Add inverter" }).click();
+    await expect(inverter.getByRole("button", { name: "Added" })).toBeDisabled();
+    await items.locator('li[data-role="read_only_device"]').getByRole("button", { name: "Add as read-only device" }).click();
+    await items.locator("li").filter({ hasText: EXTERNAL }).getByRole("button", { name: "Add inverter" }).click();
+    await expect(items.locator('li[data-role="read_only_device"]').getByRole("button", { name: "Added" })).toBeDisabled();
+    const editor = page.getByTestId("devices-editor");
+    await expect(editor).toContainText("192.168.50.41");
+    await expect(editor).toContainText(`${E3DC_SYSTEM.ip}:502`);
+    await expect(editor).toContainText("added from discovery");
+    await expect(page.getByTestId("change-count")).toHaveText("3 unsaved changes");
+
+    await page.getByTestId("review").click();
+    await expect(page.getByTestId("settings-review")).toContainText("Settings are valid");
+    await page.getByTestId("apply").click();
+    await page.getByRole("dialog", { name: "Save the checked changes?" }).getByTestId("confirm").click();
+    await expect(page.getByTestId("settings-applied")).toBeVisible();
+    await page.reload();
+    await expect(page.getByTestId("devices-editor")).toContainText("192.168.50.41");
+    await expect(page.getByTestId("devices-editor")).toContainText(`${E3DC_SYSTEM.ip}:502`);
+  });
+
+  test("a found device is ignored for this search, and clearing leaves the changes alone", async ({ page, seedAdminScenario, seedDiscoveryState }) => {
+    test.setTimeout(120_000);
+    const items = await searched(page, seedAdminScenario, seedDiscoveryState);
+    const inverter = items.locator("li").filter({ hasText: "192.168.50.41" });
+    await inverter.getByTestId("discovery-ignore").click();
+    await expect(inverter.getByRole("button", { name: "Ignored" })).toBeDisabled();
+    await items.locator('li[data-role="read_only_device"]').getByRole("button", { name: "Add as read-only device" }).click();
+    await page.getByTestId("discovery-clear").click();
+    await expect(page.getByTestId("discovery-items")).toHaveCount(0);
+    await expect(page.getByTestId("discovery-outcome")).toContainText("Results cleared");
+    await expect(page.getByTestId("change-count")).toHaveText("1 unsaved change");
   });
 });
 
