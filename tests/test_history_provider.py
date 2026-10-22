@@ -459,6 +459,79 @@ def test_a_long_window_is_thinned_and_streamed(tmp_path, monkeypatch):
     assert result.series["grid"][:3] == [0, 20, 40]
 
 
+def test_a_thinned_window_reads_only_the_payloads_it_keeps(tmp_path, monkeypatch):
+    """Two days took 30 s on a Pi 3 while every payload was read and most dropped."""
+
+    from ems.history import provider as provider_mod
+
+    monkeypatch.setattr(provider_mod, "MAX_HISTORY_POINTS", 50)
+    path = tmp_path / "dash.sqlite"
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE snapshots (timestamp TEXT PRIMARY KEY, payload TEXT)")
+    start = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    con.executemany(
+        "INSERT INTO snapshots VALUES (?, ?)",
+        [
+            (ts, json.dumps({"timestamp": ts, "grid_power_w": i}))
+            for i, ts in enumerate(
+                (start + timedelta(seconds=5 * i)).isoformat() for i in range(1000)
+            )
+        ],
+    )
+    con.commit()
+    con.close()
+    statements = []
+    connect = sqlite3.connect
+
+    def tracing(*args, **kwargs):
+        traced = connect(*args, **kwargs)
+        traced.set_trace_callback(statements.append)
+        return traced
+
+    monkeypatch.setattr(provider_mod.sqlite3, "connect", tracing)
+
+    result = provider_mod.SqliteHistoryProvider(str(path)).query(
+        start, start + timedelta(hours=2), series=["grid"]
+    )
+
+    assert len(result.time) == 50
+    assert sum("payload" in statement for statement in statements) == 50
+
+
+def test_the_system_series_read_nested_fields_and_skip_a_broken_payload(tmp_path):
+    path = tmp_path / "dash.sqlite"
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE snapshots (timestamp TEXT PRIMARY KEY, payload TEXT)")
+    start = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    stamps = [(start + timedelta(seconds=5 * i)).isoformat() for i in range(3)]
+    con.executemany(
+        "INSERT INTO snapshots VALUES (?, ?)",
+        [
+            (
+                stamps[0],
+                json.dumps(
+                    {
+                        "timestamp": stamps[0],
+                        "grid_power_w": "12.5",
+                        "controller": {"commanded_total_w": 300},
+                    }
+                ),
+            ),
+            (stamps[1], "{not json"),
+            (stamps[2], json.dumps({"timestamp": stamps[2], "grid_power_w": True})),
+        ],
+    )
+    con.commit()
+    con.close()
+
+    result = SqliteHistoryProvider(str(path)).query(
+        start, start + timedelta(minutes=1), series=["grid", "target"]
+    )
+
+    assert len(result.time) == 2
+    assert result.series == {"grid": [12.5, None], "target": [300.0, None]}
+
+
 def test_a_device_name_cannot_open_a_flux_interpolation():
     from ems.history.influx_provider import build_device_filter
 

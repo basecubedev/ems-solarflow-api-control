@@ -389,31 +389,28 @@ class DashboardStore:
         """Snapshots of a range, thinned to at most ``MAX_HISTORY_POINTS``.
 
         Runs without the store lock: ``record()`` is called by the control
-        loop and must not wait behind a long read.
+        loop and must not wait behind a long read. The rows to keep are picked
+        from the timestamp index and only their payloads are read, as in
+        ``ems.history.provider``.
         """
 
         delta = SUPPORTED_RANGES.get(range_name, SUPPORTED_RANGES["6h"])
         cutoff = (datetime.now(timezone.utc) - delta).isoformat()
 
         with contextlib.closing(self._connect()) as con:
-            (count,) = con.execute(
-                "SELECT COUNT(*) FROM snapshots WHERE timestamp >= ?",
-                (cutoff,),
-            ).fetchone()
-            stride = max(1, -(-int(count or 0) // MAX_HISTORY_POINTS))
-            cursor = con.execute(
-                """
-                SELECT payload FROM snapshots
-                WHERE timestamp >= ?
-                ORDER BY timestamp ASC
-                """,
-                (cutoff,),
-            )
-            return [
-                json.loads(raw)
-                for index, (raw,) in enumerate(cursor)
-                if index % stride == 0
+            rowids = [
+                rowid
+                for (rowid,) in con.execute(
+                    "SELECT rowid FROM snapshots WHERE timestamp >= ? ORDER BY timestamp ASC",
+                    (cutoff,),
+                )
             ]
+            stride = max(1, -(-len(rowids) // MAX_HISTORY_POINTS))
+            rows = (
+                con.execute("SELECT payload FROM snapshots WHERE rowid = ?", (rowid,)).fetchone()
+                for rowid in rowids[::stride]
+            )
+            return [json.loads(row[0]) for row in rows if row is not None]
 
     def energy_summary(self, now=None):
         """Return the rollup, reusing the last one until a sample changes it.
