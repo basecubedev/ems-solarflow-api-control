@@ -20,18 +20,69 @@ export const STALE_REASONS = Object.freeze([
 export const ownerKey = (owner) => `workflow.owner.${WORKFLOW_OWNERS.includes(owner) ? owner : "unknown"}`;
 export const stateKey = (state) => (WORKFLOW_STATES.includes(state) ? `workflow.state.${state}` : "workflow.state.unknown");
 
+const NATIVE = Object.freeze({
+  guided_upgrade: { page: "updates", label: "workflow.showUpgrade" },
+  align_existing_install: { page: "updates", label: "workflow.showAlignment" },
+  conflict: { page: "system", label: "workflow.openRecovery" },
+  unknown: { page: "system", label: "workflow.openRecovery" },
+});
+
 /**
  * A guided workflow that holds the console, with the page that continues it:
- * this console's Updates page for a Guided Upgrade, which it runs itself, and
- * Classic's for the others. Null when none holds it.
+ * the Updates page for a Guided Upgrade or a system alignment, which this
+ * console runs itself, the System page's recovery for records no owner can
+ * finish, and Classic for a Guided Setup. Null when none holds it.
  */
 export function activeWorkflow(lifecycle) {
   if (!lifecycle || lifecycle.ok !== true) return null;
   const owner = String(lifecycle.owner || "none");
   if (owner === "none" || lifecycle.state === "idle") return null;
+  const known = WORKFLOW_OWNERS.includes(owner) ? owner : "unknown";
   const classic = owner === "guided_setup" ? "setup" : "maintenance-upgrade";
-  const native = owner === "guided_upgrade" ? "updates" : null;
-  return { owner, state: String(lifecycle.state || ""), classic, native, recoverable: Boolean(lifecycle.recoverable) };
+  const native = NATIVE[known] || null;
+  return { owner, state: String(lifecycle.state || ""), classic, native: native?.page || null, label: native?.label || null, recoverable: Boolean(lifecycle.recoverable) };
+}
+
+/** The stages of a system alignment this console names; another stage is "other". */
+export const ALIGNMENT_STAGES = Object.freeze([
+  "admin_update_pending",
+  "admin_reconnect_pending",
+  "admin_aligned",
+  "resources_verified",
+  "ems_operation_pending",
+  "ems_operation_running",
+  "healthcheck_pending",
+  "failed_recoverable",
+  "other",
+]);
+
+const CONTINUED = new Set(["admin_reconnect_pending", "admin_aligned", "ems_operation_running", "healthcheck_pending"]);
+/** Where nothing on the server takes the alignment further: the console is released under System. */
+const SETTLED = new Set(["resources_verified", "ems_operation_pending"]);
+
+/**
+ * A system alignment (``align_existing_install``) in progress, as going back
+ * to the version that runs leaves one: where it stands, whether Continue (the
+ * server's resume, as Classic's Resume sends it) moves it on, and whether only
+ * a release of the console on the System page ends it. While an Admin
+ * replacement still runs, the console answering is the one being replaced, so
+ * nothing is offered.
+ */
+export function alignmentView(transition) {
+  if (transition?.mode !== "align_existing_install" || !transition.operation_id) return null;
+  if (!transition.stage || ["completed", "cancelled"].includes(transition.stage)) return null;
+  const replacing = transition.replacement_active === true;
+  const known = ALIGNMENT_STAGES.includes(transition.stage) ? transition.stage : "other";
+  const stage = replacing && known === "admin_reconnect_pending" ? "admin_update_pending" : known;
+  const failed = stage === "failed_recoverable";
+  return {
+    operationId: String(transition.operation_id),
+    tag: transition.system_tag ?? null,
+    stage,
+    error: failed ? String(transition.error_message || "") : "",
+    canContinue: !replacing && (failed ? transition.resume_available === true : CONTINUED.has(stage)),
+    release: SETTLED.has(stage),
+  };
 }
 
 /** Whether the recovery card has anything to say: a proven idle state with no reset on offer says nothing. */

@@ -12,7 +12,7 @@ import { FINDINGS, INSTALL_STATES, CONTAINER_STATUSES } from "../src/lib/health.
 import { CONTROL_STATUSES, CONTROL_TRANSPORTS } from "../src/lib/control.js";
 import { DISPLAY_STATES, SERVICES, SYNC_ACTIONS, CONFIG_STATES, PLAN_MESSAGES } from "../src/lib/services.js";
 import { BACKUP_PURPOSES, BACKUP_TYPES, CREATE_SCOPES, CREATE_STEPS, RESTORE_STEPS, FILE_ACTIONS, INFLUX_REASONS, LIST_WARNINGS, STEP_STATES } from "../src/lib/backups.js";
-import { WORKFLOW_OWNERS, WORKFLOW_STATES, STALE_REASONS } from "../src/lib/workflow.js";
+import { ALIGNMENT_STAGES, WORKFLOW_OWNERS, WORKFLOW_STATES, STALE_REASONS } from "../src/lib/workflow.js";
 import { CHECK_IDS, CHECK_STATUSES, RUN_MODES, UNAVAILABLE_MESSAGES } from "../src/lib/diagnostics.js";
 import { CHANNELS, UPGRADE_STATES, PAIR_STATES, RELEASE_NOTES } from "../src/lib/updates.js";
 import { PHASES, OPTION_GROUPS, UPGRADE_STAGES } from "../src/lib/upgrade.js";
@@ -133,6 +133,7 @@ test("every generated key family is complete", () => {
     ...FEATURE_IDS.flatMap((id) => [`feature.${id}`, `feature.${id}.sub`]),
     ...[...EDIT_TABS, "devices"].map((tab) => `settings.tab.${tab}`),
     ...EDIT_TABS.map((tab) => `settings.tab.${tab}.sub`),
+    ...ALIGNMENT_STAGES.map((stage) => `alignment.stage.${stage}`),
     ...["live", "restart"].map((when) => `settings.edit.when.${when}`),
     ...["advanced", "expert"].map((level) => `settings.edit.level.${level}`),
     ...RISKS.flatMap((risk) => [`settings.risk.${risk}`, `settings.risk.${risk}.hint`]),
@@ -154,7 +155,7 @@ test("no orphan keys: each key is used literally or belongs to a generated famil
     "system.issue.", "system.deviceState.", "system.broker.", "system.brokerDevices.", "system.metrics.", "system.migrationNeeded.",
     "system.migrationLosesControl.", "settings.kind.", "settings.source.", "settings.config.", "settings.devicesSub.", "recovery.reference.",
     "settings.tab.", "settings.edit.when.", "settings.edit.level.", "settings.risk.", "settings.edit.unsaved.", "settings.edit.overrides.",
-    "settings.edit.invalid.", "settings.edit.resetLine.",
+    "settings.edit.invalid.", "settings.edit.resetLine.", "system.migrationConfirmDevices.", "alignment.stage.",
     "feature.",
   ];
   const orphans = Object.keys(STRINGS).filter((key) => !APP_KEYS.includes(key) && !text.includes(`"${key}"`) && !families.some((prefix) => key.startsWith(prefix)));

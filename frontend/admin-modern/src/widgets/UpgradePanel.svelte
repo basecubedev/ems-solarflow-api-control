@@ -6,7 +6,6 @@
   import { t, tn, fmt } from "../i18n/i18n.svelte.js";
   import { system } from "../state/system.svelte.js";
   import { upgrade, verify, startUpgrade, closeUpgrade, recover, previewSetupDiscard, discardSetup } from "../state/upgrade.svelte.js";
-  import { classicPage } from "../state/prefs.svelte.js";
   import { PHASES, phaseStates, failedStep, backupArchive, rateLimited, replacesAdmin, migrationView, isDevelopment, clock, nothingChanged, phaseOfStage } from "../lib/upgrade.js";
   import { noteView } from "../lib/updates.js";
   import { errorView } from "../lib/errors.js";
@@ -215,12 +214,11 @@
         <span class="icon-tile c-acc"><Icon name="history" /></span>
         <div>
           <div class="outcome-title">{t("upgrade.returned")}</div>
-          <div class="muted">{upgrade.returnNeedsClassic ? t("upgrade.returnedClassic") : t("upgrade.returnedRestart")}</div>
+          <div class="muted">{upgrade.returnAligns ? t("upgrade.returnedAlign") : t("upgrade.returnedRestart")}</div>
         </div>
       </div>
       {#if upgrade.slow}<p class="note warn"><Icon name="clock" />{t("upgrade.slow")}</p>{/if}
       <div class="row-wrap actions">
-        {#if upgrade.returnNeedsClassic}<a class="btn" href={classicPage("maintenance-upgrade")}><Icon name="arrow-up-right" size="sm" />{t("workflow.continue")}</a>{/if}
         <button class="btn secondary" type="button" onclick={closeUpgrade}>{t("upgrade.finish")}</button>
       </div>
     {:else}

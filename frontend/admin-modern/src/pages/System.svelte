@@ -3,14 +3,16 @@
   import Icon from "../../../shared/ui/Icon.svelte";
   import Empty from "../../../shared/ui/Empty.svelte";
   import Status from "../../../shared/ui/Status.svelte";
+  import ConfirmDialog from "../../../shared/ui/ConfirmDialog.svelte";
   import WorkflowRecovery from "../widgets/WorkflowRecovery.svelte";
   import StaleNote from "../widgets/StaleNote.svelte";
   import { t, tn, fmt } from "../i18n/i18n.svelte.js";
   import { system, ensure, reload } from "../state/system.svelte.js";
   import { HEALTHY_INSTALL_STATES, INSTALL_STATES } from "../lib/health.js";
   import { RUNTIME_STATES, STATUS_SOURCES, brokerView, telemetryDeviceView, telemetryWanted } from "../lib/telemetry.js";
+  import { migrationReview } from "../lib/migration.js";
   import { errorView } from "../lib/errors.js";
-  import { classicPage } from "../state/prefs.svelte.js";
+  import { migration as migrating, applyMigration } from "../state/migration.svelte.js";
 
   ensure("overview", "telemetry", "migration");
 
@@ -24,7 +26,23 @@
   const runtimeState = $derived(Object.hasOwn(RUNTIME_STATES, telemetry?.runtime_state) ? telemetry.runtime_state : "unavailable");
   const brokers = $derived((Array.isArray(telemetry?.brokers) ? telemetry.brokers : []).map(brokerView));
   const devices = $derived((Array.isArray(telemetry?.devices) ? telemetry.devices : []).map(telemetryDeviceView));
-  const migrationWanted = $derived(!migration || migration.status !== "ok" || migration.review?.needs_migration === true);
+  const outcome = $derived(migrating.outcome && migrating.outcome.revision === (migration?.revision ?? null) ? migrating.outcome : null);
+  const migrationWanted = $derived(!migration || migration.status !== "ok" || migration.review?.needs_migration === true || Boolean(outcome && !outcome.conflict));
+  const review = $derived(migrationReview(migration));
+  let backup = $state(true);
+  let confirmMigration = $state(false);
+  let reviewed = $state.raw(null);
+
+  function askMigration() {
+    reviewed = review;
+    confirmMigration = true;
+  }
+
+  function migrate() {
+    confirmMigration = false;
+    if (reviewed?.canApply) applyMigration({ revision: reviewed.revision, backup });
+    reviewed = null;
+  }
 
   function installState() {
     return INSTALL_STATES.includes(install.state) ? install.state : "partial_install";
@@ -111,9 +129,36 @@
     {#if migration.status !== "ok"}
       <Empty error text={t("system.migrationUnreadable")}>{#if migration.message}<span class="muted" lang="en"> {migration.message}</span>{/if}</Empty>
     {:else}
-      <p class="summary"><Icon name="triangle-alert" />{tn("system.migrationNeeded", (migration.review?.changes || []).length)}</p>
-      {#if (migration.review?.warnings_disabling_control || []).length}<p class="note warn"><Icon name="shield-alert" />{tn("system.migrationLosesControl", migration.review.warnings_disabling_control.length)}</p>{/if}
-      <a class="btn" href={classicPage("maintenance-status")}><Icon name="arrow-up-right" size="sm" />{t("system.migrationOpen")}</a>
+      {#if review.required}
+        <p class="summary"><Icon name="triangle-alert" />{tn("system.migrationNeeded", review.devices.length)}</p>
+        {#if review.losing}<p class="note warn"><Icon name="shield-alert" />{tn("system.migrationLosesControl", review.losing)}</p>{/if}
+        {#if review.devices.length}
+          <ul class="rows" data-testid="migration-devices">
+            {#each review.devices as device, index (`${device.name}-${index}`)}
+              <li class="inner">
+                <div class="words">
+                  <strong>{device.name || t("system.migrationDevice")}</strong>
+                  <span class="muted small">{device.model ? t("system.migrationModel", { model: device.model }) : t("system.migrationModelUnknown")}</span>
+                  {#if device.message}<span class="muted small" lang="en">{device.message}</span>{/if}
+                </div>
+                <Status tone={device.disables ? "c-warn" : "c-ok"} text={device.disables ? t("system.migrationControlLost") : t("system.migrationControlKept")} />
+              </li>
+            {/each}
+          </ul>
+        {/if}
+        <p class="state"><Status tone={review.valid ? "c-ok" : "c-fault"} text={review.valid ? t("system.migrationValid") : t("system.migrationInvalid")} /></p>
+        {#each review.errors as error, index (index)}<p class="note warn"><Icon name="triangle-alert" /><span lang="en">{error}</span></p>{/each}
+        <div class="row-wrap migrate">
+          <label class="check"><input type="checkbox" bind:checked={backup} data-testid="migration-backup" />{t("settings.edit.backup")}</label>
+          <button class="btn" type="button" onclick={askMigration} disabled={!review.canApply || migrating.busy} data-testid="migration-apply"><Icon name="play" size="sm" />{migrating.busy ? t("system.migrationApplying") : t("system.migrationApply")}</button>
+        </div>
+      {/if}
+      {#if outcome?.error && !(outcome.conflict && !review.required)}
+        {@const view = errorView(outcome.error, t)}
+        <p class="note warn" data-testid="migration-result"><Icon name="circle-x" /><span lang={outcome.conflict ? undefined : view.lang}>{outcome.conflict ? t("system.migrationStale") : view.text}</span></p>
+      {:else if outcome && !outcome.error && !review.required}
+        <p class="note" data-testid="migration-result"><Icon name="circle-check" />{outcome.result?.changed === false ? t("system.migrationNoop") : t("system.migrationDone")}</p>
+      {/if}
     {/if}
   </Card>
 {:else if system.migration.error}
@@ -121,6 +166,20 @@
 {/if}
 
 <WorkflowRecovery />
+
+<ConfirmDialog
+  open={confirmMigration}
+  title={t("system.migrationConfirmTitle")}
+  lines={[
+    tn("system.migrationConfirmDevices", reviewed?.devices.length || 0),
+    ...(reviewed?.losing ? [tn("system.migrationLosesControl", reviewed.losing)] : []),
+    backup ? t("settings.edit.confirmBackup") : t("settings.edit.confirmNoBackup"),
+  ]}
+  confirmLabel={t("system.migrationApply")}
+  danger={!backup || Boolean(reviewed?.losing)}
+  onconfirm={migrate}
+  oncancel={() => { confirmMigration = false; reviewed = null; }}
+/>
 
 <style>
   .state { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; margin: 0 0 var(--s3); font-size: 13px; }
@@ -136,4 +195,5 @@
   .issue { display: flex; gap: 6px; align-items: center; color: var(--m-warn); font-size: 12.5px; }
   .summary { display: flex; gap: 8px; align-items: center; margin: 0 0 var(--s3); font-weight: 560; }
   .summary :global(svg.i) { color: var(--m-warn); }
+  .migrate { margin-top: var(--s3); justify-content: space-between; align-items: center; }
 </style>

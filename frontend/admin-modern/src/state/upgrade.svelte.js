@@ -51,7 +51,7 @@ class Upgrade {
   slow = $state(false);
   unknownStart = $state(false);
   workDone = $state(false);
-  returnNeedsClassic = $state(false);
+  returnAligns = $state(false);
   since = $state(0);
   finishedAt = $state(0);
   before = $state.raw(null);
@@ -177,7 +177,7 @@ function reset() {
   upgrade.slow = false;
   upgrade.unknownStart = false;
   upgrade.workDone = false;
-  upgrade.returnNeedsClassic = false;
+  upgrade.returnAligns = false;
   upgrade.before = null;
   upgrade.since = 0;
   upgrade.finishedAt = 0;
@@ -796,7 +796,7 @@ async function recoverAs(kind, generation, transition, operationId) {
       upgrade.recovering = "";
       upgrade.transition = null;
       upgrade.operationId = data?.operation_id || null;
-      upgrade.returnNeedsClassic = data?.reconnect !== true;
+      upgrade.returnAligns = data?.reconnect !== true;
       settle("returned");
       if (data?.reconnect === true) await waitForAnotherConsole(generation);
       return;

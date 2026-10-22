@@ -41,7 +41,7 @@ changes nothing on the host.
 | **Services** | EMS and the analytics database as they run; what should run and what a restart changes; **Restart EMS now** and **Repair analytics** |
 | **Backups** | Create a backup, see what is in one, download it, bring one back, restore it after a preview, delete it |
 | **Diagnostics** | The read-only checks of the installed EMS, with the EMS diagnosis in full |
-| **System** | The files of the installation, the device telemetry over MQTT, an older MQTT setup that waits for migration, and the reset of a guided workflow that can no longer finish |
+| **System** | The files of the installation, the device telemetry over MQTT, an older MQTT setup that waits for migration, which you review and apply there, and the reset of a guided workflow that can no longer finish |
 
 The top bar always says how the installation is: **All good**, **A note**,
 **Needs a look**, **Needs attention** or **Not installed**; **Checking…**
@@ -60,8 +60,8 @@ until you press **New design**. Adding `?ui=classic` or `?ui=modern` to the
 address sets the choice explicitly. A browser too old for Modern always opens
 Classic.
 
-Some workflows run in Classic for now: **Guided setup**, editing **devices
-and the grid meter**, and applying an **older MQTT setup's migration**. Modern names
+Some workflows run in Classic for now: **Guided setup** and editing **devices
+and the grid meter**. Modern names
 them and opens them in Classic with one click, at the right page, without
 changing your choice. The guided setup is the one exception: Classic never
 starts it from an address, so that button opens Classic's start page, where it
@@ -77,7 +77,6 @@ What Modern shows but does not change itself yet:
 | Where | Shown in Modern | Done in Classic |
 | --- | --- | --- |
 | **Settings & devices** | Every device and the grid meter | Changing them, adding devices, searching the network |
-| **System** | An older MQTT setup that waits for migration | Reviewing and applying the migration, under **System status** |
 | **Overview** | That nothing is set up yet | The guided setup |
 
 ## Changing settings
@@ -155,8 +154,13 @@ changed already. It offers the ways out the console can take at that moment:
 when the installation failed, **Go back to the version that runs** sets the
 Admin console back to the version that was verified with the EMS that runs,
 and **Cancel the update** gives it up. A backup can always be restored under **Backups**. The full reference is
-[Guided Upgrade](guided-upgrade.md); **Use the classic view instead** on the
-**Updates** page opens it there.
+[Guided Upgrade](guided-upgrade.md).
+
+When **Go back to the version that runs** finds the Admin console already on
+that version, nothing restarts; **System alignment** on the **Updates** page
+then shows what is left. **Continue** checks that version's files; after that
+**Release the console** leads to **System**, where the recovery card frees the
+console with one confirmation.
 
 ## Backups
 

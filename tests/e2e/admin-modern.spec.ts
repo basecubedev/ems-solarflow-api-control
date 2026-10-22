@@ -243,6 +243,30 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
   });
 });
 
+test.describe("Modern Admin: older MQTT setup", { tag: ["@smoke"] }, () => {
+  test("the migration is reviewed and applied here, without showing a secret", async ({ page, seedAdminScenario }) => {
+    await openModern(page);
+    await seedAdminScenario("mqtt_migration");
+    await page.goto("/modern/#/system");
+    await page.reload();
+    await expect(page.getByTestId("migration-devices").locator("li").first()).toBeVisible();
+    await expect(page.locator("body")).not.toContainText("e2e-super-secret-broker-password");
+    await expect(page.getByTestId("migration-backup")).toBeChecked();
+    const request = page.waitForRequest((req) => req.url().endsWith("/zendure-mqtt/migration-apply"));
+    const devices = await page.getByTestId("migration-devices").locator("li").count();
+    await page.getByTestId("migration-apply").click();
+    const dialog = page.getByRole("dialog", { name: "Apply the migration?" });
+    await expect(dialog).toContainText(devices === 1 ? "1 device is set up anew." : `${devices} devices are set up anew.`);
+    await expect(dialog).toContainText("A backup of the current settings is made first.");
+    await dialog.getByTestId("confirm").click();
+    const sent = await request;
+    expect(sent.headers()["x-csrf-token"]).toBeTruthy();
+    expect(sent.postDataJSON()).toMatchObject({ confirm: true, backup: true });
+    await expect(page.getByTestId("migration-result")).toHaveText("The MQTT setup is up to date.");
+    await expect(page.getByTestId("migration-apply")).toHaveCount(0);
+  });
+});
+
 test.describe("Modern Admin: backups", { tag: ["@smoke"] }, () => {
   test("a backup is created, inspected, restored and deleted from the console", async ({ page, seedAdminScenario }) => {
     await seededAt(page, seedAdminScenario, "#/backups");
