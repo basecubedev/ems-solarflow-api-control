@@ -176,6 +176,13 @@ class HistoryProvider(ABC):
 
 MAX_HISTORY_POINTS = 2000
 
+_SUMMARY_FIELDS = ("timestamp", *(spec["sqlite_field"] for spec in SERIES_CATALOG.values()))
+_SUMMARY_SELECT = (
+    "SELECT json_extract(payload, "
+    + ", ".join(f"'$.{field}'" for field in _SUMMARY_FIELDS)
+    + ") FROM snapshots WHERE rowid = ?"
+)
+
 
 class SqliteHistoryProvider(HistoryProvider):
     """History from the existing local dashboard SQLite snapshot store.
@@ -208,7 +215,7 @@ class SqliteHistoryProvider(HistoryProvider):
 
         device_filter = [d for d in (devices or []) if d]
 
-        rows = self._read_snapshots(start, end, result.meta)
+        rows = self._read_snapshots(start, end, result.meta, whole=bool(device_filter))
         for payload in rows:
             ts = _parse_iso(payload.get("timestamp"))
             if ts is None:
@@ -219,47 +226,50 @@ class SqliteHistoryProvider(HistoryProvider):
                     value = _device_series_value(payload, name, device_filter)
                 else:
                     spec = SERIES_CATALOG[name]
-                    value = _coerce_number(_dig(payload, spec["sqlite_field"]))
+                    value = _coerce_number(payload.get(spec["sqlite_field"]))
                 result.series[name].append(value)
 
         result.devices = device_filter
         result.meta["point_count"] = len(result.time)
         return result
 
-    def _read_snapshots(self, start, end, meta=None):
-        """Yield decoded snapshots, thinned to at most ``MAX_HISTORY_POINTS``.
+    def _read_snapshots(self, start, end, meta=None, *, whole=False):
+        """Yield snapshots, thinned to at most ``MAX_HISTORY_POINTS``.
 
-        A 24 h window at a 5 s write interval is 17,280 full snapshots. Loaded
-        and decoded at once they took seconds and hundreds of MB inside the EMS
-        process; a chart cannot show more points than its width anyway.
+        A 24 h window at a 5 s write interval is 17,280 snapshots of about
+        20 KB each; a chart cannot show more points than its width. The rows
+        to keep are picked from the timestamp index and only they are read.
+        Unless ``whole`` asks for the decoded payload (the per-device series),
+        SQLite picks the system-level fields out of it, keyed by their dotted
+        catalog path. Reading and decoding every payload took 30 s for two
+        days on a Raspberry Pi 3, and the chart stayed empty that long.
         """
 
+        select = "SELECT payload FROM snapshots WHERE rowid = ?" if whole else _SUMMARY_SELECT
         uri = f"file:{self.database_path}?mode=ro"
         con = sqlite3.connect(uri, uri=True)
         try:
-            bounds = (_iso(start), _iso(end))
-            (count,) = con.execute(
-                "SELECT COUNT(*) FROM snapshots WHERE timestamp >= ? AND timestamp <= ?",
-                bounds,
-            ).fetchone()
-            stride = max(1, -(-int(count or 0) // MAX_HISTORY_POINTS))
+            rowids = [
+                rowid
+                for (rowid,) in con.execute(
+                    """
+                    SELECT rowid FROM snapshots
+                    WHERE timestamp >= ? AND timestamp <= ?
+                    ORDER BY timestamp ASC
+                    """,
+                    (_iso(start), _iso(end)),
+                )
+            ]
+            stride = max(1, -(-len(rowids) // MAX_HISTORY_POINTS))
             if meta is not None and stride > 1:
                 meta["stride"] = stride
-            cursor = con.execute(
-                """
-                SELECT payload FROM snapshots
-                WHERE timestamp >= ? AND timestamp <= ?
-                ORDER BY timestamp ASC
-                """,
-                bounds,
-            )
-            for index, (raw,) in enumerate(cursor):
-                if index % stride:
-                    continue
+            for rowid in rowids[::stride]:
                 try:
-                    yield json.loads(raw)
-                except (TypeError, ValueError):
+                    row = con.execute(select, (rowid,)).fetchone()
+                    values = json.loads(row[0])
+                except (sqlite3.OperationalError, TypeError, ValueError):
                     continue
+                yield values if whole else dict(zip(_SUMMARY_FIELDS, values))
         finally:
             con.close()
 
@@ -335,15 +345,6 @@ def _device_series_value(payload, series_name, device_names):
     if series_name == "soc":
         return sum(values) / len(values)
     return sum(values)
-
-
-def _dig(payload, dotted):
-    current = payload
-    for part in dotted.split("."):
-        if not isinstance(current, dict):
-            return None
-        current = current.get(part)
-    return current
 
 
 def _coerce_number(value):
