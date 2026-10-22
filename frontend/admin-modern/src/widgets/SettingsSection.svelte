@@ -6,11 +6,14 @@
   import { AUTOMATIC_FEATURES, FEATURE_IDS, fieldMatches, levelled, liveOverride, sharedRisk, switchPath, switchedOn } from "../lib/settings.js";
   import { settings, setValue } from "../state/settings.svelte.js";
 
-  let { section, query = "" } = $props();
+  /** values and onset: another draft's feature values and its setter, as Guided Setup has them. */
+  let { section, query = "", values: given = null, onset = null, startOpen = false } = $props();
 
-  let open = $state(false);
-  const values = $derived(settings.draft?.features || {});
-  const overrides = $derived(settings.saved?.overrides);
+  let toggled = $state(null);
+  const open = $derived(toggled ?? startOpen);
+  const values = $derived(given || settings.draft?.features || {});
+  const overrides = $derived(given ? null : settings.saved?.overrides);
+  const set = (field, value) => (onset ? onset(field, value) : setValue(field, value));
   const own = $derived(switchPath(section));
   const on = $derived(switchedOn(section, values));
   const switchField = $derived(own ? (section.fields || []).find((field) => field.path === own) || { path: own, type: "boolean" } : null);
@@ -27,7 +30,7 @@
   {#if risk}<p class="note warn"><Icon name="triangle-alert" />{t(`settings.risk.${risk}.shared`)}</p>{/if}
   <div class="fields">
     {#each list as field (field.path)}
-      <SettingField {field} value={values[field.path]} live={liveOverride(overrides, field.path)} hideRisk={Boolean(risk)} onchange={(value) => setValue(field, value)} />
+      <SettingField {field} value={values[field.path]} live={liveOverride(overrides, field.path)} hideRisk={Boolean(risk)} type={field.secret ? "password" : ""} onchange={(value) => set(field, value)} />
     {/each}
   </div>
 {/snippet}
@@ -39,11 +42,11 @@
         class="switch"
         type="checkbox"
         checked={on}
-        onchange={(event) => setValue(switchField, event.currentTarget.checked)}
+        onchange={(event) => set(switchField, event.currentTarget.checked)}
         aria-label={t("settings.edit.switch", { name: named ? t(`feature.${section.id}`) : section.title || section.id })}
       />
     {/if}
-    <button class="summary" type="button" aria-expanded={expanded ? "true" : "false"} aria-controls={bodyId} onclick={() => (open = !open)}>
+    <button class="summary" type="button" aria-expanded={expanded ? "true" : "false"} aria-controls={bodyId} onclick={() => (toggled = !open)}>
       <span class="words">
         <span class="name">{#if named}{t(`feature.${section.id}`)}{:else}<span lang="en">{section.title || section.id}</span>{/if}</span>
         <span class="muted small">{#if named}{t(`feature.${section.id}.sub`)}{:else}<span lang="en">{section.summary || section.description || ""}</span>{/if}</span>

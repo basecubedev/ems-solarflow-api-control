@@ -3,7 +3,6 @@
   import { t } from "../i18n/i18n.svelte.js";
   import { system, ensure } from "../state/system.svelte.js";
   import { activeWorkflow, ownerKey, stateKey } from "../lib/workflow.js";
-  import { classicPage } from "../state/prefs.svelte.js";
   import { href, router } from "../app/router.svelte.js";
 
   /**
@@ -16,7 +15,7 @@
   const workflow = $derived(activeWorkflow(system.lifecycle.data));
 </script>
 
-{#if workflow && !(workflow.native && router.page === workflow.native)}
+{#if workflow && router.page !== workflow.native}
   <div class="banner span-12" role="status" data-testid="workflow-banner">
     <span class="icon-tile sm c-warn"><Icon name="route" /></span>
     <div class="text">
@@ -25,11 +24,7 @@
     </div>
     <div class="actions">
       {#if workflow.recoverable && workflow.native !== "system"}<a class="btn secondary small" href="#/system">{t("workflow.openRecovery")}</a>{/if}
-      {#if workflow.native}
-        <a class="btn small" href={href(workflow.native)} data-testid="workflow-continue"><Icon name={workflow.native === "updates" ? "circle-arrow-up" : "arrow-right"} size="sm" />{t(workflow.label)}</a>
-      {:else}
-        <a class="btn small" href={classicPage(workflow.classic)} data-testid="workflow-continue"><Icon name="arrow-up-right" size="sm" />{t("workflow.continue")}</a>
-      {/if}
+      <a class="btn small" href={href(workflow.native)} data-testid="workflow-continue"><Icon name={workflow.native === "updates" ? "circle-arrow-up" : "arrow-right"} size="sm" />{t(workflow.label)}</a>
     </div>
   </div>
 {/if}

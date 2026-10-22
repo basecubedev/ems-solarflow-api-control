@@ -14,6 +14,11 @@ generate `config/config.json`, deploy the containers, and start EMS.
 edit a setting, use [Maintenance](maintenance.md) — it changes less and previews
 everything.
 
+This page describes the Classic console. The Modern console runs the same five
+steps on its **Set up a new system** page; see
+[The Modern Admin console](modern.md#setting-up-a-new-system). A setup begun in
+one continues in the other.
+
 ## Prerequisites
 
 - Admin Console running and logged in — see [First start](first-start.md).

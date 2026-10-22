@@ -19,6 +19,22 @@ class Sources {
 
 export const sources = new Sources();
 
+let route = null;
+
+/**
+ * Sends this panel's writes through Guided Setup's discovery routes, which
+ * name the confirmed setup operation, while the setup page shows it; ``null``
+ * goes back to the maintenance routes.
+ */
+export function routeSources(next) {
+  route = next || null;
+}
+
+function send(path, options = {}) {
+  if (!route) return adminSend(path, options);
+  return adminSend(route.path(path), { ...options, headers: { ...(options.headers || {}), ...route.headers() } });
+}
+
 function say(kind, values = {}) {
   sources.message = { kind, values, at: Date.now() };
 }
@@ -56,7 +72,7 @@ export async function saveCredential({ label, username, password }) {
   let saved = null;
   await run("credential", async () => {
     try {
-      const data = await adminSend(CREDENTIALS, { body: { label, username, password } });
+      const data = await send(CREDENTIALS, { body: { label, username, password } });
       sources.credentials = data?.local_mqtt?.credentials || sources.credentials;
       saved = sources.credentials;
       say("credentialSaved");
@@ -70,7 +86,7 @@ export async function saveCredential({ label, username, password }) {
 export async function removeCredential(id) {
   await run(`remove:${id}`, async () => {
     try {
-      await adminSend(`/api/discovery/connections/mqtt-credentials/${encodeURIComponent(id)}`, { method: "DELETE" });
+      await send(`/api/discovery/connections/mqtt-credentials/${encodeURIComponent(id)}`, { method: "DELETE" });
       say("credentialRemoved");
       sources.credentials = (await adminGet(CREDENTIALS))?.credentials || [];
     } catch (error) {
@@ -82,7 +98,7 @@ export async function removeCredential(id) {
 export async function refreshBrokers() {
   await run("brokers", async () => {
     try {
-      const data = await adminSend("/api/discovery/mqtt-brokers/refresh", { body: {} });
+      const data = await send("/api/discovery/mqtt-brokers/refresh", { body: {} });
       say("brokersRefreshed", { reachable: Number(data?.reachable) || 0, devices: Number(data?.devices_found) || 0 });
     } catch (error) {
       fail("brokersFailed", error);
@@ -103,7 +119,7 @@ export async function saveCloudKey(key) {
   let saved = false;
   await run("cloudSave", async () => {
     try {
-      const data = await adminSend(`${CLOUD}/token`, { body: { api_key: key } });
+      const data = await send(`${CLOUD}/token`, { body: { api_key: key } });
       if (data?.ok === false) throw Object.assign(new Error(data.message || "save failed"), { payload: data });
       saved = true;
       say("cloudSaved");
@@ -119,7 +135,7 @@ export async function saveCloudKey(key) {
 export async function testCloudKey(key) {
   await run("cloudTest", async () => {
     try {
-      const data = await adminSend(`${CLOUD}/test`, { body: key ? { api_key: key } : {} });
+      const data = await send(`${CLOUD}/test`, { body: key ? { api_key: key } : {} });
       if (data?.ok === false) throw Object.assign(new Error(data.message || "test failed"), { payload: data });
       say("cloudTested", { devices: Number(data?.devices_found) || 0, broker: data?.broker || "", tls: data?.tls_mode || "system_ca" });
     } catch (error) {
@@ -132,7 +148,7 @@ export async function testCloudKey(key) {
 export async function refreshCloud() {
   await run("cloudRefresh", async () => {
     try {
-      const data = await adminSend(`${CLOUD}/refresh`, { body: {} });
+      const data = await send(`${CLOUD}/refresh`, { body: {} });
       if (data?.ok === false) throw Object.assign(new Error(data.message || "refresh failed"), { payload: data });
       sources.cloudDevices = Array.isArray(data?.candidates) ? data.candidates : [];
       say("cloudRefreshed", { listed: Number(data?.device_list_count) || 0, observed: Number(data?.mqtt_observed_count) || 0 });
@@ -146,7 +162,7 @@ export async function refreshCloud() {
 export async function forgetCloudKey() {
   await run("cloudForget", async () => {
     try {
-      const data = await adminSend(`${CLOUD}/token`, { method: "DELETE" });
+      const data = await send(`${CLOUD}/token`, { method: "DELETE" });
       if (data?.ok === false) throw Object.assign(new Error(data.message || "delete failed"), { payload: data });
       sources.cloudDevices = null;
       say("cloudForgotten");

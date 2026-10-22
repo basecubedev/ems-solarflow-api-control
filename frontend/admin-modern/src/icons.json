@@ -1,6 +1,8 @@
 [
   "archive",
+  "arrow-down",
   "arrow-right",
+  "arrow-up",
   "arrow-up-right",
   "ban",
   "boxes",
@@ -28,6 +30,7 @@
   "layout-dashboard",
   "loader",
   "lock-open",
+  "network",
   "package-plus",
   "play",
   "radio-tower",

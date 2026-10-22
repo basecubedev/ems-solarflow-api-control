@@ -6,6 +6,9 @@
   import { errorView } from "../lib/errors.js";
   import { sources, loadSources, saveCredential, removeCredential, refreshBrokers, saveCloudKey, testCloudKey, refreshCloud, forgetCloudKey } from "../state/sources.svelte.js";
 
+  /** onchanged: called after an action that changes what the search can find. */
+  let { onchanged = null } = $props();
+
   let label = $state("");
   let username = $state("");
   let password = $state("");
@@ -31,13 +34,17 @@
       label = "";
       username = "";
       password = "";
+      onchanged?.();
     }
   }
 
   async function saveKey(event) {
     event.preventDefault();
     if (!key.trim()) return;
-    if (await saveCloudKey(key.trim())) key = "";
+    if (await saveCloudKey(key.trim())) {
+      key = "";
+      onchanged?.();
+    }
   }
 </script>
 
@@ -68,7 +75,7 @@
       <button class="btn secondary small" type="submit" disabled={Boolean(sources.busy)} data-testid="credential-save"><Icon name="save" size="sm" />{t("sources.local.save")}</button>
     </form>
     {#if missingLabel}<p class="form-error">{t("sources.local.labelRequired")}</p>{/if}
-    <button class="btn secondary small" type="button" onclick={refreshBrokers} disabled={Boolean(sources.busy)} data-testid="brokers-refresh"><Icon name="refresh-cw" size="sm" />{t("sources.local.refresh")}</button>
+    <button class="btn secondary small" type="button" onclick={() => refreshBrokers().then(() => onchanged?.())} disabled={Boolean(sources.busy)} data-testid="brokers-refresh"><Icon name="refresh-cw" size="sm" />{t("sources.local.refresh")}</button>
   </section>
 
   <section class="source">
@@ -87,7 +94,7 @@
     </form>
     <div class="row-wrap actions">
       <button class="btn secondary small" type="button" onclick={() => testCloudKey(key.trim())} disabled={Boolean(sources.busy) || (!saved && !key.trim())} data-testid="cloud-test">{t("sources.cloud.test")}</button>
-      <button class="btn secondary small" type="button" onclick={refreshCloud} disabled={Boolean(sources.busy) || !saved} data-testid="cloud-refresh"><Icon name="refresh-cw" size="sm" />{t("sources.cloud.refresh")}</button>
+      <button class="btn secondary small" type="button" onclick={() => refreshCloud().then(() => onchanged?.())} disabled={Boolean(sources.busy) || !saved} data-testid="cloud-refresh"><Icon name="refresh-cw" size="sm" />{t("sources.cloud.refresh")}</button>
       {#if saved}<button class="btn secondary small" type="button" onclick={() => (forgetting = true)} disabled={Boolean(sources.busy)} data-testid="cloud-forget"><Icon name="trash-2" size="sm" />{t("sources.cloud.forget")}</button>{/if}
     </div>
     {#if sources.cloudDevices?.length}
@@ -112,7 +119,7 @@
   lines={[t("sources.local.removeLine")]}
   confirmLabel={t("devices.remove")}
   danger
-  onconfirm={() => { const credential = removing; removing = null; if (credential) removeCredential(credential.id); }}
+  onconfirm={() => { const credential = removing; removing = null; if (credential) removeCredential(credential.id).then(() => onchanged?.()); }}
   oncancel={() => (removing = null)}
 />
 <ConfirmDialog
@@ -121,7 +128,7 @@
   lines={[t("sources.cloud.forgetLine")]}
   confirmLabel={t("sources.cloud.forget")}
   danger
-  onconfirm={() => { forgetting = false; forgetCloudKey(); }}
+  onconfirm={() => { forgetting = false; forgetCloudKey().then(() => onchanged?.()); }}
   oncancel={() => (forgetting = false)}
 />
 

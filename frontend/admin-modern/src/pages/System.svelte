@@ -12,6 +12,7 @@
   import { RUNTIME_STATES, STATUS_SOURCES, brokerView, telemetryDeviceView, telemetryWanted } from "../lib/telemetry.js";
   import { migrationReview } from "../lib/migration.js";
   import { errorView } from "../lib/errors.js";
+  import { href } from "../app/router.svelte.js";
   import { migration as migrating, applyMigration } from "../state/migration.svelte.js";
 
   ensure("overview", "telemetry", "migration");
@@ -167,6 +168,13 @@
 
 <WorkflowRecovery />
 
+<Card title={t("system.setup")} subtitle={t("system.setupSub")} span="span-12">
+  <div class="row-wrap setup-entry" data-testid="system-setup">
+    <p class="muted">{t("system.setupLead")}</p>
+    <a class="btn secondary small" href={href("setup")}><Icon name="package-plus" size="sm" />{t("system.setupOpen")}</a>
+  </div>
+</Card>
+
 <ConfirmDialog
   open={confirmMigration}
   title={t("system.migrationConfirmTitle")}
@@ -196,4 +204,5 @@
   .summary { display: flex; gap: 8px; align-items: center; margin: 0 0 var(--s3); font-weight: 560; }
   .summary :global(svg.i) { color: var(--m-warn); }
   .migrate { margin-top: var(--s3); justify-content: space-between; align-items: center; }
+  .setup-entry p { margin: 0; flex: 1 1 280px; }
 </style>

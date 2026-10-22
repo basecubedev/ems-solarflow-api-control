@@ -15,7 +15,7 @@
   const languages = LANGUAGES.map((value) => ({ value, label: value.toUpperCase() }));
 
   const pinned = $derived(router.pinned.map(pageSet.pageById));
-  const others = $derived(pageSet.pages.filter((page) => !router.pinned.includes(page.id)));
+  const others = $derived(pageSet.listed.filter((page) => !router.pinned.includes(page.id)));
   const current = $derived(router.pinned.includes(router.page) ? null : pageSet.pageById(router.page));
   const focusId = $derived(current?.id ?? others[0]?.id);
   const customized = $derived(router.pinned.join() !== pageSet.mobile.join());

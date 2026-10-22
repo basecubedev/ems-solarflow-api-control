@@ -27,5 +27,5 @@ test("the phone bar holds four known pages and falls back to its default", () =>
 });
 
 test("every page names the Classic page the switch opens", () => {
-  assert.ok(PAGES.every((page) => /^maintenance(-[a-z]+)*$/.test(page.classic)));
+  assert.ok(PAGES.every((page) => /^maintenance(-[a-z]+)*$/.test(page.classic) || (page.hidden && page.classic === "setup")));
 });

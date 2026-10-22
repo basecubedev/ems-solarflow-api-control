@@ -17,10 +17,14 @@ export const STALE_REASONS = Object.freeze([
   "setup_transition_owner_unproven",
 ]);
 
+/** Refusals of a workflow switch that mean another workflow holds the console; Classic's WORKFLOW_BLOCKED_CODES. */
+export const WORKFLOW_BLOCKED_CODES = Object.freeze(["workflow_operation_in_progress", "setup_operation_in_progress", "workflow_switch_blocked", "workflow_owner_unknown", "workflow_owner_conflict"]);
+
 export const ownerKey = (owner) => `workflow.owner.${WORKFLOW_OWNERS.includes(owner) ? owner : "unknown"}`;
 export const stateKey = (state) => (WORKFLOW_STATES.includes(state) ? `workflow.state.${state}` : "workflow.state.unknown");
 
 const NATIVE = Object.freeze({
+  guided_setup: { page: "setup", label: "workflow.showSetup" },
   guided_upgrade: { page: "updates", label: "workflow.showUpgrade" },
   align_existing_install: { page: "updates", label: "workflow.showAlignment" },
   conflict: { page: "system", label: "workflow.openRecovery" },
@@ -29,18 +33,17 @@ const NATIVE = Object.freeze({
 
 /**
  * A guided workflow that holds the console, with the page that continues it:
- * the Updates page for a Guided Upgrade or a system alignment, which this
- * console runs itself, the System page's recovery for records no owner can
- * finish, and Classic for a Guided Setup. Null when none holds it.
+ * the Setup page for a Guided Setup, the Updates page for a Guided Upgrade or
+ * a system alignment, and the System page's recovery for records no owner
+ * can finish. Null when none holds it.
  */
 export function activeWorkflow(lifecycle) {
   if (!lifecycle || lifecycle.ok !== true) return null;
   const owner = String(lifecycle.owner || "none");
   if (owner === "none" || lifecycle.state === "idle") return null;
   const known = WORKFLOW_OWNERS.includes(owner) ? owner : "unknown";
-  const classic = owner === "guided_setup" ? "setup" : "maintenance-upgrade";
-  const native = NATIVE[known] || null;
-  return { owner, state: String(lifecycle.state || ""), classic, native: native?.page || null, label: native?.label || null, recoverable: Boolean(lifecycle.recoverable) };
+  const native = NATIVE[known] || NATIVE.unknown;
+  return { owner, state: String(lifecycle.state || ""), native: native.page, label: native.label, recoverable: Boolean(lifecycle.recoverable) };
 }
 
 /** The stages of a system alignment this console names; another stage is "other". */

@@ -41,7 +41,7 @@ changes nothing on the host.
 | **Services** | EMS and the analytics database as they run; what should run and what a restart changes; **Restart EMS now** and **Repair analytics** |
 | **Backups** | Create a backup, see what is in one, download it, bring one back, restore it after a preview, delete it |
 | **Diagnostics** | The read-only checks of the installed EMS, with the EMS diagnosis in full |
-| **System** | The files of the installation, the device telemetry over MQTT, an older MQTT setup that waits for migration, which you review and apply there, and the reset of a guided workflow that can no longer finish |
+| **System** | The files of the installation, the device telemetry over MQTT, an older MQTT setup that waits for migration, which you review and apply there, the reset of a guided workflow that can no longer finish, and the way into the guided setup |
 
 The top bar always says how the installation is: **All good**, **A note**,
 **Needs a look**, **Needs attention** or **Not installed**; **Checking…**
@@ -60,22 +60,43 @@ until you press **New design**. Adding `?ui=classic` or `?ui=modern` to the
 address sets the choice explicitly. A browser too old for Modern always opens
 Classic.
 
-One workflow runs in Classic for now: **Guided setup**. Modern names
-them and opens them in Classic with one click, at the right page, without
-changing your choice. The guided setup is the one exception: Classic never
-starts it from an address, so that button opens Classic's start page, where it
-is the first choice. When you go back to the console's address, Modern opens
-again.
+Every workflow runs in Modern, the guided setup included. **Classic view**
+stays available on every page.
 
 An update that is running is shown on every Modern page, with **Show the
-update**. A guided setup in progress is shown the same way, with **Continue in
-the classic view**.
+update**. A guided setup in progress is shown the same way, with **Continue
+the setup**; after a sign-in or a reload, an unfinished setup opens again in
+place of the overview.
 
-What Modern shows but does not change itself yet:
+## Setting up a new system
 
-| Where | Shown in Modern | Done in Classic |
-| --- | --- | --- |
-| **Overview** | That nothing is set up yet | The guided setup |
+On an installation with nothing set up yet, the overview offers **Set up a new
+system**; on an installed one, the System page has **Open the guided setup**.
+Both open the guided setup, which asks before it sets up over an existing
+installation. It has the same five steps as Classic
+([Guided setup](guided-setup.md)):
+
+1. **System Build**: choose the version, verify it, update the Admin console
+   when the build needs a newer one, then continue.
+2. **Devices**: the search runs on its own the first time. Choose which
+   sources it uses and in which order, scan a network by hand, and see what
+   each source found. Credentials for local MQTT brokers and the Zendure cloud
+   key are entered at the foot of the page.
+3. **Settings**: the inverters the search verified and a single grid meter are
+   already in the draft. Add, remove, rename, reorder or switch off devices,
+   add one by hand, and set the features, the control and safety switches and
+   the expert values. The server checks the draft as you go; **Continue to
+   deployment** saves it once the check says **Ready**. The generated settings
+   can also be downloaded encrypted or applied to an existing installation.
+4. **Prepare**: the workspace and the images are prepared on their own. An
+   existing installation or workspace is only replaced after you confirm it.
+5. **Start EMS**: starts the prepared deployment. A container in the way, or a
+   workspace the container's user cannot write, is named with the way out of
+   it; when EMS runs, **Open the dashboard** opens it.
+
+The draft is kept in the browser under the same names Classic uses, so a setup
+begun in one console continues in the other. **Start setup over** discards the
+draft and the progress; the installed system stays as it is.
 
 ## Changing settings
 
@@ -223,7 +244,7 @@ do before it does it.
 | Symptom | Meaning | What to do |
 | --- | --- | --- |
 | The address opens Classic | This browser chose Classic, or it is too old for Modern | Press **New design**, or open the address with `?ui=modern` |
-| A button opens the Classic view | That workflow has not moved to Modern yet | Finish it there; the console's address brings you back to Modern |
+| The setup says this tab no longer owns it | Another tab, or a restart, took the setup over | Press **Open the current setup**, or **Discard this tab’s draft** to start from the newer session |
 | An update waits at **Update the Admin console** | The Admin console is restarting with the new version | Wait; after two minutes the page offers **Reload page**. The update goes on either way |
 | The sign-in appears in the middle of an update | The Admin Console was replaced by the new version, and sessions end with it | Sign in with the same password; the page then follows the update on |
 | A message is in English | It comes from the server and has no translation yet | It is still accurate; report it if it matters to you |

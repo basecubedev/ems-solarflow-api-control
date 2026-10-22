@@ -160,7 +160,7 @@ test.describe("Modern Admin: overview and status", { tag: ["@smoke"] }, () => {
     const finding = page.locator('[data-code="installation_incomplete"]');
     await expect(finding).toContainText("Settings without container setup");
     await expect(finding).toContainText("Missing here: Container setup");
-    await expect(finding.getByRole("link", { name: "Set up in the Classic view" })).toHaveAttribute("href", "/#setup");
+    await expect(finding.getByRole("link", { name: "Set up a new system" })).toHaveAttribute("href", "#/setup");
     await expect(page.getByTestId("health-state")).toHaveText("Needs attention");
     await expect(page.getByTestId("tile-control")).toContainText("Calculates only");
   });
@@ -548,7 +548,7 @@ test.describe("Modern Admin: an unfinished workflow", { tag: ["@smoke", "@workfl
     await stuckAt(page, ["setup_cleanup_pending"]);
     const banner = page.getByTestId("workflow-banner");
     await expect(banner).toContainText("Guided setup is in progress.");
-    await expect(banner.getByTestId("workflow-continue")).toHaveAttribute("href", "/#setup");
+    await expect(banner.getByTestId("workflow-continue")).toHaveAttribute("href", "#/setup");
     await expect(page.getByTestId("recovery-summary")).toContainText("Guided setup is stuck: Cleanup unfinished.");
 
     const executed = page.waitForResponse((response) => response.url().endsWith("/api/admin/workflow-lifecycle/recovery") && response.request().method() === "POST");

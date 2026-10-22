@@ -14,7 +14,6 @@
   import { latestBackup } from "../lib/backups.js";
   import { dashboardHref } from "../lib/links.js";
   import { href } from "../app/router.svelte.js";
-  import { classicPage } from "../state/prefs.svelte.js";
   import { errorView } from "../lib/errors.js";
 
   ensure("overview", "config", "plan", "backups");
@@ -86,10 +85,9 @@
   </div>
   {#if verdict.level === "none"}
     <div class="row-wrap start">
-      <a class="btn" href={classicPage("setup")} data-testid="start-setup"><Icon name="arrow-up-right" size="sm" />{t("overview.startSetup")}</a>
+      <a class="btn" href={href("setup")} data-testid="start-setup"><Icon name="play" size="sm" />{t("overview.startSetup")}</a>
       <a class="btn secondary" href={href("backups")}>{t("overview.restoreBackup")}</a>
     </div>
-    <p class="note"><Icon name="info" />{t("overview.setupClassic")}</p>
   {:else if verdict.level === "unreadable"}
     <Empty error {...(system.overview.error ? errorView(system.overview.error, t) : { text: t("overview.unreadable") })} />
     {#if overview && system.overview.loadedAt}

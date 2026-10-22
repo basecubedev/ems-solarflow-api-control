@@ -21,8 +21,8 @@ test("only a workflow that holds the console raises the banner, and it opens the
   assert.equal(activeWorkflow({ ok: false, owner: "guided_setup", state: "active" }), null);
   assert.equal(activeWorkflow({ ok: true, owner: "none", state: "idle" }), null);
   assert.equal(activeWorkflow({ ok: true, owner: "guided_upgrade", state: "idle" }), null);
-  assert.deepEqual(activeWorkflow({ ok: true, owner: "guided_setup", state: "active" }), { owner: "guided_setup", state: "active", classic: "setup", native: null, label: null, recoverable: false });
-  assert.equal(activeWorkflow({ ok: true, owner: "guided_upgrade", state: "cleanup_pending", recoverable: true }).classic, "maintenance-upgrade");
+  assert.deepEqual(activeWorkflow({ ok: true, owner: "guided_setup", state: "active" }), { owner: "guided_setup", state: "active", native: "setup", label: "workflow.showSetup", recoverable: false });
+  assert.equal(activeWorkflow({ ok: true, owner: "guided_upgrade", state: "cleanup_pending", recoverable: true }).recoverable, true);
   assert.equal(activeWorkflow({ ok: true, owner: "guided_upgrade", state: "active" }).native, "updates");
   assert.deepEqual(
     ["align_existing_install", "conflict", "unknown", "teleport"].map((owner) => activeWorkflow({ ok: true, owner, state: "active" })).map((view) => [view.native, view.label]),

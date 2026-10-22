@@ -21,6 +21,7 @@
   import { forgetSessionError } from "./state/diagnostics.svelte.js";
   import { forgetSessionRefusal } from "./state/services.svelte.js";
   import { resumeUpgrade } from "./state/upgrade.svelte.js";
+  import { setupTransitionActive } from "./lib/setup.js";
   import { dashboardHref } from "./lib/links.js";
 
   /**
@@ -34,6 +35,7 @@
     backups: () => import("./pages/Backups.svelte"),
     diagnostics: () => import("./pages/Diagnostics.svelte"),
     system: () => import("./pages/System.svelte"),
+    setup: () => import("./pages/Setup.svelte"),
   };
   const loaded = $state({ overview: Overview });
   const Page = $derived(loaded[router.page] || null);
@@ -63,9 +65,20 @@
         forgetSessionError();
         forgetSessionRefusal();
         resumeUpgrade();
+        resumeSetup();
       });
     }
   });
+
+  /**
+   * After a sign-in, a reload or an Admin restart, a setup the server still
+   * runs opens again in place of the landing page, as Classic reopens it; a
+   * page the reader asked for by its address stays.
+   */
+  async function resumeSetup() {
+    const status = await system.alignment.load();
+    if (setupTransitionActive(status?.transition) && router.page === "overview") globalThis.location.hash = nav.href("setup");
+  }
 
   provideShell({
     pageSet,

@@ -10,7 +10,7 @@
   const { router, href } = shell.nav;
   const groups = shell.pageSet.groups.map((group) => ({
     ...group,
-    pages: shell.pageSet.pages.filter((page) => page.group === group.id),
+    pages: shell.pageSet.listed.filter((page) => page.group === group.id),
   }));
 </script>
 

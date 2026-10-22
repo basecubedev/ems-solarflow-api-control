@@ -279,11 +279,6 @@
   .block { display: flex; flex-direction: column; gap: var(--s2); }
   .block + .block { border-top: 1px solid var(--m-line); padding-top: var(--s4); }
   .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s4) var(--s5); margin-top: var(--s2); }
-  .devices { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s2); }
-  .device { display: flex; align-items: center; gap: var(--s3); }
-  .device.off { opacity: 0.7; }
-  .words { flex: 1; min-width: 0; }
-  .name { font-weight: 600; }
   .small { font-size: 12.5px; overflow-wrap: anywhere; }
   .sub { font-size: 13px; font-weight: 620; margin: var(--s4) 0 var(--s2); }
   .block .sub { margin-top: 0; }
