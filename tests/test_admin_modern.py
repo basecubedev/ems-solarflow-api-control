@@ -58,7 +58,8 @@ def js_keys(relative, name):
     source = (SOURCE / "src" / relative).read_text(encoding="utf-8")
     match = re.search(rf"export const {name} = Object\.freeze\(\{{(.*?)\n?\}}\)", source, re.S)
     assert match, f"{name} not found in {relative}"
-    return re.findall(r'^\s*"?([^":\s]+(?: [^":]+)*)"?:', match.group(1), re.M)
+    keys = re.findall(r'^\s*(?:"([^"]+)"|([^":\s]+))\s*:', match.group(1), re.M)
+    return [quoted or bare for quoted, bare in keys]
 
 
 @pytest.fixture()
