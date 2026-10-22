@@ -202,6 +202,17 @@ export async function adminSend(path, options = {}) {
 
 /** A file from the server, behind the session and the CSRF token, as a blob. */
 export async function adminDownload(path, body) {
+  return (await download(path, body)).blob();
+}
+
+/** A file from the server with the name the server gave it, when it gave one. */
+export async function adminDownloadFile(path, body) {
+  const response = await download(path, body);
+  const match = /filename="([^"]+)"/.exec(response.headers.get("Content-Disposition") || "");
+  return { blob: await response.blob(), name: match ? match[1] : "" };
+}
+
+async function download(path, body) {
   const response = await fetch(path, {
     method: "POST",
     credentials: "same-origin",
@@ -214,7 +225,7 @@ export async function adminDownload(path, body) {
     if (sessionLost(error)) await loadAuth();
     throw error;
   }
-  return response.blob();
+  return response;
 }
 
 /** A file to the server, sent as it is; its name travels in a header. */

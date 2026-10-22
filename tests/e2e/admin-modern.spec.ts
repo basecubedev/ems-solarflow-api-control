@@ -4,10 +4,11 @@
 // the two, the sign-in, the language, and the pages whose writes it runs
 // itself -- a backup from creation through details, restore and deletion.
 import { expect, test, ADMIN_PASSWORD } from "./fixtures/admin";
-import type { Page } from "@playwright/test";
+import type { Page, Route } from "@playwright/test";
 import { post } from "./helpers/setup-authority";
 import { ADMIN_UI_KEY as UI_KEY } from "./helpers/classic-ui";
 import { SetupPage } from "./pages/setup-page";
+import { E3DC_SYSTEM, apiInverter } from "./helpers/discovery-state";
 
 async function signIn(page: Page, password = ADMIN_PASSWORD) {
   await expect(page.getByTestId("sign-in-screen")).toBeVisible();
@@ -159,7 +160,7 @@ test.describe("Modern Admin: overview and status", { tag: ["@smoke"] }, () => {
     const finding = page.locator('[data-code="installation_incomplete"]');
     await expect(finding).toContainText("Settings without container setup");
     await expect(finding).toContainText("Missing here: Container setup");
-    await expect(finding.getByRole("link", { name: "Set up in the Classic view" })).toHaveAttribute("href", "/#setup");
+    await expect(finding.getByRole("link", { name: "Set up a new system" })).toHaveAttribute("href", "#/setup");
     await expect(page.getByTestId("health-state")).toHaveText("Needs attention");
     await expect(page.getByTestId("tile-control")).toContainText("Calculates only");
   });
@@ -171,12 +172,16 @@ test.describe("Modern Admin: overview and status", { tag: ["@smoke"] }, () => {
     await expect(page.getByText("Docker or the container setup is not available")).toBeVisible();
   });
 
-  test("the settings show the devices and hand editing to the Classic editor", async ({ page, seedAdminScenario }) => {
+  test("the settings edit the devices here, with the network search beside them and no way to Classic", async ({ page, seedAdminScenario }) => {
     await seededAt(page, seedAdminScenario, "#/settings");
-    await expect(page.getByTestId("devices").locator("li")).toHaveCount(3);
-    await expect(page.getByTestId("devices")).toContainText("Zendure via the Zendure cloud");
-    await expect(page.getByRole("link", { name: "Edit devices" })).toHaveAttribute("href", "/#maintenance-settings-devices");
-    await expect(page.getByTestId("features")).toContainText("Winter mode");
+    await expect(page.getByTestId("settings-features")).toContainText("Winter mode");
+    await page.getByRole("button", { name: "Devices", exact: true }).click();
+    const editor = page.getByTestId("devices-editor");
+    await expect(editor.locator("[data-device^='inverter-'], [data-device^='mqtt-']")).toHaveCount(3);
+    await expect(editor).toContainText("Zendure via the Zendure cloud");
+    await expect(editor.locator('[data-device="zendure-broker"]')).toContainText("read only");
+    await expect(page.getByTestId("discovery-start")).toBeVisible();
+    await expect(page.locator(".content a[href^='/#']")).toHaveCount(0);
   });
 
   test("the checks say plainly when there is no EMS to check", async ({ page, seedAdminScenario }) => {
@@ -191,6 +196,272 @@ test.describe("Modern Admin: overview and status", { tag: ["@smoke"] }, () => {
     await expect(page.getByText("Settings file", { exact: true })).toBeVisible();
     await expect(page.getByText("local_mixed")).toBeVisible();
     await expect(page.getByTestId("recovery-summary")).toHaveCount(0);
+  });
+});
+
+test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
+  test("a feature is switched on, checked and saved, and the saved settings say so", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings");
+    const winter = page.locator('[data-section="winter"]');
+    const toggle = winter.getByRole("checkbox", { name: "Winter mode on or off" });
+    const before = await toggle.isChecked();
+    await toggle.click();
+    await expect(page.getByTestId("change-count")).toHaveText("1 unsaved change");
+
+    await page.getByTestId("review").click();
+    const review = page.getByTestId("settings-review");
+    await expect(review).toContainText("Settings are valid");
+    await expect(review).toContainText("winter.enabled");
+    await page.getByTestId("apply").click();
+    await page.getByRole("dialog", { name: "Save the checked changes?" }).getByTestId("confirm").click();
+    await expect(page.getByTestId("settings-applied")).toContainText("Saved, with a backup of the previous settings:");
+
+    await page.reload();
+    await expect(page.locator('[data-section="winter"]').getByRole("checkbox", { name: "Winter mode on or off" })).toBeChecked({ checked: !before });
+    await expect(page.getByTestId("settings-changes")).toHaveCount(0);
+  });
+
+  test("the overview's Control & safety card opens the safety settings", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "");
+    await page.getByRole("link", { name: "Change", exact: true }).click();
+    await expect(page).toHaveURL(/#\/settings\/safety$/);
+    await expect(page.getByTestId("settings-safety")).toContainText("Allow hardware writes");
+  });
+
+  test("a device is changed, another added, both checked and saved", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings/devices");
+    const editor = page.getByTestId("devices-editor");
+    const first = editor.locator('[data-device="inverter-0"]');
+    await first.locator(".summary").click();
+    await first.locator('[data-path="devices[].max_power"] input').fill("700");
+    await page.getByTestId("add-e3dc").click();
+    const e3dc = editor.locator('[data-device="e3dc-3"]');
+    await expect(e3dc).toContainText("E3DC");
+    await e3dc.locator('[data-path="e3dcHost"] input').fill("192.168.50.30");
+    await expect(page.getByTestId("change-count")).toHaveText("2 unsaved changes");
+
+    await page.getByTestId("review").click();
+    const review = page.getByTestId("settings-review");
+    await expect(review).toContainText("Settings are valid");
+    await expect(review).toContainText("devices");
+    await page.getByTestId("apply").click();
+    await page.getByRole("dialog", { name: "Save the checked changes?" }).getByTestId("confirm").click();
+    await expect(page.getByTestId("settings-applied")).toBeVisible();
+
+    await page.reload();
+    await expect(editor.locator('[data-device="inverter-0"]')).toContainText("700 W");
+    await expect(editor.locator('[data-device="e3dc-3"]')).toContainText("192.168.50.30");
+  });
+
+  test("the grid meter's type changes its fields, and removing it leaves none", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings/devices");
+    const meter = page.getByTestId("devices-editor").locator('[data-device="grid-meter"]');
+    await meter.locator(".summary").click();
+    await expect(meter.locator('[data-path="grid_meter.ip"] input')).toHaveValue("192.168.50.2");
+    await page.getByTestId("grid-type").selectOption("zendure_smartmeter_d0");
+    await expect(meter.locator('[data-path="d0Serial"]')).toBeVisible();
+    await expect(page.getByTestId("change-count")).toHaveText("1 unsaved change");
+    await meter.getByTestId("device-remove").click();
+    await expect(meter).toContainText("No grid meter configured");
+  });
+
+  test("an edit survives a reload, the search finds it, and discard leaves the file alone", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings");
+    await page.getByRole("button", { name: "Expert", exact: true }).click();
+    await page.getByTestId("settings-search").fill("loop interval");
+    const field = page.locator('[data-path="system.loop_interval"] input');
+    await expect(field).toBeVisible();
+    await field.fill("7");
+    await expect(page.getByTestId("change-count")).toHaveText("1 unsaved change");
+
+    await page.reload();
+    await expect(page.getByTestId("change-count")).toHaveText("1 unsaved change");
+    await page.getByTestId("discard").click();
+    await expect(page.getByTestId("settings-changes")).toHaveCount(0);
+    await page.getByRole("button", { name: "Expert", exact: true }).click();
+    await page.getByTestId("settings-search").fill("loop interval");
+    await expect(page.locator('[data-path="system.loop_interval"] input')).not.toHaveValue("7");
+  });
+});
+
+test.describe("Modern Admin: older MQTT setup", { tag: ["@smoke"] }, () => {
+  test("the migration is reviewed and applied here, without showing a secret", async ({ page, seedAdminScenario }) => {
+    await openModern(page);
+    await seedAdminScenario("mqtt_migration");
+    await page.goto("/modern/#/system");
+    await page.reload();
+    await expect(page.getByTestId("migration-devices").locator("li").first()).toBeVisible();
+    await expect(page.locator("body")).not.toContainText("e2e-super-secret-broker-password");
+    await expect(page.getByTestId("migration-backup")).toBeChecked();
+    const request = page.waitForRequest((req) => req.url().endsWith("/zendure-mqtt/migration-apply"));
+    const devices = await page.getByTestId("migration-devices").locator("li").count();
+    await page.getByTestId("migration-apply").click();
+    const dialog = page.getByRole("dialog", { name: "Apply the migration?" });
+    await expect(dialog).toContainText(devices === 1 ? "1 device is set up anew." : `${devices} devices are set up anew.`);
+    await expect(dialog).toContainText("A backup of the current settings is made first.");
+    await dialog.getByTestId("confirm").click();
+    const sent = await request;
+    expect(sent.headers()["x-csrf-token"]).toBeTruthy();
+    expect(sent.postDataJSON()).toMatchObject({ confirm: true, backup: true });
+    await expect(page.getByTestId("migration-result")).toHaveText("The MQTT setup is up to date.");
+    await expect(page.getByTestId("migration-apply")).toHaveCount(0);
+  });
+});
+
+const EXTERNAL = "E2EMODERN0001";
+
+function externalBroker() {
+  const host = "192.168.100.72";
+  return {
+    host,
+    port: 1883,
+    devices: [
+      {
+        broker_id: `mqtt:${host}:1883`,
+        broker_host: host,
+        broker_port: 1883,
+        source_type: "local_mqtt",
+        topic_family: "ems_solarflow",
+        device_id: EXTERNAL,
+        serial_number: null,
+        display_name: "External device",
+        metrics_seen: ["electricLevel", "outputHomePower"],
+        topics_seen: [`ems-solarflow/${EXTERNAL}/inverterPower`, `ems-solarflow/${EXTERNAL}/batterySoc`],
+      },
+    ],
+  };
+}
+
+async function quietNetwork(page: Page) {
+  const reply = (body: unknown) => (route: import("@playwright/test").Route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+  await page.route("**/api/discovery/networks**", reply({ networks: [] }));
+  await page.route("**/api/discovery/scan**", reply({ scan_id: "e2e-scan" }));
+  await page.route("**/api/discovery/result/**", reply({ status: "complete", devices: [] }));
+  await page.route("**/api/discovery/mqtt-brokers/refresh**", reply({ ok: true }));
+  await page.route("**/api/discovery/zendure-cloud-mqtt/settings**", reply({ token_saved: false, tls_mode: "system_ca" }));
+}
+
+async function searched(page: Page, seedAdminScenario: (scenario: string) => Promise<void>, seedDiscoveryState: (state: object) => Promise<void>) {
+  await quietNetwork(page);
+  await openModern(page);
+  await seedAdminScenario("mixed_transports");
+  await seedDiscoveryState({ local_api_devices: [apiInverter("E2ENEWINV01", "192.168.50.41"), E3DC_SYSTEM], local_mqtt_brokers: [externalBroker()] });
+  await page.goto("/modern/#/settings/devices");
+  await page.reload();
+  await page.getByTestId("discovery-start").click();
+  await expect(page.getByTestId("discovery-outcome")).toContainText("The search finished");
+  return page.getByTestId("discovery-items");
+}
+
+test.describe("Modern Admin: network search", { tag: ["@smoke"] }, () => {
+  test("found devices are added from the search, checked and saved", async ({ page, seedAdminScenario, seedDiscoveryState }) => {
+    test.setTimeout(120_000);
+    const items = await searched(page, seedAdminScenario, seedDiscoveryState);
+    const inverter = items.locator("li").filter({ hasText: "192.168.50.41" });
+    await inverter.getByRole("button", { name: "Add inverter" }).click();
+    await expect(inverter.getByRole("button", { name: "Added" })).toBeDisabled();
+    await items.locator('li[data-role="read_only_device"]').getByRole("button", { name: "Add as read-only device" }).click();
+    await items.locator("li").filter({ hasText: EXTERNAL }).getByRole("button", { name: "Add inverter" }).click();
+    await expect(items.locator('li[data-role="read_only_device"]').getByRole("button", { name: "Added" })).toBeDisabled();
+    const editor = page.getByTestId("devices-editor");
+    await expect(editor).toContainText("192.168.50.41");
+    await expect(editor).toContainText(`${E3DC_SYSTEM.ip}:502`);
+    await expect(editor).toContainText("added from discovery");
+    await expect(page.getByTestId("change-count")).toHaveText("3 unsaved changes");
+
+    await page.getByTestId("review").click();
+    await expect(page.getByTestId("settings-review")).toContainText("Settings are valid");
+    await page.getByTestId("apply").click();
+    await page.getByRole("dialog", { name: "Save the checked changes?" }).getByTestId("confirm").click();
+    await expect(page.getByTestId("settings-applied")).toBeVisible();
+    await page.reload();
+    await expect(page.getByTestId("devices-editor")).toContainText("192.168.50.41");
+    await expect(page.getByTestId("devices-editor")).toContainText(`${E3DC_SYSTEM.ip}:502`);
+  });
+
+  test("a found device is ignored for this search, and clearing leaves the changes alone", async ({ page, seedAdminScenario, seedDiscoveryState }) => {
+    test.setTimeout(120_000);
+    const items = await searched(page, seedAdminScenario, seedDiscoveryState);
+    const inverter = items.locator("li").filter({ hasText: "192.168.50.41" });
+    await inverter.getByTestId("discovery-ignore").click();
+    await expect(inverter.getByRole("button", { name: "Ignored" })).toBeDisabled();
+    await items.locator('li[data-role="read_only_device"]').getByRole("button", { name: "Add as read-only device" }).click();
+    await page.getByTestId("discovery-clear").click();
+    await expect(page.getByTestId("discovery-items")).toHaveCount(0);
+    await expect(page.getByTestId("discovery-outcome")).toContainText("Results cleared");
+    await expect(page.getByTestId("change-count")).toHaveText("1 unsaved change");
+  });
+});
+
+test.describe("Modern Admin: what the search may use", { tag: ["@smoke"] }, () => {
+  test("a broker credential is saved and removed, and the password never comes back", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings/devices");
+    await page.getByTestId("credential-label").fill("garage broker");
+    await page.getByTestId("credential-username").fill("garage-user");
+    await page.getByTestId("credential-password").fill("e2e-modern-secret");
+    await page.getByTestId("credential-save").click();
+    const list = page.getByTestId("credentials");
+    await expect(list).toContainText("garage broker");
+    await expect(page.getByTestId("credential-password")).toHaveValue("");
+    await expect(page.locator("body")).not.toContainText("e2e-modern-secret");
+    await list.locator("li").filter({ hasText: "garage broker" }).getByRole("button", { name: "Remove" }).click();
+    await page.getByRole("dialog", { name: "Remove this credential?" }).getByTestId("confirm").click();
+    await expect(page.getByTestId("sources-message")).toContainText("Credential removed.");
+    await expect(page.getByTestId("search-sources")).not.toContainText("garage broker");
+  });
+
+  test("the Zendure cloud key is saved, tested, used and forgotten", async ({ page, seedAdminScenario }) => {
+    let saved = false;
+    const sent: string[] = [];
+    const reply = (route: import("@playwright/test").Route, body: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+    await page.route("**/api/discovery/zendure-cloud-mqtt/**", async (route) => {
+      const url = route.request().url();
+      const method = route.request().method();
+      sent.push(`${method} ${url.replace(/^.*zendure-cloud-mqtt/, "")}`);
+      if (url.endsWith("/settings")) return reply(route, { token_saved: saved, tls_mode: "system_ca", last_broker: saved ? "mqtt.zen-iot.com" : "", last_status: saved ? "ok" : "" });
+      if (url.endsWith("/token") && method === "POST") {
+        saved = true;
+        return reply(route, { ok: true });
+      }
+      if (url.endsWith("/token") && method === "DELETE") {
+        saved = false;
+        return reply(route, { ok: true });
+      }
+      if (url.endsWith("/test")) return reply(route, { ok: true, devices_found: 2, broker: "mqtt.zen-iot.com", tls_mode: "system_ca" });
+      return reply(route, { ok: true, candidates: [{ display_name: "SolarFlow 800 Pro 2", serial_number: "CLOUDSN1" }], device_list_count: 1, mqtt_observed_count: 1 });
+    });
+    await seededAt(page, seedAdminScenario, "#/settings/devices");
+    await expect(page.getByTestId("cloud-key-state")).toHaveText("Not saved");
+    await page.getByTestId("cloud-key").fill("e2e-cloud-key");
+    await page.getByTestId("cloud-save").click();
+    await expect(page.getByTestId("cloud-key-state")).toHaveText("Saved");
+    await page.getByTestId("cloud-test").click();
+    await expect(page.getByTestId("sources-message")).toContainText("The key works: 2 devices via mqtt.zen-iot.com");
+    await page.getByTestId("cloud-refresh").click();
+    await expect(page.getByTestId("search-sources")).toContainText("CLOUDSN1");
+    await page.getByTestId("cloud-forget").click();
+    await page.getByRole("dialog", { name: "Forget the Zendure cloud key?" }).getByTestId("confirm").click();
+    await expect(page.getByTestId("cloud-key-state")).toHaveText("Not saved");
+    expect(sent).toEqual(expect.arrayContaining(["POST /token", "POST /test", "POST /refresh", "DELETE /token"]));
+  });
+
+  test("an inverter over MQTT is added by hand on a typed local broker, its password kept out of the draft", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings/devices");
+    await page.getByTestId("add-mqtt-inverter").click();
+    const form = page.getByTestId("mqtt-form");
+    await form.locator('[data-path="broker.name"] input').fill("garage");
+    await form.locator('[data-path="host"] input').fill("192.168.50.60");
+    await form.locator('[data-path="username"] input').fill("garage-user");
+    await page.getByTestId("mqtt-form-add").click();
+    await expect(form).toContainText("Enter both a username and a password, or neither.");
+    await form.locator('[data-path="broker.password"] input').fill("e2e-broker-secret");
+    await page.getByTestId("mqtt-form-add").click();
+    await expect(form).toHaveCount(0);
+    await expect(page.getByTestId("devices-editor").locator('[data-device="mqtt-3"]')).toBeVisible();
+    await expect(page.getByTestId("credentials")).toContainText("local_mqtt_garage");
+    const stored = await page.evaluate(() => sessionStorage.getItem("ems-admin.settings-hardware") || "");
+    expect(stored).toContain("local_mqtt_garage");
+    expect(stored).not.toContain("e2e-broker-secret");
   });
 });
 
@@ -277,7 +548,7 @@ test.describe("Modern Admin: an unfinished workflow", { tag: ["@smoke", "@workfl
     await stuckAt(page, ["setup_cleanup_pending"]);
     const banner = page.getByTestId("workflow-banner");
     await expect(banner).toContainText("Guided setup is in progress.");
-    await expect(banner.getByTestId("workflow-continue")).toHaveAttribute("href", "/#setup");
+    await expect(banner.getByTestId("workflow-continue")).toHaveAttribute("href", "#/setup");
     await expect(page.getByTestId("recovery-summary")).toContainText("Guided setup is stuck: Cleanup unfinished.");
 
     const executed = page.waitForResponse((response) => response.url().endsWith("/api/admin/workflow-lifecycle/recovery") && response.request().method() === "POST");
@@ -345,5 +616,41 @@ test.describe("Modern Admin: on a phone", { tag: ["@smoke"] }, () => {
     await sheet.getByRole("link", { name: "System" }).click();
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("System");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
+});
+
+test.describe("Modern Admin: settings in the old place", { tag: ["@smoke"] }, () => {
+  test("are moved to config/config.json after a confirmation, and a different one there is replaced only after a second", async ({ page }) => {
+    let moved = false;
+    await page.route("**/api/admin/maintenance/overview", async (route: Route) => {
+      const data = await route
+        .fetch()
+        .then((response) => response.json())
+        .catch(() => null);
+      if (!data) return;
+      data.install_state = { ...(data.install_state || {}), state: moved ? "configured" : "legacy_root_config", legacy_migration_available: !moved, paths: { legacy_config: "/srv/ems/config.json", standard_config: "/srv/ems/config/config.json" } };
+      await route.fulfill({ json: data }).catch(() => undefined);
+    });
+    const asked: unknown[] = [];
+    await page.route("**/api/admin/config/migrate-legacy", async (route: Route) => {
+      const body = route.request().postDataJSON();
+      asked.push(body);
+      if (!body.overwrite) return route.fulfill({ status: 409, json: { ok: false, reason: "target_exists", message: "config/config.json already exists and differs from the legacy config. Confirm the overwrite to replace it." } });
+      moved = true;
+      return route.fulfill({ json: { ok: true, migrated: true, backup_path: "/srv/ems/data/admin/backups/config/root-config-legacy.json", backups: ["/srv/ems/data/admin/backups/config/root-config-legacy.json", "/srv/ems/data/admin/backups/config/standard-config-before-migrate.json"] } });
+    });
+    await openModern(page, "#/system");
+    const legacy = page.getByTestId("legacy-config");
+    await expect(legacy).toContainText("/srv/ems/config.json");
+    await legacy.getByTestId("legacy-move").click();
+    await page.getByRole("dialog", { name: "Move the settings to config/config.json?" }).getByTestId("confirm").click();
+    await expect(legacy).toContainText("The file there already exists and differs. Confirm to replace it.");
+    await legacy.getByTestId("legacy-replace").click();
+    await page.getByRole("dialog", { name: "Replace the existing config/config.json?" }).getByTestId("confirm").click();
+    await expect(legacy).toContainText("The settings were moved to config/config.json.");
+    await expect(legacy).toContainText("standard-config-before-migrate.json");
+    await expect(legacy).not.toContainText("still in the old place");
+    await expect(legacy.getByTestId("legacy-move")).toHaveCount(0);
+    expect(asked).toEqual([{}, { overwrite: true }]);
   });
 });

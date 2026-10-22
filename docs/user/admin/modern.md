@@ -37,11 +37,11 @@ changes nothing on the host.
 | --- | --- |
 | **Overview** | One answer to "is everything in order": what needs your attention, ranked, each with the way out of it; tiles for EMS, the analytics database, control and the last backup; what your settings allow EMS to do; the versions and the link to the dashboard |
 | **Updates** | What runs now, the versions you can update to, and the update itself: choose a version, then confirm once. Progress and the result are shown on the page |
-| **Settings & devices** | Your devices, the grid meter, the features and the safety switches as EMS applies them; editing opens the Classic editor at the right tab |
+| **Settings & devices** | The features, the safety switches, the expert settings, your devices and the grid meter, changed, checked and saved here, and the search of the network for devices |
 | **Services** | EMS and the analytics database as they run; what should run and what a restart changes; **Restart EMS now** and **Repair analytics** |
 | **Backups** | Create a backup, see what is in one, download it, bring one back, restore it after a preview, delete it |
 | **Diagnostics** | The read-only checks of the installed EMS, with the EMS diagnosis in full |
-| **System** | The files of the installation, the device telemetry over MQTT, an older MQTT setup that waits for migration, and the reset of a guided workflow that can no longer finish |
+| **System** | The files of the installation, the device telemetry over MQTT, an older MQTT setup that waits for migration, which you review and apply there, the reset of a guided workflow that can no longer finish, the way into the guided setup, and moving settings found in the old place (a `config.json` beside the installation) to `config/config.json` |
 
 The top bar always says how the installation is: **All good**, **A note**,
 **Needs a look**, **Needs attention** or **Not installed**; **Checking…**
@@ -60,25 +60,86 @@ until you press **New design**. Adding `?ui=classic` or `?ui=modern` to the
 address sets the choice explicitly. A browser too old for Modern always opens
 Classic.
 
-Some workflows run in Classic for now: **Guided setup**, editing **settings
-and devices**, and applying an **older MQTT setup's migration**. Modern names
-them and opens them in Classic with one click, at the right page, without
-changing your choice. The guided setup is the one exception: Classic never
-starts it from an address, so that button opens Classic's start page, where it
-is the first choice. When you go back to the console's address, Modern opens
-again.
+Every workflow runs in Modern, the guided setup included. **Classic view**
+stays available on every page.
 
 An update that is running is shown on every Modern page, with **Show the
-update**. A guided setup in progress is shown the same way, with **Continue in
-the classic view**.
+update**. A guided setup in progress is shown the same way, with **Continue
+the setup**; after a sign-in or a reload, an unfinished setup opens again in
+place of the overview.
 
-What Modern shows but does not change itself yet:
+## Setting up a new system
 
-| Where | Shown in Modern | Done in Classic |
-| --- | --- | --- |
-| **Settings & devices** | Every device, the grid meter, the features and the safety switches | Changing them, adding devices, putting live values back |
-| **System** | An older MQTT setup that waits for migration | Reviewing and applying the migration, under **System status** |
-| **Overview** | That nothing is set up yet | The guided setup |
+On an installation with nothing set up yet, the overview offers **Set up a new
+system**; on an installed one, the System page has **Open the guided setup**.
+Both open the guided setup, which asks before it sets up over an existing
+installation. It has the same five steps as Classic
+([Guided setup](guided-setup.md)):
+
+1. **System Build**: choose the version, verify it, update the Admin console
+   when the build needs a newer one, then continue.
+2. **Devices**: the search runs on its own the first time. Choose which
+   sources it uses and in which order, scan a network by hand, and see what
+   each source found. Credentials for local MQTT brokers and the Zendure cloud
+   key are entered at the foot of the page.
+3. **Settings**: the inverters the search verified and a single grid meter are
+   already in the draft. Add, remove, rename, reorder or switch off devices,
+   add one by hand, and set the features, the control and safety switches and
+   the expert values. The server checks the draft as you go; **Continue to
+   deployment** saves it once the check says **Ready**. The generated settings
+   can also be downloaded encrypted or applied to an existing installation.
+4. **Prepare**: the workspace and the images are prepared on their own. An
+   existing installation or workspace is only replaced after you confirm it.
+5. **Start EMS**: starts the prepared deployment. A container in the way, or a
+   workspace the container's user cannot write, is named with the way out of
+   it; when EMS runs, **Open the dashboard** opens it.
+
+The draft is kept in the browser under the same names Classic uses, so a setup
+begun in one console continues in the other. **Start setup over** discards the
+draft and the progress; the installed system stays as it is.
+
+## Changing settings
+
+**Settings & devices** has four tabs. **Features** switches winter mode,
+full-charge assist, AC charging, energy savings, the dashboard and analytics on
+or off and sets how each works. **Safety** holds what EMS may write to your
+devices, dry run and simulation, and the output limits. **Expert** holds the
+system basics and the control tuning. **Devices** holds the grid meter, the
+Zendure MQTT broker and every device: open a card to change it, **Remove**
+takes it out, and **Add an inverter**, **Add an inverter over MQTT** and **Add
+an E3/DC** add one by hand. **Search my network** above the devices looks for
+devices on mDNS, the recommended networks, the networks of your devices, your
+MQTT brokers and, with a saved key, the Zendure cloud; a single address or
+range can be scanned too. Each find says whether it is in the settings, new,
+moved or reachable another way, and its button adds it, takes the new address
+or switches the inverter to that connection. Nothing changes until you check
+and save; **Clear results** forgets the finds, **Ignore** one of them.
+**What the search may use** keeps the credentials for your own MQTT brokers
+and the Zendure cloud API key: saved encrypted on the device and never shown
+again. The key can be tested, used to find cloud devices, and forgotten.
+**Add an inverter over MQTT** asks for a broker only when the inverter is on
+your own one; its username and password are saved as such a credential, so no
+password enters the settings.
+
+1. Change what you want. Each field names its unit, says what it does and, when
+   it is empty, which default applies. Advanced and expert fields are folded
+   away under each feature. The search box finds a setting by its name, its
+   description or its config path, across all tabs.
+2. A bar at the foot of the page counts your unsaved changes. They stay when you
+   change pages or reload; **Discard** drops them without touching anything.
+3. **Check changes** has the server check the result: whether it is valid, and
+   every value that would change, split into what takes effect at once and what
+   needs an EMS restart. **The settings file this would write** shows the file
+   itself.
+4. **Save and apply** writes it, after a backup of the current settings unless
+   you turn **Back up my settings first** off, and asks once more first. A
+   change made after the check has to be checked again.
+5. When a change needs an EMS restart, **Restart EMS now** does it; **Follow it
+   in Services** shows how it goes.
+
+A value changed in the dashboard while EMS runs is marked **Running: …** beside
+the field. **Put saved values back** makes EMS use the saved values again, at
+once.
 
 ## Signing in
 
@@ -126,8 +187,13 @@ changed already. It offers the ways out the console can take at that moment:
 when the installation failed, **Go back to the version that runs** sets the
 Admin console back to the version that was verified with the EMS that runs,
 and **Cancel the update** gives it up. A backup can always be restored under **Backups**. The full reference is
-[Guided Upgrade](guided-upgrade.md); **Use the classic view instead** on the
-**Updates** page opens it there.
+[Guided Upgrade](guided-upgrade.md).
+
+When **Go back to the version that runs** finds the Admin console already on
+that version, nothing restarts; **System alignment** on the **Updates** page
+then shows what is left. **Continue** checks that version's files; after that
+**Release the console** leads to **System**, where the recovery card frees the
+console with one confirmation.
 
 ## Backups
 
@@ -178,7 +244,7 @@ do before it does it.
 | Symptom | Meaning | What to do |
 | --- | --- | --- |
 | The address opens Classic | This browser chose Classic, or it is too old for Modern | Press **New design**, or open the address with `?ui=modern` |
-| A button opens the Classic view | That workflow has not moved to Modern yet | Finish it there; the console's address brings you back to Modern |
+| The setup says this tab no longer owns it | Another tab, or a restart, took the setup over | Press **Open the current setup**, or **Discard this tab’s draft** to start from the newer session |
 | An update waits at **Update the Admin console** | The Admin console is restarting with the new version | Wait; after two minutes the page offers **Reload page**. The update goes on either way |
 | The sign-in appears in the middle of an update | The Admin Console was replaced by the new version, and sessions end with it | Sign in with the same password; the page then follows the update on |
 | A message is in English | It comes from the server and has no translation yet | It is still accurate; report it if it matters to you |

@@ -187,8 +187,10 @@ test("Maintenance local MQTT credential save and delete use the real generic rou
   await expect(page.locator("#mqtt-credential-message")).toHaveText(
     "Credential saved.",
   );
-  const card = page.locator("#mqtt-credential-list .mqtt-credential-card");
-  await expect(card).toContainText("Maintenance broker");
+  const card = page.locator("#mqtt-credential-list .mqtt-credential-card", {
+    hasText: "Maintenance broker",
+  });
+  await expect(card).toHaveCount(1);
   await expect(page.locator("body")).not.toContainText(
     "maintenance-broker-secret",
   );

@@ -2,7 +2,6 @@
   import Icon from "../../../shared/ui/Icon.svelte";
   import { t } from "../i18n/i18n.svelte.js";
   import { href } from "../app/router.svelte.js";
-  import { classicPage } from "../state/prefs.svelte.js";
 
   /** findings: views from lib/health.js, in the server's order. */
   let { findings, onrefresh } = $props();
@@ -59,8 +58,6 @@
             {#each finding.actions as action (action.label)}
               {#if action.kind === "page"}
                 <a class="btn secondary small" href={href(action.target)}>{t(action.label)}</a>
-              {:else if action.kind === "classic"}
-                <a class="btn secondary small" href={classicPage(action.target)}><Icon name="arrow-up-right" size="sm" />{t(action.label)}</a>
               {:else if onrefresh}
                 <button class="btn secondary small" type="button" onclick={onrefresh}><Icon name="refresh-cw" size="sm" />{t(action.label)}</button>
               {/if}

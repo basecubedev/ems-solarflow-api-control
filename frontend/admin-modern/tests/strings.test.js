@@ -12,12 +12,15 @@ import { FINDINGS, INSTALL_STATES, CONTAINER_STATUSES } from "../src/lib/health.
 import { CONTROL_STATUSES, CONTROL_TRANSPORTS } from "../src/lib/control.js";
 import { DISPLAY_STATES, SERVICES, SYNC_ACTIONS, CONFIG_STATES, PLAN_MESSAGES } from "../src/lib/services.js";
 import { BACKUP_PURPOSES, BACKUP_TYPES, CREATE_SCOPES, CREATE_STEPS, RESTORE_STEPS, FILE_ACTIONS, INFLUX_REASONS, LIST_WARNINGS, STEP_STATES } from "../src/lib/backups.js";
-import { WORKFLOW_OWNERS, WORKFLOW_STATES, STALE_REASONS } from "../src/lib/workflow.js";
+import { ALIGNMENT_STAGES, WORKFLOW_OWNERS, WORKFLOW_STATES, STALE_REASONS } from "../src/lib/workflow.js";
 import { CHECK_IDS, CHECK_STATUSES, RUN_MODES, UNAVAILABLE_MESSAGES } from "../src/lib/diagnostics.js";
 import { CHANNELS, UPGRADE_STATES, PAIR_STATES, RELEASE_NOTES } from "../src/lib/updates.js";
 import { PHASES, OPTION_GROUPS, UPGRADE_STAGES } from "../src/lib/upgrade.js";
 import { RUNTIME_STATES, STATUS_SOURCES, BROKER_ISSUES, DEVICE_STATES } from "../src/lib/telemetry.js";
-import { AUTOMATIC_FEATURES, DEVICE_KINDS, FEATURE_IDS, MQTT_SOURCES } from "../src/lib/settings.js";
+import { REASON_WORDS } from "../src/lib/devices.js";
+import { SETUP_STEPS, DOCKER_MODES, DOCKER_STATES, RECOVERY_REASONS } from "../src/lib/setup.js";
+import { BUSY_OPERATIONS, CONFIG_CONFLICTS, CONTINUITY, SWITCH_REASONS } from "../src/lib/setupDraft.js";
+import { AUTOMATIC_FEATURES, DEVICE_KINDS, EDIT_TABS, FEATURE_IDS, MQTT_SOURCES, RISKS } from "../src/lib/settings.js";
 
 const LANGS = ["en", "de", "nl", "fr"];
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "../src");
@@ -131,6 +134,40 @@ test("every generated key family is complete", () => {
     ...["missing", "invalid"].map((state) => `settings.config.${state}`),
     ...["operation", "workflow"].map((kind) => `recovery.reference.${kind}`),
     ...FEATURE_IDS.flatMap((id) => [`feature.${id}`, `feature.${id}.sub`]),
+    ...[...EDIT_TABS, "devices"].map((tab) => `settings.tab.${tab}`),
+    ...EDIT_TABS.map((tab) => `settings.tab.${tab}.sub`),
+    ...ALIGNMENT_STAGES.map((stage) => `alignment.stage.${stage}`),
+    ...REASON_WORDS.map((word) => `devices.reason.${word}`),
+    ...["live", "restart"].map((when) => `settings.edit.when.${when}`),
+    ...["advanced", "expert"].map((level) => `settings.edit.level.${level}`),
+    ...RISKS.flatMap((risk) => [`settings.risk.${risk}`, `settings.risk.${risk}.hint`]),
+    ...["control_stability", "data_loss"].map((risk) => `settings.risk.${risk}.shared`),
+    ...SETUP_STEPS.map((step) => `setup.title.${step}`),
+    ...RECOVERY_REASONS.map((reason) => `setup.recovery.${reason}`),
+    ...["local_api", "local_mqtt", "zendure_mqtt"].map((source) => `setup.source.${source}`),
+    ...["checking", "enabled", "disabled", "unavailable", "noAnswer"].map((state) => `setup.mdns.${state}`),
+    ...["idle", "probing", "added", "none", "unavailable"].map((state) => `setup.gateway.${state}`),
+    ...["unavailable", "refreshed", "failed", "probeFailed", "probed"].map((kind) => `setup.brokers.${kind}`),
+    ...["tcp_open", "mqtt_connected", "mqtt_listened_no_topics", "topics_seen", "auth_failed", "tls_failed", "connection_failed", "timeout"].map((status) => `setup.attempt.${status}`),
+    ...["ready", "failed", "working", "loading", "notStarted"].map((state) => `setup.chip.release.${state}`),
+    ...["empty", "draft", "needsAttention", "valid"].map((state) => `setup.chip.config.${state}`),
+    ...["starting", "failed", "running", "ready"].map((state) => `setup.chip.start.${state}`),
+    ...["emptyName", "duplicateName", "noInverter", "chooseGridMeter", "noGridMeter", "twoGridMeters", "gridMeterStale", "waiting", "selected", "planChanged"].map((key) => `setup.hint.${key}`),
+    ...["superseded", "unavailable", "ready", "checking", "attention"].map((verdict) => `setup.config.verdict.${verdict}`),
+    ...["downloadShort", "downloadDiffer", "preparing", "downloaded", "applying", "created", "applied", "stale", "planChanged", "fixFirst"].map((key) => `setup.config.status.${key}`),
+    ...CONFIG_CONFLICTS.map((code) => `setup.config.status.conflict.${code}`),
+    ...[...BUSY_OPERATIONS, "other"].map((operation) => `setup.operation.${operation}`),
+    ...[...CONTINUITY, "unresolved"].map((key) => `setup.continuity.${key}`),
+    ...[...SWITCH_REASONS, "other"].map((reason) => `setup.switchReason.${reason}`),
+    ...["serialRequired", "generationRequired", "serialTaken", "hostRequired", "hostTaken", "typeRequired"].map((error) => `setup.manualError.${error}`),
+    ...["unknown", "unavailable", "source_unavailable", "not_ready", "available"].map((status) => `setup.manualControl.${status}`),
+    ...["productKey", "mqttId"].map((part) => `setup.manualControl.missing.${part}`),
+    ...["preparing", "ready", "failed", "noRelease", "noConfig", "noDocker", "auto"].map((key) => `setup.deploy.status.${key}`),
+    ...DOCKER_STATES.map((state) => `setup.docker.${state}`),
+    ...DOCKER_MODES.map((mode) => `setup.dockerMode.${mode}`),
+    ...["starting", "conflict", "failed", "running", "notPrepared", "noDocker", "ready"].map((key) => `setup.run.status.${key}`),
+    ...["ems", "influxdb"].map((service) => `setup.run.conflict.existing.${service}`),
+    ...["ems", "influxdb", "admin"].map((service) => `setup.service.${service}`),
   ];
   assert.deepEqual([...new Set(required)].filter((key) => !exists(key)), []);
 });
@@ -147,6 +184,15 @@ test("no orphan keys: each key is used literally or belongs to a generated famil
     "upgrade.sub.", "upgrade.phase.", "upgrade.choice.", "upgrade.migration.", "upgrade.migrationLoses.", "upgrade.end.",
     "system.issue.", "system.deviceState.", "system.broker.", "system.brokerDevices.", "system.metrics.", "system.migrationNeeded.",
     "system.migrationLosesControl.", "settings.kind.", "settings.source.", "settings.config.", "settings.devicesSub.", "recovery.reference.",
+    "settings.tab.", "settings.edit.when.", "settings.edit.level.", "settings.risk.", "settings.edit.unsaved.", "settings.edit.overrides.",
+    "settings.edit.invalid.", "settings.edit.resetLine.", "system.migrationConfirmDevices.", "alignment.stage.",
+    "devices.field.", "devices.enabledHint.", "devices.mqtt.state.", "devices.reason.", "devices.mqtt.note.", "devices.external.model.",
+    "devices.external.state.", "devices.external.note.", "discovery.target.", "discovery.outcome.", "discovery.title.", "discovery.status.", "discovery.note.", "discovery.action.", "sources.message.", "devices.mqttForm.error.", "setup.step.", "setup.channel.", "setup.build.", "setup.action.", "setup.check.", "setup.pipeline.",
+    "setup.title.", "setup.chip.", "setup.source.", "setup.mdns.", "setup.gateway.", "setup.attempt.", "setup.brokers.", "setup.hint.",
+    "setup.config.verdict.", "setup.config.status.", "setup.operation.", "setup.continuity.", "setup.switchReason.", "setup.manualError.",
+    "setup.manualControl.", "setup.deploy.status.", "setup.docker.", "setup.dockerMode.", "setup.run.status.", "setup.run.conflict.existing.", "setup.service.",
+    "setup.devices.sourcesEnabled.", "setup.devices.found.", "setup.devices.brokerCount.", "setup.devices.deviceCount.", "setup.devices.ignored.",
+    "setup.devices.proposalCount.", "setup.hardware.metersFound.", "setup.hardware.ready.", "setup.recovery.",
     "feature.",
   ];
   const orphans = Object.keys(STRINGS).filter((key) => !APP_KEYS.includes(key) && !text.includes(`"${key}"`) && !families.some((prefix) => key.startsWith(prefix)));

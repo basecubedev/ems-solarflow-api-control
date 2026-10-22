@@ -31,14 +31,14 @@ export const SEVERITY_ICONS = Object.freeze({ error: "circle-x", warning: "trian
 
 /**
  * What the reader can do about each finding. "page" opens a page of this
- * console, "classic" a Classic page it does not have yet, "refresh" reads
- * the overview again.
+ * console, "refresh" reads the overview again.
  */
 export const FINDINGS = Object.freeze({
   docker_unavailable: [{ kind: "refresh", label: "health.action.recheck" }],
   installation_incomplete: [
-    { kind: "classic", target: "setup", label: "health.action.setup" },
+    { kind: "page", target: "setup", label: "health.action.setup" },
     { kind: "page", target: "backups", label: "health.action.restore" },
+    { kind: "page", target: "system", label: "health.action.files" },
   ],
   ems_missing: [{ kind: "page", target: "updates", label: "health.action.updates" }],
   ems_stopped: [{ kind: "page", target: "services", label: "health.action.services" }],

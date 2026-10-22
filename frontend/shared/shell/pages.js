@@ -2,10 +2,13 @@
 /**
  * An app's navigation as the shell reads it: the pages in menu order, the
  * groups they fall into and the four a phone's bar holds until the reader
- * picks their own. Pure, so the node tests can walk it.
+ * picks their own. A page marked ``hidden`` has an address but no place in
+ * the menu or the bar: it is opened from where it is needed. Pure, so the
+ * node tests can walk it.
  */
 export function createPageSet({ pages, groups, mobile }) {
-  const ids = pages.map((page) => page.id);
+  const listed = pages.filter((page) => !page.hidden);
+  const ids = listed.map((page) => page.id);
   const slots = mobile.length;
 
   /**
@@ -29,7 +32,7 @@ export function createPageSet({ pages, groups, mobile }) {
     return pages.find((page) => page.id === id) || pages[0];
   }
 
-  return Object.freeze({ pages, groups, mobile: Object.freeze([...mobile]), slots, pinnedPages, pageById });
+  return Object.freeze({ pages, listed, groups, mobile: Object.freeze([...mobile]), slots, pinnedPages, pageById });
 }
 
 /**

@@ -7,10 +7,11 @@ import { MOBILE_PAGES, PAGES, pinnedPages } from "../src/app/pages.js";
 const app = readFileSync(new URL("../src/App.svelte", import.meta.url), "utf8");
 
 test("every page in the navigation has the component that renders it, and no other", () => {
-  const block = app.match(/const COMPONENTS = \{([^}]*)\}/);
-  assert.ok(block, "COMPONENTS not found in App.svelte");
-  const ids = [...block[1].matchAll(/(\w+):/g)].map((match) => match[1]);
-  assert.deepEqual(ids, PAGES.map((page) => page.id));
+  const lazy = app.match(/const PAGES = \{([^}]*)\}/);
+  const eager = app.match(/const loaded = \$state\(\{([^}]*)\}\)/);
+  assert.ok(lazy && eager, "the page loaders are not found in App.svelte");
+  const ids = [...eager[1].matchAll(/(\w+):/g), ...lazy[1].matchAll(/(\w+):/g)].map((match) => match[1]);
+  assert.deepEqual(ids.sort(), PAGES.map((page) => page.id).sort());
 });
 
 test("updates and the settings come right after the overview, in the menu and on the phone bar", () => {
@@ -26,5 +27,5 @@ test("the phone bar holds four known pages and falls back to its default", () =>
 });
 
 test("every page names the Classic page the switch opens", () => {
-  assert.ok(PAGES.every((page) => /^maintenance(-[a-z]+)*$/.test(page.classic)));
+  assert.ok(PAGES.every((page) => /^maintenance(-[a-z]+)*$/.test(page.classic) || (page.hidden && page.classic === "setup")));
 });

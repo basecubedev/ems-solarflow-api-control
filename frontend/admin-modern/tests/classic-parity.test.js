@@ -11,7 +11,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { KNOWN_ERRORS } from "../src/lib/errors.js";
 import { CONTROL_STATUSES, CONTROL_TRANSPORTS } from "../src/lib/control.js";
-import { WORKFLOW_OWNERS, WORKFLOW_STATES, STALE_REASONS } from "../src/lib/workflow.js";
+import { WORKFLOW_BLOCKED_CODES, WORKFLOW_OWNERS, WORKFLOW_STATES, STALE_REASONS } from "../src/lib/workflow.js";
+import { BUSY_OPERATIONS, CONFIG_CONFLICTS, CONTINUITY, PLAN_CONFLICTS, SWITCH_REASONS, WORKFLOW_CONFLICTS } from "../src/lib/setupDraft.js";
 import { RUNTIME_STATES, STATUS_SOURCES, BROKER_ISSUES } from "../src/lib/telemetry.js";
 import { CHECK_STATUSES, RUN_MODES } from "../src/lib/diagnostics.js";
 import { SETTINGS_TABS } from "../src/lib/settings.js";
@@ -34,6 +35,22 @@ function arrayItems(name) {
   assert.ok(match, `${name} not found in admin.js`);
   return [...match[1].matchAll(/"([a-z_-]+)"/g)].map((item) => item[1]);
 }
+
+function setItems(name) {
+  const match = CLASSIC.match(new RegExp(`const ${name} = new Set\\(\\[([^\\]]*)\\]\\)`));
+  assert.ok(match, `${name} not found in admin.js`);
+  return [...match[1].matchAll(/"([a-z_-]+)"/g)].map((item) => item[1]);
+}
+
+test("the guided setup reads the server's refusals as Classic does", () => {
+  assert.deepEqual([...WORKFLOW_BLOCKED_CODES].sort(), setItems("WORKFLOW_BLOCKED_CODES").sort());
+  assert.deepEqual([...PLAN_CONFLICTS].sort(), setItems("SETUP_DEVICE_PLAN_CONFLICT_ERRORS").sort());
+  assert.deepEqual([...WORKFLOW_CONFLICTS].sort(), setItems("SETUP_WORKFLOW_CONFLICT_ERRORS").sort());
+  assert.deepEqual([...CONFIG_CONFLICTS].sort(), tableKeys("SETUP_CONFLICT_MESSAGES").sort());
+  assert.deepEqual([...BUSY_OPERATIONS].sort(), tableKeys("SETUP_OPERATION_LABELS").sort());
+  assert.deepEqual([...SWITCH_REASONS].sort(), tableKeys("CONNECTION_SWITCH_REASONS").sort());
+  assert.deepEqual([...CONTINUITY].sort(), tableKeys("CONTROL_CONTINUITY_TEXT").sort());
+});
 
 test("every error code Classic explains has words here", () => {
   const codes = [...tableKeys("ADMIN_ERROR_MESSAGES"), ...tableKeys("AUTH_ERROR_MESSAGES")];

@@ -316,6 +316,33 @@ test.describe("Modern Admin: the guided upgrade", { tag: ["@smoke", "@workflow"]
     expect(returnBody).toEqual({ operation_id: "op-e2e", confirm: true, acknowledge_risk: false });
   });
 
+  test("going back when the Admin console already runs that version continues the alignment here and leads to its release", async ({ page, seedAdminScenario }) => {
+    let current = transition("failed_recoverable", { failed_stage: "ems_operation_running", error_message: "EMS did not start.", resume_available: true, return_available: true, cancel_available: true });
+    await page.route("**/api/admin/system-alignment/status", (route) => status(route, current));
+    await page.route("**/api/admin/system-alignment/return-to-running-build", async (route) => {
+      current = transition("admin_aligned", { mode: "align_existing_install", operation_id: "op-return" });
+      await json(route, { ok: true, status: "admin_return_started", stage: "admin_aligned", reconnect: false, operation_id: "op-return" });
+    });
+    let resumed: unknown = null;
+    await page.route("**/api/admin/system-alignment/resume", async (route) => {
+      resumed = route.request().postDataJSON();
+      current = transition("resources_verified", { mode: "align_existing_install", operation_id: "op-return" });
+      await json(route, { ok: true, ...current });
+    });
+    await openUpdates(page, seedAdminScenario);
+    await page.getByTestId("upgrade-return").click();
+    await page.getByRole("dialog").getByTestId("confirm").click();
+    await expect(page.getByTestId("upgrade-returned")).toContainText("The last step is below, under System alignment.");
+    await expect(page.getByTestId("upgrade-returned").getByRole("link")).toHaveCount(0);
+    const card = page.getByTestId("alignment");
+    await expect(card).toContainText("the files of that version still need checking");
+    await card.getByTestId("alignment-continue").click();
+    await expect(card).toContainText("What is left is to release the console, under System.");
+    await expect(card.getByTestId("alignment-continue")).toHaveCount(0);
+    await expect(card.getByTestId("alignment-release")).toHaveAttribute("href", "#/system");
+    expect(resumed).toEqual({ operation_id: "op-return", tag: TARGET });
+  });
+
   test("a start that failed after its work does not take over an earlier run of the same version", async ({ page, seedAdminScenario }) => {
     await page.route("**/api/admin/system-alignment/status", (route) => status(route, transition("cancelled", { operation_id: "op-earlier" })));
     await openUpdates(page, seedAdminScenario);

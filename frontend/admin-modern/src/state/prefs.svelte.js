@@ -18,14 +18,6 @@ export function chooseClassic(classicPage) {
   globalThis.location.assign(`/?ui=classic${classicPage ? `#${classicPage}` : ""}`);
 }
 
-/**
- * A Classic page Modern does not have yet. The address names the page, so
- * admin-theme.js opens Classic for it without changing the browser's choice.
- */
-export function classicPage(page) {
-  return `/#${page}`;
-}
-
 export function rememberModern() {
   writeStored(UI_CHOICE_KEY, "modern");
 }

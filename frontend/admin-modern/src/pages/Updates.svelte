@@ -7,14 +7,14 @@
   import { t, tn, fmt } from "../i18n/i18n.svelte.js";
   import { system, ensure, reload, keepWithOverview } from "../state/system.svelte.js";
   import { upgrade, chooseRelease, resumeUpgrade, noteStatus } from "../state/upgrade.svelte.js";
-  import { noteView, pairView, releaseList, upgradePage, RELEASES_SHOWN } from "../lib/updates.js";
+  import { noteView, pairView, releaseList, RELEASES_SHOWN } from "../lib/updates.js";
   import { activeUpgrade, lastRun } from "../lib/upgrade.js";
   import { activeWorkflow } from "../lib/workflow.js";
   import { emsFact } from "../lib/health.js";
   import { errorView } from "../lib/errors.js";
-  import { classicPage } from "../state/prefs.svelte.js";
   import StaleNote from "../widgets/StaleNote.svelte";
   import UpgradePanel from "../widgets/UpgradePanel.svelte";
+  import AlignmentCard from "../widgets/AlignmentCard.svelte";
 
   ensure("overview", "alignment", "releases", "lifecycle");
   keepWithOverview("alignment");
@@ -66,6 +66,7 @@
 {/snippet}
 
 {#if upgrade.stage !== "idle"}<UpgradePanel />{/if}
+<AlignmentCard />
 
 <Card title={t("updates.current")} subtitle={t("updates.currentSub")} span="span-6">
   <div class="facts two">
@@ -90,7 +91,6 @@
     {:else}
       <p class="muted small">{t("updates.chooseBelow")}</p>
     {/if}
-    <a class="btn secondary small" href={classicPage(upgrade.stage !== "idle" && upgrade.release ? upgradePage(upgrade.release) || "maintenance-upgrade" : "maintenance-upgrade")} data-testid="upgrade-in-classic"><Icon name="arrow-up-right" size="sm" />{t("updates.openClassic")}</a>
   </div>
 </Card>
 

@@ -30,8 +30,8 @@ export async function getJson(path, { signal } = {}) {
   return payload;
 }
 
-export async function sendJson(path, { method = "POST", body, csrfToken, signal } = {}) {
-  const headers = { Accept: "application/json" };
+export async function sendJson(path, { method = "POST", body, csrfToken, signal, headers: extra } = {}) {
+  const headers = { ...(extra || {}), Accept: "application/json" };
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (csrfToken) headers["X-CSRF-Token"] = csrfToken;
   const response = await fetch(path, {
