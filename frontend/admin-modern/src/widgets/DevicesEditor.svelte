@@ -4,6 +4,7 @@
   import SettingField from "./SettingField.svelte";
   import { t } from "../i18n/i18n.svelte.js";
   import { settings, setHardwareValues } from "../state/settings.svelte.js";
+  import { sources, saveCredential } from "../state/sources.svelte.js";
   import {
     NO_GRID_METER,
     commonDefaults,
@@ -23,6 +24,8 @@
     newE3dc,
     newLocalInverter,
     newMqttInverter,
+    manualBroker,
+    onLocalBroker,
     reasonKey,
     removeDevice,
     setBroker,
@@ -65,6 +68,44 @@
     if (keys.length === count) return;
     keys = count < keys.length ? keys.slice(0, count) : [...keys, ...Array.from({ length: count - keys.length }, () => `device-${(made += 1)}`)];
   });
+
+  let mqttForm = $state(null);
+  let mqttError = $state("");
+  let mqttBusy = $state(false);
+
+  function openMqttForm() {
+    mqttForm = { name: "", host: "", port: "", security: "plain", username: "", password: "" };
+    mqttError = "";
+  }
+
+  /**
+   * A new MQTT inverter, on a local broker when one is typed. Its username and
+   * password are saved as a discovery credential first, and the device names
+   * that credential, so no password enters the settings draft.
+   */
+  async function addMqtt(event) {
+    event.preventDefault();
+    const broker = manualBroker(mqttForm);
+    if (broker?.authPartial) {
+      mqttError = "partial";
+      return;
+    }
+    let credential = "";
+    if (broker?.hasAuth) {
+      mqttBusy = true;
+      const saved = await saveCredential({ label: broker.ref, username: broker.username, password: broker.password });
+      mqttBusy = false;
+      const match = (saved || []).find((entry) => String(entry.id) === broker.ref);
+      if (!match) {
+        mqttError = "credential";
+        return;
+      }
+      credential = String(match.id);
+    }
+    const device = newMqttInverter(devices, catalog);
+    add(broker ? onLocalBroker(device, broker, credential) : device);
+    mqttForm = null;
+  }
 
   function update(index, next) {
     const list = [...devices];
@@ -175,13 +216,13 @@
   {:else}
     <SettingField {field} value={gridValue(meter, field.path)} onchange={(value) => setHardwareValues({ grid_meter: setGridValue(meter, field.path, value) })} />
     {#if field.path === "grid_meter.ip"}
-      <SettingField field={{ path: "grid_meter.port", type: "number", label: t("devices.field.port"), description: gridVariant(catalog, meterType)?.port_description || t("devices.field.port.hint") }} lang={gridVariant(catalog, meterType)?.port_description ? "en" : undefined} value={meter.port} onchange={(value) => setHardwareValues({ grid_meter: setGridPort(meter, value) })} />
+      <SettingField field={{ path: "grid_meter.port", type: "number", label: t("devices.field.port"), description: gridVariant(catalog, meterType)?.port_description || t("devices.field.port.hint") }} lang={gridVariant(catalog, meterType)?.port_description ? "en" : null} value={meter.port} onchange={(value) => setHardwareValues({ grid_meter: setGridPort(meter, value) })} />
     {/if}
   {/if}
 {/snippet}
 
-{#snippet fact(label, value, hint)}
-  <div class="fact-line"><span class="fact-name">{label}</span><span class="fact-text" lang="en">{value}</span>{#if hint}<span class="muted small">{hint}</span>{/if}</div>
+{#snippet fact(label, value, hint, raw)}
+  <div class="fact-line"><span class="fact-name">{label}</span><span class="fact-text" lang={raw ? "en" : null}>{value}</span>{#if hint}<span class="muted small">{hint}</span>{/if}</div>
 {/snippet}
 
 {#snippet enabledField(device, index, kind)}
@@ -265,11 +306,11 @@
           {@render enabledField(device, index, "mqtt")}
         </div>
         <div class="facts-list">
-          {@render fact(t("devices.mqtt.protocol"), model?.power_write_profile || t("devices.mqtt.noProtocol"), "")}
-          {@render fact(t("devices.mqtt.maturity"), model?.validation_maturity || t("devices.mqtt.unknown"), "")}
-          {@render fact(t("devices.mqtt.operations"), (model?.supported_operations || []).join(", ") || t("devices.mqtt.none"), "")}
-          {@render fact(t("devices.mqtt.readiness"), t(`devices.mqtt.state.${control.state}`), "")}
-          {@render fact(t("devices.mqtt.control"), control.shouldControl ? t("devices.mqtt.available") : t("devices.mqtt.unavailable", { reason: t(reasonKey(control.blockReason)) }), t("devices.mqtt.controlHint"))}
+          {@render fact(t("devices.mqtt.protocol"), model?.power_write_profile || t("devices.mqtt.noProtocol"), "", Boolean(model?.power_write_profile))}
+          {@render fact(t("devices.mqtt.maturity"), model?.validation_maturity || t("devices.mqtt.unknown"), "", Boolean(model?.validation_maturity))}
+          {@render fact(t("devices.mqtt.operations"), (model?.supported_operations || []).join(", ") || t("devices.mqtt.none"), "", Boolean((model?.supported_operations || []).length))}
+          {@render fact(t("devices.mqtt.readiness"), t(`devices.mqtt.state.${control.state}`), "", false)}
+          {@render fact(t("devices.mqtt.control"), control.shouldControl ? t("devices.mqtt.available") : t("devices.mqtt.unavailable", { reason: t(reasonKey(control.blockReason)) }), t("devices.mqtt.controlHint"), false)}
         </div>
         <p class="note"><Icon name="info" />{t(`devices.mqtt.note.${control.state === "routeMissing" ? "routeMissing" : control.shouldControl ? "controlled" : control.supported ? "completeRoute" : "telemetryOnly"}`)}</p>
         {@render levelled(fields.common, { device, index })}
@@ -284,8 +325,8 @@
           {@render enabledField(device, index, "external")}
         </div>
         <div class="facts-list">
-          {@render fact(t("devices.external.profile"), String(mqtt.broker_ref || "default"), t("devices.external.profileHint"))}
-          {@render fact(t("devices.external.deviceId"), String(mqtt.device_id || "") || t("devices.external.missing"), t("devices.external.deviceIdHint"))}
+          {@render fact(t("devices.external.profile"), String(mqtt.broker_ref || "default"), t("devices.external.profileHint"), true)}
+          {@render fact(t("devices.external.deviceId"), String(mqtt.device_id || "") || t("devices.external.missing"), t("devices.external.deviceIdHint"), Boolean(mqtt.device_id))}
         </div>
       </DeviceCard>
     {:else}
@@ -303,12 +344,38 @@
 
   <div class="row-wrap add">
     <button class="btn secondary small" type="button" onclick={() => add(newLocalInverter(devices, catalog))} data-testid="add-inverter"><Icon name="package-plus" size="sm" />{t("devices.add.local")}</button>
-    <button class="btn secondary small" type="button" onclick={() => add(newMqttInverter(devices, catalog))} data-testid="add-mqtt-inverter"><Icon name="radio-tower" size="sm" />{t("devices.add.mqtt")}</button>
+    <button class="btn secondary small" type="button" onclick={openMqttForm} disabled={Boolean(mqttForm)} data-testid="add-mqtt-inverter"><Icon name="radio-tower" size="sm" />{t("devices.add.mqtt")}</button>
     <button class="btn secondary small" type="button" onclick={() => add(newE3dc(devices))} data-testid="add-e3dc"><Icon name="eye" size="sm" />{t("devices.add.e3dc")}</button>
   </div>
 </div>
 
+{#if mqttForm}
+  <form class="inner mqtt-form" onsubmit={addMqtt} data-testid="mqtt-form">
+    <p class="muted small">{t("devices.mqttForm.lead")}</p>
+    <div class="fields">
+      <SettingField field={{ path: "broker.name", label: t("devices.mqttForm.name"), description: t("devices.mqttForm.nameHint") }} lang={null} value={mqttForm.name} onchange={(value) => (mqttForm.name = value)} />
+      <SettingField field={own("host", false)} lang={null} value={mqttForm.host} onchange={(value) => (mqttForm.host = value)} />
+      <SettingField field={{ ...own("port", false), type: "number" }} lang={null} value={mqttForm.port} placeholder={mqttForm.security === "tls" ? "8883" : "1883"} onchange={(value) => (mqttForm.port = value)} />
+      <div class="setting">
+        <label class="head" for="mqtt-form-security">{t("devices.field.security")}</label>
+        <select id="mqtt-form-security" class="input" value={mqttForm.security} onchange={(event) => (mqttForm.security = event.currentTarget.value)}>
+          <option value="plain">{t("devices.security.plain")}</option>
+          <option value="tls">TLS</option>
+        </select>
+      </div>
+      <SettingField field={own("username", false)} lang={null} value={mqttForm.username} onchange={(value) => (mqttForm.username = value)} />
+      <SettingField field={{ path: "broker.password", label: t("devices.field.password") }} lang={null} type="password" value={mqttForm.password} onchange={(value) => (mqttForm.password = value)} />
+    </div>
+    {#if mqttError}<p class="form-error">{t(`devices.mqttForm.error.${mqttError}`)}</p>{/if}
+    <div class="row-wrap add">
+      <button class="btn small" type="submit" disabled={mqttBusy || Boolean(sources.busy)} data-testid="mqtt-form-add"><Icon name="package-plus" size="sm" />{t("devices.mqttForm.add")}</button>
+      <button class="btn secondary small" type="button" onclick={() => (mqttForm = null)}>{t("auth.cancel")}</button>
+    </div>
+  </form>
+{/if}
+
 <style>
+  .mqtt-form { display: flex; flex-direction: column; gap: var(--s3); margin-top: var(--s3); }
   .editor { display: flex; flex-direction: column; gap: var(--s3); }
   .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s4) var(--s5); }
   .setting { display: flex; flex-direction: column; gap: 6px; min-width: 0; }

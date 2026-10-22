@@ -60,9 +60,7 @@ until you press **New design**. Adding `?ui=classic` or `?ui=modern` to the
 address sets the choice explicitly. A browser too old for Modern always opens
 Classic.
 
-Some workflows run in Classic for now: **Guided setup**, and saving the keys
-the network search uses (local MQTT broker credentials and the Zendure cloud
-API key). Modern names
+One workflow runs in Classic for now: **Guided setup**. Modern names
 them and opens them in Classic with one click, at the right page, without
 changing your choice. The guided setup is the one exception: Classic never
 starts it from an address, so that button opens Classic's start page, where it
@@ -95,6 +93,12 @@ range can be scanned too. Each find says whether it is in the settings, new,
 moved or reachable another way, and its button adds it, takes the new address
 or switches the inverter to that connection. Nothing changes until you check
 and save; **Clear results** forgets the finds, **Ignore** one of them.
+**What the search may use** keeps the credentials for your own MQTT brokers
+and the Zendure cloud API key: saved encrypted on the device and never shown
+again. The key can be tested, used to find cloud devices, and forgotten.
+**Add an inverter over MQTT** asks for a broker only when the inverter is on
+your own one; its username and password are saved as such a credential, so no
+password enters the settings.
 
 1. Change what you want. Each field names its unit, says what it does and, when
    it is empty, which default applies. Advanced and expert fields are folded

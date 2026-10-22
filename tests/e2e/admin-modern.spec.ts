@@ -393,6 +393,78 @@ test.describe("Modern Admin: network search", { tag: ["@smoke"] }, () => {
   });
 });
 
+test.describe("Modern Admin: what the search may use", { tag: ["@smoke"] }, () => {
+  test("a broker credential is saved and removed, and the password never comes back", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings/devices");
+    await page.getByTestId("credential-label").fill("garage broker");
+    await page.getByTestId("credential-username").fill("garage-user");
+    await page.getByTestId("credential-password").fill("e2e-modern-secret");
+    await page.getByTestId("credential-save").click();
+    const list = page.getByTestId("credentials");
+    await expect(list).toContainText("garage broker");
+    await expect(page.getByTestId("credential-password")).toHaveValue("");
+    await expect(page.locator("body")).not.toContainText("e2e-modern-secret");
+    await list.locator("li").filter({ hasText: "garage broker" }).getByRole("button", { name: "Remove" }).click();
+    await page.getByRole("dialog", { name: "Remove this credential?" }).getByTestId("confirm").click();
+    await expect(page.getByTestId("sources-message")).toContainText("Credential removed.");
+    await expect(page.getByTestId("search-sources")).not.toContainText("garage broker");
+  });
+
+  test("the Zendure cloud key is saved, tested, used and forgotten", async ({ page, seedAdminScenario }) => {
+    let saved = false;
+    const sent: string[] = [];
+    const reply = (route: import("@playwright/test").Route, body: unknown) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+    await page.route("**/api/discovery/zendure-cloud-mqtt/**", async (route) => {
+      const url = route.request().url();
+      const method = route.request().method();
+      sent.push(`${method} ${url.replace(/^.*zendure-cloud-mqtt/, "")}`);
+      if (url.endsWith("/settings")) return reply(route, { token_saved: saved, tls_mode: "system_ca", last_broker: saved ? "mqtt.zen-iot.com" : "", last_status: saved ? "ok" : "" });
+      if (url.endsWith("/token") && method === "POST") {
+        saved = true;
+        return reply(route, { ok: true });
+      }
+      if (url.endsWith("/token") && method === "DELETE") {
+        saved = false;
+        return reply(route, { ok: true });
+      }
+      if (url.endsWith("/test")) return reply(route, { ok: true, devices_found: 2, broker: "mqtt.zen-iot.com", tls_mode: "system_ca" });
+      return reply(route, { ok: true, candidates: [{ display_name: "SolarFlow 800 Pro 2", serial_number: "CLOUDSN1" }], device_list_count: 1, mqtt_observed_count: 1 });
+    });
+    await seededAt(page, seedAdminScenario, "#/settings/devices");
+    await expect(page.getByTestId("cloud-key-state")).toHaveText("Not saved");
+    await page.getByTestId("cloud-key").fill("e2e-cloud-key");
+    await page.getByTestId("cloud-save").click();
+    await expect(page.getByTestId("cloud-key-state")).toHaveText("Saved");
+    await page.getByTestId("cloud-test").click();
+    await expect(page.getByTestId("sources-message")).toContainText("The key works: 2 devices via mqtt.zen-iot.com");
+    await page.getByTestId("cloud-refresh").click();
+    await expect(page.getByTestId("search-sources")).toContainText("CLOUDSN1");
+    await page.getByTestId("cloud-forget").click();
+    await page.getByRole("dialog", { name: "Forget the Zendure cloud key?" }).getByTestId("confirm").click();
+    await expect(page.getByTestId("cloud-key-state")).toHaveText("Not saved");
+    expect(sent).toEqual(expect.arrayContaining(["POST /token", "POST /test", "POST /refresh", "DELETE /token"]));
+  });
+
+  test("an inverter over MQTT is added by hand on a typed local broker, its password kept out of the draft", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings/devices");
+    await page.getByTestId("add-mqtt-inverter").click();
+    const form = page.getByTestId("mqtt-form");
+    await form.locator('[data-path="broker.name"] input').fill("garage");
+    await form.locator('[data-path="host"] input').fill("192.168.50.60");
+    await form.locator('[data-path="username"] input').fill("garage-user");
+    await page.getByTestId("mqtt-form-add").click();
+    await expect(form).toContainText("Enter both a username and a password, or neither.");
+    await form.locator('[data-path="broker.password"] input').fill("e2e-broker-secret");
+    await page.getByTestId("mqtt-form-add").click();
+    await expect(form).toHaveCount(0);
+    await expect(page.getByTestId("devices-editor").locator('[data-device="mqtt-3"]')).toBeVisible();
+    await expect(page.getByTestId("credentials")).toContainText("local_mqtt_garage");
+    const stored = await page.evaluate(() => sessionStorage.getItem("ems-admin.settings-hardware") || "");
+    expect(stored).toContain("local_mqtt_garage");
+    expect(stored).not.toContain("e2e-broker-secret");
+  });
+});
+
 test.describe("Modern Admin: backups", { tag: ["@smoke"] }, () => {
   test("a backup is created, inspected, restored and deleted from the console", async ({ page, seedAdminScenario }) => {
     await seededAt(page, seedAdminScenario, "#/backups");

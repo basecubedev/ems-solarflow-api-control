@@ -397,3 +397,34 @@ export const REASON_WORDS = Object.freeze([...new Set([...Object.values(REASONS)
 export function reasonKey(code) {
   return `devices.reason.${REASONS[String(code || "")] || "other"}`;
 }
+
+/** The broker reference a typed broker name becomes: local_mqtt, or local_mqtt_<name>. */
+export function brokerRef(name) {
+  const slug = String(name ?? "").trim().toLowerCase().replace(/[^a-z0-9_-]/g, "").replace(/^[_-]+/, "").replace(/[_-]+$/, "");
+  if (!slug || slug === "local_mqtt") return "local_mqtt";
+  const suffix = (slug.startsWith("local_mqtt_") ? slug.slice("local_mqtt_".length) : slug).replace(/^[_-]+/, "").replace(/[_-]+$/, "");
+  return suffix ? `local_mqtt_${suffix}` : "local_mqtt";
+}
+
+/**
+ * The local broker typed beside a new MQTT inverter, or null when no host was
+ * typed. A username without a password, or the other way round, is refused.
+ */
+export function manualBroker({ name = "", host = "", port = "", security = "plain", username = "", password = "" } = {}) {
+  const address = String(host).trim();
+  if (!address) return null;
+  const tls = security === "tls";
+  let number = parseInt(String(port).trim(), 10);
+  if (!Number.isFinite(number) || number <= 0) number = tls ? 8883 : 1883;
+  const user = String(username).trim();
+  return { ref: brokerRef(name), host: address, port: number, tls, username: user, password, hasAuth: Boolean(user && password), authPartial: Boolean(user) !== Boolean(password) };
+}
+
+/** A new MQTT inverter bound to a typed local broker; its password travels only as the saved credential's reference. */
+export function onLocalBroker(device, broker, credentialsRef = "") {
+  const next = clone(device);
+  next.mqtt = { broker_ref: broker.ref, topic_family: "", base_topic: null, device_id: "" };
+  next.broker = { ref: broker.ref, host: broker.host, port: broker.port, tls: broker.tls, tls_insecure: false, tls_mode: "", source: "local_mqtt" };
+  if (credentialsRef) next.broker.credentials_ref = credentialsRef;
+  return next;
+}

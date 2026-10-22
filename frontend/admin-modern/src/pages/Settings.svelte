@@ -11,6 +11,7 @@
   import SettingsSection from "../widgets/SettingsSection.svelte";
   import DevicesEditor from "../widgets/DevicesEditor.svelte";
   import DiscoveryPanel from "../widgets/DiscoveryPanel.svelte";
+  import SourcesPanel from "../widgets/SourcesPanel.svelte";
   import { t, tn } from "../i18n/i18n.svelte.js";
   import { system, ensure, reload } from "../state/system.svelte.js";
   import { settings, setValue, discard, discardHardware, previewDraft, applyDraft, resetOverrides } from "../state/settings.svelte.js";
@@ -161,6 +162,9 @@
   {:else}
     <Card title={t("discovery.title")} subtitle={t("discovery.sub")} span="span-12">
       <DiscoveryPanel {config} />
+    </Card>
+    <Card title={t("sources.title")} subtitle={t("sources.sub")} span="span-12">
+      <SourcesPanel />
     </Card>
     <Card title={t("settings.devices")} subtitle={tn("settings.devicesSub", devices.length)} span="span-12">
       <DevicesEditor {config} />
