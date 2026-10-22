@@ -10,12 +10,7 @@
   import Reconnecting from "./app/Reconnecting.svelte";
   import WorkflowBanner from "./widgets/WorkflowBanner.svelte";
   import Overview from "./pages/Overview.svelte";
-  import Services from "./pages/Services.svelte";
-  import Settings from "./pages/Settings.svelte";
-  import Backups from "./pages/Backups.svelte";
-  import Updates from "./pages/Updates.svelte";
-  import Diagnostics from "./pages/Diagnostics.svelte";
-  import System from "./pages/System.svelte";
+  import Empty from "../../shared/ui/Empty.svelte";
   import { pageSet, pageById } from "./app/pages.js";
   import { nav, router } from "./app/router.svelte.js";
   import { t } from "./i18n/i18n.svelte.js";
@@ -28,8 +23,36 @@
   import { resumeUpgrade } from "./state/upgrade.svelte.js";
   import { dashboardHref } from "./lib/links.js";
 
-  const COMPONENTS = { overview: Overview, updates: Updates, settings: Settings, services: Services, backups: Backups, diagnostics: Diagnostics, system: System };
-  const Page = $derived(COMPONENTS[router.page] || Overview);
+  /**
+   * Every page but the overview loads when it is first opened, so no single
+   * file the console ships outgrows what the repository tracks unasked.
+   */
+  const PAGES = {
+    updates: () => import("./pages/Updates.svelte"),
+    settings: () => import("./pages/Settings.svelte"),
+    services: () => import("./pages/Services.svelte"),
+    backups: () => import("./pages/Backups.svelte"),
+    diagnostics: () => import("./pages/Diagnostics.svelte"),
+    system: () => import("./pages/System.svelte"),
+  };
+  const loaded = $state({ overview: Overview });
+  const Page = $derived(loaded[router.page] || null);
+  let unloadable = $state("");
+
+  /** A page whose file does not arrive, as while the Admin console restarts, says so and offers a reload. */
+  $effect(() => {
+    const id = router.page;
+    if (loaded[id] || !PAGES[id]) return;
+    unloadable = "";
+    PAGES[id]().then(
+      (module) => {
+        loaded[id] = module.default;
+      },
+      () => {
+        if (router.page === id) unloadable = id;
+      },
+    );
+  });
   const dashboard = $derived(dashboardHref(system.overview.data?.links?.dashboard_url));
 
   $effect(() => {
@@ -88,7 +111,7 @@
       <main class="content" id="content" tabindex="-1">
         <WorkflowBanner />
         {#key router.page}
-          <Page />
+          {#if Page}<Page />{:else if !PAGES[router.page]}<Overview />{:else if unloadable === router.page}<div class="span-12"><Empty error text={t("app.pageFailed")}><button class="btn secondary small" type="button" onclick={() => globalThis.location.reload()}>{t("app.reload")}</button></Empty></div>{/if}
         {/key}
       </main>
     </div>

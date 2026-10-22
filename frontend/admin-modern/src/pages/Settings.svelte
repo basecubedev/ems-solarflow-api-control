@@ -9,11 +9,12 @@
   import StaleNote from "../widgets/StaleNote.svelte";
   import SettingField from "../widgets/SettingField.svelte";
   import SettingsSection from "../widgets/SettingsSection.svelte";
-  import { t, tn, fmt } from "../i18n/i18n.svelte.js";
+  import DevicesEditor from "../widgets/DevicesEditor.svelte";
+  import { t, tn } from "../i18n/i18n.svelte.js";
   import { system, ensure, reload } from "../state/system.svelte.js";
-  import { settings, setValue, discard, previewDraft, applyDraft, resetOverrides } from "../state/settings.svelte.js";
+  import { settings, setValue, discard, discardHardware, previewDraft, applyDraft, resetOverrides } from "../state/settings.svelte.js";
   import { serviceAction, runServiceAction } from "../state/services.svelte.js";
-  import { EDIT_TABS, changeGroups, deviceView, restartNeeded, fieldMatches, gridMeterName, levelled, liveOverride, previewValue, safetyBlocks, sharedRisk, tabSections } from "../lib/settings.js";
+  import { EDIT_TABS, changeGroups, restartNeeded, fieldMatches, levelled, liveOverride, previewValue, safetyBlocks, sharedRisk, tabSections } from "../lib/settings.js";
   import { errorView } from "../lib/errors.js";
   import { href } from "../app/router.svelte.js";
   import { classicPage } from "../state/prefs.svelte.js";
@@ -35,11 +36,9 @@
   let confirmReset = $state(false);
   let confirmRestart = $state(false);
 
-  const f = $derived(fmt());
   const config = $derived(system.config.data);
   const ok = $derived(config?.status === "ok");
-  const devices = $derived(ok ? (config.draft?.devices || []).map((item) => deviceView(item, config.overrides)) : []);
-  const meter = $derived(ok ? config.draft?.grid_meter || null : null);
+  const devices = $derived(Array.isArray(settings.draft?.devices) ? settings.draft.devices : []);
   const values = $derived(settings.draft?.features || {});
   const searching = $derived(query.trim() !== "");
 
@@ -161,42 +160,12 @@
     </Card>
   {:else}
     <div class="lead span-12 inner" role="note">
-      <span class="icon-tile sm c-acc"><Icon name="pencil" /></span>
+      <span class="icon-tile sm c-acc"><Icon name="search" /></span>
       <p>{t("settings.editLead")}</p>
-      <a class="btn small" href={classicPage("maintenance-settings-devices")} data-testid="edit-settings"><Icon name="arrow-up-right" size="sm" />{t("settings.editDevices")}</a>
+      <a class="btn secondary small" href={classicPage("maintenance-settings-devices")} data-testid="edit-settings"><Icon name="arrow-up-right" size="sm" />{t("settings.searchInClassic")}</a>
     </div>
     <Card title={t("settings.devices")} subtitle={tn("settings.devicesSub", devices.length)} span="span-12">
-      {#if devices.length}
-        <ul class="devices" data-testid="devices">
-          {#each devices as device, index (`${device.name}-${index}`)}
-            <li class="device inner" class:off={!device.enabled}>
-              <span class="icon-tile sm {device.readOnly ? 'c-idle' : 'c-out'}"><Icon name={device.readOnly ? "eye" : "cpu"} /></span>
-              <div class="words">
-                <div class="name ellipsis">{device.name || t("settings.unnamed")}</div>
-                <div class="muted small num">
-                  {[device.connection ? t(device.connection) : device.connectionText, device.model, device.address, device.maxPower !== null ? t("settings.maxPower", { power: f.power(device.maxPower) }) : ""].filter(Boolean).join(" · ")}
-                </div>
-              </div>
-              {#if device.overridden}<span class="badge" title={t("settings.overriddenHint")}>{t("settings.overridden")}</span>{/if}
-              <Status tone={device.enabled ? "c-ok" : "c-idle"} text={device.enabled ? t("settings.inUse") : t("settings.notInUse")} />
-            </li>
-          {/each}
-        </ul>
-      {:else}
-        <Empty text={t("settings.noDevices")} icon="cpu" />
-      {/if}
-      <h3 class="sub">{t("settings.gridMeter")}</h3>
-      {#if meter?.present !== false && meter?.type}
-        <div class="device inner">
-          <span class="icon-tile sm c-grid"><Icon name="gauge" /></span>
-          <div class="words">
-            <div class="name" lang="en">{gridMeterName(meter.type, config?.catalog?.grid_meter_variants)}</div>
-            <div class="muted small num">{meter.ip || meter.host || ""}</div>
-          </div>
-        </div>
-      {:else}
-        <p class="muted">{t("settings.noGridMeter")}</p>
-      {/if}
+      <DevicesEditor {config} />
     </Card>
   {/if}
 
@@ -207,6 +176,9 @@
         <button class="btn secondary small" type="button" onclick={discard} disabled={!settings.changes || settings.applying || settings.previewing} data-testid="discard"><Icon name="rotate-ccw" size="sm" />{t("settings.edit.discard")}</button>
         <button class="btn small" type="button" onclick={previewDraft} disabled={settings.previewing || settings.applying || !settings.changes} data-testid="review"><Icon name="file-check" size="sm" />{settings.previewing ? t("settings.edit.reviewing") : t("settings.edit.review")}</button>
       </div>
+      {#if settings.hardwareStale}
+        <p class="note warn" role="alert" data-testid="hardware-stale"><Icon name="triangle-alert" /><span>{t("devices.stale")}</span><button class="btn secondary small" type="button" onclick={discardHardware}>{t("devices.discardStale")}</button></p>
+      {/if}
       {#if settings.previewError}{@render failure(settings.previewError)}{/if}
       {#if unreadable}
         {@render failure(unreadable)}

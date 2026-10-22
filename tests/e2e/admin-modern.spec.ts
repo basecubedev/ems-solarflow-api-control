@@ -171,13 +171,15 @@ test.describe("Modern Admin: overview and status", { tag: ["@smoke"] }, () => {
     await expect(page.getByText("Docker or the container setup is not available")).toBeVisible();
   });
 
-  test("the settings list the devices and hand device editing to the Classic editor", async ({ page, seedAdminScenario }) => {
+  test("the settings edit the devices here and hand only the network search to Classic", async ({ page, seedAdminScenario }) => {
     await seededAt(page, seedAdminScenario, "#/settings");
     await expect(page.getByTestId("settings-features")).toContainText("Winter mode");
     await page.getByRole("button", { name: "Devices", exact: true }).click();
-    await expect(page.getByTestId("devices").locator("li")).toHaveCount(3);
-    await expect(page.getByTestId("devices")).toContainText("Zendure via the Zendure cloud");
-    await expect(page.getByRole("link", { name: "Edit devices" })).toHaveAttribute("href", "/#maintenance-settings-devices");
+    const editor = page.getByTestId("devices-editor");
+    await expect(editor.locator("[data-device^='inverter-'], [data-device^='mqtt-']")).toHaveCount(3);
+    await expect(editor).toContainText("Zendure via the Zendure cloud");
+    await expect(editor.locator('[data-device="zendure-broker"]')).toContainText("read only");
+    await expect(page.getByTestId("edit-settings")).toHaveAttribute("href", "/#maintenance-settings-devices");
   });
 
   test("the checks say plainly when there is no EMS to check", async ({ page, seedAdminScenario }) => {
@@ -222,6 +224,43 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
     await page.getByRole("link", { name: "Change", exact: true }).click();
     await expect(page).toHaveURL(/#\/settings\/safety$/);
     await expect(page.getByTestId("settings-safety")).toContainText("Allow hardware writes");
+  });
+
+  test("a device is changed, another added, both checked and saved", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings/devices");
+    const editor = page.getByTestId("devices-editor");
+    const first = editor.locator('[data-device="inverter-0"]');
+    await first.locator(".summary").click();
+    await first.locator('[data-path="devices[].max_power"] input').fill("700");
+    await page.getByTestId("add-e3dc").click();
+    const e3dc = editor.locator('[data-device="e3dc-3"]');
+    await expect(e3dc).toContainText("E3DC");
+    await e3dc.locator('[data-path="e3dcHost"] input').fill("192.168.50.30");
+    await expect(page.getByTestId("change-count")).toHaveText("2 unsaved changes");
+
+    await page.getByTestId("review").click();
+    const review = page.getByTestId("settings-review");
+    await expect(review).toContainText("Settings are valid");
+    await expect(review).toContainText("devices");
+    await page.getByTestId("apply").click();
+    await page.getByRole("dialog", { name: "Save the checked changes?" }).getByTestId("confirm").click();
+    await expect(page.getByTestId("settings-applied")).toBeVisible();
+
+    await page.reload();
+    await expect(editor.locator('[data-device="inverter-0"]')).toContainText("700 W");
+    await expect(editor.locator('[data-device="e3dc-3"]')).toContainText("192.168.50.30");
+  });
+
+  test("the grid meter's type changes its fields, and removing it leaves none", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings/devices");
+    const meter = page.getByTestId("devices-editor").locator('[data-device="grid-meter"]');
+    await meter.locator(".summary").click();
+    await expect(meter.locator('[data-path="grid_meter.ip"] input')).toHaveValue("192.168.50.2");
+    await page.getByTestId("grid-type").selectOption("zendure_smartmeter_d0");
+    await expect(meter.locator('[data-path="d0Serial"]')).toBeVisible();
+    await expect(page.getByTestId("change-count")).toHaveText("1 unsaved change");
+    await meter.getByTestId("device-remove").click();
+    await expect(meter).toContainText("No grid meter configured");
   });
 
   test("an edit survives a reload, the search finds it, and discard leaves the file alone", async ({ page, seedAdminScenario }) => {

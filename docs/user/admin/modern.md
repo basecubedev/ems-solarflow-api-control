@@ -37,7 +37,7 @@ changes nothing on the host.
 | --- | --- |
 | **Overview** | One answer to "is everything in order": what needs your attention, ranked, each with the way out of it; tiles for EMS, the analytics database, control and the last backup; what your settings allow EMS to do; the versions and the link to the dashboard |
 | **Updates** | What runs now, the versions you can update to, and the update itself: choose a version, then confirm once. Progress and the result are shown on the page |
-| **Settings & devices** | The features, the safety switches and the expert settings, changed, checked and saved here; your devices and the grid meter as EMS applies them, which you change in the Classic editor |
+| **Settings & devices** | The features, the safety switches, the expert settings, your devices and the grid meter, changed, checked and saved here; only the search of the network for devices runs in Classic |
 | **Services** | EMS and the analytics database as they run; what should run and what a restart changes; **Restart EMS now** and **Repair analytics** |
 | **Backups** | Create a backup, see what is in one, download it, bring one back, restore it after a preview, delete it |
 | **Diagnostics** | The read-only checks of the installed EMS, with the EMS diagnosis in full |
@@ -60,8 +60,8 @@ until you press **New design**. Adding `?ui=classic` or `?ui=modern` to the
 address sets the choice explicitly. A browser too old for Modern always opens
 Classic.
 
-Some workflows run in Classic for now: **Guided setup** and editing **devices
-and the grid meter**. Modern names
+Some workflows run in Classic for now: **Guided setup** and the **search of
+the network for devices**. Modern names
 them and opens them in Classic with one click, at the right page, without
 changing your choice. The guided setup is the one exception: Classic never
 starts it from an address, so that button opens Classic's start page, where it
@@ -76,7 +76,7 @@ What Modern shows but does not change itself yet:
 
 | Where | Shown in Modern | Done in Classic |
 | --- | --- | --- |
-| **Settings & devices** | Every device and the grid meter | Changing them, adding devices, searching the network |
+| **Settings & devices** | Every device and the grid meter, which you change here | Searching the network for devices and adding what it finds |
 | **Overview** | That nothing is set up yet | The guided setup |
 
 ## Changing settings
@@ -85,8 +85,11 @@ What Modern shows but does not change itself yet:
 full-charge assist, AC charging, energy savings, the dashboard and analytics on
 or off and sets how each works. **Safety** holds what EMS may write to your
 devices, dry run and simulation, and the output limits. **Expert** holds the
-system basics and the control tuning. **Devices** lists your devices and the
-grid meter; **Edit devices** opens the Classic editor for them.
+system basics and the control tuning. **Devices** holds the grid meter, the
+Zendure MQTT broker and every device: open a card to change it, **Remove**
+takes it out, and **Add an inverter**, **Add an inverter over MQTT** and **Add
+an E3/DC** add one by hand. **Search the network** opens the classic view,
+which still runs the search for devices.
 
 1. Change what you want. Each field names its unit, says what it does and, when
    it is empty, which default applies. Advanced and expert fields are folded

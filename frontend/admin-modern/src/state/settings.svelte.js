@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { adminSend } from "./auth.svelte.js";
 import { system, reload } from "./system.svelte.js";
-import { changeCount, fieldIndex, liveEdits, overrideTargets, sameAsSaved } from "../lib/settings.js";
+import { changeCount, fieldIndex, liveEdits, overrideTargets, sameAsSaved, storable } from "../lib/settings.js";
+import { editableDraft } from "../lib/devices.js";
 
 const EDITS_KEY = "ems-admin.settings-edits";
+const HARDWARE_KEY = "ems-admin.settings-hardware";
+/** The draft's whole-value parts: the device list, the grid meter, the top-level broker, and the external entries removed. */
+const HARDWARE = Object.freeze(["devices", "grid_meter", "zendure_mqtt", "removed_external"]);
 
 const PATHS = {
   preview: "/api/admin/maintenance/config/preview",
@@ -21,6 +25,29 @@ function readEdits() {
   } catch {
     return {};
   }
+}
+
+function readHardware() {
+  try {
+    const stored = mapping(JSON.parse(globalThis.sessionStorage?.getItem(HARDWARE_KEY) || "null"));
+    const values = Object.fromEntries(Object.entries(mapping(stored.values)).filter(([key]) => HARDWARE.includes(key)));
+    return { values, base: typeof stored.base === "string" ? stored.base : "" };
+  } catch {
+    return { values: {}, base: "" };
+  }
+}
+
+function storeHardware(hardware) {
+  try {
+    if (Object.keys(hardware.values).length) globalThis.sessionStorage?.setItem(HARDWARE_KEY, JSON.stringify(storable(hardware)));
+    else globalThis.sessionStorage?.removeItem(HARDWARE_KEY);
+  } catch {
+    return;
+  }
+}
+
+function hardwareOf(draft) {
+  return JSON.stringify(HARDWARE.slice(0, 3).map((key) => draft?.[key] ?? null));
 }
 
 function storeEdits(edits) {
@@ -42,6 +69,7 @@ function storeEdits(edits) {
  */
 class SettingsEditor {
   edits = $state.raw(readEdits());
+  hardware = $state.raw(readHardware());
   preview = $state.raw(null);
   previewedFor = $state("");
   previewing = $state(false);
@@ -55,12 +83,15 @@ class SettingsEditor {
   saved = $derived(system.config.data?.status === "ok" && system.config.data.draft ? system.config.data : null);
   fields = $derived(fieldIndex(this.saved));
   live = $derived(this.saved ? liveEdits(this.edits, this.saved.draft.features, this.fields) : {});
-  draft = $derived(this.saved ? { ...this.saved.draft, features: { ...mapping(this.saved.draft.features), ...this.live } } : null);
+  base = $derived(this.saved ? hardwareOf(this.saved.draft) : "");
+  hardwareStale = $derived(Object.keys(this.hardware.values).length > 0 && this.hardware.base !== this.base);
+  editable = $derived(this.saved ? editableDraft(this.saved.draft, this.saved.catalog) : null);
+  draft = $derived(this.saved ? { ...this.editable, ...this.hardware.values, features: { ...mapping(this.saved.draft.features), ...this.live } } : null);
   changes = $derived(this.saved ? changeCount(this.draft, this.saved.draft) : 0);
   fresh = $derived(
     Boolean(this.preview) && this.previewedFor === JSON.stringify(this.draft) && (this.preview.revision === undefined || this.preview.revision === this.saved?.revision),
   );
-  reviewed = $derived(this.fresh && this.preview?.status === "ok" && Boolean(this.preview?.revision) && Boolean(this.preview?.validation?.ok));
+  reviewed = $derived(this.fresh && !this.hardwareStale && this.preview?.status === "ok" && Boolean(this.preview?.revision) && Boolean(this.preview?.validation?.ok));
   overrides = $derived(overrideTargets(this.saved?.overrides));
 }
 
@@ -93,9 +124,40 @@ export function setValue(field, value) {
   settings.applied = null;
 }
 
+function setHardware(hardware) {
+  settings.hardware = hardware;
+  storeHardware(hardware);
+}
+
+/**
+ * New whole values for the device list, the grid meter or the broker. A value
+ * that is what the config says is no change. The edits remember the saved
+ * hardware they were made on: when another console changes it meanwhile,
+ * they no longer describe a change of what is saved, and apply waits until
+ * they are discarded.
+ */
+export function setHardwareValues(changes) {
+  const values = { ...settings.hardware.values };
+  for (const [key, value] of Object.entries(changes)) {
+    if (!HARDWARE.includes(key)) continue;
+    const pointless = key === "removed_external" ? !Array.isArray(value) || value.length === 0 : JSON.stringify(value ?? null) === JSON.stringify(settings.editable?.[key] ?? null);
+    if (pointless) delete values[key];
+    else values[key] = value;
+  }
+  const base = Object.keys(settings.hardware.values).length ? settings.hardware.base : settings.base;
+  setHardware({ values, base: Object.keys(values).length ? base : "" });
+  settings.applied = null;
+}
+
+/** Drops the device, grid meter and broker edits only. */
+export function discardHardware() {
+  setHardware({ values: {}, base: "" });
+}
+
 /** Back to the saved config. Nothing on the system changes. */
 export function discard() {
   setEdits({});
+  setHardware({ values: {}, base: "" });
   settings.preview = null;
   settings.previewedFor = "";
   settings.previewError = null;
@@ -154,6 +216,7 @@ export async function applyDraft({ backup = true } = {}) {
     }
     settings.applied = { result, diff: changes, at: Date.now() };
     setEdits({});
+    setHardware({ values: {}, base: "" });
     settings.preview = null;
     settings.previewedFor = "";
   } catch (error) {
