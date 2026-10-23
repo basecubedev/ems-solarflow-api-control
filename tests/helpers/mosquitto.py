@@ -72,6 +72,32 @@ def free_port() -> int:
         return sock.getsockname()[1]
 
 
+BIND_ATTEMPTS = 5
+
+
+def _run_broker(name, mounts, container_port) -> int:
+    """Start the broker container on a free host port and return that port.
+
+    A port found free can be taken by another process before Docker binds it,
+    which failed a CI run with "address already in use"; such a start is
+    retried on another port. The port is fixed rather than left to Docker,
+    because a container Docker gave a port of its choice gets a new one on
+    ``docker restart``, which the reconnect tests do.
+    """
+
+    for _attempt in range(BIND_ATTEMPTS):
+        port = free_port()
+        run = ["docker", "run", "-d", "--rm", "--name", name,
+               "-p", f"{port}:{container_port}", *mounts, MOSQUITTO_IMAGE]
+        result = subprocess.run(run, capture_output=True, text=True)
+        if result.returncode == 0:
+            return port
+        if "address already in use" not in result.stderr:
+            break
+        subprocess.run(["docker", "rm", "-f", name], capture_output=True, text=True)
+    raise RuntimeError(f"failed to start mosquitto: {result.stderr}")
+
+
 def _wait_for_port(host, port, timeout=15.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -119,7 +145,6 @@ def mosquitto_broker(
     """
 
     host = "127.0.0.1"
-    port = free_port()
     conf = tmp_path / "mosquitto.conf"
     lines = ["listener 1883 0.0.0.0", "persistence false"]
     mounts = ["-v", f"{conf}:/mosquitto/config/mosquitto.conf:ro"]
@@ -134,11 +159,7 @@ def mosquitto_broker(
     conf.write_text("\n".join(lines) + "\n")
 
     name = f"ems-mosq-{uuid.uuid4().hex[:8]}"
-    run = ["docker", "run", "-d", "--rm", "--name", name,
-           "-p", f"{port}:1883", *mounts, MOSQUITTO_IMAGE]
-    result = subprocess.run(run, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"failed to start mosquitto: {result.stderr}")
+    port = _run_broker(name, mounts, 1883)
     try:
         if username:
             # Populate the password file inside the running container, then reload.
@@ -357,7 +378,6 @@ def mosquitto_acl_broker(tmp_path, accounts):
     """
 
     host = "127.0.0.1"
-    port = free_port()
     conf = tmp_path / "mosquitto.conf"
     pwfile = tmp_path / "passwd"
     aclfile = tmp_path / "aclfile"
@@ -384,11 +404,7 @@ def mosquitto_acl_broker(tmp_path, accounts):
         "-v", f"{aclfile}:/mosquitto/config/aclfile:ro",
     ]
     name = f"ems-mosq-{uuid.uuid4().hex[:8]}"
-    run = ["docker", "run", "-d", "--rm", "--name", name,
-           "-p", f"{port}:1883", *mounts, MOSQUITTO_IMAGE]
-    result = subprocess.run(run, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"failed to start mosquitto: {result.stderr}")
+    port = _run_broker(name, mounts, 1883)
     try:
         for username, password, _pattern in accounts:
             subprocess.run(
@@ -491,7 +507,6 @@ def mosquitto_tls_broker(tmp_path, *, san_dns=None):
     """
 
     host = "127.0.0.1"
-    port = free_port()
     ca_path, cert_path, key_path = generate_tls_material(
         tmp_path, common_ip=host, san_dns=san_dns
     )
@@ -517,11 +532,7 @@ def mosquitto_tls_broker(tmp_path, *, san_dns=None):
         "-v", f"{key_path}:/mosquitto/config/server.key:ro",
     ]
     name = f"ems-mosq-{uuid.uuid4().hex[:8]}"
-    run = ["docker", "run", "-d", "--rm", "--name", name,
-           "-p", f"{port}:8883", *mounts, MOSQUITTO_IMAGE]
-    result = subprocess.run(run, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(f"failed to start mosquitto: {result.stderr}")
+    port = _run_broker(name, mounts, 8883)
     try:
         if not _wait_for_port(host, port) or not _wait_for_tls(host, port):
             logs = subprocess.run(["docker", "logs", name], capture_output=True,
