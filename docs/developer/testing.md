@@ -404,9 +404,6 @@ The documentation-content ones carry the `documentation` marker, so
 - `tests/test_docker_docs_contract.py`, `tests/test_docker_first_setup.py` —
   the Docker Bootstrap installer/compose/docs promise.
 - `tests/test_issue_templates.py` — issue-template documentation links.
-- `tests/test_home_assistant_removed.py::test_no_document_page_or_form_offers_home_assistant`
-  — no document, frontend page or issue form offers the removed integration;
-  its docstring names the exceptions and why they stay.
 - `tests/test_test_classification.py` — the marker registry, the documented
   tier selections and the pull-request group partition.
 - `tests/test_ci_workflow_docker_split.py` — how the CI groups are split.

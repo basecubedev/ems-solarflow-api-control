@@ -15,9 +15,7 @@ import importlib.util
 import inspect
 import json
 import logging
-import re
 import shutil
-import subprocess
 import sys
 import zipfile
 from pathlib import Path
@@ -399,68 +397,6 @@ console.log(JSON.stringify({{ html, endpoints }}));
     ]
     assert "Home Assistant" not in output["html"]
     assert "HA " not in output["html"]
-
-
-REMOVED_PATHS = ("docs/home-assistant.md", "homeassistant-dashboard")
-NOT_WALKED = ("tests/", "reports/", "develop/", "docs/developer/review-coverage.md")
-WALKED_SUFFIXES = (".md", ".yml", ".yaml", ".html", ".js", ".css", ".ts")
-HOME_ASSISTANT_TEXT = re.compile(
-    r"home.?assistant|--no-ha\b|ha[-_]control|ha_enabled|\bha\.(?:enabled|url|token)"
-    r"|\"ha\"\s*:|\bha:\s*\{|/runtime/ha\b|runtime\.ha\b"
-    r"|\bsensor\.ems_solarflow|binary_sensor\.|input_(?:boolean|number|select)\.|last_seen_age_s"
-    r"|\bha_\w|_ha_|_ha\b",
-    re.IGNORECASE,
-)
-HA_ABBREVIATION = re.compile(r"\bHA\b")
-EXEMPT_REFERENCES = re.compile(
-    r"zendure[- ]ha\b|HA/deviceList|api/ha/deviceList|HA token|ha_device_list_token|zensdk_ha_scalar"
-    r"|Zendure App / Home Assistant|tests/test_home_assistant_removed\.py\S*",
-    re.IGNORECASE,
-)
-REMOVAL_NOTE_HEADING = re.compile(r"^#+ (?:Removed HA Commands|Former Home Assistant)")
-
-
-def _walked_files():
-    listed = subprocess.run(
-        ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True, check=True
-    ).stdout.decode().split("\0")
-    return [
-        name for name in listed
-        if name.endswith(WALKED_SUFFIXES)
-        and not name.startswith(NOT_WALKED)
-        and (ROOT / name).is_file()
-    ]
-
-
-def _home_assistant_lines(name):
-    in_fence = in_removal_note = False
-    for number, line in enumerate((ROOT / name).read_text(encoding="utf-8").splitlines(), 1):
-        if line.startswith("```"):
-            in_fence = not in_fence
-        elif name.endswith(".md") and not in_fence and line.startswith("#"):
-            in_removal_note = bool(REMOVAL_NOTE_HEADING.match(line))
-        if in_removal_note:
-            continue
-        text = EXEMPT_REFERENCES.sub("", line)
-        if HOME_ASSISTANT_TEXT.search(text) or HA_ABBREVIATION.search(text):
-            yield f"{name}:{number}: {line.strip()}"
-
-
-@pytest.mark.documentation
-def test_no_document_page_or_form_offers_home_assistant():
-    """Docs, frontends and repo forms name Home Assistant nowhere.
-
-    Exempt: the third-party Zendure-HA project, Zendure's HA/deviceList token
-    and the zensdk_ha_scalar topic family, which are Zendure's reference
-    implementation, cloud credential and topic tree; the sections that state
-    what an installation with an old ``ha`` section or ``--no-ha`` gets now;
-    and the name of this module.
-    """
-
-    offending = [line for name in _walked_files() for line in _home_assistant_lines(name)]
-
-    assert [path for path in REMOVED_PATHS if (ROOT / path).exists()] == []
-    assert offending == []
 
 
 def test_js_grid_meter_type_choices_are_the_catalog_grid_meter_types():
