@@ -1,6 +1,21 @@
 {
   "builds": [
     {
+      "admin_digest": "sha256:2d1fb088b540776ca5b30f52591af2d0a2c5d6bc326cde25c22b2cf954f12fda",
+      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-dashboard-modern-9e701202a3-16f8c03-39922817404-1",
+      "build_id": "dev-feat-dashboard-modern-9e701202a3-16f8c03-39922817404-1",
+      "channel": "development",
+      "created_at": "2026-10-23T08:20:00Z",
+      "display_name": "Feature feat-dashboard-modern",
+      "ems_digest": "sha256:4a883d1302ce2e5061024634bfd87a4347fff89c91185477a13554e31799ea46",
+      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-feat-dashboard-modern-9e701202a3-16f8c03-39922817404-1",
+      "installable": true,
+      "revision": "16f8c03dd38a5433475ea1fafae2cce5cd9f096a",
+      "run_attempt": 1,
+      "run_id": "39922817404",
+      "tag": "dev-feat-dashboard-modern-9e701202a3-16f8c03-39922817404-1"
+    },
+    {
       "admin_digest": "sha256:9b76199d581a7106cab1e5129cea927e6d0fa07bb45436053d354717b074371f",
       "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-dashboard-modern-9e701202a3-9e4944e-39764641663-1",
       "build_id": "dev-feat-dashboard-modern-9e701202a3-9e4944e-39764641663-1",
@@ -14,21 +29,6 @@
       "run_attempt": 1,
       "run_id": "39764641663",
       "tag": "dev-feat-dashboard-modern-9e701202a3-9e4944e-39764641663-1"
-    },
-    {
-      "admin_digest": "sha256:34f9614cba55c490c4f9cd210b121ce0a022f67c6765add69571f1d2cc4418b1",
-      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-dashboard-modern-9e701202a3-1a428d1-39753323844-1",
-      "build_id": "dev-feat-dashboard-modern-9e701202a3-1a428d1-39753323844-1",
-      "channel": "development",
-      "created_at": "2026-10-22T09:24:55Z",
-      "display_name": "Feature feat-dashboard-modern",
-      "ems_digest": "sha256:ac79d9ee1e10a919dd66fd1b22953442c1247ef293736c511e9bf225263089c4",
-      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-feat-dashboard-modern-9e701202a3-1a428d1-39753323844-1",
-      "installable": true,
-      "revision": "1a428d12f2db2b9fb0e6b462e312ac369fc8674f",
-      "run_attempt": 1,
-      "run_id": "39753323844",
-      "tag": "dev-feat-dashboard-modern-9e701202a3-1a428d1-39753323844-1"
     }
   ]
 }
