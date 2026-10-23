@@ -8,7 +8,7 @@
   import Fact from "../../../shared/ui/Fact.svelte";
   import Status from "../../../shared/ui/Status.svelte";
   import { t, fmt, tv } from "../i18n/i18n.svelte.js";
-  import { firmwareFacts } from "../lib/devices.js";
+  import { assistView, firmwareFacts } from "../lib/devices.js";
   import { batteryDirection } from "../lib/flow.js";
 
   let { device } = $props();
@@ -24,6 +24,7 @@
   const pvInputs = $derived(d.pvInputsW.filter((value) => value !== null));
   const settings = $derived(Object.values(d.settings || {}).filter((entry) => entry && entry.reported));
   const assist = $derived(d.fullChargeAssist && d.fullChargeAssist.enabled && d.fullChargeAssist.has_battery ? d.fullChargeAssist : null);
+  const assisted = $derived(assist ? assistView(assist) : null);
   const charging = $derived((d.targetW ?? 0) < 0);
   const show = (value) => (d.online ? value : "—");
 </script>
@@ -112,14 +113,18 @@
     <div class="assist inner">
       <div class="assist-head">
         <span class="label"><Icon name="battery-full" size="sm" />{t("device.fullCharge")}</span>
-        <Status tone={ASSIST[assist.status] || "c-idle"} text={t(`assist.${ASSIST[assist.status] ? assist.status : "unknown"}`)} />
+        <Status tone={ASSIST[assisted.status] || "c-idle"} text={t(`assist.${assisted.status}`)} />
       </div>
-      {#if assist.message}<p class="note">{assist.message}</p>{/if}
-      <div class="facts two">
-        {#if assist.last_full_charge_at}<Fact label={t("assist.last")} value={f.dateTime(assist.last_full_charge_at)} />{/if}
-        {#if assist.next_due_at}<Fact label={t("assist.next")} value={f.dateTime(assist.next_due_at)} />{/if}
-        {#if assist.assist_started_at}<Fact label={t("assist.started")} value={f.dateTime(assist.assist_started_at)} />{/if}
-        {#if Number.isFinite(assist.days_until_due)}<Fact label={t("assist.dueIn")} value={t("assist.days", { n: assist.days_until_due })} />{/if}
+      {#if assist.message}<p class="note" lang="en">{assist.message}</p>{/if}
+      {#each assisted.description as key (key)}<p class="note">{t(key)}</p>{/each}
+      <div class="facts two" data-testid="assist-facts">
+        {#each assisted.facts as fact (fact.label)}
+          <Fact
+            label={t(fact.label)}
+            wrap={Boolean(fact.firmware)}
+            value={fact.firmware ? t("assist.firmwareValue", { soc: tv(fact.firmware.socGuard), ac: tv(fact.firmware.acPath) }) : fact.key ? t(fact.key) : "days" in fact ? (fact.days === null ? "—" : t("assist.days", { n: fact.days })) : fact.time ? f.dateTime(fact.time) : "—"}
+          />
+        {/each}
       </div>
     </div>
   {/if}

@@ -1,4 +1,5 @@
 <script>
+  import { untrack } from "svelte";
   import Card from "../../../shared/ui/Card.svelte";
   import Segmented from "../../../shared/ui/Segmented.svelte";
   import TimeChart from "../ui/TimeChart.svelte";
@@ -7,6 +8,7 @@
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { getJson } from "../../../shared/lib/api.js";
   import { fetchSeries } from "../lib/historyApi.js";
+  import { escapeLeavesZoom, zoomSpan } from "../lib/history.js";
   import { ANALYTICS_RANGES, ANALYTICS_VIEWS, ANALYTICS_OVERLAYS, SERIES_STYLE, viewById, requestedSeries, computeKpi, runtimeRole, KPIS } from "../lib/analytics.js";
   import { devices } from "../state/derived.svelte.js";
   import { live } from "../state/live.svelte.js";
@@ -25,7 +27,15 @@
   let loading = $state(false);
   let error = $state(false);
   let showTable = $state(false);
+  let unavailable = $state.raw(null);
+  let zoom = $state.raw(null);
+  let dataPeriod = $state.raw(null);
+  let dataKey = "";
+  let failedKey = "";
+  let zoomEpoch = $state(0);
+  let liveExtent = $state.raw(null);
   let controller = null;
+  let zoomTimer = null;
 
   const f = $derived(fmt());
   const view = $derived(viewById(viewId));
@@ -33,7 +43,21 @@
   const powerOverlays = $derived(overlays.filter((id) => id !== "soc"));
   const seriesIds = $derived(requestedSeries(view, powerOverlays));
   const chartSeries = $derived(seriesIds.map((id) => ({ id, label: t(`series.${id}`), ...SERIES_STYLE[id] })));
-  const rangeLabel = $derived(applied ? t("analytics.custom") : t(`chart.range.${range}`));
+  const rangeLabel = $derived(periodLabel(data && dataPeriod ? dataPeriod : { zoom, applied, range }));
+  const chartHasData = $derived(seriesIds.some((id) => (data?.series?.[id] || []).some((value) => value !== null && value !== undefined)));
+
+  /** A window that is not one of the ranges is named by its length, as Classic names the KPIs' period. */
+  function spanText(seconds) {
+    const span = zoomSpan(seconds);
+    return span ? t(span.key, { n: f.number(span.n, Number.isInteger(span.n) ? 0 : 1) }) : "";
+  }
+
+  /** The KPIs' period is the one their answer was read for, as Classic takes it from the answer. */
+  function periodLabel(period) {
+    if (period.zoom) return spanText(period.zoom.end - period.zoom.start);
+    if (period.applied) return spanText(period.applied.end - period.applied.start) || t("analytics.custom");
+    return t(`chart.range.${period.range}`);
+  }
 
   async function loadStatus() {
     try {
@@ -44,35 +68,79 @@
   }
 
   function timeParams() {
+    if (zoom) return { start: zoom.start, end: zoom.end };
     if (applied) return { start: applied.start, end: applied.end };
     return { range };
+  }
+
+  /**
+   * A zoom re-reads the window from the server, which answers with a finer
+   * profile; the live refresh pauses until the way back, which reads the
+   * range again. Several steps in a row send one request. A zoom whose
+   * answer has nothing to draw, or is unavailable, has its way back here,
+   * because the chart then has no buttons; leaving it from the page tells
+   * the charts through their scope.
+   */
+  function onzoom(window) {
+    zoom = window ? { start: Math.floor(window.min), end: Math.ceil(window.max) } : null;
+    controller?.abort();
+    clearTimeout(zoomTimer);
+    zoomTimer = setTimeout(load, 180);
+  }
+
+  function leaveZoom() {
+    clearTimeout(zoomTimer);
+    zoom = null;
+    zoomEpoch += 1;
+    load();
   }
 
   async function load() {
     if (!status?.available) return;
     controller?.abort();
-    controller = new AbortController();
+    const mine = new AbortController();
+    controller = mine;
     loading = true;
+    const asked = zoom;
+    const period = { zoom, applied, range };
+    const key = JSON.stringify([seriesIds, timeParams(), device, overlays.includes("soc")]);
+    if (key !== failedKey) error = false;
     const devicesParam = device ? [device] : undefined;
     try {
       const [main, soc] = await Promise.all([
-        fetchSeries({ source: "analytics", ...timeParams(), series: seriesIds, devices: devicesParam, signal: controller.signal }),
+        fetchSeries({ source: "analytics", ...timeParams(), series: seriesIds, devices: devicesParam, signal: mine.signal }),
         overlays.includes("soc")
-          ? fetchSeries({ source: "analytics", ...timeParams(), series: ["soc"], devices: devicesParam, signal: controller.signal })
+          ? fetchSeries({ source: "analytics", ...timeParams(), series: ["soc"], devices: devicesParam, signal: mine.signal })
           : Promise.resolve(null),
       ]);
       if (!main.available) {
-        status = { available: false, reason: main.reason, hint: main.hint };
+        unavailable = { reason: main.reason, hint: main.hint };
         data = null;
+        socData = null;
+        dataKey = "";
+        clearTimeout(zoomTimer);
+        zoom = asked;
       } else {
+        unavailable = null;
         data = main;
+        socData = soc;
+        dataPeriod = period;
+        dataKey = key;
+        failedKey = "";
+        if (!asked && main.time.length > 1) liveExtent = [main.time[0], main.time[main.time.length - 1]];
       }
-      socData = soc;
       error = false;
     } catch (err) {
-      if (err?.name !== "AbortError") error = true;
+      if (err?.name !== "AbortError") {
+        error = true;
+        failedKey = key;
+        if (key !== dataKey) {
+          data = null;
+          socData = null;
+        }
+      }
     } finally {
-      loading = false;
+      if (controller === mine) loading = false;
     }
   }
 
@@ -87,15 +155,43 @@
     void applied;
     void device;
     void overlays.includes("soc");
-    load();
+    untrack(() => {
+      clearTimeout(zoomTimer);
+      zoom = null;
+      zoomEpoch += 1;
+      liveExtent = null;
+      load();
+    });
   });
 
   $effect(() => {
     const timer = setInterval(() => {
-      if (!document.hidden && !applied && !loading) load();
+      if (document.hidden) return;
+      if (!status?.available) loadStatus();
+      else if (!applied && !zoom && !loading) load();
     }, REFRESH_MS);
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      clearTimeout(zoomTimer);
+    };
   });
+
+  $effect(() => {
+    if (!zoom || !(unavailable || (error && !data))) return;
+    const onKey = (event) => {
+      if (escapeLeavesZoom(event)) leaveZoom();
+    };
+    globalThis.addEventListener("keydown", onKey);
+    return () => globalThis.removeEventListener("keydown", onKey);
+  });
+
+  function setView(value) {
+    if (value === viewId) {
+      again();
+      return;
+    }
+    viewId = value;
+  }
 
   function toggleOverlay(id) {
     overlays = overlays.includes(id) ? overlays.filter((item) => item !== id) : [...overlays, id];
@@ -109,7 +205,17 @@
     applied = { start: start / 1000, end: end / 1000 };
   }
 
+  /** A click on the range or view already shown leaves a zoom and reads it again, as in Classic. */
+  function again() {
+    if (zoom) leaveZoom();
+    else load();
+  }
+
   function setRange(value) {
+    if (value === range && !applied) {
+      again();
+      return;
+    }
     applied = null;
     range = value;
   }
@@ -122,19 +228,25 @@
     return d?.socReported ? d.soc : null;
   });
   const role = $derived(runtimeRole(live.snapshot, device));
-  const zoomScope = $derived(`${view.id}|${range}|${device}|${applied ? `${applied.start}-${applied.end}` : ""}`);
+  const zoomScope = $derived(`${view.id}|${range}|${device}|${applied ? `${applied.start}-${applied.end}` : ""}|${zoomEpoch}`);
 </script>
+
+{#snippet unavailableInfo(info)}
+  <div class="unavailable" data-testid="analytics-unavailable" data-reason={info.reason || ""}>
+    <h3 class="sub">{info.reason === "schema_incomplete" ? t("analytics.schemaIncomplete") : info.hint || info.reason === "unreachable" ? t("analytics.notReachable") : t("analytics.notConfiguredTitle")}</h3>
+    {#if info.hint}<pre class="hint" lang="en">{info.hint}</pre>{:else}<p class="muted">{t(info.reason === "unreachable" ? "analytics.unreachable" : "analytics.notConfigured")}</p>{/if}
+  </div>
+{/snippet}
 
 {#if !status}
   <div class="span-12"><Empty text={t("common.loading")} icon="loader" /></div>
 {:else if !status.available}
   <Card title={t("analytics.unavailableTitle")} span="span-12">
-    <Empty text={t(status.reason === "not_configured" ? "analytics.notConfigured" : "analytics.unreachable")} icon="info" />
-    {#if status.hint}<pre class="hint">{status.hint}</pre>{/if}
+    {@render unavailableInfo(status)}
   </Card>
 {:else}
   <div class="controls span-12">
-    <Segmented options={ANALYTICS_VIEWS.map((v) => ({ value: v.id, label: t(`analytics.view.${v.id}`) }))} value={viewId} label={t("analytics.view")} onchange={(v) => (viewId = v)} />
+    <Segmented options={ANALYTICS_VIEWS.map((v) => ({ value: v.id, label: t(`analytics.view.${v.id}`) }))} value={viewId} label={t("analytics.view")} onchange={setView} />
     <Segmented options={ANALYTICS_RANGES.map((value) => ({ value, label: t(`chart.range.${value}`) }))} value={applied ? "" : range} label={t("analytics.range")} onchange={setRange} />
   </div>
   <div class="controls span-12">
@@ -176,23 +288,26 @@
   </div>
 
   {#snippet actions()}
-    {#if loading}<span class="muted small">{t("common.loading")}</span>{/if}
+    {#if loading}<span class="muted small">{t("common.loading")}</span>{:else if error && data}<span class="muted small" role="status">{t("chart.stale")}</span>{/if}
+    {#if zoom && (unavailable || !chartHasData)}<button class="btn secondary small" type="button" onclick={leaveZoom} data-testid="analytics-zoom-reset">{t("chart.zoomReset")}</button>{/if}
     <button class="btn secondary small" type="button" aria-pressed={showTable ? "true" : "false"} onclick={() => (showTable = !showTable)}>
       <Icon name="table" size="sm" />{t("chart.table")}
     </button>
   {/snippet}
 
   <Card title={t(`analytics.view.${view.id}`)} subtitle={t("analytics.source")} span="span-12" {actions}>
-    {#if error && !data}
+    {#if unavailable}
+      {@render unavailableInfo(unavailable)}
+    {:else if error && !data}
       <div class="empty error">{t("error.load")}</div>
     {:else}
-      <TimeChart series={chartSeries} time={data?.time || []} values={data?.series || {}} {showTable} label={t(`analytics.view.${view.id}`)} scope={zoomScope} />
+      <TimeChart series={chartSeries} time={data?.time || []} values={data?.series || {}} {showTable} label={t(`analytics.view.${view.id}`)} scope={zoomScope} bounds={liveExtent} {onzoom} emptyText={data ? "" : t("chart.loading")} />
     {/if}
   </Card>
 
-  {#if overlays.includes("soc")}
+  {#if overlays.includes("soc") && !unavailable && !(error && !data)}
     <Card title={t("series.soc")} span="span-12">
-      <TimeChart series={[{ id: "soc", label: t("series.soc"), token: "--battery", unit: "%", fill: false }]} time={socData?.time || []} values={socData?.series || {}} kind="percent" height={180} label={t("series.soc")} scope={zoomScope} />
+      <TimeChart series={[{ id: "soc", label: t("series.soc"), token: "--battery", unit: "%", fill: false }]} time={socData?.time || []} values={socData?.series || {}} emptyText={socData ? "" : t("chart.loading")} kind="percent" height={180} label={t("series.soc")} scope={`${zoomScope}|${zoom ? `${zoom.start}-${zoom.end}` : ""}`} />
     </Card>
   {/if}
 {/if}
@@ -209,6 +324,9 @@
   .kpi { padding: var(--s4); border-left: 3px solid var(--c); }
   .kpi-label { font-size: 12px; color: var(--m-muted); }
   .kpi-value { font-size: 20px; font-weight: 650; margin-top: 2px; }
+  .unavailable { display: flex; flex-direction: column; gap: var(--s2); }
+  .unavailable .sub { margin: 0; font-size: 14px; font-weight: 620; }
+  .unavailable p { margin: 0; }
   .hint { white-space: pre-wrap; font-family: var(--m-mono); font-size: 12.5px; background: var(--m-well); border-radius: var(--m-radius-inner); padding: var(--s3); margin: var(--s3) 0 0; }
   .small { font-size: 12px; }
 </style>

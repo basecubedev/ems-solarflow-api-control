@@ -91,8 +91,16 @@ the battery's charged and discharged energy, the PV yield, the home's use and
 since when those channels are measured. **Table** lists all twelve months.
 
 Every chart with a time axis zooms: drag across the stretch you want to look
-at, and **Reset zoom** brings the whole range back. A zoomed chart keeps its
-zoom while new data arrives.
+at, turn the mouse wheel over the chart, or use the **+** and **−** buttons.
+**Reset zoom** or **Esc** brings the whole range back. A zoomed chart keeps its
+zoom while new data arrives. On **Analytics** a zoom asks InfluxDB for just
+the zoomed window, so the detail gets finer the further you zoom in, and the
+page stops refreshing until you go back.
+
+The history charts name where their data comes from (the local SQLite history
+or InfluxDB). When InfluxDB analytics is not set up, not reachable or its
+schema is incomplete, Analytics says which, with the fix the server suggests,
+and keeps the range buttons so another range can be tried.
 
 ## Today compared with yesterday
 

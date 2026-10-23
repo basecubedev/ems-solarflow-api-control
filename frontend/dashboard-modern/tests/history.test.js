@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { integrateKwh, hourlyKwh, gapRanges, withGapBreaks, sameTimeComparison, sampleSpacing, localDayStart, niceCeiling } from "../src/lib/history.js";
+import { integrateKwh, hourlyKwh, gapRanges, withGapBreaks, sameTimeComparison, sampleSpacing, localDayStart, niceCeiling, zoomStep, zoomDiffers, zoomSpan, zoomCenter, escapeLeavesZoom, emptyKey, sourceKey } from "../src/lib/history.js";
 
 const MIDNIGHT = localDayStart(new Date(1_800_000_000 * 1000));
 
@@ -91,4 +91,55 @@ test("the hourly bars are scaled to the next round figure above the largest", ()
   assert.equal(niceCeiling(0), null);
   assert.equal(niceCeiling(null), null);
   assert.equal(niceCeiling(Number.NaN), null);
+});
+
+test("a zoom step keeps the point under the pointer, stays inside the bounds and never narrows below a minute", () => {
+  assert.deepEqual(zoomStep(0, 1000, 500, 0.5, 0, 1000), { min: 250, max: 750 });
+  assert.deepEqual(zoomStep(0, 1000, 0, 0.5, 0, 1000), { min: 0, max: 500 });
+  assert.deepEqual(zoomStep(400, 600, 500, 4, 0, 1000), { min: 100, max: 900 });
+  assert.deepEqual(zoomStep(900, 1000, 950, 4, 0, 1000), { min: 600, max: 1000 });
+  assert.equal(zoomStep(0, 100, 50, 0.01, 0, 1000).max - zoomStep(0, 100, 50, 0.01, 0, 1000).min, 60);
+  assert.equal(zoomStep(0, 0, 0, 0.5, 0, 1000), null);
+});
+
+test("a window equal to its extent is no zoom; one that differs either way is", () => {
+  assert.equal(zoomDiffers(0, 1000, 0, 1000), false);
+  assert.equal(zoomDiffers(2, 999, 0, 1000), false);
+  assert.equal(zoomDiffers(100, 1000, 0, 1000), true);
+  assert.equal(zoomDiffers(-100, 1000, 0, 1000), true);
+});
+
+test("an empty chart says whether it loads, has no answer or no samples; the badge names known sources only", () => {
+  assert.equal(emptyKey(null, false), "chart.loading");
+  assert.equal(emptyKey(null, true), "chart.unavailable");
+  assert.equal(emptyKey({ meta: { unavailable: true } }, false), "chart.unavailable");
+  assert.equal(emptyKey({ meta: {} }, false), "chart.empty");
+  assert.deepEqual([sourceKey("sqlite"), sourceKey("influxdb"), sourceKey("other")], ["source.sqlite", "source.influxdb", null]);
+});
+
+test("a zoomed window is named by its length as Classic names the KPI period", () => {
+  assert.deepEqual(zoomSpan(20), { key: "chart.span.m", n: 1 });
+  assert.deepEqual(zoomSpan(45 * 60), { key: "chart.span.m", n: 45 });
+  assert.deepEqual(zoomSpan(3600 * 9.46), { key: "chart.span.h", n: 9.5 });
+  assert.deepEqual(zoomSpan(86400 * 3.04), { key: "chart.span.d", n: 3 });
+  assert.equal(zoomSpan(0), null);
+  assert.equal(zoomSpan(Number.NaN), null);
+});
+
+test("the buttons zoom around the data inside the window, not into an empty future", () => {
+  assert.equal(zoomCenter(0, 86400, -86400, 6.5 * 3600), 3.25 * 3600);
+  assert.equal(zoomCenter(100, 200, 0, 1000), 150);
+  assert.equal(zoomCenter(100, 200, 300, 400), 150);
+  assert.equal(zoomCenter(100, 200, undefined, undefined), 150);
+});
+
+test("Escape leaves a zoom only when no dialog or popover takes it", () => {
+  const none = { querySelector: () => null };
+  const open = { querySelector: (selector) => (selector.split(",").map((part) => part.trim()).includes("dialog[open]") ? {} : null) };
+  const oldEngine = { querySelector: (selector) => { if (selector.includes(":popover-open")) throw new SyntaxError(selector); return null; } };
+  assert.equal(escapeLeavesZoom({ key: "Escape" }, none), true);
+  assert.equal(escapeLeavesZoom({ key: "Escape" }, open), false);
+  assert.equal(escapeLeavesZoom({ key: "Escape", defaultPrevented: true }, none), false);
+  assert.equal(escapeLeavesZoom({ key: "Enter" }, none), false);
+  assert.equal(escapeLeavesZoom({ key: "Escape" }, oldEngine), true);
 });

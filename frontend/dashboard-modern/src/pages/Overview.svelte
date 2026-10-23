@@ -9,6 +9,7 @@
   import { localDayStart } from "../lib/history.js";
 
   let history = $state.raw(null);
+  let historyFailed = $state(false);
   let controller = null;
 
   async function load() {
@@ -22,8 +23,9 @@
         series: ["pv", "home", "battery", "grid"],
         signal: controller.signal,
       });
+      historyFailed = false;
     } catch (error) {
-      if (error?.name !== "AbortError") history = history || null;
+      if (error?.name !== "AbortError") historyFailed = true;
     }
   }
 
@@ -46,7 +48,7 @@
   <ActiveRules />
 </div>
 <TodayTiles {history} />
-<PowerChart todayHistory={history} />
+<PowerChart todayHistory={history} todayFailed={historyFailed} />
 
 <style>
   @media (max-width: 1280px) and (min-width: 761px) {

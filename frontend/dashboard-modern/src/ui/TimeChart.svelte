@@ -1,7 +1,8 @@
 <script>
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { prefs } from "../state/prefs.svelte.js";
-  import { withGapBreaks, gapRanges } from "../lib/history.js";
+  import Icon from "../../../shared/ui/Icon.svelte";
+  import { withGapBreaks, gapRanges, ZOOM_STEP, escapeLeavesZoom, zoomCenter, zoomDiffers, zoomStep } from "../lib/history.js";
 
   /**
    * One uPlot instance per chart, kept across data refreshes (setData) and
@@ -9,6 +10,12 @@
    * the language or the height. That is Classic's chart contract. A mouse
    * drag across the plot zooms into that stretch; a refresh of the same data
    * keeps the zoom, and a new range, device or view (``scope``) drops it.
+   * The wheel and the + and − buttons zoom too, Escape and Reset zoom leave
+   * it, and a rebuild for a new scheme or language keeps it. How far out it
+   * may zoom is the fixed ``xRange``, else ``bounds``, else the loaded data;
+   * ``onzoom`` hears every window, and null for the way back, so a page can
+   * read the window from the server. A page that leaves the zoom by itself
+   * changes ``scope``.
    */
   let {
     series,
@@ -21,6 +28,8 @@
     label = "",
     emptyText = "",
     scope = "",
+    bounds = null,
+    onzoom = null,
   } = $props();
 
   let host = $state();
@@ -29,7 +38,7 @@
   let cursorIndex = $state(null);
   let zoomed = $state(false);
   let zoomWindow = null;
-  let zoomScope = scope;
+  let zoomScope = null;
 
   const f = $derived(fmt());
   const prepared = $derived.by(() => {
@@ -128,15 +137,20 @@
     ctx.restore();
   }
 
+  function applyZoom(next) {
+    zoomWindow = next;
+    zoomed = true;
+    chart?.setScale("x", next);
+    onzoom?.(next);
+  }
+
   function zoomToSelection(u) {
     const { left, width } = u.select;
     if (width < 6) return;
     const min = u.posToVal(left, "x");
     const max = u.posToVal(left + width, "x");
     u.setSelect({ left: 0, top: 0, width: 0, height: 0 }, false);
-    zoomWindow = { min, max };
-    zoomed = true;
-    u.setScale("x", { min, max });
+    applyZoom({ min, max });
   }
 
   function resetZoom() {
@@ -144,14 +158,45 @@
     zoomed = false;
     const stamps = prepared.time;
     if (chart && stamps.length) chart.setScale("x", { min: stamps[0], max: stamps[stamps.length - 1] });
+    onzoom?.(null);
+  }
+
+  /** How far out the chart may zoom: its fixed range, else the bounds it was given, else its loaded data. */
+  function outer() {
+    if (xRange) return [xRange[0], xRange[1]];
+    if (Array.isArray(bounds) && bounds.length === 2) return bounds;
+    const stamps = prepared.time;
+    return stamps.length > 1 ? [stamps[0], stamps[stamps.length - 1]] : null;
+  }
+
+  /** One zoom step around a point; zoomed all the way out is the way back, as Reset zoom. */
+  function zoomBy(factor, center) {
+    const limits = outer();
+    if (!chart || !limits) return;
+    const { min, max } = chart.scales.x;
+    const stamps = prepared.time;
+    const middle = center ?? zoomCenter(min, max, stamps[0], stamps[stamps.length - 1]);
+    const next = zoomStep(min, max, middle, factor, limits[0], limits[1]);
+    if (!next) return;
+    if (!zoomDiffers(next.min, next.max, limits[0], limits[1])) {
+      if (zoomed) resetZoom();
+      return;
+    }
+    applyZoom(next);
+  }
+
+  function onWheel(event) {
+    event.preventDefault();
+    if (!chart) return;
+    const rect = chart.over.getBoundingClientRect();
+    const center = chart.posToVal(event.clientX - rect.left, "x");
+    zoomBy(event.deltaY < 0 ? 1 / ZOOM_STEP : ZOOM_STEP, Number.isFinite(center) ? center : undefined);
   }
 
   function build() {
     const uPlot = globalThis.uPlot;
     if (!host || !uPlot) return;
     chart?.destroy();
-    zoomWindow = null;
-    zoomed = false;
     const font = "12px InterVariable, sans-serif";
     const axis = {
       stroke: token("--m-muted"),
@@ -206,16 +251,18 @@
       [prepared.time, ...prepared.lists],
       host,
     );
+    chart.over.addEventListener("wheel", onWheel, { passive: false });
   }
 
   $effect(() => {
     const next = [series.map((s) => s.id).join(","), prefs.theme, prefs.lang, height, kind, xRange ? xRange.join("-") : ""].join("|");
-    if (!host || !hasData) return;
-    if (scope !== zoomScope) {
-      zoomScope = scope;
+    const reach = `${scope}|${xRange ? xRange.join("-") : ""}`;
+    if (zoomScope !== null && reach !== zoomScope) {
       zoomWindow = null;
       zoomed = false;
     }
+    zoomScope = reach;
+    if (!host || !hasData) return;
     tickSpan = shown.to - shown.from;
     if (next !== signature || !chart) {
       signature = next;
@@ -223,6 +270,14 @@
     } else {
       chart.setData([prepared.time, ...prepared.lists]);
     }
+  });
+
+  $effect(() => {
+    const onKey = (event) => {
+      if (zoomed && escapeLeavesZoom(event)) resetZoom();
+    };
+    globalThis.addEventListener("keydown", onKey);
+    return () => globalThis.removeEventListener("keydown", onKey);
   });
 
   $effect(() => {
@@ -263,6 +318,8 @@
       {:else}
         <span class="zoom-hint">{t("chart.zoomHint")}</span>
       {/if}
+      <button class="icon-btn small" type="button" onclick={() => zoomBy(1 / ZOOM_STEP)} aria-label={t("chart.zoomIn")} title={t("chart.zoomIn")} data-testid="chart-zoom-in"><Icon name="zoom-in" size="sm" /></button>
+      <button class="icon-btn small" type="button" onclick={() => zoomBy(ZOOM_STEP)} aria-label={t("chart.zoomOut")} title={t("chart.zoomOut")} data-testid="chart-zoom-out"><Icon name="zoom-out" size="sm" /></button>
     </span>
   </div>
   <div class="chart" bind:this={host} role="img" aria-label={label}></div>
@@ -290,7 +347,7 @@
 <style>
   .legend { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s4); align-items: center; margin-bottom: var(--s3); font-size: 12.5px; min-height: 20px; }
   .legend-time { color: var(--m-muted); min-width: 44px; }
-  .zoom { margin-left: auto; }
+  .zoom { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
   .zoom-hint { font-size: 11.5px; color: var(--m-muted-2); }
   @media (pointer: coarse) { .zoom-hint { display: none; } }
   .legend-item { display: inline-flex; align-items: center; gap: 7px; color: var(--m-muted); }

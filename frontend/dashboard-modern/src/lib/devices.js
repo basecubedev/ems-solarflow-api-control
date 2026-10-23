@@ -122,3 +122,53 @@ export function fleetSummary(devices) {
     disabled: devices.filter((device) => !device.enabled).map((device) => device.name),
   };
 }
+
+export const ASSIST_STATUSES = Object.freeze(["active", "waiting", "unavailable", "window", "restore_pending", "overdue", "completed", "ok", "unknown"]);
+const ASSIST_DESCRIPTIONS = Object.freeze({ waiting: "assist.desc.waiting", unavailable: "assist.desc.unavailable", window: "assist.desc.window", overdue: "assist.desc.overdue" });
+
+/**
+ * The full-charge assist as Classic's device card shows it
+ * (renderFullChargeAssist): the facts each status names, what it means, and
+ * the restore facts once a restore is pending. A restore flag while the
+ * assist still charges is a plan for afterwards, not a restore problem.
+ */
+export function assistView(assist) {
+  const status = ASSIST_STATUSES.includes(assist?.status) ? assist.status : "unknown";
+  const acCharging = Number(assist?.ac_mode) === 1 && Number(assist?.ac_status) === 2;
+  const restoring = Boolean(assist?.restore_pending || assist?.ac_mode_restore_pending);
+  const days = (value) => (Number.isFinite(value) ? value : null);
+  const facts = [];
+  const firmware = { label: "assist.firmware", firmware: { socGuard: enumLabel("soc_limit", assist?.soc_limit), acPath: acPath(assist) } };
+  if (status === "active") {
+    facts.push({ label: "assist.started", time: assist.assist_started_at || null });
+    if (acCharging) facts.push({ label: "assist.acCharge", key: "assist.running" });
+    facts.push(firmware);
+    if (restoring) facts.push({ label: "assist.afterCharge", key: "assist.restorePlanned" });
+  } else if (status === "waiting") {
+    facts.push({ label: "assist.started", time: assist.assist_started_at || null }, firmware);
+  } else if (status === "unavailable") {
+    facts.push({ label: "assist.last", time: assist.last_full_charge_at || null });
+  } else if (status === "overdue") {
+    const overdue = days(assist.days_until_due);
+    facts.push({ label: "assist.overdueBy", days: overdue === null ? null : Math.abs(overdue) }, { label: "assist.next", time: assist.next_due_at || null });
+  } else if (status === "window") {
+    facts.push({ label: "assist.dueIn", days: days(assist.days_until_due) }, { label: "assist.windowStarts", time: assist.window_starts_at || null });
+  } else {
+    facts.push({ label: "assist.last", time: assist?.last_full_charge_at || null }, { label: "assist.next", time: assist?.next_due_at || null });
+  }
+  const description = [];
+  if (status === "active") description.push(acCharging ? "assist.desc.activeAc" : "assist.desc.active");
+  else if (ASSIST_DESCRIPTIONS[status]) description.push(ASSIST_DESCRIPTIONS[status]);
+  else if (status === "restore_pending") {
+    if (assist.restore_pending) {
+      facts.push({ label: "assist.maxSocRestore", key: "assist.pending" });
+      description.push("assist.desc.restoreMaxSoc");
+    }
+    if (assist.ac_mode_restore_pending) {
+      facts.push({ label: "assist.acOutputMode", key: "assist.restorePendingValue" });
+      description.push("assist.desc.restoreAcMode");
+    }
+    if (restoring) description.push("assist.desc.restoreWaits");
+  }
+  return { status, facts, description };
+}
