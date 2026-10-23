@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { energyKwh, selfSufficiency, channelKwh, monthlyView, yearlyView, energyState, channelsSince, periodView } from "../src/lib/energy.js";
+import { energyKwh, selfSufficiency, channelKwh, monthlyView, yearlyView, energyState, channelsSince, periodView, periodFigures, figureValue, figureListed, figureText } from "../src/lib/energy.js";
+import { createFormat } from "../../shared/lib/format.js";
 
 test("a ratio that was not measured is null, never 0 %", () => {
   assert.equal(selfSufficiency({ ratios: { self_sufficiency: null } }), null);
@@ -65,4 +66,39 @@ test("channels are measured since the latest channel start", () => {
 
 test("a period with partial coverage is marked", () => {
   assert.equal(periodView({ coverage: { pv_yield: "partial" } }).partial, true);
+});
+
+test("the month detail and the month table share one figure list, and Expert adds the channels and the peak", () => {
+  const channels = [{ id: "grid_import" }, { id: "pv_yield" }];
+  assert.deepEqual(periodFigures(channels, false).map((figure) => figure.id), ["savings", "selfSufficiency", "acCharge"]);
+  assert.deepEqual(periodFigures(channels, true).map((figure) => figure.id), ["savings", "selfSufficiency", "acCharge", "channel.grid_import", "channel.pv_yield", "peak"]);
+});
+
+test("a figure is listed as Classic lists it: some AC charging or peak, a measured channel, an unmeasured ratio only in Expert", () => {
+  const values = {
+    savings_value: 4.2,
+    ratios: { self_sufficiency: null },
+    ac_charge_kwh: 0,
+    peak_output_w: 900,
+    channels: { grid_import: { kwh: 28.9 }, pv_yield: { kwh: 0 } },
+    coverage: { grid_import: "partial" },
+  };
+  const [savings, ratio, acCharge, gridImport, , peak] = periodFigures([{ id: "grid_import" }, { id: "pv_yield" }], true);
+  const listed = (figure, expert) => figureListed(figure, figureValue(values, figure), values, expert);
+  assert.deepEqual(figureValue(values, savings), { value: 4.2, partial: false });
+  assert.deepEqual(figureValue(values, gridImport), { value: 28.9, partial: true });
+  assert.equal(listed(ratio, false), false);
+  assert.equal(listed(ratio, true), true);
+  assert.equal(listed(acCharge, true), false);
+  assert.equal(listed(peak, true), true);
+  assert.equal(listed(gridImport, true), true);
+  const unmeasured = { channels: { grid_import: { kwh: 0 } }, coverage: { grid_import: "none" } };
+  assert.equal(figureListed(gridImport, figureValue(unmeasured, gridImport), unmeasured, true), false);
+});
+
+test("a figure reads as text with Classic's partial mark, and a missing one as a dash without it", () => {
+  const f = createFormat("en");
+  const [, ratio, , gridImport] = periodFigures([{ id: "grid_import" }], true);
+  assert.equal(figureText(f, gridImport, { value: 28.9, partial: true }, "EUR"), `${f.energy(28.9)} ◦`);
+  assert.equal(figureText(f, ratio, { value: null, partial: true }, "EUR"), "—");
 });

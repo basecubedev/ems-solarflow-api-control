@@ -7,7 +7,7 @@
   import Icon from "../../../shared/ui/Icon.svelte";
   import EnergyFacts from "./EnergyFacts.svelte";
   import { t, fmt } from "../i18n/i18n.svelte.js";
-  import { monthlyView, channelMeta, channelsSince } from "../lib/energy.js";
+  import { monthlyView, channelMeta, channelsSince, periodFigures, figureValue, figureListed, figureText } from "../lib/energy.js";
 
   let { stats, expert = false, now = new Date() } = $props();
 
@@ -29,6 +29,9 @@
   const channels = $derived(channelMeta(stats));
   const since = $derived(channelsSince(stats));
   const selected = $derived(months.find((m) => m.month === (picked ?? now.getMonth() + 1)) || months[0]);
+  const columns = $derived(
+    periodFigures(channels, expert).filter((figure) => months.some((m) => hasValue(m) && figureListed(figure, figureValue(m.raw, figure), m.raw, expert))),
+  );
 
   function pick(month) {
     picked = month;
@@ -106,14 +109,23 @@
   {#if showTable}
     <div class="table-scroll">
       <table class="data">
-        <thead><tr><th>{t("energy.month")}</th><th class="r">{t("energy.energy")}</th><th class="r">{t("energy.savings")}</th><th class="r">{t("energy.selfSufficiency")}</th><th>{t("energy.data")}</th></tr></thead>
+        {#if expert}<caption>{t("energy.context.channelsSince")}: {since ? f.date(since, { numeric: true }) : t("energy.notMeasured")}</caption>{/if}
+        <thead>
+          <tr>
+            <th>{t("energy.month")}</th>
+            <th class="r">{t("energy.energy")}</th>
+            {#each columns as figure (figure.id)}<th class="r">{t(figure.label)}</th>{/each}
+            <th>{t("energy.data")}</th>
+          </tr>
+        </thead>
         <tbody>
           {#each months as month (month.month)}
             <tr>
               <td>{f.month(month.month)}</td>
-              <td class="r num">{hasValue(month) ? f.energy(month.kwh) : "—"}</td>
-              <td class="r num">{hasValue(month) ? f.money(month.savings, currency) : "—"}</td>
-              <td class="r num">{hasValue(month) && month.selfSufficiency ? f.percent(month.selfSufficiency.ratio, { fraction: true }) : "—"}</td>
+              <td class="r num">{hasValue(month) ? `${f.energy(month.kwh)}${month.partial ? " ◦" : ""}` : "—"}</td>
+              {#each columns as figure (figure.id)}
+                <td class="r num">{hasValue(month) ? figureText(f, figure, figureValue(month.raw, figure), currency) : "—"}</td>
+              {/each}
               <td>{t(`energy.state.${month.state}`)}</td>
             </tr>
           {/each}
@@ -149,4 +161,6 @@
   .month-value { font-size: 20px; font-weight: 650; letter-spacing: -0.02em; }
   .gridline { stroke: var(--m-line); }
   .table-scroll { margin-top: var(--s4); }
+  .table-scroll td { white-space: nowrap; }
+  caption { caption-side: bottom; text-align: left; padding-top: var(--s2); color: var(--m-muted); font-size: 12px; }
 </style>
