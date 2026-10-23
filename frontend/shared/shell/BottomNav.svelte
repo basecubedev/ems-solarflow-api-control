@@ -19,6 +19,11 @@
   const current = $derived(router.pinned.includes(router.page) ? null : pageSet.pageById(router.page));
   const focusId = $derived(current?.id ?? others[0]?.id);
   const customized = $derived(router.pinned.join() !== pageSet.mobile.join());
+  const SEVERITY = ["error", "warning", "info"];
+  /** The worst mark among the pages More holds, so a finding there is not hidden until More is opened. */
+  const moreMark = $derived(
+    others.map((page) => shell.mark?.(page.id) || "").filter(Boolean).sort((a, b) => SEVERITY.indexOf(a) - SEVERITY.indexOf(b))[0] || "",
+  );
 
   let open = $state(false);
   let editing = $state(false);
@@ -101,10 +106,16 @@
 
 <nav class="bottom-nav" aria-label={t("nav.main")}>
   {#each pinned as page (page.id)}
-    <a href={href(page.id)} aria-current={router.page === page.id ? "page" : undefined} data-page={page.id}>
+    <a
+      href={href(page.id)}
+      aria-current={router.page === page.id ? "page" : undefined}
+      aria-label={shell.mark?.(page.id) ? `${name(page.id)}, ${t("nav.needsAttention")}` : undefined}
+      data-page={page.id}
+    >
       <Icon name={page.icon} />
       <span class="slot-label" title={name(page.id)}>{slotName(page)}</span>
       {#if shell.locked(page)}<svg class="i slot-badge" aria-label={t("nav.signInRequired")} role="img"><use href="#i-lock"></use></svg>{/if}
+      {#if shell.mark?.(page.id)}<i class="nav-mark {shell.mark(page.id)}"></i>{/if}
     </a>
   {/each}
   <button
@@ -114,9 +125,10 @@
     aria-haspopup="dialog"
     aria-expanded={open ? "true" : "false"}
     aria-current={current ? "page" : undefined}
-    aria-label={current ? t("nav.moreCurrent", { page: name(current.id) }) : undefined}
+    aria-label={[current ? t("nav.moreCurrent", { page: name(current.id) }) : moreMark ? t("nav.more") : "", moreMark ? t("nav.needsAttention") : ""].filter(Boolean).join(", ") || undefined}
     data-testid="nav-more"
   >
+    {#if moreMark}<i class="nav-mark {moreMark}" data-testid="nav-more-mark"></i>{/if}
     {#if current}
       <Icon name={current.icon} />
       <span class="slot-label" title={name(current.id)}>{slotName(current)}</span>
@@ -161,11 +173,13 @@
             href={href(page.id)}
             onclick={() => (open = false)}
             aria-current={router.page === page.id ? "page" : undefined}
+            aria-label={shell.mark?.(page.id) ? `${name(page.id)}, ${t("nav.needsAttention")}` : undefined}
             data-focus={page.id === focusId ? "" : undefined}
             data-page={page.id}
           >
             <Icon name={page.icon} /><span>{name(page.id)}</span>
             {#if shell.locked(page)}<svg class="i lock" aria-label={t("nav.signInRequired")} role="img"><use href="#i-lock"></use></svg>{/if}
+            {#if shell.mark?.(page.id)}<i class="nav-mark {shell.mark(page.id)}"></i>{/if}
           </a>
         {/each}
       </nav>
@@ -216,6 +230,7 @@
   }
   .tile[aria-current="page"] > :global(svg.i:not(.lock)), .tile[aria-pressed="true"] > :global(svg.i) { color: var(--m-accent); }
   .tile .lock { position: absolute; top: 7px; right: 7px; width: 13px; height: 13px; color: var(--m-muted-2); }
+  .tile .nav-mark { position: absolute; top: 9px; left: 9px; margin: 0; }
   .quick .pop-row { margin: 10px 0; }
   .session { display: inline-flex; align-items: center; gap: 6px; }
   .sheet-links { display: flex; flex-direction: column; gap: var(--s2); margin-top: var(--s3); }

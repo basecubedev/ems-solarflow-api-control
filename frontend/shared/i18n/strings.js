@@ -30,6 +30,7 @@ export const SHARED_STRINGS = {
   "nav.barNow": s("In the bar: {pages}", "In der Leiste: {pages}", "In de balk: {pages}", "Dans la barre : {pages}"),
   "nav.resetBar": s("Default pages", "Standardseiten", "Standaardpagina’s", "Pages par défaut"),
   "nav.signInRequired": s("Sign-in required", "Anmeldung erforderlich", "Aanmelding vereist", "Connexion requise"),
+  "nav.needsAttention": s("needs attention", "braucht Aufmerksamkeit", "vraagt aandacht", "demande de l’attention"),
   "nav.showLabels": s("Show menu text", "Menütext einblenden", "Menutekst tonen", "Afficher le texte du menu"),
   "nav.hideLabels": s("Hide menu text", "Menütext ausblenden", "Menutekst verbergen", "Masquer le texte du menu"),
   "nav.classic": s("Classic view", "Klassische Ansicht", "Klassieke weergave", "Vue classique"),
