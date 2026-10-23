@@ -231,6 +231,13 @@ from what the Admin server is.
   Each list of codes is a paired registry, walked against the server's source
   (`frontend/admin-modern/tests/`, `tests/test_admin_modern.py`) and against
   Classic's tables (`tests/classic-parity.test.js`).
+- **The settings catalogue, translated by its English.** Labels, help texts,
+  units, section and group titles and option values come from
+  `ems/config_catalog.py`. `src/i18n/catalog.js` keys their German, Dutch and
+  French by the English the catalogue sends, and option values by the stored
+  value; `tests/test_admin_modern.py` walks both catalogue payloads, so a new or
+  changed catalogue sentence fails it until it is translated, and an entry
+  nothing uses any more fails it too.
 - **The same writes as Classic.** Every write sends exactly the body Classic
   sends to the same endpoint, with the same `confirm` flags, plan ids and
   fingerprints, through `adminSend` with the session's CSRF token. A

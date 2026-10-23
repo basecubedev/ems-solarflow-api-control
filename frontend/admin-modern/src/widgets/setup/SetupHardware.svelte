@@ -3,8 +3,9 @@
   import Status from "../../../../shared/ui/Status.svelte";
   import DeviceCard from "../DeviceCard.svelte";
   import SettingField from "../SettingField.svelte";
-  import { t, tn } from "../../i18n/i18n.svelte.js";
-  import { generations, hardwareModels, reasonKey } from "../../lib/devices.js";
+  import CatalogText from "../CatalogText.svelte";
+  import { t, tn, say, catalogText } from "../../i18n/i18n.svelte.js";
+  import { generations, hardwareModels, maturityWords, operationWords, reasonKey } from "../../lib/devices.js";
   import { isExternalProposal, observationKey, sourcesOf } from "../../lib/discovery.js";
   import { CONTINUITY, D0_TYPE, DEFAULT_GRID_METER, DEFAULT_INVERTER, SWITCH_REASONS, candidateState, catalogSection, deviceFieldKey, deviceValue, featureValue, formGeneration, gridFields, gridMeterType, hasSource, inverterCards, isReady, manualControl, meterIsMqtt, modelsForGeneration, pendingConfirmations, selectionControllable, topicMode, unselectedProposals } from "../../lib/setupDraft.js";
   import { setup } from "../../state/setup.svelte.js";
@@ -170,12 +171,12 @@
     <h3 class="sub">{t("setup.hardware.gridMeter")}</h3>
     <p class="muted small">{t("setup.hardware.gridLead")}</p>
     {#if grid}
-      <DeviceCard id={grid.source_id} title={t("setup.hardware.gridMeter")} model={variants[gridType]?.label || grid.display_name || DEFAULT_GRID_METER} meta={endpoint(grid)} enabled={grid.enabled !== false} status={grid.enabled !== false ? t("setup.hardware.on") : t("setup.hardware.off")} connection={grid.auto_selected ? t("setup.hardware.autoSelected") : ""} onremove={() => removeItem(grid.source_id)}>
+      <DeviceCard id={grid.source_id} title={t("setup.hardware.gridMeter")} model={variants[gridType]?.label ? catalogText(variants[gridType].label).text : grid.display_name || DEFAULT_GRID_METER} modelLang={variants[gridType]?.label ? catalogText(variants[gridType].label).lang : undefined} meta={endpoint(grid)} enabled={grid.enabled !== false} status={grid.enabled !== false ? t("setup.hardware.on") : t("setup.hardware.off")} connection={grid.auto_selected ? t("setup.hardware.autoSelected") : ""} onremove={() => removeItem(grid.source_id)}>
         {#if setupDraft.gridStale}<p class="note warn"><Icon name="triangle-alert" />{t("setup.hint.gridMeterStale")}</p>{/if}
         {@render enabledRow(grid.enabled !== false, setGridEnabled, t("setup.hardware.gridEnabledHint"))}
         <label class="field"><span>{t("setup.hardware.meterType")}</span>
           <select class="input" value={gridType} onchange={(event) => setGridType(event.currentTarget.value)} data-testid="setup-grid-type">
-            {#each Object.keys(variants) as key (key)}<option value={key} lang="en">{variants[key].label}</option>{/each}
+            {#each Object.keys(variants) as key (key)}<option value={key} lang={catalogText(variants[key].label).lang}>{catalogText(variants[key].label).text}</option>{/each}
           </select>
         </label>
         {#if gridType === D0_TYPE}
@@ -188,7 +189,7 @@
             <label class="field"><span>{t("setup.hardware.host")}</span><input class="input num" type="text" value={grid.ip || ""} oninput={(event) => setGridEndpoint("ip", event.currentTarget.value)} data-testid="setup-grid-ip" /></label>
             <label class="field"><span>{t("setup.hardware.port")}</span><input class="input num" type="number" value={grid.port ?? ""} oninput={(event) => setGridEndpoint("port", event.currentTarget.value)} /></label>
           </div>
-          <p class="muted small" lang={variants[gridType]?.port_description ? "en" : null}>{variants[gridType]?.port_description || t("setup.hardware.httpPort")}</p>
+          <p class="muted small">{#if variants[gridType]?.port_description}<CatalogText text={variants[gridType].port_description} />{:else}{t("setup.hardware.httpPort")}{/if}</p>
         {/if}
         <div class="fields">
           {#each meterFields.normal as field (field.path)}<SettingField {field} value={featureValue(draft.features, field)} onchange={(value) => setGridFeature(field.path, value)} type={field.secret ? "password" : ""} />{/each}
@@ -331,7 +332,7 @@
             <select class="input" bind:value={manual.role}><option value="inverter">{t("setup.devices.inverter")}</option><option value="grid_meter">{t("setup.devices.gridMeter")}</option></select>
           </label>
           <label class="field"><span>{t("setup.hardware.type")}</span>
-            <select class="input" value={manual.type} onchange={(event) => chooseType(event.currentTarget.value)}>{#each roleVariants as variant (variant.id)}<option value={variant.id} lang="en">{variant.label || variant.id}</option>{/each}</select>
+            <select class="input" value={manual.type} onchange={(event) => chooseType(event.currentTarget.value)}>{#each roleVariants as variant (variant.id)}<option value={variant.id} lang={catalogText(variant.label || variant.id).lang}>{catalogText(variant.label || variant.id).text}</option>{/each}</select>
           </label>
           <label class="field"><span>{t("setup.hardware.host")}</span><input class="input num" type="text" placeholder="192.168.1.50" bind:value={manual.host} /></label>
           <label class="field"><span>{t("setup.hardware.port")}</span><input class="input num" type="text" inputmode="numeric" placeholder="80" bind:value={manual.port} /></label>
@@ -341,7 +342,7 @@
         {#if manualError}<p class="form-error">{t(`setup.manualError.${manualError}`)}</p>{/if}
 
         <h4 class="sub">{t("setup.hardware.broker")}</h4>
-        {#if catalog?.zendure_mqtt_broker?.help}<p class="muted small" lang="en">{catalog.zendure_mqtt_broker.help}</p>{/if}
+        {#if catalog?.zendure_mqtt_broker?.help}<p class="muted small"><CatalogText text={catalog.zendure_mqtt_broker.help} /></p>{/if}
         <div class="form" data-testid="setup-manual-broker">
           <label class="field"><span>{t("devices.mqttForm.name")}</span><input class="input" type="text" placeholder="local_mqtt" value={draft.broker.name || ""} oninput={(event) => setBroker("name", event.currentTarget.value)} /></label>
           <label class="field"><span>{t("setup.hardware.host")}</span><input class="input num" type="text" placeholder="192.168.1.20" value={draft.broker.host || ""} oninput={(event) => setBroker("host", event.currentTarget.value)} /></label>
@@ -360,23 +361,23 @@
           <label class="field"><span>{t("setup.hardware.physicalSerial")}</span><input class="input num" type="text" bind:value={device.serial} /></label>
           <label class="field"><span>{t("setup.hardware.mqttId")}</span><input class="input num" type="text" bind:value={device.routeId} /></label>
           <label class="field"><span>{t("setup.hardware.generation")}</span>
-            <select class="input" value={generation?.id || ""} onchange={(event) => chooseGeneration(event.currentTarget.value)}>{#each generations(catalog) as entry (entry.id)}<option value={entry.id} lang="en">{entry.label || entry.id}</option>{/each}</select>
+            <select class="input" value={generation?.id || ""} onchange={(event) => chooseGeneration(event.currentTarget.value)}>{#each generations(catalog) as entry (entry.id)}<option value={entry.id} lang={catalogText(entry.label || entry.id).lang}>{catalogText(entry.label || entry.id).text}</option>{/each}</select>
           </label>
           <label class="field"><span>{t("setup.hardware.model")}</span>
-            <select class="input" bind:value={device.model}>{#each models as entry (entry.id || "unknown")}<option value={entry.id || ""} lang="en">{entry.label || entry.id || t("setup.hardware.unknownModel")}</option>{/each}</select>
+            <select class="input" bind:value={device.model}>{#each models as entry (entry.id || "unknown")}<option value={entry.id || ""} lang={entry.label || entry.id ? catalogText(entry.label || entry.id).lang : undefined}>{entry.label || entry.id ? catalogText(entry.label || entry.id).text : t("setup.hardware.unknownModel")}</option>{/each}</select>
           </label>
           {#if control.supported || generation?.product_key}<label class="field"><span>{t("setup.hardware.productKey")}</span><input class="input num" type="text" bind:value={device.productKey} /></label>{/if}
           <button class="btn small" type="submit">{t("setup.hardware.addMqttDevice")}</button>
         </form>
         <p class="muted small">{t("setup.hardware.mqttIdHint")}</p>
         <p class="muted small" data-testid="setup-manual-control">{control.status === "not_ready" ? t("setup.manualControl.not_ready", { missing: t(`setup.manualControl.missing.${control.missing}`) }) : control.status === "source_unavailable" ? t("setup.manualControl.source_unavailable", { reason: t(reasonKey("broker_source_write_unverified")) }) : control.status === "unavailable" ? t("setup.manualControl.unavailable", { reason: t(reasonKey("hardware_profile_deferred")) }) : t(`setup.manualControl.${control.status}`)}</p>
-        {#if generation?.description}<p class="muted small" lang="en">{generation.description}</p>{/if}
-        <p class="muted small">{model?.id ? t("setup.hardware.modelFacts", { profile: model.power_write_profile || "—", maturity: model.validation_maturity || "—", operations: (model.supported_operations || []).join(", ") || t("setup.hardware.telemetryOnly") }) : t("setup.hardware.unknownHardware")}</p>
+        {#if generation?.description}<p class="muted small"><CatalogText text={generation.description} /></p>{/if}
+        <p class="muted small">{model?.id ? t("setup.hardware.modelFacts", { profile: model.power_write_profile || "—", maturity: model.validation_maturity ? say(maturityWords(model.validation_maturity)) : "—", operations: operationWords(model.supported_operations).map(say).join(", ") || t("setup.hardware.telemetryOnly") }) : t("setup.hardware.unknownHardware")}</p>
         {#if deviceError}<p class="form-error">{t(`setup.manualError.${deviceError}`)}</p>{/if}
         {#if draft.manual.length}
           <ul class="list">
             {#each draft.manual as entry, position (`${entry.serial_number}-${position}`)}
-              <li class="inner row-wrap"><strong class="grow">{entry.name || entry.serial_number || t("discovery.mqttDevice")}</strong><span class="muted small" lang="en">{generationLabel(entry.hardware_generation || entry.generation || "")} · {modelLabel(entry.hardware_model || entry.power_hardware_profile || "")}</span><button class="btn secondary small" type="button" onclick={() => removeManualDevice(position)}>{t("devices.remove")}</button></li>
+              <li class="inner row-wrap"><strong class="grow">{entry.name || entry.serial_number || t("discovery.mqttDevice")}</strong><span class="muted small"><CatalogText text={generationLabel(entry.hardware_generation || entry.generation || "")} /> · <CatalogText text={modelLabel(entry.hardware_model || entry.power_hardware_profile || "")} /></span><button class="btn secondary small" type="button" onclick={() => removeManualDevice(position)}>{t("devices.remove")}</button></li>
             {/each}
           </ul>
         {/if}

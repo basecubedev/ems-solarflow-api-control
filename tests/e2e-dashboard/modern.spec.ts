@@ -896,6 +896,22 @@ test.describe("Modern dashboard writes @smoke", () => {
     expect(request.headers()["x-csrf-token"]).toBe("preview-csrf-token");
   });
 
+  test("the device settings and the rule reasons are said in the reader's language", async ({ page, context }) => {
+    await context.addInitScript(() => window.localStorage.setItem("ems-modern.lang", "de"));
+    await page.route("**/api/auth/status", (route) => route.fulfill({ json: SIGNED_IN }));
+    await openModern(page, "#/control");
+    const form = page.locator('form[data-endpoint="/api/runtime/device/WR1"]');
+    await expect(form.locator('select[name="fan"] option')).toContainText(["Stufe 1", "Stufe 2"]);
+    await expect(form).toContainText("Automatisch lässt den Wechselrichter den Lüfter");
+    await page.goto("/modern/#/devices", { waitUntil: "domcontentloaded" });
+    const card = page.getByTestId("device-card").first();
+    await card.getByText("Geräteeinstellungen").click();
+    await expect(card).toContainText(/Licht\s*An/);
+    await page.goto("/modern/#/overview", { waitUntil: "domcontentloaded" });
+    await page.getByText(/\d Regeln inaktiv/).click();
+    await expect(page.getByText("inaktiv · alle Geräte online")).toBeVisible();
+  });
+
   test("a field nobody changed is not sent and nothing is written", async ({ page }) => {
     await page.route("**/api/auth/status", (route) => route.fulfill({ json: SIGNED_IN }));
     let writes = 0;

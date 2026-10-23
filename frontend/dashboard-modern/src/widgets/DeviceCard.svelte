@@ -7,7 +7,7 @@
   import Bar from "../../../shared/ui/Bar.svelte";
   import Fact from "../../../shared/ui/Fact.svelte";
   import Status from "../../../shared/ui/Status.svelte";
-  import { t, fmt, tv } from "../i18n/i18n.svelte.js";
+  import { t, fmt, tv, translatedOr } from "../i18n/i18n.svelte.js";
   import { assistView, firmwareFacts } from "../lib/devices.js";
   import { batteryDirection } from "../lib/flow.js";
 
@@ -22,7 +22,16 @@
   const d = $derived(device);
   const state = $derived(!d.enabled ? "disabled" : d.online ? "online" : "offline");
   const pvInputs = $derived(d.pvInputsW.filter((value) => value !== null));
-  const settings = $derived(Object.values(d.settings || {}).filter((entry) => entry && entry.reported));
+  const settings = $derived(
+    Object.entries(d.settings || {})
+      .filter(([, entry]) => entry && entry.reported)
+      .map(([key, entry]) => ({
+        key,
+        label: translatedOr(`setting.${key}`, entry.label || key),
+        reported: entry.reported_value ? translatedOr(`settingValue.${entry.reported_value}`, entry.reported) : entry.reported,
+        desired: entry.desired && entry.desired_value ? translatedOr(`settingValue.${entry.desired_value}`, entry.desired) : entry.desired,
+      })),
+  );
   const assist = $derived(d.fullChargeAssist && d.fullChargeAssist.enabled && d.fullChargeAssist.has_battery ? d.fullChargeAssist : null);
   const assisted = $derived(assist ? assistView(assist) : null);
   const charging = $derived((d.targetW ?? 0) < 0);
@@ -102,7 +111,7 @@
     <details class="more">
       <summary><Icon name="chevron-right" />{t("device.settings")}</summary>
       <div class="facts two body">
-        {#each settings as entry (entry.label)}
+        {#each settings as entry (entry.key)}
           <Fact label={entry.label} value={entry.desired ? `${entry.reported} → ${entry.desired}` : entry.reported} />
         {/each}
       </div>

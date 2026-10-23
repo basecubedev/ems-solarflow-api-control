@@ -25,6 +25,7 @@ from tests.modern_frontend import (
     assert_no_colour_literal_outside_the_token_blocks,
     assert_no_inline_script_or_style,
     assert_tab_icon_is_the_mark,
+    js_export,
     root_block,
     run_npm_script,
 )
@@ -153,6 +154,33 @@ def test_analytics_ranges_are_the_backend_ranges():
     source = (SOURCE / "src" / "lib" / "analytics.js").read_text(encoding="utf-8")
     ranges = re.search(r"ANALYTICS_RANGES = Object\.freeze\(\[([^\]]*)\]\)", source).group(1)
     assert [item.strip().strip('"') for item in ranges.split(",")] == list(HISTORY_RANGE_SECONDS)
+
+
+def _strings():
+    strings = js_export(SOURCE / "src" / "i18n" / "strings.js", "STRINGS")
+    if strings is None:
+        pytest.skip("Node is required to read the Modern string table")
+    return strings
+
+
+def test_every_device_setting_and_value_has_its_words_in_every_language():
+    from ems.device_settings import SETTINGS
+
+    strings = _strings()
+    for setting in SETTINGS:
+        assert strings[f"setting.{setting.key}"]["en"] == setting.label
+        assert strings[f"setting.{setting.key}.help"]["en"] == setting.help
+        for value in setting.values:
+            assert strings[f"settingValue.{value.word}"]["en"] == value.label
+
+
+def test_the_rule_reasons_modern_translates_are_the_dashboards_own():
+    from dashboard.telemetry import RULE_REASONS
+
+    assert js_export(SOURCE / "src" / "lib" / "status.js", "RULE_REASONS") == RULE_REASONS
+    strings = _strings()
+    for key, reason in RULE_REASONS.items():
+        assert strings[f"rule.reason.{key}"]["en"] == reason
 
 
 def test_the_unit_tests_of_the_modern_frontend_pass():

@@ -15,6 +15,19 @@ def _rounded(value, digits=1):
         return 0
 
 
+RULE_REASONS = {
+    "soc_limit_active": "one or more devices report a SOC limit",
+    "output_limit_active": "device outputLimit is present",
+    "winter_soc_mode": "configured winter month and runtime winter toggle",
+    "full_charge_assist_active": "no device currently in full-charge assist",
+    "pv_priority_balancing": "per-device PV priority factor differs from 1.0",
+    "battery_balancing": "effective device target differs from allocated target",
+    "night_min_soc_idle": "all controllable devices are parked at the minimum output floor",
+    "offline_devices": "all devices online",
+}
+"""A rule's reason in the dashboard's words, which the Modern dashboard translates."""
+
+
 def _bool_rule(active, reason=None):
     return {
         "active": bool(active),
@@ -30,7 +43,11 @@ def _device_runtime(controller, device_name, key, default):
 
 
 def _device_settings_card(controller, dev, state):
-    """Each device setting a device has, by label as it reports it, and the value set where it differs."""
+    """Each device setting a device has, by label as it reports it, and the value set where it differs.
+
+    The words beside the labels (``reported_value``, ``desired_value``) are the
+    setting's own values, so a page in another language can name them itself.
+    """
 
     from ems import device_settings
 
@@ -52,6 +69,8 @@ def _device_settings_card(controller, dev, state):
             "label": setting.label,
             "reported": reported.label if reported else None,
             "desired": desired.label if desired else None,
+            "reported_value": reported.word if reported else None,
+            "desired_value": desired.word if desired else None,
         }
     return card
 
@@ -469,21 +488,21 @@ def build_dashboard_snapshot(
         "ems_enabled": _bool_rule(enabled),
         "soc_limit_active": _bool_rule(
             any(device["soc_limit"] for device in devices.values()),
-            "one or more devices report a SOC limit"
+            RULE_REASONS["soc_limit_active"]
         ),
         "output_limit_active": _bool_rule(
             any(device["output_limit_w"] > 0 for device in devices.values()),
-            "device outputLimit is present"
+            RULE_REASONS["output_limit_active"]
         ),
         "winter_soc_mode": _bool_rule(
             winter_active,
-            "configured winter month and runtime winter toggle"
+            RULE_REASONS["winter_soc_mode"]
         ),
         "full_charge_assist_active": _bool_rule(
             bool(full_charge_assist_active_devices),
             ", ".join(full_charge_assist_active_devices)
             if full_charge_assist_active_devices
-            else "no device currently in full-charge assist"
+            else RULE_REASONS["full_charge_assist_active"]
         ),
         "pv_priority_balancing": _bool_rule(
             any(
@@ -491,22 +510,22 @@ def build_dashboard_snapshot(
                 != 1.0
                 for name in devices
             ),
-            "per-device PV priority factor differs from 1.0"
+            RULE_REASONS["pv_priority_balancing"]
         ),
         "battery_balancing": _bool_rule(
             any(
                 abs(device["target_w"] - device["allocated_target_w"]) > 0
                 for device in devices.values()
             ),
-            "effective device target differs from allocated target"
+            RULE_REASONS["battery_balancing"]
         ),
         "night_min_soc_idle": _bool_rule(
             night_min_soc_idle,
-            "all controllable devices are parked at the minimum output floor"
+            RULE_REASONS["night_min_soc_idle"]
         ),
         "offline_devices": _bool_rule(
             bool(offline_devices),
-            ", ".join(offline_devices) if offline_devices else "all devices online"
+            ", ".join(offline_devices) if offline_devices else RULE_REASONS["offline_devices"]
         ),
     }
 

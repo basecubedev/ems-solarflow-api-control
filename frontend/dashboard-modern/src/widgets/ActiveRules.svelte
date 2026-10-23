@@ -19,7 +19,7 @@
     {#each active as rule (rule.key)}
       <li class="rule">
         <span class="dot ok"></span><Icon name={rule.icon} size="sm" />
-        <span class="rule-text"><span class="rule-name">{t(rule.label)}</span>{#if rule.reason && rule.reason !== "active"}<span class="rule-reason">{rule.reason}</span>{/if}</span>
+        <span class="rule-text"><span class="rule-name">{t(rule.label)}</span>{#if rule.reason && rule.reason !== "active"}<span class="rule-reason">{rule.reasonKey ? t(rule.reasonKey) : rule.reason}</span>{/if}</span>
       </li>
     {:else}
       <li class="rule off">{t("rules.none")}</li>
@@ -32,7 +32,7 @@
         {#each inactive as rule (rule.key)}
           <li class="rule off">
             <span class="dot idle"></span><Icon name={rule.icon} size="sm" />
-            <span class="rule-text"><span class="rule-name">{t(rule.label)}</span>{#if rule.reason && rule.reason !== "inactive"}<span class="rule-reason">{t("rules.inactiveReason", { reason: rule.reason })}</span>{/if}</span>
+            <span class="rule-text"><span class="rule-name">{t(rule.label)}</span>{#if rule.reason && rule.reason !== "inactive"}<span class="rule-reason">{t("rules.inactiveReason", { reason: rule.reasonKey ? t(rule.reasonKey) : rule.reason })}</span>{/if}</span>
           </li>
         {/each}
       </ul>

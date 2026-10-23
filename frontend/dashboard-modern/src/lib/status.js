@@ -57,10 +57,27 @@ export const RULES = Object.freeze([
   { key: "offline_devices", label: "rule.offline_devices", icon: "wifi-off" },
 ]);
 
+/**
+ * A rule's reason in the dashboard's own words (dashboard/telemetry.py
+ * RULE_REASONS), which has a translation here; a list of device names or any
+ * other reason is shown as the dashboard gives it.
+ */
+export const RULE_REASONS = Object.freeze({
+  soc_limit_active: "one or more devices report a SOC limit",
+  output_limit_active: "device outputLimit is present",
+  winter_soc_mode: "configured winter month and runtime winter toggle",
+  full_charge_assist_active: "no device currently in full-charge assist",
+  pv_priority_balancing: "per-device PV priority factor differs from 1.0",
+  battery_balancing: "effective device target differs from allocated target",
+  night_min_soc_idle: "all controllable devices are parked at the minimum output floor",
+  offline_devices: "all devices online",
+});
+
 export function ruleStates(snapshot) {
   const rules = snapshot?.rules || {};
   return RULES.map((rule) => {
     const state = rules[rule.key] || {};
-    return { ...rule, active: state.active === true, reason: typeof state.reason === "string" ? state.reason : "" };
+    const reason = typeof state.reason === "string" ? state.reason : "";
+    return { ...rule, active: state.active === true, reason, reasonKey: reason && reason === RULE_REASONS[rule.key] ? `rule.reason.${rule.key}` : null };
   });
 }

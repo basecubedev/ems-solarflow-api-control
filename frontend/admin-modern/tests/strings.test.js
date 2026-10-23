@@ -186,7 +186,7 @@ test("no orphan keys: each key is used literally or belongs to a generated famil
     "system.migrationLosesControl.", "settings.kind.", "settings.source.", "settings.config.", "settings.devicesSub.", "recovery.reference.",
     "settings.tab.", "settings.edit.when.", "settings.edit.level.", "settings.risk.", "settings.edit.unsaved.", "settings.edit.overrides.",
     "settings.edit.invalid.", "settings.edit.resetLine.", "system.migrationConfirmDevices.", "alignment.stage.",
-    "devices.field.", "devices.enabledHint.", "devices.mqtt.state.", "devices.reason.", "devices.mqtt.note.", "devices.external.model.",
+    "devices.field.", "devices.enabledHint.", "devices.maturity.", "devices.operation.", "devices.mqtt.state.", "devices.reason.", "devices.mqtt.note.", "devices.external.model.",
     "devices.external.state.", "devices.external.note.", "discovery.target.", "discovery.outcome.", "discovery.title.", "discovery.status.", "discovery.note.", "discovery.action.", "sources.message.", "devices.mqttForm.error.", "setup.step.", "setup.channel.", "setup.build.", "setup.action.", "setup.check.", "setup.pipeline.",
     "setup.title.", "setup.chip.", "setup.source.", "setup.mdns.", "setup.gateway.", "setup.attempt.", "setup.brokers.", "setup.hint.",
     "setup.config.verdict.", "setup.config.status.", "setup.operation.", "setup.continuity.", "setup.switchReason.", "setup.manualError.",

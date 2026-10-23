@@ -140,6 +140,23 @@ def run_npm_script(script):
     return result
 
 
+def js_export(module, name):
+    """One export of a frontend module as JSON, read by Node as the bundle reads it.
+
+    Returns ``None`` when Node is not installed, so the caller can skip.
+    """
+
+    node = shutil.which("node")
+    if not node:
+        return None
+    script = f"import({json.dumps(module.as_uri())}).then((m) => process.stdout.write(JSON.stringify(m[{json.dumps(name)}])))"
+    result = subprocess.run(
+        [node, "--input-type=module", "-e", script], cwd=ROOT, capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    return json.loads(result.stdout)
+
+
 def assert_build_matches_source(config, committed, out, hint):
     """The bundle is committed so no install path needs Node; this keeps it honest.
 

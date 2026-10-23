@@ -760,8 +760,8 @@ def build_scenario(scenario=DEFAULT_SCENARIO, device_count=None, freeze_timestam
     for name, offered in preview_device_settings(devices).items():
         if offered:
             devices[name]["settings"] = {
-                "light": {"label": "Light", "reported": "On", "desired": None},
-                "fan": {"label": "Fan", "reported": "Auto", "desired": None},
+                "light": {"label": "Light", "reported": "On", "desired": None, "reported_value": "on", "desired_value": None},
+                "fan": {"label": "Fan", "reported": "Auto", "desired": None, "reported_value": "auto", "desired_value": None},
             }
     # Grid is held very close to zero (-5 W) to show the EMS regulating tightly
     # against the house load; an offline device breaks that balance.

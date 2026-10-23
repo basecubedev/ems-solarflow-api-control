@@ -59,3 +59,16 @@ test("rules keep their order and a missing rule is inactive", () => {
   assert.equal(rules.find((rule) => rule.key === "pv_priority_balancing").active, true);
   assert.equal(rules.find((rule) => rule.key === "ems_enabled").active, false);
 });
+
+test("a rule's reason in the dashboard's own words is translated, a list of device names is not", () => {
+  const rules = ruleStates({
+    rules: {
+      offline_devices: { active: false, reason: "all devices online" },
+      full_charge_assist_active: { active: true, reason: "WR1, WR2" },
+    },
+  });
+  const byKey = Object.fromEntries(rules.map((rule) => [rule.key, rule]));
+  assert.equal(byKey.offline_devices.reasonKey, "rule.reason.offline_devices");
+  assert.equal(byKey.full_charge_assist_active.reasonKey, null);
+  assert.equal(byKey.full_charge_assist_active.reason, "WR1, WR2");
+});

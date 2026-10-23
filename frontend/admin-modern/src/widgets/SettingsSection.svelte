@@ -2,7 +2,8 @@
   import Icon from "../../../shared/ui/Icon.svelte";
   import Status from "../../../shared/ui/Status.svelte";
   import SettingField from "./SettingField.svelte";
-  import { t } from "../i18n/i18n.svelte.js";
+  import CatalogText from "./CatalogText.svelte";
+  import { t, catalogText } from "../i18n/i18n.svelte.js";
   import { AUTOMATIC_FEATURES, FEATURE_IDS, fieldMatches, levelled, liveOverride, sharedRisk, switchPath, switchedOn } from "../lib/settings.js";
   import { settings, setValue } from "../state/settings.svelte.js";
 
@@ -19,7 +20,7 @@
   const switchField = $derived(own ? (section.fields || []).find((field) => field.path === own) || { path: own, type: "boolean" } : null);
   const named = $derived(FEATURE_IDS.includes(section.id));
   const levels = $derived(levelled(section));
-  const shown = $derived(Object.fromEntries(Object.entries(levels).map(([level, fields]) => [level, fields.filter((field) => fieldMatches(field, query))])));
+  const shown = $derived(Object.fromEntries(Object.entries(levels).map(([level, fields]) => [level, fields.filter((field) => fieldMatches(field, query, (text) => catalogText(text).text))])));
   const searching = $derived(Boolean(String(query).trim()));
   const expanded = $derived(open || searching);
   const bodyId = $derived(`section-${String(section.id).replace(/[^a-z0-9]/gi, "-")}`);
@@ -48,8 +49,8 @@
     {/if}
     <button class="summary" type="button" aria-expanded={expanded ? "true" : "false"} aria-controls={bodyId} onclick={() => (toggled = !open)}>
       <span class="words">
-        <span class="name">{#if named}{t(`feature.${section.id}`)}{:else}<span lang="en">{section.title || section.id}</span>{/if}</span>
-        <span class="muted small">{#if named}{t(`feature.${section.id}.sub`)}{:else}<span lang="en">{section.summary || section.description || ""}</span>{/if}</span>
+        <span class="name">{#if named}{t(`feature.${section.id}`)}{:else}<CatalogText text={section.title || section.id} />{/if}</span>
+        <span class="muted small">{#if named}{t(`feature.${section.id}.sub`)}{:else}<CatalogText text={section.summary || section.description || ""} />{/if}</span>
       </span>
       {#if on !== null}
         <Status tone={on ? "c-ok" : "c-idle"} text={on ? t("common.on") : t("common.off")} />

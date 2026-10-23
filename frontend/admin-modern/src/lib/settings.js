@@ -243,11 +243,16 @@ export function liveOverride(overrides, path) {
   return entry.source === "dashboard_override" ? entry : null;
 }
 
-/** Whether a field matches the search: label, description or config path, ignoring case. */
-export function fieldMatches(field, query) {
+/**
+ * Whether a field matches the search, ignoring case: its label or description
+ * as the catalogue sends them and as the page shows them (``shown`` turns the
+ * catalogue's words into the reader's), or its config path.
+ */
+export function fieldMatches(field, query, shown = (text) => text) {
   const needle = String(query || "").trim().toLowerCase();
   if (!needle) return true;
-  return [field?.label, field?.description, field?.path].some((text) => String(text || "").toLowerCase().includes(needle));
+  const texts = [field?.label, field?.description, field?.label && shown(field.label), field?.description && shown(field.description), field?.path];
+  return texts.some((text) => String(text || "").toLowerCase().includes(needle));
 }
 
 /** A typed password stays in memory: it is never written to the tab's storage. */
