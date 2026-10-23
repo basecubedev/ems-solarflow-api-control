@@ -88,7 +88,9 @@ On the **Energy** page every month of the year is a bar. Click a bar (or
 select it with the keyboard) to see that month's figures underneath: energy,
 savings and self-sufficiency, and in **Expert** the grid import and export,
 the battery's charged and discharged energy, the PV yield, the home's use and
-since when those channels are measured. **Table** lists all twelve months.
+since when those channels are measured. **Table** lists all twelve months
+with the same figures as columns, so in **Expert** every channel too; a table
+wider than the screen scrolls sideways.
 
 Every chart with a time axis zooms: drag across the stretch you want to look
 at, turn the mouse wheel over the chart, or use the **+** and **−** buttons.

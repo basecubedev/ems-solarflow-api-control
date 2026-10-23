@@ -1,6 +1,6 @@
 <script>
   import { t, fmt } from "../i18n/i18n.svelte.js";
-  import { periodView, channelKwh, channelsAllUnmeasured } from "../lib/energy.js";
+  import { periodFigures, figureValue, figureListed, figureText, channelsAllUnmeasured } from "../lib/energy.js";
 
   /**
    * The facts Classic's energy cards carry for any period: savings, the
@@ -10,36 +10,22 @@
   let { values, channels = [], since = null, expert = false, currency = "EUR", details = [] } = $props();
 
   const f = $derived(fmt());
-  const view = $derived(periodView(values));
   const unmeasured = $derived(channelsAllUnmeasured(values));
+  const figures = $derived(
+    periodFigures(channels, expert)
+      .map((figure) => ({ figure, cell: figureValue(values, figure) }))
+      .filter(({ figure, cell }) => figureListed(figure, cell, values, expert)),
+  );
 </script>
 
 <dl class="energy-facts">
-  <div><dt>{t("energy.savings")}</dt><dd class="num">{f.money(view.savings, currency)}</dd></div>
-  {#if view.selfSufficiency}
-    <div>
-      <dt>{t("energy.selfSufficiency")}</dt>
-      <dd class="num">{f.percent(view.selfSufficiency.ratio, { fraction: true })}{view.selfSufficiency.partial ? " ◦" : ""}</dd>
+  {#each figures as { figure, cell } (figure.id)}
+    <div class:channel={Boolean(figure.channel)}>
+      <dt>{t(figure.label)}</dt>
+      <dd class="num" class:na={cell.value === null}>{figureText(f, figure, cell, currency)}</dd>
     </div>
-  {:else if expert}
-    <div><dt>{t("energy.selfSufficiency")}</dt><dd class="num na">—</dd></div>
-  {/if}
-  {#if view.acChargeKwh !== null && view.acChargeKwh > 0}
-    <div><dt>{t("energy.acCharge")}</dt><dd class="num">{f.energy(view.acChargeKwh)}</dd></div>
-  {/if}
+  {/each}
   {#if expert}
-    {#if !unmeasured}
-      {#each channels as channel (channel.id)}
-        {@const value = channelKwh(values, channel.id)}
-        <div class="channel">
-          <dt>{t(`channel.${channel.id}`)}</dt>
-          <dd class="num" class:na={value.kwh === null}>{value.kwh === null ? "—" : f.energy(value.kwh)}{value.coverage === "partial" ? " ◦" : ""}</dd>
-        </div>
-      {/each}
-    {/if}
-    {#if view.peakW !== null && view.peakW > 0}
-      <div><dt>{t("energy.peak")}</dt><dd class="num">{f.power(view.peakW)}</dd></div>
-    {/if}
     <div class="since">
       <dt>{t("energy.measuredSince")}</dt>
       <dd class="num" class:na={!since || unmeasured}>{since && !unmeasured ? f.date(since, { numeric: true }) : t("energy.notMeasured")}</dd>

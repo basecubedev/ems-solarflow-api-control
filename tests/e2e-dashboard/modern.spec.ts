@@ -134,6 +134,20 @@ test.describe("Modern dashboard @smoke", () => {
     await expect(page.locator("dl.context")).toContainText("Channels measured since");
   });
 
+  test("the month table carries the same figures as the month detail, channels in Expert", async ({ page }) => {
+    await openModern(page, "#/energy");
+    await page.getByRole("button", { name: "Table" }).click();
+    const table = page.locator("table.data");
+    await expect(table.locator("thead")).not.toContainText("Grid import");
+    await expect(table.locator("caption")).toHaveCount(0);
+    await page.getByRole("button", { name: "Expert" }).click();
+    await expect(table.locator("thead")).toContainText("Grid import");
+    await expect(table.locator("thead")).toContainText("PV yield");
+    const september = table.locator("tbody tr", { hasText: "Sept" });
+    await expect(september).toContainText("28.9 kWh");
+    await expect(table.locator("caption")).toContainText("Channels measured since");
+  });
+
   test("the rules say why they are on, and a chart zooms and resets", async ({ page }) => {
     await openModern(page);
     await expect(page.getByTestId("active-rules")).toContainText("preview control loop active");

@@ -138,3 +138,58 @@ export function channelsSince(stats) {
   const dates = channelMeta(stats).map((channel) => channel.since).filter(Boolean).sort();
   return dates.length ? dates[dates.length - 1] : null;
 }
+
+/**
+ * The figures of a period after its energy, in the order the month detail
+ * lists them and the month table puts them in columns: savings, the
+ * self-sufficiency ratio and AC charging; Expert adds every channel and the
+ * peak output.
+ */
+export function periodFigures(channels, expert) {
+  const figures = [
+    { id: "savings", label: "energy.savings", format: "money" },
+    { id: "selfSufficiency", label: "energy.selfSufficiency", format: "percent" },
+    { id: "acCharge", label: "energy.acCharge", format: "energy" },
+  ];
+  if (!expert) return figures;
+  return [
+    ...figures,
+    ...channels.map((channel) => ({ id: `channel.${channel.id}`, label: `channel.${channel.id}`, format: "energy", channel: channel.id })),
+    { id: "peak", label: "energy.peak", format: "power" },
+  ];
+}
+
+/** One figure of one period: null when it was not measured, and whether it covers only part of the period. */
+export function figureValue(values, figure) {
+  if (figure.channel) {
+    const { kwh, coverage } = channelKwh(values, figure.channel);
+    return { value: kwh, partial: coverage === "partial" };
+  }
+  const view = periodView(values);
+  if (figure.id === "selfSufficiency") return { value: view.selfSufficiency?.ratio ?? null, partial: Boolean(view.selfSufficiency?.partial) };
+  const value = { savings: view.savings, acCharge: view.acChargeKwh, peak: view.peakW }[figure.id];
+  return { value: value ?? null, partial: false };
+}
+
+/**
+ * Whether a period lists a figure, as Classic's energy cards do: AC charging
+ * and the peak only when there was some, the channels unless none of them
+ * measured the period, and an unmeasured ratio only in Expert.
+ */
+export function figureListed(figure, cell, values, expert) {
+  if (figure.channel) return !channelsAllUnmeasured(values);
+  if (figure.id === "selfSufficiency") return cell.value !== null || expert;
+  if (figure.id === "acCharge" || figure.id === "peak") return cell.value !== null && cell.value > 0;
+  return true;
+}
+
+/** A figure as text; a partly measured one carries Classic's ◦. */
+export function figureText(f, figure, cell, currency) {
+  const value = cell.value;
+  const text =
+    figure.format === "money" ? f.money(value, currency)
+    : figure.format === "percent" ? f.percent(value, { fraction: true })
+    : figure.format === "power" ? f.power(value)
+    : f.energy(value);
+  return value !== null && cell.partial ? `${text} ◦` : text;
+}
