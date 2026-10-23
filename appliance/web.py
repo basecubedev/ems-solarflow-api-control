@@ -45,6 +45,18 @@ STATIC_FILES = {
     "theme.js": "application/javascript; charset=utf-8",
     "styles.css": "text/css; charset=utf-8",
 }
+# The Modern console is a build output (frontend/appliance-modern/) served at
+# /modern/. Its file names are fixed by the build, so the extension decides
+# the type; a file of any other kind under it is not served.
+MODERN_DIR = "modern"
+MODERN_CONTENT_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".woff2": "font/woff2",
+    ".LICENSE": "text/plain; charset=utf-8",
+}
 MAX_BODY_BYTES = 64 * 1024
 HOSTNAME_FILE = "/etc/hostname"
 
@@ -748,6 +760,10 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             return self._serve_index()
         if path.startswith("/static/"):
             return self._serve_static(path[len("/static/") :])
+        if path == "/modern":
+            return self._serve_modern("index.html")
+        if path.startswith("/modern/"):
+            return self._serve_modern(path[len("/modern/") :])
         if path == "/api/session":
             return self._session_state()
         if path.startswith("/api/support/archive/"):
@@ -860,6 +876,7 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
                 "csrf_token": session.csrf_token,
                 "security_audit": self.app.audit_status(),
                 "password_confirmed": self.app.auth.status().get("confirmed"),
+                "appliance_version": installed_version(),
             },
             extra_headers=[self._session_cookie(session)],
         )
@@ -876,6 +893,7 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
                 "csrf_token": session.csrf_token,
                 "security_audit": self.app.audit_status(),
                 "password_confirmed": self.app.auth.status().get("confirmed"),
+                "appliance_version": installed_version(),
             },
             extra_headers=[self._session_cookie(session)],
         )
@@ -1174,6 +1192,24 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         if name not in STATIC_FILES:
             return self._error(404, "not_found", "unknown asset")
         return self._serve_file(name, STATIC_FILES[name])
+
+    def _serve_modern(self, name):
+        """A file of the Modern build, by its path below static/modern/.
+
+        The request path was normalised before it got here, so ".." cannot
+        climb out; a hidden component, a backslash and a symlink that leads
+        out of the build are refused as well.
+        """
+
+        parts = name.split("/")
+        if any(not part or part.startswith(".") or "\\" in part or "\x00" in part for part in parts):
+            return self._error(404, "not_found", "unknown asset")
+        content_type = MODERN_CONTENT_TYPES.get(os.path.splitext(parts[-1])[1])
+        root = os.path.realpath(os.path.join(STATIC_DIR, MODERN_DIR))
+        target = os.path.realpath(os.path.join(root, *parts))
+        if content_type is None or not target.startswith(root + os.sep) or not os.path.isfile(target):
+            return self._error(404, "not_found", "unknown asset")
+        return self._serve_file(os.path.join(MODERN_DIR, *parts), content_type)
 
     def _serve_file(self, name, content_type):
         path = os.path.join(STATIC_DIR, name)

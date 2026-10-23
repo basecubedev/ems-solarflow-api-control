@@ -1,18 +1,21 @@
 # Modern front ends style guide
 
-The dashboard and the Admin console each have two front ends on one server and
-one API. **Classic** is the hand-written page (`dashboard/static/`,
-`admin/static/`) and follows the [Dashboard style guide](dashboard-style-guide.md)
-or the Admin console's own stylesheet. **Modern** is a Svelte 5 application
+The dashboard, the Admin console and the Appliance Manager each have two front
+ends on one server and one API. **Classic** is the hand-written page (`dashboard/static/`,
+`admin/static/`, `appliance/static/`) and follows the
+[Dashboard style guide](dashboard-style-guide.md) or the console's own
+stylesheet. **Modern** is a Svelte 5 application
 built with Vite, one for each server:
 
 | App | Source | Build output, committed | Served at |
 | --- | --- | --- | --- |
 | Modern dashboard | `frontend/dashboard-modern/` | `dashboard/static/modern/` | the dashboard's `/modern/` |
 | Modern Admin console | `frontend/admin-modern/` | `admin/static/modern/` | the Admin server's `/modern/` |
+| Modern Appliance Manager | `frontend/appliance-modern/` | `appliance/static/modern/` | the Appliance Manager's `/modern/` |
 
-Both are built from one design system in `frontend/shared/`, so they read as one
-product -- and will keep doing so when one web container serves them both.
+All three are built from one design system in `frontend/shared/`, so they read
+as one product -- and the dashboard and the Admin console will keep doing so
+when one web container serves them both.
 
 Modern is a visual system of its own, deliberately. The rule that dashboard work
 must not introduce a new visual system binds Classic; Modern is the one
@@ -274,6 +277,50 @@ from what the Admin server is.
   see [e2e-playwright.md](e2e-playwright.md)); the appearance gallery photographs
   Classic at `/?ui=classic`.
 
+## The Appliance Manager
+
+The Modern Appliance Manager follows every rule above, and a few more that come
+from what the Manager is: the recovery console of a Raspberry Pi, served by
+`appliance/web.py` from its own `.deb`.
+
+- **One bundle, no chunks.** The Manager updates itself as one package, and a
+  page split across two versions of it is worse than a larger file: every page
+  is in `assets/appliance.js`. `appliance/web.py` serves the build directory at
+  `/modern/` by extension, under the same CSP as Classic, and
+  `packaging/appliance/build-deb.sh` ships the tree and refuses to build
+  without it.
+- **Everything is behind the sign-in**, as in the Admin console: create the
+  first password, sign in, or the recovery state of a missing password file,
+  with the language switch on it. The session is the Manager's own
+  (`/api/session`, the `X-Appliance-CSRF` header,
+  `src/state/session.svelte.js`); a 401 anywhere brings the sign-in back and
+  says why.
+- **Every change is a plan.** `src/state/actions.svelte.js` is the one path:
+  ask for a plan with a request id, show it in `widgets/PlanDialog.svelte`,
+  confirm it with its token, follow the operation in
+  `widgets/OperationBanner.svelte` until it is acknowledged. Closing the dialog
+  cancels and acknowledges the plan; a plan whose answer was lost is picked up
+  with `resume-plan`; a restart or shutdown of the Pi hands the page to a
+  waiting screen. The bodies are Classic's, built in `src/lib/plans.js`.
+- **The host state is polled, the rest is held.** Operations every two
+  seconds, the status and the Manager state every fifth tick
+  (`src/state/host.svelte.js`); the release lists, the Manager index, the
+  backup state and the host settings are read once and dropped when an
+  operation settles or the installed version moves, as in Classic.
+- **The backend's words, translated by their codes.** Findings, operation types
+  and states, verification failures, plan fields, Manager verdicts and
+  outcomes, export states and log sources are closed sets the console has words
+  for; `tests/test_appliance_modern.py` walks each against the backend. The
+  executor's step names, blockers and refusals without a known code keep the
+  appliance's English, marked `lang="en"`.
+- **Basic and Expert** are Classic's detail levels, kept per browser
+  (`ems-modern.detail`).
+- **Modern is the default.** `appliance/static/theme.js` sends `/` to
+  `/modern/` unless the browser chose Classic (`ems-appliance-ui`) or lacks the
+  Popover API. Classic's Playwright specs choose Classic through the config's
+  `use.storageState` (`tests/e2e-appliance/classic-ui.ts`); the Modern spec is
+  `tests/e2e-appliance/modern.spec.ts`.
+
 ## What the Modern Admin only shows or hands to Classic
 
 The goal is a Modern console that works on its own. Until then, this list
@@ -328,15 +375,18 @@ npm run test:dashboard-modern     # the dashboard's (node --test), no browser
 npm run test:admin-modern         # the Admin console's
 npm run build:dashboard-modern    # writes dashboard/static/modern/
 npm run build:admin-modern        # writes admin/static/modern/
+npm run test:appliance-modern     # the Appliance Manager's
+npm run build:appliance-modern    # writes appliance/static/modern/
 ```
 
-A change in `frontend/shared/` changes both builds; rebuild both. The build
-output is committed with stable file names, so the Python servers and the
-Docker images need no Node at all. A change to the source is committed together
-with its rebuilt output; CI rebuilds and refuses a difference. The browser tests
-are `tests/e2e-dashboard/modern.spec.ts` in the dashboard suite and
-`tests/e2e/admin-modern.spec.ts` and `tests/e2e/admin-modern-upgrade.spec.ts` in
-the Admin suite. The checks every Modern
+A change in `frontend/shared/` changes every build; rebuild all three. The build
+output is committed with stable file names, so the Python servers, the
+Docker images and the Appliance Manager package need no Node at all. A change to
+the source is committed together with its rebuilt output; CI rebuilds and
+refuses a difference. The browser tests are `tests/e2e-dashboard/modern.spec.ts`
+in the dashboard suite, `tests/e2e/admin-modern.spec.ts` and
+`tests/e2e/admin-modern-upgrade.spec.ts` in the Admin suite and
+`tests/e2e-appliance/modern.spec.ts` in the appliance suite. The checks every Modern
 build has to pass live in `tests/modern_frontend.py`, the design system's own
 (colour schemes, contrast) in `tests/test_modern_design_system.py`.
 

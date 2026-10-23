@@ -685,6 +685,7 @@ textarea { min-height: 90px; font-family: ui-monospace, "SF Mono", Menlo, monosp
   color: var(--muted);
 }
 .ghost-button:hover { color: var(--text); border-color: var(--accent2); }
+a.primary-button, a.ghost-button { display: inline-flex; align-items: center; text-decoration: none; }
 
 .danger-button {
   background: color-mix(in srgb, var(--danger) 10%, transparent);

@@ -27,6 +27,8 @@ and in the RC tier ahead of a clean-tree check -- can never overwrite them.
 | `appliance-network-wifi` | WLAN scan and the revert warning | [network.md](../../../user/appliance/network.md) |
 | `appliance-backup-access` | Backup account state and export paths | [backup.md](../../../user/appliance/backup.md) |
 | `appliance-recovery` | The Admin section, where most recovery starts | [recovery.md](../../../user/appliance/recovery.md) |
+| `appliance-modern-overview` | The Modern view's overview on a desktop | [modern.md](../../../user/appliance/modern.md) |
+| `appliance-modern-phone` | The Modern view on a phone, with the bar at the bottom | [modern.md](../../../user/appliance/modern.md) |
 | `appliance-appearance-palettes` | Appearance — the same console in Signal, Void and Copper | [overview.md](../../../user/appliance/overview.md) |
 | `appliance-appearance-styles` | Appearance — the same console in Glass, Console and Brutal | [overview.md](../../../user/appliance/overview.md) |
 | `appliance-appearance-density` | Appearance — the same console at Compact, Normal and Roomy | [overview.md](../../../user/appliance/overview.md) |
