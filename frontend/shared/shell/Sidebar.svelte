@@ -27,9 +27,16 @@
     {#each groups as group (group.id)}
       {#if group.label}<div class="nav-group-label">{t(group.label)}</div>{/if}
       {#each group.pages as page (page.id)}
-        <a href={href(page.id)} aria-current={router.page === page.id ? "page" : undefined} title={t(`nav.${page.id}`)} data-page={page.id}>
+        <a
+          href={href(page.id)}
+          aria-current={router.page === page.id ? "page" : undefined}
+          aria-label={shell.mark?.(page.id) ? `${t(`nav.${page.id}`)}, ${t("nav.needsAttention")}` : undefined}
+          title={t(`nav.${page.id}`)}
+          data-page={page.id}
+        >
           <Icon name={page.icon} /><span>{t(`nav.${page.id}`)}</span>
           {#if shell.locked(page)}<svg class="i lock" aria-label={t("nav.signInRequired")} role="img"><use href="#i-lock"></use></svg>{/if}
+          {#if shell.mark?.(page.id)}<i class="nav-mark {shell.mark(page.id)}" data-testid="nav-mark-{page.id}"></i>{/if}
         </a>
       {/each}
     {/each}

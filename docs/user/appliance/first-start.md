@@ -29,6 +29,10 @@ always works.
 
 ![The first-visit password gate, asking for a new password twice](../../assets/screenshots/appliance/appliance-first-start-password.png)
 
+The page opens in the Modern view, in the language you pick at the foot of the
+sign-in card; the pictures here show the Classic view, which the same card
+links to. Both ask for the same password -- see [The Modern view](modern.md).
+
 ## 2. Set the password
 
 The first page asks you to choose a password, twice. There is no default

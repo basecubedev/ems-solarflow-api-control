@@ -1,0 +1,30 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* The Appliance Manager's own building blocks beside the shared base: a
+   label/value list, a call-out and a log view. Colours are roles from
+   tokens.css only. */
+
+.mono { font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace; font-size: 12px; font-weight: 450; overflow-wrap: anywhere; }
+
+.kv { margin: 0; display: flex; flex-direction: column; }
+.kv > div { display: flex; justify-content: space-between; align-items: baseline; gap: var(--s3); padding: 7px 0; border-bottom: 1px solid var(--m-line); min-width: 0; }
+.kv > div:last-child { border-bottom: 0; }
+.kv dt { color: var(--m-muted); font-size: 13px; flex: none; max-width: 48%; }
+.kv dd { margin: 0; font-size: 13.5px; font-weight: 560; text-align: right; min-width: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.kv dd.na { color: var(--m-muted-2); font-weight: 500; }
+.kv dd.mono { font-weight: 450; }
+
+.callout {
+  display: flex; gap: var(--s3); align-items: flex-start; margin: 0; padding: var(--s3) var(--s4); font-size: 13.5px;
+  border-radius: var(--m-radius-inner); border: 1px solid color-mix(in srgb, var(--c, var(--m-accent)) 35%, transparent);
+  background: color-mix(in srgb, var(--c, var(--m-accent)) 8%, var(--m-surface-1));
+}
+.callout > svg.i { color: var(--c, var(--m-accent)); margin-top: 1px; }
+.callout strong { font-weight: 620; }
+
+pre.log {
+  margin: var(--s2) 0 0; padding: var(--s3); max-height: 420px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, "DejaVu Sans Mono", "Liberation Mono", monospace; font-size: 12px; line-height: 1.5;
+  background: var(--m-well); border: 1px solid var(--m-line); border-radius: var(--m-radius-inner); color: var(--m-text);
+}
+
+.span-12 > .empty, .card .empty { margin: 0; }

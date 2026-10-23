@@ -20,6 +20,7 @@ system to maintain by hand.
 | Put the appliance on a card for the first time | [Flashing the card](install.md) |
 | Find the box on your network and log in | [First start](first-start.md) |
 | Understand what the main page is telling you | [Overview page](overview.md) |
+| Use the Modern view in your language, or switch back to Classic | [The Modern view](modern.md) |
 | Update the operating system | [Updates](updates.md#the-operating-system) |
 | Update the Appliance Manager itself | [Updates](updates.md#the-appliance-manager) |
 | Move it onto WLAN, or rename it | [Network](network.md) |

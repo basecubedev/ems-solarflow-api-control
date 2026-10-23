@@ -11,6 +11,8 @@ const SHELL = Symbol("shell");
  *   nav       createRouter(pageSet): { router, href, setPinned }
  *   short     the word under the mark when the menu is folded
  *   locked    (page) => true when the page needs a sign-in first
+ *   mark      optional (pageId) => "error" | "warning" | "info" | "": a page
+ *             with something waiting gets a dot and the words for it
  *   session   { authenticated, label, icon, pill, signIn(), signOut() }; pill
  *             false keeps the label out of the top bar (the phone sheet still
  *             shows it)

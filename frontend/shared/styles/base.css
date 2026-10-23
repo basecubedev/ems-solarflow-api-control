@@ -65,6 +65,10 @@ svg.i.lg { width: 22px; height: 22px; }
 }
 .nav a[aria-current="page"] svg.i { color: var(--m-accent); }
 .nav a .lock { margin-left: auto; width: 14px; height: 14px; color: var(--m-muted-2); }
+.nav-mark { width: 8px; height: 8px; border-radius: 50%; flex: none; margin-left: auto; background: var(--c, var(--m-accent)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c, var(--m-accent)) 22%, transparent); }
+.nav-mark.error { --c: var(--m-fault); }
+.nav-mark.warning { --c: var(--m-warn); }
+.nav-mark.info { --c: var(--m-accent); }
 .sidebar-foot { margin-top: auto; display: flex; flex-direction: column; gap: var(--s2); padding: 0 var(--s2); }
 .ghost-link {
   display: flex; align-items: center; gap: 10px; text-decoration: none; color: var(--m-muted);
@@ -240,6 +244,8 @@ dialog.modal::backdrop { background: var(--m-scrim, rgba(3, 5, 8, 0.72)); }
 .app.rail .brand { flex-direction: column; justify-content: center; gap: 6px; padding: 0; }
 .app.rail .brand-short { display: block; }
 .app.rail .sidebar-foot .ghost-link { justify-content: center; }
+.app.rail .nav a { position: relative; }
+.app.rail .nav-mark { position: absolute; top: 7px; right: 12px; margin: 0; }
 
 @media (max-width: 1280px) {
   .span-8, .span-4 { grid-column: span 12; }
@@ -267,6 +273,8 @@ dialog.modal::backdrop { background: var(--m-scrim, rgba(3, 5, 8, 0.72)); }
   }
   .bottom-nav svg.slot-badge { position: absolute; top: 1px; left: calc(50% + 8px); width: 12px; height: 12px; stroke-width: 2.4; }
   .bottom-nav .slot-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bottom-nav .nav-mark { position: absolute; top: 4px; left: calc(50% + 9px); margin: 0; }
+  .bottom-nav button:has(svg.slot-badge) .nav-mark { left: auto; right: calc(50% + 9px); }
   .bottom-nav :is(a, button)[aria-current="page"] { color: var(--m-accent); }
   .popover { right: 12px; left: 12px; width: auto; }
 }

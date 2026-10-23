@@ -1,6 +1,7 @@
 <script>
   import Icon from "./Icon.svelte";
-  let { tone = "c-idle", icon = "", text } = $props();
+  /** lang: set when the word is the host's own, in another language than the page. */
+  let { tone = "c-idle", icon = "", text, lang } = $props();
 </script>
 
-<span class="status {tone}">{#if icon}<Icon name={icon} />{/if}{text}</span>
+<span class="status {tone}" {lang}>{#if icon}<Icon name={icon} />{/if}{text}</span>

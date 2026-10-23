@@ -29,6 +29,10 @@ PRODUCTS = {
         ["dashboard/static/app.js", "dashboard/static/index.html"],
         ["frontend/dashboard-modern/src", "frontend/shared"],
     ),
+    "appliance": (
+        ["appliance/static/app.js"],
+        ["frontend/appliance-modern/src", "frontend/shared"],
+    ),
 }
 
 

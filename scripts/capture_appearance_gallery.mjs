@@ -47,7 +47,7 @@ const SUBJECT = {
   // mostly unchanged background -- measured at 12% of pixels differing, which
   // is a picture that does not show its own subject. Guided Setup is six.
   admin: { path: "/?ui=classic", after: "Guided setup", clip: "#view-setup, .admin-shell", top: 120, height: 430 },
-  appliance: { clip: "#shell, .gate-panel", top: 150, height: 560 },
+  appliance: { path: "/?ui=classic", clip: "#shell, .gate-panel", top: 150, height: 560 },
   dashboard: { path: "/preview/control", clip: ".control-pipeline, .shell", top: 120 },
 };
 

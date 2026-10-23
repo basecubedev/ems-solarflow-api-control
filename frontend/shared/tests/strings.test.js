@@ -9,7 +9,7 @@ import { APP_KEYS, SHARED_STRINGS } from "../i18n/strings.js";
 const LANGS = ["en", "de", "nl", "fr"];
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SHARED = join(HERE, "..");
-const APPS = ["dashboard-modern", "admin-modern"].map((name) => join(HERE, "../..", name, "src")).filter(existsSync);
+const APPS = ["dashboard-modern", "admin-modern", "appliance-modern"].map((name) => join(HERE, "../..", name, "src")).filter(existsSync);
 
 function sources(dir) {
   return readdirSync(dir).flatMap((name) => {
