@@ -172,8 +172,8 @@ output, with the material it bundles or copies, is described below the table.
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream | Files |
 |---|---|---|---|:---:|:---:|---|---|
 | `uPlot` | 1.6.31 | MIT | Canvas charts on the Dashboard History and Analytics tabs | ✅ | ✅ | https://github.com/leeoniya/uPlot | `dashboard/static/uPlot.iife.min.js`, `dashboard/static/uPlot.min.css`, `dashboard/static/uPlot.LICENSE` |
-| `svelte` | 5.57.2 (runtime) | MIT | Component runtime bundled into the Modern dashboard and Admin console | ✅ | ✅ | https://github.com/sveltejs/svelte | `dashboard/static/modern/assets/modern.js`, `admin/static/modern/assets/admin.js`, notices in `dashboard/static/modern/licenses.json` and `admin/static/modern/licenses.json` |
-| `clsx` | 2.1.1 | MIT | Class-name helper the Svelte runtime bundles | ✅ | ✅ | https://github.com/lukeed/clsx | `dashboard/static/modern/assets/modern.js`, `admin/static/modern/assets/admin.js`, notices in `dashboard/static/modern/licenses.json` and `admin/static/modern/licenses.json` |
+| `svelte` | 5.57.2 (runtime) | MIT | Component runtime bundled into the Modern dashboard and Admin console | ✅ | ✅ | https://github.com/sveltejs/svelte | `dashboard/static/modern/assets/modern.js`, `admin/static/modern/assets/vendor.js`, notices in `dashboard/static/modern/licenses.json` and `admin/static/modern/licenses.json` |
+| `clsx` | 2.1.1 | MIT | Class-name helper the Svelte runtime bundles | ✅ | ✅ | https://github.com/lukeed/clsx | `dashboard/static/modern/assets/modern.js`, `admin/static/modern/assets/vendor.js`, notices in `dashboard/static/modern/licenses.json` and `admin/static/modern/licenses.json` |
 | `Inter` (`@fontsource-variable/inter`) | 4.1 via 5.3.0 | OFL-1.1 | The Modern front ends' typeface, latin subset | ✅ | ✅ | https://github.com/rsms/inter | `dashboard/static/modern/assets/inter-latin-wght-normal.woff2`, `dashboard/static/modern/assets/modern.css` (`@font-face`), `dashboard/static/modern/Inter.LICENSE`, `admin/static/modern/assets/inter-latin-wght-normal.woff2`, `admin/static/modern/assets/admin.css` (`@font-face`), `admin/static/modern/Inter.LICENSE` |
 | `Lucide` (`lucide-static`) | 1.59.0 | ISC AND MIT (Feather-derived icons) | Icon paths of the Modern front ends' inline sprites | ✅ | ✅ | https://github.com/lucide-icons/lucide | `dashboard/static/modern/index.html` and `admin/static/modern/index.html` (the `<svg class="icon-sprite">` block), `dashboard/static/modern/Lucide.LICENSE`, `admin/static/modern/Lucide.LICENSE` |
 | `rpi-image-gen` | v2.7.0 | BSD-3-Clause | Upstream files copied verbatim as the image contract the appliance is built against (`image-rpios`) | ❌ | ❌ | https://github.com/raspberrypi/rpi-image-gen | `tests/fixtures/rpi_image_gen/` (seventeen files, listed with their SHA-256 in `source-manifest.json`), `tests/fixtures/rpi_image_gen/UPSTREAM.LICENSE` |
@@ -202,11 +202,14 @@ marked ✗. Their exact bytes and the release they came from are recorded in
 refresh them with `scripts/appliance-fetch-rpi-image-gen.sh`.
 
 No other third-party source is vendored. The Modern dashboard and the Modern
-Admin console are build outputs, not hand-written source. Their bundles
-(`dashboard/static/modern/assets/modern.js`, `admin/static/modern/assets/admin.js`)
-and stylesheets combine the project's own AGPL-3.0-or-later code (in
-`frontend/shared/`, `frontend/dashboard-modern/` and `frontend/admin-modern/`)
-with the Svelte runtime and `clsx`. Vite writes the MIT notices of every
+Admin console are build outputs, not hand-written source. The dashboard's
+bundle (`dashboard/static/modern/assets/modern.js`) and both stylesheets
+combine the project's own AGPL-3.0-or-later code (in `frontend/shared/`,
+`frontend/dashboard-modern/` and `frontend/admin-modern/`) with the Svelte
+runtime and `clsx`. The Admin console loads its pages as separate chunks: the
+Svelte runtime and `clsx` are all in `admin/static/modern/assets/vendor.js`
+(`admin/static/modern/assets/admin.js` loads it), and every other chunk is the
+project's own code and carries its licence header. Vite writes the MIT notices of every
 bundled package into a `licenses.json` that ships beside each bundle, and
 `tests/test_dashboard_modern.py` and `tests/test_admin_modern.py` fail when a
 package in that file has no row above or a licence outside the permissive set. The Inter font file is

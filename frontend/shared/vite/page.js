@@ -102,8 +102,22 @@ export function modernPage({ name, icons, vendored = "" }) {
   };
 }
 
-/** The build both apps share: fixed file names, one stylesheet, a licence list. */
-export function modernBuild({ outDir, entry }) {
+const PROJECT_BANNER = "/* SPDX-License-Identifier: AGPL-3.0-or-later */";
+
+/**
+ * The build both apps share: fixed file names, one stylesheet, a licence list.
+ * An app that loads its pages as separate chunks (``split``) keeps every
+ * bundled package in one ``vendor.js``, which THIRD_PARTY_LICENSES.md names,
+ * and every other chunk is the project's own code and says so in its first
+ * line; chunk names follow the pages, so a list of them would drift.
+ */
+export function modernBuild({ outDir, entry, split = false }) {
+  const chunking = split
+    ? {
+        manualChunks: (id) => (id.includes("/node_modules/") ? "vendor" : undefined),
+        postBanner: (chunk) => (chunk.name === "vendor" ? "" : PROJECT_BANNER),
+      }
+    : {};
   return {
     outDir,
     emptyOutDir: true,
@@ -116,6 +130,7 @@ export function modernBuild({ outDir, entry }) {
       output: {
         entryFileNames: `assets/${entry}.js`,
         chunkFileNames: "assets/[name].js",
+        ...chunking,
         assetFileNames: (info) => {
           const file = (info.names && info.names[0]) || info.name || "";
           if (file.endsWith(".css")) return `assets/${entry}.css`;

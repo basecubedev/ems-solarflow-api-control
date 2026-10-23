@@ -12,7 +12,7 @@ export default defineConfig({
   base: "/modern/",
   publicDir: false,
   plugins: [svelte(), modernPage({ name: "ems-admin-modern-page", icons: resolve(HERE, "src/icons.json") })],
-  build: modernBuild({ outDir: resolve(ROOT, "admin/static/modern"), entry: "admin" }),
+  build: modernBuild({ outDir: resolve(ROOT, "admin/static/modern"), entry: "admin", split: true }),
   server: {
     fs: { allow: [ROOT] },
     proxy: { "/api": { target: "http://127.0.0.1:8123", changeOrigin: false } },
