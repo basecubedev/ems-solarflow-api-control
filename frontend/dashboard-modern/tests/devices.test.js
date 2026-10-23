@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeDevice, deviceEntries, firmwareFacts, acPath, fleetSummary, normalizedDevices } from "../src/lib/devices.js";
+import { normalizeDevice, deviceEntries, firmwareFacts, acPath, fleetSummary, normalizedDevices, assistView } from "../src/lib/devices.js";
 
 test("a field the device did not report stays null instead of becoming 0", () => {
   const device = normalizeDevice("WR1", { online: true });
@@ -44,4 +44,19 @@ test("an unknown firmware value keeps its raw number", () => {
 test("the fleet counts enabled devices only", () => {
   const fleet = fleetSummary(normalizedDevices({ devices: { A: { online: true }, B: { online: false }, C: { online: false, enabled: false } } }));
   assert.deepEqual(fleet, { total: 2, online: 1, offline: ["B"], disabled: ["C"] });
+});
+
+test("the full-charge assist names the facts Classic's card names for each status", () => {
+  const labels = (assist) => assistView(assist).facts.map((fact) => fact.label);
+  assert.deepEqual(labels({ status: "active", ac_mode: 1, ac_status: 2, restore_pending: true }), ["assist.started", "assist.acCharge", "assist.firmware", "assist.afterCharge"]);
+  assert.deepEqual(assistView({ status: "active", ac_mode: 2, ac_status: 1 }).description, ["assist.desc.active"]);
+  assert.deepEqual(labels({ status: "waiting" }), ["assist.started", "assist.firmware"]);
+  assert.deepEqual(labels({ status: "unavailable" }), ["assist.last"]);
+  assert.deepEqual(assistView({ status: "overdue", days_until_due: -3 }).facts[0], { label: "assist.overdueBy", days: 3 });
+  assert.deepEqual(labels({ status: "window", days_until_due: 2 }), ["assist.dueIn", "assist.windowStarts"]);
+  assert.deepEqual(labels({ status: "ok" }), ["assist.last", "assist.next"]);
+  const restore = assistView({ status: "restore_pending", restore_pending: true, ac_mode_restore_pending: true });
+  assert.deepEqual(restore.facts.map((fact) => fact.label), ["assist.last", "assist.next", "assist.maxSocRestore", "assist.acOutputMode"]);
+  assert.deepEqual(restore.description, ["assist.desc.restoreMaxSoc", "assist.desc.restoreAcMode", "assist.desc.restoreWaits"]);
+  assert.equal(assistView({ status: "something" }).status, "unknown");
 });

@@ -157,6 +157,359 @@ test.describe("Modern dashboard @smoke", () => {
     await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(0);
   });
 
+  test("a zoom on Analytics reads the window from the server, the wheel and buttons zoom, and Escape goes back", async ({ page }) => {
+    const requests: string[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes("/api/analytics/series")) requests.push(request.url());
+    });
+    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    const plot = page.locator(".chart .u-over").first();
+    await expect(plot).toBeVisible();
+    await expect.poll(() => requests.length).toBeGreaterThan(0);
+    const before = requests.length;
+    await page.getByTestId("chart-zoom-in").first().click();
+    await expect(page.getByTestId("chart-zoom-reset").first()).toBeVisible();
+    await expect.poll(() => requests.slice(before).some((url) => url.includes("start=") && url.includes("end="))).toBe(true);
+    await expect.poll(() => requests.length).toBeGreaterThan(before);
+    const zoomed = requests.at(-1);
+    await expect(page.locator(".kpi-label").first()).not.toContainText("24 h");
+    const box = await plot.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.wheel(0, -200);
+    await expect.poll(() => requests.at(-1)).not.toBe(zoomed);
+    expect(requests.at(-1)).toContain("start=");
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(0);
+    await expect.poll(() => requests.at(-1)).toContain("range=");
+  });
+
+  test("analytics that are not set up say so", async ({ page }) => {
+    await page.route("**/api/analytics/status", (route) => route.fulfill({ json: { available: false, reason: "not_configured" } }));
+    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("analytics-unavailable")).toContainText("InfluxDB analytics is not configured");
+  });
+
+  test("an analytics schema that is incomplete says so with the server's fix", async ({ page }) => {
+    await page.route("**/api/analytics/series**", (route) => route.fulfill({ json: { available: false, reason: "schema_incomplete", hint: "Run:\nems-admin repair analytics" } }));
+    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    const info = page.getByTestId("analytics-unavailable");
+    await expect(info).toContainText("The InfluxDB analytics schema is incomplete");
+    await expect(info).toContainText("ems-admin repair analytics");
+    await expect(page.getByRole("button", { name: "7 d", exact: true })).toBeVisible();
+  });
+
+  test("a zoom of the main analytics chart takes the state-of-charge chart along", async ({ page }) => {
+    const requests: string[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes("/api/analytics/series")) requests.push(request.url());
+    });
+    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await expect(page.locator(".chart .u-over").first()).toBeVisible();
+    await page.getByRole("button", { name: "State of charge", exact: true }).click();
+    await expect(page.locator(".chart .u-over")).toHaveCount(2);
+    await page.getByTestId("chart-zoom-in").nth(1).click();
+    await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(1);
+    await page.getByTestId("chart-zoom-in").first().click();
+    const charts = page.locator(".card").filter({ has: page.locator(".chart .u-over") });
+    await expect(charts.nth(0).getByTestId("chart-zoom-reset")).toBeVisible();
+    await expect(charts.nth(1).getByTestId("chart-zoom-reset")).toHaveCount(0);
+    await expect.poll(() => requests.some((url) => /series=soc(&|$)/.test(url) && url.includes("start="))).toBe(true);
+  });
+
+  test("Escape that closes the appearance menu or the sign-in keeps the zoom", async ({ page }) => {
+    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await expect(page.locator(".chart .u-over").first()).toBeVisible();
+    await page.getByTestId("chart-zoom-in").first().click();
+    await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(1);
+    await page.getByTestId("appearance-button").first().click();
+    await expect(page.getByTestId("appearance")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("appearance")).toBeHidden();
+    await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(1);
+    await page.getByTestId("sign-in").first().click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toBeHidden();
+    await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(1);
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(0);
+  });
+
+  test("an unavailable range hides the state-of-charge chart with the main one", async ({ page }) => {
+    await page.route("**/api/analytics/series**", (route) => (route.request().url().includes("range=7d") ? route.fulfill({ json: { available: false, reason: "unreachable" } }) : route.continue()));
+    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "State of charge", exact: true }).click();
+    await expect(page.locator(".chart .u-over")).toHaveCount(2);
+    await page.getByRole("button", { name: "7 d", exact: true }).click();
+    await expect(page.getByTestId("analytics-unavailable")).toBeVisible();
+    await expect(page.locator(".chart .u-over")).toHaveCount(0);
+    await expect(page.getByText("No history in this range yet.")).toHaveCount(0);
+  });
+
+  test("a zoom whose read fails says so and has its way back on the page", async ({ page }) => {
+    let fail = false;
+    await page.route("**/api/analytics/series**", (route) => {
+      if (fail && route.request().url().includes("start=")) return route.fulfill({ status: 500, json: { error: "boom" } });
+      return route.continue();
+    });
+    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await expect(page.locator(".chart .u-over").first()).toBeVisible();
+    fail = true;
+    await page.getByTestId("chart-zoom-in").first().click();
+    await expect(page.getByText("Could not load this data.")).toBeVisible();
+    await page.getByTestId("analytics-zoom-reset").click();
+    await expect(page.locator(".chart .u-over").first()).toBeVisible();
+    await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(0);
+  });
+
+  test("a click on the range or view already shown leaves a zoom, as in Classic", async ({ page }) => {
+    const requests: string[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes("/api/analytics/series")) requests.push(request.url());
+    });
+    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await expect(page.locator(".chart .u-over").first()).toBeVisible();
+    await page.getByTestId("chart-zoom-in").first().click();
+    await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(1);
+    await expect.poll(() => requests.at(-1)).toContain("start=");
+    await page.getByRole("button", { name: "24 h", exact: true }).click();
+    await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(0);
+    await expect.poll(() => requests.at(-1)).toContain("range=24h");
+    await expect(page.locator(".kpi-label").first()).toContainText("24 h");
+    await page.getByTestId("chart-zoom-in").first().click();
+    await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(1);
+    await page.getByRole("button", { name: "Overview", exact: true }).first().click();
+    await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(0);
+  });
+
+  test("a click on the history range already shown leaves the history chart's zoom", async ({ page }) => {
+    await openModern(page, "#/devices");
+    const card = page.locator(".card", { has: page.getByTestId("history-source") }).first();
+    await card.getByTestId("chart-zoom-in").click();
+    await expect(card.getByTestId("chart-zoom-reset")).toBeVisible();
+    await card.getByRole("button", { name: "24 h", exact: true }).click();
+    await expect(card.getByTestId("chart-zoom-reset")).toHaveCount(0);
+  });
+
+  test("a custom analytics range names the KPIs' period by its length", async ({ page }) => {
+    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await expect(page.locator(".chart .u-over").first()).toBeVisible();
+    await page.getByRole("textbox", { name: "From", exact: true }).fill("2026-10-19T00:00");
+    await page.getByRole("textbox", { name: "To", exact: true }).fill("2026-10-22T12:00");
+    await page.getByRole("button", { name: "Apply", exact: true }).click();
+    await expect(page.locator(".kpi-label").first()).toContainText("3.5 d");
+  });
+
+  test("a range whose read fails says so instead of keeping the last range under the new label", async ({ page }) => {
+    await page.route("**/api/analytics/series**", (route) => (route.request().url().includes("range=7d") ? route.fulfill({ status: 500, json: { error: "boom" } }) : route.continue()));
+    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await expect(page.locator(".chart .u-over").first()).toBeVisible();
+    await page.getByRole("button", { name: "7 d", exact: true }).click();
+    await expect(page.getByText("Could not load this data.")).toBeVisible();
+    await expect(page.locator(".kpi-value").first()).toHaveText("—");
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    await page.route("**/api/analytics/series**", async (route) => {
+      if (!route.request().url().includes("range=6h")) return route.fallback();
+      await gate;
+      await route.fallback().catch(() => undefined);
+    });
+    await page.getByRole("button", { name: "6 h", exact: true }).click();
+    await expect(page.getByText("Could not load this data.")).toHaveCount(0);
+    release();
+    await expect(page.locator(".chart .u-over").first()).toBeVisible();
+  });
+
+  test("a refresh that fails keeps the last answer and says so", async ({ page }) => {
+    await page.clock.install();
+    let fail = false;
+    await page.route("**/api/analytics/series**", (route) => (fail ? route.fulfill({ status: 500, json: { error: "boom" } }) : route.continue()));
+    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await expect(page.locator(".chart .u-over").first()).toBeVisible();
+    fail = true;
+    await page.clock.fastForward(31_000);
+    await expect(page.getByText("Could not refresh; this is the last answer.")).toBeVisible();
+    await expect(page.locator(".chart .u-over").first()).toBeVisible();
+  });
+
+  test("a history range whose read fails says so on the Devices page", async ({ page }) => {
+    await page.route("**/api/history/series**", (route) => (route.request().url().includes("range=7d") ? route.fulfill({ status: 503, json: { error: "history_unavailable" } }) : route.continue()));
+    await openModern(page, "#/devices");
+    const card = page.locator(".card", { has: page.getByTestId("history-source") }).first();
+    await expect(card.locator(".chart .u-over")).toBeVisible();
+    await card.getByRole("button", { name: "7 d", exact: true }).click();
+    await expect(page.getByText("Could not load this data.")).toBeVisible();
+  });
+
+  test("a click on the range that failed reads it again, and going back to the last one shows no old error", async ({ page }) => {
+    let fail = true;
+    const asked: string[] = [];
+    await page.route("**/api/analytics/series**", (route) => {
+      const url = route.request().url();
+      if (url.includes("range=7d")) {
+        asked.push(url);
+        if (fail) return route.fulfill({ status: 500, json: { error: "boom" } });
+      }
+      return route.continue();
+    });
+    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await expect(page.locator(".chart .u-over").first()).toBeVisible();
+    await page.getByRole("button", { name: "7 d", exact: true }).click();
+    await expect(page.getByText("Could not load this data.")).toBeVisible();
+    fail = false;
+    const before = asked.length;
+    await page.getByRole("button", { name: "7 d", exact: true }).click();
+    await expect.poll(() => asked.length).toBeGreaterThan(before);
+    await expect(page.getByText("Could not load this data.")).toHaveCount(0);
+    fail = true;
+    await page.getByRole("button", { name: "24 h", exact: true }).click();
+    await page.getByRole("button", { name: "7 d", exact: true }).click();
+    await expect(page.getByText("Could not load this data.")).toBeVisible();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    await page.route("**/api/analytics/series**", async (route) => {
+      if (!route.request().url().includes("range=24h")) return route.fallback();
+      await gate;
+      await route.fallback().catch(() => undefined);
+    });
+    await page.getByRole("button", { name: "24 h", exact: true }).click();
+    await expect(page.getByText("Could not load this data.")).toHaveCount(0);
+    release();
+    await expect(page.locator(".chart .u-over").first()).toBeVisible();
+  });
+
+  test("a reset while a zoom is still read drops that read", async ({ page }) => {
+    const aborted: string[] = [];
+    page.on("requestfailed", (request) => {
+      if (request.url().includes("/api/analytics/series") && request.url().includes("start=")) aborted.push(request.url());
+    });
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let held = 0;
+    await page.route("**/api/analytics/series**", async (route) => {
+      if (!route.request().url().includes("start=")) return route.continue();
+      held += 1;
+      await gate;
+      await route.continue().catch(() => undefined);
+    });
+    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await expect(page.locator(".chart .u-over").first()).toBeVisible();
+    await page.getByTestId("chart-zoom-in").first().click();
+    await expect.poll(() => held).toBe(1);
+    await page.getByTestId("chart-zoom-reset").first().click();
+    await expect.poll(() => aborted.length).toBe(1);
+    release();
+    await expect(page.locator(".kpi-label").first()).toContainText("24 h");
+  });
+
+  test("a zoom the analytics cannot answer has its way back on the page, by button or Escape", async ({ page }) => {
+    let refuse = false;
+    await page.route("**/api/analytics/series**", (route) => {
+      if (refuse && route.request().url().includes("start=")) return route.fulfill({ json: { available: false, reason: "schema_incomplete", hint: "missing bucket" } });
+      return route.continue();
+    });
+    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await expect(page.locator(".chart .u-over").first()).toBeVisible();
+    refuse = true;
+    await page.getByTestId("chart-zoom-in").first().click();
+    await expect(page.getByTestId("analytics-unavailable")).toContainText("missing bucket");
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".chart .u-over").first()).toBeVisible();
+    await page.getByTestId("chart-zoom-in").first().click();
+    await expect(page.getByTestId("analytics-unavailable")).toBeVisible();
+    await page.getByTestId("analytics-zoom-reset").click();
+    await expect(page.getByTestId("analytics-unavailable")).toHaveCount(0);
+    await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(0);
+  });
+
+  test("a range the analytics cannot answer keeps the controls, and another range shows its chart again", async ({ page }) => {
+    await page.route("**/api/analytics/series**", async (route) => {
+      if (route.request().url().includes("range=7d")) return route.fulfill({ json: { available: false, reason: "unreachable", hint: "InfluxDB did not answer." } });
+      return route.continue();
+    });
+    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await expect(page.locator(".chart .u-over").first()).toBeVisible();
+    await page.getByRole("button", { name: "7 d", exact: true }).click();
+    await expect(page.getByTestId("analytics-unavailable")).toContainText("InfluxDB analytics is not reachable");
+    await page.getByRole("button", { name: "24 h", exact: true }).click();
+    await expect(page.getByTestId("analytics-unavailable")).toHaveCount(0);
+    await expect(page.locator(".chart .u-over").first()).toBeVisible();
+  });
+
+  test("the history names its source and says when it is unavailable", async ({ page }) => {
+    await openModern(page);
+    await expect(page.getByTestId("history-source").first()).toBeVisible();
+    await page.route("**/api/history/series**", (route) => route.fulfill({ json: { time: [], series: {}, meta: { unavailable: true } } }));
+    await page.getByRole("button", { name: "6 h", exact: true }).click();
+    await expect(page.getByText("The history is not available right now.")).toBeVisible();
+  });
+
+  test("the today chart zooms within today: one step in and one out is the whole day again", async ({ page }) => {
+    await openModern(page);
+    const card = page.locator(".card", { has: page.getByTestId("history-source") }).first();
+    await card.getByTestId("chart-zoom-in").click();
+    await expect(card.getByTestId("chart-zoom-reset")).toBeVisible();
+    await card.getByTestId("chart-zoom-out").focus();
+    await page.keyboard.press("Enter");
+    await expect(card.getByTestId("chart-zoom-reset")).toHaveCount(0);
+    await expect(card.getByTestId("chart-zoom-out")).toBeFocused();
+  });
+
+  test("a history that cannot be read says so on the Overview instead of loading forever", async ({ page }) => {
+    await page.route("**/api/history/series**", (route) => route.fulfill({ status: 500, json: { error: "boom" } }));
+    await openModern(page);
+    await expect(page.getByText("Could not load", { exact: false }).first()).toBeVisible();
+    await expect(page.getByText("Loading the history…")).toHaveCount(0);
+  });
+
+  test("a runtime state that failed before sign-in is asked again at sign-in", async ({ page }) => {
+    let signedIn = false;
+    let runtimeAsks = 0;
+    await page.route("**/api/auth/status", (route) => route.fulfill({ json: signedIn ? SIGNED_IN : { ...SIGNED_IN, authenticated: false, csrf_token: null } }));
+    await page.route("**/api/runtime", (route) => {
+      runtimeAsks += 1;
+      return route.fulfill({ status: 503, json: { error: "unavailable" } });
+    });
+    await openModern(page);
+    await expect.poll(() => runtimeAsks).toBeGreaterThan(0);
+    await expect(page.getByText("Read-only").first()).toBeVisible();
+    const before = runtimeAsks;
+    signedIn = true;
+    await page.route("**/api/auth/login", (route) => route.fulfill({ json: SIGNED_IN }));
+    await page.getByTestId("sign-in").first().click();
+    await page.getByLabel("Password").fill("pw");
+    await page.getByRole("dialog").getByRole("button", { name: "Sign in" }).click();
+    await expect.poll(() => runtimeAsks, { timeout: 4_000 }).toBeGreaterThan(before);
+    await expect(page.getByText("Write mode · runtime state unavailable, retrying").first()).toBeVisible();
+  });
+
+  test("a runtime state that does not answer is named beside the write mode and asked again", async ({ page }) => {
+    await page.route("**/api/auth/status", (route) => route.fulfill({ json: SIGNED_IN }));
+    let failing = true;
+    await page.route("**/api/runtime", (route) => (failing ? route.fulfill({ status: 503, json: { error: "unavailable" } }) : route.continue()));
+    await openModern(page);
+    await expect(page.getByText("Write mode · runtime state unavailable, retrying").first()).toBeVisible();
+    failing = false;
+    await expect(page.getByText("Write mode · runtime state unavailable, retrying")).toHaveCount(0, { timeout: 10_000 });
+  });
+
+  test("an overdue full-charge assist names how far overdue it is and when it is due next", async ({ page }) => {
+    await page.route("**/api/events", (route) => route.abort());
+    await page.route("**/api/live", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      const first = Object.values(body.devices)[0] as Record<string, unknown>;
+      first.battery_full_charge_assist = { enabled: true, has_battery: true, status: "overdue", days_until_due: -3, next_due_at: "2026-10-30T08:00:00Z", message: "Full charge is overdue" };
+      await route.fulfill({ response, json: body });
+    });
+    await openModern(page, "#/devices");
+    const facts = page.getByTestId("assist-facts").first();
+    await expect(facts).toContainText("Overdue by");
+    await expect(facts).toContainText("3 d");
+    await expect(page.getByTestId("device-card").first()).toContainText("EMS starts an assist charge as soon as conditions allow.");
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+  });
+
   test("a today tile names the top of its scale and its hours, and puts the comparison beside the figure", async ({ page }) => {
     await page.setViewportSize({ width: 900, height: 900 });
     await pinTheDay(page);

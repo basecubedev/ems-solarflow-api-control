@@ -173,3 +173,89 @@ export function sameTimeComparison(history, seriesId, nowSeconds, dayStartSecond
   if (!Number.isFinite(firstSample) || firstSample > yesterdayStart + gapLimit(history.time)) return null;
   return { today, yesterday, delta: today - yesterday };
 }
+
+/** Span multiplier for one wheel notch or one button press, and the narrowest window, as Classic's chart zoom. */
+export const ZOOM_STEP = 1.6;
+export const MIN_ZOOM_SPAN_S = 60;
+
+/**
+ * Whether an x window differs from the extent it lies in, either way; a
+ * window equal to it within half a percent is no zoom at all.
+ */
+export function zoomDiffers(min, max, start, end) {
+  const nums = [min, max, start, end];
+  if (!nums.every((n) => typeof n === "number" && Number.isFinite(n))) return false;
+  const span = end - start;
+  if (!(span > 0)) return false;
+  const eps = span * 0.005;
+  return Math.abs(min - start) > eps || Math.abs(max - end) > eps;
+}
+
+/**
+ * The x window that zooming by ``factor`` (a span multiplier, below 1 zooms
+ * in) around ``center`` gives, clamped into the outer bounds; what lies under
+ * the pointer stays under it. Null when the inputs describe no window.
+ */
+export function zoomStep(min, max, center, factor, start, end) {
+  const nums = [min, max, center, factor, start, end];
+  if (!nums.every((n) => typeof n === "number" && Number.isFinite(n))) return null;
+  const outer = end - start;
+  if (!(outer > 0) || !(max > min) || !(factor > 0)) return null;
+  const span = max - min;
+  const next = Math.min(Math.max(span * factor, Math.min(MIN_ZOOM_SPAN_S, outer)), outer);
+  const anchor = Math.min(Math.max(center, min), max);
+  let low = anchor - ((anchor - min) / span) * next;
+  if (low < start) low = start;
+  if (low + next > end) low = end - next;
+  return { min: low, max: low + next };
+}
+
+/**
+ * Escape leaves a zoom only when no dialog or popover is open to take it for
+ * itself: closing the sign-in or the appearance menu keeps the chart as it is.
+ */
+export function escapeLeavesZoom(event, root = globalThis.document) {
+  if (event?.key !== "Escape" || event.defaultPrevented) return false;
+  if (!root) return true;
+  try {
+    return !root.querySelector("dialog[open], [popover]:popover-open");
+  } catch {
+    return !root.querySelector("dialog[open]");
+  }
+}
+
+/**
+ * Where the + and − buttons zoom around: the middle of the data inside the
+ * window, so a fixed day that has data only up to now is never zoomed into
+ * its empty future; the window's middle when no data falls inside it.
+ */
+export function zoomCenter(min, max, first, last) {
+  const low = Math.max(min, first);
+  const high = Math.min(max, last);
+  return Number.isFinite(low) && Number.isFinite(high) && low <= high ? (low + high) / 2 : (min + max) / 2;
+}
+
+/**
+ * The length of a zoomed window as Classic names its KPIs' period: minutes
+ * below an hour, tenths of hours below two days, tenths of days beyond.
+ */
+export function zoomSpan(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  const tenths = (value) => Math.round(value * 10) / 10;
+  if (seconds < 3600) return { key: "chart.span.m", n: Math.max(1, Math.round(seconds / 60)) };
+  if (seconds < 2 * 86400) return { key: "chart.span.h", n: tenths(seconds / 3600) };
+  return { key: "chart.span.d", n: tenths(seconds / 86400) };
+}
+
+const SOURCE_KEYS = Object.freeze({ sqlite: "source.sqlite", influxdb: "source.influxdb", preview: "source.preview", demo: "source.demo" });
+
+/** Where a series answer came from, as the chart's badge names it; null for a source it does not name. */
+export function sourceKey(source) {
+  return Object.hasOwn(SOURCE_KEYS, source) ? SOURCE_KEYS[source] : null;
+}
+
+/** What an empty chart says: still loading, unavailable, or no samples in this range. */
+export function emptyKey(data, failed) {
+  if (!data) return failed ? "chart.unavailable" : "chart.loading";
+  return data.meta?.unavailable ? "chart.unavailable" : "chart.empty";
+}
