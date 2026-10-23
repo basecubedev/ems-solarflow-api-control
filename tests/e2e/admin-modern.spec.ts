@@ -4,7 +4,7 @@
 // the two, the sign-in, the language, and the pages whose writes it runs
 // itself -- a backup from creation through details, restore and deletion.
 import { expect, test, ADMIN_PASSWORD } from "./fixtures/admin";
-import type { Page } from "@playwright/test";
+import type { Page, Route } from "@playwright/test";
 import { post } from "./helpers/setup-authority";
 import { ADMIN_UI_KEY as UI_KEY } from "./helpers/classic-ui";
 import { SetupPage } from "./pages/setup-page";
@@ -616,5 +616,41 @@ test.describe("Modern Admin: on a phone", { tag: ["@smoke"] }, () => {
     await sheet.getByRole("link", { name: "System" }).click();
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("System");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
+});
+
+test.describe("Modern Admin: settings in the old place", { tag: ["@smoke"] }, () => {
+  test("are moved to config/config.json after a confirmation, and a different one there is replaced only after a second", async ({ page }) => {
+    let moved = false;
+    await page.route("**/api/admin/maintenance/overview", async (route: Route) => {
+      const data = await route
+        .fetch()
+        .then((response) => response.json())
+        .catch(() => null);
+      if (!data) return;
+      data.install_state = { ...(data.install_state || {}), state: moved ? "configured" : "legacy_root_config", legacy_migration_available: !moved, paths: { legacy_config: "/srv/ems/config.json", standard_config: "/srv/ems/config/config.json" } };
+      await route.fulfill({ json: data }).catch(() => undefined);
+    });
+    const asked: unknown[] = [];
+    await page.route("**/api/admin/config/migrate-legacy", async (route: Route) => {
+      const body = route.request().postDataJSON();
+      asked.push(body);
+      if (!body.overwrite) return route.fulfill({ status: 409, json: { ok: false, reason: "target_exists", message: "config/config.json already exists and differs from the legacy config. Confirm the overwrite to replace it." } });
+      moved = true;
+      return route.fulfill({ json: { ok: true, migrated: true, backup_path: "/srv/ems/data/admin/backups/config/root-config-legacy.json", backups: ["/srv/ems/data/admin/backups/config/root-config-legacy.json", "/srv/ems/data/admin/backups/config/standard-config-before-migrate.json"] } });
+    });
+    await openModern(page, "#/system");
+    const legacy = page.getByTestId("legacy-config");
+    await expect(legacy).toContainText("/srv/ems/config.json");
+    await legacy.getByTestId("legacy-move").click();
+    await page.getByRole("dialog", { name: "Move the settings to config/config.json?" }).getByTestId("confirm").click();
+    await expect(legacy).toContainText("The file there already exists and differs. Confirm to replace it.");
+    await legacy.getByTestId("legacy-replace").click();
+    await page.getByRole("dialog", { name: "Replace the existing config/config.json?" }).getByTestId("confirm").click();
+    await expect(legacy).toContainText("The settings were moved to config/config.json.");
+    await expect(legacy).toContainText("standard-config-before-migrate.json");
+    await expect(legacy).not.toContainText("still in the old place");
+    await expect(legacy.getByTestId("legacy-move")).toHaveCount(0);
+    expect(asked).toEqual([{}, { overwrite: true }]);
   });
 });

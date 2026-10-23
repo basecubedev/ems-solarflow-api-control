@@ -121,6 +121,11 @@ def run_maintenance_overview(base_dir=None, docker=None, admin_image=None):
             "message": message,
             "recommended_path": install_state.recommended_path,
             "reasons": list(install_state.reasons),
+            "legacy_migration_available": install_state.legacy_migration_available,
+            "paths": {
+                "legacy_config": install_state.paths["legacy_config"],
+                "standard_config": install_state.paths["standard_config"],
+            },
         },
         "paths": {
             "config": {

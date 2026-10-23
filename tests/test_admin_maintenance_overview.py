@@ -83,6 +83,26 @@ def test_standard_install_reports_all_paths_present(tmp_path):
     assert overview["warnings"] == []
 
 
+def test_settings_in_the_old_place_offer_the_move_with_both_paths(tmp_path):
+    (tmp_path / "config.json").write_text(json.dumps({"dashboard": {"port": 8080}}), encoding="utf-8")
+    overview = run_maintenance_overview(base_dir=str(tmp_path), docker=FakeDocker())
+
+    install = overview["install_state"]
+    assert install["state"] == "legacy_root_config"
+    assert install["legacy_migration_available"] is True
+    assert install["paths"] == {
+        "legacy_config": str(tmp_path / "config.json"),
+        "standard_config": str(tmp_path / "config" / "config.json"),
+    }
+
+
+def test_a_standard_install_offers_no_move(tmp_path):
+    _standard_install(tmp_path)
+    overview = run_maintenance_overview(base_dir=str(tmp_path), docker=FakeDocker())
+
+    assert overview["install_state"]["legacy_migration_available"] is False
+
+
 def test_missing_config_is_not_a_standard_install(tmp_path):
     (tmp_path / "data").mkdir()
     (tmp_path / "docker-compose.yml").write_text(COMPOSE_TEXT, encoding="utf-8")

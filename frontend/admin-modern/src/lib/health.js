@@ -38,6 +38,7 @@ export const FINDINGS = Object.freeze({
   installation_incomplete: [
     { kind: "page", target: "setup", label: "health.action.setup" },
     { kind: "page", target: "backups", label: "health.action.restore" },
+    { kind: "page", target: "system", label: "health.action.files" },
   ],
   ems_missing: [{ kind: "page", target: "updates", label: "health.action.updates" }],
   ems_stopped: [{ kind: "page", target: "services", label: "health.action.services" }],

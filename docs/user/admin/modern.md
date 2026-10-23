@@ -41,7 +41,7 @@ changes nothing on the host.
 | **Services** | EMS and the analytics database as they run; what should run and what a restart changes; **Restart EMS now** and **Repair analytics** |
 | **Backups** | Create a backup, see what is in one, download it, bring one back, restore it after a preview, delete it |
 | **Diagnostics** | The read-only checks of the installed EMS, with the EMS diagnosis in full |
-| **System** | The files of the installation, the device telemetry over MQTT, an older MQTT setup that waits for migration, which you review and apply there, the reset of a guided workflow that can no longer finish, and the way into the guided setup |
+| **System** | The files of the installation, the device telemetry over MQTT, an older MQTT setup that waits for migration, which you review and apply there, the reset of a guided workflow that can no longer finish, the way into the guided setup, and moving settings found in the old place (a `config.json` beside the installation) to `config/config.json` |
 
 The top bar always says how the installation is: **All good**, **A note**,
 **Needs a look**, **Needs attention** or **Not installed**; **Checking…**
