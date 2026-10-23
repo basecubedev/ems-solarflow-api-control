@@ -12,6 +12,12 @@ export function tv(item) {
   return t(item.key, item.vars);
 }
 
+/** The words this build has for a key, else the server's own (English) words. */
+export function translatedOr(key, fallback) {
+  const text = t(key);
+  return text === key ? fallback : text;
+}
+
 /** Control codes as produced by lib/control.js: a known code is translated, an unknown one keeps its words. */
 export function codesText(items) {
   return (items || []).map((item) => (item.key ? t(item.key) : item.text)).join(", ");

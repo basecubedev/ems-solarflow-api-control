@@ -6,7 +6,7 @@
   import Card from "../../../shared/ui/Card.svelte";
   import Empty from "../../../shared/ui/Empty.svelte";
   import RuntimeForm from "./RuntimeForm.svelte";
-  import { t } from "../i18n/i18n.svelte.js";
+  import { t, translatedOr } from "../i18n/i18n.svelte.js";
   import { auth } from "../state/auth.svelte.js";
   import { live, loadRuntime } from "../state/live.svelte.js";
   import { SYSTEM_ENDPOINT, WINTER_ENDPOINT, AC_CHARGE_ENDPOINT, deviceEndpoint, acRole, settingWord, deviceSettings } from "../lib/runtime.js";
@@ -22,15 +22,11 @@
   });
 
   function settingLabel(key) {
-    const known = ["light", "fan", "buzzer", "auto_heat"];
-    if (known.includes(key)) return t(`setting.${key}`);
-    return catalogue.find((setting) => setting.key === key)?.label || key;
+    return translatedOr(`setting.${key}`, catalogue.find((setting) => setting.key === key)?.label || key);
   }
 
-  function valueLabel(setting, value) {
-    const key = `settingValue.${value}`;
-    const translated = t(key);
-    return translated === key ? value.label || value.value : translated;
+  function valueLabel(value) {
+    return translatedOr(`settingValue.${value.value}`, value.label || value.value);
   }
 
   const systemFields = $derived([
@@ -78,10 +74,10 @@
         name: setting.key,
         type: "select",
         label: settingLabel(setting.key),
-        help: t(`setting.${setting.key}.help`) === `setting.${setting.key}.help` ? setting.help : t(`setting.${setting.key}.help`),
+        help: translatedOr(`setting.${setting.key}.help`, setting.help),
         options: [
           { value: "unmanaged", label: t("runtime.deviceDecides") },
-          ...values.map((value) => ({ value: value.value, label: valueLabel(setting, value) })),
+          ...values.map((value) => ({ value: value.value, label: valueLabel(value) })),
           ...(known ? [] : [{ value: current, label: t("runtime.notAValue", { value: current }) }]),
         ],
       });
