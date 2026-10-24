@@ -46,6 +46,7 @@ class LoopbackRegistry:
     def __init__(self, material, route):
         _, cert, key = material
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.load_cert_chain(cert, key)
         registry = self
         self.requests = []
