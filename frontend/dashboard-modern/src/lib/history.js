@@ -235,6 +235,67 @@ export function zoomCenter(min, max, first, last) {
   return Number.isFinite(low) && Number.isFinite(high) && low <= high ? (low + high) / 2 : (min + max) / 2;
 }
 
+/** A week less the hour a clock may skip: seven local days apart, two ticks share a weekday and time. */
+const WEEK_S = 7 * 86400 - 3600;
+/** A day tick names the day an hour on: where a clock skips its midnight, the tick falls on 23:00 the evening before. */
+const HOUR_MS = 3600000;
+
+function isMidnight(ms) {
+  const date = new Date(ms);
+  return date.getHours() === 0 && date.getMinutes() === 0 && date.getSeconds() === 0;
+}
+
+/**
+ * The labels of a time axis, in the shortest form in which no two ticks share
+ * one. Ticks a day or more apart: the date, else the date with its year. Closer
+ * ones: the clock time (with its seconds for ticks less than a minute apart), a
+ * later midnight naming its weekday; else the weekday and time; else the date
+ * and time. Where no form tells every tick apart, as in the hour a clock goes
+ * back, the form that tells the most apart, the shorter on a tie. A tick that
+ * a skipped hour brought closer than the step to the one before it stays
+ * unlabelled (null) in the wider forms, so two wide labels do not overlap; a
+ * plain clock time fits there and keeps its label unless it would repeat one.
+ */
+export function tickLabels(splits, step, f) {
+  const seconds = step < 60;
+  const crowded = (index) => step < 86400 && index > 0 && splits[index] - splits[index - 1] < step;
+  const forms = step >= 86400
+    ? [(ms) => f.date(ms + HOUR_MS, { short: true }), (ms) => f.date(ms + HOUR_MS, { numeric: true })]
+    : [
+        (ms, index) => (index > 0 && isMidnight(ms) ? `${f.weekday(ms)} ${f.time(ms, { seconds })}` : f.time(ms, { seconds })),
+        (ms) => `${f.weekday(ms)} ${f.time(ms, { seconds })}`,
+        (ms) => f.dateTime(ms, { seconds }),
+      ];
+  const labelled = forms.map((form) => splits.map((at, index) => (crowded(index) ? null : form(at * 1000, index))));
+  const distinct = (labels) => new Set(labels.filter((label) => label !== null)).size;
+  const best = labelled.reduce((best, labels) => (distinct(labels) > distinct(best) ? labels : best));
+  if (step >= 86400 || best !== labelled[0]) return best;
+  return best.map((label, index) => {
+    if (label !== null) return label;
+    const clock = forms[0](splits[index] * 1000, index);
+    return best.includes(clock) ? null : clock;
+  });
+}
+
+/** Room between ticks: a date and time from a week on is wider than a clock time, and wider still with a past year. */
+export function tickSpace(min, max) {
+  if (!(max - min >= WEEK_S)) return 72;
+  return new Date(min * 1000).getFullYear() === new Date().getFullYear() ? 100 : 125;
+}
+
+/** Room right of the plot for half the last tick's label: a date and time, or a weekday with seconds at a closing midnight. */
+export function tickPad(min, max) {
+  if (max - min >= WEEK_S) return 64;
+  return max - min < 1800 ? 44 : 32;
+}
+
+/** A window of at least a minute around its middle: a shorter one would be ticked in fractions of a second. */
+export function atLeastAMinute(min, max) {
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max - min >= MIN_ZOOM_SPAN_S) return [min, max];
+  const middle = (min + max) / 2;
+  return [middle - MIN_ZOOM_SPAN_S / 2, middle + MIN_ZOOM_SPAN_S / 2];
+}
+
 /**
  * The length of a zoomed window as Classic names its KPIs' period: minutes
  * below an hour, tenths of hours below two days, tenths of days beyond.

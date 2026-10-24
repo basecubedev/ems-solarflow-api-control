@@ -2,7 +2,7 @@
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { prefs } from "../state/prefs.svelte.js";
   import Icon from "../../../shared/ui/Icon.svelte";
-  import { withGapBreaks, gapRanges, ZOOM_STEP, escapeLeavesZoom, zoomCenter, zoomDiffers, zoomStep } from "../lib/history.js";
+  import { withGapBreaks, gapRanges, sampleSpacing, tickLabels, tickPad, tickSpace, atLeastAMinute, ZOOM_STEP, escapeLeavesZoom, zoomCenter, zoomDiffers, zoomStep } from "../lib/history.js";
 
   /**
    * One uPlot instance per chart, kept across data refreshes (setData) and
@@ -34,6 +34,7 @@
   } = $props();
 
   let host = $state();
+  const PERCENT_AXIS_PX = 56;
   let chart = null;
   let signature = "";
   let cursorIndex = $state(null);
@@ -54,17 +55,11 @@
     return stamps.length ? { from: stamps[0], to: stamps[stamps.length - 1] } : { from: 0, to: 0 };
   });
   const multiDay = $derived(new Date(shown.from * 1000).toDateString() !== new Date(shown.to * 1000).toDateString());
-  let tickSpan = 0;
-
-  function tickText(seconds) {
-    const ms = seconds * 1000;
-    if (tickSpan > 8 * 86400) return f.date(ms, { short: true });
-    if (tickSpan > 26 * 3600) return `${f.weekday(ms)} ${f.time(ms)}`;
-    return f.time(ms);
-  }
+  /** Samples less than a minute apart: a time without its seconds would name several of them. */
+  const subMinute = $derived((sampleSpacing(time) ?? 60) < 60);
 
   function stampText(seconds) {
-    return multiDay ? f.dateTime(seconds * 1000) : f.time(seconds * 1000);
+    return multiDay ? f.dateTime(seconds * 1000, { seconds: subMinute }) : f.time(seconds * 1000, { seconds: subMinute });
   }
 
   function token(name) {
@@ -154,7 +149,10 @@
     const min = u.posToVal(left, "x");
     const max = u.posToVal(left + width, "x");
     u.setSelect({ left: 0, top: 0, width: 0, height: 0 }, false);
-    applyZoom({ min, max });
+    const limits = outer();
+    const next = limits ? zoomStep(min, max, (min + max) / 2, 1, limits[0], limits[1]) : { min, max };
+    if (!next || (limits && !zoomDiffers(next.min, next.max, limits[0], limits[1]))) return;
+    applyZoom(next);
   }
 
   function resetZoom() {
@@ -213,13 +211,13 @@
       {
         width: host.clientWidth || 600,
         height,
-        padding: [8, percent ? 0 : 18, 0, 0],
+        padding: [8, (u) => Math.max(0, tickPad(u.scales.x.min, u.scales.x.max) - (percent ? PERCENT_AXIS_PX : 0)), 0, 0],
         legend: { show: false },
         cursor: { y: false, drag: { x: true, y: false, setScale: false }, points: { size: 7, width: 2 } },
         scales: {
           x: {
             time: true,
-            range: (u, min, max) => (zoomWindow ? [zoomWindow.min, zoomWindow.max] : xRange ? [xRange[0], xRange[1]] : [min, max]),
+            range: (u, min, max) => (zoomWindow ? atLeastAMinute(zoomWindow.min, zoomWindow.max) : xRange ? [xRange[0], xRange[1]] : atLeastAMinute(min, max)),
           },
           y: { range: (u, min, max) => [Math.min(0, Math.floor((min || 0) / 500) * 500), Math.max(500, Math.ceil((max || 0) / 500) * 500)] },
           ...(percent ? { pct: { range: [0, 100] } } : {}),
@@ -227,12 +225,12 @@
         axes: [
           {
             ...axis,
-            space: 72,
-            values: (u, splits) => splits.map(tickText),
+            space: (u, axis, min, max) => tickSpace(min, max),
+            values: (u, splits, axis, space, step) => tickLabels(splits, step, f),
           },
           { ...axis, size: 66, values: (u, splits) => splits.map(axisValue) },
           ...(percent
-            ? [{ ...axis, scale: "pct", side: 1, size: 56, stroke: token(percent.ink || "--m-muted"), grid: { show: false }, values: (u, splits) => splits.map((value) => f.percent(value)) }]
+            ? [{ ...axis, scale: "pct", side: 1, size: PERCENT_AXIS_PX, stroke: token(percent.ink || "--m-muted"), grid: { show: false }, values: (u, splits) => splits.map((value) => f.percent(value)) }]
             : []),
         ],
         series: [
@@ -272,7 +270,6 @@
     }
     zoomScope = reach;
     if (!host || !hasData) return;
-    tickSpan = shown.to - shown.from;
     if (next !== signature || !chart) {
       signature = next;
       build();
@@ -342,7 +339,7 @@
           {#each time as stamp, i (i)}
             {#if i % Math.max(1, Math.ceil(time.length / 96)) === 0}
               <tr>
-                <td class="num">{f.dateTime(stamp * 1000)}</td>
+                <td class="num">{f.dateTime(stamp * 1000, { seconds: subMinute })}</td>
                 {#each series as s (s.id)}<td class="r num">{valueText(values?.[s.id]?.[i] ?? null, s)}</td>{/each}
               </tr>
             {/if}

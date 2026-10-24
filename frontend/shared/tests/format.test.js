@@ -79,6 +79,18 @@ test("a moment names its year once it is not this year's", () => {
   assert.ok(f.dateTime(lastYear).includes(String(now.getFullYear() - 1)));
 });
 
+test("a moment asked for with its seconds has them, this year and any other", () => {
+  const f = createFormat("en");
+  const now = new Date();
+  const thisYear = new Date(now.getFullYear(), 2, 4, 9, 5, 37);
+  const lastYear = new Date(now.getFullYear() - 1, 2, 4, 9, 5, 37);
+  assert.ok(f.dateTime(thisYear, { seconds: true }).includes("09:05:37"));
+  assert.ok(!f.dateTime(thisYear, { seconds: true }).includes(String(now.getFullYear())));
+  assert.ok(f.dateTime(lastYear, { seconds: true }).includes("09:05:37"));
+  assert.ok(f.dateTime(lastYear, { seconds: true }).includes(String(now.getFullYear() - 1)));
+  assert.ok(!f.dateTime(thisYear).includes(":37"));
+});
+
 test("a moment from today is a clock time, any other has its day", () => {
   const f = createFormat("en");
   const today = new Date();

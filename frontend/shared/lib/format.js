@@ -55,6 +55,12 @@ export function createFormat(lang) {
   const dateTimeYearFormat = new Intl.DateTimeFormat(locale, {
     day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
   });
+  const dateTimeSecondsFormat = new Intl.DateTimeFormat(locale, {
+    day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  });
+  const dateTimeYearSecondsFormat = new Intl.DateTimeFormat(locale, {
+    day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  });
   const monthFormat = new Intl.DateTimeFormat(locale, { month: "short" });
   const monthYearFormat = new Intl.DateTimeFormat(locale, { month: "long", year: "numeric" });
   const weekdayFormat = new Intl.DateTimeFormat(locale, { weekday: "short" });
@@ -130,11 +136,13 @@ export function createFormat(lang) {
   }
 
   /** A moment with its day; the year is added once it is not this year's, so last October never reads as this one. */
-  function dateTime(value) {
+  function dateTime(value, { seconds = false } = {}) {
     if (!value) return MISSING;
     const parsed = toDate(value);
     if (!valid(parsed)) return String(value);
-    return (parsed.getFullYear() === new Date().getFullYear() ? dateTimeFormat : dateTimeYearFormat).format(parsed);
+    const thisYear = parsed.getFullYear() === new Date().getFullYear();
+    if (seconds) return (thisYear ? dateTimeSecondsFormat : dateTimeYearSecondsFormat).format(parsed);
+    return (thisYear ? dateTimeFormat : dateTimeYearFormat).format(parsed);
   }
 
   /** A moment shown as a clock time when it was today, else with its day: an old result must not read as recent. */

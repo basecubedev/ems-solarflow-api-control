@@ -228,6 +228,22 @@ test.describe("Modern dashboard @smoke", () => {
     await expect.poll(() => requests.some((url) => asksForSoc(url) && url.includes("start="))).toBe(true);
   });
 
+  test("samples less than a minute apart are named with their seconds", async ({ page }) => {
+    let step = 10;
+    await page.route("**/api/analytics/series**", (route) => {
+      const start = Date.UTC(2026, 9, 8, 10, 0, 0) / 1000;
+      const time = Array.from({ length: 18 }, (_, i) => start + i * step);
+      const values = time.map((_, i) => 100 + i);
+      return route.fulfill({ json: { available: true, time, series: { pv: values, output: values, battery: values } } });
+    });
+    await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
+    await expect(page.locator(".legend-time")).toHaveText(/\d:\d\d:\d\d/);
+    step = 300;
+    await page.getByRole("button", { name: "6 h", exact: true }).click();
+    await expect(page.locator(".legend-time")).not.toHaveText(/\d:\d\d:\d\d/);
+    await expect(page.locator(".legend-time")).toHaveText(/\d:\d\d/);
+  });
+
   test("Escape that closes the appearance menu or the sign-in keeps the zoom", async ({ page }) => {
     await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".chart .u-over").first()).toBeVisible();

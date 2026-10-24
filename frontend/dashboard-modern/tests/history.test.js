@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { integrateKwh, hourlyKwh, gapRanges, withGapBreaks, sameTimeComparison, sampleSpacing, localDayStart, niceCeiling, zoomStep, zoomDiffers, zoomSpan, zoomCenter, escapeLeavesZoom, emptyKey, sourceKey } from "../src/lib/history.js";
+import { integrateKwh, hourlyKwh, gapRanges, withGapBreaks, sameTimeComparison, sampleSpacing, localDayStart, niceCeiling, zoomStep, zoomDiffers, zoomSpan, zoomCenter, escapeLeavesZoom, emptyKey, sourceKey, tickLabels, tickSpace, tickPad, atLeastAMinute } from "../src/lib/history.js";
+import { createFormat } from "../../shared/lib/format.js";
 
 const MIDNIGHT = localDayStart(new Date(1_800_000_000 * 1000));
 
@@ -142,4 +143,107 @@ test("Escape leaves a zoom only when no dialog or popover takes it", () => {
   assert.equal(escapeLeavesZoom({ key: "Escape", defaultPrevented: true }, none), false);
   assert.equal(escapeLeavesZoom({ key: "Enter" }, none), false);
   assert.equal(escapeLeavesZoom({ key: "Escape" }, oldEngine), true);
+});
+
+const ticksOf = (start, span, step) => {
+  if (step >= 86400) {
+    const first = new Date(start * 1000);
+    return Array.from({ length: Math.floor(span / 86400) }, (_, i) => new Date(first.getFullYear(), first.getMonth(), first.getDate() + 1 + i).getTime() / 1000);
+  }
+  const ticks = [];
+  for (let at = Math.ceil(start / step) * step; at <= start + span; at += step) ticks.push(at);
+  return ticks;
+};
+
+test("a tick names its seconds only when the ticks are less than a minute apart", () => {
+  const f = createFormat("en");
+  const at = new Date(2026, 9, 8, 12, 27, 30).getTime() / 1000;
+  assert.deepEqual(tickLabels([at, at + 30], 30, f), ["12:27:30", "12:28:00"]);
+  assert.deepEqual(tickLabels([at - 30, at + 570], 600, f), ["12:27", "12:37"]);
+  assert.deepEqual(tickLabels([at, at + 7 * 86400], 7 * 86400, f), [f.date(at * 1000, { short: true }), f.date((at + 7 * 86400) * 1000, { short: true })]);
+});
+
+test("a whole day reads as clock times, its closing midnight with the weekday", () => {
+  const f = createFormat("en");
+  const day = new Date(2026, 9, 10).getTime() / 1000;
+  const ticks = Array.from({ length: 13 }, (_, i) => day + i * 7200);
+  const labels = tickLabels(ticks, 7200, f);
+  assert.equal(labels[0], "00:00");
+  assert.equal(labels[6], "12:00");
+  assert.equal(labels[12], `${f.weekday((day + 86400) * 1000)} 00:00`);
+  assert.ok(labels.slice(0, 12).every((label) => /^\d\d:\d\d$/.test(label)));
+});
+
+test("the ticks of a window never share a label, whatever the window and the step", () => {
+  const f = createFormat("en");
+  const start = new Date(2026, 9, 8, 9, 30).getTime() / 1000;
+  const windows = [[180, 30], [23.9 * 3600, 3600], [25 * 3600, 2 * 3600], [26 * 3600, 2 * 3600], [2.5 * 86400, 6 * 3600], [7.3 * 86400, 12 * 3600], [9 * 86400, 12 * 3600], [30 * 86400, 86400]];
+  for (const [span, step] of windows) {
+    const labels = tickLabels(ticksOf(start, span, step), step, f);
+    assert.equal(new Set(labels).size, labels.length, `${span}/${step}: ${labels.join(", ")}`);
+  }
+  const twentyFiveHours = Array.from({ length: 13 }, (_, i) => new Date(2026, 9, 8, 10 + 2 * i).getTime() / 1000);
+  assert.ok(tickLabels(twentyFiveHours, 2 * 3600, f).every((label) => label.includes(" ")));
+});
+
+test("ticks a day apart over more than a year name the year", () => {
+  const f = createFormat("en");
+  const newYears = [2026, 2027, 2028].map((year) => new Date(year, 0, 1).getTime() / 1000);
+  const labels = tickLabels(newYears, 365 * 86400, f);
+  assert.equal(new Set(labels).size, 3);
+  assert.ok(labels.every((label, i) => label.includes(String(2026 + i))));
+});
+
+test("where no form tells every tick apart, the one that tells the most apart wins", () => {
+  const ticks = [30, 3630, 7230, 10830];
+  const clock = { 30: "23:00", 3630: "01:00", 7230: "01:00", 10830: "02:00" };
+  const day = { 30: "Sat", 3630: "Sat", 7230: "Sun", 10830: "Sun" };
+  const f = { time: (ms) => clock[ms / 1000], weekday: (ms) => day[ms / 1000], dateTime: (ms) => `Oct ${clock[ms / 1000]}` };
+  assert.deepEqual(tickLabels(ticks, 3600, f), ["Sat 23:00", "Sat 01:00", "Sun 01:00", "Sun 02:00"]);
+  const sameDay = { ...f, weekday: (ms) => (ms < 3630000 ? "Sat" : "Sun") };
+  assert.deepEqual(tickLabels([30, 3630, 7230], 3600, sameDay), ["23:00", "01:00", "01:00"]);
+});
+
+test("ticks a week apart or more get room for a date and time, and more for a past year", () => {
+  const july = new Date(new Date().getFullYear(), 6, 1).getTime() / 1000;
+  const lastYear = new Date(new Date().getFullYear() - 1, 11, 20).getTime() / 1000;
+  assert.equal(tickSpace(july, july + 86400), 72);
+  assert.equal(tickSpace(july, july + 7 * 86400), 100);
+  assert.equal(tickSpace(july, july + 7 * 86400 - 3600), 100);
+  assert.equal(tickSpace(lastYear, lastYear + 9 * 86400), 125);
+  assert.equal(tickSpace(undefined, undefined), 72);
+  assert.equal(tickPad(july, july + 600), 44);
+  assert.equal(tickPad(july, july + 86400), 32);
+  assert.equal(tickPad(july, july + 7 * 86400), 64);
+  assert.equal(tickPad(july, july + 7 * 86400 - 3600), 64);
+  assert.equal(tickPad(undefined, undefined), 32);
+});
+
+test("a window shorter than a minute widens to one around its middle", () => {
+  assert.deepEqual(atLeastAMinute(100, 110), [75, 135]);
+  assert.deepEqual(atLeastAMinute(100, 400), [100, 400]);
+  assert.deepEqual(atLeastAMinute(null, null), [null, null]);
+});
+
+test("a zoom narrower than a minute widens to a minute around its middle", () => {
+  assert.deepEqual(zoomStep(100, 102, 101, 1, 0, 1000), { min: 71, max: 131 });
+  assert.deepEqual(zoomStep(100, 400, 250, 1, 0, 1000), { min: 100, max: 400 });
+});
+
+test("a tick a skipped hour brought closer than the step keeps a clock time, but no wider label", () => {
+  const f = createFormat("en");
+  const midnight = new Date(2026, 9, 10).getTime() / 1000;
+  const clock = tickLabels([midnight - 7200, midnight, midnight + 3600, midnight + 3 * 3600], 7200, f);
+  assert.deepEqual(clock, ["22:00", `${f.weekday(midnight * 1000)} 00:00`, "01:00", "03:00"]);
+  const at = (day, hour) => new Date(2026, 9, day, hour).getTime() / 1000;
+  const wide = tickLabels([at(10, 10), at(10, 12), at(10, 13), at(11, 10)], 7200, f);
+  assert.equal(wide[2], null);
+  assert.deepEqual(wide.filter((label) => label !== null), [`${f.weekday(at(10, 10) * 1000)} 10:00`, `${f.weekday(at(10, 12) * 1000)} 12:00`, `${f.weekday(at(11, 10) * 1000)} 10:00`]);
+});
+
+test("a day tick an hour before midnight, where the clock skips its midnight, names the day it stands for", () => {
+  const f = createFormat("en");
+  const midnight = new Date(2026, 9, 10).getTime() / 1000;
+  const labels = tickLabels([midnight, midnight + 23 * 3600], 86400, f);
+  assert.deepEqual(labels, [f.date(midnight * 1000, { short: true }), f.date((midnight + 86400) * 1000, { short: true })]);
 });
