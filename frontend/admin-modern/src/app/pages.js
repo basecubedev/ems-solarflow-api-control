@@ -8,11 +8,15 @@ export { swapPinned } from "../../../shared/shell/pages.js";
  * the same page (#maintenance-status and so on), which the switch to Classic
  * opens; tests/classic-parity.test.js requires each to be one Classic routes.
  * "shortLabel" names the page in the phone bar where its full name is long.
- * Updates and the settings come right after the overview: they are what an
- * owner opens most, to update and to switch features such as winter mode.
+ * The assistant comes right after the overview, which stays the first page
+ * and so the home: it is the way in for a reader who does not know where to
+ * start, and the console opens on it until that reader turns it off. Updates
+ * and the settings follow: they are what an owner opens most, to update and
+ * to switch features such as winter mode.
  */
 export const PAGES = Object.freeze([
   { id: "overview", icon: "layout-dashboard", group: "main", classic: "maintenance" },
+  { id: "assistant", icon: "compass", group: "main", classic: "maintenance" },
   { id: "updates", icon: "circle-arrow-up", group: "main", classic: "maintenance-upgrade" },
   { id: "settings", icon: "sliders-horizontal", group: "main", classic: "maintenance-settings", shortLabel: "nav.settings.short" },
   { id: "services", icon: "server", group: "main", classic: "maintenance-status" },

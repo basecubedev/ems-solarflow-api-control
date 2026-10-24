@@ -286,6 +286,21 @@ from what the Admin server is.
   of a failure are the ones the transition offers (`resume_available`,
   `return_available`, `cancel_available`). Each new screen of the flow is shown
   from the top of the page and takes the focus.
+- **The assistant is the way in.** It is the page after the overview, which
+  stays the first page and so the router's home. `lib/assistant.js` builds its
+  checklist (install, devices, first backup, then the dashboard) and its tasks
+  from the answers the overview already reads, and asks the server nothing of
+  its own; `tests/assistant.test.js` holds each step to the fact that decides
+  it. A console opened at its bare address shows the assistant, once per page
+  load, in `App.svelte`'s `resumeSetup()`: an unfinished guided setup goes
+  first, then the assistant opens always while nothing is installed and
+  otherwise while the browser's `ems-modern.welcome` is not `off`. An address
+  with a page in it is what the reader asked for and stays; `data-landed` on
+  `.app` says the choice is made. Its buttons open the place where the work is
+  done: `#/settings/devices`, and `#/backups/create` or `#/backups/restore`,
+  which scroll once to that card (the restore card at once, the create card
+  when the listing has answered, as its button needs it) and focus its button
+  if it can be pressed then.
 - **Modern answers at the root**, the deprecated Classic at `/classic/`; the
   Admin server maps the addresses as the dashboard does
   (`dashboard/static_files.py`) and sends an old `/modern/...` address to the
@@ -347,20 +362,19 @@ from what the Manager is: the recovery console of a Raspberry Pi, served by
 
 ## What the Modern Admin only shows or hands to Classic
 
-The goal is a Modern console that works on its own. Until then, this list
-holds everything Modern only shows or opens in Classic, as of 2026-10-21. The
-Guided Upgrade was the first to move: Modern runs it itself.
-Classic stays the reference for each item. Remove an entry in the change that
-makes it native.
+The goal is a Modern console that works on its own. This list holds
+everything Modern only shows or opens in Classic, as of 2026-10-25. Every
+workflow has moved; what remains are details shown without an action. Classic
+stays the reference for each item. Remove an entry in the change that makes it
+native.
 
 ### Workflows Modern hands to Classic
 
-| # | Workflow | Modern today | Classic endpoints a native version needs |
-| --- | --- | --- | --- |
-| 1 | **Settings editor**: devices, grid meter, features, safety, expert; add an inverter, MQTT or E3/DC device; **Put live values back** | Settings shows everything read-only, with the overridden badges. Each card opens the matching Classic tab (`/#maintenance-settings-<tab>`) | POST `/api/admin/maintenance/config/{preview,apply,reset-runtime}`; the discovery routes for adding devices (`/api/discovery/scan`, refreshes, `connections/mqtt-credentials`) |
-| 2 | **Older MQTT setup migration**: review and apply | System names the waiting migration and opens `/#maintenance-status`. The Classic section opens collapsed there | GET `/api/admin/maintenance/zendure-mqtt/migration-review`; POST `.../migration-apply` with `{revision, confirm, backup}` |
-| 3 | **Guided Setup**: system build, discovery, MQTT brokers and credentials, Zendure cloud key, device plan, config, deployment, abandon | Overview offers **Set up in the Classic view**. Classic never opens the wizard from an address, so it lands on the start page, where **Fresh install** is the first choice | `/api/setup/{workflow,releases,device-plan,config-preview,config/*,deployment/*,abandon}`, `/api/setup/system-build/*`, `/api/admin/system-alignment/validate`, `/api/discovery/*` with the `/api/setup/discovery/*` aliases |
-| 4 | **Start gate**: choose the start path, replace an existing install, migrate a root `config.json` to the standard layout | Not reachable from Modern. System shows a root `config.json` (`legacy_root_config`) without a way to migrate it | POST `/api/admin/start-path`; POST `/api/admin/config/migrate-legacy` |
+None any more. The settings editor, the older MQTT setup's migration, the
+Guided Setup and moving a root `config.json` to `config/config.json` (System
+page) run in Modern. Classic's start gate is replaced by the assistant, which
+opens at the console's address; `docs/developer/modern-parity.md` lists every
+function of both consoles.
 
 ### Display-only details inside native pages
 
@@ -369,7 +383,7 @@ makes it native.
 | Updates | The Admin/EMS pair state (not a pair, not verified); the catalogue's warnings | The Guided Upgrade aligns the pair |
 | Services | Docker not reachable; there is no start or stop per service, only **Restart EMS now** (sync) and **Repair analytics** | Fix Docker on the host |
 | Diagnostics | The checks' results; the report cannot be copied or exported | Classic has no export either |
-| System | Missing installation paths; broker and device problems from MQTT telemetry | The settings editor (1), the Guided Setup (3) |
+| System | Missing installation paths; broker and device problems from MQTT telemetry | Settings & devices, the Guided Setup |
 | Backups | Encrypted backups cannot be created (existing ones can be inspected and restored) | Classic cannot create them either; the backend accepts `encrypt`/`password` on create (`admin/backup_restore.py`) |
 
 ### Missing from both consoles

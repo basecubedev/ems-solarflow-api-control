@@ -21,6 +21,7 @@ import { REASON_WORDS } from "../src/lib/devices.js";
 import { SETUP_STEPS, DOCKER_MODES, DOCKER_STATES, RECOVERY_REASONS } from "../src/lib/setup.js";
 import { BUSY_OPERATIONS, CONFIG_CONFLICTS, CONTINUITY, SWITCH_REASONS } from "../src/lib/setupDraft.js";
 import { AUTOMATIC_FEATURES, DEVICE_KINDS, EDIT_TABS, FEATURE_IDS, MQTT_SOURCES, RISKS } from "../src/lib/settings.js";
+import { ASSISTANT_STATES, STEP_IDS, TASKS } from "../src/lib/assistant.js";
 
 const LANGS = ["en", "de", "nl", "fr"];
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "../src");
@@ -82,6 +83,11 @@ test("every generated key family is complete", () => {
     ...Object.keys(STEP_STATES).map((state) => `step.state.${state}`),
     ...INFLUX_REASONS.map((reason) => `backups.scope.influxdb.${reason}`),
     ...AUTOMATIC_FEATURES.map((id) => `feature.${id}`),
+    ...ASSISTANT_STATES.map((state) => `assistant.state.${state}`),
+    ...[...STEP_IDS, "dashboard"].map((id) => `assistant.step.${id}.title`),
+    ...["off", "stopped", "docker", "noAddress"].map((reason) => `assistant.step.dashboard.${reason}`),
+    ...["none", "partial", "legacy", "missing", "installed"].map((kind) => `assistant.lead.${kind}`),
+    ...TASKS.flatMap((task) => [`assistant.task.${task.id}.title`, `assistant.task.${task.id}.text`]),
     ...Object.keys(FINDINGS).filter((code) => code !== "installation_incomplete").flatMap((code) => [`finding.${code}.title`, `finding.${code}.next`]),
     ...Object.keys(FINDINGS).filter((code) => !["installation_incomplete", "installation_warning"].includes(code)).map((code) => `finding.${code}.message`),
     ...Object.values(FINDINGS).flat().map((action) => action.label),
@@ -193,7 +199,9 @@ test("no orphan keys: each key is used literally or belongs to a generated famil
     "setup.manualControl.", "setup.deploy.status.", "setup.docker.", "setup.dockerMode.", "setup.run.status.", "setup.run.conflict.existing.", "setup.service.",
     "setup.devices.sourcesEnabled.", "setup.devices.found.", "setup.devices.brokerCount.", "setup.devices.deviceCount.", "setup.devices.ignored.",
     "setup.devices.proposalCount.", "setup.hardware.metersFound.", "setup.hardware.ready.", "setup.recovery.",
-    "feature.",
+    "feature.", "assistant.state.", "assistant.lead.", "assistant.task.", "assistant.step.devices.done.",
+    ...STEP_IDS.map((id) => `assistant.step.${id}.title`),
+    ...["off", "stopped", "docker", "noAddress"].map((reason) => `assistant.step.dashboard.${reason}`),
   ];
   const orphans = Object.keys(STRINGS).filter((key) => !APP_KEYS.includes(key) && !text.includes(`"${key}"`) && !families.some((prefix) => key.startsWith(prefix)));
   assert.deepEqual(orphans, []);

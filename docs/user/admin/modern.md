@@ -35,6 +35,7 @@ changes nothing on the host.
 | Page | What it shows and does |
 | --- | --- |
 | **Overview** | One answer to "is everything in order": what needs your attention, ranked, each with the way out of it; tiles for EMS, the analytics database, control and the last backup; what your settings allow EMS to do; the versions and the link to the dashboard |
+| **Assistant** | Where to start: the next steps of an installation (install EMS, add your devices, make a first backup, then the dashboard), each with its state and the button that does it, and the ways to what you came for -- update, change settings, add a device, back up or restore, check the system, set up again. See [The assistant](#the-assistant) |
 | **Updates** | What runs now, the versions you can update to, and the update itself: choose a version, then confirm once. Progress and the result are shown on the page |
 | **Settings & devices** | The features, the safety switches, the expert settings, your devices and the grid meter, changed, checked and saved here, and the search of the network for devices |
 | **Services** | EMS and the analytics database as they run; what should run and what a restart changes; **Restart EMS now** and **Repair analytics** |
@@ -69,13 +70,51 @@ stays available on every page.
 An update that is running is shown on every Modern page, with **Show the
 update**. A guided setup in progress is shown the same way, with **Continue
 the setup**; after a sign-in or a reload, an unfinished setup opens again in
-place of the overview.
+place of the overview or the assistant.
+
+## The assistant
+
+The assistant is the page for a reader who does not know where to start. It
+has three parts:
+
+- **Next steps**: install EMS, add your devices, make a first backup. Each
+  step says whether it is **Done**, **To do** or comes **Later**, and the next
+  step to do is marked, with its button: **Set up a new system** (or **Restore
+  a backup**), **Open the devices**, **Create backup**. The buttons open the
+  place where the work is done: the devices tab with **Search my network** at
+  the top, and on the Backups page the card that creates a backup or the one
+  that brings a backup file back, its button ready to press. Settings without
+  an EMS container do not count as installed: the step then leads to
+  **Updates**, which installs EMS. Settings still in the old place (a
+  `config.json` beside the installation) lead to the System page, which moves
+  them. Devices, a grid meter or a broker that still carry the example values
+  of the settings template do not count as set up; the step names those
+  fields. A backup the console cannot read does not count as the first
+  backup. **Watch your system** opens the dashboard
+  once EMS runs, and says so when the dashboard is switched off in the
+  settings.
+- **What would you like to do?**: once the settings are in place, the ways
+  to an update, the settings, a new device, backups and the checks; while an
+  EMS container exists also **Set up again**, which runs the guided setup over
+  the running system and replaces its settings.
+- When the overview names something that needs your attention, the welcome at
+  the top says so and leads there.
+
+Opening the console at its address shows the assistant in place of the
+overview. Untick **Show this page when the console opens** and the console
+opens on the overview again; the choice is kept in this browser, and the
+**Assistant** entry in the menu (on a phone, under **More**) brings the page
+back, with the box to tick again. While nothing is installed, the console
+always opens on the assistant. An address with a page in it (such as
+`#/updates`) opens that page, and an unfinished guided setup opens in place of
+both.
 
 ## Setting up a new system
 
-On an installation with nothing set up yet, the overview offers **Set up a new
-system**; on an installed one, the System page has **Open the guided setup**.
-Both open the guided setup, which asks before it sets up over an existing
+On an installation with nothing set up yet, the console opens on the
+assistant, whose first step, **Install EMS**, offers **Set up a new system**;
+the overview offers it too. On an installed one, the assistant's **Set up again** and the System
+page's **Open the guided setup** lead there. Each opens the guided setup, which asks before it sets up over an existing
 installation. It has the same five steps as Classic
 ([Guided setup](guided-setup.md)):
 
@@ -238,9 +277,10 @@ own.
 
 ## Expected result
 
-The console opens in the view you chose, in your language, and says in one line
-whether the installation is in order. Every action it offers shows what it will
-do before it does it.
+The console opens in your language on the assistant, which says what is still
+to do, or on the overview once you turned the assistant off; the overview says
+in one line whether the installation is in order. Every action it offers shows
+what it will do before it does it.
 
 ## Warnings and common problems
 

@@ -14,7 +14,7 @@
   import { pageSet, pageById } from "./app/pages.js";
   import { nav, router } from "./app/router.svelte.js";
   import { t } from "./i18n/i18n.svelte.js";
-  import { prefs, chooseClassic } from "./state/prefs.svelte.js";
+  import { prefs, chooseClassic, welcome } from "./state/prefs.svelte.js";
   import { auth, logout } from "./state/auth.svelte.js";
   import { system, forgetSessionErrors } from "./state/system.svelte.js";
   import { resumeJobs } from "./state/backupJobs.svelte.js";
@@ -23,12 +23,14 @@
   import { resumeUpgrade } from "./state/upgrade.svelte.js";
   import { setupTransitionActive } from "./lib/setup.js";
   import { dashboardHref } from "./lib/links.js";
+  import { bareAddress, opensOnAssistant } from "./lib/assistant.js";
 
   /**
    * Every page but the overview loads when it is first opened, so no single
    * file the console ships outgrows what the repository tracks unasked.
    */
   const PAGES = {
+    assistant: () => import("./pages/Assistant.svelte"),
     updates: () => import("./pages/Updates.svelte"),
     settings: () => import("./pages/Settings.svelte"),
     services: () => import("./pages/Services.svelte"),
@@ -70,14 +72,39 @@
     }
   });
 
+  const LANDING_PAGES = ["overview", "assistant"];
+  const openedBare = bareAddress(globalThis.location?.hash);
+  let welcomed = false;
+  let leaving = false;
+  let landed = $state(false);
+
   /**
    * After a sign-in, a reload or an Admin restart, a setup the server still
-   * runs opens again in place of the landing page, as Classic reopens it; a
-   * page the reader asked for by its address stays.
+   * runs opens again in place of the landing pages, the overview and the
+   * assistant, as Classic reopens it; a page the reader asked for by its
+   * address stays. Otherwise a console opened at its bare address shows the
+   * assistant, once per load: always while nothing is installed, else while
+   * the reader leaves it on. Either replaces the address rather than adding
+   * one, so Back leaves the console, and neither runs once the reader left
+   * for Classic during this run; a later run, after a sign-in, finds the
+   * reader still here. ``data-landed`` on the app says the choice is made.
    */
   async function resumeSetup() {
-    const status = await system.alignment.load();
-    if (setupTransitionActive(status?.transition) && router.page === "overview") globalThis.location.hash = nav.href("setup");
+    leaving = false;
+    try {
+      const status = await system.alignment.load();
+      if (leaving) return;
+      if (setupTransitionActive(status?.transition) && LANDING_PAGES.includes(router.page)) {
+        globalThis.location.replace(nav.href("setup"));
+        return;
+      }
+      if (welcomed || !openedBare) return;
+      welcomed = true;
+      const overview = welcome.choice === "off" ? await system.overview.ensure() : null;
+      if (!leaving && bareAddress(globalThis.location.hash) && opensOnAssistant(overview, welcome.choice)) globalThis.location.replace(nav.href("assistant"));
+    } finally {
+      landed = true;
+    }
   }
 
   provideShell({
@@ -97,7 +124,10 @@
       signIn: () => {},
       signOut: logout,
     },
-    classic: (pageId) => chooseClassic(pageId ? pageById(pageId).classic : "maintenance"),
+    classic: (pageId) => {
+      leaving = true;
+      chooseClassic(pageId ? pageById(pageId).classic : "maintenance");
+    },
     get links() {
       return dashboard ? [{ href: dashboard, icon: "layout-dashboard", label: "nav.dashboard", testid: "open-dashboard" }] : [];
     },
@@ -115,7 +145,7 @@
       event.preventDefault();
       document.getElementById("content")?.focus();
     }}>{t("app.skip")}</a>
-  <div class="app" class:rail={prefs.navIconsOnly}>
+  <div class="app" class:rail={prefs.navIconsOnly} data-landed={landed || undefined}>
     <Sidebar />
     <div class="main">
       <Topbar>

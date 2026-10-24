@@ -76,6 +76,40 @@ def test_load_reads_standard_config(tmp_path):
     assert "winter.enabled" in result["draft"]["features"]
 
 
+@pytest.mark.parametrize(
+    ("dashboard", "expected"),
+    [(None, True), ({"port": 8081}, True), ({"enabled": False}, False), ({"enabled": "off"}, False), ({"enabled": "yes"}, True)],
+)
+def test_summary_reads_the_dashboard_switch_as_the_ems_does(tmp_path, dashboard, expected):
+    config = _config()
+    if dashboard is None:
+        del config["dashboard"]
+    else:
+        config["dashboard"] = dashboard
+    _write_config(tmp_path, config)
+    result = load_maintenance_config(base_dir=str(tmp_path))
+    assert result["summary"]["dashboard_enabled"] is expected
+
+
+def test_summary_reads_only_the_dashboard_switch_so_an_odd_timeout_never_breaks_the_page(tmp_path):
+    config = _config()
+    config["dashboard"] = {"enabled": True, "session_idle_timeout_seconds": "inf", "session_absolute_max_seconds": 1e999}
+    _write_config(tmp_path, config)
+    result = load_maintenance_config(base_dir=str(tmp_path))
+    assert result["status"] == "ok"
+    assert result["summary"]["dashboard_enabled"] is True
+
+
+def test_summary_names_every_template_value_ems_would_refuse_to_control_with(tmp_path):
+    template = json.loads((Path(__file__).resolve().parents[1] / "config" / "config.template.json").read_text("utf-8"))
+    _write_config(tmp_path, template)
+    fields = load_maintenance_config(base_dir=str(tmp_path))["summary"]["control"]["placeholder_fields"]
+    assert any("devices[0].ip" in field for field in fields)
+    assert "grid_meter.ip" in fields
+    _write_config(tmp_path, _config())
+    assert load_maintenance_config(base_dir=str(tmp_path))["summary"]["control"]["placeholder_fields"] == []
+
+
 def test_load_missing_config_is_clear_status(tmp_path):
     result = load_maintenance_config(base_dir=str(tmp_path))
     assert result["status"] == "missing"

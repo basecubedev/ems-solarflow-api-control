@@ -14,8 +14,9 @@ test("every page in the navigation has the component that renders it, and no oth
   assert.deepEqual(ids.sort(), PAGES.map((page) => page.id).sort());
 });
 
-test("updates and the settings come right after the overview, in the menu and on the phone bar", () => {
-  assert.deepEqual(PAGES.slice(0, 3).map((page) => page.id), ["overview", "updates", "settings"]);
+test("the overview stays the home; the assistant, updates and the settings follow it in the menu, updates and the settings on the phone bar", () => {
+  assert.deepEqual(PAGES.slice(0, 4).map((page) => page.id), ["overview", "assistant", "updates", "settings"]);
+  assert.ok(PAGES.slice(0, 4).every((page) => page.group === "main" && !page.hidden));
   assert.deepEqual(MOBILE_PAGES.slice(0, 3), ["overview", "updates", "settings"]);
 });
 

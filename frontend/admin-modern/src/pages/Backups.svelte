@@ -57,6 +57,27 @@
   let deleting = $state.raw(null);
   let setDeleteMode = $state("metadata_and_archives");
   let fileInput = $state();
+  let createButton = $state();
+  let bringBackButton = $state();
+  let sectionShown = false;
+
+  /** The part of the page the address names, #/backups/create or #/backups/restore, as the assistant opens it. */
+  const section = (globalThis.location?.hash || "").replace(/^#\/?/, "").split(/[?/]/)[1] || "";
+
+  /**
+   * That part is scrolled to once: the restore card at once, the create card
+   * when the listing has answered, as its button needs it. The button takes
+   * the focus only if it can be pressed then, so a job that ends later never
+   * pulls the reader away from what they read.
+   */
+  $effect(() => {
+    const target = section === "create" ? createButton : section === "restore" ? bringBackButton : null;
+    const answered = section === "restore" || Boolean(listing) || Boolean(system.backups.error);
+    if (sectionShown || !target || !answered) return;
+    sectionShown = true;
+    target.scrollIntoView({ block: "center" });
+    if (!target.disabled) target.focus({ preventScroll: true });
+  });
 
   $effect(() => {
     if (!scopeAvailable(scope, listing)) scope = "system";
@@ -161,7 +182,7 @@
     {/each}
   </fieldset>
   <div class="row-wrap actions">
-    <button class="btn" type="button" onclick={() => createBackup(scope)} disabled={busy || !listing} data-testid="create-backup">
+    <button class="btn" type="button" onclick={() => createBackup(scope)} disabled={busy || !listing} bind:this={createButton} data-testid="create-backup">
       <Icon name={created.running ? "loader" : "archive"} size="sm" />{created.running ? t("backups.creating") : t("backups.create")}
     </button>
   </div>
@@ -179,7 +200,9 @@
 
 <Card title={t("backups.elsewhereTitle")} subtitle={t("backups.elsewhereSub")} span="span-4">
   <p class="lead muted">{t("backups.elsewhere")}</p>
-  <button class="btn secondary" type="button" onclick={() => fileInput?.click()} disabled={busy || uploading}><Icon name="upload" size="sm" />{t("backups.bringBack")}</button>
+  <button class="btn secondary" type="button" onclick={() => fileInput?.click()} disabled={busy || uploading} bind:this={bringBackButton} data-testid="bring-back">
+    <Icon name="upload" size="sm" />{t("backups.bringBack")}
+  </button>
   <input class="sr-only" type="file" accept=".gz,.enc,application/gzip" bind:this={fileInput} onchange={bringBack} tabindex="-1" aria-hidden="true" data-testid="backup-import" />
   {@render result(upload, "transfer-status")}
 </Card>

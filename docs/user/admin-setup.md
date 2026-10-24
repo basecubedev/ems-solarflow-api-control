@@ -83,9 +83,11 @@ metadata and logs. It is not a live EMS runtime layout.
 
 The Admin Console's Classic view opens on a start/router screen that detects the
 current install state and recommends the safest of exactly **two** flows. Open it
-at `http://127.0.0.1:8090/classic/#setup`. The plain address opens the Modern view,
-whose **Classic view** button leads to Classic as well, and whose overview
-offers **Set up in the Classic view** while nothing is installed:
+at `http://127.0.0.1:8090/classic/#setup`. The plain address opens the Modern view
+instead, whose **Classic view** button leads to Classic as well; while nothing is
+installed, Modern opens on its [assistant](admin/modern.md#the-assistant), whose
+first step, **Install EMS**, offers **Set up a new system**, the same guided
+setup in Modern. The two Classic flows:
 
 - **Set up a new system** — for first-time setup or a clean reinstall.
 - **Manage my existing system** — for updates, backups, diagnostics, changing

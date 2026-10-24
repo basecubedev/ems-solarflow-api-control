@@ -33,8 +33,10 @@ http://127.0.0.1:8090/classic/#setup
 From another device on your LAN, use `http://<host-ip>:8090/classic/#setup`
 (host networking is the default). `/classic/#setup` opens the Classic view that
 these steps show. The plain address opens the [Modern view](modern.md), which
-creates the same password and offers **Set up in the Classic view**; opening
-`#setup` does not change which view the plain address opens later.
+creates the same password and, while nothing is installed, opens on its
+[assistant](modern.md#the-assistant), whose first step, **Install EMS**, offers
+**Set up a new system**; opening `#setup` does not change which view the plain address opens
+later.
 
 **Expected result:** the page loads and shows either the password-creation card,
 the login card, or the task selection if your session is still valid.

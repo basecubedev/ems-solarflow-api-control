@@ -20,6 +20,7 @@ async function openModern(page: Page, hash = "") {
   await page.goto(`/${hash}`);
   await signIn(page);
   await expect(page.locator(".app")).toBeVisible();
+  if (!hash) await expect(page).toHaveURL(/\/#\/assistant$/);
 }
 
 test.describe("Modern Admin: the switch", { tag: ["@smoke"] }, () => {
@@ -38,7 +39,7 @@ test.describe("Modern Admin: the switch", { tag: ["@smoke"] }, () => {
 
     await page.goto("/classic/");
     await page.locator("#modern-admin-link").click();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).toHaveURL(/\/(#\/assistant)?$/);
     await expect(page.locator(".app")).toBeVisible();
     expect(await page.evaluate(() => localStorage.getItem("ems-admin-ui"))).toBeNull();
   });
@@ -88,7 +89,7 @@ test.describe("Modern Admin: signing in", { tag: ["@smoke"] }, () => {
 
     await page.fill("#admin-password", ADMIN_PASSWORD);
     await page.getByTestId("sign-in-submit").click();
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Overview");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Assistant");
 
     await page.getByTestId("sign-out").click();
     await expect(page.getByTestId("sign-in-screen")).toBeVisible();
@@ -119,8 +120,192 @@ test.describe("Modern Admin: signing in", { tag: ["@smoke"] }, () => {
     await page.getByTestId("sign-in-screen").getByRole("button", { name: "DE" }).click();
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Anmelden");
     await signIn(page);
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Übersicht");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Assistent");
     await expect(page.locator("html")).toHaveAttribute("lang", "de");
+  });
+});
+
+async function withoutBackups(page: Page) {
+  await page.route("**/api/admin/maintenance/backups", async (route: Route) => {
+    const response = await route.fetch().catch(() => null);
+    const body = await response?.json().catch(() => null);
+    if (!response || !body) return;
+    await route.fulfill({ response, json: { ...body, backups: [], sets: [], summary: { ...body.summary, total: 0, latest_created_at: null } } }).catch(() => {});
+  });
+}
+
+async function installedAs(page: Page, ems: { running: boolean; found?: boolean }) {
+  await page.route("**/api/admin/maintenance/overview", async (route: Route) => {
+    const response = await route.fetch().catch(() => null);
+    const body = await response?.json().catch(() => null);
+    if (!response || !body) return;
+    body.install_state = { ...body.install_state, state: "standard_install" };
+    body.docker = { ...body.docker, available: true };
+    body.containers = { ...body.containers, ems: { ...body.containers?.ems, found: ems.found ?? true, running: ems.running, status: ems.running ? "running" : "exited" } };
+    body.links = { ...body.links, dashboard_url: "http://127.0.0.1:9/" };
+    await route.fulfill({ response, json: body }).catch(() => {});
+  });
+}
+
+async function landedAt(page: Page, address: string) {
+  await page.goto("about:blank");
+  await page.goto(address);
+  await expect(page.locator(".app[data-landed]")).toBeVisible();
+}
+
+async function opens(page: Page, task: string, address: RegExp, target: string) {
+  await page.goto("/#/assistant");
+  await page.getByTestId("assistant-tasks").locator(`[data-task="${task}"]`).click();
+  await expect(page).toHaveURL(address);
+  await expect(page.getByTestId(target)).toBeVisible();
+}
+
+test.describe("Modern Admin: the assistant", { tag: ["@smoke"] }, () => {
+  test("with nothing installed the console opens on it, the guided setup comes first, and unticking it does not hide it", async ({ page }) => {
+    await openModern(page);
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Assistant");
+    const steps = page.getByTestId("assistant-steps");
+    await expect(steps.locator('[data-step="install"]')).toHaveAttribute("data-state", "todo");
+    await expect(steps.locator('[data-step="install"]')).toHaveClass(/next/);
+    await expect(steps.locator('[data-step="install"]')).toHaveAttribute("aria-current", "step");
+    await expect(steps.locator('[data-step="devices"]')).not.toHaveAttribute("aria-current", "step");
+    await expect(page.getByTestId("assistant-setup")).toHaveAttribute("href", "#/setup");
+    await expect(page.getByTestId("assistant-setup")).not.toHaveClass(/secondary/);
+    await expect(page.getByTestId("assistant-restore")).toHaveAttribute("href", "#/backups/restore");
+    await expect(steps.locator('[data-step="devices"]')).toHaveAttribute("data-state", "later");
+    await expect(steps.locator('[data-step="backup"]')).toHaveAttribute("data-state", "later");
+    await expect(steps.locator('[data-step="dashboard"]')).toHaveAttribute("data-state", "later");
+    await expect(page.getByTestId("assistant-tasks")).toHaveCount(0);
+    await expect(page.getByTestId("assistant-attention")).toHaveCount(0);
+    await expect(page.locator(".sidebar a[href='#/assistant']")).toBeVisible();
+
+    await page.getByTestId("assistant-keep").uncheck();
+    expect(await page.evaluate(() => localStorage.getItem("ems-modern.welcome"))).toBe("off");
+    await landedAt(page, "/");
+    await expect(page).toHaveURL(/\/#\/assistant$/);
+    await expect(page.getByTestId("assistant-keep")).not.toBeChecked();
+    await page.goBack();
+    await expect(page).toHaveURL("about:blank");
+    await page.goto("/#/assistant");
+
+    await page.getByTestId("assistant-restore").click();
+    await expect(page).toHaveURL(/\/#\/backups\/restore$/);
+    await expect(page.getByTestId("bring-back")).toBeFocused();
+    await page.goto("/#/assistant");
+    await page.getByTestId("assistant-setup").click();
+    await expect(page).toHaveURL(/\/#\/setup$/);
+    await expect(page.getByTestId("setup-begin")).toBeEnabled();
+  });
+
+  test("an unfinished guided setup opens in place of it, at the bare address and at its own", async ({ page }) => {
+    const transition = { mode: "fresh_install", stage: "failed_recoverable", system_tag: "latest", operation_id: "op-stuck", resume_available: true, cancel_available: true, worker_active: false, worker_status_available: true };
+    await page.route("**/api/admin/system-alignment/status", async (route: Route) => {
+      const response = await route.fetch();
+      await route.fulfill({ response, json: { ...(await response.json()), transition } });
+    });
+    await page.goto("/");
+    await signIn(page);
+    await expect(page).toHaveURL(/\/#\/setup$/);
+    await expect(page.getByTestId("setup-recovery")).toBeVisible();
+    await landedAt(page, "/#/assistant");
+    await expect(page).toHaveURL(/\/#\/setup$/);
+    await landedAt(page, "/#/updates");
+    await expect(page).toHaveURL(/\/#\/updates$/);
+  });
+
+  test("on an installed system it lists what is left and the ways to the rest; turned off, the console opens on the overview", async ({ page, seedAdminScenario }) => {
+    await openModern(page);
+    await seedAdminScenario("mixed_transports");
+    await installedAs(page, { running: true });
+    await withoutBackups(page);
+    await landedAt(page, "/");
+    await expect(page).toHaveURL(/\/#\/assistant$/);
+    const steps = page.getByTestId("assistant-steps");
+    await expect(steps.locator('[data-step="install"]')).toHaveAttribute("data-state", "done");
+    await expect(steps.locator('[data-step="devices"]')).toHaveAttribute("data-state", "done");
+    await expect(steps.locator('[data-step="devices"]')).toContainText("3 devices are set up.");
+    await expect(steps.locator('[data-step="backup"]')).toHaveAttribute("data-state", "todo");
+    await expect(steps.locator('[data-step="backup"]')).toHaveClass(/next/);
+    await expect(page.getByTestId("assistant-backup")).toHaveAttribute("href", "#/backups/create");
+    await expect(page.getByTestId("assistant-dashboard")).toHaveAttribute("href", "http://127.0.0.1:9/");
+    await expect(page.getByTestId("assistant-attention")).toHaveAttribute("href", "#/overview");
+    await expect(page.getByTestId("assistant-attention")).toContainText(/needs? your attention/);
+    const tasks = page.getByTestId("assistant-tasks");
+    await expect(tasks.locator("[data-task]")).toHaveCount(6);
+    await expect(tasks.locator('[data-task="reinstall"]')).toContainText("make a backup first");
+    await tasks.locator('[data-task="device"]').click();
+    await expect(page).toHaveURL(/\/#\/settings\/devices$/);
+    await expect(page.getByTestId("devices-editor")).toBeVisible();
+
+    await page.goto("/#/assistant");
+    await page.getByTestId("assistant-backup").click();
+    await expect(page).toHaveURL(/\/#\/backups\/create$/);
+    await expect(page.getByTestId("create-backup")).toBeFocused();
+    await opens(page, "update", /\/#\/updates$/, "releases");
+    await opens(page, "settings", /\/#\/settings$/, "settings-features");
+    await opens(page, "backup", /\/#\/backups$/, "create-backup");
+    await opens(page, "check", /\/#\/diagnostics$/, "run-checks");
+    await opens(page, "reinstall", /\/#\/setup$/, "setup-begin");
+    await opens(page, "device", /\/#\/settings\/devices$/, "discovery-start");
+
+    await page.goto("/#/assistant");
+    await page.getByTestId("assistant-keep").uncheck();
+    await landedAt(page, "/");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Overview");
+    await expect(page).toHaveURL(/\/$/);
+
+    await page.goto("/#/assistant");
+    await page.getByTestId("assistant-keep").check();
+    expect(await page.evaluate(() => localStorage.getItem("ems-modern.welcome"))).toBe("on");
+    await landedAt(page, "/#/services");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Services");
+  });
+
+  test("settings without an EMS container leave the installation to do, with the way to Updates", async ({ page, seedAdminScenario }) => {
+    await openModern(page);
+    await seedAdminScenario("mixed_transports");
+    await installedAs(page, { running: false, found: false });
+    await landedAt(page, "/#/assistant");
+    await expect(page.getByTestId("assistant-welcome")).toContainText("EMS itself is not installed yet");
+    await expect(page.getByTestId("assistant-welcome")).not.toContainText("Your EMS is installed");
+    const install = page.getByTestId("assistant-steps").locator('[data-step="install"]');
+    await expect(install).toHaveAttribute("data-state", "todo");
+    await expect(install).toContainText("the EMS container does not exist");
+    await page.getByTestId("assistant-updates").click();
+    await expect(page).toHaveURL(/\/#\/updates$/);
+    await expect(page.getByTestId("releases")).toBeVisible();
+  });
+
+  test("an overview that cannot be read again is said, with the time of the last answer", async ({ page, seedAdminScenario }) => {
+    await openModern(page);
+    await seedAdminScenario("mixed_transports");
+    await installedAs(page, { running: true });
+    await landedAt(page, "/#/assistant");
+    await expect(page.getByTestId("assistant-attention")).toBeVisible();
+    await expect(page.getByTestId("assistant-unreadable")).toHaveCount(0);
+    await page.route("**/api/admin/maintenance/overview", (route: Route) => route.fulfill({ status: 500, json: { ok: false, error: "internal_error" } }));
+    await page.goto("/#/overview");
+    await page.getByTestId("refresh").click();
+    await expect(page.getByTestId("overview-hero")).toHaveAttribute("data-level", "unreadable");
+    await page.goto("/#/assistant");
+    await expect(page.getByTestId("assistant-unreadable")).toBeVisible();
+    await expect(page.getByTestId("assistant-stale")).toContainText("last readable answer");
+    await expect(page.getByTestId("assistant-attention")).toBeVisible();
+  });
+
+  test("the dashboard waits while EMS is stopped, and the page speaks the reader's language", async ({ page, seedAdminScenario }) => {
+    await page.addInitScript(() => window.localStorage.setItem("ems-modern.lang", "de"));
+    await openModern(page);
+    await seedAdminScenario("mixed_transports");
+    await installedAs(page, { running: false });
+    await landedAt(page, "/#/assistant");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Assistent");
+    await expect(page.getByTestId("assistant-welcome")).toContainText("Dein EMS ist installiert.");
+    await expect(page.getByTestId("assistant-steps").locator('[data-step="dashboard"]')).toHaveAttribute("data-state", "later");
+    await expect(page.getByTestId("assistant-steps").locator('[data-step="dashboard"]')).toContainText("Öffnet sich, sobald das EMS läuft.");
+    await expect(page.getByTestId("assistant-dashboard")).toHaveCount(0);
+    await expect(page.getByRole("heading", { level: 2, name: "Was möchtest du tun?" })).toBeVisible();
+    await expect(page.getByTestId("assistant-tasks").locator('[data-task="reinstall"]')).toContainText("Neu einrichten");
   });
 });
 
@@ -137,7 +322,7 @@ async function seededAt(page: Page, seed: (scenario: string) => Promise<void>, h
 test.describe("Modern Admin: overview and status", { tag: ["@smoke"] }, () => {
 
   test("an incomplete installation is named, with the way out of it", async ({ page, seedAdminScenario }) => {
-    await seededAt(page, seedAdminScenario, "");
+    await seededAt(page, seedAdminScenario, "#/overview");
     const hero = page.getByTestId("overview-hero");
     await expect(hero).toHaveAttribute("data-level", "error");
     const finding = page.locator('[data-code="installation_incomplete"]');
@@ -235,7 +420,7 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
   });
 
   test("the overview's Control & safety card opens the safety settings", async ({ page, seedAdminScenario }) => {
-    await seededAt(page, seedAdminScenario, "");
+    await seededAt(page, seedAdminScenario, "#/overview");
     await page.getByRole("link", { name: "Change", exact: true }).click();
     await expect(page).toHaveURL(/#\/settings\/safety$/);
     await expect(page.getByTestId("settings-safety")).toContainText("Allow hardware writes");

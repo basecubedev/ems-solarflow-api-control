@@ -8,7 +8,8 @@ export const FRESH_MS = 10000;
 
 /**
  * One server read the pages share. The newest request wins, so a slow answer
- * never replaces a newer one, and a failed read keeps the last good answer
+ * never replaces a newer one, and whoever waits for an overtaken read gets the
+ * newest answer; a failed read keeps the last good answer
  * beside the error rather than blanking the page. A read refused because the
  * session ended is not this read's error: the sign-in is the answer to it,
  * and the read runs again once signed in.
@@ -20,32 +21,40 @@ class Resource {
   loadedAt = $state(0);
   #path;
   #request = 0;
+  #pending = null;
 
   constructor(path) {
     this.#path = path;
   }
 
-  async load() {
+  load() {
+    this.#pending = this.#read();
+    return this.#pending;
+  }
+
+  async #read() {
     this.#request += 1;
     const request = this.#request;
     this.loading = true;
     try {
       const data = await adminGet(this.#path);
-      if (request !== this.#request) return this.data;
+      if (request !== this.#request) return this.#pending;
       this.data = data;
       this.error = null;
       this.loadedAt = Date.now();
     } catch (error) {
-      if (request === this.#request && !(sessionLost(error) && !auth.authenticated)) this.error = error;
+      if (request !== this.#request) return this.#pending;
+      if (!(sessionLost(error) && !auth.authenticated)) this.error = error;
     } finally {
       if (request === this.#request) this.loading = false;
     }
     return this.data;
   }
 
-  /** Loads unless an answer younger than FRESH_MS is already here. */
+  /** Loads unless an answer younger than FRESH_MS is already here; a read in flight is waited for, not repeated. */
   ensure() {
-    if (this.loading || Date.now() - this.loadedAt < FRESH_MS) return Promise.resolve(this.data);
+    if (this.loading) return this.#pending;
+    if (Date.now() - this.loadedAt < FRESH_MS) return Promise.resolve(this.data);
     return this.load();
   }
 }

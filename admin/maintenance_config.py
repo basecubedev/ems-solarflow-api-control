@@ -59,6 +59,7 @@ from admin.zendure_mqtt_config_draft import (
     zendure_mqtt_untrusted_connection_block,
 )
 from ems.config import (
+    DASHBOARD_DEFAULTS,
     E3DC_MODBUS_GRID_METER_TYPE,
     MQTT_DEFAULT_PORT,
     MQTT_GRID_METER_TYPES,
@@ -73,6 +74,7 @@ from ems.config import (
     resolve_config_write_gate,
     resolve_grid_meter_mqtt_settings,
     resolve_mqtt_tls_metadata,
+    safe_bool,
     stored_config_placeholder_fields,
     TLS_INSECURE_WITHOUT_TLS,
 )
@@ -1016,7 +1018,7 @@ def _summary(config, draft):
         "enabled_device_count": sum(1 for device in controlled if device.get("enabled", True)),
         "read_only_device_count": len(read_only),
         "grid_meter_type": str(grid_meter.get("type") or "").strip() or None,
-        "dashboard_enabled": bool(dashboard.get("enabled", False)),
+        "dashboard_enabled": safe_bool(dashboard.get("enabled", DASHBOARD_DEFAULTS["enabled"]), False),
         "influx_enabled": bool(influx.get("enabled", False)),
         "influx_mode": str(influx.get("mode") or "").strip() or None,
         "control": _control_state(config),
