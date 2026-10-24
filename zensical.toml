@@ -47,6 +47,7 @@ nav = [
     { "Raspberry Pi appliance" = [
       "user/appliance/index.md",
       { "Overview page" = "user/appliance/overview.md" },
+      { "Modern console" = "user/appliance/modern.md" },
       { "Flashing the card" = "user/appliance/install.md" },
       { "First start" = "user/appliance/first-start.md" },
       { "Network" = "user/appliance/network.md" },
