@@ -8828,7 +8828,7 @@ def test_reconnect_reloads_page_for_replaced_admin():
     assert "loadSystemAlignmentStatus()" not in reconnect
     assert "resumeSystemAlignment()" not in reconnect
     helper = _extract_fn(js, "reloadForReplacedAdmin")
-    assert "window.location.reload()" in helper
+    assert 'window.location.replace("/" + window.location.hash)' in helper
 
 
 def test_reconnect_ignores_stale_admin_responses_until_instance_changes(tmp_path):

@@ -207,7 +207,7 @@ test.describe("Workflow recovery", { tag: ["@authority", "@workflow"] }, () => {
     expect(digests.body.legacy_generated_config).toBeTruthy();
 
     // Guided Setup starts normally afterwards.
-    await page.goto("/");
+    await page.goto("/classic/");
     await page.locator('[data-start-path="setup_new"]').click();
     await expect(page.getByTestId("system-build-select")).toBeVisible();
   });

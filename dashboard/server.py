@@ -23,7 +23,7 @@ from dashboard.auth import (
 )
 from dashboard.https import HANDSHAKE_TIMEOUT_SECONDS, wrap_listening_socket
 from dashboard.sqlite_store import SUPPORTED_RANGES
-from dashboard.static_files import build_static_asset_index, dashboard_asset_path, dashboard_redirect, lookup_static_asset
+from dashboard.static_files import SHARED_ROOT_FILES, build_static_asset_index, lookup_static_asset, modern_asset_path, modern_redirect
 
 
 BACKUP_FILE_RE = re.compile(r"^ems-[A-Za-z0-9._-]+\.tar\.gz(?:\.enc)?$")
@@ -1909,7 +1909,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self.server.sse_limiter.release(remote)
 
     def _send_static(self, request_path, query=""):
-        moved = dashboard_redirect(request_path, query)
+        moved = modern_redirect(request_path, query)
         if moved is not None:
             self.send_response(302)
             self._send_security_headers()
@@ -1919,7 +1919,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self.end_headers()
             return
 
-        asset_path = dashboard_asset_path(request_path)
+        asset_path = modern_asset_path(request_path, SHARED_ROOT_FILES)
         asset = lookup_static_asset(STATIC_ASSETS, asset_path) if asset_path else None
         if asset is None:
             self.send_error(404)

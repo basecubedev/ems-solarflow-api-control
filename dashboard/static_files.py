@@ -51,10 +51,8 @@ def static_asset_key(request_path):
 def lookup_static_asset(assets, request_path):
     """Resolve a request to an indexed asset, serving ``<dir>/index.html`` for a directory.
 
-    The Admin console's Modern front end is a second entry page at
-    ``/modern/``; the root page keeps its own mapping in
-    :func:`static_asset_key`. The dashboard maps its addresses onto the tree
-    first, in :func:`dashboard_asset_path`.
+    The dashboard and the Admin console map their addresses onto the tree
+    first, in :func:`modern_asset_path`.
     """
 
     key = static_asset_key(request_path)
@@ -72,38 +70,41 @@ LEGACY_MODERN_PATH = "/modern"
 SHARED_ROOT_FILES = frozenset({"uPlot.min.css", "uPlot.iife.min.js", "uPlot.LICENSE"})
 
 
-def dashboard_redirect(request_path, query=""):
-    """The ``Location`` an old dashboard address moved to, or ``None``.
+def modern_redirect(request_path, query=""):
+    """The ``Location`` an old dashboard or Admin address moved to, or ``None``.
 
-    The Modern dashboard was served at ``/modern/`` and now answers at the
+    The Modern front end was served at ``/modern/`` and now answers at the
     root, so a bookmark of the old address is sent there; ``/classic`` gets
     its slash so the Classic page's relative world stays one directory. The
     servers send it as a temporary redirect that is never cached: a browser
     that remembered it would loop between ``/`` and ``/modern/`` after a
     return to an earlier release, whose ``/`` still sends it to ``/modern/``.
-    The query goes along, and a line break is percent-encoded, since the
-    value is written into a response header.
+    The query goes along. A line break is percent-encoded, since the value is
+    written into a response header, and so is a backslash, which a browser
+    would read as a slash: ``/\\host`` must never become a jump to another
+    site.
     """
 
     if request_path == LEGACY_MODERN_PATH or request_path.startswith(LEGACY_MODERN_PATH + "/"):
-        moved = "/" + request_path[len(LEGACY_MODERN_PATH):].lstrip("/")
+        moved = "/" + request_path[len(LEGACY_MODERN_PATH):].lstrip("/\\")
     elif request_path == CLASSIC_PREFIX.rstrip("/"):
         moved = CLASSIC_PREFIX
     else:
         return None
     location = f"{moved}?{query}" if query else moved
-    return location.replace("\r", "%0D").replace("\n", "%0A")
+    return location.replace("\r", "%0D").replace("\n", "%0A").replace("\\", "%5C")
 
 
-def dashboard_asset_path(request_path):
-    """The path inside the static tree that a dashboard address serves, or ``None``.
+def modern_asset_path(request_path, shared=frozenset()):
+    """The path inside the static tree that an address serves, or ``None``.
 
-    The Modern dashboard answers at the root from its build directory; the
-    deprecated Classic dashboard answers under ``/classic/`` from the files at
-    the static root, where they have always been. The two trees stay apart: a
-    Classic address never reaches the Modern build. uPlot is the one exception
-    (``SHARED_ROOT_FILES``): it is vendored once, hash-pinned in the licence
-    inventory, and both pages load it from the root.
+    The dashboard's and the Admin console's Modern front end answers at the
+    root from its build directory; the deprecated Classic page answers under
+    ``/classic/`` from the files at the static root, where they have always
+    been. The two trees stay apart: a Classic address never reaches the Modern
+    build. ``shared`` names the files both pages load from the root -- the
+    dashboard's uPlot (``SHARED_ROOT_FILES``), vendored once and hash-pinned
+    in the licence inventory.
     """
 
     if request_path.startswith(CLASSIC_PREFIX):
@@ -112,6 +113,6 @@ def dashboard_asset_path(request_path):
             return None
         return "/" + key
     name = request_path.lstrip("/")
-    if name in SHARED_ROOT_FILES:
+    if name in shared:
         return "/" + name
     return f"/{MODERN_DIR}/{name}"

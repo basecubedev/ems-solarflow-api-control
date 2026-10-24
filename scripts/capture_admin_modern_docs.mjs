@@ -2,7 +2,7 @@
 //
 // Documentation screenshots of the Modern Admin console. It starts the Admin
 // docs preview (scripts/serve_admin_docs_preview.py) on a free loopback port,
-// which serves the real admin/static/modern/ build with the deterministic demo
+// which serves the real admin/static/modern/ build at the root with the demo
 // payloads of tests/fixtures/admin_docs/, and photographs a few pages on a
 // desktop and on a phone. No hardware, Docker, config.json or password.
 //
@@ -60,7 +60,7 @@ try {
     await context.addInitScript(() => localStorage.setItem("ems-modern.motion", "off"));
     await context.clock.setFixedTime(DEMO_NOW);
     const page = await context.newPage();
-    await page.goto(`${base}/modern/${shot.hash}`);
+    await page.goto(`${base}/${shot.hash}`);
     await page.locator(".app").waitFor();
     await page.locator('[data-testid="health-state"] .dot.ok').waitFor();
     await page.evaluate(() => document.fonts.ready);

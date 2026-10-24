@@ -7,10 +7,9 @@ import { expect, test, ADMIN_PASSWORD } from "./fixtures/admin";
 import type { Page, Route } from "@playwright/test";
 import { SHELLY_METER, apiInverter } from "./helpers/discovery-state";
 
-test.use({ storageState: { cookies: [], origins: [] } });
 
 async function openSetup(page: Page) {
-  await page.goto("/modern/#/setup");
+  await page.goto("/#/setup");
   await page.fill("#admin-password", ADMIN_PASSWORD);
   await page.getByTestId("sign-in-submit").click();
   await expect(page.locator(".app")).toBeVisible();
@@ -88,7 +87,7 @@ test.describe("Modern Admin: guided setup, refusals", { tag: ["@setup"] }, () =>
       if (!body.confirm) return route.fulfill({ status: 409, json: { ok: false, requires_confirmation: true, message: "An existing installation was found." } });
       return route.continue();
     });
-    await page.goto("/modern/#/setup");
+    await page.goto("/#/setup");
     await page.fill("#admin-password", ADMIN_PASSWORD);
     await page.getByTestId("sign-in-submit").click();
     await page.getByTestId("setup-begin").click();
@@ -224,7 +223,7 @@ test.describe("Modern Admin: guided setup, a stuck transition", { tag: ["@setup"
       abandons.push(route.request().postDataJSON());
       await route.fulfill({ json: { ok: true } });
     });
-    await page.goto("/modern/#/setup");
+    await page.goto("/#/setup");
     await page.fill("#admin-password", ADMIN_PASSWORD);
     await page.getByTestId("sign-in-submit").click();
     const recovery = page.getByTestId("setup-recovery");

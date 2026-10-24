@@ -2,11 +2,11 @@
 
 ## Purpose
 
-The Appliance Manager has two views of the same Raspberry Pi. **Modern** is the
-one a browser opens first: a side menu with one page per topic, in English,
-German, Dutch or French, in the same design as the Modern dashboard and the
-Modern Admin console. **Classic** is the view the other guides in this section
-show in their pictures.
+The Appliance Manager's address opens **Modern**: a side menu with one page per
+topic, in English, German, Dutch or French, in the same design as the Modern
+dashboard and the Modern Admin console. **Classic**, the view the other guides
+in this section show in their pictures, is deprecated and still answers at
+`/classic/` until a later release removes it.
 
 Both views read the same appliance and change it the same way: every change is
 a plan the appliance makes, which you read and confirm, and the operation then
@@ -17,8 +17,7 @@ nothing on the Raspberry Pi.
 
 - You want the Appliance Manager in your own language.
 - You manage the appliance from a phone.
-- You want to find your way back to Classic, or make one of the two the view a
-  browser opens.
+- You want to find your way back to Classic while it is still there.
 
 ## Prerequisites
 
@@ -80,13 +79,16 @@ Classic, and lets you choose which four pages the bar shows.
 ## Switching between the two
 
 - In Modern, the foot of the side menu has **Classic view** (on a phone, under
-  **More**), and so does the sign-in page.
-- In Classic, the header has a **New design** link.
+  **More**), and so does the sign-in page. It opens `/classic/`.
+- In Classic, the header has a **New design** link back to the address, and a
+  line at the top says that Classic is deprecated.
 
-The browser remembers the choice: opening the address again takes you to the
-view you used last. Adding `?ui=classic` or `?ui=modern` to the address sets it
-explicitly, for a bookmark. A browser too old for Modern -- older than Chrome
-or Edge 114, Firefox 125 or Safari 17 -- stays on Classic.
+Nothing is remembered: the address always opens Modern, and Classic opens only
+from its own address. A bookmark that should stay on Classic uses `/classic/`;
+an old bookmark of `/modern/` opens the same page at the address. Two cases open
+Classic from the address: `?ui=classic` from a link made before Modern moved to
+the address, and a browser too old for Modern -- older than Chrome or Edge 114,
+Firefox 125 or Safari 17.
 
 The appearance (colour scheme, language, density, menu text, motion) is set
 under the **Appearance** button at the top right (the sliders icon) and belongs to this browser. Classic's
@@ -94,14 +96,14 @@ palettes, object styles and densities are separate and stay as you left them.
 
 ## Expected result
 
-The appliance opens in the view you chose, in your language, and both views
-show the same state and offer the same actions.
+The appliance opens in Modern, in your language; Classic shows the same state
+and offers the same actions at `/classic/`.
 
 ## Warnings and common problems
 
 | Symptom | Meaning | What to do |
 | --- | --- | --- |
-| The address opens the other view | The choice is stored per browser | Use the switch, or open the address with `?ui=modern` or `?ui=classic` |
+| The address opens Classic | It carries `?ui=classic`, or the browser is too old for Modern | Open the address without `?ui=classic`, or update the browser |
 | A message is in English although German is chosen | It is the appliance's own sentence, which this view shows unchanged when it has no translation | Read it as it is; the action it describes is the same |
 | "The appliance did not answer in time" after pressing a button | The plan took longer than the browser waited | Wait: the plan opens by itself once the appliance has made it |
 | The sign-in page says the session ended | The session timed out or the password was changed | Sign in again |

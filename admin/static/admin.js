@@ -12865,12 +12865,15 @@ function hideReconnectOverlay() {
   setReconnectBackgroundInert(false);
 }
 
-// A replaced Admin serves newer assets than this already-running page. Reload so
-// the browser runs them; the guided workflow resumes from the durable
-// server-side transition on the fresh load.
+// A replaced Admin serves newer assets than this already-running page. Load the
+// console's address again with this page's hash, so the browser runs them and
+// the Admin that now answers decides where the page lands: one with Modern at
+// the root hands a Classic page's hash on to /classic/, an older one serves
+// Classic at / itself and has no /classic/ to reload. The guided workflow
+// resumes from the durable server-side transition on the fresh load.
 function reloadForReplacedAdmin() {
   showReconnectOverlay("Loading the updated Admin Console…");
-  window.location.reload();
+  window.location.replace("/" + window.location.hash);
 }
 
 function showManualReloadHint() {

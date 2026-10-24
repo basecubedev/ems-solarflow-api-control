@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from dashboard.server import start_dashboard_server
-from dashboard.static_files import build_static_asset_index, dashboard_asset_path, dashboard_redirect, lookup_static_asset
+from dashboard.static_files import SHARED_ROOT_FILES, build_static_asset_index, lookup_static_asset, modern_asset_path, modern_redirect
 from tests.modern_frontend import (
     TOKENS_CSS,
     assert_build_matches_source,
@@ -65,7 +65,7 @@ def _request(server, path):
 
 
 def _served(assets, path):
-    asset_path = dashboard_asset_path(path)
+    asset_path = modern_asset_path(path, SHARED_ROOT_FILES)
     return lookup_static_asset(assets, asset_path) if asset_path else None
 
 
@@ -89,14 +89,17 @@ def test_modern_answers_at_the_root_and_classic_under_classic():
 
 
 def test_the_old_addresses_move_to_the_new_ones():
-    assert dashboard_redirect("/modern") == "/"
-    assert dashboard_redirect("/modern/") == "/"
-    assert dashboard_redirect("/modern/assets/modern.js") == "/assets/modern.js"
-    assert dashboard_redirect("/classic") == "/classic/"
-    assert dashboard_redirect("/modernity") is None
-    assert dashboard_redirect("/") is None
-    assert dashboard_redirect("/modern/", "demo=1") == "/?demo=1"
-    assert dashboard_redirect("/modern/a\r\nSet-Cookie: x", "b=\n") == "/a%0D%0ASet-Cookie: x?b=%0A"
+    assert modern_redirect("/modern") == "/"
+    assert modern_redirect("/modern/") == "/"
+    assert modern_redirect("/modern/assets/modern.js") == "/assets/modern.js"
+    assert modern_redirect("/classic") == "/classic/"
+    assert modern_redirect("/modernity") is None
+    assert modern_redirect("/") is None
+    assert modern_redirect("/modern/", "demo=1") == "/?demo=1"
+    assert modern_redirect("/modern/a\r\nSet-Cookie: x", "b=\n") == "/a%0D%0ASet-Cookie: x?b=%0A"
+    assert modern_redirect("/modern/\\evil.example") == "/evil.example"
+    assert modern_redirect("/modern//\\evil.example") == "/evil.example"
+    assert modern_redirect("/modern/a\\b", "c=\\") == "/a%5Cb?c=%5C"
 
 
 def test_the_bundle_is_served_with_types_nosniff_accepts():

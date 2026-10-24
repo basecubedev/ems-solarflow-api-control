@@ -10,8 +10,8 @@ built with Vite, one for each server:
 | App | Source | Build output, committed | Served at |
 | --- | --- | --- | --- |
 | Modern dashboard | `frontend/dashboard-modern/` | `dashboard/static/modern/` | the dashboard's `/` (Classic, deprecated, at `/classic/`) |
-| Modern Admin console | `frontend/admin-modern/` | `admin/static/modern/` | the Admin server's `/modern/` |
-| Modern Appliance Manager | `frontend/appliance-modern/` | `appliance/static/modern/` | the Appliance Manager's `/modern/` |
+| Modern Admin console | `frontend/admin-modern/` | `admin/static/modern/` | the Admin server's `/` (Classic, deprecated, at `/classic/`) |
+| Modern Appliance Manager | `frontend/appliance-modern/` | `appliance/static/modern/` | the Appliance Manager's `/` (Classic, deprecated, at `/classic/`) |
 
 All three are built from one design system in `frontend/shared/`, so they read
 as one product -- and the dashboard and the Admin console will keep doing so
@@ -273,16 +273,17 @@ from what the Admin server is.
   of a failure are the ones the transition offers (`resume_available`,
   `return_available`, `cancel_available`). Each new screen of the flow is shown
   from the top of the page and takes the focus.
-- **Modern is the default**: `admin/static/admin-theme.js`
-  redirects `/` to `/modern/` unless the browser chose Classic
-  (`ems-admin-ui`), the address names a Classic page, or the browser lacks the
-  Popover API. The guided setup and Classic's guided upgrade keep their
-  `#setup` / `#maintenance-upgrade` address, so a reload or the reconnect after
-  an Admin update stays in Classic; Modern's own upgrade reloads at
-  `/modern/#/updates`. Classic's Playwright specs choose Classic first
-  through the configs' `use.storageState` (`tests/e2e/helpers/classic-ui.ts`,
-  see [e2e-playwright.md](e2e-playwright.md)); the appearance gallery photographs
-  Classic at `/?ui=classic`.
+- **Modern answers at the root**, the deprecated Classic at `/classic/`; the
+  Admin server maps the addresses as the dashboard does
+  (`dashboard/static_files.py`) and sends an old `/modern/...` address to the
+  root. Nothing is remembered. Modern's `public/fallback.js` sends an address
+  that names a Classic page (`#setup`, `#maintenance-...`), `?ui=classic` and a
+  browser without the Popover API to `/classic/`. Classic's guided setup and
+  guided upgrade keep their `#setup` / `#maintenance-upgrade` address under
+  `/classic/`, so a reload or the reconnect after an Admin update stays in
+  Classic; Modern's own upgrade reloads at `/#/updates`. Classic's Playwright
+  specs open `/classic/` (see [e2e-playwright.md](e2e-playwright.md)); the
+  appearance gallery photographs Classic there.
 
 ## The Appliance Manager
 
@@ -293,7 +294,7 @@ from what the Manager is: the recovery console of a Raspberry Pi, served by
 - **One bundle, no chunks.** The Manager updates itself as one package, and a
   page split across two versions of it is worse than a larger file: every page
   is in `assets/appliance.js`. `appliance/web.py` serves the build directory at
-  `/modern/` by extension, under the same CSP as Classic, and
+  the root by extension, under the same CSP as Classic, and
   `packaging/appliance/build-deb.sh` ships the tree and refuses to build
   without it.
 - **Everything is behind the sign-in**, as in the Admin console: create the
@@ -322,10 +323,13 @@ from what the Manager is: the recovery console of a Raspberry Pi, served by
   appliance's English, marked `lang="en"`.
 - **Basic and Expert** are Classic's detail levels, kept per browser
   (`ems-modern.detail`).
-- **Modern is the default.** `appliance/static/theme.js` sends `/` to
-  `/modern/` unless the browser chose Classic (`ems-appliance-ui`) or lacks the
-  Popover API. Classic's Playwright specs choose Classic through the config's
-  `use.storageState` (`tests/e2e-appliance/classic-ui.ts`); the Modern spec is
+- **Modern answers at the root**, the deprecated Classic at `/classic/` (its
+  page and three files); `appliance/web.py` sends an old `/modern/...` address
+  to the root, never cached. Nothing is remembered. Modern's
+  `public/fallback.js` sends `?ui=classic` and a browser without the Popover
+  API to `/classic/`. A Manager version change reloads the page from the
+  address, so the version that answers decides what loads. Classic's Playwright
+  specs open `/classic/`; the Modern spec is
   `tests/e2e-appliance/modern.spec.ts`.
 
 ## What the Modern Admin only shows or hands to Classic

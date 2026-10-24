@@ -1,7 +1,7 @@
 # Overview page
 
 What the main page tells you, and what you can do from it. The pictures show
-the Classic view; the Modern view a browser opens first arranges the same
+the deprecated Classic view at `/classic/`; the Modern view the address opens arranges the same
 content in a side menu, as [The Modern view](modern.md) describes.
 
 ![The overview page: one verdict, then what needs attention, then status tiles for the board, Docker, EMS Admin, EMS, updates and the network](../../assets/screenshots/appliance/appliance-overview.png)

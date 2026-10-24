@@ -26,7 +26,7 @@ test.describe("documentation captures @docs", () => {
   });
 
   test("appliance-first-start-password", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/classic/");
     await expect(page.locator("#gate-title")).toBeVisible();
     await expect(page.locator("#gate-confirm-field")).toBeVisible();
     await page.screenshot({ path: `${SHOTS}/appliance-first-start-password.png` });
@@ -35,7 +35,7 @@ test.describe("documentation captures @docs", () => {
   test("appliance-login", async ({ page, request }) => {
     await signIn(page);
     await resetAppliance(request, { expire_sessions: true });
-    await page.goto("/");
+    await page.goto("/classic/");
     await expect(page.locator("#gate-title")).toBeVisible();
     await expect(page.locator("#gate-confirm-field")).toBeHidden();
     await page.screenshot({ path: `${SHOTS}/appliance-login.png` });
@@ -92,8 +92,6 @@ test.describe("documentation captures @docs", () => {
 });
 
 test.describe("Modern documentation captures @docs", () => {
-  test.use({ storageState: { cookies: [], origins: [] } });
-
   test.beforeAll(() => {
     mkdirSync(SHOTS, { recursive: true });
   });
@@ -103,7 +101,7 @@ test.describe("Modern documentation captures @docs", () => {
   });
 
   async function modernSignIn(page: Page) {
-    await page.goto("/modern/");
+    await page.goto("/");
     await page.locator("#appliance-password").fill(PASSWORD);
     await page.locator("#appliance-password-confirm").fill(PASSWORD);
     await page.getByTestId("sign-in-submit").click();

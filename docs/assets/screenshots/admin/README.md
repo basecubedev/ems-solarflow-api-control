@@ -97,7 +97,7 @@ Preview interactively in a browser (no capture) to tweak the demo data:
 
 ```bash
 python3 scripts/serve_admin_docs_preview.py
-# then open http://127.0.0.1:8092/?screen=maintenance-overview
+# then open http://127.0.0.1:8092/classic/?screen=maintenance-overview
 ```
 
 Screen ids are listed in the **Files** table above; `scripts/capture_admin_docs.py

@@ -51,18 +51,23 @@ reset request.
 
 ### Two front ends, one server
 
-The Admin server answers two browser front ends from `admin/static/`: Classic
-at `/` (`index.html`, `admin.js`) and Modern at `/modern/`, a build of
-`frontend/admin-modern/` committed under `admin/static/modern/`. Both are static
+The Admin server answers two browser front ends from `admin/static/`: Modern
+at `/`, a build of `frontend/admin-modern/` committed under
+`admin/static/modern/`, and the deprecated Classic at `/classic/` (`index.html`,
+`admin.js` at the static root). Both are static
 files behind the same headers below; both call the same API with the same
 session and CSRF token, and neither gains an endpoint or an authority the other
 lacks. Modern runs the maintenance writes it covers (container sync, analytics
 repair, diagnostics, backups and restore, workflow recovery, and the Guided
 Upgrade: validate, execute, resume, the job poll, the system-alignment
 recovery routes and the workflow switch) with exactly the bodies Classic sends,
-and hands Guided Setup and the settings editor to Classic's pages. `/` opens Modern unless the browser chose Classic
-(`ems-admin-ui`) or the address names a Classic page, decided before the first
-paint by `admin-theme.js`; see the
+and runs Guided Setup and the settings editor itself. The server maps the
+addresses onto the two trees with `dashboard/static_files.py`
+(`modern_asset_path`, `modern_redirect`), as the dashboard does: an old
+`/modern/...` address is sent to the same page at the root, never cached.
+Nothing is remembered; Modern's `fallback.js` sends an address that names a
+Classic page (`#setup`, `#maintenance-...`), `?ui=classic` and a browser
+without the Popover API to `/classic/` before the first paint; see the
 [Modern front ends style guide](../developer/dashboard-modern-style-guide.md).
 
 ## Standard deployment layout

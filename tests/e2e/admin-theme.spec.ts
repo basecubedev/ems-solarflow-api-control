@@ -9,7 +9,7 @@ const STORAGE_KEY = "ems-admin-theme";
 
 test.describe("theme switching", () => {
   test("a chosen theme applies and survives a reload", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/classic/");
     await expect(page.locator("#theme-select")).toBeVisible();
 
     await page.selectOption("#theme-select", "void");
@@ -24,7 +24,7 @@ test.describe("theme switching", () => {
     // The point of the separate early script: without it the page would paint
     // the default and change a moment later. Blocking admin.js is the only way
     // to prove which half did the work.
-    await page.goto("/");
+    await page.goto("/classic/");
     await page.selectOption("#theme-select", "copper");
     await expect(page.locator("html")).toHaveAttribute("data-theme", "copper");
 
@@ -38,7 +38,7 @@ test.describe("theme switching", () => {
   test("a stored name this build does not know falls back instead of breaking", async ({
     page,
   }) => {
-    await page.goto("/");
+    await page.goto("/classic/");
     await page.evaluate((key) => window.localStorage.setItem(key, "harlequin"), STORAGE_KEY);
     await page.reload();
 
@@ -49,7 +49,7 @@ test.describe("theme switching", () => {
   });
 
   test("the theme can be set before signing in", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/classic/");
     await expect(page.locator("#view-auth")).toBeVisible();
     await expect(page.locator("#theme-select")).toBeVisible();
   });
@@ -57,7 +57,7 @@ test.describe("theme switching", () => {
   test("an object style is a second axis, not a second theme", async ({ page }) => {
     // The point of two attributes: any palette can be worn with any style, and
     // choosing one must not disturb the other.
-    await page.goto("/");
+    await page.goto("/classic/");
     await page.selectOption("#theme-select", "void");
     await page.selectOption("#style-select", "slab");
 
@@ -78,7 +78,7 @@ test.describe("theme switching", () => {
     const corner = () =>
       page.locator(".admin-auth-card").evaluate((node) => getComputedStyle(node).borderTopLeftRadius);
 
-    await page.goto("/");
+    await page.goto("/classic/");
     await expect.poll(corner).not.toBe("0px");
 
     await page.selectOption("#style-select", "slab");
@@ -88,7 +88,7 @@ test.describe("theme switching", () => {
   test("density is a third axis, independent of the other two", async ({ page }) => {
     // Three attributes on one element, and the test that matters is that
     // setting one leaves the other two exactly where they were.
-    await page.goto("/");
+    await page.goto("/classic/");
     await page.selectOption("#theme-select", "void");
     await page.selectOption("#style-select", "slab");
     await page.selectOption("#density-select", "compact");
@@ -113,7 +113,7 @@ test.describe("theme switching", () => {
         .locator(".admin-auth-card")
         .evaluate((node) => parseFloat(getComputedStyle(node).paddingTop));
 
-    await page.goto("/");
+    await page.goto("/classic/");
     await expect.poll(padding).toBeGreaterThan(0);
     const normal = await padding();
 

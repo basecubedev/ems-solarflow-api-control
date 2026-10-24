@@ -82,9 +82,11 @@
 
   /**
    * Another Manager now answers -- an update, or a step back to the kept
-   * package, possibly one without this console: the page comes back from the
-   * address that version decides on, instead of running against an API it was
-   * not built for. Each source is compared with itself: the session's version
+   * package, possibly one without this console: the page loads again from its
+   * address, and what answers there is that version's to decide, instead of
+   * this page running against an API it was not built for. A reload, not a
+   * move: the console lives at the address itself, so going there would only
+   * change the hash. Each source is compared with itself: the session's version
    * from the first answer, before any sign-in, and the status's from the first
    * status read.
    */
@@ -94,7 +96,7 @@
       const running = read() || "";
       if (!running) return;
       if (!first) first = running;
-      else if (running !== first) globalThis.location.replace(`/${globalThis.location.hash}`);
+      else if (running !== first) globalThis.location.reload();
     };
   }
   $effect(versionWatch(() => session.version));

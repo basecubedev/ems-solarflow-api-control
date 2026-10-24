@@ -46,9 +46,12 @@ STATIC_FILES = {
     "styles.css": "text/css; charset=utf-8",
 }
 # The Modern console is a build output (frontend/appliance-modern/) served at
-# /modern/. Its file names are fixed by the build, so the extension decides
-# the type; a file of any other kind under it is not served.
+# the root; the deprecated Classic page and its three files answer under
+# /classic/. The build's file names are fixed, so the extension decides the
+# type; a file of any other kind is not served.
 MODERN_DIR = "modern"
+CLASSIC_PREFIX = "/classic"
+LEGACY_MODERN_PATH = "/modern"
 MODERN_CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".js": "application/javascript; charset=utf-8",
@@ -755,22 +758,23 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
     # --- routing ---------------------------------------------------------
 
     def do_GET(self):
-        path = posixpath.normpath(self.path.split("?", 1)[0])
+        raw_path, _, query = self.path.partition("?")
+        path = posixpath.normpath(raw_path)
         if path in ("/", "/index.html"):
-            return self._serve_index()
-        if path.startswith("/static/"):
-            return self._serve_static(path[len("/static/") :])
-        if path == "/modern":
             return self._serve_modern("index.html")
-        if path.startswith("/modern/"):
-            return self._serve_modern(path[len("/modern/") :])
+        if path in (CLASSIC_PREFIX, CLASSIC_PREFIX + "/index.html"):
+            return self._serve_index()
+        if path.startswith(CLASSIC_PREFIX + "/"):
+            return self._serve_static(path[len(CLASSIC_PREFIX) + 1 :])
+        if path == LEGACY_MODERN_PATH or path.startswith(LEGACY_MODERN_PATH + "/"):
+            return self._moved("/" + path[len(LEGACY_MODERN_PATH) :].lstrip("/\\"), query)
         if path == "/api/session":
             return self._session_state()
         if path.startswith("/api/support/archive/"):
             return self._download_support_archive(path[len("/api/support/archive/") :])
         if path.startswith("/api/"):
             return self._api_get(path)
-        return self._error(404, "not_found", "unknown path")
+        return self._serve_modern(path.lstrip("/"))
 
     def do_POST(self):
         path = posixpath.normpath(self.path.split("?", 1)[0])
@@ -1153,6 +1157,25 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
 
     def _serve_index(self):
         return self._serve_file("index.html", "text/html; charset=utf-8")
+
+    def _moved(self, location, query=""):
+        """An old address of Modern (``/modern/...``), sent to the same page at the root.
+
+        Temporary and never cached: a browser that remembered it would loop
+        between ``/`` and ``/modern/`` after a return to an earlier Manager,
+        whose ``/`` still sends it to ``/modern/``. A line break in the value
+        is percent-encoded, since it is written into a response header, and
+        so is a backslash, which a browser would read as a slash.
+        """
+
+        target = f"{location}?{query}" if query else location
+        self.send_response(302)
+        self.send_header("Location", target.replace("\r", "%0D").replace("\n", "%0A").replace("\\", "%5C"))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", "0")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        return None
 
     def _download_support_archive(self, operation_id):
         """Hand the operator the archive the docs tell them to attach.

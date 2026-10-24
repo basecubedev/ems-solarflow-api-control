@@ -18,10 +18,10 @@ async function signIn(page: Page) {
 }
 
 async function openUpdates(page: Page, seed: (scenario: string) => Promise<void>, scenario = "mqtt_migration") {
-  await page.goto("/modern/");
+  await page.goto("/");
   await signIn(page);
   await seed(scenario);
-  await page.goto("/modern/#/updates");
+  await page.goto("/#/updates");
   await page.reload();
   await expect(page.getByTestId("releases")).toBeVisible();
 }
@@ -76,7 +76,6 @@ async function keepAdmin(page: Page) {
   });
 }
 
-test.use({ storageState: { cookies: [], origins: [] } });
 
 test.describe("Modern Admin: the guided upgrade", { tag: ["@smoke", "@workflow"] }, () => {
   test("a chosen version is verified by the server and shows what the update will do before anything runs", async ({ page, seedAdminScenario }) => {
@@ -194,7 +193,7 @@ test.describe("Modern Admin: the guided upgrade", { tag: ["@smoke", "@workflow"]
     expect(resumed).toBeNull();
     await page.fill("#admin-password", ADMIN_PASSWORD);
     await page.getByTestId("sign-in-submit").click();
-    await expect(page).toHaveURL(/\/modern\/#\/updates$/);
+    await expect(page).toHaveURL(/\/#\/updates$/);
     await expect(page.getByTestId("upgrade-done")).toContainText(`EMS and the Admin console now run ${TARGET}`);
     expect(resumed).toEqual({ operation_id: "op-e2e" });
   });

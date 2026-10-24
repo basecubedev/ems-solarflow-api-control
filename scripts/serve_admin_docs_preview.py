@@ -1,14 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Local docs-preview server for the Admin Console.
 
-Serves the real admin static assets (``admin/static/``) with deterministic,
+Serves the real admin static assets (``admin/static/``) as the Admin server
+does -- Modern at the root, the deprecated Classic under ``/classic/`` -- with deterministic,
 non-secret demo API responses loaded from ``tests/fixtures/admin_docs/`` so the
 Admin Console screens can be screenshotted for the docs without real hardware,
 Docker, discovery, MQTT, config.json, passwords, or a running EMS.
 
-A small drive script (``admin_docs_preview.js``, injected before ``</body>``)
-reads a ``?screen=`` query parameter and navigates the already-authenticated
-Admin SPA to the requested screen so each URL renders one documented view.
+A small drive script (``admin_docs_preview.js``, injected before ``</body>`` of
+the Classic page) reads a ``?screen=`` query parameter and navigates the
+already-authenticated Classic SPA to the requested screen so each URL renders
+one documented view.
 
 Usage::
 
@@ -17,9 +19,9 @@ Usage::
 
 Open, for example::
 
-    http://127.0.0.1:8092/?screen=landing
-    http://127.0.0.1:8092/?screen=maintenance-overview
-    http://127.0.0.1:8092/?screen=guided-upgrade
+    http://127.0.0.1:8092/classic/?screen=landing
+    http://127.0.0.1:8092/classic/?screen=maintenance-overview
+    http://127.0.0.1:8092/classic/?screen=guided-upgrade
 
 Safety: the preview never contacts real Zendure/Shelly/MQTT/Docker/InfluxDB
 endpoints, never reads secrets from config.json, and never writes runtime-state,
@@ -39,7 +41,11 @@ from urllib.parse import parse_qs, urlparse
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SCRIPT_DIR)
 STATIC_DIR = os.path.join(ROOT, "admin", "static")
-MODERN_PREFIX = "/modern"
+CLASSIC_FILES = {
+    "/classic/admin.js": ("admin.js", "application/javascript"),
+    "/classic/admin.css": ("admin.css", "text/css"),
+    "/classic/admin-theme.js": ("admin-theme.js", "application/javascript"),
+}
 FIXTURE_DIR = os.path.join(ROOT, "tests", "fixtures", "admin_docs")
 DRIVE_SCRIPT = os.path.join(SCRIPT_DIR, "admin_docs_preview.js")
 
@@ -215,13 +221,14 @@ class DocsPreviewHandler(BaseHTTPRequestHandler):
         self._send_bytes(body, content_type)
 
     def _send_modern(self, path):
-        """The Modern console's build output, as the Admin server serves it."""
+        """The Modern console's build output, at the root as the Admin server serves it."""
 
         if ROOT not in sys.path:
             sys.path.insert(0, ROOT)
-        from dashboard.static_files import build_static_asset_index, lookup_static_asset
+        from dashboard.static_files import build_static_asset_index, lookup_static_asset, modern_asset_path
 
-        asset = lookup_static_asset(build_static_asset_index(STATIC_DIR), path)
+        asset_path = modern_asset_path(path)
+        asset = lookup_static_asset(build_static_asset_index(STATIC_DIR), asset_path) if asset_path else None
         if asset is None:
             self.send_error(404)
             return
@@ -247,17 +254,11 @@ class DocsPreviewHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
-        if path in ("/", "/index.html"):
+        if path in ("/classic/", "/classic/index.html"):
             self._send_index()
             return
-        if path == MODERN_PREFIX or path.startswith(MODERN_PREFIX + "/"):
-            self._send_modern(path)
-            return
-        if path == "/admin.js":
-            self._send_static("admin.js", "application/javascript")
-            return
-        if path == "/admin.css":
-            self._send_static("admin.css", "text/css")
+        if path in CLASSIC_FILES:
+            self._send_static(*CLASSIC_FILES[path])
             return
         if path == "/__hold":
             # Slow response that holds the load event open (see HOLD_SECONDS).
@@ -288,7 +289,7 @@ class DocsPreviewHandler(BaseHTTPRequestHandler):
             # Any other read the SPA attempts degrades to a benign empty payload.
             self._send_json({"ok": True})
             return
-        self.send_error(404)
+        self._send_modern(path)
 
     def do_POST(self):
         path = urlparse(self.path).path
@@ -333,7 +334,7 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
     server = start_server(args.host, args.port)
-    print(f"Admin docs preview on http://{args.host}:{args.port}/?screen=landing")
+    print(f"Admin docs preview on http://{args.host}:{args.port}/classic/?screen=landing")
     print("Screens: landing, guided-setup-start, discovery, config-preview,")
     print("         maintenance-overview, backup-restore, guided-upgrade,")
     print("         upgrade-run-1, upgrade-run-2, upgrade-run-3, upgrade-run-4,")

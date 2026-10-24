@@ -48,11 +48,12 @@ sys.path.insert(0, SCRIPT_DIR)
 sys.path.insert(0, ROOT)
 
 from dashboard.static_files import (  # noqa: E402
+    SHARED_ROOT_FILES,
     STATIC_CONTENT_TYPES,
     build_static_asset_index,
-    dashboard_asset_path,
-    dashboard_redirect,
     lookup_static_asset,
+    modern_asset_path,
+    modern_redirect,
 )
 from dashboard_preview_data import (  # noqa: E402
     DEFAULT_SCENARIO,
@@ -843,7 +844,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         })
 
     def _send_static(self, request_path, query=""):
-        moved = dashboard_redirect(request_path, query)
+        moved = modern_redirect(request_path, query)
         if moved is not None:
             self.send_response(302)
             self.send_header("Location", moved)
@@ -851,7 +852,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
-        asset_path = dashboard_asset_path(request_path)
+        asset_path = modern_asset_path(request_path, SHARED_ROOT_FILES)
         asset = lookup_static_asset(STATIC_ASSETS, asset_path) if asset_path else None
         if asset is None:
             self.send_error(404, "Not Found")

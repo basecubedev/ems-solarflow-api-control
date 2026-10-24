@@ -5,8 +5,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>EMS SolarFlow Admin</title>
-  <script src="/admin-theme.js"></script>
-  <link rel="stylesheet" href="/admin.css">
+  <script src="/classic/admin-theme.js"></script>
+  <link rel="stylesheet" href="/classic/admin.css">
 </head>
 <body>
   <!-- Global reconnect overlay for Admin Console self-update. It lives outside
@@ -31,11 +31,12 @@
   </div>
 
   <main class="admin-shell">
+    <p id="classic-notice" class="classic-notice" role="note">This Classic Admin console is deprecated and will be removed in a later release. <a href="/">Open the new console</a></p>
     <header class="admin-header">
       <p class="eyebrow">ems-solarflow-api-control</p>
       <h1 class="admin-title">EMS SolarFlow Admin</h1>
       <div class="admin-header-actions">
-        <a id="modern-admin-link" class="secondary-button compact" href="/modern/">New design</a>
+        <a id="modern-admin-link" class="secondary-button compact" href="/">New design</a>
         <div class="admin-theme">
           <label class="admin-theme-label" for="theme-select">Theme</label>
           <select id="theme-select" class="admin-theme-select"></select>
@@ -2430,6 +2431,6 @@
       </section>
     </div>
   </main>
-  <script src="/admin.js"></script>
+  <script src="/classic/admin.js"></script>
 </body>
 </html>

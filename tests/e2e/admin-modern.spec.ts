@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The Modern Admin console at /modern/, beside Classic on the same server. It
+// The Modern Admin console at the root, beside the deprecated Classic at /classic/. It
 // is driven here against the deterministic test-mode Admin: the switch between
 // the two, the sign-in, the language, and the pages whose writes it runs
 // itself -- a backup from creation through details, restore and deletion.
 import { expect, test, ADMIN_PASSWORD } from "./fixtures/admin";
 import type { Page, Route } from "@playwright/test";
 import { post } from "./helpers/setup-authority";
-import { ADMIN_UI_KEY as UI_KEY } from "./helpers/classic-ui";
 import { SetupPage } from "./pages/setup-page";
 import { E3DC_SYSTEM, apiInverter } from "./helpers/discovery-state";
 
@@ -18,87 +17,71 @@ async function signIn(page: Page, password = ADMIN_PASSWORD) {
 }
 
 async function openModern(page: Page, hash = "") {
-  await page.goto(`/modern/${hash}`);
+  await page.goto(`/${hash}`);
   await signIn(page);
   await expect(page.locator(".app")).toBeVisible();
 }
 
-test.use({ storageState: { cookies: [], origins: [] } });
-
 test.describe("Modern Admin: the switch", { tag: ["@smoke"] }, () => {
-  test("the console opens in Modern, Classic is one click away and stays chosen, New design comes back", async ({ page }) => {
+  test("the console opens in Modern at the root, Classic is one click away at /classic/ and is not remembered", async ({ page }) => {
     await page.goto("/");
-    await expect(page).toHaveURL(/\/modern\/$/);
+    await expect(page).toHaveURL(/\/$/);
     await signIn(page);
     await expect(page.locator(".app")).toBeVisible();
-    expect(await page.evaluate((key) => localStorage.getItem(key), UI_KEY)).toBe("modern");
 
     await page.getByTestId("switch-classic").click();
-    await expect(page).toHaveURL(/\/#maintenance$/);
+    await expect(page).toHaveURL(/\/classic\/#maintenance$/);
+    await expect(page.locator("#classic-notice")).toBeVisible();
     await expect(page.locator("#modern-admin-link")).toBeVisible();
-    expect(await page.evaluate((key) => localStorage.getItem(key), UI_KEY)).toBe("classic");
     await page.goto("/");
-    await expect(page).toHaveURL(/\/$/);
-    await expect(page.locator("#modern-admin-link")).toBeVisible();
-
-    await page.locator("#modern-admin-link").click();
-    await expect(page).toHaveURL(/\/modern\/$/);
     await expect(page.locator(".app")).toBeVisible();
-    expect(await page.evaluate((key) => localStorage.getItem(key), UI_KEY)).toBe("modern");
-    await page.goto("/");
-    await expect(page).toHaveURL(/\/modern\/$/);
-  });
 
-  test("going back to the Classic page after New design does not choose Classic again", async ({ page }) => {
-    await openModern(page);
-    await page.getByTestId("switch-classic").click();
-    await expect(page).toHaveURL(/\/#maintenance$/);
+    await page.goto("/classic/");
     await page.locator("#modern-admin-link").click();
-    await expect(page).toHaveURL(/\/modern\/$/);
-    await page.goBack();
-    await expect(page).toHaveURL(/\/#maintenance$/);
-    await expect(page.locator("#modern-admin-link")).toBeVisible();
-    expect(await page.evaluate((key) => localStorage.getItem(key), UI_KEY)).toBe("modern");
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.locator(".app")).toBeVisible();
+    expect(await page.evaluate(() => localStorage.getItem("ems-admin-ui"))).toBeNull();
   });
 
-  test("a guided setup begun in Classic stays in Classic across a reload, though Modern is the default", async ({ page }) => {
+  test("a guided setup begun in Classic stays in Classic across a reload", async ({ page }) => {
     const signedIn = await page.request.post("/api/admin/auth/login", { data: { password: ADMIN_PASSWORD } });
     expect(signedIn.ok()).toBeTruthy();
-    await page.goto("/#maintenance");
+    await page.goto("/classic/#maintenance");
     await page.locator('.workspace-back[data-back="landing"]:visible').first().click();
     await expect(page.locator("#view-start")).toBeVisible();
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).toHaveURL(/\/classic\/$/);
     await new SetupPage(page).chooseFreshInstall();
-    await expect(page).toHaveURL(/\/#setup$/);
+    await expect(page).toHaveURL(/\/classic\/#setup$/);
     await page.reload();
-    await expect(page).toHaveURL(/\/#setup$/);
+    await expect(page).toHaveURL(/\/classic\/#setup$/);
     await expect(page.locator("#modern-admin-link")).toBeVisible();
-    expect(await page.evaluate((key) => localStorage.getItem(key), UI_KEY)).toBeNull();
   });
 
   test("the guided upgrade's Classic page stays in Classic across a reload", async ({ page }) => {
     const signedIn = await page.request.post("/api/admin/auth/login", { data: { password: ADMIN_PASSWORD } });
     expect(signedIn.ok()).toBeTruthy();
-    await page.goto("/#maintenance-upgrade");
+    await page.goto("/classic/#maintenance-upgrade");
     await expect(page.locator("#modern-admin-link")).toBeVisible();
     await page.reload();
-    await expect(page).toHaveURL(/\/#maintenance-upgrade$/);
+    await expect(page).toHaveURL(/\/classic\/#maintenance-upgrade$/);
     await expect(page.locator("#modern-admin-link")).toBeVisible();
   });
 
-  test("a Classic page Modern hands over to opens in Classic whatever the choice", async ({ page }) => {
-    await page.goto("/?ui=modern");
-    await expect(page).toHaveURL(/\/modern\/$/);
+  test("an old address keeps working: a Classic page opens in Classic, /modern/ in Modern at the root", async ({ page }) => {
     await page.goto("/#maintenance-settings");
-    await expect(page).toHaveURL(/\/#maintenance-settings$/);
+    await expect(page).toHaveURL(/\/classic\/#maintenance-settings$/);
     await expect(page.locator("#modern-admin-link")).toBeVisible();
-    expect(await page.evaluate((key) => localStorage.getItem(key), UI_KEY)).toBe("modern");
+    await page.goto("/?ui=classic");
+    await expect(page).toHaveURL(/\/classic\/\?ui=classic$/);
+    await page.goto("/#/updates");
+    await expect(page).toHaveURL(/\/#\/updates$/);
+    await expect(page.getByTestId("sign-in-screen")).toBeVisible();
   });
 });
 
 test.describe("Modern Admin: signing in", { tag: ["@smoke"] }, () => {
   test("a wrong password is refused in words, the right one opens the console, signing out closes it", async ({ page }) => {
-    await page.goto("/modern/");
+    await page.goto("/");
     await signIn(page, "not-the-password");
     await expect(page.getByRole("alert")).toHaveText("Wrong password.");
     await expect(page.locator(".app")).toHaveCount(0);
@@ -132,7 +115,7 @@ test.describe("Modern Admin: signing in", { tag: ["@smoke"] }, () => {
   });
 
   test("the language chosen at the sign-in carries into the console", async ({ page }) => {
-    await page.goto("/modern/");
+    await page.goto("/");
     await page.getByTestId("sign-in-screen").getByRole("button", { name: "DE" }).click();
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Anmelden");
     await signIn(page);
@@ -146,7 +129,7 @@ test.describe("Modern Admin: signing in", { tag: ["@smoke"] }, () => {
 async function seededAt(page: Page, seed: (scenario: string) => Promise<void>, hash: string) {
   await openModern(page);
   await seed("mixed_transports");
-  await page.goto(`/modern/${hash}`);
+  await page.goto(`/${hash}`);
   await page.reload();
   await expect(page.locator(".app")).toBeVisible();
 }
@@ -214,10 +197,10 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
     await expect(expert.locator('[data-path="system.loop_interval"]')).toBeVisible();
     await expect(expert.locator('[data-path="system.log_level"]')).toHaveCount(0);
     await page.getByTestId("settings-search").fill("");
-    await page.goto("/modern/#/settings/safety");
+    await page.goto("/#/settings/safety");
     await expect(page.getByTestId("settings-safety")).toContainText("Was das EMS ändern darf");
 
-    await page.goto("/modern/#/settings/devices");
+    await page.goto("/#/settings/devices");
     const editor = page.getByTestId("devices-editor");
     await expect(editor).toContainText("Ältere Zendure-Hub-/Hyper-Generation");
     await expect(editor).not.toContainText("Older Zendure Hub / Hyper generation");
@@ -318,7 +301,7 @@ test.describe("Modern Admin: older MQTT setup", { tag: ["@smoke"] }, () => {
   test("the migration is reviewed and applied here, without showing a secret", async ({ page, seedAdminScenario }) => {
     await openModern(page);
     await seedAdminScenario("mqtt_migration");
-    await page.goto("/modern/#/system");
+    await page.goto("/#/system");
     await page.reload();
     await expect(page.getByTestId("migration-devices").locator("li").first()).toBeVisible();
     await expect(page.locator("body")).not.toContainText("e2e-super-secret-broker-password");
@@ -376,7 +359,7 @@ async function searched(page: Page, seedAdminScenario: (scenario: string) => Pro
   await openModern(page);
   await seedAdminScenario("mixed_transports");
   await seedDiscoveryState({ local_api_devices: [apiInverter("E2ENEWINV01", "192.168.50.41"), E3DC_SYSTEM], local_mqtt_brokers: [externalBroker()] });
-  await page.goto("/modern/#/settings/devices");
+  await page.goto("/#/settings/devices");
   await page.reload();
   await page.getByTestId("discovery-start").click();
   await expect(page.getByTestId("discovery-outcome")).toContainText("The search finished");
@@ -566,7 +549,7 @@ async function stuckAt(page: Page, scenarios: string[]) {
     const seeded = await post(page, "/api/admin/test/seed", { scenario });
     expect(seeded.status, JSON.stringify(seeded.body)).toBe(200);
   }
-  await page.goto("/modern/#/system");
+  await page.goto("/#/system");
   await page.reload();
   await expect(page.locator(".app")).toBeVisible();
 }
@@ -622,14 +605,14 @@ test.describe("Modern Admin: on a phone", { tag: ["@smoke"] }, () => {
   test("a version tapped in the list opens the guided upgrade here and verifies it", async ({ page, seedAdminScenario }) => {
     await openModern(page);
     await seedAdminScenario("mqtt_migration");
-    await page.goto("/modern/#/updates");
+    await page.goto("/#/updates");
     await page.reload();
     await expect(page.getByTestId("releases")).toBeVisible();
     const validated = page.waitForResponse((response) => response.url().endsWith("/api/admin/maintenance/upgrade/validate"));
     await page.locator('[data-tag="v9.9.10"]').getByTestId("choose-release").click();
     expect((await validated).ok()).toBeTruthy();
     await expect(page.getByTestId("upgrade")).toHaveAttribute("data-stage", "ready");
-    await expect(page).toHaveURL(/\/modern\/#\/updates$/);
+    await expect(page).toHaveURL(/\/#\/updates$/);
     await expect(page.getByRole("heading", { name: "Update to v9.9.10" })).toBeInViewport();
     await expect(page.getByTestId("upgrade-migration")).toContainText("format. 1 device loses");
   });

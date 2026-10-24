@@ -1,5 +1,4 @@
 import { defineConfig, devices } from "@playwright/test";
-import { classicUiStorage } from "./tests/e2e/helpers/classic-ui";
 
 const PORT = Number(process.env.EMS_ADMIN_REMOTE_E2E_PORT ?? 8125);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
@@ -17,7 +16,6 @@ export default defineConfig({
   expect: { timeout: 20_000 },
   use: {
     baseURL: BASE_URL,
-    storageState: classicUiStorage(BASE_URL),
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },

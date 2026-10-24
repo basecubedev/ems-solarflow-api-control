@@ -1,5 +1,4 @@
 import { defineConfig, devices } from "@playwright/test";
-import { classicUiStorage } from "./tests/e2e/helpers/classic-ui";
 
 // The deterministic test-mode Admin server (EMS_ADMIN_TEST_MODE) runs on an
 // isolated temporary state root — see tests/e2e/run-admin.sh. Per-test state is
@@ -25,7 +24,6 @@ export default defineConfig({
   expect: { timeout: 7_000 },
   use: {
     baseURL: BASE_URL,
-    storageState: classicUiStorage(BASE_URL),
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: process.env.CI ? "retain-on-failure" : "off",

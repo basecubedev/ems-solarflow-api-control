@@ -553,6 +553,12 @@ body {
   gap: calc(16px * var(--d));
 }
 
+.classic-notice {
+  margin: 0 0 calc(8px * var(--d)); padding: calc(6px * var(--d)) calc(10px * var(--d));
+  border: 1px solid var(--border-strong); border-radius: var(--o-inner-radius);
+  color: var(--muted); font-size: 12px; font-weight: 750;
+}
+.classic-notice a { color: var(--accent2); font-weight: 850; }
 .admin-header { margin-bottom: calc(4px * var(--d)); position: relative; }
 /* Both header controls sit in one group, so the theme menu cannot land under
    the logout button when that one appears on sign-in. */

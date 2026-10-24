@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * The Appliance Manager's choice between Classic and Modern and its detail
- * level, beside the shared appearance. Classic's theme.js reads the choice
- * before its first paint.
+ * The Appliance Manager's detail level beside the shared appearance, and the
+ * way to the deprecated Classic console.
  */
 import { readStored, writeStored } from "../../../shared/state/prefs.svelte.js";
 
 export * from "../../../shared/state/prefs.svelte.js";
 
-export const UI_CHOICE_KEY = "ems-appliance-ui";
 export const DETAIL_KEY = "ems-modern.detail";
 export const DETAILS = Object.freeze(["basic", "expert"]);
 
@@ -29,11 +27,7 @@ export function setDetail(level) {
   writeStored(DETAIL_KEY, level);
 }
 
-/** Switches this browser to Classic; the address carries the choice and theme.js stores it on arrival. */
+/** Classic answers under /classic/ and is only ever opened on purpose: nothing is remembered, the root stays Modern. */
 export function chooseClassic() {
-  globalThis.location.assign("/?ui=classic");
-}
-
-export function rememberModern() {
-  writeStored(UI_CHOICE_KEY, "modern");
+  globalThis.location.assign("/classic/");
 }

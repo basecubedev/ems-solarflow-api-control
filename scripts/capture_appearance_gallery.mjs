@@ -46,8 +46,8 @@ const SUBJECT = {
   // The landing page is two cards and a paragraph, so a style strip of it is
   // mostly unchanged background -- measured at 12% of pixels differing, which
   // is a picture that does not show its own subject. Guided Setup is six.
-  admin: { path: "/?ui=classic", after: "Guided setup", clip: "#view-setup, .admin-shell", top: 120, height: 430 },
-  appliance: { path: "/?ui=classic", clip: "#shell, .gate-panel", top: 150, height: 560 },
+  admin: { path: "/classic/", after: "Guided setup", clip: "#view-setup, .admin-shell", top: 120, height: 430 },
+  appliance: { path: "/classic/", clip: "#shell, .gate-panel", top: 150, height: 560 },
   dashboard: { path: "/preview/control", clip: ".control-pipeline, .shell", top: 120 },
 };
 

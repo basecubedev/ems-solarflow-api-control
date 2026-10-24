@@ -485,7 +485,10 @@ def test_admin_static_and_status_are_public(tmp_path, monkeypatch):
         assert status == 200
         with urllib.request.urlopen(f"{base}/") as resp:
             assert resp.status == 200
-        with urllib.request.urlopen(f"{base}/admin.js") as resp:
+            assert b'<div id="app">' in resp.read()
+        with urllib.request.urlopen(f"{base}/classic/") as resp:
+            assert resp.status == 200
+        with urllib.request.urlopen(f"{base}/classic/admin.js") as resp:
             assert resp.status == 200
     finally:
         srv.shutdown()

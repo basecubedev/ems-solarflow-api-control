@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Contracts of the Modern Appliance Manager, the second entry page at ``/modern/``.
+"""Contracts of the Modern Appliance Manager, at ``/`` beside the deprecated Classic at ``/classic/``.
 
 Modern is a build output committed under ``appliance/static/modern/``, made from
 ``frontend/appliance-modern/`` and the shared design system in
@@ -113,8 +113,8 @@ def fetch(port, path):
 # --- serving -----------------------------------------------------------------
 
 
-def test_the_manager_serves_modern_beside_classic_under_its_own_headers(server):
-    for path in ("/modern/", "/modern", "/modern/index.html"):
+def test_the_manager_serves_modern_at_the_root_and_classic_under_classic(server):
+    for path in ("/", "/index.html"):
         status, headers, body = fetch(server, path)
         assert status == 200, path
         assert headers["Content-Type"].startswith("text/html")
@@ -122,17 +122,33 @@ def test_the_manager_serves_modern_beside_classic_under_its_own_headers(server):
         assert headers["Cache-Control"] == "no-cache"
         assert b'<div id="app">' in body
     expected = {
-        "/modern/assets/appliance.js": "application/javascript",
-        "/modern/assets/appliance.css": "text/css",
-        "/modern/assets/inter-latin-wght-normal.woff2": "font/woff2",
-        "/modern/licenses.json": "application/json",
-        "/modern/Inter.LICENSE": "text/plain",
+        "/assets/appliance.js": "application/javascript",
+        "/assets/appliance.css": "text/css",
+        "/assets/inter-latin-wght-normal.woff2": "font/woff2",
+        "/licenses.json": "application/json",
+        "/Inter.LICENSE": "text/plain",
+        "/fallback.js": "application/javascript",
+        "/classic/app.js": "application/javascript",
+        "/classic/styles.css": "text/css",
+        "/classic/theme.js": "application/javascript",
     }
     for path, content_type in expected.items():
         status, headers, _ = fetch(server, path)
         assert status == 200, path
         assert headers["Content-Type"].startswith(content_type), path
-    assert b"Appliance Manager" in fetch(server, "/")[2]
+    for path in ("/classic/", "/classic", "/classic/index.html"):
+        status, _, body = fetch(server, path)
+        assert status == 200 and b"Appliance Manager" in body and b'id="classic-notice"' in body, path
+    for path in ("/static/app.js", "/app.js", "/classic/web.py", "/classic/../web.py"):
+        assert fetch(server, path)[0] == 404, path
+
+
+def test_the_old_addresses_move_to_the_root_and_are_never_cached(server):
+    for path, location in (("/modern/", "/"), ("/modern", "/"), ("/modern/#/x", "/"), ("/modern/assets/appliance.js?v=1", "/assets/appliance.js?v=1"), ("/modern/\\evil.example", "/evil.example"), ("/modern/a\\b", "/a%5Cb")):
+        status, headers, _ = fetch(server, path.split("#", 1)[0])
+        assert status == 302, path
+        assert headers["Location"] == location, path
+        assert headers["Cache-Control"] == "no-store", path
 
 
 def test_nothing_outside_the_build_or_of_another_kind_is_served(server, tmp_path, monkeypatch):
@@ -151,13 +167,13 @@ def test_nothing_outside_the_build_or_of_another_kind_is_served(server, tmp_path
     (assets / "leak.js").symlink_to(secret)
     monkeypatch.setattr(web, "STATIC_DIR", str(static))
 
-    assert fetch(server, "/modern/assets/ok.js")[0] == 200
-    for path in ("/modern/.hidden.js", "/modern/notes.py", "/modern/assets/leak.js", "/modern/assets", "/modern/assets/missing.js"):
+    assert fetch(server, "/assets/ok.js")[0] == 200
+    for path in ("/.hidden.js", "/notes.py", "/assets/leak.js", "/assets", "/assets/missing.js", "/../secret.js"):
         assert fetch(server, path)[0] == 404, path
 
 
 def test_the_modern_page_needs_no_session_but_every_api_still_does(server):
-    assert fetch(server, "/modern/")[0] == 200
+    assert fetch(server, "/")[0] == 200
     assert fetch(server, "/api/status")[0] == 401
 
 
@@ -212,15 +228,18 @@ def test_the_package_ships_the_modern_build():
     assert 'appliance/static/modern/index.html" ] ||' in script
 
 
-def test_the_classic_page_offers_the_switch_and_decides_before_it_paints():
+def test_the_classic_page_links_to_modern_says_it_is_deprecated_and_remembers_nothing():
     page = (STATIC / "index.html").read_text(encoding="utf-8")
-    assert 'href="/modern/"' in page
+    assert '<a id="modern-link" class="ghost-button" href="/">' in page
+    assert 'id="classic-notice"' in page
+    for asset in ("theme.js", "styles.css", "app.js"):
+        assert f'"/classic/{asset}"' in page
     early = (STATIC / "theme.js").read_text(encoding="utf-8")
-    assert 'var UI_KEY = "ems-appliance-ui";' in early
-    assert 'var DEFAULT_UI = "modern";' in early
-    assert 'window.location.replace("/modern/" + window.location.hash)' in early
+    assert "location.replace" not in early and "ems-appliance-ui" not in early
     prefs = (SOURCE / "src" / "state" / "prefs.svelte.js").read_text(encoding="utf-8")
-    assert 'UI_CHOICE_KEY = "ems-appliance-ui"' in prefs
+    assert "ems-appliance-ui" not in prefs and '"/classic/"' in prefs
+    built = (MODERN / "index.html").read_text(encoding="utf-8")
+    assert built.index('<script src="/fallback.js"></script>') < built.index('type="module"')
 
 
 # --- the vocabulary is the backend's ------------------------------------------

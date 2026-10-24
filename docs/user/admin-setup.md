@@ -83,7 +83,7 @@ metadata and logs. It is not a live EMS runtime layout.
 
 The Admin Console's Classic view opens on a start/router screen that detects the
 current install state and recommends the safest of exactly **two** flows. Open it
-at `http://127.0.0.1:8090/#setup`. The plain address opens the Modern view,
+at `http://127.0.0.1:8090/classic/#setup`. The plain address opens the Modern view,
 whose **Classic view** button leads to Classic as well, and whose overview
 offers **Set up in the Classic view** while nothing is installed:
 
@@ -111,7 +111,7 @@ The router recommends and preselects a flow but never acts silently:
 
 The wizard runs in **five stages**, shown in the stepper: **01 Release**,
 **02 Devices**, **03 Config**, **04 Prepare deployment**, **05 Start EMS**. Start
-the Admin Console (see **Start** above), open `http://127.0.0.1:8090/#setup`, and
+the Admin Console (see **Start** above), open `http://127.0.0.1:8090/classic/#setup`, and
 pick **Set up a new system**.
 
 1. **01 Release** — select one paired Admin + EMS **System Build**, then verify

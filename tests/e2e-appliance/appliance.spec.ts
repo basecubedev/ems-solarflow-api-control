@@ -12,7 +12,7 @@ test.beforeEach(async ({ request }) => {
 
 test.describe("authentication @smoke", () => {
   test("first start requires a new appliance password", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/classic/");
     await expect(page.locator("#gate")).toBeVisible();
     await expect(page.locator("#gate-intro")).toContainText("No password exists yet");
     await expect(page.locator("#gate-confirm-field")).toBeVisible();
@@ -23,7 +23,7 @@ test.describe("authentication @smoke", () => {
   });
 
   test("a mismatched confirmation is refused with a visible reason", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/classic/");
     await page.locator("#gate-password").fill("one-secret");
     await page.locator("#gate-confirm").fill("another-secret");
     await page.locator("#gate-submit").click();
@@ -33,7 +33,7 @@ test.describe("authentication @smoke", () => {
   });
 
   test("a short password is accepted, because the length is the operator's", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/classic/");
     await page.locator("#gate-password").fill("x");
     await page.locator("#gate-confirm").fill("x");
     await Promise.all([
@@ -68,7 +68,7 @@ test.describe("a password set outside the Appliance Manager", () => {
     request,
   }) => {
     await resetAppliance(request, { confirmed_password: PREVIOUS, shared_password: PASSWORD });
-    await page.goto("/");
+    await page.goto("/classic/");
     await expect(page.locator("#gate-submit")).toHaveText("Sign in");
     await page.locator("#gate-password").fill(PASSWORD);
     await Promise.all([
@@ -122,7 +122,7 @@ test.describe("a password set outside the Appliance Manager", () => {
     request,
   }) => {
     await resetAppliance(request, { confirmed_password: PREVIOUS });
-    await page.goto("/");
+    await page.goto("/classic/");
     await expect(page.locator("#gate-intro")).toContainText("password file");
     await expect(page.locator("#gate-intro")).toContainText("password-reset");
     await expect(page.locator("#gate-confirm-field")).toBeHidden();
@@ -428,7 +428,7 @@ test.describe("a control waiting for the appliance", () => {
   });
 
   test("signing in holds its button until the appliance answers", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/classic/");
     await expect(page.locator("#gate")).toBeVisible();
     const held = await holdRequests(page, "**/api/session/setup");
     await page.locator("#gate-password").fill(PASSWORD);

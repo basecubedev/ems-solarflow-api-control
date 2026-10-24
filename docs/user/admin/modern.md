@@ -2,13 +2,12 @@
 
 ## Purpose
 
-The Admin Console has two views of the same server. **Modern** is the one the
-console's address opens: a newer design at `/modern/` on the same address and
-port, arranged like the Modern dashboard, in English, German, Dutch or French.
-**Classic** is the console the other guides in this section describe; it keeps
-the workflows Modern does not run yet. Both have the same password, the same
-checks and the same actions. Modern and the Modern dashboard are one product:
-the same colours, the same menu, the same mark.
+The Admin Console's address opens **Modern**: a design arranged like the
+Modern dashboard, in English, German, Dutch or French. **Classic**, the console
+the other guides in this section describe, is deprecated and still answers at
+`/classic/` on the same port until a later release removes it. Both have the
+same password, the same checks and the same actions. Modern and the Modern
+dashboard are one product: the same colours, the same menu, the same mark.
 
 Both views talk to the same Admin server and write through the same checks.
 Nothing you do in one is hidden from the other, and switching between them
@@ -27,7 +26,7 @@ changes nothing on the host.
 - The Admin Console is installed and reachable (see
   [what the Admin Console is](../admin-console.md)).
 - A current browser: Chrome or Edge 114, Firefox 125, Safari 17 (iPadOS 17)
-  or newer. An older browser keeps using Classic.
+  or newer. An older browser keeps using Classic until Classic is removed.
 
 ## What you see
 
@@ -50,15 +49,19 @@ installation. It leads back to the overview.
 
 ## Switching between the two
 
-1. In Classic, the header has a **New design** button. It opens Modern.
-2. In Modern, the foot of the side menu has **Classic view** (on a phone, under
-   **More**). It opens the same page in Classic.
+- In Modern, the foot of the side menu has **Classic view** (on a phone, under
+  **More**). It opens the same page in Classic, at `/classic/`.
+- In Classic, the header has a **New design** button back to the address, and
+  a line at the top says that Classic is deprecated.
 
-Modern is the default, as on the EMS dashboard. The browser remembers your
-choice: once you have switched to Classic, the console's address opens Classic
-until you press **New design**. Adding `?ui=classic` or `?ui=modern` to the
-address sets the choice explicitly. A browser too old for Modern always opens
-Classic.
+Nothing is remembered, as on the EMS dashboard: the console's address always
+opens Modern, and Classic opens only from its own address. An old bookmark of
+`/modern/` opens the same page at the address.
+
+Three cases open Classic from the address: an address that names a Classic
+page (such as `#setup` or `#maintenance-upgrade`, from a link or bookmark made
+before Modern moved to the address), `?ui=classic` from such a link, and a
+browser too old for Modern.
 
 Every workflow runs in Modern, the guided setup included. **Classic view**
 stays available on every page.
@@ -243,7 +246,7 @@ do before it does it.
 
 | Symptom | Meaning | What to do |
 | --- | --- | --- |
-| The address opens Classic | This browser chose Classic, or it is too old for Modern | Press **New design**, or open the address with `?ui=modern` |
+| The address opens Classic | The address names a Classic page or carries `?ui=classic`, or the browser is too old for Modern | Press **New design**, or open the address without the `#…` part |
 | The setup says this tab no longer owns it | Another tab, or a restart, took the setup over | Press **Open the current setup**, or **Discard this tab’s draft** to start from the newer session |
 | An update waits at **Update the Admin console** | The Admin console is restarting with the new version | Wait; after two minutes the page offers **Reload page**. The update goes on either way |
 | The sign-in appears in the middle of an update | The Admin Console was replaced by the new version, and sessions end with it | Sign in with the same password; the page then follows the update on |

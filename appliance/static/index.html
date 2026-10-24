@@ -6,11 +6,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="dark" />
   <title>EMS SolarFlow Appliance Manager</title>
-  <script src="/static/theme.js"></script>
-  <link rel="stylesheet" href="/static/styles.css" />
+  <script src="/classic/theme.js"></script>
+  <link rel="stylesheet" href="/classic/styles.css" />
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to main content</a>
+  <p id="classic-notice" class="classic-notice" role="note">This Classic Appliance Manager is deprecated and will be removed in a later release. <a href="/">Open the new console</a></p>
 
   <div id="gate" class="gate" hidden>
     <main class="gate-panel" aria-labelledby="gate-title">
@@ -59,7 +60,7 @@
           <button type="button" id="mode-basic" class="mode-button" aria-pressed="true">Basic</button>
           <button type="button" id="mode-expert" class="mode-button" aria-pressed="false">Expert</button>
         </div>
-        <a id="modern-link" class="ghost-button" href="/modern/">New design</a>
+        <a id="modern-link" class="ghost-button" href="/">New design</a>
         <button type="button" id="refresh-button" class="ghost-button">Refresh</button>
         <button type="button" id="logout-button" class="ghost-button">Sign out</button>
       </div>
@@ -95,6 +96,6 @@
     </main>
   </div>
 
-  <script src="/static/app.js" defer></script>
+  <script src="/classic/app.js" defer></script>
 </body>
 </html>

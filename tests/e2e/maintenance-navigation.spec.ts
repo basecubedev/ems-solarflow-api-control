@@ -38,7 +38,7 @@ test.describe("Maintenance: navigation", { tag: ["@maintenance"] }, () => {
   // same-document hash change that never re-boots the app, so the reload is
   // what makes this a cold load rather than a hashchange in disguise.
   const coldLoad = async (page: Page, hash: string) => {
-    await page.goto("/" + hash);
+    await page.goto("/classic/" + hash);
     await page.reload();
   };
 

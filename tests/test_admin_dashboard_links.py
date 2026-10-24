@@ -87,31 +87,6 @@ def test_the_dashboard_links_are_wired_and_hide_when_the_address_is_unknown():
     assert "link.hidden = !href;" in success
 
 
-def test_a_stored_ui_choice_leaves_the_address_and_keeps_the_rest():
-    early = _read("admin-theme.js")
-    start = early.index("  function forgetAsked() {")
-    fn = early[start:early.index("\n  }\n", start) + 4]
-    script = fn + """
-const cases = ["?ui=classic", "?ui=classic&screen=x", "?screen=x&ui=modern", "?a=1&ui=classic&b=2", "?screen=x"];
-console.log(JSON.stringify(cases.map((search) => {
-  let written = null;
-  globalThis.window = {
-    location: { search, pathname: "/", hash: "#maintenance" },
-    history: { state: null, replaceState: (state, title, url) => { written = url; } },
-  };
-  forgetAsked();
-  return written;
-})));
-"""
-    assert _run_node(script) == [
-        "/#maintenance",
-        "/?screen=x#maintenance",
-        "/?screen=x#maintenance",
-        "/?a=1&b=2#maintenance",
-        "/?screen=x#maintenance",
-    ]
-
-
 def test_dashboard_links_point_where_this_browser_reaches_the_dashboard():
     js = _read("admin.js")
     fn = "function dashboardHrefForBrowser(" + _js_function_body(js, "function dashboardHrefForBrowser(") + "\n}\n"

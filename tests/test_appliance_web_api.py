@@ -768,10 +768,11 @@ def test_security_headers_are_present(signed_in):
 
 def test_static_assets_are_an_explicit_allowlist(signed_in):
     _, _, client = signed_in
-    assert client.get("/static/app.js")[0] == 200
-    assert client.get("/static/styles.css")[0] == 200
-    assert client.get("/static/../appliance/web.py")[0] == 404
-    assert client.get("/static/../../etc/passwd")[0] == 404
+    assert client.get("/classic/app.js")[0] == 200
+    assert client.get("/classic/styles.css")[0] == 200
+    assert client.get("/classic/web.py")[0] == 404
+    assert client.get("/classic/../appliance/web.py")[0] == 404
+    assert client.get("/classic/../../etc/passwd")[0] == 404
 
 
 def test_the_index_page_is_served_without_authentication(appliance):

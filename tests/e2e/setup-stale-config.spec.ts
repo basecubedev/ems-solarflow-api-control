@@ -89,7 +89,7 @@ adminTest.describe("Stale generated config", { tag: ["@setup", "@authority"] }, 
       adminExpect(plan.prepared).toBeNull();
 
       // 08 — the browser surfaces the conflict as an actionable error.
-      await page.goto("/#setup");
+      await page.goto("/classic/#setup");
       const deploymentTab = page.locator('[data-setup-step="deployment"]');
       await adminExpect(deploymentTab).toBeEnabled();
       await deploymentTab.click();

@@ -14,7 +14,7 @@ Usage::
 For an interactive preview instead of a capture::
 
     python3 scripts/serve_admin_docs_preview.py
-    # then open http://127.0.0.1:8092/?screen=maintenance-overview
+    # then open http://127.0.0.1:8092/classic/?screen=maintenance-overview
 """
 
 import argparse
@@ -139,7 +139,7 @@ def capture(host, port, output_dir, screens):
     with tempfile.TemporaryDirectory() as tmpdir:
         for screen in screens:
             basename, min_height = SCREENS[screen]
-            url = f"http://{display_host}:{port}/?screen={screen}"
+            url = f"http://{display_host}:{port}/classic/?screen={screen}"
             out_path = os.path.join(output_dir, basename)
             best_path, best_height = None, -1
             for attempt in range(1, MAX_ATTEMPTS + 1):
@@ -191,7 +191,7 @@ def main(argv=None):
     screens = args.screens or list(SCREENS)
     server = start_server(args.host, args.port)
     if args.serve_only:
-        print(f"Serving admin docs preview on http://{args.host}:{args.port}/?screen=landing")
+        print(f"Serving admin docs preview on http://{args.host}:{args.port}/classic/?screen=landing")
         try:
             while True:
                 time.sleep(3600)

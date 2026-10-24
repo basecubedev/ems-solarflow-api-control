@@ -7,11 +7,14 @@ import { ROOT, modernBuild, modernPage } from "../shared/vite/page.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
+/** public/fallback.js runs first and sends a Classic page's address, ?ui=classic and a browser too old for Modern to /classic/. */
+const VENDORED = '<script src="/fallback.js"></script>';
+
 export default defineConfig({
   root: HERE,
-  base: "/modern/",
-  publicDir: false,
-  plugins: [svelte(), modernPage({ name: "ems-admin-modern-page", icons: resolve(HERE, "src/icons.json") })],
+  base: "/",
+  publicDir: resolve(HERE, "public"),
+  plugins: [svelte(), modernPage({ name: "ems-admin-modern-page", icons: resolve(HERE, "src/icons.json"), vendored: VENDORED })],
   build: modernBuild({ outDir: resolve(ROOT, "admin/static/modern"), entry: "admin", split: true }),
   server: {
     fs: { allow: [ROOT] },

@@ -1,5 +1,4 @@
 import { defineConfig, devices } from "@playwright/test";
-import { classicUiStorage } from "./tests/e2e-appliance/classic-ui";
 
 // The Raspberry Pi Appliance Manager UI runs against a deterministic test
 // server (EMS_APPLIANCE_TEST_MODE) backed by the scripted FakeHost — no Docker,
@@ -24,7 +23,6 @@ export default defineConfig({
   expect: { timeout: 7_000 },
   use: {
     baseURL: BASE_URL,
-    storageState: classicUiStorage(BASE_URL),
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "off",

@@ -1,20 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The Modern Appliance Manager at /modern/, against the deterministic test
+// The Modern Appliance Manager at the root, against the deterministic test
 // server. Every assertion waits on a locator or a response, never on a fixed
 // timeout.
 import { expect, test, type Page } from "@playwright/test";
 import { PASSWORD, PUBLIC_KEY, resetAppliance } from "./helpers";
-
-// The config starts every context in Classic; Modern is what a browser gets
-// that has not chosen.
-test.use({ storageState: { cookies: [], origins: [] } });
 
 test.beforeEach(async ({ request }) => {
   await resetAppliance(request);
 });
 
 async function createPassword(page: Page) {
-  await page.goto("/modern/");
+  await page.goto("/");
   await expect(page.getByTestId("sign-in-screen")).toHaveAttribute("data-mode", "create");
   await page.locator("#appliance-password").fill(PASSWORD);
   await page.locator("#appliance-password-confirm").fill(PASSWORD);
@@ -42,26 +38,30 @@ async function settled(page: Page) {
   await expect(page.getByTestId("operation-banner")).toHaveAttribute("data-state", "succeeded", { timeout: 20_000 });
 }
 
-test.describe("the choice between Classic and Modern", () => {
-  test("a browser that never chose opens Modern, and the choice holds both ways", async ({ page }) => {
+test.describe("Modern at the root, the deprecated Classic at /classic/", () => {
+  test("the address opens Modern, Classic is one click away and not remembered, old addresses keep working", async ({ page }) => {
     await page.goto("/");
-    await expect(page).toHaveURL(/\/modern\/$/);
     await expect(page.getByTestId("sign-in-screen")).toBeVisible();
 
     await page.getByTestId("sign-in-classic").click();
+    await expect(page).toHaveURL(/\/classic\/$/);
     await expect(page.locator("#gate")).toBeVisible();
-    await expect(page).not.toHaveURL(/ui=classic/);
+    await expect(page.locator("#classic-notice")).toBeVisible();
     await page.goto("/");
-    await expect(page.locator("#gate")).toBeVisible();
+    await expect(page.getByTestId("sign-in-screen")).toBeVisible();
 
-    await page.goto("/?ui=modern");
-    await expect(page).toHaveURL(/\/modern\/$/);
+    await page.goto("/?ui=classic");
+    await expect(page).toHaveURL(/\/classic\/\?ui=classic$/);
+    await page.goto("/modern/");
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.getByTestId("sign-in-screen")).toBeVisible();
+    expect(await page.evaluate(() => localStorage.getItem("ems-appliance-ui"))).toBeNull();
   });
 });
 
 test.describe("signing in", () => {
   test("the first start creates the password, and a mismatch is refused", async ({ page }) => {
-    await page.goto("/modern/");
+    await page.goto("/");
     await page.locator("#appliance-password").fill("one-secret");
     await page.locator("#appliance-password-confirm").fill("another-secret");
     await page.getByTestId("sign-in-submit").click();
@@ -90,7 +90,7 @@ test.describe("signing in", () => {
 
   test("a deleted password file does not offer the first-time setup again", async ({ page, request }) => {
     await resetAppliance(request, { confirmed_password: "the-previous-manager-password" });
-    await page.goto("/modern/");
+    await page.goto("/");
     await expect(page.getByTestId("sign-in-screen")).toHaveAttribute("data-mode", "missing");
     await expect(page.getByTestId("sign-in-lead")).toContainText("password-reset");
     await expect(page.locator("#appliance-password-confirm")).toHaveCount(0);
@@ -135,7 +135,7 @@ test.describe("the overview", () => {
     const reload = page.waitForRequest((request) => request.isNavigationRequest() && new URL(request.url()).pathname === "/");
     await page.getByTestId("refresh").click();
     await reload;
-    await expect(page).toHaveURL(/\/modern\/#\/updates$/);
+    await expect(page).toHaveURL(/\/#\/updates$/);
     await expect(page.getByTestId("manager-section")).toBeVisible();
   });
 
@@ -157,7 +157,7 @@ test.describe("the overview", () => {
     await page.locator("#appliance-password").fill(PASSWORD);
     await page.getByTestId("sign-in-submit").click();
     await reload;
-    await expect(page).toHaveURL(/\/modern\//);
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/");
   });
 
   test("the updates card does not call a failed update check up to date", async ({ page }) => {
@@ -758,7 +758,7 @@ test.describe("settings", () => {
   test("a password set elsewhere holds SSH changes back until it is confirmed", async ({ page, request }) => {
     const previous = "the-previous-manager-password";
     await resetAppliance(request, { confirmed_password: previous, shared_password: PASSWORD });
-    await page.goto("/modern/");
+    await page.goto("/");
     await page.locator("#appliance-password").fill(PASSWORD);
     await page.getByTestId("sign-in-submit").click();
     await expect(page.locator('[data-code="password_unconfirmed"]')).toBeVisible();
@@ -874,7 +874,7 @@ test.describe("on a phone", () => {
 
   test("a page opened through More keeps the chevron free of its attention mark", async ({ page, request }) => {
     await resetAppliance(request, { confirmed_password: "the-previous-manager-password", shared_password: PASSWORD });
-    await page.goto("/modern/");
+    await page.goto("/");
     await page.locator("#appliance-password").fill(PASSWORD);
     await page.getByTestId("sign-in-submit").click();
     await page.getByTestId("nav-more").click();

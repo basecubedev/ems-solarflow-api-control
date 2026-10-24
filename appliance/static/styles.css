@@ -561,6 +561,13 @@ a { color: var(--accent2); }
 
 /* --- gate (login / first run / reconnect) ------------------------------ */
 
+.classic-notice {
+  max-width: 1180px;
+  margin: calc(8px * var(--d)) auto 0; padding: calc(6px * var(--d)) calc(10px * var(--d));
+  border: 1px solid var(--border-strong); border-radius: var(--o-inner-radius);
+  color: var(--muted); font-size: 12px; font-weight: 750;
+}
+.classic-notice a { color: var(--accent2); font-weight: 850; }
 .gate {
   min-height: 100vh;
   display: grid;

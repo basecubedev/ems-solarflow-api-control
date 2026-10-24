@@ -254,7 +254,7 @@ from admin.system_build import (
 )
 from dashboard.auth import LoginRateLimiter, SessionStore, auth_file_fingerprint
 from dashboard.https import HANDSHAKE_TIMEOUT_SECONDS
-from dashboard.static_files import build_static_asset_index, lookup_static_asset
+from dashboard.static_files import build_static_asset_index, lookup_static_asset, modern_asset_path, modern_redirect
 from ems import backup as backup_mod
 from ems.device_identity import (
     PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
@@ -1509,17 +1509,14 @@ class AdminHandler(BaseHTTPRequestHandler):
         )
 
     def do_GET(self):
-        path = self.path.split("?", 1)[0]
-        if path in ("", "/", "/index.html"):
-            self._send_static("/index.html")
-            return
+        path, _, query = self.path.partition("?")
         # The unauthenticated browser must be able to load the login/setup UI and
         # read auth status; every other GET below requires a valid Admin session.
         if path == "/api/admin/auth/status":
             self._send_json(self._auth_status_payload())
             return
         if not path.startswith("/api/"):
-            self._send_static(path)
+            self._send_static(path, query)
             return
         auth_error = self._require_admin_read_auth()
         if auth_error:
@@ -7556,8 +7553,19 @@ class AdminHandler(BaseHTTPRequestHandler):
             return None
         return parsed
 
-    def _send_static(self, request_path):
-        asset = lookup_static_asset(self.server.static_assets, request_path)
+    def _send_static(self, request_path, query=""):
+        """Modern at the root, the deprecated Classic under ``/classic/``.
+
+        An old address of Modern (``/modern/...``) and ``/classic`` without its
+        slash are sent on, as the dashboard sends them.
+        """
+
+        moved = modern_redirect(request_path, query)
+        if moved is not None:
+            self._send_bytes(b"", "text/plain; charset=utf-8", status=302, headers={"Location": moved})
+            return
+        asset_path = modern_asset_path(request_path or "/")
+        asset = lookup_static_asset(self.server.static_assets, asset_path) if asset_path else None
         if asset is None:
             self._send_json({"error": "not found"}, status=404)
             return

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Contracts of the Modern Admin console, the second entry page at ``/modern/``.
+"""Contracts of the Modern Admin console, at ``/`` beside the deprecated Classic at ``/classic/``.
 
 Modern is a build output committed under ``admin/static/modern/``, made from
 ``frontend/admin-modern/`` and the shared design system in ``frontend/shared/``.
@@ -8,6 +8,7 @@ the licence inventory, and hold the console's vocabulary to the server's: the
 words it has for a code are only right while the server still sends that code.
 """
 
+import http.client
 import json
 import re
 import threading
@@ -18,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from admin.server import SECURITY_HEADERS, ScanRegistry, create_server
-from dashboard.static_files import build_static_asset_index, lookup_static_asset
+from dashboard.static_files import build_static_asset_index, lookup_static_asset, modern_asset_path
 from tests.admin_auth_helpers import authenticate
 from tests.modern_frontend import (
     assert_build_matches_source,
@@ -77,23 +78,43 @@ def admin(isolated_install_root):
         srv.server_close()
 
 
-def test_the_admin_serves_modern_beside_classic_under_its_own_headers(admin):
-    for path in ("/modern/", "/modern"):
-        with urllib.request.urlopen(admin + path) as response:
-            assert response.status == 200
-            assert response.headers["Content-Type"].startswith("text/html")
-            assert response.headers["Content-Security-Policy"] == SECURITY_HEADERS["Content-Security-Policy"]
-            assert b'<div id="app">' in response.read()
-    with urllib.request.urlopen(admin + "/modern/assets/admin.js") as response:
-        assert response.headers["Content-Type"].startswith("application/javascript")
-    with urllib.request.urlopen(admin + "/modern/assets/inter-latin-wght-normal.woff2") as response:
-        assert response.headers["Content-Type"] == "font/woff2"
-    with urllib.request.urlopen(admin + "/") as response:
-        assert b"EMS SolarFlow Admin" in response.read()
+def _get(base, path):
+    host, port = base.removeprefix("http://").split(":")
+    conn = http.client.HTTPConnection(host, int(port), timeout=5)
+    try:
+        conn.request("GET", path)
+        response = conn.getresponse()
+        return response.status, dict(response.getheaders()), response.read()
+    finally:
+        conn.close()
+
+
+def test_the_admin_serves_modern_at_the_root_and_classic_under_classic(admin):
+    for path in ("/", "/index.html"):
+        status, headers, body = _get(admin, path)
+        assert status == 200
+        assert headers["Content-Type"].startswith("text/html")
+        assert headers["Content-Security-Policy"] == SECURITY_HEADERS["Content-Security-Policy"]
+        assert b'<div id="app">' in body
+    assert _get(admin, "/assets/admin.js")[1]["Content-Type"].startswith("application/javascript")
+    assert _get(admin, "/assets/inter-latin-wght-normal.woff2")[1]["Content-Type"] == "font/woff2"
+    assert _get(admin, "/fallback.js")[1]["Content-Type"].startswith("application/javascript")
+    status, headers, body = _get(admin, "/classic/")
+    assert status == 200 and b"EMS SolarFlow Admin" in body and b'id="classic-notice"' in body
+    assert _get(admin, "/classic/admin.js")[1]["Content-Type"].startswith("application/javascript")
+    assert _get(admin, "/admin.js")[0] == 404
+
+
+def test_the_old_addresses_move_to_the_new_ones_and_are_never_cached(admin):
+    for path, location in (("/modern/", "/"), ("/modern", "/"), ("/modern/?ui=x", "/?ui=x"), ("/classic", "/classic/")):
+        status, headers, _ = _get(admin, path)
+        assert status == 302, path
+        assert headers["Location"] == location, path
+        assert headers["Cache-Control"] == "no-store", path
 
 
 def test_the_modern_page_needs_no_session_but_every_api_still_does(admin):
-    with urllib.request.urlopen(admin + "/modern/") as response:
+    with urllib.request.urlopen(admin + "/") as response:
         assert response.status == 200
     request = urllib.request.Request(admin + "/api/admin/maintenance/overview")
     with pytest.raises(urllib.error.HTTPError) as refused:
@@ -102,12 +123,22 @@ def test_the_modern_page_needs_no_session_but_every_api_still_does(admin):
     authenticate(admin)
 
 
-def test_the_static_index_resolves_both_spellings_and_nothing_outside():
+def _served(assets, path):
+    asset_path = modern_asset_path(path)
+    return lookup_static_asset(assets, asset_path) if asset_path else None
+
+
+def test_the_addresses_map_onto_the_two_trees_and_nothing_outside():
     assets = build_static_asset_index(str(STATIC))
-    for path in ("/modern/", "/modern"):
-        assert lookup_static_asset(assets, path)[0].endswith("modern/index.html")
-    assert lookup_static_asset(assets, "/")[0].endswith("static/index.html")
-    assert lookup_static_asset(assets, "/modern/../../server.py") is None
+    for path in ("/", "/index.html"):
+        assert _served(assets, path)[0].endswith("modern/index.html")
+    assert _served(assets, "/classic/")[0].endswith("static/index.html")
+    assert _served(assets, "/classic/admin.css")[0].endswith("static/admin.css")
+    assert _served(assets, "/admin.css") is None
+    assert _served(assets, "/classic/modern/index.html") is None
+    assert _served(assets, "/classic/./modern/index.html") is None
+    assert _served(assets, "/../../server.py") is None
+    assert _served(assets, "/classic/../../server.py") is None
 
 
 def test_the_page_carries_no_inline_script_or_style():
@@ -138,15 +169,18 @@ def test_the_font_and_icons_ship_with_their_licence_texts():
     assert_font_and_icons_carry_their_notices(MODERN)
 
 
-def test_the_classic_page_offers_the_switch_and_decides_before_it_paints():
+def test_the_classic_page_links_to_modern_says_it_is_deprecated_and_remembers_nothing():
     page = (STATIC / "index.html").read_text(encoding="utf-8")
-    assert 'href="/modern/"' in page
+    assert '<a id="modern-admin-link" class="secondary-button compact" href="/">' in page
+    assert 'id="classic-notice"' in page
+    for asset in ("admin-theme.js", "admin.css", "admin.js"):
+        assert f'"/classic/{asset}"' in page
     early = (STATIC / "admin-theme.js").read_text(encoding="utf-8")
-    assert 'var UI_KEY = "ems-admin-ui";' in early
-    assert 'var DEFAULT_UI = "modern";' in early
-    assert 'window.location.replace("/modern/")' in early
+    assert "location.replace" not in early and "ems-admin-ui" not in early
     prefs = (SOURCE / "src" / "state" / "prefs.svelte.js").read_text(encoding="utf-8")
-    assert 'UI_CHOICE_KEY = "ems-admin-ui"' in prefs
+    assert "ems-admin-ui" not in prefs and "/classic/" in prefs
+    built = (MODERN / "index.html").read_text(encoding="utf-8")
+    assert built.index('<script src="/fallback.js"></script>') < built.index('type="module"')
 
 
 def test_the_server_sentences_this_console_translates_are_still_the_servers():
