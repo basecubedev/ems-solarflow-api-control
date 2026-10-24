@@ -232,45 +232,32 @@
     {@render unavailableInfo(status)}
   </Card>
 {:else}
-  <div class="controls span-12">
-    <Segmented options={ANALYTICS_VIEWS.map((v) => ({ value: v.id, label: t(`analytics.view.${v.id}`) }))} value={viewId} label={t("analytics.view")} onchange={setView} />
-    <Segmented options={ANALYTICS_RANGES.map((value) => ({ value, label: t(`chart.range.${value}`) }))} value={applied ? "" : range} label={t("analytics.range")} onchange={setRange} />
-  </div>
-  <div class="controls span-12">
-    <label class="inline">
-      <span>{t("chart.device")}</span>
-      <select class="input" bind:value={device}>
-        <option value="">{t("chart.allDevices")}</option>
-        {#each names as name (name)}<option value={name}>{name}</option>{/each}
-      </select>
-    </label>
-    <form class="custom" onsubmit={applyCustom}>
-      <label class="inline"><span>{t("analytics.from")}</span><input class="input" type="datetime-local" bind:value={custom.start} required /></label>
-      <label class="inline"><span>{t("analytics.to")}</span><input class="input" type="datetime-local" bind:value={custom.end} required /></label>
-      <button class="btn secondary small" type="submit">{t("analytics.apply")}</button>
-    </form>
-    <div class="overlays" role="group" aria-label={t("analytics.overlays")}>
+  <div class="block span-12" role="group" aria-label={t("analytics.view")} data-testid="analytics-view-block">
+    <div class="controls">
+      <Segmented options={ANALYTICS_VIEWS.map((v) => ({ value: v.id, label: t(`analytics.view.${v.id}`) }))} value={viewId} label={t("analytics.view")} onchange={setView} />
+      <label class="inline">
+        <span>{t("chart.device")}</span>
+        <select class="input" bind:value={device}>
+          <option value="">{t("chart.allDevices")}</option>
+          {#each names as name (name)}<option value={name}>{name}</option>{/each}
+        </select>
+      </label>
+    </div>
+    <div class="controls overlays" role="group" aria-label={t("analytics.overlays")}>
+      <span class="row-label">{t("analytics.overlays")}</span>
       {#each ANALYTICS_OVERLAYS as id (id)}
         <button type="button" class="chip" aria-pressed={overlays.includes(id) ? "true" : "false"} onclick={() => toggleOverlay(id)}>{t(`series.${id}`)}</button>
       {/each}
     </div>
   </div>
-
-  <div class="kpis span-12">
-    {#each view.kpis as id (id)}
-      {@const value = computeKpi(id, data)}
-      <div class="card kpi" style:--c={`var(${KPIS[id].token})`}>
-        <div class="kpi-label">{t(`analytics.kpi.${id}`)} · {rangeLabel}</div>
-        <div class="kpi-value num">{KPIS[id].kind === "peak" ? f.power(value) : f.energy(value)}</div>
-      </div>
-    {/each}
-    <div class="card kpi c-bat">
-      <div class="kpi-label">{t("analytics.kpi.soc")}</div>
-      <div class="kpi-value num">{f.percent(socNow)}</div>
-    </div>
-    <div class="card kpi c-out">
-      <div class="kpi-label">{t("analytics.kpi.role")}</div>
-      <div class="kpi-value">{role ? t(`analytics.role.${role}`) : "—"}</div>
+  <div class="block span-12" role="group" aria-label={t("analytics.range")} data-testid="analytics-range-block">
+    <div class="controls">
+      <Segmented options={ANALYTICS_RANGES.map((value) => ({ value, label: t(`chart.range.${value}`) }))} value={applied ? "" : range} label={t("analytics.range")} onchange={setRange} />
+      <form class="custom" onsubmit={applyCustom}>
+        <label class="inline"><span>{t("analytics.from")}</span><input class="input" type="datetime-local" bind:value={custom.start} required /></label>
+        <label class="inline"><span>{t("analytics.to")}</span><input class="input" type="datetime-local" bind:value={custom.end} required /></label>
+        <button class="btn secondary small" type="submit">{t("analytics.apply")}</button>
+      </form>
     </div>
   </div>
 
@@ -292,14 +279,33 @@
     {/if}
   </Card>
 
+  <div class="kpis span-12">
+    {#each view.kpis as id (id)}
+      {@const value = computeKpi(id, data)}
+      <div class="card kpi" style:--c={`var(${KPIS[id].token})`}>
+        <div class="kpi-label">{t(`analytics.kpi.${id}`)} · {rangeLabel}</div>
+        <div class="kpi-value num">{KPIS[id].kind === "peak" ? f.power(value) : f.energy(value)}</div>
+      </div>
+    {/each}
+    <div class="card kpi" style:--c="var(--soc)">
+      <div class="kpi-label">{t("analytics.kpi.soc")}</div>
+      <div class="kpi-value num">{f.percent(socNow)}</div>
+    </div>
+    <div class="card kpi c-out">
+      <div class="kpi-label">{t("analytics.kpi.role")}</div>
+      <div class="kpi-value">{role ? t(`analytics.role.${role}`) : "—"}</div>
+    </div>
+  </div>
 {/if}
 
 <style>
+  .block { display: flex; flex-direction: column; gap: var(--s2); }
   .controls { display: flex; flex-wrap: wrap; gap: var(--s3); align-items: center; }
+  .row-label { font-size: 12.5px; color: var(--m-muted); margin-right: 2px; }
   .inline { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--m-muted); }
   .inline .input { width: auto; height: 32px; }
   .custom { display: inline-flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
-  .overlays { display: inline-flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+  .overlays { gap: 6px; }
   .chip { border: 1px solid var(--m-line-strong); background: transparent; color: var(--m-muted); border-radius: var(--m-radius-pill); padding: 4px 10px; font-size: 12px; cursor: pointer; }
   .chip[aria-pressed="true"] { background: var(--m-selected-bg); color: var(--m-selected-ink); border-color: transparent; }
   .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--s4); }

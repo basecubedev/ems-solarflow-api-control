@@ -209,6 +209,25 @@ test.describe("Modern dashboard @smoke", () => {
     await expect(page.getByRole("button", { name: "7 d", exact: true })).toBeVisible();
   });
 
+  test("the view and its overlays form one block, the time range the next, the chart right under it, the tiles below", async ({ page }) => {
+    await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
+    const chart = page.locator(".chart .u-over").first();
+    await expect(chart).toBeVisible();
+    const viewBlock = page.getByTestId("analytics-view-block");
+    const rangeBlock = page.getByTestId("analytics-range-block");
+    await expect(viewBlock.getByRole("button", { name: "Overview", exact: true })).toBeVisible();
+    await expect(viewBlock.getByRole("button", { name: "State of charge", exact: true })).toBeVisible();
+    await expect(rangeBlock.getByRole("button", { name: "24 h", exact: true })).toBeVisible();
+    await expect(rangeBlock.getByRole("button", { name: "Apply" })).toBeVisible();
+    const view = (await viewBlock.boundingBox())!;
+    const range = (await rangeBlock.boundingBox())!;
+    const chartCard = (await page.locator(".card", { has: chart }).first().boundingBox())!;
+    expect(range.y).toBeGreaterThan(view.y + view.height - 1);
+    expect(chartCard.y).toBeGreaterThan(range.y + range.height - 1);
+    const tileBox = (await page.locator(".kpi").first().boundingBox())!;
+    expect(tileBox.y).toBeGreaterThan(chartCard.y + chartCard.height - 1);
+  });
+
   test("the state of charge joins the main analytics chart on its own percent scale on the right", async ({ page }) => {
     const requests: string[] = [];
     page.on("request", (request) => {
