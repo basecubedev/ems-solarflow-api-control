@@ -197,8 +197,15 @@ version; sessions do not survive the restart, so it asks you to sign in again.
 
 ## Updating
 
-1. Open **Updates**. **Update to …** takes the recommended version; any other
-   version in **Available versions** is chosen by tapping it.
+1. Open **Updates**. **Update to …** takes the recommended version, the
+   newest stable release. On a stable release with no newer stable release to
+   install, nothing is recommended and the page says so; on a release
+   candidate or a development build it asks you to choose. The rolling
+   `latest` is recommended only when `latest` itself runs, when the running
+   release cannot be told, or when nothing is installed. **Available versions** groups the versions: stable
+   releases first, then the rolling build (`latest`), release candidates and
+   development builds, each with its colour. Any version there is chosen by
+   tapping it.
 2. The version is checked at once: the Admin console and EMS images are
    downloaded if needed and verified as a pair, and the update is planned
    right after. Nothing on the device changes.

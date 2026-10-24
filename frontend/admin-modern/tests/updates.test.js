@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { CHANNELS, UPGRADE_STATES, PAIR_STATES, noteView, pairView, releaseList, upgradePage } from "../src/lib/updates.js";
+import { CHANNELS, CHANNEL_TONES, RELEASE_GROUPS, UPGRADE_STATES, PAIR_STATES, groupedReleases, noteView, pairView, releaseList, upgradePage } from "../src/lib/updates.js";
 
 const read = (path) => readFileSync(new URL(`../../../admin/${path}`, import.meta.url), "utf8");
 
@@ -67,4 +67,33 @@ test("a release the catalogue lets the upgrade choose opens it, chosen; any othe
   assert.deepEqual(list.map((release) => release.upgrade), ["maintenance-upgrade-v0.9.0-rc.1", "maintenance-upgrade-latest", null, null]);
   assert.equal(upgradePage({ tag: "a b/c", selectable: true }), "maintenance-upgrade-a%20b%2Fc");
   assert.equal(upgradePage(null), null);
+});
+
+test("every channel has a tone and lands in exactly one group, stable releases first", () => {
+  assert.deepEqual(Object.keys(CHANNEL_TONES).sort(), [...CHANNELS].sort());
+  const grouped = RELEASE_GROUPS.flatMap((group) => group.channels);
+  assert.deepEqual([...grouped].sort(), [...CHANNELS].sort());
+  assert.equal(new Set(grouped).size, grouped.length);
+  assert.equal(RELEASE_GROUPS[0].id, "stable");
+});
+
+test("the list is grouped by channel, each group in the server's order, empty groups left out", () => {
+  const list = releaseList({
+    default_release: "v2",
+    releases: [
+      { tag: "latest", channel: "latest" },
+      { tag: "v2", channel: "stable" },
+      { tag: "v1", channel: "stable" },
+      { tag: "dev-1", channel: "development" },
+      { tag: "x", channel: "nightly" },
+    ],
+  });
+  const groups = groupedReleases(list);
+  assert.deepEqual(groups.map((group) => [group.id, group.tone, group.releases.map((release) => release.tag)]), [
+    ["stable", "c-bat", ["v2", "v1"]],
+    ["latest", "c-out", ["latest"]],
+    ["development", "c-soc", ["dev-1"]],
+    ["other", "c-idle", ["x"]],
+  ]);
+  assert.deepEqual(groupedReleases(null), []);
 });

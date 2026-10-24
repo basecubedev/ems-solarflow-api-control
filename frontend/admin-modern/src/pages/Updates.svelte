@@ -7,7 +7,7 @@
   import { t, tn, fmt } from "../i18n/i18n.svelte.js";
   import { system, ensure, reload, keepWithOverview } from "../state/system.svelte.js";
   import { upgrade, chooseRelease, resumeUpgrade, noteStatus } from "../state/upgrade.svelte.js";
-  import { noteView, pairView, releaseList, RELEASES_SHOWN } from "../lib/updates.js";
+  import { CHANNEL_TONES, groupedReleases, noteView, pairView, releaseList } from "../lib/updates.js";
   import { activeUpgrade, lastRun } from "../lib/upgrade.js";
   import { activeWorkflow } from "../lib/workflow.js";
   import { emsFact } from "../lib/health.js";
@@ -20,6 +20,13 @@
   keepWithOverview("alignment");
 
   const STEPS = ["backup", "config", "admin", "deploy", "check"];
+  const STEP_LOOKS = {
+    backup: { icon: "archive", tone: "c-soc" },
+    config: { icon: "file-check", tone: "c-pv" },
+    admin: { icon: "server", tone: "c-inv" },
+    deploy: { icon: "package-plus", tone: "c-out" },
+    check: { icon: "circle-check", tone: "c-bat" },
+  };
 
   const f = $derived(fmt());
   const overview = $derived(system.overview.data);
@@ -28,6 +35,7 @@
   const pairState = $derived(pairView(pair));
   const releases = $derived(releaseList(system.releases.data));
   const recommended = $derived(releases.find((release) => release.recommended) || null);
+  const runsStable = $derived(releases.some((release) => release.running && release.channel === "stable"));
   const running = $derived(activeUpgrade(system.alignment.data?.transition) || activeWorkflow(system.lifecycle.data)?.owner === "guided_upgrade");
   const held = $derived(upgrade.busy || upgrade.holding || running);
 
@@ -41,7 +49,9 @@
   });
   const last = $derived(lastRun(system.alignment.data?.transition));
   let showAll = $state(false);
-  const shown = $derived(showAll ? releases : releases.slice(0, RELEASES_SHOWN));
+  const installable = $derived(releases.filter((release) => release.upgrade));
+  const shown = $derived(showAll ? releases : installable);
+  const groups = $derived(groupedReleases(shown));
 
   function choose(release) {
     if (held) return;
@@ -54,7 +64,7 @@
   <span class="words">
     <span class="tag">
       <span class="num">{release.tag}</span>
-      <span class="badge channel">{t(`updates.channel.${release.channel}`)}</span>
+      <span class="badge channel {CHANNEL_TONES[release.channel]}">{t(`updates.channel.${release.channel}`)}</span>
       {#if release.recommended}<span class="badge">{t("updates.recommended")}</span>{/if}
       {#if release.running}<span class="badge">{t("updates.running")}</span>{/if}
     </span>
@@ -83,11 +93,13 @@
 
 <Card title={t("updates.guidedTitle")} subtitle={t("updates.guidedSub")} span="span-6">
   <ol class="how">
-    {#each STEPS as step, index (step)}<li><span class="n num">{index + 1}</span>{t(`updates.step.${step}`)}</li>{/each}
+    {#each STEPS as step (step)}<li><span class="icon-tile sm {STEP_LOOKS[step].tone}"><Icon name={STEP_LOOKS[step].icon} /></span><span>{t(`updates.step.${step}`)}</span></li>{/each}
   </ol>
   <div class="row-wrap actions">
     {#if recommended?.selectable && !recommended.running}
       <button class="btn" type="button" onclick={() => choose(recommended)} disabled={held || upgrade.stage !== "idle"} data-testid="start-upgrade"><Icon name="circle-arrow-up" size="sm" />{t("upgrade.start", { tag: recommended.tag })}</button>
+    {:else if !recommended && runsStable}
+      <p class="note" data-testid="no-recommendation"><Icon name="circle-check" />{t("updates.noRecommendation")}</p>
     {:else}
       <p class="muted small">{t("updates.chooseBelow")}</p>
     {/if}
@@ -106,23 +118,30 @@
   {:else if !releases.length}
     <Empty text={t("updates.noReleases")} />
   {:else}
-    {#if releases.some((release) => release.upgrade)}<p class="muted hint">{t("updates.chooseHint")}</p>{/if}
-    <ul class="releases" data-testid="releases">
-      {#each shown as release (release.tag)}
-        <li data-tag={release.tag}>
-          {#if release.upgrade}
-            <button class="release inner choice" class:chosen={upgrade.target === release.tag && upgrade.stage !== "idle"} type="button" onclick={() => choose(release)} disabled={held} data-testid="choose-release">
-              {@render about(release)}
-              <span class="go">{upgrade.target === release.tag && upgrade.stage !== "idle" ? t("updates.chosen") : t("updates.choose")}<Icon name="chevron-right" size="sm" /></span>
-            </button>
-          {:else}
-            <div class="release inner off">{@render about(release)}</div>
-          {/if}
-        </li>
+    {#if installable.length}<p class="muted hint">{t("updates.chooseHint")}</p>{:else if !showAll}<p class="muted hint" data-testid="none-installable">{t("updates.noneInstallable")}</p>{/if}
+    <div class="groups" data-testid="releases">
+      {#each groups as group (group.id)}
+        <section class="group {group.tone}" data-group={group.id} aria-labelledby={`release-group-${group.id}`}>
+          <h3 class="group-title" id={`release-group-${group.id}`}><span class="dot"></span>{t(`updates.group.${group.id}`)}</h3>
+          <ul class="releases">
+            {#each group.releases as release (release.tag)}
+              <li data-tag={release.tag}>
+                {#if release.upgrade}
+                  <button class="release inner choice" class:chosen={upgrade.target === release.tag && upgrade.stage !== "idle"} class:recommended={release.recommended} type="button" onclick={() => choose(release)} disabled={held} data-testid="choose-release">
+                    {@render about(release)}
+                    <span class="go">{upgrade.target === release.tag && upgrade.stage !== "idle" ? t("updates.chosen") : t("updates.choose")}<Icon name="chevron-right" size="sm" /></span>
+                  </button>
+                {:else}
+                  <div class="release inner off">{@render about(release)}</div>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        </section>
       {/each}
-    </ul>
-    {#if releases.length > RELEASES_SHOWN}
-      <button class="btn secondary small more-btn" type="button" onclick={() => (showAll = !showAll)}>{showAll ? t("updates.showFewer") : tn("updates.showAll", releases.length)}</button>
+    </div>
+    {#if releases.length > installable.length}
+      <button class="btn secondary small more-btn" type="button" onclick={() => (showAll = !showAll)} data-testid="show-all-releases">{showAll ? t("updates.onlyInstallable") : tn("updates.showAll", releases.length)}</button>
     {/if}
     {#each (system.releases.data?.warnings || []).map(noteView).filter(Boolean) as warning, index (index)}<p class="note warn"><Icon name="triangle-alert" />{#if warning.key}{t(warning.key)}{:else}<span lang="en">{warning.text}</span>{/if}</p>{/each}
   {/if}
@@ -132,8 +151,7 @@
   .pair { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; margin: var(--s3) 0 0; font-size: 12.5px; }
   .last { display: flex; align-items: center; gap: 6px; margin: var(--s3) 0 0; font-size: 12.5px; }
   .how { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13.5px; }
-  .how li { display: flex; gap: 10px; align-items: flex-start; }
-  .n { flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 11.5px; font-weight: 650; background: var(--m-surface-3); color: var(--m-muted); }
+  .how li { display: flex; gap: 10px; align-items: center; }
   .actions { margin-top: var(--s4); gap: var(--s2); align-items: center; }
   .releases { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s2); }
   .release { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; width: 100%; }
@@ -141,13 +159,17 @@
   .choice { color: inherit; font: inherit; text-align: left; cursor: pointer; border: 1px solid var(--m-line); transition: border-color 0.15s; }
   .choice:hover:not(:disabled) { border-color: var(--m-line-strong); background: var(--m-surface-3); }
   .choice:disabled { cursor: default; }
+  .choice.recommended { border-color: color-mix(in srgb, var(--m-ok) 45%, var(--m-line)); background: color-mix(in srgb, var(--m-ok) 6%, var(--m-surface-2)); }
   .choice.chosen { border-color: var(--m-accent); }
   .go { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-size: 13px; font-weight: 620; color: var(--m-accent); }
   .choice:disabled .go { color: var(--m-muted); }
   .hint { font-size: 13px; margin: 0 0 var(--s3); }
   .release .words { flex: 1 1 280px; min-width: 0; display: flex; flex-direction: column; }
   .tag { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 620; }
-  .badge.channel { background: var(--m-surface-3); color: var(--m-muted); }
+  .badge.channel { display: inline-flex; align-items: center; gap: 5px; background: var(--m-surface-3); color: var(--m-muted); }
+  .badge.channel::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--c, var(--m-muted-2)); }
+  .groups { display: flex; flex-direction: column; gap: var(--s4); }
+  .group-title { display: flex; align-items: center; gap: 8px; margin: 0 0 var(--s2); font-size: 12.5px; font-weight: 640; color: var(--m-muted); }
   .small { display: block; font-size: 12.5px; margin-top: 2px; overflow-wrap: anywhere; }
   .more-btn { margin-top: var(--s3); }
 </style>

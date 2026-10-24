@@ -787,6 +787,30 @@ test.describe("Modern Admin: an unfinished workflow", { tag: ["@smoke", "@workfl
 test.describe("Modern Admin: on a phone", { tag: ["@smoke"] }, () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
+  test("the versions are grouped stable first, and with no newer stable release nothing is proposed", async ({ page, seedAdminScenario }) => {
+    await openModern(page);
+    await seedAdminScenario("mqtt_migration");
+    await page.goto("/#/updates");
+    await page.reload();
+    const groups = page.getByTestId("releases").locator("[data-group]");
+    await expect(groups.first()).toHaveAttribute("data-group", "stable");
+    await expect(page.locator('[data-group="latest"] [data-tag="latest"]')).toBeVisible();
+    await expect(page.locator('[data-group="stable"] .choice.recommended')).toHaveCount(1);
+    await expect(page.getByTestId("start-upgrade")).toBeVisible();
+
+    await page.route("**/api/setup/releases?flow=upgrade", async (route: Route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      const releases = body.releases.map((release: { tag: string; selectable: boolean; active: boolean }) => (release.tag === "v9.9.11" ? { ...release, active: true, selectable: false } : release));
+      await route.fulfill({ response, json: { ...body, releases, default_release: null, latest_stable: null } });
+    });
+    await page.reload();
+    await expect(page.getByTestId("releases")).toBeVisible();
+    await expect(page.getByTestId("no-recommendation")).toContainText("You run a stable release");
+    await expect(page.getByTestId("start-upgrade")).toHaveCount(0);
+    await expect(page.locator(".choice.recommended")).toHaveCount(0);
+  });
+
   test("a version tapped in the list opens the guided upgrade here and verifies it", async ({ page, seedAdminScenario }) => {
     await openModern(page);
     await seedAdminScenario("mqtt_migration");

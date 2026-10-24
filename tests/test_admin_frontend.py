@@ -4057,6 +4057,8 @@ console.log(JSON.stringify({
   pinnedOverDefaultAndPrepared: selectUpgradeReleaseTag(releases, data, "v0.8.0"),
   missingPinnedFailsClosed: selectUpgradeReleaseTag(releases, data, "v9.9.9"),
   noPinUsesDefault: selectUpgradeReleaseTag(releases, data, null),
+  noProposalLeavesTheChoice: selectUpgradeReleaseTag(releases, { default_release: null, prepared_release: null }, null),
+  aCachedBuildIsNoProposal: selectUpgradeReleaseTag(releases, { default_release: null, prepared_release: "v0.7.0" }, null),
 }));
 """
     result = subprocess.run(
@@ -4070,6 +4072,9 @@ console.log(JSON.stringify({
     assert out["missingPinnedFailsClosed"] is None
     # Without a pin, the server default is used.
     assert out["noPinUsesDefault"] == "v0.9.0-RC1"
+    # Without a proposal the reader chooses; no build is picked on its own.
+    assert out["noProposalLeavesTheChoice"] is None
+    assert out["aCachedBuildIsNoProposal"] is None
 
 
 def test_upgrade_resume_selects_transition_tag_deterministically():

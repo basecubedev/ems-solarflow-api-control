@@ -666,14 +666,20 @@ class ReleaseManager:
                 if item["stable"]
                 and item["selectable"]
                 and item["channel"] == "stable"
+                and not (for_upgrade and item["active"])
                 and item["upgrade_state"] != ROLLBACK_AVAILABLE
                 and not _is_backwards(policy_baseline, item["tag"])
             ),
             None,
         )
-        default_release = stable or next(
-            (item["tag"] for item in releases if item["tag"] == "latest" and item["selectable"]),
-            None,
+        runs_a_fixed_release = for_upgrade and bool(active) and active != "latest"
+        default_release = stable or (
+            None
+            if runs_a_fixed_release
+            else next(
+                (item["tag"] for item in releases if item["tag"] == "latest" and item["selectable"]),
+                None,
+            )
         )
         return {
             "active_release": active,

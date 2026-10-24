@@ -12409,7 +12409,10 @@ async function planUpgrade() {
 // Pick which System Build the upgrade selector shows. A resume PINS the exact
 // transition tag so a server default/prepared release can never overwrite the
 // resumed target; a pinned tag that is not a selectable build fails closed
-// (returns null) instead of silently falling back to a default.
+// (returns null) instead of silently falling back to a default. Without a pin
+// it is the server's proposal; without one, null, and the reader chooses: the
+// console never picks a build the server did not propose, such as the rolling
+// latest, a cached rollback or the running release itself.
 function selectUpgradeReleaseTag(releases, data, pinnedTag) {
   const selectable = (item) => item && item.selectable !== false;
   if (pinnedTag) {
@@ -12418,10 +12421,9 @@ function selectUpgradeReleaseTag(releases, data, pinnedTag) {
     );
     return pinned ? pinned.tag : null;
   }
-  const chosen =
-    releases.find((item) => item.tag === data.default_release && selectable(item)) ||
-    releases.find((item) => item.tag === data.prepared_release && selectable(item)) ||
-    releases.find(selectable);
+  const chosen = releases.find(
+    (item) => item.tag === data.default_release && selectable(item)
+  );
   return chosen ? chosen.tag : null;
 }
 
@@ -12468,20 +12470,6 @@ async function loadUpgradeReleases(pinnedTag, { preserveVerification = false, pr
     upgradeState.releases = releases;
     upgradeState.releaseWarnings = Array.isArray(data.warnings) ? data.warnings : [];
     upgradeEls.select.innerHTML = "";
-    // One selector grouped from the single shared System Build catalogue:
-    // Latest, Stable, Unstable, then Experimental (always last).
-    for (const group of groupSetupReleaseOptions(releases)) {
-      const optgroup = document.createElement("optgroup");
-      optgroup.label = group.label;
-      for (const release of group.releases) {
-        const option = document.createElement("option");
-        option.value = release.tag;
-        option.textContent = releaseOptionLabel(release);
-        option.disabled = release.selectable === false;
-        optgroup.appendChild(option);
-      }
-      upgradeEls.select.appendChild(optgroup);
-    }
     let selectedTag = selectUpgradeReleaseTag(releases, data, pinnedTag);
     const preferred = !pinnedTag && preferredTag
       ? releases.find((item) => item.tag === preferredTag && item.selectable !== false)
@@ -12496,29 +12484,60 @@ async function loadUpgradeReleases(pinnedTag, { preserveVerification = false, pr
       );
       if (keep) selectedTag = keep.tag;
     }
-    if (!selectedTag) {
-      throw new Error(
-        pinnedTag
-          ? "The System Build being upgraded is no longer available."
-          : "No System Builds are available."
-      );
+    const choosing =
+      !selectedTag && !pinnedTag && releases.some((item) => item.selectable !== false);
+    if (choosing) {
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "Choose a System Build";
+      placeholder.disabled = true;
+      upgradeEls.select.appendChild(placeholder);
     }
-    const selected = releases.find((item) => item.tag === selectedTag);
-    upgradeEls.select.value = selected.tag;
-    upgradeEls.select.disabled = false;
-    upgradeState.selected = selected.tag;
-    // A catalogue-prepared release only means its resources are cached locally
-    // (shown as a badge); it is NOT a verified System Build. Verification is only
-    // ever established by an explicit Verify System Build (or an authoritative
-    // resume). A same-session navigation back to this panel may keep an existing
-    // in-memory verification for the same tag (no second registry pull), but a
-    // full page load, an explicit refresh or a changed build leaves it unverified.
-    if (!upgradeVerificationSurvivesReload(preserveVerification, releases, selected.tag)) {
+    // One selector grouped from the single shared System Build catalogue:
+    // Latest, Stable, Unstable, then Experimental (always last).
+    for (const group of groupSetupReleaseOptions(releases)) {
+      const optgroup = document.createElement("optgroup");
+      optgroup.label = group.label;
+      for (const release of group.releases) {
+        const option = document.createElement("option");
+        option.value = release.tag;
+        option.textContent = releaseOptionLabel(release);
+        option.disabled = release.selectable === false;
+        optgroup.appendChild(option);
+      }
+      upgradeEls.select.appendChild(optgroup);
+    }
+    if (choosing) {
+      upgradeEls.select.value = "";
+      upgradeEls.select.disabled = false;
+      upgradeState.selected = null;
       clearUpgradeVerification();
+      renderUpgradeBadges(null);
     } else {
-      upgradeState.status = "ready";
+      if (!selectedTag) {
+        throw new Error(
+          pinnedTag
+            ? "The System Build being upgraded is no longer available."
+            : "No System Builds are available."
+        );
+      }
+      const selected = releases.find((item) => item.tag === selectedTag);
+      upgradeEls.select.value = selected.tag;
+      upgradeEls.select.disabled = false;
+      upgradeState.selected = selected.tag;
+      // A catalogue-prepared release only means its resources are cached locally
+      // (shown as a badge); it is NOT a verified System Build. Verification is only
+      // ever established by an explicit Verify System Build (or an authoritative
+      // resume). A same-session navigation back to this panel may keep an existing
+      // in-memory verification for the same tag (no second registry pull), but a
+      // full page load, an explicit refresh or a changed build leaves it unverified.
+      if (!upgradeVerificationSurvivesReload(preserveVerification, releases, selected.tag)) {
+        clearUpgradeVerification();
+      } else {
+        upgradeState.status = "ready";
+      }
+      renderUpgradeBadges(selected);
     }
-    renderUpgradeBadges(selected);
   } catch (err) {
     upgradeState.releases = [];
     upgradeState.selected = null;

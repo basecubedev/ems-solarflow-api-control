@@ -14,7 +14,7 @@ import { DISPLAY_STATES, SERVICES, SYNC_ACTIONS, CONFIG_STATES, PLAN_MESSAGES } 
 import { BACKUP_PURPOSES, BACKUP_TYPES, CREATE_SCOPES, CREATE_STEPS, RESTORE_STEPS, FILE_ACTIONS, INFLUX_REASONS, LIST_WARNINGS, STEP_STATES } from "../src/lib/backups.js";
 import { ALIGNMENT_STAGES, WORKFLOW_OWNERS, WORKFLOW_STATES, STALE_REASONS } from "../src/lib/workflow.js";
 import { CHECK_IDS, CHECK_STATUSES, RUN_MODES, UNAVAILABLE_MESSAGES } from "../src/lib/diagnostics.js";
-import { CHANNELS, UPGRADE_STATES, PAIR_STATES, RELEASE_NOTES } from "../src/lib/updates.js";
+import { CHANNELS, UPGRADE_STATES, PAIR_STATES, RELEASE_NOTES, RELEASE_GROUPS } from "../src/lib/updates.js";
 import { PHASES, OPTION_GROUPS, UPGRADE_STAGES } from "../src/lib/upgrade.js";
 import { RUNTIME_STATES, STATUS_SOURCES, BROKER_ISSUES, DEVICE_STATES } from "../src/lib/telemetry.js";
 import { REASON_WORDS } from "../src/lib/devices.js";
@@ -84,6 +84,7 @@ test("every generated key family is complete", () => {
     ...INFLUX_REASONS.map((reason) => `backups.scope.influxdb.${reason}`),
     ...AUTOMATIC_FEATURES.map((id) => `feature.${id}`),
     ...ASSISTANT_STATES.map((state) => `assistant.state.${state}`),
+    ...RELEASE_GROUPS.map((group) => `updates.group.${group.id}`),
     ...[...STEP_IDS, "dashboard"].map((id) => `assistant.step.${id}.title`),
     ...["off", "stopped", "docker", "noAddress"].map((reason) => `assistant.step.dashboard.${reason}`),
     ...["none", "partial", "legacy", "missing", "installed"].map((kind) => `assistant.lead.${kind}`),
@@ -186,7 +187,7 @@ test("no orphan keys: each key is used literally or belongs to a generated famil
     "service.", "services.change.", "services.config.", "services.step.", "services.desired.", "services.status.",
     "backup.type.", "backup.step.", "backup.file.", "backups.scope.", "workflow.owner.", "workflow.state.", "workflow.stale.",
     "diagnostics.check.", "diagnostics.status.", "diagnostics.mode.", "diagnostics.overall.", "diagnostics.count.",
-    "updates.channel.", "updates.state.", "updates.pair.", "updates.step.", "updates.showAll.", "updates.last.", "system.runtime.", "system.source.",
+    "updates.channel.", "updates.group.", "updates.state.", "updates.pair.", "updates.step.", "updates.showAll.", "updates.last.", "system.runtime.", "system.source.",
     "upgrade.sub.", "upgrade.phase.", "upgrade.choice.", "upgrade.migration.", "upgrade.migrationLoses.", "upgrade.end.",
     "system.issue.", "system.deviceState.", "system.broker.", "system.brokerDevices.", "system.metrics.", "system.migrationNeeded.",
     "system.migrationLosesControl.", "settings.kind.", "settings.source.", "settings.config.", "settings.devicesSub.", "recovery.reference.",

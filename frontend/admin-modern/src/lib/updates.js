@@ -14,8 +14,6 @@ export const UPGRADE_STATES = Object.freeze({
   downgrade_blocked: "c-idle",
   identity_unknown: "c-idle",
 });
-export const RELEASES_SHOWN = 6;
-
 /** Whether the running Admin and EMS are a proven pair (admin/system_alignment.py, RUNNING_PAIR_*). */
 export const PAIR_STATES = Object.freeze({
   current: "c-ok",
@@ -61,6 +59,31 @@ export function noteView(note) {
   const text = typeof note === "string" ? note.trim() : "";
   if (!text) return null;
   return Object.hasOwn(RELEASE_NOTES, text) ? { key: RELEASE_NOTES[text], text } : { key: null, text };
+}
+
+/**
+ * Each channel's tone, worn by a dot beside its name: stable green, the
+ * rolling build cyan, a release candidate warm, development violet.
+ */
+export const CHANNEL_TONES = Object.freeze({ stable: "c-bat", rc: "c-pv", latest: "c-out", development: "c-soc", legacy: "c-idle", unknown: "c-idle" });
+
+/** The list's groups in the order an owner reads them: stable releases first, then the rolling build, candidates, development, the rest. */
+export const RELEASE_GROUPS = Object.freeze([
+  { id: "stable", channels: ["stable"] },
+  { id: "latest", channels: ["latest"] },
+  { id: "rc", channels: ["rc"] },
+  { id: "development", channels: ["development"] },
+  { id: "other", channels: ["legacy", "unknown"] },
+]);
+
+/** The releases in their groups, each in the order the server listed them; an empty group is left out. */
+export function groupedReleases(releases) {
+  const list = Array.isArray(releases) ? releases : [];
+  return RELEASE_GROUPS.map((group) => ({
+    id: group.id,
+    tone: CHANNEL_TONES[group.channels[0]],
+    releases: list.filter((release) => group.channels.includes(release.channel)),
+  })).filter((group) => group.releases.length);
 }
 
 export function releaseView(release, catalogue) {

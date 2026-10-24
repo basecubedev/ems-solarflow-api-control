@@ -91,7 +91,8 @@ The synthetic `latest` option maps the rolling Docker channel to setup resources
 from the repository's `main` branch. It is selectable when those resources can be
 verified, but it is never treated as stable and never replaces the newest
 supported stable release as the default. If stable resources cannot be found,
-`latest` is the fallback. Resource availability is checked again during
+`latest` is the fallback for a setup, and for an upgrade only where nothing
+identifiable runs (see the upgrade rule below). Resource availability is checked again during
 preparation before the strict extraction whitelist is applied.
 
 The build-identity gate only applies to the **maintenance/upgrade** flow, which
@@ -111,9 +112,12 @@ read the same config schema and the same database — the SQLite store grows by
 without noticing, and `ems.config` refuses a `config_schema_version` it does not
 know by name rather than misreading it — and a minor or major step down is where
 those two statements stop holding. A rollback is `rollback_available`,
-selectable, and never what the console proposes: the default is always the
-newest release that is not behind the running build, falling back to the rolling
-channel when there is none. When the running EMS build can be inspected
+selectable, and never what the console proposes: the default is the newest
+stable release that is neither the running build nor behind it. The rolling
+channel is the fallback only when nothing identifiable runs (a rolling `latest`
+install, a container whose release cannot be told, or no installation); with a
+stable release, a release candidate or a development build running and no newer
+stable release, nothing is proposed and the reader chooses. When the running EMS build can be inspected
 (the running container's image, or the compose-declared image when it is stopped),
 each target is compared by build identity rather than tag name alone, because
 `latest` is a channel, not a version. In order: an identical image digest is
