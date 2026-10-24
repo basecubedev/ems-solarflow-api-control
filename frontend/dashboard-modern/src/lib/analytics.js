@@ -27,7 +27,7 @@ export const SERIES_STYLE = Object.freeze({
   home: { token: "--output" },
   ac_charge: { token: "--grid" },
   target: { token: "--m-accent", fill: false },
-  soc: { token: "--battery", unit: "%" },
+  soc: { token: "--soc", ink: "--soc-ink", unit: "%", fill: false, dash: [6, 4] },
 });
 
 const pos = (v) => Math.max(0, v);
@@ -49,7 +49,7 @@ export function viewById(id) {
   return ANALYTICS_VIEWS.find((view) => view.id === id) || ANALYTICS_VIEWS[0];
 }
 
-/** The series one request asks for: the view's own plus the power overlays the reader switched on. */
+/** The series one request asks for: the view's own plus the overlays the reader switched on. */
 export function requestedSeries(view, overlays) {
   const ids = [...view.series];
   overlays.forEach((id) => {

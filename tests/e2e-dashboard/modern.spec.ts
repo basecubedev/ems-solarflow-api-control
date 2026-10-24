@@ -209,22 +209,23 @@ test.describe("Modern dashboard @smoke", () => {
     await expect(page.getByRole("button", { name: "7 d", exact: true })).toBeVisible();
   });
 
-  test("a zoom of the main analytics chart takes the state-of-charge chart along", async ({ page }) => {
+  test("the state of charge joins the main analytics chart on its own percent scale on the right", async ({ page }) => {
     const requests: string[] = [];
     page.on("request", (request) => {
       if (request.url().includes("/api/analytics/series")) requests.push(request.url());
     });
+    const asksForSoc = (url: string) => (new URL(url).searchParams.get("series") || "").split(",").includes("soc");
     await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
-    await expect(page.locator(".chart .u-over").first()).toBeVisible();
+    const chart = page.locator(".chart").first();
+    await expect(chart.locator(".u-over")).toBeVisible();
+    const rightGap = () => chart.evaluate((host) => host.getBoundingClientRect().right - host.querySelector(".u-over")!.getBoundingClientRect().right);
+    const before = await rightGap();
     await page.getByRole("button", { name: "State of charge", exact: true }).click();
-    await expect(page.locator(".chart .u-over")).toHaveCount(2);
-    await page.getByTestId("chart-zoom-in").nth(1).click();
-    await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(1);
-    await page.getByTestId("chart-zoom-in").first().click();
-    const charts = page.locator(".card").filter({ has: page.locator(".chart .u-over") });
-    await expect(charts.nth(0).getByTestId("chart-zoom-reset")).toBeVisible();
-    await expect(charts.nth(1).getByTestId("chart-zoom-reset")).toHaveCount(0);
-    await expect.poll(() => requests.some((url) => /series=soc(&|$)/.test(url) && url.includes("start="))).toBe(true);
+    await expect(page.locator(".legend-item").filter({ hasText: "State of charge" })).toContainText("%");
+    await expect(page.locator(".chart .u-over")).toHaveCount(1);
+    await expect.poll(rightGap).toBeGreaterThan(before + 20);
+    await page.getByTestId("chart-zoom-in").click();
+    await expect.poll(() => requests.some((url) => asksForSoc(url) && url.includes("start="))).toBe(true);
   });
 
   test("Escape that closes the appearance menu or the sign-in keeps the zoom", async ({ page }) => {
@@ -246,11 +247,11 @@ test.describe("Modern dashboard @smoke", () => {
     await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(0);
   });
 
-  test("an unavailable range hides the state-of-charge chart with the main one", async ({ page }) => {
+  test("an unavailable range hides the chart with the state of charge on", async ({ page }) => {
     await page.route("**/api/analytics/series**", (route) => (route.request().url().includes("range=7d") ? route.fulfill({ json: { available: false, reason: "unreachable" } }) : route.continue()));
     await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "State of charge", exact: true }).click();
-    await expect(page.locator(".chart .u-over")).toHaveCount(2);
+    await expect(page.locator(".legend-item").filter({ hasText: "State of charge" })).toBeVisible();
     await page.getByRole("button", { name: "7 d", exact: true }).click();
     await expect(page.getByTestId("analytics-unavailable")).toBeVisible();
     await expect(page.locator(".chart .u-over")).toHaveCount(0);

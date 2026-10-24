@@ -23,7 +23,6 @@
   let device = $state("");
   let overlays = $state([]);
   let data = $state.raw(null);
-  let socData = $state.raw(null);
   let loading = $state(false);
   let error = $state(false);
   let showTable = $state(false);
@@ -40,8 +39,7 @@
   const f = $derived(fmt());
   const view = $derived(viewById(viewId));
   const names = $derived(devices().map((d) => d.name));
-  const powerOverlays = $derived(overlays.filter((id) => id !== "soc"));
-  const seriesIds = $derived(requestedSeries(view, powerOverlays));
+  const seriesIds = $derived(requestedSeries(view, overlays));
   const chartSeries = $derived(seriesIds.map((id) => ({ id, label: t(`series.${id}`), ...SERIES_STYLE[id] })));
   const rangeLabel = $derived(periodLabel(data && dataPeriod ? dataPeriod : { zoom, applied, range }));
   const chartHasData = $derived(seriesIds.some((id) => (data?.series?.[id] || []).some((value) => value !== null && value !== undefined)));
@@ -103,27 +101,20 @@
     loading = true;
     const asked = zoom;
     const period = { zoom, applied, range };
-    const key = JSON.stringify([seriesIds, timeParams(), device, overlays.includes("soc")]);
+    const key = JSON.stringify([seriesIds, timeParams(), device]);
     if (key !== failedKey) error = false;
     const devicesParam = device ? [device] : undefined;
     try {
-      const [main, soc] = await Promise.all([
-        fetchSeries({ source: "analytics", ...timeParams(), series: seriesIds, devices: devicesParam, signal: mine.signal }),
-        overlays.includes("soc")
-          ? fetchSeries({ source: "analytics", ...timeParams(), series: ["soc"], devices: devicesParam, signal: mine.signal })
-          : Promise.resolve(null),
-      ]);
+      const main = await fetchSeries({ source: "analytics", ...timeParams(), series: seriesIds, devices: devicesParam, signal: mine.signal });
       if (!main.available) {
         unavailable = { reason: main.reason, hint: main.hint };
         data = null;
-        socData = null;
         dataKey = "";
         clearTimeout(zoomTimer);
         zoom = asked;
       } else {
         unavailable = null;
         data = main;
-        socData = soc;
         dataPeriod = period;
         dataKey = key;
         failedKey = "";
@@ -134,10 +125,7 @@
       if (err?.name !== "AbortError") {
         error = true;
         failedKey = key;
-        if (key !== dataKey) {
-          data = null;
-          socData = null;
-        }
+        if (key !== dataKey) data = null;
       }
     } finally {
       if (controller === mine) loading = false;
@@ -154,7 +142,6 @@
     void range;
     void applied;
     void device;
-    void overlays.includes("soc");
     untrack(() => {
       clearTimeout(zoomTimer);
       zoom = null;
@@ -305,11 +292,6 @@
     {/if}
   </Card>
 
-  {#if overlays.includes("soc") && !unavailable && !(error && !data)}
-    <Card title={t("series.soc")} span="span-12">
-      <TimeChart series={[{ id: "soc", label: t("series.soc"), token: "--battery", unit: "%", fill: false }]} time={socData?.time || []} values={socData?.series || {}} emptyText={socData ? "" : t("chart.loading")} kind="percent" height={180} label={t("series.soc")} scope={`${zoomScope}|${zoom ? `${zoom.start}-${zoom.end}` : ""}`} />
-    </Card>
-  {/if}
 {/if}
 
 <style>

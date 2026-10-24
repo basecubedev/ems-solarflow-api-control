@@ -54,6 +54,7 @@ def test_every_colour_scheme_defines_every_role():
         ("--m-text", ("--m-bg", "--m-surface-1", "--m-surface-2", "--m-surface-3")),
         ("--m-muted", ("--m-bg", "--m-surface-1", "--m-surface-2", "--m-surface-3")),
         ("--m-muted-2", ("--m-bg", "--m-surface-1", "--m-surface-2", "--m-surface-3")),
+        ("--soc-ink", ("--m-bg", "--m-surface-1", "--m-surface-2", "--m-surface-3")),
         ("--m-accent-ink", ("--m-accent",)),
         ("--m-selected-ink", ("--m-selected-bg",)),
     ],

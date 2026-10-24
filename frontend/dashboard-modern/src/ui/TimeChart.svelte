@@ -15,7 +15,9 @@
    * may zoom is the fixed ``xRange``, else ``bounds``, else the loaded data;
    * ``onzoom`` hears every window, and null for the way back, so a page can
    * read the window from the server. A page that leaves the zoom by itself
-   * changes ``scope``.
+   * changes ``scope``. A series in percent reads against its own 0-100
+   * scale on the right, as Classic draws the SoC, labelled in the series'
+   * ``ink`` -- a text colour, since the line's own may be too dark to read.
    */
   let {
     series,
@@ -23,7 +25,6 @@
     values = {},
     xRange = null,
     height = 300,
-    kind = "power",
     showTable = false,
     label = "",
     emptyText = "",
@@ -92,12 +93,15 @@
 
   function valueText(value, s) {
     if (value === null || value === undefined) return "—";
-    if (kind === "percent" || s?.unit === "%") return f.percent(value);
+    if (s?.unit === "%") return f.percent(value);
     return f.power(value, { signed: Boolean(s?.signed) });
   }
 
+  function onPercentScale(s) {
+    return s.unit === "%";
+  }
+
   function axisValue(value) {
-    if (kind === "percent") return f.percent(value);
     if (value === 0) return "0";
     return Math.abs(value) >= 1000 ? `${f.number(value / 1000, 1)} kW` : `${f.number(value, 0)} W`;
   }
@@ -204,11 +208,12 @@
       ticks: { show: false },
       grid: { stroke: token("--m-line"), width: 1 },
     };
+    const percent = series.find(onPercentScale);
     chart = new uPlot(
       {
         width: host.clientWidth || 600,
         height,
-        padding: [8, 18, 0, 0],
+        padding: [8, percent ? 0 : 18, 0, 0],
         legend: { show: false },
         cursor: { y: false, drag: { x: true, y: false, setScale: false }, points: { size: 7, width: 2 } },
         scales: {
@@ -216,9 +221,8 @@
             time: true,
             range: (u, min, max) => (zoomWindow ? [zoomWindow.min, zoomWindow.max] : xRange ? [xRange[0], xRange[1]] : [min, max]),
           },
-          y: kind === "percent"
-            ? { range: [0, 100] }
-            : { range: (u, min, max) => [Math.min(0, Math.floor((min || 0) / 500) * 500), Math.max(500, Math.ceil((max || 0) / 500) * 500)] },
+          y: { range: (u, min, max) => [Math.min(0, Math.floor((min || 0) / 500) * 500), Math.max(500, Math.ceil((max || 0) / 500) * 500)] },
+          ...(percent ? { pct: { range: [0, 100] } } : {}),
         },
         axes: [
           {
@@ -227,6 +231,9 @@
             values: (u, splits) => splits.map(tickText),
           },
           { ...axis, size: 66, values: (u, splits) => splits.map(axisValue) },
+          ...(percent
+            ? [{ ...axis, scale: "pct", side: 1, size: 56, stroke: token(percent.ink || "--m-muted"), grid: { show: false }, values: (u, splits) => splits.map((value) => f.percent(value)) }]
+            : []),
         ],
         series: [
           {},
@@ -234,7 +241,9 @@
             const color = token(s.token);
             return {
               label: s.id,
+              scale: onPercentScale(s) ? "pct" : "y",
               stroke: color,
+              dash: s.dash,
               width: 1.75,
               fill: s.fill === false ? undefined : areaFill(color),
               points: { show: false },
@@ -255,7 +264,7 @@
   }
 
   $effect(() => {
-    const next = [series.map((s) => s.id).join(","), prefs.theme, prefs.lang, height, kind, xRange ? xRange.join("-") : ""].join("|");
+    const next = [series.map((s) => s.id).join(","), prefs.theme, prefs.lang, height, xRange ? xRange.join("-") : ""].join("|");
     const reach = `${scope}|${xRange ? xRange.join("-") : ""}`;
     if (zoomScope !== null && reach !== zoomScope) {
       zoomWindow = null;
@@ -309,7 +318,7 @@
     <span class="legend-time num">{shownIndex !== null ? stampText(prepared.time[shownIndex]) : ""}</span>
     {#each series as s, index (s.id)}
       <span class="legend-item" style:--c={`var(${s.token})`}>
-        <i></i>{s.label}<b class="num">{shownIndex !== null ? valueText(prepared.lists[index][shownIndex], s) : "—"}</b>
+        <i class:dash={Boolean(s.dash)}></i>{s.label}<b class="num">{shownIndex !== null ? valueText(prepared.lists[index][shownIndex], s) : "—"}</b>
       </span>
     {/each}
     <span class="zoom">
@@ -352,6 +361,7 @@
   @media (pointer: coarse) { .zoom-hint { display: none; } }
   .legend-item { display: inline-flex; align-items: center; gap: 7px; color: var(--m-muted); }
   .legend-item i { width: 10px; height: 10px; border-radius: 3px; background: var(--c); }
+  .legend-item i.dash { width: 12px; height: 0; border-radius: 0; background: none; border-top: 2px dashed var(--c); }
   .legend-item b { color: var(--m-text); font-weight: 600; min-width: 54px; }
   .chart { width: 100%; min-height: 120px; cursor: crosshair; }
   .chart :global(.u-over) { cursor: crosshair; }

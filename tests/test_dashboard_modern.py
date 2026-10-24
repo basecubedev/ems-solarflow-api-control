@@ -150,6 +150,14 @@ def test_the_shared_energy_colours_have_the_contract_values():
         assert modern[token].strip().lower() == classic[token].strip().lower(), token
 
 
+def test_the_soc_is_drawn_in_the_colour_classic_draws_it_in():
+    classic_token = re.search(r'soc:\s*\{[^}]*colorVar:\s*"([^"]+)"', (STATIC / "app.js").read_text(encoding="utf-8")).group(1)
+    classic = root_block(CLASSIC_CSS.read_text(encoding="utf-8"))
+    modern = root_block(TOKENS_CSS.read_text(encoding="utf-8"))
+    assert re.search(r'soc: \{ token: "--soc"', (SOURCE / "src" / "lib" / "analytics.js").read_text(encoding="utf-8"))
+    assert modern["--soc"].strip().lower() == classic[classic_token].strip().lower()
+
+
 def test_no_colour_literal_outside_the_token_blocks():
     assert_no_colour_literal_outside_the_token_blocks(MODERN_CSS.read_text(encoding="utf-8"))
 
