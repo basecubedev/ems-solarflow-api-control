@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The Modern dashboard at /modern/, against the same preview server and the
-// same API as Classic. Never `waitUntil: "networkidle"`: /api/events stays open.
+// The Modern dashboard at the root, against the same preview server and the
+// same API as the deprecated Classic at /classic/. Never `waitUntil: "networkidle"`: /api/events stays open.
 import { expect, test } from "@playwright/test";
 import { pinTheDay } from "./pin-the-day";
 
@@ -27,49 +27,46 @@ async function settled(locator) {
 }
 
 async function openModern(page, hash = "#/overview") {
-  await page.goto(`/modern/${hash}`, { waitUntil: "domcontentloaded" });
+  await page.goto(`/${hash}`, { waitUntil: "domcontentloaded" });
   await expect(page.getByTestId("ems-state")).toBeVisible();
 }
 
 test.describe("Modern dashboard @smoke", () => {
-  test("demo mode and a browser too old for Modern stay on Classic whatever the choice", async ({ page }) => {
-    await page.goto("/?ui=modern", { waitUntil: "domcontentloaded" });
-    await expect(page).toHaveURL(/\/modern\/$/);
+  test("demo mode, ?ui=classic and a browser too old for Modern go to Classic", async ({ page }) => {
     await page.goto("/?Demo=TRUE", { waitUntil: "domcontentloaded" });
+    await expect(page).toHaveURL(/\/classic\/\?Demo=TRUE$/);
     await expect(page.locator("#themeSelect")).toBeVisible();
-    await expect(page).toHaveURL(/\/\?Demo=TRUE$/);
+    await page.goto("/?ui=classic", { waitUntil: "domcontentloaded" });
+    await expect(page).toHaveURL(/\/classic\/\?ui=classic$/);
     await page.goto("/?demo=0", { waitUntil: "domcontentloaded" });
-    await expect(page).toHaveURL(/\/modern\/$/);
+    await expect(page.getByTestId("ems-state")).toBeVisible();
+    await expect(page).toHaveURL(/:\d+\/\?demo=0$/);
 
     await page.addInitScript(() => {
       delete HTMLElement.prototype.popover;
     });
     await page.goto("/", { waitUntil: "domcontentloaded" });
+    await expect(page).toHaveURL(/\/classic\/$/);
     await expect(page.locator("#themeSelect")).toBeVisible();
-    await expect(page).not.toHaveURL(/modern/);
   });
 
-  test("Classic links to Modern, Modern back to Classic, and the choice is remembered", async ({ page }) => {
-    await page.goto("/?ui=classic", { waitUntil: "domcontentloaded" });
-    await expect(page.locator("#themeSelect")).toBeVisible();
-    await page.locator("#modernLink").click();
-    await expect(page).toHaveURL(/\/modern\/$/);
-    await expect(page.getByTestId("ems-state")).toBeVisible();
-
+  test("Modern answers at the root, Classic under /classic/ says it is deprecated, and each links to the other", async ({ page }) => {
     await page.goto("/", { waitUntil: "domcontentloaded" });
-    await expect(page).toHaveURL(/\/modern\//);
-
+    await expect(page.getByTestId("ems-state")).toBeVisible();
     await page.getByTestId("switch-classic").click();
-    await expect(page).toHaveURL(/\/\?ui=classic$/);
-    await expect(page.locator("#themeSelect")).toBeVisible();
+    await expect(page).toHaveURL(/\/classic\/$/);
+    await expect(page.locator("#classicNotice")).toContainText("deprecated");
+    await page.locator("#modernLink").click();
+    await expect(page).toHaveURL(/:\d+\/$/);
+    await expect(page.getByTestId("ems-state")).toBeVisible();
     await page.goto("/", { waitUntil: "domcontentloaded" });
-    await expect(page).not.toHaveURL(/modern/);
+    await expect(page.getByTestId("ems-state")).toBeVisible();
   });
 
-  test("a browser that has never chosen opens Modern", async ({ page }) => {
-    await page.goto("/", { waitUntil: "domcontentloaded" });
-    await expect(page).toHaveURL(/\/modern\/$/);
-    await expect(page.getByTestId("ems-state")).toBeVisible();
+  test("a bookmark of the old Modern address opens the same page at the root", async ({ page }) => {
+    await page.goto("/modern/#/energy", { waitUntil: "domcontentloaded" });
+    await expect(page).toHaveURL(/:\d+\/#\/energy$/);
+    await expect(page.getByTestId("energy-periods")).toBeVisible();
   });
 
   test("the overview shows the status, the energy flow and the live values", async ({ page }) => {
@@ -112,13 +109,13 @@ test.describe("Modern dashboard @smoke", () => {
     await expect(page.getByTestId("device-card")).toHaveCount(2);
     await expect(page.getByTestId("grid-meter")).toBeVisible();
 
-    await page.goto("/modern/#/energy", { waitUntil: "domcontentloaded" });
+    await page.goto("/#/energy", { waitUntil: "domcontentloaded" });
     await expect(page.getByTestId("energy-periods")).toContainText(/Last 7 days\s*18\.4\d?\skWh/);
     await page.getByRole("button", { name: "Table" }).click();
     await expect(page.locator("table.data tbody tr")).toHaveCount(12);
     await expect(page.locator("table.data")).toContainText(/\d\skWh/);
 
-    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".kpi").filter({ hasText: "Current SoC" })).toContainText("60%");
   });
 
@@ -151,7 +148,7 @@ test.describe("Modern dashboard @smoke", () => {
   test("the rules say why they are on, and a chart zooms and resets", async ({ page }) => {
     await openModern(page);
     await expect(page.getByTestId("active-rules")).toContainText("preview control loop active");
-    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
     const plot = page.locator(".chart .u-over").first();
     await expect(plot).toBeVisible();
     const box = await plot.boundingBox();
@@ -176,7 +173,7 @@ test.describe("Modern dashboard @smoke", () => {
     page.on("request", (request) => {
       if (request.url().includes("/api/analytics/series")) requests.push(request.url());
     });
-    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
     const plot = page.locator(".chart .u-over").first();
     await expect(plot).toBeVisible();
     await expect.poll(() => requests.length).toBeGreaterThan(0);
@@ -199,13 +196,13 @@ test.describe("Modern dashboard @smoke", () => {
 
   test("analytics that are not set up say so", async ({ page }) => {
     await page.route("**/api/analytics/status", (route) => route.fulfill({ json: { available: false, reason: "not_configured" } }));
-    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
     await expect(page.getByTestId("analytics-unavailable")).toContainText("InfluxDB analytics is not configured");
   });
 
   test("an analytics schema that is incomplete says so with the server's fix", async ({ page }) => {
     await page.route("**/api/analytics/series**", (route) => route.fulfill({ json: { available: false, reason: "schema_incomplete", hint: "Run:\nems-admin repair analytics" } }));
-    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
     const info = page.getByTestId("analytics-unavailable");
     await expect(info).toContainText("The InfluxDB analytics schema is incomplete");
     await expect(info).toContainText("ems-admin repair analytics");
@@ -217,7 +214,7 @@ test.describe("Modern dashboard @smoke", () => {
     page.on("request", (request) => {
       if (request.url().includes("/api/analytics/series")) requests.push(request.url());
     });
-    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".chart .u-over").first()).toBeVisible();
     await page.getByRole("button", { name: "State of charge", exact: true }).click();
     await expect(page.locator(".chart .u-over")).toHaveCount(2);
@@ -231,7 +228,7 @@ test.describe("Modern dashboard @smoke", () => {
   });
 
   test("Escape that closes the appearance menu or the sign-in keeps the zoom", async ({ page }) => {
-    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".chart .u-over").first()).toBeVisible();
     await page.getByTestId("chart-zoom-in").first().click();
     await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(1);
@@ -251,7 +248,7 @@ test.describe("Modern dashboard @smoke", () => {
 
   test("an unavailable range hides the state-of-charge chart with the main one", async ({ page }) => {
     await page.route("**/api/analytics/series**", (route) => (route.request().url().includes("range=7d") ? route.fulfill({ json: { available: false, reason: "unreachable" } }) : route.continue()));
-    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "State of charge", exact: true }).click();
     await expect(page.locator(".chart .u-over")).toHaveCount(2);
     await page.getByRole("button", { name: "7 d", exact: true }).click();
@@ -266,7 +263,7 @@ test.describe("Modern dashboard @smoke", () => {
       if (fail && route.request().url().includes("start=")) return route.fulfill({ status: 500, json: { error: "boom" } });
       return route.continue();
     });
-    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".chart .u-over").first()).toBeVisible();
     fail = true;
     await page.getByTestId("chart-zoom-in").first().click();
@@ -281,7 +278,7 @@ test.describe("Modern dashboard @smoke", () => {
     page.on("request", (request) => {
       if (request.url().includes("/api/analytics/series")) requests.push(request.url());
     });
-    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".chart .u-over").first()).toBeVisible();
     await page.getByTestId("chart-zoom-in").first().click();
     await expect(page.getByTestId("chart-zoom-reset")).toHaveCount(1);
@@ -306,7 +303,7 @@ test.describe("Modern dashboard @smoke", () => {
   });
 
   test("a custom analytics range names the KPIs' period by its length", async ({ page }) => {
-    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".chart .u-over").first()).toBeVisible();
     await page.getByRole("textbox", { name: "From", exact: true }).fill("2026-10-19T00:00");
     await page.getByRole("textbox", { name: "To", exact: true }).fill("2026-10-22T12:00");
@@ -316,7 +313,7 @@ test.describe("Modern dashboard @smoke", () => {
 
   test("a range whose read fails says so instead of keeping the last range under the new label", async ({ page }) => {
     await page.route("**/api/analytics/series**", (route) => (route.request().url().includes("range=7d") ? route.fulfill({ status: 500, json: { error: "boom" } }) : route.continue()));
-    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".chart .u-over").first()).toBeVisible();
     await page.getByRole("button", { name: "7 d", exact: true }).click();
     await expect(page.getByText("Could not load this data.")).toBeVisible();
@@ -338,7 +335,7 @@ test.describe("Modern dashboard @smoke", () => {
     await page.clock.install();
     let fail = false;
     await page.route("**/api/analytics/series**", (route) => (fail ? route.fulfill({ status: 500, json: { error: "boom" } }) : route.continue()));
-    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".chart .u-over").first()).toBeVisible();
     fail = true;
     await page.clock.fastForward(31_000);
@@ -366,7 +363,7 @@ test.describe("Modern dashboard @smoke", () => {
       }
       return route.continue();
     });
-    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".chart .u-over").first()).toBeVisible();
     await page.getByRole("button", { name: "7 d", exact: true }).click();
     await expect(page.getByText("Could not load this data.")).toBeVisible();
@@ -406,7 +403,7 @@ test.describe("Modern dashboard @smoke", () => {
       await gate;
       await route.continue().catch(() => undefined);
     });
-    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".chart .u-over").first()).toBeVisible();
     await page.getByTestId("chart-zoom-in").first().click();
     await expect.poll(() => held).toBe(1);
@@ -422,7 +419,7 @@ test.describe("Modern dashboard @smoke", () => {
       if (refuse && route.request().url().includes("start=")) return route.fulfill({ json: { available: false, reason: "schema_incomplete", hint: "missing bucket" } });
       return route.continue();
     });
-    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".chart .u-over").first()).toBeVisible();
     refuse = true;
     await page.getByTestId("chart-zoom-in").first().click();
@@ -441,7 +438,7 @@ test.describe("Modern dashboard @smoke", () => {
       if (route.request().url().includes("range=7d")) return route.fulfill({ json: { available: false, reason: "unreachable", hint: "InfluxDB did not answer." } });
       return route.continue();
     });
-    await page.goto("/modern/#/analytics", { waitUntil: "domcontentloaded" });
+    await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
     await expect(page.locator(".chart .u-over").first()).toBeVisible();
     await page.getByRole("button", { name: "7 d", exact: true }).click();
     await expect(page.getByTestId("analytics-unavailable")).toContainText("InfluxDB analytics is not reachable");
@@ -903,11 +900,11 @@ test.describe("Modern dashboard writes @smoke", () => {
     const form = page.locator('form[data-endpoint="/api/runtime/device/WR1"]');
     await expect(form.locator('select[name="fan"] option')).toContainText(["Stufe 1", "Stufe 2"]);
     await expect(form).toContainText("Automatisch lässt den Wechselrichter den Lüfter");
-    await page.goto("/modern/#/devices", { waitUntil: "domcontentloaded" });
+    await page.goto("/#/devices", { waitUntil: "domcontentloaded" });
     const card = page.getByTestId("device-card").first();
     await card.getByText("Geräteeinstellungen").click();
     await expect(card).toContainText(/Licht\s*An/);
-    await page.goto("/modern/#/overview", { waitUntil: "domcontentloaded" });
+    await page.goto("/#/overview", { waitUntil: "domcontentloaded" });
     await page.getByText(/\d Regeln inaktiv/).click();
     await expect(page.getByText("inaktiv · alle Geräte online")).toBeVisible();
   });

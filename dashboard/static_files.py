@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Safe static asset lookup for the local dashboard servers."""
+"""Safe static asset lookup for the local dashboard servers, and the dashboard's addresses."""
 
 import os
 
@@ -51,8 +51,10 @@ def static_asset_key(request_path):
 def lookup_static_asset(assets, request_path):
     """Resolve a request to an indexed asset, serving ``<dir>/index.html`` for a directory.
 
-    The Modern dashboard is a second entry page at ``/modern/``; the root page
-    keeps its own mapping in :func:`static_asset_key`.
+    The Admin console's Modern front end is a second entry page at
+    ``/modern/``; the root page keeps its own mapping in
+    :func:`static_asset_key`. The dashboard maps its addresses onto the tree
+    first, in :func:`dashboard_asset_path`.
     """
 
     key = static_asset_key(request_path)
@@ -62,3 +64,54 @@ def lookup_static_asset(assets, request_path):
     if asset is not None:
         return asset
     return assets.get(f"{key}/index.html")
+
+
+CLASSIC_PREFIX = "/classic/"
+MODERN_DIR = "modern"
+LEGACY_MODERN_PATH = "/modern"
+SHARED_ROOT_FILES = frozenset({"uPlot.min.css", "uPlot.iife.min.js", "uPlot.LICENSE"})
+
+
+def dashboard_redirect(request_path, query=""):
+    """The ``Location`` an old dashboard address moved to, or ``None``.
+
+    The Modern dashboard was served at ``/modern/`` and now answers at the
+    root, so a bookmark of the old address is sent there; ``/classic`` gets
+    its slash so the Classic page's relative world stays one directory. The
+    servers send it as a temporary redirect that is never cached: a browser
+    that remembered it would loop between ``/`` and ``/modern/`` after a
+    return to an earlier release, whose ``/`` still sends it to ``/modern/``.
+    The query goes along, and a line break is percent-encoded, since the
+    value is written into a response header.
+    """
+
+    if request_path == LEGACY_MODERN_PATH or request_path.startswith(LEGACY_MODERN_PATH + "/"):
+        moved = "/" + request_path[len(LEGACY_MODERN_PATH):].lstrip("/")
+    elif request_path == CLASSIC_PREFIX.rstrip("/"):
+        moved = CLASSIC_PREFIX
+    else:
+        return None
+    location = f"{moved}?{query}" if query else moved
+    return location.replace("\r", "%0D").replace("\n", "%0A")
+
+
+def dashboard_asset_path(request_path):
+    """The path inside the static tree that a dashboard address serves, or ``None``.
+
+    The Modern dashboard answers at the root from its build directory; the
+    deprecated Classic dashboard answers under ``/classic/`` from the files at
+    the static root, where they have always been. The two trees stay apart: a
+    Classic address never reaches the Modern build. uPlot is the one exception
+    (``SHARED_ROOT_FILES``): it is vendored once, hash-pinned in the licence
+    inventory, and both pages load it from the root.
+    """
+
+    if request_path.startswith(CLASSIC_PREFIX):
+        key = static_asset_key("/" + request_path[len(CLASSIC_PREFIX):])
+        if key is None or key.split("/", 1)[0] == MODERN_DIR:
+            return None
+        return "/" + key
+    name = request_path.lstrip("/")
+    if name in SHARED_ROOT_FILES:
+        return "/" + name
+    return f"/{MODERN_DIR}/{name}"

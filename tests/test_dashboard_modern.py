@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Contracts of the Modern dashboard, the second entry page at ``/modern/``.
+"""Contracts of the Modern dashboard, at ``/`` beside the deprecated Classic at ``/classic/``.
 
 Modern is a build output committed under ``dashboard/static/modern/``. These
 tests hold that output to the rules the hand-written Classic page follows by
@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from dashboard.server import start_dashboard_server
-from dashboard.static_files import build_static_asset_index, lookup_static_asset
+from dashboard.static_files import build_static_asset_index, dashboard_asset_path, dashboard_redirect, lookup_static_asset
 from tests.modern_frontend import (
     TOKENS_CSS,
     assert_build_matches_source,
@@ -64,23 +64,48 @@ def _request(server, path):
         conn.close()
 
 
-def test_the_modern_entry_page_resolves_for_both_spellings():
+def _served(assets, path):
+    asset_path = dashboard_asset_path(path)
+    return lookup_static_asset(assets, asset_path) if asset_path else None
+
+
+def test_modern_answers_at_the_root_and_classic_under_classic():
     assets = build_static_asset_index(str(STATIC))
-    for path in ("/modern/", "/modern"):
-        full_path, content_type = lookup_static_asset(assets, path)
+    for path in ("/", "/index.html"):
+        full_path, content_type = _served(assets, path)
         assert full_path.endswith("modern/index.html")
         assert content_type.startswith("text/html")
-    assert lookup_static_asset(assets, "/")[0].endswith("static/index.html")
-    assert lookup_static_asset(assets, "/modern/../../server.py") is None
-    assert lookup_static_asset(assets, "/nowhere/") is None
+    assert _served(assets, "/classic/")[0].endswith("static/index.html")
+    assert _served(assets, "/classic/app.js")[0].endswith("static/app.js")
+    assert _served(assets, "/uPlot.iife.min.js")[0].endswith("static/uPlot.iife.min.js")
+    assert _served(assets, "/app.js") is None
+    assert _served(assets, "/classic/modern/index.html") is None
+    assert _served(assets, "/classic/./modern/index.html") is None
+    assert _served(assets, "/classic//modern/index.html") is None
+    assert _served(assets, "/classic/./app.js")[0].endswith("static/app.js")
+    assert _served(assets, "/../../server.py") is None
+    assert _served(assets, "/classic/../../server.py") is None
+    assert _served(assets, "/nowhere/") is None
+
+
+def test_the_old_addresses_move_to_the_new_ones():
+    assert dashboard_redirect("/modern") == "/"
+    assert dashboard_redirect("/modern/") == "/"
+    assert dashboard_redirect("/modern/assets/modern.js") == "/assets/modern.js"
+    assert dashboard_redirect("/classic") == "/classic/"
+    assert dashboard_redirect("/modernity") is None
+    assert dashboard_redirect("/") is None
+    assert dashboard_redirect("/modern/", "demo=1") == "/?demo=1"
+    assert dashboard_redirect("/modern/a\r\nSet-Cookie: x", "b=\n") == "/a%0D%0ASet-Cookie: x?b=%0A"
 
 
 def test_the_bundle_is_served_with_types_nosniff_accepts():
     assets = build_static_asset_index(str(STATIC))
-    assert lookup_static_asset(assets, "/modern/assets/modern.js")[1].startswith("application/javascript")
-    assert lookup_static_asset(assets, "/modern/assets/modern.css")[1].startswith("text/css")
-    assert lookup_static_asset(assets, "/modern/assets/inter-latin-wght-normal.woff2")[1] == "font/woff2"
-    assert lookup_static_asset(assets, "/modern/licenses.json")[1].startswith("application/json")
+    assert _served(assets, "/assets/modern.js")[1].startswith("application/javascript")
+    assert _served(assets, "/assets/modern.css")[1].startswith("text/css")
+    assert _served(assets, "/assets/inter-latin-wght-normal.woff2")[1] == "font/woff2"
+    assert _served(assets, "/licenses.json")[1].startswith("application/json")
+    assert _served(assets, "/fallback.js")[1].startswith("application/javascript")
 
 
 def test_the_server_serves_modern_under_the_same_security_headers():
@@ -89,14 +114,18 @@ def test_the_server_serves_modern_under_the_same_security_headers():
     except PermissionError as exc:
         pytest.skip(f"local socket creation is not permitted: {exc}")
     try:
-        status, headers, body = _request(server, "/modern/")
+        status, headers, _ = _request(server, "/modern/?demo=1")
+        assert status == 302
+        assert headers["Location"] == "/?demo=1"
+        assert headers["Cache-Control"] == "no-store"
+        status, headers, body = _request(server, "/")
         assert status == 200
         assert b'<div id="app">' in body
         assert headers["X-Content-Type-Options"] == "nosniff"
         assert "script-src 'self'" in headers["Content-Security-Policy"]
         assert "style-src 'self'" in headers["Content-Security-Policy"]
         assert headers.get("ETag")
-        status, headers, _ = _request(server, "/modern/assets/inter-latin-wght-normal.woff2")
+        status, headers, _ = _request(server, "/assets/inter-latin-wght-normal.woff2")
         assert status == 200
         assert headers["Content-Type"] == "font/woff2"
     finally:

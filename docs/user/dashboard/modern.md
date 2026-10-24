@@ -2,11 +2,11 @@
 
 ## Purpose
 
-The dashboard has two views of the same installation. **Classic** is the
-cockpit the other guides in this section describe. **Modern** is a newer
-layout at `/modern/` on the same port: the same data, the same password and
-the same runtime settings, arranged in a sidebar with one page per topic, in
-English, German, Dutch or French.
+The dashboard's address opens **Modern**: a sidebar with one page per topic,
+in English, German, Dutch or French. **Classic**, the cockpit the other guides
+in this section describe, is deprecated and still answers at `/classic/` on the
+same port until a later release removes it: the same data, the same password
+and the same runtime settings.
 
 Both views read the same API and write through the same checks. Nothing you
 do in one is hidden from the other, and switching between them changes nothing
@@ -42,21 +42,21 @@ bar uses the same password as Classic and the Admin Console.
 
 ## Switching between the two
 
-- In Classic, the header has a **New dashboard** link.
 - In Modern, the foot of the sidebar has **Classic view** (on a phone, under
-  **More**).
+  **More**). It opens `/classic/`.
+- In Classic, the header has a **New dashboard** link back to the address, and
+  a line at the top says that Classic is deprecated.
 
-Modern is the default: a browser that has never chosen opens Modern at the
-dashboard's address. The browser remembers the choice: opening the address
-again takes you to the view you used last. Adding `?ui=classic` or `?ui=modern` to the
-address sets the choice explicitly, which is useful for a bookmark or for a
-screen that stays on in one room. Each browser keeps its own choice, so a
-tablet in the hall can show Modern while a laptop shows Classic.
+Nothing is remembered: the dashboard's address always opens Modern, and
+Classic opens only from its own address. A bookmark or a screen that should
+stay on Classic uses `/classic/`. An old bookmark of `/modern/` opens the
+same page at the address.
 
-Two cases open Classic whatever the choice: demo mode (`?demo=1`), which only
-Classic has, and a browser too old for Modern. Modern needs Chrome or Edge 114,
+Three cases open Classic from the address: demo mode (`?demo=1`), which only
+Classic has, `?ui=classic` from a link made before Modern moved to the
+address, and a browser too old for Modern. Modern needs Chrome or Edge 114,
 Firefox 125 or Safari 17 (iPadOS 17) or newer; an older browser keeps working
-with Classic.
+with Classic until Classic is removed.
 
 ## The energy flow
 
@@ -170,15 +170,14 @@ and shows the same values as the other view.
 
 | Symptom | Meaning | What to do |
 | --- | --- | --- |
-| The address opens the other view | The choice is stored per browser, and this browser has a different one | Use the switch, or open the address with `?ui=modern` or `?ui=classic` |
-| The choice is forgotten after closing the browser | The browser does not keep site data | Bookmark the address with `?ui=modern` or `?ui=classic` |
-| `?ui=modern` still opens Classic | The address is in demo mode, or the browser is too old for Modern | Leave out `demo=1`, or update the browser |
+| The address opens Classic | The address is in demo mode, carries `?ui=classic`, or the browser is too old for Modern | Leave out `demo=1` and `ui=classic`, or update the browser |
+| A screen should keep showing Classic | Classic is no longer the default | Bookmark `/classic/`; plan the move to Modern, because Classic will be removed |
 | A tile says "no comparison yet" | There is no history for yesterday up to this time | It fills in once the dashboard has a day of history |
 | The dashes in the flow do not move | Motion is off here, the installation has animation switched off, or the system asks for reduced motion | Check **Appearance → Motion** |
 
 ## Recovery or next steps
 
-- Back to the Classic cockpit → [Overview and navigation](overview.md)
+- The deprecated Classic cockpit → [Overview and navigation](overview.md)
 - What each setting does; both views write the same values →
   [Runtime settings](runtime-settings.md)
 - Before enabling live hardware writes → [Safety](../safety.md)

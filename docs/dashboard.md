@@ -14,11 +14,11 @@ browser — it is the shared EMS/Admin password), or with
 Both write the same `config/dashboard-auth.json`; the EMS Dashboard's own web UI
 does not create it.
 
-The same server answers two front ends: Classic at `/` and
-[Modern](user/dashboard/modern.md) at `/modern/`. Both use the API below, the
-same session and the same CSRF token. Which one `/` opens is a per-browser
-choice that `?ui=classic` or `?ui=modern` sets, and a browser that has not
-chosen opens Modern; the server itself has no setting for it.
+The same server answers two front ends: [Modern](user/dashboard/modern.md) at
+`/` and the deprecated Classic at `/classic/`, which a later release removes.
+Both use the API below, the same session and the same CSRF token. `/` sends
+demo mode (`?demo=1`), `?ui=classic` and a browser too old for Modern to
+Classic; `/modern/`, Modern's earlier address, redirects to `/`.
 
 ## Control Explain View
 

@@ -291,9 +291,10 @@ style family (`Aggregate / Device` or `Control / Energy stage`), reuse existing
 tokens/classes, and do not create a new visual system.
 
 The Modern front ends are the one sanctioned exception: the Modern dashboard
-(`frontend/dashboard-modern/`, the dashboard's `/modern/`) and the Modern Admin
-console (`frontend/admin-modern/`, the Admin server's `/modern/`) are second
-front ends with one visual system of their own, built from the shared design
+(`frontend/dashboard-modern/`, the dashboard's `/`; the deprecated Classic
+dashboard answers at `/classic/`) and the Modern Admin console
+(`frontend/admin-modern/`, the Admin server's `/modern/`) are second front ends
+with one visual system of their own, built from the shared design
 system in `frontend/shared/`, and
 [`dashboard-modern-style-guide.md`](dashboard-modern-style-guide.md) is their
 rule set. Every rule there binds both apps alike. Read that guide instead before

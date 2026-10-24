@@ -5,12 +5,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>EMS SolarFlow API Control</title>
-  <script src="/theme.js"></script>
+  <script src="/classic/theme.js"></script>
   <link rel="stylesheet" href="/uPlot.min.css">
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/classic/styles.css">
 </head>
 <body>
   <main class="shell">
+    <p id="classicNotice" class="classic-notice" role="note">This Classic dashboard is deprecated and will be removed in a later release. <a href="/">Open the new dashboard</a></p>
     <header class="topbar">
       <div class="brand-block">
         <p class="eyebrow">ems-solarflow-api-control</p>
@@ -28,7 +29,7 @@
         <span id="lastUpdated" class="timestamp">--</span>
         <span id="writeModeState" class="pill muted">Read-only</span>
         <button id="authButton" class="auth-button" type="button" hidden>Login</button>
-        <a id="modernLink" class="auth-button" href="/modern/">New dashboard</a>
+        <a id="modernLink" class="auth-button" href="/">New dashboard</a>
       </div>
     </header>
 
@@ -438,6 +439,6 @@
     </form>
   </div>
   <script src="/uPlot.iife.min.js"></script>
-  <script src="/app.js"></script>
+  <script src="/classic/app.js"></script>
 </body>
 </html>

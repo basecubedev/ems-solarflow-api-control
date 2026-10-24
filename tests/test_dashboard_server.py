@@ -315,10 +315,14 @@ def test_read_only_gets_remain_public_when_auth_is_configured(tmp_path):
     auth_file = tmp_path / "dashboard-auth.json"
     write_password_file(auth_file, "secret-password")
 
-    status, headers, body = direct_handler("/", auth_file=auth_file)
+    status, headers, body = direct_handler("/classic/", auth_file=auth_file)
     assert status == 200
     assert "text/html" in headers["Content-Type"]
     assert b'id="loginModal"' in body
+
+    status, headers, body = direct_handler("/", auth_file=auth_file)
+    assert status == 200
+    assert b'<div id="app">' in body
 
     status, headers, body = direct_handler("/api/live", auth_file=auth_file)
     assert status == 200
