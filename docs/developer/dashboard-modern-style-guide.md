@@ -103,6 +103,17 @@ the violet one. A series, a flow line and a tile that are about the grid wear
 `--grid`; nothing else does. Text never wears an energy colour -- a small mark
 beside the text, a dot or an icon, carries the identity.
 
+Three identity colours sit beside them, for marks that are about a thing
+rather than an energy flow: `--inverter` (blue) wherever an inverter is shown
+-- the flow's inverter node, a device card, a decision per device, an Admin
+device; `--money` (pink) wherever savings are; `--soc` (violet) for the state
+of charge, with `--soc-ink` as the lighter shade its text and settings,
+limits and backups wear. They were picked against the energy, status and
+accent colours for distance in normal vision and for contrast on every
+surface. The system accent (`--m-accent`) is near-white in Graphite, the
+colour of text, so an icon that stands for something wears one of these
+instead; the accent stays for state and focus.
+
 The one exception is the product's mark: the inverter's bolt in a ring of all
 four energy colours, each quarter where the flow diagram puts it. It is drawn
 once, in `frontend/shared/brand/mark.js`, and shown in the side menu (with
@@ -120,9 +131,11 @@ the product name ("Admin console") is what tells the two apart.
   padding) stay fixed, because they are fitted to the text they hold: density
   tightens the page, not its controls, and type size does not change.
 - A tone class says what a mark is about and sets `--c` for it: `c-pv`,
-  `c-bat`, `c-out`, `c-grid` for energy, `c-ok`, `c-warn`, `c-fault` for
-  status, `c-acc` and `c-idle` for neither. A rule paints with `var(--c)`
-  instead of naming a colour.
+  `c-bat`, `c-out`, `c-grid` for energy, `c-inv`, `c-money`, `c-soc` for the
+  identity colours, `c-ok`, `c-warn`, `c-fault` for status, `c-acc` and
+  `c-idle` for neither. A rule paints with `var(--c)` instead of naming a
+  colour. An option of `ui/Segmented` may carry an icon and a tone; a page's
+  tabs use its `large` size.
 - Corners name their role: `--m-radius-card`, `--m-radius-inner`,
   `--m-radius-control`, `--m-radius-pill`.
 - One typeface, Inter (variable, Latin subset), shipped beside the bundle. Every

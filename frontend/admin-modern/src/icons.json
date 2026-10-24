@@ -5,6 +5,7 @@
   "arrow-up",
   "arrow-up-right",
   "ban",
+  "battery",
   "boxes",
   "chart-spline",
   "chevron-down",
@@ -44,8 +45,10 @@
   "shield-check",
   "sliders-horizontal",
   "stethoscope",
+  "toggle-right",
   "trash-2",
   "upload",
   "wifi-off",
-  "wrench"
+  "wrench",
+  "zap"
 ]

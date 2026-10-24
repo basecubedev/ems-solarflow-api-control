@@ -14,7 +14,7 @@
    * stored value changes underneath, every field the operator has not edited
    * takes the new value, so a save never writes back a value nobody chose.
    */
-  let { endpoint, title, subtitle = "", icon = "sliders-horizontal", step = 1, fields, initial, settingLabel } = $props();
+  let { endpoint, title, subtitle = "", icon = "sliders-horizontal", tone = "c-soc", step = 1, fields, initial, settingLabel } = $props();
 
   let values = $state({});
   let baseline = $state.raw({});
@@ -85,7 +85,7 @@
 <form class="runtime card" onsubmit={submit} data-endpoint={endpoint} novalidate>
   <div class="head">
     <span class="step num">{String(step).padStart(2, "0")}</span>
-    <div class="icon-tile sm c-acc"><Icon name={icon} /></div>
+    <div class="icon-tile sm {tone}"><Icon name={icon} /></div>
     <div class="ellipsis">
       <h3 class="title ellipsis">{title}</h3>
       {#if subtitle}<div class="sub">{subtitle}</div>{/if}

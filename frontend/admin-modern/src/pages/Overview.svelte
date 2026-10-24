@@ -130,7 +130,7 @@
     <LinkTile
       href={href("backups")}
       icon="archive"
-      tone={!system.backups.data ? "c-idle" : lastBackup ? "c-acc" : "c-warn"}
+      tone={!system.backups.data ? "c-idle" : lastBackup ? "c-soc" : "c-warn"}
       label={t("overview.tile.backup")}
       value={!system.backups.data ? (system.backups.error ? t("overview.backupUnreadable") : "—") : lastBackup ? f.relative(lastBackup) : t("overview.noBackup")}
       sub={!system.backups.data ? "" : lastBackup ? f.dateTime(lastBackup) : t("overview.noBackupHint")}

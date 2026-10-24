@@ -36,13 +36,13 @@
     </p>
     <div class="facts eight">
       <Fact label={t("control.load")} icon="house" tone="c-out" value={f.power(explain.filtered_load_w)} />
-      <Fact label={t("control.requested")} icon="gauge" value={f.power(explain.requested_total_w)} />
-      <Fact label={t("control.effective")} icon="crosshair" value={f.power(explain.effective_target_total_w)} />
-      <Fact label={t("control.commanded")} icon="send" value={f.power(explain.commanded_total_w)} />
-      <Fact label={t("control.maxTotal")} icon="sliders-horizontal" value={f.power(explain.max_total_power_w)} />
-      <Fact label={t("control.deadband")} icon="move-horizontal" value={f.power(explain.deadband_w)} />
-      <Fact label={t("control.minOutput")} icon="sliders-horizontal" value={f.power(explain.min_output_limit_w)} missing={!has(explain.min_output_limit_w)} />
-      <Fact label={t("control.undistributed")} icon="gauge" value={f.power(explain.undistributed_target_w)} missing={!has(explain.undistributed_target_w)} />
+      <Fact label={t("control.requested")} icon="gauge" tone="c-inv" value={f.power(explain.requested_total_w)} />
+      <Fact label={t("control.effective")} icon="crosshair" tone="c-inv" value={f.power(explain.effective_target_total_w)} />
+      <Fact label={t("control.commanded")} icon="send" tone="c-inv" value={f.power(explain.commanded_total_w)} />
+      <Fact label={t("control.maxTotal")} icon="sliders-horizontal" tone="c-soc" value={f.power(explain.max_total_power_w)} />
+      <Fact label={t("control.deadband")} icon="move-horizontal" tone="c-soc" value={f.power(explain.deadband_w)} />
+      <Fact label={t("control.minOutput")} icon="sliders-horizontal" tone="c-soc" value={f.power(explain.min_output_limit_w)} missing={!has(explain.min_output_limit_w)} />
+      <Fact label={t("control.undistributed")} icon="gauge" tone="c-soc" value={f.power(explain.undistributed_target_w)} missing={!has(explain.undistributed_target_w)} />
     </div>
   {/if}
   {#if explain}

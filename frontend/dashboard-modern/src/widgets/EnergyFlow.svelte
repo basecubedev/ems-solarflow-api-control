@@ -399,11 +399,11 @@
   .hub {
     position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 1;
     width: 136px; height: 136px; border-radius: 50%; display: grid; place-items: center; text-align: center;
-    background: radial-gradient(circle at 50% 35%, color-mix(in srgb, var(--m-accent) 16%, var(--m-surface-2)), var(--m-surface-2) 70%);
-    border: 1px solid color-mix(in srgb, var(--m-accent) 38%, transparent);
-    box-shadow: 0 0 0 8px color-mix(in srgb, var(--m-accent) 5%, transparent), 0 0 48px color-mix(in srgb, var(--m-accent) 13%, transparent);
+    background: radial-gradient(circle at 50% 35%, color-mix(in srgb, var(--inverter) 16%, var(--m-surface-2)), var(--m-surface-2) 70%);
+    border: 1px solid color-mix(in srgb, var(--inverter) 38%, transparent);
+    box-shadow: 0 0 0 8px color-mix(in srgb, var(--inverter) 5%, transparent), 0 0 48px color-mix(in srgb, var(--inverter) 13%, transparent);
   }
-  .hub :global(svg.i) { width: 24px; height: 24px; color: var(--m-accent); }
+  .hub :global(svg.i) { width: 24px; height: 24px; color: var(--inverter); }
   .hub-label { font-size: 11.5px; color: var(--m-muted); margin-top: 2px; max-width: 110px; }
   .hub-value { font-size: 18px; font-weight: 650; }
   .hub-charge { font-size: 11px; color: var(--m-muted); margin-top: 2px; }

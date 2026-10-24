@@ -107,12 +107,12 @@
     <div class="skeleton"></div>
   {:else}
     <div class="grid" data-testid="runtime-editor">
-      <RuntimeForm endpoint={SYSTEM_ENDPOINT} title={t("runtime.system")} subtitle={t("runtime.systemSub")} icon="gauge" step={1} fields={systemFields} initial={runtime.system || {}} {settingLabel} />
+      <RuntimeForm endpoint={SYSTEM_ENDPOINT} title={t("runtime.system")} subtitle={t("runtime.systemSub")} icon="gauge" tone="c-soc" step={1} fields={systemFields} initial={runtime.system || {}} {settingLabel} />
       {#each devices as [name, device], index (name)}
-        <RuntimeForm endpoint={deviceEndpoint(name)} title={name} subtitle={t("runtime.deviceSub")} icon="zap" step={index + 2} fields={deviceFields(name, device || {})} initial={deviceInitial(device || {})} {settingLabel} />
+        <RuntimeForm endpoint={deviceEndpoint(name)} title={name} subtitle={t("runtime.deviceSub")} icon="zap" tone="c-inv" step={index + 2} fields={deviceFields(name, device || {})} initial={deviceInitial(device || {})} {settingLabel} />
       {/each}
-      <RuntimeForm endpoint={WINTER_ENDPOINT} title={t("runtime.winter")} subtitle={t("runtime.winterSub")} icon="snowflake" step={devices.length + 2} fields={[{ name: "enabled", type: "toggle", label: t("runtime.winter") }]} initial={runtime.winter || {}} {settingLabel} />
-      <RuntimeForm endpoint={AC_CHARGE_ENDPOINT} title={t("runtime.acChargeTitle")} subtitle={t("runtime.acChargeSub")} icon="plug-zap" step={devices.length + 3} fields={[{ name: "enabled", type: "toggle", label: t("runtime.acCharging") }]} initial={runtime.ac_charge_control || {}} {settingLabel} />
+      <RuntimeForm endpoint={WINTER_ENDPOINT} title={t("runtime.winter")} subtitle={t("runtime.winterSub")} icon="snowflake" tone="c-out" step={devices.length + 2} fields={[{ name: "enabled", type: "toggle", label: t("runtime.winter") }]} initial={runtime.winter || {}} {settingLabel} />
+      <RuntimeForm endpoint={AC_CHARGE_ENDPOINT} title={t("runtime.acChargeTitle")} subtitle={t("runtime.acChargeSub")} icon="plug-zap" tone="c-grid" step={devices.length + 3} fields={[{ name: "enabled", type: "toggle", label: t("runtime.acCharging") }]} initial={runtime.ac_charge_control || {}} {settingLabel} />
     </div>
   {/if}
 </Card>

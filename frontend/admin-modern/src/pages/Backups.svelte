@@ -20,6 +20,7 @@
   ensure("backups");
 
   const TYPE_ICONS = { config: "file-cog", databases: "database", influxdb: "chart-spline", system: "boxes" };
+  const TYPE_TONES = { config: "c-soc", databases: "c-out", influxdb: "c-grid", system: "c-inv" };
   const OUTCOME_ICONS = { ok: "circle-check", partial: "triangle-alert", lost: "wifi-off", unknown: "circle-help", fault: "circle-x" };
 
   const f = $derived(fmt());
@@ -149,9 +150,9 @@
     <legend class="sr-only">{t("backups.scope")}</legend>
     {#each CREATE_SCOPES as option (option)}
       {@const available = scopeAvailable(option, listing)}
-      <label class="scope inner" class:chosen={scope === option} class:off={!available} data-scope={option}>
+      <label class="scope inner {TYPE_TONES[option]}" class:chosen={scope === option} class:off={!available} data-scope={option}>
         <input type="radio" name="backup-scope" value={option} bind:group={scope} disabled={!available} />
-        <span class="icon-tile sm c-acc"><Icon name={TYPE_ICONS[option]} /></span>
+        <span class="icon-tile sm {TYPE_TONES[option]}"><Icon name={TYPE_ICONS[option]} /></span>
         <span class="words">
           <strong>{t(`backups.scope.${option}`)}{#if option === "system"}<span class="badge">{t("backups.recommended")}</span>{/if}</strong>
           <span class="muted">{#if available}{t(`backups.scope.${option}.desc`)}{:else if INFLUX_REASONS.includes(listing?.influxdb?.reason)}{t(`backups.scope.influxdb.${listing.influxdb.reason}`)}{:else if listing?.influxdb?.message}<span lang="en">{listing.influxdb.message}</span>{:else}{t("backups.scope.influxdb.off")}{/if}</span>
@@ -195,7 +196,7 @@
         {#if row.rowKind === "set"}
           {@const set = row}
           <li class="row inner" data-kind="set">
-            <span class="icon-tile sm c-acc"><Icon name="boxes" /></span>
+            <span class="icon-tile sm c-inv"><Icon name="boxes" /></span>
             <div class="words">
               <div class="name ellipsis" title={set.name}>{set.name}</div>
               <div class="meta muted num">
@@ -211,7 +212,7 @@
         {:else}
           {@const archive = row}
           <li class="row inner" data-kind="archive" data-type={archive.type || archive.typeText}>
-            <span class="icon-tile sm c-acc"><Icon name={TYPE_ICONS[archive.type] || "file-archive"} /></span>
+            <span class="icon-tile sm {TYPE_TONES[archive.type] || 'c-idle'}"><Icon name={TYPE_ICONS[archive.type] || "file-archive"} /></span>
             <div class="words">
               <div class="name ellipsis" title={archive.name}>{archive.name}</div>
               <div class="meta muted num">
@@ -270,7 +271,7 @@
   .scope { display: flex; gap: var(--s3); align-items: flex-start; cursor: pointer; border: 1px solid var(--m-line); }
   .scope input { position: absolute; opacity: 0; pointer-events: none; }
   .scope:has(input:focus-visible) { outline: 2px solid var(--m-accent); outline-offset: 2px; }
-  .scope.chosen { border-color: color-mix(in srgb, var(--m-accent) 55%, transparent); background: color-mix(in srgb, var(--m-accent) 9%, var(--m-surface-2)); }
+  .scope.chosen { border-color: color-mix(in srgb, var(--c, var(--m-accent)) 55%, transparent); background: color-mix(in srgb, var(--c, var(--m-accent)) 9%, var(--m-surface-2)); }
   .scope.off { opacity: 0.55; cursor: not-allowed; }
   .scope .words { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
   .scope strong { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }

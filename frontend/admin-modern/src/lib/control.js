@@ -13,9 +13,9 @@
 export const CONTROL_STATUSES = Object.freeze({
   may_control: "c-ok",
   safe_mode: "c-warn",
-  calculating_only: "c-acc",
-  simulated: "c-acc",
-  disabled: "c-acc",
+  calculating_only: "c-inv",
+  simulated: "c-inv",
+  disabled: "c-inv",
   not_writing: "c-warn",
   unknown: "c-warn",
 });

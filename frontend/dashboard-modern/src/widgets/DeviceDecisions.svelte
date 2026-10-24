@@ -93,6 +93,7 @@
         <details class="decision inner">
           <summary>
             <Icon name="chevron-right" />
+            <span class="icon-tile sm c-inv"><Icon name="zap" /></span>
             <span class="name">{name}</span>
             <span class="target num">{f.power(decision.target)}</span>
             <Status tone={TONES[decision.tone]} text={t(`control.write.${decision.tone}`)} />
@@ -127,7 +128,7 @@
 
 <style>
   .list { display: flex; flex-direction: column; gap: var(--s2); }
-  .decision > summary { display: grid; grid-template-columns: auto minmax(60px, auto) auto auto minmax(0, 1fr); align-items: center; gap: var(--s3); cursor: pointer; list-style: none; }
+  .decision > summary { display: grid; grid-template-columns: auto auto minmax(60px, auto) auto auto minmax(0, 1fr); align-items: center; gap: var(--s3); cursor: pointer; list-style: none; }
   .decision > summary::-webkit-details-marker { display: none; }
   .decision > summary :global(svg.i) { transition: transform 0.15s; }
   .decision[open] > summary > :global(svg.i:first-child) { transform: rotate(90deg); }
@@ -150,5 +151,5 @@
   .result b { font-size: 14px; color: var(--m-text); }
   .stage.blocked .result b { color: var(--m-fault); }
   .muted { margin: 0; }
-  @media (max-width: 760px) { .decision > summary { grid-template-columns: auto 1fr auto; } .why { grid-column: 1 / -1; white-space: normal; } }
+  @media (max-width: 760px) { .decision > summary { grid-template-columns: auto auto 1fr auto; } .why { grid-column: 1 / -1; white-space: normal; } }
 </style>

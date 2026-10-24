@@ -40,7 +40,7 @@
 
 <article class="card device" class:offline={state !== "online"} data-testid="device-card" data-device={d.name} data-state={state}>
   <div class="head">
-    <div class="icon-tile c-acc"><Icon name="zap" /></div>
+    <div class="icon-tile c-inv"><Icon name="zap" /></div>
     <div class="title">
       <h2 class="name ellipsis">{d.name}</h2>
       {#if d.readOnly}<div class="sub">{t("device.telemetryOnly")}</div>{/if}

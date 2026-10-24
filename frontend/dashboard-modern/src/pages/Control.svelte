@@ -6,6 +6,6 @@
 </script>
 
 <ControlSummary />
+<RuntimeEditor />
 <ControlPipeline />
 <DeviceDecisions />
-<RuntimeEditor />

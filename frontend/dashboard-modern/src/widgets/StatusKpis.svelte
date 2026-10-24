@@ -66,7 +66,7 @@
     </div>
   </section>
   <section class="card kpi" data-testid="kpi-savings">
-    <div class="icon-tile c-acc"><Icon name="piggy-bank" /></div>
+    <div class="icon-tile c-money"><Icon name="piggy-bank" /></div>
     <div class="kpi-text">
       <div class="kpi-label">{t("kpi.savings")}</div>
       <div class="kpi-value num">{f.money(savings, currency)}</div>

@@ -236,7 +236,7 @@
 {/snippet}
 
 <div class="editor" data-testid="devices-editor">
-  <DeviceCard id="grid-meter" title={t("devices.grid.title")} model={meterModel.text} modelLang={meterModel.lang} meta={meterMeta()} enabled={Boolean(meterType)} onremove={meter.present || meterType || meter.ip ? () => setHardwareValues({ grid_meter: { ...NO_GRID_METER } }) : null}>
+  <DeviceCard id="grid-meter" icon="gauge" tone="c-grid" title={t("devices.grid.title")} model={meterModel.text} modelLang={meterModel.lang} meta={meterMeta()} enabled={Boolean(meterType)} onremove={meter.present || meterType || meter.ip ? () => setHardwareValues({ grid_meter: { ...NO_GRID_METER } }) : null}>
     <div class="fields">
       <div class="setting">
         <label class="head" for="grid-type">{t("devices.grid.type")}</label>
@@ -254,7 +254,7 @@
     {@render levelled(meterFields, { grid: true })}
   </DeviceCard>
 
-  <DeviceCard id="zendure-broker" title={t("devices.broker.title")} model={named ? t("devices.broker.named") : broker.present ? t("devices.broker.local") : t("devices.notConfigured")} meta={broker.host ? String(broker.host) + (broker.port == null ? "" : `:${broker.port}`) : ""} enabled={named || broker.enabled !== false} status={named ? t("devices.readOnly") : ""}>
+  <DeviceCard id="zendure-broker" icon="radio-tower" tone="c-soc" title={t("devices.broker.title")} model={named ? t("devices.broker.named") : broker.present ? t("devices.broker.local") : t("devices.notConfigured")} meta={broker.host ? String(broker.host) + (broker.port == null ? "" : `:${broker.port}`) : ""} enabled={named || broker.enabled !== false} status={named ? t("devices.readOnly") : ""}>
       <p class="note"><Icon name="info" />{#if named}{t("devices.broker.namedHelp")}{:else}<CatalogText text={catalog?.zendure_mqtt_broker?.help || ""} />{/if}</p>
       {#if broker.tls_stored_invalid && !named}<p class="note warn"><Icon name="triangle-alert" />{t("devices.broker.tlsInvalid")}</p>{/if}
       <div class="fields">
@@ -278,7 +278,7 @@
   {#each devices as device, index (keys[index] ?? `extra-${index}`)}
     {@const kind = deviceKind(device)}
     {#if kind === "local_api"}
-      <DeviceCard id={`inverter-${index}`} title={t("devices.inverter", { n: index + 1 })} model={t("devices.model.local")} meta={localSummary(device)} enabled={device.enabled !== false} connection={sourceLabel(device)} open={added === index} onremove={() => remove(index)}>
+      <DeviceCard id={`inverter-${index}`} icon="zap" tone="c-inv" title={t("devices.inverter", { n: index + 1 })} model={t("devices.model.local")} meta={localSummary(device)} enabled={device.enabled !== false} connection={sourceLabel(device)} open={added === index} onremove={() => remove(index)}>
         <div class="fields">{@render enabledField(device, index, "local")}</div>
         {@render levelled(fields.identity, { device, index })}
         {@render levelled(fields.common, { device, index })}
@@ -287,7 +287,7 @@
       {@const control = mqttControl(device, catalog)}
       {@const model = hardwareModel(catalog, device.hardware_model)}
       {@const modelWords = model?.label ? catalogText(model.label) : { text: t("devices.mqtt.unknownModel") }}
-      <DeviceCard id={`mqtt-${index}`} title={t("devices.inverter", { n: index + 1 })} model={modelWords.text + (device.alternative_layout ? ` · ${t("devices.mqtt.alternativeLayout")}` : "")} modelLang={modelWords.lang} meta={mqttSummary(device)} enabled={device.enabled !== false} connection={sourceLabel(device)} open={added === index} onremove={() => remove(index)}>
+      <DeviceCard id={`mqtt-${index}`} icon="zap" tone="c-inv" title={t("devices.inverter", { n: index + 1 })} model={modelWords.text + (device.alternative_layout ? ` · ${t("devices.mqtt.alternativeLayout")}` : "")} modelLang={modelWords.lang} meta={mqttSummary(device)} enabled={device.enabled !== false} connection={sourceLabel(device)} open={added === index} onremove={() => remove(index)}>
         <div class="fields">
           <SettingField field={own("name")} lang={null} value={device.name || ""} onchange={(value) => update(index, { ...device, name: value })} />
           <SettingField field={own("serial")} lang={null} value={device.serial_number || ""} onchange={(value) => update(index, { ...device, serial_number: value })} />
@@ -325,7 +325,7 @@
     {:else if kind === "external_mqtt"}
       {@const mqtt = device.mqtt || device.entry?.mqtt || {}}
       {@const state = externalState(device)}
-      <DeviceCard id={`external-${index}`} title={t("devices.inverter", { n: index + 1 })} model={`${device.catalog_label || device.display_name || t("devices.external.label")} · ${t(`devices.external.model.${device.catalog_retired ? (device.proposal_id ? "readOnApply" : "notRead") : "read"}`)}`} meta={[device.name || t("settings.unnamed"), mqtt.device_id ? `ID ${mqtt.device_id}` : t("devices.idMissing"), t("devices.external.broker", { ref: mqtt.broker_ref || "default" }), t(`devices.external.state.${state}`)].join(" · ")} enabled={device.enabled !== false} onremove={() => remove(index)}>
+      <DeviceCard id={`external-${index}`} icon="zap" tone="c-inv" title={t("devices.inverter", { n: index + 1 })} model={`${device.catalog_label || device.display_name || t("devices.external.label")} · ${t(`devices.external.model.${device.catalog_retired ? (device.proposal_id ? "readOnApply" : "notRead") : "read"}`)}`} meta={[device.name || t("settings.unnamed"), mqtt.device_id ? `ID ${mqtt.device_id}` : t("devices.idMissing"), t("devices.external.broker", { ref: mqtt.broker_ref || "default" }), t(`devices.external.state.${state}`)].join(" · ")} enabled={device.enabled !== false} onremove={() => remove(index)}>
         <p class="note"><Icon name="info" />{t(`devices.external.note.${device.catalog_retired ? (device.proposal_id ? "moving" : "retired") : device.entry ? "installed" : "added"}`)}</p>
         <div class="fields">
           <SettingField field={own("name")} lang={null} value={device.name || ""} onchange={(value) => update(index, { ...device, name: value })} />
@@ -337,7 +337,7 @@
         </div>
       </DeviceCard>
     {:else}
-      <DeviceCard id={`e3dc-${index}`} title={t("devices.readOnlyDevice", { n: index + 1 })} model={t("devices.model.e3dc")} meta={[device.name || t("settings.unnamed"), endpoint(device), t("devices.readOnly")].join(" · ")} enabled={device.enabled !== false} connection={sourceLabel(device)} open={added === index} onremove={() => remove(index)}>
+      <DeviceCard id={`e3dc-${index}`} icon="battery" tone="c-bat" title={t("devices.readOnlyDevice", { n: index + 1 })} model={t("devices.model.e3dc")} meta={[device.name || t("settings.unnamed"), endpoint(device), t("devices.readOnly")].join(" · ")} enabled={device.enabled !== false} connection={sourceLabel(device)} open={added === index} onremove={() => remove(index)}>
         <div class="fields">
           {@render enabledField(device, index, "e3dc")}
           <SettingField field={own("e3dcName")} lang={null} value={device.name || ""} onchange={(value) => update(index, { ...device, name: value })} />

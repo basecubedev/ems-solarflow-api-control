@@ -3,7 +3,7 @@
   import Status from "../../../shared/ui/Status.svelte";
   import { t } from "../i18n/i18n.svelte.js";
 
-  let { id, title, model = "", modelLang = undefined, meta = "", enabled = true, status = "", connection = "", onremove = null, open = false, children } = $props();
+  let { id, title, model = "", modelLang = undefined, meta = "", enabled = true, status = "", connection = "", onremove = null, open = false, icon = "", tone = "", children } = $props();
 
   let expanded = $state(open);
   const bodyId = $derived(`device-${String(id).replace(/[^a-z0-9]/gi, "-")}`);
@@ -12,6 +12,7 @@
 <section class="device inner" class:off={!enabled} data-device={id}>
   <div class="head">
     <button class="summary" type="button" aria-expanded={expanded ? "true" : "false"} aria-controls={bodyId} onclick={() => (expanded = !expanded)}>
+      {#if icon}<span class="icon-tile sm {tone}"><Icon name={icon} /></span>{/if}
       <span class="words">
         <span class="name">{title}</span>
         {#if model}<span class="muted small" lang={modelLang}>{model}</span>{/if}

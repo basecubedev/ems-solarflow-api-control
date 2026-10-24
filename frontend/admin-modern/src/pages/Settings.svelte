@@ -58,7 +58,8 @@
     const count = (sections) => sections.reduce((sum, section) => sum + sectionFields(section).filter((field) => fieldMatches(field, query, shownText)).length, 0);
     return { features: count(tabSections(config, "features")), expert: count(tabSections(config, "expert")), safety: blocks.reduce((sum, block) => sum + block.fields.length, 0) };
   });
-  const tabOptions = $derived(TABS.map((value) => ({ value, label: searching && value !== "devices" ? `${t(`settings.tab.${value}`)} (${hits[value] || 0})` : t(`settings.tab.${value}`) })));
+  const TAB_LOOKS = { features: { icon: "toggle-right", tone: "c-out" }, safety: { icon: "shield-check", tone: "c-soc" }, expert: { icon: "wrench", tone: "c-pv" }, devices: { icon: "zap", tone: "c-inv" } };
+  const tabOptions = $derived(TABS.map((value) => ({ value, ...TAB_LOOKS[value], label: searching && value !== "devices" ? `${t(`settings.tab.${value}`)} (${hits[value] || 0})` : t(`settings.tab.${value}`) })));
 
   const preview = $derived(settings.preview);
   const groups = $derived(changeGroups(preview?.diff));
@@ -120,7 +121,7 @@
   </div>
 {:else if ok}
   <div class="toolbar span-12">
-    <Segmented options={tabOptions} value={tab} label={t("settings.tabs")} onchange={choose} />
+    <Segmented large options={tabOptions} value={tab} label={t("settings.tabs")} onchange={choose} />
     <label class="search">
       <Icon name="search" size="sm" />
       <input class="input" type="search" placeholder={t("settings.edit.search")} aria-label={t("settings.edit.search")} bind:value={query} data-testid="settings-search" />

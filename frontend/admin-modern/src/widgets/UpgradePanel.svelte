@@ -211,7 +211,7 @@
       </div>
     {:else if upgrade.stage === "returned"}
       <div class="outcome" data-testid="upgrade-returned">
-        <span class="icon-tile c-acc"><Icon name="history" /></span>
+        <span class="icon-tile c-soc"><Icon name="history" /></span>
         <div>
           <div class="outcome-title">{t("upgrade.returned")}</div>
           <div class="muted">{upgrade.returnAligns ? t("upgrade.returnedAlign") : t("upgrade.returnedRestart")}</div>
