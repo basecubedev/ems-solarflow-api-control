@@ -3,7 +3,7 @@
   import Status from "../../../shared/ui/Status.svelte";
   import { t } from "../i18n/i18n.svelte.js";
 
-  let { id, title, model = "", meta = "", enabled = true, status = "", connection = "", onremove = null, open = false, children } = $props();
+  let { id, title, model = "", modelLang = undefined, meta = "", enabled = true, status = "", connection = "", onremove = null, open = false, children } = $props();
 
   let expanded = $state(open);
   const bodyId = $derived(`device-${String(id).replace(/[^a-z0-9]/gi, "-")}`);
@@ -14,7 +14,7 @@
     <button class="summary" type="button" aria-expanded={expanded ? "true" : "false"} aria-controls={bodyId} onclick={() => (expanded = !expanded)}>
       <span class="words">
         <span class="name">{title}</span>
-        {#if model}<span class="muted small">{model}</span>{/if}
+        {#if model}<span class="muted small" lang={modelLang}>{model}</span>{/if}
         {#if meta}<span class="muted small num">{meta}</span>{/if}
       </span>
       <Icon name={expanded ? "chevron-up" : "chevron-down"} size="sm" />

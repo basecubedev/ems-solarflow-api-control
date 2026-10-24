@@ -8,11 +8,12 @@
   import ControlState from "../widgets/ControlState.svelte";
   import StaleNote from "../widgets/StaleNote.svelte";
   import SettingField from "../widgets/SettingField.svelte";
+  import CatalogText from "../widgets/CatalogText.svelte";
   import SettingsSection from "../widgets/SettingsSection.svelte";
   import DevicesEditor from "../widgets/DevicesEditor.svelte";
   import DiscoveryPanel from "../widgets/DiscoveryPanel.svelte";
   import SourcesPanel from "../widgets/SourcesPanel.svelte";
-  import { t, tn } from "../i18n/i18n.svelte.js";
+  import { t, tn, catalogText } from "../i18n/i18n.svelte.js";
   import { system, ensure, reload } from "../state/system.svelte.js";
   import { settings, setValue, discard, discardHardware, previewDraft, applyDraft, resetOverrides } from "../state/settings.svelte.js";
   import { serviceAction, runServiceAction } from "../state/services.svelte.js";
@@ -32,6 +33,7 @@
 
   let tab = $state(hashTab());
   let query = $state("");
+  const shownText = (text) => catalogText(text).text;
   let backup = $state(true);
   let confirmApply = $state(false);
   let confirmReset = $state(false);
@@ -48,12 +50,12 @@
     return [...levels.normal, ...levels.advanced, ...levels.expert];
   }
   function matchingSections(name) {
-    return tabSections(config, name).filter((section) => !searching || sectionFields(section).some((field) => fieldMatches(field, query)));
+    return tabSections(config, name).filter((section) => !searching || sectionFields(section).some((field) => fieldMatches(field, query, shownText)));
   }
-  const blocks = $derived(ok ? safetyBlocks(config).map((block) => ({ ...block, fields: block.fields.filter((field) => fieldMatches(field, query)) })).filter((block) => block.fields.length) : []);
+  const blocks = $derived(ok ? safetyBlocks(config).map((block) => ({ ...block, fields: block.fields.filter((field) => fieldMatches(field, query, shownText)) })).filter((block) => block.fields.length) : []);
   const hits = $derived.by(() => {
     if (!ok || !searching) return {};
-    const count = (sections) => sections.reduce((sum, section) => sum + sectionFields(section).filter((field) => fieldMatches(field, query)).length, 0);
+    const count = (sections) => sections.reduce((sum, section) => sum + sectionFields(section).filter((field) => fieldMatches(field, query, shownText)).length, 0);
     return { features: count(tabSections(config, "features")), expert: count(tabSections(config, "expert")), safety: blocks.reduce((sum, block) => sum + block.fields.length, 0) };
   });
   const tabOptions = $derived(TABS.map((value) => ({ value, label: searching && value !== "devices" ? `${t(`settings.tab.${value}`)} (${hits[value] || 0})` : t(`settings.tab.${value}`) })));
@@ -94,8 +96,8 @@
 {#snippet safetyBlock(block)}
   {@const risk = sharedRisk(block.fields)}
   <div class="block" data-group={block.id}>
-    <h3 class="sub" lang="en">{block.title}</h3>
-    {#if block.summary}<p class="muted small" lang="en">{block.summary}</p>{/if}
+    <h3 class="sub"><CatalogText text={block.title} /></h3>
+    {#if block.summary}<p class="muted small"><CatalogText text={block.summary} /></p>{/if}
     {#if risk}<p class="note warn"><Icon name="triangle-alert" />{t(`settings.risk.${risk}.shared`)}</p>{/if}
     <div class="fields">
       {#each block.fields as field (field.path)}

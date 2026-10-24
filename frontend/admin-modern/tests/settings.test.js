@@ -142,6 +142,14 @@ test("the search finds a field by label, description or path, ignoring case", ()
   assert.ok(!fieldMatches(field, "battery"));
 });
 
+test("the search finds a field by the words the page shows for it, too", () => {
+  const field = winter.fields[2];
+  const shown = (text) => (text === field.label ? "Schrittweite der Reserve" : text);
+  assert.ok(fieldMatches(field, "schrittweite", shown));
+  assert.ok(fieldMatches(field, "RAMP", shown));
+  assert.ok(!fieldMatches(field, "schrittweite"));
+});
+
 test("a value is no change when it is what the config says, as saved, as shown, or as the default of an absent switch", () => {
   const number = { path: "system.max_total_power", type: "number" };
   const gate = { path: "system.allow_hardware_writes", type: "boolean", default: true };

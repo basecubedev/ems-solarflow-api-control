@@ -17,6 +17,8 @@ import {
   setGridPassword,
   setMqttValue,
   switchGridType,
+  maturityWords,
+  operationWords,
 } from "../src/lib/devices.js";
 
 const catalog = {
@@ -96,4 +98,11 @@ test("removing an installed external device records its reference, a new one lea
 test("every reason the server gives for blocked control has words, and an unknown one says so", () => {
   assert.equal(reasonKey("broker_source_write_unverified"), "devices.reason.brokerUnverified");
   assert.equal(reasonKey("something_new"), "devices.reason.other");
+});
+
+test("a model's validation level and operations have this console's words, an unknown one keeps the catalogue's", () => {
+  assert.deepEqual(maturityWords("deferred"), { key: "devices.maturity.deferred" });
+  assert.deepEqual(maturityWords("lab_only"), { text: "lab_only", lang: "en" });
+  assert.deepEqual(operationWords(["discharge", "teleport"]), [{ key: "devices.operation.discharge" }, { text: "teleport", lang: "en" }]);
+  assert.deepEqual(operationWords(null), []);
 });

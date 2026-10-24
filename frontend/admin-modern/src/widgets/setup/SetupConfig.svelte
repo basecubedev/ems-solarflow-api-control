@@ -3,6 +3,7 @@
   import Icon from "../../../../shared/ui/Icon.svelte";
   import ConfirmDialog from "../../../../shared/ui/ConfirmDialog.svelte";
   import SettingField from "../SettingField.svelte";
+  import CatalogText from "../CatalogText.svelte";
   import SettingsSection from "../SettingsSection.svelte";
   import SetupHardware from "./SetupHardware.svelte";
   import { t } from "../../i18n/i18n.svelte.js";
@@ -101,8 +102,8 @@
       {#each blocks as block (block.id)}
         {@const risk = sharedRisk(block.fields)}
         <div class="block">
-          <h3 class="sub" lang="en">{block.title}</h3>
-          {#if block.summary}<p class="muted small" lang="en">{block.summary}</p>{/if}
+          <h3 class="sub"><CatalogText text={block.title} /></h3>
+          {#if block.summary}<p class="muted small"><CatalogText text={block.summary} /></p>{/if}
           {#if risk}<p class="note warn"><Icon name="triangle-alert" />{t(`settings.risk.${risk}.shared`)}</p>{/if}
           <div class="fields">
             {#each block.fields as field (field.path)}<SettingField {field} value={featureValue(values, field)} hideRisk={Boolean(risk)} type={field.secret ? "password" : ""} onchange={(value) => setFeature(field.path, value)} />{/each}

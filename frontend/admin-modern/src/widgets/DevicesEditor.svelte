@@ -2,7 +2,8 @@
   import Icon from "../../../shared/ui/Icon.svelte";
   import DeviceCard from "./DeviceCard.svelte";
   import SettingField from "./SettingField.svelte";
-  import { t } from "../i18n/i18n.svelte.js";
+  import CatalogText from "./CatalogText.svelte";
+  import { t, say, catalogText } from "../i18n/i18n.svelte.js";
   import { settings, setHardwareValues } from "../state/settings.svelte.js";
   import { sources, saveCredential } from "../state/sources.svelte.js";
   import {
@@ -19,12 +20,14 @@
     gridValue,
     gridVariant,
     hardwareModel,
+    maturityWords,
     modelsForGeneration,
     mqttControl,
     newE3dc,
     newLocalInverter,
     newMqttInverter,
     manualBroker,
+    operationWords,
     onLocalBroker,
     reasonKey,
     removeDevice,
@@ -36,6 +39,7 @@
     setGridValue,
     setMqttValue,
     switchGridType,
+    VALIDATION_MATURITIES,
   } from "../lib/devices.js";
 
   let { config } = $props();
@@ -50,6 +54,8 @@
   const defaults = $derived(commonDefaults(catalog));
   const variants = $derived(Object.values(catalog?.grid_meter_variants || {}));
   const meterType = $derived(String(meter.type || ""));
+  const meterModel = $derived(gridVariant(catalog, meterType)?.label ? catalogText(gridVariant(catalog, meterType).label) : { text: t("devices.grid.none") });
+  const portHelp = $derived(gridVariant(catalog, meterType)?.port_description ? catalogText(gridVariant(catalog, meterType).port_description) : { text: t("devices.field.port.hint") });
   const meterIsMqtt = $derived(gridIsMqtt(catalog, meterType));
   const meterFields = $derived(gridFields(catalog, meter));
   const named = $derived(broker.managed === "named");
@@ -152,7 +158,7 @@
   function mqttSummary(device) {
     const identity = device.serial_number || device.device_id || "";
     const generation = generations(catalog).find((entry) => entry.id === device.hardware_generation);
-    return [device.name || t("settings.unnamed"), identity ? `ID ${identity}` : t("devices.idMissing"), generation?.label || ""].filter(Boolean).join(" · ");
+    return [device.name || t("settings.unnamed"), identity ? `ID ${identity}` : t("devices.idMissing"), generation?.label ? catalogText(generation.label).text : ""].filter(Boolean).join(" · ");
   }
 
   function externalState(device) {
@@ -216,7 +222,7 @@
   {:else}
     <SettingField {field} value={gridValue(meter, field.path)} onchange={(value) => setHardwareValues({ grid_meter: setGridValue(meter, field.path, value) })} />
     {#if field.path === "grid_meter.ip"}
-      <SettingField field={{ path: "grid_meter.port", type: "number", label: t("devices.field.port"), description: gridVariant(catalog, meterType)?.port_description || t("devices.field.port.hint") }} lang={gridVariant(catalog, meterType)?.port_description ? "en" : null} value={meter.port} onchange={(value) => setHardwareValues({ grid_meter: setGridPort(meter, value) })} />
+      <SettingField field={{ path: "grid_meter.port", type: "number", label: t("devices.field.port"), description: portHelp.text }} lang={null} descriptionLang={portHelp.lang ?? null} value={meter.port} onchange={(value) => setHardwareValues({ grid_meter: setGridPort(meter, value) })} />
     {/if}
   {/if}
 {/snippet}
@@ -230,13 +236,13 @@
 {/snippet}
 
 <div class="editor" data-testid="devices-editor">
-  <DeviceCard id="grid-meter" title={t("devices.grid.title")} model={gridVariant(catalog, meterType)?.label || t("devices.grid.none")} meta={meterMeta()} enabled={Boolean(meterType)} onremove={meter.present || meterType || meter.ip ? () => setHardwareValues({ grid_meter: { ...NO_GRID_METER } }) : null}>
+  <DeviceCard id="grid-meter" title={t("devices.grid.title")} model={meterModel.text} modelLang={meterModel.lang} meta={meterMeta()} enabled={Boolean(meterType)} onremove={meter.present || meterType || meter.ip ? () => setHardwareValues({ grid_meter: { ...NO_GRID_METER } }) : null}>
     <div class="fields">
       <div class="setting">
         <label class="head" for="grid-type">{t("devices.grid.type")}</label>
         <select id="grid-type" class="input" value={meterType} onchange={(event) => chooseMeterType(event.currentTarget.value)} data-testid="grid-type">
           <option value="">{t("devices.grid.noneOption")}</option>
-          {#each variants as variant (variant.id)}<option value={variant.id} lang="en">{variant.label}</option>{/each}
+          {#each variants as variant (variant.id)}<option value={variant.id} lang={catalogText(variant.label).lang}>{catalogText(variant.label).text}</option>{/each}
         </select>
         <p class="desc">{t("devices.grid.typeHint")}</p>
       </div>
@@ -249,7 +255,7 @@
   </DeviceCard>
 
   <DeviceCard id="zendure-broker" title={t("devices.broker.title")} model={named ? t("devices.broker.named") : broker.present ? t("devices.broker.local") : t("devices.notConfigured")} meta={broker.host ? String(broker.host) + (broker.port == null ? "" : `:${broker.port}`) : ""} enabled={named || broker.enabled !== false} status={named ? t("devices.readOnly") : ""}>
-      <p class="note"><Icon name="info" />{#if named}{t("devices.broker.namedHelp")}{:else}<span lang="en">{catalog?.zendure_mqtt_broker?.help || ""}</span>{/if}</p>
+      <p class="note"><Icon name="info" />{#if named}{t("devices.broker.namedHelp")}{:else}<CatalogText text={catalog?.zendure_mqtt_broker?.help || ""} />{/if}</p>
       {#if broker.tls_stored_invalid && !named}<p class="note warn"><Icon name="triangle-alert" />{t("devices.broker.tlsInvalid")}</p>{/if}
       <div class="fields">
         <SettingField field={own("host", false)} lang={null} value={broker.host || ""} disabled={named} onchange={(value) => setHardwareValues({ zendure_mqtt: setBroker(broker, "host", value) })} />
@@ -280,7 +286,8 @@
     {:else if kind === "zendure_mqtt"}
       {@const control = mqttControl(device, catalog)}
       {@const model = hardwareModel(catalog, device.hardware_model)}
-      <DeviceCard id={`mqtt-${index}`} title={t("devices.inverter", { n: index + 1 })} model={(model?.label || t("devices.mqtt.unknownModel")) + (device.alternative_layout ? ` · ${t("devices.mqtt.alternativeLayout")}` : "")} meta={mqttSummary(device)} enabled={device.enabled !== false} connection={sourceLabel(device)} open={added === index} onremove={() => remove(index)}>
+      {@const modelWords = model?.label ? catalogText(model.label) : { text: t("devices.mqtt.unknownModel") }}
+      <DeviceCard id={`mqtt-${index}`} title={t("devices.inverter", { n: index + 1 })} model={modelWords.text + (device.alternative_layout ? ` · ${t("devices.mqtt.alternativeLayout")}` : "")} modelLang={modelWords.lang} meta={mqttSummary(device)} enabled={device.enabled !== false} connection={sourceLabel(device)} open={added === index} onremove={() => remove(index)}>
         <div class="fields">
           <SettingField field={own("name")} lang={null} value={device.name || ""} onchange={(value) => update(index, { ...device, name: value })} />
           <SettingField field={own("serial")} lang={null} value={device.serial_number || ""} onchange={(value) => update(index, { ...device, serial_number: value })} />
@@ -289,14 +296,14 @@
             <label class="head" for={`generation-${index}`}>{t("devices.field.generation")}</label>
             <select id={`generation-${index}`} class="input" value={device.hardware_generation || ""} onchange={(event) => update(index, setMqttValue(device, "hardware_generation", event.currentTarget.value, catalog))}>
               {#if !device.hardware_generation}<option value="">—</option>{/if}
-              {#each generations(catalog) as generation (generation.id)}<option value={generation.id} lang="en">{generation.label}</option>{/each}
+              {#each generations(catalog) as generation (generation.id)}<option value={generation.id} lang={catalogText(generation.label).lang}>{catalogText(generation.label).text}</option>{/each}
             </select>
             <p class="desc">{t("devices.field.generation.hint")}</p>
           </div>
           <div class="setting">
             <label class="head" for={`model-${index}`}>{t("devices.field.model")}</label>
             <select id={`model-${index}`} class="input" value={device.hardware_model || ""} onchange={(event) => update(index, setMqttValue(device, "hardware_model", event.currentTarget.value, catalog))}>
-              {#each modelsForGeneration(catalog, device.hardware_generation) as option (option.id)}<option value={option.id} lang="en">{option.label}</option>{/each}
+              {#each modelsForGeneration(catalog, device.hardware_generation) as option (option.id)}<option value={option.id} lang={catalogText(option.label).lang}>{catalogText(option.label).text}</option>{/each}
             </select>
             <p class="desc">{t("devices.field.model.hint")}</p>
           </div>
@@ -307,8 +314,8 @@
         </div>
         <div class="facts-list">
           {@render fact(t("devices.mqtt.protocol"), model?.power_write_profile || t("devices.mqtt.noProtocol"), "", Boolean(model?.power_write_profile))}
-          {@render fact(t("devices.mqtt.maturity"), model?.validation_maturity || t("devices.mqtt.unknown"), "", Boolean(model?.validation_maturity))}
-          {@render fact(t("devices.mqtt.operations"), (model?.supported_operations || []).join(", ") || t("devices.mqtt.none"), "", Boolean((model?.supported_operations || []).length))}
+          {@render fact(t("devices.mqtt.maturity"), model?.validation_maturity ? say(maturityWords(model.validation_maturity)) : t("devices.mqtt.unknown"), "", Boolean(model?.validation_maturity) && !VALIDATION_MATURITIES.includes(model.validation_maturity))}
+          {@render fact(t("devices.mqtt.operations"), operationWords(model?.supported_operations).map(say).join(", ") || t("devices.mqtt.none"), "", operationWords(model?.supported_operations).some((words) => words.lang))}
           {@render fact(t("devices.mqtt.readiness"), t(`devices.mqtt.state.${control.state}`), "", false)}
           {@render fact(t("devices.mqtt.control"), control.shouldControl ? t("devices.mqtt.available") : t("devices.mqtt.unavailable", { reason: t(reasonKey(control.blockReason)) }), t("devices.mqtt.controlHint"), false)}
         </div>

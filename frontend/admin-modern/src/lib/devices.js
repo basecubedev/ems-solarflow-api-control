@@ -428,3 +428,19 @@ export function onLocalBroker(device, broker, credentialsRef = "") {
   if (credentialsRef) next.broker.credentials_ref = credentialsRef;
   return next;
 }
+
+/** A model's validation levels, as the hardware catalogue names them (ems/mqtt_control/zendure_profiles.py VALIDATION_*). */
+export const VALIDATION_MATURITIES = Object.freeze(["existing_support", "community_hardware_validation_required", "deferred", "telemetry_only"]);
+
+/** The per-device operations (ems/power_direction.py OPERATION_*). */
+export const DEVICE_OPERATIONS = Object.freeze(["discharge", "idle", "charge"]);
+
+/** A model's validation level in words this console has, else the catalogue's own word. */
+export function maturityWords(value) {
+  return VALIDATION_MATURITIES.includes(value) ? { key: `devices.maturity.${value}` } : { text: String(value || ""), lang: "en" };
+}
+
+/** The operations a model supports, each in words this console has where it has them. */
+export function operationWords(values) {
+  return (Array.isArray(values) ? values : []).map((value) => (DEVICE_OPERATIONS.includes(value) ? { key: `devices.operation.${value}` } : { text: String(value), lang: "en" }));
+}

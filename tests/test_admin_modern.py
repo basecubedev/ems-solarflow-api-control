@@ -8,6 +8,7 @@ the licence inventory, and hold the console's vocabulary to the server's: the
 words it has for a code are only right while the server still sends that code.
 """
 
+import json
 import re
 import threading
 import urllib.error
@@ -27,6 +28,7 @@ from tests.modern_frontend import (
     assert_no_colour_literal_outside_the_token_blocks,
     assert_no_inline_script_or_style,
     assert_tab_icon_is_the_mark,
+    js_export,
     run_npm_script,
 )
 
@@ -263,3 +265,71 @@ def test_the_unit_tests_of_the_admin_frontend_pass():
 def test_the_committed_build_is_the_build_of_the_committed_source(tmp_path):
     if not assert_build_matches_source(SOURCE / "vite.config.js", MODERN, tmp_path / "modern", "npm run build:admin-modern"):
         pytest.skip("npm ci has not been run; CI runs the same check in its own job")
+
+
+CATALOG_TEXT_KEYS = ("title", "summary", "label", "description", "help", "port_description", "unit")
+
+
+def _catalogue_texts():
+    """Every text and option value the Admin's two catalogue payloads hand the editor, as JSON carries them."""
+    from admin.maintenance_config import _catalog
+    from admin.setup_config import build_setup_catalog
+
+    texts, options = set(), set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            for key in CATALOG_TEXT_KEYS:
+                value = node.get(key)
+                if isinstance(value, str) and value.strip():
+                    texts.add(value)
+            for key, value in node.items():
+                if key == "options" and isinstance(value, list):
+                    options.update(item for item in value if isinstance(item, str))
+                    walk([item for item in value if not isinstance(item, str)])
+                elif isinstance(value, (dict, list)):
+                    walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(json.loads(json.dumps(_catalog())))
+    walk(json.loads(json.dumps(build_setup_catalog())))
+    return texts, options
+
+
+def test_every_catalogue_text_and_option_has_its_words_in_every_language():
+    texts, options = _catalogue_texts()
+    module = SOURCE / "src" / "i18n" / "catalog.js"
+    words = js_export(module, "CATALOG_WORDS")
+    if words is None:
+        pytest.skip("Node is required to read the Modern catalogue words")
+    names = set(js_export(module, "CATALOG_NAMES"))
+    assert sorted(texts - set(words) - names) == []
+    assert sorted((set(words) | names) - texts) == []
+    assert not set(words) & names
+    for text, entry in words.items():
+        assert all(entry.get(lang, "").strip() for lang in ("de", "nl", "fr")), text
+    option_words = js_export(module, "CATALOG_OPTIONS")
+    option_names = set(js_export(module, "OPTION_NAMES"))
+    assert sorted(options - set(option_words) - option_names) == []
+    assert sorted((set(option_words) | option_names) - options) == []
+    for value, entry in option_words.items():
+        assert all(entry.get(lang, "").strip() for lang in ("en", "de", "nl", "fr")), value
+
+
+
+def test_the_maturity_levels_and_operations_modern_names_are_the_backends():
+    from ems import power_direction
+    from ems.mqtt_control import zendure_profiles
+
+    module = SOURCE / "src" / "lib" / "devices.js"
+    maturities = js_export(module, "VALIDATION_MATURITIES")
+    if maturities is None:
+        pytest.skip("Node is required to read the Modern device vocabularies")
+    assert set(maturities) == {
+        value for name, value in vars(zendure_profiles).items() if name.startswith("VALIDATION_")
+    }
+    assert set(js_export(module, "DEVICE_OPERATIONS")) == {
+        value for name, value in vars(power_direction).items() if name.startswith("OPERATION_") and isinstance(value, str)
+    }

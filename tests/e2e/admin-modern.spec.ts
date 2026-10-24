@@ -200,6 +200,36 @@ test.describe("Modern Admin: overview and status", { tag: ["@smoke"] }, () => {
 });
 
 test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
+  test("the settings catalogue and its choices are said in the reader's language", async ({ page, seedAdminScenario }) => {
+    await page.addInitScript(() => window.localStorage.setItem("ems-modern.lang", "de"));
+    await seededAt(page, seedAdminScenario, "#/settings/expert");
+    const expert = page.getByTestId("settings-expert");
+    await expert.getByRole("button", { name: /Systemgrundlagen/ }).click();
+    const level = expert.locator('[data-path="system.log_level"]');
+    await expect(level).toContainText("Protokollstufe");
+    await expect(level).toContainText("Legt fest, wie ausführlich das EMS protokolliert.");
+    await expect(level.locator("option")).toContainText(["Debug", "Info", "Warnung", "Fehler"]);
+    await expect(level.locator(".label")).not.toHaveAttribute("lang", "en");
+    await page.getByTestId("settings-search").fill("Schleifenintervall");
+    await expect(expert.locator('[data-path="system.loop_interval"]')).toBeVisible();
+    await expect(expert.locator('[data-path="system.log_level"]')).toHaveCount(0);
+    await page.getByTestId("settings-search").fill("");
+    await page.goto("/modern/#/settings/safety");
+    await expect(page.getByTestId("settings-safety")).toContainText("Was das EMS ändern darf");
+
+    await page.goto("/modern/#/settings/devices");
+    const editor = page.getByTestId("devices-editor");
+    await expect(editor).toContainText("Ältere Zendure-Hub-/Hyper-Generation");
+    await expect(editor).not.toContainText("Older Zendure Hub / Hyper generation");
+    const meter = editor.locator('[data-device="grid-meter"]');
+    await meter.getByRole("button", { name: /Netzzähler/ }).click();
+    await editor.locator("#grid-type").selectOption("e3dc_modbus");
+    await expect(meter).toContainText("E3/DC-Speichersystem über Modbus TCP");
+    const port = editor.locator('[data-path="grid_meter.port"]');
+    await expect(port.locator(".desc")).toHaveText("Modbus-TCP-Port. Beim E3/DC standardmäßig 502.");
+    await expect(port.locator(".label")).not.toHaveAttribute("lang", "en");
+  });
+
   test("a feature is switched on, checked and saved, and the saved settings say so", async ({ page, seedAdminScenario }) => {
     await seededAt(page, seedAdminScenario, "#/settings");
     const winter = page.locator('[data-section="winter"]');
