@@ -166,6 +166,80 @@ export function globalWrite(devices, explain) {
   return "warn";
 }
 
+/**
+ * The reasons the EMS gives its limits (ems/target_control.py add_limit,
+ * ems/controller.py ControlLimitExplanation), keyed by their English, as
+ * RULE_REASONS keys the dashboard's own; tests/test_dashboard_modern.py walks
+ * both sources against this table.
+ */
+export const LIMIT_REASONS = Object.freeze({
+  "requested total was clamped to the configured maximum": "maxTotalClamped",
+  "configured maximum total output": "maxTotal",
+  "requested total was clamped to zero": "zeroClamped",
+  "target calculation never requests negative output": "zeroFloor",
+  "total PV can cover the requested output": "pvCovers",
+  "battery discharge is needed beyond PV output": "dischargeBeyondPv",
+  "devices that cannot store their own PV export first": "fullSocFirst",
+  "PV-only contribution could not cover the target": "pvOnlyShort",
+  "PV-only allocation covered the target": "pvOnlyCovered",
+  "battery discharge topped up PV-first allocation": "topupUsed",
+  "battery top-up was not needed or not possible": "topupNotNeeded",
+  "no PV-only contribution was available": "noPvOnly",
+  "battery discharge topped up zero PV-only allocation": "topupFromZero",
+  "battery top-up was not possible": "topupImpossible",
+  "requested target exceeds exportable PV": "exceedsPv",
+  "exportable PV covers the requested target": "pvCoversTarget",
+  "no usable discharge capacity was available": "noDischarge",
+  "final constraints preserve PV-only target limits": "pvOnlyFinal",
+  "one or more device targets were clamped": "deviceClamped",
+  "device targets fit within capability limits": "deviceFits",
+  "some target could not be distributed to devices": "undistributed",
+  "requested target was distributed within device limits": "distributed",
+  "no device states were available": "noDevices",
+  "battery/SOC protection idle mode is active": "nightIdle",
+  "devices are parked at the configured minimum output floor": "parkedAtFloor",
+});
+
+/** The notes the EMS adds to its explanation, keyed by their English; the one with a number is matched by UNDISTRIBUTED_NOTE. */
+export const EXPLAIN_NOTES = Object.freeze({
+  "no devices available for target calculation": "noDevices",
+  "battery top-up was applied after PV-first allocation": "topupApplied",
+  "Battery/SOC protection idle mode is active; normal output allocation is intentionally bypassed.": "nightIdle",
+});
+
+export const UNDISTRIBUTED_NOTE = /^(-?\d+(?:\.\d+)?) W could not be distributed$/;
+
+/** A note in the reader's words, with the lang of what stays the server's own. */
+export function noteText(note, t, f) {
+  const known = EXPLAIN_NOTES[note];
+  if (known) return { text: t(`note.${known}`) };
+  const match = UNDISTRIBUTED_NOTE.exec(String(note));
+  if (match) return { text: t("note.undistributed", { w: f.power(Number(match[1])) }) };
+  return { text: String(note), lang: "en" };
+}
+
+/**
+ * A limit's value in words, or null when it says nothing: watts as power, a
+ * per-device list against the devices' names in the controller's order
+ * (``device_order``; the devices mapping arrives sorted by name).
+ */
+export function limitValueText(limit, explain, f) {
+  const value = limit?.value;
+  const names = Array.isArray(explain?.device_order) ? explain.device_order : [];
+  if (typeof value === "number") return Number.isFinite(value) && value !== 0 ? f.power(value) : null;
+  if (typeof value !== "string" || !value.trim()) return null;
+  let list;
+  try {
+    list = JSON.parse(value);
+  } catch {
+    return value;
+  }
+  if (!Array.isArray(list)) return value;
+  if (!list.length) return null;
+  if (limit.name === "full_soc_pv_priority") return list.map((index) => names[index] ?? `#${index + 1}`).join(", ");
+  return list.map((watts, index) => `${names[index] ?? `#${index + 1}`} ${f.power(watts)}`).join(" / ");
+}
+
 export function activeLimits(explain) {
   return (Array.isArray(explain?.limits) ? explain.limits : []).filter((limit) => limit && limit.active);
 }

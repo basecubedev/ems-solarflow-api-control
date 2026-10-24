@@ -223,6 +223,81 @@ def test_the_rule_reasons_modern_translates_are_the_dashboards_own():
         assert strings[f"rule.reason.{key}"]["en"] == reason
 
 
+def _limit_reasons_the_ems_gives():
+    """Every string a limit's reason can be: the fourth argument of add_limit and ControlLimitExplanation."""
+
+    import ast
+
+    reasons = set()
+    for source in (ROOT / "ems" / "target_control.py", ROOT / "ems" / "controller.py"):
+        for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.Call) or len(node.args) < 4:
+                continue
+            name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
+            if name not in ("add_limit", "ControlLimitExplanation"):
+                continue
+            reasons.update(item.value for item in ast.walk(node.args[3]) if isinstance(item, ast.Constant) and isinstance(item.value, str))
+    return reasons
+
+
+def test_the_limit_reasons_modern_translates_are_the_ems_own():
+    registry = js_export(SOURCE / "src" / "lib" / "control.js", "LIMIT_REASONS")
+    if registry is None:
+        pytest.skip("Node is required to read the Modern limit reasons")
+    assert set(registry) == _limit_reasons_the_ems_gives()
+    strings = _strings()
+    for reason, key in registry.items():
+        assert strings[f"limit.reason.{key}"]["en"] == reason
+
+
+def _explanation_notes_the_ems_writes():
+    """The notes of a control explanation: notes=[...] and explanation_notes.append(...); f-strings apart."""
+
+    import ast
+
+    fixed, formatted = set(), []
+    for source in (ROOT / "ems" / "target_control.py", ROOT / "ems" / "controller.py"):
+        for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
+            values = []
+            if isinstance(node, ast.keyword) and node.arg == "notes" and isinstance(node.value, ast.List):
+                values = node.value.elts
+            elif isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "append" and getattr(node.func.value, "id", "") == "explanation_notes":
+                values = node.args
+            for value in values:
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    fixed.add(value.value)
+                elif isinstance(value, ast.JoinedStr):
+                    formatted.append("".join(part.value for part in value.values if isinstance(part, ast.Constant)))
+    return fixed, formatted
+
+
+def test_the_explanation_notes_modern_translates_are_the_ems_own():
+    registry = js_export(SOURCE / "src" / "lib" / "control.js", "EXPLAIN_NOTES")
+    if registry is None:
+        pytest.skip("Node is required to read the Modern explanation notes")
+    fixed, formatted = _explanation_notes_the_ems_writes()
+    assert set(registry) == fixed
+    assert formatted == [" W could not be distributed"]
+    strings = _strings()
+    for note, key in registry.items():
+        assert strings[f"note.{key}"]["en"] == note
+
+
+def test_the_control_explanation_carries_the_controllers_device_order():
+    """A limit's per-device values follow the controller's order; the devices mapping is sent sorted by name."""
+
+    from types import SimpleNamespace
+
+    from dashboard.telemetry import _control_explain_payload
+
+    controller = SimpleNamespace(
+        devices=[SimpleNamespace(name="Terasse"), SimpleNamespace(name="Garage")],
+        last_control_explanation={"devices": {"Garage": {}, "Terasse": {}}, "limits": []},
+    )
+    assert _control_explain_payload(controller)["device_order"] == ["Terasse", "Garage"]
+    assert _control_explain_payload(SimpleNamespace(devices=[], last_control_explanation=None)) is None
+
+
 def test_the_unit_tests_of_the_modern_frontend_pass():
     assert len(list((SOURCE / "tests").glob("*.test.js"))) >= 10
     for script in ("test:frontend-shared", "test:dashboard-modern"):

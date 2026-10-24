@@ -10,7 +10,7 @@ import { PAGES } from "../src/app/pages.js";
 import { PERIODS } from "../src/lib/energy.js";
 import { RULES } from "../src/lib/status.js";
 import { ANALYTICS_VIEWS, ANALYTICS_RANGES, ANALYTICS_OVERLAYS, KPIS } from "../src/lib/analytics.js";
-import { CONTROL_CODES, DECISION_SENTENCES } from "../src/lib/control.js";
+import { CONTROL_CODES, DECISION_SENTENCES, LIMIT_REASONS, EXPLAIN_NOTES } from "../src/lib/control.js";
 import { FIRMWARE_ENUMS } from "../src/lib/devices.js";
 import { PRESET_ORDER, WEEKDAYS, STATUSES } from "../src/lib/schedule.js";
 import { KNOWN_ERRORS } from "../src/lib/errors.js";
@@ -72,6 +72,8 @@ test("every generated key family is complete", () => {
     ...Object.keys(KPIS).map((id) => `analytics.kpi.${id}`),
     ...CONTROL_CODES.map((code) => `code.${code}`),
     ...DECISION_SENTENCES.map((reason) => `decision.${reason}`),
+    ...Object.values(LIMIT_REASONS).map((key) => `limit.reason.${key}`),
+    ...Object.values(EXPLAIN_NOTES).map((key) => `note.${key}`),
     ...Object.values(FIRMWARE_ENUMS).flatMap((table) => Object.values(table)),
     ...PRESET_ORDER.map((name) => `schedule.preset.${name}`),
     ...WEEKDAYS.map((day) => `schedule.weekday.${day}`),
@@ -100,7 +102,7 @@ test("no orphan keys: each key is used literally or belongs to a generated famil
     "maint.type.", "maint.kind.", "maint.influx.", "schedule.preset.", "schedule.weekday.", "schedule.freq.", "schedule.pos.",
     "schedule.status.", "schedule.group.", "schedule.action.", "schedule.choice.", "runtime.offgrid.",
     "runtime.warn.", "setting.", "settingValue.", "control.write.", "control.stage.", "control.deviceStage.", "status.", "transport.",
-    "flow.", "assist.", "error.", "schedule.monthly.", "schedule.ends.", "energy.periodSub.", "energy.context.",
+    "flow.", "assist.", "error.", "schedule.monthly.", "schedule.ends.", "energy.periodSub.", "energy.context.", "limit.reason.", "note.",
   ];
   const orphans = Object.keys(STRINGS).filter((key) => !APP_KEYS.includes(key) && !text.includes(`"${key}"`) && !families.some((prefix) => key.startsWith(prefix)));
   assert.deepEqual(orphans, []);

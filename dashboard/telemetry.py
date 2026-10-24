@@ -76,21 +76,30 @@ def _device_settings_card(controller, dev, state):
 
 
 def _control_explain_payload(controller):
+    """The last control explanation, with the controller's device order beside it.
+
+    A limit's per-device value and index list follow the controller's device
+    order, while the explanation's devices mapping reaches the browser sorted
+    by name (the snapshot is sent with sort_keys); ``device_order`` is that
+    order as a list, which sorting leaves alone.
+    """
+
     explanation = getattr(controller, "last_control_explanation", None)
 
     if explanation is None:
         return None
 
     if hasattr(explanation, "to_dict"):
-        return explanation.to_dict()
+        payload = explanation.to_dict()
+    elif is_dataclass(explanation):
+        payload = asdict(explanation)
+    elif isinstance(explanation, dict):
+        payload = explanation
+    else:
+        return None
 
-    if is_dataclass(explanation):
-        return asdict(explanation)
-
-    if isinstance(explanation, dict):
-        return explanation
-
-    return None
+    devices = getattr(controller, "devices", None) or []
+    return {**payload, "device_order": [getattr(dev, "name", None) for dev in devices]}
 
 
 def _unknown_assist_payload(message="Full-charge assist state unavailable"):

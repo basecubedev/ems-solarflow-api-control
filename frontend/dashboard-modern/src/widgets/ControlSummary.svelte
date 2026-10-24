@@ -8,7 +8,7 @@
   import Icon from "../../../shared/ui/Icon.svelte";
   import { t, fmt, codesText } from "../i18n/i18n.svelte.js";
   import { live } from "../state/live.svelte.js";
-  import { activeLimits, inactiveLimits, codeItems, has } from "../lib/control.js";
+  import { activeLimits, inactiveLimits, codeItems, has, LIMIT_REASONS, limitValueText, noteText } from "../lib/control.js";
 
   const f = $derived(fmt());
   const snapshot = $derived(live.snapshot);
@@ -52,7 +52,9 @@
         {#if limits.length}
           <ul>
             {#each limits as limit, index (index)}
-              <li><span class="dot warn"></span><b>{codesText(codeItems(limit.name)) || limit.name}</b>{#if limit.value}<span class="num"> · {limit.value}</span>{/if}<br /><span class="muted">{limit.reason}</span></li>
+              {@const value = limitValueText(limit, explain, f)}
+              {@const reason = LIMIT_REASONS[limit.reason]}
+              <li><span class="dot warn"></span><b>{codesText(codeItems(limit.name)) || limit.name}</b>{#if value}<span class="num">{` · ${value}`}</span>{/if}{#if limit.reason}<br /><span class="muted" lang={reason ? undefined : "en"}>{reason ? t(`limit.reason.${reason}`) : limit.reason}</span>{/if}</li>
             {/each}
           </ul>
         {:else}
@@ -63,7 +65,7 @@
       {#if notes.length}
         <div>
           <h3 class="sub">{t("control.notes")}</h3>
-          <ul>{#each notes as note, index (index)}<li class="muted">{note}</li>{/each}</ul>
+          <ul>{#each notes as note, index (index)}{@const said = noteText(note, t, f)}<li class="muted" lang={said.lang}>{said.text}</li>{/each}</ul>
         </div>
       {/if}
     </div>
