@@ -36,7 +36,7 @@ async function flowMotionRunning(page: Page): Promise<number> {
 
 test.describe("motion follows visibility @smoke", () => {
   test("a view with no flow drawing on screen runs no flow animation", async ({ page }) => {
-    await page.goto("/?ui=classic", { waitUntil: "domcontentloaded" });
+    await page.goto("/classic/", { waitUntil: "domcontentloaded" });
     await expect(page.locator("#flowSvg")).toBeVisible();
     await expect.poll(() => flowMotionRunning(page)).toBeGreaterThan(0);
 
@@ -60,7 +60,7 @@ test.describe("motion follows visibility @smoke", () => {
     }) => {
       // The devices view is the long one: its drawing leaves the screen well
       // before the page ends, which the short overview never does.
-      await page.goto("/?ui=classic", { waitUntil: "domcontentloaded" });
+      await page.goto("/classic/", { waitUntil: "domcontentloaded" });
       await page.click('[data-flow-view="devices"]');
       await expect(page.locator("#deviceFlowView")).toBeVisible();
       await expect.poll(() => flowMotionRunning(page)).toBeGreaterThan(0);
@@ -75,7 +75,7 @@ test.describe("motion follows visibility @smoke", () => {
     test("the device cards keep their live values while the flow is paused", async ({ page }) => {
       // Pausing motion must not pause the cockpit. The cards are below the
       // drawing, so they are exactly what a reader is looking at when it stops.
-      await page.goto("/?ui=classic", { waitUntil: "domcontentloaded" });
+      await page.goto("/classic/", { waitUntil: "domcontentloaded" });
       await page.click('[data-flow-view="devices"]');
       await expect(page.locator("#deviceGrid .device-card").first()).toBeVisible();
       await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
@@ -117,7 +117,7 @@ test.describe("motion follows visibility @smoke", () => {
           }).length;
       });
 
-    await page.goto("/?ui=classic", { waitUntil: "domcontentloaded" });
+    await page.goto("/classic/", { waitUntil: "domcontentloaded" });
     await expect(page.locator("#flowSvg")).toBeVisible();
     expect(await pausedButVisible()).toBe(0);
 

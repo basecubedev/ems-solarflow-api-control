@@ -587,6 +587,12 @@ body::before {
 }
 .topbar, .section-heading, .status-cluster, .range-tabs, .flow-heading-controls, .flow-view-tabs { display: flex; align-items: center; }
 .topbar { justify-content: space-between; gap: calc(12px * var(--d)); margin-bottom: calc(8px * var(--d)); }
+.classic-notice {
+  margin: 0 0 calc(8px * var(--d)); padding: calc(6px * var(--d)) calc(10px * var(--d));
+  border: 1px solid var(--border-strong); border-radius: var(--o-inner-radius);
+  color: var(--muted); font-size: 12px; font-weight: 750;
+}
+.classic-notice a { color: var(--accent2); font-weight: 850; }
 .brand-block { min-width: 0; }
 .eyebrow { margin: 0 0 calc(2px * var(--d)); color: var(--accent2); font-size: 10px; font-weight: 850; letter-spacing: .14em; text-transform: uppercase; }
 h1, h2 { margin: 0; letter-spacing: -0.035em; }

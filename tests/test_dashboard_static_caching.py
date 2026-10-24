@@ -53,7 +53,7 @@ def request(base_url, path, headers=None):
         conn.close()
 
 
-STATIC_PATHS = ("/", "/app.js", "/styles.css")
+STATIC_PATHS = ("/", "/classic/", "/classic/app.js", "/classic/styles.css", "/assets/modern.js")
 
 
 @pytest.mark.parametrize("path", STATIC_PATHS)
@@ -96,7 +96,7 @@ def test_stale_etag_returns_the_asset_again():
     server, base_url = with_server()
     try:
         status, _, body = request(
-            base_url, "/app.js", headers={"If-None-Match": '"not-the-current-one"'}
+            base_url, "/classic/app.js", headers={"If-None-Match": '"not-the-current-one"'}
         )
         assert status == 200
         assert body
@@ -108,9 +108,9 @@ def test_stale_etag_returns_the_asset_again():
 def test_security_headers_survive_a_304():
     server, base_url = with_server()
     try:
-        _, headers, _ = request(base_url, "/app.js")
+        _, headers, _ = request(base_url, "/classic/app.js")
         status, cached_headers, _ = request(
-            base_url, "/app.js", headers={"If-None-Match": headers["ETag"]}
+            base_url, "/classic/app.js", headers={"If-None-Match": headers["ETag"]}
         )
         assert status == 304
         assert cached_headers.get("X-Content-Type-Options") == "nosniff"

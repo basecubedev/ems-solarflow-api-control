@@ -23,7 +23,7 @@ import { pinTheDay } from "./pin-the-day";
 const SHOTS = "docs/assets/screenshots/dashboard";
 async function openOverview(page) {
   await pinTheDay(page);
-  await page.goto("/modern/#/overview", { waitUntil: "domcontentloaded" });
+  await page.goto("/#/overview", { waitUntil: "domcontentloaded" });
   await expect(page.getByTestId("kpi-status")).toHaveAttribute("data-level", "ok");
   await expect(page.locator(".chart canvas").first()).toBeVisible();
   await page.evaluate(() => document.fonts.ready);

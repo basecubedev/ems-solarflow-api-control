@@ -766,7 +766,7 @@ def run_case(node, case, browser, duration_ms, sse_interval, sse_max_per_ip, gpu
     )
     host, port = server.server_address
     payload = {
-        "url": f"http://{host}:{port}/?ui=classic",
+        "url": f"http://{host}:{port}/classic/",
         "tabs": case["tabs"],
         "view": case["view"],
         "animation": case["animation"],

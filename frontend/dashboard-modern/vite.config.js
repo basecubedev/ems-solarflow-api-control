@@ -10,15 +10,16 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 /**
  * uPlot is the vendored copy Classic already serves and the inventory hash-pins,
  * so it is referenced, never bundled; the tags are added after Vite has
- * resolved the page so it does not try to.
+ * resolved the page so it does not try to. public/fallback.js runs first and
+ * sends demo mode, ?ui=classic and a browser too old for Modern to /classic/.
  */
-const UPLOT = '<link rel="stylesheet" href="/uPlot.min.css">\n    <script src="/uPlot.iife.min.js"></script>';
+const VENDORED = '<script src="/fallback.js"></script>\n    <link rel="stylesheet" href="/uPlot.min.css">\n    <script src="/uPlot.iife.min.js"></script>';
 
 export default defineConfig({
   root: HERE,
-  base: "/modern/",
-  publicDir: false,
-  plugins: [svelte(), modernPage({ name: "ems-modern-page", icons: resolve(HERE, "src/icons.json"), vendored: UPLOT })],
+  base: "/",
+  publicDir: resolve(HERE, "public"),
+  plugins: [svelte(), modernPage({ name: "ems-modern-page", icons: resolve(HERE, "src/icons.json"), vendored: VENDORED })],
   build: modernBuild({ outDir: resolve(ROOT, "dashboard/static/modern"), entry: "modern" }),
   server: {
     fs: { allow: [ROOT] },

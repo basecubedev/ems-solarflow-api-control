@@ -50,6 +50,8 @@ sys.path.insert(0, ROOT)
 from dashboard.static_files import (  # noqa: E402
     STATIC_CONTENT_TYPES,
     build_static_asset_index,
+    dashboard_asset_path,
+    dashboard_redirect,
     lookup_static_asset,
 )
 from dashboard_preview_data import (  # noqa: E402
@@ -477,7 +479,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
             self._send_json(PREVIEW_MAINTENANCE["config_upgrade"])
             return
 
-        self._send_static(path)
+        self._send_static(path, parsed.query)
 
     def do_POST(self):
         self._handle_write()
@@ -695,7 +697,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
             html = handle.read()
         before, after = _preview_injection(view, detail)
         seed = self._chart_seed_script(view)
-        marker = '<script src="/app.js"></script>'
+        marker = '<script src="/classic/app.js"></script>'
         html = html.replace(marker, f"{before}\n  {marker}{after}{seed}", 1)
         self._send_bytes(html.encode("utf-8"), "text/html; charset=utf-8")
 
@@ -840,8 +842,17 @@ class PreviewHandler(BaseHTTPRequestHandler):
             "service_level": "DEBUG",
         })
 
-    def _send_static(self, request_path):
-        asset = lookup_static_asset(STATIC_ASSETS, request_path)
+    def _send_static(self, request_path, query=""):
+        moved = dashboard_redirect(request_path)
+        if moved is not None:
+            self.send_response(302)
+            self.send_header("Location", f"{moved}?{query}" if query else moved)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        asset_path = dashboard_asset_path(request_path)
+        asset = lookup_static_asset(STATIC_ASSETS, asset_path) if asset_path else None
         if asset is None:
             self.send_error(404, "Not Found")
             return

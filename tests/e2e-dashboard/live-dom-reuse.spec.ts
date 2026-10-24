@@ -129,7 +129,7 @@ async function deliverSnapshot(page: Page, mutate: (snapshot: Record<string, unk
 test.describe("live rendering reuses its DOM @smoke", () => {
   test("device cards are updated by a snapshot, not replaced", async ({ page }) => {
     await tapLiveStream(page);
-    await page.goto("/?ui=classic", { waitUntil: "domcontentloaded" });
+    await page.goto("/classic/", { waitUntil: "domcontentloaded" });
     await page.click('[data-flow-view="devices"]');
     await expect(page.locator("#deviceGrid .device-card").first()).toBeVisible();
     await waitForSnapshots(page, 1);
@@ -167,7 +167,7 @@ test.describe("live rendering reuses its DOM @smoke", () => {
 
   test("the rule list is updated by a snapshot, not replaced", async ({ page }) => {
     await tapLiveStream(page);
-    await page.goto("/?ui=classic", { waitUntil: "domcontentloaded" });
+    await page.goto("/classic/", { waitUntil: "domcontentloaded" });
     await expect(page.locator("#rulesList .rule-row").first()).toBeVisible();
 
     const before = await snapshotCount(page);
@@ -182,7 +182,7 @@ test.describe("live rendering reuses its DOM @smoke", () => {
     // Reuse must not become "never remove anything": a device dropped from the
     // snapshot has to lose its card, or the cockpit shows hardware that is gone.
     await tapLiveStream(page);
-    await page.goto("/?ui=classic", { waitUntil: "domcontentloaded" });
+    await page.goto("/classic/", { waitUntil: "domcontentloaded" });
     await page.click('[data-flow-view="devices"]');
     await expect(page.locator("#deviceGrid .device-card").first()).toBeVisible();
     await waitForSnapshots(page, 1);
@@ -204,7 +204,7 @@ test.describe("live rendering reuses its DOM @smoke", () => {
 
   test("a device that appears gets a card without disturbing the others", async ({ page }) => {
     await tapLiveStream(page);
-    await page.goto("/?ui=classic", { waitUntil: "domcontentloaded" });
+    await page.goto("/classic/", { waitUntil: "domcontentloaded" });
     await page.click('[data-flow-view="devices"]');
     await expect(page.locator("#deviceGrid .device-card").first()).toBeVisible();
     await waitForSnapshots(page, 1);
@@ -224,7 +224,7 @@ test.describe("live rendering reuses its DOM @smoke", () => {
   });
   test("the energy board is updated by a snapshot, not replaced", async ({ page }) => {
     await tapLiveStream(page);
-    await page.goto("/?ui=classic", { waitUntil: "domcontentloaded" });
+    await page.goto("/classic/", { waitUntil: "domcontentloaded" });
     await page.click('[data-flow-view="energy"]');
     await expect(page.locator("#energyStats")).toBeVisible();
     await waitForSnapshots(page, 1);
@@ -250,7 +250,7 @@ test.describe("live rendering reuses its DOM @smoke", () => {
 
   test("the control board is updated by a snapshot, not replaced", async ({ page }) => {
     await tapLiveStream(page);
-    await page.goto("/?ui=classic", { waitUntil: "domcontentloaded" });
+    await page.goto("/classic/", { waitUntil: "domcontentloaded" });
     await page.click('[data-flow-view="control"]');
     await expect(page.locator("#controlExplainMount")).toBeVisible();
     await waitForSnapshots(page, 1);

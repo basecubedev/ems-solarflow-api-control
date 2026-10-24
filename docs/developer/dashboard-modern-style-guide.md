@@ -9,7 +9,7 @@ built with Vite, one for each server:
 
 | App | Source | Build output, committed | Served at |
 | --- | --- | --- | --- |
-| Modern dashboard | `frontend/dashboard-modern/` | `dashboard/static/modern/` | the dashboard's `/modern/` |
+| Modern dashboard | `frontend/dashboard-modern/` | `dashboard/static/modern/` | the dashboard's `/` (Classic, deprecated, at `/classic/`) |
 | Modern Admin console | `frontend/admin-modern/` | `admin/static/modern/` | the Admin server's `/modern/` |
 | Modern Appliance Manager | `frontend/appliance-modern/` | `appliance/static/modern/` | the Appliance Manager's `/modern/` |
 
@@ -273,7 +273,7 @@ from what the Admin server is.
   of a failure are the ones the transition offers (`resume_available`,
   `return_available`, `cancel_available`). Each new screen of the flow is shown
   from the top of the page and takes the focus.
-- **Modern is the default**, as on the dashboard: `admin/static/admin-theme.js`
+- **Modern is the default**: `admin/static/admin-theme.js`
   redirects `/` to `/modern/` unless the browser chose Classic
   (`ems-admin-ui`), the address names a Classic page, or the browser lacks the
   Popover API. The guided setup and Classic's guided upgrade keep their

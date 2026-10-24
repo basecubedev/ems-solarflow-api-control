@@ -4,10 +4,10 @@ The live operating UI (**EMS SolarFlow Control**, *"Read-only energy cockpit"*)
 on port `8080`. It shows what EMS is measuring, what it decided, and why — and,
 once you log in, lets you change a small set of runtime values.
 
-The guides below describe **Classic**, the cockpit at `http://<host>:8080/?ui=classic`.
-A browser that has never chosen opens the newer **Modern** layout instead; its
-sidebar has a **Classic view** button, and [The Modern dashboard](modern.md)
-describes it.
+The dashboard's address opens the **Modern** layout, which
+[The Modern dashboard](modern.md) describes. The guides below describe
+**Classic**, the deprecated cockpit at `http://<host>:8080/classic/` that a
+later release removes; Modern's sidebar has a **Classic view** button to it.
 
 ![EMS Dashboard overview with the PV, Home, Grid, Battery and SoC tiles, the Live Flow diagram and the Rules panel](../../assets/screenshots/dashboard/dashboard-overview.png)
 
