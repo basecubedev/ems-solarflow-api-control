@@ -1,0 +1,32 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+import { createPageSet } from "../../../shared/shell/pages.js";
+
+export { swapPinned } from "../../../shared/shell/pages.js";
+
+/**
+ * The fixed navigation. "classicView" is the value Classic stores in
+ * dashboard.flowView for the same page; tests/classic-parity.test.js walks Classic's
+ * tab list and requires every tab to appear here.
+ */
+export const PAGES = Object.freeze([
+  { id: "overview", icon: "layout-dashboard", group: "main", classicView: "aggregated" },
+  { id: "devices", icon: "cpu", group: "main", classicView: "devices" },
+  { id: "energy", icon: "chart-column", group: "main", classicView: "energy" },
+  { id: "analytics", icon: "chart-spline", group: "main", classicView: "analytics" },
+  { id: "control", icon: "sliders-horizontal", group: "main", classicView: "control" },
+  { id: "schedule", icon: "calendar-clock", group: "main", operator: true, classicView: "schedule" },
+  { id: "diagnose", icon: "stethoscope", group: "system", operator: true, classicView: "diagnose" },
+  { id: "logs", icon: "scroll-text", group: "system", operator: true, classicView: "logs" },
+  { id: "maintenance", icon: "wrench", group: "system", operator: true, classicView: "maintenance" },
+]);
+
+/** The four pages a phone's bar holds until the reader picks their own. */
+export const MOBILE_PAGES = Object.freeze(["overview", "devices", "energy", "control"]);
+
+export const pageSet = createPageSet({
+  pages: PAGES,
+  groups: [{ id: "main" }, { id: "system", label: "nav.system" }],
+  mobile: MOBILE_PAGES,
+});
+
+export const { pinnedPages, pageById } = pageSet;

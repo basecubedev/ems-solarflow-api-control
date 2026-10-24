@@ -1,0 +1,7 @@
+# Build output of the Modern front ends (npm run build:dashboard-modern,
+# build:admin-modern, build:appliance-modern). Minified code keeps the
+# whitespace its template literals hold, so git must not flag it, and a review
+# reads the source rather than the bundle.
+dashboard/static/modern/** -whitespace linguist-generated=true
+admin/static/modern/** -whitespace linguist-generated=true
+appliance/static/modern/** -whitespace linguist-generated=true

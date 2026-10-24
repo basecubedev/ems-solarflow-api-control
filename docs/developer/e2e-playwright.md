@@ -120,6 +120,14 @@ Tags: `@smoke` (fast critical journeys), `@setup`, `@maintenance`,
   next click. The Firefox failure of the MQTT migration spec was this, and it
   had been written off as a flake.
 
+- The console's address opens Modern; the Classic specs run against Classic
+  because the four Admin configs start every context with Classic chosen
+  (`use.storageState`, from `tests/e2e/helpers/classic-ui.ts`). A spec that
+  sets its own `storageState` -- `test.use` or `browser.newContext({
+  storageState })` -- replaces that choice and lands in Modern unless it
+  carries the `ems-admin-ui` entry too; a spec that runs its own Admin on
+  another origin calls `chooseClassicUi(context)`.
+
 ## Covered lifecycle workflows
 
 The workflows that originally shipped as backend/contract-only coverage now have

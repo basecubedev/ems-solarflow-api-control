@@ -22,6 +22,7 @@ nav = [
     { "Admin Console guides" = [
       "user/admin/index.md",
       { "First start" = "user/admin/first-start.md" },
+      { "Modern design" = "user/admin/modern.md" },
       { "Guided Setup" = "user/admin/guided-setup.md" },
       { "Guided Upgrade" = "user/admin/guided-upgrade.md" },
       { "Maintenance" = "user/admin/maintenance.md" },
@@ -41,10 +42,12 @@ nav = [
       { "Control pipeline" = "user/dashboard/control.md" },
       { "Runtime settings" = "user/dashboard/runtime-settings.md" },
       { "Diagnostics" = "user/dashboard/diagnostics.md" },
+      { "Modern dashboard" = "user/dashboard/modern.md" },
     ] },
     { "Raspberry Pi appliance" = [
       "user/appliance/index.md",
       { "Overview page" = "user/appliance/overview.md" },
+      { "Modern console" = "user/appliance/modern.md" },
       { "Flashing the card" = "user/appliance/install.md" },
       { "First start" = "user/appliance/first-start.md" },
       { "Network" = "user/appliance/network.md" },
@@ -132,6 +135,8 @@ nav = [
     { "CI / release" = "developer/ci-release.md" },
     { "Documentation website" = "developer/docs-site.md" },
     { "Dashboard style guide" = "developer/dashboard-style-guide.md" },
+    { "Modern dashboard style guide" = "developer/dashboard-modern-style-guide.md" },
+    { "Classic and Modern parity" = "developer/modern-parity.md" },
     { "Design notes" = [
       "developer/design-notes/README.md",
       { "InfluxDB runtime telemetry" = "developer/design-notes/develop-tool-influxdb-telemetry.md" },

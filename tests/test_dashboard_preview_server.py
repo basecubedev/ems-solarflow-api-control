@@ -79,7 +79,7 @@ def test_preview_views_return_html(preview_server, view):
     # The injected bootstrap opens the requested view and still loads app.js.
     assert "dashboard.flowView" in body
     assert json.dumps(view) in body
-    assert '<script src="/app.js"></script>' in body
+    assert '<script src="/classic/app.js"></script>' in body
 
 
 def test_unknown_preview_view_is_404(preview_server):
@@ -91,7 +91,7 @@ def test_unknown_preview_view_is_404(preview_server):
 
 def test_static_assets_served(preview_server):
     _, base = preview_server()
-    for path, content_type in (("/app.js", "javascript"), ("/styles.css", "css")):
+    for path, content_type in (("/classic/app.js", "javascript"), ("/classic/styles.css", "css")):
         with _get(base, path) as response:
             assert response.status == 200
             assert content_type in response.headers.get("Content-Type", "")
@@ -233,11 +233,11 @@ def test_landing_page_is_not_the_real_dashboard(preview_server):
     _, base = preview_server()
     with _get(base, "/preview") as response:
         landing = response.read().decode("utf-8")
-    with _get(base, "/") as response:
+    with _get(base, "/classic/") as response:
         index = response.read().decode("utf-8")
     # The landing page must not replace the real dashboard index.html.
-    assert '<script src="/app.js"></script>' not in landing
-    assert '<script src="/app.js"></script>' in index
+    assert '<script src="/classic/app.js"></script>' not in landing
+    assert '<script src="/classic/app.js"></script>' in index
 
 
 def test_normalize_views_expands_all():

@@ -4,7 +4,7 @@
 [![Repo browser e2e](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/playwright-e2e.yml/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/playwright-e2e.yml)
 [![CodeQL](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/github-code-scanning/codeql)
 [![Dependabot](https://img.shields.io/badge/Dependabot-enabled-brightgreen?logo=dependabot)](.github/dependabot.yml)
-![automated tests](https://img.shields.io/badge/automated%20tests-17500%2B-blue)
+![automated tests](https://img.shields.io/badge/automated%20tests-17700%2B-blue)
 [![Test-Driven Development](https://img.shields.io/badge/Test--Driven%20Development-contract--first-blue)](docs/developer/testing.md#development-approach)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.14-blue)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue)](LICENSE)
@@ -114,6 +114,9 @@ the install worked**; if it does not appear,
 `docker compose -f docker-compose.admin.yml ps` says whether the container
 came up. Host networking is the default (best for local discovery); add
 `--bridge --bind 0.0.0.0` only if you need Docker bridge networking.
+
+The address opens the console's Modern view. The guided setup begins on the
+Classic start page below, at `http://127.0.0.1:8090/#setup`.
 
 ![Admin Console start page](docs/assets/screenshots/admin/admin-landing.png)
 

@@ -35,7 +35,8 @@
         "name": "ems-solarflow-api-control",
         "image": "ghcr.io/example/ems-solarflow-api-control:v0.7.0-RC",
         "tag": "v0.7.0-RC",
-        "status": "running"
+        "status": "running",
+        "started_at": "2026-07-05T07:12:00+00:00"
       },
       "influxdb": {
         "found": false,
@@ -49,7 +50,17 @@
     "links": {
       "dashboard_url": "http://localhost:8080"
     },
-    "warnings": []
+    "warnings": [],
+    "components": {
+      "admin": {
+        "image": "ghcr.io/example/ems-admin:v0.7.0-RC",
+        "tag": "v0.7.0-RC"
+      },
+      "ems": {
+        "image": "ghcr.io/example/ems-solarflow-api-control:v0.7.0-RC",
+        "tag": "v0.7.0-RC"
+      }
+    }
   },
   "config": {
     "status": "ok",
@@ -145,13 +156,17 @@
         "desired_state": "running",
         "display_label": "Running",
         "display_detail": "ems-solarflow-api-control \u00b7 v0.7.0-RC",
-        "tone": "ok"
+        "tone": "ok",
+        "display_state": "running",
+        "configured": true
       },
       "influxdb": {
         "desired_state": "stopped",
         "display_label": "Disabled",
         "display_detail": "Bundled InfluxDB is not enabled",
-        "tone": "muted"
+        "tone": "muted",
+        "display_state": "disabled",
+        "configured": false
       }
     }
   },

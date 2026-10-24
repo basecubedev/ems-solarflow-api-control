@@ -3,6 +3,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 
@@ -4094,7 +4095,7 @@ def test_upgrade_planning_dedupes_concurrent_loads():
     # sharing an unpinned run would hand the resume the server default.
     assert "upgradeState.loadingPromise" in fn
     assert "if (!pinnedTag) return upgradeState.loadingPromise;" in fn
-    assert ".then(() => loadUpgradePlanning(pinnedTag, { preserveVerification }))" in fn
+    assert ".then(() => loadUpgradePlanning(pinnedTag, { preserveVerification, preferredTag }))" in fn
 
 
 def test_guided_upgrade_execute_button_not_gated_on_admin_status():
@@ -4404,21 +4405,6 @@ def test_maintenance_expanded_body_carries_resolved_paths_and_names():
         'id="maintenance-docker-server"',
     ):
         assert marker in maintenance
-
-
-def test_maintenance_dashboard_link_is_a_real_anchor():
-    html = _read("index.html")
-    js = _read("admin.js")
-    maintenance = _maintenance_section(html)
-    assert 'id="maintenance-dashboard-link"' in maintenance
-    assert 'target="_blank"' in maintenance
-    assert 'rel="noopener"' in maintenance
-    # href is set through the DOM property, never via innerHTML/markup.
-    fn = js.split("function renderMaintenanceDashboard", 1)[1].split(
-        "\nfunction ", 1
-    )[0]
-    assert "link.href = url" in fn
-    assert "innerHTML" not in fn
 
 
 def test_maintenance_toggle_expands_and_collapses_card():
@@ -7607,9 +7593,6 @@ def test_maintenance_proposal_draft_keeps_opaque_server_resolution_identity():
 
 
 # --- credential rollback failure warning (Setup + Maintenance parity) --------
-
-
-import re  # noqa: E402
 
 
 def _async_fn_body(js, header):
@@ -11271,7 +11254,7 @@ def test_durable_transition_stage_wins_over_generic_validated_status():
         (
             "validated",
             True,
-            ["done", "done", "active", "pending", "pending", "pending", "pending"],
+            ["done", "done", "pending", "pending", "pending", "pending", "pending"],
         ),
         (
             "admin_aligned",

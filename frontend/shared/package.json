@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "The design system both Modern front ends are built from: tokens, styles, UI parts, the app shell, i18n and formatting. Dependencies are declared in the repository root package.json; this file only marks the directory as ES modules."
+}

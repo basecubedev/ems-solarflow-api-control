@@ -16,6 +16,7 @@ on:
       - "appliance/**"
       - "tests/e2e-appliance/**"
       - "dashboard/**"
+      - "frontend/**"
       - "tests/e2e-dashboard/**"
       # The cockpit suite is only as deterministic as the preview server it
       # runs against, so a change there has to trigger it too.
@@ -245,6 +246,20 @@ jobs:
 
       - name: Install Node dependencies
         run: npm ci
+
+      # The Modern dashboard, Admin console and Appliance Manager are committed
+      # as build output so that no install path needs Node; this is what keeps
+      # that output the build of its source, the shared design system included.
+      - name: Check the Modern builds
+        run: |
+          npm run test:frontend-shared
+          npm run test:dashboard-modern
+          npm run test:admin-modern
+          npm run test:appliance-modern
+          npm run build:dashboard-modern
+          npm run build:admin-modern
+          npm run build:appliance-modern
+          git diff --exit-code -- dashboard/static/modern admin/static/modern appliance/static/modern
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium firefox

@@ -1,0 +1,88 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/*
+  The only place a colour value is written. A colour scheme is one value set for
+  the roles below; the energy and status colours are the same in every scheme
+  and keep the names and values of the shared token contract.
+*/
+
+@font-face {
+  font-family: "InterVariable";
+  src: url("../../../node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
+    U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+:root {
+  --pv: #ffd166;
+  --battery: #39e58c;
+  --output: #38d5ff;
+  --grid: #d87cff;
+  --danger: #ff6b7a;
+
+  --m-ok: #39e58c;
+  --m-warn: #f59e0b;
+  --m-fault: #ff6b7a;
+  --m-white: #ffffff;
+  --m-black: #000000;
+
+  --m-bg: #07090d;
+  --m-well: #0a0d12;
+  --m-surface-1: #0e1218;
+  --m-surface-2: #141922;
+  --m-surface-3: #1b212c;
+  --m-line: rgba(148, 163, 184, 0.13);
+  --m-line-strong: rgba(148, 163, 184, 0.26);
+  --m-text: #f4f7fb;
+  --m-muted: #949fb1;
+  --m-muted-2: #808ca0;
+  --m-accent: #e6ebf2;
+  --m-accent-ink: #0b0e13;
+  --m-selected-bg: #2a313d;
+  --m-selected-ink: #ffffff;
+  --m-glow: rgba(148, 163, 184, 0.07);
+  --m-scrim: rgba(3, 5, 8, 0.72);
+  --m-shadow: 0 1px 0 rgba(255, 255, 255, 0.035) inset, 0 12px 32px rgba(0, 0, 0, 0.4);
+  --m-shadow-pop: 0 18px 48px rgba(0, 0, 0, 0.6);
+
+  --m-font: "InterVariable", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --m-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --m-radius-card: 16px;
+  --m-radius-inner: 12px;
+  --m-radius-control: 10px;
+  --m-radius-pill: 999px;
+  --d: 1;
+  --s1: calc(4px * var(--d));
+  --s2: calc(8px * var(--d));
+  --s3: calc(12px * var(--d));
+  --s4: calc(16px * var(--d));
+  --s5: calc(20px * var(--d));
+  --s6: calc(28px * var(--d));
+}
+
+:root[data-m-theme="midnight"] {
+  --m-bg: #060b16;
+  --m-well: #08101f;
+  --m-surface-1: #0c1527;
+  --m-surface-2: #111d33;
+  --m-surface-3: #182742;
+  --m-line: rgba(122, 152, 204, 0.14);
+  --m-line-strong: rgba(122, 152, 204, 0.28);
+  --m-text: #eaf1fb;
+  --m-muted: #8ea0bd;
+  --m-muted-2: #7b90b0;
+  --m-accent: #2d70e4;
+  --m-accent-ink: #ffffff;
+  --m-selected-bg: #2d70e4;
+  --m-selected-ink: #ffffff;
+  --m-glow: rgba(45, 112, 228, 0.15);
+  --m-scrim: rgba(2, 6, 14, 0.74);
+  --m-shadow: 0 1px 0 rgba(255, 255, 255, 0.035) inset, 0 12px 32px rgba(0, 4, 14, 0.45);
+  --m-shadow-pop: 0 18px 48px rgba(0, 4, 14, 0.65);
+}
+
+:root[data-density="compact"] {
+  --d: 0.78;
+}

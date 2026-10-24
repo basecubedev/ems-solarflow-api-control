@@ -10,9 +10,9 @@
 //
 // Every capture ID here has a row in that directory's README.md.
 
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
-import { openView, resetAppliance, setMode, signIn } from "./helpers";
+import { PASSWORD, openView, resetAppliance, setMode, signIn } from "./helpers";
 
 const SHOTS = "docs/assets/screenshots/appliance";
 
@@ -88,5 +88,38 @@ test.describe("documentation captures @docs", () => {
     await signIn(page);
     await openView(page, "admin");
     await page.screenshot({ path: `${SHOTS}/appliance-recovery.png`, fullPage: true });
+  });
+});
+
+test.describe("Modern documentation captures @docs", () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test.beforeAll(() => {
+    mkdirSync(SHOTS, { recursive: true });
+  });
+
+  test.beforeEach(async ({ request }) => {
+    await resetAppliance(request, { manager_index: true, manager_package_kept: true });
+  });
+
+  async function modernSignIn(page: Page) {
+    await page.goto("/modern/");
+    await page.locator("#appliance-password").fill(PASSWORD);
+    await page.locator("#appliance-password-confirm").fill(PASSWORD);
+    await page.getByTestId("sign-in-submit").click();
+    await expect(page.getByTestId("card-network")).toContainText("ems-solarflow.local");
+  }
+
+  test("appliance-modern-overview", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await modernSignIn(page);
+    await page.screenshot({ path: `${SHOTS}/appliance-modern-overview.png` });
+  });
+
+  test("appliance-modern-phone", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await modernSignIn(page);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.screenshot({ path: `${SHOTS}/appliance-modern-phone.png` });
   });
 });

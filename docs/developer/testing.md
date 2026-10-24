@@ -223,13 +223,15 @@ Tags: `@smoke` (fast critical journeys), `@setup`, `@maintenance`,
 ./scripts/capture-docs-screenshots.sh            # Admin + Dashboard pages
 npx playwright test --config=playwright.appliance.config.ts capture-docs \
     # with EMS_APPLIANCE_CAPTURE_DOCS=1        # Appliance Manager pages
+npx playwright test --config=playwright.dashboard.config.ts capture-docs \
+    --project=chromium # with EMS_DASHBOARD_CAPTURE_DOCS=1  # Modern dashboard
 python3 scripts/capture_appearance_gallery.py    # the appearance strips
 ```
 
-The first two photograph the product's pages. The third photographs one page
+The first three photograph the product's pages. The last photographs one page
 three times with a single appearance axis changed -- palette, object style,
 density -- because a choice whose entire effect is how something looks cannot be
-documented in prose. All three use the same deterministic servers as the browser
+documented in prose. All four use the same deterministic servers as the browser
 suites, so no capture contains a real host, address, serial or key.
 
 Each screenshot directory carries a `README.md` listing every image, and
@@ -253,6 +255,28 @@ Each brings its own deterministic server: the Manager's is the scripted
 `scripts/serve_dashboard_preview.py`, which serves the real `dashboard/static/`
 assets with synthetic API payloads -- no hardware, no MQTT, no history
 database, no secrets.
+
+The cockpit and the Admin console each have a second front end, Modern,
+built from `frontend/dashboard-modern/` and `frontend/admin-modern/` on the
+shared design system in `frontend/shared/`. Their unit tests need Node but no
+browser, and their build output is committed, so a source change is not
+finished until it is rebuilt -- both builds, when the change is in
+`frontend/shared/`:
+
+```bash
+npm run test:frontend-shared      # node --test, a second or two each
+npm run test:dashboard-modern
+npm run test:admin-modern
+npm run build:dashboard-modern    # rewrites dashboard/static/modern/
+npm run build:admin-modern        # rewrites admin/static/modern/
+```
+
+`tests/test_dashboard_modern.py` and `tests/test_admin_modern.py` rebuild into
+a scratch directory and fail when the committed output differs; the dashboard
+Playwright job does the same for both with `git diff --exit-code`. The browser
+specs are `tests/e2e-dashboard/modern.spec.ts`, in the same suite as Classic's
+cockpit, and `tests/e2e/admin-modern.spec.ts` and
+`tests/e2e/admin-modern-upgrade.spec.ts`, in the Admin suite.
 
 Four things are worth knowing before adding a spec to either:
 
@@ -380,9 +404,6 @@ The documentation-content ones carry the `documentation` marker, so
 - `tests/test_docker_docs_contract.py`, `tests/test_docker_first_setup.py` —
   the Docker Bootstrap installer/compose/docs promise.
 - `tests/test_issue_templates.py` — issue-template documentation links.
-- `tests/test_home_assistant_removed.py::test_no_document_page_or_form_offers_home_assistant`
-  — no document, frontend page or issue form offers the removed integration;
-  its docstring names the exceptions and why they stay.
 - `tests/test_test_classification.py` — the marker registry, the documented
   tier selections and the pull-request group partition.
 - `tests/test_ci_workflow_docker_split.py` — how the CI groups are split.

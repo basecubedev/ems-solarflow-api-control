@@ -33,6 +33,11 @@ belong to [Backup and restore](backup-restore.md).
 
 **What it changes:** nothing. It opens the panel.
 
+The Modern console runs the same upgrade on its **Updates** page: choosing a
+version checks it at once, the plan follows by itself, and one confirmation
+starts it. See [the Modern Admin console](modern.md#updating). The steps below
+describe the Classic view.
+
 ### 2 — Review the current state and pick the target
 
 ![Guided upgrade panel showing target System Build selection, upgrade options, admin alignment and the upgrade plan](../../assets/screenshots/admin/admin-guided-upgrade-plan.png)
@@ -44,7 +49,7 @@ belong to [Backup and restore](backup-restore.md).
   Experimental.
 - **02 Upgrade options** — see the table below.
 - **03 Admin alignment** — current Admin and target build.
-- **04 Upgrade validation** — empty until you plan.
+- **04 Upgrade validation** — filled in by itself once the build is verified.
 
 **What you select:** one target build, then **Verify System Build**.
 
@@ -53,7 +58,8 @@ downloads (or reuses) the Admin and EMS images, verifies the exact pair, and
 returns a **selection fingerprint** of the resolved pair. The plan you build next
 is bound to that fingerprint.
 
-**Expected result:** the build verifies and the plan can be built.
+**Expected result:** the build verifies, and the plan is built right after it
+without another click.
 
 **If it differs:** *Resources cached* is not verified — press Verify. On a GHCR
 rate limit nothing was changed; wait and Verify again. The button reads
@@ -75,8 +81,10 @@ under the Admin that is running *now*, before any Admin alignment.
 
 ### 4 — Review the plan
 
-**What you see, in step 04:** the ordered pipeline. Nothing has changed yet — the
-box says *Planning only — no containers will be changed yet.*
+**What you see, in step 04:** the ordered pipeline, built by itself once the
+build is verified and again whenever you change an option. Nothing has changed
+yet — the box says *Planning only — no containers will be changed yet.*
+**Plan upgrade** is only needed when a plan could not be built.
 
 1. Resolve the target and re-check the verified fingerprint.
 2. Inspect the current installation.
@@ -185,7 +193,7 @@ the [EMS Dashboard](../dashboard/index.md) should show live telemetry again.
 
 | Symptom | Meaning | What to do |
 | --- | --- | --- |
-| Upgrade rejected right at the start | The resolved pair moved since Verify | **Verify System Build** again, then re-plan |
+| Upgrade rejected right at the start | The resolved pair moved since Verify | **Verify System Build** again; the plan is rebuilt by itself |
 | GHCR rate limit | Registry throttled you | Nothing changed; wait and retry. The verified target stays selected |
 | Pull failed (network / digest missing) | Typed failure preserved | **No Compose change was written and EMS was not recreated.** Fix connectivity, retry |
 | Asked to log in mid-upgrade | The Admin was replaced | Same password; the upgrade resumes |

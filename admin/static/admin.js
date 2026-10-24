@@ -8011,7 +8011,7 @@ const MAINTENANCE_PANEL_IDS = {
 // the load promise so a caller (e.g. a resume that must select the transition
 // tag before continuing) can await full completion; ``pinnedTag`` is forwarded
 // to the upgrade planning load.
-function setMaintenancePath(path, pinnedTag, settingsTab) {
+function setMaintenancePath(path, pinnedTag, settingsTab, preferredTag) {
   const next = MAINTENANCE_PATHS.includes(path) ? path : "hub";
   // The borrowed singleton forms go home before the panel that holds them is
   // hidden: parkInlineConfigs() refuses to reclaim a node mounted elsewhere, so
@@ -8038,7 +8038,7 @@ function setMaintenancePath(path, pinnedTag, settingsTab) {
   if (next === "upgrade") {
     // Same-session navigation may keep an existing verification for the same
     // selected build (no forced re-verify just for returning to the panel).
-    return loadUpgradePlanning(pinnedTag, { preserveVerification: true });
+    return loadUpgradePlanning(pinnedTag, { preserveVerification: true, preferredTag });
   }
   if (next === "backup") {
     return loadBackups();
@@ -8081,6 +8081,21 @@ function maintenanceSettingsTabForHash(hash) {
   return MAINTENANCE_SETTINGS_TABS.includes(tab) ? tab : null;
 }
 
+// #maintenance-upgrade-v0.9.0 opens the Guided Upgrade with that release
+// chosen: the Modern console hands a release over this way. It only names a
+// candidate: one the catalogue does not let the upgrade choose leaves the
+// usual default selected, unlike a resume, which pins its tag and fails closed.
+// Choosing still verifies nothing.
+function maintenanceUpgradeTagForHash(hash) {
+  const prefix = "maintenance-upgrade-";
+  if (!hash.startsWith(prefix)) return null;
+  try {
+    return decodeURIComponent(hash.slice(prefix.length)) || null;
+  } catch {
+    return null;
+  }
+}
+
 // Deep links (#maintenance, #maintenance-manual, #maintenance-settings-safety)
 // resolve to the right panel even from the landing gate: the gate is a landing
 // screen, not a wall a bookmark has to get past. Only Maintenance opens this
@@ -8088,7 +8103,9 @@ function maintenanceSettingsTabForHash(hash) {
 // address must never resurrect an unconfirmed wizard — that resume belongs to
 // resumeGuidedSetupFromTransition. An address naming no maintenance view
 // reveals nothing, which is what keeps showLanding()'s cleared hash from
-// re-opening the panel it just closed.
+// re-opening the panel it just closed. A release a Modern hand-off names is read
+// once: the address goes back to #maintenance-upgrade, so a reload does not
+// choose it again over the owner's later pick.
 function applyHashRoute() {
   const hash = currentHashView();
   const view = adminViewForHash(hash);
@@ -8098,10 +8115,13 @@ function applyHashRoute() {
   }
   setAdminView(view);
   if (view === "maintenance") {
+    const upgradeTag = maintenanceUpgradeTagForHash(hash);
+    if (upgradeTag) history.replaceState(null, "", "#maintenance-upgrade");
     setMaintenancePath(
       maintenancePathForHash(hash),
       undefined,
       maintenanceSettingsTabForHash(hash),
+      upgradeTag,
     );
   }
 }
@@ -9174,7 +9194,12 @@ function renderStartSuccess() {
   const link = setupEls.startDashboardLink;
   const show = start.running && !start.conflict;
   if (success) success.hidden = !show;
-  if (link) link.href = startDashboardHref();
+  if (link) {
+    const href = startDashboardHref();
+    if (href) link.href = href;
+    else link.removeAttribute("href");
+    link.hidden = !href;
+  }
 }
 
 function startStatusText() {
@@ -9192,21 +9217,30 @@ function startStatusText() {
   return "Ready to start the prepared deployment.";
 }
 
-// Prefer the prepared config host/port. When the Admin UI is opened from another
-// machine, localhost would point at the user's own device, so swap in the
-// current browser hostname while keeping the dashboard scheme and port.
-function startDashboardHref() {
-  const url = setupState.start.dashboard_url || "http://localhost:8080";
+// The dashboard's address as this browser reaches it. The server names it as
+// http(s)://localhost:<port>, which only holds on the machine itself: opened
+// from another device, localhost is that device. The dashboard runs on the host
+// this console was reached at, so that host is kept and only the scheme and the
+// port are taken from the server. Anything but http(s) is no link at all. The
+// Modern console does the same (frontend/admin-modern/src/lib/links.js).
+function dashboardHrefForBrowser(url) {
+  const hostname = window.location.hostname;
+  if (typeof url !== "string" || !url || !hostname) return null;
+  let parsed;
   try {
-    const parsed = new URL(url);
-    const host = window.location.hostname;
-    if (host && host !== "localhost" && host !== "127.0.0.1") {
-      parsed.hostname = host;
-    }
-    return parsed.href;
+    parsed = new URL(url);
   } catch (err) {
-    return url;
+    return null;
   }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  const host = hostname.includes(":") && !hostname.startsWith("[") ? "[" + hostname + "]" : hostname;
+  const port = parsed.port ? ":" + parsed.port : "";
+  return parsed.protocol + "//" + host + port + "/";
+}
+
+// The prepared config's scheme and port, on the host this browser used.
+function startDashboardHref() {
+  return dashboardHrefForBrowser(setupState.start.dashboard_url || "http://localhost:8080");
 }
 
 async function refreshStartStatus() {
@@ -10151,6 +10185,7 @@ const maintenanceEls = {
   influxImage: document.getElementById("maintenance-influx-image"),
   dashboard: document.getElementById("maintenance-dashboard"),
   dashboardLink: document.getElementById("maintenance-dashboard-link"),
+  containersDashboardLink: document.getElementById("maintenance-containers-dashboard-link"),
   refresh: document.getElementById("maintenance-refresh"),
   runtimeEmsDesired: document.getElementById("maintenance-runtime-ems-desired"),
   runtimeInfluxDesired: document.getElementById("maintenance-runtime-influx-desired"),
@@ -10563,35 +10598,38 @@ function renderMaintenance(data) {
     containers.influxdb && containers.influxdb.image
   );
 
-  const dashboard = data.links && data.links.dashboard_url;
+  const dashboard = dashboardHrefForBrowser(data.links && data.links.dashboard_url);
   renderMaintenanceDashboard(dashboard);
-  renderMaintenanceSummaries(data);
+  renderMaintenanceSummaries(data, dashboard);
   renderMaintenanceFindings(data.health);
 }
 
-// The dashboard link href is set through the DOM property (never innerHTML) so
-// the config-derived URL cannot inject markup.
-function renderMaintenanceDashboard(url) {
-  const link = maintenanceEls.dashboardLink;
-  const label = maintenanceEls.dashboard;
-  if (link) {
-    if (url) {
-      link.href = url;
+// Both dashboard links -- the Version & dashboard card's and the one beside the
+// container restart -- point where this browser reaches the dashboard (href, from
+// dashboardHrefForBrowser), or are hidden while that is unknown. The href is set
+// through the DOM property (never innerHTML) so the config-derived URL cannot
+// inject markup.
+function renderMaintenanceDashboard(href) {
+  [maintenanceEls.dashboardLink, maintenanceEls.containersDashboardLink].forEach((link) => {
+    if (!link) return;
+    if (href) {
+      link.href = href;
       link.hidden = false;
     } else {
       link.removeAttribute("href");
       link.hidden = true;
     }
-  }
+  });
+  const label = maintenanceEls.dashboard;
   if (label) {
-    label.hidden = Boolean(url);
-    setMaintenanceFact(label, url ? "" : "unavailable", "muted");
+    label.hidden = Boolean(href);
+    setMaintenanceFact(label, href ? "" : "unavailable", "muted");
   }
 }
 
 // Collapsed headers must stay informative: each summary condenses the card's key
 // facts into one line so the state is readable without expanding.
-function renderMaintenanceSummaries(data) {
+function renderMaintenanceSummaries(data, dashboard) {
   const state = data.install_state || {};
   const healthy = MAINTENANCE_HEALTHY_STATES.includes(state.state);
   const paths = data.paths || {};
@@ -10615,7 +10653,6 @@ function renderMaintenanceSummaries(data) {
   const emsTag = containers.ems && containers.ems.tag;
   const components = data.components || {};
   const adminTag = components.admin && components.admin.tag;
-  const dashboard = data.links && data.links.dashboard_url;
   const versionsText =
     (adminTag ? "Admin " + adminTag : "Admin version unknown") +
     " · " +
@@ -11405,10 +11442,13 @@ if (mqttMigrationEls.refresh) {
 // --- Guided upgrade planning + execute -----------------------------------
 // Reads the maintenance overview for the current version, lists releases, and
 // (using the existing setup prepare flow) can download a target release.
-// "Plan upgrade" only renders the summary; the guarded "Upgrade EMS" button is
-// the sole mutating action and POSTs the confirmed executor, which is enabled
-// only once a target is selected, prepared, and planned. Every dynamic value is
-// escaped before it reaches the DOM.
+// The plan only renders the summary, and it is built by itself as soon as the
+// selected build is verified, and again when an option changes: verifying is
+// the operator's click, planning is not a second one. "Plan upgrade" stays for
+// a plan that could not be built. The guarded "Upgrade EMS" button is the sole
+// mutating action and POSTs the confirmed executor, which is enabled only once
+// a target is selected, prepared, and planned. Every dynamic value is escaped
+// before it reaches the DOM.
 
 const upgradeEls = {
   currentVersion: document.getElementById("upgrade-current-version"),
@@ -11879,7 +11919,7 @@ function renderUpgradePlan() {
 
   if (!upgradeState.planned) {
     renderUpgradeValidation(
-      [{ tone: "info", text: "Review the target release and options, then plan the upgrade." }],
+      [{ tone: "info", text: "Verify the selected System Build; the upgrade plan follows by itself." }],
       false
     );
     updateUpgradeActionButtons();
@@ -11974,7 +12014,7 @@ function updateUpgradeActionButtons() {
     }
   }
   for (const el of upgradeEls.options) {
-    el.disabled = upgradeState.running || upgradeState.planning || upgradeState.completed;
+    el.disabled = upgradeState.running || upgradeState.completed;
   }
   updateExecuteButton();
 }
@@ -11983,7 +12023,7 @@ function setUpgradeRunning(running) {
   upgradeState.running = running;
   if (upgradeEls.select) upgradeEls.select.disabled = running || !upgradeState.releases.length;
   for (const el of upgradeEls.options) {
-    el.disabled = running || upgradeState.planning || upgradeState.completed;
+    el.disabled = running || upgradeState.completed;
   }
   if (running && upgradeEls.prepareBtn) upgradeEls.prepareBtn.disabled = true;
   if (!running) setUpgradeReleaseStatus();
@@ -12050,6 +12090,7 @@ async function pollUpgradeJob(jobId) {
     if (data.status === "succeeded" || data.status === "failed") {
       stopUpgradePolling();
       const result = data.result || { ok: data.status === "succeeded", steps: data.steps };
+      if (!result.ok && !upgradeState.preparedFingerprint) clearUpgradeVerification();
       renderUpgradeResult(result);
       setUpgradeRunning(false);
       // Read once when the panel opened, and the operator who pressed "Upgrade
@@ -12324,6 +12365,13 @@ async function planUpgrade() {
     upgradeState.planning = false;
     upgradeState.planned = false;
     upgradeState.plannedFingerprint = null;
+    if (
+      upgradeState.selected === selectedTag &&
+      upgradeState.preparedFingerprint === fingerprint &&
+      upgradeCanPlan()
+    ) {
+      return planUpgrade();
+    }
     updateUpgradeActionButtons();
     renderUpgradeValidation(
       [
@@ -12404,7 +12452,7 @@ function upgradeVerificationSurvivesReload(preserve, releases, selectedTag) {
   );
 }
 
-async function loadUpgradeReleases(pinnedTag, { preserveVerification = false } = {}) {
+async function loadUpgradeReleases(pinnedTag, { preserveVerification = false, preferredTag = null } = {}) {
   upgradeState.status = "loading";
   upgradeState.error = null;
   upgradeState.releaseWarnings = [];
@@ -12435,10 +12483,14 @@ async function loadUpgradeReleases(pinnedTag, { preserveVerification = false } =
       upgradeEls.select.appendChild(optgroup);
     }
     let selectedTag = selectUpgradeReleaseTag(releases, data, pinnedTag);
+    const preferred = !pinnedTag && preferredTag
+      ? releases.find((item) => item.tag === preferredTag && item.selectable !== false)
+      : null;
+    if (preferred) selectedTag = preferred.tag;
     // On a same-session navigation (no explicit pin) keep the current selection
     // when it is still offered, so returning to the panel does not silently jump
     // to the default build and drop a verification for the selected one.
-    if (!pinnedTag && preserveVerification && upgradeState.selected) {
+    if (!pinnedTag && !preferred && preserveVerification && upgradeState.selected) {
       const keep = releases.find(
         (item) => item.tag === upgradeState.selected && item.selectable !== false
       );
@@ -12484,7 +12536,7 @@ async function loadUpgradeReleases(pinnedTag, { preserveVerification = false } =
 // same promise, so there is never a second parallel loadUpgradePlanning pass and
 // a caller can reliably await full completion. ``pinnedTag`` forces the selector
 // to the resumed transition tag.
-function loadUpgradePlanning(pinnedTag, { preserveVerification = false } = {}) {
+function loadUpgradePlanning(pinnedTag, { preserveVerification = false, preferredTag = null } = {}) {
   if (upgradeState.loadingPromise) {
     if (!pinnedTag) return upgradeState.loadingPromise;
     // A pinned load is a resume. The run already in flight may carry no pin --
@@ -12493,13 +12545,13 @@ function loadUpgradePlanning(pinnedTag, { preserveVerification = false } = {}) {
     // closed in silence. Wait it out, then load once more with the pin applied.
     return upgradeState.loadingPromise
       .catch(() => undefined)
-      .then(() => loadUpgradePlanning(pinnedTag, { preserveVerification }));
+      .then(() => loadUpgradePlanning(pinnedTag, { preserveVerification, preferredTag }));
   }
   upgradeState.loading = true;
   upgradeState.loadingPromise = (async () => {
     try {
       await loadUpgradeCurrentVersion();
-      await loadUpgradeReleases(pinnedTag, { preserveVerification });
+      await loadUpgradeReleases(pinnedTag, { preserveVerification, preferredTag });
       await loadUpgradeMigrationReview();
       // Admin alignment is automatic and driven by the shared system-alignment
       // transition; the planning page only reads the current state (recovery of
@@ -12512,6 +12564,7 @@ function loadUpgradePlanning(pinnedTag, { preserveVerification = false } = {}) {
       upgradeState.loadingPromise = null;
       updateUpgradeActionButtons();
     }
+    if (upgradeCanPlan()) await planUpgrade();
   })();
   return upgradeState.loadingPromise;
 }
@@ -12752,6 +12805,7 @@ async function prepareUpgradeTarget() {
   renderUpgradeAdminAlignment();
   setUpgradeReleaseStatus();
   renderUpgradePlan();
+  if (upgradeCanPlan()) await planUpgrade();
 }
 
 if (upgradeEls.form) {
@@ -12772,6 +12826,7 @@ for (const el of upgradeEls.options) {
   el.addEventListener("change", () => {
     invalidateUpgradePlan();
     renderUpgradePlan();
+    if (upgradeCanPlan()) planUpgrade();
   });
 }
 if (upgradeEls.planBtn) {
@@ -13000,6 +13055,7 @@ async function resumeGuidedUpgrade(operationId) {
       return;
     }
     if (!res.ok || !data.ok || !data.job_id) {
+      if (!upgradeState.preparedFingerprint) clearUpgradeVerification();
       renderUpgradeResult(data);
       setUpgradeRunning(false);
       return;
@@ -20754,9 +20810,6 @@ function systemAlignmentStageStates(data) {
       if (adminRequired === false) {
         states[2] = "skipped";
         states[3] = "skipped";
-        states[4] = "active";
-      } else {
-        states[2] = "active";
       }
       break;
     case "admin_update_pending":
@@ -21052,7 +21105,7 @@ function renderSystemAlignmentStatus(data) {
       selection_started: "Selecting the System Build…",
       validation_running: "Verifying the Admin and EMS images…",
       validation_failed: "System Build verification failed.",
-      validated: "System Build verified. Preparing to align…",
+      validated: "System Build verified.",
       admin_update_pending: "Updating the Admin Console…",
       admin_alignment_started: "Updating the Admin Console…",
       admin_reconnect_pending:
@@ -21357,9 +21410,11 @@ async function returnToRunningSystemBuild() {
       }
       if (!res.ok) throw new Error(humanErrorText(data, "Return failed."));
       renderSystemAlignmentStatus(data);
-      if (data.reconnect !== false) {
+      if (data.reconnect === true) {
         showReconnectOverlay(data.message || "Returning to the running System Build…");
-        waitForAdminReconnect(previousAdminInstanceId, transition.operation_id);
+        waitForAdminReconnect(previousAdminInstanceId, data.operation_id || null);
+      } else {
+        loadSystemAlignmentStatus();
       }
     } catch (err) {
       if (systemAlignmentEls.warning) {

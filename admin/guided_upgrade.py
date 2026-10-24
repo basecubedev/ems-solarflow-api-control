@@ -321,6 +321,19 @@ class UpgradeJobRegistry:
             job = self._jobs.get(job_id)
         return job.snapshot() if job is not None else None
 
+    def forget_operation(self, operation_id, job_id):
+        """Stop answering ``operation_id`` with ``job_id``; the job stays readable.
+
+        A job that failed is the operation's answer until the operation is
+        retried. A retry that reopens the EMS operation needs a new job, and a
+        continuation that kept re-attaching to the failed one would report the
+        old failure for every new attempt.
+        """
+
+        with self._lock:
+            if self._by_operation.get(operation_id) == job_id:
+                del self._by_operation[operation_id]
+
     def for_operation(self, operation_id):
         """The operation's existing job, else ``None`` — for duplicate resumes."""
 

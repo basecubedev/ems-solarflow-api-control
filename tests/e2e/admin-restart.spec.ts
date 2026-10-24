@@ -1,5 +1,6 @@
 import { test, expect, request, type APIRequestContext } from "@playwright/test";
 import { AdminProcess, authenticate } from "./helpers/admin-process";
+import { chooseClassicUi } from "./helpers/classic-ui";
 
 // Scenario D: an Admin restart must not change how the persisted workflow is
 // interpreted. This restarts the real Admin process against the same data
@@ -220,7 +221,8 @@ test("a real Admin restart preserves one workflow interpretation", { tag: ["@smo
   await third.ctx.dispose();
 });
 
-test("the restarted Admin serves the same workflow to a browser", { tag: ["@smoke", "@workflow"] }, async ({ page }) => {
+test("the restarted Admin serves the same workflow to a browser", { tag: ["@smoke", "@workflow"] }, async ({ context, page }) => {
+  await chooseClassicUi(context);
   await page.goto(`${admin.baseURL}/`);
   // Auth state lives in the preserved data directory, so the login form is the
   // one the earlier process created.

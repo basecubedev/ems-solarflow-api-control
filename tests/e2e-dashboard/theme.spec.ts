@@ -19,7 +19,7 @@ const THEME_KEY = "ems-dashboard-theme";
 // The preview serves the real index.html at both / and /preview/<view>. The
 // plain root is the one a person opens, so that is what these use.
 async function open(page) {
-  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.goto("/classic/", { waitUntil: "domcontentloaded" });
   await expect(page.locator("#themeSelect")).toBeVisible();
 }
 

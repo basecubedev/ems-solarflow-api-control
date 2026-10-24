@@ -285,6 +285,13 @@ def main():
                 services.ssh.keystore(account).revoke_all()
             except Exception:
                 continue
+        if options.get("authorized_keys"):
+            # Written as an operator who edited the file by hand would: the
+            # console's own path refuses a duplicate, a hand edit does not.
+            store = services.ssh.keystore(services.config.backup_user)
+            store.ssh_dir.mkdir(parents=True, exist_ok=True)
+            store.path.write_text("".join(f"{line}\n" for line in options["authorized_keys"]), encoding="utf-8")
+            os.chmod(store.path, 0o600)
         host.units["ssh.service"] = {"active": "inactive", "enabled": "disabled"}
         host.sshd_backup_match = SSHD_BACKUP_MATCH.format(export_root=services.paths.export_root)
         host.ss_exit_code, host.ss_stderr, host.listening_ports = 0, "", ""

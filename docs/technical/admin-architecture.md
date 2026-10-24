@@ -49,6 +49,22 @@ the one the request names; the Admin never sets the file aside itself. A restore
 writes `runtime-state.json` wholesale, and a config it puts back voids a pending
 reset request.
 
+### Two front ends, one server
+
+The Admin server answers two browser front ends from `admin/static/`: Classic
+at `/` (`index.html`, `admin.js`) and Modern at `/modern/`, a build of
+`frontend/admin-modern/` committed under `admin/static/modern/`. Both are static
+files behind the same headers below; both call the same API with the same
+session and CSRF token, and neither gains an endpoint or an authority the other
+lacks. Modern runs the maintenance writes it covers (container sync, analytics
+repair, diagnostics, backups and restore, workflow recovery, and the Guided
+Upgrade: validate, execute, resume, the job poll, the system-alignment
+recovery routes and the workflow switch) with exactly the bodies Classic sends,
+and hands Guided Setup and the settings editor to Classic's pages. `/` opens Modern unless the browser chose Classic
+(`ems-admin-ui`) or the address names a Classic page, decided before the first
+paint by `admin-theme.js`; see the
+[Modern front ends style guide](../developer/dashboard-modern-style-guide.md).
+
 ## Standard deployment layout
 
 All three operating models (Admin Console, Docker Bootstrap, Developer Setup)

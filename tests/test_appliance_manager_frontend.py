@@ -226,8 +226,11 @@ def test_a_missing_payload_enables_nothing_it_cannot_prove():
 # --- what a release is labelled with -----------------------------------------
 
 
+UTC_STAMP = 'process.env.TZ = "UTC";\n' + extract("releaseStamp") + "\n"
+
+
 @requires_node
-def test_a_release_is_labelled_with_its_version_date_and_direction():
+def test_a_release_is_labelled_with_its_version_date_time_and_direction():
     label = evaluate(
         "managerLabel",
         {
@@ -235,10 +238,22 @@ def test_a_release_is_labelled_with_its_version_date_and_direction():
             "direction": "downgrade",
             "described": {"release_version": "0.2.0", "created_at": "2026-08-26T01:00:00Z"},
         },
-        preamble=DIRECTIONS,
+        preamble=UTC_STAMP + DIRECTIONS,
     )
 
-    assert label == "0.2.0 · 2026-08-26 · older"
+    assert label == "0.2.0 · 2026-08-26 01:00 · older"
+
+
+@requires_node
+def test_two_builds_of_one_day_are_told_apart_by_their_time():
+    first = evaluate("releaseStamp", "2026-10-21T09:05:00Z", preamble='process.env.TZ = "UTC";\n')
+    second = evaluate("releaseStamp", "2026-10-21T17:40:30Z", preamble='process.env.TZ = "UTC";\n')
+    in_berlin = evaluate("releaseStamp", "2026-10-21T17:40:30Z", preamble='process.env.TZ = "Europe/Berlin";\n')
+
+    assert (first, second, in_berlin) == ("2026-10-21 09:05", "2026-10-21 17:40", "2026-10-21 19:40")
+    assert evaluate("releaseStamp", "2026-10-21T17:40:30", preamble='process.env.TZ = "Europe/Berlin";\n') == "2026-10-21 19:40"
+    assert evaluate("releaseStamp", "2026-10-21") == "2026-10-21"
+    assert evaluate("releaseStamp", None) == ""
 
 
 @requires_node

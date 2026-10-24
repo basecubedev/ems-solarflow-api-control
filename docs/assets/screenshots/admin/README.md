@@ -40,9 +40,22 @@ hostnames.
 | `admin-upgrade-running.png` | Guided upgrade — live validation | `upgrade-run-3` |
 | `admin-upgrade-completed.png` | Guided upgrade — completed | `upgrade-done` |
 | `admin-admin-update-reconnect.png` | Admin Console self-update reconnect overlay | `admin-update-reconnect` |
+| `admin-modern-overview.png` | Modern design — Overview | `scripts/capture_admin_modern_docs.mjs` |
+| `admin-modern-backups.png` | Modern design — Backups | `scripts/capture_admin_modern_docs.mjs` |
+| `admin-modern-phone.png` | Modern design — Overview on a phone | `scripts/capture_admin_modern_docs.mjs` |
 | `admin-appearance-palettes.png` | Appearance — the same console in Signal, Void and Copper | `appearance gallery` |
 | `admin-appearance-styles.png` | Appearance — the same console in Glass, Console and Brutal | `appearance gallery` |
 | `admin-appearance-density.png` | Appearance — the same console at Compact, Normal and Roomy | `appearance gallery` |
+
+The three `admin-modern-*` screens are written by
+[`scripts/capture_admin_modern_docs.mjs`](../../../../scripts/capture_admin_modern_docs.mjs),
+which drives the Modern build (`admin/static/modern/`) through the same docs
+preview and demo payloads with Playwright Chromium, the clock fixed to the demo
+day:
+
+```bash
+node scripts/capture_admin_modern_docs.mjs
+```
 
 The three `*-appearance-*` strips are written by
 [`scripts/capture_appearance_gallery.py`](../../../../scripts/capture_appearance_gallery.py)
