@@ -43,8 +43,8 @@ ANALYTICS_UNREACHABLE_HINT = (
 ANALYTICS_SCHEMA_HINT = (
     "Analytics history is enabled, but a bucket this range reads is missing.\n"
     "Unless influxdb.auto_sync is off, the EMS creates it by itself; it checks "
-    "every half hour. To create it now, use Repair analytics in the Admin "
-    "console's Maintenance, or run: python3 emsctl.py influx sync --safe"
+    "every half hour. To create it now, use Repair analytics on the Admin "
+    "console's Services page, or run: python3 emsctl.py influx sync --safe"
 )
 # Same symptom, opposite fix: no sync creates this bucket, because the two
 # halves of the influxdb config disagree about which buckets exist.
