@@ -295,7 +295,7 @@
           <h3 class="sub">{t(label)}</h3>
           <ul class="files">
             {#each rows as item, index (index)}
-              <li><code>{item.path}</code>{#if kind === "add"}<span class="muted"> = {JSON.stringify(item.value)}</span>{:else if kind === "migrate"}<span class="muted">: {JSON.stringify(item.old_value)} → {JSON.stringify(item.value)}</span>{/if}</li>
+              <li><code>{item.path}</code>{#if kind === "add"}<span class="muted">{" "}= {JSON.stringify(item.value)}</span>{:else if kind === "migrate"}<span class="muted">: {JSON.stringify(item.old_value)} → {JSON.stringify(item.value)}</span>{/if}</li>
             {/each}
           </ul>
           {#if kind === "comment_refresh" && Number(upgrade.comment_refresh_count) > 0}

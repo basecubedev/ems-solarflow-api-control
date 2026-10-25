@@ -159,7 +159,7 @@
   {#if discovery.outcome}
     <p class="note" class:warn={["warnings", "manualWarnings", "failed"].includes(discovery.outcome)} data-testid="discovery-outcome">
       <Icon name={["warnings", "manualWarnings", "failed"].includes(discovery.outcome) ? "triangle-alert" : "info"} />
-      <span>{t(`discovery.outcome.${discovery.outcome}`)}{#if ["warnings", "manualWarnings"].includes(discovery.outcome) && discovery.causes.length} <span lang="en">({failures()})</span>{/if}{#if discovery.cloudSkipped && discovery.outcome === "done"} {t("discovery.cloudSkipped")}{/if}</span>
+      <span>{t(`discovery.outcome.${discovery.outcome}`)}{#if ["warnings", "manualWarnings"].includes(discovery.outcome) && discovery.causes.length}{" "}<span lang="en">({failures()})</span>{/if}{#if discovery.cloudSkipped && discovery.outcome === "done"}{" "}{t("discovery.cloudSkipped")}{/if}</span>
     </p>
   {/if}
 

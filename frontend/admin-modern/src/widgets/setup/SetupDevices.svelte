@@ -156,7 +156,7 @@
             <div class="configure">
               <p class="muted small">
                 {on ? t("setup.devices.enabled") : t("setup.devices.disabled")} ·
-                {#if source === "zendure_mqtt"}{sources.cloud?.token_saved ? t("setup.devices.keySaved") : t("setup.devices.noKey")} · {/if}{tn("setup.devices.found", sourceCount(source))}
+                {#if source === "zendure_mqtt"}{sources.cloud?.token_saved ? t("setup.devices.keySaved") : t("setup.devices.noKey")} ·{" "}{/if}{tn("setup.devices.found", sourceCount(source))}
               </p>
               {#if source === "local_api"}
                 <div class="mdns inner">
@@ -252,7 +252,7 @@
           <li class="chip inner" class:recommended={gateway || network.scan_recommended} title={network.reason || ""}>
             <span class="num">{network.cidr}</span>
             <span class="badge">{gateway ? t("setup.devices.gateway") : network.scan_recommended ? t("setup.devices.recommended") : t("setup.devices.advanced")}</span>
-            <span class="muted small num">{gateway ? t("setup.devices.viaGateway", { gateway: network.gateway_candidate || "" }) : [network.interface, network.address].filter(Boolean).join(" · ")}{#if !gateway && network.original_cidr && network.original_cidr !== network.cidr} · {t("setup.devices.was", { cidr: network.original_cidr })}{/if}</span>
+            <span class="muted small num">{gateway ? t("setup.devices.viaGateway", { gateway: network.gateway_candidate || "" }) : [network.interface, network.address].filter(Boolean).join(" · ")}{#if !gateway && network.original_cidr && network.original_cidr !== network.cidr}{" "}· {t("setup.devices.was", { cidr: network.original_cidr })}{/if}</span>
           </li>
         {/each}
       </ul>
@@ -320,7 +320,7 @@
     <details id="setup-detail-local_mqtt" open={details.local_mqtt} ontoggle={(event) => (details = { ...details, local_mqtt: event.currentTarget.open })}>
       <summary>{t("setup.source.local_mqtt")} <span class="muted num">({tn("setup.devices.brokerCount", setupDiscovery.brokers.length)} · {tn("setup.devices.deviceCount", brokerDevices)})</span></summary>
       {#if setupDiscovery.brokerMessage}
-        <p class="muted small">{t(`setup.brokers.${setupDiscovery.brokerMessage.kind}`, setupDiscovery.brokerMessage.values || {})}{#if setupDiscovery.brokerMessage.error} {@render failure(setupDiscovery.brokerMessage.error)}{/if}</p>
+        <p class="muted small">{t(`setup.brokers.${setupDiscovery.brokerMessage.kind}`, setupDiscovery.brokerMessage.values || {})}{#if setupDiscovery.brokerMessage.error}{" "}{@render failure(setupDiscovery.brokerMessage.error)}{/if}</p>
       {/if}
       {#if setupDiscovery.brokers.length}
         <ul class="cards">

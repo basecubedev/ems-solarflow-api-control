@@ -24,7 +24,7 @@
         {#if period.kind === "today"}<span class="badge">{t("energy.inProgress")}</span>{/if}
         {#if period.kind === "best" && period.view.date}<span class="date num">{f.date(period.view.date, { short: true })}</span>{/if}
       </div>
-      <div class="period-value num">{f.energy(period.view.kwh)}{#if period.view.partial}<span class="mark" title={t("kpi.partial")}> ◦</span>{/if}</div>
+      <div class="period-value num">{f.energy(period.view.kwh)}{#if period.view.partial}<span class="mark" title={t("kpi.partial")}>{" "}◦</span>{/if}</div>
       <div class="period-sub">{t(`energy.periodSub.${period.kind}`)}</div>
       <EnergyFacts values={period.view.raw} {channels} {since} {expert} {currency} />
     </section>

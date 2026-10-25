@@ -87,7 +87,7 @@
   {/snippet}
   <StaleNote resource={system.plan} />
   {#if plan && !readable}
-    <Empty error text={t("services.planUnreadable")}>{#if plan.message}<span class="muted" lang="en"> {plan.message}</span>{/if}</Empty>
+    <Empty error text={t("services.planUnreadable")}>{#if plan.message}<span class="muted" lang="en">{" "}{plan.message}</span>{/if}</Empty>
   {:else if plan}
     <div class="services">
       {#each SERVICES as service (service)}
@@ -144,14 +144,14 @@
     </div>
     {/if}
     <div role="status" aria-live="polite">
-      {#if outcome}<p class="result {outcome.tone}" data-testid="services-result"><Icon name={RESULT_ICONS[outcome.tone] || "circle-x"} /><span><span lang={outcome.lang}>{outcome.message}</span>{#if outcome.at}<span class="muted when num"> · {f.when(outcome.at)}</span>{/if}</span></p>{/if}
+      {#if outcome}<p class="result {outcome.tone}" data-testid="services-result"><Icon name={RESULT_ICONS[outcome.tone] || "circle-x"} /><span><span lang={outcome.lang}>{outcome.message}</span>{#if outcome.at}<span class="muted when num">{" "}· {f.when(outcome.at)}</span>{/if}</span></p>{/if}
     </div>
     {#if outcome}
       <div class="outcome" data-testid="services-outcome">
         {#if outcome.steps.length}
           <ol class="sync-steps">
             {#each outcome.steps as step, index (index)}
-              <li class:failed={!step.ok}><Icon name={step.ok ? "circle-check" : "circle-x"} size="sm" /><span class="sr-only">{step.ok ? t("step.state.done") : t("step.state.failed")} </span>{#if step.key}{t(step.key)}{:else}<span lang="en">{step.text}</span>{/if}{#if step.detail}<span class="muted"> · <span lang="en">{step.detail}</span></span>{/if}</li>
+              <li class:failed={!step.ok}><Icon name={step.ok ? "circle-check" : "circle-x"} size="sm" /><span class="sr-only">{step.ok ? t("step.state.done") : t("step.state.failed")}{" "}</span>{#if step.key}{t(step.key)}{:else}<span lang="en">{step.text}</span>{/if}{#if step.detail}<span class="muted">{" "}· <span lang="en">{step.detail}</span></span>{/if}</li>
             {/each}
           </ol>
         {/if}

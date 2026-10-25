@@ -181,7 +181,7 @@
           <div class="tile-value"><Status tone={lastInstall.tone} text={say(lastInstall)} lang={langOf(lastInstall)} /></div>
           <div class="tile-sub muted">
             {#if manager.outcome?.outcome}{#if MANAGER_OUTCOMES.includes(manager.outcome.outcome)}{t(`manager.outcome.${manager.outcome.outcome}`)}{:else}<span lang="en">{manager.outcome.outcome}</span>{/if}{/if}
-            {#if verify.armed} · {t("manager.expecting", { version: verify.expected_version || "—" })}{/if}
+            {#if verify.armed}{" "}· {t("manager.expecting", { version: verify.expected_version || "—" })}{/if}
           </div>
         </div>
       </div>

@@ -10,7 +10,7 @@
   {#each steps as step, index (index)}
     <li class="step {step.tone}" data-state={step.state}>
       <Icon name={step.icon} size="sm" />
-      <span class="what"><span class="sr-only">{t(`step.state.${step.state}`)} </span>{#if step.label}{t(step.label, { type: step.type ? t(`backup.type.${step.type}`) : "" })}{:else}<span lang="en">{step.text}</span>{/if}</span>
+      <span class="what"><span class="sr-only">{t(`step.state.${step.state}`)}{" "}</span>{#if step.label}{t(step.label, { type: step.type ? t(`backup.type.${step.type}`) : "" })}{:else}<span lang="en">{step.text}</span>{/if}</span>
       {#if step.detail}<span class="detail muted" lang="en">{step.detail}</span>{/if}
     </li>
   {/each}

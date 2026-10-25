@@ -108,7 +108,7 @@
 
   {#if message}
     <p class={failure ? "form-error" : "form-ok"} role="status" data-testid="sources-message">
-      {t(`sources.message.${message.kind}`, message.values || {})}{#if failure} <span lang={failure.lang}>{failure.text}</span>{/if}
+      {t(`sources.message.${message.kind}`, message.values || {})}{#if failure}{" "}<span lang={failure.lang}>{failure.text}</span>{/if}
     </p>
   {/if}
 </div>

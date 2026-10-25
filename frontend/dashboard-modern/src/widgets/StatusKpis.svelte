@@ -53,7 +53,7 @@
     <div class="icon-tile c-bat"><Icon name="leaf" /></div>
     <div class="kpi-text">
       <div class="kpi-label">{t("kpi.selfSufficiency")}</div>
-      <div class="kpi-value num">{ratio ? f.percent(ratio.ratio, { fraction: true }) : "—"}{#if ratio?.partial}<span class="partial" title={t("kpi.partial")}> ◦</span>{/if}</div>
+      <div class="kpi-value num">{ratio ? f.percent(ratio.ratio, { fraction: true }) : "—"}{#if ratio?.partial}<span class="partial" title={t("kpi.partial")}>{" "}◦</span>{/if}</div>
       <div class="kpi-meta">{t("kpi.selfSufficiencyMeta")}</div>
     </div>
   </section>

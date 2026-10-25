@@ -119,7 +119,7 @@
   {#if telemetry && !telemetryWanted(telemetry)}
     <Empty text={t("system.telemetryNone")} icon="radio-tower" />
   {:else if telemetry && telemetry.available === false}
-    <Empty text={t("system.telemetryUnknown")} icon="circle-help">{#if telemetry.message}<span class="muted" lang="en"> {telemetry.message}</span>{/if}</Empty>
+    <Empty text={t("system.telemetryUnknown")} icon="circle-help">{#if telemetry.message}<span class="muted" lang="en">{" "}{telemetry.message}</span>{/if}</Empty>
   {:else if telemetry}
     <div class="facts two">
       <div class="fact"><div class="fact-label">{t("system.connection")}</div><div class="fact-value">{t(`system.runtime.${runtimeState}`)}</div></div>
@@ -164,7 +164,7 @@
 {#if migration && migrationWanted}
   <Card icon="file-cog" tone="c-pv" title={t("system.migration")} subtitle={t("system.migrationSub")} span="span-12">
     {#if migration.status !== "ok"}
-      <Empty error text={t("system.migrationUnreadable")}>{#if migration.message}<span class="muted" lang="en"> {migration.message}</span>{/if}</Empty>
+      <Empty error text={t("system.migrationUnreadable")}>{#if migration.message}<span class="muted" lang="en">{" "}{migration.message}</span>{/if}</Empty>
     {:else}
       {#if review.required}
         <p class="summary"><Icon name="triangle-alert" />{tn("system.migrationNeeded", review.devices.length)}</p>

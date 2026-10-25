@@ -116,7 +116,7 @@
 {:else if config && !ok}
   <div class="span-12">
     <Empty error={config.status !== "missing"} icon="file-warning" text={t(`settings.config.${config.status === "missing" ? "missing" : "invalid"}`)}>
-      {#if config.message}<span class="muted" lang="en"> {config.message}</span>{/if}
+      {#if config.message}<span class="muted" lang="en">{" "}{config.message}</span>{/if}
     </Empty>
   </div>
 {:else if ok}
@@ -217,7 +217,7 @@
           {/if}
           {#if settings.applyError}{@render failure(settings.applyError)}{/if}
           {#if rollback}
-            <p class="note warn" data-testid="credential-rollback"><Icon name="triangle-alert" /><span lang="en">{rollback.message}{#if rollback.failed_refs?.length} ({rollback.failed_refs.join(", ")}){/if}</span></p>
+            <p class="note warn" data-testid="credential-rollback"><Icon name="triangle-alert" /><span lang="en">{rollback.message}{#if rollback.failed_refs?.length}{" "}({rollback.failed_refs.join(", ")}){/if}</span></p>
           {/if}
         </div>
       {/if}

@@ -53,7 +53,7 @@
     <p class={entry.tone === "error" ? "form-error" : entry.tone === "ok" ? "form-ok" : "muted small"} role="status">
       {#if entry.raw}<span lang="en">{entry.raw}</span>
       {:else if entry.key === "busy"}{t("setup.config.busy", { what: BUSY_OPERATIONS.includes(entry.operation) ? t(`setup.operation.${entry.operation}`) : t("setup.operation.other") })}
-      {:else}{t(`setup.config.status.${entry.key}`, entry.values || {})}{#if entry.backup} {t("setup.config.backedUp", { path: entry.backup })}{:else if entry.preserved} {t("setup.config.preserved")}{/if}{/if}
+      {:else}{t(`setup.config.status.${entry.key}`, entry.values || {})}{#if entry.backup}{" "}{t("setup.config.backedUp", { path: entry.backup })}{:else if entry.preserved}{" "}{t("setup.config.preserved")}{/if}{/if}
     </p>
   {/if}
 {/snippet}
@@ -70,7 +70,7 @@
       {/each}
     </ul>
     <p class="muted small num">
-      {t("setup.config.devices", { inverters: inverterCount, meters: meterCount })}{#if readOnlyCount} · {t("setup.config.readOnly", { count: readOnlyCount })}{/if}
+      {t("setup.config.devices", { inverters: inverterCount, meters: meterCount })}{#if readOnlyCount}{" "}· {t("setup.config.readOnly", { count: readOnlyCount })}{/if}
       · {t("setup.config.release")}: <strong lang="en">{preview?.release || t("setup.config.notPrepared")}</strong>
       · {t("setup.config.base")}: <strong>{preview?.base?.replaces_config_path ? t("setup.config.baseReplaces") : t("setup.config.baseTemplate")}</strong>
     </p>
@@ -139,7 +139,7 @@
     {#if setupDraft.exportAllowed && setupDraft.draft.selections.length && !setupDraft.exportStatus}<p class="muted small">{t("setup.config.mqttIncluded")}</p>{/if}
     {@render status(setupDraft.exportStatus)}
     {@render status(setupDraft.applyStatus)}
-    {#if setupDraft.rollback}<p class="note warn" role="alert" data-testid="setup-rollback"><Icon name="triangle-alert" /><span lang="en">{setupDraft.rollback.message}{#if setupDraft.rollback.failed_refs?.length} ({setupDraft.rollback.failed_refs.join(", ")}){/if}</span></p>{/if}
+    {#if setupDraft.rollback}<p class="note warn" role="alert" data-testid="setup-rollback"><Icon name="triangle-alert" /><span lang="en">{setupDraft.rollback.message}{#if setupDraft.rollback.failed_refs?.length}{" "}({setupDraft.rollback.failed_refs.join(", ")}){/if}</span></p>{/if}
     {#if setupDraft.conflict}
       <div class="note warn" role="alert" data-testid="setup-config-conflict">
         <Icon name="triangle-alert" />

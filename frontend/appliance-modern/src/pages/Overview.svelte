@@ -51,7 +51,7 @@
       <h2 class="verdict" id="verdict" data-testid="overview-verdict" data-tone={verdict.tone}>{t(verdict.key)}</h2>
       <p class="muted">
         {#if findings.length}{tn("overview.attention", findings.length)}{:else if status}{t("overview.nothing")}{:else}{t("overview.reading")}{/if}
-        {#if host.readAt}<span class="num"> · {t("overview.readAt", { time: fmt().time(host.readAt, { seconds: true }) })}</span>{/if}
+        {#if host.readAt}<span class="num">{" "}· {t("overview.readAt", { time: fmt().time(host.readAt, { seconds: true }) })}</span>{/if}
       </p>
     </div>
   </div>
