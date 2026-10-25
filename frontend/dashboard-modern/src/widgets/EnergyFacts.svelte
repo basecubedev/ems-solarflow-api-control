@@ -39,7 +39,7 @@
 <style>
   .energy-facts { margin: 0; display: grid; gap: 4px; font-size: 12.5px; }
   .energy-facts div { display: flex; justify-content: space-between; gap: var(--s2); min-width: 0; }
-  .energy-facts dt { color: var(--m-muted); display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+  .energy-facts dt { color: var(--m-muted); display: inline-flex; align-items: center; gap: 6px; }
   .fact-mark { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--c); }
   .energy-facts dd { margin: 0; font-weight: 600; text-align: right; white-space: nowrap; }
   .energy-facts dd.na { color: var(--m-muted-2); font-weight: 500; }
