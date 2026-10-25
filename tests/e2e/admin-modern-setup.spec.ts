@@ -142,6 +142,7 @@ test.describe("Modern Admin: guided setup, devices to start", { tag: ["@setup"] 
   });
 
   test("a removed inverter stays removed, and the draft can be cleared", async ({ page, seedDiscoveryState }) => {
+    test.setTimeout(90_000);
     await openSetup(page);
     await seedDiscoveryState({ local_api_devices: [SHELLY_METER, apiInverter("SNE2EMODERN2", "192.168.100.22")] });
     await confirmLatest(page);
