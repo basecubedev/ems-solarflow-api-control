@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parse } from "svelte/compiler";
+
+const compiler = await import("svelte/compiler").catch(() => null);
 
 const FRONTEND = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const ROOTS = ["admin-modern/src", "appliance-modern/src", "dashboard-modern/src", "shared"];
@@ -34,11 +35,11 @@ function cardClasses(text) {
       if (value?.type === "Fragment") value.nodes.forEach(visit);
     }
   };
-  visit({ fragment: parse(text, { modern: true }).fragment });
+  visit({ fragment: compiler.parse(text, { modern: true }).fragment });
   return found;
 }
 
-test("a card's own class names no class the shared styles give a look of their own", () => {
+test("a card's own class names no class the shared styles give a look of their own", { skip: !compiler && "node_modules not installed" }, () => {
   assert.ok(SHARED_CLASSES.has("check") && SHARED_CLASSES.has("card"));
   assert.deepEqual(cardClasses('<Card className="check wide" />'), ["check", "wide"]);
   const clashes = ROOTS.flatMap((root) => sources(join(FRONTEND, root))).flatMap((path) => cardClasses(readFileSync(path, "utf8")).filter((name) => SHARED_CLASSES.has(name)).map((name) => `${relative(FRONTEND, path)}: ${name}`));

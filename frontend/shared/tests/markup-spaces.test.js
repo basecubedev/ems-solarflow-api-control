@@ -4,7 +4,9 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parse } from "svelte/compiler";
+
+const compiler = await import("svelte/compiler").catch(() => null);
+const SKIP = !compiler && "node_modules not installed";
 
 const FRONTEND = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const ROOTS = ["admin-modern/src", "appliance-modern/src", "dashboard-modern/src", "shared"];
@@ -58,11 +60,11 @@ function trimmedSpaces(text) {
       value.nodes.forEach((child) => visit(child, keeps));
     }
   };
-  visit({ name: "", fragment: parse(text, { modern: true }).fragment }, false);
+  visit({ name: "", fragment: compiler.parse(text, { modern: true }).fragment }, false);
   return found;
 }
 
-test("the check finds a space at the edge of a fragment, and accepts an explicit one or a line break", () => {
+test("the check finds a space at the edge of a fragment, and accepts an explicit one or a line break", { skip: SKIP }, () => {
   assert.deepEqual(trimmedSpaces("<span> · {a}</span>"), [1]);
   assert.deepEqual(trimmedSpaces("{a}{#if b} · {c}{/if}"), [1]);
   assert.deepEqual(trimmedSpaces("<span>{a} </span>"), [1]);
@@ -76,7 +78,7 @@ test("the check finds a space at the edge of a fragment, and accepts an explicit
   assert.deepEqual(trimmedSpaces("<span>\u00a0kWh</span>"), []);
 });
 
-test("no Modern page relies on a space Svelte drops at the edge of a fragment", () => {
+test("no Modern page relies on a space Svelte drops at the edge of a fragment", { skip: SKIP }, () => {
   const offenders = ROOTS.flatMap((root) => sources(join(FRONTEND, root))).flatMap((path) => trimmedSpaces(readFileSync(path, "utf8")).map((line) => `${relative(FRONTEND, path)}:${line}`));
   assert.deepEqual(offenders, []);
 });
