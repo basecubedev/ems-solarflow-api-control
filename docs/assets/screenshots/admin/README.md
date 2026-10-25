@@ -44,7 +44,7 @@ hostnames.
 | `admin-settings-safety.png` | Settings & devices — Safety | `installed` |
 | `admin-settings-devices.png` | Settings & devices — Devices: Find devices, What the search may use, the devices | `installed` |
 | `admin-settings-device.png` | Settings & devices — Devices, Inverter 1 opened | `installed` |
-| `admin-settings-search.png` | Settings & devices — Devices after Search my network: a new inverter found | `installed` |
+| `admin-settings-search.png` | Settings & devices — Devices after Search my network: the saved devices in the settings, a new inverter found | `installed` |
 | `admin-settings-review.png` | Settings & devices — one change checked, ready for Save and apply | `installed` |
 | `admin-services.png` | Services — saved settings EMS has not read yet, Restart EMS now | `settings-saved` |
 | `admin-backups.png` | Backups — create, keep a copy elsewhere, your backups | `installed` |

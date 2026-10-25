@@ -372,7 +372,7 @@ const SHOTS = [
       await appReady(page);
       await page.getByTestId("discovery-start").click();
       await visible(page.getByTestId("discovery-summary"));
-      await scrollTo(page, page.locator('[data-testid="discovery-items"] li[data-role="grid_meter"]'), 16);
+      await scrollTo(page, page.getByTestId("discovery-summary"), 16);
     },
   },
   {

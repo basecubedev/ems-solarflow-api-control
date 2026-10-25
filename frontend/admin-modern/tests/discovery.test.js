@@ -47,8 +47,9 @@ test("identities match on a shared issued token, never on two confirmed differen
 test("the review says what each configured device and each find is", () => {
   const draft = {
     devices: [
-      { name: "A", physical_device_id: ID_A, connection_id: CONN_A },
-      { name: "B", physical_device_id: ID_B, connection_id: CONN_B },
+      { name: "A", original_name: "A", physical_device_id: ID_A, connection_id: CONN_A },
+      { name: "B", original_name: "B", physical_device_id: ID_B, connection_id: CONN_B },
+      { name: "C", original_name: null, ip: "192.168.1.70" },
       { name: "M", kind: "zendure_mqtt", physical_device_id: "opaque:v1:mmmm" },
     ],
     grid_meter: { present: true, ip: "192.168.1.30" },
@@ -116,6 +117,54 @@ test("an external device moves to the connection a proposal offers, by the catal
   const moved = useExternalConnection(devices, proposal).devices[0];
   assert.deepEqual([moved.name, moved.proposal_id, moved.mqtt.broker_ref, moved.catalog_connection_id], ["Kostal", "p9", "new", "catalog:v1:c2"]);
   assert.equal(useExternalConnection(devices, { ...proposal, catalog_device_id: "catalog:v1:other" }), null);
+});
+
+test("a found inverter is in the settings at its saved address, moved elsewhere, and never moved when saved by host name", () => {
+  const review = (saved, find) => {
+    const settings = { devices: [{ name: "A", original_name: "A", physical_device_id: ID_A, connection_id: CONN_A, ...saved }] };
+    return buildReview([observation({ observation_id: "obs:v1:a", physical_device_id: ID_A, ...find })], [], settings, settings).map((item) => item.state);
+  };
+  assert.deepEqual(review({ ip: "192.168.1.50" }, { ip: "192.168.1.50", port: 80 }), ["found"]);
+  assert.deepEqual(review({ ip: "192.168.1.50" }, { ip: "192.168.1.50", port: 80, connection_id: "conn:v1:with-port" }), ["found"]);
+  assert.deepEqual(review({ ip: "SolarFlow.fritz.box" }, { ip: "192.168.1.50" }), ["found"]);
+  assert.deepEqual(review({ ip: "192.168.1.50" }, { ip: "192.168.1.51" }), ["conflict"]);
+});
+
+test("a moved inverter stays moved once the draft takes its new address, until it is saved", () => {
+  const saved = { devices: [{ name: "A", original_name: "A", ip: "192.168.1.50", physical_device_id: ID_A, connection_id: CONN_A }] };
+  const find = [observation({ observation_id: "obs:v1:a", physical_device_id: ID_A, ip: "192.168.1.51" })];
+  const draft = { devices: [{ ...saved.devices[0], ip: "192.168.1.51" }] };
+  const [item] = buildReview(find, [], draft, saved);
+  assert.equal(item.state, "conflict");
+  assert.deepEqual(itemAction(item, draft, false), { label: "added", disabled: true });
+  assert.equal(buildReview(find, [], draft, draft)[0].state, "found");
+});
+
+test("a draft address the device does not answer at is offered back, and a local entry not yet saved is added", () => {
+  const saved = { devices: [{ name: "A", original_name: "A", ip: "192.168.1.50", physical_device_id: ID_A, connection_id: CONN_A }] };
+  const find = [observation({ observation_id: "obs:v1:a", physical_device_id: ID_A, ip: "192.168.1.50" })];
+  const typo = { devices: [{ ...saved.devices[0], ip: "192.168.1.99" }] };
+  const [item] = buildReview(find, [], typo, saved);
+  assert.equal(item.state, "conflict");
+  assert.equal(itemAction(item, typo, false).kind, "updateAddress");
+  const viaMqtt = { devices: [{ name: "A", original_name: "A", kind: "zendure_mqtt", physical_device_id: ID_A }] };
+  const switched = { devices: [{ name: "A", original_name: "A", kind: "local_api", ip: "192.168.1.50", physical_device_id: ID_A }] };
+  const [local] = buildReview(find, [], switched, viaMqtt);
+  assert.equal(local.state, "added");
+  assert.deepEqual(itemAction(local, switched, false), { label: "added", disabled: true });
+  const added = addFound({ devices: [] }, { role: "inverter", discovered: find[0] }, catalog);
+  const [fresh] = buildReview(find, [], added, { devices: [] });
+  assert.equal(fresh.state, "added");
+  assert.deepEqual(itemAction(fresh, added, false), { label: "added", disabled: true });
+  const typed = { devices: [{ ...saved.devices[0], ip: "inverter-a.local" }] };
+  const [named] = buildReview([observation({ observation_id: "obs:v1:a", physical_device_id: ID_A, ip: "192.168.1.51" })], [], typed, saved);
+  assert.deepEqual([named.state, itemAction(named, typed, false).label], ["conflict", "added"]);
+});
+
+test("an address the server did not match is never taken for a device", () => {
+  const saved = { devices: [{ name: "A", original_name: "A", ip: "192.168.1.50", physical_device_id: ID_A, connection_id: CONN_A }] };
+  const stranger = [observation({ observation_id: "obs:v1:b", physical_device_id: ID_B, ip: "192.168.1.50" })];
+  assert.deepEqual(buildReview(stranger, [], saved, saved).map((item) => item.state), ["missing", "new"]);
 });
 
 test("an inverter that moved offers its new address until the draft has it", () => {

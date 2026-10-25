@@ -47,7 +47,7 @@ a device** tile and **Open the devices** lead straight here.
 
 ### 2 — Find a new device
 
-![The search results after Search my network: the grid meter in the settings and a new SolarFlow 800 Pro with Add inverter and Ignore](../../assets/screenshots/admin/admin-settings-search.png)
+![The search results after Search my network: INV_1, INV_2 and the grid meter in the settings, and a new SolarFlow 800 Pro with Add inverter and Ignore](../../assets/screenshots/admin/admin-settings-search.png)
 
 **What you select:** **Search my network**.
 
@@ -57,15 +57,16 @@ key, the Zendure cloud. Nothing it finds changes anything until you add it and
 save.
 
 **Expected result:** *The search finished. Its results stay until you clear
-them.*, a summary (*In the settings: 1 · new: 1 · not found: 0 · moved: 0*)
-and one card per find, each with its state:
+them.*, a summary (*In the settings: 3 · new: 1 · not found: 0 · moved: 0*,
+followed by *added to your changes* once you add something) and one card per
+find, each with its state:
 
 | State | Meaning | Its button |
 | --- | --- | --- |
 | **In the settings** | Saved as it is | — |
 | **New** | Not in the settings yet | **Add inverter**, **Use as grid meter** or **Add as read-only device**; **Ignore** leaves it out of this search |
 | **Not found** | In the settings, not found by this search | — |
-| **Address changed** | The same device, found at another address | **Take the new address** |
+| **Address changed** | The same device, found at another address | **Take the new address**; once taken, the card keeps **Address changed** and its button reads **Added** until you save |
 | **Another connection** | A device you have, reachable another way | **Use this connection** — see step 5 |
 | **Added to your changes** | Added in this session, not saved yet | — |
 | **Identity conflict** | The find contradicts a device you have | — (refused on purpose) |

@@ -164,7 +164,7 @@
   {/if}
 
   {#if discovery.searched && !discovery.running && review.length}
-    <p class="summary num" data-testid="discovery-summary">{t("discovery.summary", { found: counts.found || 0, new: counts.new || 0, missing: counts.missing || 0, moved: counts.conflict || 0 })}</p>
+    <p class="summary num" data-testid="discovery-summary">{t("discovery.summary", { found: counts.found || 0, new: counts.new || 0, missing: counts.missing || 0, moved: counts.conflict || 0 })}{#if counts.added}{t("discovery.summaryAdded", { added: counts.added })}{/if}</p>
   {/if}
 
   {#if review.length}

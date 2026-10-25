@@ -5,7 +5,9 @@
  * what was found, how it relates to the draft, and the draft change each
  * action makes. Whether two observations are one device is always the
  * server's answer, carried as issued ids and tokens; nothing here compares
- * displayed serials, hosts or names to reach it. Everything is pure.
+ * displayed serials, hosts or names to reach it. Only whether a device the
+ * server matched still answers at its saved address is read from the
+ * addresses themselves. Everything is pure.
  */
 
 import { commonDefaults, deviceKind, fieldKey, nextInverterName, newE3dc, E3DC_DEFAULTS, IDENTITY_KEYS } from "./devices.js";
@@ -315,6 +317,22 @@ export function proposalState(proposal, draft, saved) {
   return before ? "found" : "added";
 }
 
+const IP_LITERAL = /^(\d{1,3}\.){3}\d{1,3}$|:/;
+
+/**
+ * Whether an inverter the server matched answers at an entry's address. The
+ * search's finds carry no connection id, and one issued elsewhere counts the
+ * port the device answered on, which a saved address never names, so the
+ * addresses are compared. A host name cannot be held against the address a
+ * find answered at, so an entry that names its inverter by one is never
+ * called moved.
+ */
+function sameAddress(entry, discovered) {
+  const saved = display(entry?.ip);
+  if (!saved) return false;
+  return !IP_LITERAL.test(saved) || saved === display(discovered?.ip);
+}
+
 function findInverter(configured, discovered, used) {
   const identity = issuedPhysicalIdentity(configured);
   if (identity) {
@@ -343,7 +361,7 @@ export function buildReview(discovered, proposals, draft, saved) {
     if (kind === "external_mqtt" || kind === "e3dc_modbus") return;
     const match = findInverter(configured, supported, used);
     if (!match) {
-      if (kind !== "zendure_mqtt") results.push({ role: "inverter", state: "missing", configured, index });
+      if (kind !== "zendure_mqtt" && configured.original_name != null) results.push({ role: "inverter", state: "missing", configured, index });
       return;
     }
     used.add(observationKey(match.device));
@@ -351,7 +369,13 @@ export function buildReview(discovered, proposals, draft, saved) {
       results.push({ role: "inverter", state: "transport", configured, discovered: match.device, index, targetSource: "local_api" });
       return;
     }
-    const moved = match.match === "identity" && issuedConnectionId(configured) !== issuedConnectionId(match.device);
+    const before = configured.original_name != null ? (saved?.devices || []).find((device) => device.name === configured.original_name && deviceKind(device) === "local_api") : null;
+    const here = sameAddress(configured, match.device);
+    if (!before && here) {
+      results.push({ role: "inverter", state: "added", configured, discovered: match.device, index });
+      return;
+    }
+    const moved = match.match === "identity" && (!here || !sameAddress(before, match.device));
     results.push({ role: "inverter", state: moved ? "conflict" : "found", configured, discovered: match.device, index });
   });
   const meter = draft?.grid_meter?.present ? draft.grid_meter : null;
@@ -386,9 +410,10 @@ export function itemKey(item) {
 }
 
 /**
- * Whether a found device is in the draft already. An inverter added from the
- * search carries no issued identity, so it is recognised by the address it
- * was added with; that only keeps it from being added twice.
+ * Whether a found device is in the draft already: by the identity the server
+ * issued for the find, which an inverter added from the search carries, or,
+ * for a find without one, by the address it was added with; that only keeps
+ * it from being added twice.
  */
 export function alreadyInDraft(item, draft) {
   const found = item?.discovered;
@@ -451,7 +476,7 @@ export function itemAction(item, draft, ignored) {
   if (item.state === "identity_conflict") return { label: "identityConflict", disabled: true };
   if (item.state === "conflict") {
     const current = (draft?.devices || [])[item.index];
-    if (current && display(current.ip) === display(item.discovered?.ip)) return { label: "added", disabled: true };
+    if (current && sameAddress(current, item.discovered)) return { label: "added", disabled: true };
     return { label: "updateDraft", kind: "updateAddress", disabled: false };
   }
   if (alreadyInDraft(item, draft)) return { label: "added", disabled: true };
@@ -611,5 +636,7 @@ export function addFound(draft, item, catalog) {
     return { grid_meter: meter };
   }
   const device = withDefaults({ original_name: null, name: nextInverterName(devices), ip: found.ip || "", sn: found.serial_number || "", enabled: true }, catalog);
+  const identity = issuedPhysicalIdentity(found);
+  if (identity) Object.assign(device, { physical_device_id: identity, identity_status: found.identity_status || "" });
   return { devices: [...devices, device], index: devices.length };
 }
