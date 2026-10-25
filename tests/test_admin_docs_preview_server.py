@@ -53,6 +53,23 @@ def _request(base, path, *, scenario=None, body=None):
         return json.loads(response.read())
 
 
+def test_the_demo_installation_never_writes_or_reads_a_real_config(tmp_path, monkeypatch):
+    real = tmp_path / "real-config.json"
+    real.write_text('{"real": true}\n', encoding="utf-8")
+    monkeypatch.setenv("EMS_CONFIG_FILE", str(real))
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    installation = serve_admin_docs_preview.DemoInstallation()
+    try:
+        assert real.read_text(encoding="utf-8") == '{"real": true}\n'
+        written = os.path.join(installation.root, "config", "config.json")
+        assert os.path.isfile(written)
+        assert "EMS_CONFIG_FILE" not in os.environ
+        assert installation.config()["config_path"] == serve_admin_docs_preview.DISPLAY_CONFIG_PATH
+    finally:
+        installation.remove()
+    assert not os.path.exists(installation.root)
+
+
 def test_every_named_scenario_is_built():
     assert set(build_scenarios()) == set(SCENARIOS)
 

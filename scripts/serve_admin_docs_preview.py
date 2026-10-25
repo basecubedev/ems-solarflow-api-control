@@ -143,15 +143,25 @@ def demo_config():
     return config
 
 
+DEMO_ISOLATED_ENV = ("EMS_CONFIG_FILE", "EMS_CONFIG_DIR", "EMS_INSTALL_DIR", "EMS_TEMPLATE_FILE", "EMS_ADMIN_DATA_DIR")
+
+
 class DemoInstallation:
-    """A throwaway install root holding the demo config.json, read by the real builders."""
+    """A throwaway install root holding the demo config.json, read by the real builders.
+
+    The variables that point the builders at a real installation are cleared
+    first, so neither the demo write nor any read can reach one: the
+    preview's only write lands in its own temporary directory.
+    """
 
     def __init__(self):
+        for name in DEMO_ISOLATED_ENV:
+            os.environ.pop(name, None)
         _on_path()
         from ems import paths
 
         self.root = tempfile.mkdtemp(prefix="ems-admin-docs-")
-        config_path = paths.resolve_config_path(base_dir=self.root)
+        config_path = paths.standard_config_path(self.root)
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
         with open(config_path, "w", encoding="utf-8") as handle:
             json.dump(demo_config(), handle, indent=2)
