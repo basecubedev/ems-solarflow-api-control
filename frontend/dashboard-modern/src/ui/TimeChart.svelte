@@ -2,7 +2,7 @@
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { prefs } from "../state/prefs.svelte.js";
   import Icon from "../../../shared/ui/Icon.svelte";
-  import { withGapBreaks, gapRanges, sampleSpacing, tickLabels, tickPad, tickSpace, atLeastAMinute, ZOOM_STEP, escapeLeavesZoom, zoomCenter, zoomDiffers, zoomStep } from "../lib/history.js";
+  import { withGapBreaks, gapRanges, sampleSpacing, shownValue, batteryReading, axisPower, tickLabels, tickPad, tickSpace, atLeastAMinute, ZOOM_STEP, escapeLeavesZoom, zoomCenter, zoomDiffers, zoomStep } from "../lib/history.js";
 
   /**
    * One uPlot instance per chart, kept across data refreshes (setData) and
@@ -18,6 +18,8 @@
    * changes ``scope``. A series in percent reads against its own 0-100
    * scale on the right, as Classic draws the SoC, labelled in the series'
    * ``ink`` -- a text colour, since the line's own may be too dark to read.
+   * The battery is drawn as Classic draws it, charging below zero, and its
+   * legend and table read Charge or Discharge (``shownValue``).
    */
   let {
     series,
@@ -44,7 +46,7 @@
 
   const f = $derived(fmt());
   const prepared = $derived.by(() => {
-    const lists = series.map((s) => values?.[s.id] || []);
+    const lists = series.map((s) => (values?.[s.id] || []).map((raw) => shownValue(s.id, raw)));
     const broken = withGapBreaks(time, lists);
     return { time: broken.time, lists: broken.series, gaps: gapRanges(time, lists) };
   });
@@ -89,16 +91,15 @@
   function valueText(value, s) {
     if (value === null || value === undefined) return "—";
     if (s?.unit === "%") return f.percent(value);
+    if (s?.id === "battery" && Number.isFinite(Number(value))) {
+      const reading = batteryReading(value);
+      return reading.key ? t(reading.key, { v: f.power(reading.watts) }) : f.power(0);
+    }
     return f.power(value, { signed: Boolean(s?.signed) });
   }
 
   function onPercentScale(s) {
     return s.unit === "%";
-  }
-
-  function axisValue(value) {
-    if (value === 0) return "0";
-    return Math.abs(value) >= 1000 ? `${f.number(value / 1000, 1)} kW` : `${f.number(value, 0)} W`;
   }
 
   function drawGaps(u) {
@@ -225,10 +226,11 @@
         axes: [
           {
             ...axis,
+            gap: 9,
             space: (u, axis, min, max) => tickSpace(min, max),
             values: (u, splits, axis, space, step) => tickLabels(splits, step, f),
           },
-          { ...axis, size: 66, values: (u, splits) => splits.map(axisValue) },
+          { ...axis, size: 66, values: (u, splits) => splits.map((value) => axisPower(value, f)) },
           ...(percent
             ? [{ ...axis, scale: "pct", side: 1, size: PERCENT_AXIS_PX, stroke: token(percent.ink || "--m-muted"), grid: { show: false }, values: (u, splits) => splits.map((value) => f.percent(value)) }]
             : []),
@@ -340,7 +342,7 @@
             {#if i % Math.max(1, Math.ceil(time.length / 96)) === 0}
               <tr>
                 <td class="num">{f.dateTime(stamp * 1000, { seconds: subMinute })}</td>
-                {#each series as s (s.id)}<td class="r num">{valueText(values?.[s.id]?.[i] ?? null, s)}</td>{/each}
+                {#each series as s (s.id)}<td class="r num">{valueText(shownValue(s.id, values?.[s.id]?.[i] ?? null), s)}</td>{/each}
               </tr>
             {/if}
           {/each}

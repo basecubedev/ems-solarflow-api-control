@@ -16,7 +16,7 @@
   const SERIES = [
     { id: "pv", label: "series.pv", token: "--pv" },
     { id: "output", label: "series.output", token: "--output" },
-    { id: "battery", label: "series.battery", token: "--battery", signed: true },
+    { id: "battery", label: "series.battery", token: "--battery" },
   ];
   const RANGES = ["1h", "6h", "24h", "7d"];
 
@@ -90,7 +90,7 @@
   </button>
 {/snippet}
 
-<Card icon="chart-spline" tone="c-pv" title={t("chart.titleRange", { range: t(`chart.range.${range}`) })} subtitle={t("chart.sub")} span="span-12" {actions}>
+<Card icon="chart-spline" tone="c-pv" title={t("chart.titleRange", { range: t(`chart.range.${range}`) })} subtitle={t("chart.subDevice")} span="span-12" {actions}>
   {#if error && !data}
     <div class="empty error">{t("error.load")}</div>
   {:else}

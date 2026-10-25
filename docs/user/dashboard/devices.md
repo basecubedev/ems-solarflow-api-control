@@ -103,8 +103,9 @@ Below the cards, the **Energy flow** shows each inverter's solar and battery
 running into it and its output joining the line into the home. The chart
 underneath, **Power, last 24 h**, plots solar, inverter output and battery from
 the local SQLite history; **All devices** chooses one device, the buttons
-**1 h**, **6 h**, **24 h** or **7 d**, and **Table** lists the values. It zooms
-the same way as the chart on the [Overview](overview.md#5--today-and-the-power-chart).
+**1 h**, **6 h**, **24 h** or **7 d**, and **Table** lists the values. The battery
+is drawn below zero while charging and above zero while discharging, and it
+zooms, the same way as the chart on the [Overview](overview.md#5--today-and-the-power-chart).
 
 ## Connection and control readiness
 

@@ -144,6 +144,40 @@ export function withGapBreaks(time, seriesList, { maxGap } = {}) {
   return { time: outTime, series: outSeries };
 }
 
+/**
+ * Classic's analyticsChartDisplayValue: a chart draws the battery charging
+ * below zero and discharging above, so power into the battery and out of it
+ * part at the axis. Display only -- the API, the table's source data, the KPIs
+ * and every energy figure keep charging positive.
+ */
+export function shownValue(id, raw) {
+  if (raw === null || raw === undefined) return raw;
+  return id === "battery" ? 0 - Number(raw) : raw;
+}
+
+/**
+ * Classic's analyticsSeriesTooltip for the drawn battery: the value reads back
+ * as Charge or Discharge and its size, never as the flipped sign. Below a
+ * kilowatt the size is the whole watts Classic rounds it to; a kilowatt figure
+ * keeps its exact size, so the formatter rounds it once, as every other
+ * series. ``key`` is null for a value that rounds to no power at all.
+ */
+export function batteryReading(shown) {
+  const rounded = Math.round(Number(shown));
+  const watts = Math.abs(rounded) < 1000 ? Math.abs(rounded) : Math.abs(Number(shown));
+  if (rounded < 0) return { key: "chart.charge", watts };
+  if (rounded > 0) return { key: "chart.discharge", watts };
+  return { key: null, watts: 0 };
+}
+
+/** A power axis label in W or kW; a negative one carries the minus sign every other power figure here uses. */
+export function axisPower(value, f) {
+  if (value === 0) return "0";
+  const sign = value < 0 ? "−" : "";
+  const size = Math.abs(value);
+  return size >= 1000 ? `${sign}${f.number(size / 1000, 1)} kW` : `${sign}${f.number(size, 0)} W`;
+}
+
 /** Local midnight of the day ``days`` away from ``date``: a calendar day is 23, 24 or 25 hours long. */
 export function localDayStart(date = new Date(), days = 0) {
   const start = new Date(date.getFullYear(), date.getMonth(), date.getDate() + days);

@@ -14,6 +14,7 @@ import { CONTROL_CODES, DECISION_SENTENCES, LIMIT_REASONS, EXPLAIN_NOTES } from 
 import { FIRMWARE_ENUMS } from "../src/lib/devices.js";
 import { PRESET_ORDER, WEEKDAYS, STATUSES } from "../src/lib/schedule.js";
 import { KNOWN_ERRORS } from "../src/lib/errors.js";
+import { batteryReading } from "../src/lib/history.js";
 
 const LANGS = ["en", "de", "nl", "fr"];
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "../src");
@@ -89,6 +90,8 @@ test("every generated key family is complete", () => {
     ...["ok", "warning", "error", "devices"].map((key) => `diagnose.metric.${key}`),
     ...["output", "input", "mixed"].map((key) => `analytics.role.${key}`),
     ...["inputs", "weighting", "raw", "adjust", "final"].map((key) => `control.deviceStage.${key}`),
+    batteryReading(-1).key,
+    batteryReading(1).key,
   ];
   const missing = [...new Set(required)].filter((key) => !STRINGS[key] && !SHARED_STRINGS[key]);
   assert.deepEqual(missing, []);

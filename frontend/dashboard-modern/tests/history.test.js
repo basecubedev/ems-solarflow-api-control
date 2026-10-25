@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { integrateKwh, hourlyKwh, gapRanges, withGapBreaks, sameTimeComparison, sampleSpacing, localDayStart, niceCeiling, zoomStep, zoomDiffers, zoomSpan, zoomCenter, escapeLeavesZoom, emptyKey, sourceKey, tickLabels, tickSpace, tickPad, atLeastAMinute } from "../src/lib/history.js";
+import { integrateKwh, hourlyKwh, gapRanges, withGapBreaks, sameTimeComparison, sampleSpacing, localDayStart, niceCeiling, zoomStep, zoomDiffers, zoomSpan, zoomCenter, escapeLeavesZoom, emptyKey, sourceKey, tickLabels, tickSpace, tickPad, atLeastAMinute, shownValue, batteryReading, axisPower } from "../src/lib/history.js";
 import { createFormat } from "../../shared/lib/format.js";
 
 const MIDNIGHT = localDayStart(new Date(1_800_000_000 * 1000));
@@ -246,4 +246,42 @@ test("a day tick an hour before midnight, where the clock skips its midnight, na
   const midnight = new Date(2026, 9, 10).getTime() / 1000;
   const labels = tickLabels([midnight, midnight + 23 * 3600], 86400, f);
   assert.deepEqual(labels, [f.date(midnight * 1000, { short: true }), f.date((midnight + 86400) * 1000, { short: true })]);
+});
+
+test("a chart draws the battery charging below zero and leaves every other series and a gap alone", () => {
+  assert.equal(shownValue("battery", 200), -200);
+  assert.equal(shownValue("battery", -450), 450);
+  assert.ok(Object.is(shownValue("battery", 0), 0));
+  assert.equal(shownValue("battery", null), null);
+  assert.equal(shownValue("battery", undefined), undefined);
+  assert.equal(shownValue("grid", -120), -120);
+  assert.equal(shownValue("pv", 900), 900);
+  const broken = withGapBreaks([0, 300, 600], [[100, null, -50].map((raw) => shownValue("battery", raw))]);
+  assert.deepEqual(broken.series[0], [-100, null, 50]);
+});
+
+test("the drawn battery reads back as Charge or Discharge and its size, whole watts below a kilowatt, and no power as none", () => {
+  assert.deepEqual(batteryReading(-200), { key: "chart.charge", watts: 200 });
+  assert.deepEqual(batteryReading(450), { key: "chart.discharge", watts: 450 });
+  assert.deepEqual(batteryReading(-2.5), { key: "chart.charge", watts: 2 });
+  assert.deepEqual(batteryReading(2.5), { key: "chart.discharge", watts: 3 });
+  assert.deepEqual(batteryReading(-999.4), { key: "chart.charge", watts: 999 });
+  assert.deepEqual(batteryReading(999.6), { key: "chart.discharge", watts: 999.6 });
+  assert.deepEqual(batteryReading(-1234.6), { key: "chart.charge", watts: 1234.6 });
+  assert.equal(createFormat("en").power(batteryReading(-1234.6).watts), createFormat("en").power(1234.6));
+  assert.deepEqual(batteryReading(0), { key: null, watts: 0 });
+  assert.deepEqual(batteryReading(-0.4), { key: null, watts: 0 });
+  assert.deepEqual(batteryReading(0.4), { key: null, watts: 0 });
+});
+
+test("a power axis below zero carries the same minus sign as every other power figure", () => {
+  const f = createFormat("en");
+  assert.equal(axisPower(0, f), "0");
+  assert.equal(axisPower(-0, f), "0");
+  assert.equal(axisPower(500, f), "500 W");
+  assert.equal(axisPower(-500, f), "−500 W");
+  assert.equal(axisPower(-2000, f), "−2.0 kW");
+  assert.equal(axisPower(1500, f), "1.5 kW");
+  assert.equal(axisPower(-1500, createFormat("de")), "−1,5 kW");
+  assert.equal(axisPower(-500, f).charAt(0), f.power(-500).charAt(0));
 });

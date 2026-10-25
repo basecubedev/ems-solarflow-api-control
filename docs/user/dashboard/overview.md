@@ -105,9 +105,11 @@ yesterday the tile says *no comparison yet*.
 **Power today** charts solar, home, battery and grid from midnight. The badge
 names the source, **SQLite**, the local history that is always there. The
 buttons choose **1 h**, **6 h**, **Today**, **24 h** or **7 d**; **Table**
-lists the values instead. Battery is positive while charging and grid positive
-while importing. Hatched areas are periods without samples; they stay gaps and
-are never shown as zero.
+lists the values instead. The battery is drawn below zero while charging and
+above zero while discharging into the inverter, as in Classic; the legend and
+the table say **Charge** or **Discharge** with the power. Grid is positive while
+importing. Hatched areas are periods without samples; they stay gaps and are
+never shown as zero.
 
 Drag across the chart to zoom, turn the mouse wheel over it, or use the zoom
 buttons; **Reset zoom** or **Esc** brings the whole range back. The today chart

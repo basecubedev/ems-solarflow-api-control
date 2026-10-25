@@ -786,8 +786,12 @@ Overlay toggles add optional series on top of the active view without changing
 it: **EMS target**, **Grid**, **AC charging** and **State of charge** (drawn on
 its own 0–100 % scale on the right). Every overlay is data-backed (no overlay is
 empty by design). The live legend above the chart reports every visible series
-at the cursor. A custom date range (**From** / **To** + **Apply**) replaces the
-range buttons while it is set.
+at the cursor. Every power chart — Analytics and the SQLite charts on Overview
+and Devices, in Classic and in Modern — draws the battery below zero while
+charging and above zero while discharging, and its legend reads *Charge* or
+*Discharge* with the power. That is display only: the APIs, the stores and the
+KPIs keep the battery positive while charging. A custom date range (**From** /
+**To** + **Apply**) replaces the range buttons while it is set.
 
 Analytics series definitions (consistent across the native writer, the InfluxDB
 schema/provider and the frontend):

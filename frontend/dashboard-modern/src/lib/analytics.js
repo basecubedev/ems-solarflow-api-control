@@ -22,7 +22,7 @@ export const ANALYTICS_OVERLAYS = Object.freeze(["target", "grid", "ac_charge", 
 export const SERIES_STYLE = Object.freeze({
   pv: { token: "--pv" },
   output: { token: "--output" },
-  battery: { token: "--battery", signed: true },
+  battery: { token: "--battery" },
   grid: { token: "--grid", signed: true },
   home: { token: "--output" },
   ac_charge: { token: "--grid" },

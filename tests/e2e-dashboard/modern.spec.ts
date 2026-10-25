@@ -492,6 +492,31 @@ test.describe("Modern dashboard @smoke", () => {
     await expect(page.getByText("The history is not available right now.")).toBeVisible();
   });
 
+  test("every power chart draws the battery charging below zero and reads it back as Charge or Discharge, as Classic", async ({ page }) => {
+    const pinned = new Date();
+    pinned.setHours(18, 30, 0, 0);
+    await page.clock.install({ time: pinned });
+    const answer = (source: string) => {
+      const now = Math.floor(pinned.getTime() / 1000);
+      const flat = [0, 0, 0];
+      return { available: true, source, time: [now - 180, now - 120, now - 60], series: { pv: flat, output: flat, home: flat, grid: flat, battery: [200, 0, -450] } };
+    };
+    await page.route("**/api/history/series**", (route) => route.fulfill({ json: answer("sqlite") }));
+    await page.route("**/api/analytics/series**", (route) => route.fulfill({ json: answer("influxdb") }));
+    for (const hash of ["#/overview", "#/devices", "#/analytics"]) {
+      await openModern(page, hash);
+      const card = page.locator(".card", { has: page.locator(".legend") }).first();
+      await expect(card.locator(".legend-item", { hasText: "Battery" })).toContainText(/Discharge\s450\sW/);
+      await card.getByRole("button", { name: "Table" }).click();
+      const rows = card.locator("table.data tbody tr");
+      await expect(rows).toHaveCount(3);
+      const battery = await card.locator("table.data thead th").allTextContents().then((heads) => heads.indexOf("Battery"));
+      await expect(rows.nth(0).locator("td").nth(battery)).toHaveText(/^Charge\s200\sW$/);
+      await expect(rows.nth(1).locator("td").nth(battery)).toHaveText(/^0\sW$/);
+      await expect(rows.nth(2).locator("td").nth(battery)).toHaveText(/^Discharge\s450\sW$/);
+    }
+  });
+
   test("the today chart zooms within today: one step in and one out is the whole day again", async ({ page }) => {
     await openModern(page);
     const card = page.locator(".card", { has: page.getByTestId("history-source") }).first();

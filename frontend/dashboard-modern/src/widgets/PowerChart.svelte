@@ -17,7 +17,7 @@
   const SERIES = [
     { id: "pv", label: "series.pv", token: "--pv" },
     { id: "home", label: "series.home", token: "--output" },
-    { id: "battery", label: "series.battery", token: "--battery", signed: true },
+    { id: "battery", label: "series.battery", token: "--battery" },
     { id: "grid", label: "series.grid", token: "--grid", signed: true },
   ];
   const RANGES = ["1h", "6h", "today", "24h", "7d"];

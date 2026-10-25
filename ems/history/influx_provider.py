@@ -80,7 +80,7 @@ INFLUX_SERIES = {
         "device_scoped": False,
         "collapse": "mean",
     },
-    # battery power = discharge(pack_out) - charge(pack_in)
+    # battery power = charge(pack_out) - discharge(pack_in), positive while charging
     "battery": {
         "measurement": "zendure_device",
         "derived": ("pack_out", "pack_in"),

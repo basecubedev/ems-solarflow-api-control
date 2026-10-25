@@ -177,9 +177,12 @@ gives you the accumulated one.
 3. **Range** — **1 h**, **6 h**, **24 h**, **7 d**, **30 d** or **365 d**, or a
    custom range with **From**, **To** and **Apply**.
 4. The chart names its source, *From InfluxDB*, and **Table** lists the values.
-   It zooms like every chart here; on Analytics a zoom asks InfluxDB for just the
-   zoomed window, so the detail gets finer the further you zoom in, and the page
-   stops refreshing until **Reset zoom** or **Esc**.
+   The battery is drawn below zero while charging and above zero while
+   discharging into the inverter, as in Classic; the legend and the table say
+   **Charge** or **Discharge**. The **Charged** and **Discharged** cards are
+   both positive amounts. It zooms like every chart here; on Analytics a zoom
+   asks InfluxDB for just the zoomed window, so the detail gets finer the further
+   you zoom in, and the page stops refreshing until **Reset zoom** or **Esc**.
 5. The KPI cards integrate the energy in the loaded window and name it, for
    example **Solar · 24 h**. **Current SoC** and **Runtime role** come from the
    live values.

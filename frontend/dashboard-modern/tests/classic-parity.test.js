@@ -17,6 +17,9 @@ import { FIRMWARE_ENUMS, acPath } from "../src/lib/devices.js";
 import { CONTROL_CODES, DECISION_SENTENCES } from "../src/lib/control.js";
 import { PRESET_ORDER, STATUSES, WEEKDAYS } from "../src/lib/schedule.js";
 import { ANALYTICS_VIEWS } from "../src/lib/analytics.js";
+import { batteryReading, shownValue } from "../src/lib/history.js";
+import { STRINGS } from "../src/i18n/strings.js";
+import { createFormat } from "../../shared/lib/format.js";
 import { FLOW_SCALE_LADDER, FLOW_ACTIVATE_W, FLOW_DEACTIVATE_W } from "../src/lib/flow.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -90,6 +93,19 @@ test("analytics views request the series Classic's tabs request", () => {
   const classicTabs = Object.fromEntries(classic.ANALYTICS_TABS.map((tab) => [tab.id, tab.series]));
   for (const view of ANALYTICS_VIEWS) assert.deepEqual(view.series, classicTabs[view.id], view.id);
   assert.deepEqual(ANALYTICS_VIEWS.map((v) => v.id).sort(), Object.keys(classicTabs).sort());
+});
+
+test("a chart draws and reads the battery as Classic does: charging below zero, as Charge", () => {
+  const f = createFormat("en");
+  for (const raw of [200, -450, 0, 0.4, -0.4, 0.5, -0.5, 2.5, -2.5, 999.4, -999.4, 999.5, -999.5, 999.6, 1234.6, -19949.6, null]) {
+    for (const id of ["battery", "pv", "grid"]) assert.ok(shownValue(id, raw) === classic.analyticsChartDisplayValue(id, raw), `${id} ${raw}`);
+    if (raw === null) continue;
+    const reading = batteryReading(shownValue("battery", raw));
+    const classicText = classic.analyticsSeriesTooltip("battery", classic.analyticsChartDisplayValue("battery", raw), "W");
+    const ours = (reading.key ? STRINGS[reading.key].en.replace("{v}", f.power(reading.watts)) : f.power(0)).replace(/\u00a0/g, " ");
+    if (Math.abs(Math.round(shownValue("battery", raw))) < 1000) assert.equal(ours, classicText, String(raw));
+    else assert.equal(ours, `${classicText.split(" ")[0]} ${f.power(Math.abs(raw)).replace(/\u00a0/g, " ")}`, String(raw));
+  }
 });
 
 test("the flow hysteresis and the scale ladder are Classic's", () => {
