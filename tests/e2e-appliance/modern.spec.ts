@@ -18,6 +18,9 @@ async function createPassword(page: Page) {
     page.waitForResponse((response) => response.url().includes("/api/session/setup") && response.ok()),
     page.getByTestId("sign-in-submit").click(),
   ]);
+  await expect(page.locator(".app[data-landed]")).toBeVisible();
+  await expect(page).toHaveURL(/\/#\/assistant$/);
+  await page.evaluate(() => (globalThis.location.hash = "#/overview"));
   await expect(page.getByTestId("overview-verdict")).toBeVisible();
 }
 
@@ -56,6 +59,86 @@ test.describe("Modern at the root, the deprecated Classic at /classic/", () => {
     await expect(page).toHaveURL(/\/$/);
     await expect(page.getByTestId("sign-in-screen")).toBeVisible();
     expect(await page.evaluate(() => localStorage.getItem("ems-appliance-ui"))).toBeNull();
+  });
+});
+
+async function signInHere(page: Page) {
+  await page.goto("/");
+  await page.locator("#appliance-password").fill(PASSWORD);
+  await page.locator("#appliance-password-confirm").fill(PASSWORD);
+  await page.getByTestId("sign-in-submit").click();
+  await expect(page.locator(".app[data-landed]")).toBeVisible();
+}
+
+async function onPage(page: Page, id: string) {
+  await expect(page.locator(`.sidebar a[data-page="${id}"]`)).toHaveAttribute("aria-current", "page");
+}
+
+test.describe("the assistant", () => {
+  test("a fresh appliance opens on it whatever the choice, and EMS Admin is the step to take", async ({ page, request }) => {
+    await resetAppliance(request, { never_installed: true });
+    await page.addInitScript(() => window.localStorage.setItem("ems-modern.welcome", "off"));
+    await signInHere(page);
+    await expect(page).toHaveURL(/\/#\/assistant$/);
+    await expect(page.getByTestId("assistant-welcome")).toHaveAttribute("data-kind", "bootstrap");
+    const steps = page.getByTestId("assistant-steps");
+    await expect(steps.locator('[data-step="admin"]')).toHaveAttribute("data-state", "todo");
+    await expect(steps.locator('[data-step="admin"]')).toHaveAttribute("aria-current", "step");
+    await expect(steps.locator('[data-step="ems"]')).toHaveAttribute("data-state", "later");
+    await expect(page.getByTestId("assistant-keep")).not.toBeChecked();
+    await page.getByTestId("assistant-admin").click();
+    await expect(page).toHaveURL(/\/#\/admin$/);
+    await expect(page.getByTestId("admin-bootstrap-install")).toBeVisible();
+  });
+
+  test("an installed appliance lists what is left, every way out leads to its page, and unticked the console opens on the overview", async ({ page }) => {
+    await signInHere(page);
+    await expect(page).toHaveURL(/\/#\/assistant$/);
+    await expect(page.getByTestId("assistant-welcome")).toHaveAttribute("data-kind", "setup");
+    const steps = page.getByTestId("assistant-steps");
+    await expect(steps.locator('[data-step="network"]')).toHaveAttribute("data-state", "done");
+    await expect(steps.locator('[data-step="network"]')).toContainText("HomeNet");
+    await expect(steps.locator('[data-step="admin"]')).toHaveAttribute("data-state", "done");
+    await expect(steps.locator('[data-step="ems"]')).toHaveAttribute("data-state", "todo");
+    await expect(steps.locator('[data-step="ems"]')).toHaveAttribute("aria-current", "step");
+    await expect(steps.locator('[data-step="ems"]')).toContainText("its assistant finds your devices");
+    await expect(page.getByTestId("assistant-open-admin")).toHaveAttribute("href", /^http:\/\/[^/]+:\d+\/$/);
+    await expect(steps.locator('[data-step="updates"]')).toContainText("2 security updates are waiting.");
+    await expect(steps.locator('[data-step="backup"]')).toHaveAttribute("data-state", "todo");
+    await expect(page.getByTestId("assistant-tasks").locator("[data-task]")).toHaveCount(7);
+    await expect(page.getByTestId("assistant-tasks").locator('[data-task="openAdmin"]')).toHaveAttribute("target", "_blank");
+
+    await page.getByTestId("assistant-updates").click();
+    await onPage(page, "updates");
+    for (const [task, id] of [["update", "updates"], ["admin", "admin"], ["network", "network"], ["access", "access"], ["diagnostics", "diagnostics"], ["settings", "settings"]]) {
+      await page.evaluate(() => (globalThis.location.hash = "#/assistant"));
+      await page.getByTestId("assistant-tasks").locator(`[data-task="${task}"]`).click();
+      await onPage(page, id);
+    }
+    for (const [testid, id] of [["assistant-access", "access"], ["assistant-overview", "overview"]]) {
+      await page.evaluate(() => (globalThis.location.hash = "#/assistant"));
+      await page.getByTestId(testid).click();
+      await onPage(page, id);
+    }
+
+    await page.evaluate(() => (globalThis.location.hash = "#/assistant"));
+    await page.getByTestId("assistant-keep").uncheck();
+    expect(await page.evaluate(() => localStorage.getItem("ems-modern.welcome"))).toBe("off");
+    await page.goto("about:blank");
+    await page.goto("/");
+    await expect(page.locator(".app[data-landed]")).toBeVisible();
+    await expect(page.getByTestId("overview-verdict")).toBeVisible();
+    await expect(page).toHaveURL(/\/$/);
+  });
+
+  test("a saved backup key ends the optional step; without Docker the step leads to Diagnostics", async ({ page, request }) => {
+    await resetAppliance(request, { authorized_keys: [PUBLIC_KEY], docker_missing: true });
+    await signInHere(page);
+    const steps = page.getByTestId("assistant-steps");
+    await expect(steps.locator('[data-step="backup"]')).toHaveAttribute("data-state", "done");
+    await expect(steps.locator('[data-step="admin"]')).toContainText("Docker does not run");
+    await page.getByTestId("assistant-diagnostics").click();
+    await onPage(page, "diagnostics");
   });
 });
 
@@ -761,6 +844,8 @@ test.describe("settings", () => {
     await page.goto("/");
     await page.locator("#appliance-password").fill(PASSWORD);
     await page.getByTestId("sign-in-submit").click();
+    await expect(page.locator(".app[data-landed]")).toBeVisible();
+    await open(page, "overview");
     await expect(page.locator('[data-code="password_unconfirmed"]')).toBeVisible();
 
     await open(page, "settings");

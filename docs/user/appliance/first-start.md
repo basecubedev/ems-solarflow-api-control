@@ -56,8 +56,10 @@ field:
 
 ## 3. Look around
 
-You land on the overview. What each tile means is explained in
-[Overview page](overview.md).
+You land on the [assistant](modern.md#the-assistant): it lists what is still to
+do on this appliance -- the network, EMS Admin, the EMS, security updates and,
+optionally, backup access -- each with the button that does it. What each tile
+of the overview means is explained in [Overview page](overview.md).
 
 Two things are worth doing now:
 

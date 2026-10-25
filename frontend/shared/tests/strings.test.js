@@ -48,7 +48,7 @@ test("every literal key the shared parts ask for is shared or one each app defin
 
 test("no orphan shared keys: each is used by a shared part or an app", () => {
   const text = [SHARED, ...APPS].flatMap(sources).join("\n");
-  const families = ["appearance.density.", "appearance.nav.", "diagnose.metric.", "diagnose.status.", "diagnose.global."];
+  const families = ["appearance.density.", "appearance.nav.", "diagnose.metric.", "diagnose.status.", "diagnose.global.", "assistant.state."];
   const orphans = Object.keys(SHARED_STRINGS).filter((key) => !text.includes(`"${key}"`) && !families.some((prefix) => key.startsWith(prefix)));
   assert.deepEqual(orphans, []);
 });

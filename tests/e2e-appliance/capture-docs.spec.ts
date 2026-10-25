@@ -105,6 +105,8 @@ test.describe("Modern documentation captures @docs", () => {
     await page.locator("#appliance-password").fill(PASSWORD);
     await page.locator("#appliance-password-confirm").fill(PASSWORD);
     await page.getByTestId("sign-in-submit").click();
+    await expect(page.locator(".app[data-landed]")).toBeVisible();
+    await page.evaluate(() => (globalThis.location.hash = "#/overview"));
     await expect(page.getByTestId("card-network")).toContainText("ems-solarflow.local");
   }
 

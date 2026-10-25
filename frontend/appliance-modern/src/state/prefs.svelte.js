@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * The Appliance Manager's detail level beside the shared appearance, and the
- * way to the deprecated Classic console.
+ * The Appliance Manager's detail level beside the shared appearance, whether
+ * the console opens on the assistant, and the way to the deprecated Classic
+ * console.
  */
 import { readStored, writeStored } from "../../../shared/state/prefs.svelte.js";
 
 export * from "../../../shared/state/prefs.svelte.js";
+export { welcome, setWelcome } from "../../../shared/assistant/welcome.svelte.js";
 
 export const DETAIL_KEY = "ems-modern.detail";
 export const DETAILS = Object.freeze(["basic", "expert"]);

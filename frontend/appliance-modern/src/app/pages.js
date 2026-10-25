@@ -4,11 +4,14 @@ import { createPageSet } from "../../../shared/shell/pages.js";
 /**
  * The Appliance Manager's pages. Their ids are the sections the backend names
  * in a finding (appliance/status.py VIEW_*), so "Open Updates" on a finding is
- * the page of the same id. The host settings come last: they are read-only
- * here and opened least.
+ * the page of the same id. The assistant follows the overview, which stays the
+ * first page and so the home: the console opens on it until the reader turns
+ * that off. The host settings come last: they are read-only here and opened
+ * least.
  */
 export const PAGES = Object.freeze([
   { id: "overview", icon: "layout-dashboard", group: "main" },
+  { id: "assistant", icon: "compass", group: "main" },
   { id: "updates", icon: "circle-arrow-up", group: "main" },
   { id: "admin", icon: "server", group: "main" },
   { id: "network", icon: "wifi", group: "main" },

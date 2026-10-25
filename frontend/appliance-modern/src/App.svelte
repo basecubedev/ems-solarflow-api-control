@@ -18,22 +18,50 @@
   import Access from "./pages/Access.svelte";
   import Diagnostics from "./pages/Diagnostics.svelte";
   import Settings from "./pages/Settings.svelte";
+  import Assistant from "./pages/Assistant.svelte";
   import { pageSet } from "./app/pages.js";
   import { nav, router } from "./app/router.svelte.js";
   import { t } from "./i18n/i18n.svelte.js";
-  import { prefs, chooseClassic } from "./state/prefs.svelte.js";
+  import { prefs, chooseClassic, welcome } from "./state/prefs.svelte.js";
   import { session, logout } from "./state/session.svelte.js";
   import { host, ensure, pollWhile, refresh, resetHost, stopPolling } from "./state/host.svelte.js";
   import { actions } from "./state/actions.svelte.js";
   import { adminLink } from "./lib/links.js";
   import { attentionBySection, sessionFindings } from "./lib/findings.js";
+  import { bareAddress, installationRead, opensOnAssistant } from "./lib/assistant.js";
 
   /** The whole console is one bundle: a Manager update replaces every file at once, and a page split across two versions is worse than one more kilobyte. */
-  const PAGES = { overview: Overview, updates: Updates, admin: Admin, network: Network, access: Access, diagnostics: Diagnostics, settings: Settings };
+  const PAGES = { overview: Overview, assistant: Assistant, updates: Updates, admin: Admin, network: Network, access: Access, diagnostics: Diagnostics, settings: Settings };
   const Page = $derived(PAGES[router.page] || Overview);
 
   let signedIn = false;
   pollWhile(() => session.authenticated && !actions.reconnect);
+
+  const openedBare = bareAddress(globalThis.location?.hash);
+  let welcomed = false;
+  let leaving = false;
+  let landed = $state(false);
+
+  /**
+   * A console opened at its bare address shows the assistant, once per load:
+   * always while nothing is installed, else while the reader leaves it on. The
+   * choice "on" needs no answer from the host; "off" waits for a status that
+   * says whether anything is installed, however many reads fail first. The
+   * landing replaces the address, so Back leaves the console, and never pulls
+   * back a reader who already left for Classic or picked a page.
+   * ``data-landed`` on the app says the choice is made.
+   */
+  $effect(() => {
+    if (!session.authenticated || actions.reconnect || welcomed) return;
+    const choice = welcome.choice;
+    const status = host.status;
+    if (openedBare && choice === "off" && !installationRead(status)) return;
+    untrack(() => {
+      welcomed = true;
+      if (openedBare && !leaving && bareAddress(globalThis.location.hash) && opensOnAssistant(status, choice)) globalThis.location.replace(nav.href("assistant"));
+      landed = true;
+    });
+  });
 
   /** A new session reads the host from nothing; the tick runs only while signed in and while the host answers. */
   $effect(() => {
@@ -134,7 +162,10 @@
       signIn: () => {},
       signOut: logout,
     },
-    classic: () => chooseClassic(),
+    classic: () => {
+      leaving = true;
+      chooseClassic();
+    },
     get links() {
       return admin ? [{ href: admin, icon: "external-link", label: "nav.openAdmin", testid: "open-admin" }] : [];
     },
@@ -153,7 +184,7 @@
       event.preventDefault();
       document.getElementById("content")?.focus();
     }}>{t("app.skip")}</a>
-  <div class="app" class:rail={prefs.navIconsOnly}>
+  <div class="app" class:rail={prefs.navIconsOnly} data-landed={landed || undefined}>
     <Sidebar version={version ? t("app.version", { version }) : ""} />
     <div class="main">
       <Topbar>

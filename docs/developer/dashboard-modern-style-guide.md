@@ -286,6 +286,12 @@ from what the Admin server is.
   of a failure are the ones the transition offers (`resume_available`,
   `return_available`, `cancel_available`). Each new screen of the flow is shown
   from the top of the page and takes the focus.
+- **The assistants share their parts** with the Appliance Manager's in
+  `frontend/shared/assistant/`: `assistant.js` (the step states and their
+  marks, `ems-modern.welcome`, `bareAddress`), `welcome.svelte.js` (the
+  per-browser choice) and the components `AssistantWelcome`, `StepList`,
+  `AssistantStep`, `TaskGrid`, `TaskTile` and `KeepChoice`. Each app keeps
+  its own steps, tasks and words.
 - **The assistant is the way in.** It is the page after the overview, which
   stays the first page and so the router's home. `lib/assistant.js` builds its
   checklist (install, devices, first backup, then the dashboard) and its tasks
@@ -318,6 +324,17 @@ from what the Admin server is.
 The Modern Appliance Manager follows every rule above, and a few more that come
 from what the Manager is: the recovery console of a Raspberry Pi, served by
 `appliance/web.py` from its own `.deb`.
+
+- **The assistant** comes after the overview, built from the shared parts
+  (see the Admin console above). `src/lib/assistant.js` reads its five steps
+  -- network, EMS Admin, the EMS, security updates and the optional backup
+  access -- from the host status and the backup listing the pages read, Docker
+  first, a container in the agent's `missing` state as absent;
+  `tests/assistant.test.js` walks them. `App.svelte` lands a console opened at
+  its bare address there once per load (always while nothing is installed,
+  else unless `ems-modern.welcome` is `off`, which waits for the status), with
+  `location.replace`, never after the reader left for Classic; `data-landed`
+  marks the decision.
 
 - **One bundle, no chunks.** The Manager updates itself as one package, and a
   page split across two versions of it is worse than a larger file: every page

@@ -17,6 +17,7 @@ import { EXPORT_ACCESS_STATUSES, EXPORT_STATES, RESCUE_SSH_STATES } from "../src
 import { KNOWN_LOG_SOURCES } from "../src/lib/logs.js";
 import { CONNECTIVITY, CONTAINER_STATES, DAEMON_STATES, DEVICE_STATES, UNIT_STATES } from "../src/lib/words.js";
 import { INSTALL_CHANNELS, LIFECYCLE_ACTIONS, REPAIR_ACTIONS } from "../src/lib/plans.js";
+import { APPLIANCE_KINDS, STEP_IDS, TASKS } from "../src/lib/assistant.js";
 
 const LANGS = ["en", "de", "nl", "fr"];
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "../src");
@@ -104,6 +105,11 @@ const GENERATED = [
   ...["healthy", "attention", "degraded"].map((level) => `level.${level}`),
   ...["reboot", "shutdown"].map((action) => `plan.title.${action}`),
   ...["day", "hour", "minute", "second", "dayOld", "hourOld"].flatMap((unit) => plural(`unit.${unit}`)),
+  ...APPLIANCE_KINDS.map((kind) => `assistant.lead.${kind}`),
+  ...STEP_IDS.map((id) => `assistant.step.${id}.title`),
+  ...["bootstrap", "missing", "unhealthy", "stopped", "starting", "docker", "live"].map((kind) => `assistant.step.admin.${kind}`),
+  ...["setup", "stopped"].map((kind) => `assistant.step.ems.${kind}`),
+  ...TASKS.flatMap((task) => [`assistant.task.${task.id}.title`, `assistant.task.${task.id}.text`]),
 ];
 
 test("every generated key family is complete", () => {

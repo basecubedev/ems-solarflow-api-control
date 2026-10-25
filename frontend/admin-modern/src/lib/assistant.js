@@ -7,22 +7,7 @@
  */
 import { HEALTHY_INSTALL_STATES, emsFact } from "./health.js";
 
-/**
- * A step is done, still to do, waits for an earlier one, or cannot be told
- * yet; the dashboard, which is never "done", is ready once EMS runs, or off
- * while the settings switch it off.
- */
-export const ASSISTANT_STATES = Object.freeze(["done", "todo", "later", "unknown", "ready", "off"]);
-
-/** Each state's mark beside its word. */
-export const STATE_LOOKS = Object.freeze({
-  done: { icon: "circle-check", tone: "c-ok" },
-  todo: { icon: "circle", tone: "c-acc" },
-  later: { icon: "clock", tone: "c-idle" },
-  unknown: { icon: "circle-help", tone: "c-idle" },
-  ready: { icon: "arrow-up-right", tone: "c-ok" },
-  off: { icon: "circle-minus", tone: "c-idle" },
-});
+export { ASSISTANT_STATES, STATE_LOOKS, WELCOME_CHOICES, WELCOME_KEY, bareAddress, stepProgress } from "../../../shared/assistant/assistant.js";
 
 /** The steps in the order an installation takes them; the dashboard is where they lead. */
 export const STEP_IDS = Object.freeze(["install", "devices", "backup"]);
@@ -48,9 +33,6 @@ export const TASKS = Object.freeze([
   { id: "reinstall", icon: "rotate-cw", tone: "c-warn", page: "setup" },
 ]);
 
-/** The per-browser choice whether the console opens here; "off" is stored only once the reader unticks it. */
-export const WELCOME_KEY = "ems-modern.welcome";
-export const WELCOME_CHOICES = Object.freeze(["on", "off"]);
 
 const mapping = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : {});
 
@@ -158,9 +140,6 @@ export function dashboardStep(overview, dashboard, config) {
   return running ? step("ready", null) : step("unknown", "docker");
 }
 
-export function stepProgress(steps) {
-  return { done: steps.filter((step) => step.state === "done").length, total: steps.length };
-}
 
 /**
  * How many findings the overview's headline names when it asks for
@@ -182,10 +161,6 @@ export function assistantTasks(overview) {
   return installKind(overview) === "missing" ? TASKS.filter((task) => task.id !== "reinstall") : TASKS;
 }
 
-/** An address with no page in it: the console was opened, not a page of it. */
-export function bareAddress(hash) {
-  return /^#?\/?$/.test(String(hash ?? ""));
-}
 
 /**
  * Whether the console opens on the assistant: always while nothing is

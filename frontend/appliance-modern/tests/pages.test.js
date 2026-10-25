@@ -20,8 +20,10 @@ test("every section a backend finding names is a page, so its Open button goes s
   assert.deepEqual(sections.filter((section) => !PAGE_IDS.includes(section)), []);
 });
 
-test("the overview comes first, and the phone bar holds four known pages", () => {
+test("the overview comes first and stays the home, the assistant right after it, and the phone bar holds four known pages", () => {
   assert.equal(PAGES[0].id, "overview");
+  assert.equal(PAGES[1].id, "assistant");
+  assert.equal(PAGES[1].group, "main");
   assert.equal(MOBILE_PAGES.length, 4);
   assert.ok(MOBILE_PAGES.every((id) => PAGE_IDS.includes(id)));
   assert.deepEqual(pinnedPages("settings,ghost,network"), ["settings", "network", "overview", "updates"]);

@@ -317,12 +317,12 @@ def test_the_plan_reads_in_classic_s_order():
     assert js_list("lib/plan.js", "PLAN_EXPERT_FIELDS") == re.findall(r'"([a-z_]+)"', block)
 
 
-def test_every_page_is_a_section_the_backend_names_or_the_settings():
+def test_every_page_is_a_section_the_backend_names_the_settings_or_the_assistant():
     source = (ROOT / "appliance" / "status.py").read_text(encoding="utf-8")
     sections = set(re.findall(r'^VIEW_[A-Z_]+ = "([a-z_]+)"', source, re.M))
     pages = set(re.findall(r'\{ id: "([a-z]+)", icon:', (SOURCE / "src" / "app" / "pages.js").read_text(encoding="utf-8")))
     assert sections <= pages
-    assert pages - sections <= {"network", "settings"}
+    assert pages - sections <= {"network", "settings", "assistant"}
 
 
 # --- the source ----------------------------------------------------------------

@@ -31,6 +31,7 @@ nothing on the Raspberry Pi.
 | Page | What it is for |
 | --- | --- |
 | **Overview** | one sentence about the appliance, what needs your attention (each with a button to the page that fixes it), the state of the board, EMS, EMS Admin, updates, Docker and the network, and quick actions: restart or repair EMS Admin, install security updates, restart or shut down the Raspberry Pi |
+| **Assistant** | where to start: what is still to do on this appliance (connect it to your network, install EMS Admin, set up the EMS, install security updates and, optionally, set up backup access), each with its state and the button that does it, and the ways to the other pages and to EMS Admin. See [The assistant](#the-assistant) |
 | **Updates** | the Appliance Manager, EMS Admin and Raspberry Pi OS, each with what is installed, what is newest and the one button that updates it; below them every version you can choose, the way back to the kept Manager package, and the package-manager repairs |
 | **EMS Admin** | start, stop, restart, repair and roll back the EMS Admin container, its known-good versions and its log; on a fresh card, installing it |
 | **Network** | the interfaces, and changing the WLAN, the hostname and the time zone |
@@ -45,6 +46,27 @@ the menu marks each page with something waiting. Beside the pill, **Basic** and
 all operating-system updates and the package-manager repairs, which Basic shows
 too as soon as the package manager needs one. The choice is kept in this
 browser.
+
+## The assistant
+
+The assistant is the page for a reader who does not know where to start.
+**Next steps** lists, in order: **Connect to your network**, **Install EMS
+Admin**, **Set up the EMS**, **Install security updates** and the optional
+**Set up backup access**. Each says whether it is **Done**, **To do**, comes
+**Later** or cannot be told yet, and the next step to do is marked, with its
+button: the Network page, installing or repairing EMS Admin (or Diagnostics
+while Docker does not run), **Open EMS Admin** -- whose own assistant then
+leads through setting up the EMS --, the Updates page, and adding a key on SSH
+& backup access. **What would you like to do?** leads to every page and to EMS
+Admin. When the overview names something that needs your attention, the
+welcome says so and leads there.
+
+Opening the console at its address shows the assistant in place of the
+overview. Untick **Show this page when the console opens** and it opens on
+the overview again; the choice is kept in this browser, and the **Assistant**
+entry in the menu (on a phone, under **More**) brings the page back. While
+nothing is installed, the console always opens on the assistant. An address
+with a page in it (such as `#/updates`) opens that page.
 
 ## Changing something
 
@@ -96,8 +118,9 @@ palettes, object styles and densities are separate and stay as you left them.
 
 ## Expected result
 
-The appliance opens in Modern, in your language; Classic shows the same state
-and offers the same actions at `/classic/`.
+The appliance opens in Modern, in your language, on the assistant (or on the
+overview once you turned the assistant off); Classic shows the same state and
+offers the same actions at `/classic/`.
 
 ## Warnings and common problems
 
