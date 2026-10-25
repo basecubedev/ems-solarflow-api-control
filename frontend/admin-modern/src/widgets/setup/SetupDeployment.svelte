@@ -66,7 +66,7 @@
   <div class="stack" data-testid="setup-docker">
     {#if docker && DOCKER_STATES.includes(docker.state)}<Status tone={docker.state === "ready" ? "c-ok" : "c-warn"} text={t(`setup.docker.${docker.state}`)} />{/if}
     <div class="facts two">
-      <div class="fact"><div class="fact-label">{t("setup.deploy.mode")}</div><div class="fact-value">{docker ? (DOCKER_MODES.includes(docker.mode) ? t(`setup.dockerMode.${docker.mode}`) : docker.mode || "—") : t("setup.deploy.checking")}</div></div>
+      <div class="fact"><div class="fact-label">{t("setup.deploy.mode")}</div><div class="fact-value wrap">{docker ? (DOCKER_MODES.includes(docker.mode) ? t(`setup.dockerMode.${docker.mode}`) : docker.mode || "—") : t("setup.deploy.checking")}</div></div>
       <div class="fact"><div class="fact-label">{t("setup.deploy.version")}</div><div class="fact-value num" lang="en">{docker?.server_version || "—"}</div></div>
     </div>
     {#if docker?.message}<p class="muted small" lang="en">{docker.message}</p>{/if}
