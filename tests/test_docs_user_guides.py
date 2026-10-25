@@ -25,7 +25,8 @@ ADMIN_GUIDES = ROOT / "docs" / "user" / "admin"
 DASHBOARD_GUIDES = ROOT / "docs" / "user" / "dashboard"
 ADMIN_SHOTS = ROOT / "docs" / "assets" / "screenshots" / "admin"
 DASHBOARD_SHOTS = ROOT / "docs" / "assets" / "screenshots" / "dashboard"
-MODERN_CAPTURE_SPEC = ROOT / "tests" / "e2e-dashboard" / "capture-docs.spec.ts"
+DASHBOARD_PREVIEWS = ROOT / "docs" / "assets"
+DASHBOARD_CAPTURE_SPEC = ROOT / "tests" / "e2e-dashboard" / "capture-docs.spec.ts"
 
 REQUIRED_ADMIN_GUIDES = [
     "index.md",
@@ -47,6 +48,7 @@ REQUIRED_DASHBOARD_GUIDES = [
     "control.md",
     "runtime-settings.md",
     "diagnostics.md",
+    "appearance.md",
 ]
 
 IMAGE_RE = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<src>[^)]+)\)")
@@ -216,7 +218,7 @@ def test_capture_tooling_present():
     for rel in (
         "scripts/capture-docs-screenshots.sh",
         "scripts/capture_admin_docs.py",
-        "scripts/capture_dashboard_docs.py",
+        "tests/e2e-dashboard/capture-docs.spec.ts",
         "scripts/serve_admin_docs_preview.py",
         "scripts/serve_dashboard_preview.py",
         "scripts/admin_docs_preview.js",
@@ -235,15 +237,23 @@ def _capture_outputs(module_path):
     return set(re.findall(r'"([a-z0-9-]+\.png)"', body))
 
 
+def _dashboard_captures(prefix, suffix):
+    """Files the dashboard capture spec writes, named by its test titles."""
+
+    titles = re.findall(r'test\("(' + prefix + r'-[a-z0-9-]+)"', read(DASHBOARD_CAPTURE_SPEC))
+    return {f"{title}{suffix}" for title in titles}
+
+
 def test_capture_manifest_matches_the_committed_screenshots():
     """Several writers share these directories, so the manifest is the union.
 
     capture_admin_docs.py photographs the console's pages; the appearance
     gallery photographs the same page three times with one axis changed. A
     single-writer check would have read the gallery's output as an orphan and
-    the gallery's manifest as a lie. The Modern dashboard's pages come from a
-    Playwright spec, named by its test titles, and the Modern Admin console's
-    from capture_admin_modern_docs.mjs.
+    the gallery's manifest as a lie. The Modern Admin console's pages come from
+    capture_admin_modern_docs.mjs. Every dashboard image comes from one
+    Playwright spec, named by its test titles: the gallery and the Classic
+    capture scripts no longer write there.
     """
 
     declared = _capture_outputs(ROOT / "scripts" / "capture_admin_docs.py")
@@ -259,21 +269,39 @@ def test_capture_manifest_matches_the_committed_screenshots():
         f"only committed={sorted(committed - declared)}"
     )
 
-    declared = _capture_outputs(ROOT / "scripts" / "capture_dashboard_docs.py")
-    declared |= {
-        name
-        for name in _capture_outputs(ROOT / "scripts" / "capture_appearance_gallery.py")
-        if name.startswith("dashboard-")
-    }
-    declared |= {
-        f"{name}.png"
-        for name in re.findall(r'test\("(dashboard-[a-z0-9-]+)"', read(MODERN_CAPTURE_SPEC))
-    }
+    declared = _dashboard_captures("dashboard", ".png")
     committed = {p.name for p in DASHBOARD_SHOTS.glob("*.png")}
     assert declared == committed, (
         f"dashboard capture manifest drifted: only declared={sorted(declared - committed)} "
         f"only committed={sorted(committed - declared)}"
     )
+
+
+def test_dashboard_previews_match_the_capture_spec():
+    """The README-level preview JPGs are captured by the same spec as the guides."""
+
+    declared = _dashboard_captures("preview", ".jpg")
+    committed = {p.name for p in DASHBOARD_PREVIEWS.glob("preview-*.jpg")}
+    assert declared, "the capture spec declares no preview"
+    assert declared == committed, (
+        f"dashboard preview manifest drifted: only declared={sorted(declared - committed)} "
+        f"only committed={sorted(committed - declared)}"
+    )
+
+
+def test_every_dashboard_preview_is_embedded_and_listed():
+    used = set()
+    for doc in [ROOT / "README.md"] + sorted((ROOT / "docs").rglob("*.md")):
+        used |= {target for _, target in embedded_images(doc)}
+    listing = read(DASHBOARD_SHOTS / "README.md")
+    for path in sorted(DASHBOARD_PREVIEWS.glob("preview-*.jpg")):
+        assert path.resolve() in used, f"{path.name} is never embedded"
+        assert path.name in listing, f"dashboard screenshot README does not list {path.name}"
+
+
+def test_the_appearance_gallery_leaves_the_dashboard_to_its_spec():
+    gallery = _capture_outputs(ROOT / "scripts" / "capture_appearance_gallery.py")
+    assert not {name for name in gallery if name.startswith("dashboard-")}
 
 
 def test_asset_readmes_list_every_screenshot():

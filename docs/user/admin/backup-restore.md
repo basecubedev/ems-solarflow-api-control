@@ -189,7 +189,7 @@ the state you replaced is recoverable even when you did not think to save it.
 - Failed workflow → [Diagnostics and recovery](diagnostics-recovery.md)
 - Upgrade behaviour → [Guided Upgrade](guided-upgrade.md)
 - Backup from the dashboard →
-  [Dashboard diagnostics](../dashboard/diagnostics.md#maintenance-tab)
+  [Dashboard diagnostics](../dashboard/diagnostics.md#maintenance)
 - CLI and full format detail →
   [Admin Console: Backup / restore](../admin-backup-restore.md) ·
   [Backup/restore internals](../../technical/backup-restore.md)

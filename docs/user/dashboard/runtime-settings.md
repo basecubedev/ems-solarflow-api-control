@@ -1,9 +1,9 @@
-# Runtime settings
+# Runtime settings and schedules
 
 ## Purpose
 
 Change a small set of operating values live, from the browser, without editing
-`config.json` or restarting EMS.
+`config.json` or restarting the EMS — now, or at set times with a schedule.
 
 ## When to use this workflow
 
@@ -12,6 +12,7 @@ Change a small set of operating values live, from the browser, without editing
 - Turn winter mode or AC charging from surplus on or off.
 - Try a different loop interval or PV priority.
 - Switch an inverter to AC charging from the grid, and set its charge power.
+- Do any of these at a set time, every evening or only in winter.
 
 For anything structural — adding a device, changing a transport, changing the
 grid meter — use the Admin Console instead:
@@ -19,60 +20,69 @@ grid meter — use the Admin Console instead:
 
 ## Prerequisites
 
-- A dashboard **login**. The password is the same one the Admin Console uses,
+- A dashboard **sign-in**. The password is the same one the Admin Console uses,
   stored in `config/dashboard-auth.json`.
-- If no password is configured yet, the panel says so instead of showing a form.
+- If no password is set yet, the card says so instead of showing a form.
 
 ## Step-by-step instructions
 
-### 1 — Log in
+### 1 — Sign in
 
-![Control tab without a session, showing the read-only state instead of runtime forms](../../assets/screenshots/dashboard/dashboard-control-readonly.png)
+![Control page signed out with a password set: the Runtime settings card reads Read-only. Sign in to change runtime values. and carries a Sign in button](../../assets/screenshots/dashboard/dashboard-control-readonly.png)
 
-**What you see when logged out:** a compact read-only message. **No form controls
-are rendered at all** — the dashboard does not show a disabled form and hope you
-do not press it.
+**What you see when signed out:** on the **Control** page the **Runtime
+settings** card reads *Read-only. Sign in to change runtime values.* **No form
+fields are shown at all** — the dashboard does not show a disabled form and
+hope you do not press it.
 
-**What you enter:** the shared EMS/Admin password.
+**What you select:** **Sign in**, in the card or in the top bar.
 
-**Expected result:** the header pill changes from **Read-only** to **Write
-mode**, and the runtime cards appear at the top of the **Control** tab.
+![The Sign in to the dashboard dialog over the Control page, with the password entered and the Cancel and Sign in buttons](../../assets/screenshots/dashboard/dashboard-sign-in.png)
 
-**If it differs:** *auth not configured* means no password exists yet. Create one
-in the Admin Console ([First start](../admin/first-start.md)) or with
-`python3 emsctl.py dashboard set-password`.
+**What you enter:** the shared EMS/Admin password in **Sign in to the
+dashboard**, then **Sign in**.
 
-### 2 — Find the runtime cards
+**Expected result:** the top bar's pill changes from **Read-only** to **Write
+mode**, the button to **Sign out**, and the runtime settings appear.
 
-![Control tab in write mode with the numbered runtime settings cards above the control pipeline](../../assets/screenshots/dashboard/dashboard-control.png)
+**If it differs:**
 
-**Where:** the **Control** tab, in a **RUNTIME SETTINGS** block *above* the
-control pipeline.
+- *No dashboard password is set* means none exists yet. Create one in the Admin
+  Console ([First start](../admin/first-start.md)) or with
+  `python3 emsctl.py dashboard set-password`.
+- *Wrong password.* — try again. *Too many sign-in attempts. Wait a minute, then
+  try again.* — the server slows down repeated attempts.
 
-They deliberately look like the pipeline below them — same **Control / Energy
-stage** family, numbered headers, uppercase titles, compact fact rows. That is
-the visual cue that these are decision-affecting controls, not read-outs.
+### 2 — Find the runtime settings
+
+![Control page in write mode: the runtime settings below the current decision, with the numbered cards EMS / System, WR1 and WR2 and their fields and Save buttons](../../assets/screenshots/dashboard/dashboard-control.png)
+
+**Where:** the **Control** page, in the **Runtime settings** card — *Changes are
+checked by the EMS and take effect in the next control loop* — between **What
+the EMS is doing now** and the control pipeline, so the effect of a change is
+on the same page.
 
 ### 3 — The cards
 
 | # | Card | Subtitle | Fields |
 | --- | --- | --- | --- |
-| 01 | **EMS / System** | Global runtime limits and loop control | `EMS enabled`, `Max total power` (W), `Min output limit` (W), `Loop interval` (s) |
-| 02/03 | **Device cards** (`WR1`, `WR2`, …) | Device runtime write values | `Device enabled`, `AC charging`, `Max power` (W), `PV priority` (×), `Offgrid socket`, `AC role`, `AC charge power` (W), and `Light`, `Fan`, `Buzzer`, `Battery heating` where the inverter has them |
-| 04 | **Winter mode** | Seasonal charging behavior | `Winter mode` |
-| 05 | **AC Charging** | Charge the batteries from grid surplus | `AC charging` |
+| 01 | **EMS / System** | Global limits and loop control | **EMS enabled**, **Max total power** (W), **Min output limit** (W), **Loop interval** (s) |
+| 02, 03, … | One per device (**WR1**, **WR2**, …) | Device runtime values | **Device enabled**, **AC charging**, **Max power** (W), **PV priority** (×), **Off-grid socket**, **AC role**, **AC charge power** (W), and **Light**, **Fan**, **Buzzer** and **Battery heating** where the inverter has them |
+| next | **Winter mode** | Seasonal charging behaviour | **Winter mode** |
+| last | **AC charging** | Charge the batteries from grid surplus | **AC charging** |
 
-Each card has its own apply button: **Save EMS settings**, **Save WR1
-settings**, **Save winter mode**, **Save AC charging**.
+Each card has its own **Save** button.
 
-**AC charging** on the **AC Charging** card switches charging from surplus on or
-off for the whole installation; the **AC charging** switch on a device card
+**AC charging** on the **AC charging** card switches charging from surplus on
+or off for the whole installation; the **AC charging** switch on a device card
 allows or forbids it for that device. A device charges from surplus only while
 both are on and its model can charge from AC — see
 [AC charging from surplus](../../ac-charging.md).
 
+**Off-grid socket** is **Off / closed**, **Eco** or **Standard**.
+
 **AC role** is the same setting as `emsctl.py device WR1 ac-mode`:
-*Output (EMS regulates)* is normal operation; *AC charging (input)* takes the
+**Output (EMS regulates)** is normal operation; **AC charging (input)** takes the
 inverter out of output regulation and lets it charge from the grid at the **AC
 charge power**. **Role set by** names the last writer (`dashboard`, `emsctl`).
 A device controlled over MQTT shows *Not settable over MQTT* instead of the role
@@ -82,42 +92,83 @@ output, and a charge from surplus where its model can charge from AC and its
 **AC charging** switch allows it.
 
 **Light**, **Fan**, **Buzzer** and **Battery heating** are the inverter's own
-settings, the same as `emsctl.py device WR1 light` and its siblings. A card
-shows one only where the inverter has it: a local-API device whose model has
-the setting and whose report carries it; one set earlier that the inverter no
-longer shows stays on the card with only its value and *Device decides*, so it
-can be handed back. *Device decides* leaves it to the
-inverter and the Zendure app, which is where every setting starts; any other
-value is kept on the inverter by the EMS. Details:
+settings, the same as `emsctl.py device WR1 light` and its siblings, each with
+a line of help under it. A card shows one only where the inverter has it: a
+local-API device whose model has the setting and whose report carries it; one
+set earlier that the inverter no longer shows stays on the card with only its
+value and **Device decides**, so it can be handed back. **Device decides**
+leaves it to the inverter and the Zendure app, which is where every setting
+starts; any other value is kept on the inverter by the EMS. Details:
 [Device settings](../../technical/runtime-state.md#device-settings).
 
-### 4 — Apply
+### 4 — Save
 
-**What you select:** the save button on the card you changed.
+**What you select:** **Save** on the card you changed.
 
 **What it changes:** only the fields you changed on that card are written to
 `data/runtime-state.json` through the EMS-owned runtime writer, and the control
 loop picks them up on its next cycle. A value someone else changed in the
-meantime (emsctl, another tab) is left alone. The cards reload
-the current values every 30 seconds while you are not editing.
+meantime (emsctl, another tab, a schedule) is left alone. The cards read the
+current values again every 30 seconds; a field you are editing keeps your
+value.
 
-Turning the EMS or a device off, switching a device to AC charging, and changing
-the offgrid socket or a device setting ask for confirmation first.
+Turning the EMS or a device off, switching a device to AC charging or back,
+and changing the off-grid socket or a device setting ask first: a dialog says
+what happens, for example *Turn the EMS off? It stops writing to every inverter;
+each keeps its last output limit until the EMS is on again.*, and **Save change**
+confirms it.
 
-**Expected result:** a confirmation on the card, and the change becomes visible in
-the [Control pipeline](control.md) below within a loop interval.
+**Expected result:** *Saved* beside the button, and the change shows in the
+[control pipeline](control.md) on the same page within a loop interval. With
+nothing changed it says *Nothing to save: no value was changed.*; a dialog you
+cancel leaves *Not saved.*
 
-**If it differs:** a validation error is shown on the card and **nothing is
+**If it differs:** the card shows the server's error and **nothing is
 written**. Out-of-range values are refused rather than clamped silently.
 
 ### 5 — Verify
 
-Do not take the form's word for it. Scroll down to the pipeline:
+Do not take the form's word for it. Look further down the page:
 
-- `Max total power` → the **ACTIVE LIMITS** fact in stage 04.
-- `PV priority` → the per-device **02 WEIGHTING** card.
-- `Device enabled` off → that device's stage 01 input state.
-- `Min output limit` → the per-device **04 ADJUSTMENTS / LIMITS** card.
+- **Max total power** → **Max total power** and **Active limits** in **What the
+  EMS is doing now**.
+- **PV priority** → stage 02 **Weighting** under **Decision per device**.
+- **Device enabled** off → that device's row under **Decision per device**.
+- **Min output limit** → **Min output**, and stage 04 **Adjustments and
+  limits** per device.
+
+## Schedules
+
+![Schedule page in write mode: Schedules on with New rule and Pause all, the next seven days of switch points, and the rule Evening cap with its sentence, next switch point and buttons](../../assets/screenshots/dashboard/dashboard-schedule.png)
+
+The **Schedule** page — *Switch points the EMS applies by itself* — sets the
+same runtime values at set times. It needs a sign-in. The card on top says
+**Schedules on** or **Schedules paused**, names the EMS's time zone, and says
+that *the latest switch point wins, scheduled or set by hand*.
+
+1. Select **New rule**. The editor has four steps:
+   1. **What** — a **Name**, the **Action** (total or device output limit, PV
+      priority, off-grid socket, charging from the grid or from surplus, winter
+      mode, EMS or device control, light, fan, buzzer, battery heating, minimum
+      output limit), what it **Applies to**, and **Set to**.
+   2. **When** — **At a time**, or **From – to** with a **Then set to** value
+      for the end of the window. A *to* earlier than *from* ends the next day.
+   3. **Repeat** — **Once**, **Every day**, **Weekdays (Mon–Fri)**, **Every
+      month** and more, or **Custom…**, with **Only in** to limit it to
+      months (**Oct–Mar** for a winter rule) and **Ends**.
+   4. **Check** — the EMS reads the draft while you type and lists its next
+      switch points. **Save rule** stays off until the EMS accepts the rule; if
+      it does not, it says *Cannot be saved* and why.
+2. Select **Save rule**. The rule appears under **Rules** as the sentence the
+   EMS reads it as, with its next switch point and a state — **Waiting**,
+   **Paused**, **Finished**, **Device gone**, **Refused** or **Broken**.
+3. **Next seven days** lists every switch point coming up.
+
+Each rule has **Edit**, **Switch off** / **Switch on**, **Skip next**, **Apply
+now**, arrows to change its order, and **Delete**. **Pause all** stops every
+rule until **Resume**. *Clock not trusted; nothing fires until it is* means the
+EMS does not trust its clock yet and fires nothing. How rules fire and interact
+with values set by hand: [Schedules](../../scheduler.md).
 
 ## What is live, what is persisted, what needs a restart
 
@@ -130,15 +181,16 @@ Do not take the form's word for it. Scroll down to the pipeline:
 | Device enabled | Yes | Yes | No |
 | Device max power | Yes | Yes | No |
 | PV priority | Yes | Yes | No |
-| Offgrid socket | Yes | Yes | No |
+| Off-grid socket | Yes | Yes | No |
 | Light, fan, buzzer, battery heating | Yes | Yes | No |
 | Winter mode | Yes | Yes | No |
 | AC charging (installation and device) | Yes | Yes | No |
+| Schedule rules | Yes, at their switch points | Yes, `schedules.json` | No |
 | Adding or removing a device | — | — | **Admin Console + restart** |
 | Grid meter type or address | — | — | **Admin Console + restart** |
 | Write gates, transports | — | — | **Admin Console / config** |
 
-**Everything on this tab is live and persisted.** That is the point of the tab:
+**Everything here is live and persisted.** That is the point of these settings:
 if it needs a restart, it is not here.
 
 ## Runtime state vs config.json
@@ -148,7 +200,7 @@ These are two different files with two different jobs.
 | | `config/config.json` | `data/runtime-state.json` |
 | --- | --- | --- |
 | What | Static installation configuration | Mutable operator state |
-| Owner | Admin Console apply / config path | EMS runtime writer, `emsctl.py`, this tab |
+| Owner | Admin Console apply / config path | EMS runtime writer, `emsctl.py`, the dashboard, the scheduler |
 | Contains | Devices, transports, grid meter, write gates, features | Live overrides such as those above |
 | Changing it | Usually needs an EMS restart | Takes effect next cycle |
 
@@ -168,28 +220,29 @@ Reference: [Runtime state](../../technical/runtime-state.md) ·
 - Runtime settings **cannot enable a hardware write path that configuration has
   not already allowed.** Write gates, transports and per-device
   `write_output_limit` live in configuration, not here.
-- Turning `EMS enabled` off stops regulation. It does not reset your hardware to
-  a safe state by itself — decide deliberately.
-- Lowering `Max total power` takes effect on the next cycle, subject to the normal
-  ramp.
+- Turning **EMS enabled** off stops regulation. It does not reset your hardware
+  to a safe state by itself — decide deliberately.
+- Lowering **Max total power** takes effect on the next cycle, subject to the
+  normal ramp.
 - Before enabling live writes at all, read [Safety](../safety.md).
 
 ## Security
 
-- The runtime forms are rendered **only** for an authenticated session.
-- Every write is checked server-side for authentication **and** a CSRF token. A
+- The runtime settings are shown **only** to a signed-in session.
+- Every write is checked on the server for a session **and** a CSRF token. A
   button being visible in your browser is never what authorizes a write.
 - The dashboard is a local-network tool. Do not expose it to the internet — see
   [Security hardening](../../dashboard.md#security-hardening).
-- Sessions expire; you may be asked to log in again. The dashboard stays readable
-  either way.
+- Sessions expire; you may be asked to sign in again. The dashboard stays
+  readable either way, and a page that needs a sign-in says so.
 
 ## What happens in the background
 
-- The dashboard posts the change; EMS validates and writes it through its own
-  runtime writer. The browser never edits state directly.
-- Validation happens on the server. A rejected value is not written.
-- The control loop reads the updated runtime state on its next cycle.
+- The dashboard sends the change; the EMS validates it and writes it through its
+  own runtime writer. The browser never edits state directly.
+- Validation happens on the server. A refused value is not written.
+- The control loop reads the updated runtime state on its next cycle; the
+  scheduler applies a due switch point through the same writer.
 
 ## Expected result
 
@@ -208,12 +261,12 @@ set them.
 
 | Symptom | Meaning | What to do |
 | --- | --- | --- |
-| No forms visible | Not logged in, or no password configured | Log in, or set a password |
-| Header pill shows **Stale** | No new snapshot for three loop intervals (at least 30 s): the control loop or the connection is stuck | Check `docker compose logs ems` |
-| Grid shows **Meter offline** | The grid meter did not answer; the EMS holds its target. The flow views mark the grid **Offline** and draw no grid flow until it answers again | [Troubleshooting](../troubleshooting.md) |
-| Validation error on save | The value is out of range | Nothing was written; correct it |
+| No fields, only *Read-only. Sign in to change runtime values.* | Not signed in | Sign in |
+| *Read-only. No dashboard password is set …* | No password configured | Set a password, see step 1 |
+| The top bar reads *Write mode · runtime state unavailable, retrying* | The runtime state did not answer; the dashboard asks again | Wait, then check `docker compose logs ems` |
+| An error on save | The value is out of range or refused | Nothing was written; correct it |
 | Saved but nothing changed | Wait one loop interval, then check the pipeline | [Control pipeline](control.md) |
-| Value reverts | Something else is writing runtime state | Check `emsctl.py`, another dashboard tab, a second controller |
+| Value reverts | Something else writes runtime state | Check `emsctl.py`, another dashboard tab, a schedule rule, a second controller |
 | Device still not regulating | Enabled here, but blocked by config | [Devices](devices.md#read-only-and-write-blocked-devices) |
 
 ## Recovery or next steps
@@ -221,4 +274,5 @@ set them.
 - Confirm the effect → [Control pipeline](control.md)
 - Structural changes → [Device management](../admin/device-management.md)
 - Same edits from the shell → [CLI reference](../../cli.md)
+- How schedules work → [Schedules](../../scheduler.md)
 - Before going live → [Safety](../safety.md)

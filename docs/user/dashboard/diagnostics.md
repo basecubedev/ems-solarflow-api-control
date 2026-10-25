@@ -13,48 +13,49 @@ restore a backup — without a shell.
 
 ## Prerequisites
 
-- A dashboard **login**. All three tabs here are operator-only; without a session
-  they render a compact "login required" message.
-
-These tabs use the **Control / Energy stage** style — the same numbered cards and
-tone pills as the control pipeline.
+- A dashboard **sign-in**. The three pages here, under **System** in the side
+  menu, are operator-only; signed out they say *Sign in to see this page.* with
+  a **Sign in** button.
 
 ## Diagnose
 
-![Diagnose tab with the Install, Deep, Hardware, Control and Quality profiles and the Run, Copy JSON and Download support bundle buttons](../../assets/screenshots/dashboard/dashboard-diagnose.png)
+![Diagnose page with the five diagnosis cards Installation, Deep, Hardware, Control and Control quality, the Support bundle and Copy JSON buttons, and the Hardware report with its counts, root cause, warnings and sections](../../assets/screenshots/dashboard/dashboard-diagnose.png)
 
-**What you see:** *Diagnose* — *"Run read-only EMS diagnostics from the
-browser."* — with a profile selector and three actions.
+**What you see:** **Run a diagnosis** — *Read-only checks; nothing is written* —
+with one card per diagnosis and the **Support bundle** button.
 
-### 1 — Pick a profile
+### 1 — Pick a diagnosis
 
-| Profile | What it checks | CLI equivalent |
+| Card | What it checks | CLI equivalent |
 | --- | --- | --- |
-| **Install** | Install-level health: config, paths, clients, reachability | `diagnose` |
-| **Deep** | The above plus deeper runtime inspection | `diagnose --deep` |
-| **Hardware** | Device reachability and reported capabilities | `diagnose --hardware` |
-| **Control** | Measurements, target, allocation, write eligibility of the last control cycle | `diagnose --control` |
-| **Quality** | Control quality over the last 30 control cycles | `diagnose --control-quality` |
+| **Installation** | Config, files and services | `diagnose` |
+| **Deep** | Everything, including history | `diagnose --deep` |
+| **Hardware** | Read-only device probes | `diagnose --hardware` |
+| **Control** | Why the EMS writes what it writes | `diagnose --control` |
+| **Control quality** | How well the grid stays at zero | `diagnose --control-quality` |
 
 ### 2 — Run
 
-**What you select:** **Run**.
+**What you select:** **Run** on the card.
 
-**What it changes:** **nothing. Every profile is read-only.** No config, runtime
-state or hardware write happens.
+**What it changes:** **nothing. Every diagnosis is read-only.** No config,
+runtime state or hardware write happens.
 
-**Expected result:** a result list with tone pills for status, and root causes
-where the checks found something.
+**Expected result:** a report card named after the diagnosis, with its time and
+an overall status (**OK**, **Warning**, **Error**), the counts **OK**,
+**Warnings**, **Errors** and **Devices**, the **Root causes** with what to check
+next, the global errors and warnings, and **Sections** you open one by one.
 
-**If it differs:** *Hardware* needs the devices to be reachable; a failure there
-is itself the finding.
+**If it differs:** **Hardware** needs the devices to be reachable; a failure
+there is itself the finding. *A diagnosis is already running. Try again in a
+moment.* means one is still running.
 
 ### 3 — Export
 
 | Button | What it does |
 | --- | --- |
-| **Copy JSON** | Copies the report as JSON — a versioned public contract, stable across releases |
-| **Download support bundle** | Downloads the full bundle |
+| **Copy JSON** | Copies the report as JSON — a versioned public contract, stable across releases. It appears once a report is shown |
+| **Support bundle** | Downloads the full bundle as `ems-support-bundle.zip` |
 
 The bundle contains a fixed file list: `diagnosis.json`,
 `control-diagnostics.json`, `control-quality.json`, `redacted-config.json`,
@@ -68,21 +69,25 @@ The bundle contains a fixed file list: `diagnosis.json`,
 
 ## Logs
 
-![Logs tab with the level and service filters and the monospace log region](../../assets/screenshots/dashboard/dashboard-logs.png)
+![Logs page with the level filter All, DEBUG, INFO, WARNING and ERROR, the Follow switch, the Service level choice and Clear, above the monospace log with time, level and message per line](../../assets/screenshots/dashboard/dashboard-logs.png)
 
-**What you see:** *Logs* — *"Recent EMS service log output (in-memory)."*
+**What you see:** **Logs** — *What the EMS has written to its log* — one line per
+entry with its time, level and message, coloured by level.
 
-**What you select:** a **Filter** level (All / Debug / Info / Warning / Error,
-default Info) and optionally a **Service** level.
+**What you select:**
 
-**What it changes:** the filter is display only. Changing the *service* level
-changes what EMS emits from here on.
+- The level filter — **All**, **DEBUG**, **INFO**, **WARNING** or **ERROR**.
+- **Follow** keeps the newest line in view.
+- **Service level** — what the EMS writes from now on.
+- **Clear** empties this view; the EMS keeps its log.
 
-**Expected result:** a compact monospace region, colour-accented by level.
+**What it changes:** the filter and **Clear** are display only. Changing the
+**Service level** changes what the EMS emits from here on: raise it to
+**DEBUG** to see lines that are otherwise not written.
 
-**If it differs:** **the buffer is in memory.** It shows *recent* output, not the
-full history, and it does not survive an EMS restart. For anything older, read the
-container logs:
+**If it differs:** **the buffer is in memory.** It shows *recent* output, not
+the full history, and it does not survive an EMS restart. For anything older,
+read the container logs:
 
 ```bash
 docker compose logs ems
@@ -91,37 +96,62 @@ docker compose logs ems
 EMS logs are structured `event=...` lines, which is why they filter and grep
 cleanly.
 
-## Maintenance tab
+## Maintenance
 
-![Dashboard Maintenance tab with backup status, the backup list, restore controls, config upgrade and safety notes](../../assets/screenshots/dashboard/dashboard-maintenance.png)
+![Maintenance page with the Maintenance status and Safety notes cards, and the Backups card with its three backup buttons and the list of backups with their Details buttons](../../assets/screenshots/dashboard/dashboard-maintenance.png)
 
-**What you see:** *Maintenance* — *"Create backups and review config upgrades from
-the browser."*
+**What you see:** **Maintenance** — *Backups, restore and config upgrade* — in
+five cards:
 
-| # | Section | What it does |
-| --- | --- | --- |
-| 01 | **Maintenance Status** | Config path, backup directory, available backup types, InfluxDB mode, restore availability |
-| 02 | **Backup** | Create **Config + state**, **Local SQLite DBs** or **Analytics (InfluxDB)**; lists existing backups with **Details** |
-| 03 | **Restore** | Pick a backup, optional password, **Preview restore** then **Confirm restore** |
-| 04 | **Config Upgrade** | Shows planned added keys, migrated values, new comments and format changes; **Check config** or **Apply with backup** |
-| 05 | **Safety Notes** | What this view does and does not do |
+| Card | What it does |
+| --- | --- |
+| **Maintenance status** | The config path, the backup folder, the backup types, InfluxDB (*bundled*, *external* or off) and whether restore is *available* here or *CLI only* |
+| **Safety notes** | What this page does and does not do |
+| **Backups** | **Back up Config + state**, **Back up Local SQLite databases** and **Back up Analytics (InfluxDB)**; the list of backups with name, type, date, size, encryption and EMS version, and **Details** for each |
+| **Restore** | Choose a backup, enter a password for an encrypted one, **Preview restore**, then **Confirm restore** |
+| **Config upgrade** | **Check config** lists the added keys, migrated values, new and refreshed comments and a layout change; **Apply with backup** writes them |
+
+### Back up
+
+1. Select one of the three **Back up …** buttons.
+2. The card says *Creating … backup…*, then *Created …* with the file name, and
+   the backup appears in the list.
+3. **Details** shows where a backup came from — purpose, date, source EMS
+   version and revision, format, encryption — and its contents. The details of
+   an encrypted backup stay locked here; the restore preview opens them with
+   the password.
+
+### Restore
+
+1. Choose the backup under **Backup**. For an encrypted one, enter its password.
+2. Select **Preview restore**. The preview lists each file and what happens to
+   it, and says whether a restart and a new sign-in are needed.
+3. Select **Confirm restore**, and confirm once more in the dialog. A rollback
+   backup is taken first.
+4. Restart the EMS when the page asks for it.
+
+### Config upgrade
+
+1. Select **Check config**. *Config is up to date.* means there is nothing to do.
+2. Otherwise read what would change, then select **Apply with backup** — or
+   **Refresh comments with backup** when only comments change — and confirm.
+3. Restart the EMS after applying.
 
 ### What it will not do
 
-The Safety Notes are worth reading in full. In short:
+The **Safety notes** say it in full:
 
-- Every restore **creates a rollback backup first** and requires an explicit
-  preview before it runs.
-- A config restore can replace dashboard auth files — **you may need to log in
-  again** after a restart.
-- Bundled InfluxDB restore is replace-style. **External InfluxDB is not supported
-  here.**
-- **EMS version downgrade, image switching and container restart are
-  intentionally not run from the live dashboard.** Use the CLI for controlled
-  offline operations, or the [Admin Console](../admin/backup-restore.md).
+- Every restore **creates a rollback backup first** and requires a preview
+  before it runs.
+- A config restore can replace the dashboard password — **you may need to sign
+  in again** after a restart.
+- Restoring the bundled InfluxDB replaces the analytics data. **External
+  InfluxDB is not supported here.**
+- **Version downgrades, image switches and container restarts are not run from
+  the live dashboard.** Use the CLI for those, or the
+  [Admin Console](../admin/backup-restore.md).
 
-> Backups may contain secrets and private energy data. Download and store them
-> safely.
+> Backups may contain secrets and private energy data. Store them safely.
 
 ## Dashboard vs Admin Console vs CLI
 
@@ -145,8 +175,8 @@ for guided, previewed changes; the CLI for anything offline or scripted.
 - Diagnostics come from the EMS-owned diagnostics service — the same one the CLI
   and Admin Console use. One implementation, one answer.
 - Backup and restore use the normal EMS backup archives and the normal restore
-  rules.
-- Every action here is authenticated and CSRF-protected server-side.
+  rules. Only one backup, restore or config upgrade runs at a time.
+- Every action here is checked on the server for a session and a CSRF token.
 
 ## Expected result
 
@@ -157,11 +187,12 @@ the browser, and you know which operations deliberately are not available here.
 
 | Symptom | Meaning | What to do |
 | --- | --- | --- |
-| Tabs show "login required" | Operator-only, no session | Log in — [Runtime settings](runtime-settings.md#1--log-in) |
-| Logs look truncated | In-memory buffer | `docker compose logs ems` |
-| Diagnose hardware profile fails | Devices unreachable | That *is* the finding — [Devices](devices.md) |
-| Restore option unavailable | Status section says why | Read *01 Maintenance Status* |
-| Analytics backup greyed out | Bundled InfluxDB not enabled | Expected |
+| *Sign in to see this page.* | Operator-only, no session | Sign in — [Runtime settings](runtime-settings.md#1--sign-in) |
+| Logs look cut short | In-memory buffer | `docker compose logs ems` |
+| The Hardware diagnosis fails | Devices unreachable | That *is* the finding — [Devices](devices.md) |
+| Restore reads *CLI only* | Restore is not available from this dashboard | Use `python3 emsctl.py backup restore <archive>` |
+| *Another backup, restore or config upgrade is still running.* | One maintenance action at a time | Try again when it has finished |
+| InfluxDB reads *Off*, or *external (no backup)* | Analytics is off, or its InfluxDB is not one this page backs up | Expected |
 
 ## Recovery or next steps
 

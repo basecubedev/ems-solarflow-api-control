@@ -16,11 +16,16 @@ if SCRIPTS_DIR not in sys.path:
 import serve_dashboard_preview  # noqa: E402
 from dashboard_preview_data import FLOW_VIEWS, SCENARIOS, build_scenario  # noqa: E402
 from serve_dashboard_preview import (  # noqa: E402
-    DEFAULT_CAPTURE_VIEWS,
-    normalize_views,
+    SCENARIO_COOKIE,
     parse_args,
-    resolve_scenario,
     start_server,
+)
+
+CAPTURE_SPEC = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "tests",
+    "e2e-dashboard",
+    "capture-docs.spec.ts",
 )
 
 pytestmark = [
@@ -45,12 +50,13 @@ def preview_server():
         server.server_close()
 
 
-def _get(base, path):
-    return urllib.request.urlopen(base + path, timeout=5)
+def _get(base, path, cookie=None):
+    headers = {"Cookie": cookie} if cookie is not None else {}
+    return urllib.request.urlopen(urllib.request.Request(base + path, headers=headers), timeout=5)
 
 
-def _get_json(base, path):
-    with _get(base, path) as response:
+def _get_json(base, path, cookie=None):
+    with _get(base, path, cookie) as response:
         assert response.status == 200
         return json.loads(response.read().decode("utf-8"))
 
@@ -240,73 +246,48 @@ def test_landing_page_is_not_the_real_dashboard(preview_server):
     assert '<script src="/classic/app.js"></script>' in index
 
 
-def test_normalize_views_expands_all():
-    assert normalize_views(["all"]) == list(FLOW_VIEWS)
+def test_default_scenario_is_normal():
+    assert parse_args([]).scenario == "normal"
 
 
-def test_normalize_views_keeps_explicit_lists():
-    assert normalize_views(["devices", "control"]) == ["devices", "control"]
+def test_explicit_scenario_is_kept():
+    assert parse_args(["--scenario", "write-mode"]).scenario == "write-mode"
 
 
-def test_normalize_views_none_is_none():
-    assert normalize_views(None) is None
+@pytest.mark.parametrize("flag", ["--capture", "--views", "--output-dir"])
+def test_capture_flags_are_retired(flag):
+    with pytest.raises(SystemExit):
+        parse_args([flag, "x"] if flag != "--capture" else [flag])
 
 
-def test_normalize_views_rejects_unknown():
-    with pytest.raises(ValueError):
-        normalize_views(["nope"])
+def test_a_scenario_cookie_answers_that_request_from_its_scenario(preview_server):
+    _, base = preview_server("normal")
+    signed_in = _get_json(base, "/api/auth/status", f"{SCENARIO_COOKIE}=write-mode")
+    assert signed_in["authenticated"] is True
+    offline = _get_json(base, "/api/live", f"{SCENARIO_COOKIE}=offline-device")
+    assert offline["devices"]["WR2"]["online"] is False
 
 
-def test_interactive_default_scenario_is_normal():
-    assert resolve_scenario(parse_args([])) == "normal"
+def test_a_scenario_cookie_leaves_other_requests_on_the_server_scenario(preview_server):
+    _, base = preview_server("normal")
+    _get_json(base, "/api/auth/status", f"{SCENARIO_COOKIE}=write-mode")
+    assert _get_json(base, "/api/auth/status")["authenticated"] is False
+    assert _get_json(base, "/api/live")["devices"]["WR2"]["online"] is True
 
 
-def test_capture_default_scenario_is_write_mode():
-    assert resolve_scenario(parse_args(["--capture"])) == "write-mode"
+@pytest.mark.parametrize(
+    "cookie",
+    [f"{SCENARIO_COOKIE}=not-a-scenario", f'{SCENARIO_COOKIE}="unterminated', "garbage;;;=="],
+)
+def test_an_unknown_or_malformed_scenario_cookie_falls_back(preview_server, cookie):
+    _, base = preview_server("normal")
+    assert _get_json(base, "/api/auth/status", cookie)["authenticated"] is False
 
 
-def test_explicit_scenario_wins_in_capture_mode():
-    assert resolve_scenario(parse_args(["--capture", "--scenario", "firmware-status"])) == "firmware-status"
-
-
-def test_explicit_scenario_wins_in_interactive_mode():
-    assert resolve_scenario(parse_args(["--scenario", "write-mode"])) == "write-mode"
-
-
-def test_capture_assets_returns_written_paths(tmp_path, monkeypatch):
-    import capture_dashboard_previews as capture
-
-    monkeypatch.setattr(capture, "require_executable", lambda name: f"/usr/bin/{name}")
-    monkeypatch.setattr(capture.subprocess, "run", lambda *a, **k: None)
-
-    written = capture.capture_assets(
-        "127.0.0.1", 8767, str(tmp_path), "write-mode", ["diagnose", "logs"]
-    )
-    assert written == [
-        os.path.join(str(tmp_path), "preview-diagnose.jpg"),
-        os.path.join(str(tmp_path), "preview-logs.jpg"),
-    ]
-
-
-def test_capture_mode_uses_write_mode_by_default(tmp_path, monkeypatch, capsys):
-    captured = {}
-
-    def fake_capture_assets(host, port, output_dir, scenario, views):
-        captured["scenario"] = scenario
-        captured["views"] = views
-        return [os.path.join(output_dir, "preview-diagnose.jpg")]
-
-    import capture_dashboard_previews as capture
-
-    monkeypatch.setattr(capture, "capture_assets", fake_capture_assets)
-    serve_dashboard_preview.main(
-        ["--capture", "--port", "0", "--output-dir", str(tmp_path)]
-    )
-
-    assert captured["scenario"] == "write-mode"
-    assert captured["views"] is None  # default capture views resolved downstream
-    assert "maintenance" in DEFAULT_CAPTURE_VIEWS
-    assert "Captured preview screenshots:" in capsys.readouterr().out
+def test_the_modern_capture_spec_names_the_cookie_the_server_reads():
+    with open(CAPTURE_SPEC, encoding="utf-8") as handle:
+        spec = handle.read()
+    assert f'"{SCENARIO_COOKIE}"' in spec
 
 
 def test_list_flags_exit_without_serving(capsys):

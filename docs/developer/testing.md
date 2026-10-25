@@ -224,15 +224,18 @@ Tags: `@smoke` (fast critical journeys), `@setup`, `@maintenance`,
 npx playwright test --config=playwright.appliance.config.ts capture-docs \
     # with EMS_APPLIANCE_CAPTURE_DOCS=1        # Appliance Manager pages
 npx playwright test --config=playwright.dashboard.config.ts capture-docs \
-    --project=chromium # with EMS_DASHBOARD_CAPTURE_DOCS=1  # Modern dashboard
-python3 scripts/capture_appearance_gallery.py    # the appearance strips
+    --project=chromium # with EMS_DASHBOARD_CAPTURE_DOCS=1  # every dashboard image
+python3 scripts/capture_appearance_gallery.py    # the Admin and Appliance appearance strips
 ```
 
 The first three photograph the product's pages. The last photographs one page
 three times with a single appearance axis changed -- palette, object style,
 density -- because a choice whose entire effect is how something looks cannot be
-documented in prose. All four use the same deterministic servers as the browser
-suites, so no capture contains a real host, address, serial or key.
+documented in prose. The dashboard's spec draws its own strips (colour scheme
+and density, the two axes the dashboard has) the same way, so every dashboard
+image, the README-level `docs/assets/preview-*.jpg` included, has one writer.
+All of them use the same deterministic servers as the browser suites, so no
+capture contains a real host, address, serial or key.
 
 Each screenshot directory carries a `README.md` listing every image, and
 contract tests refuse a capture that is not listed or a listing without an
@@ -423,18 +426,20 @@ The user guides are screenshot-led. Regenerate every image with:
 ./scripts/capture-docs-screenshots.sh dashboard  # EMS Dashboard only
 ```
 
-Both capture scripts start their own loopback-only preview server from the
-deterministic fixtures in `tests/fixtures/admin_docs/` and
-`scripts/dashboard_preview_data.py`, and shut it down again when they finish.
+The Admin capture scripts start their own loopback-only preview server from the
+deterministic fixtures in `tests/fixtures/admin_docs/`; the dashboard's spec runs
+against `scripts/serve_dashboard_preview.py` over
+`scripts/dashboard_preview_data.py`, the server of the dashboard browser suite.
 No Docker, hardware, discovery, MQTT broker, Zendure credential, `config.json`
 or runtime state is involved, unrelated containers are untouched, and nothing is
-pushed. Requirements: headless `firefox` and ImageMagick `convert`.
+pushed. Requirements: headless `firefox` and ImageMagick `convert` for Admin,
+`npx playwright` with Chromium for the dashboard.
 
-Add a screen by extending `SCREENS` in `scripts/capture_admin_docs.py` or
-`scripts/capture_dashboard_docs.py` (plus a driver in
-`scripts/admin_docs_preview.js` for Admin), then embed it in a guide —
-`tests/test_docs_user_guides.py` enforces that the manifest, the committed files
-and the asset README stay in step.
+Add a screen by extending `SCREENS` in `scripts/capture_admin_docs.py` (plus a
+driver in `scripts/admin_docs_preview.js`), or by adding a test titled with the
+file's name to `tests/e2e-dashboard/capture-docs.spec.ts`, then embed it in a
+guide — `tests/test_docs_user_guides.py` enforces that the manifest, the
+committed files and the asset README stay in step.
 
 Two traps worth knowing:
 
@@ -445,8 +450,7 @@ Two traps worth knowing:
 - The Admin driver only runs after the SPA's own authenticated workflow resume
   has finished, because that resume re-opens Guided Setup on step 01.
 
-After a run, review `git status --short docs/assets/screenshots` before
-committing.
+After a run, review `git status --short docs/assets` before committing.
 
 ## Appliance tiers that need a real machine
 

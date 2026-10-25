@@ -7,9 +7,6 @@
 // The axes are attributes on <html>, so a variant is one setAttribute and a
 // repaint -- no reload, which is what keeps the three columns of a strip
 // identical apart from the thing being shown.
-//
-// Never `waitUntil: "networkidle"` on the cockpit: /api/events is an open SSE
-// stream, so the network is never idle.
 import { chromium } from "playwright";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
@@ -37,18 +34,13 @@ const COLUMN = { width: 560, height: 520 };
 // The height is per surface because the pages are: the Admin landing is two
 // choices and stops, so the shared 520 would frame a third of a page and two
 // thirds of background.
-// The subject has to be a region the axis can actually change. The cockpit's
-// first screen is mostly the Live Flow diagram, and that is exactly the wrong
-// thing to photograph: it is drawn as SVG with pill-shaped nodes, and the
-// object style deliberately leaves pills alone. Three columns of it are three
-// identical pictures. The Control view is forty cards instead.
+// The subject has to be a region the axis can actually change.
 const SUBJECT = {
   // The landing page is two cards and a paragraph, so a style strip of it is
   // mostly unchanged background -- measured at 12% of pixels differing, which
   // is a picture that does not show its own subject. Guided Setup is six.
   admin: { path: "/classic/", after: "Guided setup", clip: "#view-setup, .admin-shell", top: 120, height: 430 },
   appliance: { path: "/classic/", clip: "#shell, .gate-panel", top: 150, height: 560 },
-  dashboard: { path: "/preview/control", clip: ".control-pipeline, .shell", top: 120 },
 };
 
 async function signIn(page) {

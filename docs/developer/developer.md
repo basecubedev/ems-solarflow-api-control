@@ -152,16 +152,21 @@ python3 scripts/serve_dashboard_preview.py --scenario write-mode
 python3 scripts/serve_dashboard_preview.py --host 127.0.0.1 --port 8767
 ```
 
-It binds to `127.0.0.1:8767` by default and prints the preview URLs. Start at the
-landing page, which links every view for the current scenario:
+It binds to `127.0.0.1:8767` by default and prints the preview URLs. The
+dashboard answers at the root, exactly as on port 8080:
+
+```text
+http://127.0.0.1:8767/
+```
+
+The deprecated Classic dashboard has a landing page that links every view for
+the current scenario, and a stable URL per view that opens Classic directly in
+it: `/preview/aggregated`, `/preview/devices`, `/preview/control`,
+`/preview/energy`, `/preview/diagnose`, `/preview/logs`.
 
 ```text
 http://127.0.0.1:8767/preview
 ```
-
-Each flow view also has a stable URL that opens the dashboard directly in that
-view: `/preview/aggregated`, `/preview/devices`, `/preview/control`,
-`/preview/energy`, `/preview/diagnose`, `/preview/logs`.
 
 List the available scenarios or views without starting a server:
 
@@ -182,23 +187,26 @@ Scenarios:
   (login button visible, write controls locked).
 - `write-mode` — authenticated operator preview; the runtime write UI renders.
   Write requests are preview-only and never touch disk, config, runtime state,
-  devices, or the network. The Diagnose and Logs tabs only show content in this
-  scenario because they are auth-gated.
+  devices, or the network; the Schedule page writes into the preview's own
+  scratch copy. The operator pages (Schedule, Diagnose, Logs, Maintenance) only
+  show content in this scenario because they are auth-gated.
 
-The shared synthetic payloads live in `scripts/dashboard_preview_data.py` and are
-reused by the screenshot helper so previews and screenshots stay in sync. Capture
-mode defaults to the authenticated `write-mode` scenario (so the operator-only
-Diagnose and Logs tabs render) unless you pass `--scenario` explicitly, and
-`--views all` expands to every flow view:
+A request that carries the cookie `ems-preview-scenario=<name>` is answered from
+that scenario instead of the server's own, so a browser context can show another
+scenario without restarting the server or changing it for anyone else.
+
+The shared synthetic payloads live in `scripts/dashboard_preview_data.py`. The
+documentation screenshots — the guide PNGs under
+`docs/assets/screenshots/dashboard/` and the `docs/assets/preview-*.jpg` — are
+captured from them by one Playwright spec, which picks each capture's scenario
+with that cookie:
 
 ```bash
-# Screenshot helper (needs Firefox headless + ImageMagick `convert`):
-python3 scripts/serve_dashboard_preview.py --capture                       # diagnose + logs, write-mode
-python3 scripts/serve_dashboard_preview.py --capture --views all           # every view
-python3 scripts/serve_dashboard_preview.py --capture --scenario firmware-status --views devices control
-python3 scripts/capture_dashboard_previews.py                              # legacy helper (diagnose + logs JPGs)
-python3 scripts/capture_dashboard_previews.py --serve-only
+EMS_DASHBOARD_CAPTURE_DOCS=1 npx playwright test \
+  --config=playwright.dashboard.config.ts --project=chromium capture-docs
 ```
+
+See [the capture index](../assets/screenshots/dashboard/README.md).
 
 ## Authority map and test layering
 

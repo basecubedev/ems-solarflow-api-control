@@ -42,12 +42,13 @@ for the dedicated appliance image.
 
 | Guide | Use |
 | --- | --- |
-| [Overview and navigation](dashboard/overview.md) | Tiles, Live Flow, Rules, tabs |
+| [Overview and navigation](dashboard/overview.md) | Status tiles, energy flow, active rules, today, the menu and the phone bar |
 | [Device cards](dashboard/devices.md) | Per-inverter state, offline and write-blocked reasons |
 | [Energy and analytics](dashboard/energy.md) | Delivered energy, history, long-range analytics |
 | [Control pipeline](dashboard/control.md) | Why EMS wrote that value |
-| [Runtime settings](dashboard/runtime-settings.md) | Change live values safely |
+| [Runtime settings and schedules](dashboard/runtime-settings.md) | Change live values safely, now or at set times |
 | [Diagnostics and maintenance](dashboard/diagnostics.md) | Diagnose, logs, browser backups |
+| [Appearance and language](dashboard/appearance.md) | Colour scheme, language, density, side menu |
 
 ## Setup paths
 

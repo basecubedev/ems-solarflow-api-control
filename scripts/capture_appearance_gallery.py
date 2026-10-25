@@ -14,7 +14,7 @@ suites and the documentation captures use: no hardware, no MQTT, no history
 database, no secrets, no real config. Each surface gets a throwaway state root.
 
     python3 scripts/capture_appearance_gallery.py
-    python3 scripts/capture_appearance_gallery.py --surface dashboard
+    python3 scripts/capture_appearance_gallery.py --surface admin
 
 The strips carry no text. Labelling them inside the image would need a font
 this script cannot rely on, and the names belong in the document anyway, where
@@ -26,7 +26,6 @@ import os
 import shutil
 import socket
 import subprocess
-import sys
 import time
 from pathlib import Path
 
@@ -65,9 +64,6 @@ SCREENS = {
     "appliance-appearance-palettes.png",
     "appliance-appearance-styles.png",
     "appliance-appearance-density.png",
-    "dashboard-appearance-palettes.png",
-    "dashboard-appearance-styles.png",
-    "dashboard-appearance-density.png",
 }
 
 SURFACES = {
@@ -84,20 +80,6 @@ SURFACES = {
         "ready": "/api/session",
         "prefix": "appliance/appliance-appearance",
         "selects": ("#theme-select", "#style-select", "#density-select"),
-    },
-    "dashboard": {
-        "command": [
-            sys.executable,
-            "scripts/serve_dashboard_preview.py",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            "{port}",
-        ],
-        "env": {},
-        "ready": "/api/auth/status",
-        "prefix": "dashboard/dashboard-appearance",
-        "selects": ("#themeSelect", "#styleSelect", "#densitySelect"),
     },
 }
 

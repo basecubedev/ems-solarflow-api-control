@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Deterministic, non-secret synthetic data for the dashboard preview server.
 
-Shared by ``scripts/serve_dashboard_preview.py`` and
-``scripts/capture_dashboard_previews.py`` so the live preview and the screenshot
-helper render identical synthetic state.
+Served by ``scripts/serve_dashboard_preview.py``, which the dashboard browser
+suites and the documentation captures in
+``tests/e2e-dashboard/capture-docs.spec.ts`` run against, so the live preview
+and the screenshots render identical synthetic state.
 
 Everything here is hand-built constant data. No real Zendure/Shelly/MQTT/cloud
 access, no secrets, no SQLite history, and no runtime-state files are touched.

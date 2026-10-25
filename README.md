@@ -19,7 +19,7 @@ and provides a local dashboard.
 > EMS controls real power hardware.
 > Read the [safety guide](docs/user/safety.md) before enabling live writes.
 
-[![Local EMS dashboard — aggregated system view](docs/assets/preview-aggregated.jpg)](docs/dashboard.md)
+[![The EMS dashboard's Overview page: status tiles, the live energy flow, storage, active rules, today's energy and the power chart](docs/assets/preview-aggregated.jpg)](docs/dashboard.md)
 
 ## Supported hardware at a glance
 

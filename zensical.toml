@@ -40,9 +40,9 @@ nav = [
       { "Device cards" = "user/dashboard/devices.md" },
       { "Energy and analytics" = "user/dashboard/energy.md" },
       { "Control pipeline" = "user/dashboard/control.md" },
-      { "Runtime settings" = "user/dashboard/runtime-settings.md" },
+      { "Runtime settings and schedules" = "user/dashboard/runtime-settings.md" },
       { "Diagnostics" = "user/dashboard/diagnostics.md" },
-      { "Modern dashboard" = "user/dashboard/modern.md" },
+      { "Appearance and language" = "user/dashboard/appearance.md" },
     ] },
     { "Raspberry Pi appliance" = [
       "user/appliance/index.md",

@@ -7,30 +7,35 @@
 #   ./scripts/capture-docs-screenshots.sh admin      # Admin Console only
 #   ./scripts/capture-docs-screenshots.sh dashboard  # EMS Dashboard only
 #
-# Both capture scripts start their own loopback-only preview server from the
-# deterministic fixtures in tests/fixtures/admin_docs/ and
-# scripts/dashboard_preview_data.py, and shut it down again when they finish.
-# No Docker, no hardware, no discovery, no MQTT broker, no Zendure credentials,
-# no config.json and no runtime state are involved, and nothing is pushed.
+# The Admin capture scripts start their own loopback-only preview server from
+# the deterministic fixtures in tests/fixtures/admin_docs/; the EMS Dashboard's
+# are a Playwright spec (tests/e2e-dashboard/capture-docs.spec.ts) whose
+# webServer is scripts/serve_dashboard_preview.py over
+# scripts/dashboard_preview_data.py. Each shuts its server down again when it
+# finishes. No Docker, no hardware, no discovery, no MQTT broker, no Zendure
+# credentials, no config.json and no runtime state are involved, and nothing is
+# pushed.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 target="${1:-all}"
 
-for tool in firefox convert; do
-    command -v "$tool" >/dev/null 2>&1 || {
-        printf 'required executable not found: %s\n' "$tool" >&2
-        exit 1
-    }
-done
-
 case "$target" in
-    all|admin|dashboard) ;;
+    all) tools="firefox convert npx" ;;
+    admin) tools="firefox convert" ;;
+    dashboard) tools="npx" ;;
     *)
         printf 'usage: %s {all|admin|dashboard}\n' "$0" >&2
         exit 2
         ;;
 esac
+
+for tool in $tools; do
+    command -v "$tool" >/dev/null 2>&1 || {
+        printf 'required executable not found: %s\n' "$tool" >&2
+        exit 1
+    }
+done
 
 if [ "$target" = all ] || [ "$target" = admin ]; then
     printf '== Admin Console ==\n'
@@ -41,11 +46,9 @@ fi
 
 if [ "$target" = all ] || [ "$target" = dashboard ]; then
     printf '== EMS Dashboard ==\n'
-    python3 scripts/capture_dashboard_docs.py
-    printf '== EMS Dashboard, Modern ==\n'
     EMS_DASHBOARD_CAPTURE_DOCS=1 npx playwright test \
         --config=playwright.dashboard.config.ts --project=chromium capture-docs
 fi
 
 printf '\nDone. Review the diff before committing:\n'
-printf '  git status --short docs/assets/screenshots\n'
+printf '  git status --short docs/assets\n'

@@ -8,7 +8,7 @@ are embedded from the step-by-step guides in
 
 Dashboard screenshots live in
 [`../dashboard/`](../dashboard/) and are captured by
-`scripts/capture_dashboard_docs.py`. Regenerate both sets with
+`tests/e2e-dashboard/capture-docs.spec.ts`. Regenerate both sets with
 [`scripts/capture-docs-screenshots.sh`](../../../../scripts/capture-docs-screenshots.sh).
 
 All screenshots use **deterministic demo data** (fake devices, IPs, serials,
@@ -72,8 +72,7 @@ deterministic demo API responses from
 hardware, Docker, discovery, MQTT, `config.json` or password is involved, and
 nothing is written to config/runtime state.
 
-Requirements: `firefox` (headless) and ImageMagick `convert` — the same tools
-used by `scripts/capture_dashboard_previews.py`.
+Requirements: `firefox` (headless) and ImageMagick `convert`.
 
 Regenerate every screenshot (Admin and Dashboard):
 

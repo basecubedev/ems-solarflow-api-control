@@ -45,7 +45,7 @@ changes, and what to do when the result differs.
 | Area | Document | Use |
 |---|---|---|
 | Admin Console | [user/admin/index.md](user/admin/index.md) | First start, Guided Setup, Guided Upgrade, Maintenance, devices, MQTT, backups, recovery. |
-| EMS Dashboard | [user/dashboard/index.md](user/dashboard/index.md) | Overview, device cards, energy, control pipeline, runtime settings, diagnostics. |
+| EMS Dashboard | [user/dashboard/index.md](user/dashboard/index.md) | Overview, device cards, energy, control pipeline, runtime settings and schedules, diagnostics, appearance. |
 
 ### Setup paths
 
@@ -92,7 +92,7 @@ standard `config/config.json` layout; the third is a whole system.
 | Install Docker | [install-docker.md](install-docker.md) | Docker Engine and Compose plugin install help. |
 | Docker reference | [docker.md](docker.md) | Compose reference, first-run bootstrap and persisted data. |
 | Native Python / advanced | [native-python.md](native-python.md) | Manual venv setup with local config and dry-run checks. |
-| Standalone dashboard | [dashboard.md](dashboard.md) | Read-only live dashboard, Control Explain view and history. |
+| Standalone dashboard | [dashboard.md](dashboard.md) | The live dashboard's pages, configuration, write mode, API and history sources. |
 | Winter mode | [winter-mode.md](winter-mode.md) | Optional winter minSoc ramp and reconciliation. |
 | Battery full-charge assist | [battery-full-charge-assist.md](battery-full-charge-assist.md) | Optional EMS-managed full-charge assist. |
 | AC charging | [ac-charging.md](ac-charging.md) | Charging from grid surplus. On by default. |

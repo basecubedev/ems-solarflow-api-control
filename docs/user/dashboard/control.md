@@ -4,186 +4,178 @@
 
 ## Purpose
 
-Answer the question "why did EMS write *that* value?" — stage by stage, from the
-measurements it started with to the write it finally made or suppressed.
+Answer the question "why did the EMS write *that* value?" — stage by stage, from
+the measurements it started with to the write it finally made or held back.
 
 ## When to use this workflow
 
 - Output is not what you expected.
 - A device is not contributing.
 - You changed a setting and want to see where it takes effect.
-- Before reporting a control problem — this tab *is* the evidence.
+- Before reporting a control problem — this page *is* the evidence.
 
 ## Prerequisites
 
-- EMS running and the dashboard open.
-- Reading the pipeline needs no login. The **Runtime settings** block at the top
-  of the same tab does — see [Runtime settings](runtime-settings.md).
+- The EMS running and the dashboard open.
+- Reading the page needs no sign-in. The **Runtime settings** card on the same
+  page does — see [Runtime settings](runtime-settings.md).
 
 ## How to read it
 
-![Control tab showing the six system pipeline stages and the per-device stage cards for WR1 and WR2](../../assets/screenshots/dashboard/dashboard-control.png)
+The **Control** page — *What the EMS is doing and why* — has four cards, top to
+bottom:
 
-The Control tab is **Control / Energy stage** style throughout: numbered cards,
-each with a title, a short subtitle, compact fact rows, and a highlighted
-**RESULT** at the bottom. Read left to right; each stage's result feeds the next.
+1. **What the EMS is doing now** — the decision of the last control cycle in
+   one sentence and eight figures.
+2. **Runtime settings** — the values you can change, see
+   [Runtime settings](runtime-settings.md).
+3. **How the target is made** — six stages, one decision for the whole
+   installation.
+4. **Decision per device** — how that decision was split and adjusted for each
+   inverter, in five stages.
 
-There are two levels:
+## What the EMS is doing now
 
-1. **System stages 01–06** — one decision for the whole installation.
-2. **Per-device stages 01–05** — how that decision was split and adjusted for
-   each inverter.
+![Control page signed in: What the EMS is doing now with its sentence, the eight figures, the active limits and the notes, and the runtime settings cards below](../../assets/screenshots/dashboard/dashboard-control.png)
 
-## System stages
+The sentence reads, for example, *It covers 800 W of home load with a target of
+800 W, strategy PV first.* With control switched off it says *Control is
+switched off. The EMS writes nothing; every inverter keeps its last output
+limit.*
+
+| Figure | Meaning |
+| --- | --- |
+| **Measured load** | Home load after filtering and deadbands — not the raw meter reading |
+| **Requested** | The requested total (`commanded_total_w` plus filtered load) |
+| **Effective target** | The system target after limits |
+| **Commanded** | The value being commanded |
+| **Max total power** | The configured ceiling for the whole installation |
+| **Deadband** | Changes smaller than this are not written |
+| **Min output** | The floor below which output is not commanded |
+| **Undistributed** | Target no device could take within its limits |
+
+**Active limits** names each limit that binds, with its value and the reason,
+for example *System output limit · 800 W — output is capped at the configured
+system limit*. *Not active this cycle* lists the limits that did not bind.
+**Notes** carries what the control cycle reported besides.
+
+**Filtered, not raw.** The EMS deliberately does not chase every meter twitch.
+Filtering, deadbands and ramps keep the hardware from being commanded to
+oscillate. A measured load that lags a sudden spike by a moment is correct
+behaviour.
+
+## How the target is made
+
+![How the target is made: the six stages Measurements, Target, Distribution, Limits and gates, Commands and Result, each with its result and figures, above the Decision per device card](../../assets/screenshots/dashboard/dashboard-control-pipeline.png)
+
+*From the measured load to the command for each device.* Read left to right;
+each stage's result, the large figure, feeds the next.
 
 ### 01 — Measurements
 
-*Live values define the demand basis.*
-
-| Fact | Meaning |
-| --- | --- |
-| **FILTERED LOAD** | House load after filtering and deadbands — not the raw meter reading |
-| **PV TOTAL** | Combined PV input |
-| **OUTPUT TOTAL** | What the inverters are currently delivering |
-| **RESULT / DEMAND BASIS** | The demand EMS will work from |
-
-**Filtered, not raw.** EMS deliberately does not chase every meter twitch.
-Filtering, deadbands and ramps exist so the hardware is not commanded to
-oscillate. A demand basis that lags a sudden load spike by a moment is correct
-behaviour.
+Result: the measured load. Figures: **Solar** and **Inverter output**, what the
+inverters are delivering now.
 
 ### 02 — Target
 
-*Request and limits become the effective target.*
-
-| Fact | Meaning |
-| --- | --- |
-| **REQUESTED** | The requested total (`commanded_total_w` plus filtered load) |
-| **STRATEGY** | The allocation strategy, e.g. *PV first*, *Battery discharge*, *AC charging* or *Night idle at minimum SoC* |
-| **RESULT / EFFECTIVE TARGET** | The system target after limits |
+Result: the effective target. Figures: **Requested** and **Strategy**, the
+allocation strategy — for example *PV first*, *Battery discharge*, *AC
+charging* or *Night idle at minimum SoC*.
 
 ### 03 — Distribution
 
-*The target is allocated across devices.*
-
-| Fact | Meaning |
-| --- | --- |
-| **TARGET SPLIT** | The per-device split, e.g. `WR1: 400 W / WR2: 400 W` |
-| **UNDISTRIBUTED** | Target no device could take within its limits |
-| **RESULT / ALLOCATED TOTAL** | The sum actually allocated |
+Result: the allocated total. Figure: **Allocated**, the split per device, for
+example `WR1 400 W` and `WR2 400 W`.
 
 This is where a device "not contributing" is usually explained. PV-first
-allocation prefers the inverter that has its own PV input.
+allocation prefers the inverter that has its own solar input.
 
-### 04 — Limits / gates
+### 04 — Limits and gates
 
-*Limits and write gates shape commandable power.*
+Result: what may actually be commanded. Figure: **Active limits**, the limit
+that binds, for example *System output limit*.
 
-| Fact | Meaning |
-| --- | --- |
-| **ACTIVE LIMITS** | Which limit is currently binding, e.g. *System output limit* |
-| **WRITE GATE** | Whether writing is permitted, e.g. `Send` |
-| **RESULT / COMMANDABLE TOTAL** | What may actually be commanded |
-
-If **ALLOCATED TOTAL** and **COMMANDABLE TOTAL** differ, a limit or a gate is the
-reason — and this card names it.
+If the allocated total and this result differ, a limit or a gate is the reason —
+and this stage names it.
 
 ### 05 — Commands
 
-*Command state decides whether writes are needed.*
+Result: the write decision — **Send**, **No write**, **Blocked**, **Inferred**
+or **No devices**. Figures: **Commanded** and **Writes**, for example `Send 2`.
 
-| Fact | Meaning |
-| --- | --- |
-| **COMMANDED** | The value being commanded |
-| **WRITES** | How many writes this cycle, e.g. `Send 2` |
-| **RESULT / COMMAND DECISION** | `Send`, or a suppression reason |
-
-**No write is also a decision.** If the new value is inside the deadband, EMS
-deliberately writes nothing. That is not a failure.
+**No write is also a decision.** If the new value is inside the deadband, the
+EMS deliberately writes nothing. That is not a failure.
 
 ### 06 — Result
 
-*Final targets become the active control state.*
+Result: the final total. Figure: **Final total**, the final value per device.
 
-| Fact | Meaning |
-| --- | --- |
-| **FINAL SPLIT** | The final per-device values |
-| **RESULT / FINAL TOTAL** | The active control state |
+## Decision per device
 
-### The context strip
+![Decision per device with WR1 opened: online, SoC range and device max, then the five stages Inputs, Weighting, Raw target, Adjustments and limits and Final target, each with its result](../../assets/screenshots/dashboard/dashboard-control-device.png)
 
-Under the six stages, a compact strip shows the inputs that shaped the cycle:
-**MODE** (the strategy again, e.g. *PV first*), **MAX POWER**, **MIN OUTPUT**,
-**DEVICES**, **ACTIVE GATES** and **INACTIVE GATES**.
+*Why each device gets its share.* Each inverter has a row with its target, a
+write status — **Send**, **No write**, **Blocked** or **Inferred** — and a
+sentence. For a device the EMS holds back, the sentence says why, for example
+*AC input mode is active; normal output writes are blocked*; otherwise it says
+what decided the target, for example *WR1 target is shaped by PV-first
+allocation and local solar availability.*
 
-## Per-device stages
-
-Each inverter gets its own row: a **MEASUREMENTS** block (PV, SOC, OUTPUT), a
-**CONTEXT** block (SOC RANGE, OUTPUT LIMIT, DEVICE MAX, PV PRIORITY), then five
-stages. The line under the inverter's name says in one sentence why EMS does not
-write a device it blocks, e.g. *WR1 is blocked: AC input mode is active; normal
-output writes are blocked.*, and otherwise what decided its target, e.g. *WR1
-target is shaped by PV-first allocation and local solar availability.*
+Click a row to open it. A line names the state, the **SoC range**, the **Device
+max** and, where known, the **Capacity** weight, and five stages follow. A stage
+whose result is red is one that blocks the device.
 
 ### 01 — Inputs
 
-*Live values from this inverter.* Result: **INPUT STATE** — `ready` when the
-device's data is usable.
+**Solar**, **State of charge** and **Output** from this inverter. Result:
+**Input state** — `ready` when the device's data is usable.
 
-A device whose input state is not ready is excluded from the write decision. EMS
-does not command on stale data.
+A device that is offline gets a red result here and is left out of the write
+decision. The EMS does not command on stale data.
 
 ### 02 — Weighting
 
-*PV, SOC and balance produce the weight.*
-
-| Fact | Meaning |
+| Figure | Meaning |
 | --- | --- |
-| **BASE WEIGHT** | Starting weight |
-| **PV PRIORITY** | The PV-priority multiplier for this device |
-| **CHARGE BALANCE** | The battery-balance multiplier |
-| **RESULT / EFFECTIVE WEIGHT** | The weight used for the split |
+| **Base weight** | Starting weight |
+| **PV priority** | The PV-priority multiplier for this device |
+| **Charge balance** | The battery-balance multiplier |
+| **Effective weight** (result) | The weight used for the split |
 
 ### 03 — Raw target
 
-*Weight share is applied to the requested target.*
+**Weight**, **Share** (this device's percentage), **Requested**, and a
+**Formula** such as `800 W × 40% = 320 W`. Result: **Raw target**.
 
-Shows **WEIGHT**, **SHARE** (this device's percentage), **REQUESTED**, and an
-explicit **FORMULA** line such as `800 W x 40% = 320 W`, then **RESULT / RAW
-TARGET**.
+The formula is the arithmetic, spelled out. If a device's share surprises you,
+this is where to look.
 
-The formula row is the arithmetic, spelled out. If a device's share surprises
-you, this is where to look.
+### 04 — Adjustments and limits
 
-### 04 — Adjustments / limits
-
-*Limits modify the raw device target.*
-
-| Fact | Meaning |
+| Figure | Meaning |
 | --- | --- |
-| **PV-ONLY LIMIT** | Cap derived from this device's own PV |
-| **OUTPUT LIMIT** | The device's configured output limit |
-| **DELTA** | Change against the previous cycle |
-| **CAPABILITY** | Detected capability, e.g. *PV input detected* |
-| **RESULT / ADJUSTED TARGET** | After the limits |
+| **PV-only limit** | Cap derived from this device's own solar |
+| **Output limit** | The device's output limit |
+| **Adjustment** | The difference between the raw and the final target |
+| **Limited by** | The limit that bound, where one did |
+| **Capability** | Detected capability, for example *PV input detected* |
+| **Adjusted target** (result) | After the limits |
 
-The result turns red only when EMS reports that the device cannot export this
-cycle: its telemetry shows no way out, it is in AC input mode, the full-charge
-assist holds it, discharge is switched off for it, or winter mode holds its PV
-for charging. **CAPABILITY** then names why. A limit that binds, such as the
-PV-only limit, does not turn it red.
+The result turns red only when the EMS reports that the device cannot export
+this cycle: its telemetry shows no way out, it is in AC input mode, the
+full-charge assist holds it, discharge is switched off for it, or winter mode
+holds its solar for charging. **Capability** then names why. A limit that binds,
+such as the PV-only limit, does not turn it red.
 
 ### 05 — Final target
 
-*Adjusted target and write gate finish the decision.*
-
-| Fact | Meaning |
+| Figure | Meaning |
 | --- | --- |
-| **ADJUSTED** / **FINAL** | Before and after the final step |
-| **DELTA OUTPUT** | Change to be applied |
-| **WRITE** | `Send` or suppressed |
-| **REASON** | Why, e.g. *Output limit update* or *Change is inside the deadband* |
-| **RESULT / FINAL / WRITE** | The decision and the value |
+| **Adjusted target** / **Final** | Before and after the final step |
+| **Change of output** | The final target against what the device delivers now |
+| **Write** | **Send**, **No write**, **Blocked** or **Inferred** |
+| **Write reason** | Why, for example *Output limit update* or *Change is inside the deadband* |
+| **Final / write** (result) | The decision and the value |
 
 ## Deadbands, ramps and limits
 
@@ -195,18 +187,17 @@ PV-only limit, does not turn it red.
 | **System output limit** | Cap for the whole installation | Your configured ceiling |
 | **Per-device limit** | Cap for one inverter | Device rating or your choice |
 
-These are why a target and an output differ for a few cycles. Persistent
-divergence is different — read stage 04 to see which limit is binding.
+These are why a target and an output differ for a few cycles. A lasting
+difference is something else — read stage 04 to see which limit binds.
 
-## When EMS deliberately does not write
+## When the EMS deliberately does not write
 
 | Reason | Where you see it |
 | --- | --- |
-| Change is inside the deadband | Stage 05 command decision |
-| Telemetry is stale | Per-device stage 01 input state |
-| A write gate is off | Stage 04 write gate |
-| `dry_run` or simulation mode | Stage 04 / the context strip |
-| Night / minSoc idle | Overview **Rules** panel |
+| Change is inside the deadband | Stage 05 **Commands**, and **Write reason** per device |
+| Telemetry is stale | Per-device stage 01, **Input state** |
+| A write gate is off, or `dry_run` or simulation mode | Stage 05 **Commands**, and **Write** and **Write reason** per device |
+| Night / minSoc idle | **Strategy** *Night idle at minimum SoC*, and **Night idle** under **Active rules** on the Overview |
 | Device disabled | Per-device stage 01 |
 
 **Stale data blocks writes on purpose.** Commanding hardware from old
@@ -214,13 +205,13 @@ measurements is worse than not commanding it.
 
 ## Dry run, simulation, and MQTT confirmation
 
-- **`dry_run`** — EMS computes everything and writes nothing. The pipeline still
-  fills in, so you can validate a configuration safely before going live. See
+- **`dry_run`** — the EMS computes everything and writes nothing. The page still
+  fills in, so you can check a configuration safely before going live. See
   [Safety](../safety.md).
 - **Simulation / replay** — synthetic or recorded input; hardware writes are
   forced off.
 - **MQTT confirmation** — for an MQTT-controlled device, **publishing a command is
-  not success**. A publish is only a transport step; EMS reports a command
+  not success**. A publish is only a transport step; the EMS reports a command
   effective only after **telemetry confirmation** that the device took the value.
   Over the cloud broker that confirmation typically arrives a few seconds later —
   see [MQTT](../admin/mqtt.md#what-to-expect-from-the-cloud-path). A command shown
@@ -229,40 +220,39 @@ measurements is worse than not commanding it.
 
 ## Read-only view
 
-![Control tab without a session, showing the read-only state](../../assets/screenshots/dashboard/dashboard-control-readonly.png)
+![Control page signed out with a password set: the decision and figures are readable, and the runtime settings card says Read-only. Sign in to change runtime values.](../../assets/screenshots/dashboard/dashboard-control-readonly.png)
 
-Without a login the pipeline is fully readable — this is diagnostic information,
-not a control surface. Only the **Runtime settings** block at the top requires a
-session.
+Without a session the whole page is readable — it is diagnostic information,
+not a control surface. Only the **Runtime settings** card asks you to sign in.
 
 ## What happens in the background
 
-- Every value here comes from EMS's own control cycle. The dashboard does not
-  recompute anything.
+- Every value here comes from the EMS's own control cycle. The dashboard does
+  not recompute anything.
 - One control cycle runs per loop interval, in the order shown.
-- Write eligibility is decided by EMS write gates and capability detection.
+- Write eligibility is decided by the EMS write gates and capability detection.
 
 ## Expected result
 
-For any cycle you can say: what EMS measured, what it targeted, how it split
-that, what limited it, whether it wrote, and why.
+For any cycle you can say: what the EMS measured, what it targeted, how it
+split that, what limited it, whether it wrote, and why.
 
 ## Warnings and common problems
 
 | Symptom | Meaning | What to do |
 | --- | --- | --- |
-| Target ≠ Output persistently | A limit is binding | Stage 04 names it |
-| One device gets nothing | PV-first allocation, or it is not ready | Stages 03 and per-device 01 |
-| `WRITES: 0` | Deadband, gate, or nothing to change | Stage 05 reason |
-| Write gate shows blocked | A gate is off, or dry run/simulation | [Safety](../safety.md) |
+| Target ≠ Output for long | A limit binds | Stage 04 names it |
+| One device gets nothing | PV-first allocation, or it is not ready | Stage 03 and the device's stage 01 |
+| **No write** | Deadband, or nothing to change | **Write reason** per device |
+| **Blocked** | A gate is off, the device is offline, or dry run/simulation | [Safety](../safety.md) |
 | Values oscillate | Likely a second controller | Nothing else may write `outputLimit` |
-| Command sent, hardware unchanged | Awaiting MQTT confirmation, or write ineffective | [MQTT](../admin/mqtt.md) |
+| Command sent, hardware unchanged | Awaiting MQTT confirmation, or the write had no effect | [MQTT](../admin/mqtt.md) |
 
 ## Recovery or next steps
 
 - Per-device detail → [Devices](devices.md)
 - Change a limit live → [Runtime settings](runtime-settings.md)
 - Capture the same data for a report →
-  [Diagnostics](diagnostics.md) (`diagnose --control`)
+  [Diagnostics](diagnostics.md) (the **Control** diagnosis, `diagnose --control`)
 - The maths → [Control logic](../../technical/control-logic.md) ·
   [Control flow](../../technical/control-flow.md)
