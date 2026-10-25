@@ -16,10 +16,10 @@
   <div class="span-12"><Empty text={t("device.none")} icon="loader" /></div>
 {:else}
   <div class="device-grid span-12">
+    <GridMeter />
     {#each list as device (device.name)}
       <DeviceCard {device} />
     {/each}
-    <GridMeter />
   </div>
   <EnergyFlow span="span-12" fixedMode="devices" />
   <DeviceHistory {names} />

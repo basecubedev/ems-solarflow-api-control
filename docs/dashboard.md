@@ -96,7 +96,7 @@ Below the cards, the page draws the energy flow per device and a power chart
 from the local history with a device choice. See
 [Device cards](user/dashboard/devices.md).
 
-![Devices page demo screenshot with two inverter cards, the grid meter, the energy flow per device and the power chart](assets/preview-devices.jpg)
+![Devices page demo screenshot with the grid meter card first, then two inverter cards, the energy flow per device and the power chart](assets/preview-devices.jpg)
 
 ## Analytics Page
 

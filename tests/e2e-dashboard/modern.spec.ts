@@ -108,6 +108,7 @@ test.describe("Modern dashboard @smoke", () => {
     await openModern(page, "#/devices");
     await expect(page.getByTestId("device-card")).toHaveCount(2);
     await expect(page.getByTestId("grid-meter")).toBeVisible();
+    await expect(page.locator(".device-grid > *").first()).toHaveAttribute("data-testid", "grid-meter");
 
     await page.goto("/#/energy", { waitUntil: "domcontentloaded" });
     await expect(page.getByTestId("energy-periods")).toContainText(/Last 7 days\s*18\.4\d?\skWh/);

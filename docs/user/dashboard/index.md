@@ -31,7 +31,7 @@ System: Diagnose · Logs · Maintenance
 | Page | What it shows |
 | --- | --- |
 | **Overview** | *Your energy system right now*: system status, self-sufficiency, solar and savings, the energy flow, storage, the active rules, today's energy and the power chart |
-| **Devices** | *Inverters, batteries and meters*: one card per inverter, the grid meter, the energy flow per device and the power history |
+| **Devices** | *Inverters, batteries and meters*: the grid meter first, then one card per inverter, the energy flow per device and the power history |
 | **Energy** | *Delivered energy and savings by period*: periods, months, years and the lifetime, in **Basic** or **Expert** |
 | **Analytics** | *Long-range history from InfluxDB*, when InfluxDB is set up |
 | **Control** | *What the EMS is doing and why*: the current decision, the runtime settings, the six stages of the control pipeline and the decision per device |

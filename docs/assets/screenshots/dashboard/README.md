@@ -21,7 +21,7 @@ Admin Console screenshots live in [`../admin/`](../admin/).
 | `dashboard-overview-per-device.png` | Overview in Midnight, energy flow Per device | `normal` |
 | `dashboard-overview-narrow.png` | Overview on a phone (390×844), with the bar at the bottom | `normal` |
 | `dashboard-phone-more.png` | The More sheet on a phone: other pages, Quick settings, Classic switch | `normal` |
-| `dashboard-devices.png` | Devices — the two inverter cards, the grid meter, the flow per device | `normal` |
+| `dashboard-devices.png` | Devices — the grid meter, then the two inverter cards, the flow per device | `normal` |
 | `dashboard-devices-details.png` | Devices — WR1 with Firmware status and Device settings opened | `normal` |
 | `dashboard-devices-offline.png` | Devices — WR2 offline, the grid meter importing | `offline-device` |
 | `dashboard-energy.png` | Energy — Basic: periods, context strip, months, years and lifetime | `normal` |

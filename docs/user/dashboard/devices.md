@@ -19,13 +19,13 @@ not control it — why not.
 
 ## What you see
 
-![Devices page with a card each for WR1 and WR2 showing battery, solar, output, target, limit and packs, the grid meter card, and the energy flow per device below](../../assets/screenshots/dashboard/dashboard-devices.png)
+![Devices page with the grid meter card first, then a card each for WR1 and WR2 showing battery, solar, output, target, limit and packs, and the energy flow per device below](../../assets/screenshots/dashboard/dashboard-devices.png)
 
-The **Devices** page — *Inverters, batteries and meters* — has one card per
-inverter, a card for the grid meter, the energy flow drawn per device, and a
-power chart for the last hours.
+The **Devices** page — *Inverters, batteries and meters* — has the grid
+meter's card first, then one card per inverter, the energy flow drawn per
+device, and a power chart for the last hours.
 
-### 1 — The card header
+### 1 — An inverter card's header
 
 The device's EMS name (`WR1`, `INV_1`, …) and a status:
 
@@ -93,7 +93,7 @@ battery-backed device also carries a **Full-charge assist** block: its state
 *Restore pending*, …), a sentence on what the EMS does next, and **Last full
 charge**, **Next due** and the restore steps.
 
-### 5 — Grid meter, flow and history
+### 5 — The grid meter, flow and history
 
 The **Grid meter** card shows **Grid** (negative while exporting), **Home**, and
 **Imported today** and **Exported today**. If the meter does not answer, its
