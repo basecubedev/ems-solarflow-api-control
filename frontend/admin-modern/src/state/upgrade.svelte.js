@@ -3,7 +3,7 @@ import { adminGet, adminSend, auth, expectSessionEnd, loadAuth, replacingPage, s
 import { reload, system } from "./system.svelte.js";
 import { followJob, isTransient } from "../lib/jobs.js";
 import { noAnswer } from "../lib/errors.js";
-import { REFUSED_BEFORE_WORK, activeUpgrade, defaultChoices, executeBody, migrationView, replacesAdmin, validateBody, verificationAccepted, verificationRefusal } from "../lib/upgrade.js";
+import { REFUSED_BEFORE_WORK, WORKING_STAGES, activeUpgrade, defaultChoices, executeBody, migrationView, replacesAdmin, validateBody, verificationAccepted, verificationRefusal } from "../lib/upgrade.js";
 
 export const POLL_MS = 1500;
 export const REPLACEMENT_SLOW_MS = 120000;
@@ -53,6 +53,7 @@ class Upgrade {
   workDone = $state(false);
   returnAligns = $state(false);
   since = $state(0);
+  verifyingSince = $state(0);
   finishedAt = $state(0);
   before = $state.raw(null);
   recovering = $state("");
@@ -62,7 +63,7 @@ class Upgrade {
   #generation = 0;
 
   get busy() {
-    return ["verifying", "starting", "checking", "replacing", "running"].includes(this.stage) || Boolean(this.recovering);
+    return WORKING_STAGES.includes(this.stage) || Boolean(this.recovering);
   }
 
   /** A run the server still holds: the console cannot be closed on it, only recovered or followed. */
@@ -180,6 +181,7 @@ function reset() {
   upgrade.returnAligns = false;
   upgrade.before = null;
   upgrade.since = 0;
+  upgrade.verifyingSince = 0;
   upgrade.finishedAt = 0;
   upgrade.acknowledgeReturn = false;
   upgrade.detached = false;
@@ -205,6 +207,7 @@ export async function verify() {
   if (!release || upgrade.busy || upgrade.holding) return;
   const generation = upgrade.next();
   upgrade.stage = "verifying";
+  upgrade.verifyingSince = Date.now();
   upgrade.error = null;
   upgrade.conflict = null;
   upgrade.verification = null;

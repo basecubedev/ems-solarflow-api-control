@@ -35,6 +35,7 @@ hostnames.
 | `admin-setup-deployment.png` | Guided setup — 04 Prepare: the deployment is ready | `setup` |
 | `admin-setup-start.png` | Guided setup — 05 Start EMS: EMS runs, Open the dashboard | `setup` |
 | `admin-updates.png` | Updates — what runs now, the guided upgrade, the available versions | `installed` |
+| `admin-upgrade-verifying.png` | Updates — a version chosen and being prepared: images downloaded and checked | `installed` |
 | `admin-guided-upgrade-plan.png` | Updates — a version chosen and checked: options and what happens | `installed` |
 | `admin-upgrade-running.png` | Updates — an update running, EMS being installed | `upgrade-running` |
 | `admin-admin-update-reconnect.png` | Updates — the Admin console restarting, the page reconnecting | `upgrade-reconnect` |

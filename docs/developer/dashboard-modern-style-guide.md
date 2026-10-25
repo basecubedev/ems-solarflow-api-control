@@ -84,9 +84,9 @@ built stylesheet.
 | `--m-surface-1` … `--m-surface-3` | card, something on a card, something under the pointer |
 | `--m-line`, `--m-line-strong` | hairlines and control borders |
 | `--m-text`, `--m-muted`, `--m-muted-2` | three levels of ink |
-| `--m-accent`, `--m-accent-ink` | the one interactive colour: focus ring, selected navigation, primary button |
+| `--m-accent`, `--m-accent-ink` | the one interactive colour: focus ring, selected navigation, primary button (a destructive one wears `--m-fault`, the start of a checked update `--m-ok`) |
 | `--m-selected-bg`, `--m-selected-ink` | the chosen segment of a segmented control |
-| `--m-ok`, `--m-warn`, `--m-fault` | status, always with an icon and a word |
+| `--m-ok`, `--m-warn`, `--m-fault` | status, always with an icon and a word; `--m-fault` and `--m-ok` also fill the two primary buttons above |
 
 A colour scheme is one value set for those roles, as an
 `:root[data-m-theme="…"]` block. There are two: **Graphite** (the default,
@@ -284,8 +284,15 @@ from what the Admin server is.
   (`resume_pending_guided_upgrade`). A start that got no answer is watched for
   in the transition, a refusal says the update did not start, and the ways out
   of a failure are the ones the transition offers (`resume_available`,
-  `return_available`, `cancel_available`). Each new screen of the flow is shown
-  from the top of the page and takes the focus.
+  `return_available`, `cancel_available`). Each new screen of the flow
+  brings the update's card into view when it is above the window or, after
+  its first screen, below its fold, and takes the focus. The page leads with **What runs now**, the
+  update's card below it, then the guided upgrade and the versions. While the
+  device works (`WORKING_STAGES`), a banner in the stage's tone
+  (`STAGE_TONES`) shows the turning loader, a clock and a moving line, or the
+  share of the phases behind it once the run has started. The start of a
+  checked update is green rather than `--m-accent`: it is the step that
+  changes the device, offered only after the plan has been read.
 - **The assistants share their parts** with the Appliance Manager's in
   `frontend/shared/assistant/`: `assistant.js` (the step states and their
   marks, `ems-modern.welcome`, `bareAddress`), `welcome.svelte.js` (the

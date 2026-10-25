@@ -26,6 +26,11 @@ import {
   nothingChanged,
   phaseOfStage,
   REFUSED_BEFORE_WORK,
+  UPGRADE_STAGES,
+  WORKING_STAGES,
+  STAGE_TONES,
+  PHASE_TONES,
+  phaseProgress,
 } from "../src/lib/upgrade.js";
 
 const read = (path) => readFileSync(new URL(`../../../admin/${path}`, import.meta.url), "utf8");
@@ -229,3 +234,25 @@ test("every refusal that may say nothing changed is one the start request gives 
   }
 });
 
+test("every stage but idle wears a tone, and the working stages are stages that hold the console", () => {
+  assert.deepEqual(Object.keys(STAGE_TONES).sort(), UPGRADE_STAGES.filter((stage) => stage !== "idle").sort());
+  for (const stage of WORKING_STAGES) {
+    assert.ok(UPGRADE_STAGES.includes(stage), stage);
+    assert.equal(STAGE_TONES[stage], "c-out", stage);
+  }
+  assert.equal(STAGE_TONES.ready, "c-ok");
+  assert.equal(STAGE_TONES.succeeded, "c-ok");
+  for (const state of ["done", "running", "pending", "failed"]) assert.match(PHASE_TONES[state], /^c-/, state);
+  assert.equal(PHASE_TONES.running, STAGE_TONES.running);
+});
+
+test("the progress names the phase at work, its place and the share behind it", () => {
+  const phases = (states) => states.map((state, index) => ({ id: PHASES[index].id, state }));
+  assert.deepEqual(phaseProgress(phases(["done", "done", "running", "pending", "pending"])), { current: "admin", step: 3, total: 5, share: 0.5 });
+  assert.deepEqual(phaseProgress(phases(["done", "pending", "pending"])), { current: "backup", step: 2, total: 3, share: 1 / 3 });
+  assert.deepEqual(phaseProgress(phases(["done", "failed", "pending"])), { current: "backup", step: 2, total: 3, share: 1 / 3 });
+  assert.deepEqual(phaseProgress(phases(["done", "done", "done"])), { current: null, step: 3, total: 3, share: 1 });
+  assert.deepEqual(phaseProgress(phases(["running", "running", "pending", "pending"])), { current: "check", step: 1, total: 4, share: 0.25 });
+  assert.deepEqual(phaseProgress([]), { current: null, step: 0, total: 0, share: 0 });
+  assert.deepEqual(phaseProgress(null), { current: null, step: 0, total: 0, share: 0 });
+});

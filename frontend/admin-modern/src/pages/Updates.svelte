@@ -8,13 +8,14 @@
   import { system, ensure, reload, keepWithOverview } from "../state/system.svelte.js";
   import { upgrade, chooseRelease, resumeUpgrade, noteStatus } from "../state/upgrade.svelte.js";
   import { CHANNEL_TONES, groupedReleases, noteView, pairView, releaseList } from "../lib/updates.js";
-  import { activeUpgrade, lastRun } from "../lib/upgrade.js";
+  import { STAGE_TONES, activeUpgrade, lastRun } from "../lib/upgrade.js";
   import { activeWorkflow } from "../lib/workflow.js";
   import { emsFact } from "../lib/health.js";
   import { errorView } from "../lib/errors.js";
   import StaleNote from "../widgets/StaleNote.svelte";
   import UpgradePanel from "../widgets/UpgradePanel.svelte";
   import AlignmentCard from "../widgets/AlignmentCard.svelte";
+  import Spinner from "../widgets/Spinner.svelte";
 
   ensure("overview", "alignment", "releases", "lifecycle");
   keepWithOverview("alignment");
@@ -55,7 +56,6 @@
 
   function choose(release) {
     if (held) return;
-    globalThis.scrollTo?.(0, 0);
     chooseRelease(release);
   }
 </script>
@@ -69,16 +69,13 @@
       {#if release.running}<span class="badge">{t("updates.running")}</span>{/if}
     </span>
     <span class="muted small">
-      {#if release.publishedAt}<span class="num">{f.dateTime(release.publishedAt)}</span>{/if}{#if release.publishedAt && release.note}<span aria-hidden="true"> · </span>{/if}{#if release.note?.key}{t(release.note.key)}{:else if release.note}<span lang="en">{release.note.text}</span>{/if}
+      {#if release.publishedAt}<span class="num">{f.dateTime(release.publishedAt)}</span>{/if}{#if release.publishedAt && release.note}{" "}<span aria-hidden="true">·</span>{" "}{/if}{#if release.note?.key}{t(release.note.key)}{:else if release.note}<span lang="en">{release.note.text}</span>{/if}
     </span>
   </span>
   {#if release.state}<Status tone={release.tone} text={t(`updates.state.${release.state}`)} />{/if}
 {/snippet}
 
-{#if upgrade.stage !== "idle"}<UpgradePanel />{/if}
-<AlignmentCard />
-
-<Card icon="server" tone="c-inv" title={t("updates.current")} subtitle={t("updates.currentSub")} span="span-6">
+<Card icon="server" tone="c-inv" title={t("updates.current")} subtitle={t("updates.currentSub")} span="span-12">
   <div class="facts two">
     <div class="fact"><div class="fact-label">{t("version.admin")}</div><div class="fact-value num" class:na={!overview?.components?.admin?.tag && !pair?.admin?.release}>{overview?.components?.admin?.tag || pair?.admin?.release || t("version.unknown")}</div></div>
     <div class="fact"><div class="fact-label">{t("version.ems")}</div><div class="fact-value num" class:na={!ems.version}>{ems.version || t("version.unknown")}</div></div>
@@ -87,23 +84,34 @@
     <p class="pair"><Status tone={pairState.tone} text={t(`updates.pair.${pairState.state}`)} /><span class="muted">{t("updates.pairHint")}</span></p>
   {/if}
   {#if last}
-    <p class="last muted" data-testid="last-upgrade"><Icon name={last.outcome === "completed" ? "circle-check" : "ban"} size="sm" /><span>{t(`updates.last.${last.outcome}`, { tag: last.tag })}{#if last.at}<span class="num"> · {f.when(last.at)}</span>{/if}</span></p>
+    <p class="last muted {last.outcome === "completed" ? "c-ok" : "c-fault"}" data-testid="last-upgrade"><Icon name={last.outcome === "completed" ? "circle-check" : "ban"} size="sm" /><span>{t(`updates.last.${last.outcome}`, { tag: last.tag })}{#if last.at}{" "}<span aria-hidden="true">·</span>{" "}<span class="num">{f.when(last.at)}</span>{/if}</span></p>
+  {/if}
+  {#if upgrade.stage !== "idle" && upgrade.target}
+    <p class="now {STAGE_TONES[upgrade.stage]}" data-testid="upgrade-now">
+      {#if upgrade.busy}<Spinner size="sm" />{:else}<span class="dot"></span>{/if}
+      <span><span class="now-title">{t("upgrade.title", { tag: upgrade.target })}</span>{" "}<span aria-hidden="true">·</span>{" "}{t(`upgrade.sub.${upgrade.stage}`)}</span>
+    </p>
   {/if}
 </Card>
 
-<Card icon="route" tone="c-out" title={t("updates.guidedTitle")} subtitle={t("updates.guidedSub")} span="span-6">
+{#if upgrade.stage !== "idle"}<UpgradePanel />{/if}
+<AlignmentCard />
+
+<Card icon="route" tone="c-out" title={t("updates.guidedTitle")} subtitle={t("updates.guidedSub")} span="span-12">
   <ol class="how">
     {#each STEPS as step (step)}<li><span class="icon-tile sm {STEP_LOOKS[step].tone}"><Icon name={STEP_LOOKS[step].icon} /></span><span>{t(`updates.step.${step}`)}</span></li>{/each}
   </ol>
-  <div class="row-wrap actions">
-    {#if recommended?.selectable && !recommended.running}
-      <button class="btn" type="button" onclick={() => choose(recommended)} disabled={held || upgrade.stage !== "idle"} data-testid="start-upgrade"><Icon name="circle-arrow-up" size="sm" />{t("upgrade.start", { tag: recommended.tag })}</button>
-    {:else if !recommended && runsStable}
-      <p class="note" data-testid="no-recommendation"><Icon name="circle-check" />{t("updates.noRecommendation")}</p>
-    {:else}
-      <p class="muted small">{t("updates.chooseBelow")}</p>
-    {/if}
-  </div>
+  {#if upgrade.stage === "idle"}
+    <div class="row-wrap actions">
+      {#if recommended?.selectable && !recommended.running}
+        <button class="btn" type="button" onclick={() => choose(recommended)} disabled={held} data-testid="start-upgrade"><Icon name="circle-arrow-up" size="sm" />{t("upgrade.start", { tag: recommended.tag })}</button>
+      {:else if !recommended && runsStable}
+        <p class="note" data-testid="no-recommendation"><Icon name="circle-check" />{t("updates.noRecommendation")}</p>
+      {:else}
+        <p class="muted small">{t("updates.chooseBelow")}</p>
+      {/if}
+    </div>
+  {/if}
 </Card>
 
 <Card icon="boxes" tone="c-out" title={t("updates.releases")} subtitle={recommended ? t("updates.recommendedIs", { tag: recommended.tag }) : t("updates.releasesSub")} span="span-12">
@@ -127,9 +135,15 @@
             {#each group.releases as release (release.tag)}
               <li data-tag={release.tag}>
                 {#if release.upgrade}
-                  <button class="release inner choice" class:chosen={upgrade.target === release.tag && upgrade.stage !== "idle"} class:recommended={release.recommended} type="button" onclick={() => choose(release)} disabled={held} data-testid="choose-release">
+                  {@const chosen = upgrade.target === release.tag && upgrade.stage !== "idle"}
+                  {@const checking = chosen && upgrade.stage === "verifying"}
+                  <button class="release inner choice {checking ? STAGE_TONES.verifying : ''}" class:chosen class:checking class:recommended={release.recommended} type="button" onclick={() => choose(release)} disabled={held} data-testid="choose-release">
                     {@render about(release)}
-                    <span class="go">{upgrade.target === release.tag && upgrade.stage !== "idle" ? t("updates.chosen") : t("updates.choose")}<Icon name="chevron-right" size="sm" /></span>
+                    {#if checking}
+                      <span class="go"><Spinner size="sm" />{t("updates.checking")}</span>
+                    {:else}
+                      <span class="go">{chosen ? t("updates.chosen") : t("updates.choose")}<Icon name="chevron-right" size="sm" /></span>
+                    {/if}
                   </button>
                 {:else}
                   <div class="release inner off">{@render about(release)}</div>
@@ -150,8 +164,20 @@
 <style>
   .pair { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; margin: var(--s3) 0 0; font-size: 12.5px; }
   .last { display: flex; align-items: center; gap: 6px; margin: var(--s3) 0 0; font-size: 12.5px; }
+  .last :global(svg.i) { color: var(--c); }
+  .now {
+    display: flex; align-items: center; gap: 10px; margin: var(--s3) 0 0; padding: 10px 12px; font-size: 13px;
+    border-radius: var(--m-radius-inner); background: color-mix(in srgb, var(--c) 9%, var(--m-surface-2));
+    border: 1px solid color-mix(in srgb, var(--c) 32%, transparent);
+  }
+  .now :global(svg.i) { color: var(--c); }
+  .now-title { font-weight: 620; }
   .how { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13.5px; }
   .how li { display: flex; gap: 10px; align-items: center; }
+  @container content (min-width: 820px) {
+    .how { flex-direction: row; gap: var(--s4); }
+    .how li { flex: 1 1 0; min-width: 0; flex-direction: column; align-items: flex-start; }
+  }
   .actions { margin-top: var(--s4); gap: var(--s2); align-items: center; }
   .releases { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s2); }
   .release { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; width: 100%; }
@@ -161,8 +187,11 @@
   .choice:disabled { cursor: default; }
   .choice.recommended { border-color: color-mix(in srgb, var(--m-ok) 45%, var(--m-line)); background: color-mix(in srgb, var(--m-ok) 6%, var(--m-surface-2)); }
   .choice.chosen { border-color: var(--m-accent); }
+  .choice.checking { border-color: color-mix(in srgb, var(--c) 60%, transparent); background: color-mix(in srgb, var(--c) 8%, var(--m-surface-2)); }
   .go { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-size: 13px; font-weight: 620; color: var(--m-accent); }
   .choice:disabled .go { color: var(--m-muted); }
+  .choice.checking .go { color: var(--m-text); }
+  .choice.checking .go :global(svg.i) { color: var(--c); }
   .hint { font-size: 13px; margin: 0 0 var(--s3); }
   .release .words { flex: 1 1 280px; min-width: 0; display: flex; flex-direction: column; }
   .tag { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 620; }

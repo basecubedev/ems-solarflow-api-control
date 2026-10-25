@@ -267,6 +267,19 @@ const SHOTS = [
     },
   },
   {
+    file: "admin-upgrade-verifying.png",
+    hash: "#/updates",
+    async prepare(page) {
+      await appReady(page);
+      await page.route("**/api/admin/maintenance/upgrade/validate", () => {});
+      await page.getByTestId("start-upgrade").click();
+      await visible(page.locator('[data-testid="upgrade"][data-stage="verifying"]'));
+      await page.clock.setFixedTime(new Date(DEMO_NOW.getTime() + 47_000));
+      await visible(page.getByTestId("upgrade-clock").getByText("0:47"));
+      await page.evaluate(() => window.scrollTo(0, 0));
+    },
+  },
+  {
     file: "admin-guided-upgrade-plan.png",
     hash: "#/updates",
     full: true,

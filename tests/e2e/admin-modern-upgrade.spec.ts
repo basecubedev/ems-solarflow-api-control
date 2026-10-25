@@ -93,10 +93,38 @@ test.describe("Modern Admin: the guided upgrade", { tag: ["@smoke", "@workflow"]
     await page.getByTestId("upgrade-choice-backup").uncheck();
     await expect(panel).toContainText("No backup is made first");
     await expect(page.getByTestId("upgrade-start")).toHaveText(`Update to ${TARGET}`);
-    await expect(page.getByTestId("start-upgrade")).toBeDisabled();
+    await expect(page.getByTestId("start-upgrade")).toHaveCount(0);
     await expect(page.locator(`[data-tag="${TARGET}"]`).getByTestId("choose-release")).toContainText("Chosen");
     await page.getByTestId("upgrade-close").click();
     await expect(panel).toHaveCount(0);
+  });
+
+  test("while a chosen version is prepared the page says so at the top, in its card and on the version, then marks it ready", async ({ page, seedAdminScenario }) => {
+    await openUpdates(page, seedAdminScenario);
+    const release = gate();
+    await page.route("**/api/admin/maintenance/upgrade/validate", async (route) => {
+      await release.opened;
+      await route.fallback();
+    });
+    await page.locator(`[data-tag="${TARGET}"]`).getByTestId("choose-release").click();
+    const panel = page.getByTestId("upgrade");
+    await expect(panel).toHaveAttribute("data-stage", "verifying");
+    await expect(page.getByTestId("upgrade-working")).toContainText(`Checking ${TARGET}`);
+    await expect(page.getByTestId("upgrade-clock")).toHaveText(/Running for 0:(0[2-9]|[1-5]\d)/, { timeout: 10_000 });
+    await page.goto("/#/overview");
+    await page.goto("/#/updates");
+    await expect(page.getByTestId("upgrade-clock")).toHaveText(/Running for 0:(0[2-9]|[1-5]\d)/);
+    await expect(page.getByTestId("upgrade-now")).toContainText(`Update to ${TARGET} · Checking the version`);
+    await expect(page.locator(`[data-tag="${TARGET}"]`).getByTestId("choose-release")).toContainText("Checking");
+    await expect(page.getByTestId("start-upgrade")).toHaveCount(0);
+    const order = await page.locator(".content > .card").evaluateAll((cards) => cards.map((card) => card.querySelector(".card-title")?.textContent));
+    expect(order.slice(0, 2)).toEqual(["What runs now", `Update to ${TARGET}`]);
+    release.open();
+    await expect(panel).toHaveAttribute("data-stage", "ready", { timeout: 30_000 });
+    await expect(page.getByTestId("upgrade-working")).toHaveCount(0);
+    await expect(page.getByTestId("upgrade-ready")).toContainText(`${TARGET} is ready to install`);
+    await expect(page.getByTestId("upgrade-now")).toContainText("Checked. Nothing has changed yet");
+    await expect(page.locator(`[data-tag="${TARGET}"]`).getByTestId("choose-release")).toContainText("Chosen");
   });
 
   test("a run that keeps the Admin console follows its phases to the end and says what runs now", async ({ page, seedAdminScenario }) => {
@@ -130,6 +158,8 @@ test.describe("Modern Admin: the guided upgrade", { tag: ["@smoke", "@workflow"]
     await expect(phases.locator('[data-phase="install"]')).toHaveAttribute("data-state", "running");
     await expect(phases.locator('[data-phase="check"]')).toHaveAttribute("data-state", "done");
     await expect(phases.locator('[data-phase="admin"]')).toHaveCount(0);
+    await expect(page.getByTestId("upgrade-working")).toContainText("Step 3 of 4 · Install EMS");
+    await expect(page.getByRole("progressbar")).toHaveAttribute("aria-valuemax", "4");
     await expect(page.getByTestId("upgrade-clock")).toContainText("Running for");
     finish.open();
     await expect(page.getByTestId("upgrade-done")).toContainText("Update complete");

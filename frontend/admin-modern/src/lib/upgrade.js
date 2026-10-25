@@ -9,6 +9,26 @@
 /** Where the console is with a Guided Upgrade (state/upgrade.svelte.js). */
 export const UPGRADE_STAGES = Object.freeze(["idle", "verifying", "verifyFailed", "blocked", "ready", "starting", "checking", "replacing", "running", "succeeded", "failed", "refused", "cancelled", "returned"]);
 
+/** The stages at which the device is at work for the owner: a version is fetched and checked, or the update runs. */
+export const WORKING_STAGES = Object.freeze(["verifying", "starting", "checking", "replacing", "running"]);
+
+/** The tone each stage wears, from its mark to its banner: working, ready, held up, or how the run ended. */
+export const STAGE_TONES = Object.freeze({
+  verifying: "c-out",
+  verifyFailed: "c-warn",
+  blocked: "c-warn",
+  ready: "c-ok",
+  starting: "c-out",
+  checking: "c-out",
+  replacing: "c-out",
+  running: "c-out",
+  succeeded: "c-ok",
+  failed: "c-fault",
+  refused: "c-fault",
+  cancelled: "c-fault",
+  returned: "c-soc",
+});
+
 /**
  * Refusals the start request gives before it checks, backs up or migrates
  * anything (admin/server.py _handle_maintenance_upgrade_execute and
@@ -197,6 +217,27 @@ export function phaseStates({ steps = [], stage = null, adminRequired = null, ba
   if (finished === "succeeded") return PHASES.map((phase, index) => ({ id: phase.id, state: ["pending", "running"].includes(states[index]) ? "done" : states[index] }));
   return PHASES.map((phase, index) => ({ id: phase.id, state: states[index] }));
 }
+
+/**
+ * Where a run stands among the phases it shows: the phase at work (the first
+ * running or failed one, else the next to come), its place in the list, and
+ * the share behind it, each running phase counting half.
+ */
+export function phaseProgress(phases) {
+  const list = Array.isArray(phases) ? phases : [];
+  const done = list.filter((phase) => phase.state === "done").length;
+  const running = list.filter((phase) => phase.state === "running").length;
+  const current = list.find((phase) => phase.state === "running" || phase.state === "failed") || list.find((phase) => phase.state === "pending") || null;
+  return {
+    current: current?.id || null,
+    step: current ? list.indexOf(current) + 1 : list.length,
+    total: list.length,
+    share: list.length ? Math.min(1, (done + running / 2) / list.length) : 0,
+  };
+}
+
+/** The tone each phase state wears in the list of phases. */
+export const PHASE_TONES = Object.freeze({ done: "c-ok", running: "c-out", pending: "c-idle", failed: "c-fault" });
 
 /** The step that stopped a run, from the job's steps or the result's. */
 export function failedStep(job) {

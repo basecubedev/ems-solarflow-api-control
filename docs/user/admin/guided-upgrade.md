@@ -33,14 +33,18 @@ never proposes going back by itself. Further back belongs to
 [assistant](assistant.md) and **Updates** on the Overview's **Versions** card
 lead here too.
 
-**What you see:**
+**What you see,** from the top:
 
 - **What runs now** — the Admin Console and EMS versions, and whether they are
   one build: **Proven pair**, **Recorded pair**, **Not verified**, **Not a
   pair** or **Change in progress**. Once an update has run, *Last update:
-  v0.8.16* names it.
+  v0.8.16* names it. While an update is open, a coloured line at its foot
+  names it and says where it is, such as *Update to v0.8.16 · Checking the
+  version*, with a turning symbol while the device works.
+- **The update** you chose, once you chose one: its own card, right below
+  *What runs now*. Steps 2 to 6 happen in it.
 - **Guided upgrade** — the five things an update does, and **Update to …** for
-  the recommended version.
+  the recommended version. The button gives way while an update is open.
 - **Available versions** — *Recommended: v0.8.16*, then the versions grouped
   **Stable releases**, **Rolling build**, **Release candidates** and
   **Development builds**, each with its channel and a state such as **Newer**
@@ -58,17 +62,29 @@ when nothing is installed.
 
 ### 2 — Choose a version
 
-![Update to v0.8.16 checked: runs now v0.8.15, after the update v0.8.16, the three options and the five things that happen, with Update to v0.8.16 and Choose another version](../../assets/screenshots/admin/admin-guided-upgrade-plan.png)
+![Update to v0.8.16 being checked: the line Update to v0.8.16 · Checking the version under What runs now, and the coloured bar Checking v0.8.16 with a turning symbol, Running for 0:47 and a line along its foot](../../assets/screenshots/admin/admin-upgrade-verifying.png)
 
 **What you select:** **Update to v0.8.16** in the Guided upgrade card, or
 **Choose** on any version in the list.
 
-**What it changes:** nothing on the device. The version is checked at once: the
-Admin Console and EMS images are downloaded if needed and verified as a pair,
-and the MQTT migration review is read with them.
+**What it changes:** nothing that runs on the device. The version is checked
+at once: the Admin Console and EMS images are downloaded if needed and
+verified as a pair, and the MQTT migration review is read with them.
 
-**Expected result:** a card *Update to v0.8.16* — *Checked. Nothing has changed
-yet* — with **Runs now** and **After the update**, the **Options** and **What
+**What you see while it works:** the card *Update to v0.8.16* opens right
+below *What runs now*, and the page moves to it when it is out of view. A
+coloured bar says *Checking v0.8.16*, with a turning symbol, a
+line moving along its foot and *Running for 0:47* counting up; with motion
+switched off under **Appearance**, the symbol and the line stand still. A
+download takes a few minutes on a slow line or a Raspberry Pi; the bar stays
+until the check is done. The chosen version in the list says **Checking**.
+
+![v0.8.16 is ready to install: the green box above Runs now v0.8.15 and After the update v0.8.16, the three options and the five things that happen, with the green Update to v0.8.16 and Choose another version](../../assets/screenshots/admin/admin-guided-upgrade-plan.png)
+
+**Expected result:** the card's mark turns green — *Checked. Nothing has
+changed yet* — and the card opens with a green box: *v0.8.16 is ready to
+install. The images are on the device and were checked as a pair.* Below it
+are **Runs now** and **After the update**, the **Options** and **What
 happens**, in order:
 
 1. The new version is checked once more.
@@ -111,16 +127,21 @@ no way back if something goes wrong.*
 
 ![The update to v0.8.16 running: Check the new version, Back up and prepare and Update the Admin console done, Install EMS v0.8.16 running, Check that everything runs pending, running for 2:12](../../assets/screenshots/admin/admin-upgrade-running.png)
 
-**What you select:** **Update to v0.8.16**, and confirm once in *Update to
-v0.8.16 now?*. There is no second, Admin-specific confirmation.
+**What you select:** the green **Update to v0.8.16** at the foot of the card,
+and confirm once in *Update to v0.8.16 now?*. There is no second,
+Admin-specific confirmation.
 
 **What it changes:** everything the card listed, in order.
 
-**Expected result:** the page follows the update in five steps: **Check the new
-version**, **Back up and prepare**, **Update the Admin console**, **Install EMS
-v0.8.16**, **Check that everything runs**. The running step says what it does,
-and *Running for 2:12* counts up. You can leave the page; *You can leave this
-page; the update keeps running on the device. Keep the device switched on.*
+**Expected result:** a bar at the top of the card says *The update is running*
+and where: *Step 4 of 5 · Install EMS v0.8.16*, with *Running for 2:12*
+counting up and a line along its foot that fills as the steps go by. Below
+it, the page follows the update in five steps: **Check the new version**,
+**Back up and prepare**, **Update the Admin console**, **Install EMS
+v0.8.16**, **Check that everything runs**. Finished steps are ticked green;
+the running step is highlighted, turns its symbol and says what it does. You
+can leave the page; *You can leave this page; the update keeps running on the
+device. Keep the device switched on.*
 
 **If it differs:** a long step (an image download, the checks) keeps its
 spinner rather than freezing. *Lost contact with the Admin console; the update

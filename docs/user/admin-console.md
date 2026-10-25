@@ -107,9 +107,9 @@ new system**, the Overview of an empty host and the System page open it. See
 
 ![Updates: What runs now v0.8.15 as a proven pair, the Guided upgrade card with Update to v0.8.16, and the available versions grouped Stable releases and Rolling build](../assets/screenshots/admin/admin-updates.png)
 
-**Updates** shows what runs now, recommends a version and runs the guided
-upgrade: choosing a version checks it at once, one confirmation starts it, and
-the page follows it to **Update complete**. See
+**Updates** shows what runs now at the top, recommends a version and runs the
+guided upgrade: choosing a version checks it at once in a card right below,
+one confirmation starts it, and the page follows it to **Update complete**. See
 [Guided Upgrade](admin/guided-upgrade.md).
 
 ### Settings & devices
