@@ -7026,8 +7026,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                     "ok": False,
                     "error": "unsupported_credential_mode",
                     "message": (
-                        "Use a Zendure API key or HA/deviceList token for "
-                        "Zendure MQTT discovery."
+                        "Use a Zendure API key for Zendure MQTT discovery."
                     ),
                 },
                 status=400,
@@ -7094,8 +7093,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                     "ok": False,
                     "error": "unsupported_credential_mode",
                     "message": (
-                        "Use a Zendure API key or HA/deviceList token for "
-                        "Zendure MQTT discovery."
+                        "Use a Zendure API key for Zendure MQTT discovery."
                     ),
                 },
                 status=400,

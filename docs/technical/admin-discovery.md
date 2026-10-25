@@ -260,7 +260,7 @@ placeholder for a later phase.
   refresh lists read-only Zendure hardware candidates seen per reachable broker
   (see [Local MQTT discovery](#local-mqtt-discovery)).
 - Optionally discovers real hardware through the encrypted Zendure **cloud** MQTT
-  broker using a saved Zendure API key or HA/deviceList token — the discovery
+  broker using a saved Zendure API key or deviceList token — the discovery
   pass is read-only and TLS-only, and the discovered devices join the same
   trusted proposal set as local candidates, so Setup and Maintenance can apply them (see
   [Zendure MQTT discovery (cloud)](#zendure-mqtt-discovery-cloud)).
@@ -1097,9 +1097,9 @@ the apply then provisions the cloud runtime credential record automatically
 (see the configuration guide).
 
 Credential: the panel takes exactly one value — either a raw **Zendure API
-key** or Zendure's base64 **HA/deviceList token** — with no credential-type
+key** or Zendure's base64 **deviceList token** — with no credential-type
 selector. The backend auto-detects the shape. A raw key uses the fixed EU cloud
-base (`https://app.zendure.tech/eu`); an HA token is decoded locally into its
+base (`https://app.zendure.tech/eu`); a deviceList token is decoded locally into its
 Zendure API base plus `appKey`. Token-provided URLs are restricted to Zendure's
 known HTTPS API bases, so a crafted credential cannot turn discovery into an
 arbitrary server-side request. The operator never enters a separate `api_url`
@@ -1110,7 +1110,7 @@ or manual broker host/user/password. Requests may optionally carry
 separate feature in the Local MQTT broker section.
 
 Credential storage (`admin/credential_store.py`): the Zendure API key or
-HA token is encrypted at rest (`cryptography`/Fernet) under
+deviceList token is encrypted at rest (`cryptography`/Fernet) under
 `config/secrets/zendure-cloud.json`, with the Fernet key in
 `config/secrets/.secret-key`, both written `0600` best-effort.
 `config/discovery-connections.json` holds only the `token_ref`, never a raw key.
@@ -1126,7 +1126,7 @@ cannot bring back a token that a delete or a save is replacing at that moment.
 
 Cloud flow (`admin/zendure_cloud_auth.py`, `admin/zendure_cloud_mqtt.py`):
 
-- Resolve a raw API key to the fixed EU API base, or decode the Zendure HA token
+- Resolve a raw API key to the fixed EU API base, or decode the Zendure deviceList token
   into its allow-listed Zendure `api_url` and `app_key`.
 - Sign and POST the Zendure deviceList request to fetch the real device list plus
   the MQTT connection info; that returned host, port, username, password, and
@@ -1168,7 +1168,7 @@ API (all require Admin auth):
 
 - `GET /api/discovery/zendure-cloud-mqtt/settings` — redacted credential status.
 - `POST /api/discovery/zendure-cloud-mqtt/token` — save/replace the API key or
-  HA/deviceList token; another key drops the cached cloud candidates.
+  deviceList token; another key drops the cached cloud candidates.
   Field `api_key` (or `token` as a backwards-compatible alias, but never both);
   explicit modes `zendure_api_key` and `ha_device_list_token` are accepted.
 - `DELETE /api/discovery/zendure-cloud-mqtt/token` — forget the credential +

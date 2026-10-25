@@ -522,10 +522,10 @@ def test_ui_zendure_cloud_auto_detects_api_key_or_ha_token():
     devices = _devices_section(html)
     panel = devices.split('id="zendure-cloud-token-form"', 1)[1].split("</form>", 1)[0]
     # Exactly one credential input; no mode selector is needed because the
-    # backend safely auto-detects raw appKeys and Zendure HA/deviceList tokens.
+    # backend safely auto-detects raw appKeys and Zendure deviceList tokens.
     assert "Zendure API key" in html
-    assert "HA/deviceList token" in html
-    assert "Paste your Zendure API key or HA token" in html
+    assert "Paste your Zendure API key" in html
+    assert "HA token" not in html and "HA/deviceList" not in html
     assert 'id="zendure-cloud-token-input"' in panel
     # No credential type dropdown or manual-MQTT wording in the cloud panel.
     assert "zendure-cloud-credential-mode" not in html

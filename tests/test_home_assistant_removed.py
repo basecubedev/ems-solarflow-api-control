@@ -399,6 +399,26 @@ console.log(JSON.stringify({{ html, endpoints }}));
     assert "HA " not in output["html"]
 
 
+def test_the_zendure_cloud_key_is_never_called_an_ha_token_where_a_person_reads_it():
+    """Owner 2026-10-25: Zendure's deviceList token keeps working, but the
+    consoles and the server's messages name only the Zendure API key. "HA"
+    stands alone nowhere in them, in any language."""
+
+    import re
+
+    sources = [
+        ROOT / "admin" / "static" / "index.html",
+        ROOT / "admin" / "static" / "admin.js",
+        ROOT / "frontend" / "admin-modern" / "src" / "i18n" / "strings.js",
+        ROOT / "admin" / "server.py",
+        ROOT / "admin" / "zendure_cloud_auth.py",
+        ROOT / "admin" / "zendure_cloud_mqtt.py",
+    ]
+    for path in sources:
+        found = re.findall(r".{0,40}\bHA\b.{0,40}", path.read_text(encoding="utf-8"))
+        assert found == [], (path.name, found)
+
+
 def test_js_grid_meter_type_choices_are_the_catalog_grid_meter_types():
     """A type the catalog does not know reads as unresolved, not as chosen."""
     from ems.config_catalog import grid_meter_types

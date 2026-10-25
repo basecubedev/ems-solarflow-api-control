@@ -3578,7 +3578,7 @@ function applyZendureCloudSettings(settings) {
     : "not configured";
   if (!zendureCloudTokenSaved) {
     els.zendureCloudMessage.textContent =
-      "Save a Zendure API key or HA/deviceList token to discover devices from the Zendure MQTT broker.";
+      "Save a Zendure API key to discover devices from the Zendure MQTT broker.";
   }
 }
 
@@ -3599,7 +3599,7 @@ async function saveZendureCloudToken(event) {
   if (event) event.preventDefault();
   const apiKey = els.zendureCloudTokenInput.value.trim();
   if (!apiKey) {
-    els.zendureCloudMessage.textContent = "Enter a Zendure API key or HA token to save.";
+    els.zendureCloudMessage.textContent = "Enter a Zendure API key to save.";
     return;
   }
   els.zendureCloudSave.disabled = true;
