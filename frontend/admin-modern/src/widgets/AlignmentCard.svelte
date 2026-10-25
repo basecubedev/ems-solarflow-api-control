@@ -35,7 +35,7 @@
 </script>
 
 {#if view}
-  <Card title={t("alignment.title")} subtitle={t("alignment.sub")} span="span-12">
+  <Card icon="refresh-cw" tone="c-out" title={t("alignment.title")} subtitle={t("alignment.sub")} span="span-12">
     <div class="alignment" data-testid="alignment">
       <p class="state"><Icon name={view.stage === "failed_recoverable" ? "circle-x" : "route"} />{t(`alignment.stage.${view.stage}`)}</p>
       {#if view.error}<p class="note warn"><Icon name="triangle-alert" /><span lang="en">{view.error}</span></p>{/if}

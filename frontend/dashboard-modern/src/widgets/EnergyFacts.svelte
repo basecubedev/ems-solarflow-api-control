@@ -1,6 +1,6 @@
 <script>
   import { t, fmt } from "../i18n/i18n.svelte.js";
-  import { periodFigures, figureValue, figureListed, figureText, channelsAllUnmeasured } from "../lib/energy.js";
+  import { periodFigures, figureValue, figureListed, figureText, figureTone, channelsAllUnmeasured } from "../lib/energy.js";
 
   /**
    * The facts Classic's energy cards carry for any period: savings, the
@@ -21,7 +21,7 @@
 <dl class="energy-facts">
   {#each figures as { figure, cell } (figure.id)}
     <div class:channel={Boolean(figure.channel)}>
-      <dt>{t(figure.label)}</dt>
+      <dt><span class="fact-mark {figureTone(figure)}" aria-hidden="true"></span>{t(figure.label)}</dt>
       <dd class="num" class:na={cell.value === null}>{figureText(f, figure, cell, currency)}</dd>
     </div>
   {/each}
@@ -39,7 +39,8 @@
 <style>
   .energy-facts { margin: 0; display: grid; gap: 4px; font-size: 12.5px; }
   .energy-facts div { display: flex; justify-content: space-between; gap: var(--s2); min-width: 0; }
-  .energy-facts dt { color: var(--m-muted); }
+  .energy-facts dt { color: var(--m-muted); display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+  .fact-mark { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--c); }
   .energy-facts dd { margin: 0; font-weight: 600; text-align: right; white-space: nowrap; }
   .energy-facts dd.na { color: var(--m-muted-2); font-weight: 500; }
   .energy-facts .since { padding-top: 4px; border-top: 1px solid var(--m-line); margin-top: 2px; }

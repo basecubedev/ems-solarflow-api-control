@@ -78,7 +78,7 @@
   }
 </script>
 
-<Card title={t("settings.appliance")} span="span-6">
+<Card icon="sliders-horizontal" tone="c-pv" title={t("settings.appliance")} span="span-6">
   <div data-testid="settings-appliance">
     {#if host.settings?.error}<p class="form-error">{t("settings.failed", { code: host.settings.error })}</p>{/if}
     <KeyValues
@@ -93,7 +93,7 @@
   </div>
 </Card>
 
-<Card title={t("settings.sessions")} span="span-6">
+<Card icon="clock" tone="c-soc" title={t("settings.sessions")} span="span-6">
   <div data-testid="settings-sessions">
     <KeyValues
       rows={[
@@ -104,7 +104,7 @@
   </div>
 </Card>
 
-<Card title={t("settings.updatePolicy")} span="span-6">
+<Card icon="circle-arrow-up" tone="c-out" title={t("settings.updatePolicy")} span="span-6">
   <div data-testid="settings-updates">
     <KeyValues
       rows={[
@@ -119,7 +119,7 @@
   </div>
 </Card>
 
-<Card title={t("settings.audit")} span="span-6">
+<Card icon="shield-check" tone="c-soc" title={t("settings.audit")} span="span-6">
   {#snippet actions()}<Status tone={audit.degraded ? "c-fault" : "c-ok"} text={audit.degraded ? t("settings.auditDegraded") : t("settings.auditHealthy")} />{/snippet}
   <div data-testid="settings-audit">
     <KeyValues
@@ -133,7 +133,7 @@
   </div>
 </Card>
 
-<Card title={t("detail.label")} subtitle={t("settings.detailSub")} span="span-6">
+<Card icon="eye" tone="c-pv" title={t("detail.label")} subtitle={t("settings.detailSub")} span="span-6">
   <div class="stack-sm" data-testid="settings-mode">
     <Segmented options={DETAILS.map((value) => ({ value, label: t(`detail.${value}`) }))} value={detail.level} label={t("detail.label")} onchange={setDetail} />
     <p class="note"><Icon name="info" />{t("settings.detailNote")}</p>
@@ -141,7 +141,7 @@
 </Card>
 
 {#if session.confirmed === false}
-  <Card title={t("settings.confirmTitle")} subtitle={t("settings.confirmSub")} span="span-6">
+  <Card icon="triangle-alert" tone="c-warn" title={t("settings.confirmTitle")} subtitle={t("settings.confirmSub")} span="span-6">
     <form class="form" onsubmit={confirmPassword} data-testid="settings-password-confirm" autocomplete="off">
       <p class="muted small">{t("settings.confirmLead")}</p>
       <label class="field"><span>{t("settings.previous")}</span><input class="input" type="password" autocomplete="off" bind:value={previous} required data-testid="pw-previous" /></label>
@@ -155,7 +155,7 @@
   </Card>
 {/if}
 
-<Card title={t("settings.password")} subtitle={t("settings.passwordSub")} span="span-6">
+<Card icon="key-round" tone="c-soc" title={t("settings.password")} subtitle={t("settings.passwordSub")} span="span-6">
   <form class="form" onsubmit={changePassword} data-testid="settings-password">
     <label class="field"><span>{t("settings.current")}</span><input class="input" type="password" autocomplete="current-password" bind:value={current} required data-testid="pw-current" /></label>
     <label class="field"><span>{t("settings.new")}</span><input class="input" type="password" autocomplete="new-password" bind:value={next} required data-testid="pw-new" /></label>

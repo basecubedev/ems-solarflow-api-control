@@ -126,7 +126,7 @@
   <span lang={view.lang}>{view.text}</span>
 {/snippet}
 
-<Card title={t("setup.devices.title")} subtitle={t("setup.devices.sub")} span="span-8">
+<Card icon="search" tone="c-out" title={t("setup.devices.title")} subtitle={t("setup.devices.sub")} span="span-8">
   {#snippet actions()}
     <button class="btn small" class:secondary={setupDiscovery.scanning} type="button" onclick={() => (setupDiscovery.running ? cancel() : runDiscovery())} disabled={setupDiscovery.scanning} data-testid="setup-discovery-run">
       <Icon name={setupDiscovery.running ? "x" : "search"} size="sm" />{setupDiscovery.running ? t("setup.devices.cancel") : setupDiscovery.hasRun ? t("setup.devices.runAgain") : t("setup.devices.run")}
@@ -185,7 +185,7 @@
   </div>
 </Card>
 
-<Card title={t("setup.devices.progress")} span="span-4">
+<Card icon="radio-tower" tone="c-out" title={t("setup.devices.progress")} span="span-4">
   <div class="stack" data-testid="setup-discovery-progress">
     {#if setupDiscovery.progress.total}
       <Bar value={percent} label={t("setup.devices.progress")} />
@@ -205,7 +205,7 @@
   </div>
 </Card>
 
-<Card title={t("setup.devices.unified")} subtitle={tn("setup.devices.deviceCount", unified.length)} span="span-12">
+<Card icon="zap" tone="c-inv" title={t("setup.devices.unified")} subtitle={tn("setup.devices.deviceCount", unified.length)} span="span-12">
   <div class="stack" data-testid="setup-unified">
     {#if unified.length}
       <ul class="cards">
@@ -242,7 +242,7 @@
   </div>
 </Card>
 
-<Card title={t("setup.devices.networksTitle")} span="span-6">
+<Card icon="network" tone="c-out" title={t("setup.devices.networksTitle")} span="span-6">
   <div class="stack" data-testid="setup-networks">
     {#each setupDiscovery.networkWarnings as warning, index (index)}<p class="note warn"><Icon name="triangle-alert" /><span lang="en">{warning}</span></p>{/each}
     {#if lan.length}
@@ -273,7 +273,7 @@
   </div>
 </Card>
 
-<Card title={t("setup.devices.manualTitle")} span="span-6">
+<Card icon="pencil" tone="c-pv" title={t("setup.devices.manualTitle")} span="span-6">
   <form class="stack" onsubmit={runManual}>
     <p class="muted small">{t("setup.devices.manualLead")}</p>
     <div class="row-wrap">
@@ -284,7 +284,7 @@
   </form>
 </Card>
 
-<Card title={t("setup.devices.details")} span="span-12">
+<Card icon="file-check" tone="c-inv" title={t("setup.devices.details")} span="span-12">
   <div class="stack">
     <details id="setup-detail-local_api" open={details.local_api} ontoggle={(event) => (details = { ...details, local_api: event.currentTarget.open })}>
       <summary>{t("setup.source.local_api")} <span class="muted num">({tn("setup.devices.deviceCount", found.length)})</span></summary>
@@ -403,7 +403,7 @@
   </div>
 </Card>
 
-<Card title={t("setup.devices.sourcesTitle")} subtitle={t("setup.devices.sourcesSub")} span="span-12">
+<Card icon="radio-tower" tone="c-soc" title={t("setup.devices.sourcesTitle")} subtitle={t("setup.devices.sourcesSub")} span="span-12">
   <SourcesPanel onchanged={() => { loadSourceStatus(); refresh(); }} />
 </Card>
 

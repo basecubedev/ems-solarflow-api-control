@@ -230,7 +230,7 @@
   />
 {/snippet}
 
-<Card title={t("flow.title")} subtitle={t("flow.sub")} {span} actions={fixedMode ? undefined : actions} className="flow-card">
+<Card icon="zap" tone="c-out" title={t("flow.title")} subtitle={t("flow.sub")} {span} actions={fixedMode ? undefined : actions} className="flow-card">
   {#if !system}
     <div class="skeleton flow-skeleton" aria-busy="true" aria-label={t("flow.waiting")}></div>
   {:else}

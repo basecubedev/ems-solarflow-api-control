@@ -90,7 +90,7 @@
   </button>
 {/snippet}
 
-<Card title={t("chart.titleRange", { range: t(`chart.range.${range}`) })} subtitle={t("chart.sub")} span="span-12" {actions}>
+<Card icon="chart-spline" tone="c-pv" title={t("chart.titleRange", { range: t(`chart.range.${range}`) })} subtitle={t("chart.sub")} span="span-12" {actions}>
   {#if error && !data}
     <div class="empty error">{t("error.load")}</div>
   {:else}

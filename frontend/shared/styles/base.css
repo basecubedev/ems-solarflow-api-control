@@ -133,6 +133,8 @@ svg.i.lg { width: 22px; height: 22px; }
 }
 .card-head { display: flex; align-items: flex-start; gap: var(--s3); margin-bottom: var(--s4); flex-wrap: wrap; }
 .card-heading { flex: 1 1 220px; min-width: 0; }
+.card-head > .card-mark { margin-top: -2px; }
+.card-head:has(> .card-mark) > .card-heading { flex-basis: 120px; }
 .card-title { font-size: 15px; font-weight: 620; margin: 0; letter-spacing: -0.005em; }
 .card-sub { font-size: 12.5px; color: var(--m-muted); margin-top: 2px; }
 .card-actions { margin-left: auto; display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; }

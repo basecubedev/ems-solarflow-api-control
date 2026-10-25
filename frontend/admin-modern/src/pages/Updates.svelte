@@ -78,7 +78,7 @@
 {#if upgrade.stage !== "idle"}<UpgradePanel />{/if}
 <AlignmentCard />
 
-<Card title={t("updates.current")} subtitle={t("updates.currentSub")} span="span-6">
+<Card icon="server" tone="c-inv" title={t("updates.current")} subtitle={t("updates.currentSub")} span="span-6">
   <div class="facts two">
     <div class="fact"><div class="fact-label">{t("version.admin")}</div><div class="fact-value num" class:na={!overview?.components?.admin?.tag && !pair?.admin?.release}>{overview?.components?.admin?.tag || pair?.admin?.release || t("version.unknown")}</div></div>
     <div class="fact"><div class="fact-label">{t("version.ems")}</div><div class="fact-value num" class:na={!ems.version}>{ems.version || t("version.unknown")}</div></div>
@@ -91,7 +91,7 @@
   {/if}
 </Card>
 
-<Card title={t("updates.guidedTitle")} subtitle={t("updates.guidedSub")} span="span-6">
+<Card icon="route" tone="c-out" title={t("updates.guidedTitle")} subtitle={t("updates.guidedSub")} span="span-6">
   <ol class="how">
     {#each STEPS as step (step)}<li><span class="icon-tile sm {STEP_LOOKS[step].tone}"><Icon name={STEP_LOOKS[step].icon} /></span><span>{t(`updates.step.${step}`)}</span></li>{/each}
   </ol>
@@ -106,7 +106,7 @@
   </div>
 </Card>
 
-<Card title={t("updates.releases")} subtitle={recommended ? t("updates.recommendedIs", { tag: recommended.tag }) : t("updates.releasesSub")} span="span-12">
+<Card icon="boxes" tone="c-out" title={t("updates.releases")} subtitle={recommended ? t("updates.recommendedIs", { tag: recommended.tag }) : t("updates.releasesSub")} span="span-12">
   {#snippet actions()}
     <button class="icon-btn" type="button" onclick={() => reload("releases")} disabled={system.releases.loading} aria-label={t("common.refresh")} title={t("common.refresh")}><Icon name="refresh-cw" /></button>
   {/snippet}

@@ -38,7 +38,7 @@
 {/if}
 
 {#if bootstrap}
-  <Card title={t("admin.bootstrap.title")} subtitle={t("admin.bootstrap.sub")} span="span-12">
+  <Card icon="package" tone="c-out" title={t("admin.bootstrap.title")} subtitle={t("admin.bootstrap.sub")} span="span-12">
     {#snippet actions()}<Status tone="c-warn" text={t("admin.bootstrap.state")} />{/snippet}
     <div data-testid="admin-bootstrap-install">
       <p class="lead">{t("admin.bootstrap.lead")}</p>
@@ -46,7 +46,7 @@
     </div>
   </Card>
 {:else if status !== undefined}
-  <Card title={t("admin.installed")} subtitle={t("admin.installedSub")} span="span-4">
+  <Card icon="server" tone="c-inv" title={t("admin.installed")} subtitle={t("admin.installedSub")} span="span-4">
     {#snippet actions()}<Status tone={health.tone} text={t(health.key)} />{/snippet}
     <div data-testid="admin-version">
       <p class="big num">{version.key ? t(version.key) : version.text}</p>
@@ -59,7 +59,7 @@
     </div>
   </Card>
 
-  <Card title={t("admin.knownGood")} subtitle={t("admin.knownGoodSub")} span="span-4">
+  <Card icon="history" tone="c-soc" title={t("admin.knownGood")} subtitle={t("admin.knownGoodSub")} span="span-4">
     <div data-testid="admin-known-good">
       <KeyValues
         rows={[
@@ -72,7 +72,7 @@
   </Card>
 
   {#if detail.expert}
-    <Card title={t("admin.image")} span="span-4">
+    <Card icon="package" tone="c-out" title={t("admin.image")} span="span-4">
       <div data-testid="admin-image">
         <KeyValues
           rows={[
@@ -86,7 +86,7 @@
       </div>
     </Card>
   {:else}
-    <Card title={t("admin.version")} subtitle={t("admin.versionSub")} span="span-4">
+    <Card icon="circle-arrow-up" tone="c-out" title={t("admin.version")} subtitle={t("admin.versionSub")} span="span-4">
       <div class="stack-sm" data-testid="admin-install">
         <p class="muted small">{t("admin.versionText")}</p>
         <a class="btn small" href={href("updates")} data-testid="admin-open-updates"><Icon name="circle-arrow-up" />{t("overview.openUpdates")}</a>
@@ -94,10 +94,10 @@
     </Card>
   {/if}
 
-  <Card title={t("admin.actions")} subtitle={t("admin.actionsSub")} span="span-12">
+  <Card icon="wrench" tone="c-pv" title={t("admin.actions")} subtitle={t("admin.actionsSub")} span="span-12">
     <div class="actions-grid">
       <div class="pane" data-testid="admin-lifecycle">
-        <h3 class="pane-title">{t("admin.lifecycle")}</h3>
+        <h3 class="pane-title"><span class="icon-tile sm c-bat"><Icon name="play" /></span>{t("admin.lifecycle")}</h3>
         <p class="muted pane-sub">{t("admin.lifecycleSub")}</p>
         <div class="row-wrap">
           {#each LIFECYCLE_ACTIONS as action (action)}
@@ -106,12 +106,12 @@
         </div>
       </div>
       <div class="pane" data-testid="admin-repair-stage">
-        <h3 class="pane-title">{t("admin.repair")}</h3>
+        <h3 class="pane-title"><span class="icon-tile sm c-pv"><Icon name="wrench" /></span>{t("admin.repair")}</h3>
         <p class="muted pane-sub">{t("admin.repairSub")}</p>
         <div class="row-wrap"><PlanButton plan={adminRepairPlan()} label={t("admin.previewRepair")} icon="wrench" testid="admin-repair" /></div>
       </div>
       <div class="pane" data-testid="admin-rollback-stage">
-        <h3 class="pane-title">{t("admin.rollback")}</h3>
+        <h3 class="pane-title"><span class="icon-tile sm c-soc"><Icon name="history" /></span>{t("admin.rollback")}</h3>
         <p class="muted pane-sub">{t("admin.rollbackSub")}</p>
         <div class="row-wrap"><PlanButton plan={adminRollbackPlan()} label={t("admin.rollBack")} icon="history" variant="secondary" disabled={!knownGood.previous} testid="admin-rollback" /></div>
         <p class="note"><Icon name="info" />{knownGood.previous ? t("admin.rollbackDigest", { version: knownGood.previous.admin_version || "—" }) : t("admin.rollbackNone")}</p>
@@ -135,7 +135,7 @@
   .actions-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s4); }
   .pane { display: flex; flex-direction: column; gap: var(--s3); padding: var(--s4); border-radius: var(--m-radius-inner); border: 1px solid var(--m-line); min-width: 0; }
   .pane .note { margin: 0; }
-  .pane-title { margin: 0; font-size: 14px; font-weight: 620; }
+  .pane-title { margin: 0; font-size: 14px; font-weight: 620; display: flex; align-items: center; gap: var(--s2); }
   .pane-sub { margin: -6px 0 0; font-size: 12.5px; }
   @container content (max-width: 1000px) {
     .actions-grid { grid-template-columns: minmax(0, 1fr); }

@@ -36,7 +36,7 @@
 
 <p class="callout c-acc span-12"><Icon name="key-round" /><span>{t("access.lead")}</span></p>
 
-<Card title={t("access.ssh")} subtitle={t("access.sshSub")} span="span-6">
+<Card icon="key-round" tone="c-soc" title={t("access.ssh")} subtitle={t("access.sshSub")} span="span-6">
   {#snippet actions()}<Status tone={ssh.enabled ? "c-ok" : "c-idle"} text={ssh.enabled ? t("access.running") : t("access.stopped")} />{/snippet}
   <div class="body" data-testid="ssh-service">
     <KeyValues
@@ -52,7 +52,7 @@
   </div>
 </Card>
 
-<Card title={t("access.rescue")} subtitle={rescue.account || "ems-rescue"} span="span-6">
+<Card icon="lock" tone="c-soc" title={t("access.rescue")} subtitle={rescue.account || "ems-rescue"} span="span-6">
   {#snippet actions()}<Status tone={rescueVerdict.tone} text={t(rescueVerdict.key)} />{/snippet}
   <div class="body" data-testid="rescue-account">
     <KeyValues
@@ -66,7 +66,7 @@
   </div>
 </Card>
 
-<Card title={t("access.addKey")} subtitle={t("access.addKeySub")} span="span-6">
+<Card icon="plus" tone="c-soc" title={t("access.addKey")} subtitle={t("access.addKeySub")} span="span-6">
   <div class="body form" data-testid="ssh-stage-add">
     <label class="field">
       <span>{t("access.account")}</span>
@@ -92,7 +92,7 @@
   </div>
 </Card>
 
-<Card title={t("access.shellAccess")} subtitle={t("access.shellAccessSub")} span="span-6">
+<Card icon="shield-alert" tone="c-pv" title={t("access.shellAccess")} subtitle={t("access.shellAccessSub")} span="span-6">
   {#snippet actions()}<Status tone={shell.enabled ? "c-warn" : shell.confirmedOff ? "c-ok" : "c-warn"} text={shell.enabled ? t("access.shellOn") : shell.confirmedOff ? t("access.shellOff") : t("access.shellOffUnconfirmed")} />{/snippet}
   <div class="body" data-testid="ssh-stage-shell-access">
     <p class="callout c-warn" data-testid="shell-access-warning"><Icon name="shield-alert" /><span>{t("access.shellWarning")}</span></p>
@@ -114,7 +114,7 @@
 </Card>
 
 {#each ssh.accounts || [] as item, index (index)}
-  <Card title={t("access.keysFor", { account: item.name })} span="span-12">
+  <Card icon="key-round" tone="c-soc" title={t("access.keysFor", { account: item.name })} span="span-12">
     {#if !item.exists}
       <p class="muted small">{t("access.accountMissing", { account: item.name })}</p>
     {:else if !(item.keys || []).length}
@@ -147,7 +147,7 @@
   </Card>
 {/each}
 
-<Card title={t("access.backupAccount")} subtitle={t("access.backupAccountSub")} span="span-6">
+<Card icon="archive" tone="c-soc" title={t("access.backupAccount")} subtitle={t("access.backupAccountSub")} span="span-6">
   {#snippet actions()}{#if backup && !backup.error}<Status tone={account.exists ? "c-ok" : "c-warn"} text={account.exists ? t("access.available") : t("access.notCreated")} />{/if}{/snippet}
   <div class="body" data-testid="backup-account">
     {#if backup === null || backup === undefined}
@@ -168,7 +168,7 @@
   </div>
 </Card>
 
-<Card title={t("access.export")} subtitle={t("access.exportSub")} span="span-6">
+<Card icon="file-archive" tone="c-soc" title={t("access.export")} subtitle={t("access.exportSub")} span="span-6">
   {#snippet actions()}
     {#if backup && !backup.error}<Status tone={exportTone(backup.export_access?.status)} text={say(word("exportAccess", EXPORT_ACCESS_STATUSES, backup.export_access?.status)) || t("common.unknown")} lang={langOf(word("exportAccess", EXPORT_ACCESS_STATUSES, backup.export_access?.status))} />{/if}
   {/snippet}
@@ -192,7 +192,7 @@
 </Card>
 
 {#if backup && !backup.error && (backup.paths || []).length}
-  <Card title={t("access.paths")} subtitle={t("access.pathsSub")} span="span-12">
+  <Card icon="list" tone="c-out" title={t("access.paths")} subtitle={t("access.pathsSub")} span="span-12">
     <div class="table-scroll">
       <table class="data" data-testid="backup-paths">
         <thead><tr><th>{t("access.pathName")}</th><th>{t("access.path")}</th><th>{t("access.access")}</th><th>{t("access.exportState")}</th><th class="r">{t("access.size")}</th></tr></thead>
@@ -212,7 +212,7 @@
   </Card>
 
   {#if (backup.examples || []).length}
-    <Card title={t("access.copy")} subtitle={t("access.copySub")} span="span-12">
+    <Card icon="copy" tone="c-out" title={t("access.copy")} subtitle={t("access.copySub")} span="span-12">
       <div class="examples">
         {#each backup.examples as example, index (index)}
           <div class="example" data-testid="backup-example">

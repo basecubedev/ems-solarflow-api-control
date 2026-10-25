@@ -94,7 +94,7 @@
   }
 </script>
 
-<Card title={t("runtime.title")} subtitle={t("runtime.sub")} span="span-12">
+<Card icon="sliders-horizontal" tone="c-pv" title={t("runtime.title")} subtitle={t("runtime.sub")} span="span-12">
   {#if !auth.loaded}
     <div class="skeleton"></div>
   {:else if !auth.configured}

@@ -19,7 +19,7 @@
   const notes = $derived((Array.isArray(explain?.notes) ? explain.notes : []).filter(Boolean));
 </script>
 
-<Card title={t("control.now")} span="span-12">
+<Card icon="gauge" tone="c-inv" title={t("control.now")} span="span-12">
   {#if !snapshot}
     <div class="skeleton"></div>
   {:else if !enabled}

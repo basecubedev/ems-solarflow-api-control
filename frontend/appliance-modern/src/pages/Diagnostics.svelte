@@ -31,14 +31,14 @@
   const used = (value) => (value === null || value === undefined ? null : t("diag.used", { percent: fmt().number(value, 1) }));
 </script>
 
-<Card title={t("diag.temperature")} span="span-4">
+<Card icon="thermometer" tone="c-pv" title={t("diag.temperature")} span="span-4">
   <div data-testid="diag-temperature">
     <p class="big num">{system.temperature?.celsius ? `${fmt().number(system.temperature.celsius, 1)} °C` : "—"}</p>
     {#if system.power?.available}<Status tone={system.power.under_voltage ? "c-fault" : "c-ok"} text={system.power.under_voltage ? t("diag.underVoltage") : t("diag.powerOk")} />{/if}
   </div>
 </Card>
 
-<Card title={t("diag.memory")} span="span-4">
+<Card icon="memory-stick" tone="c-inv" title={t("diag.memory")} span="span-4">
   <div data-testid="diag-memory">
     <p class="big num">{used(memory.used_percent) || "—"}</p>
     {#if memory.used_percent !== undefined}<Bar value={memory.used_percent} label={t("diag.memory")} />{/if}
@@ -46,7 +46,7 @@
   </div>
 </Card>
 
-<Card title={t("diag.root")} span="span-4">
+<Card icon="hard-drive" tone="c-inv" title={t("diag.root")} span="span-4">
   <div data-testid="diag-storage">
     <p class="big num">{used(root.used_percent) || "—"}</p>
     {#if root.used_percent !== undefined}<Bar value={root.used_percent} label={t("diag.root")} />{/if}
@@ -54,7 +54,7 @@
   </div>
 </Card>
 
-<Card title={t("diag.emsData")} span="span-4">
+<Card icon="database" tone="c-soc" title={t("diag.emsData")} span="span-4">
   <div data-testid="diag-ems-data">
     <p class="big num">{used(data.used_percent) || "—"}</p>
     {#if data.used_percent !== undefined}<Bar value={data.used_percent} label={t("diag.emsData")} />{/if}
@@ -62,7 +62,7 @@
   </div>
 </Card>
 
-<Card title={t("diag.services")} span="span-4">
+<Card icon="server" tone="c-inv" title={t("diag.services")} span="span-4">
   <ul class="units" data-testid="diag-services">
     {#each system.services || [] as unit, index (index)}
       <li><span class="mono">{unit.unit}</span><Status tone={unit.active === "active" ? "c-ok" : unit.active === "failed" ? "c-fault" : "c-idle"} text={say(word("systemd", UNIT_STATES, unit.active)) || "—"} lang={langOf(word("systemd", UNIT_STATES, unit.active))} /></li>
@@ -71,7 +71,7 @@
 </Card>
 
 {#if detail.expert}
-  <Card title={t("diag.kernel")} span="span-4">
+  <Card icon="cpu" tone="c-inv" title={t("diag.kernel")} span="span-4">
     <div data-testid="diag-kernel">
       <p class="big mono">{system.operating_system?.kernel || "—"}</p>
       <KeyValues rows={[{ label: t("admin.architecture"), value: system.hardware?.architecture }, { label: t("diag.osVersion"), value: system.operating_system?.version }]} />
@@ -79,7 +79,7 @@
   </Card>
 {/if}
 
-<Card title={t("diag.archive")} subtitle={t("diag.archiveSub")} span={detail.expert ? "span-4" : "span-4"}>
+<Card icon="file-archive" tone="c-soc" title={t("diag.archive")} subtitle={t("diag.archiveSub")} span={detail.expert ? "span-4" : "span-4"}>
   <div class="stack-sm" data-testid="diag-support">
     <p class="note"><Icon name="shield-check" />{t("diag.archiveRedacted")}</p>
     <PlanButton plan={{ key: "support-archive", endpoint: "/api/support/archive", title: { key: "plan.title.archive" }, confirm: "plan.create" }} label={t("diag.createArchive")} icon="file-archive" small={false} testid="support-archive" />

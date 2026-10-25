@@ -14,7 +14,7 @@
   const inactive = $derived(rules.filter((rule) => !rule.active));
 </script>
 
-<Card title={t("rules.title")} subtitle={t("rules.sub")}>
+<Card icon="list-checks" tone="c-out" title={t("rules.title")} subtitle={t("rules.sub")}>
   <ul class="rules" data-testid="active-rules">
     {#each active as rule (rule.key)}
       <li class="rule">

@@ -14,6 +14,23 @@ export const SETTINGS_TABS = Object.freeze(["devices", "features", "safety", "ex
 /** Feature sections with words in every language; another section keeps the catalogue's own title. */
 export const FEATURE_IDS = Object.freeze(["zendure_mqtt", "winter", "battery_full_charge_assist", "ac_charge_control", "energy_savings", "dashboard", "influxdb"]);
 
+/**
+ * Each feature's mark, in the tone the dashboard gives the same thing: the
+ * broker violet, winter cyan as on the Control page, the battery green, AC
+ * charging the grid's, savings the money tone, analytics violet. A section
+ * of the catalogue that is not a feature wears the settings mark.
+ */
+export const FEATURE_LOOKS = Object.freeze({
+  zendure_mqtt: { icon: "radio-tower", tone: "c-soc" },
+  winter: { icon: "snowflake", tone: "c-out" },
+  battery_full_charge_assist: { icon: "battery", tone: "c-bat" },
+  ac_charge_control: { icon: "plug-zap", tone: "c-grid" },
+  energy_savings: { icon: "piggy-bank", tone: "c-money" },
+  dashboard: { icon: "layout-dashboard", tone: "c-out" },
+  influxdb: { icon: "chart-spline", tone: "c-soc" },
+});
+export const SECTION_LOOK = Object.freeze({ icon: "settings-2", tone: "c-pv" });
+
 /** Features with no switch of their own: they run once a device is set up for them. */
 export const AUTOMATIC_FEATURES = Object.freeze(["zendure_mqtt"]);
 

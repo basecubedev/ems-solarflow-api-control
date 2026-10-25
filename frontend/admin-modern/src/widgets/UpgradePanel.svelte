@@ -106,7 +106,7 @@
   };
 </script>
 
-<Card title={t("upgrade.title", { tag: tag || "" })} subtitle={t(`upgrade.sub.${upgrade.stage}`)} span="span-12">
+<Card icon="circle-arrow-up" tone="c-out" title={t("upgrade.title", { tag: tag || "" })} subtitle={t(`upgrade.sub.${upgrade.stage}`)} span="span-12">
   {#snippet actions()}
     {#if closable}
       <button class="icon-btn" type="button" onclick={closeUpgrade} aria-label={t("upgrade.close")} title={t("upgrade.close")} data-testid="upgrade-close"><Icon name="x" /></button>

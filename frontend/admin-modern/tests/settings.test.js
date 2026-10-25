@@ -184,3 +184,9 @@ test("a typed broker or grid meter password never reaches the tab's storage", ()
   assert.ok(!JSON.stringify(stored).includes("secret"));
   assert.deepEqual([stored.values.zendure_mqtt.host, stored.values.grid_meter.mqtt.topic, stored.base], ["h", "t", "b"]);
 });
+
+test("every feature has its mark, in a tone class", async () => {
+  const { FEATURE_IDS, FEATURE_LOOKS, SECTION_LOOK } = await import("../src/lib/settings.js");
+  assert.deepEqual(Object.keys(FEATURE_LOOKS).sort(), [...FEATURE_IDS].sort());
+  for (const look of [...Object.values(FEATURE_LOOKS), SECTION_LOOK]) assert.match(look.tone, /^c-[a-z]+$/);
+});

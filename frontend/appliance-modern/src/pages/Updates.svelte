@@ -118,7 +118,7 @@
 </script>
 
 <section class="span-12 summary" data-testid="update-summary" aria-label={t("updates.summary")}>
-  <Card title={t("updates.manager.title")} subtitle={t("updates.manager.sub")}>
+  <Card icon="package" tone="c-out" title={t("updates.manager.title")} subtitle={t("updates.manager.sub")}>
     <div class="summary-body" data-testid="update-summary-manager">
       <span data-testid="update-summary-manager-state"><Status tone={managerSummary.tone} text={t(managerSummary.key)} /></span>
       <KeyValues rows={[{ label: t("updates.installed"), value: manager?.installed_version }, { label: t("updates.latestStable"), value: managerLatestVersion }]} />
@@ -127,7 +127,7 @@
       {/if}
     </div>
   </Card>
-  <Card title={t("updates.admin.title")} subtitle={t("updates.admin.sub")}>
+  <Card icon="server" tone="c-inv" title={t("updates.admin.title")} subtitle={t("updates.admin.sub")}>
     <div class="summary-body" data-testid="update-summary-admin">
       <span data-testid="update-summary-admin-state"><Status tone={adminSummary.tone} text={t(adminSummary.key)} /></span>
       <KeyValues rows={[{ label: t("updates.installed"), value: version.key ? t(version.key) : version.text }, { label: t("updates.latestStable"), value: adminLatest?.tag }]} />
@@ -140,7 +140,7 @@
       {/if}
     </div>
   </Card>
-  <Card title={t("updates.os.title")} subtitle={t("updates.os.sub")}>
+  <Card icon="hard-drive" tone="c-pv" title={t("updates.os.title")} subtitle={t("updates.os.sub")}>
     <div class="summary-body" data-testid="update-summary-os">
       <span data-testid="update-summary-os-state"><Status tone={osVerdict.tone} text={say(osWords)} lang={langOf(osWords)} /></span>
       <KeyValues
@@ -157,7 +157,7 @@
   </Card>
 </section>
 
-<Card title={t("manager.title")} subtitle={t("manager.sub")} span="span-12">
+<Card icon="package" tone="c-out" title={t("manager.title")} subtitle={t("manager.sub")} span="span-12">
   <div data-testid="manager-section">
     {#if manager === undefined || manager === null}
       <p class="muted"><Icon name="loader" size="sm" /> {t("manager.reading")}</p>
@@ -198,7 +198,7 @@
 
       <div class="split">
         <div class="pane" data-testid="manager-stage-update">
-          <h3 class="pane-title">{t("manager.choose")}</h3>
+          <h3 class="pane-title"><span class="icon-tile sm c-out"><Icon name="download" /></span>{t("manager.choose")}</h3>
           <p class="muted pane-sub">{t("manager.chooseSub")}</p>
           {#if sources === undefined || sources === null}
             <p class="muted"><Icon name="loader" size="sm" /> {t("manager.readingIndex")}</p>
@@ -227,7 +227,7 @@
           {/if}
         </div>
         <div class="pane" data-testid="manager-stage-revert">
-          <h3 class="pane-title">{t("manager.revert")}</h3>
+          <h3 class="pane-title"><span class="icon-tile sm c-soc"><Icon name="history" /></span>{t("manager.revert")}</h3>
           <p class="muted pane-sub">{t("manager.revertSub")}</p>
           <div class="row-wrap">
             <PlanButton plan={managerRevertPlan(kept.version || "—")} label={t("manager.reinstall", { version: manager.can_revert ? kept.version || "—" : "—" })} icon="history" variant="secondary" disabled={!rights.canRevert} testid="manager-plan-revert" />
@@ -239,7 +239,7 @@
   </div>
 </Card>
 
-<Card title={t("adminVersions.title")} subtitle={t("adminVersions.sub")} span="span-12">
+<Card icon="server" tone="c-inv" title={t("adminVersions.title")} subtitle={t("adminVersions.sub")} span="span-12">
   <div data-testid="admin-versions">
     {#if gate === "unread"}
       <div class="empty" data-testid="admin-versions-unavailable"><Icon name="info" /><span><strong>{t("adminVersions.unread")}</strong> {t("adminVersions.unreadText")}</span></div>
@@ -256,12 +256,12 @@
       {/if}
       <div class="split">
         <div class="pane" data-testid="admin-install-version">
-          <h3 class="pane-title">{t("adminVersions.choose")}</h3>
+          <h3 class="pane-title"><span class="icon-tile sm c-out"><Icon name="download" /></span>{t("adminVersions.choose")}</h3>
           <p class="muted pane-sub">{t("adminVersions.chooseSub")}</p>
           <InstallForm {releases} blocked={gate === "live"} />
         </div>
         <div class="pane" data-testid="admin-versions-recovery">
-          <h3 class="pane-title">{t("adminVersions.recovery")}</h3>
+          <h3 class="pane-title"><span class="icon-tile sm c-pv"><Icon name="wrench" /></span>{t("adminVersions.recovery")}</h3>
           <p class="muted pane-sub">{t("adminVersions.recoverySub")}</p>
           <div class="row-wrap"><a class="btn secondary small" href={href("admin")} data-testid="updates-open-admin">{t("updates.openAdmin")}</a></div>
         </div>
@@ -270,7 +270,7 @@
   </div>
 </Card>
 
-<Card title={t("os.title")} subtitle={t("os.sub")} span="span-12">
+<Card icon="hard-drive" tone="c-pv" title={t("os.title")} subtitle={t("os.sub")} span="span-12">
   <div data-testid="os-section">
     <div class="tiles">
       <div class="tile" data-testid="updates-security">
@@ -310,7 +310,7 @@
 
     {#if detail.expert || updatesInDoubt(updates)}
       <div class="repair" data-testid="updates-stage-repair">
-        <h3 class="pane-title">{t("os.repair")}</h3>
+        <h3 class="pane-title"><span class="icon-tile sm c-pv"><Icon name="wrench" /></span>{t("os.repair")}</h3>
         <p class="muted pane-sub">{t("os.repairSub")}</p>
         <div class="row-wrap">
           {#each REPAIR_ACTIONS as action (action)}
@@ -342,7 +342,7 @@
   .tile-sub { font-size: 12px; overflow-wrap: anywhere; }
   .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s4); margin-top: var(--s4); }
   .pane { display: flex; flex-direction: column; gap: var(--s3); padding: var(--s4); border-radius: var(--m-radius-inner); border: 1px solid var(--m-line); min-width: 0; }
-  .pane-title { margin: 0; font-size: 14px; font-weight: 620; }
+  .pane-title { margin: 0; font-size: 14px; font-weight: 620; display: flex; align-items: center; gap: var(--s2); }
   .pane-sub { margin: -6px 0 0; font-size: 12.5px; }
   .actions { margin-top: var(--s4); }
   .repair { margin-top: var(--s4); display: flex; flex-direction: column; gap: var(--s3); padding: var(--s4); border-radius: var(--m-radius-inner); border: 1px solid var(--m-line); }

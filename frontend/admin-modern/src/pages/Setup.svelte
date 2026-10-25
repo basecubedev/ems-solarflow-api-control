@@ -15,7 +15,7 @@
   import { setupDiscovery, clearDiscovery, loadBrokers, watchMdns } from "../state/setupDiscovery.svelte.js";
   import { setupDraft, discoveryChanged, loadCatalog, rejoinCurrent, resetDraft, schedulePreview, syncFromDiscovery, writeConfig } from "../state/setupDraft.svelte.js";
   import { setupDeploy, configWritten, loadConfigStatus, loadPlan, resetDeploy } from "../state/setupDeploy.svelte.js";
-  import { SETUP_STEPS, PIPELINE, buildActions, buildMessage, channelGroup, groupReleases, isDevelopmentTag, pipelineStates, setupRecovery, setupTransitionActive } from "../lib/setup.js";
+  import { SETUP_STEPS, SETUP_STEP_LOOKS, PIPELINE, buildActions, buildMessage, channelGroup, groupReleases, isDevelopmentTag, pipelineStates, setupRecovery, setupTransitionActive } from "../lib/setup.js";
   import { BUSY_OPERATIONS } from "../lib/setupDraft.js";
   import { errorView } from "../lib/errors.js";
   import { WORKFLOW_BLOCKED_CODES } from "../lib/workflow.js";
@@ -150,12 +150,12 @@
 {/snippet}
 
 {#if !active}
-  <Card title={t("setup.start.title")} subtitle={t("setup.start.sub")} span="span-12">
+  <Card icon="package-plus" tone="c-out" title={t("setup.start.title")} subtitle={t("setup.start.sub")} span="span-12">
     <div class="start" data-testid="setup-start">
       <p>{t("setup.start.lead")}</p>
-      <ul class="steps-preview">
-        {#each SETUP_STEPS as step, index (step)}<li><span class="n num">{index + 1}</span>{t(`setup.step.${step}`)}</li>{/each}
-      </ul>
+      <ol class="steps-preview">
+        {#each SETUP_STEPS as step (step)}<li><span class="icon-tile sm {SETUP_STEP_LOOKS[step].tone}"><Icon name={SETUP_STEP_LOOKS[step].icon} /></span>{t(`setup.step.${step}`)}</li>{/each}
+      </ol>
       {#if setup.startError}
         {#if setup.startError.blocked}<p class="note warn"><Icon name="triangle-alert" />{t("setup.start.blocked")} <a href="#/system">{t("workflow.openRecovery")}</a></p>{:else}{@render failure(setup.startError)}{/if}
       {/if}
@@ -192,7 +192,7 @@
   {/if}
 
   {#if setup.step === "release"}
-    <Card title={t("setup.release.title")} subtitle={t("setup.release.sub")} span="span-8">
+    <Card icon="circle-arrow-up" tone="c-out" title={t("setup.release.title")} subtitle={t("setup.release.sub")} span="span-8">
       {#snippet actions()}
         <button class="icon-btn" type="button" onclick={() => loadReleases()} disabled={setup.releasesLoading} aria-label={t("common.refresh")} title={t("common.refresh")}><Icon name="refresh-cw" /></button>
       {/snippet}
@@ -239,7 +239,7 @@
         {/if}
       </div>
     </Card>
-    <Card title={t("setup.pipeline.title")} subtitle={t("setup.pipeline.sub")} span="span-4">
+    <Card icon="route" tone="c-out" title={t("setup.pipeline.title")} subtitle={t("setup.pipeline.sub")} span="span-4">
       <ol class="pipeline" data-testid="setup-pipeline">
         {#each PIPELINE as stage, index (stage)}
           <li data-state={pipeline.states[index]}><Status tone={pipeline.states[index] === "done" ? "c-ok" : pipeline.states[index] === "failed" ? "c-fault" : pipeline.states[index] === "active" ? "c-acc" : "c-idle"} text={t(`setup.pipeline.${stage}`)} /></li>

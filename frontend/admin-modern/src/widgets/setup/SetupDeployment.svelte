@@ -24,7 +24,7 @@
   }
 </script>
 
-<Card title={t("setup.deploy.title")} subtitle={t("setup.deploy.sub")} span="span-8">
+<Card icon="package-plus" tone="c-out" title={t("setup.deploy.title")} subtitle={t("setup.deploy.sub")} span="span-8">
   <div class="stack" data-testid="setup-deployment">
     <div class="facts two">
       <div class="fact"><div class="fact-label">{t("setup.deploy.config")}</div><div class="fact-value">{setup.generatedReady ? t("setup.deploy.saved") : t("setup.deploy.notSaved")}</div></div>
@@ -59,7 +59,7 @@
   </div>
 </Card>
 
-<Card title={t("setup.deploy.docker")} span="span-4">
+<Card icon="boxes" tone="c-inv" title={t("setup.deploy.docker")} span="span-4">
   {#snippet actions()}
     <button class="icon-btn" type="button" onclick={() => loadPlan({ prepare: true })} aria-label={t("setup.deploy.recheck")} title={t("setup.deploy.recheck")}><Icon name="refresh-cw" /></button>
   {/snippet}
@@ -73,7 +73,7 @@
   </div>
 </Card>
 
-<Card title={t("setup.deploy.images")} span="span-12">
+<Card icon="download" tone="c-out" title={t("setup.deploy.images")} span="span-12">
   {#if setupDeploy.images.length}
     <ul class="images" data-testid="setup-images">
       {#each setupDeploy.images as image, index (index)}

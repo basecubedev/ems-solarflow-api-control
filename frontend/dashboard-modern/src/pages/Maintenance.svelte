@@ -162,7 +162,7 @@
 <OperatorGate>
   {#if message}<div class="span-12 message" role="status">{message}</div>{/if}
 
-  <Card title={t("maint.status")} subtitle={t("maint.statusSub")} span="span-6">
+  <Card icon="wrench" tone="c-inv" title={t("maint.status")} subtitle={t("maint.statusSub")} span="span-6">
     {#if !status}
       <div class="skeleton"></div>
     {:else}
@@ -176,7 +176,7 @@
     {/if}
   </Card>
 
-  <Card title={t("maint.safety")} span="span-6">
+  <Card icon="shield-check" tone="c-soc" title={t("maint.safety")} span="span-6">
     <ul class="notes">
       <li>{t("maint.safety.rollback")}</li>
       <li>{t("maint.safety.auth")}</li>
@@ -185,7 +185,7 @@
     </ul>
   </Card>
 
-  <Card title={t("maint.backups")} subtitle={t("maint.backupsSub")} span="span-12">
+  <Card icon="archive" tone="c-soc" title={t("maint.backups")} subtitle={t("maint.backupsSub")} span="span-12">
     <p class="warn"><Icon name="triangle-alert" size="sm" />{t("maint.secretsWarning")}</p>
     <dl class="types">
       {#each BACKUP_TYPES as type (type)}
@@ -249,7 +249,7 @@
     {/if}
   </Card>
 
-  <Card title={t("maint.restoreTitle")} subtitle={t("maint.restoreSub")} span="span-6">
+  <Card icon="rotate-ccw" tone="c-soc" title={t("maint.restoreTitle")} subtitle={t("maint.restoreSub")} span="span-6">
     <div class="form">
       <label class="field"><span>{t("maint.backup")}</span>
         <select class="input" bind:value={restoreFile} onchange={() => (plan = null)}>
@@ -282,7 +282,7 @@
     {/if}
   </Card>
 
-  <Card title={t("maint.upgrade")} subtitle={t("maint.upgradeSub")} span="span-6">
+  <Card icon="file-cog" tone="c-pv" title={t("maint.upgrade")} subtitle={t("maint.upgradeSub")} span="span-6">
     {#if !upgrade}
       <p class="muted">{t("maint.upgradeHint")}</p>
     {:else if !upgrade.apply_available}

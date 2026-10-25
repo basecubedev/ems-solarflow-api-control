@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { energyKwh, selfSufficiency, channelKwh, monthlyView, yearlyView, energyState, channelsSince, periodView, periodFigures, figureValue, figureListed, figureText } from "../src/lib/energy.js";
+import { readFileSync } from "node:fs";
+import { energyKwh, selfSufficiency, channelKwh, monthlyView, yearlyView, energyState, channelsSince, periodView, periodFigures, figureValue, figureListed, figureText, figureTone, FIGURE_TONES } from "../src/lib/energy.js";
 import { createFormat } from "../../shared/lib/format.js";
 
 test("a ratio that was not measured is null, never 0 %", () => {
@@ -101,4 +102,15 @@ test("a figure reads as text with Classic's partial mark, and a missing one as a
   const [, ratio, , gridImport] = periodFigures([{ id: "grid_import" }], true);
   assert.equal(figureText(f, gridImport, { value: 28.9, partial: true }, "EUR"), `${f.energy(28.9)} ◦`);
   assert.equal(figureText(f, ratio, { value: null, partial: true }, "EUR"), "—");
+});
+
+test("every figure and every channel the EMS records wears a tone, the one its energy wears in the charts", () => {
+  const server = readFileSync(new URL("../../../ems/energy_channels.py", import.meta.url), "utf8");
+  const channels = [...server.matchAll(/EnergyChannel\(\s*"([a-z_]+)"/g)].map((match) => match[1]);
+  assert.ok(channels.length >= 6);
+  for (const id of channels) assert.ok(FIGURE_TONES[id], id);
+  for (const figure of periodFigures(channels.map((id) => ({ id })), true)) assert.match(figureTone(figure), /^c-[a-z]+$/);
+  assert.equal(figureTone({ id: "savings" }), "c-money");
+  assert.equal(figureTone({ id: "channel.pv_yield", channel: "pv_yield" }), "c-pv");
+  assert.equal(figureTone({ id: "unknown" }), "c-idle");
 });

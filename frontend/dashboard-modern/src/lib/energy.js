@@ -159,6 +159,29 @@ export function periodFigures(channels, expert) {
   ];
 }
 
+/**
+ * The tone of a figure's mark, as the charts colour the same energy: savings
+ * wear the money tone, the self-sufficiency ratio the battery's, AC charging
+ * the grid's, the peak the output's, and each channel its energy's
+ * (ems/energy_channels.py names them).
+ */
+export const FIGURE_TONES = Object.freeze({
+  savings: "c-money",
+  selfSufficiency: "c-bat",
+  acCharge: "c-grid",
+  peak: "c-out",
+  grid_import: "c-grid",
+  grid_export: "c-grid",
+  battery_charge: "c-bat",
+  battery_discharge: "c-bat",
+  pv_yield: "c-pv",
+  home_consumption: "c-out",
+});
+
+export function figureTone(figure) {
+  return FIGURE_TONES[figure?.channel || figure?.id] || "c-idle";
+}
+
 /** One figure of one period: null when it was not measured, and whether it covers only part of the period. */
 export function figureValue(values, figure) {
   if (figure.channel) {

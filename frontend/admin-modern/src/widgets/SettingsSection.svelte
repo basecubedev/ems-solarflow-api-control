@@ -4,7 +4,7 @@
   import SettingField from "./SettingField.svelte";
   import CatalogText from "./CatalogText.svelte";
   import { t, catalogText } from "../i18n/i18n.svelte.js";
-  import { AUTOMATIC_FEATURES, FEATURE_IDS, fieldMatches, levelled, liveOverride, sharedRisk, switchPath, switchedOn } from "../lib/settings.js";
+  import { AUTOMATIC_FEATURES, FEATURE_IDS, FEATURE_LOOKS, SECTION_LOOK, fieldMatches, levelled, liveOverride, sharedRisk, switchPath, switchedOn } from "../lib/settings.js";
   import { settings, setValue } from "../state/settings.svelte.js";
 
   /** values and onset: another draft's feature values and its setter, as Guided Setup has them. */
@@ -19,6 +19,7 @@
   const on = $derived(switchedOn(section, values));
   const switchField = $derived(own ? (section.fields || []).find((field) => field.path === own) || { path: own, type: "boolean" } : null);
   const named = $derived(FEATURE_IDS.includes(section.id));
+  const look = $derived(FEATURE_LOOKS[section.id] || SECTION_LOOK);
   const levels = $derived(levelled(section));
   const shown = $derived(Object.fromEntries(Object.entries(levels).map(([level, fields]) => [level, fields.filter((field) => fieldMatches(field, query, (text) => catalogText(text).text))])));
   const searching = $derived(Boolean(String(query).trim()));
@@ -48,6 +49,7 @@
       />
     {/if}
     <button class="summary" type="button" aria-expanded={expanded ? "true" : "false"} aria-controls={bodyId} onclick={() => (toggled = !open)}>
+      <span class="icon-tile sm {on === false ? 'c-idle' : look.tone}" aria-hidden="true"><Icon name={look.icon} /></span>
       <span class="words">
         <span class="name">{#if named}{t(`feature.${section.id}`)}{:else}<CatalogText text={section.title || section.id} />{/if}</span>
         <span class="muted small">{#if named}{t(`feature.${section.id}.sub`)}{:else}<CatalogText text={section.summary || section.description || ""} />{/if}</span>

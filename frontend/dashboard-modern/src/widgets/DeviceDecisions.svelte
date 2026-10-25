@@ -83,7 +83,7 @@
   const factor = (value) => (has(value) && Number.isFinite(Number(value)) ? `${f.number(value, 2)}×` : "—");
 </script>
 
-<Card title={t("control.devices")} subtitle={t("control.devicesSub")} span="span-12">
+<Card icon="split" tone="c-inv" title={t("control.devices")} subtitle={t("control.devicesSub")} span="span-12">
   {#if !devices.length}
     <p class="muted">{t("control.noExplain")}</p>
   {:else}

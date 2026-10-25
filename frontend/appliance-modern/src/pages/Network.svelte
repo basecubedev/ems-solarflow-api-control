@@ -45,7 +45,7 @@
   const signal = (item) => (item.signal === null || item.signal === undefined ? "?" : `${item.signal} %`);
 </script>
 
-<Card title={t("network.hostname")} subtitle={network.hostname || t("common.unknown")} span="span-4">
+<Card icon="server" tone="c-out" title={t("network.hostname")} subtitle={network.hostname || t("common.unknown")} span="span-4">
   {#snippet actions()}{#if network.connectivity}<Status tone={network.connectivity === "full" ? "c-ok" : "c-warn"} text={say(word("connectivity", CONNECTIVITY, network.connectivity))} lang={langOf(word("connectivity", CONNECTIVITY, network.connectivity))} />{/if}{/snippet}
   <div data-testid="network-hostname">
     <KeyValues rows={[{ label: t("overview.mdns"), value: network.mdns }, { label: t("overview.activeConnection"), value: network.active_connection }]} />
@@ -53,7 +53,7 @@
 </Card>
 
 {#each network.interfaces || [] as item, index (index)}
-  <Card title={item.device} subtitle={item.type === "wifi" ? t("network.wifi") : item.type === "ethernet" ? t("network.ethernet") : item.type} subtitleLang={item.type === "wifi" || item.type === "ethernet" ? undefined : "en"} span="span-4">
+  <Card icon={item.type === "wifi" ? "wifi" : "network"} tone="c-out" title={item.device} subtitle={item.type === "wifi" ? t("network.wifi") : item.type === "ethernet" ? t("network.ethernet") : item.type} subtitleLang={item.type === "wifi" || item.type === "ethernet" ? undefined : "en"} span="span-4">
     {#snippet actions()}<Status tone={/^connected/.test(item.state || "") ? "c-ok" : "c-idle"} text={say(word("device", DEVICE_STATES, item.state)) || t("common.unknown")} lang={langOf(word("device", DEVICE_STATES, item.state))} />{/snippet}
     <div data-testid="network-interface">
       <KeyValues
@@ -69,7 +69,7 @@
   </Card>
 {/each}
 
-<Card title={t("network.wifiChange")} subtitle={t("network.wifiChangeSub")} span="span-6">
+<Card icon="wifi" tone="c-out" title={t("network.wifiChange")} subtitle={t("network.wifiChangeSub")} span="span-6">
   <form class="form" data-testid="network-wifi" onsubmit={(event) => { event.preventDefault(); planWifi(); }}>
     <p class="note warn"><Icon name="triangle-alert" />{t("network.wifiWarning")}</p>
     <div class="row-wrap">
@@ -102,7 +102,7 @@
 </Card>
 
 <div class="span-6 stack">
-  <Card title={t("network.hostnameChange")} subtitle={t("network.hostnameChangeSub")}>
+  <Card icon="pencil" tone="c-pv" title={t("network.hostnameChange")} subtitle={t("network.hostnameChangeSub")}>
     <div class="form" data-testid="network-hostname-stage">
       <label class="field"><span>{t("network.newHostname")}</span><input class="input mono" type="text" bind:value={forms.hostname} placeholder={network.hostname || ""} autocomplete="off" data-testid="hostname-input" /></label>
       <div class="row-wrap">
@@ -117,7 +117,7 @@
       </div>
     </div>
   </Card>
-  <Card title={t("network.timezoneChange")} subtitle={t("network.timezoneChangeSub")}>
+  <Card icon="clock" tone="c-pv" title={t("network.timezoneChange")} subtitle={t("network.timezoneChangeSub")}>
     <div class="form" data-testid="network-timezone-stage">
       <p class="muted small" data-testid="timezone-current">{t("network.timezoneCurrent", { zone: currentZone })}</p>
       <label class="field"><span>{t("network.timezone")}</span><input class="input mono" type="text" value={timezone} oninput={(event) => (forms.timezone = event.currentTarget.value)} autocomplete="off" data-testid="timezone-input" /></label>

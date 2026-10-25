@@ -228,7 +228,7 @@
 {#if !status}
   <div class="span-12"><Empty text={t("common.loading")} icon="loader" /></div>
 {:else if !status.available}
-  <Card title={t("analytics.unavailableTitle")} span="span-12">
+  <Card icon="chart-spline" tone={status.hint || status.reason === "unreachable" ? "c-warn" : "c-soc"} title={t("analytics.unavailableTitle")} span="span-12">
     {@render unavailableInfo(status)}
   </Card>
 {:else}
@@ -269,7 +269,7 @@
     </button>
   {/snippet}
 
-  <Card title={t(`analytics.view.${view.id}`)} subtitle={t("analytics.source")} span="span-12" {actions}>
+  <Card icon="chart-spline" tone={unavailable || (error && !data) ? "c-warn" : "c-out"} title={t(`analytics.view.${view.id}`)} subtitle={t("analytics.source")} span="span-12" {actions}>
     {#if unavailable}
       {@render unavailableInfo(unavailable)}
     {:else if error && !data}

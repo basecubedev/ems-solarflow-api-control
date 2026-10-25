@@ -204,7 +204,7 @@
       <div class="span-12"><Empty text={t("common.loading")} icon="loader" /></div>
     {/if}
   {:else}
-    <Card title={overview.enabled !== false ? t("schedule.on") : t("schedule.paused")} subtitle={t("schedule.sub", { zone: overview.zone || "" })} span="span-12">
+    <Card icon="calendar-clock" tone="c-pv" title={overview.enabled !== false ? t("schedule.on") : t("schedule.paused")} subtitle={t("schedule.sub", { zone: overview.zone || "" })} span="span-12">
       <div class="row-wrap">
         {#if !overview.clock_trusted}<Status tone="c-warn" icon="clock-alert" text={t("schedule.clockUntrusted")} />{/if}
         <button class="btn small" type="button" onclick={startNew} disabled={Boolean(overview.zone_message) || Boolean(draft)}><Icon name="plus" size="sm" />{t("schedule.new")}</button>
@@ -359,7 +359,7 @@
       </form>
     {/if}
 
-    <Card title={t("schedule.next")} span="span-4">
+    <Card icon="clock" tone="c-pv" title={t("schedule.next")} span="span-4">
       <ul class="next">
         {#each overview.next || [] as point, index (index)}
           <li><span class="num when">{when(point.at)}</span><span>{point.name}</span><span class="muted">→ {point.text}</span></li>
@@ -369,7 +369,7 @@
       </ul>
     </Card>
 
-    <Card title={t("schedule.rules")} span="span-8">
+    <Card icon="list" tone="c-pv" title={t("schedule.rules")} span="span-8">
       {#if !(overview.rules || []).length}
         <Empty text={t("schedule.noRules")} />
       {:else}

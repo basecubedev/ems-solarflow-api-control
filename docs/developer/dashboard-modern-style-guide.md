@@ -150,7 +150,7 @@ the product name ("Admin console") is what tells the two apart.
 
 | Component | For |
 | --- | --- |
-| `ui/Card` | every panel; a title, an optional subtitle and actions on the right |
+| `ui/Card` | every panel; a title, an optional subtitle, an optional mark (`icon` and `tone`: an icon tile in a tone class beside the title, so no page reads black and white) and actions on the right |
 | `ui/Segmented` | a choice between two to seven options that applies at once |
 | `ui/Fact` | a label and a value in a row |
 | `ui/Status` | a state pill: a tone class, a word and, where it helps, an icon; the word carries the meaning |

@@ -81,7 +81,7 @@
   }
 </script>
 
-<Card title={t("services.title")} subtitle={t("services.sub")} span="span-12">
+<Card icon="server" tone="c-inv" title={t("services.title")} subtitle={t("services.sub")} span="span-12">
   {#snippet actions()}
     <button class="icon-btn" type="button" onclick={() => reload("overview", "plan")} aria-label={t("common.refresh")} title={t("common.refresh")} disabled={system.plan.loading}><Icon name="refresh-cw" /></button>
   {/snippet}
@@ -112,7 +112,7 @@
 </Card>
 
 {#if readable || outcome}
-  <Card title={t("services.syncTitle")} subtitle={t("services.syncSub")} span="span-8">
+  <Card icon="rotate-cw" tone="c-out" title={t("services.syncTitle")} subtitle={t("services.syncSub")} span="span-8">
     {#if readable}
     <div class="facts">
       <div class="fact"><div class="fact-label wrap">{t("services.emsShould")}</div><div class="fact-value wrap">{desiredText("ems")}</div></div>
@@ -162,7 +162,7 @@
 {/if}
 
 {#if overview}
-  <Card title={t("services.dockerTitle")} subtitle={t("services.dockerSub")} span={readable || outcome ? "span-4" : "span-12"}>
+  <Card icon="boxes" tone="c-inv" title={t("services.dockerTitle")} subtitle={t("services.dockerSub")} span={readable || outcome ? "span-4" : "span-12"}>
     <div class="facts two">
       <div class="fact"><div class="fact-label">{t("services.dockerAccess")}</div><div class="fact-value">{overview?.docker?.available ? t("services.dockerOk") : t("services.dockerUnavailable")}</div></div>
       <div class="fact"><div class="fact-label">{t("version.docker")}</div><div class="fact-value num" class:na={!overview?.docker?.server_version}>{overview?.docker?.server_version || "—"}</div></div>

@@ -138,7 +138,7 @@
     />
   </div>
 
-  <Card title={t("control.title")} subtitle={t("control.sub")} span="span-6">
+  <Card icon="shield-check" tone="c-soc" title={t("control.title")} subtitle={t("control.sub")} span="span-6">
     {#snippet actions()}<a class="btn secondary small" href={`${href("settings")}/safety`}>{t("control.change")}</a>{/snippet}
     <StaleNote resource={system.config} />
     {#if system.config.data?.status === "ok"}
@@ -152,7 +152,7 @@
     {/if}
   </Card>
 
-  <Card title={t("overview.versions")} subtitle={t("overview.versionsSub")} span="span-6">
+  <Card icon="circle-arrow-up" tone="c-out" title={t("overview.versions")} subtitle={t("overview.versionsSub")} span="span-6">
     {#snippet actions()}<a class="btn secondary small" href={href("updates")}>{t("overview.openUpdates")}</a>{/snippet}
     <div class="facts two">
       <div class="fact"><div class="fact-label">{t("version.admin")}</div><div class="fact-value num" class:na={!overview.components?.admin?.tag}>{overview.components?.admin?.tag || t("version.unknown")}</div></div>

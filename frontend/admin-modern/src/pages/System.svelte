@@ -66,7 +66,7 @@
   }
 </script>
 
-<Card title={t("system.files")} subtitle={t("system.filesSub")} span="span-6">
+<Card icon="hard-drive" tone="c-inv" title={t("system.files")} subtitle={t("system.filesSub")} span="span-6">
   {#snippet actions()}
     <button class="icon-btn" type="button" onclick={() => reload("overview", "telemetry", "migration")} aria-label={t("common.refresh")} title={t("common.refresh")} disabled={system.overview.loading}><Icon name="refresh-cw" /></button>
   {/snippet}
@@ -114,7 +114,7 @@
   {/if}
 </Card>
 
-<Card title={t("system.telemetry")} subtitle={t("system.telemetrySub")} span="span-6">
+<Card icon="radio-tower" tone="c-soc" title={t("system.telemetry")} subtitle={t("system.telemetrySub")} span="span-6">
   <StaleNote resource={system.telemetry} />
   {#if telemetry && !telemetryWanted(telemetry)}
     <Empty text={t("system.telemetryNone")} icon="radio-tower" />
@@ -162,7 +162,7 @@
 </Card>
 
 {#if migration && migrationWanted}
-  <Card title={t("system.migration")} subtitle={t("system.migrationSub")} span="span-12">
+  <Card icon="file-cog" tone="c-pv" title={t("system.migration")} subtitle={t("system.migrationSub")} span="span-12">
     {#if migration.status !== "ok"}
       <Empty error text={t("system.migrationUnreadable")}>{#if migration.message}<span class="muted" lang="en"> {migration.message}</span>{/if}</Empty>
     {:else}
@@ -199,12 +199,12 @@
     {/if}
   </Card>
 {:else if system.migration.error}
-  <Card title={t("system.migration")} span="span-12"><Empty error {...errorView(system.migration.error, t)} /></Card>
+  <Card icon="file-cog" tone="c-pv" title={t("system.migration")} span="span-12"><Empty error {...errorView(system.migration.error, t)} /></Card>
 {/if}
 
 <WorkflowRecovery />
 
-<Card title={t("system.setup")} subtitle={t("system.setupSub")} span="span-12">
+<Card icon="package-plus" tone="c-out" title={t("system.setup")} subtitle={t("system.setupSub")} span="span-12">
   <div class="row-wrap setup-entry" data-testid="system-setup">
     <p class="muted">{t("system.setupLead")}</p>
     <a class="btn secondary small" href={href("setup")}><Icon name="package-plus" size="sm" />{t("system.setupOpen")}</a>

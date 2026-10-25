@@ -60,7 +60,7 @@
   {/if}
 </section>
 
-<Card title={t("overview.pi")} subtitle={system.hardware?.model || t("common.unknown")} span="span-4">
+<Card icon="cpu" tone="c-inv" title={t("overview.pi")} subtitle={system.hardware?.model || t("common.unknown")} span="span-4">
   {#snippet actions()}<Status tone={levelTone} text={hostLevel ? t(`level.${hostLevel}`) : t("common.unknown")} />{/snippet}
   <div data-testid="card-host">
     <KeyValues
@@ -75,7 +75,7 @@
   </div>
 </Card>
 
-<Card title={t("overview.ems")} subtitle={t("overview.emsSub")} span="span-4">
+<Card icon="zap" tone="c-out" title={t("overview.ems")} subtitle={t("overview.emsSub")} span="span-4">
   {#snippet actions()}<Status tone={emsTone} text={ems ? container(ems.state) || t("common.unknown") : t("common.unknown")} lang={ems ? containerLang(ems.state) : undefined} />{/snippet}
   <div data-testid="card-ems">
     <KeyValues rows={[{ label: t("overview.container"), value: ems?.name }]} />
@@ -84,7 +84,7 @@
   </div>
 </Card>
 
-<Card title={t("overview.admin")} subtitle={t("overview.adminSub")} span="span-4">
+<Card icon="server" tone="c-inv" title={t("overview.admin")} subtitle={t("overview.adminSub")} span="span-4">
   {#snippet actions()}<Status tone={health.tone} text={t(health.key)} />{/snippet}
   <div data-testid="card-admin">
     <p class="big num" data-testid="admin-version">{version.key ? t(version.key) : version.text}</p>
@@ -97,7 +97,7 @@
   </div>
 </Card>
 
-<Card title={t("overview.updates")} subtitle={t("overview.updatesSub")} span="span-4">
+<Card icon="circle-arrow-up" tone="c-out" title={t("overview.updates")} subtitle={t("overview.updatesSub")} span="span-4">
   {#snippet actions()}
     {#if securityUpdatesOffered(updates)}
       <Status tone="c-warn" text={tn("overview.securityWaiting", Number(updates.security_count))} />
@@ -117,7 +117,7 @@
   </div>
 </Card>
 
-<Card title={t("overview.docker")} subtitle={t("overview.dockerSub")} span="span-4">
+<Card icon="package" tone="c-inv" title={t("overview.docker")} subtitle={t("overview.dockerSub")} span="span-4">
   {#snippet actions()}<Status tone={daemon ? dockerTone(daemon) : "c-idle"} text={daemon ? t(`docker.${dockerCondition(daemon)}`) : t("common.unknown")} />{/snippet}
   <div data-testid="card-docker">
     {#if daemon === "unavailable"}<p class="note"><Icon name="info" />{t("overview.dockerMissing")}</p>{/if}
@@ -125,7 +125,7 @@
   </div>
 </Card>
 
-<Card title={t("overview.network")} subtitle={network.hostname || t("common.unknown")} span="span-4">
+<Card icon="wifi" tone="c-out" title={t("overview.network")} subtitle={network.hostname || t("common.unknown")} span="span-4">
   {#snippet actions()}{#if network.connectivity}<Status tone={network.connectivity === "full" ? "c-ok" : "c-warn"} text={say(word("connectivity", CONNECTIVITY, network.connectivity))} lang={langOf(word("connectivity", CONNECTIVITY, network.connectivity))} />{/if}{/snippet}
   <div data-testid="card-network">
     <KeyValues
@@ -138,10 +138,10 @@
   </div>
 </Card>
 
-<Card title={t("overview.actions")} subtitle={t("overview.actionsSub")} span="span-12">
+<Card icon="wrench" tone="c-soc" title={t("overview.actions")} subtitle={t("overview.actionsSub")} span="span-12">
   <div class="quick">
     <div class="group" data-testid="quick-admin">
-      <div class="group-head"><Icon name="server" /><div><strong>{bootstrap ? t("overview.installAdmin") : t("overview.adminRecovery")}</strong><p class="muted">{bootstrap ? t("overview.installAdminSub") : t("overview.adminRecoverySub")}</p></div></div>
+      <div class="group-head"><span class="icon-tile sm c-inv"><Icon name="server" /></span><div><strong>{bootstrap ? t("overview.installAdmin") : t("overview.adminRecovery")}</strong><p class="muted">{bootstrap ? t("overview.installAdminSub") : t("overview.adminRecoverySub")}</p></div></div>
       <div class="row-wrap">
         {#if bootstrap}
           <a class="btn small" href={href("admin")} data-testid="quick-install-admin"><Icon name="download" />{t("overview.installAdmin")}</a>
@@ -153,7 +153,7 @@
       </div>
     </div>
     <div class="group" data-testid="quick-updates">
-      <div class="group-head"><Icon name="circle-arrow-up" /><div><strong>{t("overview.updates")}</strong><p class="muted">{t("overview.updatesAll")}</p></div></div>
+      <div class="group-head"><span class="icon-tile sm c-out"><Icon name="circle-arrow-up" /></span><div><strong>{t("overview.updates")}</strong><p class="muted">{t("overview.updatesAll")}</p></div></div>
       <div class="row-wrap">
         <a class="btn small" href={href("updates")} data-testid="quick-open-updates">{t("overview.openUpdates")}</a>
         <PlanButton plan={securityUpdatesPlan("quick-security-updates")} label={t("overview.installSecurity")} variant="secondary" disabled={!securityUpdatesOffered(updates)} testid="quick-security-updates" />
@@ -163,7 +163,7 @@
       {/if}
     </div>
     <div class="group" data-testid="quick-power">
-      <div class="group-head"><Icon name="power" /><div><strong>{t("overview.power")}</strong><p class="muted">{t("overview.powerSub")}</p></div></div>
+      <div class="group-head"><span class="icon-tile sm c-pv"><Icon name="power" /></span><div><strong>{t("overview.power")}</strong><p class="muted">{t("overview.powerSub")}</p></div></div>
       <div class="row-wrap">
         <PlanButton plan={powerPlan("reboot")} label={t("overview.reboot")} icon="rotate-ccw" variant="secondary" testid="quick-reboot" />
         <PlanButton plan={powerPlan("shutdown")} label={t("overview.shutdown")} icon="power" variant="secondary" testid="quick-shutdown" />
@@ -185,7 +185,6 @@
   .quick { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s4); }
   .group { display: flex; flex-direction: column; gap: var(--s3); padding: var(--s4); border-radius: var(--m-radius-inner); background: var(--m-surface-2); }
   .group-head { display: flex; gap: var(--s3); align-items: flex-start; }
-  .group-head > :global(svg.i) { color: var(--m-accent); margin-top: 2px; }
   .group-head p { margin: 2px 0 0; font-size: 12.5px; }
   .group .note { margin: 0; }
   @container content (max-width: 900px) {

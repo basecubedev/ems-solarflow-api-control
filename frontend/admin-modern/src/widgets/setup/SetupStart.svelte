@@ -6,7 +6,7 @@
   import StepList from "../StepList.svelte";
   import { t } from "../../i18n/i18n.svelte.js";
   import { dashboardHref } from "../../lib/links.js";
-  import { DOCKER_STATES, conflictService, jobSteps, serviceKey, startMessage } from "../../lib/setup.js";
+  import { DOCKER_STATES, conflictService, jobSteps, serviceKey, startMessage, startTone } from "../../lib/setup.js";
   import { setup } from "../../state/setup.svelte.js";
   import { setupDeploy, loadPlan, loadStatus, repairPermissions, resolveConflict, startEms } from "../../state/setupDeploy.svelte.js";
 
@@ -35,7 +35,7 @@
   }
 </script>
 
-<Card title={t("setup.run.title")} subtitle={t("setup.run.sub")} span="span-8">
+<Card icon="play" tone={startTone(start, message)} title={t("setup.run.title")} subtitle={t("setup.run.sub")} span="span-8">
   <div class="stack" data-testid="setup-start-step">
     {#if !setupDeploy.prepared}<p class="note warn"><Icon name="triangle-alert" />{t("setup.run.blocked")}</p>{/if}
     <div class="facts two">
@@ -86,7 +86,7 @@
   </div>
 </Card>
 
-<Card title={t("setup.run.services")} span="span-4">
+<Card icon="server" tone="c-inv" title={t("setup.run.services")} span="span-4">
   {#if services.length}
     <ul class="services" data-testid="setup-services">
       {#each services as entry, index (index)}

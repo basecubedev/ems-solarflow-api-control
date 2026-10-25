@@ -21,7 +21,7 @@
   }
 </script>
 
-<Card title={t("storage.title")} subtitle={t("storage.sub")}>
+<Card icon="battery" tone="c-bat" title={t("storage.title")} subtitle={t("storage.sub")}>
   {#if !batteries.length}
     <div class="empty">{t("storage.none")}</div>
   {:else}

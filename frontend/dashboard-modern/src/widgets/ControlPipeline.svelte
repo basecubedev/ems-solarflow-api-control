@@ -38,7 +38,7 @@
   );
 </script>
 
-<Card title={t("control.pipeline")} subtitle={t("control.pipelineSub")} span="span-12">
+<Card icon="route" tone="c-out" title={t("control.pipeline")} subtitle={t("control.pipelineSub")} span="span-12">
   {#if !explain}
     <p class="muted">{t("control.noExplain")}</p>
   {:else}

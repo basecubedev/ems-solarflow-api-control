@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildActions, buildMessage, conflictService, confirmedOperation, deploymentMessage, groupReleases, initialRelease, isDevelopmentTag, jobSteps, pipelineStates, serviceKey, setupRecovery, setupTransitionActive, startMessage, stepLocked } from "../src/lib/setup.js";
+import { buildActions, buildMessage, conflictService, confirmedOperation, deploymentMessage, groupReleases, initialRelease, isDevelopmentTag, jobSteps, pipelineStates, serviceKey, setupRecovery, setupTransitionActive, startMessage, startTone, stepLocked, SETUP_STEP_LOOKS } from "../src/lib/setup.js";
 import { pageSet } from "../src/app/pages.js";
 
 const releases = [
@@ -86,6 +86,20 @@ test("starting says a conflict before a failure, and a run before what is missin
   assert.deepEqual(startMessage({ ...start, running: true }, { prepared: false, dockerReady: false }), { key: "running" });
   assert.deepEqual(startMessage(start, { prepared: false, dockerReady: true }), { key: "notPrepared" });
   assert.deepEqual(startMessage(start, { prepared: true, dockerReady: true }), { key: "ready" });
+});
+
+test("the start card's mark never stays green beside a start that failed or cannot begin", () => {
+  const start = { status: "idle", conflict: null, running: false, phase: "", error: "", errorCode: "" };
+  const toneOf = (patch, context = { prepared: true, dockerReady: true }) => startTone({ ...start, ...patch }, startMessage({ ...start, ...patch }, context));
+  assert.equal(toneOf({ status: "failed", error: "compose up exited 1" }), "c-fault");
+  assert.equal(toneOf({ status: "failed", errorCode: "workspace_permission_denied", error: "Permission denied" }), "c-fault");
+  assert.equal(toneOf({ status: "failed", conflict: {} }), "c-warn");
+  assert.equal(toneOf({}, { prepared: false, dockerReady: true }), "c-warn");
+  assert.equal(toneOf({ error: "Docker is not reachable" }, { prepared: true, dockerReady: false }), "c-warn");
+  assert.equal(toneOf({ error: "Could not read container status from Docker Compose." }), "c-warn");
+  assert.equal(toneOf({ error: "Docker is not reachable" }, { prepared: true, dockerReady: false, docker: { message: "No socket" } }), "c-warn");
+  assert.equal(toneOf({ status: "running", phase: "Pulling" }), SETUP_STEP_LOOKS.start.tone);
+  assert.equal(toneOf({}), SETUP_STEP_LOOKS.start.tone);
 });
 
 test("job steps keep the server's labels; an unknown state waits; services are named by what they are", () => {

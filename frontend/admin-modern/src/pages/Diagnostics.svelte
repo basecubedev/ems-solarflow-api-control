@@ -17,6 +17,14 @@
   const checks = $derived((Array.isArray(result?.checks) ? result.checks : []).map(checkView));
   const mode = $derived(RUN_MODES.includes(result?.mode) ? result.mode : "unavailable");
   const why = $derived(result && !result.available ? unavailableView(result.message) : null);
+  const summaryMark = $derived(markTone());
+
+  /** The summary card's mark: red for a run that failed, amber for a reason the console has no words for, else the result. */
+  function markTone() {
+    if (failure) return "c-fault";
+    if (why && !why.key) return "c-warn";
+    return result?.available && summaryTone(result.summary) !== "c-idle" ? summaryTone(result.summary) : "c-out";
+  }
 
   function countsText(summary) {
     return ["ok", "disabled", "warning", "failed", "unavailable"]
@@ -26,7 +34,7 @@
   }
 </script>
 
-<Card title={t("diagnostics.title")} span="span-12">
+<Card icon="stethoscope" tone={summaryMark} title={t("diagnostics.title")} span="span-12">
   {#snippet actions()}
     <button class="btn" type="button" onclick={runChecks} disabled={running} data-testid="run-checks">
       <Icon name={running ? "loader" : "play"} size="sm" />{running ? t("diagnostics.running") : result ? t("diagnostics.runAgain") : t("diagnostics.run")}
@@ -51,7 +59,7 @@
 </Card>
 
 {#each checks as check (check.id)}
-  <Card title={check.nameKey ? t(check.nameKey) : check.name} span="span-12" className="check">
+  <Card icon="file-check" tone={check.tone} title={check.nameKey ? t(check.nameKey) : check.name} span="span-12" className="check">
     {#snippet actions()}
       {#if check.durationMs !== null}<span class="muted num small">{f.number(check.durationMs)} ms</span>{/if}
       <Status tone={check.tone} text={t(`diagnostics.status.${check.status}`)} />

@@ -97,9 +97,9 @@
 </script>
 
 {#if loading && !plan}
-  <Card title={t("recovery.title")} subtitle={t("recovery.sub")} span="span-12"><Empty text={t("common.loading")} icon="loader" /></Card>
+  <Card icon="wrench" tone="c-pv" title={t("recovery.title")} subtitle={t("recovery.sub")} span="span-12"><Empty text={t("common.loading")} icon="loader" /></Card>
 {:else if error || message || recoveryWanted(plan)}
-  <Card title={t("recovery.title")} subtitle={t("recovery.sub")} span="span-12" className="recovery">
+  <Card icon="wrench" tone="c-pv" title={t("recovery.title")} subtitle={t("recovery.sub")} span="span-12" className="recovery">
     {#if error}
       <Empty error {...error}>
         {#snippet action()}<button class="btn secondary small" type="button" onclick={inspect} disabled={loading}><Icon name="refresh-cw" size="sm" />{t("common.retry")}</button>{/snippet}

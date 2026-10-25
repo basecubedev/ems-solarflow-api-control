@@ -98,7 +98,7 @@
 </section>
 
 
-<Card title={t("assistant.next.title")} subtitle={progressText()} span="span-12">
+<Card icon="list-checks" tone="c-out" title={t("assistant.next.title")} subtitle={progressText()} span="span-12">
   <ol class="steps" data-testid="assistant-steps">
     {#each steps as step (step.id)}
       <li class="step inner {step.tone}" class:next={step.next} aria-current={step.next ? "step" : undefined} data-step={step.id} data-state={step.state}>
@@ -150,7 +150,7 @@
 </Card>
 
 {#if tasks.length}
-  <Card title={t("assistant.tasks.title")} span="span-12">
+  <Card icon="route" tone="c-out" title={t("assistant.tasks.title")} span="span-12">
     <div class="tasks" data-testid="assistant-tasks">
       {#each tasks as task (task.id)}
         <a class="task inner {task.tone}" href={task.tab ? `${href(task.page)}/${task.tab}` : href(task.page)} data-task={task.id}>

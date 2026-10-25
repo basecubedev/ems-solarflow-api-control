@@ -51,7 +51,7 @@
   </button>
 {/snippet}
 
-<Card title={t("energy.byMonth", { y: now.getFullYear() })} subtitle={t("energy.byMonthSub")} span="span-8" {actions}>
+<Card icon="chart-column" tone="c-out" title={t("energy.byMonth", { y: now.getFullYear() })} subtitle={t("energy.byMonthSub")} span="span-8" {actions}>
   <div class="months-wrap" bind:clientWidth={width}>
     <svg class="months" viewBox={`0 0 ${width} ${HEIGHT}`} role="group" aria-label={t("energy.byMonth", { y: now.getFullYear() })}>
       <defs>

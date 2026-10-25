@@ -17,7 +17,7 @@
   const name = (item) => (KNOWN_LOG_SOURCES.includes(item) ? t(`log.${item}`) : item.replace(/_/g, " "));
 </script>
 
-<Card {title} subtitle={t("logs.sub", { lines: LOG_LINES })} {span}>
+<Card icon="file-text" tone="c-out" {title} subtitle={t("logs.sub", { lines: LOG_LINES })} {span}>
   {#snippet actions()}
     {#if !fixed && sources.length}
       <label class="source">

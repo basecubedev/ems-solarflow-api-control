@@ -140,7 +140,7 @@
 
   {#if tab === "features" || tab === "expert"}
     {@const list = matchingSections(tab)}
-    <Card title={t(`settings.tab.${tab}`)} subtitle={t(`settings.tab.${tab}.sub`)} span="span-12">
+    <Card icon={TAB_LOOKS[tab].icon} tone={TAB_LOOKS[tab].tone} title={t(`settings.tab.${tab}`)} subtitle={t(`settings.tab.${tab}.sub`)} span="span-12">
       {#if list.length}
         <div class="sections" data-testid={`settings-${tab}`}>
           {#each list as section (section.id)}<SettingsSection {section} {query} />{/each}
@@ -150,10 +150,10 @@
       {/if}
     </Card>
   {:else if tab === "safety"}
-    <Card title={t("control.title")} subtitle={t("control.sub")} span="span-4">
+    <Card icon="toggle-right" tone="c-out" title={t("control.title")} subtitle={t("control.sub")} span="span-4">
       <ControlState control={config.summary?.control} overrides={config.overrides} />
     </Card>
-    <Card title={t("settings.tab.safety")} subtitle={t("settings.tab.safety.sub")} span="span-8">
+    <Card icon="shield-check" tone="c-soc" title={t("settings.tab.safety")} subtitle={t("settings.tab.safety.sub")} span="span-8">
       {#if blocks.length}
         <div class="blocks" data-testid="settings-safety">
           {#each blocks as block (block.id)}{@render safetyBlock(block)}{/each}
@@ -163,13 +163,13 @@
       {/if}
     </Card>
   {:else}
-    <Card title={t("discovery.title")} subtitle={t("discovery.sub")} span="span-12">
+    <Card icon="search" tone="c-out" title={t("discovery.title")} subtitle={t("discovery.sub")} span="span-12">
       <DiscoveryPanel {config} />
     </Card>
-    <Card title={t("sources.title")} subtitle={t("sources.sub")} span="span-12">
+    <Card icon="radio-tower" tone="c-soc" title={t("sources.title")} subtitle={t("sources.sub")} span="span-12">
       <SourcesPanel />
     </Card>
-    <Card title={t("settings.devices")} subtitle={tn("settings.devicesSub", devices.length)} span="span-12">
+    <Card icon="zap" tone="c-inv" title={t("settings.devices")} subtitle={tn("settings.devicesSub", devices.length)} span="span-12">
       <DevicesEditor {config} />
     </Card>
   {/if}
@@ -225,7 +225,7 @@
   {/if}
 
   {#if applied && !settings.changes && !preview}
-    <Card title={t("settings.edit.applied")} span="span-12">
+    <Card icon="circle-check" tone="c-ok" title={t("settings.edit.applied")} span="span-12">
       <div class="applied" data-testid="settings-applied">
         {#if applied.result?.changed === false}
           <p class="muted">{t("settings.edit.appliedNothing")}</p>

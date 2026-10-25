@@ -9,6 +9,15 @@
 import { STEP_ICONS, STEP_STATES } from "./backups.js";
 
 export const SETUP_STEPS = Object.freeze(["release", "devices", "config", "deployment", "start"]);
+
+/** Each setup step's mark, as the Updates page marks its guided steps. */
+export const SETUP_STEP_LOOKS = Object.freeze({
+  release: { icon: "circle-arrow-up", tone: "c-out" },
+  devices: { icon: "zap", tone: "c-inv" },
+  config: { icon: "sliders-horizontal", tone: "c-pv" },
+  deployment: { icon: "package-plus", tone: "c-soc" },
+  start: { icon: "play", tone: "c-bat" },
+});
 export const SETUP_MODES = Object.freeze(["fresh_install", "automated_setup"]);
 
 /** The states of the System Build step. */
@@ -288,6 +297,19 @@ export function startMessage(start, { prepared, dockerReady, docker }) {
   if (!prepared) return { key: "notPrepared" };
   if (!dockerReady) return docker?.message ? { raw: docker.message } : { key: "noDocker" };
   return { key: "ready" };
+}
+
+/**
+ * The start card's mark: amber while something stands in the start's way (a
+ * conflict to resolve, nothing prepared, no Docker, a status that could not be
+ * read), red once a start failed, else the step's own colour.
+ */
+export function startTone(start, message) {
+  if (start.conflict) return "c-warn";
+  if (start.status === "failed") return "c-fault";
+  if (start.error) return "c-warn";
+  if (["notPrepared", "noDocker"].includes(message.key) || (message.raw && start.status !== "running")) return "c-warn";
+  return SETUP_STEP_LOOKS.start.tone;
 }
 
 /** Why a stuck setup transition needs the reader, in Classic's order; the server's own error is shown as it is. */

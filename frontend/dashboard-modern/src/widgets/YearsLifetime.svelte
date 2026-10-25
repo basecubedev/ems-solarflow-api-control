@@ -19,7 +19,7 @@
   const channels = $derived(channelMeta(stats));
 </script>
 
-<Card title={t("energy.years")} subtitle={since ? t("energy.since", { d: f.date(since) }) : ""} span="span-4">
+<Card icon="calendar" tone="c-out" title={t("energy.years")} subtitle={since ? t("energy.since", { d: f.date(since) }) : ""} span="span-4">
   <div class="years">
     {#each years as year (year.year)}
       <div class="inner year">

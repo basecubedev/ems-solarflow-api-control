@@ -99,7 +99,7 @@
   </button>
 {/snippet}
 
-<Card title={heading} subtitle={t("chart.sub")} {span} {actions}>
+<Card icon="chart-spline" tone="c-pv" title={heading} subtitle={t("chart.sub")} {span} {actions}>
   {#if failed && !data}
     <div class="empty error">{t("error.load")}</div>
   {:else}

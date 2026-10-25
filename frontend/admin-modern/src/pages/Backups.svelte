@@ -143,7 +143,7 @@
   </div>
 {/snippet}
 
-<Card title={t("backups.title")} subtitle={t("backups.sub")} span="span-12">
+<Card icon="archive" tone="c-soc" title={t("backups.title")} subtitle={t("backups.sub")} span="span-12">
   {#snippet actions()}
     <button class="icon-btn" type="button" onclick={() => reload("backups")} disabled={system.backups.loading || busy} aria-label={t("common.refresh")} title={t("common.refresh")}><Icon name="refresh-cw" /></button>
   {/snippet}
@@ -166,7 +166,7 @@
   {/if}
 </Card>
 
-<Card title={t("backups.createTitle")} subtitle={t("backups.createSub")} span="span-8">
+<Card icon="save" tone="c-soc" title={t("backups.createTitle")} subtitle={t("backups.createSub")} span="span-8">
   <fieldset class="scopes" disabled={busy}>
     <legend class="sr-only">{t("backups.scope")}</legend>
     {#each CREATE_SCOPES as option (option)}
@@ -198,7 +198,7 @@
   {/if}
 </Card>
 
-<Card title={t("backups.elsewhereTitle")} subtitle={t("backups.elsewhereSub")} span="span-4">
+<Card icon="download" tone="c-out" title={t("backups.elsewhereTitle")} subtitle={t("backups.elsewhereSub")} span="span-4">
   <p class="lead muted">{t("backups.elsewhere")}</p>
   <button class="btn secondary" type="button" onclick={() => fileInput?.click()} disabled={busy || uploading} bind:this={bringBackButton} data-testid="bring-back">
     <Icon name="upload" size="sm" />{t("backups.bringBack")}
@@ -207,7 +207,7 @@
   {@render result(upload, "transfer-status")}
 </Card>
 
-<Card title={t("backups.listTitle")} subtitle={t("backups.listSub")} span="span-12">
+<Card icon="history" tone="c-soc" title={t("backups.listTitle")} subtitle={t("backups.listSub")} span="span-12">
   {@render result(notice, "list-status")}
   {#if !listing}
     <Empty {...(system.backups.error ? errorView(system.backups.error, t) : { text: t("common.loading") })} icon="loader" error={Boolean(system.backups.error)} />

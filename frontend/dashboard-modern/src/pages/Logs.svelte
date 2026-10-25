@@ -83,7 +83,7 @@
 {/snippet}
 
 <OperatorGate>
-  <Card title={t("nav.logs")} subtitle={t("page.logs.sub")} span="span-12" actions={logActions}>
+  <Card icon="scroll-text" tone="c-out" title={t("nav.logs")} subtitle={t("page.logs.sub")} span="span-12" actions={logActions}>
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <div class="output" bind:this={output} role="log" aria-live="off" tabindex="0" data-testid="logs-output">
       {#each lines as line (line.seq ?? `${line.ts}-${line.message}`)}

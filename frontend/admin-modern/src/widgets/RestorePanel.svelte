@@ -155,7 +155,7 @@
 {/snippet}
 
 <div class="span-12 restore" tabindex="-1" bind:this={region}>
-<Card title={t("restore.title", { name: target.name })} subtitle={t("restore.sub")} actions={panelActions}>
+<Card icon="rotate-ccw" tone="c-soc" title={t("restore.title", { name: target.name })} subtitle={t("restore.sub")} actions={panelActions}>
   {#if needsPassword}
     <form class="unlock" onsubmit={unlock} autocomplete="off">
       <p class="muted"><Icon name="lock" size="sm" />{t("restore.lockedLead")}</p>

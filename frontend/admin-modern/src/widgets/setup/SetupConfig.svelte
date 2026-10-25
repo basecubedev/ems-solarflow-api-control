@@ -28,6 +28,8 @@
   const preview = $derived(setupDraft.preview);
   const tone = $derived(hints.some((hint) => hint.tone === "error") ? "error" : hints.some((hint) => hint.tone === "warn") ? "warn" : preview ? "ready" : "pending");
   const verdict = $derived(setup.stale ? "superseded" : preview?.unavailable ? "unavailable" : tone === "ready" ? "ready" : tone === "pending" ? "checking" : "attention");
+  const VERDICT_TONES = { ready: "c-ok", attention: "c-warn", unavailable: "c-fault", checking: "c-idle", superseded: "c-warn" };
+  const markTone = $derived(tone === "error" && verdict === "attention" ? "c-fault" : VERDICT_TONES[verdict]);
   const summary = $derived(preview?.summary || {});
   const inverterCount = $derived(Number(summary.inverters || 0));
   const meterCount = $derived(Number(summary.grid_meters || 0));
@@ -56,7 +58,7 @@
   {/if}
 {/snippet}
 
-<Card title={t("setup.config.validation")} span="span-12">
+<Card icon="file-check" tone={markTone} title={t("setup.config.validation")} span="span-12">
   <div class="stack" data-testid="setup-validation" data-tone={tone}>
     <div class="row-wrap">
       <span class="verdict {tone}" data-testid="setup-verdict-state">{t(`setup.config.verdict.${verdict}`)}</span>
@@ -83,7 +85,7 @@
   </div>
 </Card>
 
-<Card title={t("setup.config.hardware")} subtitle={t("setup.config.hardwareSub")} span="span-12">
+<Card icon="zap" tone="c-inv" title={t("setup.config.hardware")} subtitle={t("setup.config.hardwareSub")} span="span-12">
   {#snippet actions()}
     <button class="btn secondary small" type="button" onclick={() => (clearing = true)} data-testid="setup-clear-draft"><Icon name="eraser" size="sm" />{t("setup.config.clear")}</button>
   {/snippet}
@@ -91,13 +93,13 @@
 </Card>
 
 {#if catalog}
-  <Card title={t("setup.config.features")} subtitle={t("setup.config.featuresSub")} span="span-12">
+  <Card icon="toggle-right" tone="c-out" title={t("setup.config.features")} subtitle={t("setup.config.featuresSub")} span="span-12">
     <div class="sections" data-testid="setup-features">
       {#each features as section (section.id)}<SettingsSection {section} {values} {onset} startOpen={section.collapsible === false} />{/each}
     </div>
   </Card>
 
-  <Card title={t("setup.config.safety")} subtitle={t("setup.config.safetySub")} span="span-12">
+  <Card icon="shield-check" tone="c-soc" title={t("setup.config.safety")} subtitle={t("setup.config.safetySub")} span="span-12">
     <div class="sections" data-testid="setup-safety">
       {#each blocks as block (block.id)}
         {@const risk = sharedRisk(block.fields)}
@@ -113,14 +115,14 @@
     </div>
   </Card>
 
-  <Card title={t("setup.config.advanced")} subtitle={t("setup.config.advancedSub")} span="span-12">
+  <Card icon="wrench" tone="c-pv" title={t("setup.config.advanced")} subtitle={t("setup.config.advancedSub")} span="span-12">
     <div class="sections" data-testid="setup-advanced">
       {#each advanced as section (section.id)}<SettingsSection {section} {values} {onset} startOpen={section.collapsible === false} />{/each}
     </div>
   </Card>
 {/if}
 
-<Card title={t("setup.config.generated")} subtitle={t("setup.config.generatedSub")} span="span-12">
+<Card icon="file-cog" tone="c-pv" title={t("setup.config.generated")} subtitle={t("setup.config.generatedSub")} span="span-12">
   <div class="stack" data-testid="setup-generated">
     <details>
       <summary>{t("setup.config.showGenerated")}</summary>

@@ -10,6 +10,13 @@
   import { saveBlob } from "../../../shared/lib/download.js";
 
   const PROFILES = ["install", "deep", "hardware", "control", "control_quality"];
+  const PROFILE_LOOKS = {
+    install: { icon: "wrench", tone: "c-inv" },
+    deep: { icon: "search", tone: "c-out" },
+    hardware: { icon: "cpu", tone: "c-inv" },
+    control: { icon: "sliders-horizontal", tone: "c-pv" },
+    control_quality: { icon: "gauge", tone: "c-bat" },
+  };
   const TONES = { ok: "c-ok", warning: "c-warn", error: "c-fault", info: "c-idle" };
 
   let report = $state.raw(null);
@@ -66,10 +73,11 @@
 {#snippet reportActions()}<Status tone={tone(diagnosis?.status)} text={t(`diagnose.status.${diagnosis?.status || "unknown"}`)} />{/snippet}
 
 <OperatorGate>
-  <Card title={t("diagnose.run")} subtitle={t("diagnose.runSub")} span="span-12" actions={runActions}>
+  <Card icon="stethoscope" tone="c-inv" title={t("diagnose.run")} subtitle={t("diagnose.runSub")} span="span-12" actions={runActions}>
     <div class="profiles">
       {#each PROFILES as profile (profile)}
         <button class="profile inner" type="button" onclick={() => run(profile)} disabled={Boolean(running)} aria-busy={running === profile ? "true" : "false"} data-profile={profile}>
+          <span class="icon-tile sm {PROFILE_LOOKS[profile].tone}"><Icon name={PROFILE_LOOKS[profile].icon} /></span>
           <span class="name">{t(`diagnose.profile.${profile}`)}</span>
           <span class="desc">{t(`diagnose.profile.${profile}.desc`)}</span>
           <span class="go"><Icon name={running === profile ? "loader" : "play"} size="sm" />{running === profile ? t("diagnose.running") : t("diagnose.runProfile")}</span>
@@ -80,7 +88,7 @@
   </Card>
 
   {#if diagnosis}
-    <Card title={t(`diagnose.profile.${report.profile || "install"}`)} subtitle={diagnosis.timestamp ? f.dateTime(diagnosis.timestamp) : ""} span="span-12" actions={reportActions}>
+    <Card icon="file-text" tone={tone(diagnosis?.status)} title={t(`diagnose.profile.${report.profile || "install"}`)} subtitle={diagnosis.timestamp ? f.dateTime(diagnosis.timestamp) : ""} span="span-12" actions={reportActions}>
       <DiagnosisReport {diagnosis} />
     </Card>
   {/if}
@@ -89,6 +97,7 @@
 <style>
   .profiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: var(--s3); }
   .profile { text-align: left; border: 1px solid var(--m-line); cursor: pointer; display: flex; flex-direction: column; gap: 4px; color: var(--m-text); }
+  .profile > .icon-tile { margin-bottom: var(--s1); }
   .profile:hover:not(:disabled) { border-color: var(--m-line-strong); background: var(--m-surface-3); }
   .profile:disabled { cursor: progress; opacity: 0.7; }
   .profile .go { margin-top: auto; padding-top: var(--s2); display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--m-accent); }
