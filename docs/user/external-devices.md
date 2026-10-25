@@ -170,15 +170,22 @@ add one `mqtt.publish` for each key you have.
 
 ## Adding the device in Admin
 
-1. Start publishing, then open **Guided Setup** (new installation) or
-   **Maintenance** (existing one) and run the discovery for your broker.
-2. The device appears as **External device `<id>`**, marked *takes no commands*.
-   Choose **Add inverter**.
-3. Give it a name if you like, then preview and apply.
+1. Start publishing, then open the Admin Console's
+   [guided setup](admin/guided-setup.md) (new installation), or use **Search my
+   network** on **Settings & devices** → **Devices** (existing one). The search
+   reads your MQTT brokers.
+2. The device appears as **External device `<id>`**: *A device from the
+   hardware catalogue: EMS reads its values over MQTT and never sends it
+   anything.* Choose **Add inverter**.
+3. Give it a name if you like, then check and save: **Check changes** and
+   **Save and apply** on Settings & devices, or **Continue to deployment** in
+   the guided setup.
 
-In Maintenance the device then shows as **External device · read over MQTT**. You
-can rename it, switch it off, move it to another broker with **Use connection**
-or remove it; everything else follows from the topics.
+On the **Devices** tab the device then shows as an inverter card reading
+**External device · read over MQTT**. You can rename it, switch it off, move it
+to another broker with **Use this connection** in the search, or remove it;
+everything else follows from the topics. See
+[Device management](admin/device-management.md).
 
 ## Expected result
 
@@ -196,7 +203,7 @@ battery total and — if it reports one — its SoC in the average.
 | A value never changes | The payload is not a plain number | Remove units, use a dot as decimal separator |
 | Battery shows charging while discharging | The source counts the other way round | Negate `batteryPower` |
 | A removed device is still offered | Its retained topics are still on the broker | Clear each: `mosquitto_pub -h 192.168.1.71 -r -n -t ems-solarflow/<id>/state` |
-| Apply refused with `external_mqtt_family_unknown` | An entry from a development build that read `KostalPiko/<serial>/solarPower` | Publish the reading as `inverterPower` under the same id, run discovery in Maintenance and choose **Use connection** on it; or remove the entry and add the device again |
+| Saving refused with `external_mqtt_family_unknown` | An entry from a development build that read `KostalPiko/<serial>/solarPower` | Publish the reading as `inverterPower` under the same id, **Search my network** on **Settings & devices** → **Devices** and choose **Use this connection** on it; or remove the entry and add the device again |
 
 ## Recovery or next steps
 

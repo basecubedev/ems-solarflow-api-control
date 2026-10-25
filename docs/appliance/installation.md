@@ -558,15 +558,18 @@ address instead. Look the appliance up in your router's list of connected
 devices (usually under *DHCP*, *Clients* or *Network*; the entry is named
 `ems-solarflow`), then open `http://<address>:8088`.
 
-The first start requires:
+The first start, step by step in [First start](../user/appliance/first-start.md):
 
-1. **Create a password.** There is no default one. The same password opens the
-   Appliance Manager, the Admin console and the dashboard, and changing it from
-   any of them changes it for all three.
-2. **Confirm the hostname** (Network section).
-3. **Confirm the timezone** (Network → Change the timezone).
-4. **Review the network state** (Network section).
-5. **Review the Admin installation state** (Admin section).
+1. **Create a password** — *Create the appliance password*, then **Create
+   password**. There is no default one. The same password opens the Appliance
+   Manager, the Admin console and the dashboard, and changing it from any of
+   them changes it for all three.
+2. **Check the hostname and the network state** on the **Network** page.
+3. **Set the time zone** under **Network → Change the time zone**, before EMS
+   Admin is installed (see above).
+4. **Install EMS Admin** on the **EMS Admin** page; the console opens on its
+   [assistant](../user/appliance/assistant.md), which lists it as the next
+   step.
 
 Before authentication the interface exposes nothing but the login page and
 whether a password exists yet.
@@ -624,7 +627,8 @@ journalctl -u ems-appliance-agent -n 200
 ## Appliance Manager self-update
 
 The Appliance Manager updates through its signed package, separately from Admin
-updates. Its current version is visible in Settings.
+updates. Its current version is shown at the foot of the side menu and under
+**Installed** on the **Updates** page's **Appliance Manager package** card.
 
 `sudo ems-appliance rollback-manager` reinstalls the package that was running
 before the current one, from

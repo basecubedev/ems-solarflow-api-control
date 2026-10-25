@@ -384,9 +384,10 @@ the plan the operator confirms — for example
 > **Status.** The EMS-owned dry-run/apply core, multi-evidence resolution, final
 > validation/canonicalization, the emsctl command, the startup fail-closed guard
 > and the Admin migration-review orchestration layer are implemented and tested.
-> The interactive frontends are wired to this backend: the Admin Maintenance
-> "Older MQTT device setup" card (`renderMqttMigrationReview()` /
-> `applyMqttMigration()` in `admin/static/admin.js`, served by
+> The interactive frontends are wired to this backend: the "Older MQTT device
+> setup" card — on the **System** page in the Modern console, in Maintenance in
+> the deprecated Classic one (`renderMqttMigrationReview()` /
+> `applyMqttMigration()` in `admin/static/admin.js`), both served by
 > `/api/admin/maintenance/zendure-mqtt/migration-review` and
 > `/api/admin/maintenance/zendure-mqtt/migration-apply` in `admin/server.py`)
 > and the Guided Upgrade `migration_review` / `mqtt_migration` steps

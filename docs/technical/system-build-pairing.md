@@ -452,7 +452,7 @@ rate limit.
 
 The full verification — resolving the pair, **downloading or reusing** the Admin
 and EMS images, and checking their OCI identity — runs only on the explicit
-**Verify System Build** action (the Step 1 primary while a build is unverified).
+**Verify the System Build** action (step 01 of the guided setup).
 That single action:
 
 - pulls each **missing** image at most once. An exact digest-pinned image already
@@ -461,7 +461,7 @@ That single action:
   the operation, and that resolved digest is then fixed — later actions never
   silently refresh it;
 - records the verified, digest-pinned pair server-side. **Continue** and **Update
-  Admin Server**, a normal re-render, and a short reconnect resume that verified
+  the Admin console**, a normal re-render, and a short reconnect resume that verified
   result instead of pulling or re-verifying the same build. Concurrent
   verification requests for the same build coalesce into one resolver operation;
 - is invalidated by any change to the selection — tag, expected image reference,
@@ -476,16 +476,17 @@ wrapping `SystemBuildResolver`, and by the durable transition record; see
 `docs/user/admin-setup.md` for the operator-facing wording and
 `docs/technical/troubleshooting-reference.md` for the GHCR rate-limit guidance.
 
-**Fresh Install and Guided Upgrade use the same model.** Selecting a Target
-System Build in Maintenance is likewise a local preview only; **Verify System
-Build** resolves through the same `CachingBuildResolver`, so the Guided Upgrade
+**The guided setup and the Guided Upgrade use the same model.** The version
+list on the Admin's **Updates** page is likewise a local preview only; choosing
+a version there (**Update to …** or **Choose**) is the verification and
+resolves through the same `CachingBuildResolver`, so the Guided Upgrade
 execute (`_handle_maintenance_upgrade_execute` → `SystemAlignmentService.resolve`)
 and a reconnect resume reuse the verified, digest-pinned pair instead of pulling
 again. `validate_upgrade_target` returns the same `selection_fingerprint` so the
 upgrade plan is bound to the exact resolved pair; the Guided Upgrade preflight
 (current-state, Zendure MQTT migration, backup readiness) is an
 *installation-specific* check that runs in addition to — never instead of —
-System Build verification, and both must succeed before **Upgrade system** runs.
+System Build verification, and both must succeed before the update starts.
 
 Execute **requires** the verified `selection_fingerprint` and enforces it before
 anything else. `_handle_maintenance_upgrade_execute` re-resolves the target,
@@ -510,7 +511,7 @@ Upgrade, this is what guarantees the executed pair is exactly the one the operat
 verified: if a re-resolve occurs and the identity (digests, revision, build id, or
 channel) changed, execution is rejected and re-verification is required. A cached
 ("prepared") release directory is only downloaded resources; it never counts as
-System Build verification and never enables **Upgrade system** on its own.
+System Build verification and never enables the update on its own.
 
 ## Runtime identity is the verified digest, not the tag
 
@@ -598,7 +599,8 @@ are blocked until resolved (`SystemAlignmentService.is_transition_pending()`).
 An embedded-resource, EMS deployment or health-check failure moves the operation
 to `failed_recoverable`, retaining the target Admin identity, the previous
 known-good/running EMS identity, the failed stage and its safe resume stage.
-Resume retries from that committed stage. **Return Admin to running build** first
+Resume retries from that committed stage. **Go back to the version that runs**
+(`return-to-running-build`) first
 inspects the actual EMS container and only uses the last known-good pair when its
 EMS digest, revision and build ID match that running container; it then starts an
 Admin reconnect without accepting an image repository from the browser. Neither

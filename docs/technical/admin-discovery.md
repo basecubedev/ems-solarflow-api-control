@@ -3,8 +3,9 @@
 This is the technical reference for the Admin Console. For a short user overview, see
 [Admin Console](../user/admin-console.md); for the two guided flows, see
 [Admin setup](../user/admin-setup.md) (Set up a new system) and
-[Admin maintenance](../user/admin-maintenance.md) (Manage my existing
-system). This page documents the internals: the setup wizard, release and
+[Admin maintenance](../user/admin-maintenance.md) (an installed system); the
+step-by-step guides are under [Admin Console guides](../user/admin/index.md).
+This page documents the internals: the setup wizard, release and
 build-identity gating, network discovery, deployment-capable Docker setup, and
 security.
 
@@ -22,13 +23,38 @@ style — is described in detail below.
 
 ## Layout
 
-The UI has two top-level tabs. **Setup** (the default) is a compact
-step-by-step wizard with a stepper header and **five steps** — **01 Release**,
-**02 Devices**, **03 Config**, **04 Prepare deployment**, **05 Start EMS**. Only
-the active step shows its full content; the others collapse to a compact status
-in the stepper (e.g. `Ready`, `3 devices`, `Draft ready`). **Devices** and
-**Config** stay locked until the Release step reports its resources ready, and
-`Next` is disabled until then.
+The guided setup is a page without a place in the side menu: the assistant,
+the Overview of an empty host and **Open the guided setup** on the **System**
+page open it (see [Guided setup](../user/admin/guided-setup.md)). It is a
+step-by-step wizard with a stepper and **five steps** — **01 System Build**,
+**02 Devices**, **03 Settings**, **04 Prepare**, **05 Start EMS**. Only the
+active step shows its full content; the stepper names each step and its state,
+and a line under it says where you are (*Step 02 of 05 · Find your devices · 3
+devices.*). **Devices** and **Settings** stay locked until the System Build
+step reports its resources ready, and the server enforces that lock. This page
+calls the first step the Release step, as the code does.
+
+The panel, button and state names further down this page are the ones the
+deprecated Classic console at `/classic/` shows; the behaviour behind them is
+the same in Modern. The Modern names are in the
+[guided setup](../user/admin/guided-setup.md#02--find-your-devices) and
+[device management](../user/admin/device-management.md) guides; the ones this
+page uses most map as follows:
+
+| Classic | Modern |
+| --- | --- |
+| **Run discovery** / **Run discovery again** | **Run the search** / **Search again** |
+| **Scan networks** | **Scan the networks** |
+| **Discovery sources** (priority, enabled, **Configure**) | **Search sources** (**Search order**, on or off, **Configure**) |
+| **Discovery progress** | **Search progress** |
+| **Detected networks / gateways** | **Networks and routers** |
+| **Detected devices** | **Devices found** |
+| The manual CIDR scan | **Scan one network** |
+| **Automatic Zendure discovery** | **Automatic mDNS discovery** |
+| Maintenance's **Add more devices** | **Search my network** on **Settings & devices** → **Devices** |
+| **Active**, *In config* | **In the settings** |
+| **Added to draft** | **Added to your changes** |
+| **Use connection** | **Use this connection** |
 
 ### Release step: one paired System Build
 
@@ -46,7 +72,7 @@ Admin image. They are verified against the build's manifest
 (`$EMS_ADMIN_DATA_DIR/releases/<tag>/`) **before any config** is written; Admin
 never substitutes `main`-branch resources for a pinned build. If the running
 Admin does not match the selected build it is aligned first
-(**Update Admin Server**); a matching Admin continues straight to discovery. The
+(**Update the Admin console**); a matching Admin continues straight to discovery. The
 selection pointer is stored under
 `$EMS_ADMIN_DATA_DIR/state/selected-release.json` and survives an Admin restart.
 

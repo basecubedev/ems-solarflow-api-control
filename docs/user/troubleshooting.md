@@ -126,9 +126,11 @@ See [Admin Maintenance](admin-maintenance.md).
 Create a support bundle and attach it to your report. It is redacted and does
 not contain your passwords, tokens, or serial numbers.
 
-Create it on the EMS host with the command in the section below. The Admin
-Console's **Diagnostics** page runs the same read-only checks and shows their
-result, but writes no bundle.
+Create it on the EMS host with the command in the section below, or signed in
+to the dashboard with **Support bundle** on its **Diagnose** page (see
+[Diagnostics](dashboard/diagnostics.md#3--export)). The Admin Console's
+**Diagnostics** page runs the same read-only checks and shows their result, but
+writes no bundle.
 
 More help: [Getting help](../../README.md#getting-help) and the
 [FAQ](faq.md).

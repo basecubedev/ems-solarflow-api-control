@@ -6,9 +6,9 @@
 |---|---|
 | What does the Appliance Manager manage? | The Raspberry Pi host: OS status and updates, reboot/shutdown, network and WLAN, hostname and mDNS, Docker service state, the EMS Admin container lifecycle, SSH access, storage and temperature, host logs, appliance recovery. See [architecture.md](architecture.md). |
 | What does the EMS Admin Console manage? | EMS configuration, device discovery, grid meter and inverters, control parameters, EMS runtime state, EMS diagnostics, EMS backup/restore, Guided Setup and Guided Upgrade. |
-| How do I recover a failed Admin update? | [admin-recovery.md](admin-recovery.md) — the appliance rolls back automatically; otherwise use Repair on the Admin page, or **Updates → Choose an Admin version → Previous known-good**. |
+| How do I recover a failed Admin update? | [admin-recovery.md](admin-recovery.md) — the appliance rolls back automatically; otherwise use **Preview repair** on the **EMS Admin** page, or **Updates → Choose an EMS Admin version → Previous known-good**. |
 | The appliance will not come up at all | [console-recovery.md](console-recovery.md) — log in as `ems-rescue` at a keyboard, then work down the list. |
-| How do I install a specific Admin version? | [admin-recovery.md](admin-recovery.md) — pick it from the **Stable** or **Unstable** group in **Updates → Choose an Admin version**. |
+| How do I install a specific Admin version? | [admin-recovery.md](admin-recovery.md) — pick it from the **Stable** or **Unstable** group in **Updates → Choose an EMS Admin version**. |
 | How do I add an SSH key? | [ssh-backup-access.md](ssh-backup-access.md) |
 | How do I back up files with rsync? | rsync is not available: the backup account is SFTP-only by design. Use the `sftp` commands in [ssh-backup-access.md](ssh-backup-access.md). |
 | How do I install OS updates? | [os-updates.md](os-updates.md) |
@@ -102,9 +102,9 @@ shown as unavailable.
 
 ## Backup access shows "degraded"
 
-**SSH & Backup Access → Export access** reports what it observes, not what was
-intended. `degraded` means an export is missing from the export root, is mounted
-read-write, or sshd does not chroot the account.
+**SSH & backup access → Export access** reports what it observes, not what was
+intended. **Incomplete** (`degraded`) means an export is missing from the export
+root, is mounted read-write, or sshd does not chroot the account.
 
 ```bash
 sudo systemctl start ems-appliance-export.service
@@ -112,8 +112,8 @@ findmnt /srv/ems-appliance-export/config
 sshd -T -C user=ems-backup,host=localhost,addr=127.0.0.1 | grep -i chroot
 ```
 
-`pending` simply means `/opt/ems-solarflow` has no exportable directory yet; the
-export root is built as soon as one appears.
+**Waiting** (`pending`) simply means `/opt/ems-solarflow` has no exportable
+directory yet; the export root is built as soon as one appears.
 
 ## "Sign in to use the Appliance Manager" keeps coming back
 
@@ -197,10 +197,10 @@ static hostname.
 
 ## An operation is stuck
 
-Open **Overview**; the current operation banner shows the stage and offers
-**Cancel**. After an agent restart an interrupted operation appears as
-`failed_recoverable` with `operation_interrupted` — acknowledge or cancel it,
-then start again.
+The operation's banner at the top of every page shows the stage and offers
+**Cancel** where the operation can still be interrupted. After an agent restart
+an interrupted operation appears as `failed_recoverable` with
+`operation_interrupted` — acknowledge or cancel it, then start again.
 
 ```bash
 sudo ems-appliance operations
@@ -213,14 +213,14 @@ cancel it from the operation banner. Read-only pages keep working meanwhile.
 
 ## Admin shows "missing" or "unhealthy"
 
-Use **Admin → Repair** for a preview of what is wrong. Typical findings:
+Use **EMS Admin → Preview repair** for a preview of what is wrong. Typical findings:
 
 | Finding | Action |
 |---|---|
 | Docker is stopped | Start Docker |
 | Container missing | Reinstall the selected version |
 | Container stopped | Start Admin |
-| Compose file or Admin service missing | Manual: recreate it with `install-admin-console.sh`; the repair reports `manual_action_required`. On an appliance that never had Admin, use **Admin → Install Admin** instead |
+| Compose file or Admin service missing | Manual: recreate it with `install-admin-console.sh`; the repair reports `manual_action_required`. On an appliance that never had Admin, use **EMS Admin → Install EMS Admin** instead |
 | Bind path missing | Recreate the directory after confirmation |
 | Port 8090 occupied | Stop the shown process yourself; the appliance never kills it |
 
@@ -296,7 +296,7 @@ reported as a success.
 ## "release_channel_unresolved"
 
 The chosen channel names no version: the list carries no stable release, or
-*Current stable (reinstall)* was chosen with nothing installed, or *Previous
+*Current version (reinstall)* was chosen with nothing installed, or *Previous
 known-good* with no history recorded yet. Pick a version from the **Stable**
 group, or from **Unstable** if this host accepts candidates, or use Expert mode
 and enter an exact release tag.

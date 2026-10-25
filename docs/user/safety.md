@@ -14,8 +14,8 @@ in `198.51.100.0/24`, a range reserved for documentation that home routers do
 not hand out (the template uses `.50`, `.100`, `.101`), `0.0.0.0`, `localhost`,
 `example.com` (and any `*.example.com`), `YOUR_SN` and `YOUR_TOKEN_HERE`.
 An address that cannot be parsed at all holds writes back the same way.
-`emsctl.py diagnose` and the Admin Console's Maintenance page name every field
-that still keeps EMS in safe mode.
+`emsctl.py diagnose` and the Admin Console's **Overview** (*EMS writes nothing
+yet*) name every field that still keeps EMS in safe mode.
 
 The moment the last placeholder is replaced and EMS restarts, it writes
 `outputLimit` and reconciles `minSoc`, `socSet`, `acMode` and `inputLimit`.
@@ -31,7 +31,8 @@ So:
   set it back to `false`.
 - To stop control at any time: `python3 emsctl.py system disable` (Docker:
   `docker compose exec ems python3 emsctl.py system disable`), or switch
-  **EMS enabled** off in the dashboard. Inverters keep their last output limit.
+  **EMS enabled** off on the dashboard's **Control** page. Inverters keep their
+  last output limit.
 
 ## Features that write on their own
 
@@ -133,8 +134,8 @@ rather than place it, so know what that means before you run it:
   `max_charge_power_w` per device at 0 means "ask the device for its own
   ceiling" — or its model's rated charge power when it reports none.
 
-You can stop it at any time without restarting the EMS, from the dashboard's
-Control tab in write mode or from the CLI:
+You can stop it at any time without restarting the EMS, from the **Runtime
+settings** on the dashboard's **Control** page, signed in, or from the CLI:
 
 ```bash
 python3 emsctl.py ac-charge disable            # the whole feature
@@ -213,8 +214,7 @@ it regulates or ends as before, or the firmware's, which it leaves alone.
 - Watch battery SOC.
 - Stop EMS if values look wrong.
 
-The [Admin Console](admin-console.md) dashboard and diagnostics make it easy to
-watch these values during the first run.
+The dashboard's [Overview](dashboard/overview.md) page shows all three live.
 
 ## Backups before risky changes
 
@@ -241,8 +241,8 @@ for a fixed whitelist of keys (system power/loop limits, winter/AC-charging
 enable, per-device enabled/max power/PV priority/off-grid mode) and only through
 the same validated runtime-write limits — never the hardware `outputLimit` or
 state-reconciliation write gates. No other key reaches `runtime-state.json` from
-the Admin; a fresh Setup only asks the EMS to rebuild it from the new config at
-its next start.
+the Admin; a fresh guided setup only asks the EMS to rebuild it from the new
+config at its next start.
 
 ## Technical safety model
 

@@ -670,7 +670,7 @@ python3 -B ems-solarflow-api-control.py --dry-run --duration 120
 ## Compatibility note
 
 The default values documented here apply only to **newly created**
-configurations (Fresh Install, and the config template). Loading an existing
+configurations (the Admin Console's guided setup, and the config template). Loading an existing
 `config.json` never rewrites values you already set: an explicit
 `loop_interval`, `deadband`, or ramp value is always preserved. Missing keys are
 resolved by the normal config-upgrade and default-resolution policy — this is

@@ -26,7 +26,7 @@ the current design to Classic; `/modern/`, an earlier address, redirects to `/`.
 
 ![The dashboard's Overview page: the status tiles, the live energy flow, storage, active rules, today's energy by the hour and the power chart](assets/preview-aggregated.jpg)
 
-## Control View
+## Control Page
 
 The **Control** page shows the decision of the last control cycle in one
 sentence and eight figures, the runtime settings (see
@@ -37,7 +37,7 @@ reason a device is held back. See [Control pipeline](user/dashboard/control.md).
 
 ![Control page demo screenshot with the current decision, the runtime settings cards, the six pipeline stages and the decision per device](assets/preview-control.jpg)
 
-## Devices View
+## Devices Page
 
 Controllable devices (local-API inverters and write-enabled Zendure MQTT
 inverters), telemetry-only Zendure MQTT devices and external devices read over
@@ -98,7 +98,7 @@ from the local history with a device choice. See
 
 ![Devices page demo screenshot with two inverter cards, the grid meter, the energy flow per device and the power chart](assets/preview-devices.jpg)
 
-## Analytics View
+## Analytics Page
 
 The **Analytics** page is the home for long-term, InfluxDB-backed analysis: one
 large chart with views, a device choice, overlays, ranges up to 365 days, custom
@@ -140,7 +140,7 @@ What the charts do with a zoom is the difference between them:
 - **The power charts (SQLite)** do not ask again. There is a single profile, so
   their zoom only rescales the axis of the data already loaded.
 
-## Energy Statistics View
+## Energy Page
 
 The **Energy** page shows historical inverter output totals and savings
 estimates from the local SQLite aggregates: **Today**, **Yesterday**, **Last 7
@@ -171,7 +171,16 @@ never AC-charge never see the row. See
 
 ![Energy page demo screenshot with the six period cards, the context strip, the months as bars and as a table, and the years and lifetime](assets/preview-energy.jpg)
 
-## Diagnose View
+## Schedule Page
+
+The **Schedule** page sets the runtime values the Control page's runtime
+settings change, at set times: rules with one switch point or a window, their
+repeats, and every switch point of the next seven days. It needs a signed-in
+session, and the EMS checks every rule before it can be saved. See
+[Runtime settings and schedules](user/dashboard/runtime-settings.md#schedules)
+and [Schedules](scheduler.md).
+
+## Diagnose Page
 
 The **Diagnose** page runs the read-only `emsctl diagnose` profiles
 (**Installation**, **Deep**, **Hardware**, **Control**, **Control quality**)
@@ -188,7 +197,7 @@ set; signed out it asks for a sign-in. Runs are snapshot-only (no
 hammered, and the served report is passed through secret redaction as
 defense-in-depth.
 
-## Logs View
+## Logs Page
 
 The **Logs** page tails the EMS service log from an in-memory ring buffer (the
 stock service writes no log file). It polls incrementally, has a display level
@@ -205,7 +214,7 @@ deployments (raw by default for authenticated operators).
 
 ![Logs page demo screenshot with the level filter, Follow, the service level and the log lines, among them an error and a warning about an offline device](assets/preview-logs.jpg)
 
-## Maintenance View
+## Maintenance Page
 
 The **Maintenance** page exposes the operator maintenance tools (backup, restore
 and config upgrade) so a Docker-first user never has to drop to a terminal. It
@@ -957,8 +966,8 @@ plan is stale or no longer matches the current config/template state. Refresh
 the preview before trying again. Apply also requires `confirm_apply` and always
 creates a config backup before writing.
 Restore wraps the same `ems.backup` core as `emsctl.py backup restore`; EMS
-version downgrade and container controls are intentionally not exposed — see the
-Maintenance View section.
+version downgrade and container controls are intentionally not exposed — see
+[Maintenance Page](#maintenance-page).
 
 ## Session Lifetime
 

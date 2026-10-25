@@ -16,7 +16,7 @@ For the full model list and grid-meter support see
 | --- | --- | --- | --- |
 | **Local API (ZenSDK)** | Newer SolarFlow / ZenSDK models with the local HTTP API | Lowest — fully local | Low (device on your LAN) |
 | **Local MQTT** | Zendure devices re-pointed to your own local broker | Low — local network | Medium (manual broker redirect) |
-| **Zendure MQTT (cloud)** | Any Zendure device, via your Zendure API key | Higher — runs over the internet | Low — save the API key; apply provisions the runtime credential automatically |
+| **Zendure MQTT (cloud)** | Any Zendure device, via your Zendure API key | Higher — runs over the internet | Low — save the API key; saving the settings provisions the runtime credential automatically |
 
 All three are control transports: a supported inverter is regulated by the same
 EMS control loop over any of them (output control over MQTT is enabled for an
@@ -114,10 +114,11 @@ for the exact test conditions and statistics, and the
 the authoritative setting guidance.
 
 > **Status: supported for telemetry; output control requires an exact supported
-> model.** Applying a selected cloud device provisions the runtime MQTT
-> credential automatically: the Apply step fetches fresh broker credentials
-> with your API key, stores them encrypted in the external secret store and
-> verifies that EMS can resolve them before the config is committed (see
+> model.** Saving a selected cloud device provisions the runtime MQTT
+> credential automatically: the save — **Save and apply** on Settings &
+> devices, or **04 Prepare** in the guided setup — fetches fresh broker
+> credentials with your API key, stores them encrypted in the external secret
+> store and verifies that EMS can resolve them before the config is committed (see
 > [configuration.md](../technical/configuration.md#zendure-mqtt-telemetry-and-control)).
 > If that record is later missing, the broker reports `broker_auth_missing`
 > and is never connected. Output **control** through the cloud broker requires

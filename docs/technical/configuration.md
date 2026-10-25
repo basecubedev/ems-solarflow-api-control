@@ -191,7 +191,7 @@ removed, and with it the `ha` section and the `--no-ha` start option. An `ha`
 section left in an existing `config.json` is ignored, whatever its content: the
 EMS loads and starts as it would without it, and an enabled section with a
 placeholder token no longer holds the EMS in safe mode. Neither the startup
-config upgrade, `emsctl config upgrade` nor an Admin Maintenance apply adds or
+config upgrade, `emsctl config upgrade` nor an Admin **Save and apply** adds or
 drops it, so a rollback to a release that still had the integration finds it as
 it was. A token in it stays a secret: diagnose, the support bundle and the
 Admin redact it like any other. Delete the section by hand once no rollback is
@@ -392,7 +392,7 @@ disabling a bound weakens the "walk away → logged out" and stolen-cookie
 protections.
 
 `dashboard.log_buffer_lines` (default `5000`) sizes the in-memory log ring buffer
-that backs the Logs tab. It is count-based, so quieter systems retain a longer
+that backs the dashboard's Logs page. It is count-based, so quieter systems retain a longer
 window; ~5000 lines covers well over 15 minutes at typical settings and costs a
 few MB of RAM. `dashboard.log_redaction` (default `false`) masks secret-looking
 values in served log lines; enable it for shared/remote deployments.
@@ -418,8 +418,8 @@ root CSS class by the frontend.
 Dashboard and Admin runtime writes are constrained by the configured system and
 device power limits. For example, a runtime `max_total_power` update cannot
 exceed the configured `system.max_total_power`, and a device runtime `max_power`
-update cannot exceed that device's configured `max_power`. Admin maintenance
-Apply mirrors the overlapping keys it changed into runtime-state through this
+update cannot exceed that device's configured `max_power`. The Admin's **Save
+and apply** mirrors the overlapping keys it changed into runtime-state through this
 same whitelist; a mirrored value the runtime validator rejects is skipped with a
 warning while the config write stands. Pure-config keys (ports, credentials,
 `grid_meter.*`, `min_soc`, …) are not runtime-writable and still take effect only
@@ -1185,10 +1185,11 @@ block.
 }
 ```
 
-In the Admin console, Guided Setup adds this device automatically when the
-E3/DC is chosen as grid meter, and says so in the preview; Maintenance has an
-**Add an E3/DC (read-only)** action under *Add a device manually*, and an E3/DC
-device card with its address, port, unit ID and enabled switch.
+In the Admin console, the guided setup adds this device automatically when the
+E3/DC is chosen as grid meter, and says so in the preview; **Settings &
+devices** → **Devices** has an **Add an E3/DC (read only)** button under the
+devices, and an E3/DC device card with its name, host or IP, port, Modbus unit
+ID and **Enabled** switch.
 
 ### Legacy config compatibility
 
@@ -1308,8 +1309,9 @@ Development builds read a Kostal Piko as `KostalPiko/<serial>/solarPower` with
 `topic_family: kostal_piko`. Nothing reads those topics any more, so such an
 entry is refused (`external_mqtt_family_unknown`), and every apply is refused
 with it until it is moved or removed. Let the bridge publish the same reading as
-`inverterPower` into the namespace under the same device id, run discovery in
-Maintenance and choose **Use connection** on the device it finds: the entry
+`inverterPower` into the namespace under the same device id, use **Search my
+network** on the Admin's **Settings & devices** → **Devices** and choose **Use
+this connection** on the device it finds: the entry
 keeps its name and its switch and becomes an `ems_solarflow` entry. A device
 published under another id is another device to EMS; remove the old entry and
 add that one.
@@ -1381,7 +1383,7 @@ catalog device's offer is refused before anything is merged.
 
 **An installed entry takes the edits every device has, and no others.** The
 maintenance page renames it, switches it on or off (off: kept, but neither read
-nor shown nor counted), moves it to another broker with **Use connection** and
+nor shown nor counted), moves it to another broker with **Use this connection** and
 removes it -- and writes everything else back unchanged rather than treating it
 as the nearest kind it knows. A move is accepted only for a proposal the server
 resolved from current discovery that names the same catalog family and device
@@ -1467,13 +1469,13 @@ only ever satisfied by that broker's telemetry. Define profiles under
 }
 ```
 
-The Admin Fresh Install and Maintenance flows assign new inverters compact
+The Admin's guided setup and **Settings & devices** assign new inverters compact
 operational names (`INV_1`, `INV_2`, …) across Local API and MQTT transports.
-That `name` is the stable key used by runtime state, logs, dashboard devices,
-and the EMS Flowchart. Model, address, serial/device ID, transport, maximum
+That `name` is the stable key used by runtime state, logs, and the dashboard's
+**Devices** and **Control** pages. Model, address, serial/device ID, transport, maximum
 power, and hardware generation remain separate metadata. Existing config names
 are not migrated automatically, and the proposed compact name can be edited
-before applying.
+before saving.
 
 Notes:
 

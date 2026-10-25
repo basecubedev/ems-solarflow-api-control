@@ -1,7 +1,8 @@
 # Operating-system updates
 
 Open **Updates**. The operating system is patched in place with `apt`,
-and a major OS generation change means writing the card again.
+and a major OS generation change means writing the card again. The step-by-step
+guide is [Updates](../user/appliance/updates.md).
 
 There is one update path and no mode to be in. What the page adds beside the
 package list is the Appliance Manager's own package, which is updated
@@ -37,7 +38,8 @@ stop apt here as they stop the install.
 
 The index age is shown beside the counts, and an index older than seven days
 raises a warning that names the number of days. **Refresh package indexes**
-below refreshes it at any time.
+under **Package-manager recovery** (always shown in Expert) refreshes it at any
+time.
 
 | Item | Meaning |
 |---|---|
@@ -52,9 +54,11 @@ below refreshes it at any time.
 
 ## Install security updates
 
-Basic mode offers **Install security updates**. Only the packages the appliance
-itself parsed out of a simulated apt run are upgraded — the browser never sends
-a package name.
+**Plan security updates** on the **Operating system** card, or **Install
+security updates** on the **Raspberry Pi OS** card above it and in the
+Overview's quick actions, plans them. Only the packages the appliance itself
+parsed out of a simulated apt run are upgraded — the browser never sends a
+package name.
 
 No install removes a package. The plan is read from `apt-get -s upgrade`, which
 never removes anything, while the security install runs `apt-get install
@@ -114,18 +118,20 @@ shows failures explicitly.
 
 ## Install all updates (Expert mode)
 
-Expert mode adds **Install all available OS updates**. It uses the same plan,
-confirmation and verification path.
+Expert mode adds **Plan all updates**. It uses the same plan, confirmation and
+verification path.
 
 ## Package-manager recovery (Expert mode)
 
-Three strictly defined actions:
+**Package-manager recovery** on **Updates** is always shown in Expert, and in
+Basic when the check failed or the package manager needs recovery. Three
+strictly defined actions, each a plan confirmed with **Run repair**:
 
 | Action | What it runs |
 |---|---|
-| Complete pending package configuration | `dpkg --configure -a` |
-| Repair package dependencies | `apt-get -y -f install` |
-| Refresh package indexes | `apt-get update --error-on=any` |
+| **Complete pending configuration** | `dpkg --configure -a` |
+| **Repair dependencies** | `apt-get -y -f install` |
+| **Refresh package indexes** | `apt-get update --error-on=any` |
 
 There are no free-form apt arguments. **A real active package-manager lock is
 never removed** — the operation refuses with `package_lock_held` and asks you to
@@ -216,10 +222,10 @@ counts against it.
 | Outcome | What the appliance does |
 |---|---|
 | The gate passes | The deadline is retired and the install stands. |
-| The gate has not passed when the deadline expires | `previous.deb` is installed again, and the console reports *reverted*. |
-| There is no `previous.deb` | The console reports *revert unavailable*, and the appliance is left to a person. |
-| `dpkg` refuses the previous package too | The next tick tries again, up to five times, and only then does the console report *revert failed*. |
-| The deadline record cannot be read by the reverter | Nothing is installed. The record is retired, the console reports *revert unavailable*, and the appliance is left to a person. A record the *console* cannot read, but the reverter can, holds Install and Revert shut until the reverter retires it. |
+| The gate has not passed when the deadline expires | `previous.deb` is installed again, and the console reports **Put back** (`reverted`) under **Last install**. |
+| There is no `previous.deb` | The console reports **Nothing to go back to** (`revert_unavailable`), and the appliance is left to a person. |
+| `dpkg` refuses the previous package too | The next tick tries again, up to five times, and only then does the console report **Going back failed** (`revert_failed`). |
+| The deadline record cannot be read by the reverter | Nothing is installed. The record is retired, the console reports **Nothing to go back to** (`revert_unavailable`), and the appliance is left to a person. A record the *console* cannot read, but the reverter can, holds Install and Revert shut until the reverter retires it. |
 
 The retries are there because the commonest reason dpkg refuses is a frontend
 lock another `apt` run holds — often the operator repairing the package manager

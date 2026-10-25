@@ -159,9 +159,10 @@ A setting is written only where all of this holds:
 - its model is in the hardware catalogue with the setting, which the ZenSDK
   models (SolarFlow 800, 800 Pro, 800 Pro 2, 800 Plus, 1600 AC+, 2400 AC,
   2400 AC+, 2400 Pro, 3000 and 4000 Mix AC+) are, and its report carries the
-  setting's properties; the dashboard and the Schedule tab offer a setting
-  only then, and the device's runtime card keeps one set earlier listed with
-  its value, so it can be handed back;
+  setting's properties; the dashboard's runtime settings and its **Schedule**
+  page offer a setting only then, and the device's card under **Runtime
+  settings** keeps one set earlier listed with its value, so it can be handed
+  back;
 - `allow_state_reconciliation_writes` is on, the EMS is not in dry run,
   simulation or replay, and neither the EMS nor the device is switched off
   (off is off).
@@ -268,14 +269,15 @@ run, the Admin's maintenance mirror and `emsctl` never settle the request.
 ## Config → runtime convergence (Admin maintenance)
 
 A few scalar values are writable in **both** `config.json` (the Admin console) and
-`runtime-state.json` (the Dashboard control tab and `emsctl`). For these keys the
+`runtime-state.json` (the dashboard's **Control** page and `emsctl`). For these keys the
 live EMS resolves the runtime value first, with the config value as the fallback,
 so an Admin edit to `config.json` alone would not take effect until a restart —
 and the runtime value would keep winning even then.
 
-To keep the two stores coherent, Admin maintenance **Apply** mirrors the keys it
-actually changed into runtime-state, one-directionally (config/Admin → runtime;
-runtime is never merged back into config). The overlapping keys are exactly the
+To keep the two stores coherent, the Admin's **Save and apply** on **Settings &
+devices** mirrors the keys it actually changed into runtime-state,
+one-directionally (config/Admin → runtime; runtime is never merged back into
+config). The overlapping keys are exactly the
 Dashboard runtime-write whitelist:
 
 - `system.enabled`, `system.max_total_power`, `system.loop_interval`,
@@ -296,11 +298,11 @@ safety property — only whitelisted keys ever reach runtime-state — is preser
 and is **best-effort**: `config.json` is already written when it runs, so a value
 above the runtime power ceiling, a device not yet present in runtime (newly added
 or renamed), or a read-only/absent runtime file is reported as a per-key skip and
-never fails the Apply. New devices are seeded from config by the EMS on its next
-start. The maintenance editor also shows a per-field provenance badge (installed
-config value vs. live Dashboard override) and a **Put live values back** action
-that writes the installed config values back into runtime-state (it always
-writes the value; it never just clears the override, because the EMS loads
+never fails the save. New devices are seeded from config by the EMS on its next
+start. **Settings & devices** also marks a field whose live Dashboard override
+differs from the installed config value with **Running: …**, and its **Put saved
+values back** action writes the installed config values back into runtime-state
+(it always writes the value; it never just clears the override, because the EMS loads
 `config.json` once per process).
 
 ## Live control snapshot
@@ -315,8 +317,8 @@ never interrupts the control loop: it is logged as
 (`event=control_status_write_recovered`). Simulation, replay, self-test and
 preflight runs do not write it.
 
-`emsctl diagnose --control`, `--control-quality` and the dashboard's Diagnose
-tab read it as their only source of cycle values (see [cli.md](../cli.md#diagnose)).
+`emsctl diagnose --control`, `--control-quality` and the dashboard's **Diagnose**
+page read it as their only source of cycle values (see [cli.md](../cli.md#diagnose)).
 A snapshot older than three loop intervals, and at least 60 s, is reported as
 stale, and its values are not used.
 
