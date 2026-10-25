@@ -5,7 +5,8 @@ Three things claim to agree: the capture spec that writes the images, the
 directory README that says what each one shows and where it is used, and the
 guides that embed them. Nothing checked that they did, so a renamed capture, a
 dropped image or a row pointing at a guide that never embedded it would all read
-as complete.
+as complete. The spec is the directory's one writer, and it photographs the
+Modern console only.
 """
 
 import re
@@ -31,24 +32,14 @@ def images():
     return {path.stem for path in SHOTS.glob("*.png")}
 
 
-GALLERY = ROOT / "scripts" / "capture_appearance_gallery.py"
-
-
 def captures():
-    """Every image this directory is supposed to contain, from both writers.
+    """Every image this directory is supposed to contain, named by the spec's test titles.
 
-    The docs spec photographs the Manager's pages. The appearance gallery
-    photographs one page three times with a single axis changed, which is the
-    only way to document a choice whose whole effect is how something looks.
+    The spec photographs the Manager's pages and draws the appearance strips
+    too, the one page photographed once per value of a single axis.
     """
 
-    written = set(re.findall(r'test\("(appliance-[a-z0-9-]+)"', SPEC.read_text("utf-8")))
-    manifest = GALLERY.read_text("utf-8").split("SCREENS = {", 1)[1].split("\n}", 1)[0]
-    written |= {
-        name[: -len(".png")]
-        for name in re.findall(r'"(appliance-[a-z0-9-]+\.png)"', manifest)
-    }
-    return written
+    return set(re.findall(r'test\("(appliance-[a-z0-9-]+)"', SPEC.read_text("utf-8")))
 
 
 def test_every_image_is_described():
@@ -79,17 +70,38 @@ def test_the_guide_a_row_names_really_embeds_it(name):
 
 
 def test_the_minimum_set_the_task_specified_is_complete():
-    """The nine the documentation plan asked for, by name."""
+    """The screens the guides cannot do without, by name.
+
+    The sign-in, the assistant on a fresh and an installed appliance, the
+    overview on a desktop and a phone, an update planned and running, and the
+    pages for WLAN, backup access and recovery, and the two appearance axes
+    Modern has.
+    """
 
     required = {
         "appliance-first-start-password",
         "appliance-login",
+        "appliance-assistant-fresh",
+        "appliance-assistant",
         "appliance-overview",
+        "appliance-overview-phone",
         "appliance-update-plan",
         "appliance-update-running",
         "appliance-network-wifi",
         "appliance-backup-access",
         "appliance-recovery",
+        "appliance-appearance-themes",
+        "appliance-appearance-density",
     }
 
     assert required - images() == set()
+    assert required - captures() == set()
+
+
+def test_every_capture_photographs_the_modern_console():
+    """The address opens Modern; Classic at /classic/ is deprecated and photographed no more."""
+
+    spec = SPEC.read_text("utf-8")
+
+    assert "/classic/" not in spec
+    assert "#gate" not in spec

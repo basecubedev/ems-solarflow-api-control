@@ -220,29 +220,30 @@ Tags: `@smoke` (fast critical journeys), `@setup`, `@maintenance`,
 ### Documentation screenshots
 
 ```bash
-./scripts/capture-docs-screenshots.sh            # Admin + Dashboard pages
+./scripts/capture-docs-screenshots.sh            # Admin + Dashboard + Appliance pages
 npx playwright test --config=playwright.appliance.config.ts capture-docs \
-    # with EMS_APPLIANCE_CAPTURE_DOCS=1        # Appliance Manager pages
+    --project=chromium # with EMS_APPLIANCE_CAPTURE_DOCS=1  # every Appliance Manager image
 npx playwright test --config=playwright.dashboard.config.ts capture-docs \
     --project=chromium # with EMS_DASHBOARD_CAPTURE_DOCS=1  # every dashboard image
-python3 scripts/capture_appearance_gallery.py    # the Appliance appearance strips
 ```
 
-The first three photograph the product's pages. The last photographs one page
-three times with a single appearance axis changed -- palette, object style,
-density -- because a choice whose entire effect is how something looks cannot be
-documented in prose. The dashboard's spec and the Admin Console's capture
-script (`scripts/capture_admin_docs.mjs`) draw their own strips (colour scheme
-and density, the two axes Modern has) the same way, so every dashboard image,
-the README-level `docs/assets/preview-*.jpg` included, and every Admin image
-has one writer.
+All three photograph the Modern pages. Each draws its own appearance strips --
+the same region of the same page once per colour scheme and once per density,
+the two axes Modern has, laid side by side -- because a choice whose entire
+effect is how something looks cannot be documented in prose. So every
+dashboard image, the README-level `docs/assets/preview-*.jpg` included, every
+Admin image and every Appliance Manager image has one writer: the dashboard's
+spec, the Admin Console's capture script (`scripts/capture_admin_docs.mjs`) and
+the Appliance Manager's spec (`tests/e2e-appliance/capture-docs.spec.ts`).
 All of them use the same deterministic servers as the browser suites, so no
-capture contains a real host, address, serial or key.
+capture contains a real host, address, serial or key. The Appliance Manager's
+spec resets its scripted host into the state each image shows with the options
+of `/api/test/reset` (`never_installed`, `manager_index`, `operation_running`,
+...).
 
 Each screenshot directory carries a `README.md` listing every image, and
 contract tests refuse a capture that is not listed or a listing without an
-image. Two writers share the Appliance directory, so its manifest is a union;
-add a row when you add a capture.
+image; add a row when you add a capture.
 
 ### The other two surfaces
 
@@ -446,9 +447,11 @@ unrelated containers are untouched, and nothing is pushed. Requirements:
 
 Add a screen by adding an entry to `SHOTS` in `scripts/capture_admin_docs.mjs`
 (and, when it needs one, a scenario in the preview), or a test titled with the
-file's name to `tests/e2e-dashboard/capture-docs.spec.ts`, then embed it in a
-guide — `tests/test_docs_user_guides.py` enforces that the manifest, the
-committed files and the asset README stay in step.
+file's name to `tests/e2e-dashboard/capture-docs.spec.ts` or
+`tests/e2e-appliance/capture-docs.spec.ts`, then embed it in a guide —
+`tests/test_docs_user_guides.py` and `tests/test_appliance_screenshot_index.py`
+enforce that the manifest, the committed files and the asset README stay in
+step.
 
 Two traps worth knowing:
 

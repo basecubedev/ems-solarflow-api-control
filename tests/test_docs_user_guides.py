@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Guard the step-by-step user guides and their screenshots.
 
-The Admin Console and EMS Dashboard guides under ``docs/user/admin/`` and
-``docs/user/dashboard/`` are screenshot-led, so these tests protect the parts a
+The Admin Console, EMS Dashboard and Appliance Manager guides under
+``docs/user/admin/``, ``docs/user/dashboard/`` and ``docs/user/appliance/`` are
+screenshot-led, so these tests protect the parts a
 reader notices when they rot: a guide that lost its screenshot, an image path
 that no longer resolves, a committed screenshot nobody embeds, a capture that
 silently produced the same screen twice, and the capture tooling itself.
@@ -28,6 +29,9 @@ ADMIN_CAPTURE_SCRIPT = ROOT / "scripts" / "capture_admin_docs.mjs"
 DASHBOARD_SHOTS = ROOT / "docs" / "assets" / "screenshots" / "dashboard"
 DASHBOARD_PREVIEWS = ROOT / "docs" / "assets"
 DASHBOARD_CAPTURE_SPEC = ROOT / "tests" / "e2e-dashboard" / "capture-docs.spec.ts"
+APPLIANCE_GUIDES = ROOT / "docs" / "user" / "appliance"
+APPLIANCE_SHOTS = ROOT / "docs" / "assets" / "screenshots" / "appliance"
+APPLIANCE_CAPTURE_SPEC = ROOT / "tests" / "e2e-appliance" / "capture-docs.spec.ts"
 
 REQUIRED_ADMIN_GUIDES = [
     "index.md",
@@ -54,6 +58,23 @@ REQUIRED_DASHBOARD_GUIDES = [
     "appearance.md",
 ]
 
+REQUIRED_APPLIANCE_GUIDES = [
+    "index.md",
+    "install.md",
+    "first-start.md",
+    "assistant.md",
+    "overview.md",
+    "updates.md",
+    "network.md",
+    "backup.md",
+    "recovery.md",
+    "appearance.md",
+]
+
+GUIDES_WITHOUT_SCREENSHOTS = {
+    "appliance/install.md": "flashing the card happens in Raspberry Pi Imager, before the console exists",
+}
+
 IMAGE_RE = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<src>[^)]+)\)")
 LINK_RE = re.compile(r"(?<!!)\[[^\]]*\]\((?P<src>[^)]+)\)")
 
@@ -75,11 +96,19 @@ def read(path):
 
 
 def guide_files():
-    return sorted(ADMIN_GUIDES.glob("*.md")) + sorted(DASHBOARD_GUIDES.glob("*.md"))
+    return (
+        sorted(ADMIN_GUIDES.glob("*.md"))
+        + sorted(DASHBOARD_GUIDES.glob("*.md"))
+        + sorted(APPLIANCE_GUIDES.glob("*.md"))
+    )
 
 
 def screenshot_files():
-    return sorted(ADMIN_SHOTS.glob("*.png")) + sorted(DASHBOARD_SHOTS.glob("*.png"))
+    return (
+        sorted(ADMIN_SHOTS.glob("*.png"))
+        + sorted(DASHBOARD_SHOTS.glob("*.png"))
+        + sorted(APPLIANCE_SHOTS.glob("*.png"))
+    )
 
 
 def embedded_images(doc):
@@ -102,6 +131,8 @@ def test_required_guides_exist():
         assert (ADMIN_GUIDES / name).is_file(), f"docs/user/admin/{name}"
     for name in REQUIRED_DASHBOARD_GUIDES:
         assert (DASHBOARD_GUIDES / name).is_file(), f"docs/user/dashboard/{name}"
+    for name in REQUIRED_APPLIANCE_GUIDES:
+        assert (APPLIANCE_GUIDES / name).is_file(), f"docs/user/appliance/{name}"
 
 
 def test_every_guide_has_a_single_title():
@@ -122,7 +153,16 @@ def test_workflow_guides_follow_the_documented_structure():
 
 def test_every_guide_embeds_at_least_one_screenshot():
     for doc in guide_files():
+        if doc.relative_to(ROOT / "docs" / "user").as_posix() in GUIDES_WITHOUT_SCREENSHOTS:
+            continue
         assert embedded_images(doc), f"{doc.relative_to(ROOT)} embeds no screenshot"
+
+
+def test_a_guide_without_a_screenshot_is_a_listed_exception():
+    for name in GUIDES_WITHOUT_SCREENSHOTS:
+        doc = ROOT / "docs" / "user" / name
+        assert doc.is_file(), f"exception for a guide that does not exist: {name}"
+        assert not embedded_images(doc), f"{name} embeds a screenshot now; drop its exception"
 
 
 # --- Screenshots resolve, are used, and are real PNGs ----------------------
@@ -185,7 +225,7 @@ def test_embedded_screenshots_have_descriptive_alt_text():
 
 
 def test_screenshots_stay_inside_the_documentation_asset_directories():
-    allowed = {ADMIN_SHOTS.resolve(), DASHBOARD_SHOTS.resolve()}
+    allowed = {ADMIN_SHOTS.resolve(), DASHBOARD_SHOTS.resolve(), APPLIANCE_SHOTS.resolve()}
     for doc in guide_files():
         for _, target in embedded_images(doc):
             assert target.parent.resolve() in allowed, (
@@ -222,6 +262,7 @@ def test_capture_tooling_present():
         "scripts/capture-docs-screenshots.sh",
         "scripts/capture_admin_docs.mjs",
         "tests/e2e-dashboard/capture-docs.spec.ts",
+        "tests/e2e-appliance/capture-docs.spec.ts",
         "scripts/serve_admin_docs_preview.py",
         "scripts/serve_dashboard_preview.py",
         "scripts/admin_docs_preview.js",
@@ -229,14 +270,7 @@ def test_capture_tooling_present():
         assert (ROOT / rel).is_file(), rel
     assert (ADMIN_SHOTS / "README.md").is_file()
     assert (DASHBOARD_SHOTS / "README.md").is_file()
-
-
-def _capture_outputs(module_path):
-    """Basenames the given capture script declares in its SCREENS mapping."""
-
-    text = read(module_path)
-    body = text.split("SCREENS = {", 1)[1].split("\n}", 1)[0]
-    return set(re.findall(r'"([a-z0-9-]+\.png)"', body))
+    assert (APPLIANCE_SHOTS / "README.md").is_file()
 
 
 def _admin_captures():
@@ -252,13 +286,19 @@ def _dashboard_captures(prefix, suffix):
     return {f"{title}{suffix}" for title in titles}
 
 
+def _appliance_captures():
+    """Files the Appliance Manager capture spec writes, named by its test titles."""
+
+    return {f"{title}.png" for title in re.findall(r'test\("(appliance-[a-z0-9-]+)"', read(APPLIANCE_CAPTURE_SPEC))}
+
+
 def test_capture_manifest_matches_the_committed_screenshots():
     """Each screenshot directory has exactly one writer, and its manifest says which files.
 
     Every Admin Console image comes from capture_admin_docs.mjs, named by the
-    ``file:`` of each shot; every dashboard image from one Playwright spec,
-    named by its test titles. The appearance gallery and the Classic capture
-    scripts write into neither directory any more.
+    ``file:`` of each shot; every dashboard image and every Appliance Manager
+    image from its own Playwright spec, named by its test titles. The retired
+    appearance gallery and the Classic capture scripts write into none of them.
     """
 
     declared = _admin_captures()
@@ -272,6 +312,13 @@ def test_capture_manifest_matches_the_committed_screenshots():
     committed = {p.name for p in DASHBOARD_SHOTS.glob("*.png")}
     assert declared == committed, (
         f"dashboard capture manifest drifted: only declared={sorted(declared - committed)} "
+        f"only committed={sorted(committed - declared)}"
+    )
+
+    declared = _appliance_captures()
+    committed = {p.name for p in APPLIANCE_SHOTS.glob("*.png")}
+    assert declared == committed, (
+        f"appliance capture manifest drifted: only declared={sorted(declared - committed)} "
         f"only committed={sorted(committed - declared)}"
     )
 
@@ -298,11 +345,6 @@ def test_every_dashboard_preview_is_embedded_and_listed():
         assert path.name in listing, f"dashboard screenshot README does not list {path.name}"
 
 
-def test_the_appearance_gallery_leaves_the_dashboard_and_the_admin_console_to_their_captures():
-    gallery = _capture_outputs(ROOT / "scripts" / "capture_appearance_gallery.py")
-    assert not {name for name in gallery if name.startswith(("dashboard-", "admin-"))}
-
-
 def test_every_admin_capture_declares_a_preview_scenario():
     """A shot names the installation it shows with a scenario the preview serves."""
 
@@ -326,10 +368,31 @@ def test_admin_guides_describe_the_modern_console():
     assert offenders == [], "\n".join(offenders)
 
 
+def test_appliance_guides_describe_the_modern_console():
+    """Classic's labels are gone from the guides; Classic is named only as the deprecated fallback."""
+
+    stale = re.compile(
+        r"\*\*(?:Restart Admin|Repair Admin|Install Admin|Enable SSH|Disable SSH|Theme|Style|Scan)\*\*"
+        r"|SSH & Backup Access|System Updates|/classic/#"
+    )
+    offenders = [
+        f"{doc.relative_to(ROOT)}: {match.group(0)}"
+        for doc in sorted(APPLIANCE_GUIDES.glob("*.md"))
+        for match in stale.finditer(read(doc))
+    ]
+    assert offenders == [], "\n".join(offenders)
+
+
+def _listed_as(path):
+    """The Admin and dashboard READMEs list files; the appliance README lists capture IDs."""
+
+    return f"`{path.stem}`" if path.parent == APPLIANCE_SHOTS else path.name
+
+
 def test_asset_readmes_list_every_screenshot():
-    for shots in (ADMIN_SHOTS, DASHBOARD_SHOTS):
+    for shots in (ADMIN_SHOTS, DASHBOARD_SHOTS, APPLIANCE_SHOTS):
         listing = read(shots / "README.md")
-        missing = [p.name for p in shots.glob("*.png") if p.name not in listing]
+        missing = [p.name for p in shots.glob("*.png") if _listed_as(p) not in listing]
         assert missing == [], f"{shots.name} README does not list: {missing}"
 
 
@@ -345,6 +408,7 @@ def test_docs_index_links_the_step_by_step_guides():
     text = read(ROOT / "docs" / "README.md")
     assert "user/admin/index.md" in text
     assert "user/dashboard/index.md" in text
+    assert "user/appliance/index.md" in text
 
 
 def test_project_overview_links_the_step_by_step_guides():
@@ -357,3 +421,4 @@ def test_readme_routes_to_the_step_by_step_guides():
     text = read(ROOT / "README.md")
     assert "docs/user/admin/index.md" in text
     assert "docs/user/dashboard/index.md" in text
+    assert "docs/user/appliance/index.md" in text

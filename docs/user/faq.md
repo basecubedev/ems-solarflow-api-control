@@ -390,7 +390,8 @@ discovery can see the real LAN. See [troubleshooting.md](troubleshooting.md) for
 ### How do I create a support bundle?
 
 If the Admin Console offers a support bundle action, use that first. On the
-appliance, use **Support archive** in its own web interface.
+appliance, use **Create support archive** on the Appliance Manager's
+**Diagnostics** page.
 
 For Docker Bootstrap or advanced shell use:
 

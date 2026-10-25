@@ -121,7 +121,7 @@ sequenceDiagram
     participant ems as EMS
 
     you->>pi: flash the card, power on, set the password
-    you->>pi: Install Admin
+    you->>pi: Install EMS Admin
     pi->>admin: download, pin, start, check it answers
     you->>admin: Guided Setup
     admin->>admin: 01 Release · 02 Devices · 03 Config
@@ -131,8 +131,8 @@ sequenceDiagram
 ```
 
 1. **The Appliance Manager** comes with the card. You open it, choose the
-   password, and press **Install Admin**. See
-   [first start](appliance/first-start.md).
+   password, and its [assistant](appliance/assistant.md) leads you to **Install
+   EMS Admin**. See [first start](appliance/first-start.md).
 2. **The Admin Console** walks you through
    [Guided Setup](admin/guided-setup.md): pick a system build, let it find your
    Zendure devices and grid meter, review the configuration. Nothing is written

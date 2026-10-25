@@ -38,8 +38,17 @@ it changes, and what to do when the result differs.
 
 ### Appliance — [all guides](appliance/index.md)
 
-Flashing a Raspberry Pi, first start, updates, network, backups and recovery
-for the dedicated appliance image.
+| Guide | Use |
+| --- | --- |
+| [Flashing the card](appliance/install.md) | Download the image for your board, check it, write the card |
+| [First start](appliance/first-start.md) | Find the box, create the password, install EMS Admin |
+| [The assistant](appliance/assistant.md) | Where to start: what is still to do on the Raspberry Pi, and the way to each task |
+| [Overview page](appliance/overview.md) | The verdict, the tiles, the quick actions; how a plan and its confirmation work |
+| [Updates](appliance/updates.md) | Raspberry Pi OS, EMS Admin and the Appliance Manager itself |
+| [Network](appliance/network.md) | WLAN with automatic fallback, hostname, time zone |
+| [SSH & backup access](appliance/backup.md) | Copy backups off, SSH keys, the rescue account |
+| [When it stops working](appliance/recovery.md) | No page, no EMS, a failed update, a lost password |
+| [Appearance, language and phone](appliance/appearance.md) | Colour scheme, language, density, the bar on a phone |
 
 ### EMS Dashboard — [all guides](dashboard/index.md)
 

@@ -360,6 +360,16 @@ def main():
                     "message": "the EMS deployment changed after this update was confirmed",
                 },
             )
+        if options.get("operation_running"):
+            operation = services.operations.create(
+                "updates.install",
+                {"scope": "security", "packages": ["openssl", "linux-image-arm64"]},
+            )
+            services.operations.await_confirmation(operation.operation_id, {"plan": True})
+            record = services.operations.get(operation.operation_id, include_token=True)
+            services.operations.confirm(operation.operation_id, record.confirmation_token)
+            services.operations.advance(operation.operation_id, "preflight")
+            services.operations.advance(operation.operation_id, "installing")
         if options.get("rollback_image_missing"):
             previous = services.known_good.previous()
             host.images.pop(previous["admin_reference"], None)

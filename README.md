@@ -82,7 +82,7 @@ EMS); read what that means before you rely on it.
 — one file per board, always the current build. Not under *Packages*: that
 holds the container images the appliance fetches by itself.
 
-[Flashing the card](docs/user/appliance/install.md) · [First start](docs/user/appliance/first-start.md) · [All appliance guides](docs/user/appliance/index.md)
+[Flashing the card](docs/user/appliance/install.md) · [First start](docs/user/appliance/first-start.md) · [The assistant](docs/user/appliance/assistant.md) · [All appliance guides](docs/user/appliance/index.md)
 
 ### On a machine you already run
 
