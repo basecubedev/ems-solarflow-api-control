@@ -132,15 +132,7 @@ def demo_config():
 
     with open(TEMPLATE_PATH, encoding="utf-8") as handle:
         template = json.load(handle)
-    demo = _load_fixture("demo_installation.json")
-    config = _overlay(template, demo["config"])
-    for dotted in demo.get("without", []):
-        *parents, leaf = dotted.split(".")
-        node = config
-        for part in parents:
-            node = node.get(part, {})
-        node.pop(leaf, None)
-    return config
+    return _overlay(template, _load_fixture("demo_installation.json")["config"])
 
 
 DEMO_ISOLATED_ENV = ("EMS_CONFIG_FILE", "EMS_CONFIG_DIR", "EMS_INSTALL_DIR", "EMS_TEMPLATE_FILE", "EMS_ADMIN_DATA_DIR")

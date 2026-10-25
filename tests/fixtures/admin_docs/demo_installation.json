@@ -1,5 +1,5 @@
 {
-  "_note": "The demo installation's own settings, laid over the shipped config/config.template.json, with the template's empty broker credentials left out (the demo has no MQTT broker). The preview serves the settings page, its check and the telemetry view from the merged file through the real Admin builders, so every setting the template gains shows up without editing this file. Fake addresses and DEMO- serials only.",
+  "_note": "The demo installation's own settings, laid over the shipped config/config.template.json. The preview serves the settings page, its check and the telemetry view from the merged file through the real Admin builders, so every setting the template gains shows up without editing this file. Fake addresses and DEMO- serials only.",
   "config": {
     "system": {
       "max_total_power": 1600
@@ -24,10 +24,5 @@
       "type": "shelly",
       "ip": "192.168.1.52"
     }
-  },
-  "without": [
-    "zendure_mqtt.username",
-    "zendure_mqtt.password",
-    "zendure_mqtt.app_key"
-  ]
+  }
 }

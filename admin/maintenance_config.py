@@ -2131,11 +2131,12 @@ def _merge_zendure_mqtt_broker(merged, broker):
                 target["tls"] = False
     elif wanted_tls != stored_tls:
         target["tls"] = wanted_tls
-    username = str(broker.get("username") or "").strip()
-    if username:
-        target["username"] = username
-    elif "username" in target:
-        target.pop("username", None)
+    if "username" in broker:
+        username = str(broker.get("username") or "").strip()
+        if username:
+            target["username"] = username
+        elif target.get("username") not in (None, ""):
+            target.pop("username", None)
     if broker.get("clear_password"):
         target.pop("password", None)
     else:
