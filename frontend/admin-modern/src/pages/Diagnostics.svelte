@@ -59,7 +59,7 @@
 </Card>
 
 {#each checks as check (check.id)}
-  <Card icon="file-check" tone={check.tone} title={check.nameKey ? t(check.nameKey) : check.name} span="span-12" className="check">
+  <Card icon="file-check" tone={check.tone} title={check.nameKey ? t(check.nameKey) : check.name} span="span-12">
     {#snippet actions()}
       {#if check.durationMs !== null}<span class="muted num small">{f.number(check.durationMs)} ms</span>{/if}
       <Status tone={check.tone} text={t(`diagnostics.status.${check.status}`)} />
