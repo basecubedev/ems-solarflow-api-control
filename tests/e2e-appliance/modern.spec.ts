@@ -584,8 +584,13 @@ test.describe("updates", () => {
     await createPassword(page);
     await page.locator(".topbar .seg button", { hasText: "Expert" }).click();
     await open(page, "updates");
+    await page.route("**/api/updates/plan", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      await route.fulfill({ response, json: { ...body, plan: { ...body.plan, held_back_count: 1 } } });
+    });
     await page.getByTestId("updates-install-security").click();
-    const row = page.getByTestId("plan-dialog").locator(".kv > div", { hasText: "free space known" });
+    const row = page.getByTestId("plan-dialog").locator(".kv > div", { hasText: "held back count" });
     await expect(row.locator("dt")).toHaveAttribute("lang", "en");
     await expect(row.locator("dd")).not.toHaveAttribute("lang", "en");
   });
