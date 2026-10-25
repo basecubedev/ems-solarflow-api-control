@@ -308,6 +308,14 @@ def _after_upgrade(overview, tag):
     return _with_live_health(overview)
 
 
+def _admin_replaced(overview, tag):
+    """Midway through the Guided Upgrade to ``tag``: the new Admin console answers, EMS is not replaced yet."""
+
+    overview = copy.deepcopy(overview)
+    overview["components"]["admin"].update(image=f"ghcr.io/example/ems-admin:{tag}", tag=tag)
+    return _with_live_health(overview)
+
+
 def build_routes():
     """The installed demo system: (method, api-path) to the payload the console expects."""
 
@@ -382,6 +390,7 @@ def build_scenarios():
         "GET": {
             "/api/admin/system-alignment/status": alignment(upgrade["upgrade_transitions"]["running"]),
             "/api/admin/workflow-lifecycle": upgrade["upgrade_lifecycle"],
+            "/api/admin/maintenance/overview": _admin_replaced(overview["overview"], upgrade["upgrade_validate"]["target_release"]),
             jobs: upgrade["upgrade_job_running"],
         },
         "POST": {"/api/admin/maintenance/upgrade/resume": upgrade["upgrade_resume"]},

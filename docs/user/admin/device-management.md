@@ -87,8 +87,9 @@ finds; your changes stay.
 
 **What you can change:** the **Enabled** switch, the **Device name**, the
 address, the **Serial number**, the **Device output limit**, the **Minimum
-SoC** and **Maximum SoC**; under **Advanced settings** the PV size, PV
-priority, battery size, AC charging and the winter policy.
+SoC** and **Maximum SoC**; under **Advanced settings** smart mode, the PV
+size, the winter policy, PV priority, the battery size, AC discharge, AC
+charging and the AC charge limit.
 
 **What it changes:** your unsaved changes only. `config/config.json` is
 untouched until you save.
