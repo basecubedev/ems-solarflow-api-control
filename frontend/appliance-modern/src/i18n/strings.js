@@ -647,6 +647,7 @@ export const STRINGS = {
   "plan.field.reboot_required_before": s("A restart was already pending", "Ein Neustart stand bereits an", "Er stond al een herstart open", "Un redémarrage était déjà en attente"),
   "plan.field.minimum_free_megabytes": s("Space required", "Benötigter Platz", "Benodigde ruimte", "Espace requis"),
   "plan.field.free_megabytes": s("Free space", "Freier Platz", "Vrije ruimte", "Espace libre"),
+  "plan.field.free_space_known": s("Free space could be measured", "Freier Platz ließ sich messen", "Vrije ruimte kon worden gemeten", "Espace libre mesurable"),
   "plan.field.lock_state": s("Package-manager lock", "Sperre der Paketverwaltung", "Vergrendeling van het pakketbeheer", "Verrou du gestionnaire de paquets"),
   "plan.field.healthy": s("Nothing to repair", "Nichts zu reparieren", "Niets te herstellen", "Rien à réparer"),
   "plan.field.repository": s("Image repository", "Image-Repository", "Image-repository", "Dépôt de l’image"),

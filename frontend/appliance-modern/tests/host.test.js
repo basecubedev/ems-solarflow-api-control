@@ -81,6 +81,13 @@ test("a plan reads in Classic's order, hides the seal in Basic and leaves object
   assert.equal(planBlocked({}), false);
 });
 
+test("free space is shown once measured, and said to be unmeasured rather than 0 MB when it is not", () => {
+  const measured = planFields({ minimum_free_megabytes: 1024, free_megabytes: 141312, free_space_known: true }, false);
+  assert.deepEqual(measured.map((field) => field.key), ["minimum_free_megabytes", "free_megabytes"]);
+  const unmeasured = planFields({ minimum_free_megabytes: 1024, free_megabytes: 0, free_space_known: false }, false);
+  assert.deepEqual(unmeasured.map((field) => [field.key, field.value, field.known]), [["minimum_free_megabytes", 1024, true], ["free_space_known", false, true]]);
+});
+
 test("a plan's vocabulary values are translated, an unknown one stays the appliance's English, data stays data", () => {
   assert.deepEqual(vocabularyWords("action", "restart"), { key: "admin.restart" });
   assert.deepEqual(vocabularyWords("action", "fix_broken"), { key: "repair.fix_broken" });

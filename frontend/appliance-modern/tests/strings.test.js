@@ -10,7 +10,7 @@ import { PAGES } from "../src/app/pages.js";
 import { KNOWN_ERRORS } from "../src/lib/errors.js";
 import { FINDINGS, STATUS_SECTIONS } from "../src/lib/findings.js";
 import { OPERATION_STATES, OPERATION_TYPES, VERIFICATION_FAILURES } from "../src/lib/operations.js";
-import { PLAN_FIELD_ORDER, PLAN_SCOPES } from "../src/lib/plan.js";
+import { PLAN_EXTRA_FIELDS, PLAN_FIELD_ORDER, PLAN_SCOPES } from "../src/lib/plan.js";
 import { RELEASE_TRACKS } from "../src/lib/host.js";
 import { MANAGER_DIRECTIONS, MANAGER_OUTCOMES, MANAGER_VERDICTS } from "../src/lib/manager.js";
 import { EXPORT_ACCESS_STATUSES, EXPORT_STATES, RESCUE_SSH_STATES } from "../src/lib/access.js";
@@ -81,7 +81,7 @@ const GENERATED = [
   ...OPERATION_TYPES.map((type) => `op.${type}`),
   ...Object.keys(OPERATION_STATES).map((state) => `opstate.${state}`),
   ...VERIFICATION_FAILURES.map((code) => `verify.${code}`),
-  ...PLAN_FIELD_ORDER.map((field) => `plan.field.${field}`),
+  ...[...PLAN_FIELD_ORDER, ...PLAN_EXTRA_FIELDS].map((field) => `plan.field.${field}`),
   ...PLAN_SCOPES.map((scope) => `plan.scope.${scope}`),
   ...RELEASE_TRACKS.flatMap((track) => [`track.${track}`, `track.${track}.help`]),
   ...MANAGER_DIRECTIONS.map((direction) => `manager.direction.${direction}`),

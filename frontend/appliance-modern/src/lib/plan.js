@@ -48,6 +48,9 @@ export const PLAN_FIELD_ORDER = Object.freeze([
   "authority_plan",
 ]);
 
+/** Fields Classic shows under their raw key that Modern names; they read after Classic's order. */
+export const PLAN_EXTRA_FIELDS = Object.freeze(["free_space_known"]);
+
 /** The fingerprint seals the plan; a mechanism, not a statement about this appliance, so it sits with the digests. */
 export const PLAN_EXPERT_FIELDS = Object.freeze([
   "authority",
@@ -92,11 +95,17 @@ function rank(key) {
   return index === -1 ? PLAN_FIELD_ORDER.length : index;
 }
 
-/** The scalar facts of a plan in reading order; objects and lists have blocks of their own. */
+/**
+ * The scalar facts of a plan in reading order; objects and lists have blocks
+ * of their own. Free space the host could not measure is said as such, never
+ * as the 0 MB the agent sends in its place, and a measured one needs no word.
+ */
 export function planFields(plan, expert) {
   return Object.keys(plan || {})
     .filter((key) => {
       if (PLAN_SKIP_FIELDS.includes(key)) return false;
+      if (key === "free_space_known") return plan[key] === false;
+      if (key === "free_megabytes" && plan.free_space_known === false) return false;
       if (!expert && PLAN_EXPERT_FIELDS.includes(key)) return false;
       const value = plan[key];
       if (value === null || value === undefined || value === "") return false;
@@ -107,7 +116,7 @@ export function planFields(plan, expert) {
       const value = plan[key];
       return {
         key,
-        known: PLAN_FIELD_ORDER.includes(key),
+        known: PLAN_FIELD_ORDER.includes(key) || PLAN_EXTRA_FIELDS.includes(key),
         label: key.replace(/_/g, " "),
         kind: typeof value === "boolean" ? "bool" : /_megabytes$/.test(key) ? "megabytes" : "text",
         value,
