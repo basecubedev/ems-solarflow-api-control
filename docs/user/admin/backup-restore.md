@@ -2,194 +2,236 @@
 
 ## Purpose
 
-Create a snapshot of your installation, inspect what a backup contains, and roll
-one back safely.
+Save a copy of your installation, take it off the machine, and put an older
+copy back — with a preview before anything is written and a copy of the
+current state made first.
 
 ## When to use this workflow
 
-- Before any change you are unsure about.
-- Before an upgrade (Guided Upgrade does this for you, and you should leave it
-  enabled).
-- To recover after a bad change or a failed upgrade.
+- Before an update or a bigger settings change (the
+  [Guided Upgrade](guided-upgrade.md) makes one by itself).
+- After a first installation — the [assistant](assistant.md) shows it as the
+  last of its steps.
+- To roll back a change, or move an installation to a new card or disk.
 
 ## Prerequisites
 
-- An installed EMS and the Admin Console logged in.
-- Free disk space under `data/backups/`.
-- For an **encrypted** backup: the password it was created with.
+- An installed EMS, and the console signed in.
+- Disk space under `data/backups/`.
 
-## Creating a backup
+## Step-by-step instructions
 
-![Backup / restore panel with backup status, the create-backup scope checkboxes and the backup management list](../../assets/screenshots/admin/admin-backup-restore.png)
+### 1 — Read the backups card
 
-**Where:** Maintenance → **Backup / restore**.
+![Backups page: four backups, the newest at 11:12, the folder, the four kinds of backup with Everything recommended, Keep a copy elsewhere with Bring a backup back, and the list with a complete System backup and its archives](../../assets/screenshots/admin/admin-backups.png)
 
-### 1 — Check the status
+**Where:** **Backups**; the **Last backup** tile on the Overview, the **Back up
+or restore** tile and **Make a first backup** of the assistant lead here too.
 
-**What you see:** *01 Backup status* — the **backup directory**, how many backups
-exist, and the **latest** timestamp. **Refresh** re-reads it.
+**What you see:** **Backups** — how many, the **Newest**, and the **Folder**
+they live in. A note warns when some backups are encrypted, when an archive
+cannot be read, or when the folder is outside the EMS installation. The
+refresh button reads it again.
 
-### 2 — Pick a scope
+### 2 — Create a backup
 
-**What you see:** *02 Create backup* — *pick a scope; safety verification runs
-automatically.*
+**What you see:** **Create a backup** — *Every new backup is verified right
+after it is written* — with four kinds:
 
-| Scope | Contents |
+| Kind | Contents |
 | --- | --- |
-| **Config / runtime state / dashboard auth** | `config.json`, runtime state, dashboard auth/cert files |
-| **Local SQLite databases** | Consistent snapshots of the local history/state databases |
-| **Bundled InfluxDB data** | The bundled analytics time-series database |
+| **Everything** (Recommended) | Settings, the local databases and, where it runs here, the analytics data — kept together as one backup set |
+| **Settings only** | `config.json`, the runtime state and the dashboard password and certificates |
+| **Local databases** | Consistent copies of the history and state databases |
+| **Analytics data** | The bundled analytics database |
 
-Scopes you cannot use are disabled with the reason shown — for example *Bundled
-InfluxDB is not enabled — skipped.*
+A kind you cannot use is greyed out with the reason — for example *Analytics
+are switched off in the settings.*, or that an external InfluxDB is backed up
+where it runs.
 
-**What you select:** the scopes you want, then **Create backup**.
+**What you select:** a kind, then **Create backup**.
 
-**What it changes:** a new archive is written under the backup directory.
+**What it changes:** new archives are written under the backup folder.
 **Nothing in your running system is modified** — creating a backup is not a
-write to config, containers or hardware.
+write to settings, containers or hardware.
 
-**Expected result:** the new archive appears in *03 Backup management* with its
-creation time, size, file count, EMS version and build.
+**Expected result:** each step is shown as it runs, then *The backup was
+created and verified.* The new backup appears at the top of **Your backups**.
+*The backup was created, but without the analytics data.* means the analytics
+part failed; the warning below it says why.
 
-### 3 — Where backups live
+> **Backups may contain secrets and private energy data.** Backups created
+> here are not encrypted (*Encrypted backups cannot be created here yet;
+> existing encrypted ones can be inspected and restored with their password.*).
+> Copy them somewhere safe off this host, and treat them like credentials.
 
-Backups are normal **EMS backup archives** under `data/backups/`. They are the
-same format the CLI produces — the Admin Console orchestrates, EMS/Core owns the
-format.
-
-> **Backups may contain secrets and private energy data.** Copy them somewhere
-> safe off this host, and treat them like credentials.
-
-### 3b — Take a copy off this machine, and bring one back
+### 3 — Keep a copy elsewhere
 
 A backup that only exists on this machine does not survive the machine. If the
 disk or SD card fails — the situation a backup is for — it fails with it.
 
-**Download**, on any backup in the list, hands you that archive. Keep the ones
-that matter somewhere else.
+**Download** (the arrow on any backup) hands you that archive byte for byte.
+Keep the ones that matter somewhere else.
 
-**Bring a backup back** puts such a file into `data/backups/`, where the normal
-flow finds it: inspect it, preview a restore, restore it. Importing only adds
-the file; it never restores anything on its own.
+**Bring a backup back**, in **Keep a copy elsewhere**, uploads such a file into
+the backup folder, where the normal flow finds it: look at it, preview a
+restore, restore it. *ems-config-manual-… is here now. Use Restore to put it
+back.* Bringing one back only adds the file; it never restores anything on its
+own.
 
-An import is refused unless the file is what its name says it is. It must carry
-the name a backup was created under
-(`ems-<type>-<purpose>-<timestamp>.tar.gz`, optionally `.enc`), and an
-unencrypted archive must contain a manifest of that type — the restore path
-reads the type from the name, so a renamed archive would be restored the wrong
-way. An import never overwrites a stored backup: a name that already exists is
-kept beside it.
+The file is refused unless it is what its name says it is. It must carry the
+name a backup was created under (`ems-<type>-<purpose>-<timestamp>.tar.gz`,
+optionally `.enc`), and an unencrypted archive must contain a manifest of that
+type — the restore path reads the type from the name, so a renamed archive
+would be restored the wrong way. It never overwrites a stored backup: a name
+that already exists is kept beside it. Encrypted archives come back as they
+are; unlocking one still needs its password.
 
-Encrypted archives import as they are; unlocking one still needs its password.
+### 4 — Look inside a backup
 
-## Inspecting and restoring
-
-### 4 — Inspect a backup
-
-**What you see:** in *03 Backup management*, each backup lists its type
-(`CONFIG`, …), name, created time, size, file count, the EMS version and build it
-came from, and whether it is encrypted.
+**What you see:** **Your backups**, newest first. A backup set (**System
+backup**) shows its members and **Complete**, **Without analytics** or
+**Incomplete**; each archive shows its kind, time, size and EMS version, and
+**Encrypted** where it is.
 
 **What you select:** **Details**.
 
-**What it changes:** nothing. This is a read.
+**What it changes:** nothing. **Details** shows the kind, when and why it was
+made (*By hand*, *Automatic*, *Before a restore*), the version it came from,
+the files and how many are sensitive — *This backup holds passwords or keys.
+Keep its copies somewhere safe.* An encrypted backup asks for its password
+first.
 
 ### 5 — Preview the restore
 
-**What you select:** **Restore preview**.
+![Restore of a settings backup: back up the current state first and undo it automatically if a check fails, one file added, two replaced, four unchanged, the file list and Restore now](../../assets/screenshots/admin/admin-backup-restore.png)
 
-**What it changes:** **nothing.** Restore is preview-first: the preview reports
-what would be replaced and runs the compatibility checks *before* you can
-confirm.
+**What you select:** **Restore** on a backup or a set.
 
-**Expected result:** a clear statement of what the restore would do.
+**What it changes:** **nothing.** The panel *Restore …* — *Nothing is written
+until you confirm* — prepares a preview at once: **Files added**, **Files
+replaced** and **Files unchanged**, and each file with what would happen to it
+(*is added*, *replaces the current file*, *unchanged, already the same*, …).
 
-**If it differs:** an encrypted backup is marked *encrypted — password required*
-and needs its password to be inspected or restored. Without it, the archive
-cannot be read — there is no recovery path for a lost backup password.
+**The two options**, both on by default:
 
-### 6 — Confirm the restore
+- **Back up the current state first** — *A copy of what is there now, so you
+  can go back.*
+- **Undo it automatically if a check fails** — *The restored files are
+  checked; if that fails, the copy above is put back.*
 
-**What you select:** confirm the previewed restore.
+Changing an option prepares a new preview; what you confirm is always what is
+on screen.
 
-**What it changes:** the previewed contents are written back. **Every restore
-creates a rollback backup first**, so the state you restored *over* is still
-recoverable.
+**If it differs:** an encrypted backup asks for its password first — **Unlock
+and preview**. Without it, the archive cannot be read; there is no recovery
+path for a lost backup password. *This restore is blocked.* names what blocks
+it.
 
-**Expected result:** the restored config/state is in place. A config restore can
-replace the dashboard auth files, so **you may need to log in again** after a
-restart.
+### 6 — Restore
 
-**If it differs:** if the preview and the current state no longer agree, the
-restore is refused rather than applied to a state you did not review.
+**What you select:** **Restore now**, and confirm in *Restore this backup?*.
+
+**What it changes:** the previewed files are written back — after a copy of
+the current state, unless you switched that off.
+
+**Expected result:** each step is shown as it runs, then *Restored. Restart EMS
+so it uses the restored files.* with **Restart on the Services page**.
+
+**If it differs:**
+
+- *The restore did not start.* — the preview had expired or was already used,
+  or another job holds the backups. Nothing changed; a fresh preview is below.
+  Check it and confirm again.
+- *Your session ended while the restore ran, most likely because it restored
+  the password file.* — sign in again, with the password from the backup if it
+  differs.
+- *Contact with the Admin console broke off.* — the job may still be running
+  there. **Check again** once the console answers.
 
 ## No hidden EMS downgrade
 
-**A restore never silently changes your EMS image.** EMS version downgrade, image
-switching and container restart are intentionally **not** performed by a restore.
+**A restore never silently changes your EMS image.** EMS version downgrade,
+image switching and container restart are intentionally **not** performed by a
+restore. It puts back data and settings files, after compatibility checks; a
+backup's recorded version is informational only. After a restore, restart EMS
+on the **Services** page so it uses the restored files.
 
 If you need to go back to an older EMS version as well, that is a separate,
-deliberate operation — use the CLI for controlled offline operations. Guided
-Upgrade only ever moves forward; see
-[Guided Upgrade](guided-upgrade.md#recovery-or-next-steps).
+deliberate operation — use the CLI for controlled offline operations. The
+Guided Upgrade moves forward, or back by a patch inside the release line you
+run; see [Guided Upgrade](guided-upgrade.md#recovery-or-next-steps).
 
 ## Deleting a backup
 
-**Delete** removes an archive permanently. There is no undo, and a deleted backup
-cannot be used for a rollback later. Keep at least one known-good backup.
+The bin icon on a backup asks *Delete this backup?* — it is deleted from this
+machine and cannot be undone. A backup set asks whether to **Delete the set and
+its archive files** or **Delete only the set and keep its archive files**.
+Only files inside the backup folder can be deleted.
 
 ## Encryption — what is available today
 
-- **Existing encrypted backups can be inspected and restored** with their
-  password.
-- **Creating an encrypted backup from the Admin Console is not available yet.**
-  The panel states this: *"Encrypted backup creation from Admin will follow
-  later."*
+The Admin Console reads encrypted backups and does not create them yet. Create
+an encrypted backup on the EMS host:
 
-To create an encrypted backup today, use the CLI — see
-[Backup/restore internals](../../technical/backup-restore.md).
+```bash
+docker compose exec ems python3 emsctl.py backup create --password
+```
 
-> This page documents what the current buttons do. Anything not listed here as
-> available is future work, not a hidden feature.
+It appears **Encrypted** in the list; **Details** and **Restore** ask for its
+password, which is used for that request only and never logged or kept.
 
 ## Rollback and recovery
 
 | Situation | What to use |
 | --- | --- |
-| A config change went wrong | Restore the config backup made before the change |
-| An upgrade misbehaves | Restore the backup the upgrade created (leave *Create backup* enabled so it exists) |
-| An upgrade failed mid-way | **Unfinished setup or update** first — Resume, or Return to running build. See [Diagnostics and recovery](diagnostics-recovery.md) |
-| A workflow was abandoned | **Unfinished setup or update**; it never deletes a file it cannot prove it owns |
+| A settings change went wrong | Restore the settings backup **Save and apply** made before the change |
+| An update misbehaves | Restore the backup the update made (leave **Back up first** on so it exists) |
+| An update stopped mid-way | The stopped update's **Try again** or **Go back to the version that runs** first — see [Guided Upgrade](guided-upgrade.md#recovery-or-next-steps) |
+| A workflow was abandoned | **Unfinished setup or update** on the System page; it never deletes a file it cannot prove it owns |
 
-**Rollback backups** are made automatically by restores and by config applies, so
-the state you replaced is recoverable even when you did not think to save it.
+- A **copy of the current state** is made before any file is written. If it
+  cannot be made, the restore does not start.
+- **Undo it automatically if a check fails** returns the system to its state
+  before the restore when a check afterwards fails. Files the restore added are
+  removed again; one that changed since, or a database in use, is left in place
+  and named. If the undo itself fails, the result says so and names the copy to
+  restore by hand.
+- For the bundled **analytics data**, the EMS CLI makes and owns that copy;
+  *The bundled analytics database may be replaced by the data in the backup.*
 
 ## What happens in the background
 
-- Backup and restore semantics are owned by **EMS/Core**, not by the Admin
-  Console. The console orchestrates and shows progress; the archive format,
-  verification and restore rules come from the same implementation the CLI uses.
-- Safety verification runs automatically on creation.
-- Restore compatibility is checked against the running system before you can
-  confirm.
+- Every archive is a normal EMS backup archive, the same format
+  `emsctl.py backup` produces. The Admin Console orchestrates; EMS owns the
+  format. A backup set is Admin metadata that groups such archives.
+- A backup and a restore run on the server. Leaving the page does not stop
+  them; the page follows them again when you come back.
+- A restore is bound to the preview you confirmed. If that preview expired or
+  the state changed, it is refused rather than applied to a state you did not
+  review.
+
+## Expected result
+
+A verified backup you can download, and a restore that shows exactly what it
+will do before it does it, with a way back.
 
 ## Warnings and common problems
 
 | Symptom | Meaning | What to do |
 | --- | --- | --- |
-| *encrypted — password required* | The archive is encrypted | Supply its password. A lost password cannot be recovered |
-| Restore refused after preview | State changed since the preview | Preview again and review |
-| Logged out after a config restore | Auth files were part of the restore | Log in with the password from the restored backup |
-| Backup scope greyed out | That data source is not enabled | Expected — e.g. bundled InfluxDB is off |
-| Disk full during backup | No space under `data/backups/` | Free space or delete an old archive |
+| **Analytics data** greyed out | Analytics is off, or an external InfluxDB is used | Back an external one up where it runs |
+| *Some backups are encrypted; they open with their password.* | An encrypted backup is in the list | Enter its password under **Details** or **Restore** |
+| *This archive cannot be read and cannot be restored.* | The archive is damaged | Use another backup |
+| The sign-in comes back after a restore | The restore put back the password file | Sign in with the password from the backup |
+| *Contact with the Admin console broke off* | The page lost the console while the job ran | **Check again** once the console answers |
+| *The restore did not start* | The preview expired or was used | Check the fresh preview and confirm again |
 
 ## Recovery or next steps
 
-- Failed workflow → [Diagnostics and recovery](diagnostics-recovery.md)
-- Upgrade behaviour → [Guided Upgrade](guided-upgrade.md)
-- Backup from the dashboard →
+- Restart EMS after a restore → [Maintenance](maintenance.md#2--restart-ems-or-repair-analytics)
+- A failed workflow → [Diagnostics and recovery](diagnostics-recovery.md)
+- A backup from the dashboard →
   [Dashboard diagnostics](../dashboard/diagnostics.md#maintenance)
-- CLI and full format detail →
-  [Admin Console: Backup / restore](../admin-backup-restore.md) ·
-  [Backup/restore internals](../../technical/backup-restore.md)
+- Full behavioural reference → [Admin Console: Backup / restore](../admin-backup-restore.md)
+- The CLI equivalents → [Backup and restore (technical)](../../technical/backup-restore.md)

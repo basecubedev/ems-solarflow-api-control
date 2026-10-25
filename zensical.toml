@@ -21,8 +21,8 @@ nav = [
     ] },
     { "Admin Console guides" = [
       "user/admin/index.md",
+      { "Assistant" = "user/admin/assistant.md" },
       { "First start" = "user/admin/first-start.md" },
-      { "Modern design" = "user/admin/modern.md" },
       { "Guided Setup" = "user/admin/guided-setup.md" },
       { "Guided Upgrade" = "user/admin/guided-upgrade.md" },
       { "Maintenance" = "user/admin/maintenance.md" },
@@ -30,6 +30,7 @@ nav = [
       { "MQTT connections" = "user/admin/mqtt.md" },
       { "Backup and restore" = "user/admin/backup-restore.md" },
       { "Diagnostics and recovery" = "user/admin/diagnostics-recovery.md" },
+      { "Appearance and language" = "user/admin/appearance.md" },
       { "Setup reference" = "user/admin-setup.md" },
       { "Maintenance reference" = "user/admin-maintenance.md" },
       { "Backup and restore reference" = "user/admin-backup-restore.md" },

@@ -14,51 +14,194 @@ only on a trusted local machine.
 
 - first setup
 - device discovery
-- config generation
+- settings and devices
 - diagnostics
 - updates
 - backups
 - restore
 
-## Two flows
+## Where to start
 
-The Admin Console start screen detects your install state and recommends one of
-two flows. It never acts silently.
+Opened at its address, the console starts on its **assistant**: it says what
+kind of installation the host has, lists what is still to do — install EMS,
+add your devices, make a first backup — with the button for the next step, and
+links to the page for anything else you came to do. See
+[The assistant](admin/assistant.md).
 
-- **Set up a new system** — for a fresh install or a deliberate reinstall.
-  See the [Admin setup guide](admin-setup.md).
-- **Manage my existing system** — for updates, config changes, diagnostics,
-  backups and restore. See the [Admin maintenance guide](admin-maintenance.md).
+- **Set up a new system** — for a fresh install or a deliberate reinstall: the
+  guided setup. See the [Guided setup](admin/guided-setup.md) and the
+  [setup reference](admin-setup.md).
+- **An existing system** — updates, settings and devices, services,
+  diagnostics, backups and restore each have a page of their own. See
+  [Maintenance](admin/maintenance.md) and the
+  [maintenance reference](admin-maintenance.md).
 
-The console's address opens its newer design, **Modern**, in English, German,
-Dutch or French and on a phone as well; see
-[The Modern Admin console](admin/modern.md). This guide and the ones it links
-describe **Classic**, which is deprecated and answers at `/classic/` until a
-later release removes it; Modern's **Classic view** opens it. Every workflow,
-the guided setup and the guided upgrade included, runs in both
-(see [Updating](admin/modern.md#updating)).
+The console works in English, German, Dutch or French, and on a phone. Its
+previous design, **Classic**, is deprecated and still answers at `/classic/`
+until a later release removes it; **Classic view** at the foot of the side menu
+opens it. Every workflow, the guided setup and the guided upgrade included,
+runs in the current design; see the
+[step-by-step guides](admin/index.md).
 
-Mutating actions preview the change and ask for confirmation. Config apply,
-guided upgrade and restore back up what they replace first.
+Changing actions show what they will do and ask for confirmation. Saving
+settings, the guided upgrade and a restore back up what they replace first.
 
-When Admin updates itself during a guided upgrade, the browser may briefly show a
-reconnect screen. Admin alignment is an automatic stage of the upgrade — see
+When the Admin Console updates itself during a guided upgrade, the page loses
+contact for a moment, reconnects by itself and follows the update on.
+Updating the Admin Console is a step of the upgrade — see
 [Admin alignment (automatic)](admin-maintenance.md#admin-alignment-automatic).
 
 ## What the Admin Console looks like
 
-Two short demos (no audio, demo data only — fake devices, IPs, serials and
-versions) show the main Admin Console workflows. Each demo ships in two formats —
-MP4/H.264 (best for forums and mobile browsers) preferred, with WebM as a
-fallback. If your Markdown viewer does not play a video inline, use a download
-link under it — a static screenshot of the same workflow is shown as a fallback.
+Every screenshot on this page shows the current console, with demo data only
+(fake devices, addresses, serials and versions). The step-by-step guides in
+[docs/user/admin/](admin/index.md) walk through each page in detail.
 
-### Fresh install — Guided Setup with hardware discovery
+### The side menu, the top bar and the Overview
 
-Start page → pick a release → discover devices → review the generated config and
-feature settings → start EMS and open the dashboard.
+![The Overview with the side menu on the left — Overview, Assistant, Updates, Settings and devices, Services, Backups, and under System Diagnostics and System — the top bar with All good, Sign out and the Appearance button, and the verdict Everything is in order with the four tiles, Control and safety and Versions](../assets/screenshots/admin/admin-overview.png)
 
-<video poster="../assets/screenshots/admin/admin-landing.png" controls muted playsinline width="880">
+The side menu lists the pages in two groups, in this order:
+
+```text
+Overview · Assistant · Updates · Settings & devices · Services · Backups
+System: Diagnostics · System
+```
+
+Its foot holds **Open the dashboard**, **Hide menu text** and **Classic view**.
+The top bar names the page and says in one word how the installation is —
+**All good**, **A note**, **Needs a look**, **Needs attention**, **Not
+installed**, **Checking…** or **Unknown state** — a pill that leads to the
+Overview, beside **Sign out** and the **Appearance** button.
+
+The **Overview** answers whether everything is in order: one verdict, what
+needs your attention, ranked and with the way out of each, tiles for EMS, the
+analytics database, control and the last backup, **Control & safety** — what
+your saved settings allow EMS to do — and **Versions**. See
+[Maintenance](admin/maintenance.md#1--read-the-overview).
+
+### The assistant
+
+![The assistant on an installed system: Welcome to EMS SolarFlow, Next steps with Install EMS and Add your devices done, Make a first backup highlighted as the next step with Create backup, Watch your system ready, and What would you like to do? with six tasks](../assets/screenshots/admin/admin-assistant.png)
+
+Opened at its address, the console starts on the **Assistant**: what kind of
+installation the host has, the next steps — **Install EMS**, **Add your
+devices**, **Make a first backup**, then **Watch your system** — each **Done**,
+**To do**, **Later** or **Unknown**, the next one highlighted with its button,
+and six tiles to the pages for what you came to do. Untick **Show this page
+when the console opens** and the console opens on the Overview instead; while
+nothing is installed it always opens here. See
+[The assistant](admin/assistant.md).
+
+### The guided setup
+
+![Guided setup step 01 System Build: the five steps in the stepper, v0.8.16 verified with the six checks passed, and the Progress card](../assets/screenshots/admin/admin-guided-setup-start.png)
+
+The **Guided setup** installs EMS in five steps — **System Build**,
+**Devices**, **Settings**, **Prepare**, **Start EMS** — and installs nothing
+until the last ones. It has no place in the menu: the assistant's **Set up a
+new system**, the Overview of an empty host and the System page open it. See
+[Guided setup](admin/guided-setup.md).
+
+### Updates
+
+![Updates: What runs now v0.8.15 as a proven pair, the Guided upgrade card with Update to v0.8.16, and the available versions grouped Stable releases and Rolling build](../assets/screenshots/admin/admin-updates.png)
+
+**Updates** shows what runs now, recommends a version and runs the guided
+upgrade: choosing a version checks it at once, one confirmation starts it, and
+the page follows it to **Update complete**. See
+[Guided Upgrade](admin/guided-upgrade.md).
+
+### Settings & devices
+
+![Settings and devices on the Features tab: the tabs Features, Safety, Expert and Devices, Search settings, and the features with Winter mode opened](../assets/screenshots/admin/admin-settings-features.png)
+
+**Settings & devices** has four tabs — **Features**, **Safety**, **Expert** and
+**Devices** — and **Search settings** across all of them. There is no
+Basic/Expert switch as on the dashboard: everyday settings are on
+**Features** and **Safety**, the system basics and control tuning on
+**Expert**, and each feature folds its rarer fields away under **Advanced
+settings** and **Expert settings**. A bar at the foot of the page counts your
+unsaved changes; **Check changes** shows what would change, **Save and apply**
+writes it after a backup. The **Devices** tab holds the grid meter, the broker,
+every device and **Search my network**. See
+[Maintenance](admin/maintenance.md#3--change-settings) and
+[Device management](admin/device-management.md).
+
+### Services
+
+![Services: EMS and the analytics database running, Restart and keep in step with the saved settings newer than the running EMS, and Restart EMS now, Repair analytics and Run the checks](../assets/screenshots/admin/admin-services.png)
+
+**Services** shows EMS and the analytics database as they run, what a restart
+changes, **Restart EMS now** and **Repair analytics**. See
+[Maintenance](admin/maintenance.md#2--restart-ems-or-repair-analytics).
+
+### Backups
+
+![Backups: the backup count and folder, Create a backup with Everything recommended, Keep a copy elsewhere with Bring a backup back, and the list of backups with Details, download, Restore and delete](../assets/screenshots/admin/admin-backups.png)
+
+**Backups** creates a backup, shows what is in one, downloads it, brings one
+back and restores it after a preview. See
+[Backup and restore](admin/backup-restore.md).
+
+### Diagnostics
+
+![Diagnostics after Run the checks: All checks passed, the EMS diagnosis with its metrics and sections, and the settings file, analytics database and runtime state checks](../assets/screenshots/admin/admin-diagnostics.png)
+
+**Diagnostics** runs the read-only checks of the installed EMS, the EMS
+diagnosis included. See
+[Diagnostics and recovery](admin/diagnostics-recovery.md).
+
+### System
+
+![System: Files on this machine with the settings file, data folder and container setup found, Device telemetry with two brokers and two online devices, and the Guided setup card](../assets/screenshots/admin/admin-system.png)
+
+**System** shows the installation's files, the device telemetry over MQTT, an
+older MQTT setup that waits for migration, a guided workflow that can no longer
+finish, and the way into the guided setup. See
+[MQTT](admin/mqtt.md) and
+[Diagnostics and recovery](admin/diagnostics-recovery.md#unfinished-setup-or-update).
+
+### Language, colour scheme and density
+
+![The same Overview twice, side by side: on the left in Graphite, on the right in Midnight](../assets/screenshots/admin/admin-appearance-themes.png)
+
+The **Appearance** button at the right end of the top bar holds the colour
+scheme (**Graphite** or **Midnight**, above), the language (**EN**, **DE**,
+**NL**, **FR**), the density (**Normal** or **Compact**), the side menu and
+motion. The language can also be chosen on the sign-in card. The choices are
+stored in your browser, so they follow neither your sign-in nor the host:
+another browser starts at the defaults again. The EMS Dashboard offers the same
+choices and keeps its own. See
+[Appearance, language and phone](admin/appearance.md).
+
+### On a phone
+
+![The Overview on a phone: the verdict, the four tiles in two columns, and the bar at the bottom with Overview, Updates, Settings, Services and More](../assets/screenshots/admin/admin-overview-phone.png)
+
+On a narrow screen the side menu gives way to a bar at the bottom with four
+pages — Overview, Updates, Settings and Services until you choose others — and
+**More** for the rest, the language, the colour scheme, signing out and the
+switch to Classic. See
+[Appearance, language and phone](admin/appearance.md#on-a-phone).
+
+### Demo videos (Classic view)
+
+Two short demos (no audio, demo data only) show the two main workflows. They
+show the Classic view: they were recorded in the deprecated **Classic**
+console, before the current design became the default. The workflows are the
+same, the screens look different. Each demo ships in two formats — MP4/H.264
+(best for forums and mobile browsers) preferred, with WebM as a fallback. If
+your Markdown viewer does not play a video inline, use a download link under
+it; the screenshot under each video shows the same workflow in the current
+design.
+
+#### Fresh install — Guided Setup with hardware discovery (Classic view)
+
+Pick a release → discover devices → review the generated settings and features
+→ start EMS and open the dashboard.
+
+<video controls muted playsinline width="880">
   <source src="../assets/videos/admin/admin-guided-setup-demo.mp4" type="video/mp4">
   <source src="../assets/videos/admin/admin-guided-setup-demo.webm" type="video/webm">
   Your browser does not support embedded videos.
@@ -67,15 +210,14 @@ feature settings → start EMS and open the dashboard.
 [Download MP4](../assets/videos/admin/admin-guided-setup-demo.mp4) ·
 [Download WebM](../assets/videos/admin/admin-guided-setup-demo.webm)
 
-![Admin Console start page stating what was found on this host, with Guided setup and Maintenance as the two paths](../assets/screenshots/admin/admin-landing.png)
+![Guided setup step 02 Devices in the current design: the search order, the search progress and the devices found](../assets/screenshots/admin/admin-discovery-preview.png)
 
-### Software update — Guided Upgrade with live validation
+#### Software update — Guided Upgrade with live validation (Classic view)
 
-Upgrade plan → run the EMS upgrade → the "Upgrade validation" box ticks off each
-step (backup, config-key add, image pull, container recreate) with a green check
-until the upgrade completes.
+Choose a version → start the update → each step is ticked off (backup,
+settings, Admin Console, EMS install, checks) until the update completes.
 
-<video poster="../assets/screenshots/admin/admin-guided-upgrade-plan.png" controls muted playsinline width="880">
+<video controls muted playsinline width="880">
   <source src="../assets/videos/admin/admin-guided-upgrade-demo.mp4" type="video/mp4">
   <source src="../assets/videos/admin/admin-guided-upgrade-demo.webm" type="video/webm">
   Your browser does not support embedded videos.
@@ -84,104 +226,13 @@ until the upgrade completes.
 [Download MP4](../assets/videos/admin/admin-guided-upgrade-demo.mp4) ·
 [Download WebM](../assets/videos/admin/admin-guided-upgrade-demo.webm)
 
-![Guided Upgrade plan showing backup, config check and container recreate steps](../assets/screenshots/admin/admin-guided-upgrade-plan.png)
+![Guided upgrade in the current design: the chosen version checked, the options and what happens, before the update starts](../assets/screenshots/admin/admin-guided-upgrade-plan.png)
 
 Individual per-screen images live in
-[docs/assets/screenshots/admin/](../assets/screenshots/admin/). To refresh the
-videos or screenshots for a new release, see the
-[capture guide](../assets/screenshots/admin/README.md) and
+[docs/assets/screenshots/admin/](../assets/screenshots/admin/); to refresh them
+for a new release, see the
+[capture guide](../assets/screenshots/admin/README.md). How the videos are made:
 [docs/assets/videos/admin/README.md](../assets/videos/admin/README.md).
-
-## Appearance
-
-Three menus sit at the top right, next to the sign-out button: **Theme**,
-**Style** and **Density**. They are there before you sign in, so you can set
-them on the login page.
-
-The **Theme** menu offers twelve palettes, all dark:
-
-| | |
-| --- | --- |
-| **Signal** | the default, and what the console has always looked like |
-| **Instrument**, **Graphite** | neutral greys, no colour cast in the background |
-| **Fjord**, **Blueprint**, **Indigo** | cool blues, from slate to deep violet |
-| **Viridian**, **Phosphor** | green: an instrument panel, and a CRT |
-| **Copper**, **Oxide** | warm metal and rust |
-| **Contrast** | the hardest separation between text and background |
-| **Void** | near-black, with the accent carrying the light |
-
-Beside it sits the **Style** menu. It changes how things are built, not what
-colour they are, and the two are independent -- any of the twelve palettes can
-be worn with any of these thirteen:
-
-| | |
-| --- | --- |
-| **Glass** | the default, and what the product has always looked like |
-| **Console** | a terminal: hairline frame, no fill, a rail down the left |
-| **Instrument** | a panel front: raised fill, a thin crown along the top |
-| **Rail** | no frame at all; the left edge and a divider carry the structure |
-| **Tab** | a filing tab: a fill with a heavier crown above it |
-| **Underline** | a list rather than a stack of cards: one rule between rows |
-| **Bracket** | a technical drawing: corner ticks instead of a frame |
-| **Inset** | pressed into the page rather than laid on it |
-| **Slab** | solid blocks, no frame, no rounding |
-| **Halo** | lifted, with the light coming from underneath |
-| **Soft** | further from the corner, and floating |
-| **Outline** | the frame does all the work |
-| **Brutal** | a heavy frame and a hard shadow, square everywhere |
-
-A style never moves anything. Padding, spacing and text size are the same in
-all thirteen, so a layout that fits in one fits in all of them.
-
-Third is a **Density** menu. It changes neither colour nor shape but how much
-room everything takes -- one setting that multiplies every distance on the page
-at once:
-
-| | |
-| --- | --- |
-| **Compact** | three quarters of the spacing; more on screen at a time |
-| **Normal** | the default, and what the product has always looked like |
-| **Roomy** | a quarter more spacing, for a screen you read from further away |
-
-Density moves things; that is what it is for. It does not change type size, and
-it leaves the pills and badges alone, because those are fitted to the words
-they hold rather than to the rhythm of the page.
-
-The three menus are independent: any of the twelve palettes can be worn with
-any of the thirteen styles at any of the three densities.
-
-### What the three choices look like
-
-Each strip below is the same page three times, with one axis changed and the
-other two left at their defaults.
-
-**Palettes** — left to right: **Signal**, **Void**, **Copper**. Only colour
-changes; nothing moves and nothing changes shape.
-
-![Three palettes on the same console: Signal, Void and Copper](../assets/screenshots/admin/admin-appearance-palettes.png)
-
-**Object styles** — left to right: **Glass**, **Console**, **Brutal**. The
-colours are identical in all three; what changes is the frame, the fill and the
-corners.
-
-![Three object styles on the same console: Glass, Console and Brutal](../assets/screenshots/admin/admin-appearance-styles.png)
-
-**Densities** — left to right: **Compact**, **Normal**, **Roomy**. Same colour,
-same shape, different amount of room. Compact fits more on the screen at once;
-Roomy is easier to read from further away.
-
-![Three densities on the same console: Compact, Normal and Roomy](../assets/screenshots/admin/admin-appearance-density.png)
-
-A theme changes colour only, a style changes shape only, and a density changes
-distance only. No control changes what it does and no reading changes its
-meaning — a warning stays a warning in every combination of the three.
-
-All three choices are stored **in your browser**, so they follow neither your
-login nor the appliance: another browser, or another machine, starts at Signal,
-Glass and Normal again. Clearing site data resets them.
-
-They are applied before the page is drawn, so switching and reloading does not
-flash the defaults first.
 
 ## It does not replace EMS
 
@@ -238,8 +289,10 @@ http://127.0.0.1:8090
 ```
 
 From another machine — the usual case when EMS runs on a headless Pi — use the
-host's address instead: `http://<host-ip>:8090`. The sign-in page appearing is
-the confirmation that the install succeeded. If it does not appear:
+host's address instead: `http://<host-ip>:8090`. The sign-in card appearing —
+on a first start *Protect your Admin console*, which creates the password — is
+the confirmation that the install succeeded; once signed in, the console opens
+on its [assistant](admin/assistant.md). If the card does not appear:
 
 ```bash
 docker compose -f docker-compose.admin.yml ps      # is the container up?
@@ -255,14 +308,16 @@ existing file. Change that one line to `restart: unless-stopped`, then run
 makes this change itself (see
 [Admin recovery](../appliance/admin-recovery.md#restart-start-stop)).
 
-## Login
+## Sign-in
 
 The Admin Console uses the same password as the EMS Dashboard.
 
-On the first start, if no password exists yet, the first browser user creates it.
-The password is stored in `config/dashboard-auth.json` and is shared with EMS.
+On the first start, if no password exists yet, the first browser user creates
+it: *Protect your Admin console*. The password is stored in
+`config/dashboard-auth.json` and is shared with EMS.
 
-After that, log in with the EMS Dashboard password.
+After that, sign in with the EMS Dashboard password. See
+[First start and sign-in](admin/first-start.md).
 
 ### Networking
 

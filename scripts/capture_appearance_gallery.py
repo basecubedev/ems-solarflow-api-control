@@ -14,7 +14,7 @@ suites and the documentation captures use: no hardware, no MQTT, no history
 database, no secrets, no real config. Each surface gets a throwaway state root.
 
     python3 scripts/capture_appearance_gallery.py
-    python3 scripts/capture_appearance_gallery.py --surface admin
+    python3 scripts/capture_appearance_gallery.py --surface appliance
 
 The strips carry no text. Labelling them inside the image would need a font
 this script cannot rely on, and the names belong in the document anyway, where
@@ -53,27 +53,16 @@ AXES = {
 }
 
 # The basenames this script writes, spelled out rather than derived. Two
-# scripts now write into docs/assets/screenshots/admin/ and two into
-# .../appliance/, and the contracts that keep those directories honest compare
-# a declared manifest against what is committed -- a manifest they can only read
-# if it is literal.
+# scripts write into docs/assets/screenshots/appliance/, and the contracts that
+# keep that directory honest compare a declared manifest against what is
+# committed -- a manifest they can only read if it is literal.
 SCREENS = {
-    "admin-appearance-palettes.png",
-    "admin-appearance-styles.png",
-    "admin-appearance-density.png",
     "appliance-appearance-palettes.png",
     "appliance-appearance-styles.png",
     "appliance-appearance-density.png",
 }
 
 SURFACES = {
-    "admin": {
-        "command": ["bash", "tests/e2e/run-admin.sh"],
-        "env": {"EMS_ADMIN_E2E_PORT": "{port}"},
-        "ready": "/api/admin/auth/status",
-        "prefix": "admin/admin-appearance",
-        "selects": ("#theme-select", "#style-select", "#density-select"),
-    },
     "appliance": {
         "command": ["bash", "tests/e2e-appliance/run-appliance.sh"],
         "env": {"EMS_APPLIANCE_E2E_PORT": "{port}"},

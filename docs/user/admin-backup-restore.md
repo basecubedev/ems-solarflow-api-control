@@ -1,9 +1,11 @@
 # Admin Console: Backup / restore
 
-The **Backup / restore** path under Maintenance (see
+The **Backups** page of the Admin Console (see
 [admin-maintenance.md](admin-maintenance.md)) is a preview-first workflow for
-creating, inspecting and restoring backups from the Admin Console. It is a
-*maintenance* flow for an existing system — not part of Set up a new system.
+creating, inspecting and restoring backups. It belongs to an existing system —
+not to the guided setup, although the assistant's **Restore a backup** leads
+here on a fresh host too. The step-by-step guide with screenshots is
+[Backup and restore](admin/backup-restore.md).
 
 The Admin Console is orchestration/UI only. It never invents a new backup format:
 every archive is a normal EMS backup archive created and read through the EMS Core
@@ -14,15 +16,16 @@ InfluxDB when supported) — it is not a new artifact.
 
 ## Backup types
 
-- **Config** — `config.json`, runtime state and the dashboard auth/cert/key
-  files (plus the bundled InfluxDB secret when applicable).
-- **Databases** — consistent snapshots of the local SQLite databases.
-- **InfluxDB** — bundled InfluxDB data, offered only when bundled InfluxDB is
-  enabled. Disabled or external InfluxDB is skipped with a clear note, not an
-  error.
-- **System set** — a grouped backup that contains config + databases (+ bundled
-  InfluxDB when supported). The set is Admin metadata that references the normal
-  EMS archives.
+- **Settings only** (config) — `config.json`, runtime state and the dashboard
+  auth/cert/key files (plus the bundled InfluxDB secret when applicable).
+- **Local databases** — consistent snapshots of the local SQLite databases.
+- **Analytics data** (InfluxDB) — bundled InfluxDB data, offered only when
+  bundled InfluxDB is enabled. Disabled or external InfluxDB is greyed out with
+  a clear note, not an error.
+- **Everything** (system set) — a grouped backup that contains config +
+  databases (+ bundled InfluxDB when supported). The set is Admin metadata that
+  references the normal EMS archives; the list shows it as **System backup**
+  with **Complete**, **Without analytics** or **Incomplete**.
 
 Every created backup is verified before the job reports success: the archive
 must exist inside the backup directory, be non-empty, have a readable manifest
@@ -39,9 +42,9 @@ default. The Admin Console keeps only its own metadata under `data/admin/`.
 | `data/admin/` | Admin Console state, temporary files, logs and backup-set metadata |
 
 Admin backup-set metadata lives under `data/admin/backups/sets/`; the archives it
-references still live in `data/backups/`. The status stage warns if the backup
-directory is outside the install root or if archives are locked (encrypted) or
-invalid.
+references still live in `data/backups/`. The **Backups** card warns if the
+backup directory is outside the install root or if archives are locked
+(encrypted) or invalid.
 
 The backup directory is inside the EMS install root — this keeps archived paths
 resolvable, but it does not put backups out of harm's way. By default backups
@@ -97,8 +100,10 @@ invalid checksums. No files are written during a preview.
 
 **Replace-on-conflict**: because a restore normally replaces the current state
 with the backup state, Admin Console restore treats differing files as replace
-candidates. The preview lists those files and counts them under "Will replace".
-Nothing is written until you explicitly confirm the restore. The lower-level EMS
+candidates. The preview lists those files and counts them under **Files
+replaced**.
+Nothing is written until you explicitly confirm the restore with **Restore
+now**. The lower-level EMS
 restore tooling (`emsctl.py backup`, see
 [../backup-restore.md](../technical/backup-restore.md)) still supports stricter conflict
 policies for CLI/advanced workflows.
@@ -106,9 +111,10 @@ policies for CLI/advanced workflows.
 ## Rollback and automatic rollback
 
 - A **rollback backup** of the current state is created before any file is
-  written. This is on by default. If the rollback backup cannot be created, the
+  written (**Back up the current state first**). This is on by default. If the rollback backup cannot be created, the
   restore does not start.
-- **Automatic rollback** (on by default for config/database restores) undoes the
+- **Automatic rollback** (**Undo it automatically if a check fails**, on by
+  default for config/database restores) undoes the
   restore if a post-restore check fails, returning the system to its
   pre-restore state. Files the restore added are removed again; one that was
   changed since, or a database that is already in use, is left in place and
@@ -134,9 +140,9 @@ The Admin Console reads encrypted backups. They appear **locked** in the list
 and details until you supply the password. Inspecting or restoring an encrypted
 backup requires the password; it is used for that request only and is never
 logged or persisted. Without the password, an encrypted backup cannot be
-restored. **Restore preview** on a locked backup opens its details with the
-password field; once **Unlock** opens the archive, the preview follows. The
-field is cleared whenever you select another backup.
+restored. **Restore** on a locked backup asks for its password first; **Unlock
+and preview** opens the archive, and the preview follows. **Details** asks the
+same way, with **Unlock**.
 
 ## Getting a backup off this machine
 

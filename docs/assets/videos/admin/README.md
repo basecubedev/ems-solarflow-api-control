@@ -5,6 +5,11 @@ Short Admin Console workflow demos (720p, no audio), embedded in
 **deterministic demo data** (fake devices, IPs, serials, image refs and backup
 names) and do **not** show a real installation.
 
+They were recorded from the deprecated **Classic** console, before the Modern
+design became the console's default. The workflows are the same in Modern, but
+the screens look different; the screenshots in
+[`../../screenshots/admin/`](../../screenshots/admin/) show Modern.
+
 ## Formats
 
 Each committed demo ships in two formats:
@@ -37,8 +42,10 @@ actually exists — do not link to it before then.
 
 ## How to refresh
 
-The videos are rendered from the **real** Admin static UI (`admin/static/`)
-driven by the docs-preview server with deterministic demo API responses from
+The videos are rendered from the **real** Classic Admin static UI
+(`admin/static/`, served at `/classic/`) driven by the docs-preview server and
+its Classic drive script (`scripts/admin_docs_preview.js`) with deterministic
+demo API responses from
 [`tests/fixtures/admin_docs/`](../../../../tests/fixtures/admin_docs). Each
 workflow step is captured as a full-page frame with headless Firefox and the
 frames are stitched into a 1280x720 `.webm` (VP9) with gentle vertical pans, so

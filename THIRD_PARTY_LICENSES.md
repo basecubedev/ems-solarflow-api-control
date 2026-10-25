@@ -338,7 +338,7 @@ already inventoried above.
 |---|---|---|:---:|
 | `config/config.template.json` | `tools/build_config_template.py` from `ems/config_catalog.py` | none | ✅ |
 | `/app/release-resources` inside the Admin image | `scripts/generate_release_resources.py` at image build | none | ✅ |
-| `docs/assets/screenshots/**`, `docs/assets/preview-*.jpg` | `scripts/capture_admin_docs.py` (headless Firefox + ImageMagick), `tests/e2e-dashboard/capture-docs.spec.ts` (Playwright Chromium) | none beyond the pixels the pages render: Inter glyphs and Lucide icon shapes in the Modern pages (inventoried above), chart pixels drawn by `uPlot` from project data | ❌ |
+| `docs/assets/screenshots/**`, `docs/assets/preview-*.jpg` | `scripts/capture_admin_docs.mjs`, `tests/e2e-dashboard/capture-docs.spec.ts` (both Playwright Chromium) | none beyond the pixels the pages render: Inter glyphs and Lucide icon shapes in the Modern pages (inventoried above), chart pixels drawn by `uPlot` from project data | ❌ |
 | `docs/assets/videos/**` | `scripts/render_admin_docs_video.py` (headless Firefox + ffmpeg) | none | ❌ |
 | Install demo animation | `docs/demo/build_install_demo.py` (Pillow + host DejaVu fonts) | rendered glyphs from the host font; no output is committed | ❌ |
 

@@ -1,45 +1,119 @@
 {
-  "_note": "Demo backup list. Fake backup filenames only (no real hostnames).",
+  "_note": "Demo backup list and restore preview. Fake archive names, ids and versions only (no real hostnames).",
   "backups_list": {
     "ok": true,
     "backup_dir": "/opt/ems/data/backups",
     "safe_location": true,
-    "warnings": [],
-    "summary": { "total": 2, "latest_created_at": "2026-07-05 09:12 UTC" },
+    "warnings": [
+      "Some backups are encrypted and locked until unlocked."
+    ],
+    "summary": { "total": 4, "encrypted": 1, "invalid": 0, "latest_created_at": "2026-07-05T09:12:01Z" },
     "influxdb": {
-      "supported": false,
-      "reason": "disabled",
-      "mode": "bundled",
-      "message": "Bundled InfluxDB is not enabled — skipped."
+      "supported": true,
+      "reason": null,
+      "message": null
     },
-    "sets": [],
+    "sets": [
+      {
+        "id": "2026-07-05-111200-system",
+        "created_at": "2026-07-05T09:12:01Z",
+        "purpose": "manual",
+        "label": "System backup",
+        "status": "complete",
+        "warnings": [],
+        "archives": [
+          { "type": "config", "name": "ems-config-manual-2026-07-05-111200.tar.gz", "optional": false, "present": true, "id": "demo-backup-config-0705" },
+          { "type": "databases", "name": "ems-databases-manual-2026-07-05-111200.tar.gz", "optional": false, "present": true, "id": "demo-backup-databases-0705" },
+          { "type": "influxdb", "name": "ems-influxdb-manual-2026-07-05-111201.tar.gz", "optional": true, "present": true, "id": "demo-backup-influxdb-0705" }
+        ]
+      }
+    ],
     "backups": [
       {
-        "id": "demo-backup-1",
-        "name": "demo-backup-2026-07-05.emsbackup",
+        "id": "demo-backup-config-0705",
+        "name": "ems-config-manual-2026-07-05-111200.tar.gz",
         "backup_type": "config",
-        "created_at": "2026-07-05 09:12 UTC",
+        "backup_purpose": "manual",
+        "created_at": "2026-07-05T09:12:00Z",
         "size_bytes": 48213,
         "files_count": 7,
-        "source_version": "v0.7.0-RC",
-        "source_build": "a1b2c3d",
+        "source_version": "v0.8.15",
         "encrypted": false,
         "valid": true,
         "locked": false
       },
       {
-        "id": "demo-backup-2",
-        "name": "demo-backup-2026-07-04.emsbackup",
+        "id": "demo-backup-databases-0705",
+        "name": "ems-databases-manual-2026-07-05-111200.tar.gz",
+        "backup_type": "databases",
+        "backup_purpose": "manual",
+        "created_at": "2026-07-05T09:12:00Z",
+        "size_bytes": 1835008,
+        "files_count": 2,
+        "source_version": "v0.8.15",
+        "encrypted": false,
+        "valid": true,
+        "locked": false
+      },
+      {
+        "id": "demo-backup-influxdb-0705",
+        "name": "ems-influxdb-manual-2026-07-05-111201.tar.gz",
+        "backup_type": "influxdb",
+        "backup_purpose": "manual",
+        "created_at": "2026-07-05T09:12:01Z",
+        "size_bytes": 9437184,
+        "files_count": 14,
+        "source_version": "v0.8.15",
+        "encrypted": false,
+        "valid": true,
+        "locked": false
+      },
+      {
+        "id": "demo-backup-config-0704",
+        "name": "ems-config-auto-2026-07-04-230300.tar.gz.enc",
         "backup_type": "config",
-        "created_at": "2026-07-04 21:03 UTC",
+        "backup_purpose": "auto",
+        "created_at": "2026-07-04T21:03:00Z",
         "size_bytes": 47180,
         "files_count": 7,
-        "source_version": "v0.7.0-RC",
-        "source_build": "a1b2c3d",
+        "source_version": "v0.8.15",
         "encrypted": true,
         "valid": true,
         "locked": true
       }
+    ]
+  },
+  "backups_list_empty": {
+    "ok": true,
+    "backup_dir": "/opt/ems/data/backups",
+    "safe_location": true,
+    "warnings": [],
+    "summary": { "total": 0, "encrypted": 0, "invalid": 0, "latest_created_at": null },
+    "influxdb": {
+      "supported": true,
+      "reason": null,
+      "message": null
+    },
+    "sets": [],
+    "backups": []
+  },
+  "restore_preview": {
+    "ok": true,
+    "preview_id": "demo-restore-preview",
+    "scope": "config",
+    "blocked": false,
+    "block_reason": null,
+    "warnings": [],
+    "summary": { "would_restore": 1, "would_replace": 2, "would_skip": 4 },
+    "targets": [ { "backup_type": "config", "name": "ems-config-manual-2026-07-05-111200.tar.gz" } ],
+    "files": [
+      { "archive": "ems-config-manual-2026-07-05-111200.tar.gz", "path": "config/config.json", "action": "would_replace_conflict" },
+      { "archive": "ems-config-manual-2026-07-05-111200.tar.gz", "path": "data/runtime-state.json", "action": "would_replace_conflict" },
+      { "archive": "ems-config-manual-2026-07-05-111200.tar.gz", "path": "data/schedules.json", "action": "would_restore_new" },
+      { "archive": "ems-config-manual-2026-07-05-111200.tar.gz", "path": "config/dashboard-auth.json", "action": "would_skip_identical" },
+      { "archive": "ems-config-manual-2026-07-05-111200.tar.gz", "path": "config/influxdb.env", "action": "would_skip_identical" },
+      { "archive": "ems-config-manual-2026-07-05-111200.tar.gz", "path": "docker-compose.yml", "action": "would_skip_identical" },
+      { "archive": "ems-config-manual-2026-07-05-111200.tar.gz", "path": "config/discovery-connections.json", "action": "would_skip_identical" }
     ]
   }
 }

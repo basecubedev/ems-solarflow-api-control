@@ -52,9 +52,11 @@ add `--bind 0.0.0.0` (or the host's LAN address) to open it on the network.
 
 ### Should I choose Setup or Maintenance?
 
-Use **Set up a new system** for a fresh install or deliberate reinstall. Use
-**Manage my existing system** for updates, diagnostics, config changes and
-backups. See the [Admin setup guide](admin-setup.md) and
+Use **Set up a new system** — the guided setup — for a fresh install or a
+deliberate reinstall. An installed system is managed on the console's other
+pages: **Updates**, **Settings & devices**, **Backups**, **Diagnostics**. The
+console's [assistant](admin/assistant.md) shows which applies to your host. See
+the [Admin setup guide](admin-setup.md) and
 [Admin maintenance guide](admin-maintenance.md).
 
 ### Does the Admin Console overwrite my config?
@@ -320,7 +322,7 @@ encrypted backup cannot be restored.
 
 ### Can I delete backups in the Admin Console?
 
-Yes, when the Backup / restore page offers the delete action. Deletion always
+Yes, with the delete action on the **Backups** page. Deletion always
 requires confirmation and only removes archives inside the backup directory.
 
 ### Can I restore InfluxDB from the Admin Console?

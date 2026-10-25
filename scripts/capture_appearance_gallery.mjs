@@ -31,29 +31,13 @@ const AXES = {
 // spacing between them reads.
 const COLUMN = { width: 560, height: 520 };
 
-// The height is per surface because the pages are: the Admin landing is two
-// choices and stops, so the shared 520 would frame a third of a page and two
-// thirds of background.
+// The height is per surface because the pages are.
 // The subject has to be a region the axis can actually change.
 const SUBJECT = {
-  // The landing page is two cards and a paragraph, so a style strip of it is
-  // mostly unchanged background -- measured at 12% of pixels differing, which
-  // is a picture that does not show its own subject. Guided Setup is six.
-  admin: { path: "/classic/", after: "Guided setup", clip: "#view-setup, .admin-shell", top: 120, height: 430 },
   appliance: { path: "/classic/", clip: "#shell, .gate-panel", top: 150, height: 560 },
 };
 
 async function signIn(page) {
-  if (surface === "admin") {
-    const create = page.locator("#auth-create-password");
-    if (await create.count()) {
-      await create.fill(PASSWORD);
-      const confirm = page.locator("#auth-create-confirm");
-      if (await confirm.count()) await confirm.fill(PASSWORD);
-      await page.locator("#auth-create-form button[type=submit]").click();
-      await page.waitForTimeout(1200);
-    }
-  }
   if (surface === "appliance") {
     const gate = page.locator("#gate-password");
     if (await gate.count()) {

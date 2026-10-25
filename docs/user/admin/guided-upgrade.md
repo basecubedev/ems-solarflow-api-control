@@ -2,229 +2,247 @@
 
 ## Purpose
 
-Move an installed EMS to a newer version safely: verify a paired Admin + EMS
-build, back up first, migrate config, recreate the EMS container, and health-check
-the result.
+Move an installed EMS to a newer version safely: check the paired Admin + EMS
+build, back up first, bring the settings file up to date, bring the Admin
+Console to the same build, install the new EMS, and check that it runs.
 
 ## When to use this workflow
 
 - A new release is out and you want it.
 - You need a fix that landed in a later build.
 
-**Not** for going backwards. Guided Upgrade only moves **forward**. Downgrades
-belong to [Backup and restore](backup-restore.md).
+**Not** for going back to an older minor or major version. Guided Upgrade moves
+**forward**, or back by a patch inside the release line you are running, and
+never proposes going back by itself. Further back belongs to
+[Backup and restore](backup-restore.md).
 
 ## Prerequisites
 
-- An installed, running EMS (Maintenance is the recommended flow on the start
-  page).
+- An installed, running EMS.
 - Disk space for a backup and one more image.
-- Internet access, unless the target image is already on disk.
+- Internet access, unless the new image is already on disk.
 - A few minutes without interrupting the host.
 
 ## Step-by-step instructions
 
-### 1 — Open Maintenance → Guided upgrade
+### 1 — Open Updates
 
-![Maintenance hub with Guided upgrade marked Recommended path, System status, Settings and devices and Backup / restore](../../assets/screenshots/admin/admin-maintenance-hub.png)
+![Updates page: What runs now v0.8.15 as a proven pair, the Guided upgrade card with its five steps and Update to v0.8.16, and the available versions with v0.8.16 recommended and the rolling build](../../assets/screenshots/admin/admin-updates.png)
 
-**What you see:** the Maintenance hub. **Guided upgrade** carries the
-*Recommended path* badge.
-
-**What it changes:** nothing. It opens the panel.
-
-The Modern console runs the same upgrade on its **Updates** page: choosing a
-version checks it at once, the plan follows by itself, and one confirmation
-starts it. See [the Modern Admin console](modern.md#updating). The steps below
-describe the Classic view.
-
-### 2 — Review the current state and pick the target
-
-![Guided upgrade panel showing target System Build selection, upgrade options, admin alignment and the upgrade plan](../../assets/screenshots/admin/admin-guided-upgrade-plan.png)
+**Where:** **Updates** in the menu; the **Update** tile of the
+[assistant](assistant.md) and **Updates** on the Overview's **Versions** card
+lead here too.
 
 **What you see:**
 
-- **01 Target System Build** — your **Current** image and install state, and a
-  **TARGET SYSTEM BUILD** dropdown grouped Latest / Stable / Unstable /
-  Experimental.
-- **02 Upgrade options** — see the table below.
-- **03 Admin alignment** — current Admin and target build.
-- **04 Upgrade validation** — filled in by itself once the build is verified.
+- **What runs now** — the Admin Console and EMS versions, and whether they are
+  one build: **Proven pair**, **Recorded pair**, **Not verified**, **Not a
+  pair** or **Change in progress**. Once an update has run, *Last update:
+  v0.8.16* names it.
+- **Guided upgrade** — the five things an update does, and **Update to …** for
+  the recommended version.
+- **Available versions** — *Recommended: v0.8.16*, then the versions grouped
+  **Stable releases**, **Rolling build**, **Release candidates** and
+  **Development builds**, each with its channel and a state such as **Newer**
+  or **Already installed**. **Show all … versions** adds the ones that cannot
+  be installed now, with the reason.
 
-**What you select:** one target build, then **Verify System Build**.
+**Which version is recommended:** the newest stable release that is neither the
+one you run nor behind it. On a stable release with nothing newer to install,
+nothing is recommended and the page says so; on a release candidate or a
+development build it asks you to choose. The rolling `latest` is recommended
+only when `latest` itself runs, when the running release cannot be told, or
+when nothing is installed.
 
-**What it changes:** selecting downloads nothing. **Verify System Build**
-downloads (or reuses) the Admin and EMS images, verifies the exact pair, and
-returns a **selection fingerprint** of the resolved pair. The plan you build next
-is bound to that fingerprint.
+**What it changes:** nothing. Reading the page never downloads anything.
 
-**Expected result:** the build verifies, and the plan is built right after it
-without another click.
+### 2 — Choose a version
 
-**If it differs:** *Resources cached* is not verified — press Verify. On a GHCR
-rate limit nothing was changed; wait and Verify again. The button reads
-*Verifying…* with a spinner while it works; the first run can take a while.
+![Update to v0.8.16 checked: runs now v0.8.15, after the update v0.8.16, the three options and the five things that happen, with Update to v0.8.16 and Choose another version](../../assets/screenshots/admin/admin-guided-upgrade-plan.png)
 
-### 3 — Check the upgrade options
+**What you select:** **Update to v0.8.16** in the Guided upgrade card, or
+**Choose** on any version in the list.
+
+**What it changes:** nothing on the device. The version is checked at once: the
+Admin Console and EMS images are downloaded if needed and verified as a pair,
+and the MQTT migration review is read with them.
+
+**Expected result:** a card *Update to v0.8.16* — *Checked. Nothing has changed
+yet* — with **Runs now** and **After the update**, the **Options** and **What
+happens**, in order:
+
+1. The new version is checked once more.
+2. A backup is made and verified.
+3. The MQTT setup is migrated — only when it has to be.
+4. The Admin Console is updated and restarts; this page reconnects by itself —
+   only when the build needs it.
+5. EMS stops briefly and starts again as the new version. Control pauses for
+   that time.
+6. The checks confirm that everything runs.
+
+**If it differs:**
+
+- *The version could not be checked.* → **Check again**, or **Choose another
+  version**. The registry may have limited the downloads; nothing changed.
+- *An unfinished guided setup holds the console.* → **Discard the setup**
+  removes that setup (the installed system is not changed by it), then the
+  check runs again. A setup that has not finished tidying up is released under
+  **System** — **Open System**.
+- *The MQTT setup of 1 device is migrated to the new format.* — and, where it
+  applies, which devices lose their output control. Read it before you start;
+  see [MQTT](mqtt.md#zendure-mqtt-migration-during-an-upgrade).
+
+### 3 — Check the options
 
 | Option | Default | What it does |
 | --- | --- | --- |
-| Create backup before upgrade | **On** | A verified backup before anything changes |
-| Check config against target template | On | Compares `config.json` with the target's template |
-| Add missing config keys | On | Fills in keys the new version introduces |
-| Refresh config comments / metadata | On | Updates inline comments to match the target |
-| Deploy the System Build | **Always** | Mandatory; cannot be turned off |
-| Run diagnostics after upgrade | On | Health check once the upgrade completes |
+| **Back up first (recommended)** | On | Settings and local databases, so you can go back |
+| **Bring the settings file up to date** | On | Checks it against the new version, adds new settings with their defaults and refreshes the comments |
+| **Run the checks afterwards** | On | Confirms that EMS reads its devices and runs as it should |
 
-**Leave *Create backup* enabled.** It is the thing that lets you go back. It runs
-under the Admin that is running *now*, before any Admin alignment.
+Installing the new EMS is not an option: it is what the update is.
 
-### 4 — Review the plan
+**Leave *Back up first* on.** It is what lets you go back. It runs under the
+Admin Console that runs *now*, before any part of the update changes it.
+Switched off, the page warns: *No backup is made first. Without one, there is
+no way back if something goes wrong.*
 
-**What you see, in step 04:** the ordered pipeline, built by itself once the
-build is verified and again whenever you change an option. Nothing has changed
-yet — the box says *Planning only — no containers will be changed yet.*
-**Plan upgrade** is only needed when a plan could not be built.
+### 4 — Start the update and follow it
 
-1. Resolve the target and re-check the verified fingerprint.
-2. Inspect the current installation.
-3. Review the Zendure MQTT migration, including devices that would lose control.
-4. Create and verify a backup.
-5. Apply the reviewed Zendure MQTT migration.
-6. Run the generic config upgrade.
-7. Validate the final config with target-compatible EMS code.
-8. Align the Admin to the target build, reconnect, verify its identity.
-9. Prepare the target EMS image and resources.
-10. Recreate EMS.
-11. Health check.
-12. Diagnostics.
-13. Mark the Known-Good state.
+![The update to v0.8.16 running: Check the new version, Back up and prepare and Update the Admin console done, Install EMS v0.8.16 running, Check that everything runs pending, running for 2:12](../../assets/screenshots/admin/admin-upgrade-running.png)
 
-**MQTT migration:** if you run Zendure MQTT devices, step 3 names which devices
-the migration affects and which would **lose control**. Read it before
-confirming. Details: [MQTT](mqtt.md#zendure-mqtt-migration-during-an-upgrade).
+**What you select:** **Update to v0.8.16**, and confirm once in *Update to
+v0.8.16 now?*. There is no second, Admin-specific confirmation.
 
-**Config changes:** steps 6–7 add missing keys and refresh comments, then
-validate the result with the *target* version's code — so a config the new EMS
-would reject is caught before the container is recreated.
+**What it changes:** everything the card listed, in order.
 
-**Container recreation:** step 10 recreates the **EMS container only**. Volumes,
-`data/`, backups and your history databases are not removed. Guided Upgrade never
-deletes containers, volumes or data.
+**Expected result:** the page follows the update in five steps: **Check the new
+version**, **Back up and prepare**, **Update the Admin console**, **Install EMS
+v0.8.16**, **Check that everything runs**. The running step says what it does,
+and *Running for 2:12* counts up. You can leave the page; *You can leave this
+page; the update keeps running on the device. Keep the device switched on.*
 
-### 5 — Start the upgrade and follow progress
+**If it differs:** a long step (an image download, the checks) keeps its
+spinner rather than freezing. *Lost contact with the Admin console; the update
+keeps running on the device. Trying again…* means only the page lost contact.
 
-![Guided upgrade running with the validation box ticking off verify, preflight, backup, config check and config update while pulling the image](../../assets/screenshots/admin/admin-upgrade-running.png)
+> Immediately before any change, the version is checked once more. If the
+> image behind it moved since you chose it — a mutable `latest` re-pushed to a
+> new digest — the update is refused before any backup, migration or
+> installation, and the page asks you to check it again.
 
-**What you select:** **Upgrade system**, and confirm once. There is no second,
-Admin-specific confirmation.
+### 5 — Wait through the Admin Console's restart
 
-**What it changes:** everything in the plan, in order.
+![Update the Admin console is the running step, and the notice The Admin console does not answer. Reconnecting… at the top of the page](../../assets/screenshots/admin/admin-admin-update-reconnect.png)
 
-**Expected result:** the live tracker highlights the current step, pulses it and
-labels it *Working…*. Completed steps get a green check.
+**What you see:** when the build needs a new Admin Console, **Update the Admin
+console** runs — *The Admin console restarts with the new version. This page
+reconnects by itself.* — and while the old console is gone, *The Admin console
+does not answer. Reconnecting…*.
 
-**If it differs:** a long step (image download, health check) stays visibly
-active rather than frozen — that is the pulse doing its job.
+**What it changes:** the Admin container is recreated on the new image.
 
-> Immediately before any change, the target is re-resolved and the fingerprint
-> re-checked. If the image moved since you verified — a mutable `latest` tag
-> re-pushed to a new digest — the upgrade is **rejected before** preflight,
-> backup, migration or deployment. Verify again.
+**Expected result:** the page reloads from the new console. Sign in again with
+the same password — sessions do not survive the restart; the sign-in says why.
+The page then opens **Updates** and follows the update on. The backup and the
+first checks are **not** repeated.
 
-### 6 — Handle the Admin reconnect
-
-![Full-screen reconnect overlay shown while the Admin Console container is replaced](../../assets/screenshots/admin/admin-admin-update-reconnect.png)
-
-**What you see:** a full-screen overlay if the Admin itself must change.
-
-**What it changes:** the Admin container is recreated on the target image.
-
-**Expected result:** the page reconnects on its own and the upgrade resumes from
-the saved transition. The completed backup and preflight are **not** repeated.
-
-**If it differs:** you may be asked to log in again — normal, same password. If
-the console does not return:
+**If it differs:** on a Raspberry Pi the restart can take several minutes;
+after two the page says *This takes longer than usual…* and offers **Reload
+page**. The update goes on either way. If the console does not return:
 
 ```bash
 docker compose -f docker-compose.admin.yml logs
 docker compose -f docker-compose.admin.yml up -d
 ```
 
-### 7 — Confirm completion
+### 6 — Confirm completion
 
-![Guided upgrade completed with every validation step green](../../assets/screenshots/admin/admin-upgrade-completed.png)
+![Update complete: EMS and the Admin console now run v0.8.16, before v0.8.15, finished 15:30, took 2:12, the backup made first, with Open the dashboard and Done](../../assets/screenshots/admin/admin-upgrade-completed.png)
 
-**What you see:** every step green, and the health check and diagnostics results.
+**What you see:** **Update complete** — *EMS and the Admin console now run
+v0.8.16.* — with **Before**, **Now**, **Finished**, **Took** and **Backup made
+first**.
 
-**Expected result:** EMS runs the new build; the Known-Good state is marked. The
-panel's own **Current** version is re-read when the run ends, so it names the
-release now installed without reloading the page.
+**What you select:** **Open the dashboard** to see live values again, or
+**Done**.
 
-**Verify for yourself:** the Maintenance overview shows the installed release, and
-the [EMS Dashboard](../dashboard/index.md) should show live telemetry again.
+**Expected result:** EMS runs the new build and the pair is recorded as known
+good. **What runs now** names the new version without a reload, and *Last
+update: v0.8.16* stays on the page afterwards.
+
+**Verify for yourself:** the Overview shows the new version, and the
+[EMS Dashboard](../dashboard/index.md) shows live telemetry again.
 
 ## What happens in the background
 
-- **Admin and EMS are one build.** You make one version decision. Admin alignment
-  is an automatic stage, not a separate choice — a matching Admin is kept as-is, a
-  stale Compose tag is corrected, a mismatched Admin is replaced.
-- **The tag names the build; the digest is what runs.** After verification the
+- **Admin and EMS are one build.** You make one version decision. Updating the
+  Admin Console is a step of the update, not a separate choice — a matching
+  Admin Console is kept as it is, a stale container-setup tag is corrected, a
+  mismatched one is replaced.
+- **The tag names the build; the digest is what runs.** After the check the
   release tag is only a label. The EMS image is pulled and written into
-  `docker-compose.yml` by its exact verified digest
-  (`…@sha256:…`), so a later registry change to that tag cannot alter your
-  installed EMS or what a restart runs.
-- **A running EMS container is the authoritative baseline.** If its image identity
-  cannot be read, the installed release is shown as **unknown** with a warning
-  rather than guessing from Compose.
+  `docker-compose.yml` by its exact verified digest (`…@sha256:…`), so a later
+  registry change to that tag cannot alter your installed EMS or what a
+  restart runs.
+- **A running EMS container is the authoritative baseline.** If its image
+  identity cannot be read, the installed release is shown as **unknown** with a
+  warning rather than guessed from the container setup.
 - **A merely prepared release is never shown as installed**, so downloading a
-  newer build does not make a real upgrade look like a downgrade.
-- **The backup and preflight run under the current Admin**, before alignment. The
-  target Admin is never assumed first.
+  newer build does not make a real update look like a downgrade.
+- **The backup and the first checks run under the current Admin Console**,
+  before it is replaced. The new one is never assumed first.
+- **The update runs on the server.** Closing the page, a lost network or a
+  sleeping laptop does not stop it; the page finds it again when you come back.
 
 ## Expected result
 
-- EMS running the target build, by digest.
+- EMS running the new build, by digest.
 - A verified backup from before the change.
-- Config migrated and validated against the target.
+- The settings file brought up to date and checked against the new version.
 - `data/`, volumes, backups and history unchanged.
 
 ## Warnings and common problems
 
 | Symptom | Meaning | What to do |
 | --- | --- | --- |
-| Upgrade rejected right at the start | The resolved pair moved since Verify | **Verify System Build** again; the plan is rebuilt by itself |
-| GHCR rate limit | Registry throttled you | Nothing changed; wait and retry. The verified target stays selected |
-| Pull failed (network / digest missing) | Typed failure preserved | **No Compose change was written and EMS was not recreated.** Fix connectivity, retry |
-| Asked to log in mid-upgrade | The Admin was replaced | Same password; the upgrade resumes |
-| A device would lose control | MQTT migration review says so | Decide before confirming — see [MQTT](mqtt.md) |
-| Setup files still present | An unfinished Guided Setup exists | **Discard setup** first; an upgrade never deploys over a setup |
-| *failed_recoverable* | A step failed, state is recoverable | See below |
+| *The update did not start* | The server refused it before any work; *It stopped before anything was changed. EMS runs as before.* | Read the reason, fix it, choose the version again |
+| The update is refused right at the start | The image moved since the check | Choose the version again; it is checked anew |
+| *The GitHub Container Registry limits downloads just now* | The registry throttled you | Nothing changed; wait and **Try again** |
+| The sign-in appears in the middle of the update | The Admin Console was replaced | Same password; the page follows the update on |
+| A device would lose control | The MQTT migration review says so | Decide before you start — see [MQTT](mqtt.md) |
+| An unfinished setup holds the console | An unfinished guided setup exists | **Discard the setup** first; an update never deploys over a setup |
+| *The update did not finish* | A step failed | See below |
 
 ## Recovery or next steps
 
-![Maintenance Unfinished setup or update card](../../assets/screenshots/admin/admin-maintenance-recovery.png)
+A stopped update does not throw the workflow away. The card says *The update
+did not finish*, *Stopped at:* the step, whether anything may have changed
+already, and offers the ways out the console can take at that moment:
 
-A failed upgrade does not throw the workflow away. **Unfinished setup or update** under
-Maintenance offers:
+- **Try again** — continues the update from the step where it stopped. Steps
+  already done are not repeated.
+- **Go back to the version that runs** — sets the Admin Console back to the
+  last version that was verified with this EMS; the page reconnects by itself.
+- **Cancel the update** — gives the update up. What it already changed stays;
+  your running system, live settings and last known-good build stay as they
+  are, and a backup brings back the state from before.
+- **Choose a version** and **Backups** are always there.
 
-- **Resume** — retry from the exact point it is safe to retry from.
-- **Return to running build** — put the Admin Console back on the build your EMS
-  is actually running. (This is offered for an upgrade; deliberately *not* during
-  a setup.)
-- **Cancel upgrade** — ends the upgrade only. Your running system, live config and
-  last known-good build stay exactly as they are. The known-good record follows
-  what runs afterwards only if Admin and EMS run one System Build and its EMS
-  passes the health check an upgrade requires, so a build whose health check
-  failed is not recorded by cancelling; see
-  [Admin maintenance](../admin-maintenance.md).
+When **Go back to the version that runs** finds the Admin Console already on
+that version, nothing restarts; **System alignment** on the **Updates** page
+then shows what is left: **Continue** checks that version's files, and after
+that **Release the console** leads to **System**, where the recovery card frees
+the console with one confirmation — see
+[Diagnostics and recovery](diagnostics-recovery.md#unfinished-setup-or-update).
 
-**Retry vs recovery:** retry the same step when the cause was transient (network,
-rate limit). Use recovery when the state itself is inconsistent — for example the
-Admin was replaced but the transition did not finish.
+**Retry or recover:** try again when the cause was passing (network, rate
+limit). Use the recovery card on **System** when the state itself is
+inconsistent — for example the Admin Console was replaced but the update did
+not finish.
 
-**Rolling back:** if the new version misbehaves, restore the backup the upgrade
-made. Restore does **not** silently downgrade the EMS image — see
+**Rolling back:** if the new version misbehaves, restore the backup the update
+made. A restore does **not** silently install an older EMS image — see
 [Backup and restore](backup-restore.md#no-hidden-ems-downgrade).
 
 **Full behavioural reference:** [Admin Maintenance](../admin-maintenance.md).

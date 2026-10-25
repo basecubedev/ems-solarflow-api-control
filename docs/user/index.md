@@ -8,6 +8,7 @@ Everything a normal user needs: install, operate, diagnose. You do not need the
 
 | Your situation | Go to |
 | --- | --- |
+| **Not sure where to start** | The Admin Console's [assistant](admin/assistant.md): what is still to do, and the way to each task |
 | **New installation** | [Supported setups](supported-setups.md) → [Admin Console](admin-console.md) → [Guided Setup](admin/guided-setup.md) |
 | **Existing installation** | [Maintenance](admin/maintenance.md) and the [EMS Dashboard guides](dashboard/index.md) |
 | **Upgrade to a newer version** | [Guided Upgrade](admin/guided-upgrade.md) |
@@ -24,7 +25,8 @@ it changes, and what to do when the result differs.
 
 | Guide | Use |
 | --- | --- |
-| [First start and login](admin/first-start.md) | Password setup, login, task selection, reconnect, logout |
+| [The assistant](admin/assistant.md) | Where to start: what is still to do, and the way to each task |
+| [First start and sign-in](admin/first-start.md) | Password setup, sign-in, where the console opens, reconnect, sign-out |
 | [Guided Setup](admin/guided-setup.md) | Install a new system, step 01 to 05 |
 | [Guided Upgrade](admin/guided-upgrade.md) | Update an installed system safely |
 | [Maintenance](admin/maintenance.md) | Inspect, change and repair an existing system |
@@ -32,6 +34,7 @@ it changes, and what to do when the result differs.
 | [MQTT connections](admin/mqtt.md) | Local MQTT, Zendure Cloud MQTT, brokers, write gates |
 | [Backup and restore](admin/backup-restore.md) | Snapshots, previews, rollback |
 | [Diagnostics and recovery](admin/diagnostics-recovery.md) | Evidence, support bundles, stuck workflows |
+| [Appearance, language and phone](admin/appearance.md) | Colour scheme, language, density, the bar on a phone |
 
 ### Appliance — [all guides](appliance/index.md)
 

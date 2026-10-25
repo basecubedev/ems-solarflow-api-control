@@ -115,12 +115,14 @@ the install worked**; if it does not appear,
 came up. Host networking is the default (best for local discovery); add
 `--bridge --bind 0.0.0.0` only if you need Docker bridge networking.
 
-The address opens the console's Modern view. The guided setup begins on the
-Classic start page below, at `http://127.0.0.1:8090/classic/#setup`.
+The console then opens on its assistant, which says what is still to do —
+on a fresh host, **Set up a new system** starts the guided setup — and leads
+to the page for it.
 
-![Admin Console start page](docs/assets/screenshots/admin/admin-landing.png)
+![Admin Console assistant on a fresh host: Install EMS is the next step, with Set up a new system and Restore a backup](docs/assets/screenshots/admin/admin-assistant-fresh.png)
 
-Full guide, with demo videos of a fresh install and a guided update:
+Full guide, with screenshots and demo videos of a fresh install and a guided
+update:
 [docs/user/admin-console.md](docs/user/admin-console.md#what-the-admin-console-looks-like)
 
 ### Other ways to install

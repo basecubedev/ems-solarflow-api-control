@@ -1,0 +1,33 @@
+{
+  "_note": "The demo installation's own settings, laid over the shipped config/config.template.json, with the template's empty broker credentials left out (the demo has no MQTT broker). The preview serves the settings page, its check and the telemetry view from the merged file through the real Admin builders, so every setting the template gains shows up without editing this file. Fake addresses and DEMO- serials only.",
+  "config": {
+    "system": {
+      "max_total_power": 1600
+    },
+    "devices": [
+      {
+        "name": "INV_1",
+        "ip": "192.168.1.50",
+        "sn": "DEMO-SF800-001",
+        "pv_kwp": 0.8,
+        "battery_kwh": 1.92
+      },
+      {
+        "name": "INV_2",
+        "ip": "192.168.1.51",
+        "sn": "DEMO-SF800-002",
+        "pv_kwp": 0.8,
+        "battery_kwh": 1.92
+      }
+    ],
+    "grid_meter": {
+      "type": "shelly",
+      "ip": "192.168.1.52"
+    }
+  },
+  "without": [
+    "zendure_mqtt.username",
+    "zendure_mqtt.password",
+    "zendure_mqtt.app_key"
+  ]
+}

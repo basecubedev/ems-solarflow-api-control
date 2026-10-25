@@ -68,15 +68,14 @@ Also check that the device is powered on and reachable from the LAN.
 Open the dashboard at `http://127.0.0.1:8080`, or `http://<host-ip>:8080` from
 another device on the same network.
 
-- In the Admin Console, open **Maintenance → Overview** and use the dashboard
-  link shown there.
+- In the Admin Console, open the **Overview** and use **Open the dashboard**.
 - Make sure the EMS container is running and healthy.
 - If the page loads but has no data yet, wait for the first control cycle.
 
 ### EMS is running but values look wrong
 
-Open **Maintenance → Diagnostics** in the Admin Console and run the recommended
-checks. They explain what EMS is reading and deciding.
+Open **Diagnostics** in the Admin Console and press **Run the checks**. They
+explain what EMS is reading and deciding.
 
 Then check the basics:
 
@@ -104,7 +103,7 @@ If targets look correct but the inverter output does not change:
 
 ### Backup or restore failed
 
-- Use **Maintenance → Backup / restore** in the Admin Console.
+- Use **Backups** in the Admin Console.
 - Restore always shows a **preview** first; check it before you confirm.
 - For an encrypted backup, enter the same password you used to create it. The
   password cannot be recovered.
@@ -115,20 +114,21 @@ See [Backup and restore](admin-backup-restore.md) for the full workflow.
 
 ### Update failed
 
-- Use **Maintenance → Guided upgrade** in the Admin Console.
-- Review the plan and create a backup before you apply the update.
-- After the update, run **Diagnostics** and review the result.
+- Use **Updates** in the Admin Console.
+- Review what the update will do and leave **Back up first** on.
+- After the update, run the checks under **Diagnostics** and review the result.
 - If something looks wrong, restore the backup you made before the update.
 
-See [Admin maintenance](admin-maintenance.md).
+See [Admin Maintenance](admin-maintenance.md).
 
 ### I need help
 
 Create a support bundle and attach it to your report. It is redacted and does
 not contain your passwords, tokens, or serial numbers.
 
-In the Admin Console, open **Maintenance → Diagnostics** and export a support
-bundle. On a Docker Bootstrap install, see the command in the section below.
+Create it on the EMS host with the command in the section below. The Admin
+Console's **Diagnostics** page runs the same read-only checks and shows their
+result, but writes no bundle.
 
 More help: [Getting help](../../README.md#getting-help) and the
 [FAQ](faq.md).

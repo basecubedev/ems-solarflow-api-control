@@ -24,12 +24,14 @@ ROOT = Path(__file__).resolve().parents[1]
 ADMIN_GUIDES = ROOT / "docs" / "user" / "admin"
 DASHBOARD_GUIDES = ROOT / "docs" / "user" / "dashboard"
 ADMIN_SHOTS = ROOT / "docs" / "assets" / "screenshots" / "admin"
+ADMIN_CAPTURE_SCRIPT = ROOT / "scripts" / "capture_admin_docs.mjs"
 DASHBOARD_SHOTS = ROOT / "docs" / "assets" / "screenshots" / "dashboard"
 DASHBOARD_PREVIEWS = ROOT / "docs" / "assets"
 DASHBOARD_CAPTURE_SPEC = ROOT / "tests" / "e2e-dashboard" / "capture-docs.spec.ts"
 
 REQUIRED_ADMIN_GUIDES = [
     "index.md",
+    "assistant.md",
     "first-start.md",
     "guided-setup.md",
     "guided-upgrade.md",
@@ -38,6 +40,7 @@ REQUIRED_ADMIN_GUIDES = [
     "mqtt.md",
     "backup-restore.md",
     "diagnostics-recovery.md",
+    "appearance.md",
 ]
 
 REQUIRED_DASHBOARD_GUIDES = [
@@ -217,12 +220,11 @@ def test_capture_fixtures_use_demo_identifiers():
 def test_capture_tooling_present():
     for rel in (
         "scripts/capture-docs-screenshots.sh",
-        "scripts/capture_admin_docs.py",
+        "scripts/capture_admin_docs.mjs",
         "tests/e2e-dashboard/capture-docs.spec.ts",
         "scripts/serve_admin_docs_preview.py",
         "scripts/serve_dashboard_preview.py",
         "scripts/admin_docs_preview.js",
-        "scripts/capture_admin_modern_docs.mjs",
     ):
         assert (ROOT / rel).is_file(), rel
     assert (ADMIN_SHOTS / "README.md").is_file()
@@ -237,6 +239,12 @@ def _capture_outputs(module_path):
     return set(re.findall(r'"([a-z0-9-]+\.png)"', body))
 
 
+def _admin_captures():
+    """Files the Admin capture script writes, named by the ``file:`` of each shot."""
+
+    return set(re.findall(r'file: "(admin-[a-z0-9-]+\.png)"', read(ADMIN_CAPTURE_SCRIPT)))
+
+
 def _dashboard_captures(prefix, suffix):
     """Files the dashboard capture spec writes, named by its test titles."""
 
@@ -245,24 +253,15 @@ def _dashboard_captures(prefix, suffix):
 
 
 def test_capture_manifest_matches_the_committed_screenshots():
-    """Several writers share these directories, so the manifest is the union.
+    """Each screenshot directory has exactly one writer, and its manifest says which files.
 
-    capture_admin_docs.py photographs the console's pages; the appearance
-    gallery photographs the same page three times with one axis changed. A
-    single-writer check would have read the gallery's output as an orphan and
-    the gallery's manifest as a lie. The Modern Admin console's pages come from
-    capture_admin_modern_docs.mjs. Every dashboard image comes from one
-    Playwright spec, named by its test titles: the gallery and the Classic
-    capture scripts no longer write there.
+    Every Admin Console image comes from capture_admin_docs.mjs, named by the
+    ``file:`` of each shot; every dashboard image from one Playwright spec,
+    named by its test titles. The appearance gallery and the Classic capture
+    scripts write into neither directory any more.
     """
 
-    declared = _capture_outputs(ROOT / "scripts" / "capture_admin_docs.py")
-    declared |= {
-        name
-        for name in _capture_outputs(ROOT / "scripts" / "capture_appearance_gallery.py")
-        if name.startswith("admin-")
-    }
-    declared |= set(re.findall(r'file: "(admin-[a-z0-9-]+\.png)"', read(ROOT / "scripts" / "capture_admin_modern_docs.mjs")))
+    declared = _admin_captures()
     committed = {p.name for p in ADMIN_SHOTS.glob("*.png")}
     assert declared == committed, (
         f"admin capture manifest drifted: only declared={sorted(declared - committed)} "
@@ -299,9 +298,32 @@ def test_every_dashboard_preview_is_embedded_and_listed():
         assert path.name in listing, f"dashboard screenshot README does not list {path.name}"
 
 
-def test_the_appearance_gallery_leaves_the_dashboard_to_its_spec():
+def test_the_appearance_gallery_leaves_the_dashboard_and_the_admin_console_to_their_captures():
     gallery = _capture_outputs(ROOT / "scripts" / "capture_appearance_gallery.py")
-    assert not {name for name in gallery if name.startswith("dashboard-")}
+    assert not {name for name in gallery if name.startswith(("dashboard-", "admin-"))}
+
+
+def test_every_admin_capture_declares_a_preview_scenario():
+    """A shot names the installation it shows with a scenario the preview serves."""
+
+    text = read(ADMIN_CAPTURE_SCRIPT)
+    preview = read(ROOT / "scripts" / "serve_admin_docs_preview.py")
+    served = set(re.findall(r'"([a-z-]+)"', preview.split("SCENARIOS = (", 1)[1].split(")", 1)[0]))
+    used = set(re.findall(r'scenario: "([a-z-]+)"', text))
+    assert used, "the capture script names no scenario"
+    assert used <= served, f"scenarios the preview does not serve: {sorted(used - served)}"
+
+
+def test_admin_guides_describe_the_modern_console():
+    """Classic is named only as the deprecated fallback, never as the console the steps show."""
+
+    stale = re.compile(r"/classic/#setup|Maintenance hub|Something looks wrong\?|Recommended path|Verify System Build\b")
+    offenders = [
+        f"{doc.relative_to(ROOT)}: {match.group(0)}"
+        for doc in sorted(ADMIN_GUIDES.glob("*.md"))
+        for match in stale.finditer(read(doc))
+    ]
+    assert offenders == [], "\n".join(offenders)
 
 
 def test_asset_readmes_list_every_screenshot():

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Docs-preview driver for the Admin Console screenshots.
+// Docs-preview driver of the deprecated Classic Admin Console for the demo
+// videos (scripts/render_admin_docs_video.py); the screenshots are taken from
+// the Modern console by scripts/capture_admin_docs.mjs.
 //
 // Injected after admin.js by scripts/serve_admin_docs_preview.py. Classic
 // scripts share one global lexical scope, so the Admin SPA's top-level
@@ -71,20 +73,6 @@
     if (typeof setMaintenancePath === "function") setMaintenancePath(path);
   }
 
-  function expandMaintenanceCard(id) {
-    var card = document.getElementById(id);
-    if (card && card.getAttribute("data-open") !== "true" &&
-        typeof toggleMaintenanceCard === "function") {
-      toggleMaintenanceCard(id);
-    }
-  }
-
-  function expandMaintenanceCards() {
-    ["maintenance-layout", "maintenance-containers", "maintenance-versions"].forEach(
-      expandMaintenanceCard
-    );
-  }
-
   // Open a Guided Setup step once the wizard itself reports it unlocked. A
   // locked step silently falls back to "release", which would make the capture a
   // duplicate of the release screen instead of failing.
@@ -117,37 +105,6 @@
         },
         function () {
           setActiveStep(step);
-        }
-      );
-    };
-  }
-
-  // Open the status page with exactly one card expanded, so each documented
-  // card gets a focused screenshot instead of the whole page.
-  function maintenanceCardScreen(cardId) {
-    return function () {
-      openMaintenance("status");
-      expandMaintenanceCard(cardId);
-      window.setTimeout(function () {
-        expandMaintenanceCard(cardId);
-      }, 500);
-    };
-  }
-
-  // Open the settings page on one tab, once the draft editor has rendered.
-  function maintenanceSettingsScreen(tab) {
-    return function () {
-      openMaintenance("settings");
-      whenReady(
-        function () {
-          return (
-            typeof mconfigState !== "undefined" &&
-            mconfigState.loaded === true &&
-            typeof setMaintenanceSettingsTab === "function"
-          );
-        },
-        function () {
-          setMaintenanceSettingsTab(tab);
         }
       );
     };
@@ -259,14 +216,6 @@
     landing: function () {
       // The authenticated start gate is the default surface; nothing to do.
     },
-    // The auth gate never carries demo credentials: the fields stay empty and
-    // the preview only re-renders the gate the SPA already owns.
-    "password-setup": function () {
-      if (typeof showAuthView === "function") showAuthView("create");
-    },
-    login: function () {
-      if (typeof showAuthView === "function") showAuthView("login");
-    },
     "guided-setup-start": function () {
       enterSetup();
     },
@@ -300,23 +249,7 @@
     // Wait for the wizard's own unlock state instead of forcing it: the async
     // deployment plan/status fetches would otherwise overwrite hand-set values
     // and silently drop the capture back to step 01.
-    "setup-deployment": stepScreen("deployment"),
     "setup-start-done": stepScreen("start"),
-    "maintenance-hub": function () {
-      openMaintenance("hub");
-    },
-    "maintenance-overview": function () {
-      openMaintenance("status");
-      window.setTimeout(expandMaintenanceCards, 500);
-    },
-    "maintenance-diagnostics": maintenanceCardScreen("maintenance-diagnostics"),
-    "maintenance-config-hardware": maintenanceSettingsScreen("devices"),
-    "maintenance-safety": maintenanceSettingsScreen("safety"),
-    "maintenance-mqtt": maintenanceCardScreen("maintenance-zendure-mqtt"),
-    "maintenance-recovery": maintenanceCardScreen("maintenance-workflow-recovery"),
-    "backup-restore": function () {
-      openMaintenance("backup");
-    },
     "guided-upgrade": function () {
       openMaintenance("upgrade");
       // Once the release list has settled, plan the upgrade so the full step
@@ -348,16 +281,6 @@
     },
     "upgrade-done": function () {
       driveUpgradeRun(null); // all steps done — upgrade completed
-    },
-    "admin-update-reconnect": function () {
-      // The reconnect overlay is a full-screen modal, so it does not depend on a
-      // loaded panel underneath — show it directly for a deterministic capture.
-      openMaintenance("upgrade");
-      if (typeof showReconnectOverlay === "function") {
-        showReconnectOverlay(
-          "Admin Console update started. This page will reconnect automatically."
-        );
-      }
     },
   };
 

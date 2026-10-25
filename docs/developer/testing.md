@@ -225,22 +225,24 @@ npx playwright test --config=playwright.appliance.config.ts capture-docs \
     # with EMS_APPLIANCE_CAPTURE_DOCS=1        # Appliance Manager pages
 npx playwright test --config=playwright.dashboard.config.ts capture-docs \
     --project=chromium # with EMS_DASHBOARD_CAPTURE_DOCS=1  # every dashboard image
-python3 scripts/capture_appearance_gallery.py    # the Admin and Appliance appearance strips
+python3 scripts/capture_appearance_gallery.py    # the Appliance appearance strips
 ```
 
 The first three photograph the product's pages. The last photographs one page
 three times with a single appearance axis changed -- palette, object style,
 density -- because a choice whose entire effect is how something looks cannot be
-documented in prose. The dashboard's spec draws its own strips (colour scheme
-and density, the two axes the dashboard has) the same way, so every dashboard
-image, the README-level `docs/assets/preview-*.jpg` included, has one writer.
+documented in prose. The dashboard's spec and the Admin Console's capture
+script (`scripts/capture_admin_docs.mjs`) draw their own strips (colour scheme
+and density, the two axes Modern has) the same way, so every dashboard image,
+the README-level `docs/assets/preview-*.jpg` included, and every Admin image
+has one writer.
 All of them use the same deterministic servers as the browser suites, so no
 capture contains a real host, address, serial or key.
 
 Each screenshot directory carries a `README.md` listing every image, and
 contract tests refuse a capture that is not listed or a listing without an
-image. Two writers now share the Admin and Appliance directories, so those
-manifests are a union; add a row when you add a capture.
+image. Two writers share the Appliance directory, so its manifest is a union;
+add a row when you add a capture.
 
 ### The other two surfaces
 
@@ -426,17 +428,24 @@ The user guides are screenshot-led. Regenerate every image with:
 ./scripts/capture-docs-screenshots.sh dashboard  # EMS Dashboard only
 ```
 
-The Admin capture scripts start their own loopback-only preview server from the
-deterministic fixtures in `tests/fixtures/admin_docs/`; the dashboard's spec runs
-against `scripts/serve_dashboard_preview.py` over
-`scripts/dashboard_preview_data.py`, the server of the dashboard browser suite.
-No Docker, hardware, discovery, MQTT broker, Zendure credential, `config.json`
-or runtime state is involved, unrelated containers are untouched, and nothing is
-pushed. Requirements: headless `firefox` and ImageMagick `convert` for Admin,
-`npx playwright` with Chromium for the dashboard.
+Every image is of the Modern design, taken with Playwright Chromium. The Admin
+Console's script, `scripts/capture_admin_docs.mjs`, starts its own
+loopback-only preview server, `scripts/serve_admin_docs_preview.py`, over the
+deterministic fixtures in `tests/fixtures/admin_docs/`; a shot names the
+installation it shows with the preview's `?scenario=` (a fresh host, a
+signed-out browser, an update that runs, a guided setup, ...). The settings
+page, its check, the telemetry view and the guided setup's device search and
+device plan are answered by the shipped Admin builders from the demo
+installation's `config.json`, so a setting the template gains shows up without
+a fixture edit. The dashboard's spec runs against
+`scripts/serve_dashboard_preview.py` over `scripts/dashboard_preview_data.py`,
+the server of the dashboard browser suite. No Docker, hardware, discovery, MQTT
+broker, Zendure credential, `config.json` or runtime state is involved,
+unrelated containers are untouched, and nothing is pushed. Requirements:
+`node` with the Playwright Chromium for both.
 
-Add a screen by extending `SCREENS` in `scripts/capture_admin_docs.py` (plus a
-driver in `scripts/admin_docs_preview.js`), or by adding a test titled with the
+Add a screen by adding an entry to `SHOTS` in `scripts/capture_admin_docs.mjs`
+(and, when it needs one, a scenario in the preview), or a test titled with the
 file's name to `tests/e2e-dashboard/capture-docs.spec.ts`, then embed it in a
 guide — `tests/test_docs_user_guides.py` enforces that the manifest, the
 committed files and the asset README stay in step.
@@ -444,11 +453,16 @@ committed files and the asset README stay in step.
 Two traps worth knowing:
 
 - Guided Setup steps 02–05 are authorized by a **server-confirmed setup
-  transition**, so the preview must serve one. Without it every setup screen
-  silently falls back to step 01 and the captures become byte-identical
+  transition**, so the `setup` scenario serves one. Without it every setup
+  screen silently falls back to step 01 and the captures become byte-identical
   duplicates; the distinctness test is what catches that.
-- The Admin driver only runs after the SPA's own authenticated workflow resume
-  has finished, because that resume re-opens Guided Setup on step 01.
+- Every click in the console sends a session heartbeat, whose answer is
+  adopted as the sign-in state. The preview answers it with the scenario's own
+  sign-in state; an answer without one signs the page out mid-capture.
+
+The demo videos in `docs/assets/videos/admin/` were recorded from the
+deprecated Classic console by `scripts/render_admin_docs_video.py`, which
+drives Classic through the preview's `?screen=` and `scripts/admin_docs_preview.js`.
 
 After a run, review `git status --short docs/assets` before committing.
 
