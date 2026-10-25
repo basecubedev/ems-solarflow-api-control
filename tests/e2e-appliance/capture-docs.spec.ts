@@ -49,6 +49,19 @@ const DEFAULT_PREFS = {
   "ems-modern.motion": "off",
 };
 const TEST_ROOT = /\/[^"\s]*?\/ems-appliance-e2e-[A-Za-z0-9_]+/g;
+const DEMO_DISK = { total_mb: 59640, free_mb: 41210, used_mb: 18430, used_percent: 30.9 };
+const PINNED_POSTS = /\/api\/updates\/plan$/;
+
+/** The test host answers with the disk of the machine running it; a capture shows a 64 GB card instead. */
+function demoDisk(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(demoDisk);
+  if (!value || typeof value !== "object") return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) out[key] = demoDisk(entry);
+  if ("free_mb" in out && "total_mb" in out && out.available !== false) Object.assign(out, DEMO_DISK);
+  if (typeof out.free_megabytes === "number" && out.free_megabytes > 0) out.free_megabytes = DEMO_DISK.free_mb;
+  return out;
+}
 
 test.use({ locale: "en-US", timezoneId: "Europe/Berlin", deviceScaleFactor: 1, reducedMotion: "reduce" });
 
@@ -59,10 +72,12 @@ async function prepare(page: Page, { viewport = DESKTOP, prefs = {} }: { viewpor
   }, { ...DEFAULT_PREFS, ...prefs });
   await page.clock.setFixedTime(DEMO_NOW);
   await page.route("**/api/**", async (route) => {
-    if (route.request().method() !== "GET") return route.continue();
+    const request = route.request();
+    if (request.method() !== "GET" && !PINNED_POSTS.test(new URL(request.url()).pathname)) return route.continue();
     const response = await route.fetch();
     if (!(response.headers()["content-type"] || "").includes("json")) return route.fulfill({ response });
-    await route.fulfill({ response, body: (await response.text()).replace(TEST_ROOT, "") });
+    const text = (await response.text()).replace(TEST_ROOT, "");
+    await route.fulfill({ response, body: JSON.stringify(demoDisk(JSON.parse(text))) });
   });
 }
 
