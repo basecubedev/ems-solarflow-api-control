@@ -315,7 +315,7 @@ and restart `ems-appliance-agent.service` to accept them.
 
 The registry that publishes the Admin image could not be read, so the version
 list is empty and *Latest stable* cannot resolve. The channels that need no
-list — *Current stable (reinstall)* and *Previous known-good* — still work, and
+list — *Current version (reinstall)* and *Previous known-good* — still work, and
 Expert mode still accepts an exact release tag. Check the appliance's DNS and
 outbound HTTPS; a site that has neither can point `release_index_url` in
 `/etc/ems-appliance-manager/appliance.conf` at a mirror's JSON index instead.

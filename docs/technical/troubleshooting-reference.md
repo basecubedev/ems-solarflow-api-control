@@ -1196,10 +1196,11 @@ rewrites the EMS image reference in `docker-compose.yml`, and force-recreates th
 detection, build-identity gating, SemVer fallback, release cache and Docker
 execution details, see [admin-discovery.md](admin-discovery.md).
 
-If the update (**Update to …** on the Admin's **Updates** page) stops with
-*System Build verification is no longer current*
-(HTTP 409 `system_build_verification_stale`, or `system_build_verification_required`
-when no verification was sent), the target image or build metadata changed after
+If the update (**Update to …** on the Admin's **Updates** page) goes back to
+*The version could not be checked* with *The selected System Build changed after
+verification. Verify it again before upgrading.* (HTTP 409
+`system_build_verification_stale`, or `system_build_verification_required` when
+no verification was sent), the target image or build metadata changed after
 you verified it — most often a mutable tag such as `latest` re-pushed to a new
 digest. No preflight, backup, migration, or deployment ran. Select **Check
 again** to re-resolve and re-verify the current pair; the plan is rebuilt by

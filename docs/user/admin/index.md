@@ -89,7 +89,9 @@ Use this before you click something you are unsure about.
 
 | Action | Reads | Writes settings | Recreates containers |
 | --- | --- | --- | --- |
-| Assistant, Overview, System, Diagnostics | Yes | No | No |
+| Assistant, Overview, Diagnostics | Yes | No | No |
+| Reading the System page | Yes | No | No |
+| **Move the settings** / **Apply the migration** on System | Yes | Yes | No |
 | **Search my network**, a scan | Yes | No | No |
 | **Check changes** on Settings & devices | Yes | No | No |
 | **Save and apply** on Settings & devices | Yes | Yes | No |

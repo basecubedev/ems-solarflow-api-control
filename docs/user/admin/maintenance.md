@@ -35,9 +35,11 @@ clean reinstall.
 | **System** | Files, device telemetry, an older MQTT setup, unfinished workflows, the guided setup | This page, [MQTT](mqtt.md) and [Diagnostics and recovery](diagnostics-recovery.md) |
 
 Every page has its own address and can be bookmarked, a single settings tab
-included (`#/settings/safety`). Reading and changing are separate: the
-Overview, Diagnostics and System pages never edit anything, and Settings &
-devices never restarts anything.
+included (`#/settings/safety`). Reading and changing are separate: the Overview
+and Diagnostics never edit anything; the System page changes something only
+through a button you confirm (moving the settings file to its new place,
+applying the MQTT migration, cancelling or clearing an unfinished workflow); and
+Settings & devices restarts EMS only when you confirm **Restart EMS now**.
 
 ## What each area changes
 
