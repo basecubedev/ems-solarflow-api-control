@@ -21,7 +21,7 @@
         {#if words.next && say(words.next)}<p class="next" lang={langOf(words.next)}>{say(words.next)}</p>{/if}
       </div>
       {#if target}
-        <a class="btn secondary small" href={href(target)} data-testid="finding-open-{target}">{t("finding.open", { page: t(`nav.${target}`) })}<Icon name="chevron-right" /></a>
+        <a class="btn secondary small" href={href(target)} data-testid="finding-open-{target}">{target === "admin" ? t("updates.openAdmin") : t("finding.open", { page: t(`nav.${target}`) })}<Icon name="chevron-right" /></a>
       {/if}
     </li>
   {/each}

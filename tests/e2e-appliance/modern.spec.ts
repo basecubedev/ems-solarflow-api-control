@@ -260,6 +260,7 @@ test.describe("the overview", () => {
     await createPassword(page);
     const link = page.getByTestId("open-admin");
     await expect(link).toBeVisible();
+    await expect(link).toHaveAttribute("target", "_blank");
     await link.focus();
     const settings = page.waitForResponse((response) => response.url().includes("/api/settings"));
     await page.getByTestId("refresh").dispatchEvent("click");
@@ -957,6 +958,7 @@ test.describe("on a phone", () => {
     const bar = page.locator(".bottom-nav");
     await expect(bar.locator("a")).toHaveCount(4);
     await page.getByTestId("nav-more").click();
+    await expect(page.getByTestId("sheet-open-admin")).toHaveAttribute("target", "_blank");
     await page.locator('.sheet a[data-page="settings"]').click();
     await expect(page.getByTestId("settings-password")).toBeVisible();
     await expect(page.locator("#content")).toBeFocused();

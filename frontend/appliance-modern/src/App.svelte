@@ -167,7 +167,7 @@
       chooseClassic();
     },
     get links() {
-      return admin ? [{ href: admin, icon: "external-link", label: "nav.openAdmin", testid: "open-admin" }] : [];
+      return admin ? [{ href: admin, icon: "external-link", label: "nav.openAdmin", testid: "open-admin", external: true }] : [];
     },
   });
 </script>

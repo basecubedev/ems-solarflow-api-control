@@ -17,7 +17,8 @@ const SHELL = Symbol("shell");
  *             false keeps the label out of the top bar (the phone sheet still
  *             shows it)
  *   classic   (pageId) => void, the switch to the Classic view
- *   links     [{ href, icon, label, testid }], opened in place
+ *   links     [{ href, icon, label, testid, external }], opened in place, or in
+ *             a new tab when external is true
  */
 export function provideShell(shell) {
   setContext(SHELL, shell);

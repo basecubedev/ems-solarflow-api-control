@@ -119,9 +119,9 @@ and **Open EMS Admin** appears at the foot of the side menu.
 ### 5 — Set up the EMS in EMS Admin
 
 **What you select:** **Open EMS Admin** — on the assistant's **Set up the EMS**
-row, which opens it in a new tab, or at the foot of the side menu, which opens
-it in this one. The EMS Admin console answers on port 8090 and asks for the
-same password.
+row or at the foot of the side menu; both open it in a new tab, so the
+Appliance Manager stays open in this one. The EMS Admin console answers on
+port 8090 and asks for the same password.
 
 From there, its own [assistant](../admin/assistant.md) and
 [guided setup](../admin/guided-setup.md) choose the EMS version, find your

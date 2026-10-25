@@ -67,7 +67,8 @@ The top bar always names the page and says how the appliance is — **Healthy**,
 pill that leads to the Overview — and carries **Basic** / **Expert**, the
 refresh button, **Sign out** and the **Appearance** button. A dot beside a menu
 entry marks a page with something waiting. The foot of the side menu holds
-**Open EMS Admin** (once it is installed), **Hide menu text**, **Classic view**
+**Open EMS Admin** (the EMS Admin console in a new tab, once it is
+installed), **Hide menu text**, **Classic view**
 and the Appliance Manager's version. On a phone the menu becomes a bar at the
 bottom with four pages and **More**; see
 [Appearance, language and phone](appearance.md#on-a-phone).

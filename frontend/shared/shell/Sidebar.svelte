@@ -43,7 +43,7 @@
   </nav>
   <div class="sidebar-foot">
     {#each shell.links as link (link.href)}
-      <a class="ghost-link" href={link.href} title={t(link.label)} data-testid={link.testid}>
+      <a class="ghost-link" href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noopener" : undefined} title={t(link.label)} data-testid={link.testid}>
         <Icon name={link.icon} /><span>{t(link.label)}</span>
       </a>
     {/each}

@@ -50,8 +50,9 @@ the top bar asks at once and reads the lists the pages hold, too.
 **What you see:** below the verdict, everything that needs you, worst first:
 errors, then warnings, then notes. Each entry says what it is, what was
 observed and what to do about it, and carries a button to the page that can act
-on it — **Open Updates**, **Open EMS Admin** (the EMS Admin page of this
-console), **Open Diagnostics**, **Open Settings**. An appliance with nothing to
+on it — **Open Updates**, **Go to the EMS Admin page** (the EMS Admin page of
+this console, not the EMS Admin console itself), **Open Diagnostics**, **Open
+Settings**. An appliance with nothing to
 report shows nothing here.
 
 The menu carries the same information: a page with something waiting gets a
@@ -94,7 +95,7 @@ steps; use the one that applies.
 
 | Group | Buttons | What they do |
 | --- | --- | --- |
-| **EMS Admin recovery** | **Restart**, **Repair**, **Open EMS Admin** | Restart the EMS Admin container — the first thing to try when EMS Admin does not answer but the box is fine; inspect the deployment and preview what a repair would fix; open the EMS Admin page |
+| **EMS Admin recovery** | **Restart**, **Repair**, **Go to the EMS Admin page** | Restart the EMS Admin container — the first thing to try when EMS Admin does not answer but the box is fine; inspect the deployment and preview what a repair would fix; open the EMS Admin page |
 | **Install EMS Admin** | **Install EMS Admin** | Takes the place of the group above while nothing is installed (*Nothing is deployed yet, so there is nothing to restart or repair*) and opens the EMS Admin page |
 | **Updates** | **Open Updates**, **Install security updates** | Open the Updates page; plan the waiting security updates. With none waiting the second button is greyed out, and the reason says so |
 | **Power** | **Restart Raspberry Pi**, **Shut down** | The whole box. EMS control stops while it is down |

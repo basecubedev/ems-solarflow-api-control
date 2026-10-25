@@ -203,7 +203,7 @@
       </div>
       <div class="sheet-links">
         {#each shell.links as link (link.href)}
-          <a class="ghost-link" href={link.href} data-testid={link.testid ? `sheet-${link.testid}` : undefined}><Icon name={link.icon} /><span>{t(link.label)}</span></a>
+          <a class="ghost-link" href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noopener" : undefined} data-testid={link.testid ? `sheet-${link.testid}` : undefined}><Icon name={link.icon} /><span>{t(link.label)}</span></a>
         {/each}
         <button class="ghost-link" type="button" onclick={startEditing} data-testid="customize-bar"><Icon name="pencil" /><span>{t("nav.customize")}</span></button>
         <button class="ghost-link" type="button" onclick={() => shell.classic(router.page)}><Icon name="arrow-left-right" /><span>{t("nav.classicSwitch")}</span></button>
