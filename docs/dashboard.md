@@ -206,7 +206,9 @@ switch, and **Clear**, which empties the view only. A separate **Service level**
 choice changes the running service's log verbosity live (switch to `DEBUG` to
 surface debug lines that are otherwise not emitted); the level filter only hides
 what is already in the buffer, so raising the service level is what actually
-produces more lines. The service level is a write action (session + CSRF). Like
+produces more lines. The service level is a write action (session + CSRF); a
+change the EMS refuses says why, and the choice goes back to the level the
+service runs at. Like
 Diagnose the page is **operator-only**. Lines are control-character sanitized
 server-side and rendered as text in the browser; an optional redaction setting
 (`dashboard.log_redaction`) masks secret-looking values for shared/remote

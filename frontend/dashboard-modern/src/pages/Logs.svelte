@@ -56,7 +56,8 @@
   });
 
   async function setServiceLevel(event) {
-    const next = event.currentTarget.value;
+    const select = event.currentTarget;
+    const next = select.value;
     status = t("logs.settingLevel", { level: next });
     try {
       const payload = await authorizedSend("/api/logs/level", { body: { level: next } });
@@ -65,6 +66,7 @@
     } catch (error) {
       status = errorText(error, t);
     }
+    select.value = serviceLevel;
   }
 
   const tone = (value) => ({ ERROR: "error", CRITICAL: "error", WARNING: "warning", DEBUG: "debug" })[value] || "info";
