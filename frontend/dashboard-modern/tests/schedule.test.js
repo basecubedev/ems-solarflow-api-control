@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { newDraft, rulePayload, draftFromRule, repeatEditable, presetOf, typedValue, shiftDate, PRESET_ORDER } from "../src/lib/schedule.js";
+import { newDraft, rulePayload, draftFromRule, repeatEditable, presetOf, typedValue, shiftDate, whenParts, PRESET_ORDER } from "../src/lib/schedule.js";
 
 const overview = {
   actions: [
@@ -66,4 +66,13 @@ test("presets are recognised and dates shift across month ends", () => {
   assert.equal(presetOf({ freq: "daily", interval: 3 }, overview.presets), "custom");
   assert.equal(shiftDate("2026-10-31", 1), "2026-11-01");
   assert.equal(PRESET_ORDER.at(-1), "custom");
+});
+
+test("a switch point keeps its written day, time and weekday in every browser zone", () => {
+  const parts = whenParts("2026-10-27T06:00+01:00");
+  assert.equal(parts.day, "2026-10-27");
+  assert.equal(parts.time, "06:00");
+  assert.deepEqual([parts.date.getFullYear(), parts.date.getMonth(), parts.date.getDate(), parts.date.getDay()], [2026, 9, 27, 2]);
+  assert.equal(parts.date.getHours(), 0);
+  assert.equal(whenParts("not a time"), null);
 });

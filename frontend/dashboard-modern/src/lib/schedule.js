@@ -205,11 +205,20 @@ export function valueLimit(action, device, overview) {
   return 5000;
 }
 
-/** "2026-10-19T18:00" is wall-clock time in the EMS's zone: shown as written, never shifted by the browser's. */
+/**
+ * "2026-10-19T18:00" is wall-clock time in the EMS's zone: shown as written,
+ * never shifted by the browser's. ``day`` is the calendar day as written and
+ * ``date`` that day's local midnight, so its weekday is the day's own in every
+ * browser zone.
+ */
 export function whenParts(at) {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}:\d{2})/.exec(String(at || ""));
   if (!match) return null;
-  return { date: new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))), time: match[4] };
+  return {
+    day: `${match[1]}-${match[2]}-${match[3]}`,
+    date: new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])),
+    time: match[4],
+  };
 }
 
 export function offsetText(minutes) {

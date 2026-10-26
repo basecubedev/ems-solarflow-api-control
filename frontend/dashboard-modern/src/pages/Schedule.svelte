@@ -83,7 +83,7 @@
   function when(at) {
     const parts = whenParts(at);
     if (!parts) return String(at || "");
-    return `${f.weekday(parts.date)} ${f.date(parts.date.toISOString().slice(0, 10), { short: true })} ${parts.time}`;
+    return `${f.weekday(parts.date)} ${f.date(parts.day, { short: true })} ${parts.time}`;
   }
 
   function actionLabel(item) {
