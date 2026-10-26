@@ -16,7 +16,7 @@ import { RULES } from "../src/lib/status.js";
 import { FIRMWARE_ENUMS, acPath } from "../src/lib/devices.js";
 import { CONTROL_CODES, DECISION_SENTENCES } from "../src/lib/control.js";
 import { PRESET_ORDER, STATUSES, WEEKDAYS } from "../src/lib/schedule.js";
-import { ANALYTICS_VIEWS } from "../src/lib/analytics.js";
+import { ANALYTICS_VIEWS, ANALYTICS_OVERLAYS, SERIES_STYLE, seriesStyle } from "../src/lib/analytics.js";
 import { batteryReading, shownValue } from "../src/lib/history.js";
 import { STRINGS } from "../src/i18n/strings.js";
 import { createFormat } from "../../shared/lib/format.js";
@@ -93,6 +93,22 @@ test("analytics views request the series Classic's tabs request", () => {
   const classicTabs = Object.fromEntries(classic.ANALYTICS_TABS.map((tab) => [tab.id, tab.series]));
   for (const view of ANALYTICS_VIEWS) assert.deepEqual(view.series, classicTabs[view.id], view.id);
   assert.deepEqual(ANALYTICS_VIEWS.map((v) => v.id).sort(), Object.keys(classicTabs).sort());
+});
+
+test("an analytics overlay is drawn as Classic draws one, a dashed line, and a view's own series keep their style", () => {
+  assert.match(source, /dash: isOverlay \? \[6, 4\] : undefined/);
+  for (const view of ANALYTICS_VIEWS) {
+    for (const id of new Set([...view.series, ...ANALYTICS_OVERLAYS])) {
+      const style = seriesStyle(view, id);
+      if (view.series.includes(id)) {
+        assert.deepEqual(style, SERIES_STYLE[id], `${view.id} ${id}`);
+      } else {
+        assert.deepEqual(style.dash, [6, 4], `${view.id} ${id}`);
+        assert.equal(style.fill, false, `${view.id} ${id}`);
+        assert.equal(style.token, SERIES_STYLE[id].token, `${view.id} ${id}`);
+      }
+    }
+  }
 });
 
 test("a chart draws and reads the battery as Classic does: charging below zero, as Charge", () => {

@@ -9,7 +9,7 @@
   import { getJson } from "../../../shared/lib/api.js";
   import { fetchSeries } from "../lib/historyApi.js";
   import { escapeLeavesZoom, zoomSpan } from "../lib/history.js";
-  import { ANALYTICS_RANGES, ANALYTICS_VIEWS, ANALYTICS_OVERLAYS, SERIES_STYLE, viewById, requestedSeries, computeKpi, runtimeRole, KPIS } from "../lib/analytics.js";
+  import { ANALYTICS_RANGES, ANALYTICS_VIEWS, ANALYTICS_OVERLAYS, viewById, requestedSeries, seriesStyle, computeKpi, runtimeRole, KPIS } from "../lib/analytics.js";
   import { devices } from "../state/derived.svelte.js";
   import { live } from "../state/live.svelte.js";
 
@@ -40,7 +40,7 @@
   const view = $derived(viewById(viewId));
   const names = $derived(devices().map((d) => d.name));
   const seriesIds = $derived(requestedSeries(view, overlays));
-  const chartSeries = $derived(seriesIds.map((id) => ({ id, label: t(`series.${id}`), ...SERIES_STYLE[id] })));
+  const chartSeries = $derived(seriesIds.map((id) => ({ id, label: t(`series.${id}`), ...seriesStyle(view, id) })));
   const rangeLabel = $derived(periodLabel(data && dataPeriod ? dataPeriod : { zoom, applied, range }));
   const chartHasData = $derived(seriesIds.some((id) => (data?.series?.[id] || []).some((value) => value !== null && value !== undefined)));
 

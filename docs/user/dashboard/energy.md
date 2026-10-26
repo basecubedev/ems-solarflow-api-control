@@ -172,8 +172,8 @@ gives you the accumulated one.
    Each keeps the one chart and changes its series and the KPI cards. **Device**
    chooses one inverter instead of **All devices**.
 2. **Overlays** — **EMS target**, **Grid**, **AC charging** and **State of
-   charge** add a series on top of the view; the state of charge gets its own
-   percent scale on the right.
+   charge** add a series on top of the view, drawn as a dashed line; the state
+   of charge gets its own percent scale on the right.
 3. **Range** — **1 h**, **6 h**, **24 h**, **7 d**, **30 d** or **365 d**, or a
    custom range with **From**, **To** and **Apply**.
 4. The chart names its source, *From InfluxDB*, and **Table** lists the values.

@@ -788,7 +788,10 @@ measurement rather than a wiring mistake.
 
 Overlay toggles add optional series on top of the active view without changing
 it: **EMS target**, **Grid**, **AC charging** and **State of charge** (drawn on
-its own 0–100 % scale on the right). Every overlay is data-backed (no overlay is
+its own 0–100 % scale on the right). An overlay is drawn as a dashed line
+without a fill, as in Classic, so it reads as laid over the view's own series;
+a series the view carries itself, such as Grid on the Grid view, keeps its
+style. Every overlay is data-backed (no overlay is
 empty by design). The live legend above the chart reports every visible series
 at the cursor. Every power chart — Analytics and the SQLite charts on Overview
 and Devices, in Classic and in Modern — draws the battery below zero while

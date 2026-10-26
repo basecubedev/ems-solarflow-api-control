@@ -58,6 +58,16 @@ export function requestedSeries(view, overlays) {
   return ids;
 }
 
+/**
+ * How one series is drawn in a view: an overlay, a series the view does not
+ * carry itself, is a dashed line without a fill, as Classic draws every
+ * overlay; the view's own series keep their style.
+ */
+export function seriesStyle(view, id) {
+  const style = SERIES_STYLE[id] || {};
+  return view.series.includes(id) ? style : { ...style, fill: false, dash: [6, 4] };
+}
+
 /** Classic's runtimeRoleLabel: AC input wherever a writable device has acMode 1, output elsewhere. */
 export function runtimeRole(snapshot, deviceName = "") {
   const devices = snapshot?.devices || {};
