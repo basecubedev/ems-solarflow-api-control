@@ -38,14 +38,14 @@ bottom:
 
 ![Control page signed in: What the EMS is doing now with its sentence, the eight figures, the active limits and the notes, and the runtime settings cards below](../../assets/screenshots/dashboard/dashboard-control.png)
 
-The sentence reads, for example, *It covers 800 W of home load with a target of
-800 W, strategy PV first.* With control switched off it says *Control is
+The sentence reads, for example, *With a measured load of 800 W it sets a
+target of 800 W, strategy PV first.* With control switched off it says *Control is
 switched off. The EMS writes nothing; every inverter keeps its last output
 limit.*
 
 | Figure | Meaning |
 | --- | --- |
-| **Measured load** | Home load after filtering and deadbands — not the raw meter reading |
+| **Measured load** | The grid meter's reading after filtering and deadbands — not the raw reading |
 | **Requested** | The requested total (`commanded_total_w` plus filtered load) |
 | **Effective target** | The system target after limits |
 | **Commanded** | The value being commanded |
@@ -73,7 +73,7 @@ each stage's result, the large figure, feeds the next.
 
 ### 01 — Measurements
 
-Result: the measured load. Figures: **Solar** and **Inverter output**, what the
+Result: the measured load. Figures: **Solar** and **Output**, what the
 inverters are delivering now.
 
 ### 02 — Target

@@ -117,7 +117,7 @@ test.describe("Modern dashboard @smoke", () => {
     await expect(page.locator("table.data")).toContainText(/\d\skWh/);
 
     await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
-    await expect(page.locator(".kpi").filter({ hasText: "Current SoC" })).toContainText("60%");
+    await expect(page.locator(".kpi").filter({ hasText: "Current state of charge" })).toContainText("60%");
   });
 
   test("a month opens with every figure Classic shows for it, channels in Expert", async ({ page }) => {
@@ -128,8 +128,8 @@ test.describe("Modern dashboard @smoke", () => {
     await expect(detail).toContainText("September");
     await expect(detail).toContainText("66.9 kWh");
     await expect(detail).toContainText(/Grid import\s*28\.9\skWh/);
-    await expect(detail).toContainText("Measured since");
-    await expect(page.locator("dl.context")).toContainText("Channels measured since");
+    await expect(detail).toContainText("Energy flows since");
+    await expect(page.locator("dl.context")).toContainText("Energy flows since");
   });
 
   test("the month table carries the same figures as the month detail, channels in Expert", async ({ page }) => {
@@ -140,10 +140,11 @@ test.describe("Modern dashboard @smoke", () => {
     await expect(table.locator("caption")).toHaveCount(0);
     await page.getByRole("button", { name: "Expert" }).click();
     await expect(table.locator("thead")).toContainText("Grid import");
-    await expect(table.locator("thead")).toContainText("PV yield");
+    await expect(table.locator("thead th").filter({ hasText: /^Solar$/ })).toHaveCount(1);
+    await expect(table.locator("thead")).toContainText("Battery charged");
     const september = table.locator("tbody tr", { hasText: "Sept" });
     await expect(september).toContainText("28.9 kWh");
-    await expect(table.locator("caption")).toContainText("Channels measured since");
+    await expect(table.locator("caption")).toContainText("Energy flows since");
   });
 
   test("the rules say why they are on, and a chart zooms and resets", async ({ page }) => {

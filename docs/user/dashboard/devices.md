@@ -21,7 +21,7 @@ not control it — why not.
 
 ![Devices page with the grid meter card first, then a card each for WR1 and WR2 showing battery, solar, output, target, limit and packs, and the energy flow per device below](../../assets/screenshots/dashboard/dashboard-devices.png)
 
-The **Devices** page — *Inverters, batteries and meters* — has the grid
+The **Devices** page — *Inverters, batteries and grid meters* — has the grid
 meter's card first, then one card per inverter, the energy flow drawn per
 device, and a power chart for the last hours.
 
@@ -95,8 +95,8 @@ charge**, **Next due** and the restore steps.
 
 ### 5 — The grid meter, flow and history
 
-The **Grid meter** card shows **Grid** (negative while exporting), **Home**, and
-**Imported today** and **Exported today**. If the meter does not answer, its
+The **Grid meter** card shows **Grid** (negative while exporting), **Home use**,
+and **Grid import today** and **Grid export today**. If the meter does not answer, its
 status reads **Offline** and the card says *The grid meter does not answer.*
 
 Below the cards, the **Energy flow** shows each inverter's solar and battery

@@ -17,7 +17,7 @@ Every day. **Overview** is the page to leave open.
 
 ## What you see
 
-![Overview page with the side menu, the four status tiles, the energy flow from solar and battery through the inverters to home and grid, the storage card and the active rules](../../assets/screenshots/dashboard/dashboard-overview.png)
+![Overview page with the side menu, the four status tiles, the energy flow from solar and battery through the inverters to home and grid, the batteries card and the active rules](../../assets/screenshots/dashboard/dashboard-overview.png)
 
 ### 1 — The top bar
 
@@ -44,7 +44,7 @@ A `◦` after a figure marks a day that was only partly measured.
 ### 3 — Energy flow
 
 A live diagram of where the power goes: **Solar** and **Battery** into the
-inverters, **Inverter output** to **Home**, and **Grid** meeting the home on its
+inverters, **Output** to **Home use**, and **Grid** meeting the home on its
 own, the way the meter sees the house. Each box carries its power and a figure
 for today; the battery says *charging*, *discharging* or *idle*, the grid
 *importing*, *exporting* or *balanced*.
@@ -66,9 +66,9 @@ remembers the choice:
 
 ![Overview in the Midnight colour scheme with the energy flow drawn per device: solar and battery for WR1 and WR2, each inverter's output joining into the home](../../assets/screenshots/dashboard/dashboard-overview-per-device.png)
 
-### 4 — Storage and Active rules
+### 4 — Batteries and Active rules
 
-**Storage** lists the battery of each device with its state of charge and
+**Batteries** lists the battery of each device with its state of charge and
 whether it is charging, discharging or idle.
 
 **Active rules** lists the EMS behaviours that shape the control right now,
@@ -94,7 +94,7 @@ capped, one of these says why.
 
 ![Overview scrolled down to the four today tiles, each with an hourly bar chart and a comparison with yesterday, and the Power today chart with its range buttons](../../assets/screenshots/dashboard/dashboard-overview-today.png)
 
-The four tiles **Solar today**, **Home today**, **Battery net today** and
+The four tiles **Solar today**, **Home use today**, **Battery net today** and
 **Grid import today** show today's energy so far, hour by hour, and compare it
 with **yesterday up to the same time of day**: at two in the afternoon, today's
 solar is compared with yesterday's until two in the afternoon. The comparison
@@ -102,7 +102,7 @@ is green where today is better and red where it is worse. Each bar is one hour;
 the dashed line is the figure written above it. Without a history for
 yesterday the tile says *no comparison yet*.
 
-**Power today** charts solar, home, battery and grid from midnight. The badge
+**Power today** charts solar, home use, battery and grid from midnight. The badge
 names the source, **SQLite**, the local history that is always there. The
 buttons choose **1 h**, **6 h**, **Today**, **24 h** or **7 d**; **Table**
 lists the values instead. The battery is drawn below zero while charging and

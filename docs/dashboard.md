@@ -155,15 +155,16 @@ it is a per-browser display choice (`ems-modern.energyDetail` in
 
 - **Basic** shows energy, savings, and self-sufficiency wherever the period is
   fully measured.
-- **Expert** adds grid import/export, battery charge/discharge, PV yield and
-  home consumption to the same cards — periods, months, years and the lifetime
-  total alike — together with peak output and the date the channels started.
+- **Expert** adds grid import/export, battery charged/discharged, solar and
+  home use to the same cards — periods, months, years and the lifetime total
+  alike — together with the output peak and the date the energy flows started
+  being measured.
 
 A value whose period was only partly measured carries a `◦`; a period the
 channels never covered says "not measured" instead of listing zeros.
 
 Where a period contains AC-charged energy, the card carries an extra **AC
-charged** figure. It has no monetary value attached on purpose: the
+charging** figure. It has no monetary value attached on purpose: the
 savings figure prices avoided import, and energy put into a battery has avoided
 nothing yet — the discharge that does is already counted. Installations that
 never AC-charge never see the row. See
@@ -570,7 +571,7 @@ hole in it, even though the channel began somewhere inside that day. Marking it
 would leave every range that contains the start — the lifetime, the first
 month, the first calendar year — incomplete for good, and those are the ranges
 whose ratio a reader keeps. The price is one partly measured day inside them;
-`channel_meta[].since` and the board's `Measured since` row say when the
+`channel_meta[].since` and the board's `Energy flows since` row say when the
 measuring began.
 
 Both `coverage` and `lifetime.since_date` are built from the sample timestamps,
@@ -761,23 +762,24 @@ one combined chart, never a chart explosion.
 The views keep the same single chart and only change the visible series and the
 energy KPI cards (no extra chart pages):
 
-- **Overview** / **Devices** — Solar, Inverter output, Battery; KPIs Solar,
-  Output, Charged, Discharged.
-- **Grid** — Grid, Home and AC charging; KPIs Grid import, Grid export, Home,
-  AC charged.
-- **Battery** — Battery; KPIs Charged, Discharged.
-- **Solar** — Solar and Inverter output; KPIs Solar, Solar peak, Output.
+- **Overview** / **Devices** — Solar, Output, Battery; KPIs Solar, Output,
+  Battery charged, Battery discharged.
+- **Grid** — Grid, Home use and AC charging; KPIs Grid import, Grid export,
+  Home use, AC charging.
+- **Battery** — Battery; KPIs Battery charged, Battery discharged.
+- **Solar** — Solar and Output; KPIs Solar, Solar peak, Output.
 
-Every view adds **Current SoC** and **Runtime role**.
+Every view adds **Current state of charge** and **Runtime role**.
 
 Energy KPIs are integrated from the window the chart loaded, and each of them
 and Solar peak names that window: the range button (`Solar · 24 h`), or the
-length of a custom range or a zoom (`Solar · 3 d`, `Charged · 20 min`). Current
-SoC and Runtime role come from the live snapshot. With a device selected, Solar,
-Output, Charged, Discharged, AC charged, Solar peak, Current SoC and Runtime role
-describe that device; Grid import, Grid export and Home always describe the grid
-meter, which measures the whole house. A device that reports no charge level
-shows `—` for Current SoC, not 0 %, and a read-only device (telemetry only, or
+length of a custom range or a zoom (`Solar · 3 d`, `Battery charged · 20 min`).
+Current state of charge and Runtime role come from the live snapshot. With a
+device selected, Solar, Output, Battery charged, Battery discharged, AC
+charging, Solar peak, Current state of charge and Runtime role describe that
+device; Grid import, Grid export and Home use always describe the grid meter,
+which measures the whole house. A device that reports no charge level shows `—`
+for Current state of charge, not 0 %, and a read-only device (telemetry only, or
 an external device) has no runtime role: it shows `—` on its own and is left
 out of the role of all devices. A step between two samples longer than
 three times the series' typical spacing is a gap in the record and is not

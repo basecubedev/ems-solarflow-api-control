@@ -73,30 +73,30 @@ shows. The browser remembers it, and it changes nothing on the system.
 | | What a card shows |
 | --- | --- |
 | **Basic** | Energy, savings, and self-sufficiency where the period is fully measured |
-| **Expert** | The same, plus grid import and export, charged and discharged, PV yield, home, peak output and since when the channels are measured |
+| **Expert** | The same, plus grid import and export, battery charged and discharged, solar, home use, the output peak and since when the energy flows are measured |
 
 **Expert** applies everywhere on the page: the period cards, the month detail
 and table, each year and the lifetime total carry the same rows in the same
-order, and the strip adds **Channels measured since**.
+order, and the strip adds **Energy flows since**.
 
-![Energy page in Expert with September selected: the month detail lists energy, savings, self-sufficiency, grid import and export, charged, discharged, PV yield and home, and each year carries the same rows](../../assets/screenshots/dashboard/dashboard-energy-expert.png)
+![Energy page in Expert with September selected: the month detail lists energy, savings, self-sufficiency, grid import and export, battery charged, battery discharged, solar and home use, and each year carries the same rows](../../assets/screenshots/dashboard/dashboard-energy-expert.png)
 
 **Grid import** is energy drawn from the grid, **Grid export** energy fed into
-it. **Charged** and **Discharged** are the two directions of the battery. They
-are measured separately, so a day with both reports both — a single netted
-figure would hide half of what happened.
+it. **Battery charged** and **Battery discharged** are the two directions of
+the battery. They are measured separately, so a day with both reports both — a
+single netted figure would hide half of what happened.
 
-**Home** is what the house drew at the grid connection point. If the EMS
+**Home use** is what the house drew at the grid connection point. If the EMS
 charges the battery from the grid — winter mode, full-charge assist — that
 charging is part of this figure, because the meter cannot tell it apart from a
 washing machine.
 
 Where a period contains energy charged from AC, the card carries an **AC
-charged** row. It has no savings attached on purpose: savings price avoided
+charging** row. It has no savings attached on purpose: savings price avoided
 import, and energy put into a battery has avoided nothing yet — the discharge
 that does is already counted.
 
-**Self-sufficiency** is the share of home consumption that did not come from
+**Self-sufficiency** is the share of home use that did not come from
 the grid. It appears for a period the channels measured from beginning to end,
 with no day inside it missing; otherwise it would divide a half-measured number
 by a whole one, and the row shows `—`. A sample whose grid meter did not answer
@@ -139,7 +139,7 @@ For periods that begin before that day, the page does not print a zero:
 | `78 Wh` | Below a kilowatt-hour the figure is in watt-hours, so a small or freshly started total is readable |
 | `28.9 kWh ◦` | The period is only partly measured; the figure covers the measured part |
 | `not measured` | The period lies entirely before the channels existed |
-| **Measured since** `12/09/2026` | The first day the channels were measured |
+| **Energy flows since** `12/09/2026` | The first day grid, battery, solar and home use were measured |
 
 The inverter output and the savings estimate are older than the channels, so a
 card can show a full year's output next to channels marked `◦`. That is not a
@@ -157,8 +157,8 @@ gives you the accumulated one.
 | How much have I delivered *today*? | Energy → **Today** |
 | Am I importing or exporting right now? | Overview → the **Grid** box of the energy flow |
 | How much did I import or export *today*? | Overview → **Grid import today**, or Energy → **Expert** → **Grid import** / **Grid export** |
-| How much did the battery take and give back? | Energy → **Expert** → **Charged** / **Discharged** |
-| Is the battery charging or discharging? | Overview → **Storage** |
+| How much did the battery take and give back? | Energy → **Expert** → **Battery charged** / **Battery discharged** |
+| Is the battery charging or discharging? | Overview → **Batteries** |
 | How did any of these move over the last day? | Overview → **Power today** |
 | How did they move over months? | **Analytics** — needs InfluxDB |
 
@@ -179,13 +179,13 @@ gives you the accumulated one.
 4. The chart names its source, *From InfluxDB*, and **Table** lists the values.
    The battery is drawn below zero while charging and above zero while
    discharging into the inverter, as in Classic; the legend and the table say
-   **Charge** or **Discharge**. The **Charged** and **Discharged** cards are
-   both positive amounts. It zooms like every chart here; on Analytics a zoom
+   **Charge** or **Discharge**. The **Battery charged** and **Battery
+   discharged** cards are both positive amounts. It zooms like every chart here; on Analytics a zoom
    asks InfluxDB for just the zoomed window, so the detail gets finer the further
    you zoom in, and the page stops refreshing until **Reset zoom** or **Esc**.
 5. The KPI cards integrate the energy in the loaded window and name it, for
-   example **Solar · 24 h**. **Current SoC** and **Runtime role** come from the
-   live values.
+   example **Solar · 24 h**. **Current state of charge** and **Runtime role**
+   come from the live values.
 
 **What it changes:** nothing.
 

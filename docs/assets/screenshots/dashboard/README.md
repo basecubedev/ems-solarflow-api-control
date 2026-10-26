@@ -16,7 +16,7 @@ Admin Console screenshots live in [`../admin/`](../admin/).
 
 | File | View | Scenario |
 | --- | --- | --- |
-| `dashboard-overview.png` | Overview — status tiles, energy flow (System), Storage, Active rules | `normal` |
+| `dashboard-overview.png` | Overview — status tiles, energy flow (System), Batteries, Active rules | `normal` |
 | `dashboard-overview-today.png` | Overview scrolled down — the four today tiles and Power today | `normal` |
 | `dashboard-overview-per-device.png` | Overview in Midnight, energy flow Per device | `normal` |
 | `dashboard-overview-narrow.png` | Overview on a phone (390×844), with the bar at the bottom | `normal` |

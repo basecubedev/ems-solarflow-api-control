@@ -308,7 +308,7 @@
   .overlays { gap: 6px; }
   .chip { border: 1px solid var(--m-line-strong); background: transparent; color: var(--m-muted); border-radius: var(--m-radius-pill); padding: 4px 10px; font-size: 12px; cursor: pointer; }
   .chip[aria-pressed="true"] { background: var(--m-selected-bg); color: var(--m-selected-ink); border-color: transparent; }
-  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--s4); }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--s4); }
   .kpi { padding: var(--s4); border-left: 3px solid var(--c); }
   .kpi-label { font-size: 12px; color: var(--m-muted); }
   .kpi-value { font-size: 20px; font-weight: 650; margin-top: 2px; }

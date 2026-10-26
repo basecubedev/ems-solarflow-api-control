@@ -93,7 +93,7 @@ test.describe("Modern dashboard views: control @smoke", () => {
     await shapeLive(page, distinctCycle);
     await openModern(page, "#/control");
     const now = page.getByRole("region", { name: "What the EMS is doing now" });
-    await expect(now.getByTestId("control-sentence")).toHaveText("It covers 777 W of home load with a target of 780 W, strategy PV first.");
+    await expect(now.getByTestId("control-sentence")).toHaveText("With a measured load of 777 W it sets a target of 780 W, strategy PV first.");
     await expect(now.locator(".facts .fact-label")).toHaveText(["Measured load", "Requested", "Effective target", "Commanded", "Max total power", "Deadband", "Min output", "Undistributed"]);
     await expect(now.locator(".facts .fact-value")).toHaveText(["777 W", "790 W", "780 W", "770 W", "900 W", "15 W", "50 W", "10 W"]);
     const limits = now.locator(".lists li").filter({ hasText: "Maximum total power" });
@@ -251,11 +251,11 @@ test.describe("Modern dashboard views: history @smoke", () => {
 });
 
 const ANALYTICS_VIEWS = [
-  { label: "Devices", series: ["pv", "output", "battery"], legend: ["Solar", "Inverter output", "Battery"], kpis: ["Solar", "Output", "Charged", "Discharged"] },
-  { label: "Grid", series: ["grid", "home", "ac_charge"], legend: ["Grid", "Home", "AC charging"], kpis: ["Grid import", "Grid export", "Home", "AC charged"] },
-  { label: "Battery", series: ["battery"], legend: ["Battery"], kpis: ["Charged", "Discharged"] },
-  { label: "Solar", series: ["pv", "output"], legend: ["Solar", "Inverter output"], kpis: ["Solar", "Solar peak", "Output"] },
-  { label: "Overview", series: ["pv", "output", "battery"], legend: ["Solar", "Inverter output", "Battery"], kpis: ["Solar", "Output", "Charged", "Discharged"] },
+  { label: "Devices", series: ["pv", "output", "battery"], legend: ["Solar", "Output", "Battery"], kpis: ["Solar", "Output", "Battery charged", "Battery discharged"] },
+  { label: "Grid", series: ["grid", "home", "ac_charge"], legend: ["Grid", "Home use", "AC charging"], kpis: ["Grid import", "Grid export", "Home use", "AC charging"] },
+  { label: "Battery", series: ["battery"], legend: ["Battery"], kpis: ["Battery charged", "Battery discharged"] },
+  { label: "Solar", series: ["pv", "output"], legend: ["Solar", "Output"], kpis: ["Solar", "Solar peak", "Output"] },
+  { label: "Overview", series: ["pv", "output", "battery"], legend: ["Solar", "Output", "Battery"], kpis: ["Solar", "Output", "Battery charged", "Battery discharged"] },
 ];
 const analyticsRead = (check = () => true) => seriesRead("/api/analytics/series", check);
 const startsWith = (labels) => labels.map((label) => new RegExp(`^${label}`));
@@ -273,7 +273,7 @@ test.describe("Modern dashboard views: analytics @smoke", () => {
       expect(new URL(asked.url()).searchParams.get("range")).toBe("24h");
       const chart = page.getByRole("region", { name: view.label, exact: true });
       await expect(chart.locator(".legend-item")).toHaveText(startsWith(view.legend));
-      await expect(page.locator(".kpi-label")).toHaveText([...view.kpis.map((kpi) => `${kpi} · 24 h`), "Current SoC", "Runtime role"]);
+      await expect(page.locator(".kpi-label")).toHaveText([...view.kpis.map((kpi) => `${kpi} · 24 h`), "Current state of charge", "Runtime role"]);
       await expect(views.getByRole("button", { name: view.label, exact: true })).toHaveAttribute("aria-pressed", "true");
     }
   });
@@ -288,7 +288,7 @@ test.describe("Modern dashboard views: analytics @smoke", () => {
     await openModern(page, "#/analytics");
     await page.getByRole("button", { name: "Table" }).click();
     const firstSolar = page.locator("table.data tbody tr").first().locator("td").nth(1);
-    const soc = page.locator(".kpi").filter({ hasText: "Current SoC" }).locator(".kpi-value");
+    const soc = page.locator(".kpi").filter({ hasText: "Current state of charge" }).locator(".kpi-value");
     await expect(firstSolar).toHaveText("888 W");
     await expect(soc).toHaveText("60%");
     const pick = page.getByRole("combobox", { name: "Device" });
@@ -434,5 +434,85 @@ test.describe("Modern dashboard views: density and animation @smoke", () => {
     await expect(page.locator("html")).toHaveAttribute("data-motion", "off");
     await expect(page.getByTestId("energy-flow").locator("[data-run] .dashes").first()).toBeAttached();
     await expect.poll(still).toBe(true);
+  });
+});
+
+/**
+ * The energy labels fit where they stand, in every language and at the widths
+ * where the cards change their columns and just beside them: a fact row keeps
+ * its label and its value on one line, an Analytics KPI label stays on one
+ * line, and the device, grid meter and flow labels are never cut off.
+ */
+test.describe("Modern dashboard views: labels fit @smoke", () => {
+  const LANGUAGES = ["en", "de", "nl", "fr"];
+  const WIDTHS = [1440, 1300, 1225, 960, 905, 640, 632, 390];
+
+  /** Every period, month and year of the preview with energy charged from AC, so the AC charging row is listed too. */
+  function withAcCharging(body) {
+    const stats = body.energy_stats || {};
+    const keys = ["today", "yesterday", "last_7_days", "last_4_weeks", "last_12_months", "best_day", "lifetime"];
+    const periods = [...keys.map((key) => stats[key]), ...(stats.monthly_current_year || []), ...(stats.yearly || [])];
+    for (const period of periods.filter(Boolean)) period.ac_charge_kwh = 2.4;
+  }
+
+  async function inLanguage(page, hash, lang) {
+    await openModern(page, hash);
+    await page.evaluate((code) => {
+      localStorage.setItem("ems-modern.lang", code);
+      localStorage.setItem("ems-modern.energyDetail", "expert");
+    }, lang);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(page.locator("html")).toHaveAttribute("lang", lang);
+  }
+
+  const brokenFacts = (page) => page.locator(".energy-facts > div").evaluateAll((rows) => rows.flatMap((row) => {
+    const [label, value] = [row.querySelector("dt"), row.querySelector("dd")];
+    const line = parseFloat(getComputedStyle(label).fontSize) * 1.7;
+    const end = row.getBoundingClientRect().right;
+    const fits = label.getBoundingClientRect().height <= line && value.getBoundingClientRect().height <= line && value.getBoundingClientRect().right <= end + 0.5;
+    return fits ? [] : [label.textContent.trim()];
+  }));
+  const wrapped = (locator) => locator.evaluateAll((labels) => labels.filter((label) => label.getBoundingClientRect().height > parseFloat(getComputedStyle(label).fontSize) * 1.7).map((label) => label.textContent.trim()));
+  const cut = (locator) => locator.evaluateAll((labels) => labels.filter((label) => label.scrollWidth > label.clientWidth + 1).map((label) => label.textContent.trim()));
+
+  test("every energy fact keeps its label and its value on one line", async ({ page }) => {
+    await shapeLive(page, withAcCharging);
+    for (const lang of LANGUAGES) {
+      await inLanguage(page, "#/energy", lang);
+      await expect(page.getByTestId("energy-periods").locator(".energy-facts > div")).not.toHaveCount(0);
+      await expect(page.locator(".energy-facts dt .c-grid").first()).toBeVisible();
+      for (const width of WIDTHS) {
+        await page.setViewportSize({ width, height: 900 });
+        expect(await brokenFacts(page), `${lang} at ${width} px`).toEqual([]);
+      }
+    }
+  });
+
+  test("every Analytics KPI label stays on one line", async ({ page }) => {
+    for (const lang of LANGUAGES) {
+      await inLanguage(page, "#/analytics", lang);
+      const views = page.locator('[role="group"]').first().getByRole("button");
+      for (let index = 0; index < await views.count(); index += 1) {
+        await views.nth(index).click();
+        await expect(page.locator(".kpi-label").first()).toBeVisible();
+        for (const width of WIDTHS) {
+          await page.setViewportSize({ width, height: 900 });
+          expect(await wrapped(page.locator(".kpi-label")), `${lang}, view ${index}, at ${width} px`).toEqual([]);
+        }
+      }
+    }
+  });
+
+  test("a device charging from AC, the grid meter and the flow keep their labels whole", async ({ page, baseURL }) => {
+    await page.context().addCookies([{ name: "ems-preview-scenario", value: "ac-charging", url: baseURL }]);
+    for (const lang of LANGUAGES) {
+      await inLanguage(page, "#/devices", lang);
+      await expect(page.locator('[data-testid="device-card"] .fact.c-grid')).not.toHaveCount(0);
+      const labels = page.locator('[data-testid="device-card"] .fact.c-grid .ellipsis, [data-testid="grid-meter"] .fact-label .ellipsis, [data-testid="energy-flow"] .node-label, [data-testid="energy-flow"] .hub-label');
+      for (const width of WIDTHS) {
+        await page.setViewportSize({ width, height: 900 });
+        expect(await cut(labels), `${lang} at ${width} px`).toEqual([]);
+      }
+    }
   });
 });

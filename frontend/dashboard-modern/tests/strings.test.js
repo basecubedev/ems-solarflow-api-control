@@ -110,3 +110,50 @@ test("no orphan keys: each key is used literally or belongs to a generated famil
   const orphans = Object.keys(STRINGS).filter((key) => !APP_KEYS.includes(key) && !text.includes(`"${key}"`) && !families.some((prefix) => key.startsWith(prefix)));
   assert.deepEqual(orphans, []);
 });
+
+/**
+ * One quantity, one name: the keys that label the same measured quantity on
+ * different pages (the energy flow, the device cards, the charts, Analytics
+ * and the Energy page) carry the same words in every language.
+ */
+const SAME_NAME = {
+  solar: ["flow.solar", "series.pv", "device.solar", "analytics.view.pv", "analytics.kpi.pv", "channel.pv_yield"],
+  battery: ["flow.battery", "series.battery", "device.battery", "analytics.view.battery"],
+  grid: ["flow.grid", "series.grid", "device.grid", "analytics.view.grid"],
+  homeUse: ["flow.home", "series.home", "analytics.kpi.home", "channel.home_consumption"],
+  output: ["flow.inverter", "series.output", "device.output", "analytics.kpi.output", "energy.energy"],
+  gridImport: ["channel.grid_import", "analytics.kpi.gridImport"],
+  gridExport: ["channel.grid_export", "analytics.kpi.gridExport"],
+  batteryCharged: ["channel.battery_charge", "analytics.kpi.charge"],
+  batteryDischarged: ["channel.battery_discharge", "analytics.kpi.discharge"],
+  acCharging: ["series.ac_charge", "energy.acCharge", "analytics.kpi.acCharge", "assist.acCharge", "code.ac_charge", "runtime.acChargeTitle", "schedule.group.ac_charging"],
+  stateOfCharge: ["flow.soc", "series.soc"],
+  gridImportToday: ["today.gridImport", "flow.importedToday"],
+  energyFlowsSince: ["energy.measuredSince", "energy.context.channelsSince"],
+};
+
+/** A label that counts a quantity over a day begins with that quantity's name, and the meter's offline status with the meter's. */
+const NAMED_AFTER = {
+  "today.solar": "flow.solar",
+  "today.home": "flow.home",
+  "today.batteryNet": "flow.battery",
+  "today.gridImport": "channel.grid_import",
+  "flow.importedToday": "channel.grid_import",
+  "flow.exportedToday": "channel.grid_export",
+  "status.meterOffline": "device.meter",
+};
+
+test("the same quantity carries the same name on every page", () => {
+  for (const [quantity, keys] of Object.entries(SAME_NAME)) {
+    for (const lang of LANGS) {
+      const names = keys.map((key) => STRINGS[key][lang]);
+      assert.deepEqual(new Set(names).size, 1, `${quantity} in ${lang}: ${keys.map((key, i) => `${key}=${names[i]}`).join(", ")}`);
+    }
+  }
+  for (const [key, named] of Object.entries(NAMED_AFTER)) {
+    for (const lang of LANGS) {
+      const name = STRINGS[named][lang].toLocaleLowerCase(lang);
+      assert.ok(STRINGS[key][lang].toLocaleLowerCase(lang).startsWith(name), `${key} in ${lang} does not begin with ${named} (${STRINGS[named][lang]})`);
+    }
+  }
+});

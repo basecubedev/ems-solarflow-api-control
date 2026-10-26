@@ -32,13 +32,13 @@
 </div>
 
 <style>
-  .periods { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--s4); }
+  .periods { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s4); }
   .period { padding: var(--s4); display: flex; flex-direction: column; gap: 4px; }
   .period-label { font-size: 12.5px; color: var(--m-muted); display: flex; align-items: center; gap: 6px; justify-content: space-between; flex-wrap: wrap; }
   .date { font-size: 12px; }
   .period-value { font-size: 22px; font-weight: 650; letter-spacing: -0.02em; white-space: nowrap; }
   .mark { color: var(--m-muted); font-size: 0.7em; }
   .period-sub { font-size: 11.5px; color: var(--m-muted-2); margin-bottom: var(--s2); }
-  @media (max-width: 1280px) { .periods { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-  @media (max-width: 760px) { .periods { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3); } }
+  @container content (max-width: 900px) { .periods { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3); } }
+  @container content (max-width: 600px) { .periods { grid-template-columns: minmax(0, 1fr); } }
 </style>
