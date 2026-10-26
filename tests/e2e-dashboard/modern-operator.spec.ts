@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// What an operator does on the Modern dashboard's Control, Schedule and
-// Maintenance pages, checked in the browser against the preview server: each
-// action asks what Classic asks before it, sends exactly what changed with the
-// CSRF token, and shows the answer. The preview's runtime and maintenance
-// routes only acknowledge a write, so a test answers it itself where the
-// page's reaction depends on the answer; the schedule routes are the real ones
-// over the preview's scratch copy of the runtime state.
+// What an operator does on the Modern dashboard's Control, Schedule,
+// Maintenance, Diagnose and Logs pages, checked in the browser against the
+// preview server: each action asks what Classic asks before it, sends exactly
+// what changed with the CSRF token, and shows the answer. The preview's
+// runtime, maintenance and log-level routes only acknowledge a write, and it
+// has no support bundle, so a test answers those itself where the page's
+// reaction depends on the answer; the schedule routes are the real ones over
+// the preview's scratch copy of the runtime state.
 //
 // Never `waitUntil: "networkidle"`: /api/events stays open.
+import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 
 const CSRF = "preview-csrf-token";
@@ -584,5 +586,259 @@ test.describe("Modern dashboard operator: maintenance @smoke", () => {
     const upgradeCard = page.getByRole("region", { name: "Config upgrade" });
     await expect(upgradeCard.getByRole("button", { name: "Refresh comments with backup" })).toBeEnabled();
     await expect(upgradeCard).toContainText("system._comment");
+  });
+});
+
+const PROFILES = [["install", "Installation"], ["deep", "Deep"], ["hardware", "Hardware"], ["control", "Control"], ["control_quality", "Control quality"]];
+const REPORT_STATUS = { ok: "OK", warning: "Warning", error: "Error" };
+const isDiagnosis = (response) => new URL(response.url()).pathname === "/api/diagnose";
+const profileButton = (page, profile) => page.locator(`button[data-profile="${profile}"]`);
+
+test.describe("Modern dashboard operator: diagnose @smoke", () => {
+  test("each profile asks the EMS for its own report and shows it under the profile's name", async ({ page }) => {
+    await openSignedIn(page, "#/diagnose");
+    for (const [profile, name] of PROFILES) {
+      const [answer] = await Promise.all([page.waitForResponse(isDiagnosis), profileButton(page, profile).click()]);
+      expect(new URL(answer.url()).searchParams.get("profile")).toBe(profile);
+      const { diagnosis } = await answer.json();
+      const report = page.getByRole("region", { name, exact: true });
+      await expect(report.locator(".card-head .status")).toHaveText(REPORT_STATUS[diagnosis.status]);
+      const { ok, warning, error, devices } = diagnosis.metrics;
+      await expect(report.locator(".fact-value")).toHaveText([ok, warning, error, devices].map(String));
+      await expect(report.locator("details.section > summary .ellipsis")).toHaveText(diagnosis.sections.map((section) => section.title));
+      await expect(page.locator("details.section")).toHaveCount(diagnosis.sections.length);
+    }
+  });
+
+  test("while one diagnosis runs every profile waits, and the running one says so", async ({ page }) => {
+    let release;
+    const held = new Promise((resolve) => (release = resolve));
+    await page.route(/\/api\/diagnose\?/, async (route) => {
+      await held;
+      await route.continue();
+    });
+    await openSignedIn(page, "#/diagnose");
+    await profileButton(page, "hardware").click();
+    const buttons = page.locator("button[data-profile]");
+    await expect(buttons).toHaveCount(PROFILES.length);
+    for (const [profile] of PROFILES) await expect(profileButton(page, profile)).toBeDisabled();
+    await expect(profileButton(page, "hardware")).toHaveAttribute("aria-busy", "true");
+    await expect(profileButton(page, "hardware")).toContainText("Running…");
+    await expect(profileButton(page, "install")).toHaveAttribute("aria-busy", "false");
+
+    release();
+    await expect(page.getByRole("region", { name: "Hardware", exact: true })).toBeVisible();
+    for (const [profile] of PROFILES) await expect(profileButton(page, profile)).toBeEnabled();
+    await expect(profileButton(page, "hardware")).toContainText("Run");
+    await expect(profileButton(page, "hardware")).toHaveAttribute("aria-busy", "false");
+  });
+
+  test("a report with findings shows its root causes with the next check, the errors and warnings, and opens only the sections that are not OK", async ({ page, baseURL }) => {
+    await page.context().addCookies([{ name: "ems-preview-scenario", value: "offline-device", url: baseURL }]);
+    await openSignedIn(page, "#/diagnose");
+    await profileButton(page, "hardware").click();
+    const report = page.getByRole("region", { name: "Hardware", exact: true });
+    await expect(report.locator(".card-head .status")).toHaveText("Error");
+    await expect(report.locator(".fact-value")).toHaveText(["18", "2", "1", "2"]);
+
+    const causes = report.locator(".cause");
+    await expect(causes).toHaveCount(2);
+    await expect(causes.nth(0).locator(".status")).toHaveText("Error");
+    await expect(causes.nth(0).locator(".cause-title")).toHaveText("Device offline");
+    await expect(causes.nth(0)).toContainText("WR2 did not respond to the read-only telemetry probe.");
+    await expect(causes.nth(0).locator(".hint")).toHaveText("Verify WR2 power, network, and local HTTP API access.");
+    await expect(causes.nth(1).locator(".status")).toHaveText("Warning");
+    await expect(causes.nth(1).locator(".cause-title")).toHaveText("Dashboard data gap");
+
+    await expect(report.locator("ul.lines.error li")).toHaveText(["Zendure device WR2 is offline."]);
+    await expect(report.locator("ul.lines.warning li")).toHaveText([
+      "Dashboard database has no recent energy rows.",
+      "WR2 read-only probe returned a transient timeout.",
+    ]);
+
+    const sections = report.locator("details.section");
+    await expect(sections.locator("> summary .ellipsis")).toHaveText(["Environment", "Config", "Hardware", "Dashboard"]);
+    await expect(sections.nth(0)).toHaveJSProperty("open", false);
+    await expect(sections.nth(0)).toContainText("No findings.");
+    await expect(sections.nth(1)).toHaveJSProperty("open", false);
+    await expect(sections.nth(2)).toHaveJSProperty("open", true);
+    await expect(sections.nth(2).locator("li")).toHaveText([
+      "Error · Zendure device WR2 is offline (no telemetry).",
+      "Warning · Zendure device WR2 read-only probe failed: TimeoutError",
+    ]);
+    await expect(sections.nth(3)).toHaveJSProperty("open", true);
+  });
+
+  test("a diagnosis the EMS refuses because another runs says so and shows no report", async ({ page }) => {
+    await page.route(/\/api\/diagnose\?/, (route) => route.fulfill({ status: 429, json: { error: "diagnose_busy" } }));
+    await openSignedIn(page, "#/diagnose");
+    await profileButton(page, "deep").click();
+    const run = page.getByRole("region", { name: "Run a diagnosis" });
+    await expect(run.getByRole("status")).toHaveText("A diagnosis is already running. Try again in a moment.");
+    await expect(page.locator("details.section")).toHaveCount(0);
+    await expect(profileButton(page, "deep")).toBeEnabled();
+  });
+
+  test("Copy JSON puts the report shown on the clipboard, and a refused clipboard says so", async ({ page }) => {
+    await page.addInitScript(() => {
+      window.copied = [];
+      window.clipboardRefuses = false;
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: (text) => {
+            if (window.clipboardRefuses) return Promise.reject(new Error("denied"));
+            window.copied.push(text);
+            return Promise.resolve();
+          },
+        },
+      });
+    });
+    await openSignedIn(page, "#/diagnose");
+    const run = page.getByRole("region", { name: "Run a diagnosis" });
+    await expect(run.getByRole("button", { name: "Copy JSON" })).toHaveCount(0);
+    const [answer] = await Promise.all([page.waitForResponse(isDiagnosis), profileButton(page, "control").click()]);
+    const shown = await answer.json();
+
+    await run.getByRole("button", { name: "Copy JSON" }).click();
+    await expect(run.getByRole("status")).toHaveText("Copied the report JSON.");
+    const copied = await page.evaluate(() => window.copied);
+    expect(copied).toHaveLength(1);
+    expect(JSON.parse(copied[0])).toEqual(shown);
+
+    await page.evaluate(() => (window.clipboardRefuses = true));
+    await run.getByRole("button", { name: "Copy JSON" }).click();
+    await expect(run.getByRole("status")).toHaveText("Could not copy to the clipboard.");
+  });
+
+  test("the support bundle is saved as ems-support-bundle.zip, and a refused one says why", async ({ page }) => {
+    const archive = Buffer.from([0x50, 0x4b, 0x05, 0x06, ...new Array(18).fill(0)]);
+    let refuse = false;
+    await page.route("**/api/diagnose/support-bundle", (route) =>
+      refuse
+        ? route.fulfill({ status: 429, json: { error: "diagnose_busy" } })
+        : route.fulfill({ status: 200, contentType: "application/zip", body: archive }));
+    await openSignedIn(page, "#/diagnose");
+    const run = page.getByRole("region", { name: "Run a diagnosis" });
+    const [download] = await Promise.all([page.waitForEvent("download"), run.getByRole("button", { name: "Support bundle" }).click()]);
+    expect(download.suggestedFilename()).toBe("ems-support-bundle.zip");
+    expect(await readFile(await download.path())).toEqual(archive);
+    await expect(run.getByRole("status")).toHaveCount(0);
+
+    refuse = true;
+    await run.getByRole("button", { name: "Support bundle" }).click();
+    await expect(run.getByRole("status")).toHaveText("Support bundle failed (429).");
+  });
+});
+
+const LOG_LEVELS = { DEBUG: 10, INFO: 20, WARNING: 30, ERROR: 40, CRITICAL: 50 };
+const isLogRead = (url) => new URL(url).pathname === "/api/logs";
+
+test.describe("Modern dashboard operator: logs @smoke", () => {
+  test("the level filter reads the log again from its start for that level and shows only what comes back", async ({ page }) => {
+    await page.route(/\/api\/logs\?/, async (route) => {
+      const floor = LOG_LEVELS[new URL(route.request().url()).searchParams.get("level")] ?? 0;
+      const answer = await (await route.fetch()).json();
+      await route.fulfill({ json: { ...answer, lines: answer.lines.filter((line) => LOG_LEVELS[line.level] >= floor) } });
+    });
+    await openSignedIn(page, "#/logs");
+    const output = page.getByTestId("logs-output");
+    const levels = output.locator(".level");
+    const filter = page.getByRole("group", { name: "Level" });
+    await expect(levels).toHaveText(["INFO", "INFO", "INFO", "DEBUG", "DEBUG", "WARNING", "INFO", "INFO", "INFO", "INFO"]);
+    await expect(filter.getByRole("button", { name: "All" })).toHaveAttribute("aria-pressed", "true");
+
+    for (const [level, shown] of [["WARNING", ["WARNING"]], ["INFO", ["INFO", "INFO", "INFO", "WARNING", "INFO", "INFO", "INFO", "INFO"]]]) {
+      const [asked] = await Promise.all([
+        page.waitForRequest((sent) => isLogRead(sent.url()) && new URL(sent.url()).searchParams.get("level") === level),
+        filter.getByRole("button", { name: level }).click(),
+      ]);
+      expect(new URL(asked.url()).searchParams.get("after")).toBe("0");
+      await expect(levels).toHaveText(shown);
+      await expect(filter.getByRole("button", { name: level })).toHaveAttribute("aria-pressed", "true");
+    }
+
+    const [errorsOnly] = await Promise.all([
+      page.waitForResponse((answer) => isLogRead(answer.url()) && new URL(answer.url()).searchParams.get("level") === "ERROR"),
+      filter.getByRole("button", { name: "ERROR" }).click(),
+    ]);
+    expect(new URL(errorsOnly.url()).searchParams.get("after")).toBe("0");
+    expect((await errorsOnly.json()).lines).toEqual([]);
+    await expect(output).toHaveText("No log lines yet.");
+    const [all] = await Promise.all([
+      page.waitForRequest((sent) => isLogRead(sent.url()) && new URL(sent.url()).searchParams.get("after") === "0"),
+      filter.getByRole("button", { name: "All" }).click(),
+    ]);
+    expect(new URL(all.url()).searchParams.has("level")).toBe(false);
+    await expect(levels).toHaveCount(10);
+  });
+
+  test("Follow keeps the newest line in view, and without it the view stays where the operator left it", async ({ page }) => {
+    let pending = 80;
+    await page.route(/\/api\/logs\?/, (route) => {
+      const after = Number(new URL(route.request().url()).searchParams.get("after"));
+      const lines = Array.from({ length: pending }, (_, index) => ({
+        seq: after + index + 1,
+        ts: 1_790_000_000 + after + index,
+        level: "INFO",
+        logger: "ems",
+        message: `line ${after + index + 1}`,
+      }));
+      pending = 0;
+      return route.fulfill({ json: { lines, cursor: after + lines.length, dropped: false, service_level: "INFO" } });
+    });
+    await openSignedIn(page, "#/logs");
+    const output = page.getByTestId("logs-output");
+    const atBottom = () => output.evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight < 2);
+    await expect(output).toContainText("line 80");
+    expect(await output.evaluate((node) => node.scrollHeight > 2 * node.clientHeight)).toBe(true);
+    await expect.poll(atBottom).toBe(true);
+
+    await page.getByLabel("Follow").uncheck();
+    await output.evaluate((node) => (node.scrollTop = 0));
+    pending = 20;
+    await expect(output).toContainText("line 100");
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    expect(await output.evaluate((node) => node.scrollTop)).toBe(0);
+
+    await page.getByLabel("Follow").check();
+    await expect.poll(atBottom).toBe(true);
+    await output.evaluate((node) => (node.scrollTop = 0));
+    pending = 20;
+    await expect(output).toContainText("line 120");
+    await expect.poll(atBottom).toBe(true);
+  });
+
+  test("the service level shows the EMS's own, is changed with the CSRF token, and a refused change shows the EMS's level again", async ({ page }) => {
+    let serviceLevel = "INFO";
+    let refuse = false;
+    const sent = [];
+    await page.route(/\/api\/logs\?/, async (route) => {
+      const answer = await (await route.fetch()).json();
+      await route.fulfill({ json: { ...answer, service_level: serviceLevel } });
+    });
+    await page.route("**/api/logs/level", (route) => {
+      const request = route.request();
+      sent.push({ body: request.postDataJSON(), csrf: request.headers()["x-csrf-token"] });
+      if (refuse) return route.fulfill({ status: 403, json: { error: "csrf_failed" } });
+      serviceLevel = request.postDataJSON().level;
+      return route.fulfill({ json: { service_level: serviceLevel } });
+    });
+    await openSignedIn(page, "#/logs");
+    const select = page.getByLabel("Service level");
+    const note = page.locator(".note[role=status]");
+    await expect(select).toHaveValue("INFO");
+
+    await select.selectOption("WARNING");
+    await expect(note).toHaveText("Service log level set to WARNING.");
+    expect(sent).toEqual([{ body: { level: "WARNING" }, csrf: CSRF }]);
+    await expect(select).toHaveValue("WARNING");
+
+    refuse = true;
+    await select.selectOption("ERROR");
+    await expect(note).toHaveText("Your session has ended. Reload the page and sign in again.");
+    expect(sent.at(-1)).toEqual({ body: { level: "ERROR" }, csrf: CSRF });
+    await expect(select).toHaveValue("WARNING");
+    expect(serviceLevel).toBe("WARNING");
   });
 });
