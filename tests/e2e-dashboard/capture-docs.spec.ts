@@ -22,16 +22,18 @@
 // cookie, which holds for that browser context only; an offline device seen
 // signed in, which no scenario has, adds the signed-in answer to
 // /api/auth/status as the browser suite does. pinTheDay (pin-the-day.ts)
-// fixes the day every capture shows, so a capture just after midnight does
-// not document an empty chart. The browser runs in English, so a native date
-// field reads like the page around it. The appearance strips are the
-// same region of the same page photographed once per value of one axis and
-// laid side by side on a blank page, so nothing but that axis changes.
+// fixes the day and the zone every capture shows, and the config starts the
+// preview server on the same instant, so a run on any date shows the same
+// content and a capture just after midnight does not document an empty chart.
+// The browser runs in English, so a native date field reads like the page
+// around it. The appearance strips are the same region of the same page
+// photographed once per value of one axis and laid side by side on a blank
+// page, so nothing but that axis changes.
 //
 // Never `waitUntil: "networkidle"`: /api/events stays open.
 import { expect, test } from "@playwright/test";
 import { mkdirSync } from "node:fs";
-import { pinTheDay } from "./pin-the-day";
+import { DOCS_SHOT_TIME, DOCS_ZONE, pinTheDay } from "./pin-the-day";
 
 const SHOTS = "docs/assets/screenshots/dashboard";
 const PREVIEWS = "docs/assets";
@@ -62,7 +64,7 @@ async function open(page, baseURL, hash, { scenario = "normal", signedIn = false
   await page.addInitScript((stored) => {
     for (const [key, value] of Object.entries(stored)) window.localStorage.setItem(key, value);
   }, { ...DEFAULT_PREFS, ...prefs });
-  await pinTheDay(page);
+  await pinTheDay(page, DOCS_SHOT_TIME);
   await page.goto(`/${hash}`, { waitUntil: "domcontentloaded" });
   await expect(page.getByTestId("ems-state")).toContainText("EMS active");
   await page.evaluate(() => document.fonts.ready);
@@ -142,7 +144,7 @@ async function waitForChart(page) {
   await expect(page.locator(".chart canvas").first()).toBeVisible();
 }
 
-test.use({ locale: "en-US", launchOptions: { env: { ...process.env, LANG: "en_US.UTF-8", LANGUAGE: "en_US", LC_ALL: "en_US.UTF-8" } } });
+test.use({ locale: "en-US", timezoneId: DOCS_ZONE, launchOptions: { env: { ...process.env, LANG: "en_US.UTF-8", LANGUAGE: "en_US", LC_ALL: "en_US.UTF-8" } } });
 
 test.describe("EMS Dashboard documentation captures @docs", () => {
   test.skip(({ browserName }) => browserName !== "chromium", "one engine, one set of images");

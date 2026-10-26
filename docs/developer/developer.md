@@ -150,7 +150,16 @@ python3 scripts/serve_dashboard_preview.py
 python3 scripts/serve_dashboard_preview.py --scenario firmware-status
 python3 scripts/serve_dashboard_preview.py --scenario write-mode
 python3 scripts/serve_dashboard_preview.py --host 127.0.0.1 --port 8767
+python3 scripts/serve_dashboard_preview.py --now 2026-10-21T18:30:00+02:00
 ```
+
+`--now` pins the preview's clock to one instant, given with its UTC offset: the
+history and analytics series, the log lines, the diagnose reports and the
+schedule all read it, so the server answers for the same day whenever it is
+asked. The browser keeps its own clock, so a page opened on another date shows
+an empty today; the documentation captures pin the page's clock to the same
+instant as well. The live snapshots keep the real time, because they only tell
+the page that something new arrived.
 
 It binds to `127.0.0.1:8767` by default and prints the preview URLs. The
 dashboard answers at the root, exactly as on port 8080:
@@ -206,7 +215,9 @@ EMS_DASHBOARD_CAPTURE_DOCS=1 npx playwright test \
   --config=playwright.dashboard.config.ts --project=chromium capture-docs
 ```
 
-See [the capture index](../assets/screenshots/dashboard/README.md).
+That run starts its own preview server on port 8128 with `--now` and runs in
+Europe/Berlin, so the pictures show the same day on any date and any host. See
+[the capture index](../assets/screenshots/dashboard/README.md).
 
 ## Authority map and test layering
 

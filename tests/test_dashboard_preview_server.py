@@ -4,6 +4,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from datetime import datetime
 
 import pytest
 
@@ -14,7 +15,13 @@ if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
 
 import serve_dashboard_preview  # noqa: E402
-from dashboard_preview_data import FLOW_VIEWS, SCENARIOS, build_scenario  # noqa: E402
+from dashboard.server import DashboardRequestHandler  # noqa: E402
+from dashboard_preview_data import (  # noqa: E402
+    DIAGNOSE_PROFILES,
+    FLOW_VIEWS,
+    SCENARIOS,
+    build_scenario,
+)
 from serve_dashboard_preview import (  # noqa: E402
     SCENARIO_COOKIE,
     parse_args,
@@ -37,8 +44,8 @@ pytestmark = [
 def preview_server():
     servers = []
 
-    def _start(scenario="normal"):
-        server = start_server("127.0.0.1", 0, scenario)
+    def _start(scenario="normal", fixed_now=None):
+        server = start_server("127.0.0.1", 0, scenario, fixed_now=fixed_now)
         servers.append(server)
         host, port = server.server_address
         return server, f"http://{host}:{port}"
@@ -133,10 +140,70 @@ def test_api_runtime_returns_runtime_state(preview_server):
 
 def test_api_diagnose_returns_report(preview_server):
     _, base = preview_server()
-    payload = _get_json(base, "/api/diagnose")
+    payload = _get_json(base, "/api/diagnose?profile=hardware")
     assert payload["schema_version"] == 1
     assert "diagnosis" in payload
     assert "sections" in payload["diagnosis"]
+
+
+def test_the_preview_diagnoses_the_profiles_the_dashboard_does():
+    assert DIAGNOSE_PROFILES == DashboardRequestHandler.DIAGNOSE_PROFILES
+
+
+@pytest.mark.parametrize("profile", DIAGNOSE_PROFILES)
+def test_each_diagnose_profile_answers_as_itself(preview_server, profile):
+    _, base = preview_server("offline-device")
+    payload = _get_json(base, f"/api/diagnose?profile={profile}")
+    sections = [section["id"] for section in payload["diagnosis"]["sections"]]
+    assert payload["profile"] == profile
+    assert ("hardware" in sections) == (profile in ("deep", "hardware"))
+    assert ("control" in sections) == (profile in ("control", "control_quality"))
+    assert payload["status"] == ("error" if profile in ("deep", "hardware") else "warning")
+
+
+@pytest.mark.parametrize("query", ["", "?profile=", "?profile=everything"])
+def test_a_diagnose_without_a_known_profile_is_refused_as_the_dashboard_refuses_it(preview_server, query):
+    _, base = preview_server()
+    with pytest.raises(urllib.error.HTTPError) as refused:
+        _get(base, f"/api/diagnose{query}")
+    assert refused.value.code == 400
+    assert json.loads(refused.value.read().decode("utf-8")) == {
+        "error": "invalid_profile",
+        "supported": list(DIAGNOSE_PROFILES),
+    }
+
+
+def test_a_pinned_clock_gives_every_answer_the_same_instant(preview_server):
+    pinned = datetime.fromisoformat("2026-06-17T18:30:00+02:00").timestamp()
+    _, base = preview_server(fixed_now=pinned)
+    first = _get_json(base, "/api/history/series?range=24h&series=pv,battery")
+    assert first == _get_json(base, "/api/history/series?range=24h&series=pv,battery")
+    assert pinned - 900 <= first["time"][-1] <= pinned
+    assert _get_json(base, "/api/diagnose?profile=install")["diagnosis"]["timestamp"] == "2026-06-17T16:30:00+00:00"
+    assert _get_json(base, "/api/logs?after=0")["lines"][-1]["ts"] == pinned
+
+
+@pytest.mark.parametrize("scenario", SCENARIOS)
+def test_a_preview_device_s_firmware_labels_agree_with_its_power(scenario):
+    for name, device in build_scenario(scenario)["snapshot"]["devices"].items():
+        battery = device.get("battery_power_w")
+        if not device.get("online") or battery is None:
+            continue
+        direction = 1 if battery > 0 else 2 if battery < 0 else 0
+        if device["pack_state"] in (0, 1, 2):
+            assert device["pack_state"] == direction, (scenario, name)
+        if device["dc_status"] in (0, 1, 2):
+            assert device["dc_status"] == direction, (scenario, name)
+        if device["soc_limit"] == 1:
+            assert battery <= 0, (scenario, name)
+        if device["soc_limit"] == 2:
+            assert battery >= 0, (scenario, name)
+        assert sum(device["pv_inputs_w"]) == device["pv_input_w"], (scenario, name)
+
+
+def test_a_scaled_preview_keeps_each_device_s_solar_inputs_adding_up():
+    for name, device in build_scenario("normal", device_count=5)["snapshot"]["devices"].items():
+        assert sum(device["pv_inputs_w"]) == device["pv_input_w"], name
 
 
 def test_api_logs_returns_lines(preview_server):

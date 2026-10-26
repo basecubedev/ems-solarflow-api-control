@@ -280,6 +280,7 @@ python3 scripts/serve_dashboard_preview.py
 python3 scripts/serve_dashboard_preview.py --scenario firmware-status
 python3 scripts/serve_dashboard_preview.py --scenario ac-charging
 python3 scripts/serve_dashboard_preview.py --scenario write-mode
+python3 scripts/serve_dashboard_preview.py --now 2026-10-21T18:30:00+02:00
 ```
 
 It serves the real dashboard assets on `http://127.0.0.1:8767`: the dashboard
@@ -287,7 +288,8 @@ at `/`, and the deprecated Classic at `/preview` with a link per view.
 Scenarios cover a healthy system, a fleet where one device AC-charges the
 surplus of another (`ac-charging`), mixed firmware-status values (including
 unknown values), an offline device, and read-only/write-mode authentication
-states. The documentation screenshots are captured against this server; see
+states; `--now` pins the preview's clock to one instant. The documentation
+screenshots are captured against this server; see
 [developer.md](developer/developer.md#local-dashboard-preview) for details.
 
 ## Configuration

@@ -36,6 +36,7 @@ import json
 import os
 import threading
 import time
+from datetime import datetime, timezone
 from html import escape
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -58,9 +59,11 @@ from dashboard.static_files import (  # noqa: E402
 )
 from dashboard_preview_data import (  # noqa: E402
     DEFAULT_SCENARIO,
+    DIAGNOSE_PROFILES,
     FLOW_VIEWS,
     SCENARIOS,
     build_scenario,
+    diagnose_report,
 )
 
 STATIC_DIR = os.path.join(ROOT, "dashboard", "static")
@@ -331,17 +334,24 @@ class PreviewServer(ThreadingHTTPServer):
         freeze_timestamp=False,
         sse_interval=2.0,
         sse_max_per_ip=0,
+        fixed_now=None,
     ):
         super().__init__(server_address, handler)
         self.scenario_name = scenario
         self.device_count = device_count
         self.freeze_timestamp = freeze_timestamp
+        self.fixed_now = fixed_now
         self.sse_interval = sse_interval
         # 0 disables the limit. A positive value reproduces the production
         # per-IP cap so the polling-fallback cascade can be measured.
         self.sse_max_per_ip = sse_max_per_ip
         self._sse_counts = {}
         self._sse_lock = threading.Lock()
+
+    def now(self):
+        """The preview's clock: the pinned instant when there is one, else the real time."""
+
+        return time.time() if self.fixed_now is None else self.fixed_now
 
     def acquire_sse_slot(self, remote):
         if self.sse_max_per_ip <= 0:
@@ -416,7 +426,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
             self._send_json(self._scenario()["auth"])
             return
         if path == "/api/diagnose":
-            self._send_json(self._scenario()["diagnose"])
+            self._send_diagnose(parse_qs(parsed.query))
             return
         if path == "/api/logs":
             self._send_logs(parsed.query)
@@ -458,6 +468,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
             self._scenario_name(),
             device_count=self.server.device_count,
             freeze_timestamp=self.server.freeze_timestamp,
+            now=self.server.fixed_now,
         )
 
     def _scenario_name(self):
@@ -787,8 +798,17 @@ class PreviewHandler(BaseHTTPRequestHandler):
         finally:
             self.server.release_sse_slot(remote)
 
+    def _send_diagnose(self, query):
+        """The report for the profile asked for, refused like the real server's when it names none it knows."""
+
+        profile = (query.get("profile") or [None])[0]
+        if profile not in DIAGNOSE_PROFILES:
+            self._send_json({"error": "invalid_profile", "supported": list(DIAGNOSE_PROFILES)}, status=400)
+            return
+        self._send_json(diagnose_report(self._scenario_name(), profile, now=self.server.fixed_now))
+
     def _log_lines(self, after=0):
-        now = time.time()
+        now = self.server.now()
         log_lines = self._scenario()["logs"]
         return [
             {
@@ -877,6 +897,7 @@ def start_server(
     freeze_timestamp=False,
     sse_interval=2.0,
     sse_max_per_ip=0,
+    fixed_now=None,
 ):
     """Start the preview server and return the running PreviewServer instance."""
 
@@ -891,6 +912,7 @@ def start_server(
             freeze_timestamp=freeze_timestamp,
             sse_interval=sse_interval,
             sse_max_per_ip=sse_max_per_ip,
+            fixed_now=fixed_now,
         )
     except OSError as exc:
         raise SystemExit(
@@ -916,7 +938,6 @@ def _preview_schedule_api(server):
     import atexit
     import shutil
     import tempfile
-    from datetime import datetime, timezone
     from zoneinfo import ZoneInfo
 
     from dashboard.schedule_api import ScheduleApi
@@ -947,7 +968,7 @@ def _preview_schedule_api(server):
         devices=lambda: {name: None for name in devices},
         validation_context=lambda: context,
         zone=ZoneInfo("Europe/Berlin"),
-        clock=lambda: datetime.now(timezone.utc),
+        clock=lambda: datetime.fromtimestamp(server.now(), timezone.utc),
         device_settings=lambda: limits.get("device_settings_offered", {}),
     )
 
@@ -978,6 +999,18 @@ def _print_views():
         print(f"  {view}")
 
 
+def _instant(text):
+    """An ISO-8601 instant with its UTC offset, as epoch seconds."""
+
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not an ISO-8601 instant: {text!r}")
+    if moment.tzinfo is None:
+        raise argparse.ArgumentTypeError(f"{text!r} names no UTC offset, so it is no single instant")
+    return moment.timestamp()
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Local dashboard preview server.")
     parser.add_argument("--host", default=DEFAULT_HOST)
@@ -1006,6 +1039,15 @@ def parse_args(argv=None):
         "--identical-snapshots",
         action="store_true",
         help="freeze the snapshot timestamp so every emission is unchanged",
+    )
+    parser.add_argument(
+        "--now",
+        type=_instant,
+        default=None,
+        metavar="ISO-8601",
+        help="pin the preview's clock to one instant with its offset, e.g. "
+        "2026-06-17T18:30:00+02:00: the history, logs, diagnose reports and "
+        "schedule read that instant, so every capture shows the same day",
     )
     parser.add_argument(
         "--sse-max-per-ip",
@@ -1051,6 +1093,7 @@ def main(argv=None):
         freeze_timestamp=args.identical_snapshots,
         sse_interval=args.sse_interval,
         sse_max_per_ip=args.sse_max_per_ip,
+        fixed_now=args.now,
     )
     try:
         _print_urls(args.host, args.port, args.scenario)

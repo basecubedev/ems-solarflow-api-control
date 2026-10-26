@@ -100,8 +100,11 @@ python3 scripts/serve_dashboard_preview.py --scenario write-mode
   **Basic**, unless the file is about another choice.
 - Scenario: the server runs `normal`; a capture that needs another one sets the
   preview's `ems-preview-scenario` cookie for its own browser context.
-- The day is pinned to 18:30 today (`tests/e2e-dashboard/pin-the-day.ts`), so
-  the today tiles and Power today never show an empty morning.
+- The moment is fixed: Wednesday 21 October 2026, 18:30 in Europe/Berlin
+  (`tests/e2e-dashboard/pin-the-day.ts`). The page clock, the preview server
+  (`--now`) and every process of the run are pinned to it, so a re-run on any
+  date shows the same content, and the today tiles and Power today never show
+  an empty morning.
 - The appearance strips photograph the same 714×560 region once per value and
   lay the columns side by side on a blank page, 12 px apart.
 

@@ -139,16 +139,22 @@ def test_the_suite_does_not_share_a_port_with_another_one():
     """
 
     ports = {}
+    unread = []
     for path in sorted(ROOT.glob("playwright*.config.ts")):
         # The variable names carry digits (EMS_ADMIN_E2E_PORT), so a [A-Z_]
         # class silently matches nothing and the whole check passes on an empty
-        # table. It did, until a perturbation said so.
-        found = re.search(
-            r"PORT = Number\(process\.env\.[A-Z0-9_]+ \?\? (\d+)\)",
-            path.read_text(encoding="utf-8"),
-        )
-        if found:
-            ports.setdefault(found.group(1), []).append(path.name)
+        # table. It did, until a perturbation said so. A config may hold more
+        # than one port (the dashboard's captures run on their own), and every
+        # port variable it reads must yield one, so a line this cannot read
+        # fails instead of dropping out unseen.
+        text = path.read_text(encoding="utf-8")
+        found = re.findall(r"PORT = Number\(process\.env\.[A-Z0-9_]+ \?\? (\d+)\)", text)
+        declared = re.findall(r"process\.env\.[A-Z0-9_]*PORT\b", text)
+        if not found or len(found) != len(declared):
+            unread.append(path.name)
+        for port in found:
+            ports.setdefault(port, []).append(path.name)
+    assert unread == [], f"no port read from {unread}"
 
     # One pair predates this suite and is left as it stands rather than fixed
     # blind: the packaged Admin runner pins 8124 in its shell script as well as
