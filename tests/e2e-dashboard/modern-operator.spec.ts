@@ -205,6 +205,8 @@ test.describe("Modern dashboard operator: runtime settings @smoke", () => {
   });
 });
 
+const WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
 async function clearScheduleRules(request) {
   const overview = await (await request.get("/api/schedule")).json();
   for (const rule of overview.rules || []) {
@@ -218,7 +220,7 @@ function tomorrow() {
   return `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
 }
 
-async function addRule(request, name, value = 600) {
+async function addRule(request, name, value = 600, time = "06:00") {
   const created = await request.post("/api/schedule/rules", {
     headers: { "X-CSRF-Token": CSRF },
     data: {
@@ -226,7 +228,7 @@ async function addRule(request, name, value = 600) {
         name,
         target: { scope: "system" },
         action: { id: "total_output_limit", value },
-        when: { start: `${tomorrow()}T06:00`, repeat: { freq: "daily" } },
+        when: { start: `${tomorrow()}T${time}`, repeat: { freq: "daily" } },
       },
     },
   });
@@ -381,6 +383,33 @@ test.describe("Modern dashboard operator: schedule @smoke", () => {
     await page.getByRole("button", { name: "Resume" }).click();
     await expect(page.getByText("Schedules on")).toBeVisible();
     expect((await (await request.get("/api/schedule")).json()).enabled).toBe(true);
+  });
+
+  test.describe("in a browser west of UTC", () => {
+    test.use({ timezoneId: "America/New_York" });
+
+    test("Next seven days lists the coming switch points in time order, each on its own day with its rule and what it sets", async ({ page, request }) => {
+      await openSignedIn(page, "#/schedule");
+      const next = page.getByRole("region", { name: "Next seven days" }).locator("li");
+      await expect(next).toHaveText(["Nothing in the next seven days."]);
+
+      await addRule(request, "Morning cap", 600, "06:00");
+      await addRule(request, "Evening cap", 300, "20:00");
+      const points = (await (await request.get("/api/schedule")).json()).next;
+      expect(points.length).toBeGreaterThan(2);
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expect(next).toHaveCount(points.length);
+      for (const [index, point] of points.entries()) {
+        const [year, month, day] = point.at.slice(0, 10).split("-").map(Number);
+        const weekday = WEEKDAY_NAMES[new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
+        await expect(next.nth(index).locator(".when")).toHaveText(new RegExp(`^${weekday}\\s.*\\b${day}\\b.*\\s${point.at.slice(11, 16)}$`));
+        await expect(next.nth(index)).toContainText(point.name);
+        await expect(next.nth(index).locator(".muted")).toHaveText(`→ ${point.text}`);
+      }
+      const times = points.map((point) => Date.parse(point.at));
+      expect(times).toEqual([...times].sort((a, b) => a - b));
+      expect(points.map((point) => point.name).slice(0, 2)).toEqual(["Morning cap", "Evening cap"]);
+    });
   });
 });
 

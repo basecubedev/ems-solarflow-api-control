@@ -445,8 +445,9 @@ A change in `frontend/shared/` changes every build; rebuild all three. The build
 output is committed with stable file names, so the Python servers, the
 Docker images and the Appliance Manager package need no Node at all. A change to
 the source is committed together with its rebuilt output; CI rebuilds and
-refuses a difference. The browser tests are `tests/e2e-dashboard/modern.spec.ts`
-in the dashboard suite, `tests/e2e/admin-modern.spec.ts` and
+refuses a difference. The browser tests are `tests/e2e-dashboard/modern.spec.ts`,
+`modern-operator.spec.ts` (what an operator does) and `modern-views.spec.ts`
+(what the pages show) in the dashboard suite, `tests/e2e/admin-modern.spec.ts` and
 `tests/e2e/admin-modern-upgrade.spec.ts` in the Admin suite and
 `tests/e2e-appliance/modern.spec.ts` in the appliance suite. The checks every Modern
 build has to pass live in `tests/modern_frontend.py`, the design system's own
