@@ -2877,7 +2877,7 @@ def safe_session_timeout(value, default):
     """
     try:
         parsed = int(float(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return int(default)
 
     if parsed < 0:
