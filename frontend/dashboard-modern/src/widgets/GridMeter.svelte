@@ -36,8 +36,9 @@
 </article>
 
 <style>
-  .meter { display: flex; flex-direction: column; gap: var(--s4); }
-  .head { display: flex; gap: var(--s3); align-items: center; }
-  .name { font-weight: 640; font-size: 16px; margin: 0; flex: 1; }
+  .meter { display: flex; flex-direction: column; gap: var(--s4); container-type: inline-size; }
+  @container (max-width: 321px) { .facts.two { grid-template-columns: minmax(0, 1fr); } }
+  .head { display: flex; flex-wrap: wrap; gap: var(--s3); align-items: center; }
+  .name { font-weight: 640; font-size: 16px; margin: 0; flex: 1; white-space: nowrap; }
   .note { margin-top: 0; }
 </style>

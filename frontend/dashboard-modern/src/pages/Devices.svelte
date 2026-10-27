@@ -26,6 +26,6 @@
 {/if}
 
 <style>
-  .device-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: var(--s5); align-items: start; }
+  .device-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: var(--s5); align-items: start; }
   @media (max-width: 760px) { .device-grid { grid-template-columns: 1fr; gap: var(--s4); } }
 </style>

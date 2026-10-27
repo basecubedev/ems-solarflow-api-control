@@ -84,7 +84,8 @@
   .status-word { font-size: 19px; color: var(--c); }
   .kpi-meta { font-size: 12px; color: var(--m-muted); margin-top: 1px; }
   .partial { color: var(--m-muted); font-size: 0.7em; }
-  @container content (max-width: 900px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @container content (max-width: 1560px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @container content (max-width: 740px) { .kpis { grid-template-columns: minmax(0, 1fr); } }
   @media (max-width: 760px) {
     .kpis { gap: var(--s3); }
     .kpi { flex-direction: column; align-items: flex-start; gap: 10px; padding: var(--s4); }

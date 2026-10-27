@@ -68,7 +68,7 @@
     <Bar value={d.online ? d.soc : null} label={`${d.name} ${t("flow.soc")}`} />
   {/if}
 
-  <div class="facts">
+  <div class="facts main">
     <Fact label={t("device.solar")} icon="sun" tone="c-pv" value={show(f.power(d.pvW))} missing={!d.online || d.pvW === null} />
     <Fact label={t("device.output")} icon="zap" tone="c-out" value={show(f.power(d.outputW))} missing={!d.online || d.outputW === null} />
     <Fact label={t("device.battery")} icon="battery-charging" tone="c-bat" value={show(f.power(d.batteryW, { signed: true }))} missing={!d.online || d.batteryW === null} />
@@ -80,9 +80,9 @@
         <Fact label={t("device.target")} icon="gauge" value={f.power(d.targetW)} missing={d.targetW === null} />
       {/if}
     {/if}
+    {#if d.inputLimitW !== null}<Fact label={t("device.inputLimit")} icon="plug-zap" value={f.power(d.inputLimitW)} wide />{/if}
     {#if d.limitApplicable}<Fact label={t("device.limit")} icon="sliders-horizontal" value={f.power(d.limitW)} missing={d.limitW === null} />{/if}
     {#if d.packs !== null}<Fact label={t("device.packs")} icon="battery" value={String(d.packs)} />{/if}
-    {#if d.inputLimitW !== null}<Fact label={t("device.inputLimit")} icon="plug-zap" value={f.power(d.inputLimitW)} />{/if}
   </div>
 
   {#if pvInputs.length > 1}
@@ -148,7 +148,9 @@
 </article>
 
 <style>
-  .device { display: flex; flex-direction: column; gap: var(--s4); }
+  .device { display: flex; flex-direction: column; gap: var(--s4); container-type: inline-size; }
+  @container (max-width: 405px) { .facts.two { grid-template-columns: minmax(0, 1fr); } }
+  .facts.main { grid-auto-flow: dense; }
   .device.offline { border-style: dashed; }
   .head { display: flex; gap: var(--s3); align-items: center; }
   .title { flex: 1; min-width: 0; }

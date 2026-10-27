@@ -117,12 +117,12 @@ zooms within today. Longer-range history is on [Analytics](energy.md#the-analyti
 
 ## On a phone
 
-![Overview on a phone: the four status tiles in two columns, the start of the energy flow, and the bar at the bottom with Overview, Devices, Energy, Control and More](../../assets/screenshots/dashboard/dashboard-overview-narrow.png)
+![Overview on a phone: the four status tiles in one column, the start of the energy flow, and the bar at the bottom with Overview, Devices, Energy, Control and More](../../assets/screenshots/dashboard/dashboard-overview-narrow.png)
 
 On a narrow screen the side menu gives way to a bar at the bottom with four
 pages — **Overview**, **Devices**, **Energy** and **Control** until you choose
-others — and **More** for the rest. The tiles stack in two columns. In the
-energy flow the home and the grid sit side by side at the bottom, and the
+others — and **More** for the rest. The status tiles stack in one column. In
+the energy flow the home and the grid sit side by side at the bottom, and the
 inverters' line runs down into the home. Nothing is left out.
 
 ![The More sheet on a phone: the other pages as tiles with a lock on those that need a sign-in, the language and colour scheme, the sign-in, and the links to choose the bar's pages and to switch to the classic view](../../assets/screenshots/dashboard/dashboard-phone-more.png)

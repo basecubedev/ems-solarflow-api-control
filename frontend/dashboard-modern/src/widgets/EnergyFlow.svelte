@@ -296,7 +296,7 @@
         {#if system.hasBattery}
           <div class="node c-bat n-bat" data-node="bat">
             <div class="icon-tile"><Icon name="battery-charging" /></div>
-            <div class="node-label">{t("flow.battery")} · {batteryWord(system.batteryW)}</div>
+            <div class="node-label"><span class="node-name">{t("flow.battery")}</span><span class="node-state"><span class="sep">{" · "}</span>{batteryWord(system.batteryW)}</span></div>
             <div class="node-value num">{f.power(system.batteryW, { signed: true })}</div>
             <div class="node-foot"><span>{t("flow.soc")}</span><b class="num">{f.percent(system.soc)}</b></div>
           </div>
@@ -317,7 +317,7 @@
         </div>
         <div class="node c-grid n-grid" class:offline={!system.gridValid} data-node="grid">
           <div class="icon-tile"><Icon name="utility-pole" /></div>
-          <div class="node-label">{t("flow.grid")} · {gridWord(system.gridW, system.gridValid)}</div>
+          <div class="node-label"><span class="node-name">{t("flow.grid")}</span><span class="node-state"><span class="sep">{" · "}</span>{gridWord(system.gridW, system.gridValid)}</span></div>
           <div class="node-value num">{system.gridValid ? f.power(system.gridW, { signed: true }) : "—"}</div>
           <div class="node-foot"><span>{t("flow.importedToday")}</span><b class="num">{f.energy(importToday)}</b></div>
         </div>
@@ -331,7 +331,7 @@
           {#if device.socReported || device.batteryW !== null}
             <div class="node c-bat col-l" class:offline={!device.online} data-node={`bat${index}`} style:grid-row={`${index * 2 + 2}`}>
               <div class="icon-tile sm"><Icon name="battery-charging" /></div>
-              <div class="node-label ellipsis" title={`${device.name} · ${device.online ? batteryWord(device.batteryW) : t("device.offline")}`}>{device.name} · {device.online ? batteryWord(device.batteryW) : t("device.offline")}</div>
+              <div class="node-label ellipsis" title={`${device.name} · ${device.online ? batteryWord(device.batteryW) : t("device.offline")}`}><span class="node-name">{device.name}</span><span class="node-state"><span class="sep">{" · "}</span>{device.online ? batteryWord(device.batteryW) : t("device.offline")}</span></div>
               <div class="node-value num">{device.online ? f.power(device.batteryW, { signed: true }) : "—"}</div>
               {#if device.soc !== null}
                 <div class="soc-mini" role="meter" aria-label={t("flow.soc")} aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(device.soc)}>
@@ -356,7 +356,7 @@
         </div>
         <div class="node c-grid col-r grid-node" class:offline={!system.gridValid} data-node="grid" style:grid-row={narrow ? `${deviceList.length * 2 + 1}` : `${deviceList.length + 1} / span ${deviceList.length}`}>
           <div class="icon-tile sm"><Icon name="utility-pole" /></div>
-          <div class="node-label ellipsis" title={`${t("flow.grid")} · ${gridWord(system.gridW, system.gridValid)}`}>{t("flow.grid")} · {gridWord(system.gridW, system.gridValid)}</div>
+          <div class="node-label ellipsis" title={`${t("flow.grid")} · ${gridWord(system.gridW, system.gridValid)}`}><span class="node-name">{t("flow.grid")}</span><span class="node-state"><span class="sep">{" · "}</span>{gridWord(system.gridW, system.gridValid)}</span></div>
           <div class="node-value num">{system.gridValid ? f.power(system.gridW, { signed: true }) : "—"}</div>
           <div class="node-foot"><span>{t("flow.importedToday")}</span><b class="num">{f.energy(importToday)}</b></div>
         </div>
@@ -438,7 +438,8 @@
   .flow-stage.system.narrow :is(.n-home, .n-grid) .node-foot { align-self: end; }
   .flow-stage.system.narrow .n-home { grid-column: 3; }
   .flow-stage.system.narrow .n-grid { grid-column: 1; }
-  .flow-stage.system.narrow .n-grid .node-label { white-space: normal; }
+  .flow-stage.narrow :is(.node-name, .node-state) { display: block; overflow: hidden; text-overflow: ellipsis; }
+  .flow-stage.narrow .node-state .sep { display: none; }
   .flow-stage.devices.narrow { grid-template-columns: minmax(0, 1fr) 32px 80px 48px; row-gap: 10px; }
   .flow-stage.devices.narrow .node { padding: 9px 12px; grid-template-columns: minmax(0, 1fr); }
   .flow-stage.devices.narrow .node .icon-tile { display: none; }
@@ -452,5 +453,4 @@
   .flow-stage.devices.narrow :is(.home-node, .grid-node) .node-foot { align-self: end; }
   .flow-stage.devices.narrow .home-node { grid-column: 3 / 5; }
   .flow-stage.devices.narrow .grid-node { grid-column: 1; }
-  .flow-stage.devices.narrow .grid-node .node-label { white-space: normal; }
 </style>

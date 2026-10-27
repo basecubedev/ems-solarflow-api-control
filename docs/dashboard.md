@@ -24,7 +24,7 @@ a later release removes it: the same API, the same session and the same CSRF
 token. `/` sends demo mode (`?demo=1`), `?ui=classic` and a browser too old for
 the current design to Classic; `/modern/`, an earlier address, redirects to `/`.
 
-![The dashboard's Overview page: the status tiles, the live energy flow, storage, active rules, today's energy by the hour and the power chart](assets/preview-aggregated.jpg)
+![The dashboard's Overview page: the status tiles, the live energy flow, the batteries, active rules, today's energy by the hour and the power chart](assets/preview-aggregated.jpg)
 
 ## Control Page
 

@@ -441,11 +441,12 @@ test.describe("Modern dashboard views: density and animation @smoke", () => {
  * The energy labels fit where they stand, in every language and at the widths
  * where the cards change their columns and just beside them: a fact row keeps
  * its label and its value on one line, an Analytics KPI label stays on one
- * line, and the device, grid meter and flow labels are never cut off.
+ * line, and the status tiles, device cards, grid meter and flow keep every
+ * line whole: not cut off, and not broken onto a second line.
  */
 test.describe("Modern dashboard views: labels fit @smoke", () => {
   const LANGUAGES = ["en", "de", "nl", "fr"];
-  const WIDTHS = [1440, 1300, 1225, 960, 905, 640, 632, 390];
+  const WIDTHS = [1920, 1440, 1300, 1225, 960, 905, 640, 632, 390, 360];
 
   /** Every period, month and year of the preview with energy charged from AC, so the AC charging row is listed too. */
   function withAcCharging(body) {
@@ -472,8 +473,17 @@ test.describe("Modern dashboard views: labels fit @smoke", () => {
     const fits = label.getBoundingClientRect().height <= line && value.getBoundingClientRect().height <= line && value.getBoundingClientRect().right <= end + 0.5;
     return fits ? [] : [label.textContent.trim()];
   }));
-  const wrapped = (locator) => locator.evaluateAll((labels) => labels.filter((label) => label.getBoundingClientRect().height > parseFloat(getComputedStyle(label).fontSize) * 1.7).map((label) => label.textContent.trim()));
-  const cut = (locator) => locator.evaluateAll((labels) => labels.filter((label) => label.scrollWidth > label.clientWidth + 1).map((label) => label.textContent.trim()));
+  const broken = (locator) => locator.evaluateAll((elements) => elements.flatMap((element) => {
+    let lines = 1;
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const tops = [...range.getClientRects()].filter((rect) => rect.width > 0).map((rect) => rect.top).sort((a, b) => a - b);
+      lines = Math.max(lines, tops.filter((top, index) => index === 0 || top - tops[index - 1] > 4).length);
+    }
+    return lines > 1 || element.scrollWidth > element.clientWidth + 1 ? [element.textContent.trim()] : [];
+  }));
 
   test("every energy fact keeps its label and its value on one line", async ({ page }) => {
     await shapeLive(page, withAcCharging);
@@ -497,22 +507,52 @@ test.describe("Modern dashboard views: labels fit @smoke", () => {
         await expect(page.locator(".kpi-label").first()).toBeVisible();
         for (const width of WIDTHS) {
           await page.setViewportSize({ width, height: 900 });
-          expect(await wrapped(page.locator(".kpi-label")), `${lang}, view ${index}, at ${width} px`).toEqual([]);
+          expect(await broken(page.locator(".kpi-label")), `${lang}, view ${index}, at ${width} px`).toEqual([]);
         }
       }
     }
   });
 
-  test("a device charging from AC, the grid meter and the flow keep their labels whole", async ({ page, baseURL }) => {
-    await page.context().addCookies([{ name: "ems-preview-scenario", value: "ac-charging", url: baseURL }]);
-    for (const lang of LANGUAGES) {
-      await inLanguage(page, "#/devices", lang);
-      await expect(page.locator('[data-testid="device-card"] .fact.c-grid')).not.toHaveCount(0);
-      const labels = page.locator('[data-testid="device-card"] .fact.c-grid .ellipsis, [data-testid="grid-meter"] .fact-label .ellipsis, [data-testid="energy-flow"] .node-label, [data-testid="energy-flow"] .hub-label');
-      for (const width of WIDTHS) {
-        await page.setViewportSize({ width, height: 900 });
-        expect(await cut(labels), `${lang} at ${width} px`).toEqual([]);
+  const offline = (count) => (body) => {
+    Object.values(body.devices || {}).slice(0, count).forEach((device) => { device.online = false; });
+  };
+  const STATES = {
+    "all normal": { level: "ok", shape: () => {} },
+    "control off": { level: "paused", shape: (body) => { body.controller = { ...body.controller, enabled: false }; } },
+    "grid meter offline": { level: "fault", shape: (body) => { body.grid_power_valid = false; } },
+    "every device offline": { level: "fault", shape: offline(Infinity) },
+    "device power not valid": { level: "attention", shape: (body) => { body.device_power_valid = false; } },
+    "one device offline": { level: "attention", shape: offline(1) },
+  };
+  for (const [state, { level, shape }] of Object.entries(STATES)) {
+    test(`the status tiles and the energy flow keep every line whole: ${state}`, async ({ page }) => {
+      await shapeLive(page, shape);
+      for (const lang of LANGUAGES) {
+        await inLanguage(page, "#/overview", lang);
+        await expect(page.getByTestId("kpi-status")).toHaveAttribute("data-level", level);
+        await expect(page.locator('[data-testid="energy-flow"] [data-node="grid"] .node-label')).toHaveText(/^\S+ · \S/);
+        const lines = page.locator('[data-testid^="kpi-"] :is(.kpi-label, .kpi-value, .kpi-meta), [data-testid="energy-flow"] :is(.node-label, .hub-label)');
+        for (const width of WIDTHS) {
+          await page.setViewportSize({ width, height: 900 });
+          expect(await broken(lines), `${lang} at ${width} px`).toEqual([]);
+        }
       }
-    }
-  });
+    });
+  }
+
+  for (const scenario of ["ac-charging", "firmware-status"]) {
+    test(`the device cards, the grid meter and the flow keep every line whole: ${scenario}`, async ({ page, baseURL }) => {
+      await page.context().addCookies([{ name: "ems-preview-scenario", value: scenario, url: baseURL }]);
+      for (const lang of LANGUAGES) {
+        await inLanguage(page, "#/devices", lang);
+        await expect(page.getByTestId("device-card")).not.toHaveCount(0);
+        await page.locator('[data-testid="device-card"] details').evaluateAll((blocks) => blocks.forEach((block) => { block.open = true; }));
+        const lines = page.locator('[data-testid="device-card"] :is(.fact-label .ellipsis, .fact-value), [data-testid="grid-meter"] :is(.name, .fact-label .ellipsis, .fact-value), [data-testid="energy-flow"] :is(.node-label, .hub-label)');
+        for (const width of WIDTHS) {
+          await page.setViewportSize({ width, height: 900 });
+          expect(await broken(lines), `${lang} at ${width} px`).toEqual([]);
+        }
+      }
+    });
+  }
 });
