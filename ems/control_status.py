@@ -18,6 +18,7 @@ from pathlib import Path
 
 from ems import config as cfg
 from ems import device_settings
+from ems.models import battery_presence
 from ems.logging_utils import log_event
 
 CONTROL_STATUS_SCHEMA_VERSION = 1
@@ -90,6 +91,7 @@ def _device_entry(controller, dev, explanation):
         "output_limit_w": _number(getattr(state, "output_limit", None)),
         "battery_charge_w": _number(getattr(state, "pack_out", None)),
         "battery_discharge_w": _number(getattr(state, "pack_in", None)),
+        "battery": battery_presence(state),
         "allocated_target_w": _number(getattr(decided, "allocated_target_w", None)),
         "effective_target_w": _number(getattr(decided, "effective_target_w", None)),
         "limiting_reason": getattr(decided, "limiting_reason", None),

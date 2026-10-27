@@ -47,6 +47,7 @@ from ems.influx_setup import (
 )
 from ems.power_direction import derive_house_load_w
 from ems.logging_utils import log_event
+from ems.models import BATTERY_ABSENT, battery_presence
 
 # Shown once when telemetry is being written but the downsampling half of the
 # schema was never created. The dashboard says the same thing for a range it
@@ -188,7 +189,10 @@ _DEVICE_FIELDS = (
 
 
 def _device_field_values(state):
-    """Pull the telemetry field set from a device state, skipping missing ones."""
+    """Pull the telemetry field set from a device state, skipping missing ones.
+
+    A device without packs has no ``soc``: Analytics averages it across devices.
+    """
     fields = {}
     for name in _DEVICE_FIELDS:
         value = getattr(state, name, None)
@@ -196,6 +200,8 @@ def _device_field_values(state):
             fields[name] = value
         elif isinstance(value, (int, float)):
             fields[name] = float(value)
+    if battery_presence(state) == BATTERY_ABSENT:
+        fields.pop("soc", None)
     return fields
 
 

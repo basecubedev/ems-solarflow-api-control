@@ -30,6 +30,22 @@ def parse_pack_count(value):
     return int(packs)
 
 
+def battery_presence(state):
+    """Classify battery presence from telemetry.
+
+    Only an observed ``packNum`` decides. A field the device never reported
+    stays ``unknown`` and must keep behaving exactly as an unclassified device
+    always has, because no caller may turn silence into a licence.
+    """
+
+    packs = parse_pack_count(getattr(state, "pack_num", None))
+
+    if packs is None:
+        return BATTERY_UNKNOWN
+
+    return BATTERY_PRESENT if packs > 0 else BATTERY_ABSENT
+
+
 DEVICE_STATE_PROPERTIES = frozenset(
     {
         "electricLevel", "minSoc", "socSet", "solarInputPower", "outputHomePower",

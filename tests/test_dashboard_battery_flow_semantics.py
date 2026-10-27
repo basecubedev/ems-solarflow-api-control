@@ -1553,3 +1553,70 @@ def test_a_freshness_lookup_that_raises_never_breaks_the_snapshot():
     )
 
     assert _two_device_snapshot(controller)["device_power_valid"] is True
+
+
+def test_an_inverter_without_packs_is_left_out_of_the_average_soc():
+    """A SolarFlow 800 beside an 800 Pro reports 0 %: counting it halves the total."""
+
+    controller = SimpleNamespace(
+        devices=[SimpleNamespace(name="Pro"), SimpleNamespace(name="SF800")],
+        runtime_state=None,
+        device_online={"Pro": True, "SF800": True},
+        commanded_total_w=0,
+        filtered_load_w=0,
+        _dashboard_capabilities=[],
+    )
+    states = [
+        SimpleNamespace(solar=400, output=300, pack_out=100, pack_in=0, soc=80, pack_num=2),
+        SimpleNamespace(solar=600, output=600, pack_out=0, pack_in=0, soc=0, pack_num=0),
+    ]
+
+    snapshot = build_dashboard_snapshot(
+        controller,
+        load_w=0,
+        states=states,
+        targets=[300, 600],
+        effective_targets=[300, 600],
+        allocated_total_w=900,
+        effective_total_w=900,
+        enabled=True,
+        max_total_power=1600,
+        min_output_limit=35,
+    )
+
+    assert snapshot["average_soc"] == 80
+    assert snapshot["devices"]["Pro"]["soc_reported"] is True
+    assert snapshot["devices"]["SF800"]["soc_reported"] is False
+    assert snapshot["pv_total_w"] == 1000
+    assert snapshot["inverter_output_w"] == 900
+
+
+def test_a_device_whose_packs_were_never_reported_still_counts_in_the_average_soc():
+    controller = SimpleNamespace(
+        devices=[SimpleNamespace(name="WR1"), SimpleNamespace(name="WR2")],
+        runtime_state=None,
+        device_online={"WR1": True, "WR2": True},
+        commanded_total_w=0,
+        filtered_load_w=0,
+        _dashboard_capabilities=[],
+    )
+    states = [
+        SimpleNamespace(solar=0, output=0, pack_out=0, pack_in=0, soc=80, pack_num=1),
+        SimpleNamespace(solar=0, output=0, pack_out=0, pack_in=0, soc=40, pack_num=None),
+    ]
+
+    snapshot = build_dashboard_snapshot(
+        controller,
+        load_w=0,
+        states=states,
+        targets=[0, 0],
+        effective_targets=[0, 0],
+        allocated_total_w=0,
+        effective_total_w=0,
+        enabled=True,
+        max_total_power=1600,
+        min_output_limit=35,
+    )
+
+    assert snapshot["average_soc"] == 60
+    assert snapshot["devices"]["WR2"]["soc_reported"] is True

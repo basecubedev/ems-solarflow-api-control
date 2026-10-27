@@ -34,7 +34,9 @@ it. Its live PV, output, battery, SOC and limit values still contribute to the
 aggregate totals, so a healthy but uncontrolled inverter is never invisible. A
 telemetry-only device that reports no charge level — an inverter without a
 battery — shows none: its card and its row in the live flow draw no SoC, and the
-average SoC leaves it out rather than counting an empty battery.
+average SoC leaves it out rather than counting an empty battery. Any device that
+reports no battery packs, controlled or not, such as a SolarFlow 800 without
+battery, is left out the same way, here and in the Analytics SoC.
 
 An E3/DC storage system configured as a read-only device appears the same way,
 with a **Telemetry only** badge: PV, **Output** (its inverter's AC power),

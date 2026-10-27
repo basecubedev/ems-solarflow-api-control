@@ -705,6 +705,10 @@ python3 emsctl.py device WR1 pv-priority-factor 1.3
 ```
 
 `battery_kwh` is the configured battery capacity used for battery weighting.
+Whether a device has a battery at all is not configured: it is the pack count
+the device reports. An inverter without packs, such as a SolarFlow 800 without
+battery, is left out of the dashboard's average SOC and of battery weighting on
+its own, and `battery_kwh: 0` does not mark a device as batteryless.
 
 `min_soc` and `max_soc` are static SOC boundaries in percent. Use `0` to leave
 the corresponding value unmanaged. Where winter mode plans nothing for the
