@@ -16,14 +16,14 @@ rather than battery-less.
 import pytest
 
 from ems.clients import parse_device, zero_device_state
-from ems.models import DeviceState
-from ems.target_control import (
+from ems.models import (
     BATTERY_ABSENT,
     BATTERY_PRESENT,
     BATTERY_UNKNOWN,
+    DeviceState,
     battery_presence,
-    detect_capabilities,
 )
+from ems.target_control import detect_capabilities
 
 pytestmark = [
     pytest.mark.power_control,

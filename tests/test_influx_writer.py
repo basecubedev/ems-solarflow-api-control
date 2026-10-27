@@ -154,6 +154,22 @@ def test_build_lines_marks_offline_devices_unavailable():
     assert "shelly_meter" not in text
 
 
+def test_build_lines_leave_out_the_soc_of_an_inverter_without_packs():
+    """Analytics averages ``soc`` over devices; a 0 % here would halve it."""
+
+    lines = build_telemetry_lines(
+        [_Dev("Pro"), _Dev("SF800")],
+        [_state(soc=80, pack_num=2), _state(soc=0, pack_num=0)],
+        {},
+        None,
+        timestamp_ns=1_000_000_000,
+    )
+    pro, sf800 = lines[0], lines[1]
+    assert "device=Pro" in pro and "soc=80" in pro
+    assert "device=SF800" in sf800 and "soc=" not in sf800.replace("min_soc=", "")
+    assert "output=400" in sf800
+
+
 # -- background worker -----------------------------------------------------
 
 

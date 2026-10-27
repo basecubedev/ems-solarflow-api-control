@@ -496,6 +496,18 @@ def test_a_telemetry_only_zendure_device_without_a_charge_level_is_left_out_too(
     assert snapshot["average_soc"] == 60
 
 
+def test_a_telemetry_only_device_without_packs_is_left_out_of_the_average():
+    runtime = _FakeTelemetryRuntime(
+        summaries=[{"name": "INV_2", "identifier": "ID2", "status": "online"}],
+        snapshots={"ID2": _snapshot({"packNum": 0, "electricLevel": 0, "outputHomePower": 280})},
+    )
+
+    snapshot = _dashboard(runtime)
+
+    assert snapshot["devices"]["INV_2"]["soc_reported"] is False
+    assert snapshot["average_soc"] == 60
+
+
 @pytest.mark.parametrize("payload", ["9" * 400, "abc", 2**60])
 def test_a_charge_level_no_reading_can_hold_is_not_reported(payload):
     """The tile reads the charge level through the filter the state does, or a

@@ -51,6 +51,7 @@ from ems.paths import (
 )
 from ems.build_info import collect_build_info
 from ems.control_status import CONTROL_STATUS_SCHEMA_VERSION
+from ems.models import BATTERY_ABSENT
 from ems.zendure_mqtt import config_entries as zendure_mqtt_entries
 from ems.read_only_devices import is_e3dc_modbus_device_config, is_read_only_device_config
 
@@ -3077,6 +3078,8 @@ def diagnose_soc_analysis(config_data, runtime_data, live_data):
     warnings = []
     protected = []
     for name, device in diagnose_live_devices(live_data).items():
+        if device.get("battery") == BATTERY_ABSENT:
+            continue
         soc = diagnose_float(device.get("soc"))
         min_soc = diagnose_float(device.get("min_soc"))
         if min_soc is None:
@@ -3639,6 +3642,7 @@ def diagnose_quality_soc(config_data, runtime_data, live_data):
         name: device
         for name, device in diagnose_live_devices(live_data).items()
         if diagnose_float(device.get("soc")) is not None
+        and device.get("battery") != BATTERY_ABSENT
     }
     if not devices:
         return {

@@ -310,8 +310,9 @@ def _parse_iso(value):
 def _device_series_value(payload, series_name, device_names):
     """Aggregate one series across the selected devices in a snapshot.
 
-    Power series are summed; ``soc`` is averaged. Series with no per-device
-    field (home/grid/target) are system-level only and resolve to None.
+    Power series are summed; ``soc`` is averaged over the devices that report
+    one. Series with no per-device field (home/grid/target) are system-level
+    only and resolve to None.
     """
     field = SERIES_DEVICE_FIELD.get(series_name)
     if not field:
@@ -323,6 +324,8 @@ def _device_series_value(payload, series_name, device_names):
     for name in device_names:
         device = devices.get(name)
         if not isinstance(device, dict):
+            continue
+        if series_name == "soc" and device.get("soc_reported") is False:
             continue
         number = _coerce_number(device.get(field))
         if number is not None:

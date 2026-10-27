@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timezone
 from dataclasses import asdict, is_dataclass
 
-from ems.models import parse_pack_count
+from ems.models import BATTERY_ABSENT, battery_presence, parse_pack_count
 from ems.power_direction import derive_house_load_w
 from ems.state_store import describe_full_charge_assist_status
 
@@ -186,6 +186,12 @@ def _state_telemetry_fields(state):
     }
 
 
+def _reports_soc(state):
+    """A device without packs has no state of charge, whatever it reports."""
+
+    return battery_presence(state) != BATTERY_ABSENT
+
+
 def _read_only_device_tiles(controller):
     """Tiles of the devices the controller only reads, such as an E3/DC."""
 
@@ -344,6 +350,7 @@ def build_dashboard_snapshot(
             offline_devices.append(name)
 
         measured = _device_telemetry_is_measured(controller, name)
+        soc_reported = _reports_soc(state)
 
         if device_enabled and not measured:
             unmeasured_devices.append(name)
@@ -359,7 +366,8 @@ def build_dashboard_snapshot(
             inverter_total_w += fields["output_w"]
             inverter_charge_total_w += fields["ac_charge_w"]
             battery_total_w += fields["battery_power_w"]
-            soc_values.append(fields["soc"])
+            if soc_reported:
+                soc_values.append(fields["soc"])
 
         capability = capabilities[index] if index < len(capabilities) else None
         target_w = effective_targets[index] if index < len(effective_targets) else 0
@@ -369,6 +377,7 @@ def build_dashboard_snapshot(
             "online": online,
             "enabled": device_enabled,
             **fields,
+            "soc_reported": soc_reported,
             "target_w": _rounded(target_w),
             "allocated_target_w": _rounded(allocated_target_w),
             "capability": (
@@ -409,7 +418,11 @@ def build_dashboard_snapshot(
         inverter_charge_total_w += fields["ac_charge_w"]
         battery_total_w += fields["battery_power_w"]
         # A device that has never been read has no state of charge, not 0 %.
-        soc_reported = tile.get("has_reading", True) and tile.get("soc_reported", True)
+        soc_reported = (
+            tile.get("has_reading", True)
+            and tile.get("soc_reported", True)
+            and _reports_soc(state)
+        )
         if soc_reported:
             soc_values.append(fields["soc"])
 

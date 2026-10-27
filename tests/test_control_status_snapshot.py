@@ -63,6 +63,7 @@ DEVICE_KEYS = {
     "output_limit_w",
     "battery_charge_w",
     "battery_discharge_w",
+    "battery",
     "allocated_target_w",
     "effective_target_w",
     "limiting_reason",
@@ -151,6 +152,42 @@ def test_a_control_cycle_produces_the_snapshot_with_the_cycle_it_ran(tmp_path):
         "grid_power_w": 240.0,
         "measured_at": snapshot["grid_meter"]["measured_at"],
     }]
+
+
+def test_the_snapshot_names_an_inverter_without_packs(tmp_path):
+    controller, runtime_path = run_cycle(tmp_path, load=240)
+    controller.last_states["WR1"].pack_num = 0
+
+    snapshot = publish(controller, runtime_path)
+
+    assert snapshot["devices"]["WR1"]["battery"] == "no"
+
+
+def test_soc_balance_leaves_out_an_inverter_without_packs():
+    """A SolarFlow 800 at 0 % beside a full 800 Pro is no imbalance."""
+
+    live = {"devices": {
+        "Pro": {"soc": 80, "min_soc": 15, "battery": "yes"},
+        "SF800": {"soc": 0, "min_soc": 0, "battery": "no"},
+    }}
+
+    soc = diagnostics.diagnose_quality_soc({}, {}, live)
+
+    assert [row["device"] for row in soc["devices"]] == ["Pro"]
+    assert (soc["status"], soc["average_soc"], soc["root_causes"]) == ("ok", 80, [])
+
+
+def test_control_soc_analysis_leaves_out_an_inverter_without_packs():
+    live = {"devices": {
+        "Pro": {"soc": 80, "min_soc": 15, "battery": "yes"},
+        "SF800": {"soc": 0, "min_soc": 10, "battery": "no"},
+    }}
+
+    soc = diagnostics.diagnose_soc_analysis({}, {}, live)
+
+    assert [entry["device"] for entry in soc["devices"]] == ["Pro"]
+    assert soc["soc_imbalance_percent"] is None
+    assert (soc["min_soc_protected_devices"], soc["warnings"]) == ([], [])
 
 
 def test_the_snapshot_is_beside_runtime_state_and_never_inside_it(tmp_path):

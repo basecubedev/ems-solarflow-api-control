@@ -510,3 +510,17 @@ def test_the_dashboard_store_thins_to_the_same_point_budget_as_the_provider():
     from ems.history import provider
 
     assert sqlite_store.MAX_HISTORY_POINTS == provider.MAX_HISTORY_POINTS
+
+
+def test_device_soc_series_leaves_out_a_device_without_packs():
+    """The SQLite path must agree with Influx, which stores no SoC for it."""
+
+    from ems.history.provider import _device_series_value
+
+    payload = {"devices": {
+        "Pro": {"soc": 80, "soc_reported": True},
+        "SF800": {"soc": 0, "soc_reported": False, "output_w": 600},
+    }}
+
+    assert _device_series_value(payload, "soc", ["Pro", "SF800"]) == 80
+    assert _device_series_value(payload, "soc", ["SF800"]) is None
