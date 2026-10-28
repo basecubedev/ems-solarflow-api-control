@@ -503,8 +503,10 @@ battery is complete in either direction.
 
 Preview both with `serve_dashboard_preview.py --scenario ac-charging`.
 
-Energy statistics count charged energy separately (**AC Charge**, kWh) and
-deliberately attach no monetary value to it.
+Energy statistics count charged energy separately (**AC charging**, kWh) and
+deliberately attach no monetary value to it. The Energy page lists it in
+**Expert**; the deprecated Classic page lists it as **AC Charge** in **Basic**
+too.
 
 The household load is corrected for it: the grid meter cannot tell a charging
 device from an appliance, so the charge power is subtracted again before

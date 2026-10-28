@@ -9,6 +9,7 @@
 //
 // Never `waitUntil: "networkidle"`: /api/events stays open.
 import { expect, test } from "@playwright/test";
+import { DOCS_SHOT_TIME, pinTheDay } from "./pin-the-day";
 
 async function openModern(page, hash) {
   await page.goto(`/${hash}`, { waitUntil: "domcontentloaded" });
@@ -27,6 +28,13 @@ async function shapeLive(page, shape) {
     shape(body);
     await route.fulfill({ response, json: body });
   });
+}
+
+/** Every period, month and year of the preview with energy charged from AC, so the AC charging row is listed too. */
+function withAcCharging(body) {
+  const periods = Object.values(body.energy_stats || {}).flatMap((entry) => (Array.isArray(entry) ? entry : [entry]));
+  const isPeriod = (entry) => entry && typeof entry === "object" && ("inverter_output_kwh" in entry || "inverter_output_wh" in entry);
+  for (const period of periods.filter(isPeriod)) period.ac_charge_kwh = 2.4;
 }
 
 const deviceCard = (page, name) => page.locator(`[data-testid="device-card"][data-device="${name}"]`);
@@ -365,6 +373,41 @@ test.describe("Modern dashboard views: analytics @smoke", () => {
   });
 });
 
+test.describe("Modern dashboard views: energy @smoke", () => {
+  test("Basic lists savings, self-sufficiency, solar and home use, and Expert goes on from there with AC charging", async ({ page }) => {
+    await shapeLive(page, (body) => {
+      withAcCharging(body);
+      const stats = body.energy_stats;
+      for (const month of stats.monthly_current_year || []) month.ratios = { self_sufficiency: 0.5 };
+      Object.assign(stats.today, { ratios: { self_sufficiency: 0.54 }, channels: { pv_yield: { kwh: 4.4 }, home_consumption: { kwh: 5.7 } }, coverage: {} });
+      stats.best_day = {
+        ...stats.best_day,
+        ratios: { self_sufficiency: null },
+        channels: { pv_yield: { kwh: 3.1 }, home_consumption: { kwh: 0 } },
+        coverage: { home_consumption: "none" },
+      };
+    });
+    await pinTheDay(page, DOCS_SHOT_TIME);
+    await openModern(page, "#/energy");
+    const today = page.getByTestId("energy-periods").getByRole("region", { name: "Today" }).locator(".energy-facts dt");
+    const basic = ["Savings", "Self-sufficiency", "Solar", "Home use"];
+    await expect(today).toHaveText(basic);
+    await expect(page.getByTestId("month-detail").locator(".energy-facts dt").first()).toHaveText("Savings");
+    await expect(page.locator(".energy-facts dt", { hasText: "AC charging" })).toHaveCount(0);
+    const bestDay = page.getByTestId("energy-periods").getByRole("region", { name: "Best day" }).locator(".energy-facts dt");
+    await expect(bestDay).toHaveText(["Savings", "Solar"]);
+    await page.getByRole("button", { name: "Table" }).click();
+    await expect(page.locator("table.data thead th")).toHaveText(["Month", "Output", ...basic, "Data"]);
+
+    await page.getByRole("button", { name: "Expert" }).click();
+    await expect(today.nth(basic.length)).toHaveText("AC charging");
+    for (const [index, label] of basic.entries()) {
+      await expect(today.nth(index)).toHaveText(label);
+      await expect(bestDay.nth(index)).toHaveText(label);
+    }
+  });
+});
+
 test.describe("Modern dashboard views: density and animation @smoke", () => {
   test("Compact tightens the page, and the choice survives a reload", async ({ page }) => {
     await openModern(page, "#/overview");
@@ -447,14 +490,6 @@ test.describe("Modern dashboard views: density and animation @smoke", () => {
 test.describe("Modern dashboard views: labels fit @smoke", () => {
   const LANGUAGES = ["en", "de", "nl", "fr"];
   const WIDTHS = [1920, 1440, 1300, 1225, 960, 905, 640, 632, 390, 360];
-
-  /** Every period, month and year of the preview with energy charged from AC, so the AC charging row is listed too. */
-  function withAcCharging(body) {
-    const stats = body.energy_stats || {};
-    const keys = ["today", "yesterday", "last_7_days", "last_4_weeks", "last_12_months", "best_day", "lifetime"];
-    const periods = [...keys.map((key) => stats[key]), ...(stats.monthly_current_year || []), ...(stats.yearly || [])];
-    for (const period of periods.filter(Boolean)) period.ac_charge_kwh = 2.4;
-  }
 
   async function inLanguage(page, hash, lang) {
     await openModern(page, hash);

@@ -153,18 +153,19 @@ A **Basic / Expert** switch at the top decides how many rows each card carries;
 it is a per-browser display choice (`ems-modern.energyDetail` in
 `localStorage`), not configuration, and it changes nothing on the server.
 
-- **Basic** shows energy, savings, and self-sufficiency wherever the period is
-  fully measured.
-- **Expert** adds grid import/export, battery charged/discharged, solar and
-  home use to the same cards — periods, months, years and the lifetime total
-  alike — together with the output peak and the date the energy flows started
-  being measured.
+- **Basic** shows energy and savings, and self-sufficiency, solar and home use
+  where they were measured.
+- **Expert** adds AC charging, grid import/export and battery
+  charged/discharged to the same cards — periods, months, years and the
+  lifetime total alike — together with the output peak and the date the energy
+  flows started being measured.
 
 A value whose period was only partly measured carries a `◦`; a period the
-channels never covered says "not measured" instead of listing zeros.
+channels never covered says "not measured" in Expert instead of listing zeros,
+and Basic leaves its channel rows out.
 
-Where a period contains AC-charged energy, the card carries an extra **AC
-charging** figure. It has no monetary value attached on purpose: the
+In Expert, where a period contains AC-charged energy, the card carries an
+extra **AC charging** figure. It has no monetary value attached on purpose: the
 savings figure prices avoided import, and energy put into a battery has avoided
 nothing yet — the discharge that does is already counted. Installations that
 never AC-charge never see the row. See
@@ -508,10 +509,11 @@ directions of the snapshot's signed grid and battery power plus PV and house
 load; `ems/energy_channels.py` owns that split and is the only place that
 states the sign convention.
 
-`home_consumption` is the load at the grid connection point (`inverter output +
-grid import`), so energy the EMS charges the battery with from AC — winter
-mode, full-charge assist, an `ac_input` device — is part of it: the grid meter
-cannot tell that apart from a household load.
+`home_consumption` is what the household draws: `inverter output + grid power`
+less the power the fleet charges from AC — winter mode, full-charge assist, an
+`ac_input` device — because the grid meter alone cannot tell a charging device
+from a household load (`ems.power_direction.derive_house_load_w`). Days that
+EMS v0.8.11 and v0.8.12 recorded still count that charging in home use.
 
 Whether a sample may be integrated is decided for the sample as a whole:
 `grid_power_valid` and `device_power_valid` both have to hold, or the sample

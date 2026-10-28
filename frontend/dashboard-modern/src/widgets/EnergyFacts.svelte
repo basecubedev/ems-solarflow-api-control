@@ -3,9 +3,9 @@
   import { periodFigures, figureValue, figureListed, figureText, figureTone, channelsAllUnmeasured } from "../lib/energy.js";
 
   /**
-   * The facts Classic's energy cards carry for any period: savings, the
-   * self-sufficiency ratio and AC charging, and in Expert every channel, the
-   * peak output and since when the channels have been measured.
+   * The facts of any period: savings, the self-sufficiency ratio, solar and
+   * home use, and in Expert AC charging, every other channel, the peak output
+   * and since when the channels have been measured.
    */
   let { values, channels = [], since = null, expert = false, currency = "EUR", details = [] } = $props();
 
@@ -20,7 +20,7 @@
 
 <dl class="energy-facts">
   {#each figures as { figure, cell } (figure.id)}
-    <div class:channel={Boolean(figure.channel)}>
+    <div>
       <dt><span class="fact-mark {figureTone(figure)}" aria-hidden="true"></span>{t(figure.label)}</dt>
       <dd class="num" class:na={cell.value === null}>{figureText(f, figure, cell, currency)}</dd>
     </div>

@@ -33,7 +33,7 @@ Details: [Two history sources](../../dashboard.md#two-history-sources-sqlite-ope
 
 ## The Energy page
 
-![Energy page in Basic: six period cards from Today to Best day with energy, savings and self-sufficiency, the context strip, the 2026 by month bars with the running month hatched, and the years and lifetime card](../../assets/screenshots/dashboard/dashboard-energy.png)
+![Energy page in Basic: six period cards from Today to Best day with energy, savings, self-sufficiency, solar and home use, the context strip, the 2026 by month bars with the running month hatched, and the years and lifetime card](../../assets/screenshots/dashboard/dashboard-energy.png)
 
 **What you see:** *Based on measured inverter output.* above six period cards —
 **Today** (*in progress*), **Yesterday**, **Last 7 days**, **Last 4 weeks**,
@@ -60,10 +60,11 @@ bill. The figures are for the whole installation, not per device.
 
 Each month of the year is a bar. The running month is hatched; a month without
 data is only outlined, because it is not zero. Click a bar, or select it with
-the keyboard, to see that month underneath: its energy, savings and
-self-sufficiency, and in **Expert** every channel. **Table** lists all twelve
-months with the same figures as columns; a table wider than the screen scrolls
-sideways.
+the keyboard, to see that month underneath: its energy, savings,
+self-sufficiency, solar and home use, and in **Expert** AC charging and the
+other channels. **Table** lists all twelve months with the same figures as
+columns, a month without one of them showing `—`; a table wider than the screen
+scrolls sideways.
 
 ### Basic and Expert
 
@@ -72,37 +73,38 @@ shows. The browser remembers it, and it changes nothing on the system.
 
 | | What a card shows |
 | --- | --- |
-| **Basic** | Energy, savings, and self-sufficiency where the period is fully measured |
-| **Expert** | The same, plus grid import and export, battery charged and discharged, solar, home use, the output peak and since when the energy flows are measured |
+| **Basic** | Energy and savings, and self-sufficiency, solar and home use where they were measured |
+| **Expert** | The same, plus AC charging, grid import and export, battery charged and discharged, the output peak and since when the energy flows are measured |
 
 **Expert** applies everywhere on the page: the period cards, the month detail
 and table, each year and the lifetime total carry the same rows in the same
 order, and the strip adds **Energy flows since**.
 
-![Energy page in Expert with September selected: the month detail lists energy, savings, self-sufficiency, grid import and export, battery charged, battery discharged, solar and home use, and each year carries the same rows](../../assets/screenshots/dashboard/dashboard-energy-expert.png)
+![Energy page in Expert with September selected: the month detail lists energy, savings, self-sufficiency, solar, home use, grid import and export, battery charged and battery discharged, and each year carries the same rows](../../assets/screenshots/dashboard/dashboard-energy-expert.png)
 
 **Grid import** is energy drawn from the grid, **Grid export** energy fed into
 it. **Battery charged** and **Battery discharged** are the two directions of
 the battery. They are measured separately, so a day with both reports both — a
 single netted figure would hide half of what happened.
 
-**Home use** is what the house drew at the grid connection point. If the EMS
-charges the battery from the grid — winter mode, full-charge assist — that
-charging is part of this figure, because the meter cannot tell it apart from a
-washing machine.
+**Home use** is what the house itself drew. The meter cannot tell a battery
+charging from the grid — winter mode, full-charge assist — apart from a washing
+machine, so the EMS subtracts that charge power again; the charged energy is the
+**AC charging** figure in Expert. Some older days still count it; see
+[Energy channels](../../dashboard.md#energy-channels).
 
-Where a period contains energy charged from AC, the card carries an **AC
-charging** row. It has no savings attached on purpose: savings price avoided
-import, and energy put into a battery has avoided nothing yet — the discharge
-that does is already counted.
+In **Expert**, where a period contains energy charged from AC, the card carries
+an **AC charging** row. It has no savings attached on purpose: savings price
+avoided import, and energy put into a battery has avoided nothing yet — the
+discharge that does is already counted.
 
-**Self-sufficiency** is the share of home use that did not come from
-the grid. It appears for a period the channels measured from beginning to end,
-with no day inside it missing; otherwise it would divide a half-measured number
-by a whole one, and the row shows `—`. A sample whose grid meter did not answer
-counts for nothing: an unreachable meter reads as 0 W, and taking that at face
-value would report perfect self-sufficiency for a system that simply lost sight
-of the grid.
+**Self-sufficiency** is the share of home use that did not come from the grid.
+It appears for a period the channels measured from beginning to end, with no
+day inside it missing; otherwise it would divide a half-measured number by a
+whole one, and the row shows `—` in **Expert** and is left out of a card in
+**Basic**. A sample whose grid meter did not answer counts for nothing: an
+unreachable meter reads as 0 W, and taking that at face value would report
+perfect self-sufficiency for a system that simply lost sight of the grid.
 
 A single failed read is not a gap. The EMS keeps calculating with a device's
 last reading for as long as it is current, and the statistics count it over
@@ -138,7 +140,7 @@ For periods that begin before that day, the page does not print a zero:
 | --- | --- |
 | `78 Wh` | Below a kilowatt-hour the figure is in watt-hours, so a small or freshly started total is readable |
 | `28.9 kWh ◦` | The period is only partly measured; the figure covers the measured part |
-| `not measured` | The period lies entirely before the channels existed |
+| `not measured` | In **Expert**: the period lies entirely before the channels existed; **Basic** leaves those rows out |
 | **Energy flows since** `12/09/2026` | The first day grid, battery, solar and home use were measured |
 
 The inverter output and the savings estimate are older than the channels, so a

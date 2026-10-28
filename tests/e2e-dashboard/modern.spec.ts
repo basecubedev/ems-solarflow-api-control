@@ -2,7 +2,7 @@
 // The Modern dashboard at the root, against the same preview server and the
 // same API as the deprecated Classic at /classic/. Never `waitUntil: "networkidle"`: /api/events stays open.
 import { expect, test } from "@playwright/test";
-import { pinTheDay } from "./pin-the-day";
+import { DOCS_SHOT_TIME, pinTheDay } from "./pin-the-day";
 
 const SIGNED_IN = {
   auth_configured: true,
@@ -120,11 +120,15 @@ test.describe("Modern dashboard @smoke", () => {
     await expect(page.locator(".kpi").filter({ hasText: "Current state of charge" })).toContainText("60%");
   });
 
-  test("a month opens with every figure Classic shows for it, channels in Expert", async ({ page }) => {
+  test("a month opens with its figures, and the channels beyond solar and home use in Expert", async ({ page }) => {
+    await pinTheDay(page, DOCS_SHOT_TIME);
     await openModern(page, "#/energy");
-    await page.getByRole("button", { name: "Expert" }).click();
     await page.getByRole("button", { name: /^Sept: / }).click();
     const detail = page.getByTestId("month-detail");
+    await expect(detail).toContainText(/Solar\s*48\.6\skWh/);
+    await expect(detail).toContainText(/Home use\s*70\.2\skWh/);
+    await expect(detail).not.toContainText("Grid import");
+    await page.getByRole("button", { name: "Expert" }).click();
     await expect(detail).toContainText("September");
     await expect(detail).toContainText("66.9 kWh");
     await expect(detail).toContainText(/Grid import\s*28\.9\skWh/);
@@ -132,7 +136,8 @@ test.describe("Modern dashboard @smoke", () => {
     await expect(page.locator("dl.context")).toContainText("Energy flows since");
   });
 
-  test("the month table carries the same figures as the month detail, channels in Expert", async ({ page }) => {
+  test("the month table carries the same figures as the month detail, the channels beyond solar and home use in Expert", async ({ page }) => {
+    await pinTheDay(page, DOCS_SHOT_TIME);
     await openModern(page, "#/energy");
     await page.getByRole("button", { name: "Table" }).click();
     const table = page.locator("table.data");

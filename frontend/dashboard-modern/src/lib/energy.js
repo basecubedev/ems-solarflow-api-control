@@ -55,10 +55,6 @@ export function isPartial(values) {
 export function periodView(values) {
   return {
     kwh: energyKwh(values),
-    savings: finite(values?.savings_value),
-    selfSufficiency: selfSufficiency(values),
-    acChargeKwh: acChargeKwh(values),
-    peakW: finite(values?.peak_output_w),
     partial: isPartial(values),
     date: values?.date || null,
     raw: values || null,
@@ -139,23 +135,32 @@ export function channelsSince(stats) {
   return dates.length ? dates[dates.length - 1] : null;
 }
 
+/** The channels Basic lists after savings and the self-sufficiency ratio. */
+export const BASIC_CHANNELS = Object.freeze(["pv_yield", "home_consumption"]);
+
+function channelFigure(channel) {
+  return { id: `channel.${channel.id}`, label: `channel.${channel.id}`, format: "energy", listed: "measured", channel: channel.id };
+}
+
 /**
  * The figures of a period after its energy, in the order the month detail
  * lists them and the month table puts them in columns: savings, the
- * self-sufficiency ratio and AC charging; Expert adds every channel and the
- * peak output.
+ * self-sufficiency ratio, solar and home use; Expert puts AC charging, every
+ * other channel and the peak output after them. `listed` says when a period
+ * lists the figure (figureListed).
  */
 export function periodFigures(channels, expert) {
-  const figures = [
-    { id: "savings", label: "energy.savings", format: "money" },
-    { id: "selfSufficiency", label: "energy.selfSufficiency", format: "percent" },
-    { id: "acCharge", label: "energy.acCharge", format: "energy" },
+  const basic = [
+    { id: "savings", label: "energy.savings", format: "money", listed: "always" },
+    { id: "selfSufficiency", label: "energy.selfSufficiency", format: "percent", listed: "measured" },
+    ...BASIC_CHANNELS.map((id) => channels.find((channel) => channel.id === id)).filter(Boolean).map(channelFigure),
   ];
-  if (!expert) return figures;
+  if (!expert) return basic;
   return [
-    ...figures,
-    ...channels.map((channel) => ({ id: `channel.${channel.id}`, label: `channel.${channel.id}`, format: "energy", channel: channel.id })),
-    { id: "peak", label: "energy.peak", format: "power" },
+    ...basic,
+    { id: "acCharge", label: "energy.acCharge", format: "energy", listed: "some" },
+    ...channels.filter((channel) => !BASIC_CHANNELS.includes(channel.id)).map(channelFigure),
+    { id: "peak", label: "energy.peak", format: "power", listed: "some" },
   ];
 }
 
@@ -188,22 +193,32 @@ export function figureValue(values, figure) {
     const { kwh, coverage } = channelKwh(values, figure.channel);
     return { value: kwh, partial: coverage === "partial" };
   }
-  const view = periodView(values);
-  if (figure.id === "selfSufficiency") return { value: view.selfSufficiency?.ratio ?? null, partial: Boolean(view.selfSufficiency?.partial) };
-  const value = { savings: view.savings, acCharge: view.acChargeKwh, peak: view.peakW }[figure.id];
-  return { value: value ?? null, partial: false };
+  switch (figure.id) {
+    case "selfSufficiency": {
+      const ratio = selfSufficiency(values);
+      return { value: ratio?.ratio ?? null, partial: Boolean(ratio?.partial) };
+    }
+    case "savings":
+      return { value: finite(values?.savings_value), partial: false };
+    case "acCharge":
+      return { value: acChargeKwh(values), partial: false };
+    case "peak":
+      return { value: finite(values?.peak_output_w), partial: false };
+    default:
+      return { value: null, partial: false };
+  }
 }
 
 /**
- * Whether a period lists a figure, as Classic's energy cards do: AC charging
- * and the peak only when there was some, the channels unless none of them
- * measured the period, and an unmeasured ratio only in Expert.
+ * Whether a period lists a figure: a "some" figure only when there was some, a
+ * "measured" one that was not measured only in Expert and no channel when none
+ * of them measured the period, and any other figure always.
  */
 export function figureListed(figure, cell, values, expert) {
-  if (figure.channel) return !channelsAllUnmeasured(values);
-  if (figure.id === "selfSufficiency") return cell.value !== null || expert;
-  if (figure.id === "acCharge" || figure.id === "peak") return cell.value !== null && cell.value > 0;
-  return true;
+  if (figure.listed === "some") return cell.value !== null && cell.value > 0;
+  if (figure.listed !== "measured") return true;
+  if (figure.channel && channelsAllUnmeasured(values)) return false;
+  return cell.value !== null || expert;
 }
 
 /** A figure as text; a partly measured one carries Classic's ◦. */
