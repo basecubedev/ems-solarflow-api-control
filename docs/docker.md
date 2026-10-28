@@ -207,10 +207,11 @@ generated Docker config, `data/runtime-state.json` resolves to
 `diagnose` is safe and read-only by default. In a container it also reports
 container detection sources, runtime UID/GID, `/app/config` and `/app/data`
 readability/writability, ownership, and whether mutable paths resolve below
-`/app/data`. `--deep` adds local SQLite/log/dashboard checks and host-side
-Docker Compose hints when Docker is available. `--support-bundle` creates a
-redacted ZIP suitable for GitHub/support issues. Exit code `1` means at least
-one diagnostic error was found; warnings still exit `0`.
+`/app/data`. `--deep` adds local SQLite/dashboard checks and host-side Docker
+Compose hints when Docker is available; without a Docker CLI or compose file,
+as inside the container, skipping them is not a warning. `--support-bundle`
+creates a redacted ZIP suitable for GitHub/support issues. Exit code `1` means
+at least one diagnostic error was found; warnings still exit `0`.
 
 Use `diagnose --control` when EMS is running but current output looks
 unexpected. Use `diagnose --control-quality --sample-seconds 60` when export

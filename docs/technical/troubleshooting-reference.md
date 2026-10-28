@@ -137,8 +137,8 @@ python3 emsctl.py diagnose --support-bundle
 ```
 
 Normal diagnose is local/read-only. `--deep` adds local operational checks such
-as SQLite integrity, table summaries, recent configured log patterns, Docker
-hints, and dashboard loopback reachability. `--hardware` is opt-in and performs
+as SQLite integrity, table summaries, Docker hints, and dashboard loopback
+reachability. `--hardware` is opt-in and performs
 short-timeout read-only network probes only. `--support-bundle` writes a
 redacted ZIP for GitHub/support requests. Exit code `1` means at least one
 diagnostic error was found; warnings still exit `0`.
