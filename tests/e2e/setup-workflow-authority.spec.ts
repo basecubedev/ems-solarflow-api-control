@@ -192,7 +192,7 @@ test.describe("Setup workflow authority", { tag: ["@setup", "@authority"] }, () 
     const generatedPath = written.body.path as string;
 
     // Selecting build B in the UI supersedes workflow A through the backend.
-    await page.goto("/#setup");
+    await page.goto("/classic/#setup");
     await page.locator('[data-setup-step="release"]').click();
     const superseded = page.waitForResponse(
       (r) =>

@@ -1,6 +1,7 @@
 # Network and hostname
 
-Open **Network**.
+Open **Network** — *WLAN, hostname and time zone*. The step-by-step guide is
+[Network](../user/appliance/network.md).
 
 ## Read-only overview
 

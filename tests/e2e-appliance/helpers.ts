@@ -14,7 +14,7 @@ export async function resetAppliance(request: APIRequestContext, options: object
 }
 
 export async function signIn(page: Page) {
-  await page.goto("/");
+  await page.goto("/classic/");
   await expect(page.locator("#gate")).toBeVisible();
   await page.locator("#gate-password").fill(PASSWORD);
   await page.locator("#gate-confirm").fill(PASSWORD);

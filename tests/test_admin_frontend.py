@@ -3,6 +3,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 
@@ -521,10 +522,10 @@ def test_ui_zendure_cloud_auto_detects_api_key_or_ha_token():
     devices = _devices_section(html)
     panel = devices.split('id="zendure-cloud-token-form"', 1)[1].split("</form>", 1)[0]
     # Exactly one credential input; no mode selector is needed because the
-    # backend safely auto-detects raw appKeys and Zendure HA/deviceList tokens.
+    # backend safely auto-detects raw appKeys and Zendure deviceList tokens.
     assert "Zendure API key" in html
-    assert "HA/deviceList token" in html
-    assert "Paste your Zendure API key or HA token" in html
+    assert "Paste your Zendure API key" in html
+    assert "HA token" not in html and "HA/deviceList" not in html
     assert 'id="zendure-cloud-token-input"' in panel
     # No credential type dropdown or manual-MQTT wording in the cloud panel.
     assert "zendure-cloud-credential-mode" not in html
@@ -4056,6 +4057,8 @@ console.log(JSON.stringify({
   pinnedOverDefaultAndPrepared: selectUpgradeReleaseTag(releases, data, "v0.8.0"),
   missingPinnedFailsClosed: selectUpgradeReleaseTag(releases, data, "v9.9.9"),
   noPinUsesDefault: selectUpgradeReleaseTag(releases, data, null),
+  noProposalLeavesTheChoice: selectUpgradeReleaseTag(releases, { default_release: null, prepared_release: null }, null),
+  aCachedBuildIsNoProposal: selectUpgradeReleaseTag(releases, { default_release: null, prepared_release: "v0.7.0" }, null),
 }));
 """
     result = subprocess.run(
@@ -4069,6 +4072,9 @@ console.log(JSON.stringify({
     assert out["missingPinnedFailsClosed"] is None
     # Without a pin, the server default is used.
     assert out["noPinUsesDefault"] == "v0.9.0-RC1"
+    # Without a proposal the reader chooses; no build is picked on its own.
+    assert out["noProposalLeavesTheChoice"] is None
+    assert out["aCachedBuildIsNoProposal"] is None
 
 
 def test_upgrade_resume_selects_transition_tag_deterministically():
@@ -4094,7 +4100,7 @@ def test_upgrade_planning_dedupes_concurrent_loads():
     # sharing an unpinned run would hand the resume the server default.
     assert "upgradeState.loadingPromise" in fn
     assert "if (!pinnedTag) return upgradeState.loadingPromise;" in fn
-    assert ".then(() => loadUpgradePlanning(pinnedTag, { preserveVerification }))" in fn
+    assert ".then(() => loadUpgradePlanning(pinnedTag, { preserveVerification, preferredTag }))" in fn
 
 
 def test_guided_upgrade_execute_button_not_gated_on_admin_status():
@@ -4404,21 +4410,6 @@ def test_maintenance_expanded_body_carries_resolved_paths_and_names():
         'id="maintenance-docker-server"',
     ):
         assert marker in maintenance
-
-
-def test_maintenance_dashboard_link_is_a_real_anchor():
-    html = _read("index.html")
-    js = _read("admin.js")
-    maintenance = _maintenance_section(html)
-    assert 'id="maintenance-dashboard-link"' in maintenance
-    assert 'target="_blank"' in maintenance
-    assert 'rel="noopener"' in maintenance
-    # href is set through the DOM property, never via innerHTML/markup.
-    fn = js.split("function renderMaintenanceDashboard", 1)[1].split(
-        "\nfunction ", 1
-    )[0]
-    assert "link.href = url" in fn
-    assert "innerHTML" not in fn
 
 
 def test_maintenance_toggle_expands_and_collapses_card():
@@ -7609,9 +7600,6 @@ def test_maintenance_proposal_draft_keeps_opaque_server_resolution_identity():
 # --- credential rollback failure warning (Setup + Maintenance parity) --------
 
 
-import re  # noqa: E402
-
-
 def _async_fn_body(js, header):
     body = js.split(header, 1)[1]
     return re.split(r"\n(?:async function |function |const )", body)[0]
@@ -8845,7 +8833,7 @@ def test_reconnect_reloads_page_for_replaced_admin():
     assert "loadSystemAlignmentStatus()" not in reconnect
     assert "resumeSystemAlignment()" not in reconnect
     helper = _extract_fn(js, "reloadForReplacedAdmin")
-    assert "window.location.reload()" in helper
+    assert 'window.location.replace("/" + window.location.hash)' in helper
 
 
 def test_reconnect_ignores_stale_admin_responses_until_instance_changes(tmp_path):
@@ -11271,7 +11259,7 @@ def test_durable_transition_stage_wins_over_generic_validated_status():
         (
             "validated",
             True,
-            ["done", "done", "active", "pending", "pending", "pending", "pending"],
+            ["done", "done", "pending", "pending", "pending", "pending", "pending"],
         ),
         (
             "admin_aligned",

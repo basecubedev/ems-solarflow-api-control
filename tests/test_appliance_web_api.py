@@ -276,6 +276,21 @@ def test_login_and_logout(signed_in):
     assert client.get("/api/status")[0] == 401
 
 
+def test_the_first_password_and_a_sign_in_name_the_running_manager_as_the_session_does(appliance, monkeypatch):
+    """A page left at the sign-in learns there whether another Manager now answers."""
+    import appliance.web as web
+
+    _, _, client = appliance
+    monkeypatch.setattr(web, "installed_version", lambda: "0.4.2")
+    setup = client.post("/api/session/setup", {"password": PASSWORD, "confirmation": PASSWORD})[1]
+    assert setup["appliance_version"] == "0.4.2"
+    client.post("/api/session/logout")
+    monkeypatch.setattr(web, "installed_version", lambda: "0.4.3")
+    status, payload, _ = client.login()
+    assert status == 200
+    assert payload["appliance_version"] == client.get("/api/session")[1]["appliance_version"] == "0.4.3"
+
+
 def test_wrong_password_is_refused(appliance):
     _, app, client = appliance
     app.auth.create(PASSWORD, PASSWORD)
@@ -753,10 +768,11 @@ def test_security_headers_are_present(signed_in):
 
 def test_static_assets_are_an_explicit_allowlist(signed_in):
     _, _, client = signed_in
-    assert client.get("/static/app.js")[0] == 200
-    assert client.get("/static/styles.css")[0] == 200
-    assert client.get("/static/../appliance/web.py")[0] == 404
-    assert client.get("/static/../../etc/passwd")[0] == 404
+    assert client.get("/classic/app.js")[0] == 200
+    assert client.get("/classic/styles.css")[0] == 200
+    assert client.get("/classic/web.py")[0] == 404
+    assert client.get("/classic/../appliance/web.py")[0] == 404
+    assert client.get("/classic/../../etc/passwd")[0] == 404
 
 
 def test_the_index_page_is_served_without_authentication(appliance):

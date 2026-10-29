@@ -95,12 +95,25 @@ documentation website only in [`requirements-docs.txt`](requirements-docs.txt).
 
 Declared in [`package.json`](package.json); `playwright` and `playwright-core`
 are resolved through [`package-lock.json`](package-lock.json). The private
-`ems-admin-e2e` package exists only for the Admin end-to-end tests. There is no
-dashboard build step and no Node package is served to a browser.
+`ems-admin-e2e` package carries the Playwright end-to-end tests and the builds
+of the three Modern front ends, the dashboard (`npm run build:dashboard-modern`),
+the Admin console (`npm run build:admin-modern`) and the Appliance Manager
+(`npm run build:appliance-modern`), all made from the design system in
+`frontend/shared/`. The builds run on a developer or CI machine, never in an
+image or a package build; their output is committed under
+`dashboard/static/modern/`, `admin/static/modern/` and
+`appliance/static/modern/`, and what of it reaches a browser is listed under
+Vendored Components below. Svelte, Vite and the Vite plugin are build tools;
+Inter and Lucide are copied into the output.
 
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream |
 |---|---|---|---|:---:|:---:|---|
 | `@playwright/test` | `^1.61.1` (locked 1.61.1) | Apache-2.0 | Admin Console end-to-end test runner | ❌ | ❌ | https://github.com/microsoft/playwright |
+| `@fontsource-variable/inter` | `5.3.0` | OFL-1.1 | Source of the Inter variable font copied into the Modern builds | ❌ | ❌ | https://github.com/fontsource/font-files |
+| `@sveltejs/vite-plugin-svelte` | `7.3.1` | MIT | Compiles the Modern front ends' Svelte components during the Vite build | ❌ | ❌ | https://github.com/sveltejs/vite-plugin-svelte |
+| `lucide-static` | `1.59.0` | ISC | Source of the icon paths copied into the Modern sprites | ❌ | ❌ | https://github.com/lucide-icons/lucide |
+| `svelte` | `5.57.2` | MIT | Component compiler of the Modern front ends; its runtime is bundled (Vendored Components) | ❌ | ❌ | https://github.com/sveltejs/svelte |
+| `vite` | `8.3.4` | MIT | Builds the Modern front ends into `dashboard/static/modern/`, `admin/static/modern/` and `appliance/static/modern/` | ❌ | ❌ | https://github.com/vitejs/vite |
 | `playwright` | 1.61.1 | Apache-2.0 | Browser automation library behind the test runner | ❌ | ❌ | https://github.com/microsoft/playwright |
 | `playwright-core` | 1.61.1 | Apache-2.0 | Browser protocol driver used by `playwright` | ❌ | ❌ | https://github.com/microsoft/playwright |
 
@@ -152,13 +165,19 @@ runners and are never part of a build artifact.
 
 ## Vendored Components
 
-Third-party source committed into this repository. The dashboard has no package
-manager and no build step, so its chart library is vendored verbatim from the
-upstream `dist/` output.
+Third-party source committed into this repository. Classic, the hand-written
+dashboard, has no package manager and no build step, so its chart library is
+vendored verbatim from the upstream `dist/` output, and Modern references the
+same copy. Modern is built with Vite from the npm packages above; its build
+output, with the material it bundles or copies, is described below the table.
 
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream | Files |
 |---|---|---|---|:---:|:---:|---|---|
 | `uPlot` | 1.6.31 | MIT | Canvas charts on the Dashboard History and Analytics tabs | ✅ | ✅ | https://github.com/leeoniya/uPlot | `dashboard/static/uPlot.iife.min.js`, `dashboard/static/uPlot.min.css`, `dashboard/static/uPlot.LICENSE` |
+| `svelte` | 5.57.2 (runtime) | MIT | Component runtime bundled into the Modern dashboard, Admin console and Appliance Manager | ✅ | ✅ | https://github.com/sveltejs/svelte | `dashboard/static/modern/assets/modern.js`, `admin/static/modern/assets/vendor.js`, `appliance/static/modern/assets/appliance.js`, notices in `dashboard/static/modern/licenses.json`, `admin/static/modern/licenses.json` and `appliance/static/modern/licenses.json` |
+| `clsx` | 2.1.1 | MIT | Class-name helper the Svelte runtime bundles | ✅ | ✅ | https://github.com/lukeed/clsx | `dashboard/static/modern/assets/modern.js`, `admin/static/modern/assets/vendor.js`, notices in `dashboard/static/modern/licenses.json` and `admin/static/modern/licenses.json` |
+| `Inter` (`@fontsource-variable/inter`) | 4.1 via 5.3.0 | OFL-1.1 | The Modern front ends' typeface, latin subset | ✅ | ✅ | https://github.com/rsms/inter | `dashboard/static/modern/assets/inter-latin-wght-normal.woff2`, `dashboard/static/modern/assets/modern.css` (`@font-face`), `dashboard/static/modern/Inter.LICENSE`, `admin/static/modern/assets/inter-latin-wght-normal.woff2`, `admin/static/modern/assets/admin.css` (`@font-face`), `admin/static/modern/Inter.LICENSE`, `appliance/static/modern/assets/inter-latin-wght-normal.woff2`, `appliance/static/modern/assets/appliance.css` (`@font-face`), `appliance/static/modern/Inter.LICENSE` |
+| `Lucide` (`lucide-static`) | 1.59.0 | ISC AND MIT (Feather-derived icons) | Icon paths of the Modern front ends' inline sprites | ✅ | ✅ | https://github.com/lucide-icons/lucide | `dashboard/static/modern/index.html`, `admin/static/modern/index.html` and `appliance/static/modern/index.html` (the `<svg class="icon-sprite">` block), `dashboard/static/modern/Lucide.LICENSE`, `admin/static/modern/Lucide.LICENSE`, `appliance/static/modern/Lucide.LICENSE` |
 | `rpi-image-gen` | v2.7.0 | BSD-3-Clause | Upstream files copied verbatim as the image contract the appliance is built against (`image-rpios`) | ❌ | ❌ | https://github.com/raspberrypi/rpi-image-gen | `tests/fixtures/rpi_image_gen/` (seventeen files, listed with their SHA-256 in `source-manifest.json`), `tests/fixtures/rpi_image_gen/UPSTREAM.LICENSE` |
 
 Provenance, verified on 2026-08-04 against the upstream `1.6.31` tag:
@@ -184,12 +203,33 @@ marked ✗. Their exact bytes and the release they came from are recorded in
 [`tests/fixtures/rpi_image_gen/source-manifest.json`](tests/fixtures/rpi_image_gen/source-manifest.json);
 refresh them with `scripts/appliance-fetch-rpi-image-gen.sh`.
 
-No other third-party source is vendored. There is no icon package, no web font,
-no CSS framework and no `data:` embedded asset: `dashboard/static/` and
-`admin/static/` contain project-authored HTML, CSS, inline SVG symbols and
-plain browser JavaScript, all under the project AGPL-3.0-or-later license. The
-CSS uses system font stacks only (`system-ui`, `Inter`, `ui-monospace`, …); no
-font file is downloaded or bundled.
+No other third-party source is vendored. The Modern dashboard, the Modern
+Admin console and the Modern Appliance Manager are build outputs, not
+hand-written source. The dashboard's bundle
+(`dashboard/static/modern/assets/modern.js`) and every stylesheet combine the
+project's own AGPL-3.0-or-later code (in `frontend/shared/`,
+`frontend/dashboard-modern/`, `frontend/admin-modern/` and
+`frontend/appliance-modern/`) with the Svelte runtime and `clsx`; the
+Appliance Manager's bundle (`appliance/static/modern/assets/appliance.js`)
+carries the Svelte runtime only, as its `licenses.json` says. The Admin console loads its pages as separate chunks: the
+Svelte runtime and `clsx` are all in `admin/static/modern/assets/vendor.js`
+(`admin/static/modern/assets/admin.js` loads it), and every other chunk is the
+project's own code and carries its licence header. Vite writes the MIT notices of every
+bundled package into a `licenses.json` that ships beside each bundle, and
+`tests/test_dashboard_modern.py`, `tests/test_admin_modern.py` and
+`tests/test_appliance_modern.py` fail when a
+package in that file has no row above or a licence outside the permissive set. The Inter font file is
+unmodified (OFL-1.1 permits bundling it with software), and the Lucide icon
+paths are copied verbatim into the page's inline sprite (ISC; the icons Lucide
+took over from Feather stay MIT, "Copyright (c) 2013-present Cole Bemis").
+Neither is bundled code, so the build copies each package's own licence file
+beside them: `Inter.LICENSE` carries the OFL text and `Lucide.LICENSE` both
+notices, with the Feather list, in `dashboard/static/modern/`,
+`admin/static/modern/` and `appliance/static/modern/`. Classic
+(`dashboard/static/`, `admin/static/` and `appliance/static/` outside their
+`modern/` folders) remains
+project-authored HTML, CSS, inline SVG symbols and plain browser JavaScript;
+they use system font stacks only and bundle no font file.
 
 ## Container Base Images
 
@@ -250,14 +290,39 @@ under Vendored Components above.
 
 ## Optional Platform Dependencies
 
-Packages that `package-lock.json` marks optional and platform-specific. They are
-never installed on the Linux developer and CI machines this project targets.
-None at present: `fsevents`, the macOS-only file watcher, was the last one and
-left with `@playwright/test` 1.63.0. The table stays so the checker keeps
-comparing this section with the lockfile.
+Packages that `package-lock.json` marks optional and platform-specific. npm
+installs only the one for the machine it runs on. All of them belong to the
+Modern dashboard's build tools and stay on the build machine.
 
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream |
 |---|---|---|---|:---:|:---:|---|
+| `@rolldown/binding-android-arm-eabi` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-android-arm64` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-darwin-arm64` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-darwin-x64` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-freebsd-x64` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-linux-arm-gnueabihf` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-linux-arm64-gnu` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-linux-arm64-musl` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-linux-ppc64-gnu` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-linux-s390x-gnu` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-linux-x64-gnu` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-linux-x64-musl` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-openharmony-arm64` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-win32-arm64-msvc` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-win32-x64-msvc` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `fsevents` | 2.3.3 | MIT | macOS file watcher, used by Vite's development server | ❌ | ❌ | https://github.com/fsevents/fsevents |
+| `lightningcss-android-arm64` | 1.33.0 | MPL-2.0 | Native CSS minifier for this platform, used by Vite at build time; never modified or shipped | ❌ | ❌ | https://github.com/parcel-bundler/lightningcss |
+| `lightningcss-darwin-arm64` | 1.33.0 | MPL-2.0 | Native CSS minifier for this platform, used by Vite at build time; never modified or shipped | ❌ | ❌ | https://github.com/parcel-bundler/lightningcss |
+| `lightningcss-darwin-x64` | 1.33.0 | MPL-2.0 | Native CSS minifier for this platform, used by Vite at build time; never modified or shipped | ❌ | ❌ | https://github.com/parcel-bundler/lightningcss |
+| `lightningcss-freebsd-x64` | 1.33.0 | MPL-2.0 | Native CSS minifier for this platform, used by Vite at build time; never modified or shipped | ❌ | ❌ | https://github.com/parcel-bundler/lightningcss |
+| `lightningcss-linux-arm-gnueabihf` | 1.33.0 | MPL-2.0 | Native CSS minifier for this platform, used by Vite at build time; never modified or shipped | ❌ | ❌ | https://github.com/parcel-bundler/lightningcss |
+| `lightningcss-linux-arm64-gnu` | 1.33.0 | MPL-2.0 | Native CSS minifier for this platform, used by Vite at build time; never modified or shipped | ❌ | ❌ | https://github.com/parcel-bundler/lightningcss |
+| `lightningcss-linux-arm64-musl` | 1.33.0 | MPL-2.0 | Native CSS minifier for this platform, used by Vite at build time; never modified or shipped | ❌ | ❌ | https://github.com/parcel-bundler/lightningcss |
+| `lightningcss-linux-x64-gnu` | 1.33.0 | MPL-2.0 | Native CSS minifier for this platform, used by Vite at build time; never modified or shipped | ❌ | ❌ | https://github.com/parcel-bundler/lightningcss |
+| `lightningcss-linux-x64-musl` | 1.33.0 | MPL-2.0 | Native CSS minifier for this platform, used by Vite at build time; never modified or shipped | ❌ | ❌ | https://github.com/parcel-bundler/lightningcss |
+| `lightningcss-win32-arm64-msvc` | 1.33.0 | MPL-2.0 | Native CSS minifier for this platform, used by Vite at build time; never modified or shipped | ❌ | ❌ | https://github.com/parcel-bundler/lightningcss |
+| `lightningcss-win32-x64-msvc` | 1.33.0 | MPL-2.0 | Native CSS minifier for this platform, used by Vite at build time; never modified or shipped | ❌ | ❌ | https://github.com/parcel-bundler/lightningcss |
 
 At the Python level, `typing-extensions` is the equivalent case: a conditional
 `cryptography` dependency for `python_full_version < 3.11`, never installed on
@@ -273,7 +338,7 @@ already inventoried above.
 |---|---|---|:---:|
 | `config/config.template.json` | `tools/build_config_template.py` from `ems/config_catalog.py` | none | ✅ |
 | `/app/release-resources` inside the Admin image | `scripts/generate_release_resources.py` at image build | none | ✅ |
-| `docs/assets/screenshots/**` | `scripts/capture_admin_docs.py`, `scripts/capture_dashboard_docs.py` (headless Firefox + ImageMagick) | none; chart pixels are drawn by `uPlot` from project data | ❌ |
+| `docs/assets/screenshots/**`, `docs/assets/preview-*.jpg` | `scripts/capture_admin_docs.mjs`, `tests/e2e-dashboard/capture-docs.spec.ts`, `tests/e2e-appliance/capture-docs.spec.ts` (all Playwright Chromium) | none beyond the pixels the pages render: Inter glyphs and Lucide icon shapes in the Modern pages (inventoried above), chart pixels drawn by `uPlot` from project data | ❌ |
 | `docs/assets/videos/**` | `scripts/render_admin_docs_video.py` (headless Firefox + ffmpeg) | none | ❌ |
 | Install demo animation | `docs/demo/build_install_demo.py` (Pillow + host DejaVu fonts) | rendered glyphs from the host font; no output is committed | ❌ |
 

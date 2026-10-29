@@ -23,7 +23,7 @@ from dashboard.auth import (
 )
 from dashboard.https import HANDSHAKE_TIMEOUT_SECONDS, wrap_listening_socket
 from dashboard.sqlite_store import SUPPORTED_RANGES
-from dashboard.static_files import build_static_asset_index, static_asset_key
+from dashboard.static_files import SHARED_ROOT_FILES, build_static_asset_index, lookup_static_asset, modern_asset_path, modern_redirect
 
 
 BACKUP_FILE_RE = re.compile(r"^ems-[A-Za-z0-9._-]+\.tar\.gz(?:\.enc)?$")
@@ -43,8 +43,8 @@ ANALYTICS_UNREACHABLE_HINT = (
 ANALYTICS_SCHEMA_HINT = (
     "Analytics history is enabled, but a bucket this range reads is missing.\n"
     "Unless influxdb.auto_sync is off, the EMS creates it by itself; it checks "
-    "every half hour. To create it now, use Repair analytics in the Admin "
-    "console's Maintenance, or run: python3 emsctl.py influx sync --safe"
+    "every half hour. To create it now, use Repair analytics on the Admin "
+    "console's Services page, or run: python3 emsctl.py influx sync --safe"
 )
 # Same symptom, opposite fix: no sync creates this bucket, because the two
 # halves of the influxdb config disagree about which buckets exist.
@@ -814,7 +814,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self._handle_maintenance_config_upgrade()
             return
 
-        self._send_static(parsed.path)
+        self._send_static(parsed.path, parsed.query)
 
     def do_POST(self):
         parsed = urlparse(self.path)
@@ -1908,8 +1908,19 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         finally:
             self.server.sse_limiter.release(remote)
 
-    def _send_static(self, request_path):
-        asset = STATIC_ASSETS.get(static_asset_key(request_path))
+    def _send_static(self, request_path, query=""):
+        moved = modern_redirect(request_path, query)
+        if moved is not None:
+            self.send_response(302)
+            self._send_security_headers()
+            self.send_header("Location", moved)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+
+        asset_path = modern_asset_path(request_path, SHARED_ROOT_FILES)
+        asset = lookup_static_asset(STATIC_ASSETS, asset_path) if asset_path else None
         if asset is None:
             self.send_error(404)
             return

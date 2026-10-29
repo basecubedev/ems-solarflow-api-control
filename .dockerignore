@@ -27,6 +27,9 @@ scripts/
 !scripts/mqtt_write_latency_probe.py
 tasks/
 docs/develop/
+# Source of the Modern dashboard; the image carries its committed build output
+# (dashboard/static/modern/), never the toolchain or node_modules.
+frontend/
 # Documentation website stage, output and Zensical's cache (scripts/docs_site.py).
 build/
 .cache/

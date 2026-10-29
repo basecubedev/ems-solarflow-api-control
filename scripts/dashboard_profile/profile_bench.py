@@ -1327,7 +1327,7 @@ def run_case(node, case, browser, gpu, duration_ms, max_load, attempts=3):
     )
     host, port = server.server_address
     payload = {
-        "url": "http://%s:%s/" % (host, port),
+        "url": "http://%s:%s/classic/" % (host, port),
         "view": case["view"],
         "animation": case["animation"],
         "transport": case["transport"],

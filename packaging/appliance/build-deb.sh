@@ -96,7 +96,22 @@ for file in "$ROOT"/appliance/*.py; do
 done
 install -d "$STAGE/usr/lib/ems-appliance-manager/appliance/static"
 for file in "$ROOT"/appliance/static/*; do
+    if [ -d "$file" ]; then
+        continue
+    fi
     install -m 0644 "$file" "$STAGE/usr/lib/ems-appliance-manager/appliance/static/"
+done
+# The Modern console is a committed build (frontend/appliance-modern/), a tree
+# rather than a flat set of files. Classic sends a browser to it by default, so
+# a package without it would open on a 404; it is required, not optional.
+[ -f "$ROOT/appliance/static/modern/index.html" ] || {
+    echo "build-deb: appliance/static/modern is missing; run npm run build:appliance-modern" >&2
+    exit 1
+}
+modern_files=$(cd "$ROOT/appliance/static" && find modern -type f | LC_ALL=C sort)
+for file in $modern_files; do
+    install -D -m 0644 "$ROOT/appliance/static/$file" \
+            "$STAGE/usr/lib/ems-appliance-manager/appliance/static/$file"
 done
 
 install -m 0755 "$PACKAGING/bin/ems-appliance" "$STAGE/usr/bin/ems-appliance"

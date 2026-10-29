@@ -1,49 +1,184 @@
 {
-  "_note": "Demo Guided Upgrade planning data. Fake image refs and digests only.",
+  "_note": "Demo Guided Upgrade data: the release catalogue, a verified target and the run as the server reports it. Fake image refs, digests and operation ids only.",
   "releases_upgrade": {
     "ok": true,
-    "default_release": "v0.7.0",
-    "prepared_release": "v0.7.0",
+    "active_release": "v0.8.15",
+    "default_release": "v0.8.16",
+    "latest_stable": "v0.8.16",
+    "prepared_release": "v0.8.15",
     "warnings": [],
     "releases": [
       {
-        "tag": "v0.7.0",
-        "name": "v0.7.0",
+        "tag": "v0.8.16",
+        "name": "v0.8.16",
         "channel": "stable",
+        "stable": true,
+        "prerelease": false,
+        "docker_supported": true,
+        "prepared": false,
+        "active": false,
+        "selectable": true,
+        "upgrade_state": "upgrade_available",
+        "published_at": "2026-07-03T09:00:00Z",
+        "reason": null
+      },
+      {
+        "tag": "v0.8.15",
+        "name": "v0.8.15",
+        "channel": "stable",
+        "stable": true,
         "prerelease": false,
         "docker_supported": true,
         "prepared": true,
-        "active": false,
-        "selectable": true,
-        "reason": "Latest stable release."
+        "active": true,
+        "selectable": false,
+        "upgrade_state": "already_current",
+        "published_at": "2026-06-21T09:00:00Z",
+        "reason": "Already running this EMS build."
       },
       {
-        "tag": "v0.7.0-RC",
-        "name": "v0.7.0-RC",
+        "tag": "latest",
+        "name": "latest",
         "channel": "latest",
-        "prerelease": true,
+        "stable": false,
+        "prerelease": false,
         "docker_supported": true,
         "prepared": false,
-        "active": true,
+        "active": false,
         "selectable": true,
-        "reason": "Currently running release."
+        "upgrade_state": "identity_unknown",
+        "published_at": "2026-07-04T18:20:00Z",
+        "reason": "Rolling Docker channel, not a stable release; switching from a stable release requires extra caution"
       }
     ]
+  },
+  "alignment_idle": {
+    "ok": true,
+    "active": false,
+    "transition": null,
+    "running_pair": {
+      "state": "current",
+      "admin": { "release": "v0.8.15" },
+      "ems": { "release": "v0.8.15" }
+    }
+  },
+  "upgrade_validate": {
+    "ok": true,
+    "valid": true,
+    "upgrade_allowed": true,
+    "selection_fingerprint": "demo-selection-fingerprint-0816",
+    "admin_update_required": true,
+    "target_release": "v0.8.16",
+    "current_admin": { "system_tag": "v0.8.15" },
+    "upgrade_direction": { "state": "upgrade_available", "reason": null }
+  },
+  "upgrade_transitions": {
+    "running": {
+      "operation_id": "demo-upgrade-operation",
+      "mode": "guided_upgrade",
+      "stage": "ems_operation_running",
+      "system_tag": "v0.8.16",
+      "admin_alignment_required": true,
+      "created_at": "2026-07-05T13:27:48Z",
+      "updated_at": "2026-07-05T13:29:51Z",
+      "error_message": null
+    },
+    "reconnect": {
+      "operation_id": "demo-upgrade-operation",
+      "mode": "guided_upgrade",
+      "stage": "admin_reconnect_pending",
+      "system_tag": "v0.8.16",
+      "admin_alignment_required": true,
+      "replacement_active": true,
+      "created_at": "2026-07-05T13:28:12Z",
+      "updated_at": "2026-07-05T13:29:40Z",
+      "error_message": null
+    }
+  },
+  "upgrade_lifecycle": {
+    "ok": true,
+    "owner": "guided_upgrade",
+    "state": "operation_running",
+    "switchable": false,
+    "recoverable": false,
+    "blocking_reason": "operation_running",
+    "fingerprint": "c3d4e5f60718293a"
+  },
+  "upgrade_resume": {
+    "ok": true,
+    "job_id": "demo-upgrade-job",
+    "status": "running",
+    "steps": []
+  },
+  "upgrade_job_running": {
+    "ok": true,
+    "job_id": "demo-upgrade-job",
+    "status": "running",
+    "steps": [
+      { "key": "verify_image", "label": "Verify target image", "state": "done", "message": "digest verified" },
+      { "key": "preflight", "label": "Preflight checks", "state": "done", "message": "environment OK" },
+      { "key": "migration_review", "label": "Review MQTT migration", "state": "done", "message": "nothing to migrate" },
+      { "key": "backup", "label": "Create backup", "state": "done", "message": "backup verified" },
+      { "key": "target_resources", "label": "Verify target resources", "state": "done", "message": "resources verified" },
+      { "key": "config_check", "label": "Check config", "state": "done", "message": "compared to template" },
+      { "key": "config_write", "label": "Update config", "state": "done", "message": "2 new keys added" },
+      { "key": "pull_image", "label": "Pull image", "state": "running", "message": null },
+      { "key": "update_compose", "label": "Update compose", "state": "pending", "message": null },
+      { "key": "recreate_ems", "label": "Recreate EMS", "state": "pending", "message": null },
+      { "key": "diagnostics", "label": "Run diagnostics", "state": "pending", "message": null }
+    ]
+  },
+  "upgrade_job_done": {
+    "ok": true,
+    "job_id": "demo-upgrade-job",
+    "status": "succeeded",
+    "steps": [
+      { "key": "verify_image", "label": "Verify target image", "state": "done", "message": "digest verified" },
+      { "key": "preflight", "label": "Preflight checks", "state": "done", "message": "environment OK" },
+      { "key": "migration_review", "label": "Review MQTT migration", "state": "done", "message": "nothing to migrate" },
+      { "key": "backup", "label": "Create backup", "state": "done", "message": "backup verified" },
+      { "key": "target_resources", "label": "Verify target resources", "state": "done", "message": "resources verified" },
+      { "key": "config_check", "label": "Check config", "state": "done", "message": "compared to template" },
+      { "key": "config_write", "label": "Update config", "state": "done", "message": "2 new keys added" },
+      { "key": "pull_image", "label": "Pull image", "state": "done", "message": "image downloaded" },
+      { "key": "update_compose", "label": "Update compose", "state": "done", "message": "image ref updated" },
+      { "key": "recreate_ems", "label": "Recreate EMS", "state": "done", "message": "container recreated" },
+      { "key": "diagnostics", "label": "Run diagnostics", "state": "done", "message": "health check passed" }
+    ],
+    "result": {
+      "ok": true,
+      "warnings": [],
+      "target_release": "v0.8.16",
+      "steps": [
+        { "id": "backup", "status": "ok", "detail": "data/backups/ems-config-rollback-2026-07-05-152801.tar.gz" },
+        { "id": "diagnostics", "status": "ok", "detail": "health check passed" }
+      ]
+    }
+  },
+  "upgrade_memo": {
+    "target": "v0.8.16",
+    "operationId": "demo-upgrade-operation",
+    "before": { "admin": "v0.8.15", "ems": "v0.8.15" },
+    "since": "2026-07-05T13:27:48Z",
+    "adminRequired": true,
+    "backupPlanned": true,
+    "instance": "demo-admin-instance",
+    "previous": null
   },
   "admin_update_status": { "supported": true },
   "admin_update_plan": {
     "ok": true,
     "plan_id": "demo-admin-plan",
-    "update_required": false,
-    "reason": "image_unchanged",
+    "update_required": true,
+    "reason": "image_changed",
     "warning": null,
     "current_admin": {
-      "image_ref": "ghcr.io/example/ems-admin:v0.7.0",
+      "image_ref": "ghcr.io/example/ems-admin:v0.8.15",
       "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
     },
     "target_admin": {
-      "image_ref": "ghcr.io/example/ems-admin:v0.7.0",
-      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      "image_ref": "ghcr.io/example/ems-admin:v0.8.16",
+      "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
     }
   }
 }

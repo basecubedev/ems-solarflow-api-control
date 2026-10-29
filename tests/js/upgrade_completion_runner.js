@@ -50,7 +50,7 @@ new Function(
   "input",
   '"use strict";\n' +
     "const upgradeState = { current: { tag: 'v0.8.5', image: 'repo:v0.8.5', state: 'installed' },\n" +
-    "  runningAdmin: { tag: null, image: null }, completed: false };\n" +
+    "  runningAdmin: { tag: null, image: null }, completed: false, preparedFingerprint: 'fp' };\n" +
     "scope.upgradeState = upgradeState;\n" +
     "const UPGRADE_POLL_INTERVAL_MS = 1200;\n" +
     "const JOB_POLL_MAX_MISSES = 20;\n" +
@@ -79,6 +79,7 @@ new Function(
     "function renderUpgradePlan() { scope.rendered.push('plan'); }\n" +
     "function setUpgradeRunning() {}\n" +
     "function updateUpgradeActionButtons() {}\n" +
+    "function clearUpgradeVerification() { scope.cleared = true; }\n" +
     extractFunction("humanErrorText") +
     "\n" +
     extractFunction("jobPollError") +

@@ -144,7 +144,7 @@ def capture_frame(firefox, convert, host, port, tmpdir, step):
     screen = step["screen"]
     mode = step["mode"]
     window = SCREEN_WINDOW if mode == "screen" else PAGE_WINDOW
-    url = f"http://{host}:{port}/?screen={screen}"
+    url = f"http://{host}:{port}/classic/?screen={screen}"
     best, best_h = None, -1
     for attempt in range(1, MAX_ATTEMPTS + 1):
         raw = os.path.join(tmpdir, f"{screen}-{attempt}-raw.png")

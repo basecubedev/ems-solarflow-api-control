@@ -150,7 +150,8 @@ It can schedule an assist window, temporarily prepare the required charging cond
 
 ## Built-in dashboard
 
-The local dashboard provides a clear view of the complete energy system.
+The local dashboard provides a clear view of the complete energy system. Its
+pages sit in a side menu, and on a phone in a bar at the bottom.
 
 ### Overview
 
@@ -190,6 +191,10 @@ Optional InfluxDB integration adds long-term analysis with:
 - zooming with the mouse wheel, the +/- buttons or a drag
 - grid, battery, PV and device views
 - comparison overlays for battery level, grid power and EMS targets
+
+### Schedule
+
+Set the same runtime values at chosen times — once, every day, on weekdays or only in the winter months — and see every switch point of the next seven days. See [Schedules](../scheduler.md).
 
 ### Diagnose
 
@@ -318,7 +323,7 @@ The built-in web interfaces support password-protected operator access. The dash
 
 Typical installations run with Docker on a small home server, NAS or Raspberry Pi. A manual Python installation and a comprehensive command-line tool are also available for advanced users.
 
-A dedicated **appliance image** is also available for a Raspberry Pi that should run EMS and nothing else: a prepared card with the operating system, the containers and a small management console. One writable root, patched by `apt`, for the Raspberry Pi 3, 3B+, 4 and 5. It has not been confirmed on a physical board yet.
+A dedicated **appliance image** is also available for a Raspberry Pi that should run EMS and nothing else: a prepared card with the operating system, the containers and a small management console. One writable root, patched by `apt`, for the Raspberry Pi 3, 3B+, 4 and 5. It is only partly confirmed on physical hardware: one Raspberry Pi 3B+ runs the image, while EMS, Admin and InfluxDB on a board and every other model are not yet proven (see [Appliance](appliance/index.md)).
 
 ---
 
@@ -383,7 +388,7 @@ compatibility report.
 Step-by-step, screenshot-led guides:
 
 - [Admin Console guides](admin/index.md) —
-  [Guided Setup](admin/guided-setup.md) ·
+  [Guided setup](admin/guided-setup.md) ·
   [Guided Upgrade](admin/guided-upgrade.md) ·
   [Maintenance](admin/maintenance.md) ·
   [MQTT](admin/mqtt.md) ·

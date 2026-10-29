@@ -35,10 +35,10 @@ test.describe("theme switching @smoke", () => {
     await page.selectOption("#theme-select", "copper");
     await expect(page.locator("html")).toHaveAttribute("data-theme", "copper");
 
-    await page.route("**/static/app.js", (route) => route.abort());
+    await page.route("**/classic/app.js", (route) => route.abort());
     await page.reload();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "copper");
-    await page.unroute("**/static/app.js");
+    await page.unroute("**/classic/app.js");
   });
 
   test("the palette reaches the sign-in gate, which has no menu of its own", async ({ page }) => {

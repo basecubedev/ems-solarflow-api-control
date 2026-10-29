@@ -4,6 +4,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from datetime import datetime
 
 import pytest
 
@@ -14,13 +15,24 @@ if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
 
 import serve_dashboard_preview  # noqa: E402
-from dashboard_preview_data import FLOW_VIEWS, SCENARIOS, build_scenario  # noqa: E402
+from dashboard.server import DashboardRequestHandler  # noqa: E402
+from dashboard_preview_data import (  # noqa: E402
+    DIAGNOSE_PROFILES,
+    FLOW_VIEWS,
+    SCENARIOS,
+    build_scenario,
+)
 from serve_dashboard_preview import (  # noqa: E402
-    DEFAULT_CAPTURE_VIEWS,
-    normalize_views,
+    SCENARIO_COOKIE,
     parse_args,
-    resolve_scenario,
     start_server,
+)
+
+CAPTURE_SPEC = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "tests",
+    "e2e-dashboard",
+    "capture-docs.spec.ts",
 )
 
 pytestmark = [
@@ -32,8 +44,8 @@ pytestmark = [
 def preview_server():
     servers = []
 
-    def _start(scenario="normal"):
-        server = start_server("127.0.0.1", 0, scenario)
+    def _start(scenario="normal", fixed_now=None):
+        server = start_server("127.0.0.1", 0, scenario, fixed_now=fixed_now)
         servers.append(server)
         host, port = server.server_address
         return server, f"http://{host}:{port}"
@@ -45,12 +57,13 @@ def preview_server():
         server.server_close()
 
 
-def _get(base, path):
-    return urllib.request.urlopen(base + path, timeout=5)
+def _get(base, path, cookie=None):
+    headers = {"Cookie": cookie} if cookie is not None else {}
+    return urllib.request.urlopen(urllib.request.Request(base + path, headers=headers), timeout=5)
 
 
-def _get_json(base, path):
-    with _get(base, path) as response:
+def _get_json(base, path, cookie=None):
+    with _get(base, path, cookie) as response:
         assert response.status == 200
         return json.loads(response.read().decode("utf-8"))
 
@@ -79,7 +92,7 @@ def test_preview_views_return_html(preview_server, view):
     # The injected bootstrap opens the requested view and still loads app.js.
     assert "dashboard.flowView" in body
     assert json.dumps(view) in body
-    assert '<script src="/app.js"></script>' in body
+    assert '<script src="/classic/app.js"></script>' in body
 
 
 def test_unknown_preview_view_is_404(preview_server):
@@ -91,7 +104,7 @@ def test_unknown_preview_view_is_404(preview_server):
 
 def test_static_assets_served(preview_server):
     _, base = preview_server()
-    for path, content_type in (("/app.js", "javascript"), ("/styles.css", "css")):
+    for path, content_type in (("/classic/app.js", "javascript"), ("/classic/styles.css", "css")):
         with _get(base, path) as response:
             assert response.status == 200
             assert content_type in response.headers.get("Content-Type", "")
@@ -127,10 +140,70 @@ def test_api_runtime_returns_runtime_state(preview_server):
 
 def test_api_diagnose_returns_report(preview_server):
     _, base = preview_server()
-    payload = _get_json(base, "/api/diagnose")
+    payload = _get_json(base, "/api/diagnose?profile=hardware")
     assert payload["schema_version"] == 1
     assert "diagnosis" in payload
     assert "sections" in payload["diagnosis"]
+
+
+def test_the_preview_diagnoses_the_profiles_the_dashboard_does():
+    assert DIAGNOSE_PROFILES == DashboardRequestHandler.DIAGNOSE_PROFILES
+
+
+@pytest.mark.parametrize("profile", DIAGNOSE_PROFILES)
+def test_each_diagnose_profile_answers_as_itself(preview_server, profile):
+    _, base = preview_server("offline-device")
+    payload = _get_json(base, f"/api/diagnose?profile={profile}")
+    sections = [section["id"] for section in payload["diagnosis"]["sections"]]
+    assert payload["profile"] == profile
+    assert ("hardware" in sections) == (profile in ("deep", "hardware"))
+    assert ("control" in sections) == (profile in ("control", "control_quality"))
+    assert payload["status"] == ("error" if profile in ("deep", "hardware") else "warning")
+
+
+@pytest.mark.parametrize("query", ["", "?profile=", "?profile=everything"])
+def test_a_diagnose_without_a_known_profile_is_refused_as_the_dashboard_refuses_it(preview_server, query):
+    _, base = preview_server()
+    with pytest.raises(urllib.error.HTTPError) as refused:
+        _get(base, f"/api/diagnose{query}")
+    assert refused.value.code == 400
+    assert json.loads(refused.value.read().decode("utf-8")) == {
+        "error": "invalid_profile",
+        "supported": list(DIAGNOSE_PROFILES),
+    }
+
+
+def test_a_pinned_clock_gives_every_answer_the_same_instant(preview_server):
+    pinned = datetime.fromisoformat("2026-06-17T18:30:00+02:00").timestamp()
+    _, base = preview_server(fixed_now=pinned)
+    first = _get_json(base, "/api/history/series?range=24h&series=pv,battery")
+    assert first == _get_json(base, "/api/history/series?range=24h&series=pv,battery")
+    assert pinned - 900 <= first["time"][-1] <= pinned
+    assert _get_json(base, "/api/diagnose?profile=install")["diagnosis"]["timestamp"] == "2026-06-17T16:30:00+00:00"
+    assert _get_json(base, "/api/logs?after=0")["lines"][-1]["ts"] == pinned
+
+
+@pytest.mark.parametrize("scenario", SCENARIOS)
+def test_a_preview_device_s_firmware_labels_agree_with_its_power(scenario):
+    for name, device in build_scenario(scenario)["snapshot"]["devices"].items():
+        battery = device.get("battery_power_w")
+        if not device.get("online") or battery is None:
+            continue
+        direction = 1 if battery > 0 else 2 if battery < 0 else 0
+        if device["pack_state"] in (0, 1, 2):
+            assert device["pack_state"] == direction, (scenario, name)
+        if device["dc_status"] in (0, 1, 2):
+            assert device["dc_status"] == direction, (scenario, name)
+        if device["soc_limit"] == 1:
+            assert battery <= 0, (scenario, name)
+        if device["soc_limit"] == 2:
+            assert battery >= 0, (scenario, name)
+        assert sum(device["pv_inputs_w"]) == device["pv_input_w"], (scenario, name)
+
+
+def test_a_scaled_preview_keeps_each_device_s_solar_inputs_adding_up():
+    for name, device in build_scenario("normal", device_count=5)["snapshot"]["devices"].items():
+        assert sum(device["pv_inputs_w"]) == device["pv_input_w"], name
 
 
 def test_api_logs_returns_lines(preview_server):
@@ -233,80 +306,55 @@ def test_landing_page_is_not_the_real_dashboard(preview_server):
     _, base = preview_server()
     with _get(base, "/preview") as response:
         landing = response.read().decode("utf-8")
-    with _get(base, "/") as response:
+    with _get(base, "/classic/") as response:
         index = response.read().decode("utf-8")
     # The landing page must not replace the real dashboard index.html.
-    assert '<script src="/app.js"></script>' not in landing
-    assert '<script src="/app.js"></script>' in index
+    assert '<script src="/classic/app.js"></script>' not in landing
+    assert '<script src="/classic/app.js"></script>' in index
 
 
-def test_normalize_views_expands_all():
-    assert normalize_views(["all"]) == list(FLOW_VIEWS)
+def test_default_scenario_is_normal():
+    assert parse_args([]).scenario == "normal"
 
 
-def test_normalize_views_keeps_explicit_lists():
-    assert normalize_views(["devices", "control"]) == ["devices", "control"]
+def test_explicit_scenario_is_kept():
+    assert parse_args(["--scenario", "write-mode"]).scenario == "write-mode"
 
 
-def test_normalize_views_none_is_none():
-    assert normalize_views(None) is None
+@pytest.mark.parametrize("flag", ["--capture", "--views", "--output-dir"])
+def test_capture_flags_are_retired(flag):
+    with pytest.raises(SystemExit):
+        parse_args([flag, "x"] if flag != "--capture" else [flag])
 
 
-def test_normalize_views_rejects_unknown():
-    with pytest.raises(ValueError):
-        normalize_views(["nope"])
+def test_a_scenario_cookie_answers_that_request_from_its_scenario(preview_server):
+    _, base = preview_server("normal")
+    signed_in = _get_json(base, "/api/auth/status", f"{SCENARIO_COOKIE}=write-mode")
+    assert signed_in["authenticated"] is True
+    offline = _get_json(base, "/api/live", f"{SCENARIO_COOKIE}=offline-device")
+    assert offline["devices"]["WR2"]["online"] is False
 
 
-def test_interactive_default_scenario_is_normal():
-    assert resolve_scenario(parse_args([])) == "normal"
+def test_a_scenario_cookie_leaves_other_requests_on_the_server_scenario(preview_server):
+    _, base = preview_server("normal")
+    _get_json(base, "/api/auth/status", f"{SCENARIO_COOKIE}=write-mode")
+    assert _get_json(base, "/api/auth/status")["authenticated"] is False
+    assert _get_json(base, "/api/live")["devices"]["WR2"]["online"] is True
 
 
-def test_capture_default_scenario_is_write_mode():
-    assert resolve_scenario(parse_args(["--capture"])) == "write-mode"
+@pytest.mark.parametrize(
+    "cookie",
+    [f"{SCENARIO_COOKIE}=not-a-scenario", f'{SCENARIO_COOKIE}="unterminated', "garbage;;;=="],
+)
+def test_an_unknown_or_malformed_scenario_cookie_falls_back(preview_server, cookie):
+    _, base = preview_server("normal")
+    assert _get_json(base, "/api/auth/status", cookie)["authenticated"] is False
 
 
-def test_explicit_scenario_wins_in_capture_mode():
-    assert resolve_scenario(parse_args(["--capture", "--scenario", "firmware-status"])) == "firmware-status"
-
-
-def test_explicit_scenario_wins_in_interactive_mode():
-    assert resolve_scenario(parse_args(["--scenario", "write-mode"])) == "write-mode"
-
-
-def test_capture_assets_returns_written_paths(tmp_path, monkeypatch):
-    import capture_dashboard_previews as capture
-
-    monkeypatch.setattr(capture, "require_executable", lambda name: f"/usr/bin/{name}")
-    monkeypatch.setattr(capture.subprocess, "run", lambda *a, **k: None)
-
-    written = capture.capture_assets(
-        "127.0.0.1", 8767, str(tmp_path), "write-mode", ["diagnose", "logs"]
-    )
-    assert written == [
-        os.path.join(str(tmp_path), "preview-diagnose.jpg"),
-        os.path.join(str(tmp_path), "preview-logs.jpg"),
-    ]
-
-
-def test_capture_mode_uses_write_mode_by_default(tmp_path, monkeypatch, capsys):
-    captured = {}
-
-    def fake_capture_assets(host, port, output_dir, scenario, views):
-        captured["scenario"] = scenario
-        captured["views"] = views
-        return [os.path.join(output_dir, "preview-diagnose.jpg")]
-
-    import capture_dashboard_previews as capture
-
-    monkeypatch.setattr(capture, "capture_assets", fake_capture_assets)
-    serve_dashboard_preview.main(
-        ["--capture", "--port", "0", "--output-dir", str(tmp_path)]
-    )
-
-    assert captured["scenario"] == "write-mode"
-    assert captured["views"] is None  # default capture views resolved downstream
-    assert "maintenance" in DEFAULT_CAPTURE_VIEWS
-    assert "Captured preview screenshots:" in capsys.readouterr().out
+def test_the_modern_capture_spec_names_the_cookie_the_server_reads():
+    with open(CAPTURE_SPEC, encoding="utf-8") as handle:
+        spec = handle.read()
+    assert f'"{SCENARIO_COOKIE}"' in spec
 
 
 def test_list_flags_exit_without_serving(capsys):

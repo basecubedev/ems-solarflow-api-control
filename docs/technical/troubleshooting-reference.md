@@ -137,8 +137,8 @@ python3 emsctl.py diagnose --support-bundle
 ```
 
 Normal diagnose is local/read-only. `--deep` adds local operational checks such
-as SQLite integrity, table summaries, recent configured log patterns, Docker
-hints, and dashboard loopback reachability. `--hardware` is opt-in and performs
+as SQLite integrity, table summaries, Docker hints, and dashboard loopback
+reachability. `--hardware` is opt-in and performs
 short-timeout read-only network probes only. `--support-bundle` writes a
 redacted ZIP for GitHub/support requests. Exit code `1` means at least one
 diagnostic error was found; warnings still exit `0`.
@@ -906,12 +906,12 @@ Check, in order:
 More detail: [safety-model.md](safety-model.md),
 [configuration.md](configuration.md), [runtime-state.md](runtime-state.md).
 
-### Setup or Maintenance shows "Identity conflict" for a rediscovered device
+### The guided setup or Settings & devices shows "Identity conflict" for a rediscovered device
 
 Symptoms:
 
 - A discovered Cloud MQTT proposal shows a disabled **Identity conflict** action
-  instead of *Add* / *In config*.
+  instead of **Add inverter** / **In the settings**.
 - Preview/apply reports `device_identity_conflict`.
 
 Cause: the discovered Cloud **route** is already configured against a **different
@@ -922,7 +922,7 @@ Fresh Setup and Maintenance apply the same rule.
 Fix: confirm which physical inverter that Cloud route belongs to. If the existing
 entry has the wrong serial, correct or remove it, then rediscover. A route-only
 device gaining its *own* serial is **not** a conflict — it is recognized as the
-same inverter (shown *In config*), keeps its custom name and dismissal, and is
+same inverter (shown **In the settings**), keeps its custom name and dismissal, and is
 enriched in place. See
 [admin-discovery.md](admin-discovery.md#physical-inverter-identity-and-route-aliases).
 
@@ -1196,14 +1196,16 @@ rewrites the EMS image reference in `docker-compose.yml`, and force-recreates th
 detection, build-identity gating, SemVer fallback, release cache and Docker
 execution details, see [admin-discovery.md](admin-discovery.md).
 
-If **Upgrade system** stops with *System Build verification is no longer current*
-(HTTP 409 `system_build_verification_stale`, or `system_build_verification_required`
-when no verification was sent), the target image or build metadata changed after
+If the update (**Update to …** on the Admin's **Updates** page) goes back to
+*The version could not be checked* with *The selected System Build changed after
+verification. Verify it again before upgrading.* (HTTP 409
+`system_build_verification_stale`, or `system_build_verification_required` when
+no verification was sent), the target image or build metadata changed after
 you verified it — most often a mutable tag such as `latest` re-pushed to a new
-digest. No preflight, backup, migration, or deployment ran. Select **Verify System
-Build** again to re-resolve and re-verify the current pair, then re-plan and
-retry. This check is deliberate: it guarantees the executed System Build is
-exactly the one you verified.
+digest. No preflight, backup, migration, or deployment ran. Select **Check
+again** to re-resolve and re-verify the current pair; the plan is rebuilt by
+itself, then retry. This check is deliberate: it guarantees the executed System
+Build is exactly the one you verified.
 
 Two more HTTP 409 refusals happen at the same point, before any preflight: the
 confirmed upgrade re-checks the direction of the move itself. The move is
@@ -1233,7 +1235,7 @@ diagnostics above and [backup-restore.md](backup-restore.md).
 
 ### Installed release shows as unknown
 
-The Maintenance Overview treats a **running** EMS container as the active
+The Admin's **Overview** and **Updates** pages treat a **running** EMS container as the active
 baseline and reads its release from the immutable image identity. If a running
 container's identity cannot be established (for example a digest-pinned image
 whose build labels are missing), the overview shows the current release as
@@ -1284,8 +1286,9 @@ can retry. (Untrusted or unknown executor reasons are normalized to
 
 ### GitHub Container Registry rate limit reached
 
-When you select **Verify System Build** (or **Update Admin Server**) and the
-System Build images are downloaded, GitHub Container Registry (GHCR) may throttle
+When you select **Verify the System Build** or **Update the Admin console** in
+the guided setup, or choose a version on **Updates**, and the System Build
+images are downloaded, GitHub Container Registry (GHCR) may throttle
 the request. The Admin Console reports this as a distinct, actionable error:
 
 ```text
@@ -1297,13 +1300,14 @@ Docker with a GitHub account to increase the available request quota.
 
 What it means and what to do:
 
-- **Nothing was installed or changed.** The build is left unverified, Continue and
-  Update Admin Server stay disabled, and no deployment starts. The full Docker
-  output is in the expandable diagnostics area (credentials are never shown).
-- **Just wait and retry.** Selecting **Verify System Build** again after a short
-  wait is the normal fix — anonymous GHCR pulls share a per-IP quota that
-  replenishes over time. Simply *browsing* builds never consumes GHCR requests, so
-  the wait only applies to the verify/download step.
+- **Nothing was installed or changed.** The build is left unverified, the
+  setup or update does not continue, and no deployment starts. The full Docker
+  output is in the details (credentials are never shown).
+- **Just wait and retry.** Selecting **Check again** (or **Verify the System
+  Build** again) after a short wait is the normal fix — anonymous GHCR pulls
+  share a per-IP quota that replenishes over time. Simply *browsing* builds
+  never consumes GHCR requests, so the wait only applies to the verify/download
+  step.
 - **Optional:** if you download builds often, authenticating Docker with a GitHub
   account (`docker login ghcr.io`) raises the available quota. This is a
   convenience, **not** a requirement — normal operation needs no GitHub token.

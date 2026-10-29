@@ -1,6 +1,7 @@
 # SSH and backup access
 
-Open **SSH & Backup Access**.
+Open **SSH & backup access** in the side menu. The step-by-step guide is
+[SSH & backup access](../user/appliance/backup.md).
 
 ## SSH service
 
@@ -13,11 +14,13 @@ PasswordAuthentication no
 PubkeyAuthentication   yes
 ```
 
-**Enable SSH** enables and starts the service. It enables nothing else — there
-is no operation in the appliance that can turn on password authentication.
-**Disable SSH** stops and disables it. Enabling SSH and adding a key need a
-session that signed in with the password the Appliance Manager confirmed; see
-[security-model.md](security-model.md#what-a-rewritten-file-cannot-open). Disabling it and removing keys do not.
+**Switch SSH on**, on the **SSH service** card, enables and starts the service.
+It enables nothing else — there is no operation in the appliance that can turn
+on password authentication. **Switch SSH off** stops and disables it. Enabling
+SSH and adding a key need a session that signed in with the password the
+Appliance Manager confirmed; see
+[security-model.md](security-model.md#what-a-rewritten-file-cannot-open).
+Disabling it and removing keys do not.
 
 A flashed image ships with the service **off**, so this control is the only way
 it comes on. That is a property of the image rather than of the package:
@@ -42,7 +45,7 @@ the same refusal any unproven account gets.
 
 ## Add an SSH public key
 
-1. Choose the account. Only accounts listed in
+1. In **Add a public key**, choose the **Account**. Only accounts listed in
    `/etc/ems-appliance-manager/appliance.conf` (`ssh_key_accounts`) can be
    managed; `ems-backup` is the default.
 2. Paste an OpenSSH **public** key, for example:
@@ -51,8 +54,8 @@ the same refusal any unproven account gets.
    ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... you@your-laptop
    ```
 
-3. Press **Add key**, review the preview (type, comment, fingerprint) and
-   confirm.
+3. Press **Add key**, review the plan (type, comment, fingerprint) and
+   confirm with **Add key** again.
 
 Accepted key types:
 
@@ -72,9 +75,11 @@ appliance never asks for one and never displays one.
 
 ## Remove keys
 
-Each key row has **Remove** (by fingerprint). **Revoke all** removes every key
-of an account and states clearly that remote access through that account stops
-immediately.
+Each key row under **Keys for** the account has **Remove** (by fingerprint).
+The agent also has an operation that removes every key of an account at once
+and states clearly that remote access through that account stops immediately
+(`ssh.revoke_all`), but neither console offers a button for it: remove the keys
+one by one.
 
 ## Generate a key pair on your own computer
 
@@ -215,11 +220,11 @@ read-only binds, which would cut an SFTP fetch that is in progress. And its
 `backup-access activate` an install is already running — measured: the package
 install fails that way.
 
-The appliance no longer claims otherwise: **Backup access** reports `degraded`
-with *exported files are not readable by ems-backup* when the newest archive
-under `data/backups` has neither a group-read nor an other-read bit. Until the
-export service runs again, fetch that archive through the Admin Console's own
-download instead.
+The appliance no longer claims otherwise: **Export access** reports `degraded`
+(shown as **Incomplete**) with *exported files are not readable by ems-backup*
+when the newest archive under `data/backups` has neither a group-read nor an
+other-read bit. Until the export service runs again, fetch that archive through
+the Admin Console's own download instead.
 
 Only the archive path is judged. What else lives under an export is the
 business of whoever writes it — the shared password store sits under `config`
@@ -557,24 +562,25 @@ not claim to be clean when it is not.
 
 ### What the appliance reports
 
-**SSH & Backup Access → Export access** reports what it can observe, not what
+**SSH & backup access → Export access** reports what it can observe, not what
 the setup script intended: the live host mount table and the effective sshd
-configuration for the account.
+configuration for the account. The card shows each state by the word in the
+second column.
 
-| State | Meaning |
-|---|---|
-| `configured` | every promised restriction is confirmed and every present export is a read-only mount |
-| `pending` | no EMS export directory exists yet |
-| `degraded` | the export root holds an unmanaged entry, an export is missing from the root, mounted read-write, published from somewhere other than the configured EMS directory, the chroot is not in effect, or a promised restriction is not enforced |
-| `unknown` | the effective sshd configuration could not be read |
+| State | Shown as | Meaning |
+|---|---|---|
+| `configured` | **Set up** | every promised restriction is confirmed and every present export is a read-only mount |
+| `pending` | **Waiting** | no EMS export directory exists yet |
+| `degraded` | **Incomplete** | the export root holds an unmanaged entry, an export is missing from the root, mounted read-write, published from somewhere other than the configured EMS directory, the chroot is not in effect, or a promised restriction is not enforced |
+| `unknown` | **Unknown** | the effective sshd configuration could not be read |
 
 An export that is mounted read-write is reported as `degraded`. The appliance
 never calls a writable export read-only.
 
-When a restriction is not enforced, the card names it (`Not enforced by sshd:
-allowtcpforwarding`) rather than only saying "degraded", and a refused export
-source appears as `Export setup: failed — …`. The descriptive note is derived
-from the observation: it does not claim forwarding, passwords or TTY are
+When a restriction is not enforced, the card names it (**Not enforced by sshd**:
+`allowtcpforwarding`) rather than only saying **Incomplete**, and a refused
+export source appears as **Export setup**: `failed — …`. The descriptive note is
+derived from the observation: it does not claim forwarding, passwords or TTY are
 disabled unless that was verified.
 
 Administrative write access requires a separate system account and is not

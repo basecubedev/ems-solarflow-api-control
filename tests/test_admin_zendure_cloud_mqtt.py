@@ -411,7 +411,7 @@ def test_paho_listener_encrypted_no_verify_disables_verification():
     assert ("tls_set", ssl.CERT_NONE) in modes
 
 
-# --- API key / HA-token credential flow ----------------------------------
+# --- API key / deviceList-token credential flow ----------------------------------
 
 
 def _fresh_discovery(tmp_path, *, saved_key=None, fetcher=None):

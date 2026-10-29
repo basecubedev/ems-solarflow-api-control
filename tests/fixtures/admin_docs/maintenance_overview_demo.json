@@ -1,17 +1,24 @@
 {
-  "_note": "Demo Maintenance overview (read-only). Fake paths, versions and container names only.",
+  "_note": "Demo overview, container plan and workflow records (read-only). Fake paths, versions and container names only. The settings themselves come from demo_installation.json through the shipped config builder.",
   "overview": {
     "install_state": {
       "state": "standard_install",
       "label": "Standard installation",
       "message": "A standard EMS installation was found.",
       "recommended_path": "manage_existing",
-      "reasons": []
+      "reasons": [],
+      "legacy_migration_available": false,
+      "paths": {
+        "legacy_config": "/opt/ems/config.json",
+        "standard_config": "/opt/ems/config/config.json"
+      }
     },
     "paths": {
       "config": {
         "path": "/opt/ems/config/config.json",
-        "exists": true
+        "exists": true,
+        "modified_at": "2026-07-04T19:40:00+00:00",
+        "placeholder_fields": []
       },
       "data": {
         "path": "/opt/ems/data",
@@ -33,9 +40,79 @@
         "found": true,
         "running": true,
         "name": "ems-solarflow-api-control",
-        "image": "ghcr.io/example/ems-solarflow-api-control:v0.7.0-RC",
-        "tag": "v0.7.0-RC",
-        "status": "running"
+        "image": "ghcr.io/example/ems-solarflow-api-control:v0.8.15",
+        "tag": "v0.8.15",
+        "status": "running",
+        "started_at": "2026-07-05T07:12:00+00:00"
+      },
+      "influxdb": {
+        "found": true,
+        "running": true,
+        "name": "ems-influxdb",
+        "image": "influxdb:2.7.11",
+        "tag": "2.7.11",
+        "status": "running",
+        "started_at": "2026-07-05T07:11:52+00:00"
+      }
+    },
+    "links": {
+      "dashboard_url": "http://localhost:8080"
+    },
+    "warnings": [],
+    "components": {
+      "admin": {
+        "image": "ghcr.io/example/ems-admin:v0.8.15",
+        "tag": "v0.8.15"
+      },
+      "ems": {
+        "image": "ghcr.io/example/ems-solarflow-api-control:v0.8.15",
+        "tag": "v0.8.15"
+      }
+    }
+  },
+  "overview_fresh": {
+    "install_state": {
+      "state": "none",
+      "label": "No installation found",
+      "message": "No EMS installation was detected in the standard layout.",
+      "recommended_path": "setup_new",
+      "reasons": [],
+      "legacy_migration_available": false,
+      "paths": {
+        "legacy_config": "/opt/ems/config.json",
+        "standard_config": "/opt/ems/config/config.json"
+      }
+    },
+    "paths": {
+      "config": {
+        "path": "/opt/ems/config/config.json",
+        "exists": false,
+        "modified_at": null,
+        "placeholder_fields": []
+      },
+      "data": {
+        "path": "/opt/ems/data",
+        "exists": false
+      },
+      "compose": {
+        "path": "/opt/ems/docker-compose.yml",
+        "exists": false
+      }
+    },
+    "docker": {
+      "available": true,
+      "state": "ready",
+      "error": null,
+      "server_version": "27.1.1"
+    },
+    "containers": {
+      "ems": {
+        "found": false,
+        "running": false,
+        "name": "ems-solarflow-api-control",
+        "image": null,
+        "tag": null,
+        "status": "missing"
       },
       "influxdb": {
         "found": false,
@@ -47,113 +124,101 @@
       }
     },
     "links": {
-      "dashboard_url": "http://localhost:8080"
+      "dashboard_url": null
     },
-    "warnings": []
-  },
-  "config": {
-    "status": "ok",
-    "config_path": "/opt/ems/config/config.json",
-    "revision": "demo-rev-1",
-    "summary": {
-      "device_count": 2,
-      "grid_meter_type": "shelly",
-      "control": {
-        "status": "may_control",
-        "enabled": true,
-        "dry_run": false,
-        "simulation_mode": false,
-        "state_reconciliation": true,
-        "transports": [
-          {
-            "control_gate": "api",
-            "gate": "allow_hardware_writes",
-            "transport": "http",
-            "armed": true,
-            "blocked_by": [],
-            "device_count": 2
-          },
-          {
-            "control_gate": "mqtt_local",
-            "gate": "allow_mqtt_local_control_writes",
-            "transport": "mqtt_local",
-            "armed": true,
-            "blocked_by": [],
-            "device_count": 0
-          },
-          {
-            "control_gate": "mqtt_zendure",
-            "gate": "allow_mqtt_zendure_control_writes",
-            "transport": "mqtt_zendure",
-            "armed": false,
-            "blocked_by": [
-              "allow_mqtt_zendure_control_writes"
-            ],
-            "device_count": 0
-          }
-        ],
-        "envelope": {
-          "total_output_w": 1600,
-          "device_output_w": 800,
-          "soc_min": 10,
-          "soc_max": 100,
-          "soc_uniform": true
-        }
-      }
-    },
-    "catalog": {
-      "feature_sections": [],
-      "grid_meter_types": [
-        "shelly",
-        "ecotracker",
-        "tasmota"
-      ]
-    },
-    "draft": {
-      "devices": [
-        {
-          "name": "sf800-living",
-          "ip": "192.168.1.50",
-          "sn": "DEMO-SF800-001"
-        },
-        {
-          "name": "sf800-garage",
-          "ip": "192.168.1.51",
-          "sn": "DEMO-SF800-002"
-        }
-      ],
-      "grid_meter": {
-        "type": "shelly",
-        "ip": "192.168.1.52"
+    "warnings": [],
+    "components": {
+      "admin": {
+        "image": "ghcr.io/example/ems-admin:v0.8.16",
+        "tag": "v0.8.16"
+      },
+      "ems": {
+        "image": null,
+        "tag": null
       }
     }
+  },
+  "config_missing": {
+    "status": "missing",
+    "config_path": "/opt/ems/config/config.json",
+    "source": "standard",
+    "message": "No config.json was found at the resolved install path."
   },
   "containers_plan": {
     "ok": true,
     "available": true,
+    "install_root": "/opt/ems",
+    "compose_path": "/opt/ems/docker-compose.yml",
+    "requires_confirmation": true,
     "summary": "No action required",
-    "status_summary": "EMS running \u00b7 InfluxDB disabled",
+    "status_summary": "EMS running · InfluxDB running",
     "message": "",
-    "actions": [
-      {
-        "action": "none",
-        "service": "ems"
+    "desired": {
+      "ems": {
+        "desired": "running",
+        "reason": "EMS is enabled in the settings."
+      },
+      "influxdb": {
+        "desired": "running",
+        "reason": "Bundled InfluxDB is enabled."
       }
-    ],
+    },
+    "current": {
+      "ems": {
+        "name": "ems-solarflow-api-control",
+        "running": true,
+        "started_at": "2026-07-05T07:12:00+00:00"
+      },
+      "influxdb": {
+        "name": "ems-influxdb",
+        "running": true,
+        "started_at": "2026-07-05T07:11:52+00:00"
+      }
+    },
+    "config_state": {
+      "state": "current",
+      "config_modified_at": "2026-07-04T19:40:00+00:00",
+      "ems_started_at": "2026-07-05T07:12:00+00:00"
+    },
+    "actions": [],
+    "auto_init": true,
+    "auto_sync": true,
+    "analytics_enabled": true,
     "services": {
       "ems": {
         "desired_state": "running",
         "display_label": "Running",
-        "display_detail": "ems-solarflow-api-control \u00b7 v0.7.0-RC",
-        "tone": "ok"
+        "display_detail": "ems-solarflow-api-control · v0.8.15",
+        "tone": "ok",
+        "display_state": "running",
+        "configured": true
       },
       "influxdb": {
-        "desired_state": "stopped",
-        "display_label": "Disabled",
-        "display_detail": "Bundled InfluxDB is not enabled",
-        "tone": "muted"
+        "desired_state": "running",
+        "display_label": "Running",
+        "display_detail": "ems-influxdb · 2.7.11",
+        "tone": "ok",
+        "display_state": "running",
+        "configured": true
       }
     }
+  },
+  "settings_saved": {
+    "config_modified_at": "2026-07-05T13:05:00+00:00",
+    "config_state": {
+      "state": "pending",
+      "config_modified_at": "2026-07-05T13:05:00+00:00",
+      "ems_started_at": "2026-07-05T07:12:00+00:00"
+    },
+    "actions": [
+      {
+        "service": "ems",
+        "action": "recreate",
+        "label": "Recreate EMS",
+        "reason": "The settings file changed after EMS started."
+      }
+    ],
+    "summary": "EMS will be recreated"
   },
   "migration_review_none": {
     "status": "ok",
@@ -237,7 +302,7 @@
       "blocking_reason": "cleanup_pending",
       "setup": {
         "workflow_id": "setup-2f4c8a1b",
-        "updated_at": "2026-09-08T21:14:07Z"
+        "updated_at": "2026-07-04T21:14:07Z"
       },
       "fingerprint": "a9b8c7d6e5f40312"
     }

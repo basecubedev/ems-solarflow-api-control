@@ -60,8 +60,9 @@ existing config silently:
 ## Migrating a legacy root config
 
 The root `./config.json` is treated as a **legacy source**. When Admin detects a
-`legacy_root_config` install, its **Manage my existing system** flow offers a
-first maintenance step that migrates it into the standard layout:
+`legacy_root_config` install, its **System** page (and the assistant's first
+step) offers **Move the settings**, a first maintenance step that migrates it
+into the standard layout:
 
 ```text
 Source: ./config.json

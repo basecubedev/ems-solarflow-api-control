@@ -3,7 +3,9 @@
 The Appliance Manager runs outside Docker, so it can install, restart, repair
 and roll back the EMS Admin container while that container is broken.
 
-Open **Admin** in the navigation.
+Open **EMS Admin** in the side menu — *Restart, repair and roll back the EMS
+Admin container*. The step-by-step guide is
+[When it stops working](../user/appliance/recovery.md#ems-admin-or-the-ems-is-not-running).
 
 ## What you see
 
@@ -15,8 +17,10 @@ Open **Admin** in the navigation.
 
 ## Restart, start, stop
 
-Each action shows a preview, asks for confirmation and then reports progress and
-a result. The Overview page has the same **Restart Admin** action.
+Each action — **Start**, **Stop** and **Restart** under **Start, stop or
+restart** — shows a preview, asks for confirmation and then reports progress and
+a result. The Overview's quick actions have the same restart under **EMS Admin
+recovery**.
 
 Docker brings the Admin back after a reboot because its compose service says
 `restart: unless-stopped`. **Stop** is Docker's explicit stop, so a stopped
@@ -51,21 +55,22 @@ therefore needs one **Start**, or the repair's own start action.
 
 A flashed appliance ships `/opt/ems-solarflow` as an empty directory: there is
 no Admin container, no compose file, and nothing that would ever have created
-one. The Admin page recognises that state and shows a single action instead of
-the usual lifecycle, repair and rollback stages.
+one. The EMS Admin page recognises that state and shows a single card,
+**Install EMS Admin**, instead of the usual lifecycle, repair and rollback
+actions.
 
-1. Open **Admin**. The page reads *No EMS Admin installation was found on this
-   appliance*.
-2. Choose the version. Under **Channels** only *Latest stable* is offered —
+1. Open **EMS Admin**. The card reads *No EMS Admin installation was found on
+   this appliance*.
+2. Choose the **Version**. Under **Channels** only *Latest stable* is offered —
    there is no current version and no known-good history to fall back on — but
    the **Stable** and **Unstable** groups below it list every version the
    registry publishes, so a first installation can pin an older release just as
    readily as the newest one. A candidate this host will not accept is listed
    greyed out with the reason. Expert mode adds *Exact release tag* for a
    version the list does not carry.
-3. Press **Install Admin**. The plan names the files it will create and the
+3. Press **Install EMS Admin**. The plan names the files it will create and the
    image digest it validated. Nothing is written yet.
-4. Confirm. Only now does the appliance run the packaged installer
+4. Confirm with **Install**. Only now does the appliance run the packaged installer
    (`/usr/lib/ems-appliance-manager/install-admin-console.sh`), pin the
    validated digest into the compose file it wrote, start Admin and verify it.
 
@@ -110,11 +115,11 @@ decides which tag *Latest stable* installs, so it is read over https only: an
 `http:` or `file:` URL, or a redirect to http, is refused with
 `release_index_insecure` and the list stays empty.
 
-1. Open **Updates → Choose an Admin version**. To go straight to the
+1. Open **Updates → Choose an EMS Admin version**. To go straight to the
    newest stable release, the **Update to …** button on the EMS Admin card at
    the top of the page plans exactly that tag and skips steps 2 to 4.
-2. Choose the version:
-   - **Channels**: *Latest stable*, *Current stable (reinstall)*, *Previous
+2. Choose the **Version**:
+   - **Channels**: *Latest stable*, *Current version (reinstall)*, *Previous
      known-good*.
    - **Stable**: every release the registry publishes, newest first.
    - **Unstable**: every pre-release tag (`-rc1`, `-beta`, `-dev.3`, …),
@@ -124,12 +129,14 @@ decides which tag *Latest stable* installs, so it is read over https only: an
      refuses the tag with `prerelease_not_allowed` even when it is typed by
      hand in Expert mode. A version a configured release index marks as a
      pre-release is a candidate too, whatever its tag says.
-   - Expert mode adds *Exact release tag* — enter for example `v0.8.0`. Use it
+   - Expert mode adds *Exact release tag* with a **Release tag** field — enter
+     for example `v0.8.0`. Use it
      for a version the list does not carry, or when the registry cannot be
      reached.
 3. Tick **Reinstall the same version** when you want to reinstall what is
    already running.
-4. Press **Install selected version**.
+4. Press **Install selected version**, read the plan and confirm with
+   **Install**.
 
 A newly imaged appliance ships with candidates enabled: before 1.0 this project
 publishes more Admin candidates than releases, and refusing them would leave the
@@ -249,7 +256,7 @@ success it did not achieve.
 
 ## Roll back manually
 
-**Admin → Rollback** restores the previous known-good version by deploying the
+**EMS Admin → Roll back** restores the previous known-good version by deploying the
 **stored** `repository@sha256:...` reference. The tag is never resolved again,
 so a tag that moved in the registry cannot change what a rollback installs. The
 button is disabled when no previous known-good version exists.
@@ -396,7 +403,7 @@ Admin:
 }
 ```
 
-The history is the rollback order: **Rollback** and *Previous known-good* install
+The history is the rollback order: **Roll back** and *Previous known-good* install
 the previous entry, and a repair verifies against the current one. Entries come
 from this appliance's own installs (the Admin installed, and the Admin it
 replaced) and rollbacks, and from the Admin that runs.
@@ -493,7 +500,7 @@ expiry or delete
 
 ## Repair
 
-**Admin → Repair** inspects and shows a preview before it changes anything:
+**EMS Admin → Preview repair** inspects and shows a preview before it changes anything:
 
 | Finding | Suggestion |
 |---|---|
@@ -501,7 +508,7 @@ expiry or delete
 | Admin container is missing | Reinstall the selected Admin version |
 | Container exists but is stopped | Start Admin |
 | Container restarts repeatedly | Review the logs, then reinstall |
-| Compose file is missing | Manual: recreate it with `TZ=<the zone shown under Network → Change the timezone> /usr/lib/ems-appliance-manager/install-admin-console.sh …`, so the Admin keeps the appliance's zone (the host itself runs on UTC). With no Admin container either, the Admin page offers **Install Admin** instead |
+| Compose file is missing | Manual: recreate it with `TZ=<the zone shown under Network → Change the time zone> /usr/lib/ems-appliance-manager/install-admin-console.sh …`, so the Admin keeps the appliance's zone (the host itself runs on UTC). With no Admin container either, the EMS Admin page offers **Install EMS Admin** instead |
 | Admin service is not defined | Manual: add the service with `install-admin-console.sh` |
 | Environment file is missing | Manual: recreate it with `/usr/lib/ems-appliance-manager/install-admin-console.sh …`; the zone comes from the kept compose file. Install, Update and Rollback are refused while it is gone, because its hash is a required field of every Admin plan |
 | Bind path is missing | Recreate the required empty directory after confirmation |
@@ -592,7 +599,7 @@ matches neither the record nor the deployment is still a fault.
 
 ## Logs
 
-**Admin → Admin container log** shows bounded, redacted output. Log output has a
+**EMS Admin → EMS Admin container log** (**Load log**) shows bounded, redacted output. Log output has a
 maximum line count and byte size, escapes all dynamic content and redacts
 credential-looking values.
 
@@ -607,10 +614,11 @@ sudo ems-appliance repair --apply
 ## Recovering a failed Admin update — checklist
 
 1. Open `http://ems-solarflow.local:8088` (works even when Admin is down).
-2. **Overview** shows the Admin warning; **Admin** shows the failed operation.
+2. **Overview** shows the Admin warning; the banner at the top of every page
+   shows the failed operation.
 3. Read the error, then **Acknowledge** the result.
 4. If the automatic rollback already restored the previous version, you are
    done — verify the health badge.
-5. Otherwise use **Repair** (preview first), or **Updates → Choose an Admin
-   version → Previous known-good**.
+5. Otherwise use **Preview repair** on **EMS Admin**, or **Updates → Choose
+   an EMS Admin version → Previous known-good**.
 6. If Docker itself is down, start it from the repair preview and retry.

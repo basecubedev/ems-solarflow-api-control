@@ -98,8 +98,9 @@ agent socket forks and connects back to the socket the agent is serving, so
 asked from inside the agent it reports `deferred` rather than a result. Only the
 console answers that one.
 
-If the **Update** and **Revert** controls are both greyed out, a verification
-deadline is armed and nothing is judging it — normally
+If the Appliance Manager's install controls on **Updates** (**Update to …**,
+**Install selected version**) and **Go back to the kept package** are all greyed
+out, a verification deadline is armed and nothing is judging it — normally
 `ems-appliance-manager-verify.timer` does, within its window. Run the check by
 hand and it resolves the deadline the same way the timer would, confirming a
 healthy manager or putting the previous one back:

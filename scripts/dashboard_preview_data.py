@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Deterministic, non-secret synthetic data for the dashboard preview server.
 
-Shared by ``scripts/serve_dashboard_preview.py`` and
-``scripts/capture_dashboard_previews.py`` so the live preview and the screenshot
-helper render identical synthetic state.
+Served by ``scripts/serve_dashboard_preview.py``, which the dashboard browser
+suites and the documentation captures in
+``tests/e2e-dashboard/capture-docs.spec.ts`` run against, so the live preview
+and the screenshots render identical synthetic state.
 
 Everything here is hand-built constant data. No real Zendure/Shelly/MQTT/cloud
 access, no secrets, no SQLite history, and no runtime-state files are touched.
@@ -42,8 +43,8 @@ FLOW_VIEWS = (
 FROZEN_TIMESTAMP = "2026-06-17T12:00:00+00:00"
 
 
-def _timestamp():
-    return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())
+def _timestamp(now=None):
+    return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(now))
 
 
 def _num(value):
@@ -64,7 +65,6 @@ def _device(name, **over):
         "min_soc": 15,
         "max_soc": 100,
         "pv_input_w": 600,
-        "pv_inputs_w": [600, 0, 0, 0],
         "output_w": 400,
         "battery_power_w": 200,
         "pack_input_w": 0,
@@ -78,13 +78,13 @@ def _device(name, **over):
         "remain_minutes": 180,
         # Firmware status enums (see ZenSDK properties + dashboard helpers).
         "soc_limit": 0,
-        "pack_state": 2,
+        "pack_state": 1,
         "fault_level": 0,
         "smart_mode": 0,
         "grid_off_mode": 0,
         "ac_mode": 2,
         "ac_status": 1,
-        "dc_status": 2,
+        "dc_status": 1,
         "grid_state": 1,
         "soc_status": 0,
         "pack_num": 1,
@@ -92,8 +92,19 @@ def _device(name, **over):
         "ac_charge_w": 0,
     }
     base.update(over)
+    if "pv_inputs_w" not in over:
+        base["pv_inputs_w"] = _pv_inputs(base["pv_input_w"])
     base["name"] = name
     return base
+
+
+def _pv_inputs(total):
+    """A device's solar spread over its first two inputs, so the inputs add up to the total."""
+
+    if not isinstance(total, (int, float)) or isinstance(total, bool):
+        return [None, None, None, None]
+    first = round(total / 2)
+    return [first, total - first, 0, 0]
 
 
 # The measured window of the synthetic installation: the channels started on
@@ -245,8 +256,8 @@ def _energy_stats():
                 (8, "Aug", 88.4),
                 (9, "Sep", 66.9),
                 (10, "Oct", 44.5),
-                (11, "Nov", 18.6),
-                (12, "Dec", 11.2),
+                (11, "Nov", 0.0),
+                (12, "Dec", 0.0),
             )
         ],
         "yearly": [
@@ -408,7 +419,7 @@ def _devices_for(scenario):
                 output_w=0, ac_charge_w=600, battery_power_w=600,
                 pack_output_w=600, pack_input_w=0, target_w=-600,
                 allocated_target_w=-600, output_limit_w=0, input_limit_w=600,
-                ac_mode=1, ac_status=2, dc_status=0, pack_num=2,
+                ac_mode=1, ac_status=2, dc_status=1, pack_num=2,
                 remain_minutes=None,
             ),
         }
@@ -417,24 +428,25 @@ def _devices_for(scenario):
         # Mixed firmware values across devices so every readable label plus the
         # unknown-value fallback can be checked at a glance.
         return {
-            # AC output active / Normal / Discharging / DC output / grid up
+            # AC output active / Max-SoC reached / Discharging / DC output / grid up
             "WR1": _device(
-                "WR1", soc=78, pv_input_w=1200, output_w=320, battery_power_w=860,
-                pack_output_w=880, pack_input_w=20, target_w=320, output_limit_w=320,
-                ac_mode=2, ac_status=1, soc_limit=0, pack_state=2, dc_status=2,
+                "WR1", soc=100, pv_input_w=100, output_w=320, battery_power_w=-220,
+                pack_output_w=0, pack_input_w=220, target_w=320, output_limit_w=320,
+                ac_mode=2, ac_status=1, soc_limit=1, pack_state=2, dc_status=2,
                 grid_state=1, soc_status=0, pack_num=1, grid_off_mode=0,
             ),
-            # AC charge active / Max-SoC reached / Charging / DC input / calibrating
+            # AC charge active / Normal / Charging / DC input / calibrating
             "WR2": _device(
-                "WR2", soc=99, pv_input_w=0, output_w=0, battery_power_w=-280,
-                pack_input_w=280, pack_output_w=0, target_w=0, output_limit_w=0,
-                ac_mode=1, ac_status=2, soc_limit=1, pack_state=1, dc_status=1,
+                "WR2", soc=99, pv_input_w=0, output_w=0, battery_power_w=280,
+                pack_input_w=0, pack_output_w=280, ac_charge_w=280, target_w=-280,
+                allocated_target_w=-280, output_limit_w=0,
+                ac_mode=1, ac_status=2, soc_limit=0, pack_state=1, dc_status=1,
                 grid_state=1, soc_status=1, pack_num=2, input_limit_w=300,
                 grid_off_mode=1,
             ),
             # AC output standby / Min-SoC protection / Standby / DC standby / grid down
             "WR3": _device(
-                "WR3", soc=15, pv_input_w=80, output_w=0, battery_power_w=0,
+                "WR3", soc=15, pv_input_w=0, output_w=0, battery_power_w=0,
                 pack_output_w=0, target_w=0, output_limit_w=0,
                 ac_mode=2, ac_status=0, soc_limit=2, pack_state=0, dc_status=0,
                 grid_state=0, soc_status=0, pack_num=1, grid_off_mode=2,
@@ -473,7 +485,7 @@ def _devices_for(scenario):
         "WR2": _device(
             "WR2", soc=57, pv_input_w=650, output_w=480, battery_power_w=170,
             pack_output_w=200, pack_input_w=30, target_w=480, output_limit_w=480,
-            ac_mode=2, ac_status=1, dc_status=2,
+            ac_mode=2, ac_status=1, dc_status=1,
         ),
     }
 
@@ -531,7 +543,7 @@ def _lerp_curve(hour, points):
     return points[-1][1]
 
 
-def _history(snapshot, points=96):
+def _history(snapshot, points=96, now=None):
     """Synthetic but lively ~24h history (15-min steps) for the preview charts.
 
     Models how the EMS keeps the **grid meter** near zero: while a source is
@@ -555,7 +567,7 @@ def _history(snapshot, points=96):
     items = []
     step = 900  # 15 minutes
     span = points * step
-    now = time.time()
+    now = time.time() if now is None else now
     for index in range(points):
         frac = index / (points - 1) if points > 1 else 0.0
         hour = frac * 24.0
@@ -634,66 +646,112 @@ def _auth(scenario):
     }
 
 
-def _diagnose(scenario):
+# The profiles /api/diagnose answers, as dashboard/server.py names them.
+DIAGNOSE_PROFILES = ("install", "deep", "hardware", "control", "control_quality")
+
+_DIAGNOSE_OK_CHECKS = {"install": 14, "deep": 22, "hardware": 18, "control": 9, "control_quality": 11}
+
+
+def diagnose_report(scenario, profile="hardware", now=None):
+    """The preview's report for one diagnose profile.
+
+    Every profile reads the environment and the config. The two that probe the
+    devices (deep, hardware) carry the hardware section with WR2's timeout, the
+    others that look at the installation carry the dashboard database's gap,
+    and the control profiles look at the control loop instead. In the
+    offline-device scenario WR2's silence is an error where a profile probes it
+    and a warning where the control loop only leaves it out.
+    """
+
+    offline = scenario == "offline-device"
+    control = profile in ("control", "control_quality")
     sections = [
         {"id": "environment", "title": "Environment", "status": "ok", "warnings": [], "errors": []},
         {"id": "config", "title": "Config", "status": "ok", "warnings": [], "errors": []},
-        {
+    ]
+    warnings = []
+    errors = []
+    root_causes = []
+
+    if profile in ("deep", "hardware"):
+        hardware = {
             "id": "hardware",
             "title": "Hardware",
             "status": "warning",
             "warnings": ["Zendure device WR2 read-only probe failed: TimeoutError"],
             "errors": [],
-        },
-        {
-            "id": "dashboard",
-            "title": "Dashboard",
-            "status": "warning",
-            "warnings": ["SQLite table snapshots latest row is older than 1 hour"],
-            "errors": [],
-        },
-    ]
-    warnings = [
-        "Dashboard database has no recent energy rows.",
-        "WR2 read-only probe returned a transient timeout.",
-    ]
-    errors = []
-    status = "warning"
-    root_causes = [
-        {
-            "code": "dashboard_data_gap",
-            "severity": "warning",
-            "title": "Dashboard data gap",
-            "message": "The dashboard database is reachable, but recent telemetry rows are sparse.",
-            "suggested_next_check": "Check the EMS loop and dashboard write interval.",
         }
-    ]
+        if offline:
+            hardware["status"] = "error"
+            hardware["errors"] = ["Zendure device WR2 is offline (no telemetry)."]
+            errors.append("Zendure device WR2 is offline.")
+            root_causes.append(
+                {
+                    "code": "device_offline",
+                    "severity": "error",
+                    "title": "Device offline",
+                    "message": "WR2 did not respond to the read-only telemetry probe.",
+                    "suggested_next_check": "Verify WR2 power, network, and local HTTP API access.",
+                }
+            )
+        sections.append(hardware)
 
-    if scenario == "offline-device":
-        status = "error"
-        sections[2]["status"] = "error"
-        sections[2]["errors"] = ["Zendure device WR2 is offline (no telemetry)."]
-        errors = ["Zendure device WR2 is offline."]
-        root_causes.insert(
-            0,
+    if control:
+        loop = {"id": "control", "title": "Control", "status": "ok", "warnings": [], "errors": []}
+        if offline:
+            loop["status"] = "warning"
+            loop["warnings"] = ["WR2 sends no telemetry and gets no share of the target."]
+            warnings.append("WR2 is left out of the distribution while it is offline.")
+            root_causes.append(
+                {
+                    "code": "device_offline",
+                    "severity": "warning",
+                    "title": "Device offline",
+                    "message": "WR2 sends no telemetry, so the EMS shares the target among the devices that answer.",
+                    "suggested_next_check": "Verify WR2 power, network, and local HTTP API access.",
+                }
+            )
+        sections.append(loop)
+    else:
+        sections.append(
             {
-                "code": "device_offline",
-                "severity": "error",
-                "title": "Device offline",
-                "message": "WR2 did not respond to the read-only telemetry probe.",
-                "suggested_next_check": "Verify WR2 power, network, and local HTTP API access.",
-            },
+                "id": "dashboard",
+                "title": "Dashboard",
+                "status": "warning",
+                "warnings": ["SQLite table snapshots latest row is older than 1 hour"],
+                "errors": [],
+            }
+        )
+        warnings.append("Dashboard database has no recent energy rows.")
+        root_causes.append(
+            {
+                "code": "dashboard_data_gap",
+                "severity": "warning",
+                "title": "Dashboard data gap",
+                "message": "The dashboard database is reachable, but recent telemetry rows are sparse.",
+                "suggested_next_check": "Check the EMS loop and dashboard write interval.",
+            }
         )
 
+    if profile in ("deep", "hardware"):
+        warnings.append("WR2 read-only probe returned a transient timeout.")
+
+    states = [section["status"] for section in sections]
+    status = "error" if "error" in states else "warning" if "warning" in states else "ok"
     return {
         "schema_version": 1,
-        "profile": "hardware",
+        "profile": profile,
         "status": status,
         "diagnosis": {
             "version": 1,
-            "timestamp": _timestamp(),
+            "timestamp": _timestamp(now),
             "status": status,
-            "metrics": {"ok": 18, "warning": len(warnings), "error": len(errors), "devices": 2},
+            "metrics": {
+                "ok": _DIAGNOSE_OK_CHECKS[profile],
+                "warning": len(warnings),
+                "error": len(errors),
+                "devices": 2,
+            },
             "warnings": warnings,
             "errors": errors,
             "root_causes": root_causes,
@@ -744,11 +802,12 @@ def scale_devices(devices, count):
         for field, step in (("soc", 3), ("pv_input_w", 40), ("output_w", 15)):
             if isinstance(copy.get(field), (int, float)):
                 copy[field] = copy[field] + step * index
+        copy["pv_inputs_w"] = _pv_inputs(copy.get("pv_input_w"))
         scaled[name] = copy
     return scaled
 
 
-def build_scenario(scenario=DEFAULT_SCENARIO, device_count=None, freeze_timestamp=False):
+def build_scenario(scenario=DEFAULT_SCENARIO, device_count=None, freeze_timestamp=False, now=None):
     """Return all synthetic preview payloads for one scenario."""
 
     if scenario not in SCENARIOS:
@@ -760,8 +819,8 @@ def build_scenario(scenario=DEFAULT_SCENARIO, device_count=None, freeze_timestam
     for name, offered in preview_device_settings(devices).items():
         if offered:
             devices[name]["settings"] = {
-                "light": {"label": "Light", "reported": "On", "desired": None},
-                "fan": {"label": "Fan", "reported": "Auto", "desired": None},
+                "light": {"label": "Light", "reported": "On", "desired": None, "reported_value": "on", "desired_value": None},
+                "fan": {"label": "Fan", "reported": "Auto", "desired": None, "reported_value": "auto", "desired_value": None},
             }
     # Grid is held very close to zero (-5 W) to show the EMS regulating tightly
     # against the house load; an offline device breaks that balance.
@@ -778,8 +837,8 @@ def build_scenario(scenario=DEFAULT_SCENARIO, device_count=None, freeze_timestam
         "name": scenario,
         "snapshot": snapshot,
         "runtime": _runtime(devices),
-        "history": _history(snapshot),
+        "history": _history(snapshot, now=now),
         "auth": _auth(scenario),
-        "diagnose": _diagnose(scenario),
+        "diagnose": diagnose_report(scenario, now=now),
         "logs": _logs(scenario),
     }

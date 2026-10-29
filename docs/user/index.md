@@ -8,7 +8,8 @@ Everything a normal user needs: install, operate, diagnose. You do not need the
 
 | Your situation | Go to |
 | --- | --- |
-| **New installation** | [Supported setups](supported-setups.md) → [Admin Console](admin-console.md) → [Guided Setup](admin/guided-setup.md) |
+| **Not sure where to start** | The Admin Console's [assistant](admin/assistant.md): what is still to do, and the way to each task |
+| **New installation** | [Supported setups](supported-setups.md) → [Admin Console](admin-console.md) → [Guided setup](admin/guided-setup.md) |
 | **Existing installation** | [Maintenance](admin/maintenance.md) and the [EMS Dashboard guides](dashboard/index.md) |
 | **Upgrade to a newer version** | [Guided Upgrade](admin/guided-upgrade.md) |
 | **Something is wrong** | [Troubleshooting](troubleshooting.md) → [Diagnostics and recovery](admin/diagnostics-recovery.md) |
@@ -24,30 +25,42 @@ it changes, and what to do when the result differs.
 
 | Guide | Use |
 | --- | --- |
-| [First start and login](admin/first-start.md) | Password setup, login, task selection, reconnect, logout |
-| [Guided Setup](admin/guided-setup.md) | Install a new system, step 01 to 05 |
+| [The assistant](admin/assistant.md) | Where to start: what is still to do, and the way to each task |
+| [First start and sign-in](admin/first-start.md) | Password setup, sign-in, where the console opens, reconnect, sign-out |
+| [Guided setup](admin/guided-setup.md) | Install a new system, step 01 to 05 |
 | [Guided Upgrade](admin/guided-upgrade.md) | Update an installed system safely |
 | [Maintenance](admin/maintenance.md) | Inspect, change and repair an existing system |
 | [Device management](admin/device-management.md) | Add, edit, disable, remove; switch connections |
 | [MQTT connections](admin/mqtt.md) | Local MQTT, Zendure Cloud MQTT, brokers, write gates |
 | [Backup and restore](admin/backup-restore.md) | Snapshots, previews, rollback |
 | [Diagnostics and recovery](admin/diagnostics-recovery.md) | Evidence, support bundles, stuck workflows |
+| [Appearance, language and phone](admin/appearance.md) | Colour scheme, language, density, the bar on a phone |
 
 ### Appliance — [all guides](appliance/index.md)
 
-Flashing a Raspberry Pi, first start, updates, network, backups and recovery
-for the dedicated appliance image.
+| Guide | Use |
+| --- | --- |
+| [Flashing the card](appliance/install.md) | Download the image for your board, check it, write the card |
+| [First start](appliance/first-start.md) | Find the box, create the password, install EMS Admin |
+| [The assistant](appliance/assistant.md) | Where to start: what is still to do on the Raspberry Pi, and the way to each task |
+| [Overview page](appliance/overview.md) | The verdict, the tiles, the quick actions; how a plan and its confirmation work |
+| [Updates](appliance/updates.md) | Raspberry Pi OS, EMS Admin and the Appliance Manager itself |
+| [Network](appliance/network.md) | WLAN with automatic fallback, hostname, time zone |
+| [SSH & backup access](appliance/backup.md) | Copy backups off, SSH keys, the rescue account |
+| [When it stops working](appliance/recovery.md) | No page, no EMS, a failed update, a lost password |
+| [Appearance, language and phone](appliance/appearance.md) | Colour scheme, language, density, the bar on a phone |
 
 ### EMS Dashboard — [all guides](dashboard/index.md)
 
 | Guide | Use |
 | --- | --- |
-| [Overview and navigation](dashboard/overview.md) | Tiles, Live Flow, Rules, tabs |
+| [Overview and navigation](dashboard/overview.md) | Status tiles, energy flow, active rules, today, the menu and the phone bar |
 | [Device cards](dashboard/devices.md) | Per-inverter state, offline and write-blocked reasons |
 | [Energy and analytics](dashboard/energy.md) | Delivered energy, history, long-range analytics |
 | [Control pipeline](dashboard/control.md) | Why EMS wrote that value |
-| [Runtime settings](dashboard/runtime-settings.md) | Change live values safely |
+| [Runtime settings and schedules](dashboard/runtime-settings.md) | Change live values safely, now or at set times |
 | [Diagnostics and maintenance](dashboard/diagnostics.md) | Diagnose, logs, browser backups |
+| [Appearance and language](dashboard/appearance.md) | Colour scheme, language, density, side menu |
 
 ## Setup paths
 

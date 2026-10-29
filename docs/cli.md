@@ -88,8 +88,8 @@ Modes:
 - `--json` prints the same result structure as machine-readable JSON. The
   diagnose API contract is versioned with top-level `schema_version: 1`.
 - `--deep` adds local operational checks: runtime-state plausibility, SQLite
-  integrity/table summaries, recent configured log patterns, Docker host hints,
-  and a dashboard loopback check when enabled.
+  integrity/table summaries, Docker host hints, and a dashboard loopback check
+  when enabled.
 - `--hardware` performs explicit short-timeout read-only network probes for
   configured grid meters and Zendure read endpoints. It never writes hardware
   state. The output also includes compact grid-meter and per-device

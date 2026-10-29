@@ -3,8 +3,9 @@
 This is the technical reference for the Admin Console. For a short user overview, see
 [Admin Console](../user/admin-console.md); for the two guided flows, see
 [Admin setup](../user/admin-setup.md) (Set up a new system) and
-[Admin maintenance](../user/admin-maintenance.md) (Manage my existing
-system). This page documents the internals: the setup wizard, release and
+[Admin maintenance](../user/admin-maintenance.md) (an installed system); the
+step-by-step guides are under [Admin Console guides](../user/admin/index.md).
+This page documents the internals: the setup wizard, release and
 build-identity gating, network discovery, deployment-capable Docker setup, and
 security.
 
@@ -22,13 +23,38 @@ style — is described in detail below.
 
 ## Layout
 
-The UI has two top-level tabs. **Setup** (the default) is a compact
-step-by-step wizard with a stepper header and **five steps** — **01 Release**,
-**02 Devices**, **03 Config**, **04 Prepare deployment**, **05 Start EMS**. Only
-the active step shows its full content; the others collapse to a compact status
-in the stepper (e.g. `Ready`, `3 devices`, `Draft ready`). **Devices** and
-**Config** stay locked until the Release step reports its resources ready, and
-`Next` is disabled until then.
+The guided setup is a page without a place in the side menu: the assistant,
+the Overview of an empty host and **Open the guided setup** on the **System**
+page open it (see [Guided setup](../user/admin/guided-setup.md)). It is a
+step-by-step wizard with a stepper and **five steps** — **01 System Build**,
+**02 Devices**, **03 Settings**, **04 Prepare**, **05 Start EMS**. Only the
+active step shows its full content; the stepper names each step and its state,
+and a line under it says where you are (*Step 02 of 05 · Find your devices · 3
+devices.*). **Devices** and **Settings** stay locked until the System Build
+step reports its resources ready, and the server enforces that lock. This page
+calls the first step the Release step, as the code does.
+
+The panel, button and state names further down this page are the ones the
+deprecated Classic console at `/classic/` shows; the behaviour behind them is
+the same in Modern. The Modern names are in the
+[guided setup](../user/admin/guided-setup.md#02--find-your-devices) and
+[device management](../user/admin/device-management.md) guides; the ones this
+page uses most map as follows:
+
+| Classic | Modern |
+| --- | --- |
+| **Run discovery** / **Run discovery again** | **Run the search** / **Search again** |
+| **Scan networks** | **Scan the networks** |
+| **Discovery sources** (priority, enabled, **Configure**) | **Search sources** (**Search order**, on or off, **Configure**) |
+| **Discovery progress** | **Search progress** |
+| **Detected networks / gateways** | **Networks and routers** |
+| **Detected devices** | **Devices found** |
+| The manual CIDR scan | **Scan one network** |
+| **Automatic Zendure discovery** | **Automatic mDNS discovery** |
+| Maintenance's **Add more devices** | **Search my network** on **Settings & devices** → **Devices** |
+| **Active**, *In config* | **In the settings** |
+| **Added to draft** | **Added to your changes** |
+| **Use connection** | **Use this connection** |
 
 ### Release step: one paired System Build
 
@@ -46,7 +72,7 @@ Admin image. They are verified against the build's manifest
 (`$EMS_ADMIN_DATA_DIR/releases/<tag>/`) **before any config** is written; Admin
 never substitutes `main`-branch resources for a pinned build. If the running
 Admin does not match the selected build it is aligned first
-(**Update Admin Server**); a matching Admin continues straight to discovery. The
+(**Update the Admin console**); a matching Admin continues straight to discovery. The
 selection pointer is stored under
 `$EMS_ADMIN_DATA_DIR/state/selected-release.json` and survives an Admin restart.
 
@@ -91,7 +117,8 @@ The synthetic `latest` option maps the rolling Docker channel to setup resources
 from the repository's `main` branch. It is selectable when those resources can be
 verified, but it is never treated as stable and never replaces the newest
 supported stable release as the default. If stable resources cannot be found,
-`latest` is the fallback. Resource availability is checked again during
+`latest` is the fallback for a setup, and for an upgrade only where nothing
+identifiable runs (see the upgrade rule below). Resource availability is checked again during
 preparation before the strict extraction whitelist is applied.
 
 The build-identity gate only applies to the **maintenance/upgrade** flow, which
@@ -111,9 +138,12 @@ read the same config schema and the same database — the SQLite store grows by
 without noticing, and `ems.config` refuses a `config_schema_version` it does not
 know by name rather than misreading it — and a minor or major step down is where
 those two statements stop holding. A rollback is `rollback_available`,
-selectable, and never what the console proposes: the default is always the
-newest release that is not behind the running build, falling back to the rolling
-channel when there is none. When the running EMS build can be inspected
+selectable, and never what the console proposes: the default is the newest
+stable release that is neither the running build nor behind it. The rolling
+channel is the fallback only when nothing identifiable runs (a rolling `latest`
+install, a container whose release cannot be told, or no installation); with a
+stable release, a release candidate or a development build running and no newer
+stable release, nothing is proposed and the reader chooses. When the running EMS build can be inspected
 (the running container's image, or the compose-declared image when it is stopped),
 each target is compared by build identity rather than tag name alone, because
 `latest` is a channel, not a version. In order: an identical image digest is
@@ -256,7 +286,7 @@ placeholder for a later phase.
   refresh lists read-only Zendure hardware candidates seen per reachable broker
   (see [Local MQTT discovery](#local-mqtt-discovery)).
 - Optionally discovers real hardware through the encrypted Zendure **cloud** MQTT
-  broker using a saved Zendure API key or HA/deviceList token — the discovery
+  broker using a saved Zendure API key or deviceList token — the discovery
   pass is read-only and TLS-only, and the discovered devices join the same
   trusted proposal set as local candidates, so Setup and Maintenance can apply them (see
   [Zendure MQTT discovery (cloud)](#zendure-mqtt-discovery-cloud)).
@@ -1093,9 +1123,9 @@ the apply then provisions the cloud runtime credential record automatically
 (see the configuration guide).
 
 Credential: the panel takes exactly one value — either a raw **Zendure API
-key** or Zendure's base64 **HA/deviceList token** — with no credential-type
+key** or Zendure's base64 **deviceList token** — with no credential-type
 selector. The backend auto-detects the shape. A raw key uses the fixed EU cloud
-base (`https://app.zendure.tech/eu`); an HA token is decoded locally into its
+base (`https://app.zendure.tech/eu`); a deviceList token is decoded locally into its
 Zendure API base plus `appKey`. Token-provided URLs are restricted to Zendure's
 known HTTPS API bases, so a crafted credential cannot turn discovery into an
 arbitrary server-side request. The operator never enters a separate `api_url`
@@ -1106,7 +1136,7 @@ or manual broker host/user/password. Requests may optionally carry
 separate feature in the Local MQTT broker section.
 
 Credential storage (`admin/credential_store.py`): the Zendure API key or
-HA token is encrypted at rest (`cryptography`/Fernet) under
+deviceList token is encrypted at rest (`cryptography`/Fernet) under
 `config/secrets/zendure-cloud.json`, with the Fernet key in
 `config/secrets/.secret-key`, both written `0600` best-effort.
 `config/discovery-connections.json` holds only the `token_ref`, never a raw key.
@@ -1122,7 +1152,7 @@ cannot bring back a token that a delete or a save is replacing at that moment.
 
 Cloud flow (`admin/zendure_cloud_auth.py`, `admin/zendure_cloud_mqtt.py`):
 
-- Resolve a raw API key to the fixed EU API base, or decode the Zendure HA token
+- Resolve a raw API key to the fixed EU API base, or decode the Zendure deviceList token
   into its allow-listed Zendure `api_url` and `app_key`.
 - Sign and POST the Zendure deviceList request to fetch the real device list plus
   the MQTT connection info; that returned host, port, username, password, and
@@ -1164,7 +1194,7 @@ API (all require Admin auth):
 
 - `GET /api/discovery/zendure-cloud-mqtt/settings` — redacted credential status.
 - `POST /api/discovery/zendure-cloud-mqtt/token` — save/replace the API key or
-  HA/deviceList token; another key drops the cached cloud candidates.
+  deviceList token; another key drops the cached cloud candidates.
   Field `api_key` (or `token` as a backwards-compatible alias, but never both);
   explicit modes `zendure_api_key` and `ha_device_list_token` are accepted.
 - `DELETE /api/discovery/zendure-cloud-mqtt/token` — forget the credential +
@@ -1262,7 +1292,8 @@ host networking with a Compose override instead of `--bridge`:
 python3 scripts/serve_admin_preview.py --host 127.0.0.1 --port 8090
 ```
 
-Then open http://127.0.0.1:8090, enter a local CIDR, and start a scan.
+Then open http://127.0.0.1:8090/classic/#setup (the Classic view, where the discovery
+runs), enter a local CIDR, and start a scan.
 
 ## Docker setup (default: deployment-capable)
 

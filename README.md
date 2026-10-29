@@ -4,14 +4,19 @@
 [![Repo browser e2e](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/playwright-e2e.yml/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/playwright-e2e.yml)
 [![CodeQL](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/github-code-scanning/codeql)
 [![Dependabot](https://img.shields.io/badge/Dependabot-enabled-brightgreen?logo=dependabot)](.github/dependabot.yml)
-![automated tests](https://img.shields.io/badge/automated%20tests-17500%2B-blue)
+![automated tests](https://img.shields.io/badge/automated%20tests-17900%2B-blue)
 [![Test-Driven Development](https://img.shields.io/badge/Test--Driven%20Development-contract--first-blue)](docs/developer/testing.md#development-approach)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.14-blue)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue)](LICENSE)
+[![Interface: English · Deutsch · Nederlands · Français](https://img.shields.io/badge/interface-English%20%C2%B7%20Deutsch%20%C2%B7%20Nederlands%20%C2%B7%20Fran%C3%A7ais-8b5cf6)](docs/user/dashboard/appearance.md)
 
 Local-first EMS control for Zendure SolarFlow systems.
 It reads local grid meter and Zendure telemetry, controls inverter output,
 and provides a local dashboard.
+
+The dashboard, the Admin Console and the Appliance Manager speak
+**English, Deutsch, Nederlands and Français** — pick yours under Appearance at
+the top right, or below the sign-in form.
 
 > [!TIP]
 > **New to EMS SolarFlow?** Start with the [Project Overview](docs/user/project-overview.md), read the docs online at <https://basecubedev.github.io/ems-solarflow-api-control/>, or watch the [videos](docs/user/videos.md) on [YouTube](https://www.youtube.com/channel/UCk7i1JfCVML8hqlvzenCJBg).
@@ -19,7 +24,7 @@ and provides a local dashboard.
 > EMS controls real power hardware.
 > Read the [safety guide](docs/user/safety.md) before enabling live writes.
 
-[![Local EMS dashboard — aggregated system view](docs/assets/preview-aggregated.jpg)](docs/dashboard.md)
+[![The EMS dashboard's Overview page: status tiles, the live energy flow, storage, active rules, today's energy and the power chart](docs/assets/preview-aggregated.jpg)](docs/dashboard.md)
 
 ## Supported hardware at a glance
 
@@ -82,7 +87,7 @@ EMS); read what that means before you rely on it.
 — one file per board, always the current build. Not under *Packages*: that
 holds the container images the appliance fetches by itself.
 
-[Flashing the card](docs/user/appliance/install.md) · [First start](docs/user/appliance/first-start.md) · [All appliance guides](docs/user/appliance/index.md)
+[Flashing the card](docs/user/appliance/install.md) · [First start](docs/user/appliance/first-start.md) · [The assistant](docs/user/appliance/assistant.md) · [All appliance guides](docs/user/appliance/index.md)
 
 ### On a machine you already run
 
@@ -115,9 +120,14 @@ the install worked**; if it does not appear,
 came up. Host networking is the default (best for local discovery); add
 `--bridge --bind 0.0.0.0` only if you need Docker bridge networking.
 
-![Admin Console start page](docs/assets/screenshots/admin/admin-landing.png)
+The console then opens on its assistant, which says what is still to do —
+on a fresh host, **Set up a new system** starts the guided setup — and leads
+to the page for it.
 
-Full guide, with demo videos of a fresh install and a guided update:
+![Admin Console assistant on a fresh host: Install EMS is the next step, with Set up a new system and Restore a backup](docs/assets/screenshots/admin/admin-assistant-fresh.png)
+
+Full guide, with screenshots and demo videos of a fresh install and a guided
+update:
 [docs/user/admin-console.md](docs/user/admin-console.md#what-the-admin-console-looks-like)
 
 ### Other ways to install

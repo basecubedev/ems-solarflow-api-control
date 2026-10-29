@@ -195,7 +195,7 @@ decides the start, the claim
 and the dashboard's **Assist waiting** (or **Assist unavailable** for the
 transport): what keeps the assist from writing what it needs on the device now
 -- its transport, a shut gate, control switched off, or such a report. While
-other devices charge from surplus, the Control view says of a device the
+other devices charge from surplus, the dashboard's **Control** page says of a device the
 assist or its restore holds, by its claim or by the direction hold, that the
 full-charge assist holds it, not that the device may not charge.
 
@@ -388,18 +388,19 @@ still reads `active` there; the dashboard shows those.
 
 ## Dashboard
 
-When enabled, the Devices view shows a compact "Full-charge assist" section on
-each battery-backed device card. It reflects the same state as `diagnose`:
+When enabled, the dashboard's **Devices** page shows a compact **Full-charge
+assist** section on each battery-backed device card (see
+[Devices](user/dashboard/devices.md)). It reflects the same state as `diagnose`:
 
 - **Assist active** — EMS is helping the device reach firmware Max-SoC. This
   is normal and can take several hours to days; it is not an error state.
-  - **AC charge running** is shown only when telemetry confirms `acMode=1`
+  - **AC charge** · **Running** is shown only when telemetry confirms `acMode=1`
     and `acStatus=2`. Assist can also run without AC charge mode
     (`enable_ac_charge_mode=false`).
   - While active, EMS internally marks Max-SoC and (once the assist put the
     device into AC input) AC output mode restore as pending for *after*
     charging finishes.
-    The dashboard shows this as **"Restore planned"** — it does not mean a
+    The dashboard shows this as **After charge** · **Restore planned** — it does not mean a
     restore is currently stuck or failed.
 - **Assist waiting** — the assist is active in the state store but cannot
   write what it needs, so it claims no device: while state writes are not
@@ -417,9 +418,9 @@ each battery-backed device card. It reflects the same state as `diagnose`:
 - **Restore pending** — assist has finished (no longer active) and EMS is
   still waiting for write gates or control switched on, or for a report that
   carries `socSet`, to restore the configured Max-SoC
-  (**Max-SoC restore pending**) and, if the assist put the device into AC
+  (**Max-SoC restore** · **Pending**) and, if the assist put the device into AC
   input, normal output mode `acMode=2` -- over a report without `acMode`, the
-  exit to idle, three times at most (**AC output mode restore pending**). The card says which of the two it
+  exit to idle, three times at most (**AC output mode** · **Restore pending**). The card says which of the two it
   waits for. These details are only shown once assist is no longer active.
 - **Assist overdue** — the device passed its due date without a completed
   assist. The dashboard shows how many days overdue.

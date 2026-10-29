@@ -1,5 +1,5 @@
 {
-  "_note": "Deterministic non-secret demo data for the Maintenance 'Zendure MQTT telemetry' card. Serials, hosts and broker refs are fake; no credentials are ever included.",
+  "_note": "Deterministic non-secret demo data for the System page's Device telemetry card in the MQTT scenario: one inverter on a local broker, one over the Zendure cloud. Serials, hosts and broker refs are fake; no credentials are ever included.",
   "runtime_status": {
     "runtime_state": "configured",
     "endpoint": "mqtt.example.invalid:8883",
@@ -11,7 +11,7 @@
     "message": "",
     "brokers": [
       {
-        "broker_ref": "demo-broker",
+        "broker_ref": "local_mqtt",
         "enabled": true,
         "running": true,
         "connected": true,
@@ -20,7 +20,7 @@
         "device_count": 1
       },
       {
-        "broker_ref": "zendure-cloud",
+        "broker_ref": "zendure_cloud",
         "enabled": true,
         "running": true,
         "connected": true,
@@ -31,27 +31,43 @@
     ],
     "devices": [
       {
-        "name": "Inverter 1 (DEMO-SF800-001)",
+        "name": "INV_1",
         "status": "online",
-        "broker_ref": "demo-broker",
+        "broker_ref": "local_mqtt",
         "source": "local_mqtt",
         "topic_family": "solarflow_800_pro",
         "age_seconds": 4,
         "metric_count": 9,
-        "metrics": ["soc", "pv_input_w", "output_w", "output_limit_w"],
-        "capabilities": ["telemetry", "output_control"],
+        "metrics": [
+          "soc",
+          "pv_input_w",
+          "output_w",
+          "output_limit_w"
+        ],
+        "capabilities": [
+          "telemetry",
+          "output_control"
+        ],
         "issues": []
       },
       {
-        "name": "Inverter 2 (DEMO-SF800-002)",
+        "name": "INV_2",
         "status": "online",
-        "broker_ref": "zendure-cloud",
+        "broker_ref": "zendure_cloud",
         "source": "zendure_cloud",
         "topic_family": "solarflow_800_pro",
         "age_seconds": 11,
         "metric_count": 9,
-        "metrics": ["soc", "pv_input_w", "output_w", "output_limit_w"],
-        "capabilities": ["telemetry", "output_control"],
+        "metrics": [
+          "soc",
+          "pv_input_w",
+          "output_w",
+          "output_limit_w"
+        ],
+        "capabilities": [
+          "telemetry",
+          "output_control"
+        ],
         "issues": []
       }
     ]

@@ -220,22 +220,30 @@ Tags: `@smoke` (fast critical journeys), `@setup`, `@maintenance`,
 ### Documentation screenshots
 
 ```bash
-./scripts/capture-docs-screenshots.sh            # Admin + Dashboard pages
+./scripts/capture-docs-screenshots.sh            # Admin + Dashboard + Appliance pages
 npx playwright test --config=playwright.appliance.config.ts capture-docs \
-    # with EMS_APPLIANCE_CAPTURE_DOCS=1        # Appliance Manager pages
-python3 scripts/capture_appearance_gallery.py    # the appearance strips
+    --project=chromium # with EMS_APPLIANCE_CAPTURE_DOCS=1  # every Appliance Manager image
+npx playwright test --config=playwright.dashboard.config.ts capture-docs \
+    --project=chromium # with EMS_DASHBOARD_CAPTURE_DOCS=1  # every dashboard image
 ```
 
-The first two photograph the product's pages. The third photographs one page
-three times with a single appearance axis changed -- palette, object style,
-density -- because a choice whose entire effect is how something looks cannot be
-documented in prose. All three use the same deterministic servers as the browser
-suites, so no capture contains a real host, address, serial or key.
+All three photograph the Modern pages. Each draws its own appearance strips --
+the same region of the same page once per colour scheme and once per density,
+the two axes Modern has, laid side by side -- because a choice whose entire
+effect is how something looks cannot be documented in prose. So every
+dashboard image, the README-level `docs/assets/preview-*.jpg` included, every
+Admin image and every Appliance Manager image has one writer: the dashboard's
+spec, the Admin Console's capture script (`scripts/capture_admin_docs.mjs`) and
+the Appliance Manager's spec (`tests/e2e-appliance/capture-docs.spec.ts`).
+All of them use the same deterministic servers as the browser suites, so no
+capture contains a real host, address, serial or key. The Appliance Manager's
+spec resets its scripted host into the state each image shows with the options
+of `/api/test/reset` (`never_installed`, `manager_index`, `operation_running`,
+...).
 
 Each screenshot directory carries a `README.md` listing every image, and
 contract tests refuse a capture that is not listed or a listing without an
-image. Two writers now share the Admin and Appliance directories, so those
-manifests are a union; add a row when you add a capture.
+image; add a row when you add a capture.
 
 ### The other two surfaces
 
@@ -253,6 +261,28 @@ Each brings its own deterministic server: the Manager's is the scripted
 `scripts/serve_dashboard_preview.py`, which serves the real `dashboard/static/`
 assets with synthetic API payloads -- no hardware, no MQTT, no history
 database, no secrets.
+
+The cockpit and the Admin console each have a second front end, Modern,
+built from `frontend/dashboard-modern/` and `frontend/admin-modern/` on the
+shared design system in `frontend/shared/`. Their unit tests need Node but no
+browser, and their build output is committed, so a source change is not
+finished until it is rebuilt -- both builds, when the change is in
+`frontend/shared/`:
+
+```bash
+npm run test:frontend-shared      # node --test, a second or two each
+npm run test:dashboard-modern
+npm run test:admin-modern
+npm run build:dashboard-modern    # rewrites dashboard/static/modern/
+npm run build:admin-modern        # rewrites admin/static/modern/
+```
+
+`tests/test_dashboard_modern.py` and `tests/test_admin_modern.py` rebuild into
+a scratch directory and fail when the committed output differs; the dashboard
+Playwright job does the same for both with `git diff --exit-code`. The browser
+specs are `tests/e2e-dashboard/modern.spec.ts`, in the same suite as Classic's
+cockpit, and `tests/e2e/admin-modern.spec.ts` and
+`tests/e2e/admin-modern-upgrade.spec.ts`, in the Admin suite.
 
 Four things are worth knowing before adding a spec to either:
 
@@ -380,9 +410,6 @@ The documentation-content ones carry the `documentation` marker, so
 - `tests/test_docker_docs_contract.py`, `tests/test_docker_first_setup.py` —
   the Docker Bootstrap installer/compose/docs promise.
 - `tests/test_issue_templates.py` — issue-template documentation links.
-- `tests/test_home_assistant_removed.py::test_no_document_page_or_form_offers_home_assistant`
-  — no document, frontend page or issue form offers the removed integration;
-  its docstring names the exceptions and why they stay.
 - `tests/test_test_classification.py` — the marker registry, the documented
   tier selections and the pull-request group partition.
 - `tests/test_ci_workflow_docker_split.py` — how the CI groups are split.
@@ -402,30 +429,45 @@ The user guides are screenshot-led. Regenerate every image with:
 ./scripts/capture-docs-screenshots.sh dashboard  # EMS Dashboard only
 ```
 
-Both capture scripts start their own loopback-only preview server from the
-deterministic fixtures in `tests/fixtures/admin_docs/` and
-`scripts/dashboard_preview_data.py`, and shut it down again when they finish.
-No Docker, hardware, discovery, MQTT broker, Zendure credential, `config.json`
-or runtime state is involved, unrelated containers are untouched, and nothing is
-pushed. Requirements: headless `firefox` and ImageMagick `convert`.
+Every image is of the Modern design, taken with Playwright Chromium. The Admin
+Console's script, `scripts/capture_admin_docs.mjs`, starts its own
+loopback-only preview server, `scripts/serve_admin_docs_preview.py`, over the
+deterministic fixtures in `tests/fixtures/admin_docs/`; a shot names the
+installation it shows with the preview's `?scenario=` (a fresh host, a
+signed-out browser, an update that runs, a guided setup, ...). The settings
+page, its check, the telemetry view and the guided setup's device search and
+device plan are answered by the shipped Admin builders from the demo
+installation's `config.json`, so a setting the template gains shows up without
+a fixture edit. The dashboard's spec runs against
+`scripts/serve_dashboard_preview.py` over `scripts/dashboard_preview_data.py`,
+the server of the dashboard browser suite. No Docker, hardware, discovery, MQTT
+broker, Zendure credential, `config.json` or runtime state is involved,
+unrelated containers are untouched, and nothing is pushed. Requirements:
+`node` with the Playwright Chromium for both.
 
-Add a screen by extending `SCREENS` in `scripts/capture_admin_docs.py` or
-`scripts/capture_dashboard_docs.py` (plus a driver in
-`scripts/admin_docs_preview.js` for Admin), then embed it in a guide —
-`tests/test_docs_user_guides.py` enforces that the manifest, the committed files
-and the asset README stay in step.
+Add a screen by adding an entry to `SHOTS` in `scripts/capture_admin_docs.mjs`
+(and, when it needs one, a scenario in the preview), or a test titled with the
+file's name to `tests/e2e-dashboard/capture-docs.spec.ts` or
+`tests/e2e-appliance/capture-docs.spec.ts`, then embed it in a guide —
+`tests/test_docs_user_guides.py` and `tests/test_appliance_screenshot_index.py`
+enforce that the manifest, the committed files and the asset README stay in
+step.
 
 Two traps worth knowing:
 
 - Guided Setup steps 02–05 are authorized by a **server-confirmed setup
-  transition**, so the preview must serve one. Without it every setup screen
-  silently falls back to step 01 and the captures become byte-identical
+  transition**, so the `setup` scenario serves one. Without it every setup
+  screen silently falls back to step 01 and the captures become byte-identical
   duplicates; the distinctness test is what catches that.
-- The Admin driver only runs after the SPA's own authenticated workflow resume
-  has finished, because that resume re-opens Guided Setup on step 01.
+- Every click in the console sends a session heartbeat, whose answer is
+  adopted as the sign-in state. The preview answers it with the scenario's own
+  sign-in state; an answer without one signs the page out mid-capture.
 
-After a run, review `git status --short docs/assets/screenshots` before
-committing.
+The demo videos in `docs/assets/videos/admin/` were recorded from the
+deprecated Classic console by `scripts/render_admin_docs_video.py`, which
+drives Classic through the preview's `?screen=` and `scripts/admin_docs_preview.js`.
+
+After a run, review `git status --short docs/assets` before committing.
 
 ## Appliance tiers that need a real machine
 

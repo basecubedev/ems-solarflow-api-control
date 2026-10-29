@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Guard the Admin Console documentation media.
 
-The user docs lead with short demo videos and keep a couple of compact static
-screenshots as a render-agnostic fallback; the remaining per-screen screenshots
-are kept in the assets folder (and reused as video posters) but are no longer
-embedded as a full gallery. Each demo ships in two formats — MP4/H.264
+The Admin Console overview page shows the current (Modern) console in
+screenshots and keeps two short demo videos, recorded in the deprecated Classic
+console and labelled as such; each video is followed by a static screenshot of
+the same workflow in the current design as a render-agnostic fallback. Each demo ships in two formats — MP4/H.264
 (preferred, best forum/mobile compatibility) and WebM/VP9 (fallback). These
 tests check that both formats exist and are embedded with MP4 first, that the
 static screenshot fallback is present with meaningful alt text, that the
@@ -36,11 +36,12 @@ REQUIRED_VIDEOS = [
 REQUIRED_MP4_VIDEOS = [name[: -len(".webm")] + ".mp4" for name in REQUIRED_VIDEOS]
 
 REQUIRED_SCREENSHOTS = [
-    "admin-landing.png",
+    "admin-assistant.png",
+    "admin-assistant-fresh.png",
+    "admin-overview.png",
     "admin-guided-setup-start.png",
     "admin-guided-setup-config-preview.png",
     "admin-discovery-preview.png",
-    "admin-maintenance-overview.png",
     "admin-backup-restore.png",
     "admin-guided-upgrade-plan.png",
     "admin-admin-update-reconnect.png",
@@ -121,11 +122,12 @@ def test_admin_console_doc_has_static_screenshot_fallback():
         name = Path(match.group("src").split("#", 1)[0]).name
         images[name] = match.group("alt").strip()
 
-    # The landing page must appear as a plain Markdown screenshot.
-    assert "admin-landing.png" in images, "admin-landing.png not embedded as Markdown image"
+    # The assistant, where the console opens, must appear as a plain Markdown
+    # screenshot.
+    assert "admin-assistant.png" in images, "admin-assistant.png not embedded as Markdown image"
 
     # At least one workflow (non-landing) screenshot must appear too.
-    workflow_shots = set(REQUIRED_SCREENSHOTS) - {"admin-landing.png"}
+    workflow_shots = set(REQUIRED_SCREENSHOTS) - {"admin-assistant.png", "admin-assistant-fresh.png", "admin-overview.png"}
     assert workflow_shots & set(images), "no workflow screenshot embedded as Markdown image"
 
     # Alt text on every embedded admin screenshot must be meaningful: not empty,
@@ -136,6 +138,19 @@ def test_admin_console_doc_has_static_screenshot_fallback():
         assert len(alt) >= 12, f"{name} alt text too short: {alt!r}"
         assert ".png" not in alt.lower(), f"{name} alt text is a filename: {alt!r}"
         assert len(alt.split()) >= 3, f"{name} alt text not descriptive: {alt!r}"
+
+
+def test_admin_console_doc_says_the_videos_show_classic():
+    """The videos predate Modern; the page must not present them as the current console."""
+
+    text = " ".join(read(ROOT / "docs" / "user" / "admin-console.md").split())
+    videos = text.split("### Demo videos (Classic view)", 1)
+    assert len(videos) == 2, "admin-console.md has no Demo videos (Classic view) section"
+    assert "deprecated **Classic** console" in videos[1].split("<video", 1)[0]
+    for heading in re.findall(r"#### [^#<]+", videos[1]):
+        assert "(Classic view)" in heading, f"video heading not labelled Classic: {heading}"
+    readme = " ".join(read(VIDEOS / "README.md").split())
+    assert "deprecated **Classic** console" in readme
 
 
 def test_no_committed_markdown_references_missing_admin_media():
@@ -181,7 +196,7 @@ def test_capture_and_render_tooling_present():
     assert (SHOTS / "README.md").is_file()
     assert (VIDEOS / "README.md").is_file()
     for script in (
-        "capture_admin_docs.py",
+        "capture_admin_docs.mjs",
         "serve_admin_docs_preview.py",
         "admin_docs_preview.js",
         "render_admin_docs_video.py",

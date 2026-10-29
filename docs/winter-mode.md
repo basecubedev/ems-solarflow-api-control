@@ -22,8 +22,12 @@ context when winter mode is enabled and active. Review SOC limits and battery
 capacity for the installation before unattended winter operation.
 
 `winter.enabled` can be toggled at runtime through `runtime-state.json`,
-`emsctl.py`, or the dashboard's Control tab. The technical winter settings below
-remain static config.
+`emsctl.py`, the **Winter mode** card in the runtime settings on the
+dashboard's **Control** page, or a rule on its **Schedule** page (see
+[Runtime settings and schedules](user/dashboard/runtime-settings.md)). The
+technical winter settings below remain static config, set in `config.json` or
+under **Winter mode** on the **Features** tab of the Admin Console's **Settings
+& devices**.
 
 ## Configuration
 
@@ -74,9 +78,10 @@ has not reported PV since the update can still take noon steps on dark days.
 PV-only device has no battery to plan for. `devices[].winter_policy` overrides
 the default for one device; `auto` keeps it. A name that is unknown or does not
 fit the device's type falls back to the type's default, and the EMS logs
-`winter_policy_invalid` once per device. Setup and Maintenance refuse such a
-name before it is applied; they judge the type from `pv_kwp` alone, because
-battery presence is only known at runtime. MQTT control devices are
+`winter_policy_invalid` once per device. The Admin Console refuses such a
+name when it checks the settings, in the guided setup and on **Settings &
+devices**, before anything is saved; it judges the type from `pv_kwp` alone,
+because battery presence is only known at runtime. MQTT control devices are
 output-only: they carry the field but get no winter plan.
 
 | Policy | Daily step | How far the step may lead the SoC | PV charges the battery first |

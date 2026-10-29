@@ -76,6 +76,40 @@ def test_load_reads_standard_config(tmp_path):
     assert "winter.enabled" in result["draft"]["features"]
 
 
+@pytest.mark.parametrize(
+    ("dashboard", "expected"),
+    [(None, True), ({"port": 8081}, True), ({"enabled": False}, False), ({"enabled": "off"}, False), ({"enabled": "yes"}, True)],
+)
+def test_summary_reads_the_dashboard_switch_as_the_ems_does(tmp_path, dashboard, expected):
+    config = _config()
+    if dashboard is None:
+        del config["dashboard"]
+    else:
+        config["dashboard"] = dashboard
+    _write_config(tmp_path, config)
+    result = load_maintenance_config(base_dir=str(tmp_path))
+    assert result["summary"]["dashboard_enabled"] is expected
+
+
+def test_summary_reads_only_the_dashboard_switch_so_an_odd_timeout_never_breaks_the_page(tmp_path):
+    config = _config()
+    config["dashboard"] = {"enabled": True, "session_idle_timeout_seconds": "inf", "session_absolute_max_seconds": 1e999}
+    _write_config(tmp_path, config)
+    result = load_maintenance_config(base_dir=str(tmp_path))
+    assert result["status"] == "ok"
+    assert result["summary"]["dashboard_enabled"] is True
+
+
+def test_summary_names_every_template_value_ems_would_refuse_to_control_with(tmp_path):
+    template = json.loads((Path(__file__).resolve().parents[1] / "config" / "config.template.json").read_text("utf-8"))
+    _write_config(tmp_path, template)
+    fields = load_maintenance_config(base_dir=str(tmp_path))["summary"]["control"]["placeholder_fields"]
+    assert any("devices[0].ip" in field for field in fields)
+    assert "grid_meter.ip" in fields
+    _write_config(tmp_path, _config())
+    assert load_maintenance_config(base_dir=str(tmp_path))["summary"]["control"]["placeholder_fields"] == []
+
+
 def test_load_missing_config_is_clear_status(tmp_path):
     result = load_maintenance_config(base_dir=str(tmp_path))
     assert result["status"] == "missing"
@@ -773,6 +807,52 @@ def test_clear_broker_password_removes_it(tmp_path):
         draft, loaded["revision"], base_dir=str(tmp_path)
     )
     assert "password" not in json.loads(prepared["payload"])["zendure_mqtt"]
+
+
+def test_an_unchanged_draft_keeps_the_template_s_empty_broker_credentials(tmp_path):
+    config = _config()
+    config["zendure_mqtt"] = {"host": "", "port": 1883, "tls": False, "username": "", "password": "", "app_key": ""}
+    _write_config(tmp_path, config)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    preview = preview_maintenance_config(loaded["draft"], base_dir=str(tmp_path))
+    assert preview["changed"] is False
+    assert preview["diff"]["removed"] == []
+    prepared = prepare_maintenance_config_apply(
+        loaded["draft"], loaded["revision"], base_dir=str(tmp_path)
+    )
+    assert json.loads(prepared["payload"])["zendure_mqtt"]["username"] == ""
+
+
+def test_a_cleared_broker_username_is_removed(tmp_path):
+    _write_config(tmp_path, _mqtt_config())
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    draft = loaded["draft"]
+    assert draft["zendure_mqtt"]["username"]
+    draft["zendure_mqtt"]["username"] = ""
+    prepared = prepare_maintenance_config_apply(
+        draft, loaded["revision"], base_dir=str(tmp_path)
+    )
+    assert "username" not in json.loads(prepared["payload"])["zendure_mqtt"]
+
+
+def test_a_whitespace_username_is_dropped_and_a_draft_without_the_field_keeps_the_stored_one(tmp_path):
+    config = _mqtt_config()
+    config["zendure_mqtt"]["username"] = "   "
+    _write_config(tmp_path, config)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    prepared = prepare_maintenance_config_apply(
+        loaded["draft"], loaded["revision"], base_dir=str(tmp_path)
+    )
+    assert "username" not in json.loads(prepared["payload"])["zendure_mqtt"]
+
+    _write_config(tmp_path, _mqtt_config())
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    draft = loaded["draft"]
+    draft["zendure_mqtt"].pop("username")
+    prepared = prepare_maintenance_config_apply(
+        draft, loaded["revision"], base_dir=str(tmp_path)
+    )
+    assert json.loads(prepared["payload"])["zendure_mqtt"]["username"] == "mqttuser"
 
 
 def test_preview_and_diff_never_leak_broker_password(tmp_path):

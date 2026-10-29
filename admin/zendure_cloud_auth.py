@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Zendure cloud auth and deviceList helpers (Admin only).
 
-Resolves either a raw Zendure API key or Zendure's base64 HA/deviceList token,
+Resolves either a raw Zendure API key or Zendure's base64 deviceList token,
 signs and sends the ``deviceList`` request, and parses the returned device +
 MQTT connection info. Discovery-only: this never publishes, never issues
 properties/read|write, and never writes the EMS config.
@@ -30,7 +30,7 @@ _DEVICE_LIST_PATH = "/api/ha/deviceList"
 DEFAULT_ZENDURE_API_BASE_URL = "https://app.zendure.tech/eu"
 GLOBAL_ZENDURE_API_BASE_URL = "https://app.zendure.tech/v2"
 
-# HA/deviceList tokens embed the API base beside the appKey. Restrict decoded
+# deviceList tokens embed the API base beside the appKey. Restrict decoded
 # URLs to Zendure's known cloud bases: accepting an arbitrary token-provided URL
 # would turn the authenticated Admin endpoint into an SSRF primitive.
 _ALLOWED_ZENDURE_API_BASE_URLS = frozenset(
@@ -47,13 +47,13 @@ DEFAULT_TIMEOUT_S = 25.0
 MAX_TIMEOUT_S = 30.0
 DEFAULT_MQTT_PORT = 1883
 
-_ERR_INVALID_KEY = "Zendure API key or HA token is invalid or expired."
+_ERR_INVALID_KEY = "The Zendure API key is invalid or expired."
 _ERR_DEVICE_LIST_FAILED = "Zendure device list request failed."
 _ERR_DEVICE_LIST_TIMEOUT = (
     "Zendure device list request timed out after {seconds}s. "
     "Zendure cloud may be slow; please retry."
 )
-_ERR_NO_DEVICES = "Zendure returned no devices for this API key or HA token."
+_ERR_NO_DEVICES = "Zendure returned no devices for this API key."
 _ERR_NO_MQTT = "Zendure did not return MQTT connection details."
 
 # Back-compat alias: older call sites referenced the token wording.
@@ -73,9 +73,9 @@ def normalize_app_key(api_key):
 
 
 def resolve_device_list_credential(credential):
-    """Return ``(api_url, app_key)`` for a raw key or HA/deviceList token.
+    """Return ``(api_url, app_key)`` for a raw key or a deviceList token.
 
-    Zendure's HA integration exposes a base64 value whose decoded form is
+    Zendure issues a base64 deviceList token whose decoded form is
     ``<api_url>.<app_key>``. A raw appKey contains no endpoint, so it continues
     to use the EU default. The original credential is never returned to the UI
     or included in an exception.

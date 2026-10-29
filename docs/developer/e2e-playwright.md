@@ -120,6 +120,11 @@ Tags: `@smoke` (fast critical journeys), `@setup`, `@maintenance`,
   next click. The Firefox failure of the MQTT migration spec was this, and it
   had been written off as a flake.
 
+- The console's address opens Modern; the deprecated Classic answers at
+  `/classic/`, and the Classic specs open it there (`LoginPage.goto` and every
+  `page.goto` of a Classic page). Nothing is remembered between the two, so no
+  spec needs a stored choice.
+
 ## Covered lifecycle workflows
 
 The workflows that originally shipped as backend/contract-only coverage now have

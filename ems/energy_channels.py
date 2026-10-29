@@ -77,6 +77,8 @@ ENERGY_CHANNELS = (
 
 CHANNEL_IDS = tuple(channel.id for channel in ENERGY_CHANNELS)
 
+GRID_TO_BATTERY_COLUMN = "grid_to_battery_wh"
+
 _CHANNELS_BY_ID = {channel.id: channel for channel in ENERGY_CHANNELS}
 
 for _channel in ENERGY_CHANNELS:
@@ -85,6 +87,8 @@ for _channel in ENERGY_CHANNELS:
     if _channel.direction not in (POSITIVE, NEGATIVE):
         raise ValueError(f"channel direction is unknown: {_channel.direction}")
 del _channel
+if not GRID_TO_BATTERY_COLUMN.isidentifier():
+    raise ValueError(f"column is not an identifier: {GRID_TO_BATTERY_COLUMN}")
 
 
 def find_channel(channel_id):
@@ -146,8 +150,25 @@ def channel_sample_wh(snapshot, elapsed_hours):
     }
 
 
-def self_sufficiency(home_consumption_wh, grid_import_wh):
-    """Share of house consumption that did not come from the grid.
+def grid_to_battery_wh(grid_import_wh, home_consumption_wh):
+    """Grid energy that went into a charging battery over one interval.
+
+    The import beyond ``home_consumption``, which nets the AC charge out
+    (``ems.power_direction.derive_house_load_w``). The rest counts as the
+    house's, because the meter cannot tell which device it fed. The store keeps
+    the daily total in ``GRID_TO_BATTERY_COLUMN``; the rule and its limits are
+    in docs/dashboard.md, "Energy channels".
+    """
+
+    return max(0.0, float(grid_import_wh or 0) - float(home_consumption_wh or 0))
+
+
+def self_sufficiency(home_consumption_wh, grid_import_wh, charged_from_grid_wh=0):
+    """Share of house consumption the house did not draw from the grid.
+
+    Grid energy the batteries charged (``charged_from_grid_wh``) is taken out
+    of the import; what a battery later gives the house counts as its own
+    (docs/dashboard.md, "Energy channels").
 
     ``None`` when there was no consumption to divide. The share is floored at
     zero: two independently integrated sums can cross over a short window, and
@@ -156,7 +177,10 @@ def self_sufficiency(home_consumption_wh, grid_import_wh):
 
     try:
         home = float(home_consumption_wh or 0)
-        grid = float(grid_import_wh or 0)
+        grid = max(
+            0.0,
+            float(grid_import_wh or 0) - float(charged_from_grid_wh or 0),
+        )
     except (TypeError, ValueError):
         return None
 

@@ -178,6 +178,11 @@ On the same machine, use:
 http://127.0.0.1:8080
 ```
 
+The dashboard opens with its **Overview** page; the guides in
+[EMS Dashboard](user/dashboard/index.md) walk through every page. **Classic
+view** in the side menu opens the deprecated Classic dashboard at `/classic/`,
+which a later release removes.
+
 ## 8. Next Steps
 
 - Configuration details: [configuration.md](technical/configuration.md)

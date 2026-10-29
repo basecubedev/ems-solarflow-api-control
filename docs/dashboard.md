@@ -14,218 +14,258 @@ browser — it is the shared EMS/Admin password), or with
 Both write the same `config/dashboard-auth.json`; the EMS Dashboard's own web UI
 does not create it.
 
-## Control Explain View
+The address opens the dashboard's pages — **Overview**, **Devices**, **Energy**,
+**Analytics**, **Control**, **Schedule**, and under **System** **Diagnose**,
+**Logs** and **Maintenance** — in English, German, Dutch or French. The
+[step-by-step guides](user/dashboard/index.md) walk through each of them; this
+page is the reference for what they show, how they are configured and the API
+behind them. The deprecated Classic dashboard still answers at `/classic/` until
+a later release removes it: the same API, the same session and the same CSRF
+token. `/` sends demo mode (`?demo=1`), `?ui=classic` and a browser too old for
+the current design to Classic; `/modern/`, an earlier address, redirects to `/`.
 
-The Control view shows the detailed calculation flow from measurements to final
-handoff, so the control decision can be followed step by step.
+![The dashboard's Overview page: the status tiles, the live energy flow, the batteries, active rules, today's energy by the hour and the power chart](assets/preview-aggregated.jpg)
 
-![Control Explain demo screenshot](assets/preview-control.jpg)
+## Control Page
 
-## Devices View
+The **Control** page shows the decision of the last control cycle in one
+sentence and eight figures, the runtime settings (see
+[Dashboard Write Mode](#dashboard-write-mode)), the six stages from the
+measured load to the command (**How the target is made**), and **Decision per
+device**: each inverter's five stages from its inputs to its write, with the
+reason a device is held back. See [Control pipeline](user/dashboard/control.md).
+
+![Control page demo screenshot with the current decision, the runtime settings cards, the six pipeline stages and the decision per device](assets/preview-control.jpg)
+
+## Devices Page
 
 Controllable devices (local-API inverters and write-enabled Zendure MQTT
 inverters), telemetry-only Zendure MQTT devices and external devices read over
 MQTT (see
 [External Devices over MQTT](technical/configuration.md#external-devices-over-mqtt-external_mqtt))
 all appear here. A telemetry-only device — one streaming telemetry but not
-enabled for output control — carries a **Telemetry only** badge and omits the
-**Target** tile, because the EMS reads it but never writes an output limit to
-it. Its live PV, output, battery, SOC and limit values still contribute to the
-aggregate totals, so a healthy but uncontrolled inverter is never invisible. A
-telemetry-only device that reports no charge level — an inverter without a
-battery — shows none: its card and its row in the live flow draw no SoC, and the
-average SoC leaves it out rather than counting an empty battery. Any device that
+enabled for output control — carries **Telemetry only** under its name and
+omits the **Target** fact, because the EMS reads it but never writes an output
+limit to it. Its live PV, output, battery, SOC and limit values still contribute
+to the aggregate totals, so a healthy but uncontrolled inverter is never
+invisible. A telemetry-only device that reports no charge level — an inverter
+without a battery — shows none: its card and its row in the energy flow draw no
+SoC, and the average SoC leaves it out rather than counting an empty battery.
+Any device that
 reports no battery packs, controlled or not, such as a SolarFlow 800 without
 battery, is left out the same way, here and in the Analytics SoC.
 
 An E3/DC storage system configured as a read-only device appears the same way,
-with a **Telemetry only** badge: PV, **Output** (its inverter's AC power),
-battery power and SOC, plus a **Grid** value with the grid power the E3/DC
-measures. It has no **Limit** and no **Firmware status** block, because the EMS
-never controls it and it has no Zendure firmware states. See
+with **Telemetry only**: PV, **Output** (its inverter's AC power), battery power
+and SOC, plus a **Grid** value with the grid power the E3/DC measures. It has no
+**Limit** and no **Firmware status** section, because the EMS never controls it
+and it has no Zendure firmware states. See
 [E3/DC as a read-only device](technical/configuration.md#e3dc-as-a-read-only-device).
 
-Each device card carries a compact **Firmware status** block below the main
-power tiles. It translates selected Zendure firmware status values into readable
+Each Zendure device card carries a folded **Firmware status** section below the
+main facts. It translates selected Zendure firmware status values into readable
 labels instead of raw numbers:
 
 - **AC path** — reported from `acStatus`, using `acMode` to clarify the standby
   direction: `AC output active`, `AC charge active`, `AC output standby`,
   `AC charge standby`, or `AC standby`.
-- **SOC guard** — from `socLimit`: `Normal`, `Max-SoC reached`, or
-  `Min-SoC protection`.
+- **SoC guard** — from `socLimit`: `Normal`, `Max SoC reached`, or
+  `Min SoC protection`.
 - **Battery state** — from `packState`: `Standby`, `Charging`, or
   `Discharging`.
 - **DC path** — from `dcStatus`: `DC standby`, `DC battery input path`, or
   `DC battery output path`.
 - **Grid** — from `gridState`: `Grid connected` or `Grid disconnected`.
+- **SoC calibration** — from `socStatus`: `No calibration` or
+  `Calibration running`.
 
-When present, SOC calibration state, battery pack count, and the AC input limit
-are shown as additional facts. Unknown firmware values are still shown with
-their raw value for debugging, for example `Unknown AC state (value 9)`.
+The battery pack count and the AC input limit are main facts of the card when
+the device reports them. Unknown firmware values are still shown with their raw
+value for debugging, for example `Unknown (value 9)`.
 
 When [battery full-charge assist](battery-full-charge-assist.md) is enabled
 and a battery-backed device has known assist state, the device card also shows
-a compact "Full-charge assist" section with the current status (active,
-waiting for state writes or a device report that carries what it writes,
-unavailable over MQTT control, assist window active, restore pending, or
-scheduled), last full-charge and next due timestamps, and pending restore
-flags. Devices without a detected battery, and devices when the feature is
-globally disabled, do not show this section.
+a **Full-charge assist** block with the current status (active, waiting for
+state writes or a device report that carries what it writes, unavailable over
+MQTT control, assist window active, restore pending, overdue, or scheduled),
+last full-charge and next due timestamps, and pending restore steps. Devices
+without a detected battery, and devices when the feature is globally disabled,
+do not show this block.
 
-## Analytics View
+Below the cards, the page draws the energy flow per device and a power chart
+from the local history with a device choice. See
+[Device cards](user/dashboard/devices.md).
 
-The Analytics tab is the home for long-term, InfluxDB-backed analysis: a single
-large primary chart with custom date ranges, [zooming](#zooming-a-chart), series
-overlays, sub-tabs and KPI cards. It is optional — when InfluxDB is not
-configured the tab shows a clean "InfluxDB analytics is not configured" info
-state, and the Aggregate/Devices history (SQLite) keeps working unchanged. See
+![Devices page demo screenshot with the grid meter card first, then two inverter cards, the energy flow per device and the power chart](assets/preview-devices.jpg)
+
+## Analytics Page
+
+The **Analytics** page is the home for long-term, InfluxDB-backed analysis: one
+large chart with views, a device choice, overlays, ranges up to 365 days, custom
+date ranges, [zooming](#zooming-a-chart) and KPI cards. It is optional — when
+InfluxDB is not configured the page shows a clean "InfluxDB analytics is not
+configured" state, and the power charts on Overview and Devices (SQLite) keep
+working unchanged. See
 [Two history sources](#two-history-sources-sqlite-operational-vs-influxdb-analytics)
 for the SQLite vs InfluxDB split and the endpoints involved.
 
-![Analytics tab demo screenshot](assets/preview-analytics.jpg)
+![Analytics page demo screenshot with the Grid view: grid, home and AC charging over 24 hours and the grid KPIs](assets/preview-analytics.jpg)
 
 ## Zooming A Chart
 
-Both time-series charts — the Analytics tab's large one and the lightweight
-History panel — are zoomed the same three ways:
+Every chart with a time axis — the Analytics chart and the power charts on
+Overview and Devices — is zoomed the same three ways:
 
-- **Drag** a band across the plot. The selection is drawn while the pointer is
-  down.
+- **Drag** across the plot. The selection is drawn while the pointer is down.
 - **Mouse wheel** over the plot. It zooms around the pointer, so whatever is
   under it stays under it, and it never scrolls the page while the pointer is
   over a chart.
-- The **`+` and `−` buttons** in the chart's top-left corner, on a strip above
-  the plot so that they cover none of its axis labels. They zoom around the
-  middle of the visible window.
+- The **Zoom in** and **Zoom out** buttons beside the chart's legend. They zoom
+  around the middle of the visible window.
 
-`↺ Back to live` appears in the same corner as soon as a chart is zoomed, and
-it is the reset: it returns the chart to the live window and resumes the 30s
-refresh. `ESC` does the same, and so does zooming all the way back out with the
-wheel or the `−` button. Changing the period, the device, the sub-tab or an
-overlay also returns to live.
+**Reset zoom** appears as soon as a chart is zoomed and returns it to the whole
+range. `Esc` does the same, and so does zooming all the way back out with the
+wheel or **Zoom out**. Choosing another range, device or view also leaves the
+zoom, and so does a click on the range or view already shown. A
+zoomed chart keeps its zoom while new data arrives. A zoom never narrows below
+a minute. The **Power today** chart on the Overview zooms within today.
 
-While a chart is zoomed its auto-refresh is paused, because a refresh resets
-the axis and the zoomed axis is the point. A zoom never narrows below a minute.
+What the charts do with a zoom is the difference between them:
 
-What the two charts do with a zoom is the difference between them:
-
-- **Analytics (InfluxDB)** re-queries the backend for the visible window, which
-  is how it gets the finer bucket and aggregation window for it — see
+- **Analytics (InfluxDB)** asks the backend for the visible window, which is how
+  it gets the finer bucket and aggregation window for it — see
   [the query profiles](#two-history-sources-sqlite-operational-vs-influxdb-analytics).
-  The request is debounced, so a burst of wheel notches produces one request.
-- **History (SQLite)** does not re-query. It has a single profile, so its zoom
-  only rescales the axis of the data already loaded.
+  The page stops refreshing while it is zoomed. A zoom whose window the backend
+  cannot answer says so, with **Reset zoom** on the page.
+- **The power charts (SQLite)** do not ask again. There is a single profile, so
+  their zoom only rescales the axis of the data already loaded.
 
-## Energy Statistics View
+## Energy Page
 
-The Energy tab shows historical inverter output totals and savings estimates
-from the local SQLite aggregates.
+The **Energy** page shows historical inverter output totals and savings
+estimates from the local SQLite aggregates: **Today**, **Yesterday**, **Last 7
+days**, **Last 4 weeks**, **Last 12 months** and **Best day**, a strip with the
+currency, the months with data, the years, the best day and the lifetime, every
+month of the year as a bar (click one for its figures; **Table** lists all
+twelve), and each year with the lifetime total.
 
-A **Basic / Expert** switch in the panel heading decides how many rows each card
-carries; it is a per-browser display choice (`dashboard.energyDetail` in
+A **Basic / Expert** switch at the top decides how many rows each card carries;
+it is a per-browser display choice (`ems-modern.energyDetail` in
 `localStorage`), not configuration, and it changes nothing on the server.
 
-- **Basic** is the board as it was, plus self-sufficiency wherever the period is
-  fully measured.
-- **Expert** adds grid import/export, battery charge/discharge, PV yield and
-  house consumption to the same cards — periods, months, years and the lifetime
-  total alike — together with peak output and the date the channels started.
+- **Basic** shows energy and savings, and self-sufficiency, solar and home use
+  where they were measured.
+- **Expert** adds AC charging, grid import/export and battery
+  charged/discharged to the same cards — periods, months, years and the
+  lifetime total alike — together with the output peak and the date the energy
+  flows started being measured.
 
 A value whose period was only partly measured carries a `◦`; a period the
-channels never covered says "not measured" instead of listing zeros.
+channels never covered says "not measured" in Expert instead of listing zeros,
+and Basic leaves its channel rows out.
 
-Where a period contains AC-charged energy, the card carries an extra **AC
-Charge** figure. It has no monetary value attached on purpose: the
+In Expert, where a period contains AC-charged energy, the card carries an
+extra **AC charging** figure. It has no monetary value attached on purpose: the
 savings figure prices avoided import, and energy put into a battery has avoided
 nothing yet — the discharge that does is already counted. Installations that
-never AC-charge never see the row.
+never AC-charge never see the row. See
+[Energy and analytics](user/dashboard/energy.md).
 
-![Energy statistics demo screenshot](assets/preview-energy.jpg)
+![Energy page demo screenshot with the six period cards, the context strip, the months as bars and as a table, and the years and lifetime](assets/preview-energy.jpg)
 
-## Diagnose View
+## Schedule Page
 
-The Diagnose tab runs the read-only `emsctl diagnose` profiles
-(Install / Deep / Hardware / Control / Quality) from the browser and renders the
-versioned report contract (status pills, sections, root causes). It can also
-download a redacted support bundle as a ZIP.
+The **Schedule** page sets the runtime values the Control page's runtime
+settings change, at set times: rules with one switch point or a window, their
+repeats, and every switch point of the next seven days. It needs a signed-in
+session, and the EMS checks every rule before it can be saved. See
+[Runtime settings and schedules](user/dashboard/runtime-settings.md#schedules)
+and [Schedules](scheduler.md).
 
-![Dashboard Diagnose tab screenshot](assets/preview-diagnose.jpg)
+## Diagnose Page
 
-This tab is **operator-only**: it requires a configured dashboard password and an
-authenticated session. With no password configured it shows a "configure a
-password" empty state; logged out it shows "login required". Runs are
-snapshot-only (no `--sample-seconds` sleeping over HTTP), single-flighted so they
-cannot be hammered, and the served report is passed through secret redaction as
+The **Diagnose** page runs the read-only `emsctl diagnose` profiles
+(**Installation**, **Deep**, **Hardware**, **Control**, **Control quality**)
+from the browser and renders the versioned report contract (status, counts,
+root causes, sections). **Copy JSON** copies the report, and **Support bundle**
+downloads a redacted support bundle as a ZIP.
+
+![Diagnose page demo screenshot with a Hardware report for an offline device: one error and two warnings, the root causes and the sections](assets/preview-diagnose.jpg)
+
+This page is **operator-only**: it requires a configured dashboard password and
+an authenticated session. With no password configured it says that none is
+set; signed out it asks for a sign-in. Runs are snapshot-only (no
+`--sample-seconds` sleeping over HTTP), single-flighted so they cannot be
+hammered, and the served report is passed through secret redaction as
 defense-in-depth.
 
-## Logs View
+## Logs Page
 
-The Logs tab tails the EMS service log from an in-memory ring buffer (the stock
-service writes no log file). It polls incrementally, supports a display **Filter**
-(severity), a follow/auto-scroll toggle, and bounds the rendered rows. A separate
-**Service** level selector changes the running service's log verbosity live
-(e.g. switch to Debug to surface debug lines that are otherwise not emitted); the
-display Filter only hides what is already in the buffer, so raising the Service
-level is what actually produces more lines. The Service selector is a write
-action (session + CSRF) and is disabled until authenticated. Like Diagnose it is
-**operator-only** behind an authenticated session. Lines are control-character
-sanitized server-side and HTML-escaped in the browser; an optional redaction
-toggle (`dashboard.log_redaction`) masks secret-looking values for shared/remote
+The **Logs** page tails the EMS service log from an in-memory ring buffer (the
+stock service writes no log file). It polls incrementally, has a display level
+filter (**All**, **DEBUG**, **INFO**, **WARNING**, **ERROR**), a **Follow**
+switch, and **Clear**, which empties the view only. A separate **Service level**
+choice changes the running service's log verbosity live (switch to `DEBUG` to
+surface debug lines that are otherwise not emitted); the level filter only hides
+what is already in the buffer, so raising the service level is what actually
+produces more lines. The service level is a write action (session + CSRF); a
+change the EMS refuses says why, and the choice goes back to the level the
+service runs at. Like
+Diagnose the page is **operator-only**. Lines are control-character sanitized
+server-side and rendered as text in the browser; an optional redaction setting
+(`dashboard.log_redaction`) masks secret-looking values for shared/remote
 deployments (raw by default for authenticated operators).
 
-![Dashboard Logs tab screenshot](assets/preview-logs.jpg)
+![Logs page demo screenshot with the level filter, Follow, the service level and the log lines, among them an error and a warning about an offline device](assets/preview-logs.jpg)
 
-## Maintenance View
+## Maintenance Page
 
-The Maintenance tab exposes the operator maintenance tools (backup, restore and
-config upgrade) so a Docker-first user never has to drop to a terminal. It uses the Control/Energy stage style with five numbered stage
-cards: **01 Maintenance Status**, **02 Backup**, **03 Restore**, **04 Config
-Upgrade**, **05 Safety Notes**. The Maintenance view hides the live-flow chrome
-(the top live metrics strip and the "Live Flow" heading) because it is not a
-live-monitoring screen.
+The **Maintenance** page exposes the operator maintenance tools (backup, restore
+and config upgrade) so a Docker-first user never has to drop to a terminal. It
+has five cards: **Maintenance status**, **Safety notes**, **Backups**,
+**Restore** and **Config upgrade**.
 
 It is **operator-only** behind an authenticated session. The read endpoints
 (`status`, `backups`, `config-upgrade`) require a valid session; every
-create/inspect/restore/apply action is a write action (session + CSRF token)
-and is disabled until authenticated. Action buttons are also disabled while a
-maintenance action is running, and a server-side single-flight lock prevents
-concurrent backup/restore/upgrade operations.
+create/inspect/restore/apply action is a write action (session + CSRF token).
+Action buttons are disabled while a maintenance action is running, and a
+server-side single-flight lock prevents concurrent backup/restore/upgrade
+operations.
 
 What it can do:
 
 - **Create backups** (`config`, `databases`, and bundled `influxdb`) while the
-  EMS keeps running. The GUI creates **unencrypted** local archives; the UI
-  warns that backups may contain secrets and private energy data and should be
-  downloaded/stored safely. Bundled InfluxDB uses the same runner as the CLI;
-  if InfluxDB is disabled or external, the card shows a clean unavailable state
-  instead of failing.
+  EMS keeps running. The page creates **unencrypted** local archives; it warns
+  that backups may contain secrets and private energy data and should be stored
+  safely. Bundled InfluxDB uses the same runner as the CLI; if InfluxDB is
+  disabled or external, the status card says so instead of failing.
 - **List and inspect backups** from the project backup directory only
   (`ems-*.tar.gz` / `.enc`). Inspect is a `POST` so an encrypted backup's
-  password can travel in the body, never the URL. The current Details action
-  does not request a password, so encrypted contents stay locked there; use
-  Restore preview or `emsctl` inspect with the password instead. Manifest
-  summaries are sanitized (no file checksums).
+  password can travel in the body, never the URL. **Details** does not request
+  a password, so encrypted contents stay locked there; use the restore preview
+  or `emsctl` inspect with the password instead. Manifest summaries are
+  sanitized (no file checksums).
 - **Restore** config, local SQLite databases and bundled InfluxDB backups with
-  a deliberate two-step flow: **select a backup → preview (dry-run) → confirm**.
-  Restore wraps the same `ems.backup` core as `emsctl.py backup restore`. Every
-  restore creates a rollback backup first (and refuses to start if the rollback
-  fails), validates checksums, and uses non-interactive replace semantics only
-  after explicit confirmation. Config restore reports that a restart and
-  re-login may be required; database restore is coordinated with the dashboard
-  store so SQLite files are not swapped mid-write; bundled InfluxDB restore is
-  replace-style and external InfluxDB is rejected.
-- **Preview and apply a config upgrade**. Before applying, the preview shows the
-  concrete added keys, migrated values, new explanatory comments,
-  refreshable/outdated comments, and format/layout changes. Sensitive values
-  are redacted. Apply requires explicit confirmation, always creates a config
-  backup first, and reminds the operator to restart EMS and re-login if needed.
+  a deliberate two-step flow: **select a backup → Preview restore (dry-run) →
+  Confirm restore**. Restore wraps the same `ems.backup` core as
+  `emsctl.py backup restore`. Every restore creates a rollback backup first (and
+  refuses to start if the rollback fails), validates checksums, and uses
+  non-interactive replace semantics only after explicit confirmation. Config
+  restore reports that a restart and re-login may be required; database restore
+  is coordinated with the dashboard store so SQLite files are not swapped
+  mid-write; bundled InfluxDB restore is replace-style and external InfluxDB is
+  rejected.
+- **Preview and apply a config upgrade**. **Check config** shows the concrete
+  added keys, migrated values, new explanatory comments, refreshable comments,
+  and format/layout changes. Sensitive values are redacted. **Apply with
+  backup** requires explicit confirmation, always creates a config backup first,
+  and reminds the operator to restart the EMS.
 
-Encrypted-backup passwords are read from the input only at request time and
-cleared from the field after the request; they are never stored in browser
-state or rendered back into the page.
+Encrypted-backup passwords are read from the input only at request time,
+travel in the request body, and are cleared from the field once a restore has
+run; they are never written to browser storage.
 
-![Dashboard Maintenance tab screenshot](assets/preview-maintenance.jpg)
+![Maintenance page demo screenshot with the status, the safety notes, the backups, the restore form and a checked config upgrade](assets/preview-maintenance.jpg)
 
 What it intentionally does **not** do: EMS version downgrade, image switching,
 or container start/stop/restart. Downgrade is modelled as restore from a backup
@@ -244,16 +284,16 @@ python3 scripts/serve_dashboard_preview.py
 python3 scripts/serve_dashboard_preview.py --scenario firmware-status
 python3 scripts/serve_dashboard_preview.py --scenario ac-charging
 python3 scripts/serve_dashboard_preview.py --scenario write-mode
+python3 scripts/serve_dashboard_preview.py --now 2026-10-21T18:30:00+02:00
 ```
 
-It serves the real dashboard assets on `http://127.0.0.1:8767`. Open the landing
-page at `http://127.0.0.1:8767/preview` for links to every view, or go straight to
-a view (`/preview/aggregated`, `/preview/devices`, `/preview/control`,
-`/preview/energy`, `/preview/diagnose`, `/preview/logs`,
-`/preview/maintenance`). Scenarios cover a healthy system, a fleet where one
-device AC-charges the surplus of another (`ac-charging`, the only state that
-draws the grid → inverter pipe and, per device, the house → inverter charge line), mixed firmware-status values (including unknown
-values), an offline device, and read-only/write-mode authentication states. See
+It serves the real dashboard assets on `http://127.0.0.1:8767`: the dashboard
+at `/`, and the deprecated Classic at `/preview` with a link per view.
+Scenarios cover a healthy system, a fleet where one device AC-charges the
+surplus of another (`ac-charging`), mixed firmware-status values (including
+unknown values), an offline device, and read-only/write-mode authentication
+states; `--now` pins the preview's clock to one instant. The documentation
+screenshots are captured against this server; see
 [developer.md](developer/developer.md#local-dashboard-preview) for details.
 
 ## Configuration
@@ -320,8 +360,9 @@ statistics and period lookups such as Today and Yesterday.
 
 ## Dashboard Write Mode
 
-Write mode is optional and only changes allowlisted runtime-state values from
-the Control tab. Live metric tiles remain read-only.
+Write mode is optional and only changes allowlisted runtime-state values: in
+the **Runtime settings** card of the Control page, and as switch points on the
+Schedule page. Every live value on the other pages stays read-only.
 
 Dashboard write mode can change live EMS behavior. Enable it only on trusted
 networks and only for operators who should be able to change runtime settings.
@@ -366,16 +407,17 @@ Power limits are checked against the configured EMS and device limits, not only
 generic type ranges. The routes follow the same allowlist, so a section is
 reachable exactly when it is writable — there is no second list to keep in sync.
 
-After a save the Control tab reloads the runtime state. A reload started
-earlier -- the 30-s refresh, a retry -- that answers after the save's reload
-has answered is dropped, and so is a failure older than the values on screen,
-so neither replaces the saved values with older ones. A failed reload is no
-values: an earlier reload answering after it is still shown.
+After a save the Control page reloads the runtime state, and it reads it again
+every 30 s. The newest read wins: an answer to an earlier read -- the 30-s
+refresh, a retry -- that arrives after a later one is dropped, data or failure
+alike, so it never replaces the saved values with older ones. A save sends only
+the fields that were changed; a field nobody edited takes a newer stored value.
 
-What the Control tab can change: EMS enabled / max total power / min output
+What the Control page can change: EMS enabled / max total power / min output
 limit / loop interval; per device its enabled flag, **AC charging**, max power,
-PV priority and offgrid socket mode; Winter mode; and **AC charging** for the
-whole installation.
+PV priority, off-grid socket mode, AC role and AC charge power, and the light,
+fan, buzzer and battery heating where the inverter has them; Winter mode; and
+**AC charging** for the whole installation.
 
 Both AC-charging switches take effect on the next control cycle. Turning either
 one off stops a running charge in the same cycle, without a restart — stopping a
@@ -458,6 +500,8 @@ inverter output:
 <entry>.channels.<channel>.wh
 <entry>.channels.<channel>.kwh
 <entry>.coverage.<channel>     only when it is not "full"
+<entry>.grid_to_battery_wh
+<entry>.grid_to_battery_kwh
 <entry>.ratios.self_sufficiency
 ```
 
@@ -467,10 +511,11 @@ directions of the snapshot's signed grid and battery power plus PV and house
 load; `ems/energy_channels.py` owns that split and is the only place that
 states the sign convention.
 
-`home_consumption` is the load at the grid connection point (`inverter output +
-grid import`), so energy the EMS charges the battery with from AC — winter
-mode, full-charge assist, an `ac_input` device — is part of it: the grid meter
-cannot tell that apart from a household load.
+`home_consumption` is what the household draws: `inverter output + grid power`
+less the power the fleet charges from AC — winter mode, full-charge assist, an
+`ac_input` device — because the grid meter alone cannot tell a charging device
+from a household load (`ems.power_direction.derive_house_load_w`). Days that
+EMS v0.8.11 and v0.8.12 recorded still count that charging in home use.
 
 Whether a sample may be integrated is decided for the sample as a whole:
 `grid_power_valid` and `device_power_valid` both have to hold, or the sample
@@ -530,17 +575,33 @@ hole in it, even though the channel began somewhere inside that day. Marking it
 would leave every range that contains the start — the lifetime, the first
 month, the first calendar year — incomplete for good, and those are the ranges
 whose ratio a reader keeps. The price is one partly measured day inside them;
-`channel_meta[].since` and the board's `Measured since` row say when the
+`channel_meta[].since` and the board's `Energy flows since` row say when the
 measuring began.
 
 Both `coverage` and `lifetime.since_date` are built from the sample timestamps,
 so a system whose clock was wrong before it reached NTP can backdate them by
 the length of that error.
 
-`self_sufficiency` is the share of house consumption that did not come from the
-grid. It is derived at read time from `home_consumption` and `grid_import`, and
-is `null` unless those two were being measured across the whole entry — from a
-first day at or before its start to a last day at or after its end.
+`self_sufficiency` is the share of house consumption the house did not draw
+from the grid; energy a battery gives it counts as its own. It is derived at
+read time from `home_consumption`, `grid_import` and `grid_to_battery_wh`, and
+is `null` unless the two channels were being measured across the whole entry —
+from a first day at or before its start to a last day at or after its end.
+
+Grid energy a battery charges is not house consumption, so the ratio takes
+`grid_to_battery_wh` out of the import. `home_consumption` has the power the
+fleet charges from AC netted out already, so the grid energy that went beyond
+it can only have gone into a charging battery; it is integrated sample by
+sample (`ems.energy_channels.grid_to_battery_wh`) and shares the coverage of
+`grid_import`: where that is `partial` or `none`, so is this figure. Whether
+the rest of the import fed the house or a battery the meter cannot tell — one
+device may be charging from another's output — and it is counted as the
+house's, so no import the measured home use accounts for is booked to a
+battery. What a battery later gives the house counts as its own, whatever
+charged it: the EMS does not trace grid energy through a battery, so a battery
+that charged from the grid and discharged into the house lifts the ratio above
+the solar share. A day recorded before `grid_to_battery_wh` existed has 0 there
+and counts its whole import, as it always did.
 
 Time inside the entry that nobody measured — a hole in a day, a day the EMS
 never ran — marks the figures instead of hiding the number. A sample is
@@ -580,13 +641,13 @@ in its own workspace:
 
 | Source       | Backed by                         | Drives                                 | Endpoint               |
 |--------------|-----------------------------------|----------------------------------------|------------------------|
-| **SQLite**   | local snapshot store (always on)  | the **History** chart in Aggregate / Devices | `/api/history/series`  |
-| **InfluxDB** | optional InfluxDB 2.x (opt-in)    | the dedicated **Analytics** tab        | `/api/analytics/series`|
+| **SQLite**   | local snapshot store (always on)  | the power charts and today tiles on Overview, the power chart on Devices | `/api/history/series`  |
+| **InfluxDB** | optional InfluxDB 2.x (opt-in)    | the dedicated **Analytics** page       | `/api/analytics/series`|
 
 InfluxDB never silently replaces the SQLite history: `/api/history/series` is
-**always** SQLite-backed, so the Aggregate and Devices views work with zero
+**always** SQLite-backed, so the Overview and Devices pages work with zero
 external dependencies and remain the default experience. Enabling InfluxDB only
-adds the Analytics tab; it does not change the operational charts.
+adds the Analytics page's data; it does not change the operational charts.
 
 #### How analytics data gets into InfluxDB (ingestion)
 
@@ -672,16 +733,18 @@ reports `"range": "custom"`. `start >= end` or unparseable bounds return
 front-end uPlot chart can plot every series on one shared time axis. The
 `source` is always `sqlite`. When the range reaches further back than the store
 keeps (`dashboard.history_hours`, 48 h by default — so `7d` and beyond),
-`meta.retention_hours` names the retention, and the History panel says under
-the chart that the range shows that many hours at most.
+`meta.retention_hours` names the retention, and the chart says under it that
+the local history keeps that many hours and older data is in Analytics.
 
-The lightweight **History** panel (shown only on the Aggregate and Devices
-views) uses this endpoint for one combined chart of the default
-PV / Inverter Output / Battery series with a range selector and a device
-filter. It is intentionally minimal — no overlays, sub-tabs or KPIs — so these
-operational views stay quick to load. It [zooms](#zooming-a-chart), but only by
-rescaling the axis: there is one query profile here, so a narrower window never
-re-queries.
+The power charts on the **Overview** and **Devices** pages use this endpoint.
+**Power today** on the Overview plots solar, home, battery and grid from
+midnight, with **1 h**, **6 h**, **Today**, **24 h** and **7 d**; it also feeds
+the hourly today tiles and their comparison with yesterday. **Power, last 24 h**
+on Devices plots solar, inverter output and battery with **1 h**, **6 h**,
+**24 h** and **7 d** and a device choice. Both are intentionally minimal — no
+overlays, views or KPIs — so these operational pages stay quick to load. They
+[zoom](#zooming-a-chart), but only by rescaling the axis: there is one query
+profile here, so a narrower window never re-queries.
 
 #### `/api/analytics/series` and `/api/analytics/status` — analytics (InfluxDB)
 
@@ -696,8 +759,8 @@ active when `influxdb.enabled` is set in config. `/api/analytics/status` returns
 `{"available": <bool>, "provider": "influxdb", "reason": ...}` so the front-end
 can render a clean state. When InfluxDB is **not** configured, both endpoints
 respond with HTTP 200 and `{"available": false, "reason": "not_configured"}`
-(never a broken chart or a JavaScript error); the Analytics tab then shows an
-"InfluxDB analytics is not configured" info panel. The series response shares the
+(never a broken chart or a JavaScript error); the Analytics page then shows an
+"InfluxDB analytics is not configured" card. The series response shares the
 same columnar shape as `/api/history/series`, with `source` set to `influxdb`.
 
 A query whose bucket was never created answers the same way, with
@@ -711,45 +774,53 @@ profile names, so a partial schema leaves the short ranges working and empties
 only the longer ones — see
 [technical/influxdb.md](technical/influxdb.md#analytics-is-empty-although-influxdb-is-reachable).
 
-The **Analytics** tab is a dedicated, larger analysis workspace (the primary
-chart is ~560px tall on desktop) reusing the existing PV/Output/Battery/Grid
-colors, with a period selector, a device filter, custom date ranges,
-[zooming](#zooming-a-chart), overlays, sub-tabs, and KPI cards — one combined
-chart, never a chart explosion.
+The **Analytics** page is a dedicated, larger analysis workspace reusing the
+energy colours of every other chart, with a range selector, a device choice,
+custom date ranges, [zooming](#zooming-a-chart), overlays, views and KPI cards —
+one combined chart, never a chart explosion.
 
-The Analytics tab has sub-tabs that keep the same single chart and only change
-the visible series and KPI cards (no extra chart pages):
+The views keep the same single chart and only change the visible series and the
+energy KPI cards (no extra chart pages):
 
-- **Overview** / **Devices** — PV, Inverter Output, Battery Power; KPIs PV,
-  Output, Charge, Discharge, Current SoC, Runtime Role.
-- **Grid** — Grid Power, Home Load and AC Charge; KPIs Grid Import, Grid
-  Export, Home, AC Charge, Current SoC.
-- **Battery** — Battery Power; KPIs Charge, Discharge, Current SoC, Runtime
-  Role.
-- **PV** — PV Input and Inverter Output; KPIs PV, PV Peak, Output, Current SoC.
+- **Overview** / **Devices** — Solar, Output, Battery; KPIs Solar, Output,
+  Battery charged, Battery discharged.
+- **Grid** — Grid, Home use and AC charging; KPIs Grid import, Grid export,
+  Home use, AC charging.
+- **Battery** — Battery; KPIs Battery charged, Battery discharged.
+- **Solar** — Solar and Output; KPIs Solar, Solar peak, Output.
+
+Every view adds **Current state of charge** and **Runtime role**.
 
 Energy KPIs are integrated from the window the chart loaded, and each of them
-and PV Peak names that window: the period button (`PV · 24h`), or the span of a
-custom range or a zoom (`PV · 3d`, `Charge · 1.5h`, `Charge · 20m`). Current SoC
-and Runtime Role come from the live snapshot. With a device selected, PV,
-Output, Charge, Discharge, AC Charge, PV Peak, Current SoC and Runtime Role
-describe that device; Grid Import, Grid Export and Home always describe the grid
-meter, which measures the whole house. A device that reports no charge level
-shows `--` for Current SoC, not 0 %, and a read-only device (telemetry only, or
-an external device) has no runtime role: it shows `--` on its own and is left
+and Solar peak names that window: the range button (`Solar · 24 h`), or the
+length of a custom range or a zoom (`Solar · 3 d`, `Battery charged · 20 min`).
+Current state of charge and Runtime role come from the live snapshot. With a
+device selected, Solar, Output, Battery charged, Battery discharged, AC
+charging, Solar peak, Current state of charge and Runtime role describe that
+device; Grid import, Grid export and Home use always describe the grid meter,
+which measures the whole house. A device that reports no charge level shows `—`
+for Current state of charge, not 0 %, and a read-only device (telemetry only, or
+an external device) has no runtime role: it shows `—` on its own and is left
 out of the role of all devices. A step between two samples longer than
 three times the series' typical spacing is a gap in the record and is not
 integrated, so an outage does not count as power held at its last value. A
-KPI's series is always part of its tab's fetched set — a KPI reading a series
-the tab does not request would render a permanent `--`, which reads like a
+KPI's series is always part of its view's fetched set — a KPI reading a series
+the view does not request would render a permanent `—`, which reads like a
 measurement rather than a wiring mistake.
 
-Overlay toggles add optional series on top of the active tab without changing
-it: **SoC** (drawn on a secondary right-hand percentage axis), **EMS Target**,
-**Grid Power** and **AC Charge**. Every overlay is data-backed (no overlay is
-empty by design). Overlays render as dashed lines and the crosshair/live legend reports
-every visible series at the cursor. A custom date range (from/to pickers +
-Apply) replaces the period selector when set.
+Overlay toggles add optional series on top of the active view without changing
+it: **EMS target**, **Grid**, **AC charging** and **State of charge** (drawn on
+its own 0–100 % scale on the right). An overlay is drawn as a dashed line
+without a fill, as in Classic, so it reads as laid over the view's own series;
+a series the view carries itself, such as Grid on the Grid view, keeps its
+style. Every overlay is data-backed (no overlay is
+empty by design). The live legend above the chart reports every visible series
+at the cursor. Every power chart — Analytics and the SQLite charts on Overview
+and Devices, in Classic and in Modern — draws the battery below zero while
+charging and above zero while discharging, and its legend reads *Charge* or
+*Discharge* with the power. That is display only: the APIs, the stores and the
+KPIs keep the battery positive while charging. A custom date range (**From** /
+**To** + **Apply**) replaces the range buttons while it is set.
 
 Analytics series definitions (consistent across the native writer, the InfluxDB
 schema/provider and the frontend):
@@ -801,43 +872,32 @@ Performance and refresh behavior:
   not by the chart window. With the EMS writing roughly every 3s, a 1h chart can
   show ~3s-level detail, but a spike shorter than the write interval can still be
   missed because it was never sampled.
-- The Analytics tab auto-refreshes every 30s, but only while it is the active
-  view; other views and a backgrounded browser tab do not trigger analytics
-  fetches. Each sub-tab loads only its own series. An Analytics answer for a
-  selection that is no longer on screen — a refresh overtaken by a device,
-  range, tab or zoom choice — is dropped, so the chart and KPIs show the latest
-  choice. An answer for the selection on screen is shown whenever it arrives,
-  also when it takes longer than the refresh interval or a later refresh for
-  the same selection failed first — unless the data on screen came from a later
-  request for that selection: the older answer, whether data, an error or
-  "unavailable", is then dropped and that data stays. The lightweight
-  History panel refreshes on the same cadence while Aggregate/Devices is on
-  screen, and keeps the same rule for its range and device. Either panel's
-  refresh pauses while [its chart is zoomed](#zooming-a-chart).
-- Both panels are mobile-friendly (controls, overlay chips, sub-tabs and KPI
-  cards reflow; charts use reduced heights on small screens) and show explicit
-  loading and empty/unavailable states.
+- The Analytics page refreshes every 30 s, but only while it is on screen and
+  the browser tab is visible, and not while its chart is
+  [zoomed](#zooming-a-chart). Each view loads only its own series and the
+  overlays switched on. An answer for a choice that is no longer on screen — a
+  refresh overtaken by a device, range, view or zoom choice — is dropped, so the
+  chart and KPIs show the latest choice. A refresh that fails keeps the last
+  answer and says *Could not refresh; this is the last answer.*; a new range
+  whose read fails says so instead of showing the last range under the new
+  label. The power charts on Overview and Devices refresh once a minute under
+  the same rules.
+- Every page lays out for a phone (controls and chips wrap, KPI cards reflow,
+  charts get less height) and shows explicit loading, empty and unavailable
+  states.
 
 Browser-CPU behavior (live updates):
 
-- Live SSE/poll snapshots are **view-gated**: each update refreshes the global
-  header metrics plus only the section for the visible view. Hidden views (the
-  aggregated flow SVG, device cards/flow, energy stats, control explain) are not
-  rebuilt while another tab is on screen, and switching views renders the newly
-  visible view immediately from the latest snapshot.
-- While the Analytics tab is active, live snapshots update only the cheap live
-  KPI cards (Current SoC, Runtime Role). The series-based KPIs are integrated
-  once per analytics data load and cached; they are not re-integrated on every
-  live snapshot.
-- The analytics and history charts are **reused in place** (`uPlot.setData`)
-  across refreshes when their structure (series set, overlays, axes, selected
-  device) and the palette's colours are unchanged; the chart is only
-  destroyed/recreated when one of them changes or the data becomes empty. A
-  palette switch rebuilds the chart on screen at once, and a chart on a hidden
-  tab when it is next drawn.
-- `dashboard.animation_mode` (`normal` / `reduced` / `off`) reduces or disables
-  the animated flow view's pipe motion and glow/blur filters to lower CPU/GPU
-  load; `prefers-reduced-motion` is always honored on top of it. See
+- Only the page on screen exists: switching pages builds the new one from the
+  latest snapshot, and a page that is not shown renders nothing and fetches
+  none of its own data.
+- The charts are **reused in place** (`uPlot.setData`) across refreshes; a chart
+  is only rebuilt when its structure changes — the series, the colour scheme,
+  the language or its height. A rebuild keeps a zoom.
+- `dashboard.animation_mode` (`normal` / `reduced` / `off`) slows (`reduced`,
+  half speed) or stops (`off`) the energy flow's moving dashes to lower CPU/GPU
+  load; `prefers-reduced-motion` and the **Motion** choice in the Appearance
+  menu are honored on top of it. See
   [configuration.md](technical/configuration.md).
 
 End-to-end tests (`tests/test_history_analytics_e2e.py`) cover the whole path.
@@ -939,8 +999,8 @@ plan is stale or no longer matches the current config/template state. Refresh
 the preview before trying again. Apply also requires `confirm_apply` and always
 creates a config backup before writing.
 Restore wraps the same `ems.backup` core as `emsctl.py backup restore`; EMS
-version downgrade and container controls are intentionally not exposed — see the
-Maintenance View section.
+version downgrade and container controls are intentionally not exposed — see
+[Maintenance Page](#maintenance-page).
 
 ## Session Lifetime
 

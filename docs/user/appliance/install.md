@@ -2,8 +2,10 @@
 
 > **Video:** [Install Raspberry Pi](https://www.youtube.com/watch?v=8yq6SYDR6sY)
 
+## Purpose
+
 Writing the appliance image onto an SD card. About twenty minutes, most of it
-waiting.
+waiting. The browser part starts afterwards, in [First start](first-start.md).
 
 > **Not confirmed on physical hardware.** The appliance image is derived and
 > tested in emulation, not on a Raspberry Pi the maintainer owns — see
@@ -214,11 +216,13 @@ There is no way to put WLAN credentials on the card before the first start. The
 appliance has to be reachable over Ethernet first, and you set up WLAN from its
 web interface afterwards — see [Network](network.md).
 
-## 5. Find it and log in
+## 5. Find it and sign in
 
-Continue with [First start](first-start.md).
+Continue with [First start](first-start.md): open
+`http://ems-solarflow.local:8088`, create the password, and the
+[assistant](assistant.md) takes it from there.
 
-## If something went wrong
+## Warnings and common problems
 
 | What you see | What it usually is |
 | --- | --- |
@@ -227,4 +231,7 @@ Continue with [First start](first-start.md).
 | LED flickers, but nothing on the network after five minutes | The cable, or the switch port. Try another port |
 | It was on the network, then vanished | The first start brings services up in stages and the page appears only at the end. Wait two minutes |
 
-More in [When it stops working](recovery.md).
+## Recovery or next steps
+
+- The page does not answer → [When it stops working](recovery.md)
+- The page answers → [First start](first-start.md)

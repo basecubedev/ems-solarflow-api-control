@@ -68,15 +68,19 @@ python3 emsctl.py backup create --type databases
 python3 emsctl.py backup create --type influxdb
 ```
 
-You can also create `config`, `databases`, and bundled `influxdb` backups from
-the dashboard **Maintenance** tab (authenticated operators) without a terminal.
-The dashboard creates **unencrypted** archives in the same backup directory; for
-password-protected backups use the CLI. The Maintenance tab can also **restore**
-config, database and bundled InfluxDB backups through a guided
-select → preview → confirm flow that wraps this same restore core (it always
-creates a rollback backup first). `emsctl.py backup restore <archive>` remains
-the canonical restore command, and EMS version downgrade / image switching is
-only handled offline via the CLI, not the live dashboard.
+You can also create `config`, `databases`, and bundled `influxdb` backups on the
+dashboard's **Maintenance** page (signed in) without a terminal, see
+[Diagnostics and maintenance](../user/dashboard/diagnostics.md#maintenance). The
+dashboard creates **unencrypted** archives in the same backup directory; for
+password-protected backups use the CLI. The same page can also **restore**
+config, database and bundled InfluxDB backups through a guided select →
+**Preview restore** → **Confirm restore** flow that wraps this same restore core
+(it always creates a rollback backup first). The Admin Console's **Backups**
+page creates and restores the same archives and creates no encrypted one either,
+see [Backup and restore](../user/admin/backup-restore.md).
+`emsctl.py backup restore <archive>` remains the canonical restore command, and
+EMS version downgrade / image switching is only handled offline via the CLI,
+not the live dashboard.
 
 What to keep in mind when deciding:
 

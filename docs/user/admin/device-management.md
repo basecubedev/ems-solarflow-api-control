@@ -2,8 +2,9 @@
 
 ## Purpose
 
-Add, edit, disable, re-enable or remove inverters and grid meters, and switch an
-inverter between its available connections — without hand-editing `config.json`.
+Add, edit, disable, re-enable or remove inverters and grid meters, and switch
+an inverter between its available connections — without hand-editing
+`config.json`.
 
 ## When to use this workflow
 
@@ -15,143 +16,163 @@ inverter between its available connections — without hand-editing `config.json
 
 ## Prerequisites
 
-- An installed EMS, and Maintenance open — see [Maintenance](maintenance.md).
-- For a new device: it is powered on and reachable (on the LAN, or publishing to
-  a broker you have configured).
+- An installed EMS, and the console signed in — see
+  [Maintenance](maintenance.md).
+- For a new device: it is powered on and reachable (on the LAN, or publishing
+  to a broker the search may use).
 
 ## Step-by-step instructions
 
-### 1 — Open the device list
+### 1 — Open the devices
 
-![Settings and devices card showing the inverter and grid-meter configuration](../../assets/screenshots/admin/admin-maintenance-config-hardware.png)
+![Settings and devices on the Devices tab: Find devices with Search my network, What the search may use with broker credentials and the Zendure cloud key, and the devices — grid meter, Zendure MQTT broker and two inverters — with the three Add buttons](../../assets/screenshots/admin/admin-settings-devices.png)
 
-**Where:** Maintenance → **Settings & devices** → the **Devices** tab.
+**Where:** **Settings & devices** → the **Devices** tab. The assistant's **Add
+a device** tile and **Open the devices** lead straight here.
 
-**What you see:** the **Grid meter** section and an **Inverters / devices**
-section with one card per logical device. Each card shows the EMS name (`INV_1`,
-`INV_2`, …), the model, the address or route, and a short connection pill —
-**API**, **MQTT** or **Zendure MQTT**.
+**What you see:** three cards.
 
-**What it changes:** nothing. This is the current configuration.
+- **Find devices** — **Search my network**, a field to **Scan** one address or
+  range, and what the search looks at.
+- **What the search may use** — the credentials for your own MQTT brokers and
+  the Zendure cloud API key; see [MQTT](mqtt.md).
+- **Devices** — one card per device: the **Grid meter**, the **Zendure MQTT
+  broker**, and each inverter (*Inverter 1*, *Inverter 2*, …) with its model,
+  EMS name, address, serial and power, its connection (**Local connection**,
+  *Zendure via your own MQTT broker*, *Zendure via the Zendure cloud*) and
+  **Enabled** or **Disabled**. Under them **Add an inverter**, **Add an
+  inverter over MQTT** and **Add an E3/DC (read only)**.
 
-### 2 — Edit a device
+**What it changes:** nothing. This is the saved configuration.
 
-**What you can change:** the EMS name, the power limits, and connection details.
+### 2 — Find a new device
 
-**What it changes:** the draft only. `config/config.json` is untouched until you
-apply.
+![The search results after Search my network: INV_1, INV_2 and the grid meter in the settings, and a new SolarFlow 800 Pro with Add inverter and Ignore](../../assets/screenshots/admin/admin-settings-search.png)
 
-**Expected result:** the card shows your new values and the card summary reports
-that a preview is needed.
+**What you select:** **Search my network**.
 
-**If it differs:** emptying a field **removes** that setting so EMS uses its own
-default — that is intended. Leaving a password box blank **keeps** the stored
-secret; use the explicit clear control to remove one.
+**What it changes:** nothing. The search looks at mDNS, the recommended
+networks, the networks of your devices, your MQTT brokers and, with a saved
+key, the Zendure cloud. Nothing it finds changes anything until you add it and
+save.
 
-### 3 — Disable, re-enable or remove
+**Expected result:** *The search finished. Its results stay until you clear
+them.*, a summary (*In the settings: 3 · new: 1 · not found: 0 · moved: 0*,
+followed by *added to your changes* once you add something) and one card per
+find, each with its state:
+
+| State | Meaning | Its button |
+| --- | --- | --- |
+| **In the settings** | Saved as it is | — |
+| **New** | Not in the settings yet | **Add inverter**, **Use as grid meter** or **Add as read-only device**; **Ignore** leaves it out of this search |
+| **Not found** | In the settings, not found by this search | — |
+| **Address changed** | The same device, found at another address | **Take the new address**; once taken, the card keeps **Address changed** and its button reads **Added** until you save |
+| **Another connection** | A device you have, reachable another way | **Use this connection** — see step 5 |
+| **Added to your changes** | Added in this session, not saved yet | — |
+| **Identity conflict** | The find contradicts a device you have | — (refused on purpose) |
+
+**What you select next:** the find's button, for example **Add inverter**.
+
+**What it changes:** your unsaved changes only. The device appears under
+**Devices**, opened, so you can check it.
+
+**If it differs:** *The Zendure cloud was skipped: save an API key for it to
+include cloud devices.* — see [MQTT](mqtt.md). **Clear results** forgets the
+finds; your changes stay.
+
+### 3 — Edit a device
+
+![Inverter 1 opened: Enabled, device name INV_1, device IP address, serial number, device output limit, minimum and maximum SoC, and Advanced settings folded away](../../assets/screenshots/admin/admin-settings-device.png)
+
+**What you select:** a device's card, to open it.
+
+**What you can change:** the **Enabled** switch, the **Device name**, the
+address, the **Serial number**, the **Device output limit**, the **Minimum
+SoC** and **Maximum SoC**; under **Advanced settings** smart mode, the PV
+size, the winter policy, PV priority, the battery size, AC discharge, AC
+charging and the AC charge limit.
+
+**What it changes:** your unsaved changes only. `config/config.json` is
+untouched until you save.
+
+**If it differs:** emptying a field **removes** that setting so EMS uses its
+own default — that is intended. Leaving a password box blank **keeps** the
+stored secret; **Clear the stored password** removes one.
+
+### 4 — Disable, re-enable or remove
 
 | Action | Effect | Reversible |
 | --- | --- | --- |
-| **Disable** | EMS stops regulating this device. It stays configured. | Yes — re-enable it |
-| **Re-enable** | EMS resumes regulating it | Yes |
-| **Remove** | The device is deleted from the configuration | Only by adding it again |
+| Untick **Enabled** | EMS stops regulating this device. It stays in the settings | Yes — tick it again |
+| Tick **Enabled** | EMS regulates it again | Yes |
+| **Remove** | The device leaves the settings | Only by adding it again |
 
-> **Enabled state belongs to the device, not to its connection.** Switching an
-> inverter between API and MQTT **preserves** whether it is enabled: active stays
-> active, and a device you deactivated stays deactivated. A transport change never
-> silently turns a device on or off.
+> **Enabled belongs to the device, not to its connection.** Switching an
+> inverter between Local API and MQTT **keeps** whether it is enabled: active
+> stays active, and a device you switched off stays off. A connection change
+> never silently turns a device on or off.
 
-A device added through Guided Setup is **enabled by default**.
+A device added through the guided setup or here is **enabled** from the start.
 
-**An E3/DC shown read-only.** *Add a device manually* › **Add an E3/DC
-(read-only)** creates a card for an E3/DC storage system: name, host/IP, Modbus
-port (502) and unit ID (1), and an enabled switch — no serial and no control
-values, because the EMS only reads it and shows its PV, battery, inverter and
-grid on the dashboard. Guided Setup adds it on its own when the E3/DC is the
-grid meter. The summary counts it as a read-only device, not as an inverter,
-and at least one Zendure inverter is still required. Nothing about it is
-written into the EMS runtime state.
+**An E3/DC shown read only.** **Add an E3/DC (read only)** creates a card for
+an E3/DC storage system: name, host or IP, Modbus port (502) and unit ID (1),
+and **Enabled** — no serial and no control values, because EMS only reads it
+and shows its PV, battery, inverter and grid on the dashboard. The guided setup
+adds it on its own when the E3/DC is the grid meter. It counts as a read-only
+device, not as an inverter, and at least one Zendure inverter is still needed.
+The search finds an E3/DC with the default unit ID 1 and offers it twice: as a
+grid meter (**Use as grid meter**) and as a read-only device (**Add as
+read-only device**); one set to another unit ID is added by hand.
 
-A scan in *Add more devices* that finds an E3/DC shows it twice: as a grid
-meter candidate (**Add as grid meter**) and as a read-only device candidate
-(**Add as read-only device**). Each action fills in the address and Modbus
-port the scan found; a read-only device already saved on that address and port
-is reported *In config*, and one on port 502 with unit ID 1 that the scan did
-not find *Not found*. The scan only finds an E3/DC with the default unit ID
-1; one set to another unit ID is added by hand.
+### 5 — Change the grid meter, or an inverter's connection
 
-### 4 — Change the grid meter
+**The grid meter:** open its card and choose the **Meter type** (Shelly,
+everHome EcoTracker, Tasmota, Zendure D0 / Smart Meter 3CT over HTTP, an E3/DC
+over Modbus TCP, or an MQTT meter), then its address or topic. Changing the
+type removes the fields the new type cannot use — an HTTP meter's address does
+not linger on an MQTT meter — while keys you added by hand stay. A port belongs
+to its protocol: switching between two HTTP meters keeps it, switching to an
+E3/DC sets the Modbus port 502, switching to an MQTT meter removes it. Only one
+grid meter can be active; an MQTT grid meter the search found replaces a
+configured one only after *Replace the grid meter?*.
 
-**What you see:** the **Grid meter** subsection with a type selector.
+**An inverter's connection:** the search is a list of *connections*, not just
+of devices. A second connection for an inverter you already have shows
+*Already set up as INV_1 via …* and offers **Use this connection**.
 
-**What you enter:** the type (Shelly, everHome EcoTracker, Tasmota, Zendure D0 /
-Smart Meter 3CT over HTTP, an E3/DC over Modbus TCP, or an MQTT meter) and its
-address or topic. An E3/DC also takes a port (502) and, under Advanced, its
-Modbus unit ID.
+**What it changes:** that one logical inverter moves to the other connection in
+your unsaved changes. Clicking it *is* the decision — there is no duplicate
+device, and the EMS name, the enabled state and the common values are kept. The
+connection you left stays listed, so you can switch back without removing the
+inverter.
 
-**What it changes:** changing the *type* removes the fields the new type cannot
-use — an HTTP meter's address does not linger on an MQTT meter. Keys you added by
-hand are left alone. A port belongs to its protocol: switching between two HTTP
-meters keeps it, switching to an E3/DC sets the Modbus port 502, switching to an
-MQTT meter removes it, and switching back restores the port the card had.
+**If it differs:** a connection that would lose output control is offered as
+**Replace the control connection**, with a warning naming why; the check before
+saving shows the change too. A switch the backend refuses — two different
+serials on one route, or an identity it cannot resolve — is an **Identity
+conflict**, refused on purpose.
 
-**Expected result:** exactly one active grid meter.
+### 6 — Check and save
 
-**If it differs:** only one grid meter can be active, and an existing one is
-replaced only when you explicitly confirm it.
+**What you select:** **Check changes** in the bar at the foot of the page, then
+**Save and apply**. See [Maintenance](maintenance.md#5--check-and-save).
 
-### 5 — Switch an inverter to another connection
+**What it changes:** `config/config.json` is written, after a backup of the
+current settings.
 
-![Connection options for a device, showing alternative connections and what happens to output control](../../assets/screenshots/admin/admin-maintenance-config-hardware.png)
-
-**What you see:** **Add more devices** is a *connection* list, not just a device
-list. It shows every discovered connection that is **not** the one currently
-selected.
-
-- A connection for an inverter you have **not** configured yet offers **Add
-  inverter**.
-- A second connection for an inverter you **already** configured shows
-  *Already configured as INV_1 via API* and offers **Use connection**.
-
-**What you select:** **Use connection**.
-
-**What it changes:** that one logical inverter switches to the other connection
-immediately. Clicking it *is* the confirmation — there is no second dialog, no
-duplicate device, and the EMS name, enabled state and common values are
-preserved.
-
-**Expected result:** the device card's connection pill changes. The connection
-you left stays listed, so you can switch back without removing the inverter.
-
-**If it differs:** a switch the backend **refuses** is reported, not performed —
-for example two different serials on one route, or an unresolved identity. That
-is an *Identity conflict*, and it is a refusal on purpose.
-
-> A manual choice is kept even if you later change discovery priority.
-
-### 6 — Preview and apply
-
-**What you select:** preview first, then apply.
-
-**What it changes:** on apply, `config/config.json` is written. A config backup is
-made before the write.
-
-**Expected result:** *Config applied*. If the change needs a restart, the console
-says so.
+**Expected result:** **Settings saved**. Adding, removing or moving a device
+generally needs EMS to read the new settings: the result says *Some changes
+take effect once EMS restarts.* and offers **Restart EMS now**.
 
 **If it differs:**
 
-- **Apply is disabled after an edit** → intended. The preview must refresh first;
-  the preview you looked at is exactly what gets applied.
-- **Apply is refused, draft kept** → `config/config.json` changed meanwhile
-  (another session, a restore, an upgrade). Choose **Review current
-  configuration**, re-check, apply again.
+- **Save and apply is not offered after an edit** → intended. Check the changes
+  again; what you saw checked is exactly what gets saved.
+- *The devices, grid meter or broker changed elsewhere since you began changing
+  them.* → another session saved device changes. **Discard device changes**
+  and make yours again.
 
-### 7 — Restart EMS when required
-
-Adding, removing or re-routing a device generally requires EMS to pick up the new
-configuration. The console prompts when a restart is needed. Live-changeable
-runtime values are a different thing — see
+Live-changeable runtime values are a different thing — see
 [Dashboard runtime settings](../dashboard/runtime-settings.md).
 
 ## One inverter, several connections
@@ -160,9 +181,8 @@ A single physical inverter can be reachable over Local API, a local MQTT broker
 and Zendure cloud MQTT at the same time. That is **three connections to one
 device**, not three devices.
 
-- The console groups them into **one** logical inverter and shows the selected
-  connection as a pill.
-- **Discovery priority** picks the preferred connection automatically, but it
+- The console keeps **one** logical inverter and shows the connection it uses.
+- In the guided setup, the **Search order** picks the preferred connection, but
   moves a device on its own **only when the new connection keeps output
   control**. Otherwise you are asked, with both connections named.
 - A serial-less Cloud MQTT inverter you selected before its serial was known is
@@ -173,38 +193,37 @@ device**, not three devices.
 ## Why a device is read-only
 
 Output control is **not a checkbox**. It follows the exact model and the write
-route, and it fails closed:
+route, and it fails closed. An MQTT inverter's card shows the **Write
+protocol**, **Validation**, **Supported operations**, **Control readiness now**
+and **Output control** — *Available*, or *Not available:* with the reason:
 
-- **Unknown / telemetry only**, no model, or conflicting model evidence → the
-  device stays read-only.
+- **Unknown model, read only**, no model, or conflicting model evidence → the
+  device stays read-only (*choose the exact model*).
 - An **external device** (read over MQTT from the `ems-solarflow/<id>/…` topics)
   is read-only by design — see [External devices over MQTT](../external-devices.md).
-- A hardware *generation* or topic family alone never authorises writes — but it
-  never blocks one either.
+- A hardware *generation* or topic family alone never authorises writes — but
+  it never blocks one either.
 - The write route is `iot/<productKey>/<deviceId>/…`. If the **Product key** or
-  **MQTT device ID** is missing, readiness reports *Not ready* and names what is
-  missing; the device is added as a telemetry source until the route is complete.
-- The **broker source** matters too: a ZenSDK/Cloud-scalar generation entered
-  through the manual *local* broker form is added as telemetry with the reason
-  *"Output control is not verified for this MQTT broker source"*, while the older
-  Hub/Hyper generation stays controllable.
+  the **MQTT device ID** is missing, readiness names what is missing; the device
+  reads values until the route is complete.
+- The **broker source** matters too: a generation whose write route the broker
+  does not carry reads *output control is not verified for this MQTT broker*,
+  while the Zendure cloud carries it for a supported model.
 
-The form shows the model's write protocol, supported operations and validation
-maturity **before** control can be enabled. See
-[Supported setups](../supported-setups.md) for what is validated on real
+See [Supported setups](../supported-setups.md) for what is validated on real
 hardware.
 
 ## Two identity fields, and why
 
-When adding a Zendure MQTT device manually there are two separate fields:
+An MQTT inverter has two separate fields:
 
 | Field | What it identifies |
 | --- | --- |
-| **Physical serial number** | The inverter itself — telemetry matching and duplicate detection |
-| **MQTT device ID** | The exact MQTT route/payload id a control write targets |
+| **Serial number** | The inverter itself — telemetry matching and duplicate detection |
+| **MQTT device ID** | The exact device ID in the MQTT topics a control write targets |
 
-**The physical serial is never used as the route id.** A telemetry-only device
-needs only the serial.
+**The serial number is never used as the MQTT route.** A device that only
+reports values needs only the serial.
 
 ## What happens in the background
 
@@ -213,8 +232,7 @@ The backend — not the browser — decides:
 - **Identity** — from the trusted serial and the scoped route, never from a raw
   Cloud route id or a display name.
 - **Candidate state** — which connections genuinely exist right now.
-- **Workflow ownership** — that this tab is allowed to change this workflow.
-- **Exact preview authority** — that the plan being applied is the one you saw.
+- **Exact check authority** — that what is saved is what you saw checked.
 
 The browser renders and collects input. It never authorises a device change.
 
@@ -222,11 +240,12 @@ The browser renders and collects input. It never authorises a device change.
 
 | Symptom | Meaning | What to do |
 | --- | --- | --- |
-| *Identity conflict* | Two different serials on one route | Refused on purpose. Check which device really owns that route |
-| *Stale device plan* | Discovery changed since you answered | Re-answer the connection question |
-| Apply refused, draft kept | Live config changed meanwhile | **Review current configuration**, then apply |
-| Device shows as telemetry only | Model or route not proven | See [Why a device is read-only](#why-a-device-is-read-only) |
-| A device seems to have vanished after a switch | It did not — one device, new connection | Check the connection pill on the card |
+| **Identity conflict** | Two different serials on one route | Refused on purpose. Check which device really owns that route |
+| **Not found** for a device you have | The search did not reach it this time | Check the device and the network, search again |
+| **Address changed** for a device you have | The search found it at another address | **Take the new address** if the device really moved |
+| Save refused, changes kept | The saved settings changed meanwhile | **Discard device changes**, make yours again, check and save |
+| A device reads values only | Model or route not proven | See [Why a device is read-only](#why-a-device-is-read-only) |
+| A device seems to have vanished after a switch | It did not — one device, new connection | Look at the connection on its card |
 
 ## Recovery or next steps
 

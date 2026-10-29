@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import json
 import os
+import shutil
 import struct
 import subprocess
 import threading
@@ -17,6 +18,7 @@ from ems.state_store import BatteryFullChargeStateStore
 
 from _emsctl_test_helpers import (
     DEFAULT_LIVE_DEVICE,
+    ROOT,
     assert_diagnose_help_discovery,
     diagnose_args,
     run_emsctl,
@@ -193,7 +195,7 @@ def test_diagnose_http_redaction_masks_cloud_route_in_name_and_arbitrary_topic()
         assert raw not in flattened
 
 
-def test_diagnose_docker_deep_warns_when_docker_cli_missing(tmp_path, monkeypatch):
+def test_diagnose_docker_deep_only_notes_a_missing_docker_cli(tmp_path, monkeypatch):
     monkeypatch.setattr(diagnostics, "BASE_DIR", str(tmp_path))
     monkeypatch.setattr(diagnostics.shutil, "which", lambda name: None)
     checks = []
@@ -201,10 +203,10 @@ def test_diagnose_docker_deep_warns_when_docker_cli_missing(tmp_path, monkeypatc
     diagnostics.diagnose_docker_deep(checks)
 
     assert [check["code"] for check in checks] == ["docker_cli_missing"]
-    assert checks[0]["level"] == "warning"
+    assert checks[0]["level"] == "info"
 
 
-def test_diagnose_docker_deep_warns_when_compose_file_missing(tmp_path, monkeypatch):
+def test_diagnose_docker_deep_only_notes_a_missing_compose_file(tmp_path, monkeypatch):
     monkeypatch.setattr(diagnostics, "BASE_DIR", str(tmp_path))
     monkeypatch.setattr(diagnostics.shutil, "which", lambda name: "/usr/bin/docker")
     checks = []
@@ -215,7 +217,7 @@ def test_diagnose_docker_deep_warns_when_compose_file_missing(tmp_path, monkeypa
         "docker_cli_found",
         "compose_file_missing",
     ]
-    assert checks[-1]["level"] == "warning"
+    assert checks[-1]["level"] == "info"
 
 
 def test_diagnose_docker_deep_reports_compose_ps_success(tmp_path, monkeypatch):
@@ -295,6 +297,66 @@ def test_diagnose_docker_deep_reports_subprocess_errors(tmp_path, monkeypatch, e
     assert checks[-1]["code"] == "docker_compose_ps_failed"
     assert checks[-1]["level"] == "warning"
     assert exception.__class__.__name__ in checks[-1]["message"]
+
+
+def test_diagnose_only_notes_a_missing_requirements_dev(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setattr(diagnostics, "BASE_DIR", str(project))
+
+    report = diagnostics.run_install_diagnosis(diagnose_args(tmp_path))
+
+    assert [
+        (check["code"], check["level"])
+        for check in report["checks"]
+        if check["code"].startswith("requirements_dev")
+    ] == [("requirements_dev_missing", "info")]
+
+
+@pytest.mark.parametrize("shape", ["unreadable", "directory"])
+def test_diagnose_only_checks_that_requirements_dev_exists(tmp_path, monkeypatch, shape):
+    project = tmp_path / "project"
+    project.mkdir()
+    requirements_dev = project / "requirements-dev.txt"
+    if shape == "directory":
+        requirements_dev.mkdir()
+    else:
+        requirements_dev.write_text("pytest\n")
+        requirements_dev.chmod(0)
+    monkeypatch.setattr(diagnostics, "BASE_DIR", str(project))
+
+    report = diagnostics.run_install_diagnosis(diagnose_args(tmp_path))
+
+    assert [
+        (check["code"], check["level"])
+        for check in report["checks"]
+        if check["code"].startswith("requirements_dev")
+    ] == [("requirements_dev_exists", "ok")]
+
+
+def test_diagnose_deep_without_development_files_or_docker_warns_about_neither(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    (project / "data").mkdir(parents=True)
+    for name in ("emsctl.py", "ems-solarflow-api-control.py", "requirements.txt"):
+        (project / name).write_text("")
+    (project / "config").mkdir()
+    shutil.copy(ROOT / "config" / "config.template.json", project / "config" / "config.template.json")
+    monkeypatch.setattr(diagnostics, "BASE_DIR", str(project))
+    monkeypatch.setattr(diagnostics, "diagnose_container_mode", lambda: ("native", []))
+    monkeypatch.delenv("EMS_TEMPLATE_FILE", raising=False)
+    monkeypatch.setattr(diagnostics.shutil, "which", lambda name: None)
+
+    report = diagnostics.run_diagnosis(diagnose_args(tmp_path, deep=True))
+
+    assert {
+        (check["section"], check["code"], check["level"])
+        for check in report["checks"]
+        if check["section"] in ("project", "docker") and check["level"] != "ok"
+    } == {
+        ("project", "requirements_dev_missing", "info"),
+        ("docker", "docker_cli_missing", "info"),
+    }
+    assert "logs" not in {check["section"] for check in report["checks"]}
 
 
 def test_emsctl_diagnose_json_contains_v2_structure(tmp_path):

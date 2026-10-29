@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* Applies the stored palette, object style and density before the stylesheet
    paints, so the console does not show the defaults first and visibly change a
-   moment later. Three axes, three keys, three attributes, and none of them
-   knows about the others. It is a file of its own rather than three lines
-   inline because the Manager's CSP is `script-src 'self'`, and it is requested
-   ahead of styles.css for the same reason it exists.
+   moment later, and sends a browser that chose Modern there first. Three axes,
+   three keys, three attributes, and none of them knows about the others. It is
+   a file of its own rather than three lines inline because the Manager's CSP is
+   `script-src 'self'`, and it is requested ahead of styles.css for the same
+   reason it exists.
 
    It runs on the sign-in gate too, which is the point: the owner reaching this
    console is usually here because something is wrong, and a page that flashes

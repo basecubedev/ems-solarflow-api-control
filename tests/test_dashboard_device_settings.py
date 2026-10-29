@@ -26,8 +26,8 @@ def test_the_device_card_shows_each_setting_by_label_and_the_value_set_where_it_
     controller, dev, _ = _ems(install, Inverter())
 
     assert _device_settings_card(controller, dev, dev.fetch()) == {
-        "light": {"label": "Light", "reported": "On", "desired": "Off"},
-        "fan": {"label": "Fan", "reported": "Auto", "desired": None},
+        "light": {"label": "Light", "reported": "On", "desired": "Off", "reported_value": "on", "desired_value": "off"},
+        "fan": {"label": "Fan", "reported": "Auto", "desired": None, "reported_value": "auto", "desired_value": None},
     }
 
 

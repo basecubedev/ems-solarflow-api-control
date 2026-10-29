@@ -2,37 +2,52 @@
   "_note": "Demo Guided Setup data: release list, prepared config template, discovery networks and generated config preview. Fake devices/IPs/serials only.",
   "releases_setup": {
     "ok": true,
-    "default_release": "v0.7.0-RC",
-    "prepared_release": "v0.7.0-RC",
+    "default_release": "v0.8.16",
+    "latest_stable": "v0.8.16",
+    "prepared_release": "v0.8.16",
     "warnings": [],
     "releases": [
       {
-        "tag": "v0.7.0-RC",
-        "name": "v0.7.0-RC",
+        "tag": "latest",
+        "name": "latest",
         "channel": "latest",
-        "prerelease": true,
+        "prerelease": false,
+        "docker_supported": true,
+        "prepared": false,
+        "active": false,
+        "selectable": true,
+        "published_at": "2026-07-04T18:20:00Z",
+        "reason": "Rolling Docker channel, not a stable release"
+      },
+      {
+        "tag": "v0.8.16",
+        "name": "v0.8.16",
+        "channel": "stable",
+        "prerelease": false,
         "docker_supported": true,
         "prepared": true,
         "active": false,
         "selectable": true,
-        "reason": "Recommended release for a fresh install."
+        "published_at": "2026-07-03T09:00:00Z",
+        "reason": null
       },
       {
-        "tag": "v0.6.4",
-        "name": "v0.6.4",
+        "tag": "v0.8.15",
+        "name": "v0.8.15",
         "channel": "stable",
         "prerelease": false,
         "docker_supported": true,
         "prepared": false,
         "active": false,
         "selectable": true,
-        "reason": "Previous stable release."
+        "published_at": "2026-06-21T09:00:00Z",
+        "reason": null
       }
     ]
   },
   "config_template": {
-    "tag": "v0.7.0-RC",
-    "docker_image": "ghcr.io/example/ems-solarflow-api-control:v0.7.0-RC",
+    "tag": "v0.8.16",
+    "docker_image": "ghcr.io/example/ems-solarflow-api-control:v0.8.16",
     "template": {
       "devices": [
         {
@@ -2543,7 +2558,7 @@
   },
   "config_preview": {
     "ready": true,
-    "release": "v0.7.0-RC",
+    "release": "v0.8.16",
     "base": {
       "source": "release_template"
     },
@@ -2601,26 +2616,32 @@
     "workspace": "/opt/ems",
     "bootstrap_source": null,
     "docker": {
-      "state": "ready"
+      "state": "ready",
+      "mode": "deployment_controller",
+      "server_version": "27.1.1",
+      "message": "Docker is available."
     },
     "images": [
       {
         "service": "ems",
-        "image": "ghcr.io/example/ems-solarflow-api-control:v0.7.0"
+        "image": "ghcr.io/example/ems-solarflow-api-control:v0.8.16"
       }
     ]
   },
   "deployment_status": {
     "prepared": true,
     "docker": {
-      "state": "ready"
+      "state": "ready",
+      "mode": "deployment_controller",
+      "server_version": "27.1.1",
+      "message": "Docker is available."
     },
     "running": true,
     "services": [
       {
         "label": "EMS",
         "service": "ems",
-        "image": "ghcr.io/example/ems-solarflow-api-control:v0.7.0",
+        "image": "ghcr.io/example/ems-solarflow-api-control:v0.8.16",
         "state": "running"
       }
     ],
@@ -2635,11 +2656,15 @@
   },
   "system_alignment_status": {
     "ok": true,
+    "active": true,
     "transition": {
       "operation_id": "demo-setup-operation",
       "mode": "fresh_install",
       "stage": "resources_verified",
-      "system_tag": "v0.7.0-RC",
+      "system_tag": "v0.8.16",
+      "admin_alignment_required": false,
+      "created_at": "2026-07-05T13:12:00Z",
+      "updated_at": "2026-07-05T13:14:30Z",
       "error_message": null
     }
   },
@@ -2650,21 +2675,77 @@
   },
   "system_build_validate": {
     "ok": true,
+    "status": "validated",
     "valid": true,
+    "validation_state": "valid",
+    "selected_tag": "v0.8.16",
     "system_build": {
-      "canonical_tag": "v0.7.0-RC",
-      "channel": "latest",
-      "build_id": "demo-build-001",
-      "revision": "demo-revision"
+      "canonical_tag": "v0.8.16",
+      "channel": "stable",
+      "build_id": "demo-build-0816",
+      "revision": "demo-revision-0816"
     },
+    "compatibility_mode": "paired",
+    "resource_strategy": "embedded",
+    "resource_status": "verified",
+    "embedded_resources_applicable": true,
+    "alignment": "aligned",
+    "admin_update_required": false,
+    "admin_update_allowed": false,
+    "embedded_resources_valid": true,
+    "resources_verified": true,
+    "next_allowed": true,
+    "confirmation_allowed": false,
+    "transition_in_progress": true,
+    "transition_stage": "resources_verified",
+    "recovery_required": false,
+    "operation_id": "demo-setup-operation",
     "action_state": {
       "selected_build": {
-        "tag": "v0.7.0-RC"
+        "tag": "v0.8.16",
+        "channel": "stable",
+        "revision": "demo-revision-0816",
+        "build_id": "demo-build-0816"
       },
+      "selection_fingerprint": "demo-setup-fingerprint",
+      "alignment_state": "aligned",
+      "resource_strategy": "embedded",
+      "resource_state": "verified",
+      "admin_update_required": false,
+      "admin_update_allowed": false,
+      "continue_allowed": true,
+      "terminal_error": null,
       "busy": false,
-      "transition_stage": null,
-      "operation_id": null
+      "progress_message": null,
+      "polling_required": false,
+      "transition_stage": "resources_verified",
+      "operation_id": "demo-setup-operation"
     },
-    "checks": {}
+    "checks": {
+      "admin_image_available": true,
+      "ems_image_available": true,
+      "revision_matches": true,
+      "build_id_matches": true,
+      "channel_matches": true,
+      "embedded_resources_match": true
+    }
+  },
+  "setup_workflow": {
+    "ok": true,
+    "workflow": {
+      "workflow_id": "demo-setup-workflow",
+      "status": "active",
+      "created_at": "2026-07-05T13:11:40Z",
+      "cleanup": null
+    }
+  },
+  "setup_lifecycle": {
+    "ok": true,
+    "owner": "guided_setup",
+    "state": "active",
+    "switchable": true,
+    "recoverable": false,
+    "blocking_reason": null,
+    "fingerprint": "d4e5f6071829304a"
   }
 }

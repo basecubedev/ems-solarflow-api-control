@@ -11,16 +11,16 @@ Usage:
     python3 scripts/serve_dashboard_preview.py --scenario firmware-status
     python3 scripts/serve_dashboard_preview.py --scenario write-mode
     python3 scripts/serve_dashboard_preview.py --host 127.0.0.1 --port 8767
-    python3 scripts/serve_dashboard_preview.py --capture --output-dir docs/assets
 
 Open, for example:
-    http://127.0.0.1:8767/preview/aggregated
-    http://127.0.0.1:8767/preview/devices
+    http://127.0.0.1:8767/                      the Modern dashboard
+    http://127.0.0.1:8767/preview               the deprecated Classic, one link per view
     http://127.0.0.1:8767/preview/control
-    http://127.0.0.1:8767/preview/energy
-    http://127.0.0.1:8767/preview/diagnose
-    http://127.0.0.1:8767/preview/logs
-    http://127.0.0.1:8767/preview/maintenance
+
+A request carrying the cookie ``ems-preview-scenario=<name>`` is answered from
+that scenario instead of the server's own, so one browser context can show
+another scenario without changing it for anyone else on the server. The
+documentation captures in ``tests/e2e-dashboard/capture-docs.spec.ts`` use it.
 
 Safety: the preview never contacts real Zendure/Shelly/MQTT/InfluxDB/Home
 Assistant endpoints, never reads secrets from config.json, and never writes
@@ -31,11 +31,14 @@ loopback by default.
 """
 
 import argparse
+import calendar
 import json
 import os
 import threading
 import time
+from datetime import datetime, timezone
 from html import escape
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -46,38 +49,31 @@ ROOT = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, SCRIPT_DIR)
 sys.path.insert(0, ROOT)
 
-from dashboard.static_files import build_static_asset_index, static_asset_key  # noqa: E402
+from dashboard.static_files import (  # noqa: E402
+    SHARED_ROOT_FILES,
+    STATIC_CONTENT_TYPES,
+    build_static_asset_index,
+    lookup_static_asset,
+    modern_asset_path,
+    modern_redirect,
+)
 from dashboard_preview_data import (  # noqa: E402
     DEFAULT_SCENARIO,
+    DIAGNOSE_PROFILES,
     FLOW_VIEWS,
     SCENARIOS,
     build_scenario,
+    diagnose_report,
 )
 
 STATIC_DIR = os.path.join(ROOT, "dashboard", "static")
 STATIC_ASSETS = build_static_asset_index(STATIC_DIR)
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8767
-# Capture mode is operator-oriented (Diagnose/Logs), so it defaults to the
-# authenticated scenario unless the user explicitly selects one.
-CAPTURE_DEFAULT_SCENARIO = "write-mode"
-# Every view embedded in the README / docs, so a no-argument
-# ``capture_dashboard_previews.py`` run regenerates the full screenshot set.
-DEFAULT_CAPTURE_VIEWS = (
-    "aggregated",
-    "devices",
-    "analytics",
-    "control",
-    "energy",
-    "diagnose",
-    "logs",
-    "maintenance",
-)
+SCENARIO_COOKIE = "ems-preview-scenario"
 SAFE_RESPONSE_CONTENT_TYPES = {
     "application/json; charset=utf-8",
-    "application/javascript; charset=utf-8",
-    "text/css; charset=utf-8",
-    "text/html; charset=utf-8",
+    *STATIC_CONTENT_TYPES.values(),
 }
 
 
@@ -135,34 +131,6 @@ def _preview_injection(view, energy_detail=None):
   </script>
 """
     return before, after
-
-
-def normalize_views(raw_views):
-    """Normalize a --views list, expanding the ``all`` alias.
-
-    Returns ``None`` when no views were given (caller uses its own default),
-    a list of concrete flow views otherwise. Raises ValueError on unknown views.
-    """
-
-    if not raw_views:
-        return None
-    if any(view == "all" for view in raw_views):
-        return list(FLOW_VIEWS)
-    invalid = [view for view in raw_views if view not in FLOW_VIEWS]
-    if invalid:
-        raise ValueError(
-            f"unknown view(s): {', '.join(invalid)}; "
-            f"choose from: {', '.join(FLOW_VIEWS)}, all"
-        )
-    return list(raw_views)
-
-
-def resolve_scenario(args):
-    """Pick the scenario, defaulting capture mode to the authenticated scenario."""
-
-    if args.scenario:
-        return args.scenario
-    return CAPTURE_DEFAULT_SCENARIO if args.capture else DEFAULT_SCENARIO
 
 
 def _landing_page(scenario):
@@ -366,17 +334,24 @@ class PreviewServer(ThreadingHTTPServer):
         freeze_timestamp=False,
         sse_interval=2.0,
         sse_max_per_ip=0,
+        fixed_now=None,
     ):
         super().__init__(server_address, handler)
         self.scenario_name = scenario
         self.device_count = device_count
         self.freeze_timestamp = freeze_timestamp
+        self.fixed_now = fixed_now
         self.sse_interval = sse_interval
         # 0 disables the limit. A positive value reproduces the production
         # per-IP cap so the polling-fallback cascade can be measured.
         self.sse_max_per_ip = sse_max_per_ip
         self._sse_counts = {}
         self._sse_lock = threading.Lock()
+
+    def now(self):
+        """The preview's clock: the pinned instant when there is one, else the real time."""
+
+        return time.time() if self.fixed_now is None else self.fixed_now
 
     def acquire_sse_slot(self, remote):
         if self.sse_max_per_ip <= 0:
@@ -408,16 +383,14 @@ class PreviewHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
 
+        if path == "/api/ui-config":
+            self._send_json({"animation_mode": "normal"})
+            return
         if path in ("/preview", "/preview/"):
             self._send_landing()
             return
         if path.startswith("/preview/"):
             self._send_preview(path[len("/preview/"):], parsed.query)
-            return
-        if path in ("/preview-diagnose.html", "/preview-logs.html"):
-            # Backwards-compatible aliases for the original screenshot helper.
-            view = "diagnose" if "diagnose" in path else "logs"
-            self._send_preview(view)
             return
 
         if path == "/api/live":
@@ -453,7 +426,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
             self._send_json(self._scenario()["auth"])
             return
         if path == "/api/diagnose":
-            self._send_json(self._scenario()["diagnose"])
+            self._send_diagnose(parse_qs(parsed.query))
             return
         if path == "/api/logs":
             self._send_logs(parsed.query)
@@ -471,7 +444,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
             self._send_json(PREVIEW_MAINTENANCE["config_upgrade"])
             return
 
-        self._send_static(path)
+        self._send_static(path, parsed.query)
 
     def do_POST(self):
         self._handle_write()
@@ -492,10 +465,28 @@ class PreviewHandler(BaseHTTPRequestHandler):
 
     def _scenario(self):
         return build_scenario(
-            self.server.scenario_name,
+            self._scenario_name(),
             device_count=self.server.device_count,
             freeze_timestamp=self.server.freeze_timestamp,
+            now=self.server.fixed_now,
         )
+
+    def _scenario_name(self):
+        """The scenario this request's cookie names, else the server's own.
+
+        An unknown or malformed cookie falls back to the server's scenario
+        rather than failing the request.
+        """
+
+        cookies = SimpleCookie()
+        try:
+            cookies.load(self.headers.get("Cookie", ""))
+        except CookieError:
+            return self.server.scenario_name
+        morsel = cookies.get(SCENARIO_COOKIE)
+        if morsel is not None and morsel.value in SCENARIOS:
+            return morsel.value
+        return self.server.scenario_name
 
     # Map each chart series id to the history-item field it reads. ``target``
     # (EMS commanded) tracks the inverter output in the synthetic data.
@@ -525,7 +516,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         for item in items:
             iso = str(item.get("timestamp", "")).replace("Z", "+00:00")
             try:
-                epoch = int(time.mktime(time.strptime(iso[:19], "%Y-%m-%dT%H:%M:%S")))
+                epoch = calendar.timegm(time.strptime(iso[:19], "%Y-%m-%dT%H:%M:%S"))
             except (ValueError, TypeError):
                 continue
             time_axis.append(epoch)
@@ -689,7 +680,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
             html = handle.read()
         before, after = _preview_injection(view, detail)
         seed = self._chart_seed_script(view)
-        marker = '<script src="/app.js"></script>'
+        marker = '<script src="/classic/app.js"></script>'
         html = html.replace(marker, f"{before}\n  {marker}{after}{seed}", 1)
         self._send_bytes(html.encode("utf-8"), "text/html; charset=utf-8")
 
@@ -807,8 +798,17 @@ class PreviewHandler(BaseHTTPRequestHandler):
         finally:
             self.server.release_sse_slot(remote)
 
+    def _send_diagnose(self, query):
+        """The report for the profile asked for, refused like the real server's when it names none it knows."""
+
+        profile = (query.get("profile") or [None])[0]
+        if profile not in DIAGNOSE_PROFILES:
+            self._send_json({"error": "invalid_profile", "supported": list(DIAGNOSE_PROFILES)}, status=400)
+            return
+        self._send_json(diagnose_report(self._scenario_name(), profile, now=self.server.fixed_now))
+
     def _log_lines(self, after=0):
-        now = time.time()
+        now = self.server.now()
         log_lines = self._scenario()["logs"]
         return [
             {
@@ -834,8 +834,17 @@ class PreviewHandler(BaseHTTPRequestHandler):
             "service_level": "DEBUG",
         })
 
-    def _send_static(self, request_path):
-        asset = STATIC_ASSETS.get(static_asset_key(request_path))
+    def _send_static(self, request_path, query=""):
+        moved = modern_redirect(request_path, query)
+        if moved is not None:
+            self.send_response(302)
+            self.send_header("Location", moved)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        asset_path = modern_asset_path(request_path, SHARED_ROOT_FILES)
+        asset = lookup_static_asset(STATIC_ASSETS, asset_path) if asset_path else None
         if asset is None:
             self.send_error(404, "Not Found")
             return
@@ -888,6 +897,7 @@ def start_server(
     freeze_timestamp=False,
     sse_interval=2.0,
     sse_max_per_ip=0,
+    fixed_now=None,
 ):
     """Start the preview server and return the running PreviewServer instance."""
 
@@ -902,6 +912,7 @@ def start_server(
             freeze_timestamp=freeze_timestamp,
             sse_interval=sse_interval,
             sse_max_per_ip=sse_max_per_ip,
+            fixed_now=fixed_now,
         )
     except OSError as exc:
         raise SystemExit(
@@ -927,7 +938,6 @@ def _preview_schedule_api(server):
     import atexit
     import shutil
     import tempfile
-    from datetime import datetime, timezone
     from zoneinfo import ZoneInfo
 
     from dashboard.schedule_api import ScheduleApi
@@ -958,7 +968,7 @@ def _preview_schedule_api(server):
         devices=lambda: {name: None for name in devices},
         validation_context=lambda: context,
         zone=ZoneInfo("Europe/Berlin"),
-        clock=lambda: datetime.now(timezone.utc),
+        clock=lambda: datetime.fromtimestamp(server.now(), timezone.utc),
         device_settings=lambda: limits.get("device_settings_offered", {}),
     )
 
@@ -966,9 +976,11 @@ def _preview_schedule_api(server):
 def _print_urls(host, port, scenario):
     display_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
     print(f"Dashboard preview server: scenario={scenario}")
-    print("Landing page:")
+    print("Modern dashboard:")
+    print(f"  http://{display_host}:{port}/")
+    print("Classic (deprecated), landing page:")
     print(f"  http://{display_host}:{port}/preview")
-    print("Views:")
+    print("Classic views:")
     for view in FLOW_VIEWS:
         print(f"  http://{display_host}:{port}/preview/{view}")
     print("Synthetic data only — no real hardware, secrets, or runtime state.")
@@ -987,30 +999,27 @@ def _print_views():
         print(f"  {view}")
 
 
+def _instant(text):
+    """An ISO-8601 instant with its UTC offset, as epoch seconds."""
+
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not an ISO-8601 instant: {text!r}")
+    if moment.tzinfo is None:
+        raise argparse.ArgumentTypeError(f"{text!r} names no UTC offset, so it is no single instant")
+    return moment.timestamp()
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description="Local dashboard preview server.")
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument(
         "--scenario",
-        default=None,
+        default=DEFAULT_SCENARIO,
         choices=SCENARIOS,
-        help="synthetic data scenario (default: normal; capture default: write-mode)",
-    )
-    parser.add_argument(
-        "--capture",
-        action="store_true",
-        help="capture screenshots instead of serving interactively",
-    )
-    parser.add_argument(
-        "--views",
-        nargs="+",
-        metavar="VIEW",
-        help="views to capture: flow view names or 'all' (default: diagnose logs)",
-    )
-    parser.add_argument(
-        "--output-dir",
-        default=os.path.join(ROOT, "docs", "assets"),
+        help=f"synthetic data scenario (default: {DEFAULT_SCENARIO})",
     )
     parser.add_argument(
         "--devices",
@@ -1030,6 +1039,15 @@ def parse_args(argv=None):
         "--identical-snapshots",
         action="store_true",
         help="freeze the snapshot timestamp so every emission is unchanged",
+    )
+    parser.add_argument(
+        "--now",
+        type=_instant,
+        default=None,
+        metavar="ISO-8601",
+        help="pin the preview's clock to one instant with its offset, e.g. "
+        "2026-06-17T18:30:00+02:00: the history, logs, diagnose reports and "
+        "schedule read that instant, so every capture shows the same day",
     )
     parser.add_argument(
         "--sse-max-per-ip",
@@ -1061,12 +1079,6 @@ def main(argv=None):
         _print_views()
         return
 
-    scenario = resolve_scenario(args)
-    try:
-        views = normalize_views(args.views)
-    except ValueError as exc:
-        raise SystemExit(str(exc))
-
     if args.host not in ("127.0.0.1", "localhost", "::1"):
         print(
             f"WARNING: binding preview server to {args.host}. The preview is "
@@ -1076,24 +1088,15 @@ def main(argv=None):
     server = start_server(
         args.host,
         args.port,
-        scenario,
+        args.scenario,
         device_count=args.devices,
         freeze_timestamp=args.identical_snapshots,
         sse_interval=args.sse_interval,
         sse_max_per_ip=args.sse_max_per_ip,
+        fixed_now=args.now,
     )
     try:
-        if args.capture:
-            from capture_dashboard_previews import capture_assets
-
-            written = capture_assets(
-                args.host, args.port, args.output_dir, scenario, views
-            )
-            print("Captured preview screenshots:")
-            for path in written:
-                print(f"  {os.path.relpath(path, ROOT)}")
-            return
-        _print_urls(args.host, args.port, scenario)
+        _print_urls(args.host, args.port, args.scenario)
         while True:
             time.sleep(3600)
     except KeyboardInterrupt:

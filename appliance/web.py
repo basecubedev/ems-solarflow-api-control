@@ -45,6 +45,21 @@ STATIC_FILES = {
     "theme.js": "application/javascript; charset=utf-8",
     "styles.css": "text/css; charset=utf-8",
 }
+# The Modern console is a build output (frontend/appliance-modern/) served at
+# the root; the deprecated Classic page and its three files answer under
+# /classic/. The build's file names are fixed, so the extension decides the
+# type; a file of any other kind is not served.
+MODERN_DIR = "modern"
+CLASSIC_PREFIX = "/classic"
+LEGACY_MODERN_PATH = "/modern"
+MODERN_CONTENT_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "application/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".woff2": "font/woff2",
+    ".LICENSE": "text/plain; charset=utf-8",
+}
 MAX_BODY_BYTES = 64 * 1024
 HOSTNAME_FILE = "/etc/hostname"
 
@@ -743,18 +758,23 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
     # --- routing ---------------------------------------------------------
 
     def do_GET(self):
-        path = posixpath.normpath(self.path.split("?", 1)[0])
+        raw_path, _, query = self.path.partition("?")
+        path = posixpath.normpath(raw_path)
         if path in ("/", "/index.html"):
+            return self._serve_modern("index.html")
+        if path in (CLASSIC_PREFIX, CLASSIC_PREFIX + "/index.html"):
             return self._serve_index()
-        if path.startswith("/static/"):
-            return self._serve_static(path[len("/static/") :])
+        if path.startswith(CLASSIC_PREFIX + "/"):
+            return self._serve_static(path[len(CLASSIC_PREFIX) + 1 :])
+        if path == LEGACY_MODERN_PATH or path.startswith(LEGACY_MODERN_PATH + "/"):
+            return self._moved("/" + path[len(LEGACY_MODERN_PATH) :].lstrip("/\\"), query)
         if path == "/api/session":
             return self._session_state()
         if path.startswith("/api/support/archive/"):
             return self._download_support_archive(path[len("/api/support/archive/") :])
         if path.startswith("/api/"):
             return self._api_get(path)
-        return self._error(404, "not_found", "unknown path")
+        return self._serve_modern(path.lstrip("/"))
 
     def do_POST(self):
         path = posixpath.normpath(self.path.split("?", 1)[0])
@@ -860,6 +880,7 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
                 "csrf_token": session.csrf_token,
                 "security_audit": self.app.audit_status(),
                 "password_confirmed": self.app.auth.status().get("confirmed"),
+                "appliance_version": installed_version(),
             },
             extra_headers=[self._session_cookie(session)],
         )
@@ -876,6 +897,7 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
                 "csrf_token": session.csrf_token,
                 "security_audit": self.app.audit_status(),
                 "password_confirmed": self.app.auth.status().get("confirmed"),
+                "appliance_version": installed_version(),
             },
             extra_headers=[self._session_cookie(session)],
         )
@@ -1136,6 +1158,25 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
     def _serve_index(self):
         return self._serve_file("index.html", "text/html; charset=utf-8")
 
+    def _moved(self, location, query=""):
+        """An old address of Modern (``/modern/...``), sent to the same page at the root.
+
+        Temporary and never cached: a browser that remembered it would loop
+        between ``/`` and ``/modern/`` after a return to an earlier Manager,
+        whose ``/`` still sends it to ``/modern/``. A line break in the value
+        is percent-encoded, since it is written into a response header, and
+        so is a backslash, which a browser would read as a slash.
+        """
+
+        target = f"{location}?{query}" if query else location
+        self.send_response(302)
+        self.send_header("Location", target.replace("\r", "%0D").replace("\n", "%0A").replace("\\", "%5C"))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", "0")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        return None
+
     def _download_support_archive(self, operation_id):
         """Hand the operator the archive the docs tell them to attach.
 
@@ -1174,6 +1215,24 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         if name not in STATIC_FILES:
             return self._error(404, "not_found", "unknown asset")
         return self._serve_file(name, STATIC_FILES[name])
+
+    def _serve_modern(self, name):
+        """A file of the Modern build, by its path below static/modern/.
+
+        The request path was normalised before it got here, so ".." cannot
+        climb out; a hidden component, a backslash and a symlink that leads
+        out of the build are refused as well.
+        """
+
+        parts = name.split("/")
+        if any(not part or part.startswith(".") or "\\" in part or "\x00" in part for part in parts):
+            return self._error(404, "not_found", "unknown asset")
+        content_type = MODERN_CONTENT_TYPES.get(os.path.splitext(parts[-1])[1])
+        root = os.path.realpath(os.path.join(STATIC_DIR, MODERN_DIR))
+        target = os.path.realpath(os.path.join(root, *parts))
+        if content_type is None or not target.startswith(root + os.sep) or not os.path.isfile(target):
+            return self._error(404, "not_found", "unknown asset")
+        return self._serve_file(os.path.join(MODERN_DIR, *parts), content_type)
 
     def _serve_file(self, name, content_type):
         path = os.path.join(STATIC_DIR, name)

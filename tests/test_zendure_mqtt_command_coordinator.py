@@ -11,6 +11,7 @@ next one.
 """
 
 
+import json
 import time
 import pytest
 
@@ -64,6 +65,18 @@ def _device(**kwargs):
         max_power=2000,
         **kwargs,
     )
+
+
+def _published_targets(dev):
+    """The outPower of every published command. A byte match would also find the timestamp."""
+
+    targets = []
+    for _topic, payload in dev._service.published:
+        for argument in json.loads(payload).get("arguments", []):
+            value = (argument.get("autoModelValue") or {}).get("outPower")
+            if value is not None:
+                targets.append(value)
+    return targets
 
 
 def _reply(record, *, success=1, output="success"):
@@ -227,7 +240,7 @@ def test_the_next_cycles_fetch_never_publishes_a_target_the_cycle_has_not_asked_
     dev.fetch()
     dev.cancel_pending_output_limit("control_disabled_skip_write")
 
-    assert [payload for _topic, payload in dev._service.published if b"800" in payload] == []
+    assert 800 not in _published_targets(dev)
     assert dev._pending_target is None
 
 

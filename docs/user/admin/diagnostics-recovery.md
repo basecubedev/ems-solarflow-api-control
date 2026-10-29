@@ -14,26 +14,46 @@ workflow back to a clean state.
 
 ## Prerequisites
 
-- For the Admin checks: the console logged in.
+- For the Admin checks: the console signed in.
 - For the CLI: shell access to the EMS host.
 
 ## Admin diagnostics (read-only)
 
-![Something looks wrong? card expanded with the checked-against fact and the Run the checks button](../../assets/screenshots/admin/admin-maintenance-diagnostics.png)
+![Diagnostics after Run the checks: All checks passed, checked in the running EMS container, 4 OK, the EMS diagnosis with its metrics and sections, and the settings file, analytics database and runtime state checks](../../assets/screenshots/admin/admin-diagnostics.png)
 
-**Where:** Maintenance → **System status** → **EMS
-diagnostics**.
+**Where:** **Diagnostics**; **Run the checks** on Services and the **Check the
+system** tile of the assistant lead here too.
 
-**What you select:** **Run the checks**.
+**What you see:** *Run the checks*, with the two promises *Nothing is changed:
+the checks only read.* and *The settings file is checked against newer versions
+as a dry run only.*
 
-**What it changes:** nothing. These are *read-only EMS checks from the installed
-system*, and the config upgrade is checked in **dry-run mode only** — no config
-file is changed.
+**What you select:** **Run the checks** (**Run again** afterwards).
 
-**Expected result:** an execution mode and a list of checks with outcomes.
+**What it changes:** nothing. The checks run read-only `emsctl.py` commands
+against the installed EMS, and the settings file is checked in **dry-run mode
+only** — no file is written.
 
-**If it differs:** for deeper evidence, or to attach something to an issue, use
-the CLI below.
+**Expected result:** an overall verdict — **All checks passed**, **Warnings**,
+**Problems found** or **Not available** — where it was checked (*checked in the
+running EMS container*, or *checked with emsctl.py on this machine*), the
+counts and the time. Then one card per check, each with its state (**OK**,
+**Switched off**, **Warning**, **Failed**, **Timed out**, **Not available**)
+and its time:
+
+| Check | What it reads |
+| --- | --- |
+| **EMS diagnosis** | `emsctl.py diagnose --json`: its metrics, root causes, warnings, errors and sections, the same report the dashboard's Diagnose page shows |
+| **Settings file against newer versions** | `emsctl.py config upgrade --dry-run` |
+| **Analytics database** | `emsctl.py influx status --json`; it warns when the analytics schema is incomplete and names the missing buckets and tasks, a downsampling task that is switched off, a retention that differs from the settings, and when no telemetry has reached InfluxDB in the last 15 minutes |
+| **Runtime state** | `emsctl.py status` |
+
+**Raw output** under a check shows what the command printed.
+
+**If it differs:** *No running EMS container and no emsctl.py were found, so
+there is nothing to check yet.* means nothing is installed or EMS is not
+running. For deeper evidence, or to attach something to an issue, use the CLI
+below.
 
 ## CLI diagnostics
 
@@ -53,8 +73,8 @@ Add `--json` for machine-readable output; it is a versioned public contract.
 
 ### Docker equivalents
 
-If you installed with the Admin Console or Docker Bootstrap, run them inside the
-EMS container:
+If you installed with the Admin Console or Docker Bootstrap, run them inside
+the EMS container:
 
 ```bash
 docker compose exec ems python3 emsctl.py diagnose
@@ -84,8 +104,8 @@ EMS SolarFlow diagnosis
       Next check: confirm the device still publishes to demo-broker.
 ```
 
-Values above are illustrative. Your own output names your real devices — sanitize
-it before sharing.
+Values above are illustrative. Your own output names your real devices —
+sanitize it before sharing.
 
 ## Support bundles
 
@@ -107,8 +127,8 @@ installation. **Before attaching one to a public issue, check for and remove:**
 - public IP addresses and personal hostnames
 - exact private filesystem paths
 
-If you are not sure a value is safe, replace it. Nobody needs your real serial to
-diagnose a control problem.
+If you are not sure a value is safe, replace it. Nobody needs your real serial
+to diagnose a control problem.
 
 ## Reporting hardware compatibility
 
@@ -116,71 +136,101 @@ Use the
 [Device compatibility report](https://github.com/basecubedev/ems-solarflow-api-control/issues/new?template=device_compatibility_report.yml)
 template when a device does not behave as documented — **and when it works**.
 
-**Positive reports are welcome and useful.** The maintainer does not own hardware
-from every Zendure generation, so a working report is what lets a device be
-marked validated for everyone else. Include the model, firmware version,
-connection type and sanitized logs.
+**Positive reports are welcome and useful.** The maintainer does not own
+hardware from every Zendure generation, so a working report is what lets a
+device be marked validated for everyone else. Include the model, firmware
+version, connection type and sanitized logs.
 
 See [Supported setups](../supported-setups.md) for the current support tiers.
 
 ## Unfinished setup or update
 
-![Unfinished setup or update card in Maintenance](../../assets/screenshots/admin/admin-maintenance-recovery.png)
+![System page with the Unfinished setup or update card: Guided setup is stuck, cleanup unfinished, what is stuck, its state and last change, the promise that the installed system is never changed, Technical details and Cancel the unfinished workflow](../../assets/screenshots/admin/admin-system-recovery.png)
 
-**Where:** Maintenance → **System status** → **Workflow
-recovery**.
+A guided workflow that did not finish cleanly is recovered where it belongs:
 
-**What you see:** the lifecycle verdict for a workflow that did not finish
-cleanly, and only the actions that are actually allowed for it.
-
-| Action | What it does | Offered for |
+| Where | What it offers | For |
 | --- | --- | --- |
-| **Resume** | Retry the failed step from the point it is safe to retry from | Setup and upgrade |
-| **Discard setup** | End the setup and remove the files it created | Setup |
-| **Return to running build** | Put the Admin back on the build EMS is actually running | Upgrade only |
-| **Cancel upgrade** | End the upgrade; running system, live config and known-good build stay as they are | Upgrade |
-| **Retry cleanup** | Retry a cleanup that failed | When files remain and cleanup can succeed |
+| **Guided setup**, step 01's **Progress** card | **Resume the transition**, **Discard the setup** | A setup whose System Build work failed, expired or lost its Admin Console replacement |
+| **Updates**, the stopped update | **Try again**, **Go back to the version that runs**, **Cancel the update** | An update that did not finish — see [Guided Upgrade](guided-upgrade.md#recovery-or-next-steps) |
+| **System**, **Unfinished setup or update** | **Cancel the unfinished workflow**, **Force-clear leftover records** | A workflow that can no longer finish, be switched away from or start again |
+
+Each page offers only the actions the server says are possible at that moment.
+
+**Where:** **System** → **Unfinished setup or update**. The card is there only
+while a guided workflow needs it; every other page then shows a banner with
+**Open recovery**.
+
+**What you see:** what is wrong in one line — *Guided setup is stuck: Cleanup
+unfinished.*, *A step is running right now; recovery waits for it.*, *Two
+workflow records claim the console at once.* — then **What is stuck**,
+**State** and **Last change**, the promise *The installed EMS, the settings,
+runtime data, containers, volumes and backups are never changed here.*, and
+**Technical details** with the reference, the state fingerprint, the affected
+Admin records and what is always kept.
+
+**What you select:**
+
+- **Cancel the unfinished workflow** — the normal way. *It is ended through the
+  workflow it belongs to, and its temporary files are cleared. The installed
+  system is not changed.* It asks once.
+- **Force-clear leftover records** — for old Admin versions, corrupt workflow
+  records and records a crash left behind. It asks twice, backs the affected
+  Admin workflow records up with their hashes under the Admin state directory,
+  and only then removes them, so the guided setup and the update are available
+  again.
+
+While a step of a guided workflow is still running, neither is offered; the
+card says so and waits for it.
+
+**Expected result:** *The unfinished workflow was cancelled.* or *The leftover
+records were backed up and removed.*
 
 ### What recovery never touches
 
-Your live `config/config.json`, `data/`, runtime databases, backups, volumes, and
-any container or file it cannot prove it owns.
+Your live `config/config.json`, `data/runtime-state.json`,
+`docker-compose.yml`, runtime databases, backups, containers and volumes, and
+any file it cannot prove it owns.
 
-### Two messages worth understanding
+### Two situations worth understanding
 
-- **"Setup has stopped. Temporary files remain."** No new setup or upgrade can
-  start until cleanup succeeds. **Retry cleanup** is offered. Your live config and
-  running EMS were not changed by the failed cleanup. The message survives a
-  reload and an Admin restart, and the retry always applies to the same setup — so
-  you never have to work out which files belong to what, and you never need to
-  delete JSON files by hand.
-- **"Files were kept for review."** The console found a file it **cannot prove**
-  belongs to this workflow — for example a generated config left by an older Admin
-  version. It **keeps** it and says so instead of deleting it. **Retry cleanup** is
-  not offered, because retrying would not change the answer. Nothing on your
-  running system was changed; a maintainer has to look at the leftover file.
+- **A setup still owns temporary files.** The guided setup says *An earlier
+  setup still owns temporary files. Release it under System before starting
+  again.*, and no new setup and no update can start until that is done. Your
+  live settings and running EMS were not changed by it. **Cancel the unfinished
+  workflow** on the System page clears it; the state survives a reload and an
+  Admin restart, and the cancel always applies to the same setup — so you never
+  have to work out which files belong to what, and you never delete JSON files
+  by hand.
+- **Ownership needs a review.** When the console finds a file it **cannot
+  prove** belongs to the workflow — for example a generated config left by an
+  older Admin version — it **keeps** it and says so instead of deleting it.
+  Nothing on your running system was changed; a maintainer has to look at the
+  leftover file.
 
-That distinction is deliberate. Deleting a file whose owner cannot be proven would
-be worse than asking you to look.
+That distinction is deliberate. Deleting a file whose owner cannot be proven
+would be worse than asking you to look.
 
 ### When a step ran out of time
 
 A System Build change has a time limit. Passing it does not by itself mean work
 has stopped, so the discard is not offered unconditionally:
 
-- **Time passed, nothing running** → Discard is available. This is the normal
-  recovery, including after an Admin restart.
-- **Time passed, an operation is still running** → Discard stays disabled and says
-  so. Wait; it becomes available immediately afterwards. This matters most during
-  resource verification, which writes shared files — discarding mid-write would
-  leave a half-written copy behind.
-- **The console cannot tell whether anything is running** → Discard stays disabled
-  and says so. It never guesses "probably finished".
+- **Time passed, nothing running** → **Discard the setup** is available. This
+  is the normal recovery, including after an Admin restart.
+- **Time passed, an operation is still running** → the setup says *The System
+  Build transition has expired, but its work is still running. Wait for it to
+  finish before discarding the setup.* It becomes available right afterwards.
+  This matters most during resource verification, which writes shared files —
+  discarding mid-write would leave a half-written copy behind.
+- **The console cannot tell whether anything is running** → *The state of the
+  System Build's worker could not be verified, so the setup cannot be discarded
+  for now.* It never guesses "probably finished".
 
 ## What happens in the background
 
-- Diagnostics come from the EMS-owned diagnostics service, the same one the CLI
-  and the dashboard use — one implementation, one answer.
+- The EMS diagnosis comes from the EMS-owned diagnostics service, the same one
+  the CLI and the dashboard use — one implementation, one answer.
 - Workflow lifecycle is a durable server-side record. The browser never decides
   whether a workflow may be resumed, discarded or cleaned up.
 - Cleanup requires exact ownership proof and canonical-path validation. Being
@@ -190,16 +240,16 @@ has stopped, so the discard is not offered unconditionally:
 
 | Symptom | Meaning | What to do |
 | --- | --- | --- |
-| Discard refused, naming an operation | That operation is still running | Wait, then discard. Nothing was half-discarded |
-| *Files were kept for review* | Ownership could not be proven | Do not delete by hand; report it |
-| Upgrade blocked by setup files | An unfinished setup exists | Discard the setup first |
-| Diagnostics show stale device | Telemetry older than the threshold | Check the transport — [MQTT](mqtt.md) |
+| A discard is refused, naming an operation | That operation is still running | Wait, then discard. Nothing was half-discarded |
+| *Ownership needs a review* | Ownership could not be proven | Do not delete by hand; report it |
+| An update is blocked by an unfinished setup | An unfinished setup exists | **Discard the setup** from the update card, or recover it on **System** |
+| The checks show a stale device | Telemetry older than the threshold | Check the transport — [MQTT](mqtt.md) |
 | Everything looks fine but control is wrong | Likely a second controller | Ensure nothing else writes `outputLimit` |
 
 ## Recovery or next steps
 
 - Roll back a change → [Backup and restore](backup-restore.md)
-- Retry an upgrade → [Guided Upgrade](guided-upgrade.md)
+- Retry an update → [Guided Upgrade](guided-upgrade.md)
 - Read the control decision live →
   [Dashboard control](../dashboard/control.md)
 - Command-level detail →

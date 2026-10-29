@@ -134,6 +134,8 @@ async function loadUpgrade(data) {
     error: upgradeEls.releaseError.hidden ? null : upgradeEls.releaseError.textContent,
     statusText: upgradeEls.releaseStatus.textContent,
     warnings: shown(upgradeEls.releaseWarnings),
+    options: upgradeEls.select.children.map((child) => [child.value, child.textContent, child.disabled]),
+    value: upgradeEls.select.value,
   };
 }
 """
@@ -170,6 +172,28 @@ def test_guided_upgrade_names_every_listing_warning_beside_a_selectable_build():
     assert not any(
         warning in html for html in out["innerHtmlWrites"] for warning in _LISTING_WARNINGS
     )
+
+
+def test_guided_upgrade_asks_for_a_choice_when_the_server_proposes_no_build():
+    script = _release_loader_script(_UPGRADE_LOADER + """
+(async () => {
+  const data = {
+    releases: [
+      { tag: "latest", channel: "latest", selectable: true, prepared: false },
+      { tag: "v0.8.16", channel: "stable", selectable: false, prepared: false, active: true },
+    ],
+    default_release: null,
+    warnings: [],
+  };
+  console.log(JSON.stringify(await loadUpgrade(data)));
+})();
+""")
+    out = _run_node(script)
+
+    assert out["selected"] is None
+    assert out["error"] is None
+    assert out["options"][0] == ["", "Choose a System Build", True]
+    assert out["value"] == ""
 
 
 def test_guided_upgrade_has_a_listing_warning_line_beside_the_status():

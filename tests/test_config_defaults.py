@@ -1919,6 +1919,9 @@ def test_safe_session_timeout_parsing():
     # invalid / missing values fall back to the default
     assert cfg.safe_session_timeout("nope", 1800) == 1800
     assert cfg.safe_session_timeout(None, 43200) == 43200
+    # an infinite or not-a-number value falls back too, instead of raising
+    for value in ("inf", "-inf", "Infinity", "nan", float("inf"), float("nan"), 1e999):
+        assert cfg.safe_session_timeout(value, 1800) == 1800, value
 
 
 def test_dashboard_config_missing_keys_fall_back_to_defaults(tmp_path):
@@ -1954,6 +1957,23 @@ def test_dashboard_session_timeout_zero_is_accepted(tmp_path):
 
         assert cfg.DASHBOARD_CONFIG["session_idle_timeout_seconds"] == 0
         assert cfg.DASHBOARD_CONFIG["session_absolute_max_seconds"] == 0
+    finally:
+        restore_config_module(snapshot)
+
+
+def test_dashboard_infinite_session_timeout_falls_back_and_loads(tmp_path):
+    snapshot = snapshot_config_module()
+    values = base_minimal_config()
+    values["dashboard"] = {
+        "session_idle_timeout_seconds": "inf",
+        "session_absolute_max_seconds": float("inf"),
+    }
+
+    try:
+        initialize_config_from_dict(tmp_path, values)
+
+        assert cfg.DASHBOARD_CONFIG["session_idle_timeout_seconds"] == 1800
+        assert cfg.DASHBOARD_CONFIG["session_absolute_max_seconds"] == 43200
     finally:
         restore_config_module(snapshot)
 

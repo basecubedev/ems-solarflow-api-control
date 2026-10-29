@@ -94,8 +94,9 @@ flowchart LR
   MQTT. [Safety](safety.md) explains the gates.
 - **Write.** The new output limit goes to the device.
 
-The Dashboard's **Control** tab shows this pipeline for the current cycle, so
-you can see why the EMS chose exactly this value. The technical detail is in
+The dashboard's **Control** page shows this pipeline for the current cycle, so
+you can see why the EMS chose exactly this value — see
+[Control pipeline](dashboard/control.md). The technical detail is in
 [control logic](../technical/control-logic.md) and
 [control flow](../technical/control-flow.md).
 
@@ -105,7 +106,7 @@ you can see why the EMS chose exactly this value. The technical detail is in
 | --- | --- | --- | --- |
 | Runs as | Docker container `ems-solarflow-api-control` | Docker container `ems-solarflow-admin` | Two system services on the Raspberry Pi, outside Docker |
 | Address | `http://<host>:8080` | `http://<host>:8090` | `http://ems-solarflow.local:8088` |
-| Does | Controls the inverters, shows the live flow, devices, energy, history and diagnostics | Guided Setup, device discovery, writes `config/config.json`, deploys and upgrades the EMS, maintenance, backup and restore | OS updates, its own updates, network and WLAN, SSH and backup access, installs, updates, repairs and rolls back the Admin Console |
+| Does | Controls the inverters, shows the live flow, devices, energy, history and diagnostics | Guided setup, device discovery, writes `config/config.json`, deploys and upgrades the EMS, maintenance, backup and restore | OS updates, its own updates, network and WLAN, SSH and backup access, installs, updates, repairs and rolls back the Admin Console |
 | Does not | — | Run the control loop or set an inverter's output | Edit EMS configuration, discover devices, or change the EMS container |
 | Needed for control | **Yes** | No | No |
 
@@ -121,20 +122,20 @@ sequenceDiagram
     participant ems as EMS
 
     you->>pi: flash the card, power on, set the password
-    you->>pi: Install Admin
+    you->>pi: Install EMS Admin
     pi->>admin: download, pin, start, check it answers
-    you->>admin: Guided Setup
-    admin->>admin: 01 Release · 02 Devices · 03 Config
-    admin->>admin: 04 Prepare deployment — writes config.json
+    you->>admin: Guided setup
+    admin->>admin: 01 System Build · 02 Devices · 03 Settings
+    admin->>admin: 04 Prepare — writes config.json
     admin->>ems: 05 Start EMS
     ems->>ems: control loop runs, every 5 s
 ```
 
 1. **The Appliance Manager** comes with the card. You open it, choose the
-   password, and press **Install Admin**. See
-   [first start](appliance/first-start.md).
-2. **The Admin Console** walks you through
-   [Guided Setup](admin/guided-setup.md): pick a system build, let it find your
+   password, and its [assistant](appliance/assistant.md) leads you to **Install
+   EMS Admin**. See [first start](appliance/first-start.md).
+2. **The Admin Console** walks you through the
+   [guided setup](admin/guided-setup.md): pick a system build, let it find your
    Zendure devices and grid meter, review the configuration. Nothing is written
    until step 04, and the EMS is not started until step 05.
 3. **The EMS** starts and controls from then on. The Admin Console and the EMS
@@ -166,13 +167,13 @@ each one waits for your confirmation.
 | --- | --- |
 | See what my system is doing right now | Dashboard (`:8080`) |
 | Understand why the EMS wrote a value | Dashboard → **Control** |
-| Add, change or remove a device | Admin Console (`:8090`) → **Maintenance** |
-| Update EMS and Admin | Admin Console → **Guided Upgrade** |
-| Back up or restore the EMS | Admin Console → **Backup / restore** |
+| Add, change or remove a device | Admin Console (`:8090`) → **Settings & devices** → **Devices** |
+| Update EMS and Admin | Admin Console → **Updates** → **Update to …** |
+| Back up or restore the EMS | Admin Console → **Backups** |
 | Update the operating system or the Appliance Manager | Appliance Manager (`:8088`) → **Updates** |
-| Install, update, repair or roll back the Admin Console | Appliance Manager → **Admin** |
+| Install, update, repair or roll back the Admin Console | Appliance Manager → **EMS Admin** |
 | Change the network or WLAN of the Pi | Appliance Manager → **Network** |
-| Copy backups off the Pi | Appliance Manager → **SSH & Backup Access** |
+| Copy backups off the Pi | Appliance Manager → **SSH & backup access** |
 | Work from a terminal | `emsctl` — see the [CLI reference](../cli.md) |
 
 ## The command line

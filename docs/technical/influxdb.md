@@ -1,7 +1,7 @@
 # InfluxDB Analytics Backend (optional)
 
-The EMS dashboard can store telemetry history in InfluxDB 2.x to power the
-**Analytics** tab with long-range, downsampled charts. This is an **optional**
+The EMS dashboard can store telemetry history in InfluxDB 2.x to power its
+**Analytics** page with long-range, downsampled charts. This is an **optional**
 feature.
 
 > InfluxDB is not required for normal EMS operation. The controller writes power
@@ -125,7 +125,7 @@ This bundled path is for repository checkouts running `emsctl` natively. You do
    `deploy/docker/influxdb.env` with secure random secrets (if missing), starts
    the bundled InfluxDB container, waits until it is reachable, and (when
    `auto_sync` is true) reconciles buckets/retention/downsampling tasks from
-   `config.json`. After it prints success, the dashboard Analytics tab can
+   `config.json`. After it prints success, the dashboard's Analytics page can
    connect — **no manual Docker Compose, `.env`, bucket, retention or task setup
    is required.**
 
@@ -515,7 +515,7 @@ at once, then a minute later, and from then on half as often each time, down to
 once an hour; another kind is named at once, and the first successful write ends
 every pause, so the next failure is named at once again.
 
-The dashboard Analytics tab shows the same guidance when it cannot reach
+The dashboard's **Analytics** page shows the same guidance when it cannot reach
 InfluxDB:
 
 ```text
@@ -554,17 +554,20 @@ A different fault with a different fix. Each range reads the bucket its query
 profile names: 1h and 6h read `<prefix>_raw`, 24h reads `<prefix>_1m`, and the
 longer ranges read `<prefix>_5m` and `<prefix>_1h`. A schema that was never
 created leaves every range empty; a partial one leaves the short ranges working
-and empties the rest, which is easy to miss because the tab opens on 24h. Either
-way the Analytics tab says so:
+and empties the rest, which is easy to miss because the page opens on 24h. Either
+way the **Analytics** page says so:
 
 ```text
 Analytics history is enabled, but a bucket this range reads is missing.
 Unless influxdb.auto_sync is off, the EMS creates it by itself; it checks every
-half hour. To create it now, use Repair analytics in the Admin console's
-Maintenance, or run: python3 emsctl.py influx sync --safe
+half hour. To create it now, use Repair analytics on the Admin console's
+Services page, or run: python3 emsctl.py influx sync --safe
 ```
 
-The EMS also says so without anyone opening the tab. Once the telemetry writer
+The message is the EMS's own text, written before the Modern Admin Console:
+**Repair analytics** is on its **Services** page.
+
+The EMS also says so without anyone opening the page. Once the telemetry writer
 has completed its first write — which proves InfluxDB is reachable and the token
 works, and is the earliest point at which a missing bucket can be told apart
 from an unreachable server — it checks the planned buckets *and* the

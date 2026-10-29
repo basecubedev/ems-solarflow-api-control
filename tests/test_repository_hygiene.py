@@ -188,6 +188,28 @@ def test_the_checker_exits_non_zero_on_a_rejection(tmp_path):
     assert "REJECTED" in result.stdout
 
 
+def test_a_repository_whose_requests_outgrow_the_pipe_is_still_read(tmp_path):
+    """Every blob's request goes to one git cat-file while its answers come
+    back. With 4 KiB blobs git fills its answer pipe after a few blobs and
+    stops reading requests, so two thousand requests -- far more than a pipe
+    buffer holds -- deadlocked the checker when it wrote every request before
+    reading any answer, by a wide margin rather than by git's read-ahead."""
+
+    files = {f"f/{index:04d}.txt": f"{index:04d}".encode() * 1024 for index in range(2000)}
+    repo = make_repo(tmp_path, files)
+
+    result = subprocess.run(
+        [sys.executable, str(CHECKER), "--repo", str(repo), "--json"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["rejected"] == []
+
+
 def test_this_repository_is_clean(tmp_path):
     result = subprocess.run(
         [sys.executable, str(CHECKER), "--repo", str(ROOT), "--json"],

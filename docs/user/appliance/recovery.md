@@ -1,12 +1,29 @@
 # When it stops working
 
-Start at the top and work down. Each step is safe to try.
+## Purpose
+
+What to do when the appliance, EMS Admin or the EMS does not behave, in the
+order to try things. Start at the top of the section that fits and work down.
+Each step is safe to try.
+
+## When to use this workflow
+
+- The web page does not load at all.
+- The page loads, but EMS Admin or the EMS does not run.
+- An update failed.
+- The password is lost.
+
+## Prerequisites
+
+- For the first section, possibly a keyboard and a screen for the Raspberry Pi,
+  or a USB-to-serial adapter.
+- For the others, the console signed in — see [First start](first-start.md).
 
 ## The web page does not load
 
 **Give it three minutes first.** The first start has work to do before it
 answers — it grows the card to its full size, generates its own SSH host keys
-and starts the containers. And an update asks you for a reboot when a kernel or
+and starts its services. And an update asks you for a restart when a kernel or
 firmware package was among the changes. A page that is missing for two minutes
 is usually a box that is coming back.
 
@@ -27,7 +44,8 @@ rescue account for exactly this — user `ems-rescue`, password `rescue-me` — 
 it can become root with `sudo`. That password is written down here and in the
 source, so it is public knowledge: fine on a home network, and worth changing
 with `sudo passwd ems-rescue` if your appliance can be reached from outside one.
-The console reports which of the two it is; it does not insist.
+The **Console rescue account** card on **SSH & backup access** reports which of
+the two it is; it does not insist.
 
 The full order of attempts, down to reading the card in another computer, is in
 [the console recovery guide](../../appliance/console-recovery.md).
@@ -79,18 +97,49 @@ and the on-box backups alike. A backup you took earlier and kept somewhere else
 is what you restore from. The paths are listed in
 [network recovery](../../appliance/network-recovery.md#whether-you-have-a-shell-at-all).
 
-![The Admin section, where restart and repair are offered](../../assets/screenshots/appliance/appliance-recovery.png)
+## EMS Admin or the EMS is not running
 
-## The page loads but EMS is not running
+The Appliance Manager and the EMS are separate. A working Appliance Manager page
+with a stopped EMS means the box is fine and the application is not. The
+Overview's **EMS** and **EMS Admin** tiles, and the assistant's steps, say which
+of the two it is.
 
-The appliance manager and EMS are separate. A working manager page with a
-stopped EMS means the box is fine and the application is not.
+![The EMS Admin page: the installed version v1.0.0, healthy and running, the known-good versions, Change the version with Open Updates, the actions Start, Stop and Restart, Preview repair and Roll back, and the container log](../../assets/screenshots/appliance/appliance-recovery.png)
 
-1. Open the **Admin** section.
-2. If Admin is not installed, install it — the page offers a single action.
-3. If Admin is installed but unhealthy, press **Restart Admin**.
-4. If it stays unhealthy, press **Preview repair**. It inspects the deployment
-   and shows what it would change before changing anything.
+On the **EMS Admin** page — *Restart, repair and roll back the EMS Admin
+container* — in this order:
+
+1. **If EMS Admin is not installed,** the page offers one thing: **Install EMS
+   Admin**. See [First start](first-start.md#4--install-ems-admin).
+2. **If it is installed but not healthy,** press **Restart** under **Start,
+   stop or restart** and confirm the plan. **Start** brings back a stopped
+   container; all three leave its version alone.
+3. **If it stays unhealthy,** press **Preview repair**. The appliance inspects
+   the deployment and shows, in the plan, which checks pass and what it would
+   change before it changes anything; **Confirm** runs it. A check it could not
+   fix, or something you have to do yourself, is listed in the banner when it
+   ends.
+4. **If a new version broke it,** press **Roll back** — *Restore the previous
+   known-good version*. **Known-good versions** shows what it goes back to, and
+   the rollback restores that version by its recorded digest, not just its tag.
+5. **To see why,** press **Load log** under **EMS Admin container log** — *The
+   last 200 lines, read when you ask*.
+
+When EMS Admin is healthy and the EMS still does not run, the EMS is EMS
+Admin's to start: **Open EMS Admin** at the foot of the side menu, and see
+[Diagnostics and recovery](../admin/diagnostics-recovery.md) there.
+
+### "The EMS Admin console is replacing itself right now."
+
+Two things can manage the EMS Admin container, and they refuse to fight. While
+the EMS Admin console updates itself, the EMS Admin page says so and names the
+stage it reached: installing, rolling back, repairing, starting, stopping and
+restarting are refused until that finishes, because both would write the same
+deployment files. Reading the status and the log still works.
+
+Wait for it to finish. If it never does, a plan you start anyway is refused,
+and its reason names the file holding that state; see
+[When Admin is replacing itself](../../appliance/admin-recovery.md#when-admin-is-replacing-itself).
 
 ## An update failed
 
@@ -99,26 +148,23 @@ because the card is full or the download was truncated will fail again the same
 way.
 
 **An operating-system update.** Nothing was undone: `apt` patches the system in
-place. If the appliance still boots, the Updates page will say what failed and
-you can try again. If it does not, this page's
-[first section](#the-web-page-does-not-load) is the route — screen and keyboard
-first, reflash and restore last.
+place. If the appliance still boots, the banner and the **Operating system**
+card on **Updates** say what failed, and you can try again — after a
+**Package-manager recovery** when the card asks for one. If it does not boot,
+this page's [first section](#the-web-page-does-not-load) is the route — screen
+and keyboard first, reflash and restore last.
 
 **An Appliance Manager update.** The appliance puts the previous package back by
-itself when the new one does not report in on time, and the Appliance Manager
-card then says *reverted*. If it says *revert unavailable* or *revert failed*,
-it stopped and is waiting for you: sign in at the console and run
-`sudo ems-appliance rollback-manager`. See
+itself when the new one does not report in on time, and **Last install** on
+**Updates** then says **Put back**. If it says **Going back failed** or
+**Nothing to go back to**, it stopped and is waiting for you: sign in at the
+console and run `sudo ems-appliance rollback-manager`. See
 [Updates](updates.md#if-the-new-one-does-not-come-up).
 
-## "The Admin console is replacing itself"
-
-Two things can manage the Admin container, and they refuse to fight. If the
-Admin Console is in the middle of updating itself, the appliance declines to
-touch it and says which stage it reached.
-
-Wait for it to finish. If it never does, the message names the file holding that
-state and you can remove it.
+**An EMS Admin update.** The running EMS Admin is replaced only once the new
+image is pulled and checked, so a failure before that leaves it as it was, and
+the banner says so. After that, **Roll back** on the EMS Admin page is the way
+back.
 
 ## The password is lost
 
@@ -127,25 +173,51 @@ console login: sign in as `ems-rescue` at a keyboard and run
 `sudo ems-appliance password-reset`.
 
 If that is not available to you either, write the card again — but understand
-what that costs: re-flashing replaces every partition on the card, on either
-shape, so your EMS configuration, data and on-box backups go with it. Take a
+what that costs: re-flashing replaces every partition on the card, so your EMS
+configuration, data and on-box backups go with it. Take a
 [backup](backup.md) first if you can still reach the box at all. It is the only
 thing that comes back.
 
+## Collect a support archive
+
+![The Diagnostics page: temperature, memory, root filesystem and EMS data, the services, the support archive card with Create support archive, and the logs](../../assets/screenshots/appliance/appliance-diagnostics.png)
+
+**Diagnostics** — *Host health, logs and the support archive* — shows the
+temperature (and under-voltage, where the board reports it), memory, the root
+filesystem, the EMS data, and the appliance's services. **Logs** reads the last
+200 lines of one source when you ask: in Basic the EMS Admin container, the
+operations and the security audit; Expert adds every other source the appliance
+declares — the Appliance Manager's web service and agent, the EMS container,
+Docker, the start-up, the package installs, the Manager install and its
+deadline, and more.
+
+**Create support archive** makes a bounded archive of the appliance's state and
+logs — *Passwords, tokens, private keys and EMS secrets are left out.* Confirm
+its plan with **Create**; when it is ready, **Download support archive** appears
+in the banner at the top of the page.
+
 ## What not to do
 
-- **Do not pull power to "reset" it.** Shut it down from the page.
+- **Do not pull power to "reset" it.** Shut it down from the Overview.
 - **Do not install packages on it by hand.** Nothing stops you, and what you
   install stays — but it becomes yours to keep working, and yours to undo at
   the console when an upgrade trips over it.
 - **Do not run a second controller against the same inverter.** Two things
   writing an output limit is worse than either alone.
 
-## Getting help
+## Expected result
+
+The appliance answers again, EMS Admin is healthy, and the EMS runs — or you
+have a support archive and the facts below for an issue.
+
+## Recovery or next steps
 
 Open an issue with: what you were doing, what the page said, the model of your
-Pi, the build id the **System** page shows, and whether you flashed the appliance
-image or installed the package on your own Raspberry Pi OS. If the appliance is
-reachable, its **Support archive** collects the
-relevant logs and state with secrets redacted, and attaching that answers most
-questions in one round.
+Pi, the Appliance Manager version (**Settings**, or the foot of the side menu),
+and whether you flashed the appliance image or installed the package on your
+own Raspberry Pi OS. If the appliance is reachable, its **support archive**
+collects the relevant logs and state with secrets redacted, and attaching that
+answers most questions in one round.
+
+- [Appliance troubleshooting reference](../../appliance/troubleshooting.md)
+- [Admin recovery, in technical detail](../../appliance/admin-recovery.md)

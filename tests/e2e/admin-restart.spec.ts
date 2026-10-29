@@ -221,7 +221,7 @@ test("a real Admin restart preserves one workflow interpretation", { tag: ["@smo
 });
 
 test("the restarted Admin serves the same workflow to a browser", { tag: ["@smoke", "@workflow"] }, async ({ page }) => {
-  await page.goto(`${admin.baseURL}/`);
+  await page.goto(`${admin.baseURL}/classic/`);
   // Auth state lives in the preserved data directory, so the login form is the
   // one the earlier process created.
   await expect(page.locator("#auth-login:not([hidden])")).toBeVisible();

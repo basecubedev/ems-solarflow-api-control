@@ -1,10 +1,11 @@
 # Admin Maintenance
 
-Use Maintenance for an existing EMS installation. This is the second of the two
-Admin Console flows; the first is [Admin setup](admin-setup.md) (Set up a new
-system).
+This is the behavioural reference for an existing EMS installation in the Admin
+Console: every page but the guided setup, which has its own reference,
+[Admin setup](admin-setup.md). The step-by-step guides with screenshots are in
+[docs/user/admin/](admin/index.md).
 
-## What Maintenance does
+## What the console does for an existing system
 
 - detects the current installation
 - checks config and containers
@@ -13,31 +14,37 @@ system).
 - guides updates
 - helps with restore
 
-Maintenance reads the real system state. It never silently replaces config or
+It reads the real system state. It never silently replaces config or
 deletes data. The Admin Console is orchestration and UI only; the EMS core stays
 the source of truth and owns the standard `config/config.json` layout.
 
-## Opening Maintenance
+## The pages
 
 Start the Admin Console and open `http://127.0.0.1:8090` (see
-[Admin setup](admin-setup.md#start)). The start screen detects the current
-install and recommends the safest flow. Any existing installation is routed to
-**Manage my existing system**; the setup wizard is never started automatically.
-A legacy root `config.json` is offered a migration to `config/config.json` first
-(see [config-layout.md](config-layout.md)).
+[Admin setup](admin-setup.md#start)). It opens on the
+[assistant](admin/assistant.md), or on the Overview if you turned the assistant
+off; the setup is never started on its own. Settings in the old place (a
+legacy root `config.json`) are offered a move to `config/config.json` on the
+**System** page first (see [config-layout.md](config-layout.md)).
 
-Maintenance offers four paths:
+An existing installation is managed on these pages:
 
-| Path | What it is |
+| Page | What it is |
 |---|---|
-| **Guided upgrade** | Pick one Target System Build; align Admin + EMS together (recommended) |
-| **System status** | See what is installed and running, run checks, fix a stuck workflow |
-| **Settings & devices** | Change devices, features and the safety switches |
-| **Backup / restore** | Create, inspect, restore, or delete EMS backups |
+| **Overview** | Is everything in order: what needs your attention, ranked, the tiles, Control & safety, the versions |
+| **Updates** | One Target System Build; Admin + EMS aligned together (the guided upgrade) |
+| **Settings & devices** | Features, the safety switches, expert tuning, devices and the network search |
+| **Services** | What runs, **Restart EMS now**, **Repair analytics** |
+| **Backups** | Create, inspect, download, bring back, restore or delete EMS backups |
+| **Diagnostics** | Read-only EMS checks |
+| **System** | Files, device telemetry, an older MQTT setup, unfinished workflows, the guided setup |
 
-Reading and changing are two pages: the status page never edits anything, and
-the settings page never restarts anything. The older address
-`#maintenance-manual` still opens the status page.
+Reading and changing are separate: the Overview and Diagnostics never edit
+anything; the System page changes something only through a button you confirm
+(moving the settings file to its new place, applying the MQTT migration,
+cancelling or clearing an unfinished workflow); and Settings & devices restarts
+EMS only when you confirm **Restart EMS now**. Every page has its own address
+(`#/updates`, `#/settings/safety`, …).
 
 ## Guided upgrade
 
@@ -46,42 +53,37 @@ a matched Admin + EMS pair, so choosing it aligns both the Admin Console and EMS
 to the same build — there is no separate Admin-target choice and no way to move
 EMS forward while intentionally leaving the Admin behind.
 
-The Target System Build selector uses the same catalogue as Guided Setup, grouped
-**Latest**, **Stable**, **Unstable**, then **Experimental**. Selecting an
-Experimental build is itself the explicit decision — there is no separate
-acknowledgement checkbox; the experimental-build acknowledgement is bound
-automatically to that exact build so an interrupted upgrade can resume safely.
+The **Updates** page lists the versions grouped **Stable releases**, **Rolling
+build**, **Release candidates** and **Development builds**, and recommends one
+(see [Guided Upgrade](admin/guided-upgrade.md) for which). Choosing a
+development build is itself the explicit decision — there is no separate
+acknowledgement checkbox; the acknowledgement is bound automatically to that
+exact build so an interrupted upgrade can resume safely.
 
-Selecting a target System Build — like Guided Setup — **downloads nothing**: it
-only previews the build, so you can browse several targets without contacting the
-container registry. A build shown as *Resources cached* only means its release
-resources are already on disk; that is **not** a verified System Build.
-
-**Verify System Build** downloads (or reuses) the Admin and EMS images, verifies
-the exact paired build, and returns an immutable **selection fingerprint** of the
+**Choosing a version checks it at once**, and changes nothing on the host: the
+Admin and EMS images are downloaded (or reused), the exact paired build is
+verified, and the check returns an immutable **selection fingerprint** of the
 resolved pair (tag, channel, revision, build id, Admin digest, EMS digest). The
-plan you then build is bound to that fingerprint. Changing the target, or
-verifying again, clears the previous verification and plan, so you verify the new
-target once. If verification stops with a *GitHub Container Registry rate limit
-reached* message, no changes were made — wait and select **Verify System Build**
-again (see [troubleshooting](../technical/troubleshooting-reference.md)).
-
-While the images download and verify, the **Verify System Build** button shows a
-spinning progress ring and reads *Verifying…*; on the first run this can take a
-moment, so the spinner is your signal that it is working, not stuck.
+update you then start is bound to that fingerprint. Choosing another version,
+or checking again, clears the previous check, so the new target is checked
+once. If the check stops because the GitHub Container Registry limited the
+downloads, no changes were made — wait and **Check again** (see
+[troubleshooting](../technical/troubleshooting-reference.md)). While the images
+download and verify, the card reads *Checking the version*; on the first run
+this can take a few minutes.
 
 The installation-specific preflight (current state, Zendure MQTT migration review,
-backup readiness) does **not** run during Verify. It runs at **Upgrade system**,
-immediately before any change, together with a re-check of the selection
+backup readiness) does **not** run during the check. It runs when you start the
+update, immediately before any change, together with a re-check of the selection
 fingerprint: the target is re-resolved and, if its image or build metadata moved
-since verification (for example a mutable `latest` tag re-pushed to a new digest),
-the upgrade is rejected before any preflight, backup, migration, or deployment,
-and you must **Verify System Build** again. Otherwise the installation preflight
-runs and the upgrade proceeds.
+since the check (for example a mutable `latest` tag re-pushed to a new digest),
+the update is refused before any preflight, backup, migration, or deployment,
+and the page asks you to check the version again. Otherwise the installation
+preflight runs and the update proceeds.
 
-Choose the target System Build. Review the plan, leave **Create a backup**
-enabled, and give explicit confirmation before execution. The page then shows ordered progress
-through this pipeline:
+Choose the target version. Review the plan of what the update will do, leave
+**Back up first (recommended)** on, and give one explicit confirmation. The page
+then shows ordered progress while the server runs this pipeline:
 
 1. Resolve the target System Build and re-check the verified selection
    fingerprint, rejecting the upgrade if the resolved pair changed since Verify.
@@ -101,14 +103,17 @@ through this pipeline:
 12. Run diagnostics.
 13. Mark the Known-Good state.
 
-The live stage tracker highlights the current step, gently pulses it, and labels
-it *Working…*, so a long step (for example while the target image downloads, or
+The page follows it in five phases — **Check the new version**, **Back up and
+prepare**, **Update the Admin console**, **Install EMS …**, **Check that
+everything runs** — with the running phase saying what it does and a clock
+counting up, so a long step (for example while the target image downloads, or
 during the health check) stays visibly active rather than looking frozen. If the
-Admin Console itself is replaced, a full-screen reconnect spinner takes over and
-the page reconnects on its own. On a slow host (a Raspberry Pi pulling the new
-image) that can take several minutes: after two the spinner offers a manual
-reload, and it keeps waiting either way — nothing is wrong underneath, the
-transition is stored and resumes as soon as the new Admin answers.
+Admin Console itself is replaced, the page shows *The Admin console does not
+answer. Reconnecting…* and reloads from the new console once it answers. On a
+slow host (a Raspberry Pi pulling the new image) that can take several minutes:
+after two the page offers **Reload page**, and it keeps waiting either way —
+nothing is wrong underneath, the transition is stored and resumes as soon as
+the new Admin answers.
 
 You do not have to keep the page open. The replaced Admin picks the upgrade up
 itself when it starts, so closing the console, losing the network or putting the
@@ -117,13 +122,13 @@ you come back, it has either finished or is on a step you can see.
 
 The other side of that: **closing the console does not stop an upgrade.** The
 confirmation you gave is what the system acts on, and it outlives the browser
-by design. To stop one, use **Abandon** in the System Build panel while it is
-offered — the console says when it is, and refuses while a step is mid-flight
-rather than leaving something half applied.
+by design. An update that stopped offers **Cancel the update** when the server
+allows it — never while a step is mid-flight, rather than leaving something half
+applied.
 
 If the replacement never arrives — the container was killed by a power cut or an
 out-of-memory kill mid-download — the console says so instead of waiting, and
-offers to abandon the upgrade so you can start it again.
+offers **Cancel the update** so you can start it again.
 
 The current-state preflight and the verified backup always run **under the
 Admin that is currently running**, before any Admin alignment. The target Admin
@@ -131,8 +136,10 @@ is never assumed before the backup and preflight are complete.
 
 Guided upgrade moves **forward**, or back by one or more patches inside the
 release line you are running — `v0.8.3` back to `v0.8.1`, so a bad patch can be
-undone. It never offers that by itself: the proposed build is always the newest
-one that is not behind what you are running. Going further back, to an older
+undone. It never offers that by itself: the proposed build is the newest stable
+release that is neither the one you are running nor behind it; without one,
+nothing is proposed and you choose, and the rolling `latest` is proposed only
+when nothing identifiable runs. Going further back, to an older
 minor or major, belongs to the Backup / restore flow. It never removes
 containers, volumes, or data. The Admin Console asks
 for confirmation before changing config, compose files, containers, or data.
@@ -189,20 +196,21 @@ Admin alignment is an automatic stage of the pipeline, not a separate decision:
 - If the Admin content matches but its persistent Compose tag is stale, the tag
   is corrected so it points at the canonical System Build (a persistent retag).
 - If the Admin does not match, it is updated to the target build automatically.
-  The page shows a reconnect screen while the Admin restarts on the new image,
-  then the upgrade continues on its own from the saved transition.
+  The page loses contact while the Admin restarts on the new image, reloads
+  from it, and the upgrade continues on its own from the saved transition.
 
-You confirm the whole upgrade plan **once**. There is no second, Admin-specific
+You confirm the whole upgrade **once**. There is no second, Admin-specific
 confirmation, no standalone *Update Admin* button, and no option to skip Admin
 alignment (or leave the Admin on a different build) in the normal flow.
 
-**Admin and EMS are named separately.** *Current EMS* in the first step is the EMS
-container's release; the Admin's own release is read the same way, from the
-running Admin container's build labels by its immutable image id — the answer the
-Appliance Manager gives too. The Maintenance overview, the plan's *Current* fact
-(`EMS … · Admin …`) and `/api/admin/maintenance/admin-update/status`
-(`current_admin.release`) all use it; the Admin's environment is read only when no
-Admin container runs to answer.
+**Admin and EMS are named separately.** **What runs now** on the Updates page
+names the EMS container's release and the Admin's own release; the latter is
+read the same way, from the running Admin container's build labels by its
+immutable image id — the answer the Appliance Manager gives too. The Overview's
+**Versions**, the update's **Runs now** and
+`/api/admin/maintenance/admin-update/status` (`current_admin.release`) all use
+it; the Admin's environment is read only when no Admin container runs to
+answer.
 
 The System Build known-good record follows what runs and passes the health check
 an upgrade requires. An upgrade or setup that completes records its pair; besides
@@ -236,20 +244,22 @@ runs no check at all.
 A Guided Upgrade cancelled after it replaced the Admin leaves the Admin on the
 target build and EMS on the old one. That is not one System Build, so it is never
 recorded: the record keeps the pair it last verified, `running_pair` names both
-builds (`state: unpaired`), and the Admin alignment step says the record does not
-name the Admin that runs, names the record's build, and names the cancelled
-upgrade if that is what left them apart. An Admin reinstalled from the Appliance
+builds (`state: unpaired`), and **What runs now** on the Updates page reads
+**Not a pair**. An Admin reinstalled from the Appliance
 Manager at another build than the EMS is named the same way. Upgrading to one
 System Build aligns both and records the pair again. While a transition is in
-flight, including a recoverable failure whose **Return to running build** reads
-the record, the record is not touched.
+flight, including a recoverable failure whose **Go back to the version that
+runs** reads the record, the record is not touched.
 
-If you are asked to log in again after the Admin Console restart, use the same
-EMS Dashboard/Admin password. The upgrade resumes exactly where it left off: the
-completed backup and current-state preflight are **not** repeated.
+If you are asked to sign in again after the Admin Console restart, use the same
+EMS Dashboard/Admin password; the page then opens **Updates** and follows the
+update on. The upgrade resumes exactly where it left off: the completed backup
+and current-state preflight are **not** repeated.
 
-A standalone Admin repair exists only under **Advanced → Recovery**, for
-restoring an inconsistent Admin after a failed transition. If the new Admin
+When **Go back to the version that runs** finds the Admin Console already on
+that version, **System alignment** on the Updates page shows what is left:
+**Continue** checks that version's files, and **Release the console** leads to
+the System page, where the recovery card frees the console. If the new Admin
 Console does not come back on its own, check its logs and start it again:
 
 ```bash
@@ -257,74 +267,87 @@ docker compose -f docker-compose.admin.yml logs
 docker compose -f docker-compose.admin.yml up -d
 ```
 
-## System status
+## Overview and Services
 
-This path inspects an existing installation and repairs it.
-
-- **The whole page** is read-only apart from **Restart EMS now** and **Repair analytics**. It shows the install state, the resolved
-  `config/config.json`, `data/`, and `docker-compose.yml` paths, the EMS and
-  InfluxDB containers, the Admin image and EMS image as separate component
-  identities, and a link to the local dashboard
+- **The Overview** is read-only. It answers whether the installation is in
+  order, ranks what needs attention (errors before warnings before notes, each
+  with what to do), and shows the EMS, analytics, control and backup tiles,
+  **Control & safety** and **Versions**: the Admin image and the EMS image as
+  separate component identities, and the local dashboard's address
   (`http://localhost:8080` by default). It never builds, starts, stops, or
-  changes anything.
+  changes anything. **Saved settings are newer than the running EMS** is the
+  finding for a settings file written after EMS started: until a restart, part
+  of what you saved is not in effect.
+- **Services** shows the EMS and analytics database containers and what a
+  restart would change. **Restart EMS now** recreates EMS with the saved
+  settings and starts or stops the bundled InfluxDB to match them; when
+  analytics is on it also creates the missing analytics buckets and
+  downsampling tasks. **Repair analytics** creates the missing buckets and tasks
+  without touching any container; it deletes nothing. The two never run at the
+  same time. A shorter retention or a removed downsampling entry is applied only
+  by a full schema sync, `docker compose exec ems python3 emsctl.py influx
+  sync`, because it deletes the data that falls out of the new retention.
+
 ## Settings & devices
 
-This path edits an existing installation.
+This page edits an existing installation.
 
-- **Four tabs over one draft** — Devices, Features, Control & safety, Expert —
-  with a search across every setting and one shared footer. Switching a tab
-  never reloads and never discards unsaved changes.
-- **Control & safety** holds the switches that decide whether EMS may change
-  your inverters, with nothing hidden behind a disclosure. They are **on by
+- **Four tabs over one draft** — Features, Safety, Expert, Devices — with
+  **Search settings** across every setting and one bar at the foot of the page
+  that counts your unsaved changes. Switching a tab never reloads and never
+  discards unsaved changes; they also survive a reload, and **Discard** drops
+  them.
+- **Safety** holds the switches that decide whether EMS may change your
+  inverters, with nothing hidden behind a disclosure. They are **on by
   default**: a fresh installation controls your inverters without you enabling
   anything, and the switches exist to stop it. A switch your settings file does
-  not mention is shown at that default and marked *· default*; nothing is
-  written until you toggle it.
-- **Config editor** loads your real config as a draft you can edit, then shows a
-  preview of the changes, split into *Takes effect immediately* and *Needs an
-  EMS restart*. Nothing is written by editing or previewing. Applying
-  the draft is the one action that writes config — it validates the change,
-  backs up the current config first, then writes it. A value its field cannot
-  hold — text in a number field, a switch that is neither true nor false, a
-  number outside the field's range — is refused by name instead of being saved
-  as text, read as *off* or cut to a whole number; a value you did not change is
-  left as it is stored. Apply writes `config.json`
-  and additionally mirrors the whitelisted overlapping values it changed (system
-  power/loop limits, winter enable, and per-device enabled/max power/PV priority)
-  into `data/runtime-state.json` so the change goes live immediately instead of
-  waiting for an EMS restart; it still never moves `data/` history,
-  `docker-compose.yml`, or databases. Fields that also carry a live override set
-  from the Dashboard show a badge with the effective value, and a **Put live
-  values back** button writes the installed config values back so the live EMS
-  matches the installed config again.
+  not mention is shown at that default; nothing is written until you change it.
+- **Check changes** sends your draft to the server, which merges it with the
+  current config and shows the result: whether it is valid, and every value that
+  would change, split into *Takes effect at once* and *Needs an EMS restart*.
+  Nothing is written by editing or checking. **Save and apply** is the one
+  action that writes config — it validates the change, backs up the current
+  config first (unless you switch **Back up my settings first** off), then
+  writes it. A value its field cannot hold — text in a number field, a switch
+  that is neither true nor false, a number outside the field's range — is
+  refused by name instead of being saved as text, read as *off* or cut to a
+  whole number; a value you did not change is left as it is stored. Saving
+  writes `config.json` and additionally mirrors the whitelisted overlapping
+  values it changed (system power/loop limits, winter enable, and per-device
+  enabled/max power/PV priority) into `data/runtime-state.json` so the change
+  goes live immediately instead of waiting for an EMS restart; it still never
+  moves `data/` history, `docker-compose.yml`, or databases. Fields that also
+  carry a live override set from the Dashboard show **Running: …** with the
+  effective value, and **Put saved values back** makes the live EMS use the
+  saved values again.
 
-  The hardware section looks and works like the Fresh Install Config step.
-  Configured hardware renders as collapsible cards — the grid meter, local-API
-  inverters, Zendure MQTT devices (telemetry-only, or controllable for a
-  supported family), and the Zendure MQTT broker —
-  and every card shows the same fields, labels, and units as Fresh Install
-  (shared catalog), with advanced and expert settings in nested collapsed
-  areas. The grid-meter card shows the connection fields for the selected
-  meter type (for example Tasmota URL and power path, MQTT broker/topic
-  settings, or the Zendure SmartMeter D0 serial that generates its MQTT topic
-  automatically).
+  The **Devices** tab holds the configured hardware as collapsible cards — the
+  grid meter, local-API inverters, Zendure MQTT devices (telemetry-only, or
+  controllable for a supported family), read-only devices and the Zendure MQTT
+  broker — and every card shows the same fields, labels, and units as the
+  guided setup (shared catalog), with advanced and expert settings folded
+  away. The grid-meter card shows the connection fields for the selected meter
+  type (for example Tasmota URL and power path, MQTT broker/topic settings, or
+  the Zendure SmartMeter D0 serial that generates its MQTT topic automatically).
 
-  Adding hardware also works like Fresh Install: the **Add more devices** row
-  runs discovery (plus a manual scan), lists candidates as cards with
-  one-click **Add inverter / Add as grid meter / Add as read-only device**
-  (an E3/DC, see [device management](admin/device-management.md)) actions and their match
-  state against the current config (In config, Not found, IP changed), and
-  offers manual adding for devices discovery cannot reach. Adding a device —
-  from discovery or manually — opens its configured card, where all device
-  configuration happens. Discovery here also surfaces Zendure MQTT config
-  proposals you can add straight to the draft. An MQTT proposal recognized as a
-  grid meter offers **Use as grid meter** instead of **Add inverter** and fills
-  the grid-meter card; if a grid meter is already configured you are asked before
-  it is replaced. When that meter sits on an MQTT broker your config does not
-  know yet, the broker profile is added to the same draft, exactly as it is for
-  an MQTT inverter — an already configured broker is reused, never duplicated.
+  Adding hardware works like the guided setup: **Search my network** runs
+  discovery (plus a **Scan** of one address or range), lists what it found as
+  cards with one-click **Add inverter**, **Use as grid meter** or **Add as
+  read-only device** (an E3/DC, see
+  [device management](admin/device-management.md)) and their match state
+  against the current config (**In the settings**, **Not found**, **Address
+  changed**), and **Add an inverter**, **Add an inverter over MQTT** and **Add an
+  E3/DC (read only)** add one by hand. Adding a device — from discovery or by
+  hand — opens its card, where all device configuration happens. Discovery here
+  also surfaces Zendure MQTT config proposals you can add straight to the draft.
+  An MQTT proposal recognized as a grid meter offers **Use as grid meter**
+  instead of **Add inverter** and fills the grid-meter card; if a grid meter is
+  already configured you are asked before it is replaced. When that meter sits
+  on an MQTT broker your config does not know yet, the broker profile is added
+  to the same draft, exactly as it is for an MQTT inverter — an already
+  configured broker is reused, never duplicated.
   Like every discovery action, this only changes the draft — nothing reaches the
-  live config before you preview and apply.
+  live config before you check and save.
 
   A newly added Local API or Zendure MQTT inverter receives the next compact
   EMS name (`INV_1`, `INV_2`, …) from one sequence shared by all transports.
@@ -350,7 +373,7 @@ This path edits an existing installation.
   template/catalog, and both transports edit the identical common field set on
   their cards. Another
   configured inverter's values are never used as a template for a new one, and
-  the values you see on a new card are exactly what preview and apply write.
+  the values you see on a new card are exactly what checking and saving write.
   Under **Advanced settings** each inverter card offers its **Winter policy**:
   `auto` follows the plan for the device's type (PV with battery, battery only
   with PV size 0, PV only), the other entries pick one plan for this inverter.
@@ -365,8 +388,8 @@ This path edits an existing installation.
   defaults in the editor, and the EMS runtime falls back to its built-in
   defaults). New devices and transport switches materialize the central
   defaults; an existing incomplete device keeps missing fields until a draft
-  change explicitly applies them. The preview shows exactly which values would
-  be written before you apply.
+  change explicitly applies them. **Check changes** shows exactly which values
+  would be written before you save.
 
   One physical inverter is always one config entry with one selected connection.
   A trusted serial number is the strongest cross-transport identity. A Cloud MQTT
@@ -380,7 +403,7 @@ This path edits an existing installation.
   than guessed to match. When discovery finds an identity that is
   already configured over another connection — for example an API scan
   sees an inverter you configured over MQTT, or an MQTT proposal matches a
-  configured API inverter — the review offers **Use connection** on that
+  configured API inverter — the review offers **Use this connection** on that
   device rather than a second **Add inverter** action. Switching the
   connection replaces the connection of the same logical device: the configured
   name, enabled state, and all common tuning values are preserved (also across
@@ -396,13 +419,13 @@ This path edits an existing installation.
   Switching is reversible inside one discovery session. What each discovered
   connection offers is decided by the *current draft*, not by what is installed:
   the moment you switch, the connection the inverter no longer uses is offered
-  as **Use connection** again, and the whole review — cards, notes, actions and
+  as **Use this connection** again, and the whole review — cards, notes, actions and
   counts — is rebuilt from the discovery results already on hand. No rescan, no
   reload. So `b1 → b2 → b1` between two local brokers, and `API → Zendure MQTT →
   API` (or the reverse), all work without leaving the page, each step selecting
   that exact broker and route and leaving exactly one logical inverter behind.
-  *In config* therefore means "this is the installed connection and you have not
-  changed it"; a connection you selected in this session reads as a draft change
+  *In the settings* therefore means "this is the installed connection and you
+  have not changed it"; a connection you selected in this session reads as a draft change
   until you apply. Removing an inverter from the draft makes its connections
   addable again. Where a trusted identity would match more than one draft
   device, the action is a blocked **Identity conflict** rather than a guess at
@@ -416,37 +439,37 @@ This path edits an existing installation.
 
   A serial-less Cloud device is
   also recognized as the same inverter when discovery later reports the **same
-  Cloud route now carrying a physical serial**: the review shows it *In config*
-  with no second **Add**, and the existing entry is enriched with the serial
+  Cloud route now carrying a physical serial**: the review shows it *In the settings*
+  with no second **Add inverter**, and the existing entry is enriched with the serial
   (name and common values preserved) instead of being duplicated. The same
   trusted identity can never be added as two separate API and MQTT devices;
   contradictory evidence — the **same Cloud route claiming a different physical
   serial** — is shown as a blocked **Identity conflict** and fails validation
   instead of guessing or merging. Fresh Setup applies the identical rules: a
   route-only Cloud inverter selected in Setup keeps its custom name and its
-  dismissal, renders one card and produces one device in the preview once the
+  dismissal, renders one card and produces one device in the check once the
   same route later reports a serial. Browser-facing
   status and support data retain trusted physical serials and useful non-secret
   context, but remove credentials and expose only masked shapes for Cloud route,
   product and topic identifiers — never their full account-scoped values.
 
-  **Search my network for devices** searches all three sources, like the setup flow: the
+  **Search my network** searches all three sources, like the setup flow: the
   local network (mDNS refresh plus network scans), local MQTT brokers (a fresh
   read-only listen on reachable brokers, trying anonymous access and every
   saved discovery credential), and — when a Zendure API key is saved — the
   Zendure cloud MQTT broker. Local and cloud results land in the same review
   list; a device already found on a local broker is not offered a second time
   via the cloud. Without a saved API key the cloud source is simply skipped.
-  The collapsed **Discovery sources** rows underneath hold the same settings
-  as the setup Discovery step — the MQTT credential pool for
-  password-protected brokers and the Zendure API key (save/test/refresh) —
-  shared with setup, not a second copy. mDNS has no row here: it refreshes
-  automatically with every discovery run.
+  The **What the search may use** card beside it holds the same settings as
+  the setup's *Credentials for the search* — the MQTT credential pool for
+  password-protected brokers and the Zendure API key (**Save key**, **Test**,
+  **Find cloud devices**, **Forget key**) — shared with setup, not a second
+  copy. mDNS has no row here: it refreshes automatically with every search.
 
-  For Zendure MQTT devices, **Hardware generation** groups telemetry and topic
-  layouts, while **Exact hardware model** selects the concrete EMS/Core registry
-  identity. Choose **Unknown / telemetry only** when the exact model cannot be
-  established. The write protocol, validation maturity, supported operations,
+  For Zendure MQTT devices, **Zendure hardware generation** groups telemetry and
+  topic layouts, while **Exact hardware model** selects the concrete EMS/Core
+  registry identity. Choose **Unknown / telemetry only** when the exact model
+  cannot be established; the card then reads *Unknown model, read only*. The write protocol, validation maturity, supported operations,
   and current control readiness are shown read-only from the Core catalog.
   **Output control** is shown read-only, because it is a capability rather than
   a setting: EMS/Core derives it from the exact model, an implemented write
@@ -457,16 +480,16 @@ This path edits an existing installation.
   broker source is the one connection property that does decide: the Zendure
   cloud broker carries the write route for every device, and a local broker
   carries it where it publishes the device's own JSON report topics. A local
-  broker seen publishing scalar metrics only reads *"Output control is not
-  verified for this MQTT broker source"*. When control is unavailable the card
+  broker seen publishing scalar metrics only reads *output control is not
+  verified for this MQTT broker*. When control is unavailable the card
   names the reason. A
   supported inverter you add or switch to is therefore controllable without a
   second step, exactly like a Local API inverter, which has no such switch
   either (see
   [Zendure MQTT output control](../technical/configuration.md#zendure-mqtt-output-control)).
   The card only reports this verdict; the derived value is written when you
-  change a field or when the draft is loaded, so it always appears in the
-  preview diff before it is applied.
+  change a field or when the draft is loaded, so it always appears in
+  **Check changes** before it is applied.
 
   An **external device** (`"type": "external_mqtt"`, see
   [External Devices over MQTT](../technical/configuration.md#external-devices-over-mqtt-external_mqtt))
@@ -477,17 +500,17 @@ This path edits an existing installation.
   is never controlled. Like any device it has a **Device name** and an
   **Enabled** switch; switched off, it stays in the config but EMS neither reads
   it nor shows or counts its values (the device itself is never switched).
-  Discovery shows the installed device as **In config**, whatever the broker
+  Discovery shows the installed device as **In the settings**, whatever the broker
   profile it sits on is called, and the same device on another broker as an
-  alternative: **Use connection** moves it there on apply, keeping its name and
+  alternative: **Use this connection** moves it there on apply, keeping its name and
   switch. **Remove** takes it out of the config. Its catalog family and
   device id are not edited on this page, and its broker (and a retired
-  family) only through **Use connection**; apart from name, switch and
+  family) only through **Use this connection**; apart from name, switch and
   connection, applying writes the installed entry back exactly as it is,
   whatever the browser sends for it, and a draft that leaves the entry out
   without its **Remove** is refused rather than applied. An entry an earlier
   development build adopted names topics EMS no longer reads; its card says
-  so, every apply is refused until it is moved or removed, and **Use
+  so, every apply is refused until it is moved or removed, and **Use this
   connection** on the device discovery finds under the same id in the
   project's namespace moves it there, which also gives it the namespace's
   catalog family.
@@ -504,12 +527,13 @@ This path edits an existing installation.
   and turns it into a telemetry source, and the card says why.
 
   A discovered connection for which no write route resolves — an unknown model,
-  or a missing product key / MQTT device ID — is offered as **Replace control
+  or a missing product key / MQTT device ID — is offered as **Replace the control
   connection** with a warning, because that is exactly what the action does. It
   is a visible decision instead of a silent loss of regulation, and the change
-  still passes through the preview diff before anything is applied.
+  still passes through **Check changes** before anything is applied.
   Stored passwords (broker or MQTT grid meter) are never displayed; leave the
-  password field blank to keep one, or use the clear checkbox to remove it.
+  password field blank to keep one, or tick **Clear the stored password** to
+  remove it.
 
   Re-applying an existing broker with a different username or password
   **rotates the stored credential in place**: the new value is staged before
@@ -522,22 +546,25 @@ This path edits an existing installation.
 The card is on the page only while a migration is actually pending; a
 review that cannot be loaded also keeps it visible.
 
-The System status page carries a compact **Older MQTT device setup**
-card with Review → Backup → Apply → Validate stages. Review shows affected
-devices, the exact-model decision for each device, and whether control is kept
-or disabled. Broker credentials and API keys are never rendered.
+The **System** page carries the **Older MQTT device setup** card: the review
+shows the affected devices, the exact-model decision for each device, whether
+control is kept (**Control kept**) or switched off (**Control off, readings
+kept**), and whether the migrated setup would be valid. Broker credentials and
+API keys are never rendered.
 
-Backup defaults on. Apply requires the review fingerprint and explicit
-confirmation; a stale review is rejected and refreshed. Backup, validation, or
-atomic-write failure leaves the active config unchanged. After success, Admin
-reloads the real Maintenance config and the runtime/control-readiness view. The
+**Back up my settings first** defaults on. **Apply the migration** requires the
+review fingerprint and explicit confirmation; a stale review is rejected and
+read again (*The review was out of date and has been read again. Check it and
+apply again.*). Backup, validation, or atomic-write failure leaves the active
+config unchanged. After success, the console reloads the real settings and the
+runtime/control-readiness view. The
 same EMS-owned migration service is used by Guided Upgrade—there is no separate
 browser migration algorithm.
 
-## Backup / restore
+## Backups
 
-The **Backup / restore** path creates config, database, and system backups,
-inspects what is inside a backup, previews a restore before anything is written,
+The **Backups** page creates config, database, and system backups under
+**Create a backup**, inspects what is inside a backup, previews a restore before anything is written,
 and restores behind an automatic rollback backup. See
 [Backup and restore](admin-backup-restore.md) for the full workflow.
 
@@ -548,32 +575,32 @@ covered. See [Backup and restore](admin-backup-restore.md).
 
 ## Unfinished setup or update
 
-**System status → Unfinished setup or update** resolves a Guided
-Setup or Guided Upgrade that can no longer be finished, switched away from, or
-started again. The card stays collapsed and quiet while nothing needs it, and
-opens by itself when the Admin Console reports a blocked workflow.
+**System → Unfinished setup or update** resolves a Guided Setup or Guided
+Upgrade that can no longer be finished, switched away from, or started again.
+The card is on the page only while a workflow needs it, and every other page
+shows a banner with **Open recovery** meanwhile.
 
-You normally do not need SSH or manual JSON deletion. Use Maintenance → Workflow
-recovery instead.
+You normally do not need SSH or manual JSON deletion. Use this card instead.
 
 It shows which guided workflow currently owns the console, its state and age, a
 shortened workflow/operation reference, and whether an operation is still
 running. Two actions can appear, and only when the Admin Console says they are
 available:
 
-- **Cancel the unfinished setup or update** — the normal path. It stops the current workflow
+- **Cancel the unfinished workflow** — the normal path. It stops the current workflow
   through its own owner: a cancellable System Build transition is cancelled, a
   Guided Setup is terminated with its claim-aware cleanup, and a Guided Upgrade
   context is cleared only for the operation it belongs to. No state file is
   deleted.
-- **Force-clear leftover Admin records** — for old Admin versions, corrupt
+- **Force-clear leftover records** — for old Admin versions, corrupt
   workflow metadata and orphaned records left by a crash. It asks twice, backs
   the affected Admin workflow files up with their hashes, and only then clears
   them.
 
 While an Admin workflow operation is still running, neither action is offered:
-the console shows the running stage and offers **Resume** instead. There is no
-force reset.
+the card says *A step is running right now; recovery waits for it.* A failed
+setup is resumed from the guided setup's **Resume the transition**, a stopped
+update from its **Try again**. There is no force reset.
 
 Two more states show up here rather than in a guided workflow:
 
@@ -627,9 +654,9 @@ You do not need to find a discard action first. Choosing the other guided
 workflow shows a preview of exactly what will be stopped and what stays
 untouched, asks once, and then performs the switch as one backend operation.
 
-Simply returning to the task selection does **not** discard your work: your
-Guided Setup draft is still there when you come back. Only an explicit switch,
-"Start over", or a workflow reset ends it.
+Simply opening another page does **not** discard your work: your Guided Setup
+draft is still there when you come back. Only an explicit switch, **Start setup
+over**, or a workflow reset ends it.
 
 Two cases are deliberately not switched automatically:
 

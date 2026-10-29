@@ -10,8 +10,10 @@ Docker-first Analytics bootstrap:
 3. a guided `config init` session with example values entered,
 4. the running dashboard.
 
-The dashboard segment reuses the existing aggregated preview screenshot under
-`docs/assets/preview-aggregated.jpg`.
+The dashboard segment reuses the dashboard's Overview preview,
+`docs/assets/preview-aggregated.jpg`, which
+`tests/e2e-dashboard/capture-docs.spec.ts` captures from the Modern dashboard.
+Rebuild the demo after that image changes.
 
 The GIF is for inline embedding in the docs; the WebM/MP4 are for places that
 play real video (e.g. forum posts). MP4 (H.264) embeds inline on more forums

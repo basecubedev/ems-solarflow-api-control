@@ -37,8 +37,9 @@ absolute, as with `emsctl`: "raise the power in the morning" is "06:00 set to
 *EMS control* and *Device control* off mean the EMS lets go: the inverter keeps
 its last output value. To lower the output, use the output limits.
 
-The Schedule tab offers a [device setting](technical/runtime-state.md#device-settings)
-only for an inverter that has it, as its last report shows.
+The dashboard's **Schedule** page offers a
+[device setting](technical/runtime-state.md#device-settings) only for an
+inverter that has it, as its last report shows.
 
 ## How a rule fires
 
@@ -66,7 +67,7 @@ the start and the value it sets when the window ends).
   every date falls on every weekday. A single switch point may fall inside a
   window.
 - **A value the installation no longer takes is not written** — a limit lowered
-  in Admin, a device moved to MQTT. The rule's card reads *Refused* with the
+  in Admin, a device moved to MQTT. The rule's card reads **Refused** with the
   reason until the rule is changed or a later switch point of it is written;
   `schedule_switch_refused` is logged.
 - **A device removed from config** leaves its rules inactive. A device renamed
@@ -119,17 +120,17 @@ as 02:30–03:15, keeps its length: 03:30–04:15.
 ## Time zone and clock
 
 Rules run in the zone the EMS's other hour-based windows use — `TZ`, else
-`/etc/localtime` (in Docker see [docker.md](docker.md#time-zone)). The Schedule
-tab and `emsctl schedule list` name it, and the tab says so when the browser's
-clock is in another zone: rule times are always the EMS's. A `TZ` that names no
-zone runs on UTC, as it does for those windows; one without daylight saving,
+`/etc/localtime` (in Docker see [docker.md](docker.md#time-zone)). The
+**Schedule** page and `emsctl schedule list` name it, and the page says so when
+the browser's clock is in another zone: rule times are always the EMS's. A `TZ`
+that names no zone runs on UTC, as it does for those windows; one without daylight saving,
 such as `UTC0` or `CET-1`, is the fixed offset it names. A POSIX rule string
 with daylight saving, such as `CET-1CEST,M3.5.0,M10.5.0/3`, is one the scheduler
 cannot follow across a clock change: nothing fires, `schedule_zone_unsupported`
 is logged, and the dashboard and `emsctl schedule` say to set a zone name such
 as `Europe/Berlin`; `emsctl schedule status`, `pause`, `resume`, `show`,
-`remove`, `disable` and `move` still work, and the Schedule tab still lists,
-pauses, moves and deletes rules.
+`remove`, `disable` and `move` still work, and the **Schedule** page still
+lists, pauses, moves and deletes rules.
 
 Nothing fires while the clock reads a time before this release: a Raspberry Pi
 without a clock of its own boots far in the past until NTP answers, and
@@ -144,17 +145,21 @@ falls back to its own zone when no EMS has reported one.
 
 ## In the dashboard
 
-The **Schedule** tab (signed in) shows whether the rules run, the switch points
-of the next seven days and a card per rule: *Edit*, *Switch off*, *Skip next*,
-*Apply now*, move up or down, *Delete*. *Pause all* stops every rule, and the
-list of coming switch points stays empty until *Resume*, which fires nothing
-that fell into the pause.
+The **Schedule** page (signed in) shows whether the rules run (**Schedules
+on** or **Schedules paused**), the switch points of the **Next seven days** and,
+under **Rules**, a card per rule: **Edit**, **Switch off** / **Switch on**,
+**Skip next**, **Apply now**, arrows to move it up or down, **Delete**. **Pause
+all** stops every rule, and the list of coming switch points stays empty until
+**Resume**, which fires nothing that fell into the pause.
 
-The editor has four steps — what, when, repeat, check. While you type, the EMS
-checks the draft and answers with the rule as a sentence ("Every weekday,
-18:00–23:00, from Mon 19 Oct 2026"), the `emsctl` commands it equals and its
-next switch points, or the reason it cannot be saved. *Save rule* follows that
-answer.
+**New rule** opens the editor with four steps — **What**, **When**,
+**Repeat**, **Check**. While you type, the EMS checks the draft and answers
+with the rule as a sentence ("Every weekday, 18:00–23:00, from Mon 19 Oct
+2026"), what it sets and its next switch points, or *Cannot be saved* and the
+reason. **Save rule** follows that answer. The deprecated Classic dashboard at
+`/classic/` also lists the `emsctl` commands the draft equals; the Modern page
+does not. Step by step:
+[Runtime settings and schedules](user/dashboard/runtime-settings.md#schedules).
 
 ## emsctl schedule
 
@@ -209,7 +214,7 @@ restored with it from the backup, a window that ran when the backup was taken
 ends at once; with the current runtime state kept, the current records stay, so
 a window running now still ends. A restore that resumes a paused schedule fires
 nothing from the pause; a backup from before this release leaves the current
-rules in place. A fresh Setup sets the rules aside with the runtime state, as
+rules in place. A fresh guided setup sets the rules aside with the runtime state, as
 `schedules.json.before-setup-<UTC time>`.
 
 The scheduler does not run in simulation or replay.

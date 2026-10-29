@@ -7,7 +7,15 @@ import { ADMIN_PASSWORD } from "../fixtures/admin";
 export class LoginPage {
   constructor(private readonly page: Page) {}
 
+  /**
+   * Classic at /classic/. A published Admin from before Modern moved to the
+   * root -- the replacement canary's source release -- has no /classic/ and
+   * answers Classic at / once the browser has chosen it.
+   */
   async open() {
+    const response = await this.page.goto("/classic/");
+    if (response?.status() !== 404) return;
+    await this.page.evaluate(() => window.localStorage.setItem("ems-admin-ui", "classic"));
     await this.page.goto("/");
   }
 

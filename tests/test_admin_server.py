@@ -171,6 +171,9 @@ def _setup_build_authority(srv, base, *, confirm=False):
 def test_root_serves_html(server):
     with urllib.request.urlopen(f"{server}/") as resp:
         assert resp.status == 200
+        assert b'<div id="app">' in resp.read()
+    with urllib.request.urlopen(f"{server}/classic/") as resp:
+        assert resp.status == 200
         assert resp.headers["Content-Type"].startswith("text/html")
         assert resp.headers["X-Content-Type-Options"] == "nosniff"
         body = resp.read().decode("utf-8")
@@ -179,9 +182,9 @@ def test_root_serves_html(server):
 
 
 def test_static_assets_have_content_types(server):
-    with urllib.request.urlopen(f"{server}/admin.css") as resp:
+    with urllib.request.urlopen(f"{server}/classic/admin.css") as resp:
         assert resp.headers["Content-Type"].startswith("text/css")
-    with urllib.request.urlopen(f"{server}/admin.js") as resp:
+    with urllib.request.urlopen(f"{server}/classic/admin.js") as resp:
         assert resp.headers["Content-Type"].startswith("application/javascript")
 
 

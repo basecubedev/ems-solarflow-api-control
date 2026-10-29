@@ -52,9 +52,11 @@ add `--bind 0.0.0.0` (or the host's LAN address) to open it on the network.
 
 ### Should I choose Setup or Maintenance?
 
-Use **Set up a new system** for a fresh install or deliberate reinstall. Use
-**Manage my existing system** for updates, diagnostics, config changes and
-backups. See the [Admin setup guide](admin-setup.md) and
+Use **Set up a new system** — the guided setup — for a fresh install or a
+deliberate reinstall. An installed system is managed on the console's other
+pages: **Updates**, **Settings & devices**, **Backups**, **Diagnostics**. The
+console's [assistant](admin/assistant.md) shows which applies to your host. See
+the [Admin setup guide](admin-setup.md) and
 [Admin maintenance guide](admin-maintenance.md).
 
 ### Does the Admin Console overwrite my config?
@@ -62,8 +64,8 @@ backups. See the [Admin setup guide](admin-setup.md) and
 Not silently. Config changes are previewed and confirmed before writing, and any
 existing config is backed up first. **Set up a new system** replaces the config
 with one built from the release template, and the dashboard's runtime settings
-with ones built from that config; to keep your settings, use **Manage my
-existing system**.
+with ones built from that config; to keep your settings, change them on
+**Settings & devices** instead.
 
 ## Operating models
 
@@ -212,17 +214,20 @@ layout.
 ### I already have `config.json` in the project root. What should I do?
 
 That is the legacy layout. New Docker and Admin Console setups use
-`config/config.json`. The Admin Console routes a legacy root config to
-Maintenance and offers to migrate it. See the
+`config/config.json`. The Admin Console's **System** page names a legacy root
+config under **Files on this machine** and offers **Move the settings**. See the
 [config layout guide](config-layout.md).
 
 ## Updates and backups
 
 ### What should I do before updating?
 
-If you use the Admin Console, open **Maintenance** and create a backup before
-starting **Guided upgrade**. The upgrade flow shows the plan, runs checks, and
-asks for confirmation before changing the system.
+If you use the Admin Console, start the update with **Update to …** in the
+**Guided upgrade** card on **Updates**. It backs up first while **Back up first
+(recommended)** stays on, shows the plan, runs checks, and asks for
+confirmation before changing the system. A backup of your own is **Create
+backup** on **Backups**. See [Guided Upgrade](admin/guided-upgrade.md), and
+[Maintenance](admin/maintenance.md) for the other pages of an installed system.
 
 For Docker Bootstrap or advanced shell use, create a backup and run diagnostics
 before updating:
@@ -315,12 +320,15 @@ Yes. The Admin Console uses the EMS backup tooling. Backup archives live in
 
 ### Can I create encrypted backups in the Admin Console?
 
-Yes. Provide a password when creating the backup. Without the password, an
-encrypted backup cannot be restored.
+Not yet. Its **Backups** page reads and restores encrypted backups with their
+password but creates unencrypted ones. Create an encrypted backup on the EMS
+host with `docker compose exec ems python3 emsctl.py backup create --password`;
+see [Backup and restore](admin/backup-restore.md#encryption--what-is-available-today).
+Without the password, an encrypted backup cannot be restored.
 
 ### Can I delete backups in the Admin Console?
 
-Yes, when the Backup / restore page offers the delete action. Deletion always
+Yes, with **Delete** on the **Backups** page. Deletion always
 requires confirmation and only removes archives inside the backup directory.
 
 ### Can I restore InfluxDB from the Admin Console?
@@ -357,8 +365,9 @@ After that, use the EMS Dashboard password to log in.
 
 ### The dashboard is not reachable. What should I check?
 
-If you installed through the Admin Console, first check the Maintenance overview
-for container state and dashboard link.
+If you installed through the Admin Console, first check its **Services** page
+for the EMS container's state; **Open the dashboard** on its **Overview** uses
+the dashboard's address.
 
 For Docker Bootstrap or shell checks:
 
@@ -387,8 +396,10 @@ discovery can see the real LAN. See [troubleshooting.md](troubleshooting.md) for
 
 ### How do I create a support bundle?
 
-If the Admin Console offers a support bundle action, use that first. On the
-appliance, use **Support archive** in its own web interface.
+The Admin Console has no support-bundle action. Signed in to the dashboard,
+**Support bundle** on its **Diagnose** page downloads one; see
+[Diagnostics](dashboard/diagnostics.md#3--export). On the appliance, use
+**Create support archive** on the Appliance Manager's **Diagnostics** page.
 
 For Docker Bootstrap or advanced shell use:
 

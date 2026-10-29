@@ -187,9 +187,10 @@ python3 emsctl.py ac-charge disable            # the whole feature
 python3 emsctl.py device WR1 ac-charge off     # one device
 ```
 
-or from the dashboard's Control tab in [write mode](dashboard.md#dashboard-write-mode)
-— **AC charging** as its own card for the installation, and a per-device toggle
-next to each device's enabled flag.
+or from the **Runtime settings** on the dashboard's **Control** page, signed in
+([write mode](dashboard.md#dashboard-write-mode)) — the **AC charging** card for
+the installation, and the **AC charging** switch on each device's card; see
+[Runtime settings](user/dashboard/runtime-settings.md#3--the-cards).
 
 Switching the EMS off (`system.enabled`) or a single device (its runtime
 `enabled`) is not one of these switches, but it also ends a charge: a device the
@@ -224,10 +225,10 @@ the exit to idle.
 
 Both switches live in [runtime-state](technical/runtime-state.md), which the
 EMS seeds from `config.json` when it loads it. The Dashboard therefore shows
-the value the EMS applies, the same value the Admin's feature list shows
-until an operator flips a switch at runtime. The Admin edits `config.json`
-and mirrors the flag into runtime-state on Apply; it never reads the runtime
-switch back into the config.
+the value the EMS applies, the same value the Admin's **Features** tab on
+**Settings & devices** shows until an operator flips a switch at runtime. The
+Admin edits `config.json` and mirrors the flag into runtime-state on **Save and
+apply**; it never reads the runtime switch back into the config.
 
 ## Safety
 
@@ -472,26 +473,40 @@ carried alongside the output and surfaces in these places:
 This is the measured value, not the commanded charge target. The two differ by
 the device's own ramp, which was measured at 100–170 W/s.
 
-In the aggregated flow diagram a charging fleet draws a **grid → inverter**
-pipe, and the inverter node states `Charging <W>` above its output. Its value
-stays the output it feeds the house, because in a mixed fleet one device can
-export while another charges. What the charger takes off the meter is not drawn
-a second time on the grid → home pipe, so at night — when the whole import is
+The dashboard's energy flow — on the Overview, drawn as **System** or **Per
+device** — has no grid → inverter pipe in either mode. **System** joins the
+inverters at the home as the per-device view does: the inverter → home line
+carries the fleet's output minus its charge and turns round and takes the grid
+colour when the charge is the larger. The difference shows once it reaches 5 %
+of the larger side and rests again below 2.5 %, so a fleet charging about as
+much as it feeds does not flicker; the grid → home line carries the whole meter
+reading. The inverter states `AC charging <W>` beneath its output. Per device,
+a charging inverter's line turns round and takes the grid colour, and its node
+shows the charge as a negative figure. See
+[Overview and navigation](user/dashboard/overview.md#3--energy-flow).
+
+The deprecated Classic dashboard at `/classic/` draws it differently. Its
+aggregated flow diagram draws a **grid → inverter** pipe for a charging fleet,
+and the inverter node states `Charging <W>` above its output. Its value stays
+the output it feeds the house, because in a mixed fleet one device can export
+while another charges. What the charger takes off the meter is not drawn a
+second time on the grid → home pipe, so at night — when the whole import is
 the charge — that pipe falls idle rather than showing the same watts twice.
+That diagram has no busbar node, so the inward flow is anchored at the grid.
+When the charge is actually covered by a sibling inverter rather than by the
+grid, the grid node still reads the truth (near zero) while the pipe overstates
+its role. Classic's per-device view draws the same flow per row: while a device
+charges, the line between house and inverter turns round and takes the grid
+colour, and the inverter node states `Charging <W>` above the output it shows
+for as long as that line is drawn, so the path grid ↔ house ↔ inverter ↔
+battery is complete in either direction.
 
-The diagram has no busbar node, so the inward flow is anchored at the grid. When
-the charge is actually covered by a sibling inverter rather than by the grid,
-the grid node still reads the truth (near zero) while the pipe overstates its
-role. Preview it with `serve_dashboard_preview.py --scenario ac-charging`.
+Preview both with `serve_dashboard_preview.py --scenario ac-charging`.
 
-The per-device view draws the same flow per row: while a device charges, the
-line between house and inverter turns round and takes the grid colour, and the
-inverter node states `Charging <W>` above the output it shows for as long as
-that line is drawn, so the path grid ↔ house ↔ inverter ↔ battery is complete
-in either direction.
-
-Energy statistics count charged energy separately (**AC Charge**, kWh) and
-deliberately attach no monetary value to it.
+Energy statistics count charged energy separately (**AC charging**, kWh) and
+deliberately attach no monetary value to it. The Energy page lists it in
+**Expert**; the deprecated Classic page lists it as **AC Charge** in **Basic**
+too.
 
 The household load is corrected for it: the grid meter cannot tell a charging
 device from an appliance, so the charge power is subtracted again before
@@ -577,8 +592,10 @@ may charge by every other rule, but has no usable ceiling. With
 `max_charge_power_w` for the device to unblock it. With
 `reason=device_reports_zero_charge_limit` the device itself reports 0, which
 the EMS respects even over `max_charge_power_w`; check the charge limit in the
-Zendure app. While another device charges, the Control view names such a device
-with `ac_charge_no_ceiling`.
+Zendure app. While another device charges, the dashboard's **Control** page
+says so for such a device under **Decision per device**
+(`ac_charge_no_ceiling`): *… may charge, but has no charge limit to charge
+at …*.
 
 `ac_charge_refused` is a `warning`, said once per device and reason, and again
 only if the reason clears and returns. The device may charge by the operator's

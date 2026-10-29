@@ -10,8 +10,9 @@ from types import SimpleNamespace
 import pytest
 
 from dashboard.telemetry import build_dashboard_snapshot
-from dashboard.sqlite_store import DashboardStore, empty_snapshot
+from dashboard.sqlite_store import DashboardStore, _daily_columns, empty_snapshot
 from ems.energy_channels import ENERGY_CHANNELS
+from ems.power_direction import derive_house_load_w
 
 pytestmark = [
     pytest.mark.integration,
@@ -35,7 +36,7 @@ def snapshot(
             }
         },
         "grid_power_w": grid,
-        "home_load_w": max(0, output + grid),
+        "home_load_w": derive_house_load_w(output, grid, charge),
         "pv_total_w": pv,
         "inverter_output_w": output,
         "inverter_charge_w": charge,
@@ -1499,3 +1500,150 @@ def test_charge_column_is_added_to_an_existing_dashboard_database(tmp_path):
 
     assert rows["2026-05-31"] == 0
     assert rows["2026-06-01"] == pytest.approx(600 * 5 / 3600)
+
+
+def flow(timestamp, pv=0, grid=0, output=0, charge=0, battery=0):
+    return snapshot(
+        timestamp, pv=pv, output=output, grid=grid, battery=battery, charge=charge
+    )
+
+
+def hourly_store(path):
+    return DashboardStore(
+        path,
+        energy_savings={
+            "enabled": True,
+            "timezone": "UTC",
+            "max_sample_delta_seconds": 3600,
+        },
+    )
+
+
+def record_grid_charge(store, start):
+    """An hour of PV covering a 500 W house, then an hour charging 800 W from the grid.
+
+    The house draws 200 W in the second hour: 700 Wh of home use, 200 Wh of it
+    from the grid, and 800 Wh of grid energy in the battery.
+    """
+
+    store.record(flow(start.isoformat()))
+    store.record(flow((start + timedelta(hours=1)).isoformat(), pv=500, output=500))
+    store.record(
+        flow(
+            (start + timedelta(hours=2)).isoformat(),
+            grid=1000,
+            charge=800,
+            battery=760,
+        )
+    )
+
+
+def test_a_day_the_battery_charges_from_the_grid_is_not_marked_down_for_it(tmp_path):
+    """Grid energy a battery charges is not home use.
+
+    Dividing home use by the whole import read 0 % for a house that drew 200 of
+    its 700 Wh from the grid. What the battery gives the house afterwards
+    counts as its own, whatever charged it.
+    """
+
+    path = tmp_path / "dashboard.sqlite"
+    store = hourly_store(path)
+    record_grid_charge(store, datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc))
+    charged = store.energy_summary(now="2026-06-01T14:30:00+00:00")["today"]
+
+    for timestamp in ("2026-06-01T15:00:00+00:00", "2026-06-01T16:00:00+00:00"):
+        store.record(flow(timestamp, output=400, battery=-420))
+    given_back = store.energy_summary(now="2026-06-01T16:30:00+00:00")["today"]
+
+    assert charged["ratios"]["self_sufficiency"] == pytest.approx(5 / 7, abs=1e-6)
+    assert charged["channels"]["grid_import"]["wh"] == 1000.0
+    assert charged["channels"]["home_consumption"]["wh"] == 700.0
+    assert charged["ac_charge_wh"] == 800.0
+    assert charged["grid_to_battery_wh"] == 800.0
+    assert given_back["ratios"]["self_sufficiency"] == pytest.approx(
+        1 - 200 / 1500, abs=1e-6
+    )
+
+
+def test_every_period_carries_the_grid_energy_the_batteries_charged(tmp_path):
+    path = tmp_path / "dashboard.sqlite"
+    store = hourly_store(path)
+    record_grid_charge(store, datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc))
+
+    summary = store.energy_summary(now="2026-06-01T14:30:00+00:00")
+    june = summary["monthly_current_year"][5]
+    (year,) = summary["yearly"]
+    periods = {
+        "today": summary["today"],
+        "last_7_days": summary["last_7_days"],
+        "best_day": summary["best_day"],
+        "june": june,
+        "year": year,
+        "lifetime": summary["lifetime"],
+    }
+
+    for name, period in periods.items():
+        assert period["grid_to_battery_wh"] == 800.0, name
+        assert period["grid_to_battery_kwh"] == 0.8, name
+        assert period["channels"]["home_consumption"]["wh"] == 700.0, name
+        assert period["channels"]["grid_import"]["wh"] == 1000.0, name
+    for name in ("today", "best_day", "june", "lifetime"):
+        assert periods[name]["ratios"]["self_sufficiency"] == pytest.approx(
+            5 / 7, abs=1e-6
+        ), name
+
+
+def test_the_daily_columns_are_plain_sql_identifiers():
+    """They are interpolated into DDL and the upsert, so they may never be free text."""
+
+    assert all(column.isidentifier() for column in _daily_columns())
+    assert len(set(_daily_columns())) == len(_daily_columns())
+
+
+def test_a_day_recorded_before_the_upgrade_keeps_its_whole_import(tmp_path):
+    """A day recorded before the grid energy the batteries charged was counted keeps it all.
+
+    That is how it was recorded, and nothing says how much of its import went
+    into a battery. Samples recorded after the upgrade add theirs to the same
+    day.
+    """
+
+    path = tmp_path / "dashboard.sqlite"
+    with sqlite3.connect(path) as con:
+        con.execute("""
+            CREATE TABLE daily_energy_stats (
+                date TEXT PRIMARY KEY,
+                inverter_output_wh REAL NOT NULL DEFAULT 0,
+                ac_charge_wh REAL NOT NULL DEFAULT 0,
+                savings_value REAL NOT NULL DEFAULT 0,
+                price_per_kwh REAL NOT NULL DEFAULT 0,
+                currency TEXT NOT NULL DEFAULT 'EUR',
+                peak_output_w REAL NOT NULL DEFAULT 0,
+                sample_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                grid_import_wh REAL NOT NULL DEFAULT 0,
+                home_consumption_wh REAL NOT NULL DEFAULT 0
+            )
+        """)
+        con.execute("""
+            INSERT INTO daily_energy_stats(
+                date, sample_count, updated_at, grid_import_wh, home_consumption_wh
+            )
+            VALUES('2026-06-01', 1, '2026-06-01T11:00:00+00:00', 1000, 2000)
+        """)
+
+    store = hourly_store(path)
+    insert_coverage(path, "2026-06-01", "2026-06-01")
+    before = store.energy_summary(now="2026-06-01T12:00:00+00:00")
+    store.record(flow("2026-06-01T12:00:00+00:00"))
+    store.record(
+        flow("2026-06-01T13:00:00+00:00", grid=1000, charge=800, battery=760)
+    )
+    after = store.energy_summary(now="2026-06-01T14:00:00+00:00")
+
+    assert before["today"]["ratios"]["self_sufficiency"] == pytest.approx(0.5)
+    assert after["today"]["channels"]["grid_import"]["wh"] == 2000.0
+    assert after["today"]["grid_to_battery_wh"] == 800.0
+    assert after["today"]["ratios"]["self_sufficiency"] == pytest.approx(
+        1 - 1200 / 2200, abs=1e-6
+    )

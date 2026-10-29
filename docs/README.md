@@ -44,8 +44,8 @@ changes, and what to do when the result differs.
 
 | Area | Document | Use |
 |---|---|---|
-| Admin Console | [user/admin/index.md](user/admin/index.md) | First start, Guided Setup, Guided Upgrade, Maintenance, devices, MQTT, backups, recovery. |
-| EMS Dashboard | [user/dashboard/index.md](user/dashboard/index.md) | Overview, device cards, energy, control pipeline, runtime settings, diagnostics. |
+| Admin Console | [user/admin/index.md](user/admin/index.md) | The assistant (where to start), first start, Guided Setup, Guided Upgrade, Maintenance, devices, MQTT, backups, recovery, appearance. |
+| EMS Dashboard | [user/dashboard/index.md](user/dashboard/index.md) | Overview, device cards, energy, control pipeline, runtime settings and schedules, diagnostics, appearance. |
 
 ### Setup paths
 
@@ -63,8 +63,9 @@ standard `config/config.json` layout; the third is a whole system.
 
 | Topic | Document | Use |
 |---|---|---|
-| Admin setup | [user/admin-setup.md](user/admin-setup.md) | "Set up a new system" flow: discovery, config generation and apply. |
-| Admin maintenance | [user/admin-maintenance.md](user/admin-maintenance.md) | "Manage my existing system" flow: guided upgrade, overview, config editor, backup. |
+| Where to start | [user/admin/assistant.md](user/admin/assistant.md) | The Admin assistant: what is still to do on an installation, and the way to each task. |
+| Admin setup | [user/admin-setup.md](user/admin-setup.md) | The guided setup: System Build, discovery, settings, deployment and start. |
+| Admin maintenance | [user/admin-maintenance.md](user/admin-maintenance.md) | An existing system: updates, overview, settings and devices, services, recovery. |
 | Backup and restore | [user/admin-backup-restore.md](user/admin-backup-restore.md) | Preview-first backup and restore from the Admin Console. |
 
 ### Everyday use and help
@@ -92,7 +93,7 @@ standard `config/config.json` layout; the third is a whole system.
 | Install Docker | [install-docker.md](install-docker.md) | Docker Engine and Compose plugin install help. |
 | Docker reference | [docker.md](docker.md) | Compose reference, first-run bootstrap and persisted data. |
 | Native Python / advanced | [native-python.md](native-python.md) | Manual venv setup with local config and dry-run checks. |
-| Standalone dashboard | [dashboard.md](dashboard.md) | Read-only live dashboard, Control Explain view and history. |
+| Standalone dashboard | [dashboard.md](dashboard.md) | The live dashboard's pages, configuration, write mode, API and history sources. |
 | Winter mode | [winter-mode.md](winter-mode.md) | Optional winter minSoc ramp and reconciliation. |
 | Battery full-charge assist | [battery-full-charge-assist.md](battery-full-charge-assist.md) | Optional EMS-managed full-charge assist. |
 | AC charging | [ac-charging.md](ac-charging.md) | Charging from grid surplus. On by default. |

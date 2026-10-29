@@ -108,19 +108,6 @@ class DiagnosisResult:
     errors: list = field(default_factory=list)
 
 
-DIAGNOSE_LOG_PATTERNS = (
-    ("permission_denied", re.compile(r"permission denied", re.I)),
-    ("json_decode", re.compile(r"json decode|jsondecode|invalid json", re.I)),
-    ("shelly_read_error", re.compile(r"shelly_read_error", re.I)),
-    ("runtime_state_write_error", re.compile(r"runtime_state_write_error", re.I)),
-    ("dashboard_auth", re.compile(r"dashboard auth|dashboard_auth", re.I)),
-    ("csrf", re.compile(r"csrf", re.I)),
-    ("preflight_failed", re.compile(r"preflight_failed", re.I)),
-    ("preflight_abort", re.compile(r"preflight_abort", re.I)),
-    ("device_unreachable", re.compile(r"device_unreachable", re.I)),
-    ("traceback", re.compile(r"traceback", re.I)),
-)
-
 EXPORT_PEAK_WARNING_W = 100
 EXPORT_PEAK_ERROR_W = 250
 EXPORT_DURATION_WARNING_PERCENT = 20
@@ -162,7 +149,6 @@ def diagnose_section_title(section_id):
         "runtime_state": "Runtime state",
         "data": "Data/database",
         "dashboard": "Dashboard",
-        "logs": "Logs",
         "docker": "Docker",
         "hardware": "Hardware",
         "control": "Control diagnostics",
@@ -2027,55 +2013,6 @@ def diagnose_dashboard_deep(checks, config_data):
         diagnose_add(checks, "dashboard", "warning", "dashboard_endpoint_unreachable", f"Dashboard local endpoint not reachable: {exc.__class__.__name__}")
 
 
-def diagnose_log_paths(config_data):
-    paths = []
-    system = config_data.get("system", {}) if isinstance(config_data, dict) else {}
-    if isinstance(system, dict):
-        for key in ("log_path", "log_file"):
-            value = system.get(key)
-            if value:
-                paths.append(resolve_project_path(str(value)))
-    return paths
-
-
-def diagnose_tail_lines(path, max_lines=300):
-    try:
-        with open(path, errors="replace") as f:
-            lines = f.readlines()
-    except OSError:
-        return []
-    return lines[-max_lines:]
-
-
-def diagnose_logs_deep(checks, config_data):
-    paths = diagnose_log_paths(config_data)
-    if not paths:
-        diagnose_add(checks, "logs", "warning", "log_path_not_configured", "No log path configured for deep log scan")
-        return
-    for path in paths:
-        diagnose_check_path(checks, "logs", "log_file", path, "log file", expect_file=True, require_exists=False, check_read=True)
-        if not os.path.exists(path):
-            continue
-        lines = diagnose_tail_lines(path)
-        counts = {}
-        last_seen = {}
-        for line in lines:
-            for name, pattern in DIAGNOSE_LOG_PATTERNS:
-                if pattern.search(line):
-                    counts[name] = counts.get(name, 0) + 1
-                    last_seen[name] = diagnose_extract_timestamp(line)
-        if counts:
-            for name, count in sorted(counts.items()):
-                diagnose_add(checks, "logs", "warning", "log_pattern_found", f"Log pattern {name}: {count} occurrence(s)", pattern=name, count=count, last_seen=last_seen.get(name))
-        else:
-            diagnose_add(checks, "logs", "ok", "log_scan_clean", "No common error patterns found in recent log lines", path=path, scanned_lines=len(lines))
-
-
-def diagnose_extract_timestamp(line):
-    match = re.search(r"\d{4}-\d{2}-\d{2}[T ][0-9:.+-]+", line)
-    return match.group(0) if match else None
-
-
 def diagnose_docker_deep(checks):
     compose_files = [
         name
@@ -2084,11 +2021,11 @@ def diagnose_docker_deep(checks):
     ]
     docker_exe = shutil.which("docker")
     if not docker_exe:
-        diagnose_add(checks, "docker", "warning", "docker_cli_missing", "Docker CLI not found; host Docker checks skipped")
+        diagnose_add(checks, "docker", "info", "docker_cli_missing", "Docker CLI not found; host Docker checks skipped")
         return
     diagnose_add(checks, "docker", "ok", "docker_cli_found", "Docker CLI found")
     if not compose_files:
-        diagnose_add(checks, "docker", "warning", "compose_file_missing", "No Docker Compose file found in project directory")
+        diagnose_add(checks, "docker", "info", "compose_file_missing", "No Docker Compose file found in project directory; host Docker checks skipped")
         return
     diagnose_add(checks, "docker", "ok", "compose_file_found", f"Compose file found: {compose_files[0]}", file=compose_files[0])
     try:
@@ -4080,7 +4017,7 @@ def diagnose_collect(args):
         ("config", config_path, "config.json", True),
         ("config_template", template_path, "config.template.json", True),
     ):
-        diagnose_check_path(checks, "project", code, path, label, expect_file=True, check_read=True, missing_level="warning" if not required else "error")
+        diagnose_check_path(checks, "project", code, path, label, expect_file=required, check_read=required, missing_level="error" if required else "info")
 
     diagnose_check_path(checks, "project", "data_dir", data_dir, "data directory", expect_dir=True, check_read=True, check_write=True, missing_level="warning")
     diagnose_git_info(checks)
@@ -4166,14 +4103,6 @@ def diagnose_collect(args):
     if battery_state_database_path:
         diagnose_parent_path(checks, "data", "battery_full_charge_state_database", battery_state_database_path, "battery full-charge assist state database", check_write=True, missing_level="warning")
 
-    system_config = config_data.get("system", {}) if isinstance(config_data, dict) else {}
-    if isinstance(system_config, dict):
-        for key in ("log_path", "log_file"):
-            log_path = system_config.get(key)
-            if log_path:
-                log_path = resolve_project_path(str(log_path))
-                diagnose_parent_path(checks, "logs", key, log_path, f"{key}", check_write=True, missing_level="warning")
-
     if mode == "container":
         for source in mode_sources:
             diagnose_add(checks, "docker", "ok", "container_detected", f"Container detected via {source['source']}", **source)
@@ -4216,7 +4145,6 @@ def diagnose_collect(args):
     if args.deep:
         diagnose_database_deep(checks, database_path)
         diagnose_dashboard_deep(checks, config_data)
-        diagnose_logs_deep(checks, config_data)
         diagnose_docker_deep(checks)
 
     hardware_health = None
@@ -4356,21 +4284,7 @@ def diagnose_text(report):
         "container": "container",
         "unknown": "unknown",
     }
-    section_labels = {
-        "environment": "Environment",
-        "project": "Project structure",
-        "runtime_paths": "Runtime paths",
-        "config": "Config",
-        "runtime_state": "Runtime state",
-        "data": "Data/database",
-        "dashboard": "Dashboard",
-        "logs": "Logs",
-        "docker": "Docker",
-        "hardware": "Hardware",
-        "control": "Control diagnostics",
-        "control_quality": "Control quality",
-    }
-    order = ("environment", "project", "runtime_paths", "config", "runtime_state", "data", "dashboard", "logs", "docker", "hardware", "control", "control_quality")
+    order = ("environment", "project", "runtime_paths", "config", "runtime_state", "data", "dashboard", "docker", "hardware", "control", "control_quality")
     level_labels = {"ok": "OK", "warning": "WARN", "error": "ERROR"}
 
     lines = [
@@ -4401,7 +4315,7 @@ def diagnose_text(report):
         if not checks:
             continue
         lines.append("")
-        lines.append(section_labels.get(section, section.title()))
+        lines.append(diagnose_section_title(section))
         for check in checks:
             lines.append(f"[{level_labels.get(check['level'], check['level'].upper())}] {check['message']}")
 

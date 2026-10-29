@@ -2,8 +2,12 @@
 
 The **EMS SolarFlow Appliance** turns a Raspberry Pi into a dedicated box that
 runs your energy management and nothing else. You flash one card, plug it in,
-and manage it from a browser. There is no shell to learn and no operating
-system to maintain by hand.
+and manage it from a browser with the **Appliance Manager** on port `8088`.
+There is no shell to learn and no operating system to maintain by hand.
+
+Each guide follows the same shape: what the workflow is for, when to use it,
+what you need first, numbered steps with what you see and what changes, then
+warnings and recovery.
 
 > **Partly confirmed on physical hardware.** One Raspberry Pi 3B+ has been
 > running this image since 2026-08-29: it boots, it grew its root partition to
@@ -13,18 +17,93 @@ system to maintain by hand.
 > InfluxDB, so nothing is known about a Pi 3's 1 GB of RAM carrying them. No Pi
 > 4 or Pi 5 has run it at all. See [what that means](#what-not-confirmed-means).
 
-## Choose your path
+![The Appliance Manager Overview with the side menu, the verdict that the appliance needs a little attention, the tiles for the Raspberry Pi, the EMS, EMS Admin, updates, Docker and the network, and the quick actions](../../assets/screenshots/appliance/appliance-overview.png)
+
+## Not sure where to start?
+
+Open the Appliance Manager at its address and it starts on the
+[assistant](assistant.md): it says what is still to do on this Raspberry Pi —
+connect it to your network, install EMS Admin, set up the EMS, install security
+updates and, optionally, set up backup access — highlights the next step with
+its button, and links to the page for anything else you came to do.
+
+## Choose your guide
 
 | You want to | Start here |
 | --- | --- |
 | Put the appliance on a card for the first time | [Flashing the card](install.md) |
-| Find the box on your network and log in | [First start](first-start.md) |
-| Understand what the main page is telling you | [Overview page](overview.md) |
+| Find the box on your network, set its password, install EMS Admin | [First start](first-start.md) |
+| Know where to start, or what is still open | [The assistant](assistant.md) |
+| Understand what the main page is telling you, and how a change is made | [Overview page](overview.md) |
 | Update the operating system | [Updates](updates.md#the-operating-system) |
-| Update the Appliance Manager itself | [Updates](updates.md#the-appliance-manager) |
-| Move it onto WLAN, or rename it | [Network](network.md) |
-| Copy your configuration and data off it | [Backups](backup.md) |
+| Update EMS Admin or the Appliance Manager itself | [Updates](updates.md#the-appliance-manager) |
+| Move it onto WLAN, rename it, set the time zone | [Network](network.md) |
+| Copy your configuration and data off it, or get a shell | [SSH & backup access](backup.md) |
 | Something is wrong | [When it stops working](recovery.md) |
+| Use the console in your language, in another colour scheme or on a phone | [Appearance, language and phone](appearance.md) |
+
+## The pages
+
+The side menu lists the pages in two groups, in this order:
+
+```text
+Overview · Assistant · Updates · EMS Admin · Network · SSH & backup access
+System: Diagnostics · Settings
+```
+
+| Page | What it shows and does |
+| --- | --- |
+| **Overview** | *What this Raspberry Pi is doing, and anything that needs you*: one verdict, what needs your attention, tiles for the board, the EMS, EMS Admin, updates, Docker and the network, and the quick actions — see [Overview page](overview.md) |
+| **Assistant** | *What is still to do on this appliance, and the way to what you came for* — see [The assistant](assistant.md) |
+| **Updates** | *Appliance Manager, EMS Admin and Raspberry Pi OS in one place* — see [Updates](updates.md) |
+| **EMS Admin** | *Restart, repair and roll back the EMS Admin container*, its known-good versions and its log; on a fresh card, installing it — see [When it stops working](recovery.md#ems-admin-or-the-ems-is-not-running) |
+| **Network** | *WLAN, hostname and time zone* — see [Network](network.md) |
+| **SSH & backup access** | *Shell access for you, and a read-only account that copies files off this appliance* — see [SSH & backup access](backup.md) |
+| **Diagnostics** | *Host health, logs and the support archive* — see [When it stops working](recovery.md#collect-a-support-archive) |
+| **Settings** | *The appliance password and the host settings*: the ports, the session limits, the update policy, the security audit and the detail level — see [First start](first-start.md#one-password-for-everything) |
+
+The top bar always names the page and says how the appliance is — **Healthy**,
+**Attention**, **Problem**, **Not readable**, **Unclear** or **Reading**, a
+pill that leads to the Overview — and carries **Basic** / **Expert**, the
+refresh button, **Sign out** and the **Appearance** button. A dot beside a menu
+entry marks a page with something waiting. The foot of the side menu holds
+**Open EMS Admin** (the EMS Admin console in a new tab, once it is
+installed), **Hide menu text**, **Classic view**
+and the Appliance Manager's version. On a phone the menu becomes a bar at the
+bottom with four pages and **More**; see
+[Appearance, language and phone](appearance.md#on-a-phone).
+
+An operation that changes the appliance shows at the top of every page until
+you acknowledge its result; see
+[Changing something](overview.md#changing-something).
+
+## What changes what
+
+| Action | Reads | Changes the appliance |
+| --- | --- | --- |
+| Assistant, Overview, Diagnostics, Settings, a log, a WLAN scan | Yes | No |
+| Any button that opens a plan | Yes | No — the plan is only shown, and holds other plans back until you confirm or drop it |
+| **Confirm** (or **Install**, **Apply**, **Restart** …) in a plan | Yes | Yes |
+| **Cancel**, the close button or Esc in a plan | — | No — the plan is dropped |
+| **Change password** on Settings | Yes | Yes, and signs every session out |
+| Appearance, language, Basic/Expert, the assistant's choice to open | — | No — this browser only |
+
+## The deprecated Classic console
+
+The previous design, **Classic**, still answers at
+`http://ems-solarflow.local:8088/classic/` and is removed in a later release.
+It uses the same password and drives the same appliance in the same way, so
+switching changes nothing on the Raspberry Pi. **Classic view** at the foot of
+the side menu and on the sign-in card, and **Switch to classic view** in the
+Appearance menu and under **More**, open it; Classic's **New design** link
+comes back. Nothing is remembered: the address always opens Modern. Every task
+runs in Modern; these guides describe Modern only. Classic's palettes, object
+styles and its Roomy density exist only there, and are not carried over.
+
+The address opens Classic in two cases only: `?ui=classic` from a link made
+before Modern moved to the address, and a browser too old for Modern. Modern
+needs Chrome or Edge 114, Firefox 125 or Safari 17 or newer. An old bookmark of
+`/modern/` opens the same page at the address.
 
 ## What you need
 
@@ -39,13 +118,13 @@ system to maintain by hand.
 ## What it is, and what it is not
 
 It **is** a complete system: operating system, the EMS containers, an update
-mechanism, and a small web interface to drive all of it.
+mechanism, and a small web console to drive all of it.
 
 There is one image and one board-specific file per Raspberry Pi model. The
 operating system is patched in place by `apt`, the way an ordinary Raspberry Pi
 is, so a bad operating-system update is undone by you, at the machine — or by
 writing the card again and restoring a backup. That is the one thing worth
-knowing before you start, and it is why [Backups](backup.md) comes before
+knowing before you start, and it is why [backups](backup.md) come before
 anything goes wrong rather than after.
 
 It is **not** a way to run other software. A package you install by hand
@@ -102,8 +181,8 @@ Then, whatever happened:
 | **Image** | the file name you flashed, and its `.sha256` |
 | **How far it got** | no LED, LED but never on the network, web page reached, or fully working |
 | **If it worked** | say so — a plain "Pi 5, NVMe, came up in three minutes" is the report that moves this to a supported tier |
-| **If it did not** | the serial capture, and the three FAT files described under [read the card](recovery.md#read-the-card-on-your-computer) |
-| **If it worked and then an update failed** | the **Support archive** from the appliance itself; it redacts secrets and carries the package and Appliance Manager state |
+| **If it did not** | the serial capture, and the FAT files described under [read the card](recovery.md#read-the-card-on-your-computer) |
+| **If it worked and then an update failed** | the **support archive** from the appliance itself (**Diagnostics → Create support archive**); it redacts secrets and carries the package and Appliance Manager state |
 
 Open it as a
 [compatibility report](../supported-setups.md#help-improve-compatibility).
@@ -112,5 +191,5 @@ Open it as a
 
 - [Appliance architecture](../../appliance/architecture.md) — for maintainers
 - [Installing the manager on your own Pi OS](../../appliance/installation.md)
-- [Admin Console guides](../admin/index.md) — the EMS management UI that runs
-  *on* the appliance
+- [Admin Console guides](../admin/index.md) — the EMS management console that
+  runs *on* the appliance

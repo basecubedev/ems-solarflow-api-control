@@ -5,8 +5,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>EMS SolarFlow Admin</title>
-  <script src="/admin-theme.js"></script>
-  <link rel="stylesheet" href="/admin.css">
+  <script src="/classic/admin-theme.js"></script>
+  <link rel="stylesheet" href="/classic/admin.css">
 </head>
 <body>
   <!-- Global reconnect overlay for Admin Console self-update. It lives outside
@@ -31,10 +31,12 @@
   </div>
 
   <main class="admin-shell">
+    <p id="classic-notice" class="classic-notice" role="note">This Classic Admin console is deprecated and will be removed in a later release. <a href="/">Open the new console</a></p>
     <header class="admin-header">
       <p class="eyebrow">ems-solarflow-api-control</p>
       <h1 class="admin-title">EMS SolarFlow Admin</h1>
       <div class="admin-header-actions">
+        <a id="modern-admin-link" class="secondary-button compact" href="/">New design</a>
         <div class="admin-theme">
           <label class="admin-theme-label" for="theme-select">Theme</label>
           <select id="theme-select" class="admin-theme-select"></select>
@@ -641,16 +643,16 @@
             <div class="prep-config-block" data-inline-config="zendure_mqtt">
               <p id="zendure-cloud-message" class="mdns-message" role="status"
                  aria-live="polite">
-                Use your Zendure API key or HA/deviceList token to discover
-                devices through the encrypted Zendure MQTT broker. Discovery is
+                Use your Zendure API key to discover devices through the
+                encrypted Zendure MQTT broker. Discovery is
                 read-only and never publishes commands.
               </p>
               <form id="zendure-cloud-token-form" class="scan-form" autocomplete="off">
                 <label class="field">
-                  <span class="field-label" id="zendure-cloud-token-label">Zendure API key or HA token</span>
+                  <span class="field-label" id="zendure-cloud-token-label">Zendure API key</span>
                   <input id="zendure-cloud-token-input" name="zendure-api-key"
                          type="password" inputmode="text" autocomplete="off"
-                         placeholder="Paste your Zendure API key or HA token">
+                         placeholder="Paste your Zendure API key">
                 </label>
                 <div class="zendure-cloud-actions">
                   <button id="zendure-cloud-save" type="submit"
@@ -2011,7 +2013,7 @@
                               class="secondary-button compact">Check again</button>
                       <button type="button" id="maintenance-post-diagnostics"
                               class="secondary-button compact">Run the checks</button>
-                      <a href="/" target="_blank" rel="noopener" class="secondary-button compact">
+                      <a id="maintenance-containers-dashboard-link" target="_blank" rel="noopener" class="secondary-button compact" hidden>
                         Open dashboard
                       </a>
                     </div>
@@ -2429,6 +2431,6 @@
       </section>
     </div>
   </main>
-  <script src="/admin.js"></script>
+  <script src="/classic/admin.js"></script>
 </body>
 </html>

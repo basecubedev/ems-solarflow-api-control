@@ -151,3 +151,25 @@ def test_a_view_read_still_draws_the_page_when_no_field_is_in_use():
 
     assert result["calls"] == ["render"]
     assert result["settings"] == {"appliance_version": "0.3.13"}
+
+
+@requires_node
+def test_a_rescue_account_without_a_password_is_said_to_have_none():
+    """An emptied password field came out as "unknown".
+
+    The appliance reports it as ``password_set`` false with
+    ``password_is_default`` None -- there is no shipped password to compare --
+    and the check for an unread comparison ran first, so the state the console
+    has words for could never show.
+    """
+    from appliance.rescue_account import RescueState
+
+    states = [
+        RescueState(present=True, password_set=False, shell="/bin/bash", uid=1001).to_dict(),
+        RescueState(present=True, unreadable="shadow unreadable").to_dict(),
+        RescueState(present=True, password_set=True, password_is_default=None, shell="/bin/bash", uid=1001).to_dict(),
+    ]
+    script = body("rescueState") + f"\nconsole.log(JSON.stringify({json.dumps(states)}.map(function (rescue) {{ return rescueState(rescue).label; }})));\n"
+    result = subprocess.run([node, "-"], input=script, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout.strip().splitlines()[-1]) == ["no password", "unknown", "unknown"]

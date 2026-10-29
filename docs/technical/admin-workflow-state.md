@@ -360,7 +360,7 @@ The second gate is the user-visible failure mode: a Guided Setup that is no
 longer in use leaves its transition at a non-terminal stage, so **Maintenance
 can no longer save a config change**. Every escape is now a supported backend
 operation — Restart setup, Discard setup, the recovery panel, a lifecycle switch
-(§7.3) or Maintenance → Unfinished setup or update (§7.4) — and each cancels the exact
+(§7.3) or **System** → **Unfinished setup or update** (§7.4) — and each cancels the exact
 operation its owner named. Deleting `pending-transition.json` by hand is not a
 supported recovery path.
 
@@ -440,6 +440,14 @@ Each action names exactly what it does, and appears only where it is accurate.
 
 An unknown transition owner is offered **no** destructive action, and the
 public cancel primitive refuses it (`transition_cancel_unsupported`).
+
+The action names and places above are the Classic console's. The Modern
+console calls the same endpoints **Start setup over** (`/api/setup/abandon`,
+then a fresh workflow), **Discard the setup**, **Cancel the update** and **Go
+back to the version that runs**, and the §7.4 recovery on **System** →
+**Unfinished setup or update** offers **Cancel the unfinished workflow**
+(`safe`) and **Force-clear leftover records** (`release_stale_state`); see
+[Diagnostics and recovery](../user/admin/diagnostics-recovery.md).
 
 ### 5.3 Terminal and cleanup ownership contract
 
@@ -1534,9 +1542,9 @@ the loser re-reads a changed state and is refused by the fingerprint. Two
 simultaneous switches therefore perform exactly one termination, one
 cancellation and one new target workflow — never a partial cross-owner state.
 
-**Navigation is not termination.** Leaving the task selection, opening
-Diagnostics or Backup keeps the durable workflow; only an explicit switch,
-"Start over" or a workflow reset terminates it.
+**Navigation is not termination.** Leaving the guided setup, opening
+Diagnostics or Backups keeps the durable workflow; only an explicit switch,
+**Start setup over** or a workflow reset terminates it.
 
 ### 7.4 Recovery
 

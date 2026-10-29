@@ -1064,8 +1064,99 @@ def test_running_newest_stable_keeps_latest_selectable_when_same_build(tmp_path)
 
     assert by_tag["latest"]["selectable"] is True
     assert by_tag["v0.6.1"]["selectable"] is False  # already current
-    assert result["default_release"] == "latest"
     assert any(item["selectable"] for item in result["releases"])
+
+
+def test_running_newest_stable_is_offered_no_rolling_latest_by_default(tmp_path):
+    """Owner 2026-10-24: the Guided Upgrade proposes the newest stable release,
+    never the rolling ``latest`` on its own. With the newest stable already
+    running there is nothing to propose; ``latest`` stays selectable."""
+
+    manager = _identity_release(
+        tmp_path,
+        "v0.6.1",
+        {
+            _ref("v0.6.1"): _image(digest="sha256:aaa", build_serial=1300, channel="stable"),
+            _ref("latest"): _image(digest="sha256:bbb", build_serial=1400, channel="latest"),
+        },
+    )
+    result = manager.list_releases()
+    by_tag = {item["tag"]: item for item in result["releases"]}
+
+    assert by_tag["v0.6.1"]["active"] is True
+    assert by_tag["latest"]["selectable"] is True
+    assert result["latest_stable"] is None
+    assert result["default_release"] is None
+
+
+def test_a_release_candidate_install_is_offered_the_newer_stable_release_or_nothing(tmp_path):
+    (tmp_path / "newer").mkdir()
+    newer = _identity_release(
+        tmp_path / "newer",
+        "v0.6.1-rc1",
+        {
+            _ref("v0.6.1-rc1"): _image(digest="sha256:aaa", build_serial=1300, channel="rc"),
+            _ref("v0.6.1"): _image(digest="sha256:ccc", build_serial=1350, channel="stable"),
+            _ref("latest"): _image(digest="sha256:bbb", build_serial=1400, channel="latest"),
+        },
+    )
+    assert newer.list_releases()["default_release"] == "v0.6.1"
+
+    payload = [
+        {
+            "tag_name": tag,
+            "name": tag,
+            "published_at": "2026-01-01T10:00:00Z",
+            "prerelease": tag.endswith("-rc1"),
+            "draft": False,
+            "zipball_url": f"https://example.test/{tag}.zip",
+        }
+        for tag in ("v0.6.2-rc1", "v0.6.1")
+    ]
+    (tmp_path / "newest").mkdir()
+    manager = ReleaseManager(
+        data_dir=tmp_path / "newest" / "data",
+        project_dir=_project_compose(tmp_path / "newest", "v0.6.2-rc1"),
+        urlopen=_opener(payload=payload),
+        docker=_FakeDocker(
+            container=_running_container("v0.6.2-rc1"),
+            images={
+                _ref("v0.6.2-rc1"): _image(digest="sha256:aaa", build_serial=1300, channel="rc"),
+                _ref("latest"): _image(digest="sha256:bbb", build_serial=1400, channel="latest"),
+            },
+        ),
+    )
+    result = manager.list_releases()
+    by_tag = {item["tag"]: item for item in result["releases"]}
+
+    assert by_tag["v0.6.2-rc1"]["active"] is True
+    assert by_tag["latest"]["selectable"] is True
+    assert result["default_release"] is None
+
+
+def test_a_setup_over_a_running_newest_stable_still_starts_on_it(tmp_path):
+    manager = _identity_release(
+        tmp_path,
+        "v0.6.1",
+        {
+            _ref("v0.6.1"): _image(digest="sha256:aaa", build_serial=1300, channel="stable"),
+            _ref("latest"): _image(digest="sha256:bbb", build_serial=1400, channel="latest"),
+        },
+    )
+    result = manager.list_releases(for_upgrade=False)
+
+    assert result["latest_stable"] == "v0.6.1"
+    assert result["default_release"] == "v0.6.1"
+
+
+def test_the_running_release_is_never_its_own_proposal_even_without_an_identity(tmp_path):
+    manager = _identity_release(tmp_path, "v0.6.1", {})
+    result = manager.list_releases()
+    by_tag = {item["tag"]: item for item in result["releases"]}
+
+    assert by_tag["v0.6.1"]["active"] is True
+    assert result["latest_stable"] != "v0.6.1"
+    assert result["default_release"] != "v0.6.1"
 
 
 def test_running_newest_stable_keeps_latest_selectable_when_latest_is_older(tmp_path):

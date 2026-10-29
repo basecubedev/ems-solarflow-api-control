@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Admin-only read-only discovery against the Zendure cloud MQTT broker.
 
-Flow: saved Zendure API key or HA token -> deviceList (real hardware) ->
+Flow: saved Zendure API key -> deviceList (real hardware) ->
 encrypted TLS MQTT listen -> enrich candidates with observed topics.
 Discovery-display-only:
 
@@ -90,7 +90,7 @@ DEFAULT_TLS_MQTT_PORT = 8883
 PLAINTEXT_MQTT_PORT = 1883
 
 _ERR_NOT_CONFIGURED = (
-    "Save a Zendure API key or HA/deviceList token to discover cloud devices."
+    "Save a Zendure API key to discover cloud devices."
 )
 _ERR_MQTT_FAILED = "TLS connection to Zendure MQTT broker failed."
 _ERR_NO_TELEMETRY = "No MQTT telemetry was observed within the discovery window."
@@ -106,7 +106,7 @@ _MSG_EMS_SESSION_UNKNOWN = (
 )
 MQTT_STATUS_EMS_SESSION = "ems_session"
 _ERR_UNSUPPORTED_CREDENTIAL_MODE = (
-    "Use a Zendure API key or HA/deviceList token for Zendure MQTT discovery."
+    "Use a Zendure API key for Zendure MQTT discovery."
 )
 
 
@@ -706,7 +706,7 @@ class ZendureCloudDiscovery:
         return len(self._candidates)
 
     def save_token(self, api_key, *, validate=False):
-        # Keep the original, trimmed credential: an HA token carries the region
+        # Keep the original, trimmed credential: a deviceList token carries the region
         # URL needed by later test/refresh/runtime-provisioning calls. Resolve it
         # once before saving so a token with an untrusted embedded URL fails
         # closed without touching the credential store.
@@ -768,7 +768,7 @@ class ZendureCloudDiscovery:
         if not api_key:
             raise CredentialStoreError(
                 "Zendure account is not connected. Save the Zendure API key "
-                "or HA/deviceList token before applying a cloud MQTT device."
+                "before applying a cloud MQTT device."
             )
         try:
             result = self._fetch(api_key, DEVICE_LIST_TIMEOUT_S)
