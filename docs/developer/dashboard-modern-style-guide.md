@@ -151,7 +151,7 @@ the product name ("Admin console") is what tells the two apart.
 | Component | For |
 | --- | --- |
 | `ui/Card` | every panel; a title, an optional subtitle, an optional mark (`icon` and `tone`: an icon tile in a tone class beside the title, so no page reads black and white) and actions on the right |
-| `ui/Segmented` | a choice between two to seven options that applies at once |
+| `ui/Segmented` | a choice between two to seven options that applies at once; an option may carry an icon or a dot, in a tone |
 | `ui/Fact` | a label and a value in a row |
 | `ui/Status` | a state pill: a tone class, a word and, where it helps, an icon; the word carries the meaning |
 | `ui/Bar` | a share of a whole, e.g. SoC |
@@ -287,7 +287,9 @@ from what the Admin server is.
   `return_available`, `cancel_available`). Each new screen of the flow
   brings the update's card into view when it is above the window or, after
   its first screen, below its fold, and takes the focus. The page leads with **What runs now**, the
-  update's card below it, then the guided upgrade and the versions. While the
+  update's card below it, then the guided upgrade and the versions: the
+  installable ones, grouped by channel, with a channel filter the browser
+  keeps (`ems-admin.releaseChannel`). While the
   device works (`WORKING_STAGES`), a banner in the stage's tone
   (`STAGE_TONES`) shows the turning loader, a clock and a moving line, or the
   share of the phases behind it once the run has started. The start of a

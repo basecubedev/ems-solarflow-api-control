@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { CHANNELS, CHANNEL_TONES, RELEASE_GROUPS, UPGRADE_STATES, PAIR_STATES, groupedReleases, noteView, pairView, releaseList, upgradePage } from "../src/lib/updates.js";
+import { CHANNELS, CHANNEL_FILTERS, CHANNEL_TONES, RELEASE_GROUPS, UPGRADE_STATES, PAIR_STATES, channelChoices, groupedReleases, noteView, pairView, releaseList, releasesInChannel, shownChannel, upgradePage } from "../src/lib/updates.js";
 
 const read = (path) => readFileSync(new URL(`../../../admin/${path}`, import.meta.url), "utf8");
 
@@ -96,4 +96,38 @@ test("the list is grouped by channel, each group in the server's order, empty gr
     ["other", "c-idle", ["x"]],
   ]);
   assert.deepEqual(groupedReleases(null), []);
+});
+
+test("the channel filter offers all and each listed group, counts what is shown, and keeps the release chosen for an update", () => {
+  const releases = releaseList({
+    releases: [
+      { tag: "v2", channel: "stable", upgrade_state: "upgrade_available" },
+      { tag: "v1", channel: "stable", active: true, selectable: false, upgrade_state: "already_current" },
+      { tag: "latest", channel: "latest", upgrade_state: "upgrade_available" },
+      { tag: "v3-rc1", channel: "rc", selectable: false, upgrade_state: "downgrade_blocked" },
+      { tag: "x", channel: "nightly" },
+    ],
+  });
+  const installable = releases.filter((release) => release.upgrade);
+  const choices = channelChoices(releases, installable);
+  assert.deepEqual(choices.map((choice) => [choice.id, choice.count]), [["all", 3], ["stable", 1], ["latest", 1], ["rc", 0], ["other", 1]]);
+  assert.deepEqual(choices.map((choice) => choice.tone), [null, CHANNEL_TONES.stable, CHANNEL_TONES.latest, CHANNEL_TONES.rc, CHANNEL_TONES.legacy]);
+  assert.deepEqual(choices.map((choice) => choice.id).filter((id) => !CHANNEL_FILTERS.includes(id)), []);
+  assert.deepEqual(channelChoices(releases, releases).map((choice) => choice.count), [5, 2, 1, 1, 1]);
+
+  assert.equal(shownChannel(choices, "stable"), "stable");
+  assert.equal(shownChannel(choices, "development"), "all");
+  assert.equal(shownChannel([], "stable"), "all");
+  assert.deepEqual(releasesInChannel(installable, "stable", null).map((release) => release.tag), ["v2"]);
+  assert.deepEqual(releasesInChannel(installable, "stable", "latest").map((release) => release.tag), ["v2", "latest"]);
+  assert.deepEqual(releasesInChannel(installable, "rc", null), []);
+  assert.deepEqual(releasesInChannel(installable, "all", null), installable);
+  assert.deepEqual(releasesInChannel(installable, "other", null).map((release) => release.tag), ["x"]);
+});
+
+test("a catalogue of one channel offers nothing to filter", () => {
+  const releases = releaseList({ releases: [{ tag: "v2", channel: "stable" }, { tag: "v1", channel: "stable" }] });
+  assert.deepEqual(channelChoices(releases, releases), []);
+  assert.deepEqual(channelChoices([], []), []);
+  assert.deepEqual(CHANNEL_FILTERS, ["all", ...RELEASE_GROUPS.map((group) => group.id)]);
 });

@@ -4,10 +4,12 @@
   import Icon from "../../../shared/ui/Icon.svelte";
   import Empty from "../../../shared/ui/Empty.svelte";
   import Status from "../../../shared/ui/Status.svelte";
+  import Segmented from "../../../shared/ui/Segmented.svelte";
   import { t, tn, fmt } from "../i18n/i18n.svelte.js";
   import { system, ensure, reload, keepWithOverview } from "../state/system.svelte.js";
   import { upgrade, chooseRelease, resumeUpgrade, noteStatus } from "../state/upgrade.svelte.js";
-  import { CHANNEL_TONES, groupedReleases, noteView, pairView, releaseList } from "../lib/updates.js";
+  import { CHANNEL_FILTERS, CHANNEL_FILTER_KEY, CHANNEL_TONES, channelChoices, groupedReleases, noteView, pairView, releaseList, releasesInChannel, shownChannel } from "../lib/updates.js";
+  import { readStored, writeStored } from "../state/prefs.svelte.js";
   import { STAGE_TONES, activeUpgrade, lastRun } from "../lib/upgrade.js";
   import { activeWorkflow } from "../lib/workflow.js";
   import { emsFact } from "../lib/health.js";
@@ -28,6 +30,8 @@
     deploy: { icon: "package-plus", tone: "c-out" },
     check: { icon: "circle-check", tone: "c-bat" },
   };
+
+  const FILTER_LABELS = { all: "updates.filter.all", other: "updates.channel.unknown" };
 
   const f = $derived(fmt());
   const overview = $derived(system.overview.data);
@@ -50,9 +54,22 @@
   });
   const last = $derived(lastRun(system.alignment.data?.transition));
   let showAll = $state(false);
+  let channel = $state(readStored(CHANNEL_FILTER_KEY, CHANNEL_FILTERS, "all"));
   const installable = $derived(releases.filter((release) => release.upgrade));
-  const shown = $derived(showAll ? releases : installable);
+  const listed = $derived(showAll ? releases : installable);
+  const choices = $derived(channelChoices(releases, listed));
+  const filter = $derived(shownChannel(choices, channel));
+  const shown = $derived(releasesInChannel(listed, filter, upgrade.stage !== "idle" ? upgrade.target : null));
   const groups = $derived(groupedReleases(shown));
+  const choosable = $derived(shown.filter((release) => release.upgrade));
+  const channelOptions = $derived(
+    choices.map((choice) => ({ value: choice.id, tone: choice.tone || undefined, dot: Boolean(choice.tone), label: `${t(FILTER_LABELS[choice.id] || `updates.channel.${choice.id}`)} (${choice.count})` })),
+  );
+
+  function pickChannel(value) {
+    channel = value;
+    writeStored(CHANNEL_FILTER_KEY, value);
+  }
 
   function choose(release) {
     if (held) return;
@@ -126,7 +143,10 @@
   {:else if !releases.length}
     <Empty text={t("updates.noReleases")} />
   {:else}
-    {#if installable.length}<p class="muted hint">{t("updates.chooseHint")}</p>{:else if !showAll}<p class="muted hint" data-testid="none-installable">{t("updates.noneInstallable")}</p>{/if}
+    {#if choices.length}
+      <div class="filter" data-testid="release-filter"><Segmented options={channelOptions} value={filter} label={t("updates.filter.label")} onchange={pickChannel} /></div>
+    {/if}
+    {#if choosable.length}<p class="muted hint">{t("updates.chooseHint")}</p>{:else if !showAll && !installable.length}<p class="muted hint" data-testid="none-installable">{t("updates.noneInstallable")}</p>{:else if filter !== "all"}<p class="muted hint" data-testid="none-in-channel">{t("updates.noneInChannel")}</p>{/if}
     <div class="groups" data-testid="releases">
       {#each groups as group (group.id)}
         <section class="group {group.tone}" data-group={group.id} aria-labelledby={`release-group-${group.id}`}>
@@ -193,6 +213,7 @@
   .choice.checking .go { color: var(--m-text); }
   .choice.checking .go :global(svg.i) { color: var(--c); }
   .hint { font-size: 13px; margin: 0 0 var(--s3); }
+  .filter { margin: 0 0 var(--s3); }
   .release .words { flex: 1 1 280px; min-width: 0; display: flex; flex-direction: column; }
   .tag { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-weight: 620; }
   .badge.channel { display: inline-flex; align-items: center; gap: 5px; background: var(--m-surface-3); color: var(--m-muted); }

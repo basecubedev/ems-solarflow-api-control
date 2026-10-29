@@ -86,6 +86,35 @@ export function groupedReleases(releases) {
   })).filter((group) => group.releases.length);
 }
 
+/** The browser's choice of channel on the Updates page, and the choices it may hold. */
+export const CHANNEL_FILTER_KEY = "ems-admin.releaseChannel";
+export const CHANNEL_FILTERS = Object.freeze(["all", ...RELEASE_GROUPS.map((group) => group.id)]);
+
+const groupOf = (release) => RELEASE_GROUPS.find((group) => group.channels.includes(release?.channel))?.id;
+
+/**
+ * The channel filter's choices: all, then each group the catalogue lists,
+ * with how many of the ``shown`` releases it holds. None while the catalogue
+ * lists a single group, as there is nothing to choose.
+ */
+export function channelChoices(releases, shown) {
+  const listed = groupedReleases(releases);
+  if (listed.length < 2) return [];
+  const count = (id) => shown.filter((release) => groupOf(release) === id).length;
+  return [{ id: "all", tone: null, count: shown.length }, ...listed.map((group) => ({ id: group.id, tone: group.tone, count: count(group.id) }))];
+}
+
+/** The chosen channel while the choices offer it, else all. */
+export function shownChannel(choices, channel) {
+  return choices.some((choice) => choice.id === channel) ? channel : "all";
+}
+
+/** The releases in the channel; the one chosen for an update stays, whichever channel it is in. */
+export function releasesInChannel(releases, channel, keepTag) {
+  if (channel === "all") return releases;
+  return releases.filter((release) => groupOf(release) === channel || (keepTag && release.tag === keepTag));
+}
+
 export function releaseView(release, catalogue) {
   const channel = CHANNELS.includes(release?.channel) ? release.channel : "unknown";
   const state = Object.hasOwn(UPGRADE_STATES, release?.upgrade_state) ? release.upgrade_state : null;

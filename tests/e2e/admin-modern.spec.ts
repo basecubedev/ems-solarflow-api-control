@@ -816,6 +816,42 @@ test.describe("Modern Admin: on a phone", { tag: ["@smoke"] }, () => {
     await expect(page.locator(".choice.recommended")).toHaveCount(0);
   });
 
+  test("the channel filter shows one channel at a time, says when none of it can be installed, and is remembered", async ({ page, seedAdminScenario }) => {
+    await openModern(page);
+    await seedAdminScenario("mqtt_migration");
+    await page.route("**/api/setup/releases?flow=upgrade", async (route: Route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      const candidate = { tag: "v9.9.12-rc1", name: "v9.9.12-rc1", channel: "rc", selectable: false, upgrade_state: "downgrade_blocked" };
+      await route.fulfill({ response, json: { ...body, releases: [...body.releases, candidate] } });
+    });
+    await page.goto("/#/updates");
+    await page.reload();
+    const filter = page.getByTestId("release-filter");
+    const groups = page.getByTestId("releases").locator("[data-group]");
+    await expect(filter.getByRole("button", { name: /^All \(\d+\)$/ })).toHaveAttribute("aria-pressed", "true");
+    await expect(groups.first()).toHaveAttribute("data-group", "stable");
+
+    await filter.getByRole("button", { name: /^Rolling/ }).click();
+    await expect(groups).toHaveCount(1);
+    await expect(groups.first()).toHaveAttribute("data-group", "latest");
+    expect(await page.evaluate(() => localStorage.getItem("ems-admin.releaseChannel"))).toBe("latest");
+
+    await filter.getByRole("button", { name: "Release candidate (0)" }).click();
+    await expect(groups).toHaveCount(0);
+    await expect(page.getByTestId("none-in-channel")).toHaveText("No version in this channel can be installed right now.");
+    await page.getByTestId("show-all-releases").click();
+    await expect(page.locator('[data-group="rc"] [data-tag="v9.9.12-rc1"]')).toBeVisible();
+    await expect(page.getByTestId("none-in-channel")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+    await page.reload();
+    await expect(filter.getByRole("button", { name: "Release candidate (0)" })).toHaveAttribute("aria-pressed", "true");
+    await filter.getByRole("button", { name: /^All/ }).click();
+    await expect(groups.first()).toHaveAttribute("data-group", "stable");
+    expect(await page.evaluate(() => localStorage.getItem("ems-admin.releaseChannel"))).toBe("all");
+  });
+
   test("a version tapped in the list opens the guided upgrade here and verifies it", async ({ page, seedAdminScenario }) => {
     await openModern(page);
     await seedAdminScenario("mqtt_migration");

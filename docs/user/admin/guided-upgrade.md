@@ -27,7 +27,7 @@ never proposes going back by itself. Further back belongs to
 
 ### 1 — Open Updates
 
-![Updates page: What runs now v0.8.15 as a proven pair, the Guided upgrade card with its five steps and Update to v0.8.16, and the available versions with v0.8.16 recommended and the rolling build](../../assets/screenshots/admin/admin-updates.png)
+![Updates page: What runs now v0.8.15 as a proven pair, the Guided upgrade card with its five steps and Update to v0.8.16, and the available versions with the channel filter, v0.8.16 recommended and the rolling build](../../assets/screenshots/admin/admin-updates.png)
 
 **Where:** **Updates** in the menu; the **Update** tile of the
 [assistant](assistant.md) and **Updates** on the Overview's **Versions** card
@@ -49,7 +49,9 @@ lead here too.
   **Stable releases**, **Rolling build**, **Release candidates** and
   **Development builds**, each with its channel and a state such as **Newer**
   or **Already installed**. **Show all … versions** adds the ones that cannot
-  be installed now, with the reason.
+  be installed now, with the reason. The buttons above the list show **All**
+  or a single channel, such as **Stable** or **Rolling**, each with how many
+  versions it lists; the browser remembers the choice.
 
 **Which version is recommended:** the newest stable release that is neither the
 one you run nor behind it. On a stable release with nothing newer to install,
@@ -227,6 +229,7 @@ update: v0.8.16* stays on the page afterwards.
 
 | Symptom | Meaning | What to do |
 | --- | --- | --- |
+| A version you expect is not in the list | The buttons above the list show a single channel, or the version cannot be installed now | Choose **All**; then **Show all … versions** |
 | *The update did not start* | The server refused it before any work; *It stopped before anything was changed. EMS runs as before.* | Read the reason, fix it, choose the version again |
 | The update is refused right at the start | The image moved since the check | Choose the version again; it is checked anew |
 | *The GitHub Container Registry limits downloads just now* | The registry throttled you | Nothing changed; wait and **Try again** |
