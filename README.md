@@ -8,10 +8,15 @@
 [![Test-Driven Development](https://img.shields.io/badge/Test--Driven%20Development-contract--first-blue)](docs/developer/testing.md#development-approach)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.14-blue)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue)](LICENSE)
+[![Interface: English · Deutsch · Nederlands · Français](https://img.shields.io/badge/interface-English%20%C2%B7%20Deutsch%20%C2%B7%20Nederlands%20%C2%B7%20Fran%C3%A7ais-8b5cf6)](docs/user/dashboard/appearance.md)
 
 Local-first EMS control for Zendure SolarFlow systems.
 It reads local grid meter and Zendure telemetry, controls inverter output,
 and provides a local dashboard.
+
+The dashboard, the Admin Console and the Appliance Manager speak
+**English, Deutsch, Nederlands and Français** — pick yours under Appearance at
+the top right, or below the sign-in form.
 
 > [!TIP]
 > **New to EMS SolarFlow?** Start with the [Project Overview](docs/user/project-overview.md), read the docs online at <https://basecubedev.github.io/ems-solarflow-api-control/>, or watch the [videos](docs/user/videos.md) on [YouTube](https://www.youtube.com/channel/UCk7i1JfCVML8hqlvzenCJBg).

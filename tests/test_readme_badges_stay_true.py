@@ -1,11 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Static contract: the badges are claims, and a claim can go stale silently.
 
-The README opens with eight badges. Four of them assert something checkable
-about this repository, and all four can drift without anything failing: a
+The README opens with nine badges. Five of them assert something checkable
+about this repository, and all five can drift without anything failing: a
 workflow file is renamed and its badge starts rendering "no status"; the CI
 matrix gains a Python version the badge does not mention; the test count is
-written once and never again.
+written once and never again; the interface gains a language the badge and
+the sentence under it do not name.
 
 The test count had drifted furthest. It read ``12300+`` against 11029 collected
 tests -- a badge overstating what it counts is the one direction that matters,
@@ -34,6 +35,7 @@ import pytest
 import yaml
 
 from pathlib import Path
+from urllib.parse import unquote
 
 pytestmark = [pytest.mark.contract]
 
@@ -45,6 +47,12 @@ COUNT_BADGE = re.compile(r"automated%20tests-(\d+)%2B-")
 COLLECTED = re.compile(r"(\d+) tests collected")
 WORKFLOW_BADGE = re.compile(r"actions/workflows/([a-z0-9._-]+\.yml)/badge\.svg")
 PYTHON_BADGE = re.compile(r"badge/python-([0-9.%A-Za-z]+)-")
+LANGUAGE_BADGE = re.compile(
+    r"\[!\[[^\]]*\]\(https://img\.shields\.io/badge/interface-([^)-]+)-[0-9a-f]{6}\)\]\(([^)]+)\)"
+)
+SHARED_PREFS = ROOT / "frontend" / "shared" / "state" / "prefs.svelte.js"
+LANGUAGES = re.compile(r"export const LANGUAGES = Object\.freeze\(\[([^\]]*)\]\)")
+ENDONYMS = {"en": "English", "de": "Deutsch", "nl": "Nederlands", "fr": "Français"}
 
 
 def readme():
@@ -138,3 +146,38 @@ def test_the_dependabot_badge_points_at_the_configuration_it_advertises():
     assert (ROOT / ".github" / "dependabot.yml").exists(), (
         "the README advertises Dependabot and the configuration is gone"
     )
+
+
+def interface_languages():
+    """The languages the three Modern consoles offer, in the order they offer them.
+
+    The README names each by its own name (``ENDONYMS``), as a reader looks for it.
+    """
+
+    match = LANGUAGES.search(SHARED_PREFS.read_text(encoding="utf-8"))
+    assert match, "LANGUAGES is gone from the shared prefs module or its shape changed"
+    return re.findall(r'"([^"]+)"', match.group(1))
+
+
+def test_the_language_badge_and_sentence_name_every_interface_language():
+    """A new language without a README line would leave the badge understating,
+    and one removed would leave it promising what is gone; both are named here."""
+
+    codes = interface_languages()
+    assert set(codes) == set(ENDONYMS), (
+        f"the interface offers {codes}; name every language in ENDONYMS here, "
+        "then in the README's interface badge and the sentence under the intro"
+    )
+    names = [ENDONYMS[code] for code in codes]
+
+    badge = LANGUAGE_BADGE.search(readme())
+    assert badge, "the interface-language badge is gone or its shape changed"
+    assert unquote(badge.group(1)).split(" · ") == names, (
+        f"the badge names {unquote(badge.group(1))}; the interface offers {names}"
+    )
+    assert (ROOT / badge.group(2)).exists(), (
+        f"the language badge links to {badge.group(2)}, which does not exist"
+    )
+
+    sentence = f"**{', '.join(names[:-1])} and {names[-1]}**"
+    assert sentence in " ".join(readme().split()), f"the README no longer says {sentence}"
