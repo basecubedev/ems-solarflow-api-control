@@ -85,6 +85,9 @@ test.describe("Modern dashboard @smoke", () => {
     await expect(flow).toHaveAttribute("data-mode", "devices");
     await expect(flow).toContainText("WR1");
     await expect(flow).toContainText("WR2");
+    await expect(flow.locator('[data-node="bat0"] .soc-value')).toHaveText("62%");
+    await expect(flow.locator('[data-node="bat1"] .soc-value')).toHaveText("57%");
+    await expect(flow).toHaveAttribute("aria-label", /; WR1 state of charge 62%; WR2 state of charge 57%$/);
     await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page.getByTestId("energy-flow")).toHaveAttribute("data-mode", "devices");
   });

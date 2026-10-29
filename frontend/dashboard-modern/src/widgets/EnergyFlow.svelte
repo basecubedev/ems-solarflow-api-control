@@ -12,6 +12,7 @@
   import Card from "../../../shared/ui/Card.svelte";
   import Segmented from "../../../shared/ui/Segmented.svelte";
   import Icon from "../../../shared/ui/Icon.svelte";
+  import Bar from "../../../shared/ui/Bar.svelte";
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { live } from "../state/live.svelte.js";
   import { prefs, flowPref, setFlowMode } from "../state/prefs.svelte.js";
@@ -206,14 +207,21 @@
   const f = $derived(fmt());
   const batteryWord = (w) => t(`flow.${batteryDirection(w)}`);
   const gridWord = (w, valid) => t(`flow.${gridDirection(w, valid)}`);
+  const hasBatteryNode = (device) => device.socReported || device.batteryW !== null;
+  const socText = (device) => (!device.online ? "—" : device.soc !== null ? f.percent(device.soc) : t("flow.noSoc"));
   const ariaLabel = $derived(
     system
-      ? t("flow.aria", {
-          pv: f.power(system.pvW),
-          battery: f.power(system.batteryW, { signed: true }),
-          home: f.power(system.homeW),
-          grid: system.gridValid ? f.power(system.gridW, { signed: true }) : t("flow.offline"),
-        })
+      ? [
+          t("flow.aria", {
+            pv: f.power(system.pvW),
+            battery: f.power(system.batteryW, { signed: true }),
+            home: f.power(system.homeW),
+            grid: system.gridValid ? f.power(system.gridW, { signed: true }) : t("flow.offline"),
+          }),
+          ...(mode === "devices"
+            ? deviceList.filter(hasBatteryNode).map((device) => t("flow.ariaSoc", { name: device.name, soc: device.online ? socText(device) : t("device.offline") }))
+            : []),
+        ].join("; ")
       : t("flow.waiting"),
   );
   const pvToday = $derived(channelKwh(today, "pv_yield").kwh);
@@ -328,16 +336,17 @@
             <div class="node-label ellipsis" title={`${device.name} · ${t("flow.solar")}`}>{device.name} · {t("flow.solar")}</div>
             <div class="node-value num">{device.online ? f.power(device.pvW) : "—"}</div>
           </div>
-          {#if device.socReported || device.batteryW !== null}
+          {#if hasBatteryNode(device)}
             <div class="node c-bat col-l" class:offline={!device.online} data-node={`bat${index}`} style:grid-row={`${index * 2 + 2}`}>
               <div class="icon-tile sm"><Icon name="battery-charging" /></div>
               <div class="node-label ellipsis" title={`${device.name} · ${device.online ? batteryWord(device.batteryW) : t("device.offline")}`}><span class="node-name">{device.name}</span><span class="node-state"><span class="sep">{" · "}</span>{device.online ? batteryWord(device.batteryW) : t("device.offline")}</span></div>
               <div class="node-value num">{device.online ? f.power(device.batteryW, { signed: true }) : "—"}</div>
-              {#if device.soc !== null}
-                <div class="soc-mini" role="meter" aria-label={t("flow.soc")} aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(device.soc)}>
-                  <span style:transform={`scaleX(${device.soc / 100})`}></span>
-                </div>
-              {/if}
+              <div class="soc-row">
+                {#if !device.online || device.soc !== null}
+                  <Bar value={device.online ? device.soc : null} label={`${device.name} ${t("flow.soc")}`} />
+                {/if}
+                <b class="soc-value num ellipsis">{socText(device)}</b>
+              </div>
             </div>
           {/if}
           <div class="hub small" class:offline={!device.online} data-node={`hub${index}`} style:grid-row={`${index * 2 + 1} / span 2`}>
@@ -409,8 +418,9 @@
   .hub-charge { font-size: 11px; color: var(--m-muted); margin-top: 2px; }
   .hub-charge::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--grid); margin-right: 5px; vertical-align: 1px; }
   .hub.offline { opacity: 0.55; border-style: dashed; }
-  .soc-mini { grid-column: 1 / -1; height: 5px; border-radius: 99px; background: var(--m-well); overflow: hidden; margin-top: 4px; }
-  .soc-mini > span { display: block; height: 100%; transform-origin: left center; background: var(--battery); }
+  .soc-row { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+  .soc-row :global(.bar) { flex: 1 1 auto; min-width: 0; height: 5px; }
+  .soc-value { font-size: 12px; font-weight: 600; }
 
   .flow-stage.devices {
     display: grid; grid-template-columns: minmax(0, 214px) minmax(40px, 1fr) 112px minmax(40px, 1fr) minmax(0, 214px);

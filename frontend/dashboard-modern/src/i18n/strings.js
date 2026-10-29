@@ -110,6 +110,7 @@ export const STRINGS = {
   "flow.exportedToday": s("Grid export today", "Einspeisung heute", "Teruglevering vandaag", "Injection du jour"),
   "flow.acCharging": s("AC charging {v}", "AC-Laden {v}", "AC-laden {v}", "Charge AC {v}"),
   "flow.noSoc": s("not reported", "nicht gemeldet", "niet gemeld", "non signalé"),
+  "flow.ariaSoc": s("{name} state of charge {soc}", "{name} Ladestand {soc}", "{name} laadtoestand {soc}", "{name} état de charge {soc}"),
   "flow.waiting": s("Waiting for the first measurement", "Warte auf die erste Messung", "Wachten op de eerste meting", "En attente de la première mesure"),
   "flow.aria": s("Solar {pv}, battery {battery}, home use {home}, grid {grid}", "Solar {pv}, Akku {battery}, Hausverbrauch {home}, Netz {grid}", "Zon {pv}, batterij {battery}, huisverbruik {home}, net {grid}", "Solaire {pv}, batterie {battery}, consommation {home}, réseau {grid}"),
 

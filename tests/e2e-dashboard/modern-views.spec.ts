@@ -30,6 +30,12 @@ async function shapeLive(page, shape) {
   });
 }
 
+/** WR1 offline with its last state of charge still in the snapshot, and WR2 reporting its battery power but not its charge. */
+function withoutBatteryFigures(body) {
+  body.devices.WR1.online = false;
+  body.devices.WR2.soc_reported = false;
+}
+
 /** Every period, month and year of the preview with energy charged from AC, so the AC charging row is listed too. */
 function withAcCharging(body) {
   const periods = Object.values(body.energy_stats || {}).flatMap((entry) => (Array.isArray(entry) ? entry : [entry]));
@@ -95,6 +101,19 @@ function distinctCycle(body) {
     notes: ["a note the EMS adds in its own words"],
   });
 }
+
+test.describe("Modern dashboard views: energy flow @smoke", () => {
+  test("a battery in the per-device flow that is offline or reports no charge shows no figure", async ({ page }) => {
+    await shapeLive(page, withoutBatteryFigures);
+    await openModern(page, "#/devices");
+    const flow = page.getByTestId("energy-flow");
+    await expect(flow.locator('[data-node="bat0"] .soc-value')).toHaveText("—");
+    await expect(flow.locator('[data-node="bat0"] .bar')).toHaveClass(/unknown/);
+    await expect(flow.locator('[data-node="bat1"] .soc-value')).toHaveText("not reported");
+    await expect(flow.locator('[data-node="bat1"] .bar')).toHaveCount(0);
+    await expect(flow).toHaveAttribute("aria-label", /; WR1 state of charge Offline; WR2 state of charge not reported$/);
+  });
+});
 
 test.describe("Modern dashboard views: control @smoke", () => {
   test("the cycle is said in a sentence with its figures, its active limit and reason, the gates not active, and the EMS's notes", async ({ page }) => {
@@ -575,6 +594,19 @@ test.describe("Modern dashboard views: labels fit @smoke", () => {
     });
   }
 
+  test("the per-device flow keeps a battery without a figure on one line", async ({ page }) => {
+    await shapeLive(page, withoutBatteryFigures);
+    for (const lang of LANGUAGES) {
+      await inLanguage(page, "#/devices", lang);
+      const lines = page.locator('[data-testid="energy-flow"] :is(.node-label, .soc-value)');
+      await expect(lines.filter({ hasText: "—" })).toHaveCount(1);
+      for (const width of WIDTHS) {
+        await page.setViewportSize({ width, height: 900 });
+        expect(await broken(lines), `${lang} at ${width} px`).toEqual([]);
+      }
+    }
+  });
+
   for (const scenario of ["ac-charging", "firmware-status"]) {
     test(`the device cards, the grid meter and the flow keep every line whole: ${scenario}`, async ({ page, baseURL }) => {
       await page.context().addCookies([{ name: "ems-preview-scenario", value: scenario, url: baseURL }]);
@@ -582,7 +614,7 @@ test.describe("Modern dashboard views: labels fit @smoke", () => {
         await inLanguage(page, "#/devices", lang);
         await expect(page.getByTestId("device-card")).not.toHaveCount(0);
         await page.locator('[data-testid="device-card"] details').evaluateAll((blocks) => blocks.forEach((block) => { block.open = true; }));
-        const lines = page.locator('[data-testid="device-card"] :is(.fact-label .ellipsis, .fact-value), [data-testid="grid-meter"] :is(.name, .fact-label .ellipsis, .fact-value), [data-testid="energy-flow"] :is(.node-label, .hub-label)');
+        const lines = page.locator('[data-testid="device-card"] :is(.fact-label .ellipsis, .fact-value), [data-testid="grid-meter"] :is(.name, .fact-label .ellipsis, .fact-value), [data-testid="energy-flow"] :is(.node-label, .hub-label, .soc-value)');
         for (const width of WIDTHS) {
           await page.setViewportSize({ width, height: 900 });
           expect(await broken(lines), `${lang} at ${width} px`).toEqual([]);
