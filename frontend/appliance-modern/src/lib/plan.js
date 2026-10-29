@@ -48,8 +48,39 @@ export const PLAN_FIELD_ORDER = Object.freeze([
   "authority_plan",
 ]);
 
-/** Fields Classic shows under their raw key that Modern names; they read after Classic's order. */
-export const PLAN_EXTRA_FIELDS = Object.freeze(["free_space_known"]);
+/**
+ * Fields Classic shows under their raw key that Modern names; they read after
+ * Classic's order. tests/test_appliance_modern.py holds the agent's plans to
+ * this list, so a new field is named before an owner meets it.
+ */
+export const PLAN_EXTRA_FIELDS = Object.freeze([
+  "free_space_known",
+  "version",
+  "installed_version",
+  "size_bytes",
+  "revert_available",
+  "state_compatibility_known",
+  "verify_window_seconds",
+  "release_id",
+  "build_id",
+  "digest",
+  "account",
+  "enabled",
+  "currently_enabled",
+  "key_count",
+  "note",
+  "hidden",
+  "security",
+  "signal",
+  "previous_profile",
+  "revert_timeout_seconds",
+  "previous_hostname",
+  "new_url",
+  "admin_url",
+  "timezone",
+  "previous_timezone",
+  "destination",
+]);
 
 /** The fingerprint seals the plan; a mechanism, not a statement about this appliance, so it sits with the digests. */
 export const PLAN_EXPERT_FIELDS = Object.freeze([
@@ -62,6 +93,9 @@ export const PLAN_EXPERT_FIELDS = Object.freeze([
   "target_reference",
   "target_source",
 ]);
+
+/** Of the fields Modern names, those only Expert shows: identities rather than facts an owner decides on. */
+export const PLAN_EXTRA_EXPERT_FIELDS = Object.freeze(["release_id", "build_id", "digest"]);
 
 /** The update scopes a package plan names (appliance/packages.py). */
 export const PLAN_SCOPES = Object.freeze(["security", "all"]);
@@ -78,6 +112,8 @@ const VOCABULARY = Object.freeze({
   current_state: (value) => (CONTAINER_STATES.includes(value) ? `container.${value}` : null),
   target_channel: (value) => (INSTALL_CHANNELS.includes(value) ? `install.channel.${value}` : null),
   lock_state: () => null,
+  security: () => null,
+  note: () => null,
 });
 
 /** The words for a vocabulary field's value, or null for data shown as it is. */
@@ -88,11 +124,21 @@ export function vocabularyWords(key, value) {
 }
 
 /** Drawn in a block of their own below the facts. */
-export const PLAN_SKIP_FIELDS = Object.freeze(["blockers", "findings", "packages", "keys", "bootstrap"]);
+export const PLAN_SKIP_FIELDS = Object.freeze(["blockers", "findings", "packages", "keys", "bootstrap", "warning"]);
+
+const NAMED_FIELDS = Object.freeze([...PLAN_FIELD_ORDER, ...PLAN_EXTRA_FIELDS]);
 
 function rank(key) {
-  const index = PLAN_FIELD_ORDER.indexOf(key);
-  return index === -1 ? PLAN_FIELD_ORDER.length : index;
+  const index = NAMED_FIELDS.indexOf(key);
+  return index === -1 ? NAMED_FIELDS.length : index;
+}
+
+function kindOf(key, value) {
+  if (typeof value === "boolean") return "bool";
+  if (/_megabytes$/.test(key)) return "megabytes";
+  if (/_bytes$/.test(key)) return "bytes";
+  if (/_seconds$/.test(key)) return "seconds";
+  return key === "signal" ? "percent" : "text";
 }
 
 /**
@@ -106,7 +152,7 @@ export function planFields(plan, expert) {
       if (PLAN_SKIP_FIELDS.includes(key)) return false;
       if (key === "free_space_known") return plan[key] === false;
       if (key === "free_megabytes" && plan.free_space_known === false) return false;
-      if (!expert && PLAN_EXPERT_FIELDS.includes(key)) return false;
+      if (!expert && (PLAN_EXPERT_FIELDS.includes(key) || PLAN_EXTRA_EXPERT_FIELDS.includes(key))) return false;
       const value = plan[key];
       if (value === null || value === undefined || value === "") return false;
       return typeof value !== "object";
@@ -116,11 +162,11 @@ export function planFields(plan, expert) {
       const value = plan[key];
       return {
         key,
-        known: PLAN_FIELD_ORDER.includes(key) || PLAN_EXTRA_FIELDS.includes(key),
+        known: NAMED_FIELDS.includes(key),
         label: key.replace(/_/g, " "),
-        kind: typeof value === "boolean" ? "bool" : /_megabytes$/.test(key) ? "megabytes" : "text",
+        kind: kindOf(key, value),
         value,
-        mono: /digest|revision|reference|authority/.test(key),
+        mono: /digest|revision|reference|authority|_url$/.test(key),
       };
     });
 }

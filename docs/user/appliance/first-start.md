@@ -135,7 +135,8 @@ up the EMS itself.
 Every visit after the first asks for the password once, under **Sign in**,
 without the second field. A session ends after 30 minutes without activity and
 at the latest after 12 hours — the **Settings** page says what this appliance
-uses. The sign-in page then says *Your session ended. Sign in again to
+uses. A console left open in a tab you are not looking at stops asking the
+appliance, so it does not count as activity. The sign-in page then says *Your session ended. Sign in again to
 continue.* **Sign out** is at the right of the top bar, and on a phone under
 **More**.
 

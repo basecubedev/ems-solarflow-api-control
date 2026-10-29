@@ -101,13 +101,15 @@ distribution upgrades are not performed here.* — shows what is pending:
 
 | Tile | What it says |
 | --- | --- |
-| **Security updates** | How many; **Action recommended** or **Up to date** |
+| **Security updates** | How many; **Action recommended**, **Up to date**, or **Not certain** while the check did not finish or the package manager needs recovery |
 | **Other updates** | How many, and whether a **Kernel update** or **Firmware update** is among them; **Held packages** |
 | **Restart** | **Required** or **Not required** after the updates. Expert names the packages that ask for it |
 | **Package manager** | **Healthy** or **Needs recovery**, and its lock |
 
 A check that could not reach its mirrors is reported as exactly that, and the
-counts then describe nothing. The check itself changes nothing.
+counts then describe nothing: the tiles show `—`, and **Plan security updates**
+waits. A tile the appliance has not answered yet says **Unknown**. The check
+itself changes nothing.
 
 1. **Plan security updates** (or **Install security updates** on the card
    above) plans the pending security packages. Only the packages the appliance
@@ -244,7 +246,8 @@ signed version is not the version the package index named, because that name
 is what the list and the **Update to …** button showed you.
 
 A password set where the Appliance Manager could not confirm it holds every
-Manager install and revert back until you confirm it under **Settings**; see
+Manager install and revert back until you confirm it under **Settings**; the
+buttons wait and say so. See
 [First start](first-start.md#one-password-for-everything).
 
 ### Installing an older version is allowed

@@ -10,7 +10,7 @@
   import { href } from "../app/router.svelte.js";
   import { host, ensure, held } from "../state/host.svelte.js";
   import { detail } from "../state/prefs.svelte.js";
-  import { adminHealth, adminTransitionLive, adminVersion } from "../lib/host.js";
+  import { adminContainer, adminHealth, adminTransitionLive, adminVersion } from "../lib/host.js";
   import { LIFECYCLE_ACTIONS, adminRepairPlan, adminRollbackPlan, lifecyclePlan } from "../lib/plans.js";
   import { CONTAINER_STATES, word } from "../lib/words.js";
 
@@ -23,7 +23,8 @@
   const admin = $derived(status?.admin || {});
   const bootstrap = $derived(admin.bootstrap_required === true);
   const live = $derived(adminTransitionLive(status));
-  const health = $derived(adminHealth(admin));
+  const health = $derived(adminHealth(status));
+  const container = $derived(adminContainer(status));
   const version = $derived(adminVersion(status));
   const knownGood = $derived(admin.known_good || {});
   const LIFECYCLE_ICONS = { start: "play", stop: "square", restart: "rotate-cw" };
@@ -52,8 +53,8 @@
       <p class="big num">{version.key ? t(version.key) : version.text}</p>
       <KeyValues
         rows={[
-          { label: t("admin.containerState"), value: say(word("container", CONTAINER_STATES, admin.container?.state)), lang: langOf(word("container", CONTAINER_STATES, admin.container?.state)) },
-          { label: t("admin.healthCheck"), value: admin.container?.health, lang: "en" },
+          { label: t("admin.containerState"), value: say(word("container", CONTAINER_STATES, container.state)), lang: langOf(word("container", CONTAINER_STATES, container.state)) },
+          { label: t("admin.healthCheck"), value: container.health, lang: "en" },
         ]}
       />
     </div>
@@ -80,7 +81,7 @@
             { label: t("overview.digest"), value: admin.digest, mono: true },
             { label: t("admin.revision"), value: admin.revision, mono: true },
             { label: t("admin.architecture"), value: admin.image?.architecture },
-            { label: t("admin.containerId"), value: admin.container?.container_id, mono: true },
+            { label: t("admin.containerId"), value: container.container_id, mono: true },
           ]}
         />
       </div>
@@ -101,19 +102,19 @@
         <p class="muted pane-sub">{t("admin.lifecycleSub")}</p>
         <div class="row-wrap">
           {#each LIFECYCLE_ACTIONS as action (action)}
-            <PlanButton plan={lifecyclePlan(action)} label={t(`admin.${action}`)} icon={LIFECYCLE_ICONS[action]} variant={action === "restart" ? "" : "secondary"} testid="admin-{action}" />
+            <PlanButton plan={lifecyclePlan(action)} label={t(`admin.${action}`)} icon={LIFECYCLE_ICONS[action]} variant={action === "restart" ? "" : "secondary"} disabled={live} testid="admin-{action}" />
           {/each}
         </div>
       </div>
       <div class="pane" data-testid="admin-repair-stage">
         <h3 class="pane-title"><span class="icon-tile sm c-pv"><Icon name="wrench" /></span>{t("admin.repair")}</h3>
         <p class="muted pane-sub">{t("admin.repairSub")}</p>
-        <div class="row-wrap"><PlanButton plan={adminRepairPlan()} label={t("admin.previewRepair")} icon="wrench" testid="admin-repair" /></div>
+        <div class="row-wrap"><PlanButton plan={adminRepairPlan()} label={t("admin.previewRepair")} icon="wrench" disabled={live} testid="admin-repair" /></div>
       </div>
       <div class="pane" data-testid="admin-rollback-stage">
         <h3 class="pane-title"><span class="icon-tile sm c-soc"><Icon name="history" /></span>{t("admin.rollback")}</h3>
         <p class="muted pane-sub">{t("admin.rollbackSub")}</p>
-        <div class="row-wrap"><PlanButton plan={adminRollbackPlan()} label={t("admin.rollBack")} icon="history" variant="secondary" disabled={!knownGood.previous} testid="admin-rollback" /></div>
+        <div class="row-wrap"><PlanButton plan={adminRollbackPlan()} label={t("admin.rollBack")} icon="history" variant="secondary" disabled={!knownGood.previous || live} testid="admin-rollback" /></div>
         <p class="note"><Icon name="info" />{knownGood.previous ? t("admin.rollbackDigest", { version: knownGood.previous.admin_version || "—" }) : t("admin.rollbackNone")}</p>
       </div>
     </div>

@@ -161,7 +161,8 @@ from this console. Details are in
   **Export access** card reports.
 - A password set where the Appliance Manager could not confirm it holds back
   switching SSH on, shell access and adding a key until you confirm it under
-  **Settings**; see [First start](first-start.md#one-password-for-everything).
+  **Settings**; the buttons wait and say so. See
+  [First start](first-start.md#one-password-for-everything).
 
 ## Expected result
 

@@ -18,7 +18,7 @@
    */
   const status = $derived(host.status);
   const network = $derived(status?.network || {});
-  const currentZone = $derived(status?.system?.timezone || "UTC");
+  const currentZone = $derived(status?.system?.timezone || "");
   const scan = $derived(host.wifi);
   const networks = $derived((scan && scan.networks) || []);
   const timezone = $derived(forms.timezone ?? currentZone);
@@ -119,7 +119,7 @@
   </Card>
   <Card icon="clock" tone="c-pv" title={t("network.timezoneChange")} subtitle={t("network.timezoneChangeSub")}>
     <div class="form" data-testid="network-timezone-stage">
-      <p class="muted small" data-testid="timezone-current">{t("network.timezoneCurrent", { zone: currentZone })}</p>
+      <p class="muted small" data-testid="timezone-current">{t("network.timezoneCurrent", { zone: currentZone || t("common.unknown") })}</p>
       <label class="field"><span>{t("network.timezone")}</span><input class="input mono" type="text" value={timezone} oninput={(event) => (forms.timezone = event.currentTarget.value)} autocomplete="off" data-testid="timezone-input" /></label>
       <div class="row-wrap">
         <PlanButton

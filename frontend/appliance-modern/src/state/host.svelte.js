@@ -245,15 +245,28 @@ function tick() {
     stopPolling();
     return;
   }
+  if (globalThis.document?.hidden) return;
   ticks += 1;
   if (ticks % STATUS_EVERY_TICKS === 0) readHostState();
   pollOperations();
 }
 
+let watchingVisibility = false;
+
+/**
+ * A hidden tab asks nothing, so a console left open ends its session after
+ * the inactivity the settings name, as every request keeps it alive; shown
+ * again, it reads the host and the operations at once.
+ */
 export function startPolling() {
   stopPolling();
   ticks = 0;
   timer = setInterval(tick, POLL_MS);
+  if (watchingVisibility || !globalThis.document) return;
+  watchingVisibility = true;
+  globalThis.document.addEventListener("visibilitychange", () => {
+    if (!globalThis.document.hidden && timer && live()) refresh();
+  });
 }
 
 export function stopPolling() {

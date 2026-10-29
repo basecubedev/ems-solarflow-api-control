@@ -12,7 +12,7 @@
   import { session } from "../state/session.svelte.js";
   import { detail } from "../state/prefs.svelte.js";
   import { findingWords, overviewVerdict, rankedFindings, sessionFindings } from "../lib/findings.js";
-  import { adminHealth, adminVersion, daemonState, dockerCondition, dockerTone, emsContainer, gigabytes, indexAge, securityUpdatesOffered, systemVerdict, updatesInDoubt } from "../lib/host.js";
+  import { adminContainer, adminHealth, adminTransitionLive, adminVersion, daemonState, dockerCondition, dockerTone, emsContainer, gigabytes, indexAge, osTiles, securityUpdatesOffered, systemVerdict, updatesInDoubt } from "../lib/host.js";
   import { adminRepairPlan, lifecyclePlan, powerPlan, securityUpdatesPlan } from "../lib/plans.js";
   import { CONNECTIVITY, CONTAINER_STATES, containerTone, word } from "../lib/words.js";
 
@@ -23,10 +23,11 @@
   const system = $derived(status?.system || {});
   const admin = $derived(status?.admin || {});
   const updates = $derived(status?.updates || {});
+  const tiles = $derived(osTiles(updates));
   const network = $derived(status?.network || {});
   const daemon = $derived(daemonState(status));
   const ems = $derived(emsContainer(status));
-  const health = $derived(adminHealth(admin));
+  const health = $derived(adminHealth(status));
   const version = $derived(adminVersion(status));
   const root = $derived(system.storage?.root || {});
   const free = $derived(gigabytes(root.free_mb));
@@ -90,7 +91,7 @@
     <p class="big num" data-testid="admin-version">{version.key ? t(version.key) : version.text}</p>
     <KeyValues
       rows={[
-        { label: t("overview.container"), value: container(admin.container?.state), lang: containerLang(admin.container?.state) },
+        { label: t("overview.container"), value: container(adminContainer(status).state), lang: containerLang(adminContainer(status).state) },
         detail.expert && { label: t("overview.digest"), value: admin.digest, mono: true },
       ]}
     />
@@ -108,8 +109,8 @@
   <div data-testid="card-updates">
     <KeyValues
       rows={[
-        { label: t("overview.securityUpdates"), value: updates.security_count },
-        { label: t("overview.otherUpdates"), value: updates.normal_count },
+        { label: t("overview.securityUpdates"), value: tiles.securityCount },
+        { label: t("overview.otherUpdates"), value: tiles.normalCount },
         { label: t("overview.index"), value: age ? tn(`unit.${age.unit}Old`, age.count) : updates.security_count === undefined ? null : t("common.unknown") },
         { label: t("overview.rebootRequired"), value: yesNo(updates.reboot_required) },
       ]}
@@ -146,8 +147,8 @@
         {#if bootstrap}
           <a class="btn small" href={href("admin")} data-testid="quick-install-admin"><Icon name="download" />{t("overview.installAdmin")}</a>
         {:else}
-          <PlanButton plan={lifecyclePlan("restart", "quick-restart-admin")} label={t("overview.restartAdmin")} icon="rotate-cw" testid="quick-restart-admin" />
-          <PlanButton plan={adminRepairPlan("quick-repair-admin")} label={t("overview.repairAdmin")} icon="wrench" variant="secondary" testid="quick-repair-admin" />
+          <PlanButton plan={lifecyclePlan("restart", "quick-restart-admin")} label={t("overview.restartAdmin")} icon="rotate-cw" disabled={adminTransitionLive(status)} testid="quick-restart-admin" />
+          <PlanButton plan={adminRepairPlan("quick-repair-admin")} label={t("overview.repairAdmin")} icon="wrench" variant="secondary" disabled={adminTransitionLive(status)} testid="quick-repair-admin" />
           <a class="btn secondary small" href={href("admin")}>{t("updates.openAdmin")}</a>
         {/if}
       </div>

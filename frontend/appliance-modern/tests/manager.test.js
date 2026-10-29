@@ -42,7 +42,10 @@ test("an older or uncomparable package is a risky step", () => {
 });
 
 test("the rescue account is judged network login first, and an unread password is unknown", () => {
-  assert.equal(rescueState({}).key, "rescue.absent");
+  assert.equal(rescueState({}).key, "rescue.unknown");
+  assert.equal(rescueState(undefined).key, "rescue.unknown");
+  assert.equal(rescueState({ present: false }).key, "rescue.absent");
+  assert.equal(rescueState({ present: false, unreadable: "passwd unreadable" }).key, "rescue.unknown");
   assert.equal(rescueState({ present: true, password_is_default: false, ssh: { state: "accepted" } }).key, "rescue.network");
   assert.equal(rescueState({ present: true, password_is_default: null }).key, "rescue.unknown");
   assert.equal(rescueState({ present: true, password_is_default: null, password_set: false }).key, "rescue.noPassword");

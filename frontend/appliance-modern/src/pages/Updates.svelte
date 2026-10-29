@@ -4,6 +4,8 @@
   import Status from "../../../shared/ui/Status.svelte";
   import KeyValues from "../widgets/KeyValues.svelte";
   import PlanButton from "../widgets/PlanButton.svelte";
+  import UnconfirmedNote from "../widgets/UnconfirmedNote.svelte";
+  import { session } from "../state/session.svelte.js";
   import InstallForm from "../widgets/InstallForm.svelte";
   import TrackHelp from "../widgets/TrackHelp.svelte";
   import PackageTable from "../widgets/PackageTable.svelte";
@@ -13,7 +15,7 @@
   import { forms } from "../state/forms.svelte.js";
   import { detail } from "../state/prefs.svelte.js";
   import { rankedFindings, findingWords } from "../lib/findings.js";
-  import { adminGate, adminVersion, daemonState, dockerCondition, groupByTrack, latestVerdict, securityUpdatesOffered, systemVerdict, updatesInDoubt } from "../lib/host.js";
+  import { adminGate, adminVersion, daemonState, dockerCondition, groupByTrack, latestVerdict, osTiles, securityUpdatesOffered, systemVerdict, updatesInDoubt } from "../lib/host.js";
   import { MANAGER_OUTCOMES, MANAGER_VERDICTS, applianceNow, latestStableVersion, managerActions, managerOptions, riskyDirection } from "../lib/manager.js";
   import { REPAIR_ACTIONS, adminInstallPlan, allUpdatesPlan, managerInstallPlan, managerRevertPlan, repairPlan, securityUpdatesPlan } from "../lib/plans.js";
 
@@ -24,6 +26,7 @@
    */
   const status = $derived(host.status);
   const updates = $derived(status?.updates || {});
+  const tiles = $derived(osTiles(updates));
   const manager = $derived(host.manager);
   const managerKnown = $derived(Boolean(manager) && !manager.error);
   const sources = $derived(held("managerSources"));
@@ -31,6 +34,7 @@
   const gate = $derived(adminGate(status));
   const now = $derived(applianceNow(status));
   const rights = $derived(managerActions(manager, now));
+  const unconfirmed = $derived(session.confirmed === false);
   const docker = $derived(dockerCondition(daemonState(status)));
 
   $effect(() => {
@@ -123,7 +127,8 @@
       <span data-testid="update-summary-manager-state"><Status tone={managerSummary.tone} text={t(managerSummary.key)} /></span>
       <KeyValues rows={[{ label: t("updates.installed"), value: manager?.installed_version }, { label: t("updates.latestStable"), value: managerLatestVersion }]} />
       {#if managerLatest?.direction === "upgrade"}
-        <PlanButton plan={managerInstallPlan(managerLatest, false, "update-manager-latest")} label={t("updates.updateTo", { version: managerLatestVersion || "" })} icon="download" disabled={!managerKnown || !rights.canUpdate} testid="update-manager-latest" />
+        <PlanButton plan={managerInstallPlan(managerLatest, false, "update-manager-latest")} label={t("updates.updateTo", { version: managerLatestVersion || "" })} icon="download" disabled={!managerKnown || !rights.canUpdate || unconfirmed} testid="update-manager-latest" />
+        <UnconfirmedNote testid="update-manager-latest-unconfirmed" />
       {/if}
     </div>
   </Card>
@@ -145,8 +150,8 @@
       <span data-testid="update-summary-os-state"><Status tone={osVerdict.tone} text={say(osWords)} lang={langOf(osWords)} /></span>
       <KeyValues
         rows={[
-          { label: t("overview.securityUpdates"), value: updates.security_count },
-          { label: t("overview.otherUpdates"), value: updates.normal_count },
+          { label: t("overview.securityUpdates"), value: tiles.securityCount },
+          { label: t("overview.otherUpdates"), value: tiles.normalCount },
           { label: t("updates.os.restart"), value: yesNo(updates.reboot_required) },
         ]}
       />
@@ -220,8 +225,9 @@
               </select>
             </label>
             <div class="row-wrap">
-              <PlanButton plan={managerInstallPlan(chosen.entry, riskyDirection(chosen.entry))} label={t("install.installSelected")} icon="download" disabled={!chosen || !rights.canUpdate} testid="manager-plan-update" />
+              <PlanButton plan={managerInstallPlan(chosen.entry, riskyDirection(chosen.entry))} label={t("install.installSelected")} icon="download" disabled={!chosen || !rights.canUpdate || unconfirmed} testid="manager-plan-update" />
             </div>
+            <UnconfirmedNote testid="manager-update-unconfirmed" />
             <TrackHelp />
             <p class="note"><Icon name="shield-check" />{t("manager.signed")}</p>
           {/if}
@@ -230,8 +236,9 @@
           <h3 class="pane-title"><span class="icon-tile sm c-soc"><Icon name="history" /></span>{t("manager.revert")}</h3>
           <p class="muted pane-sub">{t("manager.revertSub")}</p>
           <div class="row-wrap">
-            <PlanButton plan={managerRevertPlan(kept.version || "—")} label={t("manager.reinstall", { version: manager.can_revert ? kept.version || "—" : "—" })} icon="history" variant="secondary" disabled={!rights.canRevert} testid="manager-plan-revert" />
+            <PlanButton plan={managerRevertPlan(kept.version || "—")} label={t("manager.reinstall", { version: manager.can_revert ? kept.version || "—" : "—" })} icon="history" variant="secondary" disabled={!rights.canRevert || unconfirmed} testid="manager-plan-revert" />
           </div>
+          <UnconfirmedNote testid="manager-revert-unconfirmed" />
           <p class="note"><Icon name="info" />{t("manager.revertNote")}</p>
         </div>
       </div>
@@ -275,34 +282,34 @@
     <div class="tiles">
       <div class="tile" data-testid="updates-security">
         <div class="tile-label">{t("overview.securityUpdates")}</div>
-        <div class="tile-value num">{updates.security_count ?? "—"}</div>
-        <Status tone={updates.security_count ? "c-warn" : "c-ok"} text={updates.security_count ? t("os.recommended") : t("overview.upToDate")} />
+        <div class="tile-value num">{tiles.securityCount ?? "—"}</div>
+        <Status tone={tiles.security.tone} text={t(tiles.security.key)} />
       </div>
       <div class="tile" data-testid="updates-normal">
         <div class="tile-label">{t("overview.otherUpdates")}</div>
-        <div class="tile-value num">{updates.normal_count ?? "—"}</div>
+        <div class="tile-value num">{tiles.normalCount ?? "—"}</div>
         <KeyValues
           rows={[
-            { label: t("os.kernel"), value: yesNo(updates.kernel_update) },
-            { label: t("os.firmware"), value: yesNo(updates.firmware_update) },
+            { label: t("os.kernel"), value: yesNo(tiles.kernel) },
+            { label: t("os.firmware"), value: yesNo(tiles.firmware) },
             { label: t("os.held"), value: (updates.held || []).length },
           ]}
         />
       </div>
       <div class="tile" data-testid="updates-reboot">
         <div class="tile-label">{t("os.reboot")}</div>
-        <div class="tile-value"><Status tone={updates.reboot_required ? "c-warn" : "c-ok"} text={updates.reboot_required ? t("os.rebootRequired") : t("os.rebootNotRequired")} /></div>
+        <div class="tile-value"><Status tone={tiles.reboot.tone} text={t(tiles.reboot.key)} /></div>
         {#if detail.expert && (updates.reboot_packages || []).length}<div class="tile-sub mono">{t("os.triggeredBy", { packages: updates.reboot_packages.join(", ") })}</div>{/if}
       </div>
       <div class="tile" data-testid="updates-manager">
         <div class="tile-label">{t("os.packageManager")}</div>
-        <div class="tile-value"><Status tone={updates.package_manager?.healthy ? "c-ok" : "c-fault"} text={updates.package_manager?.healthy ? t("os.healthy") : t("os.needsRecovery")} /></div>
+        <div class="tile-value"><Status tone={tiles.manager.tone} text={t(tiles.manager.key)} /></div>
         <KeyValues rows={[{ label: t("os.lock"), value: updates.package_manager?.lock_state, lang: "en" }, detail.expert && { label: t("os.dpkgIssues"), value: (updates.package_manager?.dpkg_issues || []).length }]} />
       </div>
     </div>
 
     <div class="row-wrap actions">
-      <PlanButton plan={securityUpdatesPlan("updates-install-security")} label={t("os.planSecurity")} icon="shield-check" small={false} testid="updates-install-security" />
+      <PlanButton plan={securityUpdatesPlan("updates-install-security")} label={t("os.planSecurity")} icon="shield-check" small={false} disabled={!securityUpdatesOffered(updates)} testid="updates-install-security" />
       {#if detail.expert}
         <PlanButton plan={allUpdatesPlan()} label={t("os.planAll")} icon="package" variant="secondary" small={false} testid="updates-install-all" />
       {/if}

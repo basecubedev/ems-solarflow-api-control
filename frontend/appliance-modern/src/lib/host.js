@@ -56,11 +56,22 @@ export function adminVersion(status) {
   return { key: admin.installed ? "admin.version.unknownVersion" : "admin.version.notInstalled" };
 }
 
-/** healthy, unhealthy or missing, and its tone. */
-export function adminHealth(admin) {
-  const value = admin || {};
+const UNKNOWN = Object.freeze({ key: "common.unknown", tone: "c-idle" });
+
+/**
+ * healthy, unhealthy or missing, and its tone; unknown while the agent could
+ * not say, as when Docker does not run and cannot be asked (adminVersion).
+ */
+export function adminHealth(status) {
+  const value = (status && status.admin) || {};
+  if (value.installed === undefined || (!value.installed && dockerStopped(status))) return UNKNOWN;
   if (!value.installed) return { key: "admin.health.missing", tone: "c-warn" };
   return value.healthy ? { key: "admin.health.healthy", tone: "c-ok" } : { key: "admin.health.unhealthy", tone: "c-fault" };
+}
+
+/** The EMS Admin container as inspected; nothing while Docker does not run, as its inspection then answers nothing. */
+export function adminContainer(status) {
+  return dockerStopped(status) ? {} : ((status && status.admin) || {}).container || {};
 }
 
 /** The configured EMS container, by the name the backend says is the EMS -- never by a name pattern. */
@@ -97,6 +108,33 @@ export function updatesInDoubt(updates) {
 
 export function securityUpdatesOffered(updates) {
   return Number((updates || {}).security_count) > 0 && !updatesInDoubt(updates);
+}
+
+/**
+ * The operating system tiles: a field the agent did not send is unknown,
+ * never up to date or broken, and the counts of a check that did not finish
+ * are no counts. The security pill is not certain while systemVerdict puts
+ * the counts in doubt.
+ */
+export function osTiles(updates) {
+  const value = updates || {};
+  const failed = value.error === "update_check_failed";
+  const count = (field) => (failed || value[field] === undefined ? null : value[field]);
+  const flag = (field) => (failed || typeof value[field] !== "boolean" ? null : value[field]);
+  const manager = (value.package_manager || {}).healthy;
+  let security = { key: "overview.upToDate", tone: "c-ok" };
+  if (value.security_count === undefined) security = UNKNOWN;
+  else if (updatesInDoubt(value)) security = { key: "os.notCertain", tone: "c-warn" };
+  else if (Number(value.security_count) > 0) security = { key: "os.recommended", tone: "c-warn" };
+  return {
+    securityCount: count("security_count"),
+    normalCount: count("normal_count"),
+    kernel: flag("kernel_update"),
+    firmware: flag("firmware_update"),
+    security,
+    reboot: typeof value.reboot_required !== "boolean" ? UNKNOWN : value.reboot_required ? { key: "os.rebootRequired", tone: "c-warn" } : { key: "os.rebootNotRequired", tone: "c-ok" },
+    manager: typeof manager !== "boolean" ? UNKNOWN : manager ? { key: "os.healthy", tone: "c-ok" } : { key: "os.needsRecovery", tone: "c-fault" },
+  };
 }
 
 /**

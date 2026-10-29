@@ -9,6 +9,7 @@ nothing beside it, and the console's vocabulary to the backend's: the words it
 has for a code are only right while the backend still sends that code.
 """
 
+import ast
 import http.client
 import re
 import threading
@@ -315,6 +316,63 @@ def test_the_plan_reads_in_classic_s_order():
     assert js_list("lib/plan.js", "PLAN_FIELD_ORDER") == re.findall(r'"([a-z_]+)"', block)
     block = classic.split("var PLAN_EXPERT_FIELDS = [", 1)[1].split("];", 1)[0]
     assert js_list("lib/plan.js", "PLAN_EXPERT_FIELDS") == re.findall(r'"([a-z_]+)"', block)
+
+
+PLAN_OBJECT_FIELDS = frozenset(
+    {
+        "actions",
+        "authorized_keys",
+        "creates_deployment",
+        "current",
+        "deployment",
+        "docker",
+        "dpkg_issues",
+        "excluded",
+        "key",
+        "manual_actions",
+        "members",
+        "package_manager",
+        "preserves",
+        "recovery",
+        "rollback_target",
+        "running_operation",
+        "target",
+    }
+)
+
+
+def _agent_plan_keys():
+    """Every key of a plan the agent returns: a dict literal typed with a TYPE_ constant or system.*."""
+
+    keys = {}
+    for path in sorted((ROOT / "appliance").glob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.Dict):
+                continue
+            named = {key.value: value for key, value in zip(node.keys, node.values) if isinstance(key, ast.Constant) and isinstance(key.value, str)}
+            kind = named.get("type")
+            typed = isinstance(kind, ast.Name) and kind.id.startswith("TYPE_")
+            system = isinstance(kind, ast.JoinedStr) and ast.unparse(kind).startswith("f'system.")
+            if typed or system:
+                for key in named:
+                    keys.setdefault(key, f"{path.name}:{node.lineno}")
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Subscript):
+                target = node.targets[0]
+                if isinstance(target.value, ast.Name) and target.value.id == "plan" and isinstance(target.slice, ast.Constant):
+                    keys.setdefault(target.slice.value, f"{path.name}:{node.lineno}")
+    return keys
+
+
+def test_every_field_of_an_agent_plan_has_a_name_or_a_block_of_its_own():
+    named = set(js_list("lib/plan.js", "PLAN_FIELD_ORDER")) | set(js_list("lib/plan.js", "PLAN_EXTRA_FIELDS"))
+    drawn = set(js_list("lib/plan.js", "PLAN_SKIP_FIELDS")) | PLAN_OBJECT_FIELDS
+    keys = _agent_plan_keys()
+    assert {"version", "verify_window_seconds", "previous_timezone", "note"} <= set(keys)
+    unnamed = {key: where for key, where in keys.items() if key not in named | drawn}
+    assert not unnamed, f"name these in lib/plan.js PLAN_EXTRA_FIELDS with plan.field.* words: {unnamed}"
+    assert not (named & PLAN_OBJECT_FIELDS)
+    assert set(js_list("lib/plan.js", "PLAN_EXTRA_EXPERT_FIELDS")) <= named
 
 
 def test_every_page_is_a_section_the_backend_names_the_settings_or_the_assistant():

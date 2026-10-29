@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { adminGate, adminVersion, dockerCondition, exactDuration, gigabytes, groupByTrack, indexAge, latestVerdict, securityUpdatesOffered, systemVerdict } from "../src/lib/host.js";
+import { adminContainer, adminGate, adminHealth, adminVersion, dockerCondition, exactDuration, gigabytes, groupByTrack, indexAge, latestVerdict, osTiles, securityUpdatesOffered, systemVerdict } from "../src/lib/host.js";
 import { planBlocked, planFields, vocabularyWords } from "../src/lib/plan.js";
 import { logSources, logSummary } from "../src/lib/logs.js";
 import { errorWords } from "../src/lib/errors.js";
@@ -122,4 +122,63 @@ test("the EMS Admin link uses the address this browser reached the appliance by,
   assert.equal(adminLink({ hostname: "[fe80::1]" }, { admin_port: 8090 }, status), "http://[fe80::1]:8090/");
   assert.equal(adminLink({ hostname: "x" }, { admin_port: 8090 }, { admin: { installed: false } }), "");
   assert.equal(adminLink({ hostname: "x" }, { admin_port: "nope" }, status), "");
+});
+
+const update = {
+  type: "manager.update",
+  version: "0.3.15",
+  installed_version: "0.3.14",
+  release_id: "r-15",
+  build_id: "b-15",
+  digest: "sha256:abc",
+  size_bytes: 12345678,
+  revert_available: true,
+  verify_window_seconds: 900,
+  warning: "Install the newer package, then confirm it works.",
+};
+
+test("a Manager update plan names its facts, in order, with the identities only in Expert and the warning left to its own block", () => {
+  const basic = planFields(update, false);
+  assert.deepEqual(basic.map((field) => field.key), ["type", "version", "installed_version", "size_bytes", "revert_available", "verify_window_seconds"]);
+  assert.ok(basic.every((field) => field.known));
+  assert.deepEqual(basic.map((field) => field.kind), ["text", "text", "text", "bytes", "bool", "seconds"]);
+  const expert = planFields(update, true);
+  assert.deepEqual(expert.slice(-3).map((field) => field.key), ["release_id", "build_id", "digest"]);
+  assert.equal(expert.find((field) => field.key === "digest").mono, true);
+  assert.ok(!expert.some((field) => field.key === "warning"));
+});
+
+test("a WLAN, hostname or SSH plan reads its signal as a share, its addresses as data and its note in the appliance's English", () => {
+  const wifi = planFields({ type: "wifi.apply", ssid: "Home", signal: 72, revert_timeout_seconds: 120, security: "WPA2" }, false);
+  assert.deepEqual(wifi.map((field) => [field.key, field.kind]), [["type", "text"], ["ssid", "text"], ["security", "text"], ["signal", "percent"], ["revert_timeout_seconds", "seconds"]]);
+  assert.equal(planFields({ type: "network.hostname", new_url: "http://ems.local:8088" }, false)[1].mono, true);
+  assert.deepEqual(vocabularyWords("note", "Password authentication stays disabled."), { text: "Password authentication stays disabled.", lang: "en" });
+  assert.equal(vocabularyWords("current", "active"), null);
+  assert.ok(!planFields({ type: "ssh.service", current: { active: "active" } }, true).some((field) => field.key === "current"));
+});
+
+test("an OS tile the agent did not answer is unknown, and a check that did not finish gives no counts", () => {
+  const unknown = { key: "common.unknown", tone: "c-idle" };
+  assert.deepEqual(osTiles({}), { securityCount: null, normalCount: null, kernel: null, firmware: null, security: unknown, reboot: unknown, manager: unknown });
+  const failed = osTiles({ security_count: 0, normal_count: 0, kernel_update: false, firmware_update: false, error: "update_check_failed", reboot_required: false, package_manager: { healthy: true } });
+  assert.deepEqual([failed.securityCount, failed.normalCount, failed.kernel, failed.firmware, failed.security.key], [null, null, null, null, "os.notCertain"]);
+  assert.deepEqual([osTiles({ security_count: 1, kernel_update: true, firmware_update: false }).kernel, osTiles({ security_count: 1, kernel_update: true, firmware_update: false }).firmware], [true, false]);
+  const broken = osTiles({ security_count: 3, normal_count: 1, package_manager: { healthy: false } });
+  assert.deepEqual([broken.securityCount, broken.security.key, broken.manager.key], [3, "os.notCertain", "os.needsRecovery"]);
+  const fine = osTiles({ security_count: 2, normal_count: 1, reboot_required: true, package_manager: { healthy: true } });
+  assert.deepEqual([fine.security.key, fine.reboot.key, fine.manager.key], ["os.recommended", "os.rebootRequired", "os.healthy"]);
+  assert.equal(osTiles({ security_count: 0, package_manager: { healthy: true } }).security.key, "overview.upToDate");
+});
+
+test("EMS Admin is unknown while the agent cannot say, and missing only when Docker answered that it is gone", () => {
+  assert.equal(adminHealth(undefined).key, "common.unknown");
+  assert.equal(adminHealth({ admin: {} }).key, "common.unknown");
+  assert.equal(adminHealth(withDocker("inactive", { installed: false })).key, "common.unknown");
+  assert.equal(adminHealth({ docker_missing: true, docker: { daemon: { state: "missing" } }, admin: { installed: false } }).key, "common.unknown");
+  assert.equal(adminHealth(withDocker("running", { installed: false })).key, "admin.health.missing");
+  assert.equal(adminHealth(withDocker("running", { installed: true, healthy: true })).key, "admin.health.healthy");
+  assert.equal(adminHealth(withDocker("running", { installed: true, healthy: false })).key, "admin.health.unhealthy");
+  assert.deepEqual(adminContainer(withDocker("inactive", { installed: false, container: { state: "missing", health: "none" } })), {});
+  assert.deepEqual(adminContainer(withDocker("running", { installed: true, container: { state: "running", health: "healthy" } })), { state: "running", health: "healthy" });
+  assert.deepEqual(adminContainer(undefined), {});
 });

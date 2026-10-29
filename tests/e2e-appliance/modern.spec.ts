@@ -141,6 +141,9 @@ test.describe("the assistant", () => {
     await expect(steps.locator('[data-step="admin"]')).toContainText("Docker does not run");
     await page.getByTestId("assistant-diagnostics").click();
     await onPage(page, "diagnostics");
+    await open(page, "overview");
+    await expect(page.locator(".card", { has: page.getByTestId("card-admin") }).locator(".status")).toHaveText("Unknown");
+    await expect(page.locator(".card", { has: page.getByTestId("card-admin") })).not.toContainText("Missing");
   });
 });
 
@@ -256,6 +259,11 @@ test.describe("the overview", () => {
     const state = page.getByTestId("overview-updates-state");
     await expect(state).toHaveText("The package counts are not an answer");
     await expect(page.locator(".card", { has: page.getByTestId("card-updates") })).not.toContainText("Up to date");
+    await open(page, "updates");
+    await expect(page.getByTestId("updates-security")).toContainText("Not certain");
+    await expect(page.getByTestId("updates-security").locator(".tile-value")).toHaveText("—");
+    await expect(page.getByTestId("updates-install-security")).toBeDisabled();
+    await expect(page.getByTestId("update-summary-os").locator("dd").first()).toHaveText("—");
   });
 
   test("the link to EMS Admin keeps its place and the focus while the settings are read again", async ({ page }) => {
@@ -581,6 +589,11 @@ test.describe("updates", () => {
     await page.getByTestId("manager-plan-revert").click();
     await expect(page.getByRole("dialog")).toContainText("Go back to Appliance Manager 0.1.0");
     await expect(page.getByTestId("plan-confirm")).toHaveClass(/danger/);
+    const facts = page.getByTestId("plan-dialog").locator(".kv");
+    await expect(facts.locator("dt", { hasText: "Installed version" })).toBeVisible();
+    await expect(facts.locator("div", { hasText: "Time to confirm it works" }).locator("dd")).toHaveText("15 minutes");
+    await expect(facts.locator('dt[lang="en"]')).toHaveCount(0);
+    await expect(facts).not.toContainText("warning");
   });
 
   test("a plan field this build has no name for is labelled in the appliance's English", async ({ page }) => {
@@ -855,6 +868,11 @@ test.describe("settings", () => {
     await expect(page.locator(".app[data-landed]")).toBeVisible();
     await open(page, "overview");
     await expect(page.locator('[data-code="password_unconfirmed"]')).toBeVisible();
+    await open(page, "access");
+    await expect(page.getByTestId("ssh-unconfirmed")).toBeVisible();
+    await expect(page.getByTestId("shell-access-enable")).toBeDisabled();
+    await expect(page.getByTestId("shell-access-unconfirmed")).toBeVisible();
+    await expect(page.getByTestId("key-add-unconfirmed")).toBeVisible();
 
     await open(page, "settings");
     await page.getByTestId("pw-previous").fill("not-the-previous-one");
@@ -865,6 +883,8 @@ test.describe("settings", () => {
     await expect(page.getByTestId("settings-password-confirm")).toHaveCount(0);
     await open(page, "overview");
     await expect(page.locator('[data-code="password_unconfirmed"]')).toHaveCount(0);
+    await open(page, "access");
+    await expect(page.getByTestId("ssh-unconfirmed")).toHaveCount(0);
   });
 
   test("changing the password signs out and the new one signs in", async ({ page }) => {

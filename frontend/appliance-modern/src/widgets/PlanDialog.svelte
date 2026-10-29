@@ -4,12 +4,12 @@
   import KeyValues from "./KeyValues.svelte";
   import PackageTable from "./PackageTable.svelte";
   import RepairChecks from "./RepairChecks.svelte";
-  import { t, say, langOf, fmt } from "../i18n/i18n.svelte.js";
+  import { t, tn, say, langOf, fmt } from "../i18n/i18n.svelte.js";
   import { detail } from "../state/prefs.svelte.js";
   import { actions as flow, confirmPlan, dismissPlan } from "../state/actions.svelte.js";
   import { planBlocked, planFields, vocabularyWords } from "../lib/plan.js";
   import { OPERATION_TYPES } from "../lib/operations.js";
-  import { gigabytes } from "../lib/host.js";
+  import { exactDuration, gigabytes } from "../lib/host.js";
 
   /**
    * The plan the agent made, read before anything on this appliance changes.
@@ -26,6 +26,12 @@
     const vocabulary = vocabularyWords(field.key, field.value);
     if (vocabulary) return say(vocabulary);
     if (field.key === "type" && OPERATION_TYPES.includes(field.value)) return t(`op.${field.value}`);
+    if (field.kind === "bytes") return fmt().bytes(field.value);
+    if (field.kind === "percent") return fmt().percent(field.value);
+    if (field.kind === "seconds") {
+      const duration = exactDuration(field.value);
+      return duration ? tn(`unit.${duration.unit}`, duration.count) : String(field.value);
+    }
     if (field.kind === "megabytes") {
       const size = gigabytes(field.value);
       return size ? `${fmt().number(size.value, size.digits)} GB` : String(field.value);

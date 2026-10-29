@@ -4,6 +4,8 @@
   import Status from "../../../shared/ui/Status.svelte";
   import KeyValues from "../widgets/KeyValues.svelte";
   import PlanButton from "../widgets/PlanButton.svelte";
+  import UnconfirmedNote from "../widgets/UnconfirmedNote.svelte";
+  import { session } from "../state/session.svelte.js";
   import { t, fmt, say, langOf } from "../i18n/i18n.svelte.js";
   import { host, ensure, held } from "../state/host.svelte.js";
   import { forms } from "../state/forms.svelte.js";
@@ -37,7 +39,7 @@
 <p class="callout c-acc span-12"><Icon name="key-round" /><span>{t("access.lead")}</span></p>
 
 <Card icon="key-round" tone="c-soc" title={t("access.ssh")} subtitle={t("access.sshSub")} span="span-6">
-  {#snippet actions()}<Status tone={ssh.enabled ? "c-ok" : "c-idle"} text={ssh.enabled ? t("access.running") : t("access.stopped")} />{/snippet}
+  {#snippet actions()}<Status tone={ssh.enabled ? "c-ok" : "c-idle"} text={ssh.enabled === undefined ? t("common.unknown") : ssh.enabled ? t("access.running") : t("access.stopped")} />{/snippet}
   <div class="body" data-testid="ssh-service">
     <KeyValues
       rows={[
@@ -46,9 +48,10 @@
       ]}
     />
     <div class="row-wrap" data-testid="ssh-stage-service">
-      <PlanButton plan={{ key: "ssh-enable", endpoint: "/api/ssh/enable", title: { key: "plan.title.sshEnable" } }} label={t("access.enable")} icon="play" testid="ssh-enable" />
+      <PlanButton plan={{ key: "ssh-enable", endpoint: "/api/ssh/enable", title: { key: "plan.title.sshEnable" } }} label={t("access.enable")} icon="play" disabled={session.confirmed === false} testid="ssh-enable" />
       <PlanButton plan={{ key: "ssh-disable", endpoint: "/api/ssh/disable", title: { key: "plan.title.sshDisable" }, danger: true }} label={t("access.disable")} icon="square" variant="secondary" testid="ssh-disable" />
     </div>
+    <UnconfirmedNote testid="ssh-unconfirmed" />
   </div>
 </Card>
 
@@ -85,10 +88,11 @@
         label={t("access.addKeyButton")}
         icon="plus"
         small={false}
-        disabled={!keyAccount || !forms.keyValue.trim()}
+        disabled={!keyAccount || !forms.keyValue.trim() || session.confirmed === false}
         testid="key-add"
       />
     </div>
+    <UnconfirmedNote testid="key-add-unconfirmed" />
   </div>
 </Card>
 
@@ -107,9 +111,10 @@
     {/if}
     {#if shell.homeBroken}<p class="note warn" data-testid="shell-access-home-broken"><Icon name="triangle-alert" />{t("access.shellHomeBroken")}</p>{/if}
     <div class="row-wrap">
-      <PlanButton plan={{ key: "shell-enable", endpoint: "/api/ssh/shell-access/enable", title: { key: "plan.title.shellEnable" }, confirm: "plan.enable", danger: true }} label={t("access.shellEnable")} icon="unlock" disabled={shell.enabled} testid="shell-access-enable" />
+      <PlanButton plan={{ key: "shell-enable", endpoint: "/api/ssh/shell-access/enable", title: { key: "plan.title.shellEnable" }, confirm: "plan.enable", danger: true }} label={t("access.shellEnable")} icon="unlock" disabled={shell.enabled || session.confirmed === false} testid="shell-access-enable" />
       <PlanButton plan={{ key: "shell-disable", endpoint: "/api/ssh/shell-access/disable", title: { key: "plan.title.shellDisable" } }} label={t("access.shellDisable")} icon="lock" variant="secondary" disabled={!shell.enabled} testid="shell-access-disable" />
     </div>
+    <UnconfirmedNote testid="shell-access-unconfirmed" />
   </div>
 </Card>
 
@@ -231,6 +236,6 @@
   .body .note, .body .callout { margin: 0; }
   .form { gap: var(--s3); }
   .small { font-size: 13px; margin: 0; }
-  .examples { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: var(--s3); }
+  .examples { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: var(--s3); }
   .example-title { margin: 0 0 var(--s2); font-size: 13px; font-weight: 600; }
 </style>
