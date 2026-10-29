@@ -37,6 +37,18 @@ export function bareAddress(hash) {
   return /^#?\/?$/.test(String(hash ?? ""));
 }
 
+/**
+ * The menu's mark on an assistant: "warning" while one of its ``urgent``
+ * steps, what the console exists to set up, is still to do; "info" while
+ * another step that is not optional is; none once they are done or while
+ * one cannot be told.
+ */
+export function assistantMark(steps, urgent = []) {
+  const left = steps.filter((step) => step.state === "todo" && !step.optional);
+  if (left.some((step) => urgent.includes(step.id))) return "warning";
+  return left.length ? "info" : "";
+}
+
 export function stepProgress(steps) {
   return { done: steps.filter((step) => step.state === "done").length, total: steps.length };
 }

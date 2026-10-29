@@ -178,6 +178,7 @@ test.describe("Modern Admin: the assistant", { tag: ["@smoke"] }, () => {
     await expect(page.getByTestId("assistant-tasks")).toHaveCount(0);
     await expect(page.getByTestId("assistant-attention")).toHaveCount(0);
     await expect(page.locator(".sidebar a[href='#/assistant']")).toBeVisible();
+    await expect(page.getByTestId("nav-mark-assistant")).toHaveClass(/warning/);
 
     await page.getByTestId("assistant-keep").uncheck();
     expect(await page.evaluate(() => localStorage.getItem("ems-modern.welcome"))).toBe("off");
@@ -259,6 +260,7 @@ test.describe("Modern Admin: the assistant", { tag: ["@smoke"] }, () => {
     expect(await page.evaluate(() => localStorage.getItem("ems-modern.welcome"))).toBe("on");
     await landedAt(page, "/#/services");
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Services");
+    await expect(page.getByTestId("nav-mark-assistant")).toHaveClass(/info/);
   });
 
   test("settings without an EMS container leave the installation to do, with the way to Updates", async ({ page, seedAdminScenario }) => {
@@ -271,6 +273,7 @@ test.describe("Modern Admin: the assistant", { tag: ["@smoke"] }, () => {
     const install = page.getByTestId("assistant-steps").locator('[data-step="install"]');
     await expect(install).toHaveAttribute("data-state", "todo");
     await expect(install).toContainText("the EMS container does not exist");
+    await expect(page.getByTestId("nav-mark-assistant")).toHaveClass(/warning/);
     await page.getByTestId("assistant-updates").click();
     await expect(page).toHaveURL(/\/#\/updates$/);
     await expect(page.getByTestId("releases")).toBeVisible();
@@ -689,8 +692,10 @@ test.describe("Modern Admin: backups", { tag: ["@smoke"] }, () => {
     await row.getByTestId("restore-open").click();
     await expect(page.getByTestId("restore-summary")).toContainText("Files unchanged");
     await page.getByTestId("restore-execute").click();
+    const settingsReread = page.waitForResponse((response) => response.url().endsWith("/api/admin/maintenance/config") && response.request().method() === "GET");
     await page.getByRole("dialog").getByTestId("confirm").click();
     await expect(page.getByTestId("restore-outcome")).toHaveText("Restored. Restart EMS so it uses the restored files.");
+    expect((await settingsReread).ok()).toBeTruthy();
     await expect(names.filter({ hasText: /^ems-config-rollback-/ })).not.toHaveCount(0);
 
     const count = await names.count();

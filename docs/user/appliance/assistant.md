@@ -68,6 +68,13 @@ Some details worth knowing:
   switch to the Classic view, before the console has chosen is left alone.
 - **You can always open it from the menu.** **Assistant** is the second entry
   of the side menu, right below **Overview**. On a phone it is under **More**.
+- **The menu shows when something is left.** An amber dot beside
+  **Assistant** means EMS Admin or EMS is not installed or not running; a
+  quieter dot, white or blue as the colour scheme has it, means security
+  updates are waiting, or the network has no gateway to the outside or asks
+  for a sign-in. A network with a gateway that does not reach the internet,
+  and backup access, which is optional, stay steps on the page and never mark
+  the menu. On a phone the dot sits on **More**.
 
 ## Step-by-step instructions
 
@@ -267,6 +274,7 @@ the page for anything else you came to do is one click away.
 | --- | --- | --- |
 | The console opens on the Overview, not the assistant | The box was unticked in this browser | Open **Assistant** from the menu and tick **Show this page when the console opens** |
 | The console opens on the assistant although the box is unticked | Nothing is installed on this appliance | Expected; it opens there until EMS Admin is installed |
+| A dot stays beside **Assistant** in the menu | A step is still to do; backup access and a network whose gateway does not reach the internet never mark it | Open **Assistant**; the highlighted step is the one left. On a LAN without any gateway the network step and the dot stay; that is expected |
 | A bookmark opens another page, not the assistant | The address names a page | Expected; open the bare address, or **Assistant** from the menu |
 | **Install EMS Admin** stays **Unknown** | EMS Admin is starting, is replacing itself, or its state could not be read | Wait a minute; if it stays, look at the [EMS Admin page](recovery.md#ems-admin-or-the-ems-is-not-running) and **Diagnostics** |
 | **Set up the EMS** stays **Later** | EMS Admin is not healthy yet | Do the **Install EMS Admin** row first |

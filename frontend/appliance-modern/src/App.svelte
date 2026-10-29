@@ -28,7 +28,7 @@
   import { actions } from "./state/actions.svelte.js";
   import { adminLink } from "./lib/links.js";
   import { attentionBySection, sessionFindings } from "./lib/findings.js";
-  import { bareAddress, installationRead, opensOnAssistant } from "./lib/assistant.js";
+  import { URGENT_STEPS, assistantMark, assistantSteps, bareAddress, installationRead, markedSteps, opensOnAssistant } from "./lib/assistant.js";
 
   /** The whole console is one bundle: a Manager update replaces every file at once, and a page split across two versions is worse than one more kilobyte. */
   const PAGES = { overview: Overview, assistant: Assistant, updates: Updates, admin: Admin, network: Network, access: Access, diagnostics: Diagnostics, settings: Settings };
@@ -143,13 +143,14 @@
   });
   const version = $derived(host.status?.appliance_version || session.version);
   const marks = $derived(attentionBySection(host.status, sessionFindings(session.audit, session.confirmed)));
+  const assistantMarked = $derived(assistantMark(markedSteps(assistantSteps({ status: host.status, backup: null })), URGENT_STEPS));
 
   provideShell({
     pageSet,
     nav,
     short: "HOST",
     locked: () => false,
-    mark: (id) => marks[id] || "",
+    mark: (id) => (id === "assistant" && assistantMarked) || marks[id] || "",
     session: {
       get authenticated() {
         return session.authenticated;

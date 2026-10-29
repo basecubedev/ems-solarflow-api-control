@@ -9,9 +9,12 @@ import {
   STEP_IDS,
   STEP_LOOKS,
   TASKS,
+  URGENT_STEPS,
   WELCOME_KEY,
   applianceKind,
+  assistantMark,
   assistantSteps,
+  markedSteps,
   assistantTasks,
   installationRead,
   opensOnAssistant,
@@ -186,4 +189,22 @@ test("the status fields the steps read are the ones the agent sends", () => {
     const text = server(file);
     for (const field of fields) assert.ok(text.includes(`"${field}"`), `${file}: ${field}`);
   }
+});
+
+test("the menu marks the assistant amber while EMS Admin or the EMS is not there or not running, quietly while another required step is left", () => {
+  const mark = (value) => assistantMark(markedSteps(assistantSteps({ status: value, backup: null })), URGENT_STEPS);
+  assert.equal(mark(status({ admin: { installed: false, bootstrap_required: true } })), "warning");
+  assert.equal(mark(status({ docker: noEms })), "warning");
+  assert.equal(mark(status({ docker: stoppedEms })), "warning");
+  assert.equal(mark(status({ admin: downAdmin })), "warning");
+  assert.equal(mark(status({ docker: { daemon: { state: "inactive" } } })), "warning");
+  assert.equal(mark(status({ updates: { security_count: 2, normal_count: 0 } })), "info");
+  assert.equal(mark(status({ network: { connectivity: "portal" } })), "info");
+  assert.equal(mark(status({ network: { connectivity: "none" } })), "info");
+  assert.equal(mark(status({ network: { connectivity: "limited" } })), "", "a LAN without internet stays a step, not a mark");
+  assert.equal(assistantSteps({ status: status({ network: { connectivity: "limited" } }), backup: null })[0].state, "todo");
+  assert.equal(mark(status()), "");
+  assert.equal(mark(undefined), "");
+  assert.equal(mark({ error: "unreachable" }), "");
+  assert.equal(assistantMark(assistantSteps({ status: status(), backup: backup(0) }), URGENT_STEPS), "", "backup access is optional and never marks the menu");
 });

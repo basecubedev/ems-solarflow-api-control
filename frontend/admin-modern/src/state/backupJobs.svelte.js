@@ -40,7 +40,7 @@ class Job {
  */
 class BackupJobs {
   create = new Job(["backups", "overview"]);
-  restore = new Job(["backups", "overview", "plan"]);
+  restore = new Job(["backups", "overview", "plan", "config"]);
   restoreTarget = $state.raw(null);
   restorePlan = $state.raw(null);
   upload = $state.raw(null);

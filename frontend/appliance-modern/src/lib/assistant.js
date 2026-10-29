@@ -8,11 +8,14 @@
  */
 import { adminGate, daemonState, dockerStopped, emsContainer, updatesInDoubt } from "./host.js";
 
-export { ASSISTANT_STATES, STATE_LOOKS, WELCOME_CHOICES, WELCOME_KEY, bareAddress, stepProgress } from "../../../shared/assistant/assistant.js";
+export { ASSISTANT_STATES, STATE_LOOKS, WELCOME_CHOICES, WELCOME_KEY, assistantMark, bareAddress, stepProgress } from "../../../shared/assistant/assistant.js";
 
 /** The steps in the order a fresh appliance takes them; backup access is optional and never comes first. */
 export const STEP_IDS = Object.freeze(["network", "admin", "ems", "updates", "backup"]);
 export const OPTIONAL_STEPS = Object.freeze(["backup"]);
+
+/** The steps whose being left marks the menu amber: EMS Admin or the EMS is not there or not running. */
+export const URGENT_STEPS = Object.freeze(["admin", "ems"]);
 
 export const STEP_LOOKS = Object.freeze({
   network: { icon: "wifi", tone: "c-out" },
@@ -151,6 +154,15 @@ export function assistantSteps({ status, backup }) {
 /** The tasks the page offers; the way to EMS Admin only while it has an address. */
 export function assistantTasks(adminHref) {
   return TASKS.filter((task) => !task.external || Boolean(adminHref));
+}
+
+/**
+ * The steps the menu's mark weighs. A network that reaches the LAN but not
+ * the internet stays a step on the page rather than a mark on every page: an
+ * appliance on a LAN without internet could never clear it.
+ */
+export function markedSteps(steps) {
+  return steps.filter((step) => !(step.id === "network" && step.connectivity === "limited"));
 }
 
 /** Whether the status says if anything is installed yet; the welcome choice "off" waits for that answer. */

@@ -7,10 +7,13 @@
  */
 import { HEALTHY_INSTALL_STATES, emsFact } from "./health.js";
 
-export { ASSISTANT_STATES, STATE_LOOKS, WELCOME_CHOICES, WELCOME_KEY, bareAddress, stepProgress } from "../../../shared/assistant/assistant.js";
+export { ASSISTANT_STATES, STATE_LOOKS, WELCOME_CHOICES, WELCOME_KEY, assistantMark, bareAddress, stepProgress } from "../../../shared/assistant/assistant.js";
 
 /** The steps in the order an installation takes them; the dashboard is where they lead. */
 export const STEP_IDS = Object.freeze(["install", "devices", "backup"]);
+
+/** The step whose being left marks the menu amber: EMS is not installed. */
+export const URGENT_STEPS = Object.freeze(["install"]);
 
 export const STEP_LOOKS = Object.freeze({
   install: { icon: "package-plus", tone: "c-out" },

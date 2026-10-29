@@ -304,7 +304,14 @@ from what the Admin server is.
   checklist (install, devices, first backup, then the dashboard) and its tasks
   from the answers the overview already reads, and asks the server nothing of
   its own; `tests/assistant.test.js` holds each step to the fact that decides
-  it. A console opened at its bare address shows the assistant, once per page
+  it. The menu marks the assistant with the shared `assistantMark`: `warning`
+  while one of the app's `URGENT_STEPS` is left (EMS not installed here; EMS
+  Admin or EMS not there or not running in the Appliance Manager), `info`
+  while another step that is not optional is (the Manager's `markedSteps`
+  leaves out a network that only lacks the internet, which an isolated LAN
+  could never clear); the Admin's `App.svelte` reads
+  the settings and the backups for it once an installation is there. A console
+  opened at its bare address shows the assistant, once per page
   load, in `App.svelte`'s `resumeSetup()`: an unfinished guided setup goes
   first, then the assistant opens always while nothing is installed and
   otherwise while the browser's `ems-modern.welcome` is not `off`. An address

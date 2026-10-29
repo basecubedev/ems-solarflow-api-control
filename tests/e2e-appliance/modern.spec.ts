@@ -89,6 +89,7 @@ test.describe("the assistant", () => {
     await page.getByTestId("assistant-admin").click();
     await expect(page).toHaveURL(/\/#\/admin$/);
     await expect(page.getByTestId("admin-bootstrap-install")).toBeVisible();
+    await expect(page.getByTestId("nav-mark-assistant")).toHaveClass(/warning/);
   });
 
   test("an installed appliance lists what is left, every way out leads to its page, and unticked the console opens on the overview", async ({ page }) => {
@@ -110,6 +111,7 @@ test.describe("the assistant", () => {
 
     await page.getByTestId("assistant-updates").click();
     await onPage(page, "updates");
+    await expect(page.getByTestId("nav-mark-assistant")).toHaveClass(/warning/);
     for (const [task, id] of [["update", "updates"], ["admin", "admin"], ["network", "network"], ["access", "access"], ["diagnostics", "diagnostics"], ["settings", "settings"]]) {
       await page.evaluate(() => (globalThis.location.hash = "#/assistant"));
       await page.getByTestId("assistant-tasks").locator(`[data-task="${task}"]`).click();

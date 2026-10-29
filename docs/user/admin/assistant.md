@@ -37,7 +37,7 @@ deletes anything by itself.
 
 ## When the assistant opens
 
-![Assistant on a host with nothing installed: the welcome says nothing is installed yet, Install EMS is the highlighted next step with Set up a new system and Restore a backup, the other three steps come later](../../assets/screenshots/admin/admin-assistant-fresh.png)
+![Assistant on a host with nothing installed: the welcome says nothing is installed yet, Install EMS is the highlighted next step with Set up a new system and Restore a backup, the other three steps come later, and an amber dot beside Assistant in the menu](../../assets/screenshots/admin/admin-assistant-fresh.png)
 
 | You open | The console shows |
 | --- | --- |
@@ -64,6 +64,10 @@ Some details worth knowing:
   afterwards never sends you to the assistant again.
 - **You can always open it from the menu.** **Assistant** is the second entry
   of the side menu, right below **Overview**. On a phone it is under **More**.
+- **The menu shows when something is left.** An amber dot beside
+  **Assistant** means EMS is not installed yet; a quieter dot, white or blue
+  as the colour scheme has it, means a later step is still to do. On a phone
+  the dot sits on **More**. Once every step is done, the dot goes.
 
 ## Step-by-step instructions
 
@@ -225,6 +229,7 @@ and the page for anything else you came to do is one click away.
 | The console opens on the assistant although the box is unticked | Nothing is installed on this host | Expected; it opens there until EMS is installed |
 | The console opens on **Guided setup** | A guided setup is unfinished on the server | Continue it, or start it over on that page |
 | A bookmark opens another page, not the assistant | The address names a page | Expected; open the bare address, or **Assistant** from the menu |
+| A dot stays beside **Assistant** in the menu | A step is still to do | Open **Assistant**; the highlighted step is the one left |
 | A step stays **Unknown** | Its answer is loading or could not be read | Wait, or refresh the [Overview](maintenance.md#1--read-the-overview); if it stays, run the checks under [Diagnostics](diagnostics-recovery.md) |
 | **Add your devices** stays **To do** although devices are set up | A device, the grid meter or the broker still carries a template example value | Replace the fields the row names, then **Save and apply** |
 | **Make a first backup** stays **To do** after a backup | The backup could not be read | Look at it under [Backups](backup-restore.md); create a new one |

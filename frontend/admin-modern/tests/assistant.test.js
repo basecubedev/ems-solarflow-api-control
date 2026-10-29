@@ -8,7 +8,9 @@ import {
   STEP_IDS,
   STEP_LOOKS,
   TASKS,
+  URGENT_STEPS,
   WELCOME_KEY,
+  assistantMark,
   assistantSteps,
   assistantTasks,
   attentionCount,
@@ -100,6 +102,18 @@ test("a step whose answer has not come, or could not be read, is unknown and nev
   const installedSteps = assistantSteps({ overview: overview("standard_install"), config: { status: "invalid" }, backups: null });
   assert.deepEqual(states(installedSteps), { install: "done", devices: "unknown", backup: "unknown" });
   assert.equal(states(assistantSteps({ overview: overview("standard_install"), config: { status: "ok", summary: {} }, backups: backups(null) })).devices, "unknown");
+});
+
+test("the menu marks the assistant amber while EMS is not installed, quietly while a later step is left, and not once all are done", () => {
+  const mark = (state, patch, devices, latest) => assistantMark(assistantSteps({ overview: state && overview(state, patch), config: devices === undefined ? null : config(devices), backups: latest === undefined ? null : backups(latest) }), URGENT_STEPS);
+  assert.equal(mark("none"), "warning");
+  assert.equal(mark("partial_install"), "warning");
+  assert.equal(mark("standard_install", { containers: { ems: { found: false } } }, 2, "2026-10-24T08:00:00Z"), "warning");
+  assert.equal(mark("standard_install", {}, 0, "2026-10-24T08:00:00Z"), "info");
+  assert.equal(mark("standard_install", {}, 2, null), "info");
+  assert.equal(mark("standard_install", {}, 2, "2026-10-24T08:00:00Z"), "");
+  assert.equal(mark("standard_install"), "");
+  assert.equal(mark(null, {}, 0, null), "");
 });
 
 test("the device counts are the ones the config summary sends", () => {
