@@ -500,6 +500,8 @@ inverter output:
 <entry>.channels.<channel>.wh
 <entry>.channels.<channel>.kwh
 <entry>.coverage.<channel>     only when it is not "full"
+<entry>.grid_to_battery_wh
+<entry>.grid_to_battery_kwh
 <entry>.ratios.self_sufficiency
 ```
 
@@ -580,10 +582,26 @@ Both `coverage` and `lifetime.since_date` are built from the sample timestamps,
 so a system whose clock was wrong before it reached NTP can backdate them by
 the length of that error.
 
-`self_sufficiency` is the share of house consumption that did not come from the
-grid. It is derived at read time from `home_consumption` and `grid_import`, and
-is `null` unless those two were being measured across the whole entry — from a
-first day at or before its start to a last day at or after its end.
+`self_sufficiency` is the share of house consumption the house did not draw
+from the grid; energy a battery gives it counts as its own. It is derived at
+read time from `home_consumption`, `grid_import` and `grid_to_battery_wh`, and
+is `null` unless the two channels were being measured across the whole entry —
+from a first day at or before its start to a last day at or after its end.
+
+Grid energy a battery charges is not house consumption, so the ratio takes
+`grid_to_battery_wh` out of the import. `home_consumption` has the power the
+fleet charges from AC netted out already, so the grid energy that went beyond
+it can only have gone into a charging battery; it is integrated sample by
+sample (`ems.energy_channels.grid_to_battery_wh`) and shares the coverage of
+`grid_import`: where that is `partial` or `none`, so is this figure. Whether
+the rest of the import fed the house or a battery the meter cannot tell — one
+device may be charging from another's output — and it is counted as the
+house's, so no import the measured home use accounts for is booked to a
+battery. What a battery later gives the house counts as its own, whatever
+charged it: the EMS does not trace grid energy through a battery, so a battery
+that charged from the grid and discharged into the house lifts the ratio above
+the solar share. A day recorded before `grid_to_battery_wh` existed has 0 there
+and counts its whole import, as it always did.
 
 Time inside the entry that nobody measured — a hole in a day, a day the EMS
 never ran — marks the figures instead of hiding the number. A sample is

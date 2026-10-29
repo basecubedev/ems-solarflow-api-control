@@ -52,17 +52,51 @@ def _channels():
 
 
 @functools.lru_cache(maxsize=1)
-def _channel_columns_sql():
-    """Plain column list. Built from the frozen registry, never from input."""
+def _daily_columns():
+    """The daily columns summed like a channel.
 
-    return ", ".join(channel.column for channel in _channels())
+    Every channel's, then the grid energy the batteries charged, in this
+    order. Built from the frozen registry, never from input.
+    """
+
+    return (
+        *(channel.column for channel in _channels()),
+        _energy_channels_module().GRID_TO_BATTERY_COLUMN,
+    )
 
 
 @functools.lru_cache(maxsize=1)
-def _channel_sums_sql():
-    return ", ".join(
-        f"COALESCE(SUM({channel.column}), 0)" for channel in _channels()
+def _daily_columns_sql():
+    return ", ".join(_daily_columns())
+
+
+def _daily_values(channel_wh, grid_to_battery_wh):
+    """One sample's values in ``_daily_columns`` order."""
+
+    values = {
+        **{channel.column: channel_wh.get(channel.id, 0.0) for channel in _channels()},
+        _energy_channels_module().GRID_TO_BATTERY_COLUMN: grid_to_battery_wh,
+    }
+    return tuple(float(values[column]) for column in _daily_columns())
+
+
+@functools.lru_cache(maxsize=1)
+def _daily_upsert_sql():
+    """The column list, placeholders and update clause of the daily upsert."""
+
+    columns = "".join(f",\n                {column}" for column in _daily_columns())
+    placeholders = ", ?" * len(_daily_columns())
+    updates = "".join(
+        f",\n                {column} = daily_energy_stats.{column}"
+        f" + excluded.{column}"
+        for column in _daily_columns()
     )
+    return columns, placeholders, updates
+
+
+@functools.lru_cache(maxsize=1)
+def _daily_sums_sql():
+    return ", ".join(f"COALESCE(SUM({column}), 0)" for column in _daily_columns())
 
 
 def _reports_soc(device):
@@ -218,18 +252,20 @@ class DashboardStore:
         """Add the channel columns and the coverage table to any database.
 
         A new database takes the same path as an upgraded one, so the migration
-        runs on every start instead of only once on an old file.
+        runs on every start instead of only once on an old file. A day recorded
+        before ``grid_to_battery_wh`` existed keeps 0 there and counts its whole
+        import.
         """
 
         existing = {
             row[1] for row in con.execute("PRAGMA table_info(daily_energy_stats)")
         }
-        for channel in _channels():
-            if channel.column in existing:
+        for column in _daily_columns():
+            if column in existing:
                 continue
             con.execute(
                 f"ALTER TABLE daily_energy_stats "
-                f"ADD COLUMN {channel.column} REAL NOT NULL DEFAULT 0"
+                f"ADD COLUMN {column} REAL NOT NULL DEFAULT 0"
             )
 
         con.execute("""
@@ -490,6 +526,10 @@ class DashboardStore:
             snapshot,
             elapsed_hours,
         )
+        grid_to_battery_wh = _energy_channels_module().grid_to_battery_wh(
+            channel_wh["grid_import"],
+            channel_wh["home_consumption"],
+        )
 
         date_key = sample_time.astimezone(self.energy_timezone).date().isoformat()
         updated_at = sample_time.astimezone(timezone.utc).isoformat()
@@ -502,6 +542,7 @@ class DashboardStore:
                 channel_wh,
                 updated_at,
                 charge_delta_wh,
+                grid_to_battery_wh,
             )
             self._record_channel_coverage(con, date_key, updated_at, measured)
         elif elapsed_hours > 0:
@@ -629,6 +670,7 @@ class DashboardStore:
         channel_wh,
         updated_at,
         charge_delta_wh=0.0,
+        grid_to_battery_wh=0.0,
     ):
         row = con.execute(
             """
@@ -651,16 +693,8 @@ class DashboardStore:
         # anything yet, and the discharge that does is already counted. Pricing
         # both would book the same kilowatt-hour twice.
         savings_value = (delta_wh / 1000.0) * price_per_kwh
-        # The channel columns come from the frozen registry, never from input.
-        channel_columns = "".join(
-            f",\n                {channel.column}" for channel in _channels()
-        )
-        channel_placeholders = ", ?" * len(_channels())
-        channel_updates = "".join(
-            f",\n                {channel.column} = daily_energy_stats.{channel.column}"
-            f" + excluded.{channel.column}"
-            for channel in _channels()
-        )
+        # The daily columns come from the frozen registry, never from input.
+        daily_columns, daily_placeholders, daily_updates = _daily_upsert_sql()
         con.execute(
             f"""
             INSERT INTO daily_energy_stats(
@@ -672,9 +706,9 @@ class DashboardStore:
                 currency,
                 peak_output_w,
                 sample_count,
-                updated_at{channel_columns}
+                updated_at{daily_columns}
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, 1, ?{channel_placeholders})
+            VALUES(?, ?, ?, ?, ?, ?, ?, 1, ?{daily_placeholders})
             ON CONFLICT(date) DO UPDATE SET
                 inverter_output_wh = daily_energy_stats.inverter_output_wh
                     + excluded.inverter_output_wh,
@@ -687,7 +721,7 @@ class DashboardStore:
                     excluded.peak_output_w
                 ),
                 sample_count = daily_energy_stats.sample_count + 1,
-                updated_at = excluded.updated_at{channel_updates}
+                updated_at = excluded.updated_at{daily_updates}
             """,
             (
                 date_key,
@@ -698,10 +732,7 @@ class DashboardStore:
                 currency,
                 float(output_w),
                 updated_at,
-                *(
-                    float(channel_wh.get(channel.id, 0.0))
-                    for channel in _channels()
-                ),
+                *_daily_values(channel_wh, grid_to_battery_wh),
             ),
         )
 
@@ -830,23 +861,25 @@ class DashboardStore:
                 COALESCE(MAX(peak_output_w), 0),
                 COALESCE(SUM(CASE WHEN sample_count > 0 THEN 1 ELSE 0 END), 0),
                 COALESCE(SUM(ac_charge_wh), 0),
-                {_channel_sums_sql()}
+                {_daily_sums_sql()}
             FROM daily_energy_stats
             WHERE date BETWEEN ? AND ?
             """,
             (start_date, end_date),
         ).fetchone()
+        channel_wh, grid_to_battery_wh = _daily_totals(row[5:])
 
         return _energy_payload(
             row[0],
             row[1],
             peak_output_w=row[2] if include_peak else None,
-            channel_wh=_channel_totals(row[5:]),
+            channel_wh=channel_wh,
             coverage=coverage,
             start_date=start_date,
             end_date=end_date,
             measured_days=row[3],
             charge_wh=row[4],
+            grid_to_battery_wh=grid_to_battery_wh,
         )
 
     def _best_day(self, con, coverage):
@@ -858,7 +891,7 @@ class DashboardStore:
                 savings_value,
                 peak_output_w,
                 ac_charge_wh,
-                {_channel_columns_sql()}
+                {_daily_columns_sql()}
             FROM daily_energy_stats
             ORDER BY inverter_output_wh DESC, date ASC
             LIMIT 1
@@ -868,17 +901,19 @@ class DashboardStore:
         if not row:
             return _energy_payload(0, 0, date=None)
 
+        channel_wh, grid_to_battery_wh = _daily_totals(row[5:])
         return _energy_payload(
             row[1],
             row[2],
             date=row[0],
             peak_output_w=row[3],
-            channel_wh=_channel_totals(row[5:]),
+            channel_wh=channel_wh,
             coverage=coverage,
             start_date=row[0],
             end_date=row[0],
             measured_days=1,
             charge_wh=row[4],
+            grid_to_battery_wh=grid_to_battery_wh,
         )
 
     def _monthly_summary(self, con, coverage, year, today=None):
@@ -890,7 +925,7 @@ class DashboardStore:
                 COALESCE(SUM(savings_value), 0),
                 COALESCE(SUM(CASE WHEN sample_count > 0 THEN 1 ELSE 0 END), 0),
                 COALESCE(SUM(ac_charge_wh), 0),
-                {_channel_sums_sql()}
+                {_daily_sums_sql()}
             FROM daily_energy_stats
             WHERE substr(date, 1, 4) = ?
             GROUP BY month
@@ -902,6 +937,7 @@ class DashboardStore:
         months = []
         for month in range(1, 13):
             row = values.get(month)
+            channel_wh, grid_to_battery_wh = _daily_totals(row[5:] if row else ())
             last_day = calendar.monthrange(year, month)[1]
             end_date = _elapsed_end(
                 f"{year:04d}-{month:02d}-{last_day:02d}",
@@ -913,12 +949,13 @@ class DashboardStore:
                 **_energy_payload(
                     row[1] if row else 0,
                     row[2] if row else 0,
-                    channel_wh=_channel_totals(row[5:]) if row else None,
+                    channel_wh=channel_wh,
                     coverage=coverage,
                     start_date=f"{year:04d}-{month:02d}-01",
                     end_date=end_date,
                     measured_days=row[3] if row else 0,
                     charge_wh=row[4] if row else 0,
+                    grid_to_battery_wh=grid_to_battery_wh,
                 ),
             })
 
@@ -933,29 +970,32 @@ class DashboardStore:
                 COALESCE(SUM(savings_value), 0),
                 COALESCE(SUM(CASE WHEN sample_count > 0 THEN 1 ELSE 0 END), 0),
                 COALESCE(SUM(ac_charge_wh), 0),
-                {_channel_sums_sql()}
+                {_daily_sums_sql()}
             FROM daily_energy_stats
             GROUP BY year
             ORDER BY year ASC
             """
         ).fetchall()
 
-        return [
-            {
+        years = []
+        for row in rows:
+            channel_wh, grid_to_battery_wh = _daily_totals(row[5:])
+            years.append({
                 "year": int(row[0]),
                 **_energy_payload(
                     row[1],
                     row[2],
-                    channel_wh=_channel_totals(row[5:]),
+                    channel_wh=channel_wh,
                     coverage=coverage,
                     start_date=f"{int(row[0]):04d}-01-01",
                     end_date=_elapsed_end(f"{int(row[0]):04d}-12-31", today),
                     measured_days=row[3],
                     charge_wh=row[4],
+                    grid_to_battery_wh=grid_to_battery_wh,
                 ),
-            }
-            for row in rows
-        ]
+            })
+
+        return years
 
     def _lifetime_summary(self, con, coverage):
         row = con.execute(
@@ -967,21 +1007,23 @@ class DashboardStore:
                 MAX(date),
                 COUNT(*),
                 COALESCE(SUM(ac_charge_wh), 0),
-                {_channel_sums_sql()}
+                {_daily_sums_sql()}
             FROM daily_energy_stats
             WHERE sample_count > 0
             """
         ).fetchone()
+        channel_wh, grid_to_battery_wh = _daily_totals(row[6:])
 
         payload = _energy_payload(
             row[0],
             row[1],
-            channel_wh=_channel_totals(row[6:]),
+            channel_wh=channel_wh,
             coverage=coverage,
             start_date=row[2],
             end_date=row[3],
             measured_days=row[4],
             charge_wh=row[5],
+            grid_to_battery_wh=grid_to_battery_wh,
         )
         payload["since_date"] = row[2]
         return payload
@@ -1063,13 +1105,18 @@ def _as_float(value, default=0.0, minimum=None):
     return parsed
 
 
-def _channel_totals(values):
-    """Map a row tail of channel sums back onto the channel ids."""
+def _daily_totals(values):
+    """Split a row tail of ``_daily_columns`` sums.
 
-    return {
-        channel.id: value
-        for channel, value in zip(_channels(), values or ())
-    }
+    Returns the channel totals by channel id, and the grid energy the
+    batteries charged.
+    """
+
+    totals = dict(zip(_daily_columns(), values or ()))
+    return (
+        {channel.id: totals.get(channel.column, 0) for channel in _channels()},
+        totals.get(_energy_channels_module().GRID_TO_BATTERY_COLUMN, 0),
+    )
 
 
 def _days_between(start_date, end_date):
@@ -1182,7 +1229,7 @@ def _ratio_value(value):
 RATIO_CHANNELS = ("home_consumption", "grid_import")
 
 
-def _energy_ratios(channels, range_states):
+def _energy_ratios(channels, range_states, grid_to_battery_wh=0):
     """Derive the ratio, for a range the channels measured from end to end.
 
     ``range_states`` asks the narrow question: were the channels measuring
@@ -1199,10 +1246,12 @@ def _energy_ratios(channels, range_states):
 
     Both sides of the division share one basis: a sample is integrated for
     every channel or for none of them (``ems.energy_channels``), so a hole is
-    always the same hole on both sides of it.
+    always the same hole on both sides of it. ``grid_to_battery_wh`` is
+    integrated and rounded with the import it is taken out of, and shares its
+    coverage.
     """
 
-    # Only the two channels it divides: a seventh channel added to the registry
+    # Only the two channels it reads: a seventh channel added to the registry
     # later would otherwise null this figure for the lifetime and every past
     # year, permanently, for a quantity it does not read.
     divisor = channels.get("home_consumption")
@@ -1215,6 +1264,7 @@ def _energy_ratios(channels, range_states):
     sufficiency = _energy_channels_module().self_sufficiency(
         divisor["wh"],
         dividend["wh"],
+        grid_to_battery_wh,
     )
 
     return {"self_sufficiency": _ratio_value(sufficiency)}
@@ -1231,12 +1281,16 @@ def _energy_payload(
     end_date=None,
     measured_days=None,
     charge_wh=0,
+    grid_to_battery_wh=0,
 ):
+    grid_to_battery = _channel_value(grid_to_battery_wh)
     payload = {
         "inverter_output_wh": round(float(wh or 0), 9),
         "inverter_output_kwh": round(float(wh or 0) / 1000.0, 9),
         "ac_charge_wh": round(float(charge_wh or 0), 9),
         "ac_charge_kwh": round(float(charge_wh or 0) / 1000.0, 9),
+        "grid_to_battery_wh": grid_to_battery["wh"],
+        "grid_to_battery_kwh": grid_to_battery["kwh"],
         "savings_value": round(float(savings or 0), 9),
     }
 
@@ -1297,6 +1351,10 @@ def _energy_payload(
         for channel_id, state in states.items()
         if state != "full"
     }
-    payload["ratios"] = _energy_ratios(payload["channels"], range_states)
+    payload["ratios"] = _energy_ratios(
+        payload["channels"],
+        range_states,
+        payload["grid_to_battery_wh"],
+    )
 
     return payload

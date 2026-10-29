@@ -13,6 +13,7 @@ from ems.energy_channels import (
     channel_power_w,
     channel_sample_wh,
     find_channel,
+    grid_to_battery_wh,
     measured_channel_ids,
     self_sufficiency,
 )
@@ -88,6 +89,46 @@ def test_self_sufficiency_never_reports_below_zero():
     """
 
     assert self_sufficiency(100.0, 250.0) == 0.0
+
+
+def test_import_beyond_home_use_went_into_a_battery():
+    """1000 Wh imported while the house drew 200 Wh: the other 800 Wh charged a battery."""
+
+    assert grid_to_battery_wh(1000.0, 200.0) == 800.0
+
+
+def test_import_the_house_could_have_used_is_counted_as_the_houses():
+    """One device puts out 600 Wh, another charges 600 Wh, the house draws 400 Wh.
+
+    The import of 400 Wh may have fed the house or the charging battery, and
+    the meter cannot tell which. Booking it to the battery would report a house
+    that may have drawn all of its energy from the grid as self-sufficient.
+    """
+
+    assert grid_to_battery_wh(400.0, 400.0) == 0.0
+    assert grid_to_battery_wh(400.0, 600.0) == 0.0
+
+
+def test_a_charge_from_surplus_takes_nothing_from_the_grid():
+    assert grid_to_battery_wh(0.0, 300.0) == 0.0
+    assert grid_to_battery_wh(None, None) == 0.0
+
+
+def test_grid_energy_a_battery_charges_is_not_house_consumption():
+    """The house used 1000 Wh and drew 200 Wh of it from the grid.
+
+    The import was 1000 Wh, but 800 Wh of it went into a battery: dividing by
+    it read 0 % for a house that drew a fifth of its energy from the grid.
+    """
+
+    assert self_sufficiency(1000.0, 1000.0, 800.0) == pytest.approx(0.8)
+    assert self_sufficiency(1000.0, 1000.0) == 0.0
+
+
+def test_the_batteries_never_charged_more_from_the_grid_than_it_supplied():
+    """A net import below zero would read as more than 100 %; there is none."""
+
+    assert self_sufficiency(1000.0, 200.0, 800.0) == 1.0
 
 
 def test_channel_columns_are_plain_sql_identifiers():

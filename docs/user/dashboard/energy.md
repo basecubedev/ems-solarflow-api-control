@@ -98,13 +98,21 @@ an **AC charging** row. It has no savings attached on purpose: savings price
 avoided import, and energy put into a battery has avoided nothing yet — the
 discharge that does is already counted.
 
-**Self-sufficiency** is the share of home use that did not come from the grid.
-It appears for a period the channels measured from beginning to end, with no
-day inside it missing; otherwise it would divide a half-measured number by a
-whole one, and the row shows `—` in **Expert** and is left out of a card in
-**Basic**. A sample whose grid meter did not answer counts for nothing: an
-unreachable meter reads as 0 W, and taking that at face value would report
-perfect self-sufficiency for a system that simply lost sight of the grid.
+**Self-sufficiency** is the share of home use the house did not draw from the
+grid; what a battery gives it counts as its own. It appears for a period the
+channels measured from beginning to end, with no day inside it missing;
+otherwise it would divide a half-measured number by a whole one, and the row
+shows `—` in **Expert** and is left out of a card in **Basic**. A sample whose
+grid meter did not answer counts for nothing: an unreachable meter reads as
+0 W, and taking that at face value would report perfect self-sufficiency for a
+system that simply lost sight of the grid.
+
+Energy a battery charges from the grid — winter mode, full-charge assist — is
+not home use, so a day of charging from the grid is not marked down for it.
+When the battery later gives that energy to the house, it counts as the
+battery's, so self-sufficiency then reads higher than the share of solar
+energy; the rule and its limits are in
+[Energy channels](../../dashboard.md#energy-channels).
 
 A single failed read is not a gap. The EMS keeps calculating with a device's
 last reading for as long as it is current, and the statistics count it over
