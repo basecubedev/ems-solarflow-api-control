@@ -20,7 +20,7 @@
   ensure("backups");
 
   const TYPE_ICONS = { config: "file-cog", databases: "database", influxdb: "chart-spline", system: "boxes" };
-  const TYPE_TONES = { config: "c-soc", databases: "c-out", influxdb: "c-grid", system: "c-inv" };
+  const TYPE_TONES = { config: "c-soc", databases: "c-out", influxdb: "c-soc", system: "c-inv" };
   const OUTCOME_ICONS = { ok: "circle-check", partial: "triangle-alert", lost: "wifi-off", unknown: "circle-help", fault: "circle-x" };
 
   const f = $derived(fmt());
@@ -178,6 +178,7 @@
           <strong>{t(`backups.scope.${option}`)}{#if option === "system"}<span class="badge">{t("backups.recommended")}</span>{/if}</strong>
           <span class="muted">{#if available}{t(`backups.scope.${option}.desc`)}{:else if INFLUX_REASONS.includes(listing?.influxdb?.reason)}{t(`backups.scope.influxdb.${listing.influxdb.reason}`)}{:else if listing?.influxdb?.message}<span lang="en">{listing.influxdb.message}</span>{:else}{t("backups.scope.influxdb.off")}{/if}</span>
         </span>
+        {#if scope === option}<span class="picked" aria-hidden="true"><Icon name="circle-check" /></span>{/if}
       </label>
     {/each}
   </fieldset>
@@ -291,10 +292,16 @@
 
 <style>
   .scopes { border: 0; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s2); }
-  .scope { display: flex; gap: var(--s3); align-items: flex-start; cursor: pointer; border: 1px solid var(--m-line); }
+  .scope {
+    display: flex; gap: var(--s3); align-items: flex-start; cursor: pointer; transition: border-color 0.15s, background 0.15s;
+    border: 1px solid color-mix(in srgb, var(--c, var(--m-line)) 26%, var(--m-line)); background: color-mix(in srgb, var(--c, transparent) 5%, var(--m-surface-2));
+  }
+  .scope:not(.off, .chosen):hover { border-color: color-mix(in srgb, var(--c, var(--m-line-strong)) 50%, var(--m-line)); }
   .scope input { position: absolute; opacity: 0; pointer-events: none; }
   .scope:has(input:focus-visible) { outline: 2px solid var(--m-accent); outline-offset: 2px; }
-  .scope.chosen { border-color: color-mix(in srgb, var(--c, var(--m-accent)) 55%, transparent); background: color-mix(in srgb, var(--c, var(--m-accent)) 9%, var(--m-surface-2)); }
+  .scope.chosen { border-color: color-mix(in srgb, var(--c, var(--m-accent)) 70%, transparent); background: color-mix(in srgb, var(--c, var(--m-accent)) 13%, var(--m-surface-2)); }
+  .picked { margin-left: auto; flex: none; display: inline-flex; }
+  .picked :global(svg.i) { color: var(--c, var(--m-accent)); }
   .scope.off { opacity: 0.55; cursor: not-allowed; }
   .scope .words { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
   .scope strong { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
