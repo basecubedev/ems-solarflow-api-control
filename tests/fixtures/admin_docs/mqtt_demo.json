@@ -1,0 +1,71 @@
+{
+  "broker": {
+    "configured": true,
+    "settings": {"schema_version": 1, "enabled": true, "port": 1883, "anonymous": false,
+      "accounts": [
+        {"name": "devices", "credentials_ref": "mqtt-broker-devices", "topic_prefix": null, "bridge": false, "zendure": false},
+        {"name": "zendure", "credentials_ref": "mqtt-broker-zendure", "topic_prefix": null, "bridge": false, "zendure": true}
+      ],
+      "grid_meter_account": null},
+    "issues": [],
+    "accounts": [
+      {"name": "devices", "topic_prefix": null, "bridge": false, "zendure": false, "password_saved": true},
+      {"name": "zendure", "topic_prefix": null, "bridge": false, "zendure": true, "password_saved": true}
+    ],
+    "containers": {"ems-mqtt-broker": "running", "ems-mqtt-mapping": "running"},
+    "running": true,
+    "profile_ref": "ems-mqtt",
+    "profile_users": ["Balcony"],
+    "grid_meter_topic": null,
+    "stop_impact": {"external_devices": [{"name": "Balcony"}], "zendure_devices": [], "grid_meter": false},
+    "host_address": "192.168.178.40"
+  },
+  "mapping": {
+    "document": {"schema_version": 1, "devices": [
+      {"id": "balcony", "label": "Balcony", "enabled": true, "broker_ref": "ems-mqtt", "values": {
+        "inverterPower": {"sources": [{"topic": "shellyplusplugs-balcony/status/switch:0", "format": "json", "path": "apower", "factor": 1, "invert": true, "negative": "zero", "max_age_seconds": 600}]},
+        "solarPower": {"sources": [{"topic": "shellyplusplugs-balcony/status/switch:0", "format": "json", "path": "apower", "factor": 1, "invert": true, "negative": "zero", "max_age_seconds": 600}]}
+      }}
+    ]},
+    "issues": [],
+    "broker_refs": ["ems-mqtt"],
+    "status": {"schema_version": 1, "devices": [{"id": "balcony", "enabled": true, "broker_ref": "ems-mqtt", "publishing": true, "reason": null}]},
+    "targets": ["inverterPower", "solarPower", "batteryPower", "batterySoc"],
+    "limits": {"devices": 32, "sources": 8, "publish_interval_seconds": 15}
+  },
+  "topics": {
+    "session": "demo", "broker_ref": "ems-mqtt", "state": "listening", "truncated": false,
+    "groups": [
+      {"key": "shellyplusplugs-balcony", "label": "shelly_gen2", "mappable": true, "topics": [
+        {"topic": "shellyplusplugs-balcony/status/switch:0", "format": "json", "retained": false, "messages_per_minute": 4.0, "changing": true, "last_seen_seconds": 3.0, "payload_preview": "{\"id\":0,\"apower\":-612.3,\"voltage\":231.4}",
+         "values": [
+           {"path": "apower", "value": -612.3, "likely": "power", "mapped_to": ["balcony"]},
+           {"path": "voltage", "value": 231.4, "likely": null, "mapped_to": []}
+         ]}
+      ]},
+      {"key": "balcony", "label": "ems_output", "mappable": false, "topics": [
+        {"topic": "ems-solarflow/balcony/state", "format": "json", "retained": true, "messages_per_minute": 4.0, "changing": false, "last_seen_seconds": 9.0, "payload_preview": "{\"inverterPower\":612.3,\"solarPower\":612.3}",
+         "values": [
+           {"path": "inverterPower", "value": 612.3, "likely": "power", "mapped_to": []},
+           {"path": "solarPower", "value": 612.3, "likely": "power", "mapped_to": []}
+         ]}
+      ]},
+      {"key": "heating", "label": "unknown", "mappable": true, "topics": [
+        {"topic": "heating/flow", "format": "number", "retained": true, "messages_per_minute": 1.0, "changing": true, "last_seen_seconds": 20.0, "payload_preview": "41.5",
+         "values": [{"path": null, "value": 41.5, "likely": null, "mapped_to": []}]}
+      ]}
+    ]
+  },
+  "value_preview": {"ok": true, "issues": [], "evaluation": {
+    "state": {"inverterPower": 612.3, "solarPower": 612.3},
+    "reason": null,
+    "targets": [
+      {"key": "inverterPower", "value": 612.3, "reason": null},
+      {"key": "solarPower", "value": 612.3, "reason": null}
+    ],
+    "sources": [
+      {"topic": "shellyplusplugs-balcony/status/switch:0", "path": "apower", "value": 612.3, "reason": null},
+      {"topic": "shellyplusplugs-balcony/status/switch:0", "path": "apower", "value": 612.3, "reason": null}
+    ]
+  }}
+}

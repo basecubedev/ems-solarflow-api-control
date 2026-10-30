@@ -32,6 +32,7 @@ it changes, and what to do when the result differs.
 | [Maintenance](admin/maintenance.md) | Inspect, change and repair an existing system |
 | [Device management](admin/device-management.md) | Add, edit, disable, remove; switch connections |
 | [MQTT connections](admin/mqtt.md) | Local MQTT, Zendure Cloud MQTT, brokers, write gates |
+| [MQTT broker and mapping](admin/mqtt-mapping.md) | Built-in broker, accounts, live topics, mapping unknown devices |
 | [Backup and restore](admin/backup-restore.md) | Snapshots, previews, rollback |
 | [Diagnostics and recovery](admin/diagnostics-recovery.md) | Evidence, support bundles, stuck workflows |
 | [Appearance, language and phone](admin/appearance.md) | Colour scheme, language, density, the bar on a phone |

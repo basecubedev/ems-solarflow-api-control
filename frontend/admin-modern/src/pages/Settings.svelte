@@ -13,6 +13,8 @@
   import DevicesEditor from "../widgets/DevicesEditor.svelte";
   import DiscoveryPanel from "../widgets/DiscoveryPanel.svelte";
   import SourcesPanel from "../widgets/SourcesPanel.svelte";
+  import MqttBrokerCard from "../widgets/MqttBrokerCard.svelte";
+  import MqttMappingPanel from "../widgets/MqttMappingPanel.svelte";
   import { t, tn, catalogText } from "../i18n/i18n.svelte.js";
   import { system, ensure, reload } from "../state/system.svelte.js";
   import { settings, setValue, discard, discardHardware, previewDraft, applyDraft, resetOverrides } from "../state/settings.svelte.js";
@@ -23,7 +25,7 @@
 
   ensure("config");
 
-  const TABS = [...EDIT_TABS, "devices"];
+  const TABS = ["features", "addons", ...EDIT_TABS.filter((name) => name !== "features"), "devices"];
 
   /** The tab in the address, #/settings/<tab>, so another page can open one. */
   function hashTab() {
@@ -58,8 +60,8 @@
     const count = (sections) => sections.reduce((sum, section) => sum + sectionFields(section).filter((field) => fieldMatches(field, query, shownText)).length, 0);
     return { features: count(tabSections(config, "features")), expert: count(tabSections(config, "expert")), safety: blocks.reduce((sum, block) => sum + block.fields.length, 0) };
   });
-  const TAB_LOOKS = { features: { icon: "toggle-right", tone: "c-out" }, safety: { icon: "shield-check", tone: "c-soc" }, expert: { icon: "wrench", tone: "c-pv" }, devices: { icon: "zap", tone: "c-inv" } };
-  const tabOptions = $derived(TABS.map((value) => ({ value, ...TAB_LOOKS[value], label: searching && value !== "devices" ? `${t(`settings.tab.${value}`)} (${hits[value] || 0})` : t(`settings.tab.${value}`) })));
+  const TAB_LOOKS = { features: { icon: "toggle-right", tone: "c-out" }, addons: { icon: "boxes", tone: "c-grid" }, safety: { icon: "shield-check", tone: "c-soc" }, expert: { icon: "wrench", tone: "c-pv" }, devices: { icon: "zap", tone: "c-inv" } };
+  const tabOptions = $derived(TABS.map((value) => ({ value, ...TAB_LOOKS[value], label: searching && !["devices", "addons"].includes(value) ? `${t(`settings.tab.${value}`)} (${hits[value] || 0})` : t(`settings.tab.${value}`) })));
 
   const preview = $derived(settings.preview);
   const groups = $derived(changeGroups(preview?.diff));
@@ -149,6 +151,10 @@
         <Empty text={t("settings.edit.noMatch")} icon="search" />
       {/if}
     </Card>
+  {:else if tab === "addons"}
+    <Card icon="radio-tower" tone="c-grid" title={t("mqtt.broker.title")} subtitle={t("mqtt.broker.sub")} span="span-12">
+      <MqttBrokerCard />
+    </Card>
   {:else if tab === "safety"}
     <Card icon="toggle-right" tone="c-out" title={t("control.title")} subtitle={t("control.sub")} span="span-4">
       <ControlState control={config.summary?.control} overrides={config.overrides} />
@@ -168,6 +174,9 @@
     </Card>
     <Card icon="radio-tower" tone="c-soc" title={t("sources.title")} subtitle={t("sources.sub")} span="span-12">
       <SourcesPanel />
+    </Card>
+    <Card icon="list-checks" tone="c-grid" title={t("mqtt.mapping.title")} subtitle={t("mqtt.mapping.sub")} span="span-12">
+      <MqttMappingPanel />
     </Card>
     <Card icon="zap" tone="c-inv" title={t("settings.devices")} subtitle={tn("settings.devicesSub", devices.length)} span="span-12">
       <DevicesEditor {config} />
