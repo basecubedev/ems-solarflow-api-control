@@ -492,7 +492,7 @@ Validation MUST match the changed risk. Use the applicable baseline:
 
 ```bash
 ruff check .
-python -m compileall -q admin appliance ems dashboard scripts tests emsctl.py ems-solarflow-api-control.py
+python -m compileall -q admin appliance ems dashboard mqtt_mapping scripts tests emsctl.py ems-solarflow-api-control.py
 node --check admin/static/admin.js
 python tools/build_config_template.py --check
 python tools/check_third_party_licenses.py
