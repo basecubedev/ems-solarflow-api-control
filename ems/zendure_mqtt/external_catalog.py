@@ -12,20 +12,18 @@ broker publishes into it, so the payload is fixed by this project rather than by
 a manufacturer.
 """
 
-import math
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
 from ems.device_identity import is_masked_identity_value
+from ems.zendure_mqtt.payload_values import plain_number
 from ems.zendure_mqtt.payloads import parse_json_object
 
 Readings = dict[str, int | float]
 
 _DEVICE_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
-_PLAIN_NUMBER = re.compile(r"-?[0-9]{1,16}(?:\.[0-9]{1,16})?")
-MAX_READING = 1_000_000
 
 
 @dataclass(frozen=True)
@@ -56,33 +54,6 @@ def _signed(positive: str, negative: str) -> CatalogKey:
             negative: -value if value < 0 else 0,
         },
     )
-
-
-def _number(value) -> int | float | None:
-    """A plain decimal number of plausible size, or ``None``.
-
-    Text must be ASCII digits with an optional sign and fraction, sixteen
-    digits at most on either side: Python's own parsers would also take
-    ``1_000``, other scripts' digits and exponents, and refuse a few thousand
-    digits by raising. A number beyond ``MAX_READING`` is refused before
-    anything converts it to a float, which a long enough integer overflows.
-    """
-
-    if isinstance(value, (bytes, bytearray)):
-        try:
-            value = value.decode("utf-8")
-        except UnicodeDecodeError:
-            return None
-    if isinstance(value, str):
-        text = value.strip()
-        if _PLAIN_NUMBER.fullmatch(text) is None:
-            return None
-        value = float(text) if "." in text else int(text)
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    if abs(value) > MAX_READING or not math.isfinite(value):
-        return None
-    return value
 
 
 def valid_device_id(value) -> bool:
@@ -136,7 +107,7 @@ class ExternalTopicFamily:
         if key == self.bundle_key:
             return self._bundle_readings(payload)
         spec = self.keys.get(key)
-        value = _number(payload) if spec is not None else None
+        value = plain_number(payload) if spec is not None else None
         return spec.read(value) if value is not None else None
 
     def offerable(self, metrics) -> bool:
@@ -150,7 +121,7 @@ class ExternalTopicFamily:
             return None
         readings: Readings = {}
         for key, spec in self.keys.items():
-            value = _number(data.get(key))
+            value = plain_number(data.get(key))
             reading = spec.read(value) if value is not None else None
             if reading:
                 readings.update(reading)
