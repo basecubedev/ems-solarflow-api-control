@@ -5,7 +5,11 @@ The Admin renders ``mosquitto.conf``, ``acl`` and ``passwd`` exactly as it would
 for an installation, and the pinned image runs them as the install user. Each
 forbidden publish is followed by an allowed one from the same connection; the
 watcher sees the allowed one, so not seeing the forbidden one before it proves
-the broker dropped it rather than that it was slow.
+the broker dropped it rather than that it was slow. Every marker is a topic of
+its own, and so is every topic a check publishes (``{n}`` is replaced by a
+counter), so a late copy of an earlier message can never stand in for one or
+look like a forbidden one; an allowed publish is waited for by name rather than
+judged by its order.
 """
 
 import json
@@ -63,6 +67,7 @@ def _client(port, username=None, password=None):
 class Watcher:
     def __init__(self, port, password):
         self.messages = []
+        self.markers = 0
         self.client, refused = _client(port, "ems-admin", password)
         assert not refused
         subscribed = []
@@ -71,16 +76,30 @@ class Watcher:
         self.client.subscribe("#", qos=1)
         wait_until(lambda: subscribed, message="watcher not subscribed")
 
+    def _unique(self, topic):
+        self.markers += 1
+        return topic.replace("{n}", str(self.markers))
+
     def delivered(self, client, forbidden, allowed):
         """Whether ``forbidden`` reached the watcher before ``allowed`` did."""
 
-        marker = f"{allowed}"
+        forbidden = self._unique(forbidden)
+        marker = self._unique(allowed.replace("/ok", "/ok-{n}", 1))
         client.publish(forbidden, b"1", qos=1).wait_for_publish(5)
         client.publish(marker, b"1", qos=1).wait_for_publish(5)
         wait_until(lambda: marker in self.messages, message=f"{marker} never arrived")
         seen = self.messages[: self.messages.index(marker)]
         self.messages.clear()
         return forbidden in seen
+
+    def arrives(self, client, topic):
+        """Whether ``topic`` from ``client`` reaches the watcher; raises when it never does."""
+
+        topic = self._unique(topic)
+        client.publish(topic, b"1", qos=1).wait_for_publish(5)
+        wait_until(lambda: topic in self.messages, message=f"{topic} never arrived")
+        self.messages.clear()
+        return True
 
     def stop(self):
         self.client.loop_stop()
@@ -152,18 +171,18 @@ def test_each_client_reaches_only_what_its_mode_allows(broker):
         clients = [anonymous, devices, zendure, meter, mapping, ems]
 
         for client in (anonymous, devices):
-            assert not watcher.delivered(client, "ems-solarflow/x/state", "shellies/ok")
-            assert not watcher.delivered(client, "iot/pk/dev/properties/report", "shellies/ok")
-            assert not watcher.delivered(client, "Zendure/sensor/x/totalPower", "shellies/ok")
-            assert not watcher.delivered(client, "/pk/dev/properties/report", "shellies/ok")
+            assert not watcher.delivered(client, "ems-solarflow/x{n}/state", "shellies/ok")
+            assert not watcher.delivered(client, "iot/pk/dev{n}/properties/report", "shellies/ok")
+            assert not watcher.delivered(client, "Zendure/sensor/x{n}/totalPower", "shellies/ok")
+            assert not watcher.delivered(client, "/pk/dev{n}/properties/report", "shellies/ok")
             assert not watcher.delivered(client, "meter/power", "shellies/ok")
-        assert watcher.delivered(zendure, "iot/pk/dev/properties/report", "shellies/ok")
-        assert not watcher.delivered(zendure, "ems-solarflow/x/state", "shellies/ok")
-        assert watcher.delivered(meter, "meter/power", "shellies/ok")
-        assert watcher.delivered(mapping, "ems-solarflow/balkon/state", "ems-solarflow/ok/state")
-        assert not watcher.delivered(mapping, "iot/pk/dev/properties/write", "ems-solarflow/ok/state")
-        assert watcher.delivered(ems, "iot/pk/dev/properties/write", "iot/pk/ok/properties/write")
-        assert not watcher.delivered(ems, "iot/pk/dev/properties/report", "iot/pk/ok/properties/write")
+        assert watcher.arrives(zendure, "iot/pk/dev{n}/properties/report")
+        assert not watcher.delivered(zendure, "ems-solarflow/x{n}/state", "shellies/ok")
+        assert watcher.arrives(meter, "meter/power")
+        assert watcher.arrives(mapping, "ems-solarflow/balkon{n}/state")
+        assert not watcher.delivered(mapping, "iot/pk/dev{n}/properties/write", "ems-solarflow/ok/state")
+        assert watcher.arrives(ems, "iot/pk/dev{n}/properties/write")
+        assert not watcher.delivered(ems, "iot/pk/dev{n}/properties/report", "iot/pk/ok/properties/write")
     finally:
         for client in clients:
             client.loop_stop()

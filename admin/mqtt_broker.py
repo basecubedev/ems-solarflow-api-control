@@ -28,11 +28,13 @@ from admin.deployment import DockerCompose, DockerError
 from ems.config import grid_meter_mqtt_settings
 from ems.file_io import atomic_write_bytes
 from ems.zendure_mqtt.builtin_broker import (
+    BUILTIN_CREDENTIALS_REF,
     BUILTIN_PROFILE_REF,
+    NATIVE_TOPIC_ROOTS,
+    NATIVE_TOPIC_TREES,
     broker_settings_path,
-    builtin_profile_configured,
+    builtin_profile_refs,
     builtin_profile_users,
-    mapping_status_path,
     mappings_path,
 )
 from mqtt_mapping.config import load_mappings_file
@@ -51,9 +53,9 @@ DEFAULT_ACCOUNT = "devices"
 INTERNAL_ACCOUNTS = ("ems", "ems-mapping", "ems-admin")
 EMS_ACCOUNT, MAPPING_ACCOUNT, ADMIN_ACCOUNT = INTERNAL_ACCOUNTS
 OUTPUT_TREE = "ems-solarflow/#"
-ZENDURE_TREES = ("iot/#", "Zendure/#", "/#")
+ZENDURE_TREES = NATIVE_TOPIC_TREES
 EMS_WRITE_TOPIC = "iot/+/+/properties/write"
-RESERVED_PREFIX_ROOTS = ("ems-solarflow", "iot", "Zendure")
+RESERVED_PREFIX_ROOTS = ("ems-solarflow", *(root for root in NATIVE_TOPIC_ROOTS if root))
 PASSWORD_ITERATIONS = 101
 PASSWORD_SALT_BYTES = 12
 START_TIMEOUT_SECONDS = 20.0
@@ -236,7 +238,7 @@ def grid_meter_topic(config) -> str | None:
 
     grid_meter = config.get("grid_meter") if isinstance(config, dict) else None
     settings = grid_meter_mqtt_settings(grid_meter)
-    if settings.get("broker_ref") != BUILTIN_PROFILE_REF:
+    if settings.get("broker_ref") not in builtin_profile_refs(config) | {BUILTIN_PROFILE_REF}:
         return None
     topic = settings.get("topic")
     return topic.strip() if isinstance(topic, str) and topic.strip() else None
@@ -364,9 +366,10 @@ def local_profile_endpoints(config, credential_store):
 
     section = config.get("zendure_mqtt") if isinstance(config, dict) else None
     brokers = section.get("brokers") if isinstance(section, dict) else None
+    builtin = builtin_profile_refs(config) | {BUILTIN_PROFILE_REF}
     endpoints = {}
     for ref, profile in (brokers or {}).items():
-        if ref == BUILTIN_PROFILE_REF or not isinstance(profile, dict):
+        if ref in builtin or not isinstance(profile, dict):
             continue
         if profile.get("enabled") is False or str(profile.get("source") or "local_mqtt") != "local_mqtt":
             continue
@@ -479,11 +482,31 @@ class BuiltinBroker:
         atomic_write_bytes(self.settings_path, raw)
 
     def password(self, name) -> str | None:
-        secret = self.store.load_mqtt_broker_secret(credentials_ref_for(name))
+        if name == EMS_ACCOUNT:
+            secret = self.store.load_mqtt_discovery_secret(BUILTIN_CREDENTIALS_REF)
+        else:
+            secret = self.store.load_mqtt_broker_secret(credentials_ref_for(name))
         return secret.password if secret is not None and secret.password else None
 
     def _store_password(self, name, password):
-        self.store.save_mqtt_broker_secret(credentials_ref_for(name), name, password)
+        if name == EMS_ACCOUNT:
+            self.store.save_mqtt_discovery_secret(
+                BUILTIN_CREDENTIALS_REF, EMS_ACCOUNT, password, label="Built-in MQTT broker"
+            )
+        else:
+            self.store.save_mqtt_broker_secret(credentials_ref_for(name), name, password)
+
+    def discovery_credential_refs(self) -> list[str]:
+        """The account discovery reads the built-in broker with, while it is on.
+
+        Discovery finds mapped devices like any bridge's output, and a device it
+        adds gets a profile with this account, which marks it as this broker.
+        """
+
+        settings, _issues, _exists = self.load()
+        if settings is None or not settings.enabled or self.password(EMS_ACCOUNT) is None:
+            return []
+        return [BUILTIN_CREDENTIALS_REF]
 
     def container_states(self) -> dict:
         if not os.path.isfile(os.path.join(self.workspace, "compose.yml")):
@@ -504,7 +527,9 @@ class BuiltinBroker:
         settings, issues, exists = self.load()
         states = self.container_states()
         config = self._config_loader()
-        if not exists and builtin_profile_configured(config):
+        section = config.get("zendure_mqtt") if isinstance(config.get("zendure_mqtt"), dict) else {}
+        brokers = section.get("brokers") if isinstance(section.get("brokers"), dict) else {}
+        if not exists and BUILTIN_PROFILE_REF in brokers:
             issues = [
                 *issues,
                 _issue(
@@ -536,7 +561,6 @@ class BuiltinBroker:
             "profile_ref": BUILTIN_PROFILE_REF,
             "profile_users": builtin_profile_users(config),
             "grid_meter_topic": grid_meter_topic(config),
-            "mapping_status_path": mapping_status_path(self.data_dir),
         }
 
     # --- rendering --------------------------------------------------------
@@ -558,6 +582,8 @@ class BuiltinBroker:
         issues = []
         for account in settings.accounts:
             password = self.password(account.name)
+            if password is None and not settings.enabled:
+                continue
             if password is None:
                 issues.append(
                     _issue(
@@ -653,13 +679,39 @@ class BuiltinBroker:
                 issues = self.render(settings)
                 if issues:
                     return _failure("render_failed", "The broker files cannot be written.", issues)
-            if wanted and state != "running":
+            if wanted:
                 self.compose.up(self.workspace, services=[MAPPING_SERVICE])
             elif not wanted and state == "running":
                 self.compose.stop(self.workspace, [MAPPING_SERVICE])
         except DockerError as exc:
             return _failure(exc.code, exc.message)
         return _Result(True, "running" if wanted else "stopped")
+
+    def reconcile(self):
+        """Render and start what broker.json and the mappings ask for; ``None`` when nothing is set up.
+
+        ``up`` leaves a running container alone unless its rendered service
+        changed, which is how an Admin update reaches the mapping container's
+        image and a new Mosquitto. A stopped broker is not started.
+        """
+
+        with self._one_at_a_time() as busy:
+            if busy:
+                return busy
+            settings, issues, exists = self.load()
+            if not exists and not os.path.isfile(mappings_path(self.config_dir)):
+                return None
+            if settings is None:
+                return _failure("settings_invalid", "broker.json cannot be read.", issues)
+            if settings.enabled:
+                render_issues = self.render(settings)
+                if render_issues:
+                    return _failure("render_failed", "The broker files cannot be written.", render_issues)
+                try:
+                    self.compose.up(self.workspace, services=[BROKER_SERVICE])
+                except DockerError as exc:
+                    return _failure(exc.code, exc.message)
+            return self.sync_mapping_container(settings)
 
     def _apply_running(self, settings, *, recreate=False):
         issues = self.render(settings)
@@ -721,11 +773,12 @@ class BuiltinBroker:
                 if isinstance(entry, dict) and entry.get("output_limit_w") is not None:
                     held[name] = entry["output_limit_w"]
         external, zendure = [], []
+        refs = builtin_profile_refs(config) | {BUILTIN_PROFILE_REF}
         for index, item in enumerate(config.get("devices") or []):
             if not isinstance(item, dict) or item.get("enabled") is False:
                 continue
             mqtt = item.get("mqtt") if isinstance(item.get("mqtt"), dict) else {}
-            if mqtt.get("broker_ref") != BUILTIN_PROFILE_REF:
+            if mqtt.get("broker_ref") not in refs:
                 continue
             name = str(item.get("name") or f"device {index + 1}")
             if item.get("type") == "zendure_mqtt":
@@ -880,3 +933,58 @@ def _port_answers(port) -> bool:
             return True
     except OSError:
         return False
+
+
+def reconcile_builtin_broker(credential_store, *, broker=None) -> str | None:
+    """Run once when the Admin starts; a line for the log, or ``None`` when nothing is set up."""
+
+    try:
+        broker = broker or builtin_broker_for_install(credential_store)
+        result = broker.reconcile()
+    except Exception as exc:
+        return f"Built-in MQTT broker: not reconciled ({type(exc).__name__})"
+    if result is None:
+        return None
+    detail = f" ({result.message})" if not result.ok and result.message else ""
+    return f"Built-in MQTT broker: {result.status}{detail}"
+
+
+def admin_image_reference(environ=None) -> str:
+    """The image the running Admin came from, which the mapping container runs too."""
+
+    from admin.admin_update import admin_image_ref_from_env
+
+    environ = os.environ if environ is None else environ
+    reference = admin_image_ref_from_env(environ)
+    if reference:
+        return reference
+    tag = str(environ.get("EMS_ADMIN_TAG") or "").strip() or "latest"
+    return f"ghcr.io/basecubedev/ems-solarflow-admin:{tag}"
+
+
+def host_address(detect=None) -> str | None:
+    """The LAN address devices and the EMS reach the broker on, or ``None``."""
+
+    from admin.networks import detect_network_suggestions
+
+    suggestions = (detect or detect_network_suggestions)()
+    for network in suggestions.get("networks") or []:
+        if network.get("scan_recommended") and network.get("address"):
+            return network["address"]
+    return None
+
+
+def builtin_broker_for_install(credential_store, *, context=None, compose=None):
+    """The built-in broker of the installation this Admin manages."""
+
+    from admin.install_context import detect_install_context
+
+    context = context or detect_install_context()
+    return BuiltinBroker(
+        install_root=context.install_root,
+        config_dir=context.config_path.parent,
+        data_dir=context.data_dir,
+        credential_store=credential_store,
+        compose=compose,
+        admin_image=admin_image_reference(),
+    )

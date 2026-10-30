@@ -12,13 +12,17 @@ import os
 import time
 from collections.abc import Mapping
 
+from ems.config import grid_meter_mqtt_settings
 from ems.zendure_mqtt.config_entries import zendure_mqtt_broker_ref
 
 BUILTIN_PROFILE_REF = "ems-mqtt"
+BUILTIN_CREDENTIALS_REF = "ems-mqtt"
 BROKER_SETTINGS_PARTS = ("mqtt", "broker.json")
 MAPPINGS_PARTS = ("mqtt", "mappings.json")
 MAPPING_STATUS_FILENAME = "mqtt-mapping-status.json"
 MAPPING_STATUS_STALE_SECONDS = 120
+NATIVE_TOPIC_ROOTS = ("iot", "Zendure", "")
+NATIVE_TOPIC_TREES = tuple(f"{root}/#" for root in NATIVE_TOPIC_ROOTS)
 _UNREADABLE = object()
 
 
@@ -56,12 +60,29 @@ def broker_enabled(config_dir) -> bool | None:
     return enabled if isinstance(enabled, bool) else None
 
 
-def builtin_profile_configured(config) -> bool:
+def builtin_profile_refs(config) -> set[str]:
+    """The profiles that reach the built-in broker: by its name, or by its account.
+
+    Adding a mapped device through discovery mints a local profile of its own
+    name; the account the Admin gave the EMS is what marks it as this broker.
+    """
+
     if not isinstance(config, Mapping):
-        return False
+        return set()
     section = config.get("zendure_mqtt")
     brokers = section.get("brokers") if isinstance(section, Mapping) else None
-    return isinstance(brokers, Mapping) and BUILTIN_PROFILE_REF in brokers
+    if not isinstance(brokers, Mapping):
+        return set()
+    return {
+        str(ref)
+        for ref, profile in brokers.items()
+        if ref == BUILTIN_PROFILE_REF
+        or (isinstance(profile, Mapping) and profile.get("credentials_ref") == BUILTIN_CREDENTIALS_REF)
+    }
+
+
+def builtin_profile_configured(config) -> bool:
+    return bool(builtin_profile_refs(config))
 
 
 def builtin_profile_users(config) -> list[str]:
@@ -69,20 +90,18 @@ def builtin_profile_users(config) -> list[str]:
 
     if not isinstance(config, Mapping):
         return []
+    refs = builtin_profile_refs(config) | {BUILTIN_PROFILE_REF}
     users = []
     devices = config.get("devices")
     for index, item in enumerate(devices if isinstance(devices, list) else []):
         if not isinstance(item, Mapping) or item.get("enabled") is False:
             continue
         mqtt = item.get("mqtt")
-        if isinstance(mqtt, Mapping) and zendure_mqtt_broker_ref(item) == BUILTIN_PROFILE_REF:
+        if isinstance(mqtt, Mapping) and zendure_mqtt_broker_ref(item) in refs:
             users.append(str(item.get("name") or f"device {index + 1}"))
     grid_meter = config.get("grid_meter")
-    if isinstance(grid_meter, Mapping):
-        nested = grid_meter.get("mqtt")
-        ref = nested.get("broker_ref") if isinstance(nested, Mapping) else grid_meter.get("broker_ref")
-        if ref == BUILTIN_PROFILE_REF:
-            users.append("grid meter")
+    if isinstance(grid_meter, Mapping) and grid_meter_mqtt_settings(grid_meter).get("broker_ref") in refs:
+        users.append("grid meter")
     return users
 
 

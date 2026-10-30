@@ -169,3 +169,12 @@ def test_the_appliance_watches_the_containers_the_admin_starts():
     assert ApplianceConfig().managed_containers[-2:] == (BROKER_SERVICE, MAPPING_SERVICE)
     assert shipped["appliance"]["mqtt_broker_container"] == BROKER_SERVICE
     assert shipped["appliance"]["mqtt_mapping_container"] == MAPPING_SERVICE
+
+
+def test_a_profile_discovery_minted_counts_as_the_built_in_one_by_its_account():
+    config = {
+        "zendure_mqtt": {"brokers": {"local_mqtt_x": {"host": "192.0.2.10", "credentials_ref": "ems-mqtt"}}},
+        "devices": [{"name": "Balkon", "type": "external_mqtt", "mqtt": {"broker_ref": "local_mqtt_x"}}],
+    }
+
+    assert builtin_profile_users(config) == ["Balkon"]

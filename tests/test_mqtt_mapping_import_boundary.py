@@ -25,6 +25,7 @@ ALLOWED_PROJECT_MODULES = frozenset(
         "ems.config",
         "ems.file_io",
         "ems.logging_utils",
+        "ems.zendure_mqtt.builtin_broker",
         "ems.zendure_mqtt.external_catalog",
         "ems.zendure_mqtt.payload_values",
     }

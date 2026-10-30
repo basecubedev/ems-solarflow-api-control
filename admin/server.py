@@ -152,7 +152,11 @@ from admin.runtime_convergence import (
     reset_targets_to_config,
 )
 from admin.mdns import MdnsProvider
+from admin.mqtt_broker import builtin_broker_for_install, host_address, local_profile_endpoints
 from admin.mqtt_discovery import MqttBrokerDiscovery
+from admin.mqtt_live_topics import LiveTopicSessions
+from admin.mqtt_mapping_editor import MappingEditor
+from ems.zendure_mqtt.builtin_broker import BUILTIN_PROFILE_REF
 from admin.mqtt_topic_discovery import default_topic_discoverer
 from admin.models import SOURCE_ZENDURE_CLOUD_MQTT, utc_now_iso
 from admin.mqtt_runtime_provisioning import (
@@ -1011,7 +1015,10 @@ def create_admin_runtime(
         topic_discoverer=default_topic_discoverer,
         credential_lookup=credential_store.load_mqtt_discovery_secret,
         credential_refs_provider=(
-            lambda: discovery_preparation.load()["local_mqtt"]["credential_refs"]
+            lambda: [
+                *discovery_preparation.load()["local_mqtt"]["credential_refs"],
+                *_builtin_discovery_refs(credential_store),
+            ]
         ),
     )
     mdns_provider = mdns_provider or MdnsProvider(
@@ -1418,6 +1425,21 @@ def resume_pending_guided_upgrade(runtime):
     return f"Guided Upgrade {operation_id}: {result['outcome']}"
 
 
+MQTT_BROKER_POST_PATHS = frozenset(
+    f"/api/discovery/mqtt-broker/{action}" for action in ("enable", "stop", "settings", "password", "reveal")
+)
+MQTT_MAPPING_POST_PATHS = frozenset(
+    f"/api/discovery/mqtt-mapping/{action}" for action in ("preview", "apply", "value-preview")
+)
+
+
+def _builtin_discovery_refs(credential_store):
+    try:
+        return builtin_broker_for_install(credential_store).discovery_credential_refs()
+    except Exception:
+        return []
+
+
 class AdminServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -1466,6 +1488,7 @@ class AdminServer(ThreadingHTTPServer):
         self.identity_token_key = runtime.identity_token_key
         self.workflow_lifecycle = runtime.workflow_lifecycle
         self.static_assets = runtime.static_assets
+        self.mqtt_live_topics = getattr(runtime, "mqtt_live_topics", None) or LiveTopicSessions()
         # Present only for the gated browser-test runtime; ``None`` (and its route
         # 404s) in every normal deployment.
         self.test_reset = getattr(runtime, "test_reset", None)
@@ -1650,6 +1673,15 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._send_json({
                 "proposals": self._public_mqtt_proposals(),
             })
+            return
+        if path == "/api/discovery/mqtt-broker":
+            self._handle_mqtt_broker_view()
+            return
+        if path == "/api/discovery/mqtt-mapping":
+            self._send_json(MappingEditor(self._builtin_broker()).view())
+            return
+        if path.startswith("/api/discovery/mqtt-topics/sessions/"):
+            self._handle_mqtt_topics_poll(path[len("/api/discovery/mqtt-topics/sessions/"):])
             return
         if path == "/api/discovery/zendure-cloud-mqtt/settings":
             self._handle_zendure_cloud_settings()
@@ -1927,6 +1959,19 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/discovery/mqtt-brokers/probe":
             self._handle_mqtt_probe()
+            return
+        if path in MQTT_BROKER_POST_PATHS:
+            self._handle_mqtt_broker_post(path)
+            return
+        if path in MQTT_MAPPING_POST_PATHS:
+            self._handle_mqtt_mapping_post(path)
+            return
+        if path == "/api/discovery/mqtt-topics/sessions":
+            self._handle_mqtt_topics_start()
+            return
+        if path.startswith("/api/discovery/mqtt-topics/sessions/") and path.endswith("/stop"):
+            session_id = path[len("/api/discovery/mqtt-topics/sessions/"):-len("/stop")]
+            self._send_json({"ok": self.server.mqtt_live_topics.stop(session_id)})
             return
         if path == "/api/discovery/zendure-cloud-mqtt/token":
             self._handle_zendure_cloud_save_token()
@@ -3611,6 +3656,143 @@ class AdminHandler(BaseHTTPRequestHandler):
             )
             return
         self._send_json(plan)
+
+    def _builtin_broker(self):
+        return builtin_broker_for_install(self.server.credential_store)
+
+    def _mqtt_body(self, allowed):
+        body = self._read_json_body()
+        if body is None:
+            return None
+        if not isinstance(body, dict) or set(body) - set(allowed):
+            self._send_json({"ok": False, "error": "unsupported request"}, status=400)
+            return None
+        return body
+
+    def _handle_mqtt_broker_view(self):
+        broker = self._builtin_broker()
+        view = broker.view()
+        control_status = None
+        try:
+            with open(os.path.join(broker.data_dir, "control-status.json"), encoding="utf-8") as handle:
+                control_status = json.load(handle)
+        except (OSError, ValueError):
+            pass
+        view["stop_impact"] = broker.stop_impact(control_status)
+        view["host_address"] = host_address()
+        self._send_json(view)
+
+    def _handle_mqtt_broker_post(self, path):
+        action = path.rsplit("/", 1)[-1]
+        allowed = {
+            "enable": {"confirm"},
+            "stop": {"confirm"},
+            "settings": {"port", "anonymous", "grid_meter_account", "accounts"},
+            "password": {"name", "password"},
+            "reveal": {"name"},
+        }[action]
+        body = self._mqtt_body(allowed)
+        if body is None:
+            return
+        if action in ("enable", "stop") and body.get("confirm") is not True:
+            self._send_json({"ok": False, "error": "explicit confirmation is required"}, status=400)
+            return
+        broker = self._builtin_broker()
+        if action == "reveal":
+            password = broker.reveal_password(body.get("name"))
+            if password is None:
+                self._send_json({"ok": False, "error": "no password"}, status=404)
+                return
+            self._send_json({"ok": True, "password": password}, headers={"Cache-Control": "no-store"})
+            return
+        if action == "enable":
+            result = broker.enable()
+            if result.get("ok"):
+                self._seed_builtin_broker_candidate(broker)
+        elif action == "stop":
+            result = broker.stop()
+        elif action == "settings":
+            result = broker.update(body)
+        else:
+            if "password" in body and not isinstance(body["password"], str):
+                self._send_json({"ok": False, "error": "password must be text"}, status=400)
+                return
+            result = broker.set_password(body.get("name"), body.get("password"))
+        status = 200 if result.get("ok") else 409 if result.get("status") == "busy" else 422
+        self._send_json(result, status=status, headers={"Cache-Control": "no-store"})
+
+    def _seed_builtin_broker_candidate(self, broker):
+        address = host_address()
+        settings, _issues, _exists = broker.load()
+        if not address or settings is None:
+            return
+        try:
+            self.server.mqtt_discovery.set_configured_brokers(
+                [{"id": "mqtt:builtin", "host": address, "port": settings.port, "label": "Built-in MQTT broker"}]
+            )
+        except Exception:
+            pass
+
+    def _handle_mqtt_mapping_post(self, path):
+        action = path.rsplit("/", 1)[-1]
+        allowed = {
+            "preview": {"document"},
+            "apply": {"document", "confirm"},
+            "value-preview": {"device", "payloads", "session"},
+        }[action]
+        body = self._mqtt_body(allowed)
+        if body is None:
+            return
+        editor = MappingEditor(self._builtin_broker())
+        if action == "preview":
+            self._send_json(editor.preview(body.get("document")))
+            return
+        if action == "apply":
+            if body.get("confirm") is not True:
+                self._send_json({"ok": False, "error": "explicit confirmation is required"}, status=400)
+                return
+            result = editor.apply(body.get("document"))
+            self._send_json(result, status=200 if result.get("ok") else 422)
+            return
+        payloads = {}
+        session = self.server.mqtt_live_topics.get(body.get("session")) if body.get("session") else None
+        if session is not None:
+            payloads.update(session.tree.latest_payloads())
+        extra = body.get("payloads") or {}
+        if not isinstance(extra, dict) or not all(isinstance(value, str) for value in extra.values()):
+            self._send_json({"ok": False, "error": "payloads map a topic to text"}, status=400)
+            return
+        payloads.update(extra)
+        self._send_json(editor.value_preview(body.get("device"), payloads))
+
+    def _handle_mqtt_topics_start(self):
+        body = self._mqtt_body({"broker_ref"})
+        if body is None:
+            return
+        ref = body.get("broker_ref")
+        broker = self._builtin_broker()
+        if ref == BUILTIN_PROFILE_REF:
+            settings, _issues, _exists = broker.load()
+            password = broker.password("ems-admin")
+            if settings is None or not settings.enabled or password is None:
+                self._send_json({"ok": False, "error": "mqtt_broker_off"}, status=409)
+                return
+            endpoint = {"host": "127.0.0.1", "port": settings.port, "username": "ems-admin", "password": password}
+        else:
+            endpoint = local_profile_endpoints(broker._config_loader(), broker.store).get(ref)
+            if endpoint is None:
+                self._send_json({"ok": False, "error": "unknown local broker"}, status=404)
+                return
+        session_id = self.server.mqtt_live_topics.start(ref, endpoint)
+        self._send_json({"ok": True, "session": session_id})
+
+    def _handle_mqtt_topics_poll(self, session_id):
+        session = self.server.mqtt_live_topics.get(session_id)
+        if session is None:
+            self._send_json({"ok": False, "error": "session ended"}, status=404)
+            return
+        mapped = MappingEditor(self._builtin_broker()).mapped_values(session.broker_ref)
+        self._send_json(self.server.mqtt_live_topics.snapshot(session_id, mapped))
 
     def _handle_maintenance_container_sync(self):
         # Confirmed mutation: recreate EMS and start/stop the optional bundled

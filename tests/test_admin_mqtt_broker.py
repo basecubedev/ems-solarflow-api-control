@@ -529,3 +529,114 @@ def test_a_second_action_while_one_runs_is_refused_as_busy(install):
         assert broker.enable()["status"] == "busy"
     finally:
         BuiltinBroker._lock.release()
+
+
+def test_discovery_reads_the_broker_with_the_ems_account_only_while_it_runs(install):
+    broker = _broker(install)
+    assert broker.discovery_credential_refs() == []
+
+    broker.enable()
+    secret = broker.store.load_mqtt_discovery_secret("ems-mqtt")
+    assert broker.discovery_credential_refs() == ["ems-mqtt"]
+    assert (secret.username, secret.password) == ("ems", broker.password("ems"))
+
+    broker.stop()
+    assert broker.discovery_credential_refs() == []
+
+
+def test_a_new_port_that_is_taken_keeps_the_broker_on_its_old_port(install):
+    broker = _broker(install)
+    broker.enable()
+    broker._port_free = lambda port: False
+    broker.compose.calls.clear()
+
+    result = broker.update({"port": 1884})
+
+    assert result["status"] == "mqtt_broker_port_in_use"
+    assert broker.compose.calls == []
+    assert _settings_file(install)["port"] == 1883
+    assert 'ports: ["1883:1883"]' in (install / "mqtt" / "compose.yml").read_text()
+
+
+def test_a_running_mapping_gets_the_credentials_of_a_newly_used_broker(install):
+    config = {"zendure_mqtt": {"brokers": {"iobroker": {"source": "local_mqtt", "host": "192.0.2.20", "port": 1883}}}}
+    broker = _broker(install, config=config)
+    broker.enable()
+    broker.compose.states[MAPPING_SERVICE] = "running"
+    broker.compose.calls.clear()
+    (install / "config" / "mqtt" / "mappings.json").write_text(json.dumps({
+        "schema_version": 1,
+        "devices": [{"id": "akku", "broker_ref": "iobroker",
+                     "values": {"inverterPower": {"sources": [{"topic": "akku/ac", "format": "number"}]}}}],
+    }), encoding="utf-8")
+
+    assert broker.sync_mapping_container().ok
+
+    credentials = json.loads((install / "mqtt" / "mapping" / "mapping-credentials.json").read_text())
+    assert "iobroker" in credentials["brokers"]
+    assert broker.compose.calls == [("up", (MAPPING_SERVICE,), False)]
+
+
+def test_switching_on_again_keeps_the_shared_password_it_had(install):
+    broker = _broker(install)
+    broker.enable()
+    before = broker.reveal_password("devices")
+    (install / "config" / "mqtt" / "broker.json").unlink()
+
+    broker.enable()
+
+    assert broker.reveal_password("devices") == before
+
+
+def _active_mapping(install, broker_ref=BUILTIN_PROFILE_REF):
+    (install / "config" / "mqtt").mkdir(parents=True, exist_ok=True)
+    (install / "config" / "mqtt" / "mappings.json").write_text(json.dumps({
+        "schema_version": 1,
+        "devices": [{"id": "balkon", "broker_ref": broker_ref,
+                     "values": {"inverterPower": {"sources": [{"topic": "shelly/power", "format": "number"}]}}}],
+    }), encoding="utf-8")
+
+
+def test_nothing_set_up_is_left_alone_when_the_admin_starts(install):
+    broker = _broker(install)
+
+    assert broker.reconcile() is None
+    assert broker.compose.calls == []
+
+
+def test_the_admin_start_brings_a_running_broker_and_its_mapping_up_to_date(install):
+    """``up`` recreates only what the new render changed, such as a new Admin image tag."""
+
+    broker = _broker(install)
+    broker.enable()
+    _active_mapping(install)
+    broker.compose.calls.clear()
+
+    result = broker.reconcile()
+
+    assert result.ok
+    assert broker.compose.calls == [("up", (BROKER_SERVICE,), False), ("up", (MAPPING_SERVICE,), False)]
+
+
+def test_the_admin_start_never_starts_a_broker_that_was_stopped(install):
+    broker = _broker(install)
+    broker.enable()
+    broker.stop()
+    broker.compose.calls.clear()
+
+    result = broker.reconcile()
+
+    assert result.ok and result.status == "stopped"
+    assert ("up", (BROKER_SERVICE,), False) not in broker.compose.calls
+
+
+def test_every_tree_the_ems_reads_zendure_on_is_protected():
+    from ems.zendure_mqtt.config import DEFAULT_LOCAL_SUBSCRIPTIONS
+    from mqtt_mapping.config import topic_problem
+
+    acl = render_acl(BrokerSettings(anonymous=True, accounts=(Account("devices"),)))
+    anonymous = acl.split("\nuser ", 1)[0]
+    for subscription in DEFAULT_LOCAL_SUBSCRIPTIONS:
+        root = subscription.split("/", 1)[0]
+        assert f"topic deny {root}/#" in anonymous
+        assert topic_problem(f"{root}/pk/device/properties/report") == "mqtt_mapping_topic_native"

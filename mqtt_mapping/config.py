@@ -13,13 +13,13 @@ import os
 from dataclasses import dataclass
 
 from ems.file_io import file_signature
+from ems.zendure_mqtt.builtin_broker import NATIVE_TOPIC_ROOTS
 from ems.zendure_mqtt.external_catalog import EMS_SOLARFLOW, valid_device_id
 from ems.zendure_mqtt.payload_values import PAYLOAD_FORMATS, valid_json_path
 
 SCHEMA_VERSION = 1
 OUTPUT_PREFIX = EMS_SOLARFLOW.prefix
 OUTPUT_KEY = EMS_SOLARFLOW.bundle_key
-NATIVE_TOPIC_ROOTS = ("iot", "Zendure")
 TARGETS = tuple(EMS_SOLARFLOW.keys)
 REQUIRED_TARGET = EMS_SOLARFLOW.required_key
 SPLIT_TARGET = "batteryPower"
