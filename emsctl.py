@@ -19,6 +19,7 @@ from ems import runtime_commands
 from ems.runtime_state import RuntimeState
 
 
+from ems.zendure_mqtt.builtin_broker import builtin_broker_view
 from ems.paths import (
     BASE_DIR,
     LAYOUT_LEGACY_ROOT_ONLY,
@@ -1683,13 +1684,15 @@ def run_runtime_command(runtime_state, config, command, action, value=None, devi
         raise ValueError(f"{label}: {exc}") from exc
 
 
-def print_status(path, state, device_settings=None):
+def print_status(path, state, device_settings=None, builtin_broker=None):
     payload = {
         "runtime_state_path": path,
         "state": state
     }
     if device_settings:
         payload["device_settings"] = device_settings
+    if builtin_broker is not None:
+        payload["builtin_mqtt_broker"] = builtin_broker
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 
@@ -4403,7 +4406,16 @@ def main(argv=None):
         if args.command == "status":
             if created:
                 runtime_state.save_atomic()
-            print_status(runtime_path, state, live_device_settings(runtime_path))
+            print_status(
+                runtime_path,
+                state,
+                live_device_settings(runtime_path),
+                builtin_broker=builtin_broker_view(
+                    config,
+                    os.path.dirname(os.path.abspath(args.config)),
+                    os.path.dirname(os.path.abspath(runtime_path)),
+                ),
+            )
             return 0
 
         if args.command == "winter" and args.action == "status":

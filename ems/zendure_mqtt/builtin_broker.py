@@ -13,6 +13,7 @@ import time
 from collections.abc import Mapping
 
 from ems.config import grid_meter_mqtt_settings
+from ems.paths import ZENDURE_MQTT_STATUS_FILENAME
 from ems.zendure_mqtt.config_entries import zendure_mqtt_broker_ref
 
 BUILTIN_PROFILE_REF = "ems-mqtt"
@@ -21,6 +22,8 @@ BROKER_SETTINGS_PARTS = ("mqtt", "broker.json")
 MAPPINGS_PARTS = ("mqtt", "mappings.json")
 MAPPING_STATUS_FILENAME = "mqtt-mapping-status.json"
 MAPPING_STATUS_STALE_SECONDS = 120
+EMS_STATUS_STALE_SECONDS = 120
+BUILTIN_BROKER_STATES = ("off", "on", "connected", "not_connected", "unknown")
 NATIVE_TOPIC_ROOTS = ("iot", "Zendure", "")
 NATIVE_TOPIC_TREES = tuple(f"{root}/#" for root in NATIVE_TOPIC_ROOTS)
 _UNREADABLE = object()
@@ -103,6 +106,63 @@ def builtin_profile_users(config) -> list[str]:
     if isinstance(grid_meter, Mapping) and grid_meter_mqtt_settings(grid_meter).get("broker_ref") in refs:
         users.append("grid meter")
     return users
+
+
+def _ems_connected(config, data_dir, now):
+    """Whether the EMS reports a live connection to the broker, or ``None`` when it reports none.
+
+    The EMS writes each profile's connection into its MQTT status file every
+    cycle; a file older than two minutes says nothing about now.
+    """
+
+    payload = _read_json(os.path.join(str(data_dir), ZENDURE_MQTT_STATUS_FILENAME))
+    if not isinstance(payload, Mapping):
+        return None
+    written = payload.get("written_at")
+    if not isinstance(written, (int, float)) or now - written > EMS_STATUS_STALE_SECONDS:
+        return None
+    status = payload.get("status")
+    brokers = status.get("brokers") if isinstance(status, Mapping) else None
+    refs = builtin_profile_refs(config) | {BUILTIN_PROFILE_REF}
+    reported = [
+        broker for broker in brokers or [] if isinstance(broker, Mapping) and broker.get("broker_ref") in refs
+    ]
+    if not reported:
+        return None
+    return any(broker.get("connected") is True for broker in reported)
+
+
+def builtin_broker_view(config, config_dir, data_dir, *, now=None) -> dict:
+    """The broker as the EMS sees it, read-only: switched on, used, and connected.
+
+    ``state`` is ``off``, ``unknown`` (``broker.json`` unreadable), ``connected``
+    or ``not_connected`` (as the EMS reports its profile), or ``on`` when the
+    EMS reports no connection for it at all: nothing of it is in use yet, or
+    only an MQTT grid meter, whose client does not report one.
+    """
+
+    now = time.time() if now is None else now
+    enabled = broker_enabled(config_dir)
+    users = builtin_profile_users(config)
+    connected = _ems_connected(config, data_dir, now) if enabled else None
+    if enabled is None:
+        state = "unknown"
+    elif not enabled:
+        state = "off"
+    elif connected is None:
+        state = "on"
+    else:
+        state = "connected" if connected else "not_connected"
+    mapping = _read_json(mapping_status_path(data_dir))
+    devices = [item for item in (mapping.get("devices") or []) if isinstance(item, Mapping)] if isinstance(mapping, Mapping) else []
+    return {
+        "state": state,
+        "enabled": enabled,
+        "users": users,
+        "ems_connected": connected,
+        "mapped_devices": len(devices),
+        "publishing_devices": sum(1 for item in devices if item.get("publishing") is True),
+    }
 
 
 def _cause(code, title, message, suggested):

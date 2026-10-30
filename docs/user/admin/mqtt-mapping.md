@@ -19,8 +19,9 @@ reaches EMS until you save a mapping.
 
 ## Prerequisites
 
-- The Admin Console. Only the Admin switches the broker; the dashboard and
-  `emsctl diagnose` only show its state.
+- The Admin Console. Only the Admin switches the broker; the dashboard's
+  maintenance status, `emsctl status` and `emsctl diagnose` only show its state:
+  off, on, EMS connected or not, and who uses it.
 - A fixed address for this host in your router: every device finds the broker
   by it.
 - Docker Hub reachable the first time you switch the broker on (22 MB).
