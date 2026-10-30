@@ -54,6 +54,7 @@ RUN pip install --no-cache-dir --no-compile -r requirements.txt \
     && chown -R admin:admin /data
 
 COPY admin/ ./admin/
+COPY mqtt_mapping/ ./mqtt_mapping/
 COPY dashboard/__init__.py ./dashboard/__init__.py
 COPY dashboard/static_files.py ./dashboard/static_files.py
 # Admin install-context detection reuses the central EMS path resolver, the

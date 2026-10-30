@@ -35,7 +35,7 @@ require_replacement_canary_env
 gate_static() {
     run_stage "static: ruff" ruff check .
     run_stage "static: compileall" "$PYTHON" -m compileall -q \
-        admin appliance ems dashboard scripts tests emsctl.py ems-solarflow-api-control.py
+        admin appliance ems dashboard mqtt_mapping scripts tests emsctl.py ems-solarflow-api-control.py
     run_stage "static: admin.js" node --check admin/static/admin.js
     run_stage "static: appliance app.js" node --check appliance/static/app.js
     run_stage "static: whitespace" git diff --check

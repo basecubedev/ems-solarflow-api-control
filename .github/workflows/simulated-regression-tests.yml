@@ -42,7 +42,7 @@ jobs:
 
       - name: Compile Python files
         run: |
-          python -m compileall admin appliance ems dashboard scripts tests emsctl.py ems-solarflow-api-control.py
+          python -m compileall admin appliance ems dashboard mqtt_mapping scripts tests emsctl.py ems-solarflow-api-control.py
 
       - name: Check generated config template
         run: |
