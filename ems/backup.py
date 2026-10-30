@@ -30,6 +30,7 @@ from ems.config import normalize_influxdb_config, safe_bool
 from ems.diagnostics import DIAGNOSE_SCHEMA_VERSION, SUPPORT_BUNDLE_VERSION
 from ems.file_io import STARTUP_LOCK_TIMEOUT_SECONDS, FileLockTimeout, exclusive_file_lock
 from ems.paths import BASE_DIR, resolve_schedules_path
+from ems.zendure_mqtt.builtin_broker import broker_settings_path, mappings_path
 
 APP_NAME = "ems-solarflow-api-control"
 BACKUP_FORMAT_VERSION = 1
@@ -219,6 +220,9 @@ def collect_config_backup_files(
     # config.json — always when present.
     cfg_path = config_path or _resolve("config.json", base_dir)
     candidates.append((cfg_path, "config", True))
+    config_dir = os.path.dirname(os.path.abspath(cfg_path))
+    candidates.append((broker_settings_path(config_dir), "mqtt_broker_config", False))
+    candidates.append((mappings_path(config_dir), "mqtt_mapping_config", False))
 
     # runtime-state.json
     if runtime_state_path:
