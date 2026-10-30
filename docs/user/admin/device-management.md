@@ -25,7 +25,7 @@ an inverter between its available connections — without hand-editing
 
 ### 1 — Open the devices
 
-![Settings and devices on the Devices tab: Find devices with Search my network, What the search may use with broker credentials and the Zendure cloud key, and the devices — grid meter, Zendure MQTT broker and two inverters — with the three Add buttons](../../assets/screenshots/admin/admin-settings-devices.png)
+![Settings and devices on the Devices tab: Find devices with Search my network, What the search may use with broker credentials and the Zendure cloud key, and the devices — grid meter, Zendure MQTT broker and two inverters — with the three Add buttons, and the MQTT mapping](../../assets/screenshots/admin/admin-settings-devices.png)
 
 **Where:** **Settings & devices** → the **Devices** tab. The assistant's **Add
 a device** tile and **Open the devices** lead straight here.

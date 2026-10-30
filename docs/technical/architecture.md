@@ -66,6 +66,19 @@ The implementation lives in internal modules under `ems/`.
 This preserves the operational model of one start script and one static config
 while avoiding a large monolithic source file.
 
+### Built-in MQTT broker and MQTT mapping
+
+Owned by the Admin, not by the EMS: `admin/mqtt_broker.py` keeps
+`config/mqtt/broker.json`, renders `<install>/mqtt/` and starts the compose
+project `ems-mqtt` (containers `ems-mqtt-broker`, Mosquitto, and
+`ems-mqtt-mapping`, the Admin image running `python -m mqtt_mapping`) beside
+the EMS stack, which it never changes. The mapping service (`mqtt_mapping/`)
+imports only the shared rules from `ems/` — the external catalog and
+`ems/zendure_mqtt/payload_values.py` — and publishes the external-device
+standard, so the EMS read path is unchanged and sees an ordinary local MQTT
+profile. `ems/zendure_mqtt/builtin_broker.py` is the EMS's read-only view for
+diagnose and backups.
+
 ## Runtime AC Mode Intent
 
 The controller derives a runtime AC mode intent for each device before normal

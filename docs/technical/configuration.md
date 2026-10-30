@@ -1406,6 +1406,32 @@ above, not as a Local API device. Everything else on that page stays editable be
 Staleness, broker profiles, credentials and TLS work exactly as they do for
 every other MQTT device; see the section below.
 
+## Built-in MQTT broker and MQTT mapping
+
+Both are switched and edited only in the Admin Console
+([user guide](../user/admin/mqtt-mapping.md)); `config.json` holds no key for
+them. The EMS sees the broker as an ordinary local MQTT profile.
+
+| File | Owner | Content |
+| --- | --- | --- |
+| `config/mqtt/broker.json` | Admin | `enabled` (default `false`; a missing file is off, an unreadable one unknown), `port`, `anonymous`, `accounts[]` (`name`, `credentials_ref`, `topic_prefix`, `bridge`, `zendure`), `grid_meter_account` |
+| `config/mqtt/mappings.json` | Admin (validated by `mqtt_mapping/config.py`) | `schema_version: 1`, optional `publish_interval_seconds` (5–30, default 15), `devices[]` with `id`, `label`, `enabled`, `broker_ref` and `values` keyed by the catalog keys |
+| `config/secrets/` | Admin credential store | account passwords, encrypted; not part of backups |
+| `<install>/mqtt/` | rendered by the Admin | `compose.yml` (project `ems-mqtt`), `broker/` (`mosquitto.conf`, `acl`, `passwd`), `mapping/mapping-credentials.json`, `data/` |
+| `data/mqtt-mapping-status.json` | the mapping service | non-authoritative status per device and source |
+
+A mapping source is `{topic, format: number|json, path, factor, invert,
+negative: keep|zero, max_age_seconds: 10–900}`. A value is the sum of its
+sources, battery power optionally charge minus discharge, and must pass the
+catalog's own `readings()` rule; a device publishes only while every source is
+fresh. Source topics under `ems-solarflow/`, `iot/` and `Zendure/` are refused.
+
+Accounts `ems`, `ems-mapping` and `ems-admin` are internal. In every mode,
+`ems-solarflow/#`, `iot/#`, `Zendure/#`, `/#` and the topic of an MQTT grid
+meter on this broker are denied to anonymous clients and to accounts without
+the matching option. Config backups carry both JSON files (kinds
+`mqtt_broker_config`, `mqtt_mapping_config`).
+
 ## Zendure MQTT Telemetry and Control
 
 Telemetry from one or more MQTT brokers. The feature is **always on** and has
