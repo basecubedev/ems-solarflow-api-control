@@ -81,3 +81,6 @@ export function ruleStates(snapshot) {
     return { ...rule, active: state.active === true, reason, reasonKey: reason && reason === RULE_REASONS[rule.key] ? `rule.reason.${rule.key}` : null };
   });
 }
+
+/** The built-in MQTT broker's states as the EMS reads them; paired with ems/zendure_mqtt/builtin_broker.py. */
+export const MQTT_BROKER_STATES = Object.freeze(["off", "on", "connected", "not_connected", "unknown"]);

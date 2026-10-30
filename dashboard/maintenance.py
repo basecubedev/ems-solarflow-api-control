@@ -8,7 +8,9 @@ from dataclasses import dataclass
 
 from ems import backup as backup_mod
 from ems import config as config_mod
+from ems import paths
 from ems.diagnostics import diagnose_redact_key, diagnose_redact_text
+from ems.zendure_mqtt.builtin_broker import builtin_broker_view
 
 
 BACKUP_TYPES = ("config", "databases", "influxdb")
@@ -77,6 +79,11 @@ def maintenance_status(config_path, base_dir):
             "restore_supported": bool(evaluation["supported"]),
         },
         "restore_available_in_dashboard": True,
+        "builtin_mqtt_broker": builtin_broker_view(
+            config,
+            os.path.dirname(os.path.abspath(config_path)),
+            paths.resolve_data_dir(base_dir=base_dir),
+        ),
     }
 
 

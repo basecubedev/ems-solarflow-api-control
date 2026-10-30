@@ -21,9 +21,11 @@ from admin.mqtt_broker import BROKER_SERVICE, MAPPING_SERVICE
 from ems.backup import collect_config_backup_files
 from ems.diagnostics import diagnose_builtin_mqtt
 from ems.zendure_mqtt.builtin_broker import (
+    BUILTIN_BROKER_STATES,
     BUILTIN_PROFILE_REF,
     broker_enabled,
     builtin_broker_root_causes,
+    builtin_broker_view,
     builtin_profile_users,
 )
 
@@ -178,3 +180,89 @@ def test_a_profile_discovery_minted_counts_as_the_built_in_one_by_its_account():
     }
 
     assert builtin_profile_users(config) == ["Balkon"]
+
+
+def _ems_status(data_dir, brokers, *, written_at):
+    (data_dir / "zendure-mqtt-status.json").write_text(
+        json.dumps({"written_at": written_at, "status": {"brokers": brokers}}), encoding="utf-8"
+    )
+
+
+def test_the_view_says_off_unknown_or_on_as_the_admin_switched_it(dirs):
+    config_dir, data_dir = dirs
+    assert builtin_broker_view({}, *dirs)["state"] == "off"
+
+    _broker(config_dir, enabled=True)
+    view = builtin_broker_view({}, *dirs)
+    assert (view["state"], view["users"], view["ems_connected"]) == ("on", [], None)
+
+    (config_dir / "mqtt" / "broker.json").write_text("{", encoding="utf-8")
+    assert builtin_broker_view({}, *dirs)["state"] == "unknown"
+
+
+def test_connected_is_what_the_ems_reports_for_the_profile_and_only_while_fresh(dirs):
+    config_dir, data_dir = dirs
+    _broker(config_dir, enabled=True)
+    config = {
+        "zendure_mqtt": {"brokers": {"local_mqtt_x": {"host": "192.0.2.10", "credentials_ref": "ems-mqtt"}}},
+        "devices": [{"name": "Balkon", "type": "external_mqtt", "mqtt": {"broker_ref": "local_mqtt_x"}}],
+    }
+    other = {"broker_ref": "local", "connected": True}
+
+    _ems_status(data_dir, [other, {"broker_ref": "local_mqtt_x", "connected": True}], written_at=1000.0)
+    assert builtin_broker_view(config, *dirs, now=1060.0)["state"] == "connected"
+    assert builtin_broker_view(config, *dirs, now=1200.0)["state"] == "on"
+
+    _ems_status(data_dir, [other, {"broker_ref": "local_mqtt_x", "connected": False}], written_at=1000.0)
+    view = builtin_broker_view(config, *dirs, now=1060.0)
+    assert (view["state"], view["users"]) == ("not_connected", ["Balkon"])
+
+    _ems_status(data_dir, [other], written_at=1000.0)
+    assert builtin_broker_view(config, *dirs, now=1060.0)["state"] == "on"
+
+
+def test_the_view_counts_mapped_and_published_devices(dirs):
+    _status(dirs[1], [{"id": "a", "publishing": True}, {"id": "b", "publishing": False}])
+
+    view = builtin_broker_view({}, *dirs)
+
+    assert (view["mapped_devices"], view["publishing_devices"]) == (2, 1)
+
+
+def test_every_state_the_view_can_take_is_listed():
+    assert BUILTIN_BROKER_STATES == ("off", "on", "connected", "not_connected", "unknown")
+
+
+def test_emsctl_status_carries_the_broker_line(tmp_path, capsys):
+    import emsctl
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text("{}", encoding="utf-8")
+    _broker(config_dir, enabled=True)
+    runtime = tmp_path / "data" / "runtime-state.json"
+
+    code = emsctl.main(["--config", str(config_dir / "config.json"), "--runtime-state", str(runtime), "status"])
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["builtin_mqtt_broker"]["state"] == "on"
+
+
+def test_the_dashboard_maintenance_status_carries_the_broker_line(tmp_path):
+    from dashboard.maintenance import maintenance_status
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text("{}", encoding="utf-8")
+
+    status = maintenance_status(str(config_dir / "config.json"), str(tmp_path))
+
+    assert status["builtin_mqtt_broker"]["state"] == "off"
+
+
+def test_the_dashboard_lists_the_same_states():
+    source = (ROOT / "frontend" / "dashboard-modern" / "src" / "lib" / "status.js").read_text(encoding="utf-8")
+    listed = source.split("export const MQTT_BROKER_STATES = Object.freeze([", 1)[1].split("]", 1)[0]
+
+    assert tuple(part.strip().strip('"') for part in listed.split(",")) == BUILTIN_BROKER_STATES

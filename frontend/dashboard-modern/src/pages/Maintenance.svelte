@@ -26,6 +26,24 @@
   let confirm = $state({ open: false, kind: "" });
   const f = $derived(fmt());
 
+  const BROKER_WORDS = {
+    off: () => t("maint.mqtt.off"),
+    on: () => t("maint.mqtt.on"),
+    connected: () => t("maint.mqtt.connected"),
+    not_connected: () => t("maint.mqtt.notConnected"),
+    unknown: () => t("maint.mqtt.unknown"),
+  };
+
+  /** The built-in broker in one line: its state, who uses it, what the mapping publishes. Read-only. */
+  function brokerLine(view) {
+    if (!view) return "—";
+    const word = (BROKER_WORDS[view.state] || BROKER_WORDS.unknown)();
+    if (view.state === "off" || view.state === "unknown") return word;
+    const users = view.users?.length ? t("maint.mqtt.users", { names: view.users.join(", ") }) : t("maint.mqtt.unused");
+    const mapped = view.mapped_devices ? t("maint.mqtt.mapped", { published: view.publishing_devices, mapped: view.mapped_devices }) : "";
+    return [word, users, mapped].filter(Boolean).join(" · ");
+  }
+
   async function loadAll() {
     if (!auth.authenticated) return;
     const [s, b, u] = await Promise.allSettled([
@@ -172,6 +190,9 @@
         <Fact label={t("maint.backupTypes")} value={(status.backup_types || []).map(typeLabel).join(", ") || "—"} wrap />
         <Fact label="InfluxDB" value={status.influxdb?.enabled ? `${influxMode(status.influxdb.mode)}${status.influxdb.backup_supported ? "" : ` (${t("maint.noBackup")})`}` : t("common.off")} />
         <Fact label={t("maint.restore")} value={status.restore_available_in_dashboard ? t("maint.available") : t("maint.cliOnly")} />
+        <div data-testid="maint-mqtt-broker" data-state={status.builtin_mqtt_broker?.state || "unknown"}>
+          <Fact label={t("maint.mqtt")} value={brokerLine(status.builtin_mqtt_broker)} wrap />
+        </div>
       </div>
     {/if}
   </Card>
