@@ -505,6 +505,27 @@ run here is the same evidence CI is about to produce. It used to leave out
 the gate it stands in for -- the failure mode being a push that looks validated
 and comes back red on something that was never run.
 
+CodeQL belongs to that baseline. GitHub's code scanning analyses a pull request
+only once it is pushed, and an alert the change introduces turns its check
+red, so a branch is scanned locally before it is pushed, for both languages
+and with the same code-scanning suites. The database is built from a
+directory, ignored files included, so scan a clean checkout of the branch (a
+throwaway worktree), not a working tree with local research or agent copies:
+
+```bash
+codeql database create <db-python> --language=python --source-root=. --overwrite
+codeql database analyze <db-python> --format=sarif-latest --output=python.sarif \
+  codeql/python-queries:codeql-suites/python-code-scanning.qls
+codeql database create <db-js> --language=javascript-typescript --source-root=. --overwrite
+codeql database analyze <db-js> --format=sarif-latest --output=javascript.sarif \
+  codeql/javascript-queries:codeql-suites/javascript-code-scanning.qls
+```
+
+A result the branch introduces -- one the default branch's scan does not have
+-- is fixed before the push, never dismissed to get it through. Where a query
+misreads the code, change the code so that it reads right; a sanitizer named
+like a secret is the known case.
+
 EMS/control changes additionally require focused tests, simulation and the
 `power_control` gate, self-test, and the full non-Docker suite. Admin/frontend
 changes require focused backend contracts, frontend extraction/contracts,
