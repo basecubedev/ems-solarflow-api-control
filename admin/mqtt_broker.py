@@ -935,11 +935,11 @@ def _port_answers(port) -> bool:
         return False
 
 
-def reconcile_builtin_broker(credential_store, *, broker=None) -> str | None:
+def reconcile_builtin_broker(credential_store, *, broker=None, compose=None) -> str | None:
     """Run once when the Admin starts; a line for the log, or ``None`` when nothing is set up."""
 
     try:
-        broker = broker or builtin_broker_for_install(credential_store)
+        broker = broker or builtin_broker_for_install(credential_store, compose=compose)
         result = broker.reconcile()
     except Exception as exc:
         return f"Built-in MQTT broker: not reconciled ({type(exc).__name__})"
