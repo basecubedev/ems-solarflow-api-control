@@ -144,10 +144,16 @@ def test_an_oversized_payload_is_refused_before_it_is_parsed():
 
 
 def test_a_payload_nested_too_deeply_for_the_parser_is_refused_without_raising():
+    """Up to Python 3.13 the parser gives up on this depth; 3.14 reads it, and
+    the value at ``a`` is then an object. Either way it is no reading."""
+
     depth = 30_000
     nested = b'{"a":' * depth + b"1" + b"}" * depth
 
-    assert extract_number(nested, "json", "a") == (None, "not_json")
+    value, reason = extract_number(nested, "json", "a")
+
+    assert value is None
+    assert reason in ("not_json", "not_a_number")
 
 
 # --- what a path may be -------------------------------------------------------
