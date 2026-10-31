@@ -64,38 +64,59 @@ Accounts, mappings and the image stay; switching on again needs no download.
 
 ## Connect a device
 
-Enter the address shown on the card, the port and an account in the device's
-own MQTT settings. For a Shelly Gen2, switch MQTT on, enter server, user and
-password, and switch on the status updates it sends over MQTT.
+With the broker running, **Connect a device** on its card guides you:
+
+1. Choose the device type — Shelly Gen2+, Shelly Gen1, Tasmota, OpenDTU/AhoyDTU
+   or another — and follow its three or four steps. For a Shelly Gen2+ that is:
+   Settings → MQTT, enable it, enter server, user and password, and switch on
+   **Generic status update over MQTT**.
+2. Copy the address, the port, the user and the password with the buttons
+   beside them.
+3. **Wait for the device…** shows the live topics; as soon as the device
+   publishes, it appears with **Set it up now**.
+
+![Settings, Add-ons, Connect a device: the steps for a Shelly Gen2+, the address, port, user and password to copy, and the button that waits for the device](../../assets/screenshots/admin/admin-mqtt-connect.png)
 
 ## Map it
 
-**Settings → Devices → MQTT mapping** (or Guided Setup step 02):
+**Set it up now**, or **Map as external device** on a group under **Settings →
+Devices → MQTT mapping** (in Guided Setup, step 02), asks one question first:
 
-1. Choose the broker and **Show live topics**. Everything the broker carries
-   appears, grouped by device. Shelly, Tasmota, OpenDTU and AhoyDTU are
-   recognised and named; unknown topics are grouped by their topic tree.
-   Devices EMS reads directly (Zendure) and the mapping's own outputs are shown
-   but not offered.
-2. **Map as external device** on a group, or **New external device**.
-3. For each value — inverter power (required), solar power, battery power,
-   state of charge — **Use as** a number from the live topics, or enter topic
-   and JSON path by hand. Several sources add up; battery power is one signed
-   value, or charge and discharge as two.
-4. Per source: factor (for example 1000 for kW), invert the sign (a Shelly
-   measures feed-in as negative), negative as 0 (standby noise) and the
-   maximum age.
-5. **Preview** asks the service's own calculation what it would publish, and
-   why not. **Save and apply** writes the mapping; EMS does not restart.
-6. Once the device publishes, add it under **Find devices** as an external
-   device.
+1. **What does this device measure?**
+   - *Balcony plant or inverter without battery*: one power value, counted as
+     inverter and solar power.
+   - *Inverter with battery*: its AC power, and solar, battery and charge level
+     if it reports them.
+   - *AC-coupled battery*: its AC output, its battery power and its charge
+     level. The EMS counts a device by what it feeds into the house, so a
+     battery needs its AC output too.
+   - *Something else*: the free editor, where you choose every value.
+2. Give it a name, and check **Which value is the power (W)?** — the likely
+   value is already chosen; pick the unit (Watt or Kilowatt; for a charge level
+   Percent or a share 0–1). For a plant without battery, a value that reads
+   negative, as a Shelly counts feed-in, is turned round on its own and
+   negatives count as 0. A battery's negative AC power may just mean it is
+   charging, so there it only counts as 0: check in the preview that
+   discharging shows as a positive value. A source may stay quiet for three of
+   its measured intervals (60 to 900 s); one that sends only on change, or that
+   has not been seen often enough to measure, may stay quiet for 600 s.
+   **Advanced** holds the id, the topic and path and a free factor; a name
+   already in use gets a number in its id.
+3. **Preview** asks the service's own calculation what it would publish, and
+   why not; a refused negative value has a **Correct** button in the free
+   editor. **Save and apply** writes the mapping; EMS does not restart.
+
+   **Edit** on a mapped device opens the free editor with every source's
+   factor, sign, negative rule and maximum age:
+
+   ![Editing the mapped balcony inverter: the Shelly's apower as inverter power with the sign inverted, negative as 0 and a maximum age of 600 s, and the preview that would publish 612.3 W as inverter and solar power](../../assets/screenshots/admin/admin-mqtt-mapping-editor.png)
+4. Once it is published, **Add as device** in its row adds it through the same
+   adoption as Find devices; save the settings (in Guided Setup, it joins the
+   setup draft).
+
+![Settings, Devices, MQTT mapping: the question what the device measures, with Balcony plant chosen, the name and the power value from the Shelly](../../assets/screenshots/admin/admin-mqtt-question.png)
 
 ![Settings, Devices, MQTT mapping: the mapped balcony inverter published, and the live topics with a Shelly (Gen2+) group, the EMS output and an unknown heating topic](../../assets/screenshots/admin/admin-mqtt-mapping.png)
-
-A balcony inverter without a battery is inverter power **and** solar power from
-the same Shelly value, otherwise it is missing from the PV total.
-
-![Editing the mapped balcony inverter: the Shelly's apower as inverter power with the sign inverted, negative as 0 and a maximum age of 600 s, and the preview that would publish 612.3 W as inverter and solar power](../../assets/screenshots/admin/admin-mqtt-mapping-editor.png)
 
 ## Expected result
 

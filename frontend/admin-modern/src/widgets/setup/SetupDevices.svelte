@@ -8,6 +8,8 @@
   import MqttBrokerCard from "../MqttBrokerCard.svelte";
   import MqttMappingPanel from "../MqttMappingPanel.svelte";
   import { routeMqtt } from "../../state/mqtt.svelte.js";
+  import { mappedProposal } from "../../lib/mqtt.js";
+  import { refreshBrokers as refreshSetupBrokers } from "../../state/setupDiscovery.svelte.js";
   import { t, tn } from "../../i18n/i18n.svelte.js";
   import { errorView } from "../../lib/errors.js";
   import { reasonKey } from "../../lib/devices.js";
@@ -40,6 +42,22 @@
   const mdnsState = $derived(mdnsStateOf(setupDiscovery.mdns));
   const percent = $derived(progressPercent());
   const running = $derived(setupDiscovery.scans.find((entry) => entry.status === "running") || null);
+
+  const proposalFor = (id) => mappedProposal(setupDiscovery.proposals, id);
+  /** A published mapped device is chosen for the setup draft through the same proposal as Find devices. */
+  const mqttAdoption = {
+    state(id) {
+      const proposal = proposalFor(id);
+      return proposal && selection(setupDraft.draft, proposal.id) ? "draft" : null;
+    },
+    async add(id) {
+      await refreshSetupBrokers();
+      const proposal = proposalFor(id);
+      if (!proposal) return false;
+      if (!selection(setupDraft.draft, proposal.id)) toggleProposal(proposal.id);
+      return true;
+    },
+  };
 
   $effect(() => {
     routeSources(setupRoute);
@@ -419,7 +437,7 @@
 </Card>
 
 <Card icon="list-checks" tone="c-grid" title={t("mqtt.mapping.title")} subtitle={t("mqtt.mapping.sub")} span="span-12">
-  <MqttMappingPanel />
+  <MqttMappingPanel adoption={mqttAdoption} />
 </Card>
 
 <ConfirmDialog

@@ -5,8 +5,11 @@
   import ConfirmDialog from "../../../shared/ui/ConfirmDialog.svelte";
   import { t } from "../i18n/i18n.svelte.js";
   import { errorView } from "../lib/errors.js";
-  import { BROKER_ISSUES, brokerState } from "../lib/mqtt.js";
-  import { mqtt, loadBroker, enableBroker, stopBroker, saveBroker, setPassword, revealPassword } from "../state/mqtt.svelte.js";
+  import { BROKER_ISSUES, BUILTIN_BROKER, CONNECT_TYPES, brokerState, connectSteps } from "../lib/mqtt.js";
+  import { mqtt, loadBroker, enableBroker, stopBroker, saveBroker, setPassword, revealPassword, waitForDevice, newGroup, setUpGroup, watchTopics } from "../state/mqtt.svelte.js";
+
+  /** onsetup: called after a new device was handed to the mapping, so the page can show it. */
+  let { onsetup = null } = $props();
 
   const TONES = { off: "c-idle", running: "c-ok", stopped: "c-warn", unknown: "c-warn" };
 
@@ -20,6 +23,12 @@
   let passwordFor = $state("");
   let shown = $state.raw({});
   let removing = $state("");
+  let connecting = $state(false);
+  let deviceType = $state("shelly_gen2");
+  let connectAccount = $state("");
+  let copied = $state("");
+  let copyFailed = $state(false);
+  let copiedPassword = $state.raw(null);
 
   const view = $derived(mqtt.broker);
   const settings = $derived(view?.settings || null);
@@ -33,6 +42,36 @@
   $effect(() => {
     loadBroker();
   });
+
+  $effect(() => (mqtt.session && mqtt.waiting ? watchTopics() : undefined));
+
+  const fresh = $derived(newGroup());
+  const account = $derived(connectAccount || view?.accounts?.[0]?.name || "");
+
+  /** The clipboard exists only over HTTPS or on localhost; elsewhere the value stays on screen to copy by hand. */
+  async function copy(what, text) {
+    try {
+      await navigator.clipboard.writeText(String(text));
+      copied = what;
+      copyFailed = false;
+      return true;
+    } catch {
+      copied = "";
+      copyFailed = true;
+      return false;
+    }
+  }
+
+  async function copyPassword() {
+    const answer = await revealPassword(account);
+    if (!answer?.password) return;
+    copiedPassword = (await copy("password", answer.password)) ? null : { account, password: answer.password };
+  }
+
+  function setUp(group) {
+    setUpGroup(group);
+    onsetup?.();
+  }
 
   $effect(() => {
     if (settings) port = String(settings.port);
@@ -149,7 +188,7 @@
       <button class="btn secondary small" type="submit" disabled={busy || !name.trim()} data-testid="mqtt-account-add"><Icon name="plus" size="sm" />{t("mqtt.broker.addAccount")}</button>
     </form>
     <form class="form" onsubmit={(event) => { event.preventDefault(); const target = passwordFor || view.accounts[0]?.name; if (target && newPassword) renew(target, newPassword); }}>
-      <select class="input" bind:value={passwordFor} aria-label={t("mqtt.broker.accounts")} disabled={!view.accounts.length}>
+      <select class="input" value={passwordFor || view.accounts[0]?.name || ""} onchange={(event) => (passwordFor = event.currentTarget.value)} aria-label={t("mqtt.broker.accounts")} disabled={!view.accounts.length}>
         {#each view.accounts as account (account.name)}<option value={account.name}>{account.name}</option>{/each}
       </select>
       <input class="input" type="password" autocomplete="new-password" placeholder={t("mqtt.broker.ownPassword", { name: passwordFor || view.accounts[0]?.name || "" })} aria-label={t("mqtt.broker.ownPassword", { name: passwordFor || view.accounts[0]?.name || "" })} bind:value={newPassword} disabled={!view.accounts.length} />
@@ -165,6 +204,42 @@
       </label>
     {/if}
     <p class="muted small">{t("mqtt.broker.connectHint")}</p>
+    {#if state === "running"}
+      <div class="row-wrap"><button class="btn small" type="button" onclick={() => (connecting = !connecting)} aria-expanded={connecting ? "true" : "false"} data-testid="mqtt-connect"><Icon name="plug-zap" size="sm" />{t("mqtt.connect.title")}</button></div>
+    {/if}
+    {#if connecting}
+      <section class="connect inner" data-testid="mqtt-connect-guide">
+        <div class="row-wrap" role="radiogroup" aria-label={t("mqtt.connect.type")}>
+          {#each CONNECT_TYPES as type (type)}
+            <label class="check"><input type="radio" name="mqtt-device-type" value={type} checked={deviceType === type} onchange={() => (deviceType = type)} /><span>{t(`mqtt.connect.type.${type}`)}</span></label>
+          {/each}
+        </div>
+        <ol class="steps">
+          {#each connectSteps(deviceType) as key (key)}<li>{t(key)}</li>{/each}
+        </ol>
+        {#if view.accounts.length > 1}
+          <label class="field"><span class="small muted">{t("mqtt.broker.accounts")}</span>
+            <select class="input" value={account} onchange={(event) => (connectAccount = event.currentTarget.value)}>{#each view.accounts as item (item.name)}<option value={item.name}>{item.name}</option>{/each}</select>
+          </label>
+        {/if}
+        <div class="copies">
+          {#each [["address", t("mqtt.connect.server"), view.host_address || ""], ["port", t("mqtt.broker.port"), String(settings.port)], ["user", t("mqtt.connect.user"), settings.anonymous && !account ? "" : account]] as [what, label, value] (what)}
+            <div class="copy inner"><span class="small muted">{label}</span><code>{value || "—"}</code><button class="btn secondary small fit" type="button" onclick={() => copy(what, value)} disabled={!value}>{copied === what ? t("mqtt.connect.copied") : t("mqtt.connect.copy")}</button></div>
+          {/each}
+          <div class="copy inner"><span class="small muted">{t("mqtt.connect.password")}</span><code data-testid="mqtt-connect-password">{copiedPassword?.account === account ? copiedPassword.password : "••••••"}</code><button class="btn secondary small fit" type="button" onclick={copyPassword} disabled={busy || !account}>{copied === "password" ? t("mqtt.connect.copied") : t("mqtt.connect.copy")}</button></div>
+        </div>
+        {#if copyFailed}<p class="note warn small" data-testid="mqtt-connect-copy-failed"><Icon name="triangle-alert" size="sm" />{t("mqtt.connect.copyFailed")}</p>{/if}
+        {#if fresh}
+          <p class="note ok" data-testid="mqtt-connect-found"><Icon name="circle-check" />{t("mqtt.connect.found", { key: fresh.key })}
+            <button class="btn small" type="button" onclick={() => setUp(fresh)} data-testid="mqtt-connect-setup">{t("mqtt.connect.setUp")}</button>
+          </p>
+        {:else if mqtt.waiting}
+          <p class="muted small" data-testid="mqtt-connect-waiting"><Icon name="loader" size="sm" />{t("mqtt.connect.waiting")}</p>
+        {:else}
+          <div class="row-wrap"><button class="btn secondary small" type="button" onclick={() => waitForDevice(BUILTIN_BROKER)} disabled={busy} data-testid="mqtt-connect-wait"><Icon name="radio-tower" size="sm" />{t("mqtt.connect.wait")}</button></div>
+        {/if}
+      </section>
+    {/if}
   {/if}
 
   {#each issues as issue, index (`${issue.code}-${index}`)}
@@ -216,4 +291,10 @@
   .field { display: grid; gap: 2px; }
   .port { width: 7rem; }
   .check { display: inline-flex; gap: var(--s1); align-items: center; }
+  .connect { display: grid; gap: var(--s2); }
+  .steps { margin: 0; padding-left: 1.25rem; display: grid; gap: var(--s1); }
+  .copies { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: var(--s2); }
+  .copy { display: grid; gap: 2px; min-width: 0; }
+  .copy code { overflow-wrap: anywhere; }
+  .fit { justify-self: start; }
 </style>

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { SETTLE_MS, freshGroup, mappedProposal } from "../lib/mqtt.js";
 import { adminGet, adminSend } from "./auth.svelte.js";
 
 const BROKER = "/api/discovery/mqtt-broker";
@@ -18,6 +19,9 @@ class Mqtt {
   busy = $state("");
   result = $state.raw(null);
   error = $state.raw(null);
+  waiting = $state.raw(null);
+  topicsAt = $state(0);
+  setup = $state.raw(null);
 }
 
 export const mqtt = new Mqtt();
@@ -95,6 +99,7 @@ export async function pollTopics() {
   if (!mqtt.session) return;
   try {
     mqtt.topics = await adminGet(`${TOPICS}/${encodeURIComponent(mqtt.session)}`);
+    mqtt.topicsAt = Date.now();
   } catch (error) {
     mqtt.session = "";
     mqtt.topics = null;
@@ -107,4 +112,52 @@ export async function stopTopics() {
   mqtt.session = "";
   mqtt.topics = null;
   if (session) await send(`${TOPICS}/${encodeURIComponent(session)}/stop`, {}).catch(() => null);
+}
+
+let watchers = 0;
+let timer = null;
+
+/** Polls the live topics every two seconds while anyone shows them; one timer for every component. */
+export function watchTopics() {
+  watchers += 1;
+  if (!timer) timer = setInterval(pollTopics, 2000);
+  return () => {
+    watchers -= 1;
+    if (watchers <= 0 && timer) {
+      clearInterval(timer);
+      timer = null;
+      watchers = 0;
+    }
+  };
+}
+
+/** Starts the live topics on ``brokerRef`` and remembers what was there, so only a new device stands out. */
+export async function waitForDevice(brokerRef) {
+  const opening = !mqtt.session;
+  const before = (mqtt.topics?.groups || []).map((group) => `${group.label}/${group.key}`);
+  mqtt.waiting = { brokerRef, before, since: Date.now() + (opening ? SETTLE_MS : 0) };
+  if (opening) await startTopics(brokerRef);
+}
+
+/** The first group that appeared since waiting began and can be mapped, or null. */
+export function newGroup() {
+  if (!mqtt.waiting) return null;
+  return freshGroup(mqtt.topics?.groups, { before: mqtt.waiting.before, since: mqtt.waiting.since, polledAt: mqtt.topicsAt });
+}
+
+/** Hands a live-topic group to the mapping panel, which opens its questions for it. */
+export function setUpGroup(group) {
+  mqtt.waiting = null;
+  mqtt.setup = group;
+}
+
+/**
+ * The existing discovery's proposal for a published mapped device: the known
+ * brokers are listened to once more and the proposals read, exactly as Find
+ * devices does. Null when no broker discovery knows carries the device.
+ */
+export async function findProposal(deviceId) {
+  await send("/api/discovery/mqtt-brokers/refresh", undefined).catch(() => null);
+  const data = await adminGet("/api/discovery/mqtt-proposals").catch(() => null);
+  return mappedProposal(data?.proposals, deviceId);
 }
