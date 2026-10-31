@@ -1,3 +1,19 @@
 {
-  "builds": []
+  "builds": [
+    {
+      "admin_digest": "sha256:a44899cf4194abd52227fffaec16f32e0cd21cebcdf3c686ea1a070a1fff0c3f",
+      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-mqtt-broker-mapping-6138d9ba78-adc010b-41235855912-1",
+      "build_id": "dev-feat-mqtt-broker-mapping-6138d9ba78-adc010b-41235855912-1",
+      "channel": "development",
+      "created_at": "2026-10-31T19:56:54Z",
+      "display_name": "Feature feat-mqtt-broker-mapping",
+      "ems_digest": "sha256:9ec3fb003411e24d27f05adb7c0e14e3e3afd3db9d8c65aa7b76c6394ac15e7c",
+      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-feat-mqtt-broker-mapping-6138d9ba78-adc010b-41235855912-1",
+      "installable": true,
+      "revision": "adc010bc62406359eba66ab2073d4c39e2420ef2",
+      "run_attempt": 1,
+      "run_id": "41235855912",
+      "tag": "dev-feat-mqtt-broker-mapping-6138d9ba78-adc010b-41235855912-1"
+    }
+  ]
 }
