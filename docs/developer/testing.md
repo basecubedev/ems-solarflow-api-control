@@ -262,6 +262,25 @@ Each brings its own deterministic server: the Manager's is the scripted
 assets with synthetic API payloads -- no hardware, no MQTT, no history
 database, no secrets.
 
+### The MQTT mapping end to end
+
+One run across three processes, real where it matters: a real Mosquitto on the
+pinned image with a played Shelly Gen2 plug, the test-mode Admin driven in the
+browser (live topics, mapping, Find devices, saving config.json), the real
+mapping service and the real EMS -- dry, every write gate off -- whose
+dashboard API must show the inverter at 612.3 W. It needs Docker.
+
+```bash
+npx playwright test --config=playwright.mqtt-e2e.config.ts --project=chromium --workers=1
+pytest tests/test_mqtt_mapping_browser_end_to_end.py   # both engines; skips without the browsers
+```
+
+`tests/e2e-mqtt/harness.py` builds the installation and the broker. The
+test-mode Admin runs the mapping container as a local process of the same
+module and files (`admin/test_support.py`, `ProcessMappingCompose`), because the
+container image is the published Admin image, not the code under test. No CI job
+runs it yet: the browser jobs have no Docker broker, the Docker job no browsers.
+
 The cockpit and the Admin console each have a second front end, Modern,
 built from `frontend/dashboard-modern/` and `frontend/admin-modern/` on the
 shared design system in `frontend/shared/`. Their unit tests need Node but no

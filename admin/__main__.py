@@ -189,7 +189,9 @@ def main(argv=None):
     threading.Thread(target=_continue_pending_upgrade, daemon=True).start()
 
     def _reconcile_builtin_broker():
-        outcome = reconcile_builtin_broker(runtime.credential_store)
+        outcome = reconcile_builtin_broker(
+            runtime.credential_store, compose=getattr(runtime, "mqtt_compose", None)
+        )
         if outcome is not None:
             print(outcome)
 

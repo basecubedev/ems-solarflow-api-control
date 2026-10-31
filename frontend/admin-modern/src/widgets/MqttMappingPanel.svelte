@@ -203,8 +203,8 @@
             <span class="small muted">{side === "sources" ? t(`mqtt.target.${key}`) : side === "charge" ? t("mqtt.mapping.charge") : t("mqtt.mapping.discharge")}</span>
             <code class="topic">{source.topic}{source.path ? ` → ${source.path}` : ""}</code>
             <label class="field"><span class="small muted">{t("mqtt.mapping.factor")}</span><input class="input narrow" type="number" step="any" value={source.factor ?? 1} onchange={(event) => changeSource(key, side, index, { factor: numberOf(event) })} /></label>
-            <label class="check"><input type="checkbox" checked={Boolean(source.invert)} onchange={(event) => changeSource(key, side, index, { invert: event.currentTarget.checked })} /><span>{t("mqtt.mapping.invert")}</span></label>
-            <label class="check"><input type="checkbox" checked={source.negative === "zero"} onchange={(event) => changeSource(key, side, index, { negative: event.currentTarget.checked ? "zero" : "keep" })} /><span>{t("mqtt.mapping.negativeZero")}</span></label>
+            <label class="check"><input type="checkbox" checked={Boolean(source.invert)} onchange={(event) => changeSource(key, side, index, { invert: event.currentTarget.checked })} data-testid="mqtt-source-invert" /><span>{t("mqtt.mapping.invert")}</span></label>
+            <label class="check"><input type="checkbox" checked={source.negative === "zero"} onchange={(event) => changeSource(key, side, index, { negative: event.currentTarget.checked ? "zero" : "keep" })} data-testid="mqtt-source-negative" /><span>{t("mqtt.mapping.negativeZero")}</span></label>
             <label class="field"><span class="small muted">{t("mqtt.mapping.maxAge")}</span><input class="input narrow" type="number" min="10" max="900" value={source.max_age_seconds ?? 60} onchange={(event) => changeSource(key, side, index, { max_age_seconds: numberOf(event) })} /></label>
             <button class="icon-btn" type="button" onclick={() => removeSource(key, side, index)} aria-label={t("devices.remove")} title={t("devices.remove")}><Icon name="trash-2" /></button>
           </div>
@@ -246,12 +246,12 @@
     {#if !groups.length}<p class="muted small">{t("mqtt.topics.waiting")}</p>{/if}
     <ul class="list" data-testid="mqtt-topic-groups">
       {#each groups as group (`${group.label}/${group.key}`)}
-        <li class="inner group">
+        <li class="inner group" data-label={group.label} data-key={group.key}>
           <div class="row-wrap">
             <Status tone={group.label === "unknown" ? "c-idle" : group.mappable ? "c-inv" : "c-pv"} text={LIVE_LABELS.includes(group.label) ? t(`mqtt.label.${group.label}`) : group.label} />
             <strong>{group.key}</strong>
             {#if group.mappable}
-              <button class="btn secondary small" type="button" onclick={() => startDevice(group)} disabled={busy}><Icon name="plus" size="sm" />{t("mqtt.topics.mapGroup")}</button>
+              <button class="btn secondary small" type="button" onclick={() => startDevice(group)} disabled={busy} data-testid="mqtt-map-group"><Icon name="plus" size="sm" />{t("mqtt.topics.mapGroup")}</button>
             {:else}
               <span class="muted small">{group.label === "ems_output" ? t("mqtt.topics.output") : t("mqtt.topics.native")}</span>
             {/if}
@@ -266,7 +266,7 @@
                   <strong>{value.value}</strong>
                   {#if value.mapped_to.length}<span class="muted small">{t("mqtt.topics.mappedTo", { ids: value.mapped_to.join(", ") })}</span>{/if}
                   {#if draft && group.mappable}
-                    <button class="btn secondary small" type="button" onclick={() => addSource(topic.topic, value.path)}>{t("mqtt.topics.useAs", { target: t(`mqtt.target.${target}`) })}</button>
+                    <button class="btn secondary small" type="button" onclick={() => addSource(topic.topic, value.path)} data-testid="mqtt-use-value">{t("mqtt.topics.useAs", { target: t(`mqtt.target.${target}`) })}</button>
                   {/if}
                 </div>
               {/each}

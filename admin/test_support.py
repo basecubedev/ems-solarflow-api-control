@@ -25,6 +25,8 @@ import io
 import json
 import os
 import shutil
+import subprocess
+import sys
 import threading
 import uuid
 import zipfile
@@ -703,6 +705,59 @@ def offline_network_scan(cidr, timeout_ms=None, max_workers=None, progress_callb
                 "current_ip": ip,
             })
     return [], []
+
+
+class ProcessMappingCompose:
+    """Test mode only: the MQTT containers without Docker.
+
+    The mapping container runs as a local process of the same module with the
+    same files the Admin rendered for it, so a browser test drives the real
+    service; the built-in broker cannot start here and says so, as a test
+    must bring its own broker.
+    """
+
+    def __init__(self, python=None):
+        self._python = python or sys.executable
+        self._process = None
+
+    def _paths(self, workspace):
+        install = Path(workspace).parent
+        return [
+            "--mappings", str(install / "config" / "mqtt" / "mappings.json"),
+            "--brokers", str(Path(workspace) / "mapping" / "mapping-credentials.json"),
+            "--status", str(install / "data" / "mqtt-mapping-status.json"),
+        ]
+
+    def _running(self):
+        return self._process is not None and self._process.poll() is None
+
+    def up(self, workspace, profiles=(), services=(), force_recreate=False, on_line=None):
+        from admin.deployment import DockerError
+        from admin.mqtt_broker import MAPPING_SERVICE
+
+        for service in services:
+            if service != MAPPING_SERVICE:
+                raise DockerError("test_mode_without_docker", "The test-mode Admin starts no broker container.")
+            if not self._running():
+                self._process = subprocess.Popen(
+                    [self._python, "-B", "-m", "mqtt_mapping", *self._paths(workspace)],
+                    cwd=str(Path(__file__).resolve().parents[1]),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+
+    def stop(self, workspace, services, profiles=(), on_line=None):
+        if self._running():
+            self._process.terminate()
+            self._process.wait(timeout=10)
+
+    def reload(self, workspace, service):
+        pass
+
+    def ps(self, workspace):
+        from admin.mqtt_broker import MAPPING_SERVICE
+
+        return [{"service": MAPPING_SERVICE, "state": "running" if self._running() else "exited"}]
 
 
 def build_test_runtime(*, data_dir):
@@ -1938,4 +1993,5 @@ def build_test_runtime(*, data_dir):
         )
 
     runtime.test_reset = test_reset
+    runtime.mqtt_compose = ProcessMappingCompose()
     return runtime

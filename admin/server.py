@@ -1489,6 +1489,7 @@ class AdminServer(ThreadingHTTPServer):
         self.workflow_lifecycle = runtime.workflow_lifecycle
         self.static_assets = runtime.static_assets
         self.mqtt_live_topics = getattr(runtime, "mqtt_live_topics", None) or LiveTopicSessions()
+        self.mqtt_compose = getattr(runtime, "mqtt_compose", None)
         # Present only for the gated browser-test runtime; ``None`` (and its route
         # 404s) in every normal deployment.
         self.test_reset = getattr(runtime, "test_reset", None)
@@ -3658,7 +3659,9 @@ class AdminHandler(BaseHTTPRequestHandler):
         self._send_json(plan)
 
     def _builtin_broker(self):
-        return builtin_broker_for_install(self.server.credential_store)
+        return builtin_broker_for_install(
+            self.server.credential_store, compose=getattr(self.server, "mqtt_compose", None)
+        )
 
     def _mqtt_body(self, allowed):
         body = self._read_json_body()
