@@ -16,8 +16,11 @@ InfluxDB when supported) — it is not a new artifact.
 
 ## Backup types
 
-- **Settings only** (config) — `config.json`, runtime state and the dashboard
-  auth/cert/key files (plus the bundled InfluxDB secret when applicable).
+- **Settings only** (config) — `config.json`, runtime state, the dashboard
+  auth/cert/key files, the built-in MQTT broker and MQTT mapping settings, and
+  the saved MQTT passwords with the key that decrypts them (plus the bundled
+  InfluxDB secret when applicable). Devices on the built-in broker keep their
+  password across a restore, also onto a re-flashed card.
 - **Local databases** — consistent snapshots of the local SQLite databases.
 - **Analytics data** (InfluxDB) — bundled InfluxDB data, offered only when
   bundled InfluxDB is enabled. Disabled or external InfluxDB is greyed out with
@@ -130,7 +133,7 @@ policies for CLI/advanced workflows.
 
 The Admin Console does **not yet create** encrypted backups: the backups it
 creates are unencrypted, and they contain credentials (config, password file,
-certificates). Create an encrypted backup on the EMS host instead:
+certificates, the saved MQTT passwords). Create an encrypted backup on the EMS host instead:
 
 ```bash
 docker compose exec ems python3 emsctl.py backup create --password

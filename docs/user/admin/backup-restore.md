@@ -41,7 +41,7 @@ after it is written* — with four kinds:
 | Kind | Contents |
 | --- | --- |
 | **Everything** (Recommended) | Settings, the local databases and, where it runs here, the analytics data — kept together as one backup set |
-| **Settings only** | `config.json`, the runtime state and the dashboard password and certificates |
+| **Settings only** | `config.json`, the runtime state, the dashboard password and certificates, and the MQTT broker, mapping and saved MQTT passwords |
 | **Local databases** | Consistent copies of the history and state databases |
 | **Analytics data** | The bundled analytics database |
 
@@ -136,7 +136,10 @@ it.
 the current state, unless you switched that off.
 
 **Expected result:** each step is shown as it runs, then *Restored. Restart EMS
-so it uses the restored files.* with **Restart on the Services page**.
+so it uses the restored files.* with **Restart on the Services page**. A
+settings restore ends with *Apply the built-in MQTT broker's restored
+settings*: where the broker is switched on it runs again with the restored
+passwords, so its devices need no new one.
 
 **If it differs:**
 

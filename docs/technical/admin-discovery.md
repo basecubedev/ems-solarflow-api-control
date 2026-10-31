@@ -356,7 +356,10 @@ backward compatibility, but the Discovery flow neither creates nor manages it.
 namespace (`mqtt-discovery-<id>.json`, separate from any legacy per-broker
 `mqtt-<id>.json`), and the Fernet key (`.secret-key`), all `0600`
 best-effort. `config/discovery-connections.json` holds only references
-(`credential_refs`, `token_ref`), never a raw token or password.
+(`credential_refs`, `token_ref`), never a raw token or password. Config backups carry the
+key, every record and `discovery-connections.json`; a restore decides the
+records together with the key they decrypt with
+([backup-restore.md](backup-restore.md#what-do-the-restore-questions-mean)).
 
 - **Priority** is edited with up/down buttons and is always stored as a full
   permutation of the three sources (unknown/duplicate entries are dropped and

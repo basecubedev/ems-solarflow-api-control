@@ -1416,7 +1416,7 @@ them. The EMS sees the broker as an ordinary local MQTT profile.
 | --- | --- | --- |
 | `config/mqtt/broker.json` | Admin | `enabled` (default `false`; a missing file is off, an unreadable one unknown), `port`, `anonymous`, `accounts[]` (`name`, `credentials_ref`, `topic_prefix`, `bridge`, `zendure`), `grid_meter_account` |
 | `config/mqtt/mappings.json` | Admin (validated by `mqtt_mapping/config.py`) | `schema_version: 1`, optional `publish_interval_seconds` (5–30, default 15), `devices[]` with `id`, `label`, `enabled`, `broker_ref` and `values` keyed by the catalog keys |
-| `config/secrets/` | Admin credential store | account passwords, encrypted; not part of backups |
+| `config/secrets/` | Admin credential store | account passwords, encrypted; config backups carry them with their key |
 | `<install>/mqtt/` | rendered by the Admin | `compose.yml` (project `ems-mqtt`), `broker/` (`mosquitto.conf`, `acl`, `passwd`), `mapping/mapping-credentials.json`, `data/` |
 | `data/mqtt-mapping-status.json` | the mapping service | non-authoritative status per device and source |
 
@@ -1430,7 +1430,9 @@ Accounts `ems`, `ems-mapping` and `ems-admin` are internal. In every mode,
 `ems-solarflow/#`, `iot/#`, `Zendure/#`, `/#` and the topic of an MQTT grid
 meter on this broker are denied to anonymous clients and to accounts without
 the matching option. Config backups carry both JSON files (kinds
-`mqtt_broker_config`, `mqtt_mapping_config`).
+`mqtt_broker_config`, `mqtt_mapping_config`) and the account passwords (kind
+`credential_store`); a config restore in the Admin Console renders and applies
+them as its last step.
 
 ## Zendure MQTT Telemetry and Control
 

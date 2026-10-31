@@ -133,8 +133,10 @@ value would be refused by EMS (a negative inverter power, a charge level above
   age.
 - **Port in use** — another broker runs on this host; choose another port or
   map on that broker instead.
-- After restoring a backup, set the account passwords again: like other MQTT
-  credentials they are not part of the backup.
+- A settings backup carries the account passwords. Restored in the Admin
+  Console, the broker is set up again with them as the restore's last step, so
+  devices keep connecting with the password they were given, also after a
+  re-flashed card.
 - `emsctl diagnose` reports `mqtt_broker_stopped_in_use`,
   `mqtt_broker_profile_missing` and `mqtt_mapping_device_silent`.
 
