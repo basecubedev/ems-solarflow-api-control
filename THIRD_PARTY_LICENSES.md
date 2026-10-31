@@ -249,6 +249,7 @@ AGPL-3.0-or-later and are not third-party components.
 | `influxdb:2.9` | 2.9 | MIT | EMS image build stage; only `/usr/local/bin/influx` is copied out of it | ❌ | ✅ | https://hub.docker.com/_/influxdb |
 | `influxdb:2.7` | 2.7 | MIT | Optional bundled Analytics database in `docker-compose.yml` and `deploy/docker/compose.influxdb.yml` | ✅ | ❌ | https://hub.docker.com/_/influxdb |
 | `eclipse-mosquitto:2` | 2 | EPL-2.0 OR BSD-3-Clause | Local development broker and the ephemeral broker for optional real-MQTT tests | ❌ | ❌ | https://hub.docker.com/_/eclipse-mosquitto |
+| `eclipse-mosquitto:2.1.2-alpine` | 2.1.2-alpine | EPL-2.0 OR BSD-3-Clause (Mosquitto) AND mixed (Alpine base) | Optional built-in MQTT broker the Admin pulls and starts in the `ems-mqtt` project when an operator switches it on | ✅ | ❌ | https://hub.docker.com/_/eclipse-mosquitto |
 | `grafana/grafana-oss:latest` | latest | AGPL-3.0-only | Optional local telemetry analysis under `develop/grafana/` | ❌ | ❌ | https://github.com/grafana/grafana |
 | `alpine:3.20` | 3.20 | mixed (MIT musl, GPL-2.0-only BusyBox, …) | One-shot permission helper in the `develop/grafana/` compose stack | ❌ | ❌ | https://hub.docker.com/_/alpine |
 

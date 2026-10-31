@@ -19,6 +19,7 @@ from admin.https import (
     ensure_admin_ssl_context,
     wrap_listening_socket,
 )
+from admin.mqtt_broker import reconcile_builtin_broker
 from admin.releases import default_admin_data_dir
 from admin.server import (
     create_admin_runtime,
@@ -186,6 +187,13 @@ def main(argv=None):
             print(outcome)
 
     threading.Thread(target=_continue_pending_upgrade, daemon=True).start()
+
+    def _reconcile_builtin_broker():
+        outcome = reconcile_builtin_broker(runtime.credential_store)
+        if outcome is not None:
+            print(outcome)
+
+    threading.Thread(target=_reconcile_builtin_broker, daemon=True).start()
 
     try:
         threading.Event().wait()
