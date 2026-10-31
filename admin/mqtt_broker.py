@@ -59,6 +59,8 @@ RESERVED_PREFIX_ROOTS = ("ems-solarflow", *(root for root in NATIVE_TOPIC_ROOTS 
 PASSWORD_ITERATIONS = 101
 PASSWORD_SALT_BYTES = 12
 START_TIMEOUT_SECONDS = 20.0
+SOCKET_TABLES = ("/proc/net/tcp", "/proc/net/tcp6")
+TCP_LISTEN = "0A"
 
 ISSUE_CODES = (
     "mqtt_broker_settings_invalid",
@@ -77,7 +79,7 @@ ISSUE_CODES = (
 )
 
 _ACCOUNT_NAME = re.compile(r"[A-Za-z0-9_-]{1,32}")
-_PREFIX = re.compile(r"[A-Za-z0-9_.:-]+(?:/[A-Za-z0-9_.:-]+){0,7}")
+_PREFIX = re.compile(r"[A-Za-z0-9_.:-]{1,64}(?:/[A-Za-z0-9_.:-]{1,64}){0,7}")
 _ACL_TOPIC = re.compile(r"[^\s+#\x00-\x1f\x7f]+")
 MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 128
@@ -147,7 +149,7 @@ def topic_prefix_problem(prefix) -> str | None:
     if prefix is None:
         return None
     if not isinstance(prefix, str) or _PREFIX.fullmatch(prefix) is None:
-        return "A prefix is one to eight topic levels of letters, digits and _ . : -."
+        return "A prefix is one to eight topic levels of up to 64 letters, digits and _ . : -."
     if prefix.split("/", 1)[0] in RESERVED_PREFIX_ROOTS:
         return "This prefix belongs to a protected tree."
     return None
@@ -917,12 +919,23 @@ class BuiltinBroker:
         return self._Busy(self._lock)
 
 
-def _port_free(port) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+def _port_free(port, tables=SOCKET_TABLES) -> bool:
+    """Whether no TCP socket on this host listens on ``port``, on any address.
+
+    Docker publishes the broker on every interface. The kernel's socket tables
+    answer whether that can work without binding a socket to every interface
+    to find out. A host without the tables answers ``True``; ``compose up``
+    then reports a taken port itself.
+    """
+
+    wanted = f":{port:04X}"
+    for table in tables:
         try:
-            sock.bind(("0.0.0.0", port))
-        except OSError:
+            with open(table, encoding="ascii") as handle:
+                rows = [line.split() for line in handle.readlines()[1:]]
+        except (OSError, ValueError):
+            continue
+        if any(len(row) > 3 and row[3] == TCP_LISTEN and row[1].endswith(wanted) for row in rows):
             return False
     return True
 

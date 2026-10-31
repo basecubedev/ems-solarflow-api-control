@@ -9,6 +9,7 @@ import base64
 import hashlib
 import json
 import os
+import socket
 import stat
 
 import pytest
@@ -19,9 +20,11 @@ from admin.mqtt_broker import (
     BROKER_SERVICE,
     MAPPING_SERVICE,
     MOSQUITTO_IMAGE,
+    SOCKET_TABLES,
     Account,
     BrokerSettings,
     BuiltinBroker,
+    _port_free,
     credentials_ref_for,
     hash_password,
     parse_settings,
@@ -151,6 +154,8 @@ def _write_settings(install, **changes):
         ({"accounts": [{"name": "a", "topic_prefix": "a b"}]}, "mqtt_broker_topic_prefix_invalid"),
         ({"accounts": [{"name": "a", "topic_prefix": "shellies/#"}]}, "mqtt_broker_topic_prefix_invalid"),
         ({"accounts": [{"name": "a", "topic_prefix": ""}]}, "mqtt_broker_topic_prefix_invalid"),
+        ({"accounts": [{"name": "a", "topic_prefix": "x" * 65}]}, "mqtt_broker_topic_prefix_invalid"),
+        ({"accounts": [{"name": "a", "topic_prefix": "/".join("a" * 9)}]}, "mqtt_broker_topic_prefix_invalid"),
         ({"grid_meter_account": "nobody"}, "mqtt_broker_account_unknown"),
     ],
 )
@@ -309,6 +314,54 @@ def test_a_taken_port_keeps_the_broker_off_and_starts_nothing(install):
     assert not result["ok"] and result["status"] == "mqtt_broker_port_in_use"
     assert broker.compose.calls == []
     assert not (install / "config" / "mqtt" / "broker.json").exists()
+
+
+SOCKET_TABLE_HEADER = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+
+
+def _socket_table(path, *rows):
+    path.write_text(
+        SOCKET_TABLE_HEADER
+        + "".join(f"   {index}: {local} 00000000:0000 {state} 00000000:00000000 00:00000000 00000000  1000 0 1\n"
+                  for index, (local, state) in enumerate(rows)),
+        encoding="ascii",
+    )
+    return str(path)
+
+
+@pytest.mark.parametrize(
+    ("rows", "free"),
+    [
+        ((("00000000:075B", "0A"),), False),
+        ((("0100007F:075B", "0A"),), False),
+        ((("0100007F:075B", "06"), ("00000000:075C", "0A")), True),
+        ((), True),
+    ],
+    ids=["listening-everywhere", "listening-on-loopback", "only-closing-or-another-port", "empty"],
+)
+def test_a_port_is_taken_only_while_a_socket_listens_on_it(tmp_path, rows, free):
+    assert _port_free(1883, tables=(_socket_table(tmp_path / "tcp", *rows),)) is free
+
+
+def test_a_port_listened_on_over_ipv6_is_taken(tmp_path):
+    tcp = _socket_table(tmp_path / "tcp")
+    tcp6 = _socket_table(tmp_path / "tcp6", ("00000000000000000000000000000000:075B", "0A"))
+
+    assert _port_free(1883, tables=(tcp, tcp6)) is False
+
+
+def test_a_host_without_socket_tables_leaves_the_answer_to_compose(tmp_path):
+    assert _port_free(1883, tables=(str(tmp_path / "missing"),)) is True
+
+
+@pytest.mark.skipif(not os.path.exists(SOCKET_TABLES[0]), reason="no kernel socket table on this host")
+def test_a_real_listener_is_found_in_the_kernel_tables():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+
+        assert _port_free(port) is False
 
 
 def test_a_broker_that_never_answers_is_stopped_again_and_stays_off(install):
