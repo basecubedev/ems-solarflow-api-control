@@ -313,6 +313,21 @@ def render_passwd(passwords) -> str:
     return "".join(f"{name}:{hash_password(password)}\n" for name, password in sorted(passwords.items()))
 
 
+def broker_service_lines(compose_text) -> list[str] | None:
+    """The broker's own lines in a rendered compose file; ``up`` recreates it when they change."""
+
+    lines = compose_text.splitlines() if isinstance(compose_text, str) else []
+    header = f"  {BROKER_SERVICE}:"
+    if header not in lines:
+        return None
+    service = []
+    for line in lines[lines.index(header) + 1:]:
+        if not line.startswith("    "):
+            break
+        service.append(line)
+    return service
+
+
 def render_compose(*, port, admin_image, puid, pgid) -> str:
     """The ``ems-mqtt`` project; paths are relative to ``<install>/mqtt/``.
 
@@ -694,7 +709,9 @@ class BuiltinBroker:
 
         ``up`` leaves a running container alone unless its rendered service
         changed, which is how an Admin update reaches the mapping container's
-        image and a new Mosquitto. A stopped broker is not started.
+        image and a new Mosquitto. A broker ``up`` left running re-reads the
+        files just rendered, so restored passwords and a new ACL apply at once.
+        A broker that is switched off is not started.
         """
 
         with self._one_at_a_time() as busy:
@@ -706,14 +723,25 @@ class BuiltinBroker:
             if settings is None:
                 return _failure("settings_invalid", "broker.json cannot be read.", issues)
             if settings.enabled:
+                running = self.container_states().get(BROKER_SERVICE) == "running"
+                service = broker_service_lines(self._workspace_text("compose.yml"))
                 render_issues = self.render(settings)
                 if render_issues:
                     return _failure("render_failed", "The broker files cannot be written.", render_issues)
                 try:
                     self.compose.up(self.workspace, services=[BROKER_SERVICE])
+                    if running and broker_service_lines(self._workspace_text("compose.yml")) == service:
+                        self.compose.reload(self.workspace, BROKER_SERVICE)
                 except DockerError as exc:
                     return _failure(exc.code, exc.message)
             return self.sync_mapping_container(settings)
+
+    def _workspace_text(self, name):
+        try:
+            with open(os.path.join(self.workspace, name), encoding="utf-8") as handle:
+                return handle.read()
+        except (OSError, ValueError):
+            return None
 
     def _apply_running(self, settings, *, recreate=False):
         issues = self.render(settings)
@@ -960,6 +988,20 @@ def reconcile_builtin_broker(credential_store, *, broker=None, compose=None) -> 
         return None
     detail = f" ({result.message})" if not result.ok and result.message else ""
     return f"Built-in MQTT broker: {result.status}{detail}"
+
+
+def converge_after_restore(broker) -> tuple[str, str]:
+    """``(status, detail)`` for the restore step that renders the restored broker files and applies them."""
+
+    try:
+        result = broker.reconcile()
+    except Exception as exc:
+        return "warning", f"Not brought in line ({type(exc).__name__}); the Admin tries again when it starts."
+    if result is None:
+        return "skipped", "The built-in MQTT broker is not set up."
+    if result.ok:
+        return "ok", f"Built-in MQTT broker: {result.status}."
+    return "warning", result.message or result.status
 
 
 def admin_image_reference(environ=None) -> str:

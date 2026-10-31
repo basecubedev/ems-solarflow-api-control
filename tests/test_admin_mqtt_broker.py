@@ -9,13 +9,17 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import socket
 import stat
+from types import SimpleNamespace
 
 import pytest
 
+from admin.backup_restore import BackupRestoreService
 from admin.credential_store import CredentialStore
 from admin.deployment import DockerError
+from admin.install_context import detect_install_context
 from admin.mqtt_broker import (
     BROKER_SERVICE,
     MAPPING_SERVICE,
@@ -25,6 +29,7 @@ from admin.mqtt_broker import (
     BrokerSettings,
     BuiltinBroker,
     _port_free,
+    converge_after_restore,
     credentials_ref_for,
     hash_password,
     parse_settings,
@@ -32,6 +37,7 @@ from admin.mqtt_broker import (
     render_compose,
     render_mosquitto_conf,
 )
+from ems import backup as backup_mod
 from ems.zendure_mqtt.builtin_broker import BUILTIN_PROFILE_REF
 
 pytestmark = [
@@ -658,7 +664,8 @@ def test_nothing_set_up_is_left_alone_when_the_admin_starts(install):
 
 
 def test_the_admin_start_brings_a_running_broker_and_its_mapping_up_to_date(install):
-    """``up`` recreates only what the new render changed, such as a new Admin image tag."""
+    """``up`` recreates only what the new render changed, such as a new Admin image tag;
+    a broker it leaves running re-reads the passwords and the ACL just rendered."""
 
     broker = _broker(install)
     broker.enable()
@@ -668,7 +675,110 @@ def test_the_admin_start_brings_a_running_broker_and_its_mapping_up_to_date(inst
     result = broker.reconcile()
 
     assert result.ok
-    assert broker.compose.calls == [("up", (BROKER_SERVICE,), False), ("up", (MAPPING_SERVICE,), False)]
+    assert broker.compose.calls == [
+        ("up", (BROKER_SERVICE,), False),
+        ("reload", BROKER_SERVICE),
+        ("up", (MAPPING_SERVICE,), False),
+    ]
+
+
+def test_a_broker_whose_service_changed_is_recreated_rather_than_reloaded(install):
+    broker = _broker(install)
+    broker.enable()
+    _write_settings(install, enabled=True, port=1884)
+    broker.compose.calls.clear()
+
+    result = broker.reconcile()
+
+    assert result.ok
+    assert ("up", (BROKER_SERVICE,), False) in broker.compose.calls
+    assert ("reload", BROKER_SERVICE) not in broker.compose.calls
+
+
+def test_a_broker_that_was_not_running_is_started_and_not_signalled(install):
+    broker = _broker(install)
+    broker.enable()
+    broker.compose.states[BROKER_SERVICE] = "exited"
+    broker.compose.calls.clear()
+
+    broker.reconcile()
+
+    assert broker.compose.calls[0] == ("up", (BROKER_SERVICE,), False)
+    assert ("reload", BROKER_SERVICE) not in broker.compose.calls
+
+
+class _Reconciles:
+    def __init__(self, result=None, error=None):
+        self.result, self.error = result, error
+
+    def reconcile(self):
+        if self.error is not None:
+            raise self.error
+        return self.result
+
+
+@pytest.mark.parametrize(
+    ("broker", "status"),
+    [
+        (_Reconciles(), "skipped"),
+        (_Reconciles(result=SimpleNamespace(ok=True, status="running", message=None)), "ok"),
+        (_Reconciles(result=SimpleNamespace(ok=False, status="render_failed", message="no password")), "warning"),
+        (_Reconciles(error=OSError("disk")), "warning"),
+    ],
+    ids=["not-set-up", "running", "failed", "raised"],
+)
+def test_the_restore_step_reports_the_broker_without_failing_the_restore(broker, status):
+    assert converge_after_restore(broker)[0] == status
+
+
+def test_a_restore_onto_a_fresh_installation_gives_the_devices_their_password_back(install):
+    """The owner's case: a re-flashed card, the backup restored, the devices
+    still connecting with the password they were given before."""
+
+    config = {"system": {"runtime_state_path": "data/runtime-state.json"}, "devices": []}
+    broker = _broker(install, config=config)
+    broker.enable()
+    password = broker.reveal_password("devices")
+    backup_dir = install / "data" / "backups"
+    backup_mod.create_config_backup(
+        config, base_dir=str(install), config_path=str(install / "config" / "config.json"),
+        backup_dir=str(backup_dir),
+    )
+    for leftover in ("config/secrets", "config/mqtt", "mqtt"):
+        shutil.rmtree(install / leftover)
+    fresh = _broker(install)
+    service = BackupRestoreService(
+        context_provider=lambda: detect_install_context(base_dir=str(install)),
+        after_config_restore=lambda: converge_after_restore(fresh),
+    )
+    backup_id = service.list_backups()["backups"][0]["id"]
+    plan = service.create_restore_plan({"id": backup_id, "scope": "config"})
+
+    result = service.restore_from_plan(plan["plan_id"], confirm=True)
+
+    assert result["ok"] is True
+    assert [step["status"] for step in result["steps"] if step["key"] == "broker"] == ["ok"]
+    assert ("up", (BROKER_SERVICE,), False) in fresh.compose.calls
+    line = next(
+        line for line in (install / "mqtt" / "broker" / "passwd").read_text().splitlines()
+        if line.startswith("devices:")
+    )
+    _, _, iterations, salt, digest = line.split(":", 1)[1].split("$")
+    assert base64.b64decode(digest) == hashlib.pbkdf2_hmac(
+        "sha512", password.encode(), base64.b64decode(salt), int(iterations)
+    )
+
+
+def test_a_restore_of_databases_only_leaves_the_broker_alone(install):
+    called = []
+    service = BackupRestoreService(
+        context_provider=lambda: detect_install_context(base_dir=str(install)),
+        after_config_restore=lambda: called.append(True) or ("ok", ""),
+    )
+    plan = SimpleNamespace(targets=[SimpleNamespace(backup_type="databases")], rollback_enabled=False)
+
+    assert "broker" not in [step["key"] for step in service.plan_restore_steps(plan)]
+    assert called == []
 
 
 def test_the_admin_start_never_starts_a_broker_that_was_stopped(install):

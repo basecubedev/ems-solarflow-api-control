@@ -705,13 +705,20 @@ Included files (when present and configured):
 - dashboard auth/cert/key (`dashboard.auth_file`, `ssl_cert_file`, `ssl_key_file`)
 - the bundled InfluxDB secret (`influxdb.secret_file`) — only when
   `influxdb.enabled` is true **and** `influxdb.mode` is `bundled`
+- the built-in MQTT broker's and the MQTT mapping's settings
+  (`config/mqtt/broker.json`, `config/mqtt/mappings.json`) and Find devices'
+  broker list (`config/discovery-connections.json`)
+- the credential store (`config/secrets/`): its key and every saved MQTT
+  password and token, restored as a whole by its key (see
+  [backup-restore.md](technical/backup-restore.md#what-do-the-restore-questions-mean))
 
 Every archive contains a `backup-manifest.json` with the backup format, type,
 purpose, UTC timestamp, build metadata (git commit/branch/describe), contract
 versions, and per-file sensitivity flags and SHA256 checksums.
 
 > **Config backups may contain secrets.** `config.json`, the dashboard auth
-> file, the dashboard TLS key and the InfluxDB secret are flagged sensitive.
+> file, the dashboard TLS key, the InfluxDB secret and the credential store
+> are flagged sensitive.
 > The CLI prints a sensitive-data warning before creating a backup.
 
 ### What a database backup contains

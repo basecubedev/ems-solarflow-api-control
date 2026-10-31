@@ -152,7 +152,12 @@ from admin.runtime_convergence import (
     reset_targets_to_config,
 )
 from admin.mdns import MdnsProvider
-from admin.mqtt_broker import builtin_broker_for_install, host_address, local_profile_endpoints
+from admin.mqtt_broker import (
+    builtin_broker_for_install,
+    converge_after_restore,
+    host_address,
+    local_profile_endpoints,
+)
 from admin.mqtt_discovery import MqttBrokerDiscovery
 from admin.mqtt_live_topics import LiveTopicSessions
 from admin.mqtt_mapping_editor import MappingEditor
@@ -1490,6 +1495,8 @@ class AdminServer(ThreadingHTTPServer):
         self.static_assets = runtime.static_assets
         self.mqtt_live_topics = getattr(runtime, "mqtt_live_topics", None) or LiveTopicSessions()
         self.mqtt_compose = getattr(runtime, "mqtt_compose", None)
+        if getattr(self.backup_service, "after_config_restore", False) is None:
+            self.backup_service.after_config_restore = self.converge_builtin_broker
         # Present only for the gated browser-test runtime; ``None`` (and its route
         # 404s) in every normal deployment.
         self.test_reset = getattr(runtime, "test_reset", None)
@@ -1497,6 +1504,13 @@ class AdminServer(ThreadingHTTPServer):
         # Local HTTP appliance: the Secure cookie flag is only added when this
         # listener is the HTTPS one (never required for local HTTP).
         self.https_active = bool(https_active)
+
+    def converge_builtin_broker(self):
+        """The restore step for the built-in broker: its restored settings and passwords applied."""
+
+        return converge_after_restore(
+            builtin_broker_for_install(self.credential_store, compose=self.mqtt_compose)
+        )
 
 
 def _authority_hostname(authority):

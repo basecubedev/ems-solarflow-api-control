@@ -20,7 +20,7 @@ export const CREATE_STEPS = Object.freeze([
   "write_set",
   "refresh",
 ]);
-export const RESTORE_STEPS = Object.freeze(["verify_plan", "rollback", "apply", "postcheck", "done"]);
+export const RESTORE_STEPS = Object.freeze(["verify_plan", "rollback", "apply", "postcheck", "broker", "done"]);
 /** Restore steps that repeat once per archive of a set, so each names its archive. */
 const TYPED_STEPS = Object.freeze(["rollback", "apply", "postcheck"]);
 export const FILE_ACTIONS = Object.freeze([
@@ -29,6 +29,7 @@ export const FILE_ACTIONS = Object.freeze([
   "would_skip_identical",
   "would_skip_outside_project",
   "would_keep_current",
+  "would_skip_other_key",
   "conflict_requires_policy",
   "would_restore_influxdb",
   "checksum_invalid",

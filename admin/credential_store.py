@@ -26,16 +26,16 @@ from pathlib import Path
 from admin.models import utc_now_iso
 from ems.mqtt_credentials import (
     MQTT_CREDENTIAL_REQUIRED_FIELDS,
+    SECRETS_DIRNAME,
     missing_mqtt_credential_fields,
 )
+from ems.mqtt_credentials import MANAGED_RECORD_NAME as _MANAGED_NAME_RE
+from ems.mqtt_credentials import SECRET_KEY_FILENAME as KEY_FILENAME
 from ems.zendure_mqtt.config_entries import SOURCE_ZENDURE_CLOUD_MQTT
-
-SECRETS_DIRNAME = "secrets"
 
 # The one runtime credential reference the Zendure cloud broker profile uses in
 # generated configs; the record lives at config/secrets/mqtt-<ref>.json.
 ZENDURE_CLOUD_CREDENTIALS_REF = "zendure-cloud"
-KEY_FILENAME = ".secret-key"
 ZENDURE_SECRET_FILENAME = "zendure-cloud.json"
 
 _ENCRYPT_ERROR_MESSAGE = (
@@ -44,11 +44,6 @@ _ENCRYPT_ERROR_MESSAGE = (
 )
 
 _MQTT_REF_RE = re.compile(r"[^a-z0-9_-]+")
-
-# A managed secrets record is a flat "<canonical>.json" basename. The anchored
-# allowlist admits no path separator or ".." sequence, so it is the sanitizer
-# barrier for the secrets-dir path built from it.
-_MANAGED_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*\.json$")
 
 _ZENDURE_METADATA_FIELDS = (
     "last_checked",
