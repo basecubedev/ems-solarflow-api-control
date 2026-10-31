@@ -11,6 +11,10 @@ fast it is and which hardware suits it, read
 [Connection types](../connection-types.md) — that page owns the transport
 semantics and the measured latency figures.
 
+No broker yet, or a device that publishes in a format EMS does not know? The
+Admin Console can run a broker for you and map such a device into EMS: see
+[Built-in MQTT broker and MQTT mapping](mqtt-mapping.md).
+
 ## When to use this workflow
 
 - Your inverter has no usable local API.

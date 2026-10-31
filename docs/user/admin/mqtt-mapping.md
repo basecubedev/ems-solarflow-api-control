@@ -17,6 +17,40 @@ only reads: an external device counts in the dashboard, the house load and the
 statistics, and the regulation keeps working against the grid meter. Nothing
 reaches EMS until you save a mapping.
 
+## How the parts fit together
+
+```mermaid
+flowchart LR
+    device["Your device<br/>Shelly, Tasmota, OpenDTU, AhoyDTU<br/>or any device that speaks MQTT"]
+
+    subgraph broker["One MQTT broker"]
+        direction TB
+        builtin["Built-in MQTT broker<br/>Mosquitto, started by the Admin Console"]
+        own["or a broker you already run<br/>ioBroker, a Mosquitto of your own"]
+    end
+
+    mapping["MQTT mapping<br/>unit, sign, maximum age"]
+    ems["EMS<br/>reads it as an external device"]
+    admin["Admin Console"]
+
+    device -- "2 · connect" --> broker
+    broker -- "the topics you chose" --> mapping
+    mapping -- "ems-solarflow/‹id›/state" --> ems
+    admin -. "1 · switch on" .-> builtin
+    admin -. "3 · map the values" .-> mapping
+    admin -. "4 · add as device" .-> ems
+```
+
+Solid arrows carry the readings; dotted arrows are what you do in the Admin
+Console. The four steps, each with its section below:
+
+1. **Switch the broker on**, or keep the broker you already run.
+2. **Connect the device**: enter the broker's address, port and an account in
+   the device's own MQTT settings.
+3. **Map it**: pick its values from the live topics. The mapping publishes them
+   as `ems-solarflow/<id>/state` on the same broker, where EMS reads them.
+4. **Add it as a device**, as you would a device the search found.
+
 ## Prerequisites
 
 - The Admin Console. Only the Admin switches the broker; the dashboard's
