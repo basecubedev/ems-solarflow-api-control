@@ -41,13 +41,15 @@ def free_port():
         return sock.getsockname()[1]
 
 
-def wait_for_port(port, deadline):
+def wait_for_broker(port, deadline):
+    """Until Mosquitto answers a CONNECT; Docker's port proxy accepts before it listens."""
+
+    from admin.mqtt_broker import mqtt_answers
+
     while time.monotonic() < deadline:
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
-                return True
-        except OSError:
-            threading.Event().wait(0.1)
+        if mqtt_answers(port):
+            return True
+        threading.Event().wait(0.1)
     return False
 
 
@@ -105,7 +107,7 @@ def start_broker(tmp):
          "-v", f"{conf}:/mosquitto/config/mosquitto.conf:ro", MOSQUITTO_IMAGE],
         check=True, capture_output=True, text=True,
     )
-    if not wait_for_port(port, time.monotonic() + 30):
+    if not wait_for_broker(port, time.monotonic() + 30):
         subprocess.run(["docker", "rm", "-f", name], capture_output=True)
         raise RuntimeError("the e2e broker never answered")
     return name, port
