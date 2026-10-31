@@ -2,9 +2,17 @@
   import Icon from "../../../shared/ui/Icon.svelte";
   import Status from "../../../shared/ui/Status.svelte";
   import ConfirmDialog from "../../../shared/ui/ConfirmDialog.svelte";
+  import MqttDeviceWizard from "./MqttDeviceWizard.svelte";
   import { t } from "../i18n/i18n.svelte.js";
   import { BUILTIN_BROKER, LIVE_LABELS, MAPPING_ISSUES, SILENCE_REASONS, TARGETS, VALUE_REASONS, newDevice, newSource, proposedId, targetSources } from "../lib/mqtt.js";
-  import { mqtt, loadMapping, startTopics, pollTopics, stopTopics, previewMapping, applyMapping, previewValue } from "../state/mqtt.svelte.js";
+  import { mqtt, loadMapping, startTopics, stopTopics, previewMapping, applyMapping, previewValue, watchTopics } from "../state/mqtt.svelte.js";
+
+  /**
+   * adoption: ``{ state(id) -> "saved" | "draft" | null, add(id) -> Promise<boolean> }``
+   * from the page this sits on; it adds a published device through the
+   * existing external-device adoption of that page's draft.
+   */
+  let { adoption = null } = $props();
 
   let brokerRef = $state(BUILTIN_BROKER);
   let draft = $state.raw(null);
@@ -15,6 +23,9 @@
   let issues = $state.raw([]);
   let evaluation = $state.raw(null);
   let confirming = $state.raw(null);
+  let wizard = $state.raw(null);
+  let adopting = $state("");
+  let notFound = $state("");
 
   const view = $derived(mqtt.mapping);
   const devices = $derived(view?.document?.devices || []);
@@ -27,11 +38,38 @@
     return () => stopTopics();
   });
 
+  $effect(() => (mqtt.session ? watchTopics() : undefined));
+
   $effect(() => {
-    if (!mqtt.session) return;
-    const timer = setInterval(pollTopics, 2000);
-    return () => clearInterval(timer);
+    const group = mqtt.setup;
+    if (!group) return;
+    mqtt.setup = null;
+    startDevice(group);
   });
+
+  async function adopt(id) {
+    adopting = id;
+    notFound = "";
+    try {
+      if (!(await adoption?.add(id))) notFound = id;
+    } finally {
+      adopting = "";
+    }
+  }
+
+  async function wizardPreview(device) {
+    const answer = await previewValue($state.snapshot(device));
+    issues = answer?.issues || mqtt.error?.payload?.issues || [];
+    const result = answer?.evaluation || null;
+    return result ? { ...result, reasonText: reasonText(result.reason) } : null;
+  }
+
+  function correct(key) {
+    const spec = draft.values[key];
+    if (!spec?.sources) return;
+    setTarget(key, { ...spec, sources: spec.sources.map((source) => ({ ...source, invert: !source.invert, negative: "zero" })) });
+    evaluation = null;
+  }
 
   function issueText(issue) {
     return MAPPING_ISSUES.includes(issue.code) ? t(`mqtt.code.${issue.code}`) : issue.message;
@@ -57,10 +95,17 @@
 
   function startDevice(group) {
     editingIndex = -1;
-    draft = { ...newDevice(brokerRef), id: proposedId(group?.key) };
+    draft = null;
+    wizard = { group, brokerRef: mqtt.topics?.broker_ref || brokerRef, at: Date.now() };
     target = "inverterPower";
     evaluation = null;
     issues = [];
+  }
+
+  function freeEditor(device) {
+    wizard = null;
+    editingIndex = -1;
+    draft = { ...newDevice(device.broker_ref || brokerRef), ...device, id: device.id || proposedId("") };
   }
 
   function update(change) {
@@ -131,6 +176,7 @@
     issues = answer?.issues || mqtt.error?.payload?.issues || [];
     if (answer?.ok) {
       draft = null;
+      wizard = null;
       editingIndex = -1;
     }
   }
@@ -172,11 +218,34 @@
           {#if status}
             <Status tone={status.publishing ? "c-ok" : "c-warn"} text={status.publishing ? t("mqtt.mapping.publishing") : reasonText(status.reason)} />
           {/if}
+          {#if adoption && adoption.state(device.id) === "saved"}
+            <span class="muted small" data-testid="mqtt-adopted">{t("mqtt.mapping.inSystem")}</span>
+          {:else if adoption && adoption.state(device.id) === "draft"}
+            <span class="muted small" data-testid="mqtt-adopted">{t("mqtt.mapping.adopted")}</span>
+          {:else if adoption && status?.publishing}
+            <button class="btn small" type="button" onclick={() => adopt(device.id)} disabled={busy || Boolean(adopting)} data-testid="mqtt-adopt"><Icon name={adopting === device.id ? "loader" : "plus"} size="sm" />{t("mqtt.mapping.adopt")}</button>
+          {/if}
+          {#if notFound === device.id}<span class="note warn small">{t("mqtt.mapping.adoptNotFound")}</span>{/if}
           <button class="btn secondary small" type="button" onclick={() => edit(index)} disabled={busy}><Icon name="wrench" size="sm" />{t("mqtt.mapping.edit")}</button>
           <button class="btn secondary small" type="button" onclick={() => review(null, index)} disabled={busy}><Icon name="trash-2" size="sm" />{t("devices.remove")}</button>
         </li>
       {/each}
     </ul>
+  {/if}
+
+  {#if wizard}
+    {#key wizard.at}
+      <MqttDeviceWizard
+        group={wizard.group}
+        brokerRef={wizard.brokerRef}
+        takenIds={devices.map((item) => item.id)}
+        {busy}
+        onpreview={wizardPreview}
+        onsave={(device) => review($state.snapshot(device), -1)}
+        onfree={freeEditor}
+        oncancel={() => (wizard = null)}
+      />
+    {/key}
   {/if}
 
   {#if draft}
@@ -229,7 +298,12 @@
         {:else}
           <p class="note warn" data-testid="mqtt-preview-silent"><Icon name="triangle-alert" />{t("mqtt.mapping.wouldNotPublish", { reason: reasonText(evaluation.reason) })}</p>
           {#each evaluation.targets.filter((item) => item.reason === "catalog_refused") as item (item.key)}
-            <p class="muted small">{t("mqtt.mapping.refusedValue", { target: t(`mqtt.target.${item.key}`), value: item.value })}</p>
+            <p class="muted small row-wrap">
+              {t("mqtt.mapping.refusedValue", { target: t(`mqtt.target.${item.key}`), value: item.value })}
+              {#if Number(item.value) < 0 && draft.values[item.key]?.sources}
+                <button class="btn secondary small" type="button" onclick={() => correct(item.key)} data-testid="mqtt-correct">{t("mqtt.mapping.correct")}</button>
+              {/if}
+            </p>
           {/each}
         {/if}
       {/if}

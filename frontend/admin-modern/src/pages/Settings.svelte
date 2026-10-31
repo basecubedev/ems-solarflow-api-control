@@ -15,9 +15,12 @@
   import SourcesPanel from "../widgets/SourcesPanel.svelte";
   import MqttBrokerCard from "../widgets/MqttBrokerCard.svelte";
   import MqttMappingPanel from "../widgets/MqttMappingPanel.svelte";
+  import { findProposal } from "../state/mqtt.svelte.js";
+  import { externalDeviceFromProposal } from "../lib/discovery.js";
+  import { deviceKind } from "../lib/devices.js";
   import { t, tn, catalogText } from "../i18n/i18n.svelte.js";
   import { system, ensure, reload } from "../state/system.svelte.js";
-  import { settings, setValue, discard, discardHardware, previewDraft, applyDraft, resetOverrides } from "../state/settings.svelte.js";
+  import { settings, setValue, setHardwareValues, discard, discardHardware, previewDraft, applyDraft, resetOverrides } from "../state/settings.svelte.js";
   import { serviceAction, runServiceAction } from "../state/services.svelte.js";
   import { EDIT_TABS, changeGroups, restartNeeded, fieldMatches, levelled, liveOverride, previewValue, safetyBlocks, sharedRisk, tabSections } from "../lib/settings.js";
   import { errorView } from "../lib/errors.js";
@@ -46,6 +49,21 @@
   const devices = $derived(Array.isArray(settings.draft?.devices) ? settings.draft.devices : []);
   const values = $derived(settings.draft?.features || {});
   const searching = $derived(query.trim() !== "");
+
+  const mapsTo = (id) => (device) => (deviceKind(device) === "external_mqtt" || device?.type === "external_mqtt") && device?.mqtt?.device_id === id;
+  /** A published mapped device joins the draft through the same adoption as Find devices. */
+  const mqttAdoption = {
+    state(id) {
+      if ((settings.editable?.devices || []).some(mapsTo(id))) return "saved";
+      return devices.some(mapsTo(id)) ? "draft" : null;
+    },
+    async add(id) {
+      const proposal = await findProposal(id);
+      if (!proposal) return false;
+      if (!devices.some(mapsTo(id))) setHardwareValues({ devices: [...devices, externalDeviceFromProposal(proposal, devices)] });
+      return true;
+    },
+  };
 
   function sectionFields(section) {
     const levels = levelled(section);
@@ -153,7 +171,7 @@
     </Card>
   {:else if tab === "addons"}
     <Card icon="radio-tower" tone="c-grid" title={t("mqtt.broker.title")} subtitle={t("mqtt.broker.sub")} span="span-12">
-      <MqttBrokerCard />
+      <MqttBrokerCard onsetup={() => choose("devices")} />
     </Card>
   {:else if tab === "safety"}
     <Card icon="toggle-right" tone="c-out" title={t("control.title")} subtitle={t("control.sub")} span="span-4">
@@ -176,7 +194,7 @@
       <SourcesPanel />
     </Card>
     <Card icon="list-checks" tone="c-grid" title={t("mqtt.mapping.title")} subtitle={t("mqtt.mapping.sub")} span="span-12">
-      <MqttMappingPanel />
+      <MqttMappingPanel adoption={mqttAdoption} />
     </Card>
     <Card icon="zap" tone="c-inv" title={t("settings.devices")} subtitle={tn("settings.devicesSub", devices.length)} span="span-12">
       <DevicesEditor {config} />

@@ -29,7 +29,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MOSQUITTO_IMAGE = "eclipse-mosquitto:2.1.2-alpine"
-SHELLY_ID = "shellyplusplugs-e2etest"
+SHELLY_IDS = {"chromium": "shellyplusplugs-e2echromium", "firefox": "shellyplusplugs-e2efirefox"}
 GRID_TOPIC = "e2e/grid/power"
 BROKER_REF = "e2e_broker"
 PUBLISH_EVERY_SECONDS = 2.0
@@ -110,16 +110,21 @@ def start_broker(tmp):
 
 
 def play_devices(port, stop):
-    """A Shelly Gen2 plug on a balcony inverter and a grid meter, publishing as the devices do."""
+    """A Shelly Gen2 plug on a balcony inverter per browser project, and a grid meter, publishing as the devices do.
+
+    Each project maps and adds its own plug, so neither run depends on what the other left behind.
+    """
 
     import paho.mqtt.client as mqtt
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     client.connect("127.0.0.1", port)
     client.loop_start()
-    client.publish(f"{SHELLY_ID}/online", "true", qos=1, retain=True)
+    for shelly_id in SHELLY_IDS.values():
+        client.publish(f"{shelly_id}/online", "true", qos=1, retain=True)
     while not stop.is_set():
-        client.publish(f"{SHELLY_ID}/status/switch:0", json.dumps({"id": 0, "apower": -612.3, "voltage": 230.1}), qos=1)
+        for shelly_id in SHELLY_IDS.values():
+            client.publish(f"{shelly_id}/status/switch:0", json.dumps({"id": 0, "apower": -612.3, "voltage": 230.1}), qos=1)
         client.publish(GRID_TOPIC, "150", qos=1)
         stop.wait(PUBLISH_EVERY_SECONDS)
     client.loop_stop()
@@ -138,7 +143,7 @@ def main():
     state_path.write_text(
         json.dumps({
             "app": str(app), "python": sys.executable, "broker_port": broker_port, "broker_container": broker_name,
-            "dashboard_port": dashboard_port, "broker_ref": BROKER_REF, "shelly_id": SHELLY_ID,
+            "dashboard_port": dashboard_port, "broker_ref": BROKER_REF, "shelly_ids": SHELLY_IDS,
         }),
         encoding="utf-8",
     )

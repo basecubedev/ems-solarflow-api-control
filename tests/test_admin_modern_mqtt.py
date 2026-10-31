@@ -17,7 +17,7 @@ from ems.zendure_mqtt.builtin_broker import BUILTIN_PROFILE_REF
 from ems.zendure_mqtt.payload_values import EXTRACT_REASONS
 from mqtt_mapping.config import ISSUE_CODES as MAPPING_CODES
 from mqtt_mapping.config import TARGETS
-from mqtt_mapping.mapping import SILENCE_REASONS
+from mqtt_mapping.status import STATUS_REASONS
 
 pytestmark = [
     pytest.mark.contract,
@@ -42,7 +42,7 @@ def _list(name):
         ("BROKER_ISSUES", BROKER_CODES),
         ("MAPPING_ISSUES", MAPPING_CODES),
         ("LIVE_LABELS", LABELS),
-        ("SILENCE_REASONS", SILENCE_REASONS),
+        ("SILENCE_REASONS", STATUS_REASONS),
         ("VALUE_REASONS", EXTRACT_REASONS),
         ("TARGETS", TARGETS),
     ],
