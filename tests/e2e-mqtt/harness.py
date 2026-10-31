@@ -2,9 +2,9 @@
 """The world the MQTT end-to-end browser test runs in, as Playwright's web server.
 
 It builds an isolated installation laid out like the EMS container (/app with
-config/ and data/), starts a real Mosquitto on the pinned image, plays a
-Shelly Gen2 plug and a grid meter on it, and serves the test-mode Admin for
-that installation. The EMS itself is started by the test once the inverter is
+config/ and data/), starts a real Mosquitto on the image the built-in broker
+runs, plays a Shelly Gen2 plug and a grid meter on it, and serves the
+test-mode Admin for that installation. The EMS itself is started by the test once the inverter is
 added, from the same layout. Every write gate is off and the EMS runs dry, so
 nothing here could command hardware. The EMS needs one output-control inverter
 to run; the one it gets is a local-API device on 192.0.2.10 (TEST-NET-1, never
@@ -28,7 +28,7 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-MOSQUITTO_IMAGE = "eclipse-mosquitto:2.1.2-alpine"
+sys.path.insert(0, str(ROOT))
 SHELLY_IDS = {"chromium": "shellyplusplugs-e2echromium", "firefox": "shellyplusplugs-e2efirefox"}
 GRID_TOPIC = "e2e/grid/power"
 BROKER_REF = "e2e_broker"
@@ -94,6 +94,8 @@ def build_install(tmp, broker_port, dashboard_port):
 
 
 def start_broker(tmp):
+    from admin.mqtt_broker import MOSQUITTO_IMAGE
+
     conf = tmp / "mosquitto.conf"
     conf.write_text("listener 1883\nallow_anonymous true\npersistence false\n", encoding="utf-8")
     port = free_port()
