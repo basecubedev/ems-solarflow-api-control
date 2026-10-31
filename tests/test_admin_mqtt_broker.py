@@ -12,6 +12,7 @@ import os
 import shutil
 import socket
 import stat
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -32,6 +33,7 @@ from admin.mqtt_broker import (
     converge_after_restore,
     credentials_ref_for,
     hash_password,
+    mqtt_answers,
     parse_settings,
     render_acl,
     render_compose,
@@ -368,6 +370,48 @@ def test_a_real_listener_is_found_in_the_kernel_tables():
         port = listener.getsockname()[1]
 
         assert _port_free(port) is False
+
+
+def _serve_once(reply):
+    """A one-connection listener on a free port: reads the CONNECT, sends ``reply``, closes."""
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen()
+    received = []
+
+    def serve():
+        connection, _address = listener.accept()
+        with connection:
+            received.append(connection.recv(64))
+            if reply:
+                connection.sendall(reply)
+        listener.close()
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    return listener.getsockname()[1], thread, received
+
+
+@pytest.mark.parametrize(
+    ("reply", "answers"),
+    [(b"\x20\x02\x00\x00", True), (b"\x20\x02\x00\x05", True), (b"", False)],
+    ids=["accepted", "not-authorized", "accepted-and-dropped-like-dockers-port-proxy"],
+)
+def test_a_broker_counts_as_up_once_it_answers_a_connect(reply, answers):
+    port, thread, received = _serve_once(reply)
+
+    assert mqtt_answers(port) is answers
+    thread.join(5)
+    assert received and received[0][:1] == b"\x10" and b"MQTT" in received[0]
+
+
+def test_a_port_nobody_listens_on_is_no_broker():
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+
+    assert mqtt_answers(port) is False
 
 
 def test_a_broker_that_never_answers_is_stopped_again_and_stays_off(install):

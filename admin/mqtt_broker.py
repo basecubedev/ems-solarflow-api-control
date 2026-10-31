@@ -461,7 +461,7 @@ class BuiltinBroker:
         self.admin_image = admin_image
         self.runtime_identity = runtime_identity
         self._port_free = port_free or _port_free
-        self._port_answers = port_answers or _port_answers
+        self._port_answers = port_answers or mqtt_answers
         self._monotonic = monotonic
         self._sleep = sleep
         self._password_factory = password_factory
@@ -968,10 +968,22 @@ def _port_free(port, tables=SOCKET_TABLES) -> bool:
     return True
 
 
-def _port_answers(port) -> bool:
+def mqtt_answers(port, host="127.0.0.1") -> bool:
+    """Whether an MQTT broker answers on ``port``: a CONNACK, whatever it says.
+
+    An open port proves nothing here. Docker's port proxy accepts a connection
+    before Mosquitto in the container listens and drops it a moment later, so
+    the broker counts as started only once it has answered a CONNECT.
+    """
+
+    client_id = b"ems-admin-probe"
+    variable_header = b"\x00\x04MQTT\x04\x02\x00\x3c"
+    payload = len(client_id).to_bytes(2, "big") + client_id
+    packet = bytes([0x10, len(variable_header) + len(payload)]) + variable_header + payload
     try:
-        with socket.create_connection(("127.0.0.1", port), timeout=1.0):
-            return True
+        with socket.create_connection((host, port), timeout=1.0) as sock:
+            sock.sendall(packet)
+            return sock.recv(1) == b"\x20"
     except OSError:
         return False
 

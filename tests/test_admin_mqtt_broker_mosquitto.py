@@ -5,7 +5,10 @@ The Admin renders ``mosquitto.conf``, ``acl`` and ``passwd`` exactly as it would
 for an installation, and the pinned image runs them as the install user. Each
 forbidden publish is followed by an allowed one from the same connection; the
 watcher sees the allowed one, so not seeing the forbidden one before it proves
-the broker dropped it rather than that it was slow. Every marker is a topic of
+the broker dropped it rather than that it was slow. The broker counts as up
+once it answers a CONNECT, never when its port merely accepts: Docker's port
+proxy accepts before Mosquitto listens, and the first client then lost its
+connection -- the failure this module showed now and then. Every marker is a topic of
 its own, and so is every topic a check publishes (``{n}`` is replaced by a
 counter), so a late copy of an earlier message can never stand in for one or
 look like a forbidden one; an allowed publish is waited for by name rather than
@@ -20,7 +23,6 @@ import uuid
 import pytest
 
 from tests.helpers.mosquitto import (
-    _wait_for_port,
     free_port,
     require_real_broker_environment,
     wait_until,
@@ -109,7 +111,7 @@ class Watcher:
 @pytest.fixture
 def broker(tmp_path):
     from admin.credential_store import CredentialStore
-    from admin.mqtt_broker import MOSQUITTO_IMAGE, BuiltinBroker
+    from admin.mqtt_broker import MOSQUITTO_IMAGE, BuiltinBroker, mqtt_answers
 
     (tmp_path / "config").mkdir()
     (tmp_path / "data").mkdir()
@@ -148,9 +150,11 @@ def broker(tmp_path):
     ]
     subprocess.run(run, check=True, capture_output=True, text=True)
     try:
-        assert _wait_for_port("127.0.0.1", port), subprocess.run(
-            ["docker", "logs", name], capture_output=True, text=True
-        ).stderr
+        try:
+            wait_until(lambda: mqtt_answers(port), timeout=30.0, message="the broker never sent a CONNACK")
+        except AssertionError as exc:
+            logs = subprocess.run(["docker", "logs", name], capture_output=True, text=True).stderr
+            raise AssertionError(f"{exc}: {logs}") from exc
         yield admin, port, name
     finally:
         subprocess.run(["docker", "rm", "-f", name], capture_output=True)
