@@ -92,6 +92,13 @@ gate**. It runs on every pull request and on pushes to `main`:
 - `Repo System Build compatibility`
 - `Repo docker smoke test`, `Repo docker-first setup e2e`,
   `Repo InfluxDB analytics e2e`
+- `Repo Docker browser e2e` — the tests marked both `docker` and `browser`,
+  which need a real Mosquitto and Chromium and Firefox at once: the MQTT
+  mapping from a played Shelly plug to the EMS reading it
+  (`tests/test_mqtt_mapping_browser_end_to_end.py`). The Docker job above runs
+  `docker and not browser`, so each Docker-marked test runs in exactly one of
+  the two. With `EMS_REQUIRE_REAL_MQTT_TESTS=1` a missing browser or broker
+  fails the job, and so does a run in which nothing passed.
 - `Repo PR gate` — waits on all of the above and fails if any of them did
 
 The groups are an exact partition of the non-Docker suite. Functional markers
@@ -125,7 +132,8 @@ image store, a green pull step leaves the build with no registry to fail
 against. The images are read out of the `FROM` lines rather than listed in the
 script, so a base image bump needs no second edit, and
 `tests/test_ci_base_image_prepull.py` fails when a job that can build an image
-does not pull first.
+does not pull first. `Repo Docker browser e2e` builds nothing but runs the
+built-in broker's Mosquitto image, and pulls it the same way with `--image`.
 
 The offline power-control regression tests behind it are deterministic and need
 no hardware, network, or secrets.

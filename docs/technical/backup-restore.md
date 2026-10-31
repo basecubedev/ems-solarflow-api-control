@@ -85,8 +85,9 @@ not the live dashboard.
 What to keep in mind when deciding:
 
 - **config** backups may contain credentials or tokens (the dashboard auth
-  file, TLS key, and the bundled InfluxDB secret). Encrypt these if you store
-  them anywhere shared.
+  file, TLS key, the bundled InfluxDB secret, and the credential store with
+  every MQTT password together with the key that decrypts it). Encrypt these
+  if you store them anywhere shared.
 - **databases** and **influxdb** backups hold local energy/runtime history. This
   is not a secret like a password, but it can reveal usage patterns, so it can
   be privacy-relevant.
@@ -112,8 +113,11 @@ has already been created.
 Notes:
 
 - A **config** backup includes `config.json`, the runtime state, the dashboard
-  auth/cert/key files, and the bundled InfluxDB secret (only when bundled
-  InfluxDB is enabled).
+  auth/cert/key files, the bundled InfluxDB secret (only when bundled
+  InfluxDB is enabled), the built-in MQTT broker's and the MQTT mapping's
+  settings (`config/mqtt/`), Find devices' broker list
+  (`config/discovery-connections.json`) and the credential store
+  (`config/secrets/`: its key and every saved MQTT password and token).
 - A **databases** backup includes the local SQLite files
   (`data/ems_dashboard.sqlite`, `data/ems_state.sqlite`). It does **not**
   include InfluxDB data.
@@ -385,6 +389,17 @@ An interactive restore asks a few questions. In plain language:
 If two rollback passwords do not match, or rollback creation fails, the restore
 aborts and no partial files are written.
 
+The credential store is decided as a whole by its key, `config/secrets/.secret-key`.
+A saved password decrypts with the key it was saved under and no other, so
+when the backup's key differs from the one in place -- a backup from another
+installation, or a fresh one after a re-flash -- the question is asked once,
+for the key, and its records follow: **replace** brings the backup's key and
+every password saved under it, **keep** keeps the key in place and leaves out
+the backup's records it could not read (`skipped_other_key`). After a
+replace, a password this installation saved under its own key and the backup
+does not carry can no longer be read; enter it again. With the same key on
+both sides each record is an ordinary file.
+
 A replaced file keeps the permissions it had, and its owner when the restore
 runs as root, where the filesystem allows it (a refusal is logged and does not
 stop the restore); a file the restore creates is readable by its owner only.
@@ -413,6 +428,14 @@ python3 emsctl.py influx status
 After a config or database restore the CLI names the archive it restored, says
 to restart EMS so it reads the restored files, and reminds you to run
 `diagnose --deep`.
+
+The built-in MQTT broker runs from files the Admin Console renders out of the
+restored settings and passwords. A config restore in the Admin Console does
+that as its last step, **Apply the built-in MQTT broker's restored settings**:
+a broker that is switched on is started, or re-reads its passwords and access
+rules if it is running. After a restore with `emsctl` or from the dashboard
+this happens when the Admin Console next starts. A device that connected
+before keeps its password.
 
 ## Common problems
 

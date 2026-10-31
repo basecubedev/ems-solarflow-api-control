@@ -42,7 +42,7 @@ jobs:
 
       - name: Compile Python files
         run: |
-          python -m compileall admin appliance ems dashboard scripts tests emsctl.py ems-solarflow-api-control.py
+          python -m compileall admin appliance ems dashboard mqtt_mapping scripts tests emsctl.py ems-solarflow-api-control.py
 
       - name: Check generated config template
         run: |
@@ -266,7 +266,7 @@ jobs:
       # on failure, and clean up their own project in a finally block. Non-Docker
       # contract/unit tests run in the python-tests groups instead.
       - name: Report the selected marker expression
-        run: printf 'pytest -q -rs -m docker tests/\n'
+        run: printf 'pytest -q -rs -m "docker and not browser" tests/\n'
 
       - name: Run real-Docker e2e tests
         env:
@@ -275,7 +275,7 @@ jobs:
           # reports as a skip and the job passes having proven nothing.
           EMS_REQUIRE_APPLIANCE_CONTAINER_TESTS: "1"
         run: |
-          pytest -q -rs -m docker tests/
+          pytest -q -rs -m "docker and not browser" tests/
 
       - name: Show leftover containers on failure
         if: failure()
@@ -283,6 +283,74 @@ jobs:
           docker ps -a
           docker volume ls
           docker network ls
+
+  docker-browser-e2e:
+    name: Repo Docker browser e2e
+    runs-on: ubuntu-latest
+    # A real Mosquitto, the test-mode Admin, the mapping service and the EMS,
+    # driven from Chromium and Firefox. The job above has no browser and the
+    # browser jobs no Docker, so this is the one place these tests run at all.
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium firefox
+
+      - name: Pull the broker image before the tests need it
+        run: |
+          python3 scripts/prepull_base_images.py --image "$(python3 -c 'from admin.mqtt_broker import MOSQUITTO_IMAGE; print(MOSQUITTO_IMAGE)')"
+
+      - name: Report the selected marker expression
+        run: printf 'pytest -q -rs -m "docker and browser" tests/\n'
+
+      - name: Run the Docker-and-browser e2e tests
+        env:
+          # A missing browser or broker fails here instead of skipping, and a
+          # run in which nothing passed fails below.
+          EMS_REQUIRE_REAL_MQTT_TESTS: "1"
+        run: |
+          set -o pipefail
+          pytest -q -rs -m "docker and browser" tests/ | tee docker-browser-e2e.log
+          grep -E "[1-9][0-9]* passed" docker-browser-e2e.log >/dev/null || {
+            echo "No Docker-and-browser e2e test ran." >&2
+            exit 1
+          }
+
+      - name: Upload Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-docker-browser-e2e
+          path: test-results/
+          retention-days: 14
+
+      - name: Show leftover containers on failure
+        if: failure()
+        run: |
+          docker ps -a
 
   influx-e2e:
     name: Repo InfluxDB analytics e2e
@@ -453,6 +521,7 @@ jobs:
       - system-build-compatibility
       - docker-smoke-test
       - docker-first-e2e
+      - docker-browser-e2e
       - influx-e2e
       - full-suite
       - upstream-generator

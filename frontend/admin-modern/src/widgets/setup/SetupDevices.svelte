@@ -5,6 +5,11 @@
   import Bar from "../../../../shared/ui/Bar.svelte";
   import ConfirmDialog from "../../../../shared/ui/ConfirmDialog.svelte";
   import SourcesPanel from "../SourcesPanel.svelte";
+  import MqttBrokerCard from "../MqttBrokerCard.svelte";
+  import MqttMappingPanel from "../MqttMappingPanel.svelte";
+  import { routeMqtt } from "../../state/mqtt.svelte.js";
+  import { mappedProposal } from "../../lib/mqtt.js";
+  import { refreshBrokers as refreshSetupBrokers } from "../../state/setupDiscovery.svelte.js";
   import { t, tn } from "../../i18n/i18n.svelte.js";
   import { errorView } from "../../lib/errors.js";
   import { reasonKey } from "../../lib/devices.js";
@@ -38,10 +43,30 @@
   const percent = $derived(progressPercent());
   const running = $derived(setupDiscovery.scans.find((entry) => entry.status === "running") || null);
 
+  const proposalFor = (id) => mappedProposal(setupDiscovery.proposals, id);
+  /** A published mapped device is chosen for the setup draft through the same proposal as Find devices. */
+  const mqttAdoption = {
+    state(id) {
+      const proposal = proposalFor(id);
+      return proposal && selection(setupDraft.draft, proposal.id) ? "draft" : null;
+    },
+    async add(id) {
+      await refreshSetupBrokers();
+      const proposal = proposalFor(id);
+      if (!proposal) return false;
+      if (!selection(setupDraft.draft, proposal.id)) toggleProposal(proposal.id);
+      return true;
+    },
+  };
+
   $effect(() => {
     routeSources(setupRoute);
+    routeMqtt(setupRoute);
     enter();
-    return () => routeSources(null);
+    return () => {
+      routeSources(null);
+      routeMqtt(null);
+    };
   });
 
   /** The first visit runs discovery on its own; a later one only reads what it found. */
@@ -405,6 +430,14 @@
 
 <Card icon="radio-tower" tone="c-soc" title={t("setup.devices.sourcesTitle")} subtitle={t("setup.devices.sourcesSub")} span="span-12">
   <SourcesPanel onchanged={() => { loadSourceStatus(); refresh(); }} />
+</Card>
+
+<Card icon="boxes" tone="c-grid" title={t("mqtt.broker.title")} subtitle={t("mqtt.broker.setupSub")} span="span-12">
+  <MqttBrokerCard />
+</Card>
+
+<Card icon="list-checks" tone="c-grid" title={t("mqtt.mapping.title")} subtitle={t("mqtt.mapping.sub")} span="span-12">
+  <MqttMappingPanel adoption={mqttAdoption} />
 </Card>
 
 <ConfirmDialog

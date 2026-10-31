@@ -54,6 +54,7 @@ RUN pip install --no-cache-dir --no-compile -r requirements.txt \
     && chown -R admin:admin /data
 
 COPY admin/ ./admin/
+COPY mqtt_mapping/ ./mqtt_mapping/
 COPY dashboard/__init__.py ./dashboard/__init__.py
 COPY dashboard/static_files.py ./dashboard/static_files.py
 # Admin install-context detection reuses the central EMS path resolver, the
@@ -106,6 +107,8 @@ COPY ems/runtime_state.py ./ems/runtime_state.py
 COPY ems/zendure_mqtt/__init__.py ./ems/zendure_mqtt/__init__.py
 COPY ems/zendure_mqtt/topics.py ./ems/zendure_mqtt/topics.py
 COPY ems/zendure_mqtt/external_catalog.py ./ems/zendure_mqtt/external_catalog.py
+COPY ems/zendure_mqtt/payload_values.py ./ems/zendure_mqtt/payload_values.py
+COPY ems/zendure_mqtt/builtin_broker.py ./ems/zendure_mqtt/builtin_broker.py
 COPY ems/zendure_mqtt/payloads.py ./ems/zendure_mqtt/payloads.py
 COPY ems/zendure_mqtt/snapshot.py ./ems/zendure_mqtt/snapshot.py
 COPY ems/zendure_mqtt/write_protocols.py ./ems/zendure_mqtt/write_protocols.py

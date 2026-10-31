@@ -31,8 +31,11 @@ def test_real_paired_system_build_docker_contract_exists():
 
 
 def test_pull_request_ci_requires_all_docker_marked_contracts():
+    """Two jobs, one with a browser and one without; together every Docker-marked test."""
+
     text = CI_WORKFLOW.read_text(encoding="utf-8")
-    assert 'pytest -q -rs -m docker tests/' in text
+    assert 'pytest -q -rs -m "docker and not browser" tests/' in text
+    assert 'pytest -q -rs -m "docker and browser" tests/' in text
 
 
 @pytest.mark.parametrize("workflow", (RELEASE_WORKFLOW, FEATURE_WORKFLOW))

@@ -265,8 +265,8 @@ python3 emsctl.py backup create --type databases   # local SQLite (consistent sn
 python3 emsctl.py backup create --type influxdb    # bundled InfluxDB data (official backup)
 ```
 
-- **Config backup** — `config.json`, runtime state, dashboard auth/cert/key and
-  the bundled InfluxDB secret file. May contain secrets.
+- **Config backup** — `config.json`, runtime state, dashboard auth/cert/key,
+  the bundled InfluxDB secret file and the credential store. May contain secrets.
 - **Database backup** — `data/ems_dashboard.sqlite` and `data/ems_state.sqlite`,
   snapshotted with the SQLite online backup API. InfluxDB data is **not** part of
   this archive.

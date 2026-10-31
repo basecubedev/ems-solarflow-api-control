@@ -264,6 +264,34 @@ def test_backup_purposes_are_the_backups_own():
     assert tuple(js_list("lib/backups.js", "BACKUP_PURPOSES")) == tuple(BACKUP_PURPOSES)
 
 
+def test_every_restore_preview_action_has_words_here():
+    from itertools import product
+
+    from admin.backup_restore import BackupRestoreService
+
+    actions = {"would_restore_influxdb"}
+    for status, policy, follows_key, checksum_ok in product(
+        ("new", "conflict", "identical", "outside_project"), ("abort", "keep", "replace"), (False, True), (False, True)
+    ):
+        entry = {"status": status, "checksum_ok": checksum_ok, "follows_key": follows_key}
+        actions.add(BackupRestoreService._preview_action(entry, policy)[0])
+
+    assert actions == set(js_list("lib/backups.js", "FILE_ACTIONS"))
+
+
+def test_every_restore_step_has_words_here():
+    from types import SimpleNamespace
+
+    from admin.backup_restore import BackupRestoreService
+
+    service = BackupRestoreService(after_config_restore=lambda: ("ok", ""))
+    targets = [SimpleNamespace(backup_type=kind) for kind in ("config", "databases", "influxdb")]
+    steps = service.plan_restore_steps(SimpleNamespace(targets=targets, rollback_enabled=True))
+
+    keys = {re.sub(r"_\d+$", "", step["key"]) for step in steps}
+    assert keys == set(js_list("lib/backups.js", "RESTORE_STEPS"))
+
+
 def test_feature_sections_with_words_here_are_catalogue_features():
     from ems.config_catalog import get_config_feature_sections
 

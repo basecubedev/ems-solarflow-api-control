@@ -366,6 +366,71 @@ const SHOTS = [
     },
   },
   {
+    file: "admin-mqtt-broker.png",
+    hash: "#/settings/addons",
+    async prepare(page) {
+      await appReady(page);
+      await visible(page.getByTestId("mqtt-broker-accounts"));
+    },
+  },
+  {
+    file: "admin-mqtt-connect.png",
+    hash: "#/settings/addons",
+    async prepare(page) {
+      await appReady(page);
+      await page.getByTestId("mqtt-connect").click();
+      const guide = page.getByTestId("mqtt-connect-guide");
+      await visible(guide);
+      await scrollTo(page, guide, 16);
+    },
+  },
+  {
+    file: "admin-mqtt-question.png",
+    hash: "#/settings/devices",
+    async prepare(page) {
+      await appReady(page);
+      const mapping = page.getByTestId("mqtt-mapping");
+      await visible(mapping);
+      await mapping.getByTestId("mqtt-topics-start").click();
+      await visible(page.getByTestId("mqtt-topic-groups"));
+      await mapping.locator('li[data-label="shelly_gen2"]').getByTestId("mqtt-map-group").click();
+      const wizard = page.getByTestId("mqtt-wizard");
+      await wizard.getByTestId("mqtt-kind-balcony").check();
+      await wizard.getByTestId("mqtt-wizard-name").fill("Balcony South");
+      await visible(wizard.getByTestId("mqtt-wizard-turned"));
+      await scrollTo(page, wizard, 16);
+    },
+  },
+  {
+    file: "admin-mqtt-mapping.png",
+    hash: "#/settings/devices",
+    async prepare(page) {
+      await appReady(page);
+      const mapping = page.getByTestId("mqtt-mapping");
+      await visible(mapping);
+      await mapping.getByTestId("mqtt-topics-start").click();
+      await visible(page.getByTestId("mqtt-topic-groups"));
+      await scrollTo(page, page.locator("section.card").filter({ has: mapping }), 16);
+    },
+  },
+  {
+    file: "admin-mqtt-mapping-editor.png",
+    hash: "#/settings/devices",
+    async prepare(page) {
+      await appReady(page);
+      const mapping = page.getByTestId("mqtt-mapping");
+      await visible(mapping);
+      await mapping.getByTestId("mqtt-topics-start").click();
+      await visible(page.getByTestId("mqtt-topic-groups"));
+      await mapping.getByTestId("mqtt-mapped-devices").getByRole("button", { name: "Edit" }).first().click();
+      const editor = page.getByTestId("mqtt-mapping-editor");
+      await visible(editor);
+      await editor.getByTestId("mqtt-device-preview").click();
+      await visible(page.getByTestId("mqtt-preview-state"));
+      await scrollTo(page, editor, 16);
+    },
+  },
+  {
     file: "admin-settings-search.png",
     hash: "#/settings/devices",
     async prepare(page) {

@@ -25,6 +25,15 @@ _REF_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 # managed file. No legitimate reference approaches this.
 _MAX_REF_LEN = 128
 
+CREDENTIAL_STORE_DIRNAME = "secrets"
+CREDENTIAL_KEY_FILENAME = ".secret-key"
+# A managed secrets record is a flat "<canonical>.json" basename. The anchored
+# allowlist admits no path separator or ".." sequence, so it is the sanitizer
+# barrier for the secrets-dir path built from it.
+MANAGED_RECORD_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*\.json$")
+# Beside config.json: discovery's broker list, naming its credentials by ref only.
+DISCOVERY_CONNECTIONS_FILENAME = "discovery-connections.json"
+
 
 class MqttCredentialError(ValueError):
     """Sanitized credential resolution failure safe for operator output."""
@@ -129,13 +138,13 @@ class MqttCredentialResolver(Protocol):
 def default_mqtt_secrets_dir() -> Path:
     configured = os.environ.get("EMS_CONFIG_DIR")
     if configured:
-        return Path(configured) / "secrets"
+        return Path(configured) / CREDENTIAL_STORE_DIRNAME
     install_root = os.environ.get("EMS_INSTALL_DIR")
     if install_root:
-        return Path(install_root) / "config" / "secrets"
+        return Path(install_root) / "config" / CREDENTIAL_STORE_DIRNAME
     from ems import paths
 
-    return Path(paths.BASE_DIR) / "config" / "secrets"
+    return Path(paths.BASE_DIR) / "config" / CREDENTIAL_STORE_DIRNAME
 
 
 class FileMqttCredentialResolver:
@@ -182,7 +191,7 @@ class FileMqttCredentialResolver:
             if record.get(f"{field}_encrypted") is True:
                 from cryptography.fernet import Fernet
 
-                key = (self.secrets_dir / ".secret-key").read_bytes()
+                key = (self.secrets_dir / CREDENTIAL_KEY_FILENAME).read_bytes()
                 return Fernet(key).decrypt(blob.encode("ascii")).decode("utf-8")
             if record.get(f"{field}_encrypted") is False:
                 return base64.b64decode(blob.encode("ascii"), validate=True).decode("utf-8")

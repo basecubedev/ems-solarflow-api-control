@@ -317,8 +317,12 @@ def build_routes():
     upgrade = _load_fixture("guided_upgrade_demo.json")
     setup = _load_fixture("guided_setup_demo.json")
     diagnostics = _load_fixture("diagnostics_demo.json")
+    mqtt = _load_fixture("mqtt_demo.json")
 
     get_routes = {
+        "/api/discovery/mqtt-broker": mqtt["broker"],
+        "/api/discovery/mqtt-mapping": mqtt["mapping"],
+        "/api/discovery/mqtt-topics/sessions/demo": mqtt["topics"],
         "/api/admin/auth/status": common["auth_status"],
         "/api/admin/install-state": common["install_state"],
         "/api/discovery/mdns/status": common["mdns_status"],
@@ -344,6 +348,8 @@ def build_routes():
         "/api/setup/config/status": setup["config_status"],
     }
     post_routes = {
+        "/api/discovery/mqtt-topics/sessions": {"ok": True, "session": "demo"},
+        "/api/discovery/mqtt-mapping/value-preview": mqtt["value_preview"],
         "/api/discovery/scan": common["scan_started"],
         "/api/setup/discovery/scan": common["scan_started"],
         "/api/setup/config-preview": setup["config_preview"],

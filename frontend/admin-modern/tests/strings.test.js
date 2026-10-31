@@ -22,6 +22,7 @@ import { SETUP_STEPS, DOCKER_MODES, DOCKER_STATES, RECOVERY_REASONS } from "../s
 import { BUSY_OPERATIONS, CONFIG_CONFLICTS, CONTINUITY, SWITCH_REASONS } from "../src/lib/setupDraft.js";
 import { AUTOMATIC_FEATURES, DEVICE_KINDS, EDIT_TABS, FEATURE_IDS, MQTT_SOURCES, RISKS } from "../src/lib/settings.js";
 import { ASSISTANT_STATES, STEP_IDS, TASKS } from "../src/lib/assistant.js";
+import { BROKER_ISSUES as MQTT_BROKER_ISSUES, BROKER_STATES, CONNECT_TYPES, DEVICE_KINDS as MQTT_DEVICE_KINDS, LIVE_LABELS, MAPPING_ISSUES, SILENCE_REASONS, TARGETS, UNITS, VALUE_REASONS, connectSteps } from "../src/lib/mqtt.js";
 
 const LANGS = ["en", "de", "nl", "fr"];
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "../src");
@@ -141,7 +142,16 @@ test("every generated key family is complete", () => {
     ...["missing", "invalid"].map((state) => `settings.config.${state}`),
     ...["operation", "workflow"].map((kind) => `recovery.reference.${kind}`),
     ...FEATURE_IDS.flatMap((id) => [`feature.${id}`, `feature.${id}.sub`]),
-    ...[...EDIT_TABS, "devices"].map((tab) => `settings.tab.${tab}`),
+    ...[...EDIT_TABS, "addons", "devices"].map((tab) => `settings.tab.${tab}`),
+    ...BROKER_STATES.map((state) => `mqtt.state.${state}`),
+    ...[...MQTT_BROKER_ISSUES, ...MAPPING_ISSUES].map((code) => `mqtt.code.${code}`),
+    ...LIVE_LABELS.map((label) => `mqtt.label.${label}`),
+    ...SILENCE_REASONS.map((reason) => `mqtt.reason.${reason}`),
+    ...VALUE_REASONS.map((reason) => `mqtt.value.${reason}`),
+    ...TARGETS.map((target) => `mqtt.target.${target}`),
+    ...MQTT_DEVICE_KINDS.flatMap((kind) => [`mqtt.wizard.kind.${kind}`, `mqtt.wizard.kind.${kind}.hint`]),
+    ...Object.keys(UNITS).map((unit) => `mqtt.unit.${unit}`),
+    ...CONNECT_TYPES.flatMap((type) => [`mqtt.connect.type.${type}`, ...connectSteps(type)]),
     ...EDIT_TABS.map((tab) => `settings.tab.${tab}.sub`),
     ...ALIGNMENT_STAGES.map((stage) => `alignment.stage.${stage}`),
     ...REASON_WORDS.map((word) => `devices.reason.${word}`),
@@ -182,6 +192,7 @@ test("every generated key family is complete", () => {
 test("no orphan keys: each key is used literally or belongs to a generated family", () => {
   const text = sources().join("\n");
   const families = [
+    "mqtt.state.", "mqtt.code.", "mqtt.label.", "mqtt.reason.", "mqtt.value.", "mqtt.target.", "mqtt.wizard.kind.", "mqtt.unit.", "mqtt.connect.type.", "mqtt.connect.shelly_gen2.", "mqtt.connect.shelly_gen1.", "mqtt.connect.tasmota.", "mqtt.connect.dtu.", "mqtt.connect.other.",
     "nav.", "page.", "error.", "finding.", "install.", "container.status.", "health.path.", "health.pill.", "overview.verdict.",
     "overview.attention.", "overview.notes.", "backup.purpose.", "backups.scope.influxdb.", "step.state.", "control.status.", "control.short.", "control.transport.", "control.gate.", "control.writing.",
     "service.", "services.change.", "services.config.", "services.step.", "services.desired.", "services.status.",

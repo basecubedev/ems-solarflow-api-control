@@ -28,6 +28,7 @@ nav = [
       { "Maintenance" = "user/admin/maintenance.md" },
       { "Device management" = "user/admin/device-management.md" },
       { "MQTT connections" = "user/admin/mqtt.md" },
+      { "MQTT broker and mapping" = "user/admin/mqtt-mapping.md" },
       { "Backup and restore" = "user/admin/backup-restore.md" },
       { "Diagnostics and recovery" = "user/admin/diagnostics-recovery.md" },
       { "Appearance and language" = "user/admin/appearance.md" },

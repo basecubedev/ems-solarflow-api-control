@@ -29,7 +29,8 @@ on a schedule or against a meter of its own.
 
 - A local MQTT broker that EMS can reach (the same kind of broker a Local MQTT
   Zendure device uses — see [Connection types](connection-types.md)).
-- Something that reads the device and can publish to that broker.
+- Something that reads the device and can publish to that broker — or the
+  Admin Console's [built-in MQTT mapping](admin/mqtt-mapping.md).
 
 ## What to publish
 
@@ -140,6 +141,13 @@ while True:
     client.publish(TOPIC, json.dumps(read_values()), qos=1, retain=True)
     time.sleep(15)
 ```
+
+### The built-in MQTT mapping
+
+The Admin Console can do this for you: switch on its built-in broker, point the
+device at it, pick the values from the live topics and save. The mapping
+publishes the `state` object above with the retain flag and an expiry. See
+[Built-in MQTT broker and MQTT mapping](admin/mqtt-mapping.md).
 
 ### FHEM and ioBroker
 

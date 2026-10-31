@@ -414,6 +414,19 @@ test.describe("Modern dashboard operator: schedule @smoke", () => {
 });
 
 test.describe("Modern dashboard operator: maintenance @smoke", () => {
+  test("the status names the built-in MQTT broker as the EMS reads it, read-only", async ({ page }) => {
+    await page.route("**/api/maintenance/status", (route) => route.fulfill({ json: {
+      config_path: "config/config.json", backup_dir: "data/backups", backup_types: ["config"],
+      influxdb: { enabled: false }, restore_available_in_dashboard: true,
+      builtin_mqtt_broker: { state: "connected", enabled: true, users: ["Balkon"], ems_connected: true, mapped_devices: 1, publishing_devices: 1 },
+    } }));
+    await openSignedIn(page, "#/maintenance");
+    const line = page.getByTestId("maint-mqtt-broker");
+    await expect(line).toHaveAttribute("data-state", "connected");
+    await expect(line).toContainText("On, EMS connected · used by Balkon · 1 of 1 mapped devices published");
+    await expect(line.locator("button, input, select")).toHaveCount(0);
+  });
+
   test("the page names the config, the backup folder and the backup types, and lists every backup", async ({ page }) => {
     await openSignedIn(page, "#/maintenance");
     const status = page.getByRole("region", { name: "Maintenance status" });
