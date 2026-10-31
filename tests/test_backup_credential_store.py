@@ -19,7 +19,7 @@ from admin.credential_store import CredentialStore
 from admin.backup_restore import BackupRestoreService
 from admin.install_context import detect_install_context
 from ems import backup
-from ems.mqtt_credentials import SECRET_KEY_FILENAME, FileMqttCredentialResolver
+from ems.mqtt_credentials import CREDENTIAL_KEY_FILENAME, FileMqttCredentialResolver
 
 pytestmark = [
     pytest.mark.backup_restore,
@@ -87,7 +87,7 @@ def test_a_config_backup_carries_the_key_every_record_and_the_discovery_list(sou
     files = {entry["path"]: entry for entry in manifest["files"]}
     stored = sorted(
         name for name in os.listdir(_secrets(source))
-        if name == SECRET_KEY_FILENAME or name.endswith(".json") and not name.startswith(".")
+        if name == CREDENTIAL_KEY_FILENAME or name.endswith(".json") and not name.startswith(".")
     )
     assert len(stored) == 4
     for name in stored:
@@ -118,7 +118,7 @@ def test_a_restore_onto_its_own_installation_puts_a_changed_password_back(source
     result = backup.restore_backup(archive, base_dir=str(source), on_conflict="replace")
 
     assert _password(source, DEVICES) == "devices-password"
-    assert _actions(result)[SECRET_KEY_FILENAME] == "skip_identical"
+    assert _actions(result)[CREDENTIAL_KEY_FILENAME] == "skip_identical"
 
 
 def test_a_backup_from_another_key_brings_its_key_along_with_its_records(source, tmp_path):
@@ -128,7 +128,7 @@ def test_a_backup_from_another_key_brings_its_key_along_with_its_records(source,
 
     backup.restore_backup(archive, base_dir=str(fresh), on_conflict="replace")
 
-    assert (_secrets(fresh) / SECRET_KEY_FILENAME).read_bytes() == (_secrets(source) / SECRET_KEY_FILENAME).read_bytes()
+    assert (_secrets(fresh) / CREDENTIAL_KEY_FILENAME).read_bytes() == (_secrets(source) / CREDENTIAL_KEY_FILENAME).read_bytes()
     assert _password(fresh, DEVICES) == "devices-password"
     assert _password(fresh, METER) == "meter-password"
 
@@ -141,7 +141,7 @@ def test_keeping_the_key_in_place_keeps_out_every_record_it_could_not_read(sourc
     result = backup.restore_backup(archive, base_dir=str(fresh), on_conflict="keep")
 
     actions = _actions(result)
-    assert actions[SECRET_KEY_FILENAME] == "kept_current"
+    assert actions[CREDENTIAL_KEY_FILENAME] == "kept_current"
     assert actions[f"mqtt-{DEVICES}.json"] == "kept_current"
     assert actions[f"mqtt-{METER}.json"] == "skipped_other_key"
     assert _password(fresh, DEVICES) == "fresh-password"
@@ -161,7 +161,7 @@ def test_the_key_is_asked_about_once_and_its_records_follow(source, tmp_path, de
 
     backup.restore_backup(archive, base_dir=str(fresh), conflict_resolver=resolver)
 
-    assert [name for name in asked if name.startswith(("mqtt-", "."))] == [SECRET_KEY_FILENAME]
+    assert [name for name in asked if name.startswith(("mqtt-", "."))] == [CREDENTIAL_KEY_FILENAME]
     assert _password(fresh, DEVICES) == ("fresh-password" if decision == "keep" else "devices-password")
 
 
@@ -176,6 +176,6 @@ def test_the_admin_preview_says_which_records_a_kept_key_keeps_out(source, tmp_p
     plan = service.create_restore_plan({"id": backup_id, "scope": "config", "conflict_policy": "keep"})
 
     actions = {os.path.basename(row["path"]): row["action"] for row in plan["files"]}
-    assert actions[SECRET_KEY_FILENAME] == "would_keep_current"
+    assert actions[CREDENTIAL_KEY_FILENAME] == "would_keep_current"
     assert actions[f"mqtt-{DEVICES}.json"] == "would_keep_current"
     assert actions[f"mqtt-{METER}.json"] == "would_skip_other_key"

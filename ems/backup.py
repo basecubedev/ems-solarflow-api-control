@@ -30,10 +30,10 @@ from ems.config import normalize_influxdb_config, safe_bool
 from ems.diagnostics import DIAGNOSE_SCHEMA_VERSION, SUPPORT_BUNDLE_VERSION
 from ems.file_io import STARTUP_LOCK_TIMEOUT_SECONDS, FileLockTimeout, exclusive_file_lock
 from ems.mqtt_credentials import (
+    CREDENTIAL_KEY_FILENAME,
+    CREDENTIAL_STORE_DIRNAME,
     DISCOVERY_CONNECTIONS_FILENAME,
     MANAGED_RECORD_NAME,
-    SECRET_KEY_FILENAME,
-    SECRETS_DIRNAME,
 )
 from ems.paths import BASE_DIR, resolve_schedules_path
 from ems.zendure_mqtt.builtin_broker import broker_settings_path, mappings_path
@@ -205,15 +205,15 @@ def outside_project_name(abs_path):
 def credential_store_files(config_dir):
     """The credential store's key and managed records under ``config_dir``."""
 
-    secrets_dir = os.path.join(config_dir, SECRETS_DIRNAME)
+    store_dir = os.path.join(config_dir, CREDENTIAL_STORE_DIRNAME)
     try:
-        names = sorted(os.listdir(secrets_dir))
+        names = sorted(os.listdir(store_dir))
     except OSError:
         return []
     return [
-        os.path.join(secrets_dir, name)
+        os.path.join(store_dir, name)
         for name in names
-        if name == SECRET_KEY_FILENAME or MANAGED_RECORD_NAME.fullmatch(name)
+        if name == CREDENTIAL_KEY_FILENAME or MANAGED_RECORD_NAME.fullmatch(name)
     ]
 
 
@@ -1619,10 +1619,10 @@ def _build_restore_entries(tar, manifest, base_dir):
     return entries
 
 
-def _is_secret_key(entry):
+def _is_store_key(entry):
     return (
         entry.get("kind") == CREDENTIAL_STORE_KIND
-        and entry["path"].rsplit("/", 1)[-1] == SECRET_KEY_FILENAME
+        and entry["path"].rsplit("/", 1)[-1] == CREDENTIAL_KEY_FILENAME
     )
 
 
@@ -1634,7 +1634,7 @@ def _bind_records_to_key(entries):
     once the backup's key replaced it, so the records go where the key goes.
     """
 
-    key = next((entry for entry in entries if _is_secret_key(entry)), None)
+    key = next((entry for entry in entries if _is_store_key(entry)), None)
     if key is None or key["status"] != "conflict":
         return
     for entry in entries:
@@ -1645,7 +1645,7 @@ def _bind_records_to_key(entries):
 def _restore_order(entry):
     """The key before its records, which follow its decision; schedules after the runtime state."""
 
-    return (entry.get("kind") == "schedules", not _is_secret_key(entry))
+    return (entry.get("kind") == "schedules", not _is_store_key(entry))
 
 
 def plan_restore(
@@ -1936,7 +1936,7 @@ def restore_backup(
                     raise BackupError(
                         f"restore aborted at conflicting file: {entry['path']}"
                     )
-                if _is_secret_key(entry):
+                if _is_store_key(entry):
                     key_decision = decision
                 if decision == "keep":
                     actions.append({"path": entry["path"], "action": "kept_current"})

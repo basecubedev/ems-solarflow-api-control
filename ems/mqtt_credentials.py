@@ -25,8 +25,8 @@ _REF_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 # managed file. No legitimate reference approaches this.
 _MAX_REF_LEN = 128
 
-SECRETS_DIRNAME = "secrets"
-SECRET_KEY_FILENAME = ".secret-key"
+CREDENTIAL_STORE_DIRNAME = "secrets"
+CREDENTIAL_KEY_FILENAME = ".secret-key"
 # A managed secrets record is a flat "<canonical>.json" basename. The anchored
 # allowlist admits no path separator or ".." sequence, so it is the sanitizer
 # barrier for the secrets-dir path built from it.
@@ -138,13 +138,13 @@ class MqttCredentialResolver(Protocol):
 def default_mqtt_secrets_dir() -> Path:
     configured = os.environ.get("EMS_CONFIG_DIR")
     if configured:
-        return Path(configured) / SECRETS_DIRNAME
+        return Path(configured) / CREDENTIAL_STORE_DIRNAME
     install_root = os.environ.get("EMS_INSTALL_DIR")
     if install_root:
-        return Path(install_root) / "config" / SECRETS_DIRNAME
+        return Path(install_root) / "config" / CREDENTIAL_STORE_DIRNAME
     from ems import paths
 
-    return Path(paths.BASE_DIR) / "config" / SECRETS_DIRNAME
+    return Path(paths.BASE_DIR) / "config" / CREDENTIAL_STORE_DIRNAME
 
 
 class FileMqttCredentialResolver:
@@ -191,7 +191,7 @@ class FileMqttCredentialResolver:
             if record.get(f"{field}_encrypted") is True:
                 from cryptography.fernet import Fernet
 
-                key = (self.secrets_dir / SECRET_KEY_FILENAME).read_bytes()
+                key = (self.secrets_dir / CREDENTIAL_KEY_FILENAME).read_bytes()
                 return Fernet(key).decrypt(blob.encode("ascii")).decode("utf-8")
             if record.get(f"{field}_encrypted") is False:
                 return base64.b64decode(blob.encode("ascii"), validate=True).decode("utf-8")

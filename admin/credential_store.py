@@ -26,11 +26,11 @@ from pathlib import Path
 from admin.models import utc_now_iso
 from ems.mqtt_credentials import (
     MQTT_CREDENTIAL_REQUIRED_FIELDS,
-    SECRETS_DIRNAME,
     missing_mqtt_credential_fields,
 )
+from ems.mqtt_credentials import CREDENTIAL_KEY_FILENAME as KEY_FILENAME
+from ems.mqtt_credentials import CREDENTIAL_STORE_DIRNAME as SECRETS_DIRNAME
 from ems.mqtt_credentials import MANAGED_RECORD_NAME as _MANAGED_NAME_RE
-from ems.mqtt_credentials import SECRET_KEY_FILENAME as KEY_FILENAME
 from ems.zendure_mqtt.config_entries import SOURCE_ZENDURE_CLOUD_MQTT
 
 # The one runtime credential reference the Zendure cloud broker profile uses in
