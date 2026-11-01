@@ -196,8 +196,10 @@ Docker. It is not part of the EMS control loop and must not import from `ems/`.
   uninstallable on every appliance that recorded it.
 - Thinly confirmed on physical hardware. One Pi 3B+ has booted the image, grown
   its root, come up, and taken five manager upgrades in place; its armed
-  deadline has decided once, `confirmed`. Nothing has been proven about a
-  revert, about EMS or InfluxDB on a board, or about any other model.
+  deadline has decided twice, `confirmed` once and `revert_failed` once (a
+  socket-activated sshd failed both packages' postinst). No revert has
+  succeeded, and nothing is proven about EMS or InfluxDB on a board, or about
+  any other model.
   `docs/appliance/hardware-validation.md` is the authority on what has and has
   not been proven; never upgrade a claim there without the evidence it names.
 

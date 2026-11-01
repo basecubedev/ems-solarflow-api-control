@@ -200,9 +200,11 @@ is not in any package archive.
 
 > Like the rest of the appliance, this has barely run on hardware. One
 > appliance has fetched and installed manager packages over a real network,
-> and its deadline, described below, has decided once: it confirmed an
-> install. No deadline has yet put a package back on hardware; that path is
-> tested in full offline, which is not the same claim. See
+> and its deadline, described below, has decided twice: it confirmed one
+> install, and once, when an install had failed, it tried five times to put
+> the previous package back and could not. No deadline has yet put a package
+> back on hardware; that path is tested in full offline, which is not the same
+> claim. See
 > [what "not confirmed" means](index.md#what-not-confirmed-means).
 
 Nothing here happens on a schedule. There is no automatic update, no nightly
