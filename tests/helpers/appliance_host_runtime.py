@@ -16,6 +16,7 @@ from appliance import ssh_policy
 from appliance.ssh_policy import parse_sshd_config
 
 UNIT_SSH = "ssh.service"
+UNIT_SSH_SOCKET = "ssh.socket"
 
 BASE_POLICY = {
     "passwordauthentication": "no",
@@ -86,6 +87,7 @@ class FakeHost:
         tools=("sshd", "systemctl"),
         path_unit_active="waiting",
         ssh_active="active",
+        socket_active="inactive",
         enabled="enabled",
     ):
         self.systemd_dir = systemd_dir
@@ -96,6 +98,7 @@ class FakeHost:
         self.messages = {}
         self.path_unit_active = path_unit_active
         self.ssh_active = ssh_active
+        self.socket_active = socket_active
         self.enabled = enabled
         self.armed_path = watched_of(systemd_dir)
         self.loaded_policy = policy_of(sshd_dir)
@@ -150,7 +153,8 @@ class FakeHost:
             stdout = "".join(f"{key} {value}\n" for key, value in sorted(self.loaded_policy.items()))
         elif tool == "systemctl" and args[:1] == ("is-active",):
             unit = args[1] if len(args) > 1 else ""
-            stdout = (self.ssh_active if unit == UNIT_SSH else self.path_unit_active) + "\n"
+            states = {UNIT_SSH: self.ssh_active, UNIT_SSH_SOCKET: self.socket_active}
+            stdout = states.get(unit, self.path_unit_active) + "\n"
         elif tool == "systemctl" and args[:1] == ("is-enabled",):
             stdout = f"{self.enabled}\n"
         elif tool == "systemctl" and args[:2] == ("show", PATH_UNIT):
@@ -158,8 +162,16 @@ class FakeHost:
         elif tool == "systemctl" and args[:1] == ("restart",) and code == 0:
             if args[1:2] == (PATH_UNIT,):
                 self.armed_path = watched_of(self.systemd_dir)
-        elif tool == "systemctl" and args[:1] == ("reload",) and code == 0:
-            if args[1:2] == (UNIT_SSH,):
+        elif tool == "systemctl" and args[:2] == ("reload", UNIT_SSH) and code == 0:
+            if self.socket_active == "active":
+                # sshd re-executes itself on SIGHUP and binds port 22 again,
+                # which systemd holds for the socket: the daemon exits.
+                self.ssh_active = "failed"
+                code = 1
+            else:
+                self.loaded_policy = policy_of(self.sshd_dir)
+        elif tool == "systemctl" and args[:2] == ("try-restart", UNIT_SSH) and code == 0:
+            if self.ssh_active == "active":
                 self.loaded_policy = policy_of(self.sshd_dir)
 
         return CommandResult(

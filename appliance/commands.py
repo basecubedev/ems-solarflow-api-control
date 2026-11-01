@@ -50,6 +50,13 @@ EXECUTABLES = {
     "gpgv": ("/usr/bin/gpgv",),
 }
 
+# A directory a tool refuses to run without, made before it runs. sshd checks
+# its privilege separation directory even for -t and -T; ssh.service creates it
+# as its runtime directory and removes it when it stops, and a socket-activated
+# daemon has not started before the first login after a boot.
+RUNTIME_DIRECTORIES = {"sshd": "/run/sshd"}
+RUNTIME_DIRECTORY_MODE = 0o755
+
 
 class CommandError(Exception):
     def __init__(self, code, message):
@@ -119,8 +126,18 @@ def _captured(value):
 class CommandRunner:
     """Run an allowlisted host tool with validated arguments."""
 
-    def __init__(self, *, executables=None, default_timeout=DEFAULT_TIMEOUT, env=None):
+    def __init__(
+        self,
+        *,
+        executables=None,
+        default_timeout=DEFAULT_TIMEOUT,
+        env=None,
+        runtime_directories=None,
+    ):
         self.executables = dict(executables or EXECUTABLES)
+        self.runtime_directories = dict(
+            RUNTIME_DIRECTORIES if runtime_directories is None else runtime_directories
+        )
         self.default_timeout = default_timeout
         self.env = dict(
             env
@@ -150,10 +167,23 @@ class CommandRunner:
             return False
         return True
 
+    def _prepare(self, tool):
+        """Make the directory ``tool`` needs; one that cannot be made is left for it to report."""
+
+        directory = self.runtime_directories.get(tool)
+        if not directory or os.path.isdir(directory):
+            return
+        try:
+            os.mkdir(directory, RUNTIME_DIRECTORY_MODE)
+            os.chmod(directory, RUNTIME_DIRECTORY_MODE)
+        except OSError:
+            pass
+
     def run(self, tool, args=(), *, timeout=None, input_text=None, check=False):
         arguments = validated_arguments(args)
         executable = self.resolve(tool)
         argv = [executable, *arguments]
+        self._prepare(tool)
 
         try:
             completed = subprocess.run(
@@ -206,6 +236,7 @@ class CommandRunner:
 
         arguments = validated_arguments(args)
         executable = self.resolve(tool)
+        self._prepare(tool)
         try:
             process = subprocess.Popen(
                 [executable, *arguments],

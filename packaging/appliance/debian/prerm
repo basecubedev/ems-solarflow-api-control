@@ -71,7 +71,13 @@ case "$1" in
         fi
 
         if command -v sshd >/dev/null 2>&1 && sshd -t >/dev/null 2>&1; then
-            systemctl reload ssh.service >/dev/null 2>&1 || true
+            # A daemon started from ssh.socket exits on a reload: it binds port
+            # 22 again, which systemd holds. It is restarted instead.
+            if systemctl is-active --quiet ssh.socket; then
+                systemctl try-restart ssh.service >/dev/null 2>&1 || true
+            else
+                systemctl reload ssh.service >/dev/null 2>&1 || true
+            fi
         fi
         ;;
     upgrade|failed-upgrade)

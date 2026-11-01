@@ -584,6 +584,11 @@ class FakeHost:
             unit = args[-1]
             if unit in self.reload_failures:
                 return self._result("systemctl", args, 1, "", f"Failed to reload {unit}")
+            if unit == "ssh.service" and self.units.get("ssh.socket", {}).get("active") == "active":
+                # sshd re-executes itself on SIGHUP and binds port 22 again,
+                # which systemd holds for the socket: the daemon exits.
+                self.units[unit]["active"] = "failed"
+                return self._result("systemctl", args, 1, "", f"Reload failed for {unit}")
             return self._result("systemctl", args, 0)
         if args[:1] in (["stop"], ["reboot"], ["poweroff"], ["try-restart"]):
             return self._result("systemctl", args, 0)
