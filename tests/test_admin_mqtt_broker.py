@@ -977,6 +977,24 @@ def test_a_meter_naming_this_host_and_the_broker_port_is_on_the_broker(mqtt, exp
     assert grid_meter_topic(config, port=1883, host_addresses=("192.168.1.40",)) == expected
 
 
+@pytest.mark.parametrize(
+    ("mqtt", "expected"),
+    [
+        ({"host": "ems-mqtt-broker", "port": 1883, "topic": "meter/power"}, "meter/power"),
+        ({"host": "192.168.1.40", "port": 1884, "topic": "meter/power"}, "meter/power"),
+        ({"host": "192.168.1.40", "port": 1883, "topic": "meter/power"}, None),
+        ({"host": "ems-mqtt-broker", "port": 1884, "topic": "meter/power"}, None),
+    ],
+    ids=["container-name-inside-port", "host-published-port", "host-old-port", "container-name-published-port"],
+)
+def test_a_meter_reaches_a_broker_published_on_another_port_by_its_container_name(mqtt, expected):
+    """The container listens on 1883 inside Docker whatever port the host publishes."""
+
+    config = {"grid_meter": {"type": "mqtt", "mqtt": mqtt}}
+
+    assert grid_meter_topic(config, port=1884, host_addresses=("192.168.1.40",)) == expected
+
+
 def test_a_meter_saved_after_the_broker_started_is_protected_at_once(install):
     _write_settings(install, enabled=True, accounts=[{"name": "devices"}, {"name": "meter"}], grid_meter_account="meter")
     broker = _broker(install, config={})

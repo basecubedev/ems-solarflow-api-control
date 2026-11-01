@@ -285,3 +285,37 @@ export function storable(hardware) {
   }
   return { ...hardware, values };
 }
+
+/** A refusal with the server's validation reasons as its message, when it gave any. */
+export function refused(answer) {
+  const reasons = (answer?.validation?.errors || []).map((issue) => issue?.message).filter((message) => typeof message === "string" && message);
+  return reasons.length ? { ...answer, message: reasons.join(" ") } : answer;
+}
+
+/**
+ * One hardware change written straight to the config. ``read()`` answers the
+ * config as it is now, ``{ saved, editable, error }``, so a change another console
+ * saved meanwhile is the base rather than undone; ``build(editable)`` makes the
+ * change from it, ``null`` for nothing to change. The result is previewed and,
+ * when the server finds it valid on that same revision, applied with a backup
+ * first through ``send(path, body)``. Answers ``{ ok, reason, error, applied }``;
+ * ``reason`` ``changed`` means the config moved on between reading and the check.
+ */
+export async function writeAtOnce(build, { read, send, paths }) {
+  try {
+    const { saved, editable, error } = await read();
+    if (!saved || !editable) return { ok: false, error };
+    const changes = build(editable);
+    if (!changes) return { ok: true };
+    const features = saved.draft?.features && typeof saved.draft.features === "object" ? saved.draft.features : {};
+    const draft = { ...editable, ...changes, features: { ...features } };
+    const preview = await send(paths.preview, { draft });
+    if (!preview?.validation?.ok || !preview.revision) return { ok: false, error: refused(preview) };
+    if (saved.revision && preview.revision !== saved.revision) return { ok: false, reason: "changed" };
+    const result = await send(paths.apply, { draft, revision: preview.revision, confirm: true, backup: true });
+    if (result?.ok === false) return { ok: false, error: refused(result) };
+    return { ok: true, applied: { result, diff: preview.diff, at: Date.now() } };
+  } catch (error) {
+    return { ok: false, error: error?.payload?.validation ? refused(error.payload) : error };
+  }
+}

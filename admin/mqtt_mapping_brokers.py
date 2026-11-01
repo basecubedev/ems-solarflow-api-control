@@ -26,7 +26,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 
-from admin.mqtt_broker import BROKER_SERVICE, DEFAULT_PORT, local_profile_endpoints
+from admin.mqtt_broker import BROKER_SERVICE, DEFAULT_PORT, local_profile_endpoints, this_broker_endpoints
 from admin.zendure_mqtt_broker_profiles import valid_host
 from ems.file_io import atomic_write_bytes
 from ems.zendure_mqtt.builtin_broker import BUILTIN_PROFILE_REF, builtin_profile_refs, mappings_path
@@ -54,7 +54,6 @@ FOUND_REF_PREFIX = "broker-"
 LOGIN_TIMEOUT_SECONDS = 3.0
 SEARCH_WORKERS = 8
 MAX_ACCOUNT_LENGTH = 256
-THIS_HOST_NAMES = ("127.0.0.1", "localhost", "::1")
 BUILTIN_IDENTITY = "builtin"
 
 
@@ -179,7 +178,7 @@ class MappingBrokers:
                 "usable": running and enabled,
             }
         ]
-        taken = {_key(name, port) for name in (*THIS_HOST_NAMES, *self._local_addresses(address))}
+        taken = {_key(*endpoint) for endpoint in this_broker_endpoints(port, self._local_addresses(address))}
         saved = saved_brokers(read_mappings_document(mappings_path(broker.config_dir)))
         for ref, entry in saved.items():
             item = self._known(ref, "saved", entry, account=self._saved_account(entry))
@@ -294,11 +293,11 @@ class MappingBrokers:
     # --- one device id, two brokers ---------------------------------------
 
     def _identities(self, broker, address):
-        """``(host, port) -> identity``: ``builtin`` for every address of this host on the broker's port."""
+        """``(host, port) -> identity``: ``builtin`` for every endpoint that reaches the built-in broker."""
 
         settings, _issues, _exists = broker.load()
         port = settings.port if settings is not None else DEFAULT_PORT
-        local = {_key(name, port) for name in (*THIS_HOST_NAMES, *self._local_addresses(address))}
+        local = {_key(*endpoint) for endpoint in this_broker_endpoints(port, self._local_addresses(address))}
 
         def identity(host, port_):
             if not host or not isinstance(port_, int):
@@ -537,6 +536,17 @@ def seed_saved_brokers(discovery, config_dir):
         discovery.set_configured_brokers(brokers)
 
 
+def seed_builtin_broker(discovery, broker, address):
+    """Let Find devices listen on the built-in broker while it is switched on, also after the Admin restarts."""
+
+    with contextlib.suppress(Exception):
+        settings, _issues, _exists = broker.load()
+        if address and settings is not None and settings.enabled:
+            discovery.set_configured_brokers(
+                [{"id": "mqtt:builtin", "host": address, "port": settings.port, "label": "Built-in MQTT broker"}]
+            )
+
+
 __all__ = [
     "ACCESS_STATES",
     "ERROR_CODES",
@@ -544,5 +554,6 @@ __all__ = [
     "MappingBrokers",
     "found_ref",
     "paho_login",
+    "seed_builtin_broker",
     "seed_saved_brokers",
 ]

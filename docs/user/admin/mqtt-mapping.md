@@ -12,10 +12,10 @@ measures a balcony inverter, a Tasmota plug, an OpenDTU — into EMS as an
   their values into the [external-device standard](../external-devices.md)
   and publishes them as `ems-solarflow/<id>/state`.
 
-EMS then finds the device under **Find devices** like any bridge's output. It
-only reads: an external device counts in the dashboard, the house load and the
-statistics, and the regulation keeps working against the grid meter. Nothing
-reaches EMS until you save a mapping.
+Saving the mapping adds the device to EMS in the same step; no search has to
+find it first. It only reads: an external device counts in the dashboard, the
+house load and the statistics, and the regulation keeps working against the
+grid meter. Nothing reaches EMS until you save a mapping.
 
 ## How the parts fit together
 
@@ -37,19 +37,21 @@ flowchart LR
     broker -- "the topics you chose" --> mapping
     mapping -- "ems-solarflow/‹id›/state" --> ems
     admin -. "1 · switch on" .-> builtin
-    admin -. "3 · map the values" .-> mapping
-    admin -. "4 · add as device" .-> ems
+    admin -. "3 · map and save" .-> mapping
+    admin -. "4 · added with the save" .-> ems
 ```
 
 Solid arrows carry the readings; dotted arrows are what you do in the Admin
-Console. The four steps, each with its section below:
+Console. The four steps, each with its section below; the panel shows them
+above the broker list and marks the next one:
 
-1. **Switch the broker on**, or keep the broker you already run.
+1. **Choose a broker**: switch the built-in one on, or keep the broker you
+   already run.
 2. **Connect the device**: enter the broker's address, port and an account in
    the device's own MQTT settings.
-3. **Map it**: pick its values from the live topics. The mapping publishes them
-   as `ems-solarflow/<id>/state` on the same broker, where EMS reads them.
-4. **Add it as a device**, as you would a device the search found.
+3. **Map its values**: pick them from the live topics. The mapping publishes
+   them as `ems-solarflow/<id>/state` on the same broker, where EMS reads them.
+4. **In the EMS**: the save that writes the mapping adds its device to EMS.
 
 ## Prerequisites
 
@@ -133,7 +135,7 @@ With the broker running, **Connect a device** on its card guides you:
 Above the live topics, **Settings → Devices → MQTT mapping** (in Guided Setup,
 step 02) lists every broker a mapping can read:
 
-![Settings, Devices, MQTT mapping: the broker list with the built-in broker running, a broker found on the network that needs no account, and one that asks for its account, with user and password fields open](../../assets/screenshots/admin/admin-mqtt-brokers.png)
+![Settings, Devices, MQTT mapping: the four steps done, the broker list with the built-in broker running, a broker found on the network that needs no account, and one that asks for its account, with user and password fields open](../../assets/screenshots/admin/admin-mqtt-brokers.png)
 
 - the **built-in broker**, with **Switch on** right there while it is off;
 - the brokers EMS already reads through a Local MQTT connection;
@@ -157,9 +159,10 @@ the same way.
 
 Choose a broker that can be read, then **Show live topics**. Saving the first
 mapping on a found broker remembers it, so the mapping keeps reading it after
-a restart; its account is kept with the search's broker accounts. Once the
-device publishes, **Add as device** gives EMS a connection of its own to that
-broker, the same way Find devices does for any device it finds there.
+a restart; its account is kept with the search's broker accounts. The device
+the mapping adds gets a connection of its own to that broker, the same one Find
+devices would give a device it found there; on a broker EMS already reads, it
+uses that connection.
 
 ## Map it
 
@@ -188,19 +191,36 @@ Devices → MQTT mapping** (in Guided Setup, step 02), asks one question first:
    already in use gets a number in its id.
 3. **Preview** asks the service's own calculation what it would publish, and
    why not; a refused negative value has a **Correct** button in the free
-   editor. **Save and apply** writes the mapping; EMS does not restart.
+   editor. **Save and add to the EMS** writes the mapping and adds its device
+   to EMS, after one confirmation that names both: the settings are saved at
+   once, with a backup first. EMS reads a newly added device after a restart,
+   which the settings page offers next with **Restart EMS now**, as for any
+   device added there. Under Settings the device is named after the mapping's
+   name, unless another device has it; with other changes waiting there, it
+   joins them and is saved with them. In Guided Setup it joins the setup's
+   devices under the setup's next free name.
 
    **Edit** on a mapped device opens the free editor with every source's
    factor, sign, negative rule and maximum age:
 
    ![Editing the mapped balcony inverter: the Shelly's apower as inverter power with the sign inverted, negative as 0 and a maximum age of 600 s, and the preview that would publish 612.3 W as inverter and solar power](../../assets/screenshots/admin/admin-mqtt-mapping-editor.png)
-4. Once it is published, **Add as device** in its row adds it through the same
-   adoption as Find devices; save the settings (in Guided Setup, it joins the
-   setup draft).
+4. Its row says **In the EMS** and, once the mapping service has sent the
+   first value, **Published**; until then it says **Waiting for the first
+   value**. When the device could not be added, for instance while the broker
+   was off, the row says why and **Add to the EMS** tries again.
 
-![Settings, Devices, MQTT mapping: the question what the device measures, with Balcony plant chosen, the name and the power value from the Shelly](../../assets/screenshots/admin/admin-mqtt-question.png)
+A mapped device and its EMS device stay one thing. A new name in **Edit**
+renames the EMS device too, when no other device has that name, and the
+confirmation says so; a save that leaves the name alone leaves the EMS device's
+name alone too, also one you gave it under **Devices**. A rename that did not
+happen is offered again with **Try again**, or made under **Devices**. **Remove** asks whether to remove the EMS device as well;
+keep it only when you move the device to another broker, see below. EMS uses a
+new name, and drops a removed device, after a restart, as for any change to a
+device under Settings.
 
-![Settings, Devices, MQTT mapping: the mapped balcony inverter published, and the live topics with a Shelly (Gen2+) group, the EMS output and an unknown heating topic](../../assets/screenshots/admin/admin-mqtt-mapping.png)
+![Settings, Devices, MQTT mapping: the question what the device measures, with Balcony plant chosen, the name, the power value from the Shelly and Save and add to the EMS](../../assets/screenshots/admin/admin-mqtt-question.png)
+
+![Settings, Devices, MQTT mapping: the mapped balcony inverter published and in the EMS, and the live topics with a Shelly (Gen2+) group, the EMS output and an unknown heating topic](../../assets/screenshots/admin/admin-mqtt-mapping.png)
 
 ## Expected result
 
@@ -225,11 +245,20 @@ value would be refused by EMS (a negative inverter power, a charge level above
   that id, and EMS does not read it there. EMS reads an id from one broker
   only, so a new mapping takes another id; the guide never proposes one
   another broker has. To move a mapped device to another broker under its id,
-  remove its mapping on the old broker, map it on the new one and set its id
-  under **Advanced**; once it publishes there, **Use this connection** under
-  Find devices moves the EMS device too. A mapping saved
-  before the other broker appeared keeps saving, and the live topics say where
-  else its id comes from.
+  remove its mapping on the old broker and keep its EMS device, then map it on
+  the new one and set its id under **Advanced**: saving moves the EMS device to
+  the new broker. Until it has moved, the row says **The EMS reads this id from
+  another broker** and **Move to this broker** moves it. A mapping saved before
+  the other broker appeared keeps
+  saving, and the live topics say where else its id comes from.
+- **Not added: the server offers no device for this mapping now** — its broker
+  is off, or its account is no longer saved. Switch the broker on or give it
+  its account again, then **Add to the EMS** in the row.
+- **Not done: the settings changed meanwhile** — another page or console saved
+  the settings between reading and writing them; nothing was written to them.
+  Check them, then use **Add to the EMS** or **Try again** in the row. When the
+  mapping was removed but its EMS device was not, the panel says so above the
+  mapped devices; remove the device under **Devices**.
 - `emsctl diagnose` reports `mqtt_broker_stopped_in_use`,
   `mqtt_broker_profile_missing`, `mqtt_mapping_device_silent` and
   `external_device_second_source`.

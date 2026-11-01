@@ -9,7 +9,7 @@
    * free editor; oncancel() closes. The result is an ordinary mapping entry the
    * server validates and calculates like any other.
    */
-  let { group, brokerRef, takenIds = [], busy = false, onsave, onfree, oncancel, onpreview } = $props();
+  let { group, brokerRef, takenIds = [], busy = false, saveLabel = "", onsave, onfree, oncancel, onpreview } = $props();
 
   const values = $derived(groupValues(group));
   const keyOf = (value) => (value ? `${value.topic}|${value.path ?? ""}` : "");
@@ -162,7 +162,7 @@
 
       <div class="row-wrap">
         <button class="btn secondary small" type="button" onclick={preview} disabled={busy || !device} data-testid="mqtt-wizard-preview"><Icon name="eye" size="sm" />{t("mqtt.mapping.preview")}</button>
-        <button class="btn small" type="button" onclick={() => device && onsave?.(device)} disabled={busy || !device || !name.trim()} data-testid="mqtt-wizard-save"><Icon name="save" size="sm" />{t("mqtt.mapping.save")}</button>
+        <button class="btn small" type="button" onclick={() => device && onsave?.(device)} disabled={busy || !device || !name.trim()} data-testid="mqtt-wizard-save"><Icon name="save" size="sm" />{saveLabel || t("mqtt.mapping.save")}</button>
         <button class="btn secondary small" type="button" onclick={oncancel}>{t("mqtt.mapping.cancel")}</button>
       </div>
       {#if evaluation?.state}

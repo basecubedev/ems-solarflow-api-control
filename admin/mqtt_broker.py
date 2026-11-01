@@ -26,7 +26,7 @@ import time
 from dataclasses import dataclass, field, replace
 
 from admin.deployment import DockerCompose, DockerError
-from ems.config import grid_meter_mqtt_settings
+from ems.config import default_mqtt_port, grid_meter_mqtt_settings
 from ems.file_io import atomic_write_bytes
 from ems.zendure_mqtt.builtin_broker import (
     BUILTIN_CREDENTIALS_REF,
@@ -308,10 +308,21 @@ def hash_password(password, *, salt=None, iterations=PASSWORD_ITERATIONS) -> str
     return f"$7${iterations}${encode(salt).decode()}${encode(digest).decode()}"
 
 
+def this_broker_endpoints(port, host_addresses=()) -> set[tuple[str, int]]:
+    """Every ``(host, port)`` that reaches the built-in broker.
+
+    This host's names on the port it publishes, and the container's own name on
+    the port it listens on inside Docker, which stays the same when the
+    published one moves.
+    """
+
+    names = {*THIS_HOST_NAMES, *(str(address).strip().lower() for address in host_addresses)}
+    return {*((name, port) for name in names), (BROKER_SERVICE, CONTAINER_PORT)}
+
+
 def _reaches_this_broker(endpoint, port, host_addresses) -> bool:
     host = str(endpoint.get("host") or "").strip().lower()
-    names = {*THIS_HOST_NAMES, BROKER_SERVICE, *(str(address).lower() for address in host_addresses)}
-    return host in names and endpoint.get("port", DEFAULT_PORT) == port
+    return (host, endpoint.get("port", DEFAULT_PORT)) in this_broker_endpoints(port, host_addresses)
 
 
 def grid_meter_topic(config, *, port=DEFAULT_PORT, host_addresses=()) -> str | None:
@@ -534,10 +545,10 @@ def local_profile_endpoints(config, credential_store):
             continue
         if profile.get("enabled") is False or str(profile.get("source") or "local_mqtt") != "local_mqtt":
             continue
-        host, port = profile.get("host"), profile.get("port", 1883)
+        tls = profile.get("tls") is True or profile.get("tls_mode") in ("system_ca", "insecure_no_verify")
+        host, port = profile.get("host"), profile.get("port", default_mqtt_port(tls))
         if not isinstance(host, str) or not host.strip() or not isinstance(port, int) or isinstance(port, bool):
             continue
-        tls = profile.get("tls") is True or profile.get("tls_mode") in ("system_ca", "insecure_no_verify")
         entry = {
             "host": host.strip(),
             "port": port,

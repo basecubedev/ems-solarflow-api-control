@@ -6,6 +6,7 @@ const BROKER = "/api/discovery/mqtt-broker";
 const MAPPING = "/api/discovery/mqtt-mapping";
 const TOPICS = "/api/discovery/mqtt-topics/sessions";
 const BROKERS = `${MAPPING}/brokers`;
+const MAPPING_POLL_MS = 5000;
 
 /**
  * The built-in broker, the mapping file and one live-topic session. The
@@ -64,11 +65,16 @@ export async function loadBroker() {
   }
 }
 
+let mappingReads = 0;
+
+/** The mapping and its service's status. Only the newest read lands, so a slow poll never puts back a document an apply replaced. */
 export async function loadMapping() {
+  const read = ++mappingReads;
   try {
-    mqtt.mapping = await adminGet(MAPPING);
+    const answer = await adminGet(MAPPING);
+    if (read === mappingReads) mqtt.mapping = answer;
   } catch (error) {
-    mqtt.error = { name: "load", error };
+    if (read === mappingReads) mqtt.error = { name: "load", error };
   }
 }
 
@@ -167,13 +173,25 @@ export function setUpGroup(group) {
   mqtt.setup = group;
 }
 
-/**
- * The existing discovery's proposal for a published mapped device: the known
- * brokers are listened to once more and the proposals read, exactly as Find
- * devices does. Null when no broker discovery knows carries the device.
- */
-export async function findProposal(deviceId) {
-  await send("/api/discovery/mqtt-brokers/refresh", undefined).catch(() => null);
+/** The proposal the server makes from a saved mapping for its device; no search runs. */
+export async function findProposal(deviceId, brokerRef) {
   const data = await adminGet("/api/discovery/mqtt-proposals").catch(() => null);
-  return mappedProposal(data?.proposals, deviceId);
+  return mappedProposal(data?.proposals, deviceId, brokerRef);
+}
+
+let mappingWatchers = 0;
+let mappingTimer = null;
+
+/** Reads the mapping and the service's status every five seconds while anyone shows them, so a row says when its device publishes. */
+export function watchMapping() {
+  mappingWatchers += 1;
+  if (!mappingTimer) mappingTimer = setInterval(() => mqtt.busy || loadMapping(), MAPPING_POLL_MS);
+  return () => {
+    mappingWatchers -= 1;
+    if (mappingWatchers <= 0 && mappingTimer) {
+      clearInterval(mappingTimer);
+      mappingTimer = null;
+      mappingWatchers = 0;
+    }
+  };
 }

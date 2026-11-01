@@ -18,11 +18,32 @@
         "sn": "DEMO-SF800-002",
         "pv_kwp": 0.8,
         "battery_kwh": 1.92
+      },
+      {
+        "name": "Balcony",
+        "type": "external_mqtt",
+        "enabled": true,
+        "mqtt": {
+          "broker_ref": "local_mqtt_192_168_178_40_9f9ae379",
+          "source": "local_mqtt",
+          "topic_family": "ems_solarflow",
+          "device_id": "balcony"
+        }
       }
     ],
     "grid_meter": {
       "type": "shelly",
       "ip": "192.168.1.52"
+    },
+    "zendure_mqtt": {
+      "brokers": {
+        "local_mqtt_192_168_178_40_9f9ae379": {
+          "enabled": true,
+          "source": "local_mqtt",
+          "host": "192.168.178.40",
+          "port": 1883
+        }
+      }
     }
   }
 }

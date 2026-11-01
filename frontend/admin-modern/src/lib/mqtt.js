@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { deviceKind, nextInverterName } from "./devices.js";
+import { externalDeviceFromProposal, useExternalConnection } from "./discovery.js";
+
 /**
  * The codes the built-in broker, the MQTT mapping and the live topics answer
  * with. Each list is paired with the server's own (tests/test_admin_modern_mqtt.py),
@@ -210,15 +213,81 @@ export function freshGroup(groups, { before = [], since = 0, polledAt = 0 } = {}
 }
 
 /**
- * The one discovery proposal for a mapped device, by its id. ``null`` when there
- * is none, and also when there are several: another bridge on another broker
- * may publish the same id, and only Find devices shows which broker is which.
+ * The proposal a saved mapping makes for its device: the server builds it from
+ * the mapping itself and marks it with the mapping's broker, so no search has
+ * to find the device first. ``null`` when the server offers none, as for a
+ * broker that is off.
  */
-export function mappedProposal(proposals, deviceId) {
+export function mappedProposal(proposals, deviceId, brokerRef) {
   const matches = (proposals || []).filter(
-    (proposal) => proposal?.config_fragment?.type === "external_mqtt" && proposal.config_fragment.mqtt?.device_id === deviceId,
+    (proposal) =>
+      proposal?.mapping_broker_ref === brokerRef && proposal.config_fragment?.type === "external_mqtt" && proposal.config_fragment.mqtt?.device_id === deviceId,
   );
   return matches.length === 1 ? matches[0] : null;
+}
+
+/** Whether an EMS device is the one a mapping publishes as ``id``: a new entry carries ``mqtt``, a saved one its ``entry``. */
+export function mapsTo(id) {
+  return (device) =>
+    (deviceKind(device) === "external_mqtt" || device?.type === "external_mqtt") && (device?.mqtt?.device_id ?? device?.entry?.mqtt?.device_id) === id;
+}
+
+/** The EMS name a mapped device gets: its label where no other device has it, else the next free INV_ name. */
+export function emsDeviceName(label, devices) {
+  const name = String(label ?? "").trim();
+  const used = new Set((devices || []).map((device) => String(device?.name ?? "").trim().toLowerCase()));
+  return name && !used.has(name.toLowerCase()) ? name : nextInverterName(devices);
+}
+
+/**
+ * Where a mapped device stands in an EMS device list: ``null`` when it is not
+ * there, ``"there"`` on its mapping's connection, ``"elsewhere"`` when the EMS
+ * reads the same id from another broker.
+ */
+export function emsPlace(devices, id, connection) {
+  const device = (devices || []).find(mapsTo(id));
+  if (!device) return null;
+  return connection && device.catalog_connection_id && device.catalog_connection_id !== connection ? "elsewhere" : "there";
+}
+
+/**
+ * The device list with the mapped device in it: added from its proposal and
+ * named after ``label``, or moved to the proposal's connection when the EMS
+ * reads the same id elsewhere. ``null`` when the list already has it there.
+ */
+export function withMappedDevice(devices, proposal, label) {
+  const list = devices || [];
+  const moved = useExternalConnection(list, proposal);
+  if (moved) return list[moved.index].catalog_connection_id === moved.devices[moved.index].catalog_connection_id ? null : moved.devices;
+  if (list.some(mapsTo(proposal?.config_fragment?.mqtt?.device_id))) return null;
+  return [...list, { ...externalDeviceFromProposal(proposal, list), name: emsDeviceName(label, list) }];
+}
+
+/** The device list with mapped device ``id`` named ``label``; ``null`` when that changes nothing or another device has the name. */
+export function withRenamedDevice(devices, id, label) {
+  const list = devices || [];
+  const index = list.findIndex(mapsTo(id));
+  const name = String(label ?? "").trim();
+  if (index < 0 || !name || list[index].name === name) return null;
+  const taken = list.some((device, position) => position !== index && String(device?.name ?? "").trim().toLowerCase() === name.toLowerCase());
+  return taken ? null : list.map((device, position) => (position === index ? { ...device, name } : device));
+}
+
+/** Why adding, moving, renaming or removing an EMS device did not happen, each with its own words. */
+export const ADOPT_REFUSALS = Object.freeze(["missing", "busy", "changed"]);
+
+/** The steps from a broker to a device in the EMS, and how far the panel has come. */
+export const MAPPING_STEPS = Object.freeze(["broker", "connect", "map", "ems"]);
+
+/**
+ * Which step is next: a broker that can be read, a device that publishes on it,
+ * a saved mapping, and that mapping in the EMS. ``inEms`` counts the mapped
+ * devices the EMS has, saved or about to be.
+ */
+export function mappingStep({ readable = false, groups = 0, devices = 0, inEms = 0 } = {}) {
+  if (devices > 0) return inEms >= devices ? MAPPING_STEPS.length : 3;
+  if (groups > 0) return 2;
+  return readable ? 1 : 0;
 }
 
 /** ``base``, or ``base-2``, ``base-3`` … when the mapping already uses it; never longer than 64 characters. */

@@ -330,3 +330,260 @@ def test_a_new_mapping_may_not_take_an_id_another_broker_has(server, monkeypatch
     ]
     assert applied[0] == 422 and not applied[2]["ok"]
     assert view["taken_ids"]["ems-mqtt"] == ["balkon"]
+
+
+# --- a saved mapping is an EMS device, without a search ------------------------
+
+MAPPED_VALUES = {"inverterPower": {"sources": [{"topic": "plug/status", "format": "json", "path": "apower"}]}}
+
+
+def _write_config(root, brokers=None):
+    config = {
+        "system": {"max_total_power": 1600},
+        "devices": [{"name": "WR1", "ip": "192.168.1.100", "sn": "AAA", "max_power": 800}],
+        "grid_meter": {"type": "shelly", "ip": "192.168.1.50"},
+    }
+    if brokers:
+        config["zendure_mqtt"] = {"brokers": brokers}
+    with open(f"{root}/config/config.json", "w", encoding="utf-8") as handle:
+        json.dump(config, handle)
+
+
+def _map(base, broker_ref, *, device_id="balkon", enabled=True):
+    device = {"id": device_id, "label": "Balkon", "broker_ref": broker_ref, "values": MAPPED_VALUES}
+    if not enabled:
+        device["enabled"] = False
+    document = {"schema_version": 1, "devices": [device]}
+    status, _h, payload = _post(base, "/api/discovery/mqtt-mapping/apply", {"document": document, "confirm": True})
+    assert status == 200 and payload["ok"], payload
+
+
+def _mapped_proposals(base):
+    proposals = request(f"{base}/api/discovery/mqtt-proposals")[2]["proposals"]
+    return [proposal for proposal in proposals if proposal.get("mapping_broker_ref")]
+
+
+def _adopt(base, proposal, name="Balkon"):
+    """What the mapping panel sends: the saved config and the device its proposal makes."""
+
+    loaded = request(f"{base}/api/admin/maintenance/config")[2]
+    assert loaded["status"] == "ok", loaded
+    draft = loaded["draft"]
+    mqtt = proposal["config_fragment"]["mqtt"]
+    draft["devices"].append(
+        {
+            "kind": "external_mqtt",
+            "original_name": None,
+            "proposal_id": proposal["id"],
+            "proposal_broker_ref": proposal["broker_ref"],
+            "name": name,
+            "enabled": True,
+            "mqtt": {key: mqtt[key] for key in ("broker_ref", "topic_family", "device_id")},
+        }
+    )
+    return _post(base, "/api/admin/maintenance/config/apply", {"draft": draft, "revision": loaded["revision"], "confirm": True})
+
+
+def _config(root):
+    with open(f"{root}/config/config.json", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def test_a_device_mapped_on_the_built_in_broker_is_offered_without_a_search(server):
+    base, _compose, root = server
+    _write_config(root)
+    _post(base, "/api/discovery/mqtt-broker/enable", {"confirm": True})
+    _map(base, "ems-mqtt")
+
+    (proposal,) = _mapped_proposals(base)
+
+    assert proposal["mapping_broker_ref"] == "ems-mqtt"
+    assert proposal["config_fragment"]["mqtt"]["device_id"] == "balkon"
+    assert proposal["config_fragment"]["mqtt"]["topic_family"] == "ems_solarflow"
+    assert (proposal["broker_host"], proposal["broker_port"], proposal["credentials_ref"]) == ("192.0.2.10", 1883, "ems-mqtt")
+    assert proposal["output_control_supported"] is False
+
+
+def test_the_mapped_device_joins_the_config_in_one_apply(server):
+    base, _compose, root = server
+    _write_config(root)
+    _post(base, "/api/discovery/mqtt-broker/enable", {"confirm": True})
+    _map(base, "ems-mqtt")
+
+    status, _h, payload = _adopt(base, _mapped_proposals(base)[0])
+
+    assert status == 200 and payload.get("ok") is not False, payload
+    config = _config(root)
+    (entry,) = [device for device in config["devices"] if device.get("type") == "external_mqtt"]
+    assert entry["name"] == "Balkon"
+    assert (entry["mqtt"]["topic_family"], entry["mqtt"]["device_id"]) == ("ems_solarflow", "balkon")
+    profile = config["zendure_mqtt"]["brokers"][entry["mqtt"]["broker_ref"]]
+    assert (profile["host"], profile["port"], profile["credentials_ref"]) == ("192.0.2.10", 1883, "ems-mqtt")
+
+
+def test_a_device_mapped_on_a_remembered_broker_is_offered_on_that_broker(server):
+    base, _compose, root = server
+    _write_config(root)
+    ref = _post(base, "/api/discovery/mqtt-mapping/brokers/manual", {"host": "192.0.2.50", "port": 1883})[2]["ref"]
+    _map(base, ref)
+
+    (proposal,) = _mapped_proposals(base)
+    status, _h, payload = _adopt(base, proposal)
+
+    assert proposal["mapping_broker_ref"] == ref
+    assert (proposal["broker_host"], proposal["broker_port"]) == ("192.0.2.50", 1883)
+    assert "credentials_ref" not in proposal
+    assert status == 200 and payload.get("ok") is not False, payload
+    config = _config(root)
+    (entry,) = [device for device in config["devices"] if device.get("type") == "external_mqtt"]
+    assert config["zendure_mqtt"]["brokers"][entry["mqtt"]["broker_ref"]]["host"] == "192.0.2.50"
+
+
+def test_a_device_mapped_on_a_broker_the_ems_reads_keeps_that_profile(server):
+    base, _compose, root = server
+    CredentialStore(f"{root}/config").save_mqtt_broker_secret("garage-account", "garage", "garage-password")
+    _write_config(root, {"garage": {"source": "local_mqtt", "host": "192.0.2.60", "port": 1883, "credentials_ref": "garage-account"}})
+    _map(base, "garage")
+
+    (proposal,) = _mapped_proposals(base)
+    status, _h, payload = _adopt(base, proposal)
+
+    assert proposal["mapping_broker_ref"] == "garage"
+    assert "garage-password" not in json.dumps(proposal)
+    assert status == 200 and payload.get("ok") is not False, payload
+    config = _config(root)
+    (entry,) = [device for device in config["devices"] if device.get("type") == "external_mqtt"]
+    assert entry["mqtt"]["broker_ref"] == "garage"
+    assert set(config["zendure_mqtt"]["brokers"]) == {"garage"}
+
+
+def test_nothing_is_offered_for_a_broker_that_is_off_or_a_mapping_that_is_off(server):
+    base, _compose, root = server
+    _write_config(root)
+    _map(base, "ems-mqtt")
+    off = _mapped_proposals(base)
+    _post(base, "/api/discovery/mqtt-broker/enable", {"confirm": True})
+    _map(base, "ems-mqtt", enabled=False)
+    paused = _mapped_proposals(base)
+
+    assert off == [] and paused == []
+
+
+def test_a_mapping_removed_before_the_apply_is_refused_there(server):
+    base, _compose, root = server
+    _write_config(root)
+    _post(base, "/api/discovery/mqtt-broker/enable", {"confirm": True})
+    _map(base, "ems-mqtt")
+    proposal = _mapped_proposals(base)[0]
+    _post(base, "/api/discovery/mqtt-mapping/apply", {"document": {"schema_version": 1, "devices": []}, "confirm": True})
+
+    status, _h, payload = _adopt(base, proposal)
+
+    assert status >= 400 or payload.get("ok") is False, payload
+    assert [device for device in _config(root)["devices"] if device.get("type") == "external_mqtt"] == []
+
+
+def test_the_built_in_broker_is_listened_on_again_after_the_admin_restarts(server):
+    base, _compose, _root = server
+    _post(base, "/api/discovery/mqtt-broker/enable", {"confirm": True})
+
+    restarted = create_server("127.0.0.1", 0, registry=ScanRegistry(scan_runner=lambda *a, **k: ([], [])))
+    try:
+        endpoints = [(item.get("host"), item.get("port")) for item in restarted.mqtt_discovery.candidates()]
+    finally:
+        restarted.server_close()
+
+    assert ("192.0.2.10", 1883) in endpoints
+
+
+def test_a_remembered_broker_whose_account_is_gone_offers_nothing(server):
+    base, _compose, root = server
+    _write_config(root)
+    ref = _post(
+        base, "/api/discovery/mqtt-mapping/brokers/manual", {"host": "192.0.2.51", "port": 1883, "username": "iob", "password": "iob-password"}
+    )[2]["ref"]
+    _map(base, ref)
+    offered = _mapped_proposals(base)
+    with open(f"{root}/config/mqtt/mappings.json", encoding="utf-8") as handle:
+        credentials_ref = json.load(handle)["brokers"][ref]["credentials_ref"]
+    CredentialStore(f"{root}/config").forget_mqtt_discovery_secret(credentials_ref)
+
+    assert [proposal["mapping_broker_ref"] for proposal in offered] == [ref]
+    assert _mapped_proposals(base) == []
+
+
+def test_a_tls_profile_without_a_port_is_offered_on_the_tls_port_and_kept(server):
+    base, _compose, root = server
+    CredentialStore(f"{root}/config").save_mqtt_broker_secret("garage-account", "garage", "garage-password")
+    _write_config(
+        root, {"garage": {"source": "local_mqtt", "host": "192.0.2.60", "tls_mode": "system_ca", "credentials_ref": "garage-account"}}
+    )
+    _map(base, "garage")
+
+    (proposal,) = _mapped_proposals(base)
+    status, _h, payload = _adopt(base, proposal)
+
+    assert (proposal["broker_port"], proposal["broker_tls"]) == (8883, True)
+    assert status == 200 and payload.get("ok") is not False, payload
+    config = _config(root)
+    (entry,) = [device for device in config["devices"] if device.get("type") == "external_mqtt"]
+    assert entry["mqtt"]["broker_ref"] == "garage"
+    assert set(config["zendure_mqtt"]["brokers"]) == {"garage"}
+
+
+def test_the_mapping_view_names_the_connection_its_device_is_read_on(server):
+    base, _compose, root = server
+    _write_config(root)
+    _post(base, "/api/discovery/mqtt-broker/enable", {"confirm": True})
+    _map(base, "ems-mqtt")
+    (proposal,) = _mapped_proposals(base)
+
+    connections = request(f"{base}/api/discovery/mqtt-mapping")[2]["ems_connections"]
+    _adopt(base, proposal)
+    entry = next(
+        device for device in request(f"{base}/api/admin/maintenance/config")[2]["draft"]["devices"] if device.get("kind") == "external_mqtt"
+    )
+
+    assert connections == {"balkon": proposal["catalog_connection_id"]}
+    assert entry["catalog_connection_id"] == connections["balkon"]
+
+
+@pytest.mark.parametrize("name", ["localhost", "host.docker.internal", "ems-mqtt-broker"])
+def test_an_ems_device_read_from_the_built_in_broker_by_another_name_is_not_read_elsewhere(server, name):
+    base, _compose, root = server
+    _write_config(root, {"this-host": {"source": "local_mqtt", "host": name, "port": 1883}})
+    config = _config(root)
+    config["devices"].append(
+        {"name": "Balkon", "type": "external_mqtt", "mqtt": {"broker_ref": "this-host", "topic_family": "ems_solarflow", "device_id": "balkon"}}
+    )
+    with open(f"{root}/config/config.json", "w", encoding="utf-8") as handle:
+        json.dump(config, handle)
+    _post(base, "/api/discovery/mqtt-broker/enable", {"confirm": True})
+    _map(base, "ems-mqtt")
+
+    connections = request(f"{base}/api/discovery/mqtt-mapping")[2]["ems_connections"]
+
+    assert connections == {"balkon": None}
+
+
+@pytest.mark.parametrize(
+    ("host", "port", "expected"),
+    [("localhost", 1884, None), ("ems-mqtt-broker", 1883, None), ("localhost", 1883, "elsewhere")],
+    ids=["this-host-published-port", "container-name-inside-port", "this-host-old-port"],
+)
+def test_on_a_moved_port_the_container_name_still_reaches_the_built_in_broker(server, host, port, expected):
+    base, _compose, root = server
+    _write_config(root, {"this-host": {"source": "local_mqtt", "host": host, "port": port}})
+    config = _config(root)
+    config["devices"].append(
+        {"name": "Balkon", "type": "external_mqtt", "mqtt": {"broker_ref": "this-host", "topic_family": "ems_solarflow", "device_id": "balkon"}}
+    )
+    with open(f"{root}/config/config.json", "w", encoding="utf-8") as handle:
+        json.dump(config, handle)
+    _post(base, "/api/discovery/mqtt-broker/enable", {"confirm": True})
+    assert _post(base, "/api/discovery/mqtt-broker/settings", {"port": 1884})[0] == 200
+    _map(base, "ems-mqtt")
+
+    connection = request(f"{base}/api/discovery/mqtt-mapping")[2]["ems_connections"]["balkon"]
+
+    assert (connection is None) == (expected is None)

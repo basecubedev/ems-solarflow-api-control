@@ -9,13 +9,12 @@
   import MqttMappingPanel from "../MqttMappingPanel.svelte";
   import { routeMqtt } from "../../state/mqtt.svelte.js";
   import { mappedProposal } from "../../lib/mqtt.js";
-  import { refreshBrokers as refreshSetupBrokers } from "../../state/setupDiscovery.svelte.js";
   import { t, tn } from "../../i18n/i18n.svelte.js";
   import { errorView } from "../../lib/errors.js";
   import { reasonKey } from "../../lib/devices.js";
   import { isExternalProposal, isGridMeterProposal, proposalRole, proposalTopic } from "../../lib/discovery.js";
   import { isReady, proposalCanBeChosen, selection } from "../../lib/setupDraft.js";
-  import { SOURCES, setupDiscovery, setupRoute, allNetworks, cancel, loadPreparation, loadSourceStatus, progressPercent, refresh, refreshMdns, rescanNetworks, rescanSource, resetResults, runDiscovery, scanManually, setMdns, sourceEnabled } from "../../state/setupDiscovery.svelte.js";
+  import { SOURCES, setupDiscovery, setupRoute, allNetworks, cancel, loadPreparation, loadProposals, loadSourceStatus, progressPercent, refresh, refreshMdns, rescanNetworks, rescanSource, resetResults, runDiscovery, scanManually, setMdns, sourceEnabled } from "../../state/setupDiscovery.svelte.js";
   import { setupDraft, enableSource, replacesGridMeter, reprioritize, toggleProposal } from "../../state/setupDraft.svelte.js";
   import { sources, routeSources } from "../../state/sources.svelte.js";
 
@@ -43,19 +42,29 @@
   const percent = $derived(progressPercent());
   const running = $derived(setupDiscovery.scans.find((entry) => entry.status === "running") || null);
 
-  const proposalFor = (id) => mappedProposal(setupDiscovery.proposals, id);
-  /** A published mapped device is chosen for the setup draft through the same proposal as Find devices. */
+  const proposalFor = (device) => mappedProposal(setupDiscovery.proposals, device.id, device.broker_ref);
+  /** A saved mapping's device joins the setup draft through the proposal the server makes from the mapping. */
   const mqttAdoption = {
-    state(id) {
-      const proposal = proposalFor(id);
+    direct: false,
+    state(device) {
+      const proposal = proposalFor(device);
       return proposal && selection(setupDraft.draft, proposal.id) ? "draft" : null;
     },
-    async add(id) {
-      await refreshSetupBrokers();
-      const proposal = proposalFor(id);
-      if (!proposal) return false;
+    name() {
+      return "";
+    },
+    async add(device) {
+      await loadProposals();
+      const proposal = proposalFor(device);
+      if (!proposal) return { state: "missing" };
       if (!selection(setupDraft.draft, proposal.id)) toggleProposal(proposal.id);
-      return true;
+      return { state: "draft" };
+    },
+    async remove(device) {
+      const proposal = proposalFor(device);
+      if (proposal && selection(setupDraft.draft, proposal.id)) toggleProposal(proposal.id);
+      await loadProposals();
+      return { state: null };
     },
   };
 

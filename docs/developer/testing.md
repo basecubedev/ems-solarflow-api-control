@@ -266,9 +266,11 @@ database, no secrets.
 
 One run across three processes, real where it matters: a real Mosquitto on the
 pinned image with a played Shelly Gen2 plug, the test-mode Admin driven in the
-browser (live topics, mapping, Find devices, saving config.json), the real
-mapping service and the real EMS -- dry, every write gate off -- whose
-dashboard API must show the inverter at 612.3 W. It needs Docker.
+browser (sign-in, live topics, mapping, the one save that also adds the device
+to config.json), the real mapping service and the real EMS -- dry, every write
+gate off -- whose dashboard page must show the device online at 612 W. Every
+step is taken on the page, as agent-rules §12 asks of a user's journey. It
+needs Docker.
 
 ```bash
 npx playwright test --config=playwright.mqtt-e2e.config.ts --project=chromium --workers=1

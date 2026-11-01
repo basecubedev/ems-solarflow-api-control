@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { adminSend } from "./auth.svelte.js";
 import { system, reload } from "./system.svelte.js";
-import { changeCount, fieldIndex, liveEdits, overrideTargets, sameAsSaved, storable } from "../lib/settings.js";
+import { changeCount, fieldIndex, liveEdits, overrideTargets, sameAsSaved, storable, writeAtOnce } from "../lib/settings.js";
 import { editableDraft } from "../lib/devices.js";
 
 const EDITS_KEY = "ems-admin.settings-edits";
@@ -228,6 +228,31 @@ export async function applyDraft({ backup = true } = {}) {
   } finally {
     settings.applying = false;
     reload("config", "overview", "plan");
+  }
+}
+
+/**
+ * Writes one hardware change straight to the saved config, read again first
+ * (``writeAtOnce``). Edits waiting in the draft take no part, so the caller
+ * asks only when there are none. Answers ``{ ok, reason, error }``; ``reason``
+ * is ``busy`` while another apply runs, or ``changed``.
+ */
+export async function applyNow(build) {
+  if (settings.applying) return { ok: false, reason: "busy" };
+  settings.applying = true;
+  settings.applyError = null;
+  try {
+    const read = async () => {
+      await reload("config");
+      return { saved: settings.saved, editable: settings.editable, error: system.config.error };
+    };
+    const send = (path, body) => adminSend(path, { body });
+    const outcome = await writeAtOnce(build, { read, send, paths: PATHS });
+    if (outcome.applied) settings.applied = outcome.applied;
+    return outcome;
+  } finally {
+    await reload("config", "overview", "plan").catch(() => null);
+    settings.applying = false;
   }
 }
 

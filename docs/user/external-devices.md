@@ -145,8 +145,9 @@ while True:
 ### The built-in MQTT mapping
 
 The Admin Console can do this for you: switch on its built-in broker, point the
-device at it, pick the values from the live topics and save. The mapping
-publishes the `state` object above with the retain flag and an expiry. See
+device at it, pick the values from the live topics and save; the same save
+adds the device to EMS. The mapping publishes the `state` object above with the
+retain flag and an expiry. See
 [Built-in MQTT broker and MQTT mapping](admin/mqtt-mapping.md).
 
 ### FHEM and ioBroker

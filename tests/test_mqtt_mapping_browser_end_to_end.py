@@ -3,9 +3,9 @@
 
 Runs tests/e2e-mqtt/mqtt-mapping-end-to-end.spec.ts through
 playwright.mqtt-e2e.config.ts in Chromium and Firefox: the live topics
-recognise a played Shelly Gen2 plug, the browser maps it, Find devices adds
-the published external device to config.json, and the EMS -- dry, every write
-gate off -- reads it at 612.3 W. Needs Docker, Node and the Playwright
+recognise a played Shelly Gen2 plug, the browser maps it, the same save adds
+its external device to config.json, and the EMS -- dry, every write gate
+off -- reads it at 612.3 W, which its dashboard page shows. Needs Docker, Node and the Playwright
 browsers; without the browsers it is skipped and says so, unless
 EMS_REQUIRE_REAL_MQTT_TESTS=1 makes a missing browser a failure, as the CI job
 that exists to run it does.

@@ -160,7 +160,8 @@ from admin.mqtt_broker import (
 )
 from admin.mqtt_discovery import MqttBrokerDiscovery
 from admin.mqtt_live_topics import LiveTopicSessions
-from admin.mqtt_mapping_brokers import MappingBrokers, seed_saved_brokers
+from admin.mqtt_mapping_adoption import MAPPING_BROKER_REF_FIELD, mapped_observations, with_mapped_devices
+from admin.mqtt_mapping_brokers import MappingBrokers, seed_builtin_broker, seed_saved_brokers
 from admin.mqtt_mapping_editor import MappingEditor
 from ems.zendure_mqtt.builtin_broker import BUILTIN_PROFILE_REF
 from admin.mqtt_topic_discovery import default_topic_discoverer
@@ -177,6 +178,7 @@ from admin.zendure_cloud_mqtt import (
 )
 from admin import zendure_mqtt_config_proposals
 from admin.zendure_mqtt_config_draft import (
+    CATALOG_CONNECTION_ID_FIELD,
     TRUSTED_CONNECTION_SELECTION_FIELD,
     zendure_mqtt_untrusted_connection_block,
 )
@@ -1507,7 +1509,9 @@ class AdminServer(ThreadingHTTPServer):
             preparation=self.discovery_preparation,
         )
         try:
-            seed_saved_brokers(self.mqtt_discovery, builtin_broker_for_install(self.credential_store).config_dir)
+            broker = builtin_broker_for_install(self.credential_store)
+            seed_saved_brokers(self.mqtt_discovery, broker.config_dir)
+            seed_builtin_broker(self.mqtt_discovery, broker, host_address())
         except Exception:
             pass
         if getattr(self.backup_service, "after_config_restore", False) is None:
@@ -1526,6 +1530,7 @@ class AdminServer(ThreadingHTTPServer):
         broker = builtin_broker_for_install(self.credential_store, compose=self.mqtt_compose)
         outcome = converge_after_restore(broker)
         seed_saved_brokers(self.mqtt_discovery, broker.config_dir)
+        seed_builtin_broker(self.mqtt_discovery, broker, host_address())
         return outcome
 
 
@@ -1709,7 +1714,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._handle_mqtt_broker_view()
             return
         if path == "/api/discovery/mqtt-mapping":
-            self._send_json(self._mapping_editor().view())
+            self._send_json({**self._mapping_editor().view(), "ems_connections": self._mapped_connections()})
             return
         if path == MQTT_MAPPING_BROKERS_PATH:
             self._send_json(
@@ -3750,7 +3755,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         if action == "enable":
             result = broker.enable()
             if result.get("ok"):
-                self._seed_builtin_broker_candidate(broker)
+                seed_builtin_broker(self.server.mqtt_discovery, broker, host_address())
         elif action == "stop":
             result = broker.stop()
         elif action == "settings":
@@ -3762,18 +3767,6 @@ class AdminHandler(BaseHTTPRequestHandler):
             result = broker.set_password(body.get("name"), body.get("password"))
         status = 200 if result.get("ok") else 409 if result.get("status") == "busy" else 422
         self._send_json(result, status=status, headers={"Cache-Control": "no-store"})
-
-    def _seed_builtin_broker_candidate(self, broker):
-        address = host_address()
-        settings, _issues, _exists = broker.load()
-        if not address or settings is None:
-            return
-        try:
-            self.server.mqtt_discovery.set_configured_brokers(
-                [{"id": "mqtt:builtin", "host": address, "port": settings.port, "label": "Built-in MQTT broker"}]
-            )
-        except Exception:
-            pass
 
     def _handle_mqtt_mapping_post(self, path):
         action = path.rsplit("/", 1)[-1]
@@ -5925,13 +5918,48 @@ class AdminHandler(BaseHTTPRequestHandler):
             if callable(trusted_candidates)
             else self.server.zendure_cloud_discovery.candidates()
         )
-        proposals = zendure_mqtt_config_proposals.proposals_from_sources(
-            self.server.mqtt_discovery.candidates(),
-            cloud_candidates,
+        proposals = with_mapped_devices(
+            zendure_mqtt_config_proposals.proposals_from_sources(
+                self.server.mqtt_discovery.candidates(),
+                cloud_candidates,
+            ),
+            self._mapped_device_observations(),
         )
         return zendure_mqtt_config_proposals.annotate_identity_tokens(
             proposals, self.server.identity_token_key
         )
+
+    def _mapped_connections(self):
+        """``device id -> connection id`` of each saved mapping's own device, so a page tells it from the same id read elsewhere.
+
+        ``None`` where the EMS already reads the id from the mapping's broker,
+        under whatever name its profile gives that broker: the built-in one is
+        this host's address, ``localhost`` and the container name alike.
+        """
+
+        broker, brokers, address = self._builtin_broker(), self.server.mqtt_mapping_brokers, host_address()
+        sources = brokers.external_sources(broker, address=address)
+        identities, connections = {}, {}
+        for proposal in self._trusted_mqtt_proposals():
+            ref = proposal.get(MAPPING_BROKER_REF_FIELD)
+            device_id = ((proposal.get("config_fragment") or {}).get("mqtt") or {}).get("device_id")
+            if not ref or not device_id:
+                continue
+            if ref not in identities:
+                identities[ref] = brokers.ref_identity(broker, ref, address=address)
+            read_here = "configured" in sources.get(device_id, {}).get(identities[ref], set())
+            connections[device_id] = None if read_here else proposal.get(CATALOG_CONNECTION_ID_FIELD)
+        return connections
+
+    def _mapped_device_observations(self):
+        """The devices saved mappings publish, as discovery would see them; none when that cannot be read."""
+
+        try:
+            return mapped_observations(
+                self._builtin_broker(), self.server.credential_store, address=host_address()
+            )
+        except Exception:
+            return {}
 
     def _public_mqtt_proposals(self):
         """Browser-safe proposal view with raw write identities removed."""

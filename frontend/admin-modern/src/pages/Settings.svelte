@@ -16,11 +16,11 @@
   import MqttBrokerCard from "../widgets/MqttBrokerCard.svelte";
   import MqttMappingPanel from "../widgets/MqttMappingPanel.svelte";
   import { findProposal } from "../state/mqtt.svelte.js";
-  import { externalDeviceFromProposal } from "../lib/discovery.js";
-  import { deviceKind } from "../lib/devices.js";
+  import { removeDevice } from "../lib/devices.js";
+  import { emsPlace, mapsTo, withMappedDevice, withRenamedDevice } from "../lib/mqtt.js";
   import { t, tn, catalogText } from "../i18n/i18n.svelte.js";
   import { system, ensure, reload } from "../state/system.svelte.js";
-  import { settings, setValue, setHardwareValues, discard, discardHardware, previewDraft, applyDraft, resetOverrides } from "../state/settings.svelte.js";
+  import { settings, setValue, setHardwareValues, discard, discardHardware, previewDraft, applyDraft, applyNow, resetOverrides } from "../state/settings.svelte.js";
   import { serviceAction, runServiceAction } from "../state/services.svelte.js";
   import { EDIT_TABS, changeGroups, restartNeeded, fieldMatches, levelled, liveOverride, previewValue, safetyBlocks, sharedRisk, tabSections } from "../lib/settings.js";
   import { errorView } from "../lib/errors.js";
@@ -50,20 +50,67 @@
   const values = $derived(settings.draft?.features || {});
   const searching = $derived(query.trim() !== "");
 
-  const mapsTo = (id) => (device) => (deviceKind(device) === "external_mqtt" || device?.type === "external_mqtt") && device?.mqtt?.device_id === id;
-  /** A published mapped device joins the draft through the same adoption as Find devices. */
+  /**
+   * A mapped device and its EMS device are one thing: saving the mapping adds
+   * the device, or moves it to the mapping's broker, a new label renames it and
+   * removing the mapping can remove it. Each change is written to the config at
+   * once; with other changes waiting it joins them, and the bar below saves all.
+   */
   const mqttAdoption = {
-    state(id) {
-      if ((settings.editable?.devices || []).some(mapsTo(id))) return "saved";
-      return devices.some(mapsTo(id)) ? "draft" : null;
+    get direct() {
+      return !settings.changes;
     },
-    async add(id) {
-      const proposal = await findProposal(id);
-      if (!proposal) return false;
-      if (!devices.some(mapsTo(id))) setHardwareValues({ devices: [...devices, externalDeviceFromProposal(proposal, devices)] });
-      return true;
+    get busy() {
+      return settings.applying;
+    },
+    state(device, connection) {
+      const saved = emsPlace(settings.editable?.devices, device.id, connection);
+      if (saved === "there") return "saved";
+      const waiting = settings.changes ? emsPlace(devices, device.id, connection) : null;
+      if (waiting === "there") return "draft";
+      return saved || waiting ? "elsewhere" : null;
+    },
+    name(device) {
+      return (current().devices || []).find(mapsTo(device.id))?.name || "";
+    },
+    renamable(device, label) {
+      return Boolean(withRenamedDevice(current().devices, device.id, label));
+    },
+    async add(device) {
+      const proposal = await findProposal(device.id, device.broker_ref);
+      if (!proposal) return { state: "missing" };
+      return write((draft) => devicesChange(withMappedDevice(draft.devices, proposal, device.label || device.id)));
+    },
+    rename(device, label) {
+      return write((draft) => devicesChange(withRenamedDevice(draft.devices, device.id, label)));
+    },
+    remove(device) {
+      return write((draft) => {
+        const index = (draft.devices || []).findIndex(mapsTo(device.id));
+        return index < 0 ? null : removeDevice(draft, index);
+      });
     },
   };
+
+  /** The device list a change is made on: the saved one, or the draft while it holds other changes. */
+  function current() {
+    return (settings.changes ? settings.draft : settings.editable) || {};
+  }
+
+  function devicesChange(next) {
+    return next ? { devices: next } : null;
+  }
+
+  async function write(build) {
+    if (settings.changes) {
+      const changes = build(settings.draft);
+      if (changes) setHardwareValues(changes);
+      return { state: "draft" };
+    }
+    const result = await applyNow(build);
+    if (result.ok) return { state: "saved" };
+    return result.reason ? { state: result.reason } : { state: "failed", error: result.error };
+  }
 
   function sectionFields(section) {
     const levels = levelled(section);
