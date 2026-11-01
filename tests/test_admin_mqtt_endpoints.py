@@ -291,3 +291,42 @@ def test_a_found_broker_that_needs_an_account_takes_one_and_reports_a_refusal(se
     assert accepted[0] == 200 and [item["access"] for item in after] == ["account"]
     assert topics[0] == 200 and FakeWatcher.instances[-1].endpoint["username"] == "iob"
     assert "iob-password" not in json.dumps(after)
+
+
+def test_an_ems_output_another_broker_carries_too_says_which_broker(server, monkeypatch):
+    base, _compose, _root = server
+    monkeypatch.setattr(
+        MappingBrokers,
+        "external_sources",
+        lambda _self, _broker, address=None: {"balkon": {"builtin": {"configured"}, "192.0.2.99:1883": {"published"}}},
+    )
+    _post(base, "/api/discovery/mqtt-broker/enable", {"confirm": True})
+    session = _post(base, "/api/discovery/mqtt-topics/sessions", {"broker_ref": "ems-mqtt"})[2]["session"]
+    FakeWatcher.instances[-1].tree.observe("ems-solarflow/balkon/state", b'{"inverterPower": 612.3}', True)
+    FakeWatcher.instances[-1].tree.observe("ems-solarflow/terrasse/state", b'{"inverterPower": 80}', True)
+
+    groups = {group["key"]: group for group in request(f"{base}/api/discovery/mqtt-topics/sessions/{session}")[2]["groups"]}
+
+    assert groups["balkon"]["also_on"] == ["192.0.2.99:1883"]
+    assert groups["terrasse"]["also_on"] == []
+
+
+def test_a_new_mapping_may_not_take_an_id_another_broker_has(server, monkeypatch):
+    base, _compose, _root = server
+    monkeypatch.setattr(
+        MappingBrokers, "external_sources", lambda _self, _broker, address=None: {"balkon": {"192.0.2.99:1883": {"published"}}}
+    )
+    document = {
+        "schema_version": 1,
+        "devices": [{"id": "balkon", "broker_ref": "ems-mqtt", "values": {"inverterPower": {"sources": [{"topic": "plug/power", "format": "number"}]}}}],
+    }
+
+    preview = _post(base, "/api/discovery/mqtt-mapping/preview", {"document": document})[2]
+    applied = _post(base, "/api/discovery/mqtt-mapping/apply", {"document": document, "confirm": True})
+    view = request(f"{base}/api/discovery/mqtt-mapping")[2]
+
+    assert [(issue["code"], issue["params"]) for issue in preview["issues"]] == [
+        ("mqtt_mapping_device_id_taken", {"id": "balkon", "where": "192.0.2.99:1883"})
+    ]
+    assert applied[0] == 422 and not applied[2]["ok"]
+    assert view["taken_ids"]["ems-mqtt"] == ["balkon"]

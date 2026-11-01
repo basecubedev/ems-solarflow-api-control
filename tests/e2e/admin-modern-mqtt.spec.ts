@@ -187,4 +187,25 @@ test.describe("Modern Admin: built-in MQTT broker and mapping", () => {
     await expect(page.getByTestId("mqtt-topics-start")).toBeEnabled();
     expect(accounts).toEqual([{ ref: "broker-192-0-2-7-1883", username: "iob", password: "iob-password" }]);
   });
+
+  test("an EMS output another broker carries too names that broker in the live topics", async ({ page, seedAdminScenario }) => {
+    const builtin = { ref: "ems-mqtt", kind: "builtin", host: "192.0.2.40", port: 1883, state: "running", usable: true };
+    await page.route("**/api/discovery/mqtt-mapping/brokers", (route) => route.fulfill({ json: { searching: false, brokers: [builtin] } }));
+    await page.route("**/api/discovery/mqtt-topics/sessions", (route) => route.fulfill({ json: { ok: true, session: "twice" } }));
+    await page.route("**/api/discovery/mqtt-topics/sessions/twice", (route) =>
+      route.fulfill({
+        json: {
+          session: "twice", broker_ref: "ems-mqtt", state: "listening", truncated: false,
+          groups: [{ key: "balkon", label: "ems_output", mappable: false, also_on: ["192.0.2.99:1883"], topics: [{ topic: "ems-solarflow/balkon/state", format: "json", retained: true, messages_per_minute: 4, changing: true, last_seen_seconds: 1, first_seen_seconds: 60, payload_preview: "{}", values: [] }] }],
+        },
+      }),
+    );
+    await seededAt(page, seedAdminScenario, "#/settings/devices");
+
+    await page.getByTestId("mqtt-topics-start").click();
+
+    const hint = page.locator('li[data-label="ems_output"][data-key="balkon"]').getByTestId("mqtt-topic-also-on");
+    await expect(hint).toContainText("192.0.2.99:1883");
+    await expect(hint).toContainText("only from the broker it was added through");
+  });
 });

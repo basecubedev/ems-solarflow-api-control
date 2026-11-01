@@ -176,11 +176,38 @@ def _cause(code, title, message, suggested):
     }
 
 
-def builtin_broker_root_causes(config, config_dir, data_dir, *, now=None) -> list[dict]:
-    """The diagnosis findings about the built-in broker and the MQTT mapping."""
+def second_source_causes(data_dir, *, now=None) -> list[dict]:
+    """A finding for each external device the EMS sees on a second broker, from the EMS's own MQTT status."""
 
     now = time.time() if now is None else now
+    payload = _read_json(os.path.join(str(data_dir), ZENDURE_MQTT_STATUS_FILENAME))
+    if not isinstance(payload, Mapping):
+        return []
+    written = payload.get("written_at")
+    if not isinstance(written, (int, float)) or now - written > EMS_STATUS_STALE_SECONDS:
+        return []
+    status = payload.get("status") if isinstance(payload.get("status"), Mapping) else {}
     causes = []
+    for item in status.get("second_sources") or []:
+        if not isinstance(item, Mapping) or not all(isinstance(item.get(key), str) for key in ("device_id", "read_from", "also_on")):
+            continue
+        causes.append(
+            _cause(
+                "external_device_second_source",
+                "An external device publishes on two brokers",
+                f"{item['device_id']} is read from {item['read_from']}, but {item['also_on']} carries it too; "
+                "the EMS counts only the first.",
+                "Stop the second publisher, or give it an id of its own.",
+            )
+        )
+    return causes
+
+
+def builtin_broker_root_causes(config, config_dir, data_dir, *, now=None) -> list[dict]:
+    """The diagnosis findings about the built-in broker, the MQTT mapping and external devices seen twice."""
+
+    now = time.time() if now is None else now
+    causes = second_source_causes(data_dir, now=now)
     enabled = broker_enabled(config_dir)
     users = builtin_profile_users(config)
     if users and enabled is False:

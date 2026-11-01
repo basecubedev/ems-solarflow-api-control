@@ -256,3 +256,47 @@ def test_external_mqtt_device_reads_a_republished_web_interface_value(tmp_path):
             assert set(runtime.snapshots()) == {"ems-solarflow/EXAMPLE0000001"}
         finally:
             runtime.stop()
+
+
+def test_a_second_broker_carrying_a_device_the_ems_reads_elsewhere_is_reported_not_counted(tmp_path):
+    """The same ems-solarflow id on two brokers: the EMS reads the one it was added through and names the other."""
+
+    require_real_broker_environment()
+    from ems.zendure_mqtt.runtime import build_zendure_mqtt_runtime
+
+    dir_a, dir_b = tmp_path / "a", tmp_path / "b"
+    dir_a.mkdir()
+    dir_b.mkdir()
+    with mosquitto_broker(dir_a) as (host_a, port_a), mosquitto_broker(dir_b) as (host_b, port_b):
+        def device(name, ref, device_id):
+            return {"name": name, "type": "external_mqtt", "mqtt": {"broker_ref": ref, "topic_family": "ems_solarflow", "device_id": device_id}}
+
+        config = {
+            "zendure_mqtt": {
+                "brokers": {
+                    "house": {"enabled": True, "source": "local_mqtt", "host": host_a, "port": port_a},
+                    "garden": {"enabled": True, "source": "local_mqtt", "host": host_b, "port": port_b},
+                }
+            },
+            "devices": [device("Balkon", "house", "balkon"), device("Garten", "garden", "garten")],
+        }
+        runtime = build_zendure_mqtt_runtime(config)
+        runtime.start()
+        try:
+            publish_until(
+                lambda: (
+                    publish_once(host_a, port_a, "ems-solarflow/balkon/inverterPower", "600", retain=True),
+                    publish_once(host_b, port_b, "ems-solarflow/balkon/inverterPower", "9999", retain=True),
+                ),
+                lambda: runtime.status()["second_sources"],
+                message="the second broker's copy was never reported",
+            )
+            wait_until(
+                lambda: runtime.snapshots().get("ems-solarflow/balkon") is not None,
+                message="the device never arrived from its own broker",
+            )
+
+            assert runtime.status()["second_sources"] == [{"device_id": "balkon", "read_from": "house", "also_on": "garden"}]
+            assert runtime.snapshots()["ems-solarflow/balkon"].metrics.get("outputHomePower") == 600
+        finally:
+            runtime.stop()

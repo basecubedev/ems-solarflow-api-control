@@ -29,7 +29,15 @@ from dataclasses import dataclass, replace
 from admin.mqtt_broker import BROKER_SERVICE, DEFAULT_PORT, local_profile_endpoints
 from admin.zendure_mqtt_broker_profiles import valid_host
 from ems.file_io import atomic_write_bytes
-from ems.zendure_mqtt.builtin_broker import BUILTIN_PROFILE_REF, mappings_path
+from ems.zendure_mqtt.builtin_broker import BUILTIN_PROFILE_REF, builtin_profile_refs, mappings_path
+from ems.zendure_mqtt.config_entries import (
+    config_entry_enabled,
+    is_external_mqtt_device_config,
+    zendure_mqtt_broker_ref,
+    zendure_mqtt_route_device_id,
+    zendure_mqtt_topic_family,
+)
+from ems.zendure_mqtt.external_catalog import EMS_SOLARFLOW
 from mqtt_mapping.config import read_mappings_document, saved_brokers
 
 ACCESS_STATES = ("anonymous", "account", "needs_account", "untrusted", "unreachable", "unchecked")
@@ -47,6 +55,7 @@ LOGIN_TIMEOUT_SECONDS = 3.0
 SEARCH_WORKERS = 8
 MAX_ACCOUNT_LENGTH = 256
 THIS_HOST_NAMES = ("127.0.0.1", "localhost", "::1")
+BUILTIN_IDENTITY = "builtin"
 
 
 def found_ref(host, port) -> str:
@@ -281,6 +290,88 @@ class MappingBrokers:
                 return None
             endpoint["username"], endpoint["password"] = secret.username, secret.password
         return endpoint
+
+    # --- one device id, two brokers ---------------------------------------
+
+    def _identities(self, broker, address):
+        """``(host, port) -> identity``: ``builtin`` for every address of this host on the broker's port."""
+
+        settings, _issues, _exists = broker.load()
+        port = settings.port if settings is not None else DEFAULT_PORT
+        local = {_key(name, port) for name in (*THIS_HOST_NAMES, *self._local_addresses(address))}
+
+        def identity(host, port_):
+            if not host or not isinstance(port_, int):
+                return None
+            key = _key(host, port_)
+            return BUILTIN_IDENTITY if key in local else f"{key[0]}:{key[1]}"
+
+        return identity
+
+    def ref_identity(self, broker, ref, *, address=None):
+        """The broker a mapping's ``broker_ref`` reaches: ``builtin`` or ``host:port``; ``None`` when unknown."""
+
+        if ref == BUILTIN_PROFILE_REF:
+            return BUILTIN_IDENTITY
+        identity = self._identities(broker, address)
+        saved = saved_brokers(read_mappings_document(mappings_path(broker.config_dir))).get(ref)
+        if saved is not None:
+            return identity(saved["host"], saved["port"])
+        profile = local_profile_endpoints(broker._config_loader(), self._store).get(ref)
+        if profile is not None:
+            return identity(profile["host"], profile["port"])
+        with self._lock:
+            found = self._found.get(ref)
+        return identity(found.host, found.port) if found is not None else None
+
+    def external_sources(self, broker, *, address=None) -> dict[str, dict]:
+        """``device id -> {broker identity -> {"configured", "published"}}`` for every ems-solarflow device the EMS has or discovery saw."""
+
+        identity = self._identities(broker, address)
+        config = broker._config_loader()
+        section = config.get("zendure_mqtt") if isinstance(config.get("zendure_mqtt"), dict) else {}
+        profiles = section.get("brokers") if isinstance(section.get("brokers"), dict) else {}
+        builtin = builtin_profile_refs(config) | {BUILTIN_PROFILE_REF}
+        sources = {}
+        for item in config.get("devices") or []:
+            if not is_external_mqtt_device_config(item) or not config_entry_enabled(item):
+                continue
+            if zendure_mqtt_topic_family(item) != EMS_SOLARFLOW.family:
+                continue
+            ref, device_id = zendure_mqtt_broker_ref(item), zendure_mqtt_route_device_id(item)
+            profile = profiles.get(ref) if isinstance(profiles.get(ref), dict) else {}
+            where = BUILTIN_IDENTITY if ref in builtin else identity(profile.get("host"), profile.get("port", DEFAULT_PORT))
+            if device_id and where:
+                sources.setdefault(device_id, {}).setdefault(where, set()).add("configured")
+        for candidate in self._discovery.candidates():
+            where = identity(candidate.get("host"), candidate.get("port"))
+            for device in candidate.get("devices") or []:
+                if where and device.get("topic_family") == EMS_SOLARFLOW.family and device.get("device_id"):
+                    sources.setdefault(device["device_id"], {}).setdefault(where, set()).add("published")
+        return sources
+
+    def elsewhere(self, broker, device_id, broker_ref, *, address=None):
+        """A broker other than ``broker_ref``'s that publishes ``device_id`` without the EMS reading it there, or ``None``.
+
+        The broker an EMS device was added through does not count, published
+        or not: moving a mapping away from it is how a device changes broker,
+        Find devices then offers Use this connection, and its old copy expires.
+        """
+
+        mine = self.ref_identity(broker, broker_ref, address=address)
+        others = sorted(
+            where
+            for where, kinds in self.external_sources(broker, address=address).get(device_id, {}).items()
+            if where != mine and "published" in kinds and "configured" not in kinds
+        )
+        return others[0] if others else None
+
+    def taken_ids(self, broker, broker_ref, *, address=None) -> list[str]:
+        """The ems-solarflow ids another broker than ``broker_ref``'s has, so a new mapping there is never offered one."""
+
+        mine = self.ref_identity(broker, broker_ref, address=address)
+        sources = self.external_sources(broker, address=address)
+        return sorted(device_id for device_id, places in sources.items() if set(places) - {mine})
 
     # --- checking, searching, adding --------------------------------------
 

@@ -41,17 +41,28 @@ def _evaluation_dict(evaluation):
     }
 
 
+ISSUE_CODES = ("mqtt_mapping_device_id_taken",)
+
+
 class MappingEditor:
     """The mapping file as the Admin edits it.
 
     ``found`` returns the brokers a search found and a mapping may read now
     (``ref -> entry``). A mapping on one of them is valid, and saving it
     remembers the broker under ``brokers``, so the mapping keeps reading it.
+
+    ``elsewhere(device_id, broker_ref)`` names another broker seen publishing
+    that ems-solarflow id, and ``taken(broker_ref)`` lists the ids brokers
+    other than ``broker_ref``'s have. A new mapping may not take an id another
+    broker publishes: the EMS reads each device from one broker, and a second
+    source would only be told apart by its broker.
     """
 
-    def __init__(self, broker: BuiltinBroker, found=None):
+    def __init__(self, broker: BuiltinBroker, found=None, elsewhere=None, taken=None):
         self.broker = broker
         self._found = found or dict
+        self._elsewhere = elsewhere or (lambda _device_id, _broker_ref: None)
+        self._taken = taken or (lambda _broker_ref: [])
 
     @property
     def path(self):
@@ -69,12 +80,36 @@ class MappingEditor:
     def _refs(self):
         return self.broker.mapping_broker_refs() | set(self._found())
 
+    def _taken_issues(self, mappings, *, new_only):
+        """An issue for each device whose id another broker has; ``new_only`` leaves the saved ones alone."""
+
+        saved = set()
+        if new_only:
+            current, _issues = load_mappings_file(self.path)
+            saved = {(device.id, device.broker_ref) for device in (current.devices if current else ())}
+        issues = []
+        for index, device in enumerate(mappings.devices if mappings else ()):
+            if (device.id, device.broker_ref) in saved:
+                continue
+            where = self._elsewhere(device.id, device.broker_ref)
+            if where:
+                issues.append(
+                    {
+                        "code": "mqtt_mapping_device_id_taken",
+                        "path": f"devices[{index}].id",
+                        "message": f"The id {device.id} already comes from {where}; choose another id.",
+                        "params": {"id": device.id, "where": where},
+                    }
+                )
+        return issues
+
     def view(self) -> dict:
         refs = self._refs()
-        _mappings, issues = load_mappings_file(self.path, broker_refs=refs)
+        mappings, issues = load_mappings_file(self.path, broker_refs=refs)
         return {
             "document": self._document(),
-            "issues": issues,
+            "issues": [*issues, *self._taken_issues(mappings, new_only=False)],
+            "taken_ids": {ref: self._taken(ref) for ref in sorted(refs)},
             "broker_refs": sorted(refs),
             "status": read_status(mapping_status_path(self.broker.data_dir)),
             "targets": list(TARGETS),
@@ -86,7 +121,8 @@ class MappingEditor:
         }
 
     def preview(self, document) -> dict:
-        _mappings, issues = parse_mappings(document, broker_refs=self._refs())
+        mappings, issues = parse_mappings(document, broker_refs=self._refs())
+        issues = issues or self._taken_issues(mappings, new_only=True)
         return {"ok": not issues, "issues": issues}
 
     def _remembered(self, mappings) -> dict:
@@ -106,6 +142,7 @@ class MappingEditor:
 
     def apply(self, document) -> dict:
         mappings, issues = parse_mappings(document, broker_refs=self._refs())
+        issues = issues or self._taken_issues(mappings, new_only=True)
         if issues:
             return {"ok": False, "status": "invalid", "issues": issues}
         document = {key: value for key, value in document.items() if key != "brokers"}

@@ -3810,7 +3810,15 @@ class AdminHandler(BaseHTTPRequestHandler):
         self._send_json(editor.value_preview(body.get("device"), payloads))
 
     def _mapping_editor(self):
-        return MappingEditor(self._builtin_broker(), found=self.server.mqtt_mapping_brokers.usable)
+        broker = self._builtin_broker()
+        brokers = self.server.mqtt_mapping_brokers
+        address = host_address()
+        return MappingEditor(
+            broker,
+            found=brokers.usable,
+            elsewhere=lambda device_id, broker_ref: brokers.elsewhere(broker, device_id, broker_ref, address=address),
+            taken=lambda broker_ref: brokers.taken_ids(broker, broker_ref, address=address),
+        )
 
     def _handle_mqtt_mapping_broker_post(self, path):
         action = path.rsplit("/", 1)[-1]
@@ -3873,8 +3881,19 @@ class AdminHandler(BaseHTTPRequestHandler):
         if session is None:
             self._send_json({"ok": False, "error": "session ended"}, status=404)
             return
-        mapped = MappingEditor(self._builtin_broker()).mapped_values(session.broker_ref)
-        self._send_json(self.server.mqtt_live_topics.snapshot(session_id, mapped))
+        broker = self._builtin_broker()
+        mapped = MappingEditor(broker).mapped_values(session.broker_ref)
+        snapshot = self.server.mqtt_live_topics.snapshot(session_id, mapped)
+        if snapshot is None:
+            self._send_json({"ok": False, "error": "session ended"}, status=404)
+            return
+        brokers, address = self.server.mqtt_mapping_brokers, host_address()
+        sources = brokers.external_sources(broker, address=address)
+        here = brokers.ref_identity(broker, session.broker_ref, address=address)
+        for group in snapshot.get("groups") or []:
+            if group.get("label") == "ems_output":
+                group["also_on"] = sorted(set(sources.get(group.get("key"), {})) - {here})
+        self._send_json(snapshot)
 
     def _handle_maintenance_container_sync(self):
         # Confirmed mutation: recreate EMS and start/stop the optional bundled

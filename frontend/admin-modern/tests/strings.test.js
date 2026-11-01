@@ -22,7 +22,7 @@ import { SETUP_STEPS, DOCKER_MODES, DOCKER_STATES, RECOVERY_REASONS } from "../s
 import { BUSY_OPERATIONS, CONFIG_CONFLICTS, CONTINUITY, SWITCH_REASONS } from "../src/lib/setupDraft.js";
 import { AUTOMATIC_FEATURES, DEVICE_KINDS, EDIT_TABS, FEATURE_IDS, MQTT_SOURCES, RISKS } from "../src/lib/settings.js";
 import { ASSISTANT_STATES, STEP_IDS, TASKS } from "../src/lib/assistant.js";
-import { BROKER_ACCESS, BROKER_CHOICE_ERRORS, BROKER_ISSUES as MQTT_BROKER_ISSUES, BROKER_STATES, CONNECT_TYPES, DEVICE_KINDS as MQTT_DEVICE_KINDS, LIVE_LABELS, MAPPING_ISSUES, SILENCE_REASONS, TARGETS, UNITS, VALUE_REASONS, connectSteps } from "../src/lib/mqtt.js";
+import { BROKER_ACCESS, BROKER_CHOICE_ERRORS, BROKER_ISSUES as MQTT_BROKER_ISSUES, MAPPING_EDITOR_ISSUES, BROKER_STATES, CONNECT_TYPES, DEVICE_KINDS as MQTT_DEVICE_KINDS, LIVE_LABELS, MAPPING_ISSUES, SILENCE_REASONS, TARGETS, UNITS, VALUE_REASONS, connectSteps } from "../src/lib/mqtt.js";
 
 const LANGS = ["en", "de", "nl", "fr"];
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "../src");
@@ -145,7 +145,7 @@ test("every generated key family is complete", () => {
     ...[...EDIT_TABS, "addons", "devices"].map((tab) => `settings.tab.${tab}`),
     ...BROKER_STATES.map((state) => `mqtt.state.${state}`),
     ...BROKER_ACCESS.map((access) => `mqtt.brokers.access.${access}`),
-    ...[...MQTT_BROKER_ISSUES, ...MAPPING_ISSUES, ...BROKER_CHOICE_ERRORS].map((code) => `mqtt.code.${code}`),
+    ...[...MQTT_BROKER_ISSUES, ...MAPPING_ISSUES, ...BROKER_CHOICE_ERRORS, ...MAPPING_EDITOR_ISSUES].map((code) => `mqtt.code.${code}`),
     ...LIVE_LABELS.map((label) => `mqtt.label.${label}`),
     ...SILENCE_REASONS.map((reason) => `mqtt.reason.${reason}`),
     ...VALUE_REASONS.map((reason) => `mqtt.value.${reason}`),

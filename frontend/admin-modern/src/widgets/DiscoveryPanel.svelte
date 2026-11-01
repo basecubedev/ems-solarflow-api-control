@@ -10,6 +10,8 @@
     brokerProfile,
     buildReview,
     configuredFor,
+    entryBroker,
+    proposalBroker,
     externalDeviceFromProposal,
     isControlDowngrade,
     isExternalProposal,
@@ -71,7 +73,7 @@
   function meta(item) {
     if (item.proposal) {
       const p = item.proposal;
-      return [p.serial_number || p.device_id || "", sourceLabel(p.connection_source)].filter(Boolean).join(" · ");
+      return [p.serial_number || p.device_id || "", sourceLabel(p.connection_source), proposalBroker(p)].filter(Boolean).join(" · ");
     }
     const found = item.discovered || {};
     const configured = item.configured || {};
@@ -82,7 +84,8 @@
   function relationship(item) {
     if (item.state !== "transport") return "";
     const configured = configuredFor(item, draft);
-    return configured ? t("discovery.alreadyAs", { name: configured.name || t("settings.unnamed"), via: sourceLabel(connectionSource(configured)) || "—" }) : "";
+    const via = entryBroker(configured, draft) || sourceLabel(connectionSource(configured)) || "—";
+    return configured ? t("discovery.alreadyAs", { name: configured.name || t("settings.unnamed"), via }) : "";
   }
 
   function apply(item, action) {

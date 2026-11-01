@@ -221,8 +221,18 @@ value would be refused by EMS (a negative inverter power, a charge level above
   Console, the broker is set up again with them as the restore's last step, so
   devices keep connecting with the password they were given, also after a
   re-flashed card.
+- **The id … already comes from …** — the search saw another broker publish
+  that id, and EMS does not read it there. EMS reads an id from one broker
+  only, so a new mapping takes another id; the guide never proposes one
+  another broker has. To move a mapped device to another broker under its id,
+  remove its mapping on the old broker, map it on the new one and set its id
+  under **Advanced**; once it publishes there, **Use this connection** under
+  Find devices moves the EMS device too. A mapping saved
+  before the other broker appeared keeps saving, and the live topics say where
+  else its id comes from.
 - `emsctl diagnose` reports `mqtt_broker_stopped_in_use`,
-  `mqtt_broker_profile_missing` and `mqtt_mapping_device_silent`.
+  `mqtt_broker_profile_missing`, `mqtt_mapping_device_silent` and
+  `external_device_second_source`.
 
 ## Recovery or next steps
 

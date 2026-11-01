@@ -1438,6 +1438,19 @@ accepted unchecked unless the operator says so. A check or a new account on a
 remembered broker rewrites its `credentials_ref` and renders the mapping's
 credentials again.
 
+An ems-solarflow id belongs to one broker. The editor refuses a new mapping
+whose id discovery saw published on another broker that no EMS device of that
+id was added through (`mqtt_mapping_device_id_taken`, with `params` `id` and
+`where`); a saved one is only named. The broker an EMS device was added
+through does not block, published or not: that is how a device moves, and Find
+devices then offers Use this connection.
+The view's `taken_ids` maps each broker ref to the ids other brokers have, so
+the guide never proposes one. The EMS telemetry runtime listens on each local
+broker it reads for the external devices added through another one: their
+snapshots stay scoped to their own broker, and a copy elsewhere is reported,
+while it is fresh, in the MQTT status as `second_sources` and by diagnose as
+`external_device_second_source`.
+
 A mapping source is `{topic, format: number|json, path, factor, invert,
 negative: keep|zero, max_age_seconds: 10–900}`. A value is the sum of its
 sources, battery power optionally charge minus discharge, and must pass the

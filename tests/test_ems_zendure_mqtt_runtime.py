@@ -9,6 +9,7 @@ network broker.
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ from ems.zendure_mqtt import (
     classify_zendure_mqtt_devices,
     load_zendure_mqtt_runtime_config,
 )
+from ems.zendure_mqtt.external_catalog import external_topic_family
 from ems.zendure_mqtt.runtime import ZendureMqttTelemetryRuntime
 
 pytestmark = [
@@ -28,9 +30,10 @@ pytestmark = [
 
 
 class _Snap:
-    def __init__(self, device_id, serial_number=None):
+    def __init__(self, device_id, serial_number=None, last_seen_monotonic=None):
         self.device_id = device_id
         self.serial_number = serial_number
+        self.last_seen_monotonic = last_seen_monotonic
 
 
 class FakeService:
@@ -714,3 +717,49 @@ def test_a_broker_whose_only_telemetry_device_is_disabled_is_not_started():
     assert not any(service.started for service in services)
     assert runtime.device_summaries() == []
     assert runtime.status()["configured_device_count"] == 0
+
+
+def _external(name, broker_ref, device_id):
+    return {"type": "external_mqtt", "name": name, "mqtt": {"broker_ref": broker_ref, "topic_family": "ems_solarflow", "device_id": device_id}}
+
+
+def _two_brokers():
+    return {
+        "zendure_mqtt": {
+            "brokers": {
+                "home": {"source": "local_mqtt", "host": "192.168.1.5", "port": 1883},
+                "other": {"source": "local_mqtt", "host": "192.168.1.7", "port": 1883},
+            }
+        },
+        "devices": [_external("Balkon", "home", "balkon"), _external("Garten", "other", "garten")],
+    }
+
+
+def test_a_broker_listens_for_devices_read_elsewhere_and_reports_them_without_counting_them():
+    runtime = build_zendure_mqtt_runtime(_two_brokers(), service_factory=FakeService)
+    services = {broker.broker_ref: broker._service for broker in runtime._brokers}
+    key = external_topic_family("ems_solarflow").snapshot_key
+    now = time.monotonic()
+    services["home"].set_snapshots({key("balkon"): _Snap(key("balkon"), last_seen_monotonic=now)})
+    services["other"].set_snapshots(
+        {key("garten"): _Snap(key("garten"), last_seen_monotonic=now), key("balkon"): _Snap(key("balkon"), last_seen_monotonic=now)}
+    )
+
+    status = runtime.status()
+
+    assert "ems-solarflow/balkon/+" in services["other"].config.client_config().resolved_subscriptions()
+    assert status["second_sources"] == [{"device_id": "balkon", "read_from": "home", "also_on": "other"}]
+    scoped = {broker.broker_ref: set(broker.snapshots()) for broker in runtime._brokers}
+    assert scoped == {"home": {key("balkon")}, "other": {key("garten")}}
+
+
+def test_no_second_source_without_one_and_none_once_the_copy_has_gone_quiet():
+    runtime = build_zendure_mqtt_runtime(_two_brokers(), service_factory=FakeService)
+    key = external_topic_family("ems_solarflow").snapshot_key
+    services = {broker.broker_ref: broker._service for broker in runtime._brokers}
+    services["home"].set_snapshots({})
+    services["other"].set_snapshots({})
+    empty = runtime.status()["second_sources"]
+    services["other"].set_snapshots({key("balkon"): _Snap(key("balkon"), last_seen_monotonic=time.monotonic() - 3600)})
+
+    assert empty == [] and runtime.status()["second_sources"] == []

@@ -5,7 +5,7 @@
   import MqttDeviceWizard from "./MqttDeviceWizard.svelte";
   import MqttBrokerChooser from "./MqttBrokerChooser.svelte";
   import { t } from "../i18n/i18n.svelte.js";
-  import { BUILTIN_BROKER, LIVE_LABELS, MAPPING_ISSUES, SILENCE_REASONS, TARGETS, VALUE_REASONS, brokerAddress, newDevice, newSource, proposedId, targetSources } from "../lib/mqtt.js";
+  import { BUILTIN_BROKER, LIVE_LABELS, MAPPING_EDITOR_ISSUES, MAPPING_ISSUES, SILENCE_REASONS, TARGETS, VALUE_REASONS, brokerAddress, newDevice, newSource, proposedId, targetSources } from "../lib/mqtt.js";
   import { mqtt, loadMapping, startTopics, stopTopics, previewMapping, applyMapping, previewValue, watchTopics } from "../state/mqtt.svelte.js";
 
   /**
@@ -75,7 +75,13 @@
   }
 
   function issueText(issue) {
+    if (MAPPING_EDITOR_ISSUES.includes(issue.code)) return t(`mqtt.code.${issue.code}`, { ...issue.params, where: whereText(issue.params?.where) });
     return MAPPING_ISSUES.includes(issue.code) ? t(`mqtt.code.${issue.code}`) : issue.message;
+  }
+
+  /** The broker an id already comes from: the built-in one by name, any other by its address. */
+  function whereText(where) {
+    return where === "builtin" ? t("mqtt.mapping.builtin") : where || "";
   }
 
   function reasonText(reason) {
@@ -242,7 +248,7 @@
       <MqttDeviceWizard
         group={wizard.group}
         brokerRef={wizard.brokerRef}
-        takenIds={devices.map((item) => item.id)}
+        takenIds={[...devices.map((item) => item.id), ...(view?.taken_ids?.[wizard.brokerRef] || [])]}
         {busy}
         onpreview={wizardPreview}
         onsave={(device) => review($state.snapshot(device), -1)}
@@ -334,6 +340,9 @@
               <span class="muted small">{group.label === "ems_output" ? t("mqtt.topics.output") : t("mqtt.topics.native")}</span>
             {/if}
           </div>
+          {#if group.also_on?.length}
+            <p class="note warn small" data-testid="mqtt-topic-also-on"><Icon name="triangle-alert" size="sm" />{t("mqtt.topics.alsoOn", { brokers: group.also_on.map(whereText).join(", ") })}</p>
+          {/if}
           {#each group.topics as topic (topic.topic)}
             <div class="topic-row">
               <code class="topic">{topic.topic}</code>

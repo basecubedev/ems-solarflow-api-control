@@ -268,3 +268,19 @@ def test_the_dashboard_lists_the_same_states():
     listed = source.split("export const MQTT_BROKER_STATES = Object.freeze([", 1)[1].split("]", 1)[0]
 
     assert tuple(part.strip().strip('"') for part in listed.split(",")) == BUILTIN_BROKER_STATES
+
+
+def test_an_external_device_on_a_second_broker_is_a_finding_while_the_ems_status_is_fresh(tmp_path):
+    from ems.paths import ZENDURE_MQTT_STATUS_FILENAME
+    from ems.zendure_mqtt.builtin_broker import second_source_causes
+
+    status = tmp_path / ZENDURE_MQTT_STATUS_FILENAME
+    second = {"device_id": "balkon", "read_from": "house", "also_on": "garden"}
+    status.write_text(json.dumps({"written_at": 1000.0, "status": {"second_sources": [second, {"device_id": 3}]}}), encoding="utf-8")
+
+    fresh = second_source_causes(tmp_path, now=1010.0)
+    stale = second_source_causes(tmp_path, now=5000.0)
+
+    assert [cause["code"] for cause in fresh] == ["external_device_second_source"]
+    assert "balkon" in fresh[0]["message"] and "garden" in fresh[0]["message"]
+    assert stale == []

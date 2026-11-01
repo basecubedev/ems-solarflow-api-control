@@ -195,6 +195,17 @@ to another broker with **Use this connection** in the search, or remove it;
 everything else follows from the topics. See
 [Device management](admin/device-management.md).
 
+### One id, one broker
+
+EMS reads each device from the one broker it was added through. An id is
+added only once: the search shows the same id on a second broker as
+*Already set up as … via …* and names both brokers, so you can move the
+device there with **Use this connection** rather than add it twice. When a
+second broker carries an id that is already added, EMS ignores that copy and
+says so: `emsctl diagnose` reports `external_device_second_source` for the
+brokers EMS reads, and the MQTT mapping's live topics name the other broker.
+Stop the second publisher, or give it an id of its own.
+
 ## Expected result
 
 The dashboard shows a card with a **Telemetry only** badge and no **Target**. Its

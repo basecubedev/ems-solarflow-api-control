@@ -46,6 +46,9 @@ export const MAPPING_ISSUES = Object.freeze([
   "mqtt_mapping_brokers_unreadable",
 ]);
 
+/** Codes the Admin's mapping editor adds to the mapping file's own; each issue carries its ``params``. */
+export const MAPPING_EDITOR_ISSUES = Object.freeze(["mqtt_mapping_device_id_taken"]);
+
 export const LIVE_LABELS = Object.freeze([
   "shelly_gen1",
   "shelly_gen2",

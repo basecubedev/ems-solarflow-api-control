@@ -134,7 +134,7 @@ def _mapping(broker_ref, device_id="balcony"):
     return {
         "id": device_id,
         "broker_ref": broker_ref,
-        "values": {"inverterPower": {"sources": [{"topic": "plug/power", "format": "number"}]}},
+        "values": {"inverterPower": {"sources": [{"topic": f"{device_id}/power", "format": "number"}]}},
     }
 
 
@@ -548,3 +548,81 @@ def test_a_checked_state_gives_way_when_the_account_behind_it_is_gone(install):
 
     assert usable == ("saved", ref, "account", True)
     assert _kinds(chooser.choices(broker))[-1] == ("saved", ref, "needs_account", False)
+
+
+def test_an_id_is_known_with_every_broker_that_has_it_configured_or_published(install):
+    config = {
+        "zendure_mqtt": {"brokers": {"home": {"source": "local_mqtt", "host": "192.168.1.5", "port": 1883}, "ems-mqtt": {"source": "local_mqtt", "host": "192.168.1.40", "port": 1883, "credentials_ref": "ems-mqtt"}}},
+        "devices": [
+            {"name": "Balkon", "type": "external_mqtt", "mqtt": {"broker_ref": "home", "topic_family": "ems_solarflow", "device_id": "balkon"}},
+            {"name": "Terrasse", "type": "external_mqtt", "mqtt": {"broker_ref": "ems-mqtt", "topic_family": "ems_solarflow", "device_id": "terrasse"}},
+            {"name": "Off", "type": "external_mqtt", "enabled": False, "mqtt": {"broker_ref": "home", "topic_family": "ems_solarflow", "device_id": "off"}},
+        ],
+    }
+    candidates = [
+        {"host": "192.168.1.7", "port": 1883, "devices": [{"topic_family": "ems_solarflow", "device_id": "balkon"}, {"topic_family": "zendure", "device_id": "HOA1"}]},
+        {"host": "192.168.1.41", "port": 1883, "devices": [{"topic_family": "ems_solarflow", "device_id": "terrasse"}]},
+    ]
+    networks = {"networks": [{"address": "192.168.1.40"}, {"address": "192.168.1.41"}]}
+    broker = _broker(install, config)
+    chooser, *_ = _brokers(install, candidates=candidates, networks=lambda: networks)
+
+    sources = chooser.external_sources(broker, address="192.168.1.40")
+
+    assert sources == {
+        "balkon": {"192.168.1.5:1883": {"configured"}, "192.168.1.7:1883": {"published"}},
+        "terrasse": {"builtin": {"configured", "published"}},
+    }
+    assert chooser.elsewhere(broker, "balkon", "home", address="192.168.1.40") == "192.168.1.7:1883"
+    assert chooser.elsewhere(broker, "terrasse", BUILTIN_PROFILE_REF, address="192.168.1.40") is None
+    assert chooser.elsewhere(broker, "neu", BUILTIN_PROFILE_REF, address="192.168.1.40") is None
+    assert chooser.taken_ids(broker, BUILTIN_PROFILE_REF, address="192.168.1.40") == ["balkon"]
+    assert chooser.taken_ids(broker, "home", address="192.168.1.40") == ["balkon", "terrasse"]
+
+
+def test_an_id_the_ems_only_has_through_another_broker_may_move_there(install):
+    config = {
+        "zendure_mqtt": {"brokers": {"ems-mqtt": {"source": "local_mqtt", "host": "192.168.1.40", "port": 1883, "credentials_ref": "ems-mqtt"}}},
+        "devices": [{"name": "Balkon", "type": "external_mqtt", "mqtt": {"broker_ref": "ems-mqtt", "topic_family": "ems_solarflow", "device_id": "balkon"}}],
+    }
+    broker = _broker(install, config)
+    chooser, *_ = _brokers(install, candidates=[{"host": "192.168.1.7", "port": 1883}], answers={("192.168.1.7", None): "accepted"})
+    ref = found_ref("192.168.1.7", 1883)
+    chooser.choices(broker)
+    chooser.check(ref)
+
+    assert chooser.elsewhere(broker, "balkon", ref, address="192.168.1.40") is None
+    assert chooser.taken_ids(broker, ref, address="192.168.1.40") == ["balkon"]
+
+
+def test_the_broker_an_ems_device_was_added_through_never_blocks_its_move_even_while_it_still_publishes(install):
+    config = {
+        "zendure_mqtt": {"brokers": {"ems-mqtt": {"source": "local_mqtt", "host": "192.168.1.40", "port": 1883, "credentials_ref": "ems-mqtt"}}},
+        "devices": [{"name": "Balkon", "type": "external_mqtt", "mqtt": {"broker_ref": "ems-mqtt", "topic_family": "ems_solarflow", "device_id": "balkon"}}],
+    }
+    candidates = [
+        {"host": "192.168.1.40", "port": 1883, "devices": [{"topic_family": "ems_solarflow", "device_id": "balkon"}]},
+        {"host": "192.168.1.9", "port": 1883, "devices": [{"topic_family": "ems_solarflow", "device_id": "garten"}]},
+    ]
+    broker = _broker(install, config)
+    chooser, *_ = _brokers(install, candidates=candidates, answers={("192.168.1.7", None): "accepted"})
+    chooser.add_manual("192.168.1.7", 1883)
+    ref = found_ref("192.168.1.7", 1883)
+
+    assert chooser.elsewhere(broker, "balkon", ref, address="192.168.1.40") is None
+    assert chooser.elsewhere(broker, "garten", ref, address="192.168.1.40") == "192.168.1.9:1883"
+
+
+def test_a_saved_mapping_whose_id_turns_up_elsewhere_is_named_but_still_saves(install):
+    broker = _broker(install)
+    (install / "config" / "mqtt" / "mappings.json").write_text(
+        json.dumps({"schema_version": 1, "devices": [_mapping(BUILTIN_PROFILE_REF, "balkon")]}), encoding="utf-8"
+    )
+    editor = MappingEditor(broker, elsewhere=lambda device_id, _ref: "192.168.1.7:1883" if device_id == "balkon" else None)
+
+    view_codes = [issue["code"] for issue in editor.view()["issues"]]
+    kept = editor.apply({"schema_version": 1, "devices": [_mapping(BUILTIN_PROFILE_REF, "balkon"), _mapping(BUILTIN_PROFILE_REF, "neu")]})
+    added = editor.apply({"schema_version": 1, "devices": [_mapping(BUILTIN_PROFILE_REF, "balkon"), _mapping(BUILTIN_PROFILE_REF, "neu"), _mapping(BUILTIN_PROFILE_REF, "zweit")]})
+
+    assert view_codes == ["mqtt_mapping_device_id_taken"]
+    assert kept["ok"] and added["ok"]
