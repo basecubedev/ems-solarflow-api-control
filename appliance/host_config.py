@@ -846,7 +846,7 @@ class LiveActivation:
             raise
         except Exception:
             return True
-        if running and not self.systemd.reload(UNIT_SSH).ok:
+        if running and not self.systemd.reload_ssh().ok:
             raise HostConfigError("sshd_reload_failed", "the SSH daemon did not reload")
         return True
 

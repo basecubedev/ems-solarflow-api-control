@@ -232,6 +232,11 @@ case "$1" in
             # unavailable feature, not a failed package.
             /usr/bin/ems-appliance backup-access activate >/dev/null \
                 || note "the confined SFTP backup access is not active; run 'ems-appliance backup-access' for the reason."
+            # verify-install reads whether the export unit is failed. A failure
+            # an earlier run left there is that run's verdict, not this
+            # package's, which is the activation just above: kept, it failed
+            # this install and the revert to the package before it alike.
+            systemctl reset-failed ems-appliance-export.service 2>/dev/null || true
 
             /usr/bin/ems-appliance verify-install \
                 || fail "the installation is not usable; see the checks above"

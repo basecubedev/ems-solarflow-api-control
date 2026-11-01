@@ -106,6 +106,20 @@ class SystemdBackend:
         self._check_controllable(unit)
         return self.runner.run("systemctl", ["reload", unit], timeout=120)
 
+    def reload_ssh(self):
+        """Have the running sshd apply its configuration again.
+
+        A daemon started from ssh.socket cannot take a reload: sshd re-executes
+        itself on SIGHUP, binds port 22, which systemd holds for the socket, and
+        exits with "Cannot bind any address". It is restarted instead. systemd
+        hands the new daemon the socket, and the open sessions are processes of
+        their own that Debian's ssh.service, ``KillMode=process``, leaves alone.
+        """
+
+        if self.unit_state(UNIT_SSH_SOCKET)["running"]:
+            return self.runner.run("systemctl", ["try-restart", UNIT_SSH], timeout=120)
+        return self.reload(UNIT_SSH)
+
     def enable(self, unit):
         self._check_controllable(unit)
         return self.runner.run("systemctl", ["enable", "--now", unit], timeout=120)

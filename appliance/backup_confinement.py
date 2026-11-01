@@ -453,7 +453,7 @@ class BackupAccessActivation:
         try:
             if not self.systemd.unit_state(UNIT_SSH)["running"]:
                 return True
-            return bool(self.systemd.reload(UNIT_SSH).ok)
+            return bool(self.systemd.reload_ssh().ok)
         except Exception:
             return False
 

@@ -327,6 +327,22 @@ PermitOpen none                   GatewayPorts no
 The forced command is compared exactly, including its full list of denied SFTP
 requests. Everything else is compared against the value above.
 
+Where SSH runs from `ssh.socket`, as the console turns it on wherever the host
+has one, the daemon is restarted rather than reloaded: sshd re-executes itself
+on a reload, tries to bind port 22, which systemd holds for the socket, and
+exits. A restart hands the new daemon the socket and leaves open sessions
+running. A package install clears a failure an earlier run left on
+`ems-appliance-export.service` before `verify-install` reads it: the install's
+own verdict is the activation it just ran, and a stale failure used to fail the
+install and the revert to the package before it alike.
+
+A package from before this fix, Appliance Manager 0.4.0 and older, still
+reloads a socket-activated daemon in its own postinst and fails there whenever
+`ssh.service` is running. Through the console, installing one over a fixed
+manager then fails and the fixed package is put back; with `ssh.service`
+stopped it installs and brings the defect back. A revert to one fails while
+`ssh.service` runs or while `ems-appliance-export.service` is failed.
+
 The sshd policy is only half the boundary. Activation additionally requires the
 export root to be exclusive and every **present** export to be exact: mounted
 at its expected target, publishing the configured EMS directory, read-only. A
@@ -353,8 +369,8 @@ key is always allowed.
 
 | Reason | What was not confirmed |
 |---|---|
-| `sshd_config_invalid` | `sshd -t` refused the configuration |
-| `sshd_reload_failed` | a running daemon did not reload the new policy |
+| `sshd_config_invalid` | `sshd -t` refused the configuration; the runner makes `/run/sshd` first, which sshd needs even to check it and which `ssh.service` removes when it stops |
+| `sshd_reload_failed` | a running daemon did not reload the new policy, or a socket-activated one did not restart |
 | `ssh_policy_unreadable` | `sshd -T -C user=…` could not report what the daemon would apply |
 | `confinement_not_confirmed` | a restriction the account requires is not in force |
 | `export_root_not_exclusive` | the chroot root holds something this feature does not manage |
