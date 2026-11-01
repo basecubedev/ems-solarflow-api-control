@@ -3,6 +3,7 @@
 """Pull the Dockerfiles' base images before a CI job builds an image.
 
     scripts/prepull_base_images.py [--print] [--attempts N] [DOCKERFILE...]
+    scripts/prepull_base_images.py --image REFERENCE [--image REFERENCE...]
 
 Docker Hub is pulled anonymously here, and an anonymous pull is the part of a
 build nobody owns. On 2026-09-12 the token endpoint reset the connection twice
@@ -21,7 +22,8 @@ registry at all, which is what makes the split work: once this step succeeds,
 the build has no registry left to fail against.
 
 The images come out of the Dockerfiles rather than a list kept here, so a base
-image bump is one edit. A ``FROM`` this cannot resolve -- a build argument in
+image bump is one edit. ``--image`` names an image a test runs instead, such
+as the pinned Mosquitto, for a job that builds nothing but pulls all the same. A ``FROM`` this cannot resolve -- a build argument in
 the reference -- is an error rather than a skip: a pre-pull that silently stops
 covering an image looks exactly like one that works.
 
@@ -140,10 +142,15 @@ def main(argv=None) -> int:
     parser.add_argument("--print", dest="only_print", action="store_true",
                         help="name the base images and pull nothing")
     parser.add_argument("--attempts", type=int, default=DEFAULT_ATTEMPTS)
+    parser.add_argument("--image", dest="images", action="append", default=[],
+                        help="pull this image instead of the Dockerfiles' base images")
     args = parser.parse_args(argv)
 
+    if args.images and args.dockerfiles:
+        print("error: name Dockerfiles or images, not both", file=sys.stderr)
+        return 2
     try:
-        images = collect(resolve_dockerfiles(args.dockerfiles or DOCKERFILES))
+        images = args.images or collect(resolve_dockerfiles(args.dockerfiles or DOCKERFILES))
     except UnresolvedBaseImage as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
@@ -156,9 +163,9 @@ def main(argv=None) -> int:
     for image in images:
         if not pull(image, attempts=args.attempts):
             print(
-                f"error: could not pull the base image {image} after "
+                f"error: could not pull the image {image} after "
                 f"{args.attempts} attempts. This is a registry failure, not a "
-                "build failure: nothing in this repository was compiled yet.",
+                "build or test failure: nothing in this repository ran yet.",
                 file=sys.stderr,
             )
             return 1

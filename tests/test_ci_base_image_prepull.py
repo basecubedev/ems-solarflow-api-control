@@ -43,6 +43,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from scripts import prepull_base_images as prepull
 from scripts.prepull_base_images import (
     DOCKERFILES,
     UnresolvedBaseImage,
@@ -362,3 +363,17 @@ def test_a_pull_that_works_first_time_does_not_wait():
     assert pull("python:3.14-slim", run=docker.run, sleep=docker.sleep)
     assert len(docker.calls) == 1
     assert docker.waited == []
+
+
+def test_an_image_a_test_runs_is_pulled_instead_of_the_base_images(monkeypatch):
+    pulled = []
+    monkeypatch.setattr(prepull, "pull", lambda image, attempts: pulled.append(image) or True)
+
+    assert prepull.main(["--image", "eclipse-mosquitto:2.1.2-alpine"]) == 0
+    assert pulled == ["eclipse-mosquitto:2.1.2-alpine"]
+
+
+def test_images_and_dockerfiles_are_not_mixed(monkeypatch):
+    monkeypatch.setattr(prepull, "pull", lambda image, attempts: True)
+
+    assert prepull.main(["--image", "eclipse-mosquitto:2.1.2-alpine", "Dockerfile"]) == 2
