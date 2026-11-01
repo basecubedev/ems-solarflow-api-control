@@ -23,18 +23,27 @@ project requirement and scope are defined in [agent-rules.md](agent-rules.md).
 ## Before a broad run: scratch space
 
 A full run writes tens of GB of temporary data — appliance packages, disk
-images, database snapshots. Point `TMPDIR` at a filesystem with room:
+images, database snapshots. A passing test's directory is removed as soon as the
+test ends (`tmp_path_retention_policy = failed` in `pytest.ini`), so a full
+non-Docker run holds well under 1 GB at a time. A test whose body does not pass
+— it fails, or skips or xfails part-way — keeps its directory while the run
+lasts; one that errors in a fixture or only in teardown does not. A run that
+fails leaves those directories under `pytest-of-*` for inspection, and a run
+that passes removes its whole base directory when it ends. The large disk
+images the appliance tests write are sparse, so a kept directory holds little
+real data. Point `TMPDIR` at a filesystem with room:
 
 ```bash
 export TMPDIR=/path/with/room
 ```
 
-`tests/conftest.py` refuses a broad selection that does not fit and names the
-fix, because a temporary filesystem that fills part-way through kills the run
-with an internal error rather than a test failure, and leaves the host unusable
-until it is cleaned. A targeted tier is never refused — the check runs after
-marker deselection, so it judges what will actually run. `EMS_ALLOW_SMALL_SCRATCH=1`
-overrides it.
+`tests/conftest.py` refuses a broad selection with less than 4 GB free and names
+the fix, in CI as well, because a temporary filesystem that fills part-way
+through kills the run with an internal error rather than a test failure, and
+leaves the host unusable until it is cleaned. A targeted tier is never refused —
+the check runs after marker deselection, so it judges what will actually run.
+A run that keeps every directory (`-o tmp_path_retention_policy=all`) needs
+20 GB, as every run did before. `EMS_ALLOW_SMALL_SCRATCH=1` overrides it.
 
 ## Quick local loop
 

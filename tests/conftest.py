@@ -88,7 +88,10 @@ def pytest_collection_finish(session):
 
     temp_dir = tempfile.gettempdir()
     shortfall = scratch_shortfall(
-        shutil.disk_usage(temp_dir).free, len(session.items), temp_dir
+        shutil.disk_usage(temp_dir).free,
+        len(session.items),
+        temp_dir,
+        retention_policy=session.config.getini("tmp_path_retention_policy"),
     )
     if shortfall:
         raise pytest.UsageError(shortfall)

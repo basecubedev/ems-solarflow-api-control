@@ -329,10 +329,12 @@ leave no cross-test state. Use exact bytes or hashes when preservation matters.
 
 ### Scratch space
 
-A broad run writes tens of GB of temporary data. A temporary filesystem that
-fills part-way through does not produce a test failure: the run dies with an
-internal error and every later command on the host fails for reasons unrelated
-to the code, which makes real failures indistinguishable from environment noise.
+A broad run writes tens of GB of temporary data, though a passing test gives
+its directory back when it ends, so only a few hundred MB are held at once
+unless many tests fail. A temporary filesystem that fills part-way through does
+not produce a test failure: the run dies with an internal error and every later
+command on the host fails for reasons unrelated to the code, which makes real
+failures indistinguishable from environment noise.
 
 Point `TMPDIR` at a filesystem with room before a broad run. `tests/conftest.py`
 refuses one that cannot fit and names the fix; `EMS_ALLOW_SMALL_SCRATCH=1`
