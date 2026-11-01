@@ -1415,10 +1415,28 @@ them. The EMS sees the broker as an ordinary local MQTT profile.
 | File | Owner | Content |
 | --- | --- | --- |
 | `config/mqtt/broker.json` | Admin | `enabled` (default `false`; a missing file is off, an unreadable one unknown), `port`, `anonymous`, `accounts[]` (`name`, `credentials_ref`, `topic_prefix`, `bridge`, `zendure`), `grid_meter_account` |
-| `config/mqtt/mappings.json` | Admin (validated by `mqtt_mapping/config.py`) | `schema_version: 1`, optional `publish_interval_seconds` (5–30, default 15), `devices[]` with `id`, `label`, `enabled`, `broker_ref` and `values` keyed by the catalog keys |
+| `config/mqtt/mappings.json` | Admin (validated by `mqtt_mapping/config.py`) | `schema_version: 1`, optional `publish_interval_seconds` (5–30, default 15), `devices[]` with `id`, `label`, `enabled`, `broker_ref` and `values` keyed by the catalog keys; optional `brokers` (see below) |
 | `config/secrets/` | Admin credential store | account passwords, encrypted; config backups carry them with their key |
 | `<install>/mqtt/` | rendered by the Admin | `compose.yml` (project `ems-mqtt`), `broker/` (`mosquitto.conf`, `acl`, `passwd`; mode 0700, the files 0600), `mapping/mapping-credentials.json` (0600; only the brokers the active mappings read), `data/` |
 | `data/mqtt-mapping/status.json` | the mapping service | non-authoritative status per device and source; the only directory the mapping container may write |
+
+A mapping's `broker_ref` names the built-in broker (`ems-mqtt`), a Local MQTT
+profile of `config.json`, or a broker `mappings.json` remembers under
+`brokers`: `{"<ref>": {host, port, tls, tls_insecure, credentials_ref}}`, never a
+secret. The Admin writes that section on every save: it holds exactly the
+brokers a mapping reads that are neither built in nor a profile, named
+`broker-<host>-<port>`. Their `credentials_ref` names an account of the
+discovery credential pool (`mqtt-discovery-<ref>.json`), the same pool Find
+devices tries, so adding the published device through discovery gives EMS a
+profile of its own by the usual staging. The broker list behind the mapping
+(`GET /api/discovery/mqtt-mapping/brokers`; `POST …/brokers/search`, `check`,
+`account`, `manual`) checks a broker with one MQTT CONNECT per account: its
+own account first, then anonymously, then each pool account, since
+discovery's listening cannot tell a refused account from a quiet broker. A TLS
+broker whose certificate does not verify is reported as untrusted, never
+accepted unchecked unless the operator says so. A check or a new account on a
+remembered broker rewrites its `credentials_ref` and renders the mapping's
+credentials again.
 
 A mapping source is `{topic, format: number|json, path, factor, invert,
 negative: keep|zero, max_age_seconds: 10–900}`. A value is the sum of its

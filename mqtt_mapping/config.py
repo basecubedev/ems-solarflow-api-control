@@ -10,6 +10,7 @@ nothing else: a mapping adds no topic and no key to the EMS.
 import json
 import math
 import os
+import re
 from dataclasses import dataclass
 
 from ems.file_io import file_signature
@@ -39,6 +40,7 @@ DEFAULT_MAX_AGE_SECONDS = 60
 MIN_PUBLISH_INTERVAL_SECONDS = 5
 MAX_PUBLISH_INTERVAL_SECONDS = 30
 DEFAULT_PUBLISH_INTERVAL_SECONDS = 15
+SAVED_BROKER_REF = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 
 ISSUE_CODES = (
     "mqtt_mapping_document_invalid",
@@ -473,6 +475,53 @@ def load_mappings_file(path, *, broker_refs=None):
     except ValueError:
         return None, [_issue("mqtt_mapping_document_invalid", "", "The file is no valid JSON.")]
     return parse_mappings(document, broker_refs=broker_refs)
+
+
+def saved_brokers(document) -> dict[str, dict]:
+    """The brokers the Admin remembers under ``brokers``: endpoint and ``credentials_ref``, never a secret.
+
+    Kept for each broker a mapping reads that the EMS has no profile for. The
+    Admin writes the section and renders the service's credentials from it;
+    the service itself never reads it. An entry out of shape is left out.
+    """
+
+    raw = document.get("brokers") if isinstance(document, dict) else None
+    saved = {}
+    for ref, entry in (raw.items() if isinstance(raw, dict) else ()):
+        if not isinstance(ref, str) or SAVED_BROKER_REF.fullmatch(ref) is None or not isinstance(entry, dict):
+            continue
+        host, port = entry.get("host"), entry.get("port")
+        credentials_ref = entry.get("credentials_ref")
+        if (
+            not isinstance(host, str)
+            or not 0 < len(host) <= 253
+            or any(char.isspace() or char in "/#+" or ord(char) < 32 for char in host)
+            or not _is_int(port)
+            or not 1 <= port <= 65535
+            or not isinstance(entry.get("tls", False), bool)
+            or not isinstance(entry.get("tls_insecure", False), bool)
+            or not (credentials_ref is None or isinstance(credentials_ref, str) and SAVED_BROKER_REF.fullmatch(credentials_ref))
+        ):
+            continue
+        saved[ref] = {
+            "host": host,
+            "port": port,
+            "tls": entry.get("tls", False),
+            "tls_insecure": entry.get("tls_insecure", False),
+            "credentials_ref": credentials_ref,
+        }
+    return saved
+
+
+def read_mappings_document(path):
+    """The JSON object in the file, ``None`` without one or for one that cannot be read."""
+
+    try:
+        with open(path, encoding="utf-8") as handle:
+            document = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    return document if isinstance(document, dict) else None
 
 
 def mappings_file_signature(path):

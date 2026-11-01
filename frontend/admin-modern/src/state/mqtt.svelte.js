@@ -5,6 +5,7 @@ import { adminGet, adminSend } from "./auth.svelte.js";
 const BROKER = "/api/discovery/mqtt-broker";
 const MAPPING = "/api/discovery/mqtt-mapping";
 const TOPICS = "/api/discovery/mqtt-topics/sessions";
+const BROKERS = `${MAPPING}/brokers`;
 
 /**
  * The built-in broker, the mapping file and one live-topic session. The
@@ -14,6 +15,7 @@ const TOPICS = "/api/discovery/mqtt-topics/sessions";
 class Mqtt {
   broker = $state.raw(null);
   mapping = $state.raw(null);
+  brokers = $state.raw(null);
   topics = $state.raw(null);
   session = $state("");
   busy = $state("");
@@ -70,13 +72,27 @@ export async function loadMapping() {
   }
 }
 
-export const enableBroker = () => run("enable", () => send(`${BROKER}/enable`, { confirm: true })).then(after(loadBroker));
-export const stopBroker = () => run("stop", () => send(`${BROKER}/stop`, { confirm: true })).then(after(loadBroker));
+/** The brokers a mapping may read: built in, the EMS's profiles, remembered ones and those a search found. */
+export async function loadBrokers() {
+  try {
+    mqtt.brokers = await adminGet(BROKERS);
+  } catch (error) {
+    mqtt.error = { name: "brokers", error };
+  }
+}
+
+export const searchBrokers = () => run("search", () => send(`${BROKERS}/search`, {})).then(after(loadBrokers));
+export const checkBroker = (ref) => run("check", () => send(`${BROKERS}/check`, { ref })).then(after(loadBrokers));
+export const useBrokerAccount = (ref, username, password) => run("account", () => send(`${BROKERS}/account`, { ref, username, password })).then(after(loadBrokers));
+export const addBroker = (form) => run("manual", () => send(`${BROKERS}/manual`, form)).then(after(loadBrokers));
+
+export const enableBroker = () => run("enable", () => send(`${BROKER}/enable`, { confirm: true })).then(after(loadBroker)).then(after(loadBrokers));
+export const stopBroker = () => run("stop", () => send(`${BROKER}/stop`, { confirm: true })).then(after(loadBroker)).then(after(loadBrokers));
 export const saveBroker = (changes) => run("settings", () => send(`${BROKER}/settings`, changes)).then(after(loadBroker));
 export const setPassword = (name, password) => run("password", () => send(`${BROKER}/password`, password ? { name, password } : { name })).then(after(loadBroker));
 export const revealPassword = (name) => run("reveal", () => send(`${BROKER}/reveal`, { name }));
 export const previewMapping = (document) => run("preview", () => send(`${MAPPING}/preview`, { document }));
-export const applyMapping = (document) => run("apply", () => send(`${MAPPING}/apply`, { document, confirm: true })).then(after(loadMapping));
+export const applyMapping = (document) => run("apply", () => send(`${MAPPING}/apply`, { document, confirm: true })).then(after(loadMapping)).then(after(loadBrokers));
 export const previewValue = (device) => run("value", () => send(`${MAPPING}/value-preview`, mqtt.session ? { device, session: mqtt.session } : { device }));
 
 function after(reload) {

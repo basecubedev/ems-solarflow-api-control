@@ -6,6 +6,7 @@ is a fake and the live-topic watcher is fed by the test, so nothing leaves the
 process.
 """
 
+import functools
 import json
 import threading
 
@@ -15,6 +16,7 @@ from admin import server as admin_server
 from admin.credential_store import CredentialStore
 from admin.mqtt_broker import BuiltinBroker
 from admin.mqtt_live_topics import LiveTopicSessions
+from admin.mqtt_mapping_brokers import MappingBrokers
 from admin.server import ScanRegistry, create_server
 from ems import paths
 from tests.admin_auth_helpers import authenticate, raw_request, request
@@ -25,6 +27,16 @@ pytestmark = [
     pytest.mark.mqtt,
     pytest.mark.integration,
 ]
+
+
+def fake_login(endpoint):
+    """192.0.2.50 lets anyone in; 192.0.2.51 only ``iob`` with ``iob-password``; nothing else answers."""
+
+    if endpoint["host"] == "192.0.2.50":
+        return "accepted"
+    if endpoint["host"] == "192.0.2.51":
+        return "accepted" if (endpoint.get("username"), endpoint.get("password")) == ("iob", "iob-password") else "refused"
+    return "unreachable"
 
 
 class FakeWatcher:
@@ -66,6 +78,9 @@ def server(tmp_path, monkeypatch, isolated_install_root):
 
     monkeypatch.setattr(admin_server, "builtin_broker_for_install", broker_for)
     monkeypatch.setattr(admin_server, "host_address", lambda: "192.0.2.10")
+    monkeypatch.setattr(
+        admin_server, "MappingBrokers", functools.partial(MappingBrokers, login=fake_login, networks=lambda: {"networks": []})
+    )
     FakeWatcher.instances = []
     srv = create_server("127.0.0.1", 0, registry=ScanRegistry(scan_runner=lambda *a, **k: ([], [])))
     srv.mqtt_live_topics = LiveTopicSessions(watcher_factory=FakeWatcher, spawn=lambda target: None)
@@ -228,3 +243,51 @@ def test_a_mapping_of_many_devices_fits_the_request(server):
 
     assert status == 200 and payload["ok"], payload
     assert json.loads(open(f"{root}/config/mqtt/mappings.json", encoding="utf-8").read()) == document
+
+
+def test_the_broker_list_and_its_actions_need_a_session_and_writes_the_csrf_token(server):
+    base, _compose, _root = server
+
+    assert raw_request(f"{base}/api/discovery/mqtt-mapping/brokers")[0] == 401
+    for action in ("search", "check", "account", "manual"):
+        status = raw_request(f"{base}/api/discovery/mqtt-mapping/brokers/{action}", method="POST", body={})[0]
+        assert status in (401, 403), action
+
+
+def test_a_broker_added_by_hand_feeds_the_live_topics_and_saving_a_mapping_remembers_it(server):
+    base, _compose, root = server
+
+    status, _h, added = _post(base, "/api/discovery/mqtt-mapping/brokers/manual", {"host": "192.0.2.50", "port": 1883})
+    listed = request(f"{base}/api/discovery/mqtt-mapping/brokers")[2]["brokers"]
+    ref = added["ref"]
+    topics = _post(base, "/api/discovery/mqtt-topics/sessions", {"broker_ref": ref})
+    document = {
+        "schema_version": 1,
+        "devices": [{"id": "balkon", "broker_ref": ref, "values": {"inverterPower": {"sources": [{"topic": "plug/power", "format": "number"}]}}}],
+    }
+    applied = _post(base, "/api/discovery/mqtt-mapping/apply", {"document": document, "confirm": True})
+
+    assert status == 200 and added == {"ok": True, "ref": "broker-192-0-2-50-1883"}
+    assert [(item["kind"], item["access"], item["usable"]) for item in listed if item["ref"] == ref] == [("found", "anonymous", True)]
+    assert topics[0] == 200 and FakeWatcher.instances[-1].endpoint["host"] == "192.0.2.50"
+    assert applied[0] == 200 and applied[2]["ok"]
+    written = json.loads(open(f"{root}/config/mqtt/mappings.json", encoding="utf-8").read())
+    assert written["brokers"][ref]["host"] == "192.0.2.50"
+
+
+def test_a_found_broker_that_needs_an_account_takes_one_and_reports_a_refusal(server):
+    base, _compose, _root = server
+
+    added = _post(base, "/api/discovery/mqtt-mapping/brokers/manual", {"host": "192.0.2.51", "port": 1883})[2]
+    ref = added["ref"]
+    before = [item for item in request(f"{base}/api/discovery/mqtt-mapping/brokers")[2]["brokers"] if item["ref"] == ref]
+    refused = _post(base, "/api/discovery/mqtt-mapping/brokers/account", {"ref": ref, "username": "iob", "password": "wrong"})
+    accepted = _post(base, "/api/discovery/mqtt-mapping/brokers/account", {"ref": ref, "username": "iob", "password": "iob-password"})
+    after = [item for item in request(f"{base}/api/discovery/mqtt-mapping/brokers")[2]["brokers"] if item["ref"] == ref]
+    topics = _post(base, "/api/discovery/mqtt-topics/sessions", {"broker_ref": ref})
+
+    assert [item["access"] for item in before] == ["needs_account"]
+    assert refused[0] == 422 and refused[2]["error"] == "mqtt_mapping_broker_refused"
+    assert accepted[0] == 200 and [item["access"] for item in after] == ["account"]
+    assert topics[0] == 200 and FakeWatcher.instances[-1].endpoint["username"] == "iob"
+    assert "iob-password" not in json.dumps(after)

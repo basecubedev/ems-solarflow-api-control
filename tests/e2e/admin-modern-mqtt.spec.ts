@@ -155,4 +155,36 @@ test.describe("Modern Admin: built-in MQTT broker and mapping", () => {
     await expect(id).toHaveValue("balkon");
     await expect(id).toHaveAttribute("readonly", "");
   });
+
+  test("with the built-in broker off, a broker found on the network is offered and takes its account", async ({ page, seedAdminScenario }) => {
+    const builtin = { ref: "ems-mqtt", kind: "builtin", host: "192.0.2.40", port: 1883, state: "off", usable: false };
+    const found = { ref: "broker-192-0-2-7-1883", kind: "found", host: "192.0.2.7", port: 1883, tls: false, origin: "discovery", access: "needs_account", usable: false };
+    let accounts: { ref: string; username: string; password: string }[] = [];
+    await page.route("**/api/discovery/mqtt-mapping/brokers", (route) =>
+      route.fulfill({ json: { searching: false, brokers: [builtin, accounts.length ? { ...found, access: "account", usable: true } : found] } }),
+    );
+    await page.route("**/api/discovery/mqtt-mapping/brokers/account", async (route) => {
+      accounts.push(route.request().postDataJSON());
+      await route.fulfill({ json: { ok: true, ref: found.ref } });
+    });
+    await seededAt(page, seedAdminScenario, "#/settings/devices");
+    const chooser = page.getByTestId("mqtt-broker-chooser");
+
+    await expect(chooser.getByTestId("mqtt-chooser-none")).toBeVisible();
+    await expect(chooser.getByTestId("mqtt-chooser-enable")).toBeVisible();
+    await expect(page.getByTestId("mqtt-topics-start")).toBeDisabled();
+    const row = chooser.locator('[data-testid="mqtt-broker-choice"][data-ref="broker-192-0-2-7-1883"]');
+    await expect(row).toContainText("Needs an account");
+
+    await row.getByTestId("mqtt-chooser-account").click();
+    await row.getByTestId("mqtt-chooser-user").fill("iob");
+    await row.getByTestId("mqtt-chooser-password").fill("iob-password");
+    await row.getByTestId("mqtt-chooser-account-use").click();
+
+    await expect(row).toContainText("Account works");
+    await expect(row.locator("input[type=radio]")).toBeChecked();
+    await expect(chooser.getByTestId("mqtt-chooser-none")).toHaveCount(0);
+    await expect(page.getByTestId("mqtt-topics-start")).toBeEnabled();
+    expect(accounts).toEqual([{ ref: "broker-192-0-2-7-1883", username: "iob", password: "iob-password" }]);
+  });
 });

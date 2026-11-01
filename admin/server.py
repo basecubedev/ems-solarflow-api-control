@@ -156,10 +156,11 @@ from admin.mqtt_broker import (
     builtin_broker_for_install,
     converge_after_restore,
     host_address,
-    local_profile_endpoints,
+    mapping_endpoints,
 )
 from admin.mqtt_discovery import MqttBrokerDiscovery
 from admin.mqtt_live_topics import LiveTopicSessions
+from admin.mqtt_mapping_brokers import MappingBrokers, seed_saved_brokers
 from admin.mqtt_mapping_editor import MappingEditor
 from ems.zendure_mqtt.builtin_broker import BUILTIN_PROFILE_REF
 from admin.mqtt_topic_discovery import default_topic_discoverer
@@ -1437,6 +1438,10 @@ MQTT_BROKER_POST_PATHS = frozenset(
 MQTT_MAPPING_POST_PATHS = frozenset(
     f"/api/discovery/mqtt-mapping/{action}" for action in ("preview", "apply", "value-preview")
 )
+MQTT_MAPPING_BROKERS_PATH = "/api/discovery/mqtt-mapping/brokers"
+MQTT_MAPPING_BROKER_POST_PATHS = frozenset(
+    f"{MQTT_MAPPING_BROKERS_PATH}/{action}" for action in ("search", "check", "account", "manual")
+)
 
 
 def _builtin_discovery_refs(credential_store):
@@ -1496,6 +1501,15 @@ class AdminServer(ThreadingHTTPServer):
         self.static_assets = runtime.static_assets
         self.mqtt_live_topics = getattr(runtime, "mqtt_live_topics", None) or LiveTopicSessions()
         self.mqtt_compose = getattr(runtime, "mqtt_compose", None)
+        self.mqtt_mapping_brokers = getattr(runtime, "mqtt_mapping_brokers", None) or MappingBrokers(
+            discovery=self.mqtt_discovery,
+            credential_store=self.credential_store,
+            preparation=self.discovery_preparation,
+        )
+        try:
+            seed_saved_brokers(self.mqtt_discovery, builtin_broker_for_install(self.credential_store).config_dir)
+        except Exception:
+            pass
         if getattr(self.backup_service, "after_config_restore", False) is None:
             self.backup_service.after_config_restore = self.converge_builtin_broker
         # Present only for the gated browser-test runtime; ``None`` (and its route
@@ -1509,9 +1523,10 @@ class AdminServer(ThreadingHTTPServer):
     def converge_builtin_broker(self):
         """The restore step for the built-in broker: its restored settings and passwords applied."""
 
-        return converge_after_restore(
-            builtin_broker_for_install(self.credential_store, compose=self.mqtt_compose)
-        )
+        broker = builtin_broker_for_install(self.credential_store, compose=self.mqtt_compose)
+        outcome = converge_after_restore(broker)
+        seed_saved_brokers(self.mqtt_discovery, broker.config_dir)
+        return outcome
 
 
 def _authority_hostname(authority):
@@ -1694,7 +1709,13 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._handle_mqtt_broker_view()
             return
         if path == "/api/discovery/mqtt-mapping":
-            self._send_json(MappingEditor(self._builtin_broker()).view())
+            self._send_json(self._mapping_editor().view())
+            return
+        if path == MQTT_MAPPING_BROKERS_PATH:
+            self._send_json(
+                self.server.mqtt_mapping_brokers.choices(self._builtin_broker(), address=host_address()),
+                headers={"Cache-Control": "no-store"},
+            )
             return
         if path.startswith("/api/discovery/mqtt-topics/sessions/"):
             self._handle_mqtt_topics_poll(path[len("/api/discovery/mqtt-topics/sessions/"):])
@@ -1981,6 +2002,9 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path in MQTT_MAPPING_POST_PATHS:
             self._handle_mqtt_mapping_post(path)
+            return
+        if path in MQTT_MAPPING_BROKER_POST_PATHS:
+            self._handle_mqtt_mapping_broker_post(path)
             return
         if path == "/api/discovery/mqtt-topics/sessions":
             self._handle_mqtt_topics_start()
@@ -3761,7 +3785,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         body = self._mqtt_body(allowed, MAX_MQTT_MAPPING_BODY_BYTES)
         if body is None:
             return
-        editor = MappingEditor(self._builtin_broker())
+        editor = self._mapping_editor()
         if action == "preview":
             self._send_json(editor.preview(body.get("document")))
             return
@@ -3770,6 +3794,8 @@ class AdminHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": False, "error": "explicit confirmation is required"}, status=400)
                 return
             result = editor.apply(body.get("document"))
+            if result.get("ok"):
+                seed_saved_brokers(self.server.mqtt_discovery, editor.broker.config_dir)
             self._send_json(result, status=200 if result.get("ok") else 422)
             return
         payloads = {}
@@ -3782,6 +3808,43 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         payloads.update(extra)
         self._send_json(editor.value_preview(body.get("device"), payloads))
+
+    def _mapping_editor(self):
+        return MappingEditor(self._builtin_broker(), found=self.server.mqtt_mapping_brokers.usable)
+
+    def _handle_mqtt_mapping_broker_post(self, path):
+        action = path.rsplit("/", 1)[-1]
+        allowed = {
+            "search": set(),
+            "check": {"ref"},
+            "account": {"ref", "username", "password"},
+            "manual": {"host", "port", "tls", "tls_insecure", "username", "password"},
+        }[action]
+        body = self._mqtt_body(allowed)
+        if body is None:
+            return
+        brokers = self.server.mqtt_mapping_brokers
+        broker = self._builtin_broker()
+        try:
+            if action == "search":
+                result = brokers.search(broker, address=host_address())
+            elif action == "check":
+                result = brokers.check(body.get("ref"), broker)
+            elif action == "account":
+                result = brokers.use_account(body.get("ref"), body.get("username"), body.get("password"), broker)
+            else:
+                result = brokers.add_manual(
+                    body.get("host"),
+                    body.get("port"),
+                    tls=body.get("tls", False),
+                    tls_insecure=body.get("tls_insecure", False),
+                    username=body.get("username") or None,
+                    password=body.get("password"),
+                )
+        except CredentialStoreError:
+            result = {"ok": False, "error": "mqtt_mapping_broker_account_invalid"}
+        status = 200 if result.get("ok") else 409 if result.get("error") == "mqtt_mapping_broker_search_busy" else 422
+        self._send_json(result, status=status, headers={"Cache-Control": "no-store"})
 
     def _handle_mqtt_topics_start(self):
         body = self._mqtt_body({"broker_ref"})
@@ -3797,7 +3860,8 @@ class AdminHandler(BaseHTTPRequestHandler):
                 return
             endpoint = {"host": "127.0.0.1", "port": settings.port, "username": "ems-admin", "password": password}
         else:
-            endpoint = local_profile_endpoints(broker._config_loader(), broker.store).get(ref)
+            endpoint = mapping_endpoints(broker._config_loader(), broker.config_dir, broker.store).get(ref)
+            endpoint = endpoint or self.server.mqtt_mapping_brokers.endpoint(ref)
             if endpoint is None:
                 self._send_json({"ok": False, "error": "unknown local broker"}, status=404)
                 return

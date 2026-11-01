@@ -241,3 +241,25 @@ def test_a_new_account_works_after_a_reload_without_a_restart(broker):
         assert watcher.client.is_connected()
     finally:
         watcher.stop()
+
+
+def test_a_login_check_tells_an_accepted_account_from_a_refused_one_and_from_silence(broker):
+    from admin.mqtt_mapping_brokers import paho_login
+
+    admin, port, _name = broker
+    endpoint = {"host": "127.0.0.1", "port": port}
+
+    assert paho_login({**endpoint, "username": "devices", "password": admin.password("devices")}) == "accepted"
+    assert paho_login({**endpoint, "username": "devices", "password": "not-the-password"}) == "refused"
+    assert paho_login({**endpoint, "port": free_port()}) == "unreachable"
+
+
+def test_a_login_check_tells_a_certificate_it_cannot_verify_from_one_it_was_told_to_accept(tmp_path):
+    from admin.mqtt_mapping_brokers import paho_login
+    from tests.helpers.mosquitto import mosquitto_tls_broker
+
+    with mosquitto_tls_broker(tmp_path) as (host, port, _ca_path):
+        endpoint = {"host": host, "port": port, "tls": True}
+
+        assert paho_login(endpoint) == "untrusted"
+        assert paho_login({**endpoint, "tls_insecure": True}) == "accepted"

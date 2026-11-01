@@ -51,7 +51,7 @@ test("a Shelly plug in an unknown format is mapped, added and read by the EMS", 
 
     // 1. Recognise the topics.
     const mapping = page.getByTestId("mqtt-mapping");
-    await mapping.getByTestId("mqtt-mapping-broker").selectOption(world.broker_ref);
+    await mapping.locator(`[data-testid="mqtt-broker-choice"][data-ref="${world.broker_ref}"] input[type=radio]`).check();
     await mapping.getByTestId("mqtt-topics-start").click();
     const plug = mapping.locator(`li[data-label="shelly_gen2"][data-key="${shellyId}"]`);
     await expect(plug).toContainText("Shelly (Gen2+)");

@@ -3,8 +3,9 @@
   import Status from "../../../shared/ui/Status.svelte";
   import ConfirmDialog from "../../../shared/ui/ConfirmDialog.svelte";
   import MqttDeviceWizard from "./MqttDeviceWizard.svelte";
+  import MqttBrokerChooser from "./MqttBrokerChooser.svelte";
   import { t } from "../i18n/i18n.svelte.js";
-  import { BUILTIN_BROKER, LIVE_LABELS, MAPPING_ISSUES, SILENCE_REASONS, TARGETS, VALUE_REASONS, newDevice, newSource, proposedId, targetSources } from "../lib/mqtt.js";
+  import { BUILTIN_BROKER, LIVE_LABELS, MAPPING_ISSUES, SILENCE_REASONS, TARGETS, VALUE_REASONS, brokerAddress, newDevice, newSource, proposedId, targetSources } from "../lib/mqtt.js";
   import { mqtt, loadMapping, startTopics, stopTopics, previewMapping, applyMapping, previewValue, watchTopics } from "../state/mqtt.svelte.js";
 
   /**
@@ -32,6 +33,8 @@
   const statusById = $derived(Object.fromEntries((view?.status?.devices || []).map((item) => [item.id, item])));
   const groups = $derived(mqtt.topics?.groups || []);
   const busy = $derived(Boolean(mqtt.busy));
+  const choices = $derived(Object.fromEntries((mqtt.brokers?.brokers || []).map((item) => [item.ref, item])));
+  const readable = $derived(Boolean(choices[brokerRef]?.usable));
 
   $effect(() => {
     loadMapping();
@@ -82,7 +85,13 @@
   }
 
   function brokerLabel(ref) {
-    return ref === BUILTIN_BROKER ? t("mqtt.mapping.builtin") : ref;
+    if (ref === BUILTIN_BROKER) return t("mqtt.mapping.builtin");
+    return brokerAddress(choices[ref]) || ref;
+  }
+
+  function remembers(document) {
+    const refs = new Set((document?.devices || []).map((device) => device.broker_ref));
+    return [...refs].filter((ref) => choices[ref]?.kind === "found").map((ref) => brokerLabel(ref));
   }
 
   function edit(index) {
@@ -189,17 +198,12 @@
 
 <div class="mapping" data-testid="mqtt-mapping">
   <p class="muted small">{t("mqtt.mapping.lead")}</p>
+  <MqttBrokerChooser bind:value={brokerRef} locked={Boolean(mqtt.session)} />
   <div class="row-wrap">
-    <label class="field">
-      <span class="small muted">{t("mqtt.mapping.broker")}</span>
-      <select class="input" bind:value={brokerRef} disabled={Boolean(mqtt.session)} data-testid="mqtt-mapping-broker">
-        {#each view?.broker_refs || [BUILTIN_BROKER] as ref (ref)}<option value={ref}>{brokerLabel(ref)}</option>{/each}
-      </select>
-    </label>
     {#if mqtt.session}
       <button class="btn secondary small" type="button" onclick={stopTopics} data-testid="mqtt-topics-stop"><Icon name="square" size="sm" />{t("mqtt.topics.stop")}</button>
     {:else}
-      <button class="btn small" type="button" onclick={() => startTopics(brokerRef)} disabled={busy} data-testid="mqtt-topics-start"><Icon name="radio-tower" size="sm" />{t("mqtt.topics.start")}</button>
+      <button class="btn small" type="button" onclick={() => startTopics(brokerRef)} disabled={busy || !readable} data-testid="mqtt-topics-start"><Icon name="radio-tower" size="sm" />{t("mqtt.topics.start")}</button>
     {/if}
     <button class="btn secondary small" type="button" onclick={() => startDevice(null)} disabled={busy} data-testid="mqtt-new-device"><Icon name="plus" size="sm" />{t("mqtt.mapping.newDevice")}</button>
   </div>
@@ -356,7 +360,7 @@
 <ConfirmDialog
   open={Boolean(confirming)}
   title={confirming?.removing ? t("mqtt.mapping.removeTitle") : t("mqtt.mapping.saveTitle")}
-  lines={confirming?.removing ? [t("mqtt.mapping.removeLine", { id: confirming.id })] : [t("mqtt.mapping.saveLine"), t("mqtt.mapping.saveNoRestart")]}
+  lines={confirming?.removing ? [t("mqtt.mapping.removeLine", { id: confirming.id })] : [t("mqtt.mapping.saveLine"), t("mqtt.mapping.saveNoRestart"), ...remembers(confirming?.document).map((broker) => t("mqtt.mapping.saveRemembers", { broker }))]}
   confirmLabel={confirming?.removing ? t("devices.remove") : t("mqtt.mapping.save")}
   danger={Boolean(confirming?.removing)}
   onconfirm={apply}

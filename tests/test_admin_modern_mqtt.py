@@ -13,6 +13,8 @@ import pytest
 
 from admin.mqtt_broker import ISSUE_CODES as BROKER_CODES
 from admin.mqtt_live_topics import LABELS
+from admin.mqtt_mapping_brokers import ACCESS_STATES
+from admin.mqtt_mapping_brokers import ERROR_CODES as BROKER_CHOICE_CODES
 from ems.zendure_mqtt.builtin_broker import BUILTIN_PROFILE_REF
 from ems.zendure_mqtt.payload_values import EXTRACT_REASONS
 from mqtt_mapping.config import ISSUE_CODES as MAPPING_CODES
@@ -45,6 +47,8 @@ def _list(name):
         ("SILENCE_REASONS", STATUS_REASONS),
         ("VALUE_REASONS", EXTRACT_REASONS),
         ("TARGETS", TARGETS),
+        ("BROKER_ACCESS", ACCESS_STATES),
+        ("BROKER_CHOICE_ERRORS", BROKER_CHOICE_CODES),
     ],
 )
 def test_each_list_is_the_servers(name, server):

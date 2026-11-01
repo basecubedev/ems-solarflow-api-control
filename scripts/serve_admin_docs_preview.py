@@ -322,6 +322,7 @@ def build_routes():
     get_routes = {
         "/api/discovery/mqtt-broker": mqtt["broker"],
         "/api/discovery/mqtt-mapping": mqtt["mapping"],
+        "/api/discovery/mqtt-mapping/brokers": mqtt["brokers"],
         "/api/discovery/mqtt-topics/sessions/demo": mqtt["topics"],
         "/api/admin/auth/status": common["auth_status"],
         "/api/admin/install-state": common["install_state"],

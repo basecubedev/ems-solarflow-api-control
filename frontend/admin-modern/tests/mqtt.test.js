@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { UNITS, deviceFromAnswers, freshGroup, groupValues, idFromName, isChangeOnly, likelyValue, mappedProposal, maxAgeFor, signPreset, sourceFromValue, uniqueId, unitFactor, unitOf } from "../src/lib/mqtt.js";
+import { BUILTIN_BROKER, UNITS, brokerAddress, deviceFromAnswers, freshGroup, groupValues, idFromName, isChangeOnly, likelyValue, mappedProposal, maxAgeFor, signPreset, sourceFromValue, uniqueId, preferredBroker, unitFactor, unitOf } from "../src/lib/mqtt.js";
 
 test("each unit is the factor the catalog needs", () => {
   assert.deepEqual(UNITS, { W: 1, kW: 1000, fraction: 100, percent: 1 });
@@ -131,4 +131,19 @@ test("a group's values carry the topic, its rate and the label, and the likely p
   assert.deepEqual(likelyValue(values), { topic: "p/status/switch:0", path: "apower", value: -5, likely: "power", rate: 2, interval: null, label: "shelly_gen2" });
   assert.equal(likelyValue(values, "soc"), null);
   assert.deepEqual(sourceFromValue(likelyValue(values), "inverterPower").max_age_seconds, 600);
+});
+
+test("the broker a mapping starts on is the chosen one while it can be read, else the running built-in one, else any readable one", () => {
+  const builtinOff = { ref: BUILTIN_BROKER, kind: "builtin", usable: false };
+  const builtinOn = { ref: BUILTIN_BROKER, kind: "builtin", usable: true };
+  const found = { ref: "broker-192-168-1-7-1883", kind: "found", host: "192.168.1.7", port: 1883, usable: true };
+  const locked = { ref: "broker-192-168-1-9-1883", kind: "found", usable: false };
+
+  assert.equal(preferredBroker([builtinOn, found], found.ref), found.ref);
+  assert.equal(preferredBroker([builtinOn, found], ""), BUILTIN_BROKER);
+  assert.equal(preferredBroker([builtinOff, locked, found], ""), found.ref);
+  assert.equal(preferredBroker([builtinOff, locked], locked.ref), BUILTIN_BROKER);
+  assert.equal(preferredBroker([], ""), BUILTIN_BROKER);
+  assert.equal(brokerAddress(found), "192.168.1.7:1883");
+  assert.equal(brokerAddress({ ref: BUILTIN_BROKER, host: null }), "");
 });

@@ -9,9 +9,9 @@ service reloads it by itself and the EMS does not restart.
 
 import json
 
-from admin.mqtt_broker import BuiltinBroker
+from admin.mqtt_broker import BuiltinBroker, local_profile_endpoints
 from ems.file_io import atomic_write_bytes
-from ems.zendure_mqtt.builtin_broker import mapping_status_path, mappings_path
+from ems.zendure_mqtt.builtin_broker import BUILTIN_PROFILE_REF, mapping_status_path, mappings_path
 from mqtt_mapping.config import (
     DEFAULT_PUBLISH_INTERVAL_SECONDS,
     MAX_DEVICES,
@@ -20,6 +20,7 @@ from mqtt_mapping.config import (
     empty_document,
     load_mappings_file,
     parse_mappings,
+    saved_brokers,
 )
 from mqtt_mapping.mapping import preview_device
 from mqtt_mapping.status import read_status
@@ -41,8 +42,16 @@ def _evaluation_dict(evaluation):
 
 
 class MappingEditor:
-    def __init__(self, broker: BuiltinBroker):
+    """The mapping file as the Admin edits it.
+
+    ``found`` returns the brokers a search found and a mapping may read now
+    (``ref -> entry``). A mapping on one of them is valid, and saving it
+    remembers the broker under ``brokers``, so the mapping keeps reading it.
+    """
+
+    def __init__(self, broker: BuiltinBroker, found=None):
         self.broker = broker
+        self._found = found or dict
 
     @property
     def path(self):
@@ -57,8 +66,11 @@ class MappingEditor:
         except (OSError, ValueError):
             return None
 
+    def _refs(self):
+        return self.broker.mapping_broker_refs() | set(self._found())
+
     def view(self) -> dict:
-        refs = self.broker.mapping_broker_refs()
+        refs = self._refs()
         _mappings, issues = load_mappings_file(self.path, broker_refs=refs)
         return {
             "document": self._document(),
@@ -74,13 +86,32 @@ class MappingEditor:
         }
 
     def preview(self, document) -> dict:
-        _mappings, issues = parse_mappings(document, broker_refs=self.broker.mapping_broker_refs())
+        _mappings, issues = parse_mappings(document, broker_refs=self._refs())
         return {"ok": not issues, "issues": issues}
 
+    def _remembered(self, mappings) -> dict:
+        """``brokers`` for the file: each broker a mapping reads that is neither built in nor an EMS profile."""
+
+        saved = saved_brokers(self._document())
+        found = self._found()
+        profiles = set(local_profile_endpoints(self.broker._config_loader(), self.broker.store))
+        remembered = {}
+        for ref in sorted({device.broker_ref for device in mappings.devices}):
+            if ref == BUILTIN_PROFILE_REF or ref in profiles and ref not in saved:
+                continue
+            entry = saved.get(ref) or found.get(ref)
+            if entry is not None:
+                remembered[ref] = entry
+        return remembered
+
     def apply(self, document) -> dict:
-        _mappings, issues = parse_mappings(document, broker_refs=self.broker.mapping_broker_refs())
+        mappings, issues = parse_mappings(document, broker_refs=self._refs())
         if issues:
             return {"ok": False, "status": "invalid", "issues": issues}
+        document = {key: value for key, value in document.items() if key != "brokers"}
+        remembered = self._remembered(mappings)
+        if remembered:
+            document["brokers"] = remembered
         raw = json.dumps(document, indent=2, ensure_ascii=False).encode("utf-8") + b"\n"
         atomic_write_bytes(self.path, raw)
         container = self.broker.sync_mapping_container()
@@ -90,7 +121,7 @@ class MappingEditor:
         """What one draft device would publish from the given payloads (topic → text)."""
 
         document = {"schema_version": 1, "devices": [device]}
-        mappings, issues = parse_mappings(document, broker_refs=self.broker.mapping_broker_refs())
+        mappings, issues = parse_mappings(document, broker_refs=self._refs())
         if issues:
             return {"ok": False, "issues": issues}
         evaluation = preview_device(mappings.devices[0], payloads)

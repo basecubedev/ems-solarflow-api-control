@@ -66,6 +66,36 @@ export const TARGETS = Object.freeze(["inverterPower", "solarPower", "batteryPow
 
 export const BROKER_STATES = Object.freeze(["off", "running", "stopped", "unknown"]);
 
+/** How a mapping may read a broker of the chooser, and what a check of one can answer. */
+export const BROKER_ACCESS = Object.freeze(["anonymous", "account", "needs_account", "untrusted", "unreachable", "unchecked"]);
+
+export const BROKER_CHOICE_ERRORS = Object.freeze([
+  "mqtt_mapping_broker_unknown",
+  "mqtt_mapping_broker_refused",
+  "mqtt_mapping_broker_unreachable",
+  "mqtt_mapping_broker_endpoint_invalid",
+  "mqtt_mapping_broker_account_invalid",
+  "mqtt_mapping_broker_search_busy",
+]);
+
+/**
+ * The broker the live topics and a new mapping start on: the one chosen while
+ * it can still be read, else the running built-in broker, else the first
+ * other one that can be read, else the built-in broker, which says why not.
+ */
+export function preferredBroker(brokers, current = "") {
+  const list = brokers || [];
+  if (list.some((item) => item.ref === current && item.usable)) return current;
+  const usable = list.filter((item) => item.usable);
+  const pick = usable.find((item) => item.kind === "builtin") || usable[0] || list.find((item) => item.kind === "builtin");
+  return pick?.ref || BUILTIN_BROKER;
+}
+
+/** ``host:port``, or nothing for a broker the server could not place. */
+export function brokerAddress(item) {
+  return item?.host ? `${item.host}:${item.port}` : "";
+}
+
 /** off, running, stopped (switched on, container not running) or unknown, from the server's view. */
 export function brokerState(view) {
   if (!view || !view.settings) return "unknown";

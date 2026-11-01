@@ -402,6 +402,19 @@ const SHOTS = [
     },
   },
   {
+    file: "admin-mqtt-brokers.png",
+    hash: "#/settings/devices",
+    async prepare(page) {
+      await appReady(page);
+      const chooser = page.getByTestId("mqtt-broker-chooser");
+      await visible(chooser);
+      const row = chooser.locator('[data-testid="mqtt-broker-choice"][data-ref="broker-192-168-178-30-1883"]');
+      await row.getByTestId("mqtt-chooser-account").click();
+      await visible(row.getByTestId("mqtt-chooser-user"));
+      await scrollTo(page, page.locator("section.card").filter({ has: chooser }), 16);
+    },
+  },
+  {
     file: "admin-mqtt-mapping.png",
     hash: "#/settings/devices",
     async prepare(page) {
@@ -410,7 +423,7 @@ const SHOTS = [
       await visible(mapping);
       await mapping.getByTestId("mqtt-topics-start").click();
       await visible(page.getByTestId("mqtt-topic-groups"));
-      await scrollTo(page, page.locator("section.card").filter({ has: mapping }), 16);
+      await scrollTo(page, page.getByTestId("mqtt-topics-stop"), 16);
     },
   },
   {

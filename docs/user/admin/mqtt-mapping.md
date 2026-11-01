@@ -61,7 +61,7 @@ Console. The four steps, each with its section below:
 - Docker Hub reachable the first time you switch the broker on (22 MB).
 
 The mapping also works on a broker you already run (ioBroker, a Mosquitto of
-your own): choose that local MQTT profile instead of the built-in broker.
+your own), without the built-in one: see [Choose the broker](#choose-the-broker).
 
 ## Switch the broker on
 
@@ -127,6 +127,39 @@ With the broker running, **Connect a device** on its card guides you:
    publishes, it appears with **Set it up now**.
 
 ![Settings, Add-ons, Connect a device: the steps for a Shelly Gen2+, the address, port, user and password to copy, and the button that waits for the device](../../assets/screenshots/admin/admin-mqtt-connect.png)
+
+## Choose the broker
+
+Above the live topics, **Settings → Devices → MQTT mapping** (in Guided Setup,
+step 02) lists every broker a mapping can read:
+
+![Settings, Devices, MQTT mapping: the broker list with the built-in broker running, a broker found on the network that needs no account, and one that asks for its account, with user and password fields open](../../assets/screenshots/admin/admin-mqtt-brokers.png)
+
+- the **built-in broker**, with **Switch on** right there while it is off;
+- the brokers EMS already reads through a Local MQTT connection;
+- the brokers your mappings already read;
+- brokers **found on your network**: by Find devices, or by **Search your
+  network**, which asks every address of your network on ports 1883 and 8883
+  (up to a minute).
+
+Each found broker is checked with a real login and says what it needs: *No
+account needed*, *Account works* (a broker account you saved for the search
+fits), or *Needs an account*: **Enter its account**, give user and password
+and **Check and use**. *Certificate not trusted* is a TLS broker whose
+certificate this host does not trust: add it by hand and tick **Accept its
+certificate unchecked** if you know the broker. A broker the search does not
+reach, such as one in another network, is added with **Add a broker by hand**:
+address, port, optionally TLS, and its account if it has accounts.
+
+A broker your mappings read can be checked again with **Check**: when its
+account changed or got lost, it says *Needs an account* and takes a new one
+the same way.
+
+Choose a broker that can be read, then **Show live topics**. Saving the first
+mapping on a found broker remembers it, so the mapping keeps reading it after
+a restart; its account is kept with the search's broker accounts. Once the
+device publishes, **Add as device** gives EMS a connection of its own to that
+broker, the same way Find devices does for any device it finds there.
 
 ## Map it
 

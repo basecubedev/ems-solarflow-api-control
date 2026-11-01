@@ -41,7 +41,7 @@ from ems.zendure_mqtt.builtin_broker import (
     mapping_status_path,
     mappings_path,
 )
-from mqtt_mapping.config import load_mappings_file, mappings_file_signature
+from mqtt_mapping.config import load_mappings_file, mappings_file_signature, read_mappings_document, saved_brokers
 
 SETTINGS_SCHEMA_VERSION = 1
 MOSQUITTO_IMAGE = "eclipse-mosquitto:2.1.2-alpine"
@@ -554,6 +554,26 @@ def local_profile_endpoints(config, credential_store):
     return endpoints
 
 
+def saved_broker_endpoints(config_dir, credential_store):
+    """The brokers ``mappings.json`` remembers, each with the account its ``credentials_ref`` names in the discovery pool."""
+
+    endpoints = {}
+    for ref, entry in saved_brokers(read_mappings_document(mappings_path(config_dir))).items():
+        endpoint = {key: entry[key] for key in ("host", "port", "tls", "tls_insecure")}
+        if entry["credentials_ref"]:
+            secret = credential_store.load_mqtt_discovery_secret(entry["credentials_ref"])
+            if secret is not None and secret.username:
+                endpoint["username"], endpoint["password"] = secret.username, secret.password
+        endpoints[ref] = endpoint
+    return endpoints
+
+
+def mapping_endpoints(config, config_dir, credential_store):
+    """Every broker a mapping may read besides the built-in one: the EMS's profiles, then the ones mappings remember."""
+
+    return {**saved_broker_endpoints(config_dir, credential_store), **local_profile_endpoints(config, credential_store)}
+
+
 @dataclass
 class _Result:
     ok: bool
@@ -825,7 +845,8 @@ class BuiltinBroker:
 
         mappings = self.mappings()
         used = set(mappings.subscriptions()) if mappings is not None else set()
-        brokers = {ref: entry for ref, entry in local_profile_endpoints(config, self.store).items() if ref in used}
+        endpoints = mapping_endpoints(config, self.config_dir, self.store)
+        brokers = {ref: entry for ref, entry in endpoints.items() if ref in used}
         brokers[BUILTIN_PROFILE_REF] = {
             "host": BROKER_SERVICE,
             "port": CONTAINER_PORT,
@@ -835,9 +856,9 @@ class BuiltinBroker:
         return json.dumps({"schema_version": 1, "brokers": brokers}, indent=2, sort_keys=True) + "\n"
 
     def mapping_broker_refs(self):
-        """The brokers a mapping may name: the built-in one and every usable local profile."""
+        """The brokers a mapping may name: the built-in one, every usable local profile and the ones mappings remember."""
 
-        return {BUILTIN_PROFILE_REF, *local_profile_endpoints(self._config_loader(), self.store)}
+        return {BUILTIN_PROFILE_REF, *mapping_endpoints(self._config_loader(), self.config_dir, self.store)}
 
     # --- containers -------------------------------------------------------
 
