@@ -72,7 +72,9 @@ same card is in step 02, so the broker runs before you map devices.
 
 The broker is off by default. The first time, a shared account `devices` with a
 generated password is created and anonymous access stays off. **Show password**
-shows it again whenever you need it for the next device.
+shows it again whenever you need it for the next device; **Own password** in an
+account's row sets one you choose. **Allow anonymous access** asks first, since
+every device on your network may then read and publish without an account.
 
 | Setting | Effect |
 | --- | --- |
@@ -81,15 +83,30 @@ shows it again whenever you need it for the next device.
 | Anonymous access off, one account | one shared account for every device |
 | Anonymous access off, several accounts | per device or per vendor, optionally limited to a topic prefix |
 
-**What the regulation reads stays protected in every mode.** `ems-solarflow/`
-(the mapping's outputs), the Zendure topics (`iot/`, `Zendure/`) and the topic
-of an MQTT grid meter on this broker cannot be read or written by anonymous
-clients or by accounts without the matching option:
+**What EMS reads stays protected in every mode.** `ems-solarflow/` (the
+external devices, the mapping's outputs among them), the Zendure topics (`iot/`,
+`Zendure/`) and the topic of an MQTT grid meter on this broker cannot be read or
+written by anonymous clients or by accounts without the matching option. The
+regulation itself reads only the Zendure topics and the grid meter; protecting
+`ems-solarflow/` keeps a device on a shared account from overwriting another
+device's readings in the dashboard and the statistics:
 
 - **May write ems-solarflow/ (bridge)** — for Node-RED or ioBroker that already
   publish the standard themselves;
-- **Zendure devices** — for a Zendure device you point at this broker;
-- the grid meter account chosen under the accounts.
+- **Zendure devices** — for a Zendure device you point at this broker. Such an
+  account reaches the Zendure topics only (and its topic prefix, if it has one):
+  a device may report and answer there, but never send a device a command —
+  only EMS does that. Give Zendure devices an account of their own; the shared
+  `devices` account cannot take this option;
+- the grid meter account chosen under the accounts. Choose one only the meter
+  uses: every device on it may send grid readings, so the shared `devices`
+  account cannot be it. A meter publishing under `Zendure/`, like a Zendure
+  Smart Meter, needs an account with the **Zendure devices** option.
+
+The grid meter's topic is protected within seconds of saving the meter, also
+when the broker is already running. Let EMS read the meter through the built-in
+broker's profile: read with another account, such as `devices`, it no longer
+receives the protected topic, and the broker card says so.
 
 **Stopping is always possible.** The dialog names what changes: external
 devices are shown as stale after 60 s, a Zendure device on this broker is no

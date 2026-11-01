@@ -120,12 +120,13 @@ def remove_stale_temp_files(path, *, now=None):
     return removed
 
 
-def atomic_write_bytes(path, raw):
+def atomic_write_bytes(path, raw, *, mode=None):
     """Replace ``path`` with ``raw`` through a temp file of this write's own.
 
     The EMS and the Admin write the same bind-mounted directory from separate
     PID namespaces, where both can be PID 1; the random token keeps their
-    temp files apart, and ``x`` refuses a name that exists.
+    temp files apart, and ``x`` refuses a name that exists. ``mode`` is set
+    on the empty temp file, so a secret is never readable under a wider mode.
     """
 
     parent = os.path.dirname(path)
@@ -134,6 +135,8 @@ def atomic_write_bytes(path, raw):
     tmp_path = f"{path}.{os.getpid()}.{threading.get_ident()}.{secrets.token_hex(4)}.tmp"
     try:
         with open(tmp_path, "xb") as handle:
+            if mode is not None:
+                os.fchmod(handle.fileno(), mode)
             handle.write(raw)
             handle.flush()
             os.fsync(handle.fileno())

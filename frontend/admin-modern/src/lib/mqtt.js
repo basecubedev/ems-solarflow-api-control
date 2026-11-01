@@ -20,6 +20,11 @@ export const BROKER_ISSUES = Object.freeze([
   "mqtt_broker_account_password_invalid",
   "mqtt_broker_topic_prefix_invalid",
   "mqtt_broker_grid_meter_topic_unprotectable",
+  "mqtt_broker_grid_meter_account_shared",
+  "mqtt_broker_grid_meter_account_lacks_option",
+  "mqtt_broker_shared_account_zendure",
+  "mqtt_broker_runs_as_root",
+  "mqtt_broker_grid_meter_reader_denied",
   "mqtt_broker_profile_name_reserved",
 ]);
 

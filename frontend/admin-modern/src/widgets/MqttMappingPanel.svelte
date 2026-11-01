@@ -252,7 +252,7 @@
     <section class="editor inner" data-testid="mqtt-mapping-editor">
       <h3 class="sub">{editingIndex >= 0 ? t("mqtt.mapping.editTitle", { id: draft.id }) : t("mqtt.mapping.newTitle")}</h3>
       <div class="row-wrap">
-        <label class="field"><span class="small muted">{t("mqtt.mapping.id")}</span><input class="input" value={draft.id} oninput={(event) => update({ id: event.currentTarget.value })} data-testid="mqtt-device-id" /></label>
+        <label class="field"><span class="small muted">{t("mqtt.mapping.id")}</span><input class="input" value={draft.id} oninput={(event) => update({ id: event.currentTarget.value })} readonly={editingIndex >= 0} title={editingIndex >= 0 ? t("mqtt.mapping.idFixed") : undefined} data-testid="mqtt-device-id" /></label>
         <label class="field"><span class="small muted">{t("mqtt.mapping.label")}</span><input class="input" value={draft.label || ""} oninput={(event) => update({ label: event.currentTarget.value })} /></label>
         <label class="check"><input type="checkbox" checked={draft.enabled !== false} onchange={(event) => update({ enabled: event.currentTarget.checked })} /><span>{t("mqtt.mapping.enabled")}</span></label>
       </div>

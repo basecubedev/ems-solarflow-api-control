@@ -123,6 +123,17 @@
     const answer = await setPassword(account, value || "");
     if (answer?.password) shown = { ...shown, [account]: answer.password };
     newPassword = "";
+    if (answer?.ok) passwordFor = "";
+  }
+
+  function scope(account) {
+    if (account.topic_prefix) return t("mqtt.broker.prefixOnly", { prefix: account.topic_prefix });
+    return account.zendure ? "" : t("mqtt.broker.everyTopic");
+  }
+
+  function toggleAnonymous() {
+    if (settings.anonymous) saveBroker({ anonymous: false });
+    else confirming = "anonymous";
   }
 
   function savePort(event) {
@@ -142,7 +153,7 @@
     {/if}
     <button class="icon-btn" type="button" onclick={loadBroker} aria-label={t("common.refresh")} title={t("common.refresh")}><Icon name="refresh-cw" /></button>
   </div>
-  <p class="muted small">{t("mqtt.broker.lead")}</p>
+  {#if state !== "running"}<p class="muted small">{t("mqtt.broker.lead")}</p>{/if}
 
   {#if settings}
     <div class="facts">
@@ -154,7 +165,7 @@
         <label class="field"><span class="small muted">{t("mqtt.broker.port")}</span><input class="input port" type="number" min="1" max="65535" bind:value={port} data-testid="mqtt-broker-port" /></label>
         <button class="btn secondary small" type="submit" disabled={busy || port === String(settings.port)}><Icon name="save" size="sm" />{t("mqtt.broker.savePort")}</button>
       </form>
-      <button class="btn secondary small" type="button" onclick={() => saveBroker({ anonymous: !settings.anonymous })} disabled={busy} data-testid="mqtt-broker-anonymous">
+      <button class="btn secondary small" type="button" onclick={toggleAnonymous} disabled={busy} data-testid="mqtt-broker-anonymous">
         <Icon name={settings.anonymous ? "lock" : "lock-open"} size="sm" />{settings.anonymous ? t("mqtt.broker.anonymousDisable") : t("mqtt.broker.anonymousEnable")}
       </button>
     </div>
@@ -167,7 +178,7 @@
           <div class="words">
             <strong>{account.name}</strong>
             <span class="muted small">
-              {[account.topic_prefix ? t("mqtt.broker.prefixOnly", { prefix: account.topic_prefix }) : t("mqtt.broker.everyTopic"), account.bridge ? t("mqtt.broker.bridge") : "", account.zendure ? t("mqtt.broker.zendure") : ""].filter(Boolean).join(" · ")}
+              {[scope(account), account.bridge ? t("mqtt.broker.bridge") : "", account.zendure ? t("mqtt.broker.zendure") : ""].filter(Boolean).join(" · ")}
             </span>
             {#if shown[account.name]}<code class="secret" data-testid="mqtt-account-password">{shown[account.name]}</code>{/if}
           </div>
@@ -175,8 +186,15 @@
           <div class="row-wrap">
             <button class="btn secondary small" type="button" onclick={() => show(account.name)} disabled={busy || !account.password_saved}><Icon name="eye" size="sm" />{t("mqtt.broker.showPassword")}</button>
             <button class="btn secondary small" type="button" onclick={() => renew(account.name)} disabled={busy}><Icon name="refresh-cw" size="sm" />{t("mqtt.broker.newPassword")}</button>
+            <button class="btn secondary small" type="button" onclick={() => { passwordFor = passwordFor === account.name ? "" : account.name; newPassword = ""; }} aria-expanded={passwordFor === account.name ? "true" : "false"} disabled={busy} data-testid="mqtt-account-own-password"><Icon name="key" size="sm" />{t("mqtt.broker.ownPasswordButton")}</button>
             <button class="btn secondary small" type="button" onclick={() => (removing = account.name)} disabled={busy}><Icon name="trash-2" size="sm" />{t("devices.remove")}</button>
           </div>
+          {#if passwordFor === account.name}
+            <form class="form own" onsubmit={(event) => { event.preventDefault(); if (newPassword) renew(account.name, newPassword); }}>
+              <input class="input" type="password" autocomplete="new-password" placeholder={t("mqtt.broker.ownPassword", { name: account.name })} aria-label={t("mqtt.broker.ownPassword", { name: account.name })} bind:value={newPassword} data-testid="mqtt-account-password-input" />
+              <button class="btn secondary small" type="submit" disabled={busy || !newPassword}><Icon name="save" size="sm" />{t("mqtt.broker.setPassword")}</button>
+            </form>
+          {/if}
         </li>
       {/each}
     </ul>
@@ -187,13 +205,6 @@
       <label class="check"><input type="checkbox" bind:checked={zendure} /><span>{t("mqtt.broker.zendure")}</span></label>
       <button class="btn secondary small" type="submit" disabled={busy || !name.trim()} data-testid="mqtt-account-add"><Icon name="plus" size="sm" />{t("mqtt.broker.addAccount")}</button>
     </form>
-    <form class="form" onsubmit={(event) => { event.preventDefault(); const target = passwordFor || view.accounts[0]?.name; if (target && newPassword) renew(target, newPassword); }}>
-      <select class="input" value={passwordFor || view.accounts[0]?.name || ""} onchange={(event) => (passwordFor = event.currentTarget.value)} aria-label={t("mqtt.broker.accounts")} disabled={!view.accounts.length}>
-        {#each view.accounts as account (account.name)}<option value={account.name}>{account.name}</option>{/each}
-      </select>
-      <input class="input" type="password" autocomplete="new-password" placeholder={t("mqtt.broker.ownPassword", { name: passwordFor || view.accounts[0]?.name || "" })} aria-label={t("mqtt.broker.ownPassword", { name: passwordFor || view.accounts[0]?.name || "" })} bind:value={newPassword} disabled={!view.accounts.length} />
-      <button class="btn secondary small" type="submit" disabled={busy || !newPassword || !view.accounts.length}><Icon name="key" size="sm" />{t("mqtt.broker.setPassword")}</button>
-    </form>
     {#if view.grid_meter_topic}
       <label class="field">
         <span class="small muted">{t("mqtt.broker.gridMeterAccount", { topic: view.grid_meter_topic })}</span>
@@ -201,6 +212,7 @@
           <option value="">{t("mqtt.broker.noGridMeterAccount")}</option>
           {#each view.accounts as account (account.name)}<option value={account.name}>{account.name}</option>{/each}
         </select>
+        <span class="small muted">{t("mqtt.broker.gridMeterHint")}</span>
       </label>
     {/if}
     <p class="muted small">{t("mqtt.broker.connectHint")}</p>
@@ -218,7 +230,7 @@
           {#each connectSteps(deviceType) as key (key)}<li>{t(key)}</li>{/each}
         </ol>
         {#if view.accounts.length > 1}
-          <label class="field"><span class="small muted">{t("mqtt.broker.accounts")}</span>
+          <label class="field"><span class="small muted">{t("mqtt.connect.account")}</span>
             <select class="input" value={account} onchange={(event) => (connectAccount = event.currentTarget.value)}>{#each view.accounts as item (item.name)}<option value={item.name}>{item.name}</option>{/each}</select>
           </label>
         {/if}
@@ -260,6 +272,15 @@
   oncancel={() => (confirming = "")}
 />
 <ConfirmDialog
+  open={confirming === "anonymous"}
+  title={t("mqtt.broker.anonymousTitle")}
+  lines={[t("mqtt.broker.anonymousLine"), t("mqtt.broker.anonymousKept")]}
+  confirmLabel={t("mqtt.broker.anonymousEnable")}
+  danger
+  onconfirm={() => { confirming = ""; saveBroker({ anonymous: true }); }}
+  oncancel={() => (confirming = "")}
+/>
+<ConfirmDialog
   open={confirming === "stop"}
   title={t("mqtt.broker.stopTitle")}
   lines={stopLines}
@@ -284,7 +305,7 @@
   .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: var(--s2); }
   .list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2); }
   .account { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s2); align-items: center; }
-  .account .row-wrap { grid-column: 1 / -1; }
+  .account .row-wrap, .account .own { grid-column: 1 / -1; }
   .words { display: grid; gap: 2px; min-width: 0; }
   .secret { overflow-wrap: anywhere; user-select: all; }
   .form { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }

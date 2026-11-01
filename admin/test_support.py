@@ -59,6 +59,7 @@ from admin.workflow_lifecycle import (
     ReplacementActivity,
     admin_replacement_activity,
 )
+from ems.zendure_mqtt.builtin_broker import mapping_status_path
 
 TEST_MODE_ENV = "EMS_ADMIN_TEST_MODE"
 PACKAGED_RESOURCES_ENV = "EMS_ADMIN_TEST_PACKAGED_RESOURCES"
@@ -725,7 +726,7 @@ class ProcessMappingCompose:
         return [
             "--mappings", str(install / "config" / "mqtt" / "mappings.json"),
             "--brokers", str(Path(workspace) / "mapping" / "mapping-credentials.json"),
-            "--status", str(install / "data" / "mqtt-mapping-status.json"),
+            "--status", mapping_status_path(install / "data"),
         ]
 
     def _running(self):

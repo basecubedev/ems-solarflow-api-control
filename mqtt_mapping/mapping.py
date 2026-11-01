@@ -25,10 +25,15 @@ SILENCE_REASONS = (
 
 @dataclass(frozen=True)
 class Received:
-    """The latest payload of one topic and when it arrived, on the monotonic clock."""
+    """The latest payload of one topic and when it arrived, on the monotonic clock.
+
+    ``numbers`` holds what each format and path read from it, so a payload is
+    parsed once however often the publisher asks.
+    """
 
     payload: bytes
     at: float
+    numbers: dict = field(default_factory=dict, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -72,7 +77,10 @@ def payload_preview(payload) -> str | None:
 def source_value(source, payload):
     """``(value, None)`` after factor, sign and the negative rule, or ``(None, reason)``."""
 
-    number, reason = extract_number(payload, source.format, source.path)
+    return _scaled(source, *extract_number(payload, source.format, source.path))
+
+
+def _scaled(source, number, reason):
     if number is None:
         return None, reason
     value = number * source.factor
@@ -90,7 +98,10 @@ def _read_source(source, received, now):
     preview = payload_preview(received.payload)
     if age > source.max_age_seconds:
         return SourceReading(source.topic, source.path, None, "stale", age, preview)
-    value, reason = source_value(source, received.payload)
+    key = (source.format, source.path)
+    if key not in received.numbers:
+        received.numbers[key] = extract_number(received.payload, source.format, source.path)
+    value, reason = _scaled(source, *received.numbers[key])
     return SourceReading(source.topic, source.path, value, reason, age, preview)
 
 

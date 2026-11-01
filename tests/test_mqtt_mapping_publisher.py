@@ -10,6 +10,7 @@ import json
 import pytest
 
 from mqtt_mapping.config import parse_mappings
+from mqtt_mapping import mapping as mapping_module
 from mqtt_mapping.publisher import (
     MIN_EXPIRY_SECONDS,
     MappingPublisher,
@@ -154,3 +155,25 @@ def test_new_mappings_keep_what_was_received_on_topics_still_read():
     assert publisher.tick() == ["terrasse"]
     assert sent[-1][2] == "ems-solarflow/terrasse/state"
     assert publisher.last_published_wall("balkon") is None
+
+
+def test_a_payload_is_read_once_however_often_the_publisher_ticks(monkeypatch):
+    reads = []
+    extract = mapping_module.extract_number
+
+    def counting(payload, payload_format, path):
+        reads.append(payload)
+        return extract(payload, payload_format, path)
+
+    monkeypatch.setattr(mapping_module, "extract_number", counting)
+    publisher, clock, sent = _publisher(_mappings())
+    publisher.observe("ems-mqtt", "plug", b"612.3")
+
+    for _tick in range(40):
+        clock.now += 0.25
+        publisher.tick()
+    publisher.observe("ems-mqtt", "plug", b"615.0")
+    publisher.tick()
+
+    assert reads == [b"612.3", b"615.0"]
+    assert sent[-1][3]["inverterPower"] == 615

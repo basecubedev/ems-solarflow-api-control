@@ -14,6 +14,7 @@ neither read nor write there; Mosquitto checks ``deny`` before any grant.
 """
 
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -30,14 +31,17 @@ from ems.file_io import atomic_write_bytes
 from ems.zendure_mqtt.builtin_broker import (
     BUILTIN_CREDENTIALS_REF,
     BUILTIN_PROFILE_REF,
+    EMS_COMMAND_TOPICS,
+    MAPPING_STATUS_PARTS,
     NATIVE_TOPIC_ROOTS,
     NATIVE_TOPIC_TREES,
     broker_settings_path,
     builtin_profile_refs,
     builtin_profile_users,
+    mapping_status_path,
     mappings_path,
 )
-from mqtt_mapping.config import load_mappings_file
+from mqtt_mapping.config import load_mappings_file, mappings_file_signature
 
 SETTINGS_SCHEMA_VERSION = 1
 MOSQUITTO_IMAGE = "eclipse-mosquitto:2.1.2-alpine"
@@ -54,11 +58,23 @@ INTERNAL_ACCOUNTS = ("ems", "ems-mapping", "ems-admin")
 EMS_ACCOUNT, MAPPING_ACCOUNT, ADMIN_ACCOUNT = INTERNAL_ACCOUNTS
 OUTPUT_TREE = "ems-solarflow/#"
 ZENDURE_TREES = NATIVE_TOPIC_TREES
-EMS_WRITE_TOPIC = "iot/+/+/properties/write"
+ZENDURE_DEVICE_GRANTS = (
+    "topic read iot/#",
+    "topic write iot/+/+/properties/report",
+    "topic write iot/+/+/+/+/+/#",
+    "topic read Zendure/#",
+    "topic write Zendure/+/+/+",
+    "topic readwrite /#",
+)
+THIS_HOST_NAMES = ("127.0.0.1", "localhost", "::1", "host.docker.internal")
 RESERVED_PREFIX_ROOTS = ("ems-solarflow", *(root for root in NATIVE_TOPIC_ROOTS if root))
 PASSWORD_ITERATIONS = 101
 PASSWORD_SALT_BYTES = 12
 START_TIMEOUT_SECONDS = 20.0
+CONFIG_FOLLOW_SECONDS = 2.0
+BROKER_MEMORY_LIMIT_BYTES = 32 * 1024 * 1024
+SECRET_FILE_MODE = 0o600
+PRIVATE_DIR_MODE = 0o700
 SOCKET_TABLES = ("/proc/net/tcp", "/proc/net/tcp6")
 TCP_LISTEN = "0A"
 
@@ -75,6 +91,11 @@ ISSUE_CODES = (
     "mqtt_broker_account_password_invalid",
     "mqtt_broker_topic_prefix_invalid",
     "mqtt_broker_grid_meter_topic_unprotectable",
+    "mqtt_broker_grid_meter_account_shared",
+    "mqtt_broker_grid_meter_account_lacks_option",
+    "mqtt_broker_shared_account_zendure",
+    "mqtt_broker_runs_as_root",
+    "mqtt_broker_grid_meter_reader_denied",
     "mqtt_broker_profile_name_reserved",
 )
 
@@ -214,6 +235,58 @@ def _parse_account(raw, path, seen):
     return Account(name, prefix, bridge, zendure), []
 
 
+def policy_issues(settings: BrokerSettings, grid_topic=None) -> list[dict]:
+    """Rights broker.json asks for that the broker does not grant; :func:`granted` leaves them out.
+
+    A change may not ask for one, but a file that already does still loads,
+    renders without it and stops, so nothing is locked behind it.
+    """
+
+    issues = []
+    shared = settings.account(DEFAULT_ACCOUNT)
+    if shared is not None and shared.zendure:
+        issues.append(
+            _issue(
+                "mqtt_broker_shared_account_zendure",
+                f"{DEFAULT_ACCOUNT} is shared by every device, so its Zendure option is ignored; "
+                "give Zendure devices an account of their own.",
+                "accounts",
+            )
+        )
+    if settings.grid_meter_account == DEFAULT_ACCOUNT:
+        issues.append(
+            _issue(
+                "mqtt_broker_grid_meter_account_shared",
+                f"Every device on {DEFAULT_ACCOUNT} could send grid readings, so it does not carry the grid meter; "
+                "give the meter an account of its own.",
+                "grid_meter_account",
+            )
+        )
+    allowed = granted(settings)
+    meter = allowed.account(allowed.grid_meter_account) if grid_topic else None
+    missing = [option for option in options_for_topic(grid_topic) if not getattr(meter, option)] if meter else []
+    if missing:
+        issues.append(
+            _issue(
+                "mqtt_broker_grid_meter_account_lacks_option",
+                f"The grid meter publishes on {grid_topic}; until its account {meter.name} has the option "
+                f"{missing[0]}, the topic stays closed to it.",
+                "grid_meter_account",
+            )
+        )
+    return issues
+
+
+def granted(settings: BrokerSettings) -> BrokerSettings:
+    """``settings`` without the rights :func:`policy_issues` names for the shared account."""
+
+    accounts = tuple(
+        replace(account, zendure=False) if account.name == DEFAULT_ACCOUNT else account for account in settings.accounts
+    )
+    meter = None if settings.grid_meter_account == DEFAULT_ACCOUNT else settings.grid_meter_account
+    return replace(settings, accounts=accounts, grid_meter_account=meter)
+
+
 def password_problem(password) -> str | None:
     if not isinstance(password, str) or not MIN_PASSWORD_LENGTH <= len(password) <= MAX_PASSWORD_LENGTH:
         return f"A password has {MIN_PASSWORD_LENGTH} to {MAX_PASSWORD_LENGTH} characters."
@@ -235,15 +308,69 @@ def hash_password(password, *, salt=None, iterations=PASSWORD_ITERATIONS) -> str
     return f"$7${iterations}${encode(salt).decode()}${encode(digest).decode()}"
 
 
-def grid_meter_topic(config) -> str | None:
-    """The topic an MQTT grid meter reads on the built-in broker, or ``None``."""
+def _reaches_this_broker(endpoint, port, host_addresses) -> bool:
+    host = str(endpoint.get("host") or "").strip().lower()
+    names = {*THIS_HOST_NAMES, BROKER_SERVICE, *(str(address).lower() for address in host_addresses)}
+    return host in names and endpoint.get("port", DEFAULT_PORT) == port
 
-    grid_meter = config.get("grid_meter") if isinstance(config, dict) else None
-    settings = grid_meter_mqtt_settings(grid_meter)
-    if settings.get("broker_ref") not in builtin_profile_refs(config) | {BUILTIN_PROFILE_REF}:
+
+def grid_meter_topic(config, *, port=DEFAULT_PORT, host_addresses=()) -> str | None:
+    """The topic an MQTT grid meter reads on the built-in broker, or ``None``.
+
+    A meter reaches the broker through the built-in profile, through another
+    profile or its own inline settings naming this host and the broker's port.
+    """
+
+    if not isinstance(config, dict):
+        return None
+    settings = grid_meter_mqtt_settings(config.get("grid_meter"))
+    ref = settings.get("broker_ref")
+    if ref:
+        section = config.get("zendure_mqtt") if isinstance(config.get("zendure_mqtt"), dict) else {}
+        brokers = section.get("brokers") if isinstance(section.get("brokers"), dict) else {}
+        profile = brokers.get(ref) if isinstance(brokers.get(ref), dict) else {}
+        on_this_broker = ref in builtin_profile_refs(config) | {BUILTIN_PROFILE_REF} or _reaches_this_broker(
+            profile, port, host_addresses
+        )
+    else:
+        on_this_broker = _reaches_this_broker(settings, port, host_addresses)
+    if not on_this_broker:
         return None
     topic = settings.get("topic")
     return topic.strip() if isinstance(topic, str) and topic.strip() else None
+
+
+def grid_meter_reader(config, credential_store) -> str | None:
+    """The account the EMS reads its MQTT grid meter with: ``ems`` on the built-in profile, else its own, ``None`` anonymous."""
+
+    settings = grid_meter_mqtt_settings(config.get("grid_meter") if isinstance(config, dict) else None)
+    ref = settings.get("broker_ref")
+    source = settings
+    if ref:
+        if ref in builtin_profile_refs(config) | {BUILTIN_PROFILE_REF}:
+            return EMS_ACCOUNT
+        section = config.get("zendure_mqtt") if isinstance(config.get("zendure_mqtt"), dict) else {}
+        brokers = section.get("brokers") if isinstance(section.get("brokers"), dict) else {}
+        source = brokers.get(ref) if isinstance(brokers.get(ref), dict) else {}
+    credentials_ref = source.get("credentials_ref")
+    if isinstance(credentials_ref, str) and credentials_ref:
+        secret = credential_store.load_mqtt_broker_secret(credentials_ref)
+        return secret.username if secret is not None and secret.username else None
+    username = source.get("username")
+    return username.strip() if isinstance(username, str) and username.strip() else None
+
+
+def options_for_topic(topic) -> list[str]:
+    """The account options a topic needs: ``bridge`` under ems-solarflow/, ``zendure`` under a Zendure tree."""
+
+    def within(tree):
+        root = tree[:-2]
+        return topic.startswith(f"{root}/") or bool(root) and topic == root
+
+    needed = ["bridge"] if within(OUTPUT_TREE) else []
+    if any(within(tree) for tree in ZENDURE_TREES):
+        needed.append("zendure")
+    return needed
 
 
 def render_mosquitto_conf(settings: BrokerSettings) -> str:
@@ -258,6 +385,8 @@ def render_mosquitto_conf(settings: BrokerSettings) -> str:
             "persistence_location /mosquitto/data/",
             "message_size_limit 65536",
             "max_connections 64",
+            f"memory_limit {BROKER_MEMORY_LIMIT_BYTES}",
+            "max_queued_messages 1000",
             "log_dest stdout",
             "",
         ]
@@ -287,12 +416,12 @@ def render_acl(settings: BrokerSettings, *, grid_topic=None) -> str:
         lines.append(f"user {account.name}")
         if account.topic_prefix:
             lines.append(f"topic readwrite {account.topic_prefix}/#")
-        else:
+        elif not account.zendure:
             lines.append("topic readwrite #")
         if account.bridge:
             lines.append(f"topic readwrite {OUTPUT_TREE}")
         if account.zendure:
-            lines += [f"topic readwrite {tree}" for tree in ZENDURE_TREES]
+            lines += list(ZENDURE_DEVICE_GRANTS)
         if grid_topic and account.name == settings.grid_meter_account:
             lines.append(f"topic readwrite {grid_topic}")
         lines += _denials(account, grid_topic, settings.grid_meter_account)
@@ -301,7 +430,7 @@ def render_acl(settings: BrokerSettings, *, grid_topic=None) -> str:
     lines += [f"topic read {tree}" for tree in ZENDURE_TREES]
     if grid_topic:
         lines.append(f"topic read {grid_topic}")
-    lines += [f"topic write {EMS_WRITE_TOPIC}", ""]
+    lines += [*(f"topic write {topic}" for topic in EMS_COMMAND_TOPICS), ""]
     lines += [f"user {MAPPING_ACCOUNT}", "topic read #", f"topic write {OUTPUT_TREE}", ""]
     lines += [f"user {ADMIN_ACCOUNT}", "topic read #", "topic read $SYS/#", ""]
     return "\n".join(lines)
@@ -328,6 +457,15 @@ def broker_service_lines(compose_text) -> list[str] | None:
     return service
 
 
+MAPPING_STATUS_IN_CONTAINER = f"/app/status/{MAPPING_STATUS_PARTS[1]}"
+_HARDENING = (
+    "    read_only: true",
+    "    cap_drop: [ALL]",
+    '    security_opt: ["no-new-privileges:true"]',
+    "    pids_limit: 64",
+)
+
+
 def render_compose(*, port, admin_image, puid, pgid) -> str:
     """The ``ems-mqtt`` project; paths are relative to ``<install>/mqtt/``.
 
@@ -347,6 +485,8 @@ def render_compose(*, port, admin_image, puid, pgid) -> str:
             "    volumes:",
             f"      - ./{BROKER_FILES_DIRNAME}:/mosquitto/config:ro",
             "      - ./data:/mosquitto/data",
+            *_HARDENING,
+            "    mem_limit: 96m",
             "    restart: unless-stopped",
             f"  {MAPPING_SERVICE}:",
             f"    image: {admin_image}",
@@ -359,16 +499,20 @@ def render_compose(*, port, admin_image, puid, pgid) -> str:
             "      - --brokers",
             "      - /app/mqtt/mapping/mapping-credentials.json",
             "      - --status",
-            "      - /app/data/mqtt-mapping-status.json",
+            f"      - {MAPPING_STATUS_IN_CONTAINER}",
             "    environment:",
             '      TZ: "${TZ:-UTC}"',
             "    volumes:",
             "      - ../config/mqtt:/app/config/mqtt:ro",
             f"      - ./{MAPPING_FILES_DIRNAME}:/app/mqtt/mapping:ro",
-            "      - ../data:/app/data",
+            f"      - ../data/{MAPPING_STATUS_PARTS[0]}:/app/status",
+            *_HARDENING,
+            "    tmpfs:",
+            "      - /tmp:size=8m,mode=1777",
+            "    mem_limit: 128m",
             "    healthcheck:",
             '      test: ["CMD", "python", "-B", "-m", "mqtt_mapping", "--healthcheck",'
-            ' "--status", "/app/data/mqtt-mapping-status.json"]',
+            f' "--status", "{MAPPING_STATUS_IN_CONTAINER}"]',
             "      interval: 30s",
             "      timeout: 10s",
             "      retries: 3",
@@ -447,6 +591,7 @@ class BuiltinBroker:
         runtime_identity=None,
         port_free=None,
         port_answers=None,
+        host_addresses=None,
         monotonic=time.monotonic,
         sleep=time.sleep,
         password_factory=generate_password,
@@ -462,6 +607,7 @@ class BuiltinBroker:
         self.runtime_identity = runtime_identity
         self._port_free = port_free or _port_free
         self._port_answers = port_answers or mqtt_answers
+        self._host_addresses = host_addresses or _this_host_addresses
         self._monotonic = monotonic
         self._sleep = sleep
         self._password_factory = password_factory
@@ -565,6 +711,19 @@ class BuiltinBroker:
                     "password_saved": self.password(account.name) is not None,
                 }
             )
+        topic = self._grid_topic(config, settings)
+        if settings is not None:
+            issues = [*issues, *policy_issues(settings, topic)]
+            reader = grid_meter_reader(config, self.store) if topic else EMS_ACCOUNT
+            if reader is None or reader not in (EMS_ACCOUNT, granted(settings).grid_meter_account):
+                issues.append(
+                    _issue(
+                        "mqtt_broker_grid_meter_reader_denied",
+                        f"The EMS reads the grid meter as {reader or 'anonymous'}, which may not read its protected "
+                        "topic; read the meter through the built-in broker profile.",
+                        "grid_meter_account",
+                    )
+                )
         return {
             "configured": exists,
             "settings": settings_document(settings) if settings else None,
@@ -577,8 +736,12 @@ class BuiltinBroker:
             "running": states.get(BROKER_SERVICE) == "running",
             "profile_ref": BUILTIN_PROFILE_REF,
             "profile_users": builtin_profile_users(config),
-            "grid_meter_topic": grid_meter_topic(config),
+            "grid_meter_topic": topic,
         }
+
+    def _grid_topic(self, config, settings):
+        port = settings.port if settings is not None else DEFAULT_PORT
+        return grid_meter_topic(config, port=port, host_addresses=self._host_addresses())
 
     # --- rendering --------------------------------------------------------
 
@@ -612,9 +775,9 @@ class BuiltinBroker:
             else:
                 passwords[account.name] = password
         config = self._config_loader()
-        topic = grid_meter_topic(config)
+        topic = self._grid_topic(config, settings)
         try:
-            acl = render_acl(settings, grid_topic=topic)
+            acl = render_acl(granted(settings), grid_topic=topic)
         except ValueError:
             issues.append(
                 _issue(
@@ -622,14 +785,23 @@ class BuiltinBroker:
                     "The grid meter topic cannot be protected; it must not contain spaces or wildcards.",
                 )
             )
+        identity = self.runtime_identity or (os.getuid(), os.getgid())
+        if identity[0] == 0:
+            issues.append(
+                _issue("mqtt_broker_runs_as_root", "The Admin runs as root; the broker containers never do.")
+            )
         if issues:
             return issues
-        identity = self.runtime_identity or (os.getuid(), os.getgid())
         os.makedirs(os.path.join(self.workspace, "data"), exist_ok=True)
+        os.makedirs(os.path.dirname(mapping_status_path(self.data_dir)), exist_ok=True)
+        for directory in (BROKER_FILES_DIRNAME, MAPPING_FILES_DIRNAME):
+            path = os.path.join(self.workspace, directory)
+            os.makedirs(path, mode=PRIVATE_DIR_MODE, exist_ok=True)
+            os.chmod(path, PRIVATE_DIR_MODE)
         files = {
             f"{BROKER_FILES_DIRNAME}/mosquitto.conf": (render_mosquitto_conf(settings), 0o644),
-            f"{BROKER_FILES_DIRNAME}/acl": (acl, 0o600),
-            f"{BROKER_FILES_DIRNAME}/passwd": (render_passwd(passwords), 0o600),
+            f"{BROKER_FILES_DIRNAME}/acl": (acl, SECRET_FILE_MODE),
+            f"{BROKER_FILES_DIRNAME}/passwd": (render_passwd(passwords), SECRET_FILE_MODE),
             "compose.yml": (
                 render_compose(
                     port=settings.port,
@@ -641,17 +813,19 @@ class BuiltinBroker:
             ),
             f"{MAPPING_FILES_DIRNAME}/mapping-credentials.json": (
                 self._mapping_credentials(config, passwords[MAPPING_ACCOUNT]),
-                0o600,
+                SECRET_FILE_MODE,
             ),
         }
         for name, (text, mode) in files.items():
-            path = os.path.join(self.workspace, name)
-            atomic_write_bytes(path, text.encode("utf-8"))
-            os.chmod(path, mode)
+            atomic_write_bytes(os.path.join(self.workspace, name), text.encode("utf-8"), mode=mode)
         return []
 
     def _mapping_credentials(self, config, mapping_password):
-        brokers = local_profile_endpoints(config, self.store)
+        """Exactly the brokers the active mappings read, the built-in one always among them."""
+
+        mappings = self.mappings()
+        used = set(mappings.subscriptions()) if mappings is not None else set()
+        brokers = {ref: entry for ref, entry in local_profile_endpoints(config, self.store).items() if ref in used}
         brokers[BUILTIN_PROFILE_REF] = {
             "host": BROKER_SERVICE,
             "port": CONTAINER_PORT,
@@ -722,8 +896,13 @@ class BuiltinBroker:
                 return None
             if settings is None:
                 return _failure("settings_invalid", "broker.json cannot be read.", issues)
+            running = self.container_states().get(BROKER_SERVICE) == "running"
+            if not settings.enabled and running:
+                try:
+                    self.compose.stop(self.workspace, [BROKER_SERVICE])
+                except DockerError as exc:
+                    return _failure(exc.code, exc.message)
             if settings.enabled:
-                running = self.container_states().get(BROKER_SERVICE) == "running"
                 service = broker_service_lines(self._workspace_text("compose.yml"))
                 render_issues = self.render(settings)
                 if render_issues:
@@ -735,6 +914,39 @@ class BuiltinBroker:
                 except DockerError as exc:
                     return _failure(exc.code, exc.message)
             return self.sync_mapping_container(settings)
+
+    def refresh_after_config_change(self):
+        """Bring the files in line with a changed EMS config; reload a running broker whose ACL changed.
+
+        The grid meter's topic is protected from the config, so a meter saved
+        after the broker was switched on would otherwise stay open to every
+        account until the Admin next starts. The mapping's broker credentials
+        come from the config too, also while the built-in broker is off.
+        """
+
+        with self._lock:
+            settings, issues, exists = self.load()
+            if settings is None:
+                return None
+            if not settings.enabled:
+                if not self._mapping_wanted(settings):
+                    return None
+                render_issues = self.render(settings)
+                if render_issues:
+                    return _failure("render_failed", "The mapping files cannot be written.", render_issues)
+                return _Result(True, "rendered")
+            acl = os.path.join(BROKER_FILES_DIRNAME, "acl")
+            before = self._workspace_text(acl)
+            render_issues = self.render(settings)
+            if render_issues:
+                return _failure("render_failed", "The broker files cannot be written.", render_issues)
+            if self._workspace_text(acl) == before or self.container_states().get(BROKER_SERVICE) != "running":
+                return _Result(True, "unchanged")
+            try:
+                self.compose.reload(self.workspace, BROKER_SERVICE)
+            except DockerError as exc:
+                return _failure(exc.code, exc.message)
+            return _Result(True, "reloaded")
 
     def _workspace_text(self, name):
         try:
@@ -815,10 +1027,11 @@ class BuiltinBroker:
                 zendure.append({"name": name, "held_output_limit_w": held.get(name)})
             else:
                 external.append({"name": name})
+        settings, _issues, _exists = self.load()
         return {
             "external_devices": external,
             "zendure_devices": zendure,
-            "grid_meter": grid_meter_topic(config) is not None,
+            "grid_meter": self._grid_topic(config, settings) is not None,
         }
 
     def stop(self):
@@ -863,6 +1076,10 @@ class BuiltinBroker:
         if "accounts" in changes:
             document["accounts"] = changes["accounts"]
         updated, problems = parse_settings(document)
+        if not problems:
+            topic = self._grid_topic(self._config_loader(), updated)
+            before = {issue["code"] for issue in policy_issues(settings, topic)}
+            problems = [issue for issue in policy_issues(updated, topic) if issue["code"] not in before]
         if problems:
             return _failure("invalid", "The change breaks a rule.", problems)
         known = {account.name for account in settings.accounts}
@@ -871,8 +1088,9 @@ class BuiltinBroker:
                 self._store_password(account.name, self._password_factory())
         result = self._persist(settings, updated)
         if result.ok:
-            for name in known - {account.name for account in updated.accounts}:
-                self.store.forget_mqtt_broker_secret(credentials_ref_for(name))
+            kept = {account.credentials_ref for account in updated.accounts}
+            for ref in {credentials_ref_for(name) for name in known} - kept:
+                self.store.forget_mqtt_broker_secret(ref)
         return result
 
     def _persist(self, before, after):
@@ -986,6 +1204,56 @@ def mqtt_answers(port, host="127.0.0.1") -> bool:
             return sock.recv(1) == b"\x20"
     except OSError:
         return False
+
+
+def follow_config_changes(refresh, config_path, *, wait, start=None):
+    """Run ``start``, then call ``refresh`` once each time ``config.json`` changes, until ``wait()`` returns false.
+
+    Setup, Maintenance, a System Build and a Guided Upgrade all write the
+    config, and the grid meter's topic is protected from it; watching the file
+    sees every writer. The first signature is taken before ``start``, so a
+    write while it runs is followed too. ``config_path`` is asked each time,
+    since a fresh host gets its installation only during setup.
+    """
+
+    seen = mappings_file_signature(config_path())
+    if start is not None:
+        start()
+    while wait():
+        current = mappings_file_signature(config_path())
+        if current != seen:
+            seen = current
+            refresh()
+
+
+def follow_builtin_broker_config(credential_store, *, compose=None, idle=None, start=None):
+    """For the Admin's lifetime: after every write of ``config.json``, the built-in broker follows it."""
+
+    from admin.install_context import detect_install_context
+
+    idle = idle or threading.Event()
+
+    def config_path():
+        with contextlib.suppress(Exception):
+            return detect_install_context().config_path
+        return ""
+
+    def refresh():
+        try:
+            result = builtin_broker_for_install(credential_store, compose=compose).refresh_after_config_change()
+        except Exception as exc:
+            result = _failure(type(exc).__name__, str(exc))
+        if result is not None and not result.ok:
+            print(f"Built-in MQTT broker: not refreshed after the config change ({result.status})", flush=True)
+
+    follow_config_changes(refresh, config_path, wait=lambda: not idle.wait(CONFIG_FOLLOW_SECONDS), start=start)
+
+
+def _this_host_addresses():
+    with contextlib.suppress(Exception):
+        address = host_address()
+        return (address,) if address else ()
+    return ()
 
 
 def reconcile_builtin_broker(credential_store, *, broker=None, compose=None) -> str | None:

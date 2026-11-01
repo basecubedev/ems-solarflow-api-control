@@ -280,6 +280,7 @@ from ems.zendure_mqtt.config_entries import EXTERNAL_MQTT_TYPE
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 MAX_JSON_BODY_BYTES = 4 * 1024
+MAX_MQTT_MAPPING_BODY_BYTES = 256 * 1024
 
 # A backup archive is the one request body that is not JSON. It is streamed to
 # disk rather than buffered, so the ceiling is about the install's own disk, not
@@ -3677,8 +3678,8 @@ class AdminHandler(BaseHTTPRequestHandler):
             self.server.credential_store, compose=getattr(self.server, "mqtt_compose", None)
         )
 
-    def _mqtt_body(self, allowed):
-        body = self._read_json_body()
+    def _mqtt_body(self, allowed, max_bytes=MAX_JSON_BODY_BYTES):
+        body = self._read_json_body(max_bytes)
         if body is None:
             return None
         if not isinstance(body, dict) or set(body) - set(allowed):
@@ -3757,7 +3758,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             "apply": {"document", "confirm"},
             "value-preview": {"device", "payloads", "session"},
         }[action]
-        body = self._mqtt_body(allowed)
+        body = self._mqtt_body(allowed, MAX_MQTT_MAPPING_BODY_BYTES)
         if body is None:
             return
         editor = MappingEditor(self._builtin_broker())

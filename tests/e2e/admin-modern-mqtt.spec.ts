@@ -108,4 +108,51 @@ test.describe("Modern Admin: built-in MQTT broker and mapping", () => {
     await wizard.getByText("Advanced").click();
     await expect(wizard.getByTestId("mqtt-wizard-id")).toHaveValue("balcony-south");
   });
+
+  test("anonymous access is asked for first, and each account sets its own password in its row", async ({ page, seedAdminScenario }) => {
+    const broker = {
+      configured: true, issues: [], running: true, profile_ref: "ems-mqtt", profile_users: [], grid_meter_topic: null, host_address: "192.0.2.40",
+      settings: { schema_version: 1, enabled: true, port: 1883, anonymous: false, accounts: [{ name: "devices", credentials_ref: "mqtt-broker-devices", topic_prefix: null, bridge: false, zendure: false }], grid_meter_account: null },
+      accounts: [{ name: "devices", topic_prefix: null, bridge: false, zendure: false, password_saved: true }],
+      containers: { "ems-mqtt-broker": "running", "ems-mqtt-mapping": null },
+      stop_impact: { external_devices: [], zendure_devices: [], grid_meter: false },
+    };
+    let changes = 0;
+    await page.route("**/api/discovery/mqtt-broker", (route) => route.fulfill({ json: broker }));
+    await page.route("**/api/discovery/mqtt-broker/settings", (route) => {
+      changes += 1;
+      route.fulfill({ json: { ok: true, status: "saved" } });
+    });
+    await seededAt(page, seedAdminScenario, "#/settings/addons");
+
+    await page.getByTestId("mqtt-broker-anonymous").click();
+    const dialog = page.locator("dialog[open]");
+    await expect(dialog).toContainText("Every device on your network can then read and publish without an account.");
+    await expect(dialog).toContainText("ems-solarflow/");
+    await page.keyboard.press("Escape");
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+    expect(changes).toBe(0);
+
+    const row = page.getByTestId("mqtt-broker-accounts").locator("li").filter({ hasText: "devices" });
+    await expect(row.getByTestId("mqtt-account-password-input")).toHaveCount(0);
+    await row.getByTestId("mqtt-account-own-password").click();
+    await expect(row.getByTestId("mqtt-account-password-input")).toBeVisible();
+  });
+
+  test("a mapped device keeps its id when it is edited", async ({ page, seedAdminScenario }) => {
+    await page.route("**/api/discovery/mqtt-mapping", async (route) => {
+      const response = await route.fetch();
+      const view = await response.json();
+      view.document = { schema_version: 1, devices: [{ id: "balkon", label: "Balkon", broker_ref: "ems-mqtt", values: { inverterPower: { sources: [{ topic: "plug/status", format: "json", path: "apower" }] } } }] };
+      await route.fulfill({ response, json: view });
+    });
+    await seededAt(page, seedAdminScenario, "#/settings/devices");
+    const mapping = page.getByTestId("mqtt-mapping");
+
+    await mapping.getByRole("button", { name: "Edit" }).click();
+
+    const id = page.getByTestId("mqtt-mapping-editor").getByTestId("mqtt-device-id");
+    await expect(id).toHaveValue("balkon");
+    await expect(id).toHaveAttribute("readonly", "");
+  });
 });

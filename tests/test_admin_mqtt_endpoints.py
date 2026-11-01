@@ -61,6 +61,7 @@ def server(tmp_path, monkeypatch, isolated_install_root):
             runtime_identity=(1000, 1000),
             port_free=lambda port: True,
             port_answers=lambda port: True,
+            host_addresses=lambda: (),
         )
 
     monkeypatch.setattr(admin_server, "builtin_broker_for_install", broker_for)
@@ -204,3 +205,26 @@ def test_live_topics_need_a_running_broker_and_show_what_arrives(server):
     assert _post(base, f"/api/discovery/mqtt-topics/sessions/{payload['session']}/stop", {})[2]["ok"]
     assert watcher.stopped
     assert request(f"{base}/api/discovery/mqtt-topics/sessions/{payload['session']}")[0] == 404
+
+
+def test_a_mapping_of_many_devices_fits_the_request(server):
+    base, _compose, root = server
+    devices = [
+        {
+            "id": f"balcony-{index}",
+            "label": f"Balcony plant {index}",
+            "broker_ref": "ems-mqtt",
+            "values": {
+                target: {"sources": [{"topic": f"shellyplusplugs-a8032ab1234{index}/status/switch:0", "format": "json", "path": "apower", "invert": True, "negative": "zero", "max_age_seconds": 600}]}
+                for target in ("inverterPower", "solarPower")
+            },
+        }
+        for index in range(24)
+    ]
+    document = {"schema_version": 1, "devices": devices}
+    assert len(json.dumps({"document": document, "confirm": True})) > 8 * 1024
+
+    status, _h, payload = _post(base, "/api/discovery/mqtt-mapping/apply", {"document": document, "confirm": True})
+
+    assert status == 200 and payload["ok"], payload
+    assert json.loads(open(f"{root}/config/mqtt/mappings.json", encoding="utf-8").read()) == document

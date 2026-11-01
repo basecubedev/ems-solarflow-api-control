@@ -24,6 +24,7 @@ from ems.config import is_zendure_smartmeter_d0_topic
 from ems.mqtt_control.topic_families import FAMILY_UNKNOWN
 from ems.zendure_mqtt.external_catalog import in_catalog_namespace
 from ems.zendure_mqtt.payload_values import MAX_PATH_SEGMENTS, plain_number
+from mqtt_mapping.config import MAX_TOPIC_LENGTH
 
 MAX_TOPICS = 1000
 MAX_PAYLOAD_BYTES = 16 * 1024
@@ -153,7 +154,7 @@ class TopicTree:
     lock: threading.Lock = field(default_factory=threading.Lock)
 
     def observe(self, topic, payload, retained=False):
-        if not isinstance(topic, str) or topic.startswith("$"):
+        if not isinstance(topic, str) or topic.startswith("$") or len(topic) > MAX_TOPIC_LENGTH:
             return
         payload = bytes(payload or b"")[:MAX_PAYLOAD_BYTES]
         now = self.clock()

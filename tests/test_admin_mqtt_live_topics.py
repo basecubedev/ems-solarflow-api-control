@@ -21,6 +21,7 @@ from admin.mqtt_live_topics import (
     recognize,
     topic_values,
 )
+from mqtt_mapping.config import MAX_TOPIC_LENGTH
 
 pytestmark = [
     pytest.mark.unit,
@@ -225,3 +226,11 @@ def test_a_plain_number_is_named_by_its_topic():
     assert topic_values(b"410", "solar/1161234567/0/power")[1][0]["likely"] == "power"
     assert topic_values(b"81", "akku/soc")[1][0]["likely"] == "soc"
     assert topic_values(b"5", "heating/flow")[1][0]["likely"] is None
+
+
+def test_a_topic_longer_than_a_mapping_may_name_is_not_kept():
+    tree = TopicTree(clock=Clock())
+    tree.observe("a/" + "x" * MAX_TOPIC_LENGTH, b"1")
+    tree.observe("plug/power", b"1")
+
+    assert list(tree.topics) == ["plug/power"]

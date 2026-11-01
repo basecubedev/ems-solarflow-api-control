@@ -29,9 +29,12 @@ from admin.mqtt_broker import (
     Account,
     BrokerSettings,
     BuiltinBroker,
+    MAPPING_STATUS_IN_CONTAINER,
     _port_free,
     converge_after_restore,
     credentials_ref_for,
+    follow_config_changes,
+    grid_meter_topic,
     hash_password,
     mqtt_answers,
     parse_settings,
@@ -40,7 +43,9 @@ from admin.mqtt_broker import (
     render_mosquitto_conf,
 )
 from ems import backup as backup_mod
-from ems.zendure_mqtt.builtin_broker import BUILTIN_PROFILE_REF
+from ems.mqtt_control.zendure_commands import build_power_command
+from ems.zendure_mqtt.builtin_broker import BUILTIN_PROFILE_REF, EMS_COMMAND_TOPICS, MAPPING_STATUS_PARTS, mapping_status_path
+from ems.zendure_mqtt.write_protocols import canonical_profile_write_topic
 
 pytestmark = [
     pytest.mark.unit,
@@ -113,6 +118,7 @@ def _broker(install, *, config=None, compose=None, port_free=True, answers=True)
         runtime_identity=(1000, 1000),
         port_free=lambda port: port_free,
         port_answers=lambda port: answers,
+        host_addresses=lambda: (),
         monotonic=lambda: clock["now"],
         sleep=sleep,
         password_factory=Passwords(),
@@ -201,7 +207,8 @@ def test_the_acl_protects_what_the_regulation_reads_in_every_mode():
     devices = acl[acl.index("user devices") : acl.index("user zendure")]
     assert "topic deny ems-solarflow/#" in devices and "topic deny iot/#" in devices
     zendure = acl[acl.index("user zendure") : acl.index("user nodered")]
-    assert "topic readwrite iot/#" in zendure and "topic deny iot/#" not in zendure
+    assert "topic read iot/#" in zendure and "topic deny iot/#" not in zendure
+    assert "topic readwrite #" not in zendure and "topic readwrite iot/#" not in zendure
     assert "topic deny ems-solarflow/#" in zendure
     nodered = acl[acl.index("user nodered") : acl.index("user ems")]
     assert "topic readwrite ems-solarflow/#" in nodered and "topic deny ems-solarflow/#" not in nodered
@@ -213,6 +220,7 @@ def test_the_acl_protects_what_the_regulation_reads_in_every_mode():
         "topic read Zendure/#",
         "topic read /#",
         "topic write iot/+/+/properties/write",
+        "topic write iot/+/+/function/invoke",
         "",
     ]
     assert acl[acl.index("user ems-mapping") : acl.index("user ems-admin")] == [
@@ -847,3 +855,340 @@ def test_every_tree_the_ems_reads_zendure_on_is_protected():
         root = subscription.split("/", 1)[0]
         assert f"topic deny {root}/#" in anonymous
         assert topic_problem(f"{root}/pk/device/properties/report") == "mqtt_mapping_topic_native"
+
+
+def _matches(pattern, topic):
+    parts, levels = pattern.split("/"), topic.split("/")
+    for index, part in enumerate(parts):
+        if part == "#":
+            return True
+        if index >= len(levels) or part not in ("+", levels[index]):
+            return False
+    return len(parts) == len(levels)
+
+
+def _block(acl, user):
+    lines = acl.split("\n")
+    start = lines.index(f"user {user}")
+    return lines[start + 1 : lines.index("", start)]
+
+
+def _may(block, access, topic):
+    rules = [line.split(" ", 2)[1:] for line in block if line.startswith("topic ")]
+    if any(kind == "deny" and _matches(pattern, topic) for kind, pattern in rules):
+        return False
+    return any(kind in (access, "readwrite") and _matches(pattern, topic) for kind, pattern in rules)
+
+
+def _command_topics():
+    invoke = build_power_command(
+        hardware_profile="hub_1200", target_w=500, product_key="PK", device_id="SN", message_id=1, timestamp=1
+    ).topic
+    return (canonical_profile_write_topic("PK", "SN"), invoke)
+
+
+def test_the_ems_may_publish_every_command_topic_it_builds_and_the_grant_names_no_other():
+    ems = _block(render_acl(BrokerSettings(accounts=(Account("devices"),))), "ems")
+
+    for topic in _command_topics():
+        assert _may(ems, "write", topic), topic
+    for pattern in EMS_COMMAND_TOPICS:
+        assert any(_matches(pattern, topic) for topic in _command_topics()), pattern
+
+
+def test_a_zendure_account_receives_commands_but_never_sends_one():
+    zendure = _block(render_acl(BrokerSettings(accounts=(Account("zendure", zendure=True),))), "zendure")
+
+    for topic in _command_topics():
+        assert _may(zendure, "read", topic) and not _may(zendure, "write", topic), topic
+    for topic in ("iot/PK/SN/properties/report", "iot/PK/SN/function/invoke/reply", "/PK/SN/properties/report", "Zendure/sensor/SN/power"):
+        assert _may(zendure, "write", topic), topic
+    assert _may(zendure, "read", "Zendure/number/SN/outputLimit/set")
+    assert not _may(zendure, "write", "Zendure/number/SN/outputLimit/set")
+    assert not _may(zendure, "write", "shellies/plug/power")
+    assert not _may(zendure, "write", "ems-solarflow/balcony/state")
+
+
+SHARED_RIGHTS = pytest.mark.parametrize(
+    ("change", "code"),
+    [
+        ({"accounts": [{"name": "devices", "zendure": True}]}, "mqtt_broker_shared_account_zendure"),
+        ({"accounts": [{"name": "devices"}], "grid_meter_account": "devices"}, "mqtt_broker_grid_meter_account_shared"),
+    ],
+    ids=["zendure-option", "grid-meter"],
+)
+
+
+@SHARED_RIGHTS
+def test_the_account_every_device_shares_gets_no_control_relevant_right(install, change, code):
+    broker = _broker(install)
+    broker.enable()
+
+    result = broker.update(change)
+
+    assert not result["ok"] and [issue["code"] for issue in result["issues"]] == [code]
+
+
+@SHARED_RIGHTS
+def test_a_broker_json_that_already_grants_it_is_named_left_out_and_locks_nothing(install, change, code):
+    meter = {"grid_meter": {"type": "mqtt", "mqtt": {"broker_ref": BUILTIN_PROFILE_REF, "topic": "meter/power"}}}
+    _write_settings(install, enabled=True, **change)
+    (install / "mqtt").mkdir()
+    (install / "mqtt" / "compose.yml").write_text("services: {}\n", encoding="utf-8")
+    broker = _broker(install, config=meter)
+    broker.set_password("devices", "a-long-password")
+    broker.compose.states[BROKER_SERVICE] = "running"
+
+    assert code in [issue["code"] for issue in broker.view()["issues"]]
+    assert broker.update({"port": 1884})["ok"]
+    devices = _block((install / "mqtt" / "broker" / "acl").read_text(encoding="utf-8"), "devices")
+    assert not _may(devices, "write", "iot/PK/SN/properties/report") and not _may(devices, "write", "meter/power")
+    assert broker.stop()["ok"] and broker.compose.states[BROKER_SERVICE] == "exited"
+
+
+@pytest.mark.parametrize(("zendure", "codes"), [(False, ["mqtt_broker_grid_meter_account_lacks_option"]), (True, [])])
+def test_a_meter_in_a_zendure_tree_is_named_until_its_account_has_that_option(install, zendure, codes):
+    config = {"grid_meter": {"type": "mqtt", "mqtt": {"broker_ref": BUILTIN_PROFILE_REF, "topic": "Zendure/sensor/D0ABC/totalPower"}}}
+    _write_settings(install, accounts=[{"name": "devices"}, {"name": "meter", "zendure": zendure}], grid_meter_account="meter")
+    broker = _broker(install, config=config)
+    settings, _issues, _exists = broker.load()
+
+    assert [issue["code"] for issue in broker.view()["issues"]] == codes
+    assert broker.render(settings) == []
+
+
+@pytest.mark.parametrize(
+    ("mqtt", "expected"),
+    [
+        ({"host": "192.168.1.40", "port": 1883, "topic": "meter/power"}, "meter/power"),
+        ({"host": "ems-mqtt-broker", "port": 1883, "topic": "meter/power"}, "meter/power"),
+        ({"host": "192.168.1.41", "port": 1883, "topic": "meter/power"}, None),
+        ({"host": "192.168.1.40", "port": 1884, "topic": "meter/power"}, None),
+        ({"broker_ref": "home", "topic": "meter/power"}, "meter/power"),
+    ],
+    ids=["inline-host-address", "inline-container-name", "another-host", "another-port", "profile-naming-this-host"],
+)
+def test_a_meter_naming_this_host_and_the_broker_port_is_on_the_broker(mqtt, expected):
+    config = {
+        "zendure_mqtt": {"brokers": {"home": {"source": "local_mqtt", "host": "192.168.1.40", "port": 1883}}},
+        "grid_meter": {"type": "mqtt", "mqtt": mqtt},
+    }
+
+    assert grid_meter_topic(config, port=1883, host_addresses=("192.168.1.40",)) == expected
+
+
+def test_a_meter_saved_after_the_broker_started_is_protected_at_once(install):
+    _write_settings(install, enabled=True, accounts=[{"name": "devices"}, {"name": "meter"}], grid_meter_account="meter")
+    broker = _broker(install, config={})
+    for name in ("devices", "meter"):
+        broker.set_password(name, "a-long-password")
+    broker.compose.states[BROKER_SERVICE] = "running"
+    broker.compose.calls.clear()
+    meter = {"grid_meter": {"type": "mqtt", "mqtt": {"broker_ref": BUILTIN_PROFILE_REF, "topic": "meter/power"}}}
+    (install / "config" / "config.json").write_text(json.dumps(meter), encoding="utf-8")
+
+    first, second = broker.refresh_after_config_change(), broker.refresh_after_config_change()
+
+    acl = (install / "mqtt" / "broker" / "acl").read_text(encoding="utf-8")
+    assert "topic deny meter/power" in _block(acl, "devices")
+    assert "topic readwrite meter/power" in _block(acl, "meter")
+    assert (first.status, second.status) == ("reloaded", "unchanged")
+    assert broker.compose.calls == [("reload", BROKER_SERVICE)]
+
+
+def test_a_broker_that_is_off_is_left_alone_after_a_config_change(install):
+    broker = _broker(install, config={})
+
+    assert broker.refresh_after_config_change() is None
+    assert not (install / "mqtt").exists()
+
+
+def test_renaming_an_account_only_in_case_keeps_its_password(install):
+    _write_settings(install, accounts=[{"name": "Devices"}])
+    broker = _broker(install)
+    broker.set_password("Devices", "a-long-password")
+
+    result = broker.update({"accounts": [{"name": "devices"}]})
+
+    assert result["ok"] and broker.password("devices") == "a-long-password"
+
+
+def test_an_admin_running_as_root_starts_no_broker(install):
+    broker = _broker(install)
+    broker.runtime_identity = (0, 0)
+    settings, _issues, _exists = broker.load()
+
+    assert [issue["code"] for issue in broker.render(settings)] == ["mqtt_broker_runs_as_root"]
+
+
+def test_the_broker_files_with_secrets_are_the_owners_alone(install, monkeypatch):
+    modes = []
+    replace = os.replace
+
+    def recording_replace(source, target):
+        modes.append((os.path.basename(target), stat.S_IMODE(os.stat(source).st_mode)))
+        return replace(source, target)
+
+    monkeypatch.setattr(os, "replace", recording_replace)
+    broker = _broker(install)
+    settings, _issues, _exists = broker.load()
+
+    assert broker.render(settings) == []
+
+    secrets = {"acl", "passwd", "mapping-credentials.json"}
+    assert {name: mode for name, mode in modes if name in secrets} == dict.fromkeys(secrets, 0o600)
+    for directory in ("broker", "mapping"):
+        assert stat.S_IMODE((install / "mqtt" / directory).stat().st_mode) == 0o700
+
+
+def test_both_containers_run_hardened_and_the_mapping_may_write_only_its_status(tmp_path):
+    compose = render_compose(port=1883, admin_image="admin:v1", puid=1000, pgid=1000)
+    broker, mapping = compose.split(f"  {MAPPING_SERVICE}:")
+
+    for block in (broker, mapping):
+        for line in ("read_only: true", "cap_drop: [ALL]", 'security_opt: ["no-new-privileges:true"]', "pids_limit: 64", "mem_limit: "):
+            assert line in block, line
+    mounts = [line.strip()[2:] for line in mapping.split("\n") if line.strip().startswith(("- ../", "- ./"))]
+    writable = [mount for mount in mounts if not mount.endswith(":ro")]
+    assert writable == [f"../data/{MAPPING_STATUS_PARTS[0]}:/app/status"]
+    host_dir = os.path.normpath(os.path.join(tmp_path / "mqtt", writable[0].split(":")[0]))
+    assert host_dir == os.path.dirname(mapping_status_path(tmp_path / "data"))
+    assert MAPPING_STATUS_IN_CONTAINER == f"/app/status/{MAPPING_STATUS_PARTS[1]}"
+    assert compose.count(MAPPING_STATUS_IN_CONTAINER) == 2
+
+
+def test_the_broker_bounds_the_memory_messages_may_take():
+    lines = render_mosquitto_conf(BrokerSettings()).split("\n")
+
+    assert "memory_limit 33554432" in lines and "max_queued_messages 1000" in lines
+
+
+def test_the_mapping_gets_the_credentials_of_the_brokers_it_reads_and_no_other(install):
+    store = CredentialStore(install / "config")
+    store.save_mqtt_broker_secret("garage-ref", "garage-user", "garage-password")
+    config = {
+        "zendure_mqtt": {
+            "brokers": {
+                "iobroker": {"source": "local_mqtt", "host": "192.0.2.20", "port": 1883},
+                "garage": {"source": "local_mqtt", "host": "192.0.2.21", "port": 1883, "credentials_ref": "garage-ref"},
+            }
+        }
+    }
+    mappings = {
+        "schema_version": 1,
+        "devices": [
+            {"id": "akku", "broker_ref": "iobroker", "values": {"inverterPower": {"sources": [{"topic": "akku/ac", "format": "number"}]}}}
+        ],
+    }
+    _write_settings(install)
+    (install / "config" / "mqtt" / "mappings.json").write_text(json.dumps(mappings), encoding="utf-8")
+    broker = _broker(install, config=config)
+    settings, _issues, _exists = broker.load()
+
+    assert broker.render(settings) == []
+
+    credentials = json.loads((install / "mqtt" / "mapping" / "mapping-credentials.json").read_text())
+    assert set(credentials["brokers"]) == {BUILTIN_PROFILE_REF, "iobroker"}
+    assert "garage-password" not in json.dumps(credentials)
+
+
+def test_a_meter_the_ems_reads_with_another_account_is_named_since_its_topic_stays_protected(install):
+    CredentialStore(install / "config").save_mqtt_broker_secret("home-ref", "devices", "devices-password")
+    config = {
+        "zendure_mqtt": {"brokers": {"home": {"source": "local_mqtt", "host": "192.168.1.40", "port": 1883, "credentials_ref": "home-ref"}}},
+        "grid_meter": {"type": "mqtt", "mqtt": {"broker_ref": "home", "topic": "meter/power"}},
+    }
+    _write_settings(install, accounts=[{"name": "devices"}, {"name": "meter"}], grid_meter_account="meter")
+    broker = _broker(install, config=config)
+    broker._host_addresses = lambda: ("192.168.1.40",)
+    settings, _issues, _exists = broker.load()
+
+    view = broker.view()
+
+    assert view["grid_meter_topic"] == "meter/power"
+    assert [issue["code"] for issue in view["issues"]] == ["mqtt_broker_grid_meter_reader_denied"]
+    assert broker.render(settings) == []
+    assert "topic deny meter/power" in _block((install / "mqtt" / "broker" / "acl").read_text(encoding="utf-8"), "devices")
+
+
+def test_the_shared_account_as_meter_account_is_named_once_and_never_told_to_take_an_option(install):
+    config = {"grid_meter": {"type": "mqtt", "mqtt": {"broker_ref": BUILTIN_PROFILE_REF, "topic": "Zendure/sensor/D0ABC/totalPower"}}}
+    _write_settings(install, grid_meter_account="devices")
+
+    codes = [issue["code"] for issue in _broker(install, config=config).view()["issues"]]
+
+    assert codes == ["mqtt_broker_grid_meter_account_shared"]
+
+
+def test_a_meter_the_ems_reads_anonymously_is_named_too(install):
+    config = {"grid_meter": {"type": "mqtt", "mqtt": {"host": "192.168.1.40", "port": 1883, "topic": "meter/power"}}}
+    _write_settings(install, anonymous=True)
+    broker = _broker(install, config=config)
+    broker._host_addresses = lambda: ("192.168.1.40",)
+
+    assert [issue["code"] for issue in broker.view()["issues"]] == ["mqtt_broker_grid_meter_reader_denied"]
+
+
+def test_a_meter_read_through_the_built_in_profile_is_no_finding(install):
+    config = {"grid_meter": {"type": "mqtt", "mqtt": {"broker_ref": BUILTIN_PROFILE_REF, "topic": "meter/power"}}}
+    _write_settings(install, accounts=[{"name": "devices"}, {"name": "meter"}], grid_meter_account="meter")
+
+    assert _broker(install, config=config).view()["issues"] == []
+
+
+def test_with_the_broker_off_a_config_change_still_reaches_the_mapping_credentials(install):
+    mappings = {
+        "schema_version": 1,
+        "devices": [{"id": "akku", "broker_ref": "iobroker", "values": {"inverterPower": {"sources": [{"topic": "akku/ac", "format": "number"}]}}}],
+    }
+    _write_settings(install)
+    (install / "config" / "mqtt" / "mappings.json").write_text(json.dumps(mappings), encoding="utf-8")
+    profile = {"zendure_mqtt": {"brokers": {"iobroker": {"source": "local_mqtt", "host": "192.0.2.20", "port": 1883}}}}
+    broker = _broker(install, config=profile)
+    broker.sync_mapping_container()
+    profile["zendure_mqtt"]["brokers"]["iobroker"]["host"] = "192.0.2.21"
+    (install / "config" / "config.json").write_text(json.dumps(profile), encoding="utf-8")
+
+    result = broker.refresh_after_config_change()
+
+    credentials = json.loads((install / "mqtt" / "mapping" / "mapping-credentials.json").read_text())
+    assert result.status == "rendered" and credentials["brokers"]["iobroker"]["host"] == "192.0.2.21"
+
+
+def test_a_restore_that_switched_the_broker_off_stops_it(install):
+    _write_settings(install, enabled=False)
+    (install / "mqtt").mkdir()
+    (install / "mqtt" / "compose.yml").write_text("services: {}\n", encoding="utf-8")
+    broker = _broker(install)
+    broker.compose.states[BROKER_SERVICE] = "running"
+
+    broker.reconcile()
+
+    assert ("stop", (BROKER_SERVICE,)) in broker.compose.calls
+
+
+def test_the_broker_follows_every_write_of_the_config_and_only_those(tmp_path):
+    config = tmp_path / "config.json"
+    config.write_text("{}", encoding="utf-8")
+    seen = []
+
+    def write(text):
+        return lambda: config.write_text(text, encoding="utf-8")
+
+    steps = iter([lambda: None, write('{"a": 1}'), lambda: None, write('{"a": 22}'), config.unlink])
+
+    def wait():
+        step = next(steps, None)
+        if step is None:
+            return False
+        step()
+        return True
+
+    follow_config_changes(
+        lambda: seen.append(config.read_text(encoding="utf-8") if config.exists() else None),
+        lambda: config,
+        wait=wait,
+        start=write('{"while": "starting"}'),
+    )
+
+    assert seen == ['{"while": "starting"}', '{"a": 1}', '{"a": 22}', None]

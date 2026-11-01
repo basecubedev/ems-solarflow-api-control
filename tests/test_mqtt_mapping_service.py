@@ -9,6 +9,7 @@ import pytest
 from mqtt_mapping import __main__ as entry
 from mqtt_mapping.brokers import BrokerEndpoint, load_broker_file
 from mqtt_mapping.service import MappingService, ServicePaths
+from ems.zendure_mqtt.builtin_broker import mapping_status_path
 from mqtt_mapping.status import read_status, status_is_fresh
 
 pytestmark = [
@@ -55,7 +56,7 @@ def service(tmp_path):
     paths = ServicePaths(
         str(tmp_path / "config" / "mqtt" / "mappings.json"),
         str(tmp_path / "mqtt" / "mapping-credentials.json"),
-        str(tmp_path / "data" / "mqtt-mapping-status.json"),
+        mapping_status_path(tmp_path / "data"),
     )
     for path in (paths.mappings, paths.brokers):
         os.makedirs(os.path.dirname(path), exist_ok=True)

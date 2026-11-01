@@ -27,6 +27,7 @@ from ems.zendure_mqtt.builtin_broker import (
     builtin_broker_root_causes,
     builtin_broker_view,
     builtin_profile_users,
+    mapping_status_path,
 )
 
 pytestmark = [
@@ -60,7 +61,8 @@ def _broker(config_dir, **document):
 
 
 def _status(data_dir, devices, age=0):
-    path = data_dir / "mqtt-mapping-status.json"
+    path = Path(mapping_status_path(data_dir))
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"schema_version": 1, "devices": devices}), encoding="utf-8")
     if age:
         stamp = path.stat().st_mtime - age

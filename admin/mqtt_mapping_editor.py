@@ -8,11 +8,10 @@ service reloads it by itself and the EMS does not restart.
 """
 
 import json
-import os
 
 from admin.mqtt_broker import BuiltinBroker
 from ems.file_io import atomic_write_bytes
-from ems.zendure_mqtt.builtin_broker import mappings_path
+from ems.zendure_mqtt.builtin_broker import mapping_status_path, mappings_path
 from mqtt_mapping.config import (
     DEFAULT_PUBLISH_INTERVAL_SECONDS,
     MAX_DEVICES,
@@ -65,7 +64,7 @@ class MappingEditor:
             "document": self._document(),
             "issues": issues,
             "broker_refs": sorted(refs),
-            "status": read_status(os.path.join(self.broker.data_dir, "mqtt-mapping-status.json")),
+            "status": read_status(mapping_status_path(self.broker.data_dir)),
             "targets": list(TARGETS),
             "limits": {
                 "devices": MAX_DEVICES,

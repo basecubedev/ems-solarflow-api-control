@@ -10,9 +10,11 @@ a stopped service.
 
 import json
 import threading
+from pathlib import Path
 
 import pytest
 
+from ems.zendure_mqtt.builtin_broker import mapping_status_path
 from tests.helpers.mosquitto import (
     mosquitto_broker,
     publish_once,
@@ -59,7 +61,7 @@ def test_a_shelly_payload_becomes_an_external_device_the_ems_reads(tmp_path):
         paths = ServicePaths(
             str(tmp_path / "config" / "mqtt" / "mappings.json"),
             str(tmp_path / "mqtt" / "mapping-credentials.json"),
-            str(tmp_path / "data" / "mqtt-mapping-status.json"),
+            mapping_status_path(tmp_path / "data"),
         )
         _write(tmp_path / "mqtt" / "mapping-credentials.json",
                {"schema_version": 1, "brokers": {"ems-mqtt": {"host": host, "port": port}}})
@@ -113,5 +115,5 @@ def test_a_shelly_payload_becomes_an_external_device_the_ems_reads(tmp_path):
             stop.set()
             runner.join(timeout=10)
 
-        status = json.loads((tmp_path / "data" / "mqtt-mapping-status.json").read_text())
+        status = json.loads(Path(mapping_status_path(tmp_path / "data")).read_text())
         assert status["devices"][0]["last_published_at"]

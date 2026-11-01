@@ -128,6 +128,7 @@ def broker(tmp_path):
         runtime_identity=(os.getuid(), os.getgid()),
         port_free=lambda port: True,
         port_answers=lambda port: True,
+        host_addresses=lambda: (),
     )
     assert admin.enable()["ok"]
     admin.update(
@@ -181,11 +182,16 @@ def test_each_client_reaches_only_what_its_mode_allows(broker):
             assert not watcher.delivered(client, "/pk/dev{n}/properties/report", "shellies/ok")
             assert not watcher.delivered(client, "meter/power", "shellies/ok")
         assert watcher.arrives(zendure, "iot/pk/dev{n}/properties/report")
-        assert not watcher.delivered(zendure, "ems-solarflow/x{n}/state", "shellies/ok")
+        assert watcher.arrives(zendure, "iot/pk/dev{n}/function/invoke/reply")
+        assert watcher.arrives(zendure, "Zendure/sensor/dev{n}/totalPower")
+        assert not watcher.delivered(zendure, "Zendure/number/dev{n}/outputLimit/set", "iot/pk/ok/properties/report")
+        for topic in ("ems-solarflow/x{n}/state", "iot/pk/dev{n}/properties/write", "iot/pk/dev{n}/function/invoke", "shellies/x{n}"):
+            assert not watcher.delivered(zendure, topic, "iot/pk/ok/properties/report"), topic
         assert watcher.arrives(meter, "meter/power")
         assert watcher.arrives(mapping, "ems-solarflow/balkon{n}/state")
         assert not watcher.delivered(mapping, "iot/pk/dev{n}/properties/write", "ems-solarflow/ok/state")
         assert watcher.arrives(ems, "iot/pk/dev{n}/properties/write")
+        assert watcher.arrives(ems, "iot/pk/dev{n}/function/invoke")
         assert not watcher.delivered(ems, "iot/pk/dev{n}/properties/report", "iot/pk/ok/properties/write")
     finally:
         for client in clients:

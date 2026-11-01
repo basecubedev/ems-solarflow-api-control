@@ -20,12 +20,13 @@ BUILTIN_PROFILE_REF = "ems-mqtt"
 BUILTIN_CREDENTIALS_REF = "ems-mqtt"
 BROKER_SETTINGS_PARTS = ("mqtt", "broker.json")
 MAPPINGS_PARTS = ("mqtt", "mappings.json")
-MAPPING_STATUS_FILENAME = "mqtt-mapping-status.json"
+MAPPING_STATUS_PARTS = ("mqtt-mapping", "status.json")
 MAPPING_STATUS_STALE_SECONDS = 120
 EMS_STATUS_STALE_SECONDS = 120
 BUILTIN_BROKER_STATES = ("off", "on", "connected", "not_connected", "unknown")
 NATIVE_TOPIC_ROOTS = ("iot", "Zendure", "")
 NATIVE_TOPIC_TREES = tuple(f"{root}/#" for root in NATIVE_TOPIC_ROOTS)
+EMS_COMMAND_TOPICS = ("iot/+/+/properties/write", "iot/+/+/function/invoke")
 _UNREADABLE = object()
 
 
@@ -38,7 +39,7 @@ def mappings_path(config_dir) -> str:
 
 
 def mapping_status_path(data_dir) -> str:
-    return os.path.join(str(data_dir), MAPPING_STATUS_FILENAME)
+    return os.path.join(str(data_dir), *MAPPING_STATUS_PARTS)
 
 
 def _read_json(path):
