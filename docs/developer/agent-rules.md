@@ -344,6 +344,15 @@ not here: this file has to stay true on a machine that is not the maintainer's.
 
 ### Playwright
 
+- An end-to-end test of what a user does drives every step through the web
+  page: no API request to take a step or to wait for one, no reload to make the
+  page catch up, no shortcut the user does not have. Preparing the world before
+  the journey and checking its effect afterwards (the config file, the EMS
+  reading) are not steps. A test that sends a request no page would send, to
+  prove the server refuses it, is an authority test, not a user journey. The
+  mapping end-to-end run passed while a user could not finish it: it polled the
+  API, registered a broker over it and reloaded the page, the three steps the
+  page did not offer.
 - Do not use arbitrary `waitForTimeout`; use response, event or locator
   authority.
 - Hold previews and temporary resources in `try/finally`.
