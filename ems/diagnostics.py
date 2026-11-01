@@ -452,6 +452,31 @@ def diagnose_parent_path(checks, section, code_prefix, path, label,
     )
 
 
+MQTT_CONTROL_UNUSED_DEVICE_KEYS = frozenset({"ip", "sn", "smart_mode", "min_soc", "max_soc", "winter_policy"})
+
+
+def diagnose_device_template(item, template_device):
+    """The part of the template's device entry that applies to ``item``, or ``None``.
+
+    The template describes a device the EMS controls over its local API. An
+    entry the EMS only reads -- an E3/DC, an external device, a telemetry-only
+    Zendure MQTT device -- uses none of its control keys, and its own
+    validation names a missing name or address. A device controlled over
+    MQTT is reached through its broker and addressed by its MQTT route, never
+    by ``ip`` or ``sn``, and gets no state reconciliation, so the keys that
+    only feed it -- ``smart_mode``, the SoC limits, the winter policy -- are
+    never used either.
+    """
+
+    if is_read_only_device_config(item):
+        return None
+    if not zendure_mqtt_entries.is_mqtt_telemetry_device_config(item):
+        return template_device
+    if not zendure_mqtt_entries.is_control_zendure_mqtt_device_config(item):
+        return None
+    return {key: value for key, value in template_device.items() if key not in MQTT_CONTROL_UNUSED_DEVICE_KEYS}
+
+
 def diagnose_missing_template_keys(config_data, template_data):
     missing = []
 
@@ -475,8 +500,11 @@ def diagnose_missing_template_keys(config_data, template_data):
             and isinstance(current, list)
         ):
             for index, item in enumerate(current):
-                if isinstance(item, dict):
-                    walk(item, template[0], f"{prefix}.{index}")
+                if not isinstance(item, dict):
+                    continue
+                item_template = diagnose_device_template(item, template[0]) if prefix == "devices" else template[0]
+                if item_template is not None:
+                    walk(item, item_template, f"{prefix}.{index}")
 
     walk(config_data, template_data, "")
     return sorted(missing)

@@ -78,6 +78,16 @@ the system regulates but export/import, PV usage, or SOC balancing looks poor
 over time. Use `--support-bundle` before opening a GitHub issue or forum
 support request.
 
+Normal `diagnose` compares `config.json` with `config.template.json` and warns
+about each key the config lacks. The template's device entry describes a device
+the EMS controls over its local API, so a device entry is held to it only where
+those keys apply. A device controlled over MQTT is not asked for `ip` or `sn`,
+because it is reached through its broker, nor for the keys that only feed state
+reconciliation (`smart_mode`, `min_soc`, `max_soc`, `winter_policy`), because
+the EMS reconciles no device state over MQTT. A device the EMS only reads (an
+external MQTT device, a telemetry-only Zendure MQTT device, an E3/DC) is asked
+for none of them.
+
 Normal `diagnose` also includes the optional battery full-charge assist section.
 It reads the core EMS state database when present and reports per-device
 `last_full_charge_at`, `next_due_at`, pending restore flags, and read-only
