@@ -1,6 +1,21 @@
 {
   "builds": [
     {
+      "admin_digest": "sha256:40b2973b773d05f4062896a312a236e19d7e41c28bedfefd64f07b193180df67",
+      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-mqtt-broker-mapping-6138d9ba78-aa7b90a-41261032987-1",
+      "build_id": "dev-feat-mqtt-broker-mapping-6138d9ba78-aa7b90a-41261032987-1",
+      "channel": "development",
+      "created_at": "2026-11-01T05:13:57Z",
+      "display_name": "Feature feat-mqtt-broker-mapping",
+      "ems_digest": "sha256:2759d9c6c3959d5191fa25ead9cdc53ccb94e0310c53055784b767668074735d",
+      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-feat-mqtt-broker-mapping-6138d9ba78-aa7b90a-41261032987-1",
+      "installable": true,
+      "revision": "aa7b90a6bb7be69392a76198151b62b6e67720e5",
+      "run_attempt": 1,
+      "run_id": "41261032987",
+      "tag": "dev-feat-mqtt-broker-mapping-6138d9ba78-aa7b90a-41261032987-1"
+    },
+    {
       "admin_digest": "sha256:2e94e3dfa67d58db8b281cabefd36cdfae3e691c843addaea196cd7b48f23040",
       "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-mqtt-broker-mapping-6138d9ba78-936f172-41250257060-1",
       "build_id": "dev-feat-mqtt-broker-mapping-6138d9ba78-936f172-41250257060-1",
@@ -14,21 +29,6 @@
       "run_attempt": 1,
       "run_id": "41250257060",
       "tag": "dev-feat-mqtt-broker-mapping-6138d9ba78-936f172-41250257060-1"
-    },
-    {
-      "admin_digest": "sha256:a44899cf4194abd52227fffaec16f32e0cd21cebcdf3c686ea1a070a1fff0c3f",
-      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-mqtt-broker-mapping-6138d9ba78-adc010b-41235855912-1",
-      "build_id": "dev-feat-mqtt-broker-mapping-6138d9ba78-adc010b-41235855912-1",
-      "channel": "development",
-      "created_at": "2026-10-31T19:56:54Z",
-      "display_name": "Feature feat-mqtt-broker-mapping",
-      "ems_digest": "sha256:9ec3fb003411e24d27f05adb7c0e14e3e3afd3db9d8c65aa7b76c6394ac15e7c",
-      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-feat-mqtt-broker-mapping-6138d9ba78-adc010b-41235855912-1",
-      "installable": true,
-      "revision": "adc010bc62406359eba66ab2073d4c39e2420ef2",
-      "run_attempt": 1,
-      "run_id": "41235855912",
-      "tag": "dev-feat-mqtt-broker-mapping-6138d9ba78-adc010b-41235855912-1"
     }
   ]
 }
