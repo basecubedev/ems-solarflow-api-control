@@ -3,7 +3,7 @@
 # from inside this container without the Docker CLI or socket.
 FROM influxdb:2.9 AS influxdb-cli
 
-FROM python:3.14-slim
+FROM python:3.15-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
