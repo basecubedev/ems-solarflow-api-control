@@ -7,13 +7,14 @@ removes one. A real active package-manager lock is reported, never removed, and
 no distribution upgrade is offered.
 """
 
+import contextlib
 import fcntl
 import os
 import re
 import time
 from dataclasses import dataclass, field
 
-from appliance.hostprobe import DPKG_LOCK_FILE
+from appliance.hostprobe import APT_DAILY_UPDATE_STAMP, APT_LISTS_DIR, DPKG_LOCK_FILE
 from appliance.operations import (
     BUSY_CODES,
     STATE_FAILED_TERMINAL,
@@ -30,6 +31,7 @@ from appliance.validation import (
 )
 
 INDEX_MAX_AGE_SECONDS = 20 * 60 * 60
+CLOCK_AHEAD_TOLERANCE_SECONDS = 60 * 60
 INDEX_REFRESH_TIMEOUT = 900
 APT_SIMULATE_TIMEOUT = 120
 DPKG_QUERY_TIMEOUT = 60
@@ -292,22 +294,35 @@ class PackageService:
         return state
 
     def _index_age(self):
-        try:
-            return int(self._time() - self._lists_dir().stat().st_mtime)
-        except OSError:
-            return None
+        """Seconds since the last refresh that reached every source, or None.
+
+        apt-daily's stamp, which the console's refresh writes too, decides; the
+        lists only stand in where there is no stamp or it lies more than an
+        hour ahead of the clock.
+        """
+
+        for path in (self._update_stamp(), self._lists_dir()):
+            try:
+                age = int(self._time() - path.stat().st_mtime)
+            except OSError:
+                continue
+            if age >= -CLOCK_AHEAD_TOLERANCE_SECONDS:
+                return max(age, 0)
+        return None
 
     def _lists_dir(self):
-        return self.probe.root / "var/lib/apt/lists"
+        return self.probe.root / APT_LISTS_DIR
+
+    def _update_stamp(self):
+        return self.probe.root / APT_DAILY_UPDATE_STAMP
 
     def _refresh_index(self):
-        """Run ``apt-get update`` and mark the lists as refreshed now.
+        """Run ``apt-get update`` and stamp the index as refreshed now.
 
-        apt leaves its lists directory alone when the mirror has nothing new,
-        so its age would go on reading as stale after a refresh that found
-        nothing to change. Without ``--error-on=any`` an unreachable mirror is
-        only a warning and apt exits 0; that run refreshed nothing and must not
-        reset the age either.
+        apt leaves unchanged lists alone, so the refresh is marked in
+        apt-daily's stamp, and on the lists for a Manager installed back to a
+        version that reads only them. Without ``--error-on=any`` an unreachable
+        mirror is only a warning; that run must not reset the age.
         """
 
         result = self.runner.run(
@@ -315,6 +330,15 @@ class PackageService:
         )
         if result.ok:
             now = self._time()
+            stamp = self._update_stamp()
+            try:
+                stamp.parent.mkdir(parents=True, exist_ok=True)
+                stamp.touch()
+                os.chmod(stamp, 0o644)
+                os.utime(stamp, (now, now))
+            except OSError:
+                with contextlib.suppress(OSError):
+                    stamp.unlink()
             try:
                 os.utime(self._lists_dir(), (now, now))
             except OSError:
@@ -373,7 +397,7 @@ class PackageService:
         }
 
     def plan_repair(self, operation, action):
-        state = self.check()
+        state = self._read_gates(PackageState())
         values = {"action": action}
         operation.requested_target.update(values)
         self.operations.update_target(operation.operation_id, values)

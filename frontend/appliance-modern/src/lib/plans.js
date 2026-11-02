@@ -28,11 +28,20 @@ export function allUpdatesPlan() {
   return { key: "all-updates", endpoint: "/api/updates/plan", body: { scope: "all" }, title: { key: "plan.title.allUpdates" }, confirm: "plan.install" };
 }
 
+export const REFRESH_INDEX_ACTION = "refresh_index";
+
 /** The package-manager repairs; an active lock is never removed. */
-export const REPAIR_ACTIONS = Object.freeze(["configure_pending", "fix_broken", "refresh_index"]);
+export const REPAIR_ACTIONS = Object.freeze(["configure_pending", "fix_broken", REFRESH_INDEX_ACTION]);
+
+/** The repairs under recovery; refreshing the index has its own button beside the installs. */
+export const RECOVERY_ACTIONS = Object.freeze(REPAIR_ACTIONS.filter((action) => action !== REFRESH_INDEX_ACTION));
 
 export function repairPlan(action) {
   return { key: `repair-${action}`, endpoint: "/api/updates/repair", body: { action }, title: { key: `repair.${action}` }, confirm: "plan.runRepair" };
+}
+
+export function refreshIndexPlan() {
+  return { ...repairPlan(REFRESH_INDEX_ACTION), key: "refresh-index", confirm: "plan.refresh" };
 }
 
 export const LIFECYCLE_ACTIONS = Object.freeze(["start", "stop", "restart"]);

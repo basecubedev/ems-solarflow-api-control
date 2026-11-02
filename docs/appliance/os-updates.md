@@ -22,9 +22,34 @@ OS security patches could not be installed because its index was too old.
 So the index is refreshed where something is about to be done with it: **every
 update plan refreshes an index older than twenty hours first** (the stage reads
 *refreshing index*), from the console and from the daily automatic security
-updates alike. Nothing else refreshes it on a schedule: with the automatic
-updates off, which is the default, the index ages until someone plans an update
-or uses **Refresh package indexes**. The status check itself stays read-only.
+updates alike. The status check itself stays read-only.
+
+Between plans, apt keeps the index current itself. Every Raspberry Pi OS image
+runs `apt-daily.timer`, and without `APT::Periodic::Update-Package-Lists` it ran
+and fetched nothing: the index aged until someone planned an update. The
+Appliance Manager package gives that one unit the setting, through a drop-in
+(`/usr/lib/systemd/system/apt-daily.service.d/ems-appliance-manager.conf`) that
+points `APT_CONFIG` at `/usr/share/ems-appliance-manager/apt-daily.conf`. The
+timer then refreshes the index once a day, after the network is up and at a
+randomised hour. It is the one `apt` run on this appliance that does not go
+through the agent, and it only fetches the package lists: nothing is
+downloaded beyond them and nothing is installed, because the image carries no
+`unattended-upgrades`. Every other `apt` run keeps apt's defaults; apt reads
+`/etc/apt/apt.conf.d` after `APT_CONFIG`, so `APT::Periodic::Update-Package-Lists
+"0";` in a file there turns the daily refresh off again, and a Manager installed
+back to an older version removes the drop-in with its own files.
+
+The same file sets `APT::Update::Error-Mode "any"` for that unit, so a source
+that could not be reached fails its refresh instead of only warning. apt then
+writes its daily stamp, `/var/lib/apt/periodic/update-stamp`, only for a
+refresh that reached every source, and the console's own refresh writes the
+same stamp. The index age is measured from it; only an appliance that has had
+neither refresh reads the age off the lists, which a partly failed refresh
+moves and one that found nothing new leaves alone. A refresh run by hand, such
+as `sudo apt update` over SSH, writes no stamp and does not count. A stamp
+more than an hour ahead of the clock is passed over for the lists as well, and
+a refresh that could not update the stamp removes it rather than leave an
+older one standing.
 
 The refresh is strict. A plan whose index cannot be refreshed is refused with
 `index_refresh_failed` and apt's first error line rather than made from the old
@@ -37,9 +62,13 @@ not refreshed for: a read-only root, a held lock or too little room on `/var`
 stop apt here as they stop the install.
 
 The index age is shown beside the counts, and an index older than seven days
-raises a warning that names the number of days. **Refresh package indexes**
-under **Package-manager recovery** (always shown in Expert) refreshes it at any
-time.
+raises a warning that names the number of days. **Refresh package indexes** on
+the **Operating system** card, in Basic and Expert alike, refreshes it at any
+time: `apt-get update --error-on=any` as a plan confirmed with **Refresh**,
+refused like the repairs below while another package manager holds the lock.
+If apt-daily is refreshing at that moment, apt itself refuses this refresh,
+and a plan's own, with its own lock message; it can simply be run again a few
+minutes later, and a scheduled security run tries again the next day.
 
 | Item | Meaning |
 |---|---|
@@ -124,14 +153,14 @@ verification path.
 ## Package-manager recovery (Expert mode)
 
 **Package-manager recovery** on **Updates** is always shown in Expert, and in
-Basic when the check failed or the package manager needs recovery. Three
-strictly defined actions, each a plan confirmed with **Run repair**:
+Basic when the check failed or the package manager needs recovery. Two
+strictly defined actions, each a plan confirmed with **Run repair**, beside
+**Refresh package indexes** on the card above:
 
 | Action | What it runs |
 |---|---|
 | **Complete pending configuration** | `dpkg --configure -a` |
 | **Repair dependencies** | `apt-get -y -f install` |
-| **Refresh package indexes** | `apt-get update --error-on=any` |
 
 There are no free-form apt arguments. **A real active package-manager lock is
 never removed** — the operation refuses with `package_lock_held` and asks you to

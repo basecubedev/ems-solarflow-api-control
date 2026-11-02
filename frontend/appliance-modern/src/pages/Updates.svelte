@@ -15,9 +15,9 @@
   import { forms } from "../state/forms.svelte.js";
   import { detail } from "../state/prefs.svelte.js";
   import { rankedFindings, findingWords } from "../lib/findings.js";
-  import { adminGate, adminVersion, daemonState, dockerCondition, groupByTrack, latestVerdict, osTiles, securityUpdatesOffered, systemVerdict, updatesInDoubt } from "../lib/host.js";
+  import { adminGate, adminVersion, daemonState, dockerCondition, groupByTrack, indexAgeWords, latestVerdict, osTiles, securityUpdatesOffered, systemVerdict, updatesInDoubt } from "../lib/host.js";
   import { MANAGER_OUTCOMES, MANAGER_VERDICTS, applianceNow, latestStableVersion, managerActions, managerOptions, riskyDirection } from "../lib/manager.js";
-  import { REPAIR_ACTIONS, adminInstallPlan, allUpdatesPlan, managerInstallPlan, managerRevertPlan, repairPlan, securityUpdatesPlan } from "../lib/plans.js";
+  import { RECOVERY_ACTIONS, adminInstallPlan, allUpdatesPlan, managerInstallPlan, managerRevertPlan, refreshIndexPlan, repairPlan, securityUpdatesPlan } from "../lib/plans.js";
 
   /**
    * Everything on this appliance that has a version, in one place. Nothing
@@ -304,7 +304,7 @@
       <div class="tile" data-testid="updates-manager">
         <div class="tile-label">{t("os.packageManager")}</div>
         <div class="tile-value"><Status tone={tiles.manager.tone} text={t(tiles.manager.key)} /></div>
-        <KeyValues rows={[{ label: t("os.lock"), value: updates.package_manager?.lock_state, lang: "en" }, detail.expert && { label: t("os.dpkgIssues"), value: (updates.package_manager?.dpkg_issues || []).length }]} />
+        <KeyValues rows={[{ label: t("os.lock"), value: updates.package_manager?.lock_state, lang: "en" }, { label: t("overview.index"), value: say(indexAgeWords(updates)), testid: "updates-index-age" }, detail.expert && { label: t("os.dpkgIssues"), value: (updates.package_manager?.dpkg_issues || []).length }]} />
       </div>
     </div>
 
@@ -313,6 +313,7 @@
       {#if detail.expert}
         <PlanButton plan={allUpdatesPlan()} label={t("os.planAll")} icon="package" variant="secondary" small={false} testid="updates-install-all" />
       {/if}
+      <PlanButton plan={refreshIndexPlan()} label={t("repair.refresh_index")} icon="refresh-cw" variant="secondary" small={false} testid="updates-refresh-index" />
     </div>
 
     {#if detail.expert || updatesInDoubt(updates)}
@@ -320,7 +321,7 @@
         <h3 class="pane-title"><span class="icon-tile sm c-pv"><Icon name="wrench" /></span>{t("os.repair")}</h3>
         <p class="muted pane-sub">{t("os.repairSub")}</p>
         <div class="row-wrap">
-          {#each REPAIR_ACTIONS as action (action)}
+          {#each RECOVERY_ACTIONS as action (action)}
             <PlanButton plan={repairPlan(action)} label={t(`repair.${action}`)} variant="secondary" testid="updates-repair-{action}" />
           {/each}
         </div>

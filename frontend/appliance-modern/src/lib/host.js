@@ -158,11 +158,19 @@ export function systemVerdict(updates, findings) {
 
 /** Days when the index is a day old or more, else hours; null when nobody knows. */
 export function indexAge(updates) {
-  const seconds = Number((updates || {}).index_age_seconds);
+  const raw = (updates || {}).index_age_seconds;
+  const seconds = raw === null || raw === undefined ? NaN : Number(raw);
   if (!Number.isFinite(seconds) || seconds < 0) return null;
   const days = Math.floor(seconds / 86400);
   if (days >= 1) return { unit: "day", count: days };
   return { unit: "hour", count: Math.floor(seconds / 3600) };
+}
+
+/** The index age in words: unknown while the counts are known and its age is not, else nothing. */
+export function indexAgeWords(updates) {
+  const age = indexAge(updates);
+  if (age) return { key: `unit.${age.unit}Old`, count: age.count };
+  return (updates || {}).security_count === undefined ? null : { key: "common.unknown" };
 }
 
 /**
