@@ -461,6 +461,11 @@ Commits are folded by theme: one finished change per commit, with its tests and
 documentation. A correction found in review is folded into the commit it
 corrects before the branch is pushed, never stacked on top as a separate fix.
 
+Branch names are `<type>/<topic>` with no date: `fix/appliance-package-index`,
+not `fix/appliance-package-index-2026-11-02`. The commits already carry the
+date. A pushed branch is renamed only while it has no pull request, because
+deleting the old remote name closes one.
+
 Do not commit generated reports, local state, traces, screenshots, temporary
 archives, secrets or unintended scratch files. After commit, run
 `git status --short` and `git log --oneline -5`. The tree SHOULD be clean unless
