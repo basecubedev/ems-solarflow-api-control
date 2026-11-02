@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { adminContainer, adminGate, adminHealth, adminVersion, dockerCondition, exactDuration, gigabytes, groupByTrack, indexAge, latestVerdict, osTiles, securityUpdatesOffered, systemVerdict } from "../src/lib/host.js";
+import { adminContainer, adminGate, adminHealth, adminVersion, dockerCondition, exactDuration, gigabytes, groupByTrack, indexAge, indexAgeWords, latestVerdict, osTiles, securityUpdatesOffered, systemVerdict } from "../src/lib/host.js";
 import { planBlocked, planFields, vocabularyWords } from "../src/lib/plan.js";
 import { logSources, logSummary } from "../src/lib/logs.js";
 import { errorWords } from "../src/lib/errors.js";
@@ -70,6 +70,14 @@ test("sizes and durations read the way Classic reads them", () => {
   assert.deepEqual(indexAge({ index_age_seconds: 3607 }), { unit: "hour", count: 1 });
   assert.deepEqual(indexAge({ index_age_seconds: 3 * 86400 }), { unit: "day", count: 3 });
   assert.equal(indexAge({}), null);
+});
+
+test("the index age reads the same on every page: its age, unknown beside known counts, else nothing", () => {
+  assert.deepEqual(indexAgeWords({ index_age_seconds: 17 * 86400, security_count: 0 }), { key: "unit.dayOld", count: 17 });
+  assert.deepEqual(indexAgeWords({ security_count: 0 }), { key: "common.unknown" });
+  assert.deepEqual(indexAgeWords({ index_age_seconds: null, security_count: 0 }), { key: "common.unknown" });
+  assert.equal(indexAge({ index_age_seconds: null }), null);
+  assert.equal(indexAgeWords({}), null);
 });
 
 test("a plan reads in Classic's order, hides the seal in Basic and leaves objects to their blocks", () => {

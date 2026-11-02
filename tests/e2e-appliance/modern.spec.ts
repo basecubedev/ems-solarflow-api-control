@@ -615,9 +615,25 @@ test.describe("updates", () => {
     await createPassword(page);
     await page.locator(".topbar .seg button", { hasText: "Expert" }).click();
     await open(page, "updates");
-    await page.getByTestId("updates-repair-refresh_index").click();
-    await expect(page.getByRole("dialog")).toContainText("Refresh package indexes");
+    await expect(page.getByTestId("updates-repair-refresh_index")).toHaveCount(0);
+    await expect(page.getByTestId("updates-refresh-index")).toHaveCount(1);
+    await page.getByTestId("updates-repair-fix_broken").click();
+    await expect(page.getByRole("dialog")).toContainText("Repair dependencies");
     await expect(page.getByTestId("plan-confirm")).toHaveText("Run repair");
+  });
+
+  test("an old package index is refreshed from Updates without Expert", async ({ page, request }) => {
+    await resetAppliance(request, { index_days_old: 17 });
+    await createPassword(page);
+    await open(page, "updates");
+    await expect(page.getByTestId("updates-index-age")).toContainText("17 days old");
+    await page.getByTestId("updates-refresh-index").click();
+    await expect(page.getByRole("dialog")).toContainText("Refresh package indexes");
+    await expect(page.getByTestId("plan-confirm")).toHaveText("Refresh");
+    await confirmPlan(page);
+    await settled(page);
+    await expect(page.getByTestId("operation-banner")).toContainText("Refreshing the package index");
+    await expect(page.getByTestId("updates-index-age")).toContainText("0 hours old");
   });
 
   test("a deadline in flight blocks installing and going back", async ({ page, request }) => {

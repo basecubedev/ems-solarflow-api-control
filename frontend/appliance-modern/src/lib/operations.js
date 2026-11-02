@@ -4,6 +4,7 @@
  * settle. The agent owns every one of these states; this file only reads them
  * and decides which words and which buttons go with them.
  */
+import { REFRESH_INDEX_ACTION } from "./plans.js";
 
 /**
  * Every operation type the agent runs. tests/test_appliance_modern.py walks
@@ -81,9 +82,13 @@ export function currentOperation(payload) {
   return payload.active || (payload.unacknowledged || [])[0] || null;
 }
 
-export function operationTitleKey(operation) {
+/** A refresh runs as one of the package manager's repairs, but nothing about it is a repair. */
+const ACTION_TITLES = Object.freeze({ "updates.repair": Object.freeze({ [REFRESH_INDEX_ACTION]: "op.updates.refresh_index" }) });
+
+export function operationTitleKey(operation, action = ((operation || {}).requested_target || {}).action) {
   const type = String((operation || {}).type || "");
-  return OPERATION_TYPES.includes(type) ? `op.${type}` : null;
+  if (!OPERATION_TYPES.includes(type)) return null;
+  return (ACTION_TITLES[type] || {})[action] || `op.${type}`;
 }
 
 /** The executor's own stage, spelled out; empty when it only repeats the state the pill already says. */

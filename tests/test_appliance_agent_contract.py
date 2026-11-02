@@ -780,6 +780,7 @@ def test_no_operation_times_out_below_what_it_may_legitimately_spend():
     slow = {
         "status.get": protocol.SLOW_PROBE_TIMEOUT,
         "updates.get": protocol.SLOW_PROBE_TIMEOUT,
+        "updates.plan_repair": protocol.SLOW_PROBE_TIMEOUT,
         "support.plan_archive": protocol.SLOW_PROBE_TIMEOUT,
         "network.get": protocol.WIFI_OPERATION_TIMEOUT,
         "network.wifi.scan": protocol.WIFI_OPERATION_TIMEOUT,

@@ -685,14 +685,14 @@ def test_a_plan_from_an_index_a_day_old_refreshes_it_first(tmp_path):
     nobody refreshed, and the daily timer only ever planned from it."""
 
     services = appliance(tmp_path)
-    lists = _index_aged(services, tmp_path, 25 * 60 * 60)
+    _index_aged(services, tmp_path, 25 * 60 * 60)
 
     planned = handlers_for(services).dispatch({"operation": "updates.plan", "scope": "security"})
 
     assert len(_apt_updates(services)) == 1
     stages = [entry["stage"] for entry in services.operations.get(planned["operation"]["operation_id"]).progress]
     assert "refreshing_index" in stages
-    assert services.clock.now - lists.stat().st_mtime < 60
+    assert services.packages.check().index_age_seconds < 60
 
 
 def test_the_plan_is_made_from_the_refreshed_index(tmp_path):
@@ -723,8 +723,7 @@ def test_a_plan_whose_mirror_cannot_be_reached_is_refused_with_apts_reason(tmp_p
     refreshed nothing, so the plan is refused and the index keeps its age."""
 
     services = appliance(tmp_path)
-    lists = _index_aged(services, tmp_path, 25 * 60 * 60)
-    aged = lists.stat().st_mtime
+    _index_aged(services, tmp_path, 25 * 60 * 60)
     services.host.apt_mirror_unreachable = True
 
     with pytest.raises(Exception) as refused:
@@ -734,7 +733,7 @@ def test_a_plan_whose_mirror_cannot_be_reached_is_refused_with_apts_reason(tmp_p
     assert refused.value.message.startswith(
         "apt could not refresh the package index: E: Failed to fetch"
     )
-    assert lists.stat().st_mtime == aged
+    assert services.packages.check().index_age_seconds >= 25 * 60 * 60
 
 
 def test_a_refresh_from_an_unreachable_mirror_leaves_the_index_old(tmp_path):
@@ -742,15 +741,14 @@ def test_a_refresh_from_an_unreachable_mirror_leaves_the_index_old(tmp_path):
     trusted; a refresh that reached nothing must not silence it."""
 
     services = appliance(tmp_path)
-    lists = _index_aged(services, tmp_path, 10 * 24 * 60 * 60)
-    aged = lists.stat().st_mtime
+    _index_aged(services, tmp_path, 10 * 24 * 60 * 60)
     services.host.apt_mirror_unreachable = True
 
     operation, _ = plan_and_execute(services, "updates.plan_repair", action="refresh_index")
 
     assert operation.state == STATE_FAILED_TERMINAL
     assert operation.error["code"] == "package_repair_failed"
-    assert lists.stat().st_mtime == aged
+    assert services.packages.check().index_age_seconds >= 10 * 24 * 60 * 60
 
 
 def test_a_plan_the_blockers_refuse_does_not_refresh_the_index(tmp_path):
@@ -814,9 +812,163 @@ def test_a_refresh_that_finds_nothing_new_still_counts_as_fresh(tmp_path):
     """apt leaves its lists alone when the mirror has nothing new."""
 
     services = appliance(tmp_path)
-    lists = _index_aged(services, tmp_path, 10 * 24 * 60 * 60)
+    _index_aged(services, tmp_path, 10 * 24 * 60 * 60)
 
     operation, _ = plan_and_execute(services, "updates.plan_repair", action="refresh_index")
 
     assert operation.state == STATE_SUCCEEDED
+    assert services.packages.check().index_age_seconds < 60
+
+
+def _apt_daily_stamped(services, tmp_path, seconds):
+    from appliance.hostprobe import APT_DAILY_UPDATE_STAMP
+
+    stamp = tmp_path / APT_DAILY_UPDATE_STAMP
+    stamp.parent.mkdir(parents=True, exist_ok=True)
+    stamp.write_text("", encoding="utf-8")
+    moment = services.clock.now - seconds
+    os.utime(stamp, (moment, moment))
+    return stamp
+
+
+def test_the_index_age_counts_apts_own_daily_refresh(tmp_path):
+    """apt-daily marks a refresh in its stamp and leaves lists the mirror did not
+    change alone, so the lists alone would read seventeen days old."""
+
+    services = appliance(tmp_path)
+    _index_aged(services, tmp_path, 17 * 24 * 60 * 60)
+    _apt_daily_stamped(services, tmp_path, 60 * 60)
+
+    age = services.packages.check().index_age_seconds
+
+    assert 60 * 60 <= age < 60 * 60 + 60
+
+
+def test_lists_a_partly_failed_refresh_moved_do_not_read_as_fresh(tmp_path):
+    """A source that answered moves its lists in even when another failed; only
+    a refresh that reached everything writes the stamp."""
+
+    services = appliance(tmp_path)
+    _index_aged(services, tmp_path, 60 * 60)
+    _apt_daily_stamped(services, tmp_path, 17 * 24 * 60 * 60)
+
+    age = services.packages.check().index_age_seconds
+
+    assert 17 * 24 * 60 * 60 <= age < 17 * 24 * 60 * 60 + 60
+
+
+def test_a_stamp_from_a_clock_that_ran_ahead_gives_way_to_the_lists(tmp_path):
+    """Read as fresh, it would let every plan skip its refresh and hide the
+    stale-index warning until real time caught up with it."""
+
+    services = appliance(tmp_path)
+    _index_aged(services, tmp_path, 17 * 24 * 60 * 60)
+    _apt_daily_stamped(services, tmp_path, -2 * 60 * 60)
+
+    age = services.packages.check().index_age_seconds
+
+    assert 17 * 24 * 60 * 60 <= age < 17 * 24 * 60 * 60 + 60
+    handlers_for(services).dispatch({"operation": "updates.plan", "scope": "security"})
+    assert len(_apt_updates(services)) == 1
+
+
+def test_a_repair_plan_reads_the_gates_without_simulating_an_upgrade(tmp_path):
+    """The plan shows the lock and dpkg's audit; the simulation took a Pi 3B+ past
+    the caller's timeout and stranded the operation lock behind it."""
+
+    services = appliance(tmp_path)
+
+    handlers_for(services).dispatch({"operation": "updates.plan_repair", "action": "refresh_index"})
+
+    simulated = [args for tool, args, _ in services.host.calls if tool == "apt-get" and "-s" in args]
+    assert simulated == []
+
+
+def test_the_consoles_refresh_also_touches_the_lists_for_an_older_manager(tmp_path):
+    """A Manager installed back to an older version reads only the lists."""
+
+    services = appliance(tmp_path)
+    lists = _index_aged(services, tmp_path, 10 * 24 * 60 * 60)
+
+    plan_and_execute(services, "updates.plan_repair", action="refresh_index")
+
     assert services.clock.now - lists.stat().st_mtime < 60
+
+
+def test_a_stamp_that_cannot_be_written_still_leaves_the_refresh_counted(tmp_path):
+    services = appliance(tmp_path)
+    lists = _index_aged(services, tmp_path, 10 * 24 * 60 * 60)
+    (tmp_path / "var" / "lib" / "apt" / "periodic").write_text("not a directory", encoding="utf-8")
+
+    plan_and_execute(services, "updates.plan_repair", action="refresh_index")
+
+    assert services.clock.now - lists.stat().st_mtime < 60
+    assert services.packages.check().index_age_seconds < 60
+
+
+def test_a_refresh_never_puts_a_file_where_apts_lists_directory_belongs(tmp_path):
+    services = appliance(tmp_path)
+    lists = tmp_path / "var" / "lib" / "apt" / "lists"
+    lists.rmdir()
+
+    plan_and_execute(services, "updates.plan_repair", action="refresh_index")
+
+    assert not lists.exists() or lists.is_dir()
+
+
+def test_a_stamp_a_clock_step_left_seconds_ahead_is_a_fresh_refresh(tmp_path):
+    """NTP stepping the clock back after apt-daily stamped must not make the
+    index jump to the lists' age."""
+
+    services = appliance(tmp_path)
+    _index_aged(services, tmp_path, 12 * 24 * 60 * 60)
+    _apt_daily_stamped(services, tmp_path, -30)
+
+    assert services.packages.check().index_age_seconds == 0
+
+
+def test_a_stamp_the_refresh_could_not_update_no_longer_stands(tmp_path, monkeypatch):
+    """Left in place, the older stamp would hide the refresh that just succeeded."""
+
+    from appliance import packages
+
+    services = appliance(tmp_path)
+    _index_aged(services, tmp_path, 10 * 24 * 60 * 60)
+    stamp = _apt_daily_stamped(services, tmp_path, 9 * 24 * 60 * 60)
+    utime = os.utime
+
+    def refuse_the_stamp(path, *args, **kwargs):
+        if os.fspath(path) == os.fspath(stamp):
+            raise PermissionError("the stamp is immutable")
+        return utime(path, *args, **kwargs)
+
+    monkeypatch.setattr(packages.os, "utime", refuse_the_stamp)
+    plan_and_execute(services, "updates.plan_repair", action="refresh_index")
+    monkeypatch.undo()
+
+    assert services.packages.check().index_age_seconds < 60
+
+
+def test_the_consoles_refresh_writes_apts_own_stamp(tmp_path):
+    """One marker for both, so apt-daily does not fetch again the same day."""
+
+    from appliance.hostprobe import APT_DAILY_UPDATE_STAMP
+
+    services = appliance(tmp_path)
+    _index_aged(services, tmp_path, 10 * 24 * 60 * 60)
+    stamp = tmp_path / APT_DAILY_UPDATE_STAMP
+
+    plan_and_execute(services, "updates.plan_repair", action="refresh_index")
+
+    assert services.clock.now - stamp.stat().st_mtime < 60
+    assert stamp.stat().st_mode & 0o777 == 0o644
+
+
+def test_a_plan_after_apts_daily_refresh_does_not_refresh_again(tmp_path):
+    services = appliance(tmp_path)
+    _index_aged(services, tmp_path, 17 * 24 * 60 * 60)
+    _apt_daily_stamped(services, tmp_path, 60 * 60)
+
+    handlers_for(services).dispatch({"operation": "updates.plan", "scope": "security"})
+
+    assert _apt_updates(services) == []
