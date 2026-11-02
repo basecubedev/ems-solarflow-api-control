@@ -922,6 +922,64 @@ def test_a_shipped_etc_file_is_a_conffile():
     assert "/etc/logrotate.d/ems-appliance-manager" in conffiles
 
 
+APT_DAILY_CONF = "/usr/share/ems-appliance-manager/apt-daily.conf"
+APT_DAILY_DROP_IN = "/usr/lib/systemd/system/apt-daily.service.d/ems-appliance-manager.conf"
+
+
+def _apt_settings(text):
+    return dict(re.findall(r'^\s*([A-Za-z:-]+)\s+"([^"]*)";', text, flags=re.MULTILINE))
+
+
+def test_apts_own_daily_timer_refreshes_the_package_index():
+    """Field report: a Pi's index was seventeen days old with automatic updates
+    off. apt-daily.timer ran twice a day and fetched nothing, because the image
+    set no APT::Periodic::Update-Package-Lists."""
+
+    build = (PACKAGING / "build-deb.sh").read_text(encoding="utf-8")
+    drop_in = unit(PACKAGING / "apt" / "apt-daily.service.conf")
+    settings = _apt_settings((PACKAGING / "apt" / "apt-daily.conf").read_text(encoding="utf-8"))
+
+    assert f'"$STAGE{APT_DAILY_DROP_IN}"' in build
+    assert '"$PACKAGING/apt/apt-daily.conf" "$STAGE/usr/share/ems-appliance-manager/"' in build
+    assert drop_in["Service"]["Environment"] == f"APT_CONFIG={APT_DAILY_CONF}"
+    assert settings == {
+        "APT::Periodic::Update-Package-Lists": "1",
+        "APT::Update::Error-Mode": "any",
+    }
+
+
+def test_the_automatic_security_run_waits_for_apt_daily():
+    """Debian orders apt-daily-upgrade after apt-daily for the same reason."""
+
+    service = unit(PACKAGING / "systemd" / "ems-appliance-auto-update.service")
+
+    assert "apt-daily.service" in service["Unit"]["After"].split()
+
+
+def test_no_other_apt_run_on_the_appliance_changes():
+    """A strict refresh is what the stamp needs, not what an operator's own
+    ``apt update`` or an image-build stage expects; and a file under /etc/apt
+    would outlive a Manager installed back to an older version."""
+
+    build = (PACKAGING / "build-deb.sh").read_text(encoding="utf-8")
+    conffiles = (PACKAGING / "debian" / "conffiles").read_text(encoding="utf-8")
+
+    assert "$STAGE/etc/apt" not in build
+    assert "/etc/apt" not in conffiles
+
+
+@pytest.mark.skipif(shutil.which("apt-config") is None, reason="apt reads the file")
+def test_apt_reads_the_daily_settings_through_apt_config():
+    path = PACKAGING / "apt" / "apt-daily.conf"
+    scoped = subprocess.run(
+        ["apt-config", "dump"], env={**os.environ, "APT_CONFIG": str(path)},
+        capture_output=True, text=True, check=True,
+    ).stdout
+
+    assert 'APT::Periodic::Update-Package-Lists "1";' in scoped
+    assert 'APT::Update::Error-Mode "any";' in scoped
+
+
 # --- the OS release transport ----------------------------------------------
 
 

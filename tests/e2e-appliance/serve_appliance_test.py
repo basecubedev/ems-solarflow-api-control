@@ -23,6 +23,7 @@ from appliance.agent_client import InProcessAgentClient  # noqa: E402
 from appliance.auth import AuthStore, ConfirmedPassword, hash_password  # noqa: E402
 from appliance.web import ApplianceWebApp, ApplianceWebServer  # noqa: E402
 from appliance.config import AllowedImages  # noqa: E402
+from appliance.hostprobe import APT_DAILY_UPDATE_STAMP  # noqa: E402
 from tests.helpers.appliance import (  # noqa: E402
     ADMIN_CONTAINER,
     APT_SIMULATION,
@@ -142,6 +143,13 @@ def seed_manager_state(services, *, kept=False, verdict="", armed=False, deadlin
         )
 
 
+def age_index(root, now, seconds=3600):
+    """Make the package index read ``seconds`` old, as if never stamped by a refresh."""
+
+    (root / APT_DAILY_UPDATE_STAMP).unlink(missing_ok=True)
+    os.utime(root / "var" / "lib" / "apt" / "lists", (now - seconds, now - seconds))
+
+
 def seed_host_files(root, *, now=None):
     (root / "etc").mkdir(parents=True, exist_ok=True)
     (root / "etc" / "os-release").write_text(OS_RELEASE, encoding="utf-8")
@@ -156,16 +164,14 @@ def seed_host_files(root, *, now=None):
     (thermal / "temp").write_text("51234\n", encoding="utf-8")
     (root / "var" / "lib" / "dpkg").mkdir(parents=True, exist_ok=True)
     (root / "var" / "lib" / "dpkg" / "lock-frontend").write_text("", encoding="utf-8")
-    lists = root / "var" / "lib" / "apt" / "lists"
-    lists.mkdir(parents=True, exist_ok=True)
+    (root / "var" / "lib" / "apt" / "lists").mkdir(parents=True, exist_ok=True)
     if now is not None:
         # Stamped against the fixture's own clock, which starts ahead of real
         # time. A directory created "now" by the wall clock reads as months old
         # to the services, and how old drifts with the calendar -- so the fixture
         # would have grown a stale-index warning on its own, on a date nobody
         # chose.
-        fresh = now - 3600
-        os.utime(lists, (fresh, fresh))
+        age_index(root, now)
     (root / "var" / "run").mkdir(parents=True, exist_ok=True)
     return root
 
@@ -269,6 +275,7 @@ def main():
         host.write_deployment(tag="v1.0.0")
         host.run_container(ADMIN_CONTAINER, f"{ADMIN_REPOSITORY}:v1.0.0")
         host.apt_simulation = APT_SIMULATION
+        age_index(root, clock.now, 86400 * int(options.get("index_days_old") or 0) or 3600)
         # Re-publish every scripted image so a previous test that broke one
         # cannot leak into the next.
         host.publish_image("v1.0.0")

@@ -8,7 +8,7 @@
   import { detail } from "../state/prefs.svelte.js";
   import { actions as flow, confirmPlan, dismissPlan } from "../state/actions.svelte.js";
   import { planBlocked, planFields, vocabularyWords } from "../lib/plan.js";
-  import { OPERATION_TYPES } from "../lib/operations.js";
+  import { operationTitleKey } from "../lib/operations.js";
   import { exactDuration, gigabytes } from "../lib/host.js";
 
   /**
@@ -25,7 +25,8 @@
     if (field.kind === "bool") return field.value ? t("common.yes") : t("common.no");
     const vocabulary = vocabularyWords(field.key, field.value);
     if (vocabulary) return say(vocabulary);
-    if (field.key === "type" && OPERATION_TYPES.includes(field.value)) return t(`op.${field.value}`);
+    const title = field.key === "type" && operationTitleKey({ type: field.value }, plan.action);
+    if (title) return t(title);
     if (field.kind === "bytes") return fmt().bytes(field.value);
     if (field.kind === "percent") return fmt().percent(field.value);
     if (field.kind === "seconds") {

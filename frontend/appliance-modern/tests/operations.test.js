@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { acknowledgeable, archiveHref, cancellable, currentOperation, operationDetails, operationStage, planRequestId, recentProgress, settledSince, stateOf } from "../src/lib/operations.js";
+import { acknowledgeable, archiveHref, cancellable, currentOperation, operationDetails, operationStage, operationTitleKey, planRequestId, recentProgress, settledSince, stateOf } from "../src/lib/operations.js";
 
 const ID = "0123456789abcdef0123456789abcdef";
 
@@ -62,4 +62,18 @@ test("one more settled record, or a later finish, is a settle; neither is not", 
 test("a plan request id is 32 hex characters", () => {
   const random = { getRandomValues: (bytes) => bytes.fill(171) };
   assert.equal(planRequestId(random), "ab".repeat(16));
+});
+
+test("a refresh of the package index is not titled a repair, in the banner or in its plan", () => {
+  assert.equal(operationTitleKey({ type: "updates.repair", requested_target: { action: "refresh_index" } }), "op.updates.refresh_index");
+  assert.equal(operationTitleKey({ type: "updates.repair" }, "refresh_index"), "op.updates.refresh_index");
+  assert.equal(operationTitleKey({ type: "updates.repair", requested_target: { action: "fix_broken" } }), "op.updates.repair");
+  assert.equal(operationTitleKey({ type: "not.a.type" }), null);
+});
+
+test("the refresh leaves the recovery repairs and takes nothing else with it", async () => {
+  const { RECOVERY_ACTIONS, REFRESH_INDEX_ACTION, REPAIR_ACTIONS, refreshIndexPlan } = await import("../src/lib/plans.js");
+  assert.deepEqual([...RECOVERY_ACTIONS, REFRESH_INDEX_ACTION].sort(), [...REPAIR_ACTIONS].sort());
+  assert.ok(!RECOVERY_ACTIONS.includes(REFRESH_INDEX_ACTION));
+  assert.deepEqual(refreshIndexPlan().body, { action: REFRESH_INDEX_ACTION });
 });

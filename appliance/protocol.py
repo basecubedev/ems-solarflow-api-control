@@ -241,6 +241,7 @@ MUTATING_OPERATIONS = (
         takes_lock=True,
         fields=(Field("action", KIND_REPAIR_ACTION),),
         summary="Plan a package-manager repair",
+        timeout_seconds=SLOW_PROBE_TIMEOUT,
     ),
     _spec(
         "network.wifi.plan",

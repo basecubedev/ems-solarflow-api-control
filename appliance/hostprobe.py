@@ -47,6 +47,7 @@ REBOOT_REQUIRED_FILE = "var/run/reboot-required"
 REBOOT_REQUIRED_PKGS = "var/run/reboot-required.pkgs"
 DPKG_LOCK_FILE = "var/lib/dpkg/lock-frontend"
 APT_LISTS_DIR = "var/lib/apt/lists"
+APT_DAILY_UPDATE_STAMP = "var/lib/apt/periodic/update-stamp"
 
 
 class HostProbe:

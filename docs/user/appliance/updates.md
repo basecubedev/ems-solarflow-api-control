@@ -140,9 +140,17 @@ one that occasionally needs you at the machine.
 
 When the check failed or the package manager needs recovery — and always in
 Expert — **Package-manager recovery** offers *strictly defined repair actions*:
-**Complete pending configuration**, **Repair dependencies** and **Refresh
-package indexes**. Each is a plan you confirm with **Run repair**. An active
-package-manager lock is never removed.
+**Complete pending configuration** and **Repair dependencies**. Each is a plan
+you confirm with **Run repair**. An active package-manager lock is never
+removed.
+
+### The package index
+
+The counts are only as new as the package index they were read from; the
+**Operating system** card shows its age under **Package index**. The appliance
+refreshes it once a day by itself, and **Refresh package indexes** on the same
+card, in Basic and Expert, refreshes it now: a plan you confirm with
+**Refresh**. It installs nothing.
 
 ### Automatic security updates
 

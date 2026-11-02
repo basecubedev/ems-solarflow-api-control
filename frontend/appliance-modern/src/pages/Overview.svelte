@@ -12,7 +12,7 @@
   import { session } from "../state/session.svelte.js";
   import { detail } from "../state/prefs.svelte.js";
   import { findingWords, overviewVerdict, rankedFindings, sessionFindings } from "../lib/findings.js";
-  import { adminContainer, adminHealth, adminTransitionLive, adminVersion, daemonState, dockerCondition, dockerTone, emsContainer, gigabytes, indexAge, osTiles, securityUpdatesOffered, systemVerdict, updatesInDoubt } from "../lib/host.js";
+  import { adminContainer, adminHealth, adminTransitionLive, adminVersion, daemonState, dockerCondition, dockerTone, emsContainer, gigabytes, indexAgeWords, osTiles, securityUpdatesOffered, systemVerdict, updatesInDoubt } from "../lib/host.js";
   import { adminRepairPlan, lifecyclePlan, powerPlan, securityUpdatesPlan } from "../lib/plans.js";
   import { CONNECTIVITY, CONTAINER_STATES, containerTone, word } from "../lib/words.js";
 
@@ -31,7 +31,6 @@
   const version = $derived(adminVersion(status));
   const root = $derived(system.storage?.root || {});
   const free = $derived(gigabytes(root.free_mb));
-  const age = $derived(indexAge(updates));
   const osVerdict = $derived(systemVerdict(updates, findings));
   const osWords = $derived(osVerdict.finding ? findingWords(osVerdict.finding, status).title : { key: osVerdict.key });
   const bootstrap = $derived(admin.bootstrap_required === true);
@@ -111,7 +110,7 @@
       rows={[
         { label: t("overview.securityUpdates"), value: tiles.securityCount },
         { label: t("overview.otherUpdates"), value: tiles.normalCount },
-        { label: t("overview.index"), value: age ? tn(`unit.${age.unit}Old`, age.count) : updates.security_count === undefined ? null : t("common.unknown") },
+        { label: t("overview.index"), value: say(indexAgeWords(updates)) },
         { label: t("overview.rebootRequired"), value: yesNo(updates.reboot_required) },
       ]}
     />

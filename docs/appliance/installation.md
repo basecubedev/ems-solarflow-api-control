@@ -126,6 +126,7 @@ The package installs:
 /usr/lib/systemd/system/ems-appliance-manager-install.service
 /usr/lib/systemd/system/ems-appliance-manager-verify.service
 /usr/lib/systemd/system/ems-appliance-manager-verify.timer
+/usr/lib/systemd/system/apt-daily.service.d/ems-appliance-manager.conf
 /usr/lib/ems-appliance-manager/setup-export-root.sh
 /usr/lib/ems-appliance-manager/backup-account.sh
 /usr/lib/ems-appliance-manager/rescue-account.sh
@@ -136,6 +137,7 @@ The package installs:
 /usr/lib/tmpfiles.d/ems-appliance-manager.conf
 /etc/logrotate.d/ems-appliance-manager
 /etc/ems-appliance-manager/release-keyring.gpg
+/usr/share/ems-appliance-manager/apt-daily.conf
 /usr/share/ems-appliance-manager/appliance.conf        (template)
 /usr/share/ems-appliance-manager/allowed-images.conf   (template)
 /usr/share/ems-appliance-manager/rescue-password.hash
