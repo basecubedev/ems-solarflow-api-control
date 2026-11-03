@@ -99,7 +99,7 @@ def _candidate_view(source, raw):
     role = (
         _clean(raw.get("role_suggestion"))
         or _clean(raw.get("role"))
-        or ("inverter" if catalog is not None else None)
+        or (catalog.role if catalog is not None else None)
     )
     return {
         "source": source,

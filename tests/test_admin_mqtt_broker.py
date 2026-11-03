@@ -202,20 +202,22 @@ def test_the_acl_protects_what_the_regulation_reads_in_every_mode():
     acl = render_acl(settings).split("\n")
 
     anonymous = acl[: acl.index("user devices")]
-    assert anonymous[:2] == ["topic readwrite #", "topic deny ems-solarflow/#"]
+    assert anonymous[:3] == ["topic readwrite #", "topic deny ems-solarflow/#", "topic deny ems-consumer/#"]
     assert {"topic deny iot/#", "topic deny Zendure/#", "topic deny /#"} <= set(anonymous)
     devices = acl[acl.index("user devices") : acl.index("user zendure")]
-    assert "topic deny ems-solarflow/#" in devices and "topic deny iot/#" in devices
+    assert {"topic deny ems-solarflow/#", "topic deny ems-consumer/#", "topic deny iot/#"} <= set(devices)
     zendure = acl[acl.index("user zendure") : acl.index("user nodered")]
     assert "topic read iot/#" in zendure and "topic deny iot/#" not in zendure
     assert "topic readwrite #" not in zendure and "topic readwrite iot/#" not in zendure
-    assert "topic deny ems-solarflow/#" in zendure
+    assert {"topic deny ems-solarflow/#", "topic deny ems-consumer/#"} <= set(zendure)
     nodered = acl[acl.index("user nodered") : acl.index("user ems")]
-    assert "topic readwrite ems-solarflow/#" in nodered and "topic deny ems-solarflow/#" not in nodered
+    assert {"topic readwrite ems-solarflow/#", "topic readwrite ems-consumer/#"} <= set(nodered)
+    assert not any(line.startswith("topic deny ems-") for line in nodered)
     ems = acl[acl.index("user ems") : acl.index("user ems-mapping")]
     assert ems == [
         "user ems",
         "topic read ems-solarflow/#",
+        "topic read ems-consumer/#",
         "topic read iot/#",
         "topic read Zendure/#",
         "topic read /#",
@@ -224,7 +226,7 @@ def test_the_acl_protects_what_the_regulation_reads_in_every_mode():
         "",
     ]
     assert acl[acl.index("user ems-mapping") : acl.index("user ems-admin")] == [
-        "user ems-mapping", "topic read #", "topic write ems-solarflow/#", "",
+        "user ems-mapping", "topic read #", "topic write ems-solarflow/#", "topic write ems-consumer/#", "",
     ]
     assert "topic read $SYS/#" in acl[acl.index("user ems-admin") :]
 

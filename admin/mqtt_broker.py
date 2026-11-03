@@ -8,7 +8,7 @@ rendered from those into ``<install>/mqtt/`` and started as the compose project
 ``ems-mqtt``, beside the EMS and independent of it.
 
 What the regulation reads is protected in every mode: the mapping's outputs
-under ``ems-solarflow/``, the Zendure trees and the topic of an MQTT grid meter
+under ``ems-solarflow/`` and ``ems-consumer/``, the Zendure trees and the topic of an MQTT grid meter
 on this broker. Anonymous clients and accounts without the matching option can
 neither read nor write there; Mosquitto checks ``deny`` before any grant.
 """
@@ -41,6 +41,7 @@ from ems.zendure_mqtt.builtin_broker import (
     mapping_status_path,
     mappings_path,
 )
+from ems.zendure_mqtt.external_catalog import EXTERNAL_TOPIC_FAMILIES
 from mqtt_mapping.config import load_mappings_file, mappings_file_signature, read_mappings_document, saved_brokers
 
 SETTINGS_SCHEMA_VERSION = 1
@@ -56,7 +57,7 @@ DEFAULT_PORT = 1883
 DEFAULT_ACCOUNT = "devices"
 INTERNAL_ACCOUNTS = ("ems", "ems-mapping", "ems-admin")
 EMS_ACCOUNT, MAPPING_ACCOUNT, ADMIN_ACCOUNT = INTERNAL_ACCOUNTS
-OUTPUT_TREE = "ems-solarflow/#"
+OUTPUT_TREES = tuple(f"{entry.prefix}/#" for entry in EXTERNAL_TOPIC_FAMILIES.values())
 ZENDURE_TREES = NATIVE_TOPIC_TREES
 ZENDURE_DEVICE_GRANTS = (
     "topic read iot/#",
@@ -67,7 +68,10 @@ ZENDURE_DEVICE_GRANTS = (
     "topic readwrite /#",
 )
 THIS_HOST_NAMES = ("127.0.0.1", "localhost", "::1", "host.docker.internal")
-RESERVED_PREFIX_ROOTS = ("ems-solarflow", *(root for root in NATIVE_TOPIC_ROOTS if root))
+RESERVED_PREFIX_ROOTS = (
+    *(entry.prefix for entry in EXTERNAL_TOPIC_FAMILIES.values()),
+    *(root for root in NATIVE_TOPIC_ROOTS if root),
+)
 PASSWORD_ITERATIONS = 101
 PASSWORD_SALT_BYTES = 12
 START_TIMEOUT_SECONDS = 20.0
@@ -372,13 +376,13 @@ def grid_meter_reader(config, credential_store) -> str | None:
 
 
 def options_for_topic(topic) -> list[str]:
-    """The account options a topic needs: ``bridge`` under ems-solarflow/, ``zendure`` under a Zendure tree."""
+    """The account options a topic needs: ``bridge`` under a catalog tree, ``zendure`` under a Zendure tree."""
 
     def within(tree):
         root = tree[:-2]
         return topic.startswith(f"{root}/") or bool(root) and topic == root
 
-    needed = ["bridge"] if within(OUTPUT_TREE) else []
+    needed = ["bridge"] if any(within(tree) for tree in OUTPUT_TREES) else []
     if any(within(tree) for tree in ZENDURE_TREES):
         needed.append("zendure")
     return needed
@@ -407,7 +411,7 @@ def render_mosquitto_conf(settings: BrokerSettings) -> str:
 def _denials(account, grid_topic, grid_meter_account):
     denied = []
     if account is None or not account.bridge:
-        denied.append(OUTPUT_TREE)
+        denied.extend(OUTPUT_TREES)
     if account is None or not account.zendure:
         denied.extend(ZENDURE_TREES)
     if grid_topic and (account is None or account.name != grid_meter_account):
@@ -430,19 +434,19 @@ def render_acl(settings: BrokerSettings, *, grid_topic=None) -> str:
         elif not account.zendure:
             lines.append("topic readwrite #")
         if account.bridge:
-            lines.append(f"topic readwrite {OUTPUT_TREE}")
+            lines += [f"topic readwrite {tree}" for tree in OUTPUT_TREES]
         if account.zendure:
             lines += list(ZENDURE_DEVICE_GRANTS)
         if grid_topic and account.name == settings.grid_meter_account:
             lines.append(f"topic readwrite {grid_topic}")
         lines += _denials(account, grid_topic, settings.grid_meter_account)
         lines.append("")
-    lines += [f"user {EMS_ACCOUNT}", f"topic read {OUTPUT_TREE}"]
+    lines += [f"user {EMS_ACCOUNT}", *(f"topic read {tree}" for tree in OUTPUT_TREES)]
     lines += [f"topic read {tree}" for tree in ZENDURE_TREES]
     if grid_topic:
         lines.append(f"topic read {grid_topic}")
     lines += [*(f"topic write {topic}" for topic in EMS_COMMAND_TOPICS), ""]
-    lines += [f"user {MAPPING_ACCOUNT}", "topic read #", f"topic write {OUTPUT_TREE}", ""]
+    lines += [f"user {MAPPING_ACCOUNT}", "topic read #", *(f"topic write {tree}" for tree in OUTPUT_TREES), ""]
     lines += [f"user {ADMIN_ACCOUNT}", "topic read #", "topic read $SYS/#", ""]
     return "\n".join(lines)
 

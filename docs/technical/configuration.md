@@ -1204,9 +1204,9 @@ payload if possible.
 ## External Devices over MQTT (`external_mqtt`)
 
 A `devices[]` entry for a device this project reads but does not control: an
-inverter or a battery with no local API, whose values something else — a
-home-automation system such as FHEM, ioBroker or Node-RED, or a script —
-publishes on MQTT.
+inverter or a battery with no local API, or a consumer in the house, whose
+values something else — a home-automation system such as FHEM, ioBroker or
+Node-RED, a script, or the built-in MQTT mapping — publishes on MQTT.
 
 It is the MQTT telemetry path, not a second one. The entry names a broker
 profile like any other MQTT device, reaches the same runtime, and appears in the
@@ -1218,13 +1218,14 @@ method gets.
 the device's topics are built and what the payload behind each key it names
 means. A device is read, discovered and offered only when the catalog lists it;
 a topic of any other shape is never read and never offered, because nobody can
-say what its payload is. Its one entry is this project's own namespace: the
-bridge publishes into it, so the payload is fixed here rather than by a
+say what its payload is. Both its entries are this project's own namespaces: the
+bridge publishes into them, so the payload is fixed here rather than by a
 manufacturer, and any device a bridge can read fits.
 
 | Device | `mqtt.topic_family` | Topics |
 |---|---|---|
 | Any device a bridge publishes into the project namespace | `ems_solarflow` | `ems-solarflow/<id>/<key>` for one value, `ems-solarflow/<id>/state` for several |
+| A consumer in the house: a washing machine, a heat pump, a metered plug | `ems_consumer` | `ems-consumer/<id>/<key>` for one value, `ems-consumer/<id>/state` for several |
 
 | Key | Meaning | Unit and range | |
 |---|---|---|---|
@@ -1232,6 +1233,31 @@ manufacturer, and any device a bridge can read fits.
 | `solarPower` | PV power at the device's input | W, 0 or more | Optional |
 | `batteryPower` | Battery power: positive while charging, negative while discharging | W | Optional |
 | `batterySoc` | Battery state of charge | %, 0 to 100 | Optional |
+
+An `ems_consumer` device has one key:
+
+| Key | Meaning | Unit and range | |
+|---|---|---|---|
+| `power` | Power the consumer draws | W, 0 or more | Required |
+
+**A consumer is a part of the house load, never a source.** The grid meter
+already measured what it draws, so it joins no total, no validity flag and no
+control decision: a silent consumer leaves the energy statistics measured, and
+nothing it reports changes a setpoint. The dashboard names it in the live
+snapshot (`consumers`, `consumer_total_w`, and `home_other_w`, the house load no
+consumer measured), integrates it per day and prices it by the share of the house
+the grid supplied at the time: that part costs `energy_savings.price_per_kwh`, the
+rest counts as saved at the same price. InfluxDB records it as a `consumer`
+point. See [docs/dashboard.md](../dashboard.md#consumers-page).
+
+**A consumer's history follows its device id, not its name.** Its energy, cost
+and power history are recorded under its `mqtt.device_id`, so renaming it or
+moving it to another broker keeps them; a disabled consumer records nothing and
+holds no key. An optional `history_id` (1 to 64 letters, digits, `-`, `_`; on a
+consumer only) records them under another key instead. Admin writes it when the operator answers its question on saving:
+**Begin anew** gives the consumer a key of its own, and the old values stay
+visible as a former consumer; **Take over** gives a new consumer the key of a
+removed one, so it continues that consumer's values.
 
 The first segment is the namespace, the second names the device, the third the
 key. Topics are case-sensitive: the bridge has to use exactly the namespace and
@@ -1327,8 +1353,10 @@ are of this type has nothing for the control loop to do.
 **What it changes, and what it does not.** Its values reach the dashboard tiles
 and totals — PV, inverter output, battery power, average SoC, house load — and
 the energy statistics the dashboard keeps. InfluxDB Analytics records only the
-devices EMS controls, so its house load leaves out what an external device
-delivers. The control loop never sees them: a
+devices EMS controls and the consumers, so its house load leaves out what an
+external device delivers, and so does its `house_other`: on such an
+installation the consumers and **Other** in Analytics add up to less than the
+dashboard's home use. The control loop never sees them: a
 device that is only read is not among the devices the target is distributed
 over, so no PV-first weighting, winter policy, full-charge assist or AC charge
 ever involves it. It changes the control only the way any appliance in the house
@@ -1351,6 +1379,7 @@ through, so each is an error rather than a warning:
 | An `mqtt.device_id` with `/`, `+`, `#` | `mqtt_route_segment_invalid` | It would widen the subscription |
 | An `mqtt.device_id` with any other character than letters, digits, `-`, `_`, or longer than 64 | `external_mqtt_device_id_invalid` | The catalog reads no topic with such a segment, so the device would stay dark |
 | An `mqtt.topics` list (the shape of earlier development builds) | `external_mqtt_topics_unsupported` | The catalog fixes the topics; a configured list would be read by nothing |
+| A `history_id` on an entry that is no consumer, or one with any other character than letters, digits, `-`, `_` | `external_mqtt_history_id_invalid` | It names where a consumer's energy and power history is recorded, and becomes a part of its history series |
 | A Zendure cloud broker profile | `external_mqtt_cloud_broker` | The cloud never carries such a device, and its sessions only deliver the account's own topics |
 | A `broker_ref` naming no configured profile | `broker_ref_unknown` | The device would end up on no broker at all |
 | The same device twice, on one broker or on two | `external_device_duplicate` | Both entries would read one device and count it twice |
@@ -1369,9 +1398,9 @@ changed in `config.json`.
 
 **Found by discovery, adopted in Setup and Maintenance.** Admin discovery
 subscribes to each catalog entry's topics on every local broker it finds and
-offers a device once it has seen a readable `inverterPower` from it, on its own
-topic or inside `state`, as a read-only device. One that publishes only the
-optional keys is not offered. The payload rules are the runtime's own, so
+offers a device once it has seen a readable required key from it —
+`inverterPower`, for a consumer `power` — on its own topic or inside `state`, as
+a read-only device. One that publishes only the optional keys is not offered. The payload rules are the runtime's own, so
 nothing is offered that would then stay dark. Setup
 and Maintenance adopt it like any other discovered device. The entry they write
 holds its name, `"enabled"` (true unless switched off before applying) and the

@@ -125,7 +125,13 @@ from ems.external_status import (
     sanitize_external_mqtt_status,
 )
 from ems.winter_policies import find_winter_policy_issues
-from ems.zendure_mqtt.external_catalog import external_topic_family, successor_family
+from ems.zendure_mqtt.external_catalog import (
+    CONSUMER,
+    default_device_name,
+    external_topic_family,
+    successor_family,
+    valid_device_id,
+)
 from ems.zendure_mqtt.config_entries import (
     EXTERNAL_MQTT_TYPE,
     SOURCE_LOCAL_MQTT,
@@ -1695,6 +1701,16 @@ def _installed_external_device(item, external_by_ref, kept_ids, issues):
     return None
 
 
+def _unnamed_external_name(item, allocation_names, allocation_count):
+    """A consumer is named after its catalog entry and id, anything else takes the next INV_ name."""
+
+    mqtt = item.get("mqtt") if isinstance(item.get("mqtt"), dict) else {}
+    entry = external_topic_family(mqtt.get("topic_family"))
+    if entry is not None and entry.role == CONSUMER and valid_device_id(mqtt.get("device_id")):
+        return default_device_name(entry, mqtt["device_id"])
+    return next_compact_inverter_name(allocation_names, allocation_count)
+
+
 def _is_adopted_external_device(item):
     """A new row for a catalog device the server resolved from current discovery."""
 
@@ -1823,7 +1839,7 @@ def _external_devices_not_kept(originals, settled_ids, issues):
             _issue(
                 "external_mqtt_device_read_only",
                 f"{str(device.get('name') or '').strip()} is an external MQTT "
-                "inverter, and this draft neither keeps it nor removes it with its "
+                "device, and this draft neither keeps it nor removes it with its "
                 "Remove button. Reload the current config and review the draft.",
             )
         )
@@ -1883,8 +1899,8 @@ def _merge_devices(
         if not isinstance(item, dict) or item.get("removed") is True:
             continue
         if item.get("kind") == EXTERNAL_MQTT_TYPE and _is_adopted_external_device(item):
-            name = str(item.get("name") or "").strip() or next_compact_inverter_name(
-                allocation_names, allocation_count
+            name = str(item.get("name") or "").strip() or _unnamed_external_name(
+                item, allocation_names, allocation_count
             )
             allocation_count += 1
             allocation_names.append(name)
@@ -1914,7 +1930,7 @@ def _merge_devices(
                 _issue(
                     "external_mqtt_device_read_only",
                     f"{str(original.get('name') or '').strip()} is an external MQTT "
-                    "inverter and cannot be edited as another kind of device. Reload "
+                    "device and cannot be edited as another kind of device. Reload "
                     "the current config and review the draft.",
                 )
             )

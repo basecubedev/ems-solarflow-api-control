@@ -52,7 +52,7 @@ class MappingEditor:
     remembers the broker under ``brokers``, so the mapping keeps reading it.
 
     ``elsewhere(device_id, broker_ref)`` names another broker seen publishing
-    that ems-solarflow id, and ``taken(broker_ref)`` lists the ids brokers
+    that catalog id, and ``taken(broker_ref)`` lists the ids brokers
     other than ``broker_ref``'s have. A new mapping may not take an id another
     broker publishes: the EMS reads each device from one broker, and a second
     source would only be told apart by its broker.

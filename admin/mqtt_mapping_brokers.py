@@ -37,7 +37,7 @@ from ems.zendure_mqtt.config_entries import (
     zendure_mqtt_route_device_id,
     zendure_mqtt_topic_family,
 )
-from ems.zendure_mqtt.external_catalog import EMS_SOLARFLOW
+from ems.zendure_mqtt.external_catalog import EXTERNAL_TOPIC_FAMILIES
 from mqtt_mapping.config import read_mappings_document, saved_brokers
 
 ACCESS_STATES = ("anonymous", "account", "needs_account", "untrusted", "unreachable", "unchecked")
@@ -324,7 +324,11 @@ class MappingBrokers:
         return identity(found.host, found.port) if found is not None else None
 
     def external_sources(self, broker, *, address=None) -> dict[str, dict]:
-        """``device id -> {broker identity -> {"configured", "published"}}`` for every ems-solarflow device the EMS has or discovery saw."""
+        """``device id -> {broker identity -> {"configured", "published"}}`` for every catalog device the EMS has or discovery saw.
+
+        Ids are one namespace across the catalog families, as they are in the
+        mapping file, so an inverter and a consumer never share one.
+        """
 
         identity = self._identities(broker, address)
         config = broker._config_loader()
@@ -335,7 +339,7 @@ class MappingBrokers:
         for item in config.get("devices") or []:
             if not is_external_mqtt_device_config(item) or not config_entry_enabled(item):
                 continue
-            if zendure_mqtt_topic_family(item) != EMS_SOLARFLOW.family:
+            if zendure_mqtt_topic_family(item) not in EXTERNAL_TOPIC_FAMILIES:
                 continue
             ref, device_id = zendure_mqtt_broker_ref(item), zendure_mqtt_route_device_id(item)
             profile = profiles.get(ref) if isinstance(profiles.get(ref), dict) else {}
@@ -345,7 +349,7 @@ class MappingBrokers:
         for candidate in self._discovery.candidates():
             where = identity(candidate.get("host"), candidate.get("port"))
             for device in candidate.get("devices") or []:
-                if where and device.get("topic_family") == EMS_SOLARFLOW.family and device.get("device_id"):
+                if where and device.get("topic_family") in EXTERNAL_TOPIC_FAMILIES and device.get("device_id"):
                     sources.setdefault(device["device_id"], {}).setdefault(where, set()).add("published")
         return sources
 
@@ -366,7 +370,7 @@ class MappingBrokers:
         return others[0] if others else None
 
     def taken_ids(self, broker, broker_ref, *, address=None) -> list[str]:
-        """The ems-solarflow ids another broker than ``broker_ref``'s has, so a new mapping there is never offered one."""
+        """The catalog ids another broker than ``broker_ref``'s has, so a new mapping there is never offered one."""
 
         mine = self.ref_identity(broker, broker_ref, address=address)
         sources = self.external_sources(broker, address=address)

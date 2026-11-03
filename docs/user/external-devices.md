@@ -44,6 +44,11 @@ Every topic starts with `ems-solarflow`, then a device id you choose, then a key
 | `ems-solarflow/<id>/batterySoc` | Battery state of charge, `0` to `100` | Optional |
 | `ems-solarflow/<id>/state` | All of the above at once, as one JSON object | Alternative |
 
+A consumer — a washing machine, a heat pump, a plug with a meter — has a tree
+of its own, `ems-consumer/<id>/power` (watts drawn, `0` or more, **required**)
+or `ems-consumer/<id>/state` with `{"power": …}`. The dashboard shows it on its
+[Consumers](dashboard/consumers.md) page; the EMS never regulates by it.
+
 Rules that decide whether a value is read:
 
 - **Device id:** 1 to 64 letters, digits, `-` or `_`, for example

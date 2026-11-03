@@ -10,7 +10,6 @@ catalog's own rule last, so nothing is published that the EMS would refuse.
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from ems.zendure_mqtt.external_catalog import EMS_SOLARFLOW
 from ems.zendure_mqtt.payload_values import extract_number
 
 PAYLOAD_PREVIEW_CHARS = 200
@@ -144,7 +143,7 @@ def evaluate_device(device, latest: Mapping[str, Received], now: float) -> Evalu
             sum(reading.value for reading in plain + charge)
             - sum(reading.value for reading in discharge)
         )
-        if EMS_SOLARFLOW.readings(target.key, total) is None:
+        if device.catalog.readings(target.key, total) is None:
             targets.append(TargetReading(target.key, total, "catalog_refused"))
             silent_reason = silent_reason or "catalog_refused"
             continue

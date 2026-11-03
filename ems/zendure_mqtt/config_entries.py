@@ -31,6 +31,7 @@ from ems.read_only_devices import is_read_only_device_config
 from ems.zendure_mqtt.external_catalog import (
     EXTERNAL_TOPIC_FAMILIES,
     external_topic_family,
+    is_consumer_family,
     successor_family,
     valid_device_id,
 )
@@ -135,7 +136,10 @@ def external_device_subscriptions(
 
 
 def external_devices_elsewhere(devices: Any, broker_ref: str) -> dict[str, tuple[str, str, str]]:
-    """``device id -> (broker_ref, topic filter, snapshot key)`` for every active, valid catalog device on another broker.
+    """``snapshot key -> (broker_ref, topic filter, device id)`` for every active, valid catalog device on another broker.
+
+    The snapshot key carries the family's prefix, so an inverter and a consumer
+    that share a device id are watched apart.
 
     A broker listens to these too, only to notice when it carries a device the
     EMS reads from elsewhere: its snapshots stay scoped to its own devices, so
@@ -155,8 +159,56 @@ def external_devices_elsewhere(devices: Any, broker_ref: str) -> dict[str, tuple
         ):
             continue
         entry = external_topic_family(zendure_mqtt_topic_family(item))
-        elsewhere.setdefault(device_id, (owner, entry.subscription(device_id), entry.snapshot_key(device_id)))
+        elsewhere.setdefault(entry.snapshot_key(device_id), (owner, entry.subscription(device_id), device_id))
     return elsewhere
+
+
+def is_consumer_device_config(item: Any) -> bool:
+    """True for an external MQTT entry whose catalog family is a consumer."""
+
+    return is_external_mqtt_device_config(item) and is_consumer_family(
+        zendure_mqtt_topic_family(item)
+    )
+
+
+def consumer_history_key(item: Any) -> str | None:
+    """The key a consumer's energy and power history is recorded under.
+
+    ``history_id`` when the entry names one, else its device id. A rename or a
+    move to another broker keeps the device id, so the history follows the
+    device; Admin writes ``history_id`` only when the operator chooses to begin
+    anew, or to take over the values of a device that is gone.
+    """
+
+    if not is_consumer_device_config(item):
+        return None
+    for value in (item.get("history_id"), zendure_mqtt_route_device_id(item)):
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def consumer_history_keys(devices: Any) -> dict[str, str]:
+    """``name -> history key`` of every enabled, named consumer in ``devices``.
+
+    A disabled consumer reads nothing, so it holds no key. Two enabled ones
+    never share a device id (``find_duplicate_zendure_device_identities``) and
+    Admin gives every ``history_id`` a key no other holds; should a hand-edited
+    config still give two one key, the second is recorded under its key and
+    its broker, so neither adds to the other.
+    """
+
+    items = [
+        item for item in devices if is_consumer_device_config(item) and config_entry_enabled(item)
+    ] if isinstance(devices, list) else []
+    keys: dict[str, str] = {}
+    for item in items:
+        key = consumer_history_key(item)
+        name = item.get("name")
+        if not key or not isinstance(name, str) or not name.strip() or name in keys:
+            continue
+        keys[name] = key if key not in keys.values() else f"{key}@{zendure_mqtt_broker_ref(item)}"
+    return keys
 
 
 def validate_mqtt_telemetry_device_config(
@@ -277,6 +329,21 @@ def validate_external_mqtt_device_config(
                 "external_mqtt_topics_unsupported",
                 "mqtt.topics is not read: the catalog entry named by "
                 "mqtt.topic_family fixes the device's topics; remove mqtt.topics",
+            )
+        )
+
+    history_id = item.get("history_id")
+    if history_id is not None and not (
+        is_consumer_family(family)
+        and isinstance(history_id, str)
+        and valid_device_id(history_id)
+    ):
+        issues.append(
+            _issue(
+                "error",
+                "external_mqtt_history_id_invalid",
+                "history_id names a consumer's history: 1 to 64 letters, digits, "
+                "'-' or '_', and only on a consumer entry",
             )
         )
 
