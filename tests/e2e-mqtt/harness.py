@@ -30,6 +30,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 SHELLY_IDS = {"chromium": "shellyplusplugs-e2echromium", "firefox": "shellyplusplugs-e2efirefox"}
+WASHER_IDS = {"chromium": "shellyplusplugs-washerchromium", "firefox": "shellyplusplugs-washerfirefox"}
 GRID_TOPIC = "e2e/grid/power"
 BROKER_REF = "e2e_broker"
 PUBLISH_EVERY_SECONDS = 2.0
@@ -92,6 +93,12 @@ def build_install(tmp, broker_port, dashboard_port):
     )
     config["influxdb"]["enabled"] = False
     (app / "config" / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+    # The API inverter's address never answers. Switched off, as a unit is for
+    # the season, it no longer holds every sample unmeasured, so the dashboard
+    # integrates energy as it would at home and a consumer records what it drew.
+    (app / "data" / "runtime-state.json").write_text(
+        json.dumps({"devices": {inverter["name"]: {"enabled": False}}}), encoding="utf-8"
+    )
     return app
 
 
@@ -114,7 +121,7 @@ def start_broker(tmp):
 
 
 def play_devices(port, stop):
-    """A Shelly Gen2 plug on a balcony inverter per browser project, and a grid meter, publishing as the devices do.
+    """Per browser project a Shelly Gen2 plug on a balcony inverter and one under a washing machine, and a grid meter, publishing as the devices do.
 
     Each project maps and adds its own plug, so neither run depends on what the other left behind.
     """
@@ -124,11 +131,13 @@ def play_devices(port, stop):
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     client.connect("127.0.0.1", port)
     client.loop_start()
-    for shelly_id in SHELLY_IDS.values():
+    for shelly_id in (*SHELLY_IDS.values(), *WASHER_IDS.values()):
         client.publish(f"{shelly_id}/online", "true", qos=1, retain=True)
     while not stop.is_set():
         for shelly_id in SHELLY_IDS.values():
             client.publish(f"{shelly_id}/status/switch:0", json.dumps({"id": 0, "apower": -612.3, "voltage": 230.1}), qos=1)
+        for washer_id in WASHER_IDS.values():
+            client.publish(f"{washer_id}/status/switch:0", json.dumps({"id": 0, "apower": 437.2, "voltage": 229.8}), qos=1)
         client.publish(GRID_TOPIC, "150", qos=1)
         stop.wait(PUBLISH_EVERY_SECONDS)
     client.loop_stop()
@@ -148,6 +157,7 @@ def main():
         json.dumps({
             "app": str(app), "python": sys.executable, "broker_port": broker_port, "broker_container": broker_name,
             "dashboard_port": dashboard_port, "broker_ref": BROKER_REF, "shelly_ids": SHELLY_IDS,
+            "washer_ids": WASHER_IDS,
         }),
         encoding="utf-8",
     )
