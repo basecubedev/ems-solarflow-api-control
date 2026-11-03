@@ -648,7 +648,8 @@ its daily step, in the zone the EMS runs in; in Docker that is `TZ` (see
 `winter.policies` names the default winter policy for `pv_battery` and
 `battery_only` devices; a PV-only device has no plan. `devices[].winter_policy`
 overrides it for one device; `auto` keeps the type default. A battery device
-with `pv_kwp: 0` is battery-only. See
+whose model the hardware catalogue lists without PV inputs, or with
+`pv_kwp: 0`, is battery-only. See
 [winter-mode.md](../winter-mode.md#device-types-and-policies).
 
 Winter mode writes no `inputLimit`. The former `winter.ac_charge_power` key no

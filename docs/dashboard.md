@@ -55,6 +55,23 @@ Any device that
 reports no battery packs, controlled or not, such as a SolarFlow 800 without
 battery, is left out the same way, here and in the Analytics SoC.
 
+What a device has decides what the Overview and the energy flow draw. The live
+snapshot names it per device in `devices.<name>.hardware` as
+`{"pv": true|false, "battery": true|false}`, from the device's energy class,
+the one the winter plan reads: the battery is absent once the device reports
+no packs, PV is absent when the hardware catalogue lists the device's model
+without PV inputs or its `devices[]` entry says `pv_kwp: 0`, and a device that
+has said neither keeps both, because a dark array and a silent device read
+exactly like none. The model is the one the device's report names, or the
+`hardware_profile` its entry pins. An external MQTT device has the parts its
+bridge publishes a key for (`solarPower`; `batteryPower` or `batterySoc`).
+The Overview draws solar when one shown device has PV and a battery when one
+has a battery: without PV the **Battery** tile replaces **Solar now** (with
+neither, the row keeps the other three tiles), without a battery the
+**Batteries** card goes, and the flow, the today tiles and the
+**Power today** chart leave the missing part out. On the Devices page each card,
+each row of the flow and the power chart show the parts of their own device.
+
 An E3/DC storage system configured as a read-only device appears the same way,
 with **Telemetry only**: PV, **Output** (its inverter's AC power), battery power
 and SOC, plus a **Grid** value with the grid power the E3/DC measures. It has no

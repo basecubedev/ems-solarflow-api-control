@@ -4,7 +4,7 @@
     data: ["live", "energy.today"],
     refresh: "sse",
     minWidth: 320,
-    states: ["waiting", "stale", "meter-offline", "no-battery", "device-offline", "ac-charging"],
+    states: ["waiting", "stale", "meter-offline", "no-pv", "no-battery", "device-offline", "ac-charging"],
   };
 </script>
 
@@ -17,6 +17,7 @@
   import { live } from "../state/live.svelte.js";
   import { prefs, flowPref, setFlowMode } from "../state/prefs.svelte.js";
   import { devices as allDevices, isStale } from "../state/derived.svelte.js";
+  import { flowDevices, hardwareOf } from "../lib/devices.js";
   import { createFlowActivity, createFlowScale, createHouseLines, createFleetLine, busFlows, ribbonWidth, batteryDirection, gridDirection, flowBucket, FLOW_BUCKETS } from "../lib/flow.js";
   import { box, elbow, vertical, roundedPath, runs } from "../lib/wires.js";
   import { flowDashes, dashTexture, dashPhase, DASH_PERIOD_PX } from "../lib/flowAnim.js";
@@ -41,8 +42,9 @@
   const snapshot = $derived(live.snapshot);
   const today = $derived(snapshot?.energy_stats?.today);
   const stale = $derived(isStale());
-  const deviceList = $derived(allDevices().filter((device) => device.enabled || device.online));
-  const deviceKey = $derived(deviceList.map((device) => `${device.name}:${device.socReported || device.batteryW !== null}`).join("|"));
+  const deviceList = $derived(flowDevices(allDevices()));
+  const hardware = $derived(hardwareOf(deviceList));
+  const deviceKey = $derived(deviceList.map((device) => `${device.name}:${device.hasPv}:${device.hasBattery}`).join("|"));
   const narrow = $derived(size.width > 0 && size.width < 600);
   const mode = $derived((fixedMode || flowPref.mode) === "devices" && deviceList.length > 0 ? "devices" : "system");
   const houses = $derived(
@@ -63,7 +65,6 @@
     return {
       pvW: finite(snapshot.pv_total_w),
       batteryW,
-      hasBattery: deviceList.length === 0 || deviceList.some((device) => device.socReported || device.batteryW !== null),
       soc: finite(snapshot.average_soc),
       outputW: finite(snapshot.inverter_output_w),
       chargeW,
@@ -80,8 +81,8 @@
     if (mode === "system") {
       const v = system;
       scale.update(Math.max(Math.abs(v.pvW || 0), Math.abs(v.batteryW), Math.abs(v.outputW || 0), Math.abs(v.gridW), v.chargeW));
-      specs.push({ id: "pv", token: "--pv", watts: v.pvW, reverse: false });
-      if (v.hasBattery) specs.push({ id: "bat", token: "--battery", watts: v.batteryW, reverse: v.batteryW > 0 });
+      if (hardware.pv) specs.push({ id: "pv", token: "--pv", watts: v.pvW, reverse: false });
+      if (hardware.battery) specs.push({ id: "bat", token: "--battery", watts: v.batteryW, reverse: v.batteryW > 0 });
       specs.push(toward("out", fleetLine.watts(v.outputW, v.chargeW, live.sequence)));
       specs.push({ id: "grid", token: "--grid", watts: v.gridW, reverse: v.gridW < 0 });
     } else {
@@ -101,8 +102,8 @@
       specs.push(toward("trunk", total));
       deviceList.forEach((device, index) => {
         const on = device.online;
-        specs.push({ id: `pv${index}`, token: "--pv", watts: on ? device.pvW : 0, reverse: false });
-        if (device.socReported || device.batteryW !== null) {
+        if (device.hasPv) specs.push({ id: `pv${index}`, token: "--pv", watts: on ? device.pvW : 0, reverse: false });
+        if (device.hasBattery) {
           specs.push({ id: `bat${index}`, token: "--battery", watts: on ? device.batteryW : 0, reverse: (device.batteryW || 0) > 0 });
         }
         specs.push(toward(`out${index}`, flows[index]));
@@ -134,8 +135,8 @@
         points.out = vertical(hub.cx, hub.b - inset, home.t);
         points.grid = elbow(grid.r, grid.cy, home.l, home.cy);
       } else {
-        if (pv) points.pv = elbow(pv.r, pv.cy, hub.l + inset, hub.cy - 22);
-        if (bat) points.bat = elbow(bat.r, bat.cy, hub.l + inset, hub.cy + 22);
+        if (pv) points.pv = elbow(pv.r, pv.cy, hub.l + inset, hub.cy - (bat ? 22 : 0));
+        if (bat) points.bat = elbow(bat.r, bat.cy, hub.l + inset, hub.cy + (pv ? 22 : 0));
         points.out = elbow(hub.r - inset, hub.cy, home.l, home.cy);
         points.grid = vertical(grid.cx, grid.t, home.b);
       }
@@ -207,19 +208,19 @@
   const f = $derived(fmt());
   const batteryWord = (w) => t(`flow.${batteryDirection(w)}`);
   const gridWord = (w, valid) => t(`flow.${gridDirection(w, valid)}`);
-  const hasBatteryNode = (device) => device.socReported || device.batteryW !== null;
   const socText = (device) => (!device.online ? "—" : device.soc !== null ? f.percent(device.soc) : t("flow.noSoc"));
+  const leftRow = (index, offset, alone) => (alone ? `${index * 2 + 1} / span 2` : `${index * 2 + 1 + offset}`);
   const ariaLabel = $derived(
     system
       ? [
-          t("flow.aria", {
-            pv: f.power(system.pvW),
-            battery: f.power(system.batteryW, { signed: true }),
-            home: f.power(system.homeW),
-            grid: system.gridValid ? f.power(system.gridW, { signed: true }) : t("flow.offline"),
-          }),
+          [
+            ...(hardware.pv ? [`${t("flow.solar")} ${f.power(system.pvW)}`] : []),
+            ...(hardware.battery ? [`${t("flow.battery")} ${f.power(system.batteryW, { signed: true })}`] : []),
+            `${t("flow.home")} ${f.power(system.homeW)}`,
+            `${t("flow.grid")} ${system.gridValid ? f.power(system.gridW, { signed: true }) : t("flow.offline")}`,
+          ].join(", "),
           ...(mode === "devices"
-            ? deviceList.filter(hasBatteryNode).map((device) => t("flow.ariaSoc", { name: device.name, soc: device.online ? socText(device) : t("device.offline") }))
+            ? deviceList.filter((device) => device.hasBattery).map((device) => t("flow.ariaSoc", { name: device.name, soc: device.online ? socText(device) : t("device.offline") }))
             : []),
         ].join("; ")
       : t("flow.waiting"),
@@ -295,13 +296,15 @@
       </div>
 
       {#if mode === "system"}
-        <div class="node c-pv n-pv" data-node="pv">
-          <div class="icon-tile"><Icon name="solar-panel" /></div>
-          <div class="node-label">{t("flow.solar")}</div>
-          <div class="node-value num">{f.power(system.pvW)}</div>
-          <div class="node-foot"><span>{t("common.today")}</span><b class="num">{f.energy(pvToday)}</b></div>
-        </div>
-        {#if system.hasBattery}
+        {#if hardware.pv}
+          <div class="node c-pv n-pv" data-node="pv">
+            <div class="icon-tile"><Icon name="solar-panel" /></div>
+            <div class="node-label">{t("flow.solar")}</div>
+            <div class="node-value num">{f.power(system.pvW)}</div>
+            <div class="node-foot"><span>{t("common.today")}</span><b class="num">{f.energy(pvToday)}</b></div>
+          </div>
+        {/if}
+        {#if hardware.battery}
           <div class="node c-bat n-bat" data-node="bat">
             <div class="icon-tile"><Icon name="battery-charging" /></div>
             <div class="node-label"><span class="node-name">{t("flow.battery")}</span><span class="node-state"><span class="sep">{" · "}</span>{batteryWord(system.batteryW)}</span></div>
@@ -331,13 +334,15 @@
         </div>
       {:else}
         {#each deviceList as device, index (device.name)}
-          <div class="node c-pv col-l" class:offline={!device.online} data-node={`pv${index}`} style:grid-row={`${index * 2 + 1}`}>
-            <div class="icon-tile sm"><Icon name="solar-panel" /></div>
-            <div class="node-label ellipsis" title={`${device.name} · ${t("flow.solar")}`}>{device.name} · {t("flow.solar")}</div>
-            <div class="node-value num">{device.online ? f.power(device.pvW) : "—"}</div>
-          </div>
-          {#if hasBatteryNode(device)}
-            <div class="node c-bat col-l" class:offline={!device.online} data-node={`bat${index}`} style:grid-row={`${index * 2 + 2}`}>
+          {#if device.hasPv}
+            <div class="node c-pv col-l" class:offline={!device.online} data-node={`pv${index}`} style:grid-row={leftRow(index, 0, !device.hasBattery)}>
+              <div class="icon-tile sm"><Icon name="solar-panel" /></div>
+              <div class="node-label ellipsis" title={`${device.name} · ${t("flow.solar")}`}>{device.name} · {t("flow.solar")}</div>
+              <div class="node-value num">{device.online ? f.power(device.pvW) : "—"}</div>
+            </div>
+          {/if}
+          {#if device.hasBattery}
+            <div class="node c-bat col-l" class:offline={!device.online} data-node={`bat${index}`} style:grid-row={leftRow(index, 1, !device.hasPv)}>
               <div class="icon-tile sm"><Icon name="battery-charging" /></div>
               <div class="node-label ellipsis" title={`${device.name} · ${device.online ? batteryWord(device.batteryW) : t("device.offline")}`}><span class="node-name">{device.name}</span><span class="node-state"><span class="sep">{" · "}</span>{device.online ? batteryWord(device.batteryW) : t("device.offline")}</span></div>
               <div class="node-value num">{device.online ? f.power(device.batteryW, { signed: true }) : "—"}</div>
@@ -403,6 +408,8 @@
   .node-foot b { color: var(--m-text); font-weight: 600; white-space: nowrap; }
   .n-pv { left: 0; top: 8px; }
   .n-bat { left: 0; bottom: 8px; }
+  .flow-stage.system:not(.narrow):not(:has(.n-bat)) .n-pv,
+  .flow-stage.system:not(.narrow):not(:has(.n-pv)) .n-bat { top: 50%; bottom: auto; transform: translateY(-50%); }
   .n-home { right: 0; top: 8px; }
   .n-grid { right: 0; bottom: 8px; }
   .hub {
@@ -441,11 +448,13 @@
   .flow-stage.system.narrow .node-value { font-size: 19px; }
   .flow-stage.system.narrow .node-foot { flex-direction: column; gap: 0; }
   .flow-stage.system.narrow .hub { width: 104px; height: 104px; grid-column: 3; grid-row: 1 / span 2; justify-self: center; }
-  .flow-stage.system.narrow:not(:has(.n-bat)) .hub { grid-row: 1; }
+  .flow-stage.system.narrow:is(:not(:has(.n-pv)), :not(:has(.n-bat))) .hub { grid-row: 1; }
   .flow-stage.system.narrow .n-pv { grid-column: 1; grid-row: 1; }
   .flow-stage.system.narrow .n-bat { grid-column: 1; grid-row: 2; }
+  .flow-stage.system.narrow:not(:has(.n-pv)) .n-bat { grid-row: 1; }
   .flow-stage.system.narrow :is(.n-home, .n-grid) { grid-row: 3; align-self: stretch; margin-top: 14px; grid-template-rows: auto auto 1fr; }
   .flow-stage.system.narrow :is(.n-home, .n-grid) .node-foot { align-self: end; }
+  .flow-stage.system.narrow:not(:has(.n-pv, .n-bat)) :is(.n-home, .n-grid) { grid-row: 2; }
   .flow-stage.system.narrow .n-home { grid-column: 3; }
   .flow-stage.system.narrow .n-grid { grid-column: 1; }
   .flow-stage.narrow :is(.node-name, .node-state) { display: block; overflow: hidden; text-overflow: ellipsis; }

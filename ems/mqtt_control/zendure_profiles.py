@@ -21,6 +21,7 @@ from ems.power_direction import (
     OPERATION_IDLE,
     operation_for_target,
 )
+from ems.winter_policies import BATTERY_ONLY, PV_BATTERY
 
 # Verified write-protocol families. ``telemetry_only`` is intentionally NOT an
 # implemented write profile: a device that resolves to it can never publish.
@@ -76,6 +77,11 @@ class ZendureHardwareProfile:
     # Source-backed MQTT-writable properties; empty = no verified contract.
     state_property_writes: tuple[str, ...] = ()
     device_settings: tuple[str, ...] = ()
+    # What the model can have: PV inputs, a battery, or both (the classes of
+    # ems.winter_policies), from the vendor's own product facts; None where no
+    # source says. A battery the model can hold is present only once the
+    # device reports packs.
+    energy_class: str | None = None
 
     @property
     def writable(self) -> bool:
@@ -106,6 +112,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
     ZendureHardwareProfile(
         canonical_name="solarflow_800",
         display_label="SolarFlow 800",
+        energy_class=PV_BATTERY,
         hardware_generation="solarflow_zensdk",
         aliases=("SolarFlow 800", "SolarFlow800"),
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
@@ -121,6 +128,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
     ZendureHardwareProfile(
         canonical_name="solarflow_800_pro",
         display_label="SolarFlow 800 Pro",
+        energy_class=PV_BATTERY,
         hardware_generation="solarflow_zensdk",
         aliases=("SolarFlow 800 Pro", "SolarFlow800Pro"),
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
@@ -137,6 +145,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
     ZendureHardwareProfile(
         canonical_name="solarflow_800_pro_2",
         display_label="SolarFlow 800 Pro 2",
+        energy_class=PV_BATTERY,
         hardware_generation="solarflow_zensdk",
         aliases=("SolarFlow 800 Pro 2", "SolarFlow800Pro2"),
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
@@ -154,6 +163,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
     ZendureHardwareProfile(
         canonical_name="solarflow_800_plus",
         display_label="SolarFlow 800 Plus",
+        energy_class=PV_BATTERY,
         hardware_generation="solarflow_zensdk",
         aliases=("SolarFlow 800 Plus", "SolarFlow800Plus"),
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
@@ -169,6 +179,8 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
     ZendureHardwareProfile(
         canonical_name="solarflow_1600_ac_plus",
         display_label="SolarFlow 1600 AC+",
+        # Vendor: 1600 W AC, no MPPT; panels only through their own micro-inverters.
+        energy_class=BATTERY_ONLY,
         hardware_generation="solarflow_zensdk",
         aliases=("SolarFlow 1600 AC+", "SolarFlow1600AC+"),
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
@@ -185,6 +197,8 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
     ZendureHardwareProfile(
         canonical_name="solarflow_2400_ac",
         display_label="SolarFlow 2400 AC",
+        # Vendor FAQ: cannot connect to PV panels, AC-coupled storage only.
+        energy_class=BATTERY_ONLY,
         hardware_generation="solarflow_zensdk",
         aliases=("SolarFlow 2400 AC", "SolarFlow2400AC"),
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
@@ -201,6 +215,8 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
     ZendureHardwareProfile(
         canonical_name="solarflow_2400_ac_plus",
         display_label="SolarFlow 2400 AC+",
+        # Vendor FAQ: cannot be connected directly to PV modules.
+        energy_class=BATTERY_ONLY,
         hardware_generation="solarflow_zensdk",
         aliases=("SolarFlow 2400 AC+", "SolarFlow2400AC+"),
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
@@ -217,6 +233,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
     ZendureHardwareProfile(
         canonical_name="solarflow_2400_pro",
         display_label="SolarFlow 2400 Pro",
+        energy_class=PV_BATTERY,
         hardware_generation="solarflow_zensdk",
         aliases=("SolarFlow 2400 Pro", "SolarFlow2400Pro"),
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
@@ -236,6 +253,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         # word orders are accepted because the product is written either way.
         canonical_name="solarflow_4000_ac_plus",
         display_label="SolarFlow 4000 Mix AC+",
+        # No class: the manual lists no DC PV input, the product FAQ a PV isolator.
         hardware_generation="solarflow_zensdk",
         aliases=(
             "SolarFlow 4000 Mix AC+",
@@ -261,6 +279,8 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         # stayed telemetry-only whatever the charge flag said.
         canonical_name="solarflow_3000_ac_plus",
         display_label="SolarFlow 3000 Mix AC+",
+        # Vendor FAQ: no MPPT PV input.
+        energy_class=BATTERY_ONLY,
         hardware_generation="solarflow_zensdk",
         aliases=(
             "SolarFlow 3000 Mix AC+",
@@ -282,6 +302,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
     ZendureHardwareProfile(
         canonical_name="hyper_2000",
         display_label="Hyper 2000",
+        energy_class=PV_BATTERY,
         hardware_generation="hub_hyper_legacy",
         aliases=("Hyper 2000", "Hyper 2000 3.0", "Hyper2000"),
         power_write_profile=WRITE_PROFILE_LEGACY_OBJECT,
@@ -296,6 +317,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
     ZendureHardwareProfile(
         canonical_name="aio_2400",
         display_label="AIO 2400",
+        energy_class=PV_BATTERY,
         hardware_generation="hub_hyper_legacy",
         aliases=("AIO 2400", "SolarFlow AIO ZY", "AIO2400"),
         power_write_profile=WRITE_PROFILE_LEGACY_OBJECT,
@@ -310,6 +332,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
     ZendureHardwareProfile(
         canonical_name="hub_1200",
         display_label="Hub 1200",
+        energy_class=PV_BATTERY,
         hardware_generation="hub_hyper_legacy",
         aliases=("Hub 1200", "SolarFlow Hub 1200", "SolarFlow 2.0", "Hub1200"),
         power_write_profile=WRITE_PROFILE_LEGACY_HUB,
@@ -323,6 +346,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
     ZendureHardwareProfile(
         canonical_name="hub_2000",
         display_label="Hub 2000",
+        energy_class=PV_BATTERY,
         hardware_generation="hub_hyper_legacy",
         aliases=("Hub 2000", "SolarFlow Hub 2000", "Hub2000"),
         power_write_profile=WRITE_PROFILE_LEGACY_HUB,
@@ -336,6 +360,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
     ZendureHardwareProfile(
         canonical_name="ace_1500",
         display_label="ACE 1500",
+        energy_class=PV_BATTERY,
         hardware_generation="hub_hyper_legacy",
         aliases=("ACE 1500", "ACE1500"),
         power_write_profile=WRITE_PROFILE_TELEMETRY_ONLY,
@@ -350,6 +375,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
     ZendureHardwareProfile(
         canonical_name="superbase_v4600",
         display_label="SuperBase V4600",
+        energy_class=PV_BATTERY,
         hardware_generation="hub_hyper_legacy",
         aliases=("SuperBase V4600",),
         power_write_profile=WRITE_PROFILE_TELEMETRY_ONLY,
@@ -362,6 +388,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
     ZendureHardwareProfile(
         canonical_name="superbase_v6400",
         display_label="SuperBase V6400",
+        energy_class=PV_BATTERY,
         hardware_generation="hub_hyper_legacy",
         aliases=("SuperBase V6400",),
         power_write_profile=WRITE_PROFILE_TELEMETRY_ONLY,
@@ -619,6 +646,40 @@ def resolve_hardware_profile(product) -> ZendureHardwareProfile | None:
     if detail.profile_id is None:
         return None
     return HARDWARE_PROFILES[detail.profile_id]
+
+
+def resolve_device_profile(pinned, observed_product):
+    """A device's model id from its config pin and the product its report names, or ``None``.
+
+    The pin is decisive and the report corroborates it, the precedence
+    discovery uses.
+    """
+
+    return resolve_hardware_profile_evidence(
+        [
+            make_hardware_profile_evidence(EVIDENCE_EXISTING_CONFIG, pinned),
+            make_hardware_profile_evidence(EVIDENCE_FULL_REPORT, observed_product),
+        ]
+    ).profile_id
+
+
+def profile_energy_class(profile_id):
+    """The energy class the catalogue names for a model id, or ``None``."""
+
+    profile = hardware_profile_by_name(profile_id) if profile_id else None
+    return profile.energy_class if profile else None
+
+
+def device_model_class(dev):
+    """The catalogue's energy class for a controller device's model, or ``None``.
+
+    A local HTTP device resolves its model from its pin and its report; an MQTT
+    device carries the pin it was configured with.
+    """
+
+    resolve = getattr(dev, "resolved_hardware_profile", None)
+    profile_id = resolve() if callable(resolve) else getattr(dev, "hardware_profile", None)
+    return profile_energy_class(profile_id)
 
 
 def hardware_profile_by_name(canonical_name) -> ZendureHardwareProfile | None:

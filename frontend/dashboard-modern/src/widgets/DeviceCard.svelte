@@ -54,7 +54,7 @@
     {/if}
   </div>
 
-  {#if d.socReported}
+  {#if d.hasBattery && d.socReported}
     <div class="soc">
       <div>
         <div class="label">{t("device.battery")}</div>
@@ -69,9 +69,9 @@
   {/if}
 
   <div class="facts main">
-    <Fact label={t("device.solar")} icon="sun" tone="c-pv" value={show(f.power(d.pvW))} missing={!d.online || d.pvW === null} />
+    {#if d.hasPv}<Fact label={t("device.solar")} icon="sun" tone="c-pv" value={show(f.power(d.pvW))} missing={!d.online || d.pvW === null} />{/if}
     <Fact label={t("device.output")} icon="zap" tone="c-out" value={show(f.power(d.outputW))} missing={!d.online || d.outputW === null} />
-    <Fact label={t("device.battery")} icon="battery-charging" tone="c-bat" value={show(f.power(d.batteryW, { signed: true }))} missing={!d.online || d.batteryW === null} />
+    {#if d.hasBattery}<Fact label={t("device.battery")} icon="battery-charging" tone="c-bat" value={show(f.power(d.batteryW, { signed: true }))} missing={!d.online || d.batteryW === null} />{/if}
     {#if d.gridW !== null}<Fact label={t("device.grid")} icon="utility-pole" tone="c-grid" value={show(f.power(d.gridW, { signed: true }))} />{/if}
     {#if !d.readOnly}
       {#if charging}
@@ -85,7 +85,7 @@
     {#if d.packs !== null}<Fact label={t("device.packs")} icon="battery" value={String(d.packs)} />{/if}
   </div>
 
-  {#if pvInputs.length > 1}
+  {#if d.hasPv && pvInputs.length > 1}
     <details class="more">
       <summary><Icon name="chevron-right" />{t("device.solar")} · {pvInputs.length}</summary>
       <div class="facts body">

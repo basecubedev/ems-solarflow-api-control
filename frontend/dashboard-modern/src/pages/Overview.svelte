@@ -7,10 +7,12 @@
   import PowerChart from "../widgets/PowerChart.svelte";
   import { fetchSeries } from "../lib/historyApi.js";
   import { localDayStart } from "../lib/history.js";
+  import { systemHardware } from "../state/derived.svelte.js";
 
   let history = $state.raw(null);
   let historyFailed = $state(false);
   let controller = null;
+  const hardware = $derived(systemHardware());
 
   async function load() {
     controller?.abort();
@@ -44,7 +46,7 @@
 <StatusKpis />
 <EnergyFlow span="span-8" />
 <div class="stack span-4 side">
-  <Storage />
+  {#if hardware.battery}<Storage />{/if}
   <ActiveRules />
 </div>
 <TodayTiles {history} />
@@ -53,5 +55,6 @@
 <style>
   @media (max-width: 1280px) and (min-width: 761px) {
     .side { display: grid; grid-template-columns: 1fr 1fr; }
+    .side > :global(:only-child) { grid-column: 1 / -1; }
   }
 </style>

@@ -58,6 +58,12 @@ a battery — shows no battery, and the average state of charge leaves it out.
 | **Packs** | The number of battery packs |
 | **AC input limit** | The AC charge limit, where the device reports one |
 
+A card shows only the parts its device has: a SolarFlow 800 without a battery
+has no battery figure and no **Battery** fact, and a battery-only unit such as
+a SolarFlow 2400 AC has no **Solar** and no **Solar · 4**. The power chart below
+the cards leaves out **Solar** or **Battery** the same way, for the device it
+shows or, under *All devices*, for the installation.
+
 **Target against Output** is the useful comparison. They should meet within a
 ramp. A lasting gap means something limits the device — the
 [Control pipeline](control.md) names which stage.

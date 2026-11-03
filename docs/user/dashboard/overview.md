@@ -37,9 +37,13 @@ Every day. **Overview** is the page to leave open.
 | **System status** | *All normal* and *EMS regulating · 2 of 2 devices online*, or what is wrong: *EMS paused*, *No new data*, *Grid meter offline*, *All devices offline*, *1 device(s) offline* |
 | **Self-sufficiency today** | The share *of home use from own energy* so far today |
 | **Solar now** | The solar power of all inverters, and today's solar energy underneath |
+| **Battery** | In place of *Solar now* on an installation without PV: the state of charge, and whether the batteries are charging, discharging or idle |
 | **Savings today** | The estimated savings, *at €0.35 per kWh delivered* (the configured price) |
 
 A `◦` after a figure marks a day that was only partly measured.
+
+An installation with neither PV nor a battery — an external inverter that
+reports only its output — shows the other three tiles.
 
 ### 3 — Energy flow
 
@@ -56,13 +60,24 @@ it from the home back to the inverter; in **System** that line carries the
 inverters' output minus their charge, so it turns round once the charge is the
 larger and rests while the two are about even.
 
+The diagram draws only what the installation has. A SolarFlow 800 without a
+battery draws **Solar** and no **Battery**, because it reports no battery
+packs. A battery-only unit such as a SolarFlow 2400 AC draws **Battery** into the
+inverter and no **Solar**: it names its model, and the EMS knows that model
+has no PV inputs. For a model the EMS does not know, set its PV size to 0
+(`pv_kwp: 0`), because a dark array reads exactly like none. Without PV the
+**Battery** status tile replaces **Solar now**; without a battery the
+**Batteries** card is left out, and **today's tiles** and the **Power today**
+chart leave out the solar or battery figures in either case.
+
 The switch above the diagram chooses how it is drawn, and the browser
 remembers the choice:
 
 - **System** — one box each for solar, battery, home and grid, totalled over
   all devices.
-- **Per device** — one row per inverter with its own solar, battery and output.
-  The inverters' lines join into one line into the home.
+- **Per device** — one row per inverter with its own solar, battery and output,
+  each only if that device has it. The inverters' lines join into one line into
+  the home.
 
 ![Overview in the Midnight colour scheme with the energy flow drawn per device: solar and battery for WR1 and WR2, each inverter's output joining into the home](../../assets/screenshots/dashboard/dashboard-overview-per-device.png)
 

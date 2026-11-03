@@ -26,11 +26,14 @@ export function normalizeDevice(name, raw) {
   const soc = socReported ? Math.max(0, Math.min(100, finite(device.soc ?? device.soc_percent))) : null;
   const packs = finite(device.pack_num);
   const inputLimit = finite(device.input_limit_w);
+  const hardware = device.hardware || {};
   return {
     name,
     online,
     enabled,
     readOnly: device.read_only === true,
+    hasPv: hardware.pv !== false,
+    hasBattery: hardware.battery !== false,
     socReported,
     soc,
     minSoc: finite(device.min_soc),
@@ -56,6 +59,22 @@ export function normalizeDevice(name, raw) {
 
 export function normalizedDevices(snapshot) {
   return deviceEntries(snapshot).map(([name, raw]) => normalizeDevice(name, raw));
+}
+
+/** The devices the energy flow draws: a disabled one only while it still reports. */
+export function flowDevices(devices) {
+  return devices.filter((device) => device.enabled || device.online);
+}
+
+/**
+ * The parts the installation has, from the devices the flow draws: PV when
+ * one of them has PV, a battery when one has a battery. Before any device is
+ * known, it has both.
+ */
+export function hardwareOf(devices) {
+  const shown = flowDevices(devices);
+  if (!shown.length) return { pv: true, battery: true };
+  return { pv: shown.some((device) => device.hasPv), battery: shown.some((device) => device.hasBattery) };
 }
 
 /**

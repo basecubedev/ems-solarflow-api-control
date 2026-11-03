@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeDevice, deviceEntries, firmwareFacts, acPath, fleetSummary, normalizedDevices, assistView } from "../src/lib/devices.js";
+import { normalizeDevice, deviceEntries, firmwareFacts, acPath, fleetSummary, normalizedDevices, assistView, flowDevices, hardwareOf } from "../src/lib/devices.js";
 
 test("a field the device did not report stays null instead of becoming 0", () => {
   const device = normalizeDevice("WR1", { online: true });
@@ -15,6 +15,35 @@ test("a device that reports no SoC has no SoC", () => {
   const device = normalizeDevice("E3DC", { online: true, soc: 0, soc_reported: false });
   assert.equal(device.socReported, false);
   assert.equal(device.soc, null);
+});
+
+test("a device has the PV and battery the EMS names, and both when it names neither", () => {
+  assert.deepEqual(
+    [normalizeDevice("A", { hardware: { pv: false, battery: true } }), normalizeDevice("B", { hardware: { pv: true, battery: false } }), normalizeDevice("C", {})]
+      .map((device) => [device.hasPv, device.hasBattery]),
+    [[false, true], [true, false], [true, true]],
+  );
+});
+
+test("the installation has a part when one drawn device has it", () => {
+  const device = (name, hardware, over = {}) => normalizeDevice(name, { online: true, enabled: true, hardware, ...over });
+  assert.deepEqual(hardwareOf([device("AC2400", { pv: false, battery: true })]), { pv: false, battery: true });
+  assert.deepEqual(hardwareOf([device("SF800", { pv: true, battery: false })]), { pv: true, battery: false });
+  assert.deepEqual(
+    hardwareOf([device("SF800", { pv: true, battery: false }), device("AC2400", { pv: false, battery: true })]),
+    { pv: true, battery: true },
+  );
+  assert.deepEqual(hardwareOf([device("Plug", { pv: false, battery: false })]), { pv: false, battery: false });
+});
+
+test("a device the flow does not draw adds no part, and no device at all leaves both", () => {
+  const device = (name, hardware, over) => normalizeDevice(name, { hardware, ...over });
+  const parked = device("Winter", { pv: true, battery: false }, { enabled: false, online: false });
+  const running = device("AC2400", { pv: false, battery: true }, { enabled: true, online: false });
+  assert.deepEqual(flowDevices([parked, running]).map((d) => d.name), ["AC2400"]);
+  assert.deepEqual(hardwareOf([parked, running]), { pv: false, battery: true });
+  assert.deepEqual(hardwareOf([]), { pv: true, battery: true });
+  assert.deepEqual(hardwareOf([parked]), { pv: true, battery: true });
 });
 
 test("SoC is clamped to 0..100", () => {

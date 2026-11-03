@@ -11,13 +11,14 @@
   import { fetchSeries } from "../lib/historyApi.js";
   import { emptyKey, localDayStart, sourceKey } from "../lib/history.js";
   import { live } from "../state/live.svelte.js";
+  import { systemHardware } from "../state/derived.svelte.js";
 
   let { todayHistory = null, todayFailed = false, devices = null, title = "", span = "span-12" } = $props();
 
   const SERIES = [
-    { id: "pv", label: "series.pv", token: "--pv" },
+    { id: "pv", label: "series.pv", token: "--pv", part: "pv" },
     { id: "home", label: "series.home", token: "--output" },
-    { id: "battery", label: "series.battery", token: "--battery" },
+    { id: "battery", label: "series.battery", token: "--battery", part: "battery" },
     { id: "grid", label: "series.grid", token: "--grid", signed: true },
   ];
   const RANGES = ["1h", "6h", "today", "24h", "7d"];
@@ -31,7 +32,11 @@
   let error = $state(false);
   let controller = null;
 
-  const series = $derived(SERIES.map((s) => ({ ...s, label: t(s.label) })));
+  const hasPv = $derived(systemHardware().pv);
+  const hasBattery = $derived(systemHardware().battery);
+  const series = $derived(
+    SERIES.filter((s) => devices || (s.part !== "pv" || hasPv) && (s.part !== "battery" || hasBattery)).map((s) => ({ ...s, label: t(s.label) })),
+  );
   const heading = $derived(title || (range === "today" ? t("chart.title") : t("chart.titleRange", { range: t(`chart.range.${range}`) })));
   const dayStart = $derived(localDayStart(new Date(live.now)));
   const data = $derived(range === "today" && !devices ? todayHistory : ranged);

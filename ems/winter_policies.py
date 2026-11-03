@@ -105,18 +105,28 @@ def device_policy_options():
     return (AUTO, *POLICIES)
 
 
-def device_energy_class(battery_absent, configured_pv_kwp):
-    """The energy class of a device.
+def device_parts(battery_absent, configured_pv_kwp, model_class=None):
+    """Whether a device has PV and whether it has a battery, as ``(pv, battery)``.
 
-    Battery presence comes from telemetry; a missing PV array is a statement
-    only the configuration can make (``pv_kwp: 0``), because a dark or shaded
-    array reads exactly like none.
+    ``model_class`` is the class the hardware catalogue names for the device's
+    model: what that model can have. Telemetry and configuration take away
+    what this one does not have -- a pack count of 0 its battery, ``pv_kwp: 0``
+    its array, because a dark or shaded array reads exactly like none.
     """
 
-    if battery_absent:
+    pv = model_class != BATTERY_ONLY and not _is_zero(configured_pv_kwp)
+    battery = model_class != PV_ONLY and not battery_absent
+    return pv, battery
+
+
+def device_energy_class(battery_absent, configured_pv_kwp, model_class=None):
+    """The energy class of a device, from :func:`device_parts`."""
+
+    pv, battery = device_parts(battery_absent, configured_pv_kwp, model_class)
+    if not battery:
         return PV_ONLY
 
-    if _is_zero(configured_pv_kwp):
+    if not pv:
         return BATTERY_ONLY
 
     return PV_BATTERY
@@ -152,9 +162,10 @@ def resolve_policy(device_class, device_override=None, class_defaults=None):
 def find_winter_policy_issues(config):
     """Return ``{code, message}`` issues for winter policies that cannot apply.
 
-    The class is read from the configuration alone, ``pv_kwp: 0`` making a
-    battery-only device; whether a battery is present is telemetry, and a
-    device without one runs no winter plan whatever it names.
+    The class is read from the configuration alone: ``pv_kwp: 0``, or a pinned
+    ``hardware_profile`` whose model has no PV inputs, makes a battery-only
+    device. Whether a battery is present is telemetry, and a device without one
+    runs no winter plan whatever it names.
     """
 
     issues = []
@@ -198,7 +209,7 @@ def find_winter_policy_issues(config):
                 "message": f"{label}: winter policy {name!r} is unknown",
             })
             continue
-        device_class = device_energy_class(False, device.get("pv_kwp"))
+        device_class = device_energy_class(False, device.get("pv_kwp"), _pinned_model_class(device))
         if device_class not in POLICIES[name].device_classes:
             issues.append({
                 "code": "winter_policy_device_class",
@@ -208,6 +219,16 @@ def find_winter_policy_issues(config):
                 ),
             })
     return issues
+
+
+def _pinned_model_class(device):
+    """The catalogue class of the model a ``devices[]`` entry pins, or ``None``."""
+
+    # Imported here: the hardware catalogue reads this module's class names.
+    from ems.mqtt_control.zendure_profiles import profile_energy_class
+    from ems.zendure_mqtt.config_entries import zendure_mqtt_hardware_profile
+
+    return profile_energy_class(zendure_mqtt_hardware_profile(device))
 
 
 def _is_zero(value):

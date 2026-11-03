@@ -90,6 +90,7 @@ def _device(name, **over):
         "pack_num": 1,
         "input_limit_w": 0,
         "ac_charge_w": 0,
+        "hardware": {"pv": True, "battery": True},
     }
     base.update(over)
     if "pv_inputs_w" not in over:

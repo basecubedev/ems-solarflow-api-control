@@ -15,6 +15,7 @@ from ems import config as cfg
 from ems import winter_policies
 from ems.logging_utils import log_event
 from ems.models import BATTERY_ABSENT, DeviceCapabilities
+from ems.mqtt_control.zendure_profiles import device_model_class
 from ems.state_store import WinterReserveStore
 from ems.target_control import battery_presence, pv_power
 from ems.winter_policies import MAX_RAISE_ABOVE_SOC
@@ -65,6 +66,7 @@ class WinterDeviceState:
     pv_ever: bool = False
     pv_veto_logged: str | None = None
     device_class: str | None = None
+    model_class: str | None = None
     policy: winter_policies.WinterPolicy | None = None
     policy_warned: bool = False
     dark_date: str | None = None
@@ -104,11 +106,12 @@ class WinterReserve:
             return winter_policies.POLICIES[winter_policies.NO_POLICY]
 
         item = self.device(dev.name)
-        if item.policy is not None:
+        model_class = device_model_class(dev)
+        if item.policy is not None and item.model_class == model_class:
             return item.policy
 
         entry = cfg.device_config_entry(dev.name) or {}
-        device_class = winter_policies.device_energy_class(False, entry.get("pv_kwp"))
+        device_class = winter_policies.device_energy_class(False, entry.get("pv_kwp"), model_class)
         policy, valid = winter_policies.resolve_policy(
             device_class,
             entry.get("winter_policy"),
@@ -125,6 +128,7 @@ class WinterReserve:
                 policy=policy.name
             )
         item.device_class = device_class
+        item.model_class = model_class
         item.policy = policy
         return policy
 
@@ -271,9 +275,10 @@ class WinterReserve:
     def reports_pv_unexpectedly(self, dev, item, today):
         """Whether a battery-only device has reported PV; then it takes no noon step.
 
-        ``pv_kwp: 0`` long meant "not set". A PV device saved that way would
-        otherwise get a step that may lead its SoC far enough for a grid
-        charge. Once a device has reported PV it is remembered.
+        ``pv_kwp: 0`` long meant "not set", and a catalogue entry can be wrong.
+        A PV device counted as battery-only would otherwise get a step that may
+        lead its SoC far enough for a grid charge. Once a device has reported
+        PV it is remembered.
         """
 
         if item.device_class != winter_policies.BATTERY_ONLY or not item.pv_ever:
@@ -284,7 +289,7 @@ class WinterReserve:
                 logging.WARNING,
                 "winter_pv_kwp_zero_but_pv_reported",
                 device=dev.name,
-                hint="pv_kwp 0 marks a battery without PV; this device reported PV, so it takes no noon step"
+                hint="counted as battery-only by its model or pv_kwp 0, but it reported PV, so it takes no noon step"
             )
         return True
 
