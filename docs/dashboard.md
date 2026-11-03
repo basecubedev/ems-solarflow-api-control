@@ -59,9 +59,11 @@ What a device has decides what the Overview and the energy flow draw. The live
 snapshot names it per device in `devices.<name>.hardware` as
 `{"pv": true|false, "battery": true|false}`, from the device's energy class,
 the one the winter plan reads: the battery is absent once the device reports
-no packs, PV is absent when its `devices[]` entry says `pv_kwp: 0`, and a
-device that has said neither keeps both, because a dark array and a silent
-device read exactly like none. An external MQTT device has the parts its
+no packs, PV is absent when the hardware catalogue lists the device's model
+without PV inputs or its `devices[]` entry says `pv_kwp: 0`, and a device that
+has said neither keeps both, because a dark array and a silent device read
+exactly like none. The model is the one the device's report names, or the
+`hardware_profile` its entry pins. An external MQTT device has the parts its
 bridge publishes a key for (`solarPower`; `batteryPower` or `batterySoc`).
 The Overview draws solar when one shown device has PV and a battery when one
 has a battery: without PV the **Battery** tile replaces **Solar now** (with

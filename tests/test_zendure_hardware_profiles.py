@@ -251,3 +251,31 @@ def test_supported_operations_reflect_capability_flags():
     assert set(hub.supported_operations) == {OPERATION_DISCHARGE, OPERATION_IDLE}
     ace = resolve_hardware_profile("ACE 1500")
     assert ace.supported_operations == ()
+
+
+# --- what each model can have ----------------------------------------------
+
+
+def test_each_model_names_what_it_can_have_from_the_vendor_s_facts():
+    """The dashboard and the winter plan read these; a model no vendor source
+    settles keeps no class, and a device of it keeps both parts."""
+
+    from ems.mqtt_control.zendure_profiles import HARDWARE_PROFILES
+    from ems.winter_policies import BATTERY_ONLY, PV_BATTERY
+
+    battery_only = {"solarflow_1600_ac_plus", "solarflow_2400_ac", "solarflow_2400_ac_plus", "solarflow_3000_ac_plus"}
+    unsettled = {"solarflow_4000_ac_plus"}
+    expected = {
+        name: BATTERY_ONLY if name in battery_only else None if name in unsettled else PV_BATTERY
+        for name in HARDWARE_PROFILES
+    }
+
+    assert {name: profile.energy_class for name, profile in HARDWARE_PROFILES.items()} == expected
+
+
+def test_a_device_is_known_by_its_pin_before_its_report():
+    from ems.mqtt_control.zendure_profiles import resolve_device_profile
+
+    assert resolve_device_profile(None, "SolarFlow 2400 AC") == "solarflow_2400_ac"
+    assert resolve_device_profile("solarflow_800_pro", None) == "solarflow_800_pro"
+    assert resolve_device_profile(None, None) is None

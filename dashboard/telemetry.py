@@ -6,7 +6,12 @@ from dataclasses import asdict, is_dataclass
 from ems.models import BATTERY_ABSENT, battery_presence, parse_pack_count
 from ems.power_direction import derive_house_load_w
 from ems.state_store import describe_full_charge_assist_status
-from ems.winter_policies import BATTERY_ONLY, PV_ONLY, device_energy_class
+from ems.mqtt_control.zendure_profiles import (
+    device_model_class,
+    profile_energy_class,
+    resolve_device_profile,
+)
+from ems.winter_policies import device_parts
 
 
 def _rounded(value, digits=1):
@@ -221,19 +226,20 @@ def _reports_soc(state):
     return battery_presence(state) != BATTERY_ABSENT
 
 
-def _device_hardware(name, state):
+def _device_hardware(name, state, model_class):
     """The parts the dashboard draws for one device: its PV input and its battery.
 
-    The device's energy class decides, as it does for the winter plan.
+    The rule the winter plan reads decides: the model's catalogue class, the
+    reported packs and ``pv_kwp: 0``.
     """
 
     from ems import config as cfg
 
     entry = cfg.device_config_entry(name) or {}
-    device_class = device_energy_class(
-        battery_presence(state) == BATTERY_ABSENT, entry.get("pv_kwp")
+    pv, battery = device_parts(
+        battery_presence(state) == BATTERY_ABSENT, entry.get("pv_kwp"), model_class
     )
-    return {"pv": device_class != BATTERY_ONLY, "battery": device_class != PV_ONLY}
+    return {"pv": pv, "battery": battery}
 
 
 def _external_hardware(family, observable):
@@ -285,7 +291,9 @@ def _telemetry_only_tiles(controller):
         logging.debug("event=dashboard_telemetry_devices_unavailable", exc_info=True)
         return tiles
 
+    from ems import config as cfg
     from ems.clients import parse_device
+    from ems.zendure_mqtt.config_entries import zendure_mqtt_hardware_profile
     from ems.zendure_mqtt.external_catalog import external_topic_family
     from ems.zendure_mqtt.snapshot import observable_metrics, pack_witness
 
@@ -318,6 +326,11 @@ def _telemetry_only_tiles(controller):
         external = next((family for family in families if family), None)
         if external is not None:
             tile["hardware"] = _external_hardware(external, observable)
+        else:
+            tile["hardware_profile"] = resolve_device_profile(
+                zendure_mqtt_hardware_profile(cfg.device_config_entry(name)),
+                getattr(snapshot, "product", None),
+            )
         tiles.append(tile)
     return tiles
 
@@ -443,7 +456,7 @@ def build_dashboard_snapshot(
             "enabled": device_enabled,
             **fields,
             "soc_reported": soc_reported,
-            "hardware": _device_hardware(name, state),
+            "hardware": _device_hardware(name, state, device_model_class(dev)),
             "target_w": _rounded(target_w),
             "allocated_target_w": _rounded(allocated_target_w),
             "capability": (
@@ -499,7 +512,10 @@ def build_dashboard_snapshot(
             **fields,
             **tile.get("fields", {}),
             "soc_reported": soc_reported,
-            "hardware": tile.get("hardware") or _device_hardware(name, state),
+            "hardware": tile.get("hardware")
+            or _device_hardware(
+                name, state, profile_energy_class(tile.get("hardware_profile"))
+            ),
             "target_w": 0,
             "allocated_target_w": 0,
             "capability": None,

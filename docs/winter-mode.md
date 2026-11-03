@@ -61,13 +61,16 @@ container's [time zone](docker.md#time-zone).
 
 | Device type | Recognised by | Default policy | Policies it may use |
 |---|---|---|---|
-| PV with battery (`pv_battery`) | a battery in telemetry and `pv_kwp` other than 0 | `solar_morning_step` | `solar_morning_step`, `noon_step`, `none` |
-| Battery only (`battery_only`) | a battery in telemetry and `pv_kwp: 0` | `noon_step` | `noon_step`, `none` |
-| PV only (`pv_only`) | no battery in telemetry (`packNum: 0`) | `none` | `none` |
+| PV with battery (`pv_battery`) | a battery in telemetry, a model with PV inputs or one the hardware catalogue does not know, and `pv_kwp` other than 0 | `solar_morning_step` | `solar_morning_step`, `noon_step`, `none` |
+| Battery only (`battery_only`) | a battery in telemetry, and a model the hardware catalogue lists without PV inputs or `pv_kwp: 0` | `noon_step` | `noon_step`, `none` |
+| PV only (`pv_only`) | no battery in telemetry (`packNum: 0`), or a model the catalogue lists without a battery | `none` | `none` |
 
-A missing PV array is something only the configuration can state: a dark or
-shaded array reads exactly like none, so `pv_kwp: 0` is what makes a device
-battery-only. Earlier releases read `pv_kwp: 0` as "not set", so a
+A missing PV array is something telemetry cannot state: a dark or shaded array
+reads exactly like none. The model can: each device's report names its model,
+and the hardware catalogue says for each model it knows whether it has PV
+inputs, so an AC-coupled unit such as a SolarFlow 2400 AC is battery-only out
+of the box. For a model the catalogue does not know, `pv_kwp: 0` is what makes
+a device battery-only. Earlier releases read `pv_kwp: 0` as "not set", so a
 battery-only device that has ever reported PV (50 W or more) takes no noon step
 and logs `winter_pv_kwp_zero_but_pv_reported` once a day: a PV device saved
 with `pv_kwp: 0` gets no step rather than one that may end in a grid charge.
@@ -80,8 +83,10 @@ the default for one device; `auto` keeps it. A name that is unknown or does not
 fit the device's type falls back to the type's default, and the EMS logs
 `winter_policy_invalid` once per device. The Admin Console refuses such a
 name when it checks the settings, in the guided setup and on **Settings &
-devices**, before anything is saved; it judges the type from `pv_kwp` alone,
-because battery presence is only known at runtime. MQTT control devices are
+devices**, before anything is saved. It judges the type from `pv_kwp` and from
+the model a device's entry pins (`hardware_profile`), because battery presence
+is only known at runtime; a device whose model is known only from its report
+is checked when the EMS runs it. MQTT control devices are
 output-only: they carry the field but get no winter plan.
 
 | Policy | Daily step | How far the step may lead the SoC | PV charges the battery first |
@@ -121,8 +126,8 @@ Outside the configured winter months, the EMS resets `minSoc` to
 There is one step per calendar day: PV that drops to nothing under cloud takes
 no second step, and a few watts of noise at night are no morning. A device that
 has seen no PV by `adjust_hour` logs `winter_step_waits_for_pv` once that day:
-a battery without PV of its own needs `pv_kwp: 0`, or it waits for a morning
-that never comes.
+a battery without PV of its own whose model the catalogue does not know needs
+`pv_kwp: 0`, or it waits for a morning that never comes.
 
 ### `noon_step`
 

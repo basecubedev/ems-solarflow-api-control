@@ -434,23 +434,9 @@ class ZendureClient:
         a local HTTP device needs no separate identification rule.
         """
 
-        from ems.mqtt_control.zendure_profiles import (
-            EVIDENCE_EXISTING_CONFIG,
-            EVIDENCE_FULL_REPORT,
-            make_hardware_profile_evidence,
-            resolve_hardware_profile_evidence,
-        )
+        from ems.mqtt_control.zendure_profiles import resolve_device_profile
 
-        return resolve_hardware_profile_evidence(
-            [
-                make_hardware_profile_evidence(
-                    EVIDENCE_EXISTING_CONFIG, self.hardware_profile
-                ),
-                make_hardware_profile_evidence(
-                    EVIDENCE_FULL_REPORT, self.observed_product
-                ),
-            ]
-        ).profile_id
+        return resolve_device_profile(self.hardware_profile, self.observed_product)
 
     def dispatch_output_limit(self, value, charge_exit=None):
         """Dispatch a signed power target over the local HTTP API.

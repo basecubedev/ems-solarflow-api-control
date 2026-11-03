@@ -102,6 +102,40 @@ def test_the_device_class_comes_from_the_battery_and_the_configured_pv(battery_a
     assert wp.device_energy_class(battery_absent, pv_kwp) == expected
 
 
+@pytest.mark.parametrize(
+    "battery_absent, pv_kwp, model_class, expected",
+    [
+        (False, 1.0, wp.BATTERY_ONLY, wp.BATTERY_ONLY),
+        (False, None, wp.BATTERY_ONLY, wp.BATTERY_ONLY),
+        (False, 1.0, wp.PV_ONLY, wp.PV_ONLY),
+        (False, 1.0, wp.PV_BATTERY, wp.PV_BATTERY),
+        (True, 1.0, wp.PV_BATTERY, wp.PV_ONLY),
+        (False, 0, wp.PV_BATTERY, wp.BATTERY_ONLY),
+        (False, 1.0, None, wp.PV_BATTERY),
+    ],
+)
+def test_the_model_says_what_a_device_can_have_and_the_device_what_it_lacks(battery_absent, pv_kwp, model_class, expected):
+    """A battery-only model needs no ``pv_kwp: 0``; a model with PV and a
+    battery still loses the battery it reports no packs for."""
+
+    assert wp.device_energy_class(battery_absent, pv_kwp, model_class) == expected
+
+
+@pytest.mark.parametrize(
+    "battery_absent, pv_kwp, model_class, parts",
+    [
+        (True, 0, None, (False, False)),
+        (True, 1.0, wp.BATTERY_ONLY, (False, False)),
+        (False, 1.0, wp.BATTERY_ONLY, (False, True)),
+        (False, 1.0, None, (True, True)),
+    ],
+)
+def test_a_device_can_lack_both_parts(battery_absent, pv_kwp, model_class, parts):
+    """The class has no name for neither; the parts do, and the dashboard reads them."""
+
+    assert wp.device_parts(battery_absent, pv_kwp, model_class) == parts
+
+
 @pytest.mark.parametrize("device_class", wp.DEVICE_CLASSES)
 def test_every_class_defaults_to_its_built_in_policy(device_class):
     policy, valid = wp.resolve_policy(device_class)
@@ -276,6 +310,49 @@ def test_a_battery_missing_for_one_report_is_no_invalid_policy(caplog):
     assert not controller.winter.device("WR1").policy_warned
 
 
+def test_a_battery_only_model_takes_the_battery_plan_without_pv_kwp_0():
+    controller = EMSController(devices=[], shelly=None, sleep_enabled=False)
+    dev = SimpleNamespace(name="WR1", min_soc=15, max_soc=95, resolved_hardware_profile=lambda: "solarflow_2400_ac")
+
+    with _configured(entry={"pv_kwp": 1.0}):
+        policy = controller.winter.policy(dev, _state())
+
+    assert policy.name == wp.NOON_STEP
+    assert controller.winter.device("WR1").device_class == wp.BATTERY_ONLY
+
+
+def test_the_plan_follows_a_model_that_becomes_known():
+    """The model is read from the device's report; a plan chosen before the
+    first report names it is chosen again once it does."""
+
+    controller = EMSController(devices=[], shelly=None, sleep_enabled=False)
+    model = {"profile": None}
+    dev = SimpleNamespace(name="WR1", min_soc=15, max_soc=95, resolved_hardware_profile=lambda: model["profile"])
+
+    with _configured():
+        assert controller.winter.policy(dev, _state()).name == wp.SOLAR_MORNING_STEP
+        model["profile"] = "solarflow_2400_ac_plus"
+        assert controller.winter.policy(dev, _state()).name == wp.NOON_STEP
+
+
+def test_a_battery_only_model_steps_at_noon_and_not_once_it_reports_pv():
+    """The model's class takes the noon step as ``pv_kwp: 0`` does, and the
+    same PV veto guards a catalogue entry that turns out wrong."""
+
+    def winter_target(controller, dev, state, now):
+        with _configured():
+            return controller.winter.reconciliation_target(dev, state, True, now)
+
+    dark = EMSController(devices=[], shelly=None, sleep_enabled=False)
+    ac = SimpleNamespace(name="WR1", min_soc=15, max_soc=95, resolved_hardware_profile=lambda: "solarflow_2400_ac")
+    winter_target(dark, ac, _state(20, soc=20), MORNING)
+    assert winter_target(dark, ac, _state(20, soc=20), NOON) == (23, True)
+
+    lit = EMSController(devices=[], shelly=None, sleep_enabled=False)
+    winter_target(lit, ac, _state(20, soc=20, pv=300), MORNING)
+    assert winter_target(lit, ac, _state(20, soc=20, pv=300), NOON) == (20, False)
+
+
 def test_the_step_hour_is_configurable():
     controller = EMSController(devices=[], shelly=None, sleep_enabled=False)
     with patch.object(cfg, "winter_adjust_hour", lambda: 8):
@@ -416,6 +493,11 @@ def test_a_device_reads_its_settings_from_its_one_enabled_entry(entries, expecte
     "device, code",
     [
         ({"name": "AKKU", "pv_kwp": 0, "winter_policy": wp.SOLAR_MORNING_STEP}, "winter_policy_device_class"),
+        ({"name": "AC", "hardware_profile": "solarflow_2400_ac", "winter_policy": wp.SOLAR_MORNING_STEP}, "winter_policy_device_class"),
+        (
+            {"name": "AC", "type": "zendure_mqtt", "mqtt": {"hardware_profile": "solarflow_2400_ac_plus"}, "winter_policy": wp.SOLAR_MORNING_STEP},
+            "winter_policy_device_class",
+        ),
         ({"name": "WR1", "pv_kwp": 1.0, "winter_policy": "store_solar"}, "winter_policy_unknown"),
     ],
 )
@@ -427,6 +509,8 @@ def test_a_policy_that_cannot_apply_is_an_issue(device, code):
     "device",
     [
         {"name": "AKKU", "pv_kwp": 0, "winter_policy": wp.NOON_STEP},
+        {"name": "AC", "hardware_profile": "solarflow_2400_ac", "winter_policy": wp.NOON_STEP},
+        {"name": "MIX", "hardware_profile": "solarflow_4000_ac_plus", "winter_policy": wp.SOLAR_MORNING_STEP},
         {"name": "WR1", "pv_kwp": 1.0, "winter_policy": wp.NOON_STEP},
         {"name": "WR1", "pv_kwp": 1.0, "winter_policy": wp.AUTO},
         {"name": "WR1", "pv_kwp": 1.0},

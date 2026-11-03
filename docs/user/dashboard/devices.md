@@ -60,8 +60,7 @@ a battery — shows no battery, and the average state of charge leaves it out.
 
 A card shows only the parts its device has: a SolarFlow 800 without a battery
 has no battery figure and no **Battery** fact, and a battery-only unit such as
-an AC 2400+ whose PV size is set to 0 (`pv_kwp: 0`) has no **Solar** and no
-**Solar · 4**. The power chart below
+a SolarFlow 2400 AC has no **Solar** and no **Solar · 4**. The power chart below
 the cards leaves out **Solar** or **Battery** the same way, for the device it
 shows or, under *All devices*, for the installation.
 

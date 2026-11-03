@@ -42,9 +42,9 @@ Two features are enabled in the template and act without an operator:
   once a day up to `winter_min_soc` (40 %). On a device with PV, `minSoc`
   leads the SoC by at most 3 points, and while the battery is below it the
   device exports at most `min_output_limit` for up to three hours so PV charges
-  the battery first. On a battery without PV of its own (`pv_kwp: 0`) the noon
-  step may lead the SoC by up to two steps, and the firmware may then charge it
-  from the grid at full AC power. See
+  the battery first. On a battery without PV of its own (a model without PV
+  inputs, or `pv_kwp: 0`) the noon step may lead the SoC by up to two steps,
+  and the firmware may then charge it from the grid at full AC power. See
   [winter-mode.md](../winter-mode.md#device-types-and-policies).
 - **Battery full-charge assist** (`battery_full_charge_assist.enabled: true`)
   raises `socSet` to 100 % every 28 days; with `enable_ac_charge_mode: true`

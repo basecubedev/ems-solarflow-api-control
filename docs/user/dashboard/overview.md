@@ -62,10 +62,10 @@ larger and rests while the two are about even.
 
 The diagram draws only what the installation has. A SolarFlow 800 without a
 battery draws **Solar** and no **Battery**, because it reports no battery
-packs. A battery-only unit such as an AC 2400+ draws **Battery** into the
-inverter and no **Solar** once its PV size is set to 0 (`pv_kwp: 0`): a device
-cannot tell an absent array from a dark one, so only the configuration says
-there is none. Without PV the
+packs. A battery-only unit such as a SolarFlow 2400 AC draws **Battery** into the
+inverter and no **Solar**: it names its model, and the EMS knows that model
+has no PV inputs. For a model the EMS does not know, set its PV size to 0
+(`pv_kwp: 0`), because a dark array reads exactly like none. Without PV the
 **Battery** status tile replaces **Solar now**; without a battery the
 **Batteries** card is left out, and **today's tiles** and the **Power today**
 chart leave out the solar or battery figures in either case.
