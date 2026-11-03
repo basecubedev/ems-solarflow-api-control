@@ -84,6 +84,7 @@ export const STRINGS = {
   "kpi.selfSufficiency": s("Self-sufficiency today", "Autarkie heute", "Zelfvoorziening vandaag", "Autonomie aujourd’hui"),
   "kpi.selfSufficiencyMeta": s("of home use from own energy", "des Verbrauchs aus eigener Energie", "van het verbruik uit eigen energie", "de la consommation couverte par vous"),
   "kpi.solarNow": s("Solar now", "Solar jetzt", "Zon nu", "Solaire maintenant"),
+  "kpi.battery": s("Battery", "Akku", "Batterij", "Batterie"),
   "kpi.todayValue": s("{v} today", "heute {v}", "vandaag {v}", "{v} aujourd’hui"),
   "kpi.savings": s("Savings today", "Ersparnis heute", "Besparing vandaag", "Économies aujourd’hui"),
   "kpi.savingsMeta": s("at {p} per kWh delivered", "bei {p} pro gelieferter kWh", "bij {p} per geleverde kWh", "à {p} par kWh fourni"),
@@ -112,7 +113,6 @@ export const STRINGS = {
   "flow.noSoc": s("not reported", "nicht gemeldet", "niet gemeld", "non signalé"),
   "flow.ariaSoc": s("{name} state of charge {soc}", "{name} Ladestand {soc}", "{name} laadtoestand {soc}", "{name} état de charge {soc}"),
   "flow.waiting": s("Waiting for the first measurement", "Warte auf die erste Messung", "Wachten op de eerste meting", "En attente de la première mesure"),
-  "flow.aria": s("Solar {pv}, battery {battery}, home use {home}, grid {grid}", "Solar {pv}, Akku {battery}, Hausverbrauch {home}, Netz {grid}", "Zon {pv}, batterij {battery}, huisverbruik {home}, net {grid}", "Solaire {pv}, batterie {battery}, consommation {home}, réseau {grid}"),
 
   "storage.title": s("Batteries", "Akkus", "Batterijen", "Batteries"),
   "storage.sub": s("Battery state per device", "Akkustand pro Gerät", "Batterijstatus per apparaat", "État de la batterie par appareil"),

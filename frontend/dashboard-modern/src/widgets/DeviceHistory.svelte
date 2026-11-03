@@ -10,13 +10,14 @@
   import { t } from "../i18n/i18n.svelte.js";
   import { fetchSeries } from "../lib/historyApi.js";
   import { emptyKey, sourceKey } from "../lib/history.js";
+  import { devices, systemHardware } from "../state/derived.svelte.js";
 
   let { names = [] } = $props();
 
   const SERIES = [
-    { id: "pv", label: "series.pv", token: "--pv" },
+    { id: "pv", label: "series.pv", token: "--pv", part: "pv" },
     { id: "output", label: "series.output", token: "--output" },
-    { id: "battery", label: "series.battery", token: "--battery" },
+    { id: "battery", label: "series.battery", token: "--battery", part: "battery" },
   ];
   const RANGES = ["1h", "6h", "24h", "7d"];
 
@@ -30,7 +31,15 @@
   let error = $state(false);
   let controller = null;
 
-  const series = $derived(SERIES.map((s) => ({ ...s, label: t(s.label) })));
+  const parts = $derived.by(() => {
+    const chosen = device ? devices().find((entry) => entry.name === device) : null;
+    return chosen ? { pv: chosen.hasPv, battery: chosen.hasBattery } : systemHardware();
+  });
+  const hasPv = $derived(parts.pv);
+  const hasBattery = $derived(parts.battery);
+  const series = $derived(
+    SERIES.filter((s) => (s.part !== "pv" || hasPv) && (s.part !== "battery" || hasBattery)).map((s) => ({ ...s, label: t(s.label) })),
+  );
 
   async function load() {
     controller?.abort();

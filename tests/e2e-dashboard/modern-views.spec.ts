@@ -115,6 +115,139 @@ test.describe("Modern dashboard views: energy flow @smoke", () => {
   });
 });
 
+const BATTERY_ONLY = { pv: false, battery: true };
+const PV_ONLY = { pv: true, battery: false };
+
+/** Each device given the parts ``partsOf`` names for it, with figures that fit: no PV reads 0 W, no battery reads no packs, and a battery without PV discharges 150 W. */
+function withHardware(partsOf) {
+  return (body) => {
+    for (const [name, device] of Object.entries(body.devices)) {
+      device.hardware = partsOf(name);
+      if (!device.hardware.pv) Object.assign(device, { pv_input_w: 0, pv_inputs_w: [0, 0, 0, 0] });
+      if (!device.hardware.battery) Object.assign(device, { battery_power_w: 0, pack_input_w: 0, pack_output_w: 0, pack_num: 0, soc_reported: false });
+      else if (!device.hardware.pv) Object.assign(device, { battery_power_w: -150, pack_input_w: 150, pack_output_w: 0 });
+    }
+    const devices = Object.values(body.devices);
+    body.pv_total_w = devices.reduce((sum, device) => sum + device.pv_input_w, 0);
+    body.battery_power_w = devices.reduce((sum, device) => sum + device.battery_power_w, 0);
+  };
+}
+
+const middle = (box) => box.y + box.height / 2;
+const STRAIGHT = /^M[\d.]+,[\d.]+ L[\d.]+,[\d.]+$/;
+
+test.describe("Modern dashboard views: only the parts a system has @smoke", () => {
+  test("batteries without PV: no solar in the flow, the figures, the day or the chart, and the battery level with the inverter", async ({ page }) => {
+    await shapeLive(page, withHardware(() => BATTERY_ONLY));
+    await openModern(page, "#/overview");
+    const flow = page.getByTestId("energy-flow");
+    await expect(flow.locator("[data-node=bat]")).toBeVisible();
+    await expect(flow.locator("[data-node=pv]")).toHaveCount(0);
+    await expect(flow.locator('[data-wire="pv"]')).toHaveCount(0);
+    await expect(flow).toHaveAttribute("aria-label", /^Battery [^,]+, Home use [^,]+, Grid [^,]+$/);
+    await expect(async () => {
+      const [bat, hub] = await Promise.all(["[data-node=bat]", "[data-node=hub]"].map((selector) => flow.locator(selector).boundingBox()));
+      expect(Math.abs(middle(bat) - middle(hub))).toBeLessThan(1);
+    }).toPass();
+    await expect(flow.locator('[data-wire="bat"]')).toHaveAttribute("d", STRAIGHT);
+    await expect(page.getByTestId("kpi-solar")).toHaveCount(0);
+    const battery = page.getByTestId("kpi-battery");
+    await expect(battery.locator(".kpi-label")).toHaveText("Battery");
+    await expect(battery.locator(".kpi-value")).toHaveText(/^\d+%$/);
+    await expect(battery.locator(".kpi-meta")).toHaveText(/^Discharging 300\sW$/);
+    await expect(page.getByRole("region", { name: "Batteries" })).toBeVisible();
+    await expect(page.getByTestId("today-tiles").locator("section .head")).toHaveText(["Home use today", "Battery net today", "Grid import today"]);
+    await expect(page.locator(".legend-item")).toHaveText([/^Home use/, /^Battery/, /^Grid/]);
+  });
+
+  test("PV without a battery: no battery in the flow, the side column, the day or the chart, and the solar level with the inverter", async ({ page }) => {
+    await shapeLive(page, withHardware(() => PV_ONLY));
+    await openModern(page, "#/overview");
+    const flow = page.getByTestId("energy-flow");
+    await expect(flow.locator("[data-node=pv]")).toBeVisible();
+    await expect(flow.locator("[data-node=bat]")).toHaveCount(0);
+    await expect(flow.locator('[data-wire="bat"]')).toHaveCount(0);
+    await expect(flow).toHaveAttribute("aria-label", /^Solar [^,]+, Home use [^,]+, Grid [^,]+$/);
+    await expect(async () => {
+      const [pv, hub] = await Promise.all(["[data-node=pv]", "[data-node=hub]"].map((selector) => flow.locator(selector).boundingBox()));
+      expect(Math.abs(middle(pv) - middle(hub))).toBeLessThan(1);
+    }).toPass();
+    await expect(flow.locator('[data-wire="pv"]')).toHaveAttribute("d", STRAIGHT);
+    await expect(page.getByTestId("kpi-solar")).toBeVisible();
+    await expect(page.getByTestId("kpi-battery")).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Batteries" })).toHaveCount(0);
+    const [rules, side] = await Promise.all([page.getByRole("region", { name: "Active rules" }).boundingBox(), page.locator(".side").boundingBox()]);
+    expect(Math.abs(rules.width - side.width)).toBeLessThan(1);
+    await expect(page.getByTestId("today-tiles").locator("section .head")).toHaveText(["Solar today", "Home use today", "Grid import today"]);
+    await expect(page.locator(".legend-item")).toHaveText([/^Solar/, /^Home use/, /^Grid/]);
+  });
+
+  test("an inverter that reports only its output: no solar and no battery anywhere, three status tiles", async ({ page }) => {
+    await shapeLive(page, withHardware(() => ({ pv: false, battery: false })));
+    await openModern(page, "#/overview");
+    const flow = page.getByTestId("energy-flow");
+    await expect(flow.locator("[data-node=hub]")).toBeVisible();
+    await expect(flow.locator("[data-node=pv], [data-node=bat]")).toHaveCount(0);
+    await expect(flow).toHaveAttribute("aria-label", /^Home use [^,]+, Grid [^,]+$/);
+    await expect(page.locator(".kpis > section")).toHaveCount(3);
+    await expect(page.getByTestId("kpi-solar")).toHaveCount(0);
+    await expect(page.getByTestId("kpi-battery")).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Batteries" })).toHaveCount(0);
+    await expect(page.getByTestId("today-tiles").locator("section .head")).toHaveText(["Home use today", "Grid import today"]);
+    await expect(page.locator(".legend-item")).toHaveText([/^Home use/, /^Grid/]);
+  });
+
+  test("a PV inverter beside a battery: each device draws its own part, the system draws both", async ({ page }) => {
+    await shapeLive(page, withHardware((name) => (name === "WR1" ? PV_ONLY : BATTERY_ONLY)));
+    await openModern(page, "#/devices");
+    const facts = (name) => deviceCard(page, name).locator(".facts.main .fact-label");
+    await expect(facts("WR1")).toHaveText(["Solar", "Output", "Target", "Limit"]);
+    await expect(facts("WR2")).toHaveText(["Output", "Battery", "Target", "Limit", "Packs"]);
+    await expect(deviceCard(page, "WR1").locator(".soc")).toHaveCount(0);
+    await expect(deviceCard(page, "WR2").locator(".soc")).toBeVisible();
+    await expect(deviceCard(page, "WR2").locator("details.more summary", { hasText: "Solar" })).toHaveCount(0);
+    await expect(page.locator(".legend-item")).toHaveText([/^Solar/, /^Output/, /^Battery/]);
+    await page.locator("select.input").selectOption("WR1");
+    await expect(page.locator(".legend-item")).toHaveText([/^Solar/, /^Output/]);
+    await page.locator("select.input").selectOption("WR2");
+    await expect(page.locator(".legend-item")).toHaveText([/^Output/, /^Battery/]);
+    const flow = page.getByTestId("energy-flow");
+    await expect(flow.locator("[data-node=pv0]")).toBeVisible();
+    await expect(flow.locator("[data-node=bat1]")).toBeVisible();
+    await expect(flow.locator("[data-node=bat0]")).toHaveCount(0);
+    await expect(flow.locator("[data-node=pv1]")).toHaveCount(0);
+    await expect(flow).toHaveAttribute("aria-label", /, Grid [^;]+; WR2 state of charge \d+%$/);
+    await expect(async () => {
+      const box = (selector) => flow.locator(selector).boundingBox();
+      const [pv0, hub0, bat1, hub1] = await Promise.all(["[data-node=pv0]", "[data-node=hub0]", "[data-node=bat1]", "[data-node=hub1]"].map(box));
+      expect(Math.abs(middle(pv0) - middle(hub0))).toBeLessThan(1);
+      expect(Math.abs(middle(bat1) - middle(hub1))).toBeLessThan(1);
+    }).toPass();
+    await openModern(page, "#/overview");
+    await expect(page.getByTestId("energy-flow").locator("[data-node=pv]")).toBeVisible();
+    await expect(page.getByTestId("energy-flow").locator("[data-node=bat]")).toBeVisible();
+    await expect(page.getByTestId("kpi-solar")).toBeVisible();
+    await expect(page.getByTestId("today-tiles").locator("section")).toHaveCount(4);
+  });
+
+  test("on a phone, batteries without PV sit level with the inverter, the home below them", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await shapeLive(page, withHardware(() => BATTERY_ONLY));
+    await openModern(page, "#/overview");
+    const flow = page.getByTestId("energy-flow");
+    await expect(flow).toHaveAttribute("data-mode", "system");
+    await expect(async () => {
+      const [bat, hub, home] = await Promise.all(["[data-node=bat]", "[data-node=hub]", "[data-node=home]"].map((selector) => flow.locator(selector).boundingBox()));
+      expect(Math.abs(middle(bat) - middle(hub))).toBeLessThan(1);
+      expect(home.y).toBeGreaterThan(hub.y + hub.height);
+    }).toPass();
+    const tiles = page.getByTestId("today-tiles").locator("section");
+    const [first, last] = await Promise.all([tiles.first().boundingBox(), tiles.last().boundingBox()]);
+    expect(Math.abs(last.width - (await page.getByTestId("today-tiles").boundingBox()).width)).toBeLessThan(1);
+    expect(first.width).toBeLessThan(last.width);
+  });
+});
+
 test.describe("Modern dashboard views: control @smoke", () => {
   test("the cycle is said in a sentence with its figures, its active limit and reason, the gates not active, and the EMS's notes", async ({ page }) => {
     await shapeLive(page, distinctCycle);

@@ -6,15 +6,16 @@
   import Icon from "../../../shared/ui/Icon.svelte";
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { live } from "../state/live.svelte.js";
+  import { systemHardware } from "../state/derived.svelte.js";
   import { channelKwh } from "../lib/energy.js";
   import { hourlyKwh, sameTimeComparison, localDayStart, niceCeiling } from "../lib/history.js";
 
   let { history = null } = $props();
 
   const TILES = [
-    { id: "pv", label: "today.solar", icon: "sun", token: "--pv", channel: "pv_yield", good: 1 },
+    { id: "pv", label: "today.solar", icon: "sun", token: "--pv", channel: "pv_yield", good: 1, part: "pv" },
     { id: "home", label: "today.home", icon: "house", token: "--output", channel: "home_consumption", good: -1 },
-    { id: "battery", label: "today.batteryNet", icon: "battery-charging", token: "--battery", net: true, good: 1 },
+    { id: "battery", label: "today.batteryNet", icon: "battery-charging", token: "--battery", net: true, good: 1, part: "battery" },
     { id: "grid", label: "today.gridImport", icon: "utility-pole", token: "--grid", channel: "grid_import", positiveOnly: true, good: -1 },
   ];
 
@@ -47,8 +48,9 @@
     return tile.positiveOnly ? (v) => Math.max(0, v) : undefined;
   }
 
+  const hardware = $derived(systemHardware());
   const tiles = $derived(
-    TILES.map((tile) => {
+    TILES.filter((tile) => !tile.part || hardware[tile.part]).map((tile) => {
       const values = history?.series?.[tile.id];
       const hours = values ? hourlyKwh(history.time, values, dayStart, { transform: transformFor(tile) }) : Array(24).fill(null);
       const comparison = history ? sameTimeComparison(history, tile.id, nowSeconds, dayStart, transformFor(tile)) : null;
@@ -59,7 +61,7 @@
   );
 </script>
 
-<div class="today span-12" data-testid="today-tiles">
+<div class="today span-12" data-testid="today-tiles" style:--tiles={tiles.length}>
   {#each tiles as tile (tile.id)}
     <section class="card tile" style:--c={`var(${tile.token})`} aria-label={t(tile.label)}>
       <div class="head"><Icon name={tile.icon} size="sm" />{t(tile.label)}</div>
@@ -110,7 +112,7 @@
 </div>
 
 <style>
-  .today { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s5); }
+  .today { display: grid; grid-template-columns: repeat(var(--tiles, 4), minmax(0, 1fr)); gap: var(--s5); }
   .tile { padding: var(--s4) var(--s5); container-type: inline-size; }
   .head { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--m-muted); font-weight: 520; }
   .head :global(svg.i) { color: var(--c); }
@@ -141,6 +143,9 @@
     .delta b { margin-left: auto; }
     .delta span { flex-basis: 100%; text-align: left; }
   }
-  @media (max-width: 1280px) { .today { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 1280px) {
+    .today { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .tile:last-child:nth-child(odd) { grid-column: 1 / -1; }
+  }
   @media (max-width: 760px) { .today { gap: var(--s3); } .tile { padding: var(--s4); } .value { font-size: 18px; } }
 </style>

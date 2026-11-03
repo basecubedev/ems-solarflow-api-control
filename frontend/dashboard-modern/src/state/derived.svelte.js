@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { live } from "./live.svelte.js";
 import { deriveSystemStatus, staleAfterMs } from "../lib/status.js";
-import { normalizedDevices } from "../lib/devices.js";
+import { normalizedDevices, hardwareOf } from "../lib/devices.js";
 
 export function loopInterval() {
   return Number(live.runtime?.system?.loop_interval) || 5;
@@ -18,6 +18,10 @@ export function systemStatus() {
 
 export function devices() {
   return normalizedDevices(live.snapshot);
+}
+
+export function systemHardware() {
+  return hardwareOf(devices());
 }
 
 export function isStale() {

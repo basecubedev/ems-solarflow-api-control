@@ -63,6 +63,12 @@ no packs, PV is absent when its `devices[]` entry says `pv_kwp: 0`, and a
 device that has said neither keeps both, because a dark array and a silent
 device read exactly like none. An external MQTT device has the parts its
 bridge publishes a key for (`solarPower`; `batteryPower` or `batterySoc`).
+The Overview draws solar when one shown device has PV and a battery when one
+has a battery: without PV the **Battery** tile replaces **Solar now** (with
+neither, the row keeps the other three tiles), without a battery the
+**Batteries** card goes, and the flow, the today tiles and the
+**Power today** chart leave the missing part out. On the Devices page each card,
+each row of the flow and the power chart show the parts of their own device.
 
 An E3/DC storage system configured as a read-only device appears the same way,
 with **Telemetry only**: PV, **Output** (its inverter's AC power), battery power

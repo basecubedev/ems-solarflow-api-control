@@ -10,7 +10,7 @@
   import { devices } from "../state/derived.svelte.js";
 
   const f = $derived(fmt());
-  const batteries = $derived(devices().filter((device) => device.enabled && (device.socReported || device.batteryW !== null)));
+  const batteries = $derived(devices().filter((device) => device.enabled && device.hasBattery));
 
   function meta(device) {
     if (!device.online) return t("storage.offline");
