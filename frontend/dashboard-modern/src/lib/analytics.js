@@ -6,6 +6,7 @@
  */
 
 import { integrateKwh } from "./history.js";
+import { consumerSeriesId } from "./consumers.js";
 
 export const ANALYTICS_RANGES = Object.freeze(["1h", "6h", "24h", "7d", "30d", "365d"]);
 
@@ -15,6 +16,9 @@ export const ANALYTICS_VIEWS = Object.freeze([
   { id: "grid", series: ["grid", "home", "ac_charge"], kpis: ["gridImport", "gridExport", "home", "acCharge"] },
   { id: "battery", series: ["battery"], kpis: ["charge", "discharge"] },
   { id: "pv", series: ["pv", "output"], kpis: ["pv", "pvPeak", "output"] },
+  // Modern only: the consumers that drew most, each its own series, stacked on
+  // the rest of the house, which is Home less them (consumers.js restOfHouse).
+  { id: "consumers", series: ["home"], kpis: [], consumers: true },
 ]);
 
 export const ANALYTICS_OVERLAYS = Object.freeze(["target", "grid", "ac_charge", "soc"]);
@@ -25,6 +29,7 @@ export const SERIES_STYLE = Object.freeze({
   battery: { token: "--battery" },
   grid: { token: "--grid", signed: true },
   home: { token: "--output" },
+  home_other: { token: "--m-muted-2" },
   ac_charge: { token: "--grid" },
   target: { token: "--m-accent", fill: false },
   soc: { token: "--soc", ink: "--soc-ink", unit: "%", fill: false, dash: [6, 4] },
@@ -50,7 +55,8 @@ export function viewById(id) {
 }
 
 /** The series one request asks for: the view's own plus the overlays the reader switched on. */
-export function requestedSeries(view, overlays) {
+export function requestedSeries(view, overlays, consumers = []) {
+  if (view.consumers) return [...consumers.map(consumerSeriesId), ...view.series];
   const ids = [...view.series];
   overlays.forEach((id) => {
     if (!ids.includes(id)) ids.push(id);
@@ -83,6 +89,12 @@ export function runtimeRole(snapshot, deviceName = "") {
   if (input && output) return "mixed";
   if (input) return "input";
   return output ? "output" : null;
+}
+
+/** The energy one series of an answer carries, positive only; null when the answer has no such series. */
+export function seriesKwh(data, id) {
+  const values = data?.series?.[id];
+  return values ? integrateKwh(data.time, values, { transform: pos }) : null;
 }
 
 export function computeKpi(id, data) {

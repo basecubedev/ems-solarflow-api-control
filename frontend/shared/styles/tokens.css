@@ -25,6 +25,13 @@
   --inverter: #4f9dff;
   --money: #f9a8d4;
   --danger: #ff6b7a;
+  /* One colour per consumer in a chart, in turn; the energy colours keep their meaning. */
+  --consumer-1: #ff9f43;
+  --consumer-2: #2dd4bf;
+  --consumer-3: #fb7185;
+  --consumer-4: #a3e635;
+  --consumer-5: #7dd3fc;
+  --consumer-6: #c4b5fd;
 
   --m-ok: #39e58c;
   --m-warn: #f59e0b;

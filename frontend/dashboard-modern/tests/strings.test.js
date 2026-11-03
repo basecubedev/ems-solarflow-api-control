@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { CONSUMER_ORDERS, CONSUMER_PERIODS } from "../src/lib/consumers.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -67,6 +68,8 @@ test("every generated key family is complete", () => {
     ...["currency", "monthsWithData", "years", "bestDay", "lifetime", "channelsSince"].map((key) => `energy.context.${key}`),
     ...RULES.map((rule) => rule.label),
     ...ANALYTICS_VIEWS.map((view) => `analytics.view.${view.id}`),
+    ...CONSUMER_ORDERS.map((order) => `consumers.order.${order}`),
+    ...CONSUMER_PERIODS.map((period) => `consumers.periodSub.${period.kind}`),
     ...ANALYTICS_RANGES.map((range) => `chart.range.${range}`),
     ...ANALYTICS_OVERLAYS.map((id) => `series.${id}`),
     ...ANALYTICS_VIEWS.flatMap((view) => view.series.map((id) => `series.${id}`)),
@@ -105,7 +108,7 @@ test("no orphan keys: each key is used literally or belongs to a generated famil
     "maint.type.", "maint.kind.", "maint.influx.", "schedule.preset.", "schedule.weekday.", "schedule.freq.", "schedule.pos.",
     "schedule.status.", "schedule.group.", "schedule.action.", "schedule.choice.", "runtime.offgrid.",
     "runtime.warn.", "setting.", "settingValue.", "control.write.", "control.stage.", "control.deviceStage.", "status.", "transport.",
-    "flow.", "assist.", "error.", "schedule.monthly.", "schedule.ends.", "energy.periodSub.", "energy.context.", "limit.reason.", "note.",
+    "flow.", "assist.", "consumers.order.", "consumers.periodSub.", "error.", "schedule.monthly.", "schedule.ends.", "energy.periodSub.", "energy.context.", "limit.reason.", "note.",
   ];
   const orphans = Object.keys(STRINGS).filter((key) => !APP_KEYS.includes(key) && !text.includes(`"${key}"`) && !families.some((prefix) => key.startsWith(prefix)));
   assert.deepEqual(orphans, []);

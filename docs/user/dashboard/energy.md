@@ -156,6 +156,12 @@ card can show a full year's output next to channels marked `◦`. That is not a
 defect: it is the difference between what was measured then and what is
 measured now.
 
+### Consumers
+
+With [consumers](consumers.md) in the EMS, the page also shows **Energy and
+costs per consumer** for the chosen period: each consumer's energy, its own
+supply and grid parts, cost, savings and share of the home use.
+
 ### Reading production, consumption, battery and grid
 
 The [Overview](overview.md) gives you the instantaneous picture; the Energy page
@@ -178,9 +184,12 @@ gives you the accumulated one.
 
 **What you see:** two rows of controls, the chart, and the KPI cards.
 
-1. **View** — **Overview**, **Devices**, **Grid**, **Battery** or **Solar**.
-   Each keeps the one chart and changes its series and the KPI cards. **Device**
-   chooses one inverter instead of **All devices**.
+1. **View** — **Overview**, **Devices**, **Grid**, **Battery**, **Solar** or
+   **Consumers**. Each keeps the one chart and changes its series and the KPI
+   cards. **Device** chooses one inverter instead of **All devices**.
+   **Consumers** stacks the five [consumers](consumers.md) that drew most on
+   the rest of the house, with one KPI card for each and one for the rest, and
+   has no device choice and no overlays.
 2. **Overlays** — **EMS target**, **Grid**, **AC charging** and **State of
    charge** add a series on top of the view, drawn as a dashed line; the state
    of charge gets its own percent scale on the right.

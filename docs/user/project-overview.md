@@ -120,6 +120,24 @@ Support differs by model and connection type. The current compatibility overview
 
 ---
 
+## Measured consumers
+
+A plug or meter on a single consumer — a washing machine, a heat pump, a
+dishwasher — can be added over MQTT: publishing into EMS SolarFlow's own
+`ems-consumer/<id>/…` topics, or in a format of its own through the MQTT mapping
+in the Admin Console, which recognises Shelly and Tasmota devices among others.
+
+The dashboard then shows where the house's power goes: what each consumer draws
+now, its energy per day, month and year, what it cost and its share of the
+house. Consumers are shown and costed only. EMS never regulates by them; the grid
+meter stays the measurement control follows.
+
+Status: Reverse-engineered — read end to end against a real broker in tests, not
+yet on an installation. See [External devices over MQTT](external-devices.md)
+and [Consumers](dashboard/consumers.md).
+
+---
+
 ## Battery management
 
 EMS SolarFlow does more than change inverter output. It also helps keep battery operation consistent with the configured energy strategy.
@@ -176,6 +194,12 @@ Follow the current EMS decision from the grid measurement through filtering, tar
 See delivered energy totals and estimated savings based on a configurable electricity price.
 
 Available periods include daily, weekly, monthly, yearly and lifetime statistics.
+
+### Consumers
+
+See what each measured consumer draws now and over a day, month or year, what it
+cost and its share of the house, ranked or A–Z. The Overview's energy flow shows
+them beside the rest of the house.
 
 ### History
 

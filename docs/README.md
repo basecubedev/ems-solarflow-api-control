@@ -45,7 +45,7 @@ changes, and what to do when the result differs.
 | Area | Document | Use |
 |---|---|---|
 | Admin Console | [user/admin/index.md](user/admin/index.md) | The assistant (where to start), first start, Guided Setup, Guided Upgrade, Maintenance, devices, MQTT, backups, recovery, appearance. |
-| EMS Dashboard | [user/dashboard/index.md](user/dashboard/index.md) | Overview, device cards, energy, control pipeline, runtime settings and schedules, diagnostics, appearance. |
+| EMS Dashboard | [user/dashboard/index.md](user/dashboard/index.md) | Overview, device cards, energy, consumers, control pipeline, runtime settings and schedules, diagnostics, appearance. |
 
 ### Setup paths
 

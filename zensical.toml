@@ -40,6 +40,7 @@ nav = [
       "user/dashboard/index.md",
       { "Overview and navigation" = "user/dashboard/overview.md" },
       { "Device cards" = "user/dashboard/devices.md" },
+      { "Consumers" = "user/dashboard/consumers.md" },
       { "Energy and analytics" = "user/dashboard/energy.md" },
       { "Control pipeline" = "user/dashboard/control.md" },
       { "Runtime settings and schedules" = "user/dashboard/runtime-settings.md" },

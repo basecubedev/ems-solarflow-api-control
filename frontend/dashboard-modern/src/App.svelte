@@ -8,6 +8,7 @@
   import LoginDialog from "./app/LoginDialog.svelte";
   import Overview from "./pages/Overview.svelte";
   import Devices from "./pages/Devices.svelte";
+  import Consumers from "./pages/Consumers.svelte";
   import Energy from "./pages/Energy.svelte";
   import Analytics from "./pages/Analytics.svelte";
   import Control from "./pages/Control.svelte";
@@ -22,7 +23,7 @@
   import { auth, logout } from "./state/auth.svelte.js";
   import { live } from "./state/live.svelte.js";
 
-  const COMPONENTS = { overview: Overview, devices: Devices, energy: Energy, analytics: Analytics, control: Control, schedule: Schedule, diagnose: Diagnose, logs: Logs, maintenance: Maintenance };
+  const COMPONENTS = { overview: Overview, devices: Devices, consumers: Consumers, energy: Energy, analytics: Analytics, control: Control, schedule: Schedule, diagnose: Diagnose, logs: Logs, maintenance: Maintenance };
   const Page = $derived(COMPONENTS[router.page] || Overview);
 
   provideShell({

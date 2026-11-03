@@ -7,17 +7,22 @@
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { PERIODS, periodView, channelMeta, channelsSince } from "../lib/energy.js";
 
-  let { stats, expert = false } = $props();
+  /**
+   * One card per period. The Energy page passes its stats; another page passes
+   * its own ``periods`` ({ key, label, kind, sub, view: { kwh, partial, date } })
+   * and the ``facts`` each card lists, in the same cards.
+   */
+  let { stats, expert = false, periods = null, facts = null, testid = "energy-periods" } = $props();
 
   const f = $derived(fmt());
   const currency = $derived(stats?.currency || "EUR");
   const channels = $derived(channelMeta(stats));
   const since = $derived(channelsSince(stats));
-  const periods = $derived(PERIODS.map((period) => ({ ...period, view: periodView(stats?.[period.key]) })));
+  const shown = $derived(periods || PERIODS.map((period) => ({ ...period, view: periodView(stats?.[period.key]) })));
 </script>
 
-<div class="periods span-12" data-testid="energy-periods">
-  {#each periods as period (period.key)}
+<div class="periods span-12" data-testid={testid}>
+  {#each shown as period (period.key)}
     <section class="card period" aria-label={t(period.label)}>
       <div class="period-label">
         <span>{t(period.label)}</span>
@@ -25,8 +30,8 @@
         {#if period.kind === "best" && period.view.date}<span class="date num">{f.date(period.view.date, { short: true })}</span>{/if}
       </div>
       <div class="period-value num">{f.energy(period.view.kwh)}{#if period.view.partial}<span class="mark" title={t("kpi.partial")}>{" "}◦</span>{/if}</div>
-      <div class="period-sub">{t(`energy.periodSub.${period.kind}`)}</div>
-      <EnergyFacts values={period.view.raw} {channels} {since} {expert} {currency} />
+      <div class="period-sub">{period.sub ?? t(`energy.periodSub.${period.kind}`)}</div>
+      {#if facts}{@render facts(period)}{:else}<EnergyFacts values={period.view.raw} {channels} {since} {expert} {currency} />{/if}
     </section>
   {/each}
 </div>

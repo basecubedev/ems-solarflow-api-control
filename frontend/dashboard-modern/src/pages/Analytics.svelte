@@ -9,7 +9,8 @@
   import { getJson } from "../../../shared/lib/api.js";
   import { fetchSeries } from "../lib/historyApi.js";
   import { escapeLeavesZoom, zoomSpan } from "../lib/history.js";
-  import { ANALYTICS_RANGES, ANALYTICS_VIEWS, ANALYTICS_OVERLAYS, viewById, requestedSeries, seriesStyle, computeKpi, runtimeRole, KPIS } from "../lib/analytics.js";
+  import { ANALYTICS_RANGES, ANALYTICS_VIEWS, ANALYTICS_OVERLAYS, viewById, requestedSeries, seriesStyle, seriesKwh, computeKpi, runtimeRole, KPIS } from "../lib/analytics.js";
+  import { chartConsumers, chartTokens, consumerPalette, consumerSeriesId, restOfHouse, OTHER_TOKEN } from "../lib/consumers.js";
   import { devices } from "../state/derived.svelte.js";
   import { live } from "../state/live.svelte.js";
 
@@ -39,8 +40,28 @@
   const f = $derived(fmt());
   const view = $derived(viewById(viewId));
   const names = $derived(devices().map((d) => d.name));
-  const seriesIds = $derived(requestedSeries(view, overlays));
-  const chartSeries = $derived(seriesIds.map((id) => ({ id, label: t(`series.${id}`), ...seriesStyle(view, id) })));
+  const chosen = $derived(view.consumers ? chartConsumers(live.snapshot, live.snapshot?.energy_stats?.lifetime) : { shown: [], rest: false });
+  const palette = $derived(view.consumers ? consumerPalette(live.snapshot, live.snapshot?.energy_stats?.lifetime) : null);
+  // A string, so a live frame naming the same consumers in the same colours
+  // reloads and redraws nothing.
+  const consumerKey = $derived(JSON.stringify(chartTokens(chosen.shown, palette)));
+  const consumers = $derived(JSON.parse(consumerKey));
+  const rest = $derived(chosen.rest);
+  const seriesIds = $derived(requestedSeries(view, overlays, consumers.map((item) => item.key)));
+  const seriesKey = $derived(seriesIds.join(","));
+  const chartSeries = $derived(
+    view.consumers
+      ? [
+          ...consumers.map((item) => ({ id: consumerSeriesId(item.key), label: item.name, token: item.token })),
+          { id: "rest", label: t(rest ? "flow.otherConsumers" : "consumers.unmeasured"), token: OTHER_TOKEN },
+        ]
+      : seriesIds.map((id) => ({ id, label: t(`series.${id}`), ...seriesStyle(view, id) })),
+  );
+  const chartData = $derived(
+    view.consumers && data
+      ? { ...data, series: { ...data.series, rest: restOfHouse(data.series?.home || [], consumers.map((item) => data.series?.[consumerSeriesId(item.key)])) } }
+      : data,
+  );
   const rangeLabel = $derived(periodLabel(data && dataPeriod ? dataPeriod : { zoom, applied, range }));
   const chartHasData = $derived(seriesIds.some((id) => (data?.series?.[id] || []).some((value) => value !== null && value !== undefined)));
 
@@ -138,7 +159,8 @@
 
   $effect(() => {
     void status?.available;
-    void seriesIds.join(",");
+    void viewId;
+    void seriesKey;
     void range;
     void applied;
     void device;
@@ -235,20 +257,24 @@
   <div class="block span-12" role="group" aria-label={t("analytics.view")} data-testid="analytics-view-block">
     <div class="controls">
       <Segmented options={ANALYTICS_VIEWS.map((v) => ({ value: v.id, label: t(`analytics.view.${v.id}`) }))} value={viewId} label={t("analytics.view")} onchange={setView} />
-      <label class="inline">
-        <span>{t("chart.device")}</span>
-        <select class="input" bind:value={device}>
-          <option value="">{t("chart.allDevices")}</option>
-          {#each names as name (name)}<option value={name}>{name}</option>{/each}
-        </select>
-      </label>
+      {#if !view.consumers}
+        <label class="inline">
+          <span>{t("chart.device")}</span>
+          <select class="input" bind:value={device}>
+            <option value="">{t("chart.allDevices")}</option>
+            {#each names as name (name)}<option value={name}>{name}</option>{/each}
+          </select>
+        </label>
+      {/if}
     </div>
-    <div class="controls overlays" role="group" aria-label={t("analytics.overlays")}>
-      <span class="row-label">{t("analytics.overlays")}</span>
-      {#each ANALYTICS_OVERLAYS as id (id)}
-        <button type="button" class="chip" aria-pressed={overlays.includes(id) ? "true" : "false"} onclick={() => toggleOverlay(id)}>{t(`series.${id}`)}</button>
-      {/each}
-    </div>
+    {#if !view.consumers}
+      <div class="controls overlays" role="group" aria-label={t("analytics.overlays")}>
+        <span class="row-label">{t("analytics.overlays")}</span>
+        {#each ANALYTICS_OVERLAYS as id (id)}
+          <button type="button" class="chip" aria-pressed={overlays.includes(id) ? "true" : "false"} onclick={() => toggleOverlay(id)}>{t(`series.${id}`)}</button>
+        {/each}
+      </div>
+    {/if}
   </div>
   <div class="block span-12" role="group" aria-label={t("analytics.range")} data-testid="analytics-range-block">
     <div class="controls">
@@ -275,11 +301,17 @@
     {:else if error && !data}
       <div class="empty error">{t("error.load")}</div>
     {:else}
-      <TimeChart series={chartSeries} time={data?.time || []} values={data?.series || {}} {showTable} label={t(`analytics.view.${view.id}`)} scope={zoomScope} bounds={liveExtent} {onzoom} emptyText={data ? "" : t("chart.loading")} />
+      <TimeChart series={chartSeries} stacked={Boolean(view.consumers)} time={data?.time || []} values={chartData?.series || {}} {showTable} label={t(`analytics.view.${view.id}`)} scope={zoomScope} bounds={liveExtent} {onzoom} emptyText={data ? "" : t("chart.loading")} />
     {/if}
   </Card>
 
   <div class="kpis span-12">
+    {#each view.consumers ? chartSeries : [] as item (item.id)}
+      <div class="card kpi" style:--c={`var(${item.token})`} data-testid="analytics-consumer-kpi">
+        <div class="kpi-label">{item.label} · {rangeLabel}</div>
+        <div class="kpi-value num">{f.energy(seriesKwh(chartData, item.id))}</div>
+      </div>
+    {/each}
     {#each view.kpis as id (id)}
       {@const value = computeKpi(id, data)}
       <div class="card kpi" style:--c={`var(${KPIS[id].token})`}>

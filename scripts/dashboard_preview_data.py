@@ -23,6 +23,8 @@ SCENARIOS = (
     "offline-device",
     "auth-readonly",
     "write-mode",
+    "consumers",
+    "many-consumers",
 )
 DEFAULT_SCENARIO = "normal"
 
@@ -621,6 +623,136 @@ def _history(snapshot, points=96, now=None):
     return items
 
 
+# Four metered consumers, by history key: the flow names the two drawing most.
+_PREVIEW_CONSUMERS = {
+    "washer": ("Washing machine", 420.0),
+    "fridge": ("Fridge", 85.0),
+    "office": ("Office", 60.0),
+    "dishwasher": ("Dishwasher", 0.0),
+}
+# Each consumer's share of a period's home use, and the share of that it drew
+# from the grid; the rest of the house stays unmeasured.
+_PREVIEW_CONSUMER_SHARES = {
+    "washer": (0.16, 0.22),
+    "fridge": (0.09, 0.45),
+    "office": (0.12, 0.30),
+    "dishwasher": (0.07, 0.25),
+}
+# The preview's home use per month this year, for the consumers' months.
+_PREVIEW_MONTH_HOME_KWH = (312.0, 284.0, 266.0, 231.0, 208.0, 196.0, 201.0, 207.0, 222.0, 251.0, 21.0, 0.0)
+# A freezer that was removed in spring: its values stay in the long periods.
+_PREVIEW_FORMER = ("freezer", "Freezer", 0.04, 0.35)
+# The many-consumers scenario: a house that meters thirty things.
+_MANY_CONSUMERS = (
+    ("Heat pump", 1240.0), ("Wallbox", 920.0), ("Sauna", 0.0), ("Oven", 410.0),
+    ("Washing machine", 380.0), ("Dryer", 260.0), ("Dishwasher", 0.0),
+    ("Water heater", 180.0), ("Pool pump", 150.0), ("Fridge", 85.0),
+    ("Freezer", 70.0), ("Server rack", 64.0), ("Office", 60.0), ("TV", 48.0),
+    ("Ventilation", 36.0), ("Aquarium", 31.0), ("Router", 12.0),
+    ("Sound system", 9.0), ("Game console", 0.0), ("Pond pump", 42.0),
+    ("Garden lights", 0.0), ("Garage door", 3.0), ("E-bike", 0.0),
+    ("Bathroom heater", 0.0), ("Workshop", 0.0), ("Coffee machine", 2.0),
+    ("Kettle", 0.0), ("Toaster", 0.0), ("Microwave", 1.0), ("Hob", 0.0),
+)
+
+
+def _consumer_readings(home_w, hour=12.0, index=1, many=False):
+    """The consumers at one moment: the washer runs late morning, the fridge cycles, the office works days."""
+
+    if many:
+        powers = {
+            f"c{number:02d}": (name, watts * (0.8 + 0.2 * ((index + number) % 3)))
+            for number, (name, watts) in enumerate(_MANY_CONSUMERS)
+        }
+    else:
+        powers = {
+            "washer": ("Washing machine", 420.0 if 9.5 <= hour <= 11.5 or hour == 12.0 else 2.0),
+            "fridge": ("Fridge", 85.0 if index % 3 else 0.0),
+            "office": ("Office", 60.0 if 8.0 <= hour <= 18.0 else 4.0),
+            "dishwasher": ("Dishwasher", 0.0 if hour == 12.0 else (1100.0 if 20.0 <= hour <= 21.0 else 0.0)),
+        }
+    measured = sum(value for _name, value in powers.values())
+    return (
+        {key: {"name": name, "online": True, "power_w": round(value, 1)} for key, (name, value) in powers.items()},
+        round(measured, 1),
+        round(max(0.0, home_w - measured), 1),
+    )
+
+
+def _with_consumers(scenario, many=False):
+    """The normal scenario with metered consumers, live, in the history and in every period."""
+
+    snapshot = scenario["snapshot"]
+    if many:
+        snapshot["home_load_w"] = 5200.0
+        snapshot["grid_power_w"] = round(5200.0 - (snapshot.get("inverter_output_w") or 0.0), 1)
+    consumers, total, other = _consumer_readings(snapshot["home_load_w"], many=many)
+    snapshot.update({"consumers": consumers, "consumer_total_w": total, "home_other_w": other})
+    stats = snapshot["energy_stats"]
+    price = stats["price_per_kwh"]
+    today = _PREVIEW_CHANNEL_UNTIL
+    rated = sum(watts for _name, watts in _MANY_CONSUMERS)
+    shares = (
+        {f"c{number:02d}": (0.8 * max(watts, 4.0) / rated, 0.3) for number, (_name, watts) in enumerate(_MANY_CONSUMERS)}
+        if many
+        else dict(_PREVIEW_CONSUMER_SHARES)
+    )
+    def split(home, former=False, scale=1.0):
+        entries = [(key, consumers[key]["name"], share, grid_share, today) for key, (share, grid_share) in shares.items()]
+        if former and not many:
+            key, name, share, grid_share = _PREVIEW_FORMER
+            entries.append((key, name, share, grid_share, "2026-04-12"))
+        drawn = {}
+        for number, (key, name, share, grid_share, last_date) in enumerate(entries):
+            kwh = round(home * share * (scale if number % 2 else 1.0), 3)
+            grid = round(kwh * grid_share, 3)
+            drawn[key] = {
+                "name": name,
+                "last_date": last_date,
+                "kwh": kwh,
+                "grid_kwh": grid,
+                "own_kwh": round(kwh - grid, 3),
+                "cost": round(grid * price, 4),
+                "saved": round((kwh - grid) * price, 4),
+            }
+        return drawn
+
+    for period in ("today", "yesterday", "last_7_days", "last_4_weeks", "last_12_months", "lifetime"):
+        home = stats[period]["channels"]["home_consumption"]["kwh"]
+        stats[period]["consumers"] = split(home, former=period in ("last_12_months", "lifetime"))
+    # The house's use per month of the year so far, the measured one where
+    # the month has it: more in winter, the current month only begun; the
+    # freezer drew until spring. The year adds its months up.
+    year_total = {}
+    for item in stats["monthly_current_year"]:
+        measured = ((item.get("channels") or {}).get("home_consumption") or {}).get("kwh") or 0.0
+        home = measured or _PREVIEW_MONTH_HOME_KWH[item["month"] - 1]
+        item["consumers"] = split(home, former=item["month"] <= 4, scale=1.4 if item["month"] in (1, 2, 12) else 0.8)
+        for key, value in item["consumers"].items():
+            total = year_total.setdefault(key, {**value, "kwh": 0.0, "grid_kwh": 0.0, "own_kwh": 0.0, "cost": 0.0, "saved": 0.0})
+            for field in ("kwh", "grid_kwh", "own_kwh", "cost", "saved"):
+                total[field] = round(total[field] + value[field], 4)
+    last_year = split(1310.0)
+    for item in stats["yearly"]:
+        item["consumers"] = year_total if item["year"] == 2026 else last_year
+    # The long periods hold what the months and the years hold.
+    lifetime = {key: dict(value) for key, value in year_total.items()}
+    for key, value in last_year.items():
+        total = lifetime.setdefault(key, {**value, "kwh": 0.0, "grid_kwh": 0.0, "own_kwh": 0.0, "cost": 0.0, "saved": 0.0})
+        for field in ("kwh", "grid_kwh", "own_kwh", "cost", "saved"):
+            total[field] = round(total[field] + value[field], 4)
+    stats["last_12_months"]["consumers"] = year_total
+    stats["lifetime"]["consumers"] = lifetime
+    stats["consumer_peak_day"] = {"date": "2026-01-18", "consumers": split(14.2)}
+    for index, item in enumerate(scenario["history"]):
+        hour = 24.0 * index / max(1, len(scenario["history"]) - 1)
+        if many:
+            item["home_load_w"] = round(item["home_load_w"] + 4400.0, 1)
+        consumers, total, other = _consumer_readings(item["home_load_w"], hour + 0.001, index, many=many)
+        item.update({"consumers": consumers, "consumer_total_w": total, "home_other_w": other})
+    return scenario
+
+
 def _auth(scenario):
     if scenario == "write-mode":
         return {
@@ -834,7 +966,7 @@ def build_scenario(scenario=DEFAULT_SCENARIO, device_count=None, freeze_timestam
     # the server keeps sending, and a correct client stops re-rendering.
     if freeze_timestamp:
         snapshot["timestamp"] = FROZEN_TIMESTAMP
-    return {
+    built = {
         "name": scenario,
         "snapshot": snapshot,
         "runtime": _runtime(devices),
@@ -843,3 +975,6 @@ def build_scenario(scenario=DEFAULT_SCENARIO, device_count=None, freeze_timestam
         "diagnose": diagnose_report(scenario, now=now),
         "logs": _logs(scenario),
     }
+    if scenario in ("consumers", "many-consumers"):
+        return _with_consumers(built, many=scenario == "many-consumers")
+    return built

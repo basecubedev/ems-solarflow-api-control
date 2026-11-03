@@ -4,7 +4,7 @@
     data: ["live", "energy.today"],
     refresh: "sse",
     minWidth: 320,
-    states: ["waiting", "stale", "meter-offline", "no-pv", "no-battery", "device-offline", "ac-charging"],
+    states: ["waiting", "stale", "meter-offline", "no-pv", "no-battery", "device-offline", "ac-charging", "consumers"],
   };
 </script>
 
@@ -18,6 +18,8 @@
   import { prefs, flowPref, setFlowMode } from "../state/prefs.svelte.js";
   import { devices as allDevices, isStale } from "../state/derived.svelte.js";
   import { flowDevices, hardwareOf } from "../lib/devices.js";
+  import { flowConsumers } from "../lib/consumers.js";
+  import { href } from "../app/router.svelte.js";
   import { createFlowActivity, createFlowScale, createHouseLines, createFleetLine, busFlows, ribbonWidth, batteryDirection, gridDirection, flowBucket, FLOW_BUCKETS } from "../lib/flow.js";
   import { box, elbow, vertical, roundedPath, runs } from "../lib/wires.js";
   import { flowDashes, dashTexture, dashPhase, DASH_PERIOD_PX } from "../lib/flowAnim.js";
@@ -38,6 +40,7 @@
   let size = $state({ width: 0, height: 0 });
   let geometry = $state.raw({});
   let bus = $state.raw({ above: [], below: [] });
+  let consumerBus = $state.raw({ above: [], below: [] });
 
   const snapshot = $derived(live.snapshot);
   const today = $derived(snapshot?.energy_stats?.today);
@@ -47,6 +50,21 @@
   const deviceKey = $derived(deviceList.map((device) => `${device.name}:${device.hasPv}:${device.hasBattery}`).join("|"));
   const narrow = $derived(size.width > 0 && size.width < 600);
   const mode = $derived((fixedMode || flowPref.mode) === "devices" && deviceList.length > 0 ? "devices" : "system");
+  const homeSplit = $derived(snapshot && Object.keys(snapshot.consumers || {}).length ? flowConsumers(snapshot) : null);
+  // System draws every consumer as one block; per device names the two drawing
+  // most and the rest of the house, so those add up to Home.
+  const consumerNodes = $derived(
+    !homeSplit
+      ? []
+      : mode === "system"
+        ? [{ id: "cons", kind: "total", watts: homeSplit.totalW }]
+        : [
+            ...homeSplit.shown.map((item, index) => ({ id: `c${index}`, kind: "consumer", name: item.name, online: item.online, watts: item.powerW })),
+            { id: "cother", kind: "other", watts: homeSplit.otherW },
+          ],
+  );
+  const consumersToday = $derived(Object.values(today?.consumers || {}).reduce((sum, item) => sum + (finite(item?.kwh) ?? 0), 0));
+  const consumerCount = $derived(consumerNodes.length);
   const houses = $derived(
     new Map(deviceList.map((device) => [
       device.name,
@@ -85,6 +103,7 @@
       if (hardware.battery) specs.push({ id: "bat", token: "--battery", watts: v.batteryW, reverse: v.batteryW > 0 });
       specs.push(toward("out", fleetLine.watts(v.outputW, v.chargeW, live.sequence)));
       specs.push({ id: "grid", token: "--grid", watts: v.gridW, reverse: v.gridW < 0 });
+      if (consumerCount) specs.push({ id: "cons", token: "--output", watts: consumerNodes[0].watts || 0, reverse: false });
     } else {
       const flows = deviceList.map((device) => {
         const house = houses.get(device.name);
@@ -109,6 +128,13 @@
         specs.push(toward(`out${index}`, flows[index]));
       });
       specs.push({ id: "grid", token: "--grid", watts: system.gridW, reverse: system.gridW < 0 });
+      if (consumerCount) {
+        const parts = consumerNodes.map((node) => node.watts || 0);
+        const split = busFlows(parts, consumerBus);
+        Object.entries(split.segments).forEach(([id, watts]) => specs.push({ id: `c-${id}`, token: "--output", watts, reverse: false }));
+        if (!narrow) specs.push({ id: "c-trunk", token: "--output", watts: split.total, reverse: false });
+        consumerNodes.forEach((node, index) => specs.push({ id: node.id, token: "--output", watts: parts[index], reverse: false }));
+      }
     }
     return specs.map((spec) => {
       const active = activity.isActive(`${mode}:${spec.id}`, spec.watts);
@@ -140,6 +166,8 @@
         points.out = elbow(hub.r - inset, hub.cy, home.l, home.cy);
         points.grid = vertical(grid.cx, grid.t, home.b);
       }
+      const { cons } = nodes;
+      if (cons) points.cons = narrow ? vertical(home.cx, home.b, cons.t) : elbow(home.r, home.cy, cons.l, cons.cy);
     } else {
       const { home, grid } = nodes;
       if (!home || !grid) return;
@@ -175,8 +203,30 @@
         points.grid = vertical(grid.cx, grid.t, home.b);
       }
       bus = { above: above.map((row) => row.index), below: below.map((row) => row.index) };
+      consumerWires(points, nodes, home);
     }
     geometry = points;
+  }
+
+  /** Home's wires to the consumer nodes: one bus beside them, joined at Home's side, or below it on a phone. */
+  function consumerWires(points, nodes, home) {
+    const rows = consumerNodes.map((node, index) => ({ index, box: nodes[node.id] })).filter((row) => row.box);
+    if (!rows.length) return;
+    const busX = Math.round(narrow ? home.cx : home.r + (rows[0].box.l - home.r) / 2);
+    const junction = narrow ? home.b : home.cy;
+    rows.forEach(({ index, box: row }) => {
+      points[consumerNodes[index].id] = narrow ? [[busX, row.cy], [row.r, row.cy]] : [[busX, row.cy], [row.l, row.cy]];
+    });
+    const above = rows.filter((row) => row.box.cy < junction - 0.5).sort((a, b) => a.box.cy - b.box.cy);
+    const below = rows.filter((row) => row.box.cy > junction + 0.5).sort((a, b) => b.box.cy - a.box.cy);
+    above.forEach((row, k) => {
+      points[`c-bus-above${k}`] = [[busX, row.box.cy], [busX, above[k + 1]?.box.cy ?? junction]];
+    });
+    below.forEach((row, k) => {
+      points[`c-bus-below${k}`] = [[busX, row.box.cy], [busX, below[k + 1]?.box.cy ?? junction]];
+    });
+    if (!narrow) points["c-trunk"] = [[home.r, home.cy], [busX, home.cy]];
+    consumerBus = { above: above.map((row) => row.index), below: below.map((row) => row.index) };
   }
 
   $effect(() => {
@@ -192,6 +242,7 @@
   $effect(() => {
     void mode;
     void deviceKey;
+    void consumerCount;
     void narrow;
     void prefs.density;
     void prefs.lang;
@@ -209,6 +260,7 @@
   const batteryWord = (w) => t(`flow.${batteryDirection(w)}`);
   const gridWord = (w, valid) => t(`flow.${gridDirection(w, valid)}`);
   const socText = (device) => (!device.online ? "—" : device.soc !== null ? f.percent(device.soc) : t("flow.noSoc"));
+  const consumerLabel = (node) => (node.kind === "other" ? t("flow.otherConsumers") : node.kind === "total" ? t("flow.consumers") : node.name);
   const leftRow = (index, offset, alone) => (alone ? `${index * 2 + 1} / span 2` : `${index * 2 + 1 + offset}`);
   const ariaLabel = $derived(
     system
@@ -217,6 +269,7 @@
             ...(hardware.pv ? [`${t("flow.solar")} ${f.power(system.pvW)}`] : []),
             ...(hardware.battery ? [`${t("flow.battery")} ${f.power(system.batteryW, { signed: true })}`] : []),
             `${t("flow.home")} ${f.power(system.homeW)}`,
+            ...consumerNodes.map((node) => `${consumerLabel(node)} ${node.watts === null ? t("device.offline") : f.power(node.watts)}`),
             `${t("flow.grid")} ${system.gridValid ? f.power(system.gridW, { signed: true }) : t("flow.offline")}`,
           ].join(", "),
           ...(mode === "devices"
@@ -245,6 +298,7 @@
   {:else}
     <div
       class="flow-stage {mode}"
+      class:consumers={consumerCount > 0}
       class:narrow
       class:stale
       bind:this={stage}
@@ -332,6 +386,14 @@
           <div class="node-value num">{system.gridValid ? f.power(system.gridW, { signed: true }) : "—"}</div>
           <div class="node-foot"><span>{t("flow.importedToday")}</span><b class="num">{f.energy(importToday)}</b></div>
         </div>
+        {#if consumerCount}
+          <a class="node c-out n-cons" href={href("consumers")} data-node="cons" data-testid="flow-consumers">
+            <div class="icon-tile"><Icon name="plug-zap" /></div>
+            <div class="node-label">{t("flow.consumers")}</div>
+            <div class="node-value num">{f.power(consumerNodes[0].watts)}</div>
+            <div class="node-foot"><span>{t("common.today")}</span><b class="num">{f.energy(consumersToday)}</b></div>
+          </a>
+        {/if}
       {:else}
         {#each deviceList as device, index (device.name)}
           {#if device.hasPv}
@@ -374,6 +436,24 @@
           <div class="node-value num">{system.gridValid ? f.power(system.gridW, { signed: true }) : "—"}</div>
           <div class="node-foot"><span>{t("flow.importedToday")}</span><b class="num">{f.energy(importToday)}</b></div>
         </div>
+        {#if consumerCount}
+          <div class="consumer-column" data-testid="flow-consumers" style:grid-row={narrow ? `${deviceList.length * 2 + 2}` : `1 / span ${deviceList.length * 2}`}>
+            {#each consumerNodes as node (node.id)}
+              <a
+                class="node consumer {node.kind === 'other' ? 'c-idle' : 'c-out'}"
+                class:other={node.kind === "other"}
+                class:offline={node.kind === "consumer" && !node.online}
+                href={href("consumers")}
+                data-node={node.id}
+                data-consumer={node.kind === "consumer" ? node.name : undefined}
+                data-testid={node.kind === "other" ? "flow-consumers-other" : "flow-consumer"}
+              >
+                <div class="node-label ellipsis" title={consumerLabel(node)}>{consumerLabel(node)}</div>
+                <div class="node-value num">{node.watts === null ? "—" : f.power(node.watts)}</div>
+              </a>
+            {/each}
+          </div>
+        {/if}
       {/if}
     </div>
   {/if}
@@ -429,6 +509,23 @@
   .soc-row :global(.bar) { flex: 1 1 auto; min-width: 0; height: 5px; }
   .soc-value { font-size: 12px; font-weight: 600; }
 
+  a.node { color: inherit; text-decoration: none; }
+  a.node:hover { border-color: var(--c); }
+  a.node:focus-visible { outline: 2px solid var(--c); outline-offset: 2px; }
+  .flow-stage.system.consumers:not(.narrow) {
+    --side: clamp(140px, 22%, 214px);
+    --gap: clamp(20px, 4%, 40px);
+  }
+  .flow-stage.system.consumers:not(.narrow) .node { width: var(--side); padding: 12px 14px; }
+  .flow-stage.system.consumers:not(.narrow) .node-value { font-size: 19px; }
+  .flow-stage.system.consumers:not(.narrow) :is(.n-home, .n-grid) { right: calc(var(--side) + var(--gap)); }
+  .flow-stage.system.consumers:not(.narrow) .hub { left: calc((100% - var(--side) - var(--gap)) / 2); width: 120px; height: 120px; }
+  .n-cons { right: 0; top: 8px; }
+  .flow-stage.system.narrow .n-cons { grid-column: 3; grid-row: 4; margin-top: 14px; }
+  .consumer-column { display: flex; flex-direction: column; justify-content: center; gap: 8px; min-width: 0; z-index: 1; }
+  .flow-stage.devices .node.consumer { padding: 8px 12px; grid-template-columns: minmax(0, 1fr); gap: 0; box-shadow: none; }
+  .flow-stage.devices .node.consumer .node-value { font-size: 16px; }
+
   .flow-stage.devices {
     display: grid; grid-template-columns: minmax(0, 214px) minmax(40px, 1fr) 112px minmax(40px, 1fr) minmax(0, 214px);
     row-gap: 14px; align-items: center; padding: 4px 0;
@@ -440,6 +537,10 @@
   .flow-stage.devices .hub-value { font-size: 15px; }
   .flow-stage.devices .col-l { grid-column: 1; }
   .flow-stage.devices .col-r { grid-column: 5; }
+  .flow-stage.devices.consumers:not(.narrow) {
+    grid-template-columns: minmax(0, 190px) minmax(24px, 1fr) 104px minmax(24px, 1fr) minmax(0, 180px) minmax(20px, 0.5fr) minmax(0, 150px);
+  }
+  .flow-stage.devices.consumers:not(.narrow) .consumer-column { grid-column: 7; align-self: center; }
 
   .flow-stage.system.narrow { height: auto; display: grid; grid-template-columns: minmax(0, 1fr) 32px 128px; row-gap: 10px; align-items: center; }
   .flow-stage.system.narrow .node, .flow-stage.system.narrow .hub { position: relative; left: auto; right: auto; top: auto; bottom: auto; transform: none; }
@@ -472,4 +573,5 @@
   .flow-stage.devices.narrow :is(.home-node, .grid-node) .node-foot { align-self: end; }
   .flow-stage.devices.narrow .home-node { grid-column: 3 / 5; }
   .flow-stage.devices.narrow .grid-node { grid-column: 1; }
+  .flow-stage.devices.narrow .consumer-column { grid-column: 1; margin-top: 14px; }
 </style>

@@ -70,6 +70,12 @@ has no PV inputs. For a model the EMS does not know, set its PV size to 0
 **Batteries** card is left out, and **today's tiles** and the **Power today**
 chart leave out the solar or battery figures in either case.
 
+With [consumers](consumers.md) in the EMS, **Home use** has a line to them:
+**System** draws one **Consumers** block with what they all draw now and their
+energy today; **Per device** names the two drawing most and gives the rest of
+the house to **Other**, so the three add up to the home use. Each of them opens
+the **Consumers** page.
+
 The switch above the diagram chooses how it is drawn, and the browser
 remembers the choice:
 

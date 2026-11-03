@@ -214,6 +214,14 @@ test.describe("EMS Dashboard documentation captures @docs", () => {
     await shoot(page, "dashboard-devices-offline");
   });
 
+  test("dashboard-consumers", async ({ page, baseURL }) => {
+    await open(page, baseURL, "#/consumers", { scenario: "consumers" });
+    await expect(page.getByTestId("consumer-row")).toHaveCount(4);
+    await expect(page.getByTestId("consumer-energy")).toContainText("Washing machine");
+    await waitForChart(page);
+    await shoot(page, "dashboard-consumers");
+  });
+
   test("dashboard-energy", async ({ page, baseURL }) => {
     await open(page, baseURL, "#/energy");
     await expect(page.getByTestId("energy-periods")).toContainText("Last 7 days");
