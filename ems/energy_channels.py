@@ -163,6 +163,22 @@ def grid_to_battery_wh(grid_import_wh, home_consumption_wh):
     return max(0.0, float(grid_import_wh or 0) - float(home_consumption_wh or 0))
 
 
+def home_grid_share(snapshot):
+    """Share of the house's draw in this sample that came from the grid, 0 to 1.
+
+    Import beyond the house's draw charged a battery (``grid_to_battery_wh``)
+    and is not the house's. A consumer is priced by this share: its grid part
+    costs the price, the rest came from the installation. Without a house
+    draw there is nothing to divide, and any import counts as the grid's.
+    """
+
+    home = max(0.0, _as_float(snapshot.get("home_load_w")))
+    grid = max(0.0, _as_float(snapshot.get("grid_power_w")))
+    if home <= 0:
+        return 1.0 if grid > 0 else 0.0
+    return min(grid, home) / home
+
+
 def self_sufficiency(home_consumption_wh, grid_import_wh, charged_from_grid_wh=0):
     """Share of house consumption the house did not draw from the grid.
 

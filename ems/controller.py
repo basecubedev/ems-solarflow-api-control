@@ -4757,6 +4757,7 @@ class EMSController:
         self._last_influx_publish = now
 
         try:
+            from dashboard.telemetry import consumer_readings
             from ems.history.influx_writer import build_telemetry_lines
 
             read_only_devices = getattr(self, "read_only_devices", None)
@@ -4770,6 +4771,7 @@ class EMSController:
                 load,
                 target,
                 read_only_tiles=read_only_tiles,
+                consumers=consumer_readings(self),
             )
             writer.enqueue(lines)
         except Exception as e:

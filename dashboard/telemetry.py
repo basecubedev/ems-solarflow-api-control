@@ -294,7 +294,7 @@ def _telemetry_only_tiles(controller):
     from ems import config as cfg
     from ems.clients import parse_device
     from ems.zendure_mqtt.config_entries import zendure_mqtt_hardware_profile
-    from ems.zendure_mqtt.external_catalog import external_topic_family
+    from ems.zendure_mqtt.external_catalog import CONSUMER, external_topic_family
     from ems.zendure_mqtt.snapshot import observable_metrics, pack_witness
 
     for summary in summaries:
@@ -324,7 +324,9 @@ def _telemetry_only_tiles(controller):
             for family in sorted(getattr(snapshot, "topic_families", None) or ())
         ]
         external = next((family for family in families if family), None)
-        if external is not None:
+        if external is not None and external.role == CONSUMER:
+            tile["consumer_power_w"] = observable.get("consumerPower")
+        elif external is not None:
             tile["hardware"] = _external_hardware(external, observable)
         else:
             tile["hardware_profile"] = resolve_device_profile(
@@ -333,6 +335,26 @@ def _telemetry_only_tiles(controller):
             )
         tiles.append(tile)
     return tiles
+
+
+def _consumer_keys():
+    """``name -> history key`` of the configured consumers (``consumer_history_keys``)."""
+
+    from ems import config as cfg
+    from ems.zendure_mqtt.config_entries import consumer_history_keys
+
+    return consumer_history_keys(cfg.ZENDURE_CONFIG)
+
+
+def consumer_readings(controller):
+    """``history key -> power`` of every consumer the telemetry runtime holds, ``None`` while it does not read."""
+
+    keys = _consumer_keys()
+    return {
+        keys.get(tile["name"], tile["name"]): tile["consumer_power_w"] if tile["online"] else None
+        for tile in _telemetry_only_tiles(controller)
+        if "consumer_power_w" in tile
+    }
 
 
 def _battery_full_charge_assist_payload(controller, dev, state, now):
@@ -476,12 +498,29 @@ def build_dashboard_snapshot(
             "settings": _device_settings_card(controller, dev, state),
         }
 
+    consumers = {}
+    consumer_keys = _consumer_keys()
     for tile in _telemetry_only_tiles(controller):
         name = tile["name"]
         if name in devices:
             continue
         state = tile["state"]
         online = tile["online"]
+        if "consumer_power_w" in tile:
+            # A consumer is a part of the house load the meter already saw, so
+            # it joins no aggregate and no validity flag: it only says where
+            # the house's power went. It is keyed by its history key, so a
+            # renamed one keeps its energy and its power series.
+            key = consumer_keys.get(name, name)
+            if key in consumers:
+                continue
+            power_w = tile["consumer_power_w"]
+            consumers[key] = {
+                "name": name,
+                "online": online,
+                "power_w": _rounded(power_w) if online and power_w is not None else None,
+            }
+            continue
         fields = _state_telemetry_fields(state)
 
         if not online:
@@ -530,6 +569,9 @@ def build_dashboard_snapshot(
         derive_house_load_w(inverter_total_w, grid_power_w, inverter_charge_total_w)
     )
     average_soc = _rounded(sum(soc_values) / len(soc_values)) if soc_values else 0
+    consumer_total_w = _rounded(
+        sum(consumer["power_w"] or 0 for consumer in consumers.values())
+    )
 
     winter_active = False
     try:
@@ -605,6 +647,11 @@ def build_dashboard_snapshot(
         # not a gap.
         "device_power_valid": not unmeasured_devices,
         "home_load_w": home_load_w,
+        "consumers": consumers,
+        "consumer_total_w": consumer_total_w,
+        # The part of the house load no consumer measured; a consumer read a
+        # moment apart from the meter can briefly sum past the house.
+        "home_other_w": _rounded(max(0, home_load_w - consumer_total_w)),
         "pv_total_w": _rounded(pv_total_w),
         "inverter_output_w": _rounded(inverter_total_w),
         "inverter_charge_w": _rounded(inverter_charge_total_w),

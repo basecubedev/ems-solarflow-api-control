@@ -41,8 +41,10 @@ NUMERIC_FIELDS = [
     "temp",
     "remain_minutes",
     "house_load",
+    "house_other",
     "grid_power",
     "target_output",
+    "power",
 ]
 
 STATE_FIELDS = [
@@ -64,7 +66,8 @@ STATE_FIELDS = [
 MEASUREMENT_FILTER = (
     'r._measurement == "zendure_device" or '
     'r._measurement == "shelly_meter" or '
-    'r._measurement == "ems_runtime"'
+    'r._measurement == "ems_runtime" or '
+    'r._measurement == "consumer"'
 )
 
 TASK_NAME_INFIX = "-downsample-"
