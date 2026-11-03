@@ -55,6 +55,15 @@ Any device that
 reports no battery packs, controlled or not, such as a SolarFlow 800 without
 battery, is left out the same way, here and in the Analytics SoC.
 
+What a device has decides what the Overview and the energy flow draw. The live
+snapshot names it per device in `devices.<name>.hardware` as
+`{"pv": true|false, "battery": true|false}`, from the device's energy class,
+the one the winter plan reads: the battery is absent once the device reports
+no packs, PV is absent when its `devices[]` entry says `pv_kwp: 0`, and a
+device that has said neither keeps both, because a dark array and a silent
+device read exactly like none. An external MQTT device has the parts its
+bridge publishes a key for (`solarPower`; `batteryPower` or `batterySoc`).
+
 An E3/DC storage system configured as a read-only device appears the same way,
 with **Telemetry only**: PV, **Output** (its inverter's AC power), battery power
 and SOC, plus a **Grid** value with the grid power the E3/DC measures. It has no

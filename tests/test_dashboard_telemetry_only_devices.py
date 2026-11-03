@@ -565,6 +565,40 @@ def test_a_charge_level_of_zero_is_a_reading_and_counts():
     assert snapshot["average_soc"] == 30
 
 
+@pytest.mark.parametrize(
+    ("messages", "hardware"),
+    [
+        ([("inverterPower", b"765")], {"pv": False, "battery": False}),
+        ([("inverterPower", b"0"), ("solarPower", b"0")], {"pv": True, "battery": False}),
+        ([("inverterPower", b"250"), ("batteryPower", b"-250")], {"pv": False, "battery": True}),
+        ([("inverterPower", b"0"), ("batterySoc", b"40")], {"pv": False, "battery": True}),
+        (
+            [("state", b'{"inverterPower": 400, "solarPower": 520, "batteryPower": 120, "batterySoc": 40}')],
+            {"pv": True, "battery": True},
+        ),
+    ],
+)
+def test_an_external_device_has_the_parts_its_bridge_publishes(messages, hardware):
+    """An external device has no pack count and no ``pv_kwp``: what it has is
+    what its bridge publishes. A key the bridge sends at 0 W is a part that
+    is idle; a key it never sends is a part the device does not have."""
+
+    snapshot = _dashboard(_namespace_runtime("Garage", messages))
+
+    assert snapshot["devices"]["Garage"]["hardware"] == hardware
+
+
+def test_a_telemetry_only_zendure_device_without_packs_has_no_battery():
+    runtime = _FakeTelemetryRuntime(
+        summaries=[{"name": "INV_2", "identifier": "ID2", "status": "online"}],
+        snapshots={"ID2": _snapshot({"packNum": 0, "solarInputPower": 315, "outputHomePower": 280})},
+    )
+
+    snapshot = _dashboard(runtime)
+
+    assert snapshot["devices"]["INV_2"]["hardware"] == {"pv": True, "battery": False}
+
+
 def test_both_kinds_of_read_only_device_can_be_present_at_once():
     # One runtime, two kinds of device: a Zendure device with no write method
     # and an external device with no command path at all.
