@@ -41,6 +41,7 @@
     switchGridType,
     VALIDATION_MATURITIES,
   } from "../lib/devices.js";
+  import { CONSUMER_FAMILY } from "../lib/mqtt.js";
 
   let { config } = $props();
 
@@ -325,7 +326,8 @@
     {:else if kind === "external_mqtt"}
       {@const mqtt = device.mqtt || device.entry?.mqtt || {}}
       {@const state = externalState(device)}
-      <DeviceCard id={`external-${index}`} icon="zap" tone="c-inv" title={t("devices.inverter", { n: index + 1 })} model={`${device.catalog_label || device.display_name || t("devices.external.label")} · ${t(`devices.external.model.${device.catalog_retired ? (device.proposal_id ? "readOnApply" : "notRead") : "read"}`)}`} meta={[device.name || t("settings.unnamed"), mqtt.device_id ? `ID ${mqtt.device_id}` : t("devices.idMissing"), t("devices.external.broker", { ref: mqtt.broker_ref || "default" }), t(`devices.external.state.${state}`)].join(" · ")} enabled={device.enabled !== false} onremove={() => remove(index)}>
+      {@const consumer = mqtt.topic_family === CONSUMER_FAMILY}
+      <DeviceCard id={`external-${index}`} icon={consumer ? "plug-zap" : "zap"} tone={consumer ? "c-out" : "c-inv"} title={t(consumer ? "devices.consumer" : "devices.inverter", { n: index + 1 })} model={`${device.catalog_label || device.display_name || t("devices.external.label")} · ${t(`devices.external.model.${device.catalog_retired ? (device.proposal_id ? "readOnApply" : "notRead") : "read"}`)}`} meta={[device.name || t("settings.unnamed"), mqtt.device_id ? `ID ${mqtt.device_id}` : t("devices.idMissing"), t("devices.external.broker", { ref: mqtt.broker_ref || "default" }), t(`devices.external.state.${state}`)].join(" · ")} enabled={device.enabled !== false} onremove={() => remove(index)}>
         <p class="note"><Icon name="info" />{t(`devices.external.note.${device.catalog_retired ? (device.proposal_id ? "moving" : "retired") : device.entry ? "installed" : "added"}`)}</p>
         <div class="fields">
           <SettingField field={own("name")} lang={null} value={device.name || ""} onchange={(value) => update(index, { ...device, name: value })} />

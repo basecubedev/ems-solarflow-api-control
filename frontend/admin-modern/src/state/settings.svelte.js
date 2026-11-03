@@ -6,8 +6,11 @@ import { editableDraft } from "../lib/devices.js";
 
 const EDITS_KEY = "ems-admin.settings-edits";
 const HARDWARE_KEY = "ems-admin.settings-hardware";
-/** The draft's whole-value parts: the device list, the grid meter, the top-level broker, and the external entries removed. */
-const HARDWARE = Object.freeze(["devices", "grid_meter", "zendure_mqtt", "removed_external"]);
+/**
+ * The draft's whole-value parts: the device list, the grid meter, the top-level
+ * broker, the external entries removed, and the answers about consumers' values.
+ */
+const HARDWARE = Object.freeze(["devices", "grid_meter", "zendure_mqtt", "removed_external", "consumer_history"]);
 
 const PATHS = {
   preview: "/api/admin/maintenance/config/preview",
@@ -140,7 +143,12 @@ export function setHardwareValues(changes) {
   const values = { ...settings.hardware.values };
   for (const [key, value] of Object.entries(changes)) {
     if (!HARDWARE.includes(key)) continue;
-    const pointless = key === "removed_external" ? !Array.isArray(value) || value.length === 0 : JSON.stringify(value ?? null) === JSON.stringify(settings.editable?.[key] ?? null);
+    const pointless =
+      key === "removed_external"
+        ? !Array.isArray(value) || value.length === 0
+        : key === "consumer_history"
+          ? !value || typeof value !== "object" || Object.keys(value).length === 0
+          : JSON.stringify(value ?? null) === JSON.stringify(settings.editable?.[key] ?? null);
     if (pointless) delete values[key];
     else values[key] = value;
   }
@@ -235,9 +243,10 @@ export async function applyDraft({ backup = true } = {}) {
  * Writes one hardware change straight to the saved config, read again first
  * (``writeAtOnce``). Edits waiting in the draft take no part, so the caller
  * asks only when there are none. Answers ``{ ok, reason, error }``; ``reason``
- * is ``busy`` while another apply runs, or ``changed``.
+ * is ``busy`` while another apply runs, ``changed``, or ``cancelled`` when
+ * ``decide`` gave no answer about a consumer's values.
  */
-export async function applyNow(build) {
+export async function applyNow(build, { decide = null } = {}) {
   if (settings.applying) return { ok: false, reason: "busy" };
   settings.applying = true;
   settings.applyError = null;
@@ -247,7 +256,7 @@ export async function applyNow(build) {
       return { saved: settings.saved, editable: settings.editable, error: system.config.error };
     };
     const send = (path, body) => adminSend(path, { body });
-    const outcome = await writeAtOnce(build, { read, send, paths: PATHS });
+    const outcome = await writeAtOnce(build, { read, send, paths: PATHS, decide });
     if (outcome.applied) settings.applied = outcome.applied;
     return outcome;
   } finally {

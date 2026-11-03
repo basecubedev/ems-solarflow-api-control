@@ -5,6 +5,7 @@
   import Status from "../../../shared/ui/Status.svelte";
   import Segmented from "../../../shared/ui/Segmented.svelte";
   import ConfirmDialog from "../../../shared/ui/ConfirmDialog.svelte";
+  import Dialog from "../../../shared/ui/Dialog.svelte";
   import ControlState from "../widgets/ControlState.svelte";
   import StaleNote from "../widgets/StaleNote.svelte";
   import SettingField from "../widgets/SettingField.svelte";
@@ -15,6 +16,7 @@
   import SourcesPanel from "../widgets/SourcesPanel.svelte";
   import MqttBrokerCard from "../widgets/MqttBrokerCard.svelte";
   import MqttMappingPanel from "../widgets/MqttMappingPanel.svelte";
+  import ConsumerHistoryQuestions from "../widgets/ConsumerHistoryQuestions.svelte";
   import { findProposal } from "../state/mqtt.svelte.js";
   import { removeDevice } from "../lib/devices.js";
   import { emsPlace, mapsTo, withMappedDevice, withRenamedDevice } from "../lib/mqtt.js";
@@ -22,7 +24,7 @@
   import { system, ensure, reload } from "../state/system.svelte.js";
   import { settings, setValue, setHardwareValues, discard, discardHardware, previewDraft, applyDraft, applyNow, resetOverrides } from "../state/settings.svelte.js";
   import { serviceAction, runServiceAction } from "../state/services.svelte.js";
-  import { EDIT_TABS, changeGroups, restartNeeded, fieldMatches, levelled, liveOverride, previewValue, safetyBlocks, sharedRisk, tabSections } from "../lib/settings.js";
+  import { EDIT_TABS, changeGroups, restartNeeded, fieldMatches, levelled, liveOverride, openHistory, previewValue, safetyBlocks, sharedRisk, tabSections } from "../lib/settings.js";
   import { errorView } from "../lib/errors.js";
   import { href } from "../app/router.svelte.js";
 
@@ -92,6 +94,37 @@
     },
   };
 
+  /** A direct write that touches a consumer's recorded values waits here for the reader's answers. */
+  let historyAsk = $state(null);
+
+  function askHistory(questions) {
+    return new Promise((resolve) => {
+      historyAsk = { questions, answers: {}, resolve };
+    });
+  }
+
+  function closeHistory(answers) {
+    historyAsk?.resolve(answers);
+    historyAsk = null;
+  }
+
+  // Leaving the page answers nothing, so the write waiting on it ends.
+  $effect(() => () => closeHistory(null));
+
+  /** An answer in the review joins the draft, which is then reviewed again once no review runs. */
+  let reviewAgain = $state(false);
+
+  function answerHistory(name, value) {
+    setHardwareValues({ consumer_history: { ...historyAnswers, [name]: value } });
+    reviewAgain = true;
+  }
+
+  $effect(() => {
+    if (!reviewAgain || settings.previewing) return;
+    reviewAgain = false;
+    previewDraft();
+  });
+
   /** The device list a change is made on: the saved one, or the draft while it holds other changes. */
   function current() {
     return (settings.changes ? settings.draft : settings.editable) || {};
@@ -107,7 +140,7 @@
       if (changes) setHardwareValues(changes);
       return { state: "draft" };
     }
-    const result = await applyNow(build);
+    const result = await applyNow(build, { decide: askHistory });
     if (result.ok) return { state: "saved" };
     return result.reason ? { state: result.reason } : { state: "failed", error: result.error };
   }
@@ -133,7 +166,12 @@
   const notes = $derived([...(preview?.validation?.errors || []), ...(preview?.validation?.warnings || [])].map((item) => item?.message).filter(Boolean));
   const stale = $derived(Boolean(preview) && !settings.fresh);
   const unreadable = $derived(preview && preview.status !== "ok" && !preview.validation ? preview : null);
-  const canApply = $derived(settings.reviewed && preview?.changed === true && !settings.applying);
+  const history = $derived(preview?.consumer_history || []);
+  const historyAnswers = $derived({
+    ...Object.fromEntries(history.filter((question) => question.answered).map((question) => [question.name, question.answer])),
+    ...(settings.draft?.consumer_history || {}),
+  });
+  const canApply = $derived(settings.reviewed && preview?.changed === true && !settings.applying && !openHistory(preview).length);
   const applied = $derived(settings.applied);
   const needsRestart = $derived(restartNeeded(applied?.diff, applied?.result));
   const rollback = $derived(settings.applyError?.payload?.credential_rollback || settings.applyError?.credential_rollback || null);
@@ -277,6 +315,10 @@
             </ul>
           {/each}
           {#each notes as note, index (index)}<p class="note warn"><Icon name="triangle-alert" /><span lang="en">{note}</span></p>{/each}
+          {#if history.length}
+            <h3 class="sub">{t("history.title")}</h3>
+            <ConsumerHistoryQuestions questions={history} answers={historyAnswers} onanswer={answerHistory} />
+          {/if}
           {#if preview.preview}
             <details class="generated">
               <summary>{t("settings.edit.generated")}</summary>
@@ -321,6 +363,15 @@
   {/if}
 {/if}
 
+<Dialog open={Boolean(historyAsk)} title={t("history.title")} onclose={() => closeHistory(null)}>
+  {#if historyAsk}
+    <ConsumerHistoryQuestions questions={historyAsk.questions} answers={historyAsk.answers} onanswer={(name, value) => (historyAsk = { ...historyAsk, answers: { ...historyAsk.answers, [name]: value } })} />
+  {/if}
+  {#snippet actions()}
+    <button class="btn secondary" type="button" onclick={() => closeHistory(null)}>{t("auth.cancel")}</button>
+    <button class="btn" type="button" disabled={!historyAsk || historyAsk.questions.some((question) => !historyAsk.answers[question.name])} onclick={() => closeHistory(historyAsk.answers)} data-testid="history-confirm">{t("common.save")}</button>
+  {/snippet}
+</Dialog>
 <ConfirmDialog
   open={confirmApply}
   title={t("settings.edit.confirmTitle")}

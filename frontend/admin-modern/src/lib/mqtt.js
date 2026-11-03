@@ -38,6 +38,7 @@ export const MAPPING_ISSUES = Object.freeze([
   "mqtt_mapping_broker_invalid",
   "mqtt_mapping_device_id_invalid",
   "mqtt_mapping_device_id_duplicate",
+  "mqtt_mapping_family_unknown",
   "mqtt_mapping_target_unknown",
   "mqtt_mapping_target_required_missing",
   "mqtt_mapping_battery_shape_invalid",
@@ -69,6 +70,16 @@ export const SILENCE_REASONS = Object.freeze(["disabled", "source_missing", "sta
 export const VALUE_REASONS = Object.freeze(["format_invalid", "not_json", "path_invalid", "path_missing", "not_a_number", "out_of_range"]);
 
 export const TARGETS = Object.freeze(["inverterPower", "solarPower", "batteryPower", "batterySoc"]);
+
+/** A consumer publishes its power alone, under its own catalog family. */
+export const CONSUMER_TARGETS = Object.freeze(["power"]);
+export const CONSUMER_FAMILY = "ems_consumer";
+
+/** Whether a mapping entry describes a consumer rather than an inverter. */
+export const isConsumer = (device) => device?.family === CONSUMER_FAMILY;
+
+/** The targets a mapping entry may carry. */
+export const targetsOf = (device) => (isConsumer(device) ? CONSUMER_TARGETS : TARGETS);
 
 export const BROKER_STATES = Object.freeze(["off", "running", "stopped", "unknown"]);
 
@@ -137,7 +148,7 @@ export function proposedId(key) {
 }
 
 /** What a mapped device measures, asked before any target: each answer maps one power value to the catalog keys. */
-export const DEVICE_KINDS = Object.freeze(["balcony", "hybrid", "ac_battery", "other"]);
+export const DEVICE_KINDS = Object.freeze(["balcony", "hybrid", "ac_battery", "consumer", "other"]);
 
 /** Units a reading can come in, and the factor that turns it into what the catalog expects. */
 export const UNITS = Object.freeze({ W: 1, kW: 1000, fraction: 100, percent: 1 });
@@ -145,7 +156,7 @@ export const POWER_UNITS = Object.freeze(["W", "kW"]);
 export const SOC_UNITS = Object.freeze(["percent", "fraction"]);
 
 /** Targets that must never be negative; a negative reading there is a sign to turn round. */
-export const NON_NEGATIVE_TARGETS = Object.freeze(["inverterPower", "solarPower", "batterySoc"]);
+export const NON_NEGATIVE_TARGETS = Object.freeze(["inverterPower", "solarPower", "batterySoc", "power"]);
 
 export const MIN_MAX_AGE = 60;
 export const MAX_MAX_AGE = 900;
@@ -232,11 +243,11 @@ export function mapsTo(id) {
     (deviceKind(device) === "external_mqtt" || device?.type === "external_mqtt") && (device?.mqtt?.device_id ?? device?.entry?.mqtt?.device_id) === id;
 }
 
-/** The EMS name a mapped device gets: its label where no other device has it, else the next free INV_ name. */
-export function emsDeviceName(label, devices) {
+/** The EMS name a mapped device gets: its label where no other device has it, else ``fallback``, by default the next free INV_ name. */
+export function emsDeviceName(label, devices, fallback = nextInverterName(devices)) {
   const name = String(label ?? "").trim();
   const used = new Set((devices || []).map((device) => String(device?.name ?? "").trim().toLowerCase()));
-  return name && !used.has(name.toLowerCase()) ? name : nextInverterName(devices);
+  return name && !used.has(name.toLowerCase()) ? name : fallback;
 }
 
 /**
@@ -260,7 +271,8 @@ export function withMappedDevice(devices, proposal, label) {
   const moved = useExternalConnection(list, proposal);
   if (moved) return list[moved.index].catalog_connection_id === moved.devices[moved.index].catalog_connection_id ? null : moved.devices;
   if (list.some(mapsTo(proposal?.config_fragment?.mqtt?.device_id))) return null;
-  return [...list, { ...externalDeviceFromProposal(proposal, list), name: emsDeviceName(label, list) }];
+  const device = externalDeviceFromProposal(proposal, list);
+  return [...list, { ...device, name: emsDeviceName(label, list, device.name) }];
 }
 
 /** The device list with mapped device ``id`` named ``label``; ``null`` when that changes nothing or another device has the name. */
@@ -274,7 +286,7 @@ export function withRenamedDevice(devices, id, label) {
 }
 
 /** Why adding, moving, renaming or removing an EMS device did not happen, each with its own words. */
-export const ADOPT_REFUSALS = Object.freeze(["missing", "busy", "changed"]);
+export const ADOPT_REFUSALS = Object.freeze(["missing", "busy", "changed", "cancelled"]);
 
 /** The steps from a broker to a device in the EMS, and how far the panel has come. */
 export const MAPPING_STEPS = Object.freeze(["broker", "connect", "map", "ems"]);
@@ -322,7 +334,7 @@ export function sourceFromValue(choice, target, unit = "W", { turnSign = true } 
 
 /** Only a device without a battery can be read as having its sign the wrong way round from one negative value. */
 function turnsSign(kind, target) {
-  return kind === "balcony" || target === "solarPower" || target === "batterySoc";
+  return kind === "balcony" || kind === "consumer" || target === "solarPower" || target === "batterySoc";
 }
 
 /**
@@ -339,12 +351,17 @@ export function deviceFromAnswers({ kind, name, brokerRef, power, solar = null, 
       values[target] = { sources: [sourceFromValue(choice, target, unit, { turnSign: turnsSign(kind, target) })] };
     }
   };
+  const entry = { id: id || idFromName(name), label: String(name || "").trim(), enabled: true, broker_ref: brokerRef || BUILTIN_BROKER, values };
+  if (kind === "consumer") {
+    add("power", power);
+    return { ...entry, family: CONSUMER_FAMILY };
+  }
   add("inverterPower", power);
   if (kind === "balcony") add("solarPower", power);
   if (kind === "hybrid") add("solarPower", solar);
   if (kind === "hybrid" || kind === "ac_battery") add("batteryPower", battery);
   if (kind === "hybrid" || kind === "ac_battery") add("batterySoc", soc);
-  return { id: id || idFromName(name), label: String(name || "").trim(), enabled: true, broker_ref: brokerRef || BUILTIN_BROKER, values };
+  return entry;
 }
 
 /** Every number a live-topic group carries, with what the mapping helpers need to know about it. */

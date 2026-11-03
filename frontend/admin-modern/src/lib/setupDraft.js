@@ -11,7 +11,7 @@
  */
 
 import { D0_TOPIC_PREFIX, D0_TOPIC_SUFFIX, generations, hardwareModels, modelsForGeneration } from "./devices.js";
-import { aliasTokens, isExternalProposal, isGridMeterProposal, issuedPhysicalIdentity, meterTypeOf, observationKey, proposalTopic, sourcesOf } from "./discovery.js";
+import { aliasTokens, isConsumerProposal, isExternalProposal, isGridMeterProposal, issuedPhysicalIdentity, meterTypeOf, observationKey, proposalTopic, sourcesOf } from "./discovery.js";
 
 /** Classic's localStorage keys; the workflow identity and the step live in state/setup.svelte.js. */
 export const STORE = Object.freeze({
@@ -118,6 +118,11 @@ export function nextCompactName(names, count) {
   return `INV_${number}`;
 }
 
+/** The name a chosen proposal starts with: a consumer keeps the one it is offered under, anything else takes the next free name. */
+export function proposalName(draft, proposal) {
+  return (isConsumerProposal(proposal) && text(proposal.config_fragment?.name)) || nextName(draft);
+}
+
 /** Every inverter name the draft holds: its rows, its MQTT devices and the hand-entered ones. */
 export function inverterNames(draft, exclude = null) {
   return [...inverters(draft).filter((item) => item !== exclude).map((item) => item.config_name), ...deviceSelections(draft).filter((entry) => entry !== exclude).map((entry) => entry.config_name), ...draft.manual.filter((device) => device !== exclude).map((device) => device.name)];
@@ -149,7 +154,8 @@ export function withNames(draft) {
     count += 1;
     return value;
   };
-  const selections = draft.selections.map((entry) => (isGridSelection(entry) || has(entry, "config_name") ? entry : { ...entry, config_name: name() }));
+  const offered = (entry) => (isConsumerProposal(entry) ? text(entry.config_fragment?.name) : "");
+  const selections = draft.selections.map((entry) => (isGridSelection(entry) || has(entry, "config_name") ? entry : { ...entry, config_name: offered(entry) || name() }));
   const manual = draft.manual.map((device) => (has(device, "name") ? device : { ...device, name: name() }));
   return { ...draft, selections, manual };
 }
@@ -374,7 +380,7 @@ export function applyOperations(draft, plan, current, { proposals, available, na
   for (const chosen of operations.select_mqtt_proposals || []) {
     const proposal = (proposals || []).find((candidate) => String(candidate.id || "") === String(chosen.id));
     if (!proposal) continue;
-    const fallback = rememberedName(next, index, names, issuedPhysicalIdentity(proposal), proposal, "proposal") || nextName(next);
+    const fallback = rememberedName(next, index, names, issuedPhysicalIdentity(proposal), proposal, "proposal") || proposalName(next, proposal);
     const entry = serializeSelection(proposal, { target: "device", configName: fallback });
     entry.config_name = rememberedName(next, index, names, chosen.physical_device_id, proposal, "proposal") || entry.config_name;
     entry.selection_origin = chosen.selection_origin || "automatic";

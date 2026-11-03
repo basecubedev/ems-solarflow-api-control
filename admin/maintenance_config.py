@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import json
 
+from admin import consumer_history
 from admin.config_preview import _GRID_TYPE_CHOICES, _valid_host
 from admin.config_runtime_overlap import applies_live, overlap_provenance_for_context
 from admin.connection_planner import (
@@ -1133,6 +1134,7 @@ def preview_maintenance_config(draft, base_dir=None, *, identity_token_key=None)
     merged = _merge_draft(
         current, draft, merge_issues, identity_token_key=identity_token_key
     )
+    history = _consumer_history(current, merged, draft, context)
     validation = _validate(merged, merge_issues)
     # Read-only preview surfaces the global MQTT credentials_ref contract early
     # (canonical refs, single-source ownership) so the UI shows a bad reference
@@ -1157,11 +1159,23 @@ def preview_maintenance_config(draft, base_dir=None, *, identity_token_key=None)
             identity_token_key=identity_token_key,
             broker_sources=broker_sources_from_config(merged),
         ),
+        "consumer_history": history,
     }
     return sanitize_external_mqtt_status(
         response,
         sensitive_context=merged,
         drop_secrets=False,
+    )
+
+
+def _consumer_history(current, merged, draft, context):
+    """The consumer history questions of the draft, its answers written into ``merged``."""
+
+    return consumer_history.resolve(
+        current,
+        merged,
+        consumer_history.recorded_histories(current, str(context.install_root)),
+        draft.get(consumer_history.DRAFT_FIELD),
     )
 
 
@@ -1178,20 +1192,20 @@ def prepare_maintenance_config_apply(
     if error is not None:
         return error
     revision = hashlib.sha256(raw).hexdigest()
+    context = detect_install_context(base_dir=base_dir)
 
     draft = draft if isinstance(draft, dict) else {}
     merge_issues = []
     merged = _merge_draft(
         current, draft, merge_issues, identity_token_key=identity_token_key
     )
+    history = _consumer_history(current, merged, draft, context)
     validation = _validate(merged, merge_issues)
     diff = summarize_config_changes(current, merged)
     result = sanitize_external_mqtt_status(
         {
             "status": "ok",
-            "config_path": str(
-                detect_install_context(base_dir=base_dir).config_path
-            ),
+            "config_path": str(context.config_path),
             "revision": revision,
             "changed": diff["changed"],
             "diff": redact_config_for_browser(
@@ -1205,6 +1219,7 @@ def prepare_maintenance_config_apply(
                 identity_token_key=identity_token_key,
                 broker_sources=broker_sources_from_config(merged),
             ),
+            "consumer_history": history,
         },
         sensitive_context=merged,
         drop_secrets=False,

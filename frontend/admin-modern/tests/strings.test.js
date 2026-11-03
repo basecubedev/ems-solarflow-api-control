@@ -20,7 +20,7 @@ import { RUNTIME_STATES, STATUS_SOURCES, BROKER_ISSUES, DEVICE_STATES } from "..
 import { REASON_WORDS } from "../src/lib/devices.js";
 import { SETUP_STEPS, DOCKER_MODES, DOCKER_STATES, RECOVERY_REASONS } from "../src/lib/setup.js";
 import { BUSY_OPERATIONS, CONFIG_CONFLICTS, CONTINUITY, SWITCH_REASONS } from "../src/lib/setupDraft.js";
-import { AUTOMATIC_FEATURES, DEVICE_KINDS, EDIT_TABS, FEATURE_IDS, MQTT_SOURCES, RISKS } from "../src/lib/settings.js";
+import { AUTOMATIC_FEATURES, DEVICE_KINDS, EDIT_TABS, FEATURE_IDS, HISTORY_KINDS, MQTT_SOURCES, RISKS } from "../src/lib/settings.js";
 import { ASSISTANT_STATES, STEP_IDS, TASKS } from "../src/lib/assistant.js";
 import { BROKER_ACCESS, BROKER_CHOICE_ERRORS, BROKER_ISSUES as MQTT_BROKER_ISSUES, MAPPING_EDITOR_ISSUES, BROKER_STATES, CONNECT_TYPES, DEVICE_KINDS as MQTT_DEVICE_KINDS, ADOPT_REFUSALS, LIVE_LABELS, MAPPING_ISSUES, MAPPING_STEPS, SILENCE_REASONS, TARGETS, UNITS, VALUE_REASONS, connectSteps } from "../src/lib/mqtt.js";
 
@@ -152,6 +152,7 @@ test("every generated key family is complete", () => {
     ...TARGETS.map((target) => `mqtt.target.${target}`),
     ...MAPPING_STEPS.map((step) => `mqtt.step.${step}`),
     ...ADOPT_REFUSALS.map((reason) => `mqtt.mapping.adopt.${reason}`),
+    ...HISTORY_KINDS.map((kind) => `history.question.${kind}`),
     ...MQTT_DEVICE_KINDS.flatMap((kind) => [`mqtt.wizard.kind.${kind}`, `mqtt.wizard.kind.${kind}.hint`]),
     ...Object.keys(UNITS).map((unit) => `mqtt.unit.${unit}`),
     ...CONNECT_TYPES.flatMap((type) => [`mqtt.connect.type.${type}`, ...connectSteps(type)]),
@@ -214,7 +215,7 @@ test("no orphan keys: each key is used literally or belongs to a generated famil
     "setup.manualControl.", "setup.deploy.status.", "setup.docker.", "setup.dockerMode.", "setup.run.status.", "setup.run.conflict.existing.", "setup.service.",
     "setup.devices.sourcesEnabled.", "setup.devices.found.", "setup.devices.brokerCount.", "setup.devices.deviceCount.", "setup.devices.ignored.",
     "setup.devices.proposalCount.", "setup.hardware.metersFound.", "setup.hardware.ready.", "setup.recovery.",
-    "feature.", "assistant.state.", "assistant.lead.", "assistant.task.", "assistant.step.devices.done.",
+    "feature.", "assistant.state.", "assistant.lead.", "assistant.task.", "assistant.step.devices.done.", "history.question.",
     ...STEP_IDS.map((id) => `assistant.step.${id}.title`),
     ...["off", "stopped", "docker", "noAddress"].map((reason) => `assistant.step.dashboard.${reason}`),
   ];

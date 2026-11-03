@@ -227,6 +227,41 @@ test("a change written at once is refused when the config moved on, and nothing 
   assert.deepEqual(sent, ["/preview"]);
 });
 
+test("a change written at once that touches a consumer's values asks first, and writes the answers with it", async () => {
+  const { writeAtOnce } = await import("../src/lib/settings.js");
+  const paths = { preview: "/preview", apply: "/apply" };
+  const read = async () => ({ saved: { revision: "r2", draft: {} }, editable: { devices: [{ name: "Washer" }] } });
+  const question = { name: "Waschmaschine", kind: "renamed", answer: "keep", answered: false };
+  const preview = (answers) => ({ revision: "r2", validation: { ok: true }, consumer_history: [answers ? { ...question, answer: answers.Waschmaschine, answered: true } : question] });
+  const run = async (decide) => {
+    const sent = [];
+    const asked = [];
+    const outcome = await writeAtOnce(() => ({ devices: [{ name: "Waschmaschine" }] }), {
+      read,
+      send: async (path, body) => {
+        sent.push([path, body]);
+        return path === "/preview" ? preview(body.draft.consumer_history) : { ok: true };
+      },
+      paths,
+      decide: async (questions) => {
+        asked.push(questions.map((item) => item.name));
+        return decide;
+      },
+    });
+    return { outcome, sent, asked };
+  };
+
+  const answered = await run({ Waschmaschine: "new" });
+  const cancelled = await run(null);
+
+  assert.deepEqual(answered.asked, [["Waschmaschine"]]);
+  assert.deepEqual(answered.sent.map(([path]) => path), ["/preview", "/preview", "/apply"]);
+  assert.deepEqual(answered.sent[2][1].draft.consumer_history, { Waschmaschine: "new" });
+  assert.equal(answered.outcome.ok, true);
+  assert.deepEqual([cancelled.outcome.ok, cancelled.outcome.reason], [false, "cancelled"]);
+  assert.deepEqual(cancelled.sent.map(([path]) => path), ["/preview"]);
+});
+
 test("a change written at once that changes nothing sends nothing, and a refused one says why", async () => {
   const { writeAtOnce } = await import("../src/lib/settings.js");
   const paths = { preview: "/preview", apply: "/apply" };

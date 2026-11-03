@@ -6,7 +6,7 @@
   import MqttDeviceWizard from "./MqttDeviceWizard.svelte";
   import MqttBrokerChooser from "./MqttBrokerChooser.svelte";
   import { t } from "../i18n/i18n.svelte.js";
-  import { ADOPT_REFUSALS, BUILTIN_BROKER, LIVE_LABELS, MAPPING_EDITOR_ISSUES, MAPPING_ISSUES, MAPPING_STEPS, SILENCE_REASONS, TARGETS, VALUE_REASONS, brokerAddress, mappingStep, newDevice, newSource, proposedId, targetSources } from "../lib/mqtt.js";
+  import { ADOPT_REFUSALS, BUILTIN_BROKER, LIVE_LABELS, MAPPING_EDITOR_ISSUES, MAPPING_ISSUES, MAPPING_STEPS, SILENCE_REASONS, VALUE_REASONS, brokerAddress, mappingStep, newDevice, newSource, proposedId, targetSources, targetsOf } from "../lib/mqtt.js";
   import { mqtt, loadMapping, startTopics, stopTopics, previewMapping, applyMapping, previewValue, watchMapping, watchTopics } from "../state/mqtt.svelte.js";
   import { errorView } from "../lib/errors.js";
 
@@ -132,7 +132,7 @@
   function edit(index) {
     editingIndex = index;
     draft = structuredClone($state.snapshot(devices[index]));
-    target = "inverterPower";
+    target = targetsOf(draft)[0];
     evaluation = null;
     issues = [];
   }
@@ -150,6 +150,7 @@
     wizard = null;
     editingIndex = -1;
     draft = { ...newDevice(device.broker_ref || brokerRef), ...device, id: device.id || proposedId("") };
+    target = targetsOf(draft)[0];
   }
 
   function update(change) {
@@ -364,7 +365,7 @@
         <label class="check"><input type="checkbox" checked={draft.enabled !== false} onchange={(event) => update({ enabled: event.currentTarget.checked })} /><span>{t("mqtt.mapping.enabled")}</span></label>
       </div>
       <div class="row-wrap" role="group" aria-label={t("mqtt.mapping.targets")}>
-        {#each TARGETS as key (key)}
+        {#each targetsOf(draft) as key (key)}
           <button class="btn small" class:secondary={target !== key} type="button" onclick={() => (target = key)} aria-pressed={target === key ? "true" : "false"}>
             {t(`mqtt.target.${key}`)}{draft.values[key] ? ` (${targetSources(draft.values[key]).length})` : ""}
           </button>
@@ -373,7 +374,7 @@
       {#if target === "batteryPower"}
         <label class="check"><input type="checkbox" checked={Boolean(draft.values.batteryPower && !Array.isArray(draft.values.batteryPower.sources))} onchange={(event) => splitBattery(event.currentTarget.checked)} /><span>{t("mqtt.mapping.split")}</span></label>
       {/if}
-      {#each TARGETS.filter((key) => draft.values[key]) as key (key)}
+      {#each targetsOf(draft).filter((key) => draft.values[key]) as key (key)}
         {#each targetSources(draft.values[key]) as [side, index, source] (`${key}-${side}-${index}`)}
           <div class="source" class:hidden={key !== target}>
             <span class="small muted">{side === "sources" ? t(`mqtt.target.${key}`) : side === "charge" ? t("mqtt.mapping.charge") : t("mqtt.mapping.discharge")}</span>
@@ -390,7 +391,7 @@
         <input class="input" placeholder={t("mqtt.mapping.topic")} aria-label={t("mqtt.mapping.topic")} bind:value={manualTopic} data-testid="mqtt-source-topic" />
         <input class="input" placeholder={t("mqtt.mapping.path")} aria-label={t("mqtt.mapping.path")} bind:value={manualPath} data-testid="mqtt-source-path" />
         <button class="btn secondary small" type="submit" disabled={!manualTopic.trim()} data-testid="mqtt-source-add"><Icon name="plus" size="sm" />{t("mqtt.mapping.addSource")}</button>
-        {#if target !== "inverterPower" && draft.values[target]}
+        {#if target !== targetsOf(draft)[0] && draft.values[target]}
           <button class="btn secondary small" type="button" onclick={() => setTarget(target, null)}><Icon name="x" size="sm" />{t("mqtt.mapping.dropTarget")}</button>
         {/if}
       </form>
