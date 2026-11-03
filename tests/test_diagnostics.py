@@ -118,6 +118,52 @@ def test_emsctl_diagnose_json_is_read_only_and_hides_sensitive_values(tmp_path):
     assert not (tmp_path / "runtime-state.json").exists()
 
 
+def _config_template():
+    return json.loads((ROOT / "config" / "config.template.json").read_text())
+
+
+def _mqtt_entry(kind, **extra):
+    return {"name": "Balcony", "type": kind, "enabled": True, "mqtt": {"broker_ref": "ems-mqtt", "device_id": "balcony"}, **extra}
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        pytest.param(_mqtt_entry("external_mqtt"), id="external"),
+        pytest.param(_mqtt_entry("zendure_mqtt", serial_number="X"), id="zendure-telemetry-only"),
+        pytest.param({"name": "E3DC", "type": "e3dc_modbus", "ip": "192.0.2.5"}, id="e3dc"),
+    ],
+)
+def test_diagnose_asks_a_device_it_only_reads_for_no_template_key(entry):
+    template = _config_template()
+    config = {**template, "devices": [template["devices"][0], entry]}
+
+    assert diagnostics.diagnose_missing_template_keys(config, template) == []
+
+
+def test_diagnose_asks_an_mqtt_control_device_for_every_template_key_it_reads():
+    template = _config_template()
+    entry = _mqtt_entry("zendure_mqtt", serial_number="X", capabilities={"write_output_limit": True})
+
+    missing = diagnostics.diagnose_missing_template_keys({**template, "devices": [entry]}, template)
+
+    assert missing == sorted(
+        f"devices.0.{key}"
+        for key in template["devices"][0]
+        if not key.startswith("_comment") and key not in ("name", "ip", "sn", "smart_mode", "min_soc", "max_soc", "winter_policy")
+    )
+
+
+@pytest.mark.parametrize("dropped", [("max_power",), ("ip", "sn"), ("smart_mode", "min_soc", "max_soc", "winter_policy")])
+def test_diagnose_still_names_a_key_a_local_api_device_lacks(dropped):
+    template = _config_template()
+    entry = {key: value for key, value in template["devices"][0].items() if key not in dropped}
+
+    missing = diagnostics.diagnose_missing_template_keys({**template, "devices": [entry]}, template)
+
+    assert missing == sorted(f"devices.0.{key}" for key in dropped)
+
+
 def test_diagnose_redact_report_for_http_masks_structured_and_text_secrets():
     secret = "super-secret-token"
     report = {

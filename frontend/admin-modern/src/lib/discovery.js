@@ -437,13 +437,28 @@ function canControl(proposal) {
 export function configuredFor(item, draft) {
   if (item?.configured) return item.configured;
   if (!item?.proposal) return null;
+  if (isExternalProposal(item.proposal)) {
+    const issued = catalogId(item.proposal, "catalog_device_id");
+    return (draft?.devices || []).find((device) => deviceKind(device) === "external_mqtt" && Boolean(issued) && catalogId(device, "catalog_device_id") === issued) || null;
+  }
   const matched = matchingDevices(draft, identityView(item.proposal));
   return matched.length === 1 ? matched[0] : null;
 }
 
+/** ``host:port`` of the Local MQTT broker an entry reads through, from the draft's broker profiles; "" when not known. */
+export function entryBroker(entry, draft) {
+  const profile = draft?.zendure_mqtt?.brokers?.[entry?.mqtt?.broker_ref];
+  return profile?.host ? `${profile.host}:${profile.port || 1883}` : "";
+}
+
+/** ``host:port`` a proposal was found on; "" for one without a broker address. */
+export function proposalBroker(proposal) {
+  return proposal?.broker_host ? `${proposal.broker_host}:${proposal.broker_port || 1883}` : "";
+}
+
 /** Taking a read-only connection for an inverter EMS regulates today gives up its regulation. */
 export function isControlDowngrade(item, draft) {
-  if (item?.state !== "transport" || !item.proposal || isGridMeterProposal(item.proposal) || canControl(item.proposal)) return false;
+  if (item?.state !== "transport" || !item.proposal || isGridMeterProposal(item.proposal) || isExternalProposal(item.proposal) || canControl(item.proposal)) return false;
   const configured = configuredFor(item, draft);
   return Boolean(configured) && configured.enabled !== false;
 }

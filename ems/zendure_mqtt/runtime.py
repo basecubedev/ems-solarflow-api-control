@@ -28,6 +28,7 @@ from ems.zendure_mqtt.config_entries import (
     RESERVED_MQTT_BROKER_REFS,
     config_entry_enabled,
     external_device_subscriptions,
+    external_devices_elsewhere,
     is_control_zendure_mqtt_device_config,
     is_external_mqtt_device_config,
     is_zendure_mqtt_device_config,
@@ -49,6 +50,7 @@ from ems.zendure_mqtt.service import (
     ZendureMqttRuntimeConfig,
     ZendureMqttService,
     classify_snapshot,
+    snapshot_age_seconds,
 )
 from ems.mqtt_credentials import (
     MqttCredentialError,
@@ -428,9 +430,11 @@ class _BrokerRuntime:
         service=None,
         service_factory=None,
         owns_service=True,
+        watched=None,
     ):
         self._config = config
         self._devices = tuple(devices)
+        self._watched = dict(watched or {})
         self._stale_after_seconds = config.stale_after_seconds
         self._identifiers = frozenset(
             device.identifier for device in self._devices if device.identifier
@@ -494,6 +498,23 @@ class _BrokerRuntime:
             if key in self._identifiers
             or getattr(snap, "serial_number", None) in self._identifiers
         }
+
+    def second_sources(self, now_monotonic) -> list[dict]:
+        """Devices this broker carries now, though the EMS reads them from the broker they were added through.
+
+        A copy counts while it is fresh: once its publisher stops and the
+        retained message expires, it is no longer reported.
+        """
+
+        if not self._watched:
+            return []
+        seen = self._service.snapshots()
+        sources = []
+        for key, (device_id, owner) in sorted(self._watched.items()):
+            age = snapshot_age_seconds(seen.get(key), now_monotonic)
+            if age is not None and age <= self._stale_after_seconds:
+                sources.append({"device_id": device_id, "read_from": owner, "also_on": self.broker_ref})
+        return sources
 
     def device_summaries(self, now_monotonic, invalid_devices=()):
         return summarize_zendure_mqtt_devices(
@@ -684,6 +705,9 @@ class ZendureMqttTelemetryRuntime:
             "snapshot_count": self._snapshot_count(),
             "brokers": [broker.summary() for broker in self._brokers],
             "devices": self.device_summaries(),
+            "second_sources": [
+                item for broker in self._brokers for item in broker.second_sources(time.monotonic())
+            ],
         }
         if self._config_error:
             status["config_error"] = self._config_error
@@ -808,9 +832,15 @@ def build_zendure_mqtt_runtime(
         external = external_device_subscriptions(
             config.get("devices"), ref, broker_source=broker_config.source
         )
-        if external:
+        watched = (
+            {}
+            if broker_config.source == SOURCE_ZENDURE_CLOUD_MQTT
+            else external_devices_elsewhere(config.get("devices"), ref)
+        )
+        filters = tuple(dict.fromkeys([*external, *(topic for _owner, topic, _key in watched.values())]))
+        if filters:
             broker_config = dataclasses.replace(
-                broker_config, external_subscriptions=external
+                broker_config, external_subscriptions=filters
             )
         broker_runtimes.append(
             _BrokerRuntime(
@@ -818,6 +848,7 @@ def build_zendure_mqtt_runtime(
                 broker_devices,
                 service=broker_service,
                 service_factory=service_factory,
+                watched={key: (device_id, owner) for device_id, (owner, _topic, key) in watched.items()},
             )
         )
 

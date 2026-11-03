@@ -13,9 +13,14 @@
   import DevicesEditor from "../widgets/DevicesEditor.svelte";
   import DiscoveryPanel from "../widgets/DiscoveryPanel.svelte";
   import SourcesPanel from "../widgets/SourcesPanel.svelte";
+  import MqttBrokerCard from "../widgets/MqttBrokerCard.svelte";
+  import MqttMappingPanel from "../widgets/MqttMappingPanel.svelte";
+  import { findProposal } from "../state/mqtt.svelte.js";
+  import { removeDevice } from "../lib/devices.js";
+  import { emsPlace, mapsTo, withMappedDevice, withRenamedDevice } from "../lib/mqtt.js";
   import { t, tn, catalogText } from "../i18n/i18n.svelte.js";
   import { system, ensure, reload } from "../state/system.svelte.js";
-  import { settings, setValue, discard, discardHardware, previewDraft, applyDraft, resetOverrides } from "../state/settings.svelte.js";
+  import { settings, setValue, setHardwareValues, discard, discardHardware, previewDraft, applyDraft, applyNow, resetOverrides } from "../state/settings.svelte.js";
   import { serviceAction, runServiceAction } from "../state/services.svelte.js";
   import { EDIT_TABS, changeGroups, restartNeeded, fieldMatches, levelled, liveOverride, previewValue, safetyBlocks, sharedRisk, tabSections } from "../lib/settings.js";
   import { errorView } from "../lib/errors.js";
@@ -23,7 +28,7 @@
 
   ensure("config");
 
-  const TABS = [...EDIT_TABS, "devices"];
+  const TABS = ["features", "addons", ...EDIT_TABS.filter((name) => name !== "features"), "devices"];
 
   /** The tab in the address, #/settings/<tab>, so another page can open one. */
   function hashTab() {
@@ -45,6 +50,68 @@
   const values = $derived(settings.draft?.features || {});
   const searching = $derived(query.trim() !== "");
 
+  /**
+   * A mapped device and its EMS device are one thing: saving the mapping adds
+   * the device, or moves it to the mapping's broker, a new label renames it and
+   * removing the mapping can remove it. Each change is written to the config at
+   * once; with other changes waiting it joins them, and the bar below saves all.
+   */
+  const mqttAdoption = {
+    get direct() {
+      return !settings.changes;
+    },
+    get busy() {
+      return settings.applying;
+    },
+    state(device, connection) {
+      const saved = emsPlace(settings.editable?.devices, device.id, connection);
+      if (saved === "there") return "saved";
+      const waiting = settings.changes ? emsPlace(devices, device.id, connection) : null;
+      if (waiting === "there") return "draft";
+      return saved || waiting ? "elsewhere" : null;
+    },
+    name(device) {
+      return (current().devices || []).find(mapsTo(device.id))?.name || "";
+    },
+    renamable(device, label) {
+      return Boolean(withRenamedDevice(current().devices, device.id, label));
+    },
+    async add(device) {
+      const proposal = await findProposal(device.id, device.broker_ref);
+      if (!proposal) return { state: "missing" };
+      return write((draft) => devicesChange(withMappedDevice(draft.devices, proposal, device.label || device.id)));
+    },
+    rename(device, label) {
+      return write((draft) => devicesChange(withRenamedDevice(draft.devices, device.id, label)));
+    },
+    remove(device) {
+      return write((draft) => {
+        const index = (draft.devices || []).findIndex(mapsTo(device.id));
+        return index < 0 ? null : removeDevice(draft, index);
+      });
+    },
+  };
+
+  /** The device list a change is made on: the saved one, or the draft while it holds other changes. */
+  function current() {
+    return (settings.changes ? settings.draft : settings.editable) || {};
+  }
+
+  function devicesChange(next) {
+    return next ? { devices: next } : null;
+  }
+
+  async function write(build) {
+    if (settings.changes) {
+      const changes = build(settings.draft);
+      if (changes) setHardwareValues(changes);
+      return { state: "draft" };
+    }
+    const result = await applyNow(build);
+    if (result.ok) return { state: "saved" };
+    return result.reason ? { state: result.reason } : { state: "failed", error: result.error };
+  }
+
   function sectionFields(section) {
     const levels = levelled(section);
     return [...levels.normal, ...levels.advanced, ...levels.expert];
@@ -58,8 +125,8 @@
     const count = (sections) => sections.reduce((sum, section) => sum + sectionFields(section).filter((field) => fieldMatches(field, query, shownText)).length, 0);
     return { features: count(tabSections(config, "features")), expert: count(tabSections(config, "expert")), safety: blocks.reduce((sum, block) => sum + block.fields.length, 0) };
   });
-  const TAB_LOOKS = { features: { icon: "toggle-right", tone: "c-out" }, safety: { icon: "shield-check", tone: "c-soc" }, expert: { icon: "wrench", tone: "c-pv" }, devices: { icon: "zap", tone: "c-inv" } };
-  const tabOptions = $derived(TABS.map((value) => ({ value, ...TAB_LOOKS[value], label: searching && value !== "devices" ? `${t(`settings.tab.${value}`)} (${hits[value] || 0})` : t(`settings.tab.${value}`) })));
+  const TAB_LOOKS = { features: { icon: "toggle-right", tone: "c-out" }, addons: { icon: "boxes", tone: "c-grid" }, safety: { icon: "shield-check", tone: "c-soc" }, expert: { icon: "wrench", tone: "c-pv" }, devices: { icon: "zap", tone: "c-inv" } };
+  const tabOptions = $derived(TABS.map((value) => ({ value, ...TAB_LOOKS[value], label: searching && !["devices", "addons"].includes(value) ? `${t(`settings.tab.${value}`)} (${hits[value] || 0})` : t(`settings.tab.${value}`) })));
 
   const preview = $derived(settings.preview);
   const groups = $derived(changeGroups(preview?.diff));
@@ -149,6 +216,10 @@
         <Empty text={t("settings.edit.noMatch")} icon="search" />
       {/if}
     </Card>
+  {:else if tab === "addons"}
+    <Card icon="radio-tower" tone="c-grid" title={t("mqtt.broker.title")} subtitle={t("mqtt.broker.sub")} span="span-12">
+      <MqttBrokerCard onsetup={() => choose("devices")} />
+    </Card>
   {:else if tab === "safety"}
     <Card icon="toggle-right" tone="c-out" title={t("control.title")} subtitle={t("control.sub")} span="span-4">
       <ControlState control={config.summary?.control} overrides={config.overrides} />
@@ -168,6 +239,9 @@
     </Card>
     <Card icon="radio-tower" tone="c-soc" title={t("sources.title")} subtitle={t("sources.sub")} span="span-12">
       <SourcesPanel />
+    </Card>
+    <Card icon="list-checks" tone="c-grid" title={t("mqtt.mapping.title")} subtitle={t("mqtt.mapping.sub")} span="span-12">
+      <MqttMappingPanel adoption={mqttAdoption} />
     </Card>
     <Card icon="zap" tone="c-inv" title={t("settings.devices")} subtitle={tn("settings.devicesSub", devices.length)} span="span-12">
       <DevicesEditor {config} />

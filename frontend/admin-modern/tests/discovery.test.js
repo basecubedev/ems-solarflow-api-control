@@ -14,6 +14,9 @@ import {
   scanTarget,
   switchTransport,
   useExternalConnection,
+  configuredFor,
+  entryBroker,
+  proposalBroker,
 } from "../src/lib/discovery.js";
 
 const ID_A = "opaque:v1:aaaa";
@@ -173,4 +176,26 @@ test("an inverter that moved offers its new address until the draft has it", () 
   assert.deepEqual(itemAction(item, draft, false), { label: "updateDraft", kind: "updateAddress", disabled: false });
   const moved = { devices: [{ ...draft.devices[0], ip: "192.168.1.11" }] };
   assert.deepEqual(itemAction(item, moved, false), { label: "added", disabled: true });
+});
+
+test("a device found again on a second broker names the entry it already is and both brokers", () => {
+  const draft = {
+    devices: [{ kind: "external_mqtt", name: "Balkon", enabled: true, catalog_device_id: "catalog:v1:balkon", mqtt: { broker_ref: "home" } }],
+    zendure_mqtt: { brokers: { home: { host: "192.168.1.5", port: 1883 } } },
+  };
+  const proposal = {
+    id: "p1",
+    catalog_device_id: "catalog:v1:balkon",
+    catalog_connection_id: "catalog:v1:other",
+    broker_host: "192.168.1.7",
+    broker_port: 1883,
+    config_fragment: { type: "external_mqtt", mqtt: { broker_ref: "other", device_id: "balkon" } },
+  };
+  const item = { state: "transport", proposal };
+
+  assert.equal(configuredFor(item, draft), draft.devices[0]);
+  assert.equal(entryBroker(draft.devices[0], draft), "192.168.1.5:1883");
+  assert.equal(proposalBroker(proposal), "192.168.1.7:1883");
+  assert.equal(isControlDowngrade(item, draft), false);
+  assert.equal(configuredFor({ state: "transport", proposal: { ...proposal, catalog_device_id: "catalog:v1:other" } }, draft), null);
 });

@@ -190,3 +190,57 @@ test("every feature has its mark, in a tone class", async () => {
   assert.deepEqual(Object.keys(FEATURE_LOOKS).sort(), [...FEATURE_IDS].sort());
   for (const look of [...Object.values(FEATURE_LOOKS), SECTION_LOOK]) assert.match(look.tone, /^c-[a-z]+$/);
 });
+
+test("a change written at once is built on the config as it is now and applied with a backup", async () => {
+  const { writeAtOnce } = await import("../src/lib/settings.js");
+  const paths = { preview: "/preview", apply: "/apply" };
+  const saved = { revision: "r2", draft: { features: { "winter.enabled": true } } };
+  const editable = { devices: [{ name: "INV_1" }], grid_meter: { type: "shelly" } };
+  const sent = [];
+  const send = async (path, body) => {
+    sent.push([path, body]);
+    return path === "/preview" ? { revision: "r2", validation: { ok: true }, diff: { changes: [] } } : { ok: true };
+  };
+  const outcome = await writeAtOnce((current) => ({ devices: [...current.devices, { name: "Balkon" }] }), { read: async () => ({ saved, editable }), send, paths });
+
+  assert.equal(outcome.ok, true);
+  assert.deepEqual(sent.map(([path]) => path), ["/preview", "/apply"]);
+  assert.deepEqual(sent[1][1].draft.devices.map((device) => device.name), ["INV_1", "Balkon"]);
+  assert.deepEqual(sent[1][1].draft.features, { "winter.enabled": true });
+  assert.deepEqual([sent[1][1].revision, sent[1][1].confirm, sent[1][1].backup], ["r2", true, true]);
+});
+
+test("a change written at once is refused when the config moved on, and nothing is applied", async () => {
+  const { writeAtOnce } = await import("../src/lib/settings.js");
+  const sent = [];
+  const send = async (path) => {
+    sent.push(path);
+    return { revision: "r3", validation: { ok: true } };
+  };
+  const outcome = await writeAtOnce(() => ({ devices: [] }), {
+    read: async () => ({ saved: { revision: "r2", draft: {} }, editable: { devices: [] } }),
+    send,
+    paths: { preview: "/preview", apply: "/apply" },
+  });
+
+  assert.deepEqual([outcome.ok, outcome.reason], [false, "changed"]);
+  assert.deepEqual(sent, ["/preview"]);
+});
+
+test("a change written at once that changes nothing sends nothing, and a refused one says why", async () => {
+  const { writeAtOnce } = await import("../src/lib/settings.js");
+  const paths = { preview: "/preview", apply: "/apply" };
+  const read = async () => ({ saved: { revision: "r2", draft: {} }, editable: { devices: [] } });
+  const sent = [];
+  const unchanged = await writeAtOnce(() => null, { read, send: async (path) => sent.push(path), paths });
+  const invalid = await writeAtOnce(() => ({ devices: [] }), {
+    read,
+    send: async () => ({ revision: "r2", validation: { ok: false, errors: [{ message: "Config names must be unique: Balkon." }] } }),
+    paths,
+  });
+  const unreadable = await writeAtOnce(() => ({ devices: [] }), { read: async () => ({ saved: null, editable: null, error: { message: "gone" } }), send: async () => ({}), paths });
+
+  assert.deepEqual([unchanged.ok, sent], [true, []]);
+  assert.deepEqual([invalid.ok, invalid.error.message], [false, "Config names must be unique: Balkon."]);
+  assert.deepEqual([unreadable.ok, unreadable.error.message], [false, "gone"]);
+});

@@ -128,6 +128,7 @@ def test_settings_and_search_agree_on_which_device_is_which(preview):
     configured = {
         device["sn"]: device["physical_device_id"]
         for device in _request(base, "/api/admin/maintenance/config")["draft"]["devices"]
+        if device.get("kind") != "external_mqtt"
     }
     found = {
         device["serial_number"]: device["physical_device_id"]

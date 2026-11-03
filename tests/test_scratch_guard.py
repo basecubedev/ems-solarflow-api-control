@@ -7,12 +7,16 @@ every later command on the machine failed with ENOSPC — including the ones tha
 would have diagnosed it. A rule a tool enforces cannot be skipped.
 """
 
+import configparser
+
 import pytest
 
 from tests.scratch_guard import (
     BROAD_SELECTION_ITEMS,
+    KEEP_ALL_REQUIRED_FREE_BYTES,
     OVERRIDE_ENV,
     REQUIRED_FREE_BYTES,
+    RETURNING_RETENTION_POLICY,
     scratch_shortfall,
 )
 
@@ -49,10 +53,45 @@ def test_the_override_is_honoured():
     assert _shortfall(0.1, BROAD_SELECTION_ITEMS, {OVERRIDE_ENV: "1"}) is None
 
 
-def test_the_floor_is_the_measurement_that_caused_this():
-    """A 12 GB tmpfs was not enough; the floor must be above it."""
+def test_the_floor_fits_a_github_runner():
+    """A hosted runner had 12.9 GB free; a floor above that refuses every CI run."""
 
-    assert REQUIRED_FREE_BYTES > 12 * GB
+    assert REQUIRED_FREE_BYTES < 12 * GB
+
+
+def test_the_suite_gives_a_passing_test_scratch_back(pytestconfig):
+    """The floor is that low only because a passing test's directory goes when it ends.
+
+    With pytest's default every directory stays until the run ends: the
+    appliance group then held 18.8 GB of disk images and filled a runner. The
+    file is read rather than the run's setting, which ``-o`` may override.
+    """
+
+    ini = configparser.ConfigParser(interpolation=None)
+    ini.read(pytestconfig.inipath, encoding="utf-8")
+
+    assert ini["pytest"]["tmp_path_retention_policy"] == RETURNING_RETENTION_POLICY
+
+
+@pytest.mark.parametrize("policy", ["all", "none"])
+def test_a_run_that_keeps_every_directory_needs_the_old_floor(policy):
+    """``-o tmp_path_retention_policy=all`` brings back what a full run held to its end."""
+
+    room = (REQUIRED_FREE_BYTES + KEEP_ALL_REQUIRED_FREE_BYTES) / 2 / GB
+
+    assert scratch_shortfall(int(room * GB), BROAD_SELECTION_ITEMS, "/tmp", environ={}) is None
+    message = scratch_shortfall(int(room * GB), BROAD_SELECTION_ITEMS, "/tmp", environ={}, retention_policy=policy)
+    assert message is not None
+    assert f"about {KEEP_ALL_REQUIRED_FREE_BYTES / GB:.0f} GB" in message
+
+
+def test_the_guard_asks_the_run_which_retention_it_has():
+    import inspect
+
+    from tests import conftest
+
+    hook = inspect.getsource(conftest.pytest_collection_finish)
+    assert 'getini("tmp_path_retention_policy")' in hook
 
 
 def test_the_guard_judges_the_selection_that_will_actually_run():

@@ -1406,6 +1406,93 @@ above, not as a Local API device. Everything else on that page stays editable be
 Staleness, broker profiles, credentials and TLS work exactly as they do for
 every other MQTT device; see the section below.
 
+## Built-in MQTT broker and MQTT mapping
+
+Both are switched and edited only in the Admin Console
+([user guide](../user/admin/mqtt-mapping.md)); `config.json` holds no key for
+them. The EMS sees the broker as an ordinary local MQTT profile.
+
+| File | Owner | Content |
+| --- | --- | --- |
+| `config/mqtt/broker.json` | Admin | `enabled` (default `false`; a missing file is off, an unreadable one unknown), `port`, `anonymous`, `accounts[]` (`name`, `credentials_ref`, `topic_prefix`, `bridge`, `zendure`), `grid_meter_account` |
+| `config/mqtt/mappings.json` | Admin (validated by `mqtt_mapping/config.py`) | `schema_version: 1`, optional `publish_interval_seconds` (5–30, default 15), `devices[]` with `id`, `label`, `enabled`, `broker_ref` and `values` keyed by the catalog keys; optional `brokers` (see below) |
+| `config/secrets/` | Admin credential store | account passwords, encrypted; config backups carry them with their key |
+| `<install>/mqtt/` | rendered by the Admin | `compose.yml` (project `ems-mqtt`), `broker/` (`mosquitto.conf`, `acl`, `passwd`; mode 0700, the files 0600), `mapping/mapping-credentials.json` (0600; only the brokers the active mappings read), `data/` |
+| `data/mqtt-mapping/status.json` | the mapping service | non-authoritative status per device and source; the only directory the mapping container may write |
+
+A mapping's `broker_ref` names the built-in broker (`ems-mqtt`), a Local MQTT
+profile of `config.json`, or a broker `mappings.json` remembers under
+`brokers`: `{"<ref>": {host, port, tls, tls_insecure, credentials_ref}}`, never a
+secret. The Admin writes that section on every save: it holds exactly the
+brokers a mapping reads that are neither built in nor a profile, named
+`broker-<host>-<port>`. Their `credentials_ref` names an account of the
+discovery credential pool (`mqtt-discovery-<ref>.json`), the same pool Find
+devices tries, so adding the published device through discovery gives EMS a
+profile of its own by the usual staging. The broker list behind the mapping
+(`GET /api/discovery/mqtt-mapping/brokers`; `POST …/brokers/search`, `check`,
+`account`, `manual`) checks a broker with one MQTT CONNECT per account: its
+own account first, then anonymously, then each pool account, since
+discovery's listening cannot tell a refused account from a quiet broker. A TLS
+broker whose certificate does not verify is reported as untrusted, never
+accepted unchecked unless the operator says so. A check or a new account on a
+remembered broker rewrites its `credentials_ref` and renders the mapping's
+credentials again.
+
+An ems-solarflow id belongs to one broker. The editor refuses a new mapping
+whose id discovery saw published on another broker that no EMS device of that
+id was added through (`mqtt_mapping_device_id_taken`, with `params` `id` and
+`where`); a saved one is only named. The broker an EMS device was added
+through does not block, published or not: that is how a device moves, and Find
+devices then offers Use this connection.
+The view's `taken_ids` maps each broker ref to the ids other brokers have, so
+the guide never proposes one. The EMS telemetry runtime listens on each local
+broker it reads for the external devices added through another one: their
+snapshots stay scoped to their own broker, and a copy elsewhere is reported,
+while it is fresh, in the MQTT status as `second_sources` and by diagnose as
+`external_device_second_source`.
+
+A mapping source is `{topic, format: number|json, path, factor, invert,
+negative: keep|zero, max_age_seconds: 10–900}`. A value is the sum of its
+sources, battery power optionally charge minus discharge, and must pass the
+catalog's own `readings()` rule; a device publishes only while every source is
+fresh. Source topics under `ems-solarflow/`, `iot/` and `Zendure/` are refused.
+
+Accounts `ems`, `ems-mapping` and `ems-admin` are internal. In every mode,
+`ems-solarflow/#`, `iot/#`, `Zendure/#`, `/#` and the topic of an MQTT grid
+meter on this broker are denied to anonymous clients and to accounts without
+the matching option. A grid meter counts as on this broker through the built-in
+profile, or through another profile or inline settings naming this host (its
+address, `localhost`, `host.docker.internal` or `ems-mqtt-broker`) and the
+broker's port. The Admin watches `config.json`: within two seconds of any write
+(Setup, Maintenance, a System Build, a Guided Upgrade) it renders the files
+again and reloads a running broker whose ACL changed, so a meter saved after
+the switch is protected at once; with the broker off it still renders the
+mapping's broker credentials. The grid meter account cannot be `devices`, and
+needs the `bridge` or `zendure` option when its topic lies in that tree; until
+it has it, the topic stays closed to the meter. The EMS reads a protected grid
+meter as `ems` (the built-in profile) or as the meter's own account; any other
+account, and an anonymous client, is denied the topic, which the broker's view
+reports as `mqtt_broker_grid_meter_reader_denied`. A change cannot give
+`devices` the `zendure` option or the grid meter; a `broker.json` that already
+does still loads, renders and stops, with the right left out and named in the
+broker's view.
+
+An account with the `zendure` option has no `#` grant of its own: it reads
+`iot/#` and `Zendure/#` and writes only `iot/+/+/properties/report`, replies
+(`iot/+/+/+/+/+/#`), the four-level state topics `Zendure/+/+/+` and `/#`. The command topics
+`iot/+/+/properties/write` and `iot/+/+/function/invoke` are written by `ems`
+alone (`EMS_COMMAND_TOPICS` in `ems/zendure_mqtt/builtin_broker.py`); `devices`
+cannot take the option.
+
+Both containers run as the Admin's user ID (never root: the Admin refuses to
+render for uid 0) with `read_only`, `cap_drop: [ALL]`, `no-new-privileges`,
+`pids_limit: 64` and a memory limit (96 MB broker, 128 MB mapping, `/tmp` a
+small tmpfs). Mosquitto keeps at most 32 MB for messages (`memory_limit`) and
+1000 queued messages per client. Config backups carry both JSON files (kinds
+`mqtt_broker_config`, `mqtt_mapping_config`) and the account passwords (kind
+`credential_store`); a config restore in the Admin Console renders and applies
+them as its last step.
+
 ## Zendure MQTT Telemetry and Control
 
 Telemetry from one or more MQTT brokers. The feature is **always on** and has

@@ -112,6 +112,11 @@ networks found once more, and **Scan** under *Scan one network* for an address
 or range the search did not reach. **Configure** on a source shows what it
 found, its state and its credentials.
 
+A device that speaks MQTT in a format EMS does not know — a Shelly at a balcony
+plant, a Tasmota plug, an OpenDTU — needs no bridge of your own: the
+**Built-in MQTT broker** card and the **MQTT mapping** in this step bring it in.
+See [Built-in MQTT broker and MQTT mapping](mqtt-mapping.md).
+
 **What it changes:** nothing on your hardware and nothing in any settings. The
 search only reads. The order affects the setup only — a device found by more
 than one source is set up over the first one in the list — never how EMS runs.

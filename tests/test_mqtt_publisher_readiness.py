@@ -1,13 +1,19 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Helper-level contract: the real-broker publisher waits for CONNACK.
+"""Helper-level contract: the real-broker helpers wait for CONNACK.
 
 Paho's network loop delivers CONNACK asynchronously, so publishing straight
 after ``connect()`` can race the connection and fail with ``MQTT_ERR_NO_CONN``
 on a slow runner. These tests drive the readiness protocol against a fake Paho
 client (no Docker, no network) to prove a publish is never attempted before a
 successful connection and that every failure mode is bounded and actionable.
+
+A broker container is ready the same way: once it answers a CONNECT. Docker's
+port proxy accepts on the published port before Mosquitto listens, so the
+readiness wait is driven against a local listener that does exactly that.
 """
 
+import contextlib
+import socket
 import threading
 import time
 
@@ -16,6 +22,7 @@ import pytest
 from tests.helpers.mosquitto import (
     PublishReadinessError,
     _await_connack_and_publish,
+    _wait_for_broker,
 )
 
 pytestmark = [
@@ -184,3 +191,42 @@ def test_readiness_error_contains_only_nonsecret_diagnostics():
     # Nothing resembling a credential field is present.
     assert "password" not in message
     assert "username" not in message
+
+
+@contextlib.contextmanager
+def _listener(reply):
+    """A local port that reads each CONNECT, sends ``reply`` and closes the connection."""
+
+    stop = threading.Event()
+    server = socket.create_server(("127.0.0.1", 0))
+    server.settimeout(0.05)
+
+    def serve():
+        while not stop.is_set():
+            try:
+                connection, _address = server.accept()
+            except TimeoutError:
+                continue
+            with connection:
+                connection.recv(64)
+                if reply:
+                    connection.sendall(reply)
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    try:
+        yield server.getsockname()[1]
+    finally:
+        stop.set()
+        thread.join(5)
+        server.close()
+
+
+@pytest.mark.parametrize(
+    ("reply", "ready"),
+    [(b"", False), (b"\x20\x02\x00\x05", True)],
+    ids=["accepts-and-drops-like-dockers-port-proxy", "answers-even-when-refusing"],
+)
+def test_a_broker_container_is_ready_once_it_answers_a_connect(reply, ready):
+    with _listener(reply) as port:
+        assert _wait_for_broker("127.0.0.1", port, timeout=0.5) is ready

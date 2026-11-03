@@ -183,7 +183,7 @@ test("every state and every step has its look, and every look names a tone", () 
 test("each task opens a page of this console, and a tab it names is one the settings page has", () => {
   const ids = PAGES.map((page) => page.id);
   for (const task of TASKS) assert.ok(ids.includes(task.page), task.id);
-  const tabs = SETTINGS_PAGE.match(/const TABS = \[\.\.\.EDIT_TABS, ([^\]]*)\]/);
+  const tabs = SETTINGS_PAGE.match(/const TABS = \[([^\]]*)\]/);
   assert.ok(tabs, "the settings tabs are not found");
   for (const task of TASKS.filter((entry) => entry.tab)) assert.ok(tabs[1].includes(`"${task.tab}"`), task.id);
   assert.equal(TASKS.find((task) => task.id === "reinstall").tone, "c-warn");

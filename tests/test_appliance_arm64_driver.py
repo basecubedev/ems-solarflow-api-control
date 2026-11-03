@@ -138,6 +138,20 @@ def qemu_stub(extra=""):
     return body if not extra else body.replace("exit 0\n", extra + "exit 0\n")
 
 
+def sized_file(path, size, head=b""):
+    """A file of ``size`` bytes holding nothing beyond ``head``.
+
+    The driver only measures and copies a firmware image. A sparse one keeps
+    the directory a failing test leaves behind from holding its size in real
+    bytes, which a run of failures in this module would multiply into GBs.
+    """
+
+    with path.open("wb") as handle:
+        handle.write(head)
+        handle.truncate(size)
+    return path
+
+
 @pytest.fixture
 def sandbox(tmp_path):
     """A PATH with every external tool the driver needs, all stubbed."""
@@ -158,8 +172,8 @@ def sandbox(tmp_path):
 
     firmware = tmp_path / "firmware"
     firmware.mkdir()
-    (firmware / "AAVMF_CODE.fd").write_bytes(b"\x00" * (64 * 1024 * 1024))
-    (firmware / "AAVMF_VARS.fd").write_bytes(b"\xff" * (64 * 1024 * 1024))
+    sized_file(firmware / "AAVMF_CODE.fd", 64 * 1024 * 1024)
+    sized_file(firmware / "AAVMF_VARS.fd", 64 * 1024 * 1024)
 
     image = tmp_path / "debian-13-arm64.qcow2"
     image.write_bytes(b"QFI\xfb" + b"\x00" * 64)
@@ -319,7 +333,7 @@ def test_a_symlinked_firmware_is_measured_through_the_link(sandbox):
     """
 
     firmware = sandbox["firmware"]
-    (firmware / "AAVMF_CODE.real.fd").write_bytes(b"\x00" * (64 * 1024 * 1024))
+    sized_file(firmware / "AAVMF_CODE.real.fd", 64 * 1024 * 1024)
     link = firmware / "AAVMF_CODE.link.fd"
     link.symlink_to("AAVMF_CODE.real.fd")
 
@@ -328,12 +342,12 @@ def test_a_symlinked_firmware_is_measured_through_the_link(sandbox):
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert f"{64 * 1024 * 1024} bytes" in result.stdout, result.stdout
+    assert f"{link} ({64 * 1024 * 1024} bytes)" in result.stdout, result.stdout
 
 
 def test_a_symlinked_firmware_larger_than_the_slot_is_still_refused(sandbox):
     firmware = sandbox["firmware"]
-    (firmware / "AAVMF_CODE.big.fd").write_bytes(b"\x00" * (64 * 1024 * 1024 + 1))
+    sized_file(firmware / "AAVMF_CODE.big.fd", 64 * 1024 * 1024 + 1)
     link = firmware / "AAVMF_CODE.biglink.fd"
     link.symlink_to("AAVMF_CODE.big.fd")
 
@@ -377,7 +391,7 @@ def test_the_variable_store_is_taken_from_the_firmware_template(sandbox):
     """A blank variable store is not a substitute for AAVMF_VARS.fd."""
 
     marker = sandbox["firmware"] / "AAVMF_VARS.fd"
-    marker.write_bytes(b"VARS-TEMPLATE".ljust(64 * 1024 * 1024, b"\x00"))
+    sized_file(marker, 64 * 1024 * 1024, b"VARS-TEMPLATE")
     recorder = sandbox["stubs"] / "qemu-system-aarch64"
     recorder.write_text(
         qemu_stub(
@@ -518,7 +532,7 @@ def test_a_missing_variable_store_template_reports_not_run(sandbox):
 
 
 def test_incompatible_firmware_sizes_report_not_run(sandbox):
-    (sandbox["firmware"] / "AAVMF_CODE.fd").write_bytes(b"\x00" * (128 * 1024 * 1024))
+    sized_file(sandbox["firmware"] / "AAVMF_CODE.fd", 128 * 1024 * 1024)
 
     result = run_driver(sandbox, "--image", str(sandbox["image"]))
 

@@ -27,6 +27,8 @@ DEFAULT_ADMIN_CONTAINER = "ems-solarflow-admin"
 # the appliance runs outside every container and cannot import it.
 DEFAULT_EMS_CONTAINER = "ems-solarflow-api-control"
 DEFAULT_INFLUX_CONTAINER = "ems-influxdb"
+DEFAULT_MQTT_BROKER_CONTAINER = "ems-mqtt-broker"
+DEFAULT_MQTT_MAPPING_CONTAINER = "ems-mqtt-mapping"
 DEFAULT_ADMIN_SERVICE = "ems-solarflow-admin"
 DEFAULT_EMS_SERVICE = "ems"
 DEFAULT_INFLUX_SERVICE = "influxdb"
@@ -97,6 +99,8 @@ class ApplianceConfig:
     admin_container: str = DEFAULT_ADMIN_CONTAINER
     ems_container: str = DEFAULT_EMS_CONTAINER
     influx_container: str = DEFAULT_INFLUX_CONTAINER
+    mqtt_broker_container: str = DEFAULT_MQTT_BROKER_CONTAINER
+    mqtt_mapping_container: str = DEFAULT_MQTT_MAPPING_CONTAINER
     admin_service: str = DEFAULT_ADMIN_SERVICE
     ems_service: str = DEFAULT_EMS_SERVICE
     influx_service: str = DEFAULT_INFLUX_SERVICE
@@ -117,7 +121,13 @@ class ApplianceConfig:
 
     @property
     def managed_containers(self):
-        return (self.admin_container, self.ems_container, self.influx_container)
+        return (
+            self.admin_container,
+            self.ems_container,
+            self.influx_container,
+            self.mqtt_broker_container,
+            self.mqtt_mapping_container,
+        )
 
     @property
     def admin_health_url(self):
@@ -351,6 +361,8 @@ def load_config(paths):
         admin_container=values.get("admin_container") or DEFAULT_ADMIN_CONTAINER,
         ems_container=values.get("ems_container") or DEFAULT_EMS_CONTAINER,
         influx_container=values.get("influx_container") or DEFAULT_INFLUX_CONTAINER,
+        mqtt_broker_container=values.get("mqtt_broker_container") or DEFAULT_MQTT_BROKER_CONTAINER,
+        mqtt_mapping_container=values.get("mqtt_mapping_container") or DEFAULT_MQTT_MAPPING_CONTAINER,
         admin_service=values.get("admin_service") or DEFAULT_ADMIN_SERVICE,
         ems_service=values.get("ems_service") or DEFAULT_EMS_SERVICE,
         influx_service=values.get("influx_service") or DEFAULT_INFLUX_SERVICE,

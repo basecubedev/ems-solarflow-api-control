@@ -31,6 +31,7 @@ from ems.config import (
     parse_mqtt_port,
     resolve_mqtt_tls_metadata,
 )
+from ems.mqtt_credentials import DISCOVERY_CONNECTIONS_FILENAME
 
 from admin.discovery_preparation import (
     DEFAULT_PRIORITY,
@@ -40,7 +41,7 @@ from admin.discovery_preparation import (
     SOURCE_ZENDURE_MQTT,
 )
 
-CONNECTIONS_FILENAME = "discovery-connections.json"
+CONNECTIONS_FILENAME = DISCOVERY_CONNECTIONS_FILENAME
 DEFAULT_MQTT_PORT = 1883
 
 

@@ -23,18 +23,27 @@ project requirement and scope are defined in [agent-rules.md](agent-rules.md).
 ## Before a broad run: scratch space
 
 A full run writes tens of GB of temporary data — appliance packages, disk
-images, database snapshots. Point `TMPDIR` at a filesystem with room:
+images, database snapshots. A passing test's directory is removed as soon as the
+test ends (`tmp_path_retention_policy = failed` in `pytest.ini`), so a full
+non-Docker run holds well under 1 GB at a time. A test whose body does not pass
+— it fails, or skips or xfails part-way — keeps its directory while the run
+lasts; one that errors in a fixture or only in teardown does not. A run that
+fails leaves those directories under `pytest-of-*` for inspection, and a run
+that passes removes its whole base directory when it ends. The large disk
+images the appliance tests write are sparse, so a kept directory holds little
+real data. Point `TMPDIR` at a filesystem with room:
 
 ```bash
 export TMPDIR=/path/with/room
 ```
 
-`tests/conftest.py` refuses a broad selection that does not fit and names the
-fix, because a temporary filesystem that fills part-way through kills the run
-with an internal error rather than a test failure, and leaves the host unusable
-until it is cleaned. A targeted tier is never refused — the check runs after
-marker deselection, so it judges what will actually run. `EMS_ALLOW_SMALL_SCRATCH=1`
-overrides it.
+`tests/conftest.py` refuses a broad selection with less than 4 GB free and names
+the fix, in CI as well, because a temporary filesystem that fills part-way
+through kills the run with an internal error rather than a test failure, and
+leaves the host unusable until it is cleaned. A targeted tier is never refused —
+the check runs after marker deselection, so it judges what will actually run.
+A run that keeps every directory (`-o tmp_path_retention_policy=all`) needs
+20 GB, as every run did before. `EMS_ALLOW_SMALL_SCRATCH=1` overrides it.
 
 ## Quick local loop
 
@@ -261,6 +270,27 @@ Each brings its own deterministic server: the Manager's is the scripted
 `scripts/serve_dashboard_preview.py`, which serves the real `dashboard/static/`
 assets with synthetic API payloads -- no hardware, no MQTT, no history
 database, no secrets.
+
+### The MQTT mapping end to end
+
+One run across three processes, real where it matters: a real Mosquitto on the
+pinned image with a played Shelly Gen2 plug, the test-mode Admin driven in the
+browser (sign-in, live topics, mapping, the one save that also adds the device
+to config.json), the real mapping service and the real EMS -- dry, every write
+gate off -- whose dashboard page must show the device online at 612 W. Every
+step is taken on the page, as agent-rules §12 asks of a user's journey. It
+needs Docker.
+
+```bash
+npx playwright test --config=playwright.mqtt-e2e.config.ts --project=chromium --workers=1
+pytest tests/test_mqtt_mapping_browser_end_to_end.py   # both engines; skips without the browsers
+```
+
+`tests/e2e-mqtt/harness.py` builds the installation and the broker. The
+test-mode Admin runs the mapping container as a local process of the same
+module and files (`admin/test_support.py`, `ProcessMappingCompose`), because the
+container image is the published Admin image, not the code under test. No CI job
+runs it yet: the browser jobs have no Docker broker, the Docker job no browsers.
 
 The cockpit and the Admin console each have a second front end, Modern,
 built from `frontend/dashboard-modern/` and `frontend/admin-modern/` on the

@@ -356,7 +356,10 @@ backward compatibility, but the Discovery flow neither creates nor manages it.
 namespace (`mqtt-discovery-<id>.json`, separate from any legacy per-broker
 `mqtt-<id>.json`), and the Fernet key (`.secret-key`), all `0600`
 best-effort. `config/discovery-connections.json` holds only references
-(`credential_refs`, `token_ref`), never a raw token or password.
+(`credential_refs`, `token_ref`), never a raw token or password. Config backups carry the
+key, every record and `discovery-connections.json`; a restore decides the
+records together with the key they decrypt with
+([backup-restore.md](backup-restore.md#what-do-the-restore-questions-mean)).
 
 - **Priority** is edited with up/down buttons and is always stored as a full
   permutation of the three sources (unknown/duplicate entries are dropped and
@@ -1250,6 +1253,40 @@ against exactly the same combined set. Cloud proposals carry
   it is remapped server-side only, and only when it resolves to exactly one
   current proposal in the same scope — two case-distinct routes that fold to one
   token fail closed rather than merge.
+
+### Mapped devices as config proposals
+
+A device a saved MQTT mapping publishes needs no search: the Admin wrote the
+mapping and knows its broker, its account and its
+`ems-solarflow/<id>/state` topic. `admin/mqtt_mapping_adoption.py` turns each
+active mapped device into the observation discovery would make of it and runs
+it through the same `build_proposals()`, so the trusted set holds one proposal
+per mapped device, marked `mapping_broker_ref` with the mapping's broker, and
+the config preview and apply resolve a selection of it exactly like any other.
+Rules:
+
+- The endpoint comes from what the Admin already holds, never from the browser:
+  the built-in broker while it is switched on (this host's address, its port,
+  the EMS account `ems-mqtt`), a broker `mappings.json` remembers (its
+  discovery-pool account) or a local MQTT profile of the EMS (its own account,
+  so the profile is reused).
+- A broker that is off, unknown or without its account offers nothing, nor
+  does a mapping that is switched off: a device added there would only ever be
+  stale.
+- The id carries no generation, and a discovery proposal of the very same
+  connection gives way to it, so a selection made from the mapping panel
+  survives a search that runs meanwhile.
+- Removing the mapping removes its proposal: a draft that still selects it is
+  refused at preview and apply.
+
+The mapping panel adds the device with that proposal when the mapping is
+saved; [MQTT mapping](../user/admin/mqtt-mapping.md) describes it from the
+operator's side. The mapping view (`GET /api/discovery/mqtt-mapping`) names
+each mapped device's connection id under `ems_connections`, so the panel tells
+an EMS device read on that connection from the same id read from another broker
+and offers to move it. Find devices also listens on the built-in broker again
+after the Admin restarts, while the broker is switched on, not only after it was
+switched on in the same process.
 
 ### Docker networking
 

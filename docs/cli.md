@@ -78,6 +78,16 @@ the system regulates but export/import, PV usage, or SOC balancing looks poor
 over time. Use `--support-bundle` before opening a GitHub issue or forum
 support request.
 
+Normal `diagnose` compares `config.json` with `config.template.json` and warns
+about each key the config lacks. The template's device entry describes a device
+the EMS controls over its local API, so a device entry is held to it only where
+those keys apply. A device controlled over MQTT is not asked for `ip` or `sn`,
+because it is reached through its broker, nor for the keys that only feed state
+reconciliation (`smart_mode`, `min_soc`, `max_soc`, `winter_policy`), because
+the EMS reconciles no device state over MQTT. A device the EMS only reads (an
+external MQTT device, a telemetry-only Zendure MQTT device, an E3/DC) is asked
+for none of them.
+
 Normal `diagnose` also includes the optional battery full-charge assist section.
 It reads the core EMS state database when present and reports per-device
 `last_full_charge_at`, `next_due_at`, pending restore flags, and read-only
@@ -705,13 +715,20 @@ Included files (when present and configured):
 - dashboard auth/cert/key (`dashboard.auth_file`, `ssl_cert_file`, `ssl_key_file`)
 - the bundled InfluxDB secret (`influxdb.secret_file`) — only when
   `influxdb.enabled` is true **and** `influxdb.mode` is `bundled`
+- the built-in MQTT broker's and the MQTT mapping's settings
+  (`config/mqtt/broker.json`, `config/mqtt/mappings.json`) and Find devices'
+  broker list (`config/discovery-connections.json`)
+- the credential store (`config/secrets/`): its key and every saved MQTT
+  password and token, restored as a whole by its key (see
+  [backup-restore.md](technical/backup-restore.md#what-do-the-restore-questions-mean))
 
 Every archive contains a `backup-manifest.json` with the backup format, type,
 purpose, UTC timestamp, build metadata (git commit/branch/describe), contract
 versions, and per-file sensitivity flags and SHA256 checksums.
 
 > **Config backups may contain secrets.** `config.json`, the dashboard auth
-> file, the dashboard TLS key and the InfluxDB secret are flagged sensitive.
+> file, the dashboard TLS key, the InfluxDB secret and the credential store
+> are flagged sensitive.
 > The CLI prints a sensitive-data warning before creating a backup.
 
 ### What a database backup contains

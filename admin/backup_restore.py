@@ -48,6 +48,7 @@ INFLUXDB_BACKUP_TYPE = "influxdb"
 
 # Executor step status -> live job step state (mirrors admin.guided_upgrade).
 _STEP_STATE = {"ok": "done", "skipped": "skipped", "warning": "done", "error": "failed"}
+BROKER_STEP_LABEL = "Apply the built-in MQTT broker's restored settings"
 
 
 class BackupRestoreError(Exception):
@@ -776,11 +777,14 @@ class BackupRestoreService:
     """Facade used by ``admin/server.py`` for all backup/restore actions."""
 
     def __init__(self, context_provider=detect_install_context, plans=None,
-                 ems_tool=None):
+                 ems_tool=None, after_config_restore=None):
         self._context_provider = context_provider
         self.plans = plans or RestorePlanRegistry()
         self._ems_tool = ems_tool
         self.restore_lock = threading.Lock()
+        # ``() -> (status, detail)``: brings what the Admin renders from the
+        # restored config files in line, as the last step of a config restore.
+        self.after_config_restore = after_config_restore
 
     # --- environment -----------------------------------------------------
 
@@ -1309,6 +1313,10 @@ class BackupRestoreService:
             return "would_skip_outside_project", "skip"
         if status == "identical":
             return "would_skip_identical", "skip"
+        if entry.get("follows_key") and conflict_policy == "keep":
+            if status == "conflict":
+                return "would_keep_current", "skip"
+            return "would_skip_other_key", "skip"
         if status == "new":
             return "would_restore_new", "restore"
         # conflict
@@ -1335,8 +1343,22 @@ class BackupRestoreService:
             steps.append({"key": f"apply{suffix}", "label": f"Restore {label}"})
             steps.append({"key": f"postcheck{suffix}",
                           "label": f"Verify restored {label}"})
+        if self._converges(plan):
+            steps.append({"key": "broker", "label": BROKER_STEP_LABEL})
         steps.append({"key": "done", "label": "Finish restore"})
         return steps
+
+    def _converges(self, plan):
+        return self.after_config_restore is not None and any(
+            target.backup_type == "config" for target in plan.targets
+        )
+
+    def _converge(self, steps):
+        try:
+            status, detail = self.after_config_restore()
+        except Exception as exc:
+            status, detail = "warning", f"Not brought in line ({type(exc).__name__})."
+        steps.append(_step("broker", status, BROKER_STEP_LABEL, detail=detail))
 
     def restore_from_plan(self, plan_id, confirm, progress=None):
         plan = self.plans.get(plan_id)
@@ -1429,6 +1451,8 @@ class BackupRestoreService:
             steps.append(_step(f"postcheck{suffix}", "ok", "Verify restored files",
                                detail=detail))
 
+        if self._converges(plan):
+            self._converge(steps)
         steps.append(_step("done", "ok", "Finish restore"))
         rollback_name = os.path.basename(rollbacks[0][1]) if rollbacks and rollbacks[0][1] else None
         return {"ok": True, "status": "restored", "steps": list(steps),

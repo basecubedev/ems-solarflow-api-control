@@ -28,7 +28,7 @@ clean reinstall.
 | **Overview** | Is everything in order, and what needs doing | This page |
 | **Assistant** | What is still to do, and the way to each task | [The assistant](assistant.md) |
 | **Updates** | Move EMS and the Admin Console to a newer System Build | [Guided Upgrade](guided-upgrade.md) |
-| **Settings & devices** | Features, safety switches, expert tuning, devices | This page, and [Device management](device-management.md) |
+| **Settings & devices** | Features, add-ons, safety switches, expert tuning, devices | This page, [Device management](device-management.md), and [MQTT broker and mapping](mqtt-mapping.md) |
 | **Services** | What runs, **Restart EMS now**, **Repair analytics** | This page |
 | **Backups** | Create, download, bring back, restore or delete backups | [Backup and restore](backup-restore.md) |
 | **Diagnostics** | Read-only checks of the installed EMS | [Diagnostics and recovery](diagnostics-recovery.md) |

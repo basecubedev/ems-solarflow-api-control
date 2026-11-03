@@ -134,6 +134,31 @@ def external_device_subscriptions(
     return tuple(filters)
 
 
+def external_devices_elsewhere(devices: Any, broker_ref: str) -> dict[str, tuple[str, str, str]]:
+    """``device id -> (broker_ref, topic filter, snapshot key)`` for every active, valid catalog device on another broker.
+
+    A broker listens to these too, only to notice when it carries a device the
+    EMS reads from elsewhere: its snapshots stay scoped to its own devices, so
+    a second source is reported and never counted.
+    """
+
+    if not isinstance(devices, list):
+        return {}
+    elsewhere: dict[str, tuple[str, str, str]] = {}
+    for item in devices:
+        if not is_external_mqtt_device_config(item) or not config_entry_enabled(item):
+            continue
+        owner = zendure_mqtt_broker_ref(item)
+        device_id = zendure_mqtt_route_device_id(item)
+        if owner == broker_ref or not device_id or any(
+            issue["severity"] == "error" for issue in validate_external_mqtt_device_config(item)
+        ):
+            continue
+        entry = external_topic_family(zendure_mqtt_topic_family(item))
+        elsewhere.setdefault(device_id, (owner, entry.subscription(device_id), entry.snapshot_key(device_id)))
+    return elsewhere
+
+
 def validate_mqtt_telemetry_device_config(
     item: Any,
     *,

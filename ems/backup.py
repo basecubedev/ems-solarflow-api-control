@@ -29,7 +29,14 @@ from ems.build_info import collect_build_info
 from ems.config import normalize_influxdb_config, safe_bool
 from ems.diagnostics import DIAGNOSE_SCHEMA_VERSION, SUPPORT_BUNDLE_VERSION
 from ems.file_io import STARTUP_LOCK_TIMEOUT_SECONDS, FileLockTimeout, exclusive_file_lock
+from ems.mqtt_credentials import (
+    CREDENTIAL_KEY_FILENAME,
+    CREDENTIAL_STORE_DIRNAME,
+    DISCOVERY_CONNECTIONS_FILENAME,
+    MANAGED_RECORD_NAME,
+)
 from ems.paths import BASE_DIR, resolve_schedules_path
+from ems.zendure_mqtt.builtin_broker import broker_settings_path, mappings_path
 
 APP_NAME = "ems-solarflow-api-control"
 BACKUP_FORMAT_VERSION = 1
@@ -68,6 +75,10 @@ SKIP_DATABASE_REASON = "use_databases_backup_type"
 MISSING_DATABASE_REASON = "missing"
 # Database backups only record InfluxDB status; data uses the influxdb type.
 INFLUX_SKIP_REASON = "use_influxdb_backup_type"
+
+# The credential store's key and records; a record is readable only with the
+# key it was encrypted with, so a restore decides the records with the key.
+CREDENTIAL_STORE_KIND = "credential_store"
 
 
 BackupError = backup_crypto.BackupError
@@ -191,6 +202,21 @@ def outside_project_name(abs_path):
     return f"{OUTSIDE_PROJECT_PREFIX}{origin}/{os.path.basename(abs_path)}"
 
 
+def credential_store_files(config_dir):
+    """The credential store's key and managed records under ``config_dir``."""
+
+    store_dir = os.path.join(config_dir, CREDENTIAL_STORE_DIRNAME)
+    try:
+        names = sorted(os.listdir(store_dir))
+    except OSError:
+        return []
+    return [
+        os.path.join(store_dir, name)
+        for name in names
+        if name == CREDENTIAL_KEY_FILENAME or MANAGED_RECORD_NAME.fullmatch(name)
+    ]
+
+
 def collect_config_backup_files(
     config,
     base_dir=None,
@@ -219,6 +245,15 @@ def collect_config_backup_files(
     # config.json — always when present.
     cfg_path = config_path or _resolve("config.json", base_dir)
     candidates.append((cfg_path, "config", True))
+    config_dir = os.path.dirname(os.path.abspath(cfg_path))
+    candidates.append((broker_settings_path(config_dir), "mqtt_broker_config", False))
+    candidates.append((mappings_path(config_dir), "mqtt_mapping_config", False))
+    candidates.append((
+        os.path.join(config_dir, DISCOVERY_CONNECTIONS_FILENAME), "discovery_connections", False,
+    ))
+    candidates.extend(
+        (path, CREDENTIAL_STORE_KIND, True) for path in credential_store_files(config_dir)
+    )
 
     # runtime-state.json
     if runtime_state_path:
@@ -1580,7 +1615,37 @@ def _build_restore_entries(tar, manifest, base_dir):
             "source_path": source_path,
             "_data": data,
         })
+    _bind_records_to_key(entries)
     return entries
+
+
+def _is_store_key(entry):
+    return (
+        entry.get("kind") == CREDENTIAL_STORE_KIND
+        and entry["path"].rsplit("/", 1)[-1] == CREDENTIAL_KEY_FILENAME
+    )
+
+
+def _bind_records_to_key(entries):
+    """Mark the store's records as ``follows_key`` when the backup's key is not the one in place.
+
+    A record decrypts with its own key only. Restored beside the key in place
+    it would be a file nothing can read, and a record in place would be one
+    once the backup's key replaced it, so the records go where the key goes.
+    """
+
+    key = next((entry for entry in entries if _is_store_key(entry)), None)
+    if key is None or key["status"] != "conflict":
+        return
+    for entry in entries:
+        if entry.get("kind") == CREDENTIAL_STORE_KIND and entry is not key:
+            entry["follows_key"] = True
+
+
+def _restore_order(entry):
+    """The key before its records, which follow its decision; schedules after the runtime state."""
+
+    return (entry.get("kind") == "schedules", not _is_store_key(entry))
 
 
 def plan_restore(
@@ -1664,6 +1729,16 @@ def _atomic_write(target, data):
                 os.remove(tmp)
         except OSError:
             pass
+
+
+def _restore_private(target, data):
+    """Write a credential-store file into a directory only its owner can enter."""
+
+    try:
+        os.makedirs(os.path.dirname(target), mode=stat.S_IRWXU, exist_ok=True)
+    except OSError as exc:
+        raise BackupError(f"restore could not write {target}: {exc}") from exc
+    _atomic_write(target, data)
 
 
 def _keep_replaced_file_identity(fd, target):
@@ -1826,7 +1901,8 @@ def restore_backup(
                 )
 
         runtime_from_backup = False
-        for entry in sorted(entries, key=lambda item: item.get("kind") == "schedules"):
+        key_decision = None
+        for entry in sorted(entries, key=_restore_order):
             status = entry["status"]
             if status == "identical":
                 runtime_from_backup = runtime_from_backup or entry.get("kind") == "runtime_state"
@@ -1840,7 +1916,14 @@ def restore_backup(
                 })
                 continue
 
-            if status == "conflict":
+            if entry.get("follows_key"):
+                if key_decision == "keep":
+                    actions.append({
+                        "path": entry["path"],
+                        "action": "kept_current" if status == "conflict" else "skipped_other_key",
+                    })
+                    continue
+            elif status == "conflict":
                 if conflict_resolver is not None:
                     decision = conflict_resolver(entry)
                 else:
@@ -1853,6 +1936,8 @@ def restore_backup(
                     raise BackupError(
                         f"restore aborted at conflicting file: {entry['path']}"
                     )
+                if _is_store_key(entry):
+                    key_decision = decision
                 if decision == "keep":
                     actions.append({"path": entry["path"], "action": "kept_current"})
                     continue
@@ -1866,6 +1951,8 @@ def restore_backup(
                 elif entry.get("kind") == "runtime_state":
                     _restore_runtime_state(entry["target"], entry["_data"])
                     runtime_from_backup = True
+                elif entry.get("kind") == CREDENTIAL_STORE_KIND:
+                    _restore_private(entry["target"], entry["_data"])
                 else:
                     _atomic_write(entry["target"], entry["_data"])
             except BackupError as exc:

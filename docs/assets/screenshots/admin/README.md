@@ -42,7 +42,13 @@ hostnames.
 | `admin-upgrade-completed.png` | Updates — Update complete | `upgrade-done` |
 | `admin-settings-features.png` | Settings & devices — Features, Winter mode opened | `installed` |
 | `admin-settings-safety.png` | Settings & devices — Safety | `installed` |
-| `admin-settings-devices.png` | Settings & devices — Devices: Find devices, What the search may use, the devices | `installed` |
+| `admin-mqtt-broker.png` | Settings & devices — Add-ons: the built-in MQTT broker running, its address and two accounts | `installed` |
+| `admin-mqtt-connect.png` | Settings & devices — Add-ons: Connect a device, the Shelly Gen2+ steps and the values to copy | `installed` |
+| `admin-mqtt-brokers.png` | Settings & devices — Devices: the MQTT mapping's four steps done, its broker list with the built-in broker running and two brokers found on the network, one asking for its account | `installed` |
+| `admin-mqtt-question.png` | Settings & devices — Devices: the MQTT mapping asks what the device measures, Balcony plant chosen, Save and add to the EMS | `installed` |
+| `admin-mqtt-mapping.png` | Settings & devices — Devices: the MQTT mapping with a mapped balcony inverter, published and in the EMS, and the live topics grouped and labelled | `installed` |
+| `admin-mqtt-mapping-editor.png` | Settings & devices — Devices: editing the mapped balcony inverter, its source options and the server's preview | `installed` |
+| `admin-settings-devices.png` | Settings & devices — Devices: Find devices, What the search may use, the MQTT mapping, the devices | `installed` |
 | `admin-settings-device.png` | Settings & devices — Devices, Inverter 1 opened | `installed` |
 | `admin-settings-search.png` | Settings & devices — Devices after Search my network: the saved devices in the settings, a new inverter found | `installed` |
 | `admin-settings-review.png` | Settings & devices — one change checked, ready for Save and apply | `installed` |

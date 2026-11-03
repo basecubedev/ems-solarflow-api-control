@@ -167,6 +167,34 @@ def test_copied_files_are_sufficient_for_admin_startup(tmp_path):
     assert "usage" in result.stdout.lower()
 
 
+def test_mirrored_image_runs_the_mqtt_mapping_service(tmp_path):
+    """The ems-mqtt-mapping container runs ``python -m mqtt_mapping`` from this image."""
+
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    _mirror_image_files(app_root)
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+
+    imports = subprocess.run(
+        [sys.executable, "-B", "-c", "import mqtt_mapping.service, mqtt_mapping.config, mqtt_mapping.mapping"],
+        cwd=app_root,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    health = subprocess.run(
+        [sys.executable, "-B", "-m", "mqtt_mapping", "--healthcheck", "--status", str(tmp_path / "none.json")],
+        cwd=app_root,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert imports.returncode == 0, imports.stderr
+    assert health.returncode == 1, health.stderr
+
+
 def test_mirrored_image_builds_offline_zendure_mqtt_status(tmp_path):
     """The offline telemetry status must work inside the image file set.
 

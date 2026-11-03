@@ -42,6 +42,7 @@ from ems.health import (
 )
 from ems.paths import (
     BASE_DIR,
+    resolve_config_path,
     resolve_control_status_path,
     resolve_data_dir,
     resolve_project_path,
@@ -53,6 +54,11 @@ from ems.build_info import collect_build_info
 from ems.control_status import CONTROL_STATUS_SCHEMA_VERSION
 from ems.models import BATTERY_ABSENT
 from ems.zendure_mqtt import config_entries as zendure_mqtt_entries
+from ems.zendure_mqtt.builtin_broker import (
+    broker_enabled,
+    builtin_broker_root_causes,
+    builtin_profile_users,
+)
 from ems.read_only_devices import is_e3dc_modbus_device_config, is_read_only_device_config
 
 
@@ -242,6 +248,33 @@ def diagnose_build_sections(checks):
     return sections
 
 
+def diagnose_builtin_mqtt(checks, config_data, config_path, runtime_path):
+    """The built-in broker as the Admin switched it, and what the MQTT mapping reports.
+
+    Read-only: the EMS never switches the broker. The findings become warnings
+    and root causes; a broker nobody uses is no finding at all.
+    """
+
+    config_dir = os.path.dirname(os.path.abspath(str(config_path or resolve_config_path())))
+    data_dir = os.path.dirname(os.path.abspath(str(runtime_path)))
+    causes = builtin_broker_root_causes(config_data, config_dir, data_dir)
+    for cause in causes:
+        diagnose_add(
+            checks,
+            "config",
+            "warning",
+            cause["code"],
+            cause["title"],
+            root_cause_code=cause["code"],
+            suggested_next_check=cause["suggested_next_check"],
+        )
+    return {
+        "enabled": broker_enabled(config_dir),
+        "profile_users": builtin_profile_users(config_data),
+        "root_causes": causes,
+    }
+
+
 def diagnose_finalize_report(report):
     if report.get("control") and isinstance(report["control"].get("root_causes"), list):
         report["control"]["root_causes"] = diagnose_dedupe_root_causes(
@@ -257,6 +290,8 @@ def diagnose_finalize_report(report):
         root_causes.extend(report["control"].get("root_causes", []))
     if report.get("control_quality"):
         root_causes.extend(report["control_quality"].get("root_causes", []))
+    if report.get("builtin_mqtt"):
+        root_causes.extend(report["builtin_mqtt"].get("root_causes", []))
     root_causes = diagnose_dedupe_root_causes(root_causes)
 
     warnings = [
@@ -417,6 +452,31 @@ def diagnose_parent_path(checks, section, code_prefix, path, label,
     )
 
 
+MQTT_CONTROL_UNUSED_DEVICE_KEYS = frozenset({"ip", "sn", "smart_mode", "min_soc", "max_soc", "winter_policy"})
+
+
+def diagnose_device_template(item, template_device):
+    """The part of the template's device entry that applies to ``item``, or ``None``.
+
+    The template describes a device the EMS controls over its local API. An
+    entry the EMS only reads -- an E3/DC, an external device, a telemetry-only
+    Zendure MQTT device -- uses none of its control keys, and its own
+    validation names a missing name or address. A device controlled over
+    MQTT is reached through its broker and addressed by its MQTT route, never
+    by ``ip`` or ``sn``, and gets no state reconciliation, so the keys that
+    only feed it -- ``smart_mode``, the SoC limits, the winter policy -- are
+    never used either.
+    """
+
+    if is_read_only_device_config(item):
+        return None
+    if not zendure_mqtt_entries.is_mqtt_telemetry_device_config(item):
+        return template_device
+    if not zendure_mqtt_entries.is_control_zendure_mqtt_device_config(item):
+        return None
+    return {key: value for key, value in template_device.items() if key not in MQTT_CONTROL_UNUSED_DEVICE_KEYS}
+
+
 def diagnose_missing_template_keys(config_data, template_data):
     missing = []
 
@@ -440,8 +500,11 @@ def diagnose_missing_template_keys(config_data, template_data):
             and isinstance(current, list)
         ):
             for index, item in enumerate(current):
-                if isinstance(item, dict):
-                    walk(item, template[0], f"{prefix}.{index}")
+                if not isinstance(item, dict):
+                    continue
+                item_template = diagnose_device_template(item, template[0]) if prefix == "devices" else template[0]
+                if item_template is not None:
+                    walk(item, item_template, f"{prefix}.{index}")
 
     walk(config_data, template_data, "")
     return sorted(missing)
@@ -4097,6 +4160,7 @@ def diagnose_collect(args):
     elif runtime_json_error:
         diagnose_add(checks, "runtime_state", "error", "runtime_state_invalid_json", f"runtime-state.json is invalid JSON: {runtime_json_error}", path=runtime_path)
     diagnose_runtime_state_plausibility(checks, runtime_path, config_data)
+    builtin_mqtt = diagnose_builtin_mqtt(checks, config_data, config_path, runtime_path)
 
     if database_path:
         diagnose_parent_path(checks, "data", "dashboard_database", database_path, "dashboard database", check_write=True, missing_level="warning")
@@ -4201,6 +4265,7 @@ def diagnose_collect(args):
         "control_quality": control_quality_report,
         "battery_full_charge_assist": battery_full_charge_report,
         "hardware_health": hardware_health,
+        "builtin_mqtt": builtin_mqtt,
     }
     return sanitize_external_mqtt_status(
         report, sensitive_context=config_data

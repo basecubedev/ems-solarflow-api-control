@@ -1,0 +1,211 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// The built-in MQTT broker and the MQTT mapping in the Modern Admin console,
+// against the deterministic test-mode Admin: the add-ons tab, the switch's
+// confirmation, and a mapped device drafted under Devices whose server preview
+// says why it would not publish yet. Nothing here starts a container.
+import { expect, test, ADMIN_PASSWORD } from "./fixtures/admin";
+import type { Page } from "@playwright/test";
+
+async function seededAt(page: Page, seed: (scenario: string) => Promise<void>, hash: string) {
+  await page.goto("/");
+  await expect(page.getByTestId("sign-in-screen")).toHaveAttribute("data-mode", "login");
+  await page.fill("#admin-password", ADMIN_PASSWORD);
+  await page.getByTestId("sign-in-submit").click();
+  await expect(page.locator(".app")).toBeVisible();
+  await seed("mixed_transports");
+  await page.goto(`/${hash}`);
+  await page.reload();
+  await expect(page.locator(".app")).toBeVisible();
+}
+
+test.describe("Modern Admin: built-in MQTT broker and mapping", () => {
+  test("the add-ons tab shows the broker switched off and asks before switching it on", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings/addons");
+    const broker = page.getByTestId("mqtt-broker");
+    await expect(broker).toBeVisible();
+    const enable = broker.getByTestId("mqtt-broker-enable");
+    await expect(enable).toBeEnabled();
+
+    await enable.click();
+    const dialog = page.locator("dialog[open]");
+    await expect(dialog).toContainText("Mosquitto");
+    await page.keyboard.press("Escape");
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+    await expect(enable).toBeVisible();
+  });
+
+  test("a mapped device is drafted under Devices and the server preview says why it would not publish yet", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings/devices");
+    const mapping = page.getByTestId("mqtt-mapping");
+    await expect(mapping).toBeVisible();
+
+    await mapping.getByTestId("mqtt-new-device").click();
+    await expect(page.getByTestId("mqtt-wizard")).toContainText("What does this device measure?");
+    await page.getByTestId("mqtt-kind-other").click();
+    const editor = page.getByTestId("mqtt-mapping-editor");
+    await editor.getByTestId("mqtt-device-id").fill("balkon");
+    await editor.getByTestId("mqtt-source-topic").fill("shellyplusplugs-balkon/status/switch:0");
+    await editor.getByTestId("mqtt-source-path").fill("apower");
+    await editor.getByTestId("mqtt-source-add").click();
+    await expect(editor).toContainText("shellyplusplugs-balkon/status/switch:0 → apower");
+
+    const answer = page.waitForResponse((response) => response.url().endsWith("/api/discovery/mqtt-mapping/value-preview"));
+    await editor.getByTestId("mqtt-device-preview").click();
+    expect((await answer).ok()).toBeTruthy();
+    await expect(page.getByTestId("mqtt-preview-silent")).toBeVisible();
+  });
+
+  test("a device is connected step by step and, once it publishes, set up by answering what it measures", async ({ page, seedAdminScenario }) => {
+    const broker = {
+      configured: true, issues: [], running: true, profile_ref: "ems-mqtt", profile_users: [], grid_meter_topic: null, host_address: "192.0.2.40",
+      settings: { schema_version: 1, enabled: true, port: 1883, anonymous: false, accounts: [{ name: "devices", credentials_ref: "mqtt-broker-devices", topic_prefix: null, bridge: false, zendure: false }], grid_meter_account: null },
+      accounts: [{ name: "devices", topic_prefix: null, bridge: false, zendure: false, password_saved: true }],
+      containers: { "ems-mqtt-broker": "running", "ems-mqtt-mapping": null },
+      stop_impact: { external_devices: [], zendure_devices: [], grid_meter: false },
+    };
+    const topic = (name: string, since: number) => ({ topic: name, format: "json", retained: false, messages_per_minute: 4, changing: true, last_seen_seconds: 1, first_seen_seconds: (Date.now() - since) / 1000, payload_preview: "{}", values: [{ path: "apower", value: -612.3, likely: "power", mapped_to: [] }, { path: "voltage", value: 230.1, likely: null, mapped_to: [] }] });
+    let opened = 0;
+    let joined = 0;
+    let polls = 0;
+    await page.route("**/api/discovery/mqtt-broker", (route) => route.fulfill({ json: broker }));
+    await page.route("**/api/discovery/mqtt-topics/sessions", (route) => {
+      opened = Date.now();
+      route.fulfill({ json: { ok: true, session: "e2e" } });
+    });
+    await page.route("**/api/discovery/mqtt-topics/sessions/e2e", (route) => {
+      polls += 1;
+      if (polls === 3) joined = Date.now();
+      const old = { key: "shellyplus1pm-oldone", label: "shelly_gen2", mappable: true, topics: [topic("shellyplus1pm-oldone/status/switch:0", opened)] };
+      const plug = { key: "shellyplusplugs-e2etest", label: "shelly_gen2", mappable: true, topics: [topic("shellyplusplugs-e2etest/status/switch:0", joined)] };
+      route.fulfill({ json: { session: "e2e", broker_ref: "ems-mqtt", state: "listening", truncated: false, groups: polls >= 3 ? [old, plug] : [old] } });
+    });
+    await seededAt(page, seedAdminScenario, "#/settings/addons");
+
+    await page.getByTestId("mqtt-connect").click();
+    const guide = page.getByTestId("mqtt-connect-guide");
+    await expect(guide).toContainText("Generic status update over MQTT");
+    await guide.getByLabel("Tasmota").check();
+    await expect(guide).toContainText("Configuration → Configure MQTT.");
+    await expect(guide).toContainText("192.0.2.40");
+    await page.route("**/api/discovery/mqtt-broker/reveal", (route) => route.fulfill({ json: { ok: true, password: "demo-device-password" } }));
+    await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true }));
+    await guide.getByRole("button", { name: "Copy" }).last().click();
+    await expect(guide.getByTestId("mqtt-connect-copy-failed")).toBeVisible();
+    await expect(guide.getByTestId("mqtt-connect-password")).toHaveText("demo-device-password");
+    await guide.getByTestId("mqtt-connect-wait").click();
+    await expect(guide.getByTestId("mqtt-connect-found")).toContainText("shellyplusplugs-e2etest");
+    await expect(guide.getByTestId("mqtt-connect-found")).not.toContainText("shellyplus1pm-oldone");
+    await guide.getByTestId("mqtt-connect-setup").click();
+
+    await expect(page).toHaveURL(/#\/settings\/devices$/);
+    const wizard = page.getByTestId("mqtt-wizard");
+    await expect(wizard).toContainText("What does this device measure?");
+    await wizard.getByTestId("mqtt-kind-balcony").check();
+    await wizard.getByTestId("mqtt-wizard-name").fill("Balcony South");
+    await expect(wizard.getByTestId("mqtt-wizard-power")).toHaveValue("shellyplusplugs-e2etest/status/switch:0|apower");
+    await expect(wizard.getByTestId("mqtt-wizard-turned")).toBeVisible();
+    await expect(wizard).toContainText("Sends only on change");
+    await wizard.getByText("Advanced").click();
+    await expect(wizard.getByTestId("mqtt-wizard-id")).toHaveValue("balcony-south");
+  });
+
+  test("anonymous access is asked for first, and each account sets its own password in its row", async ({ page, seedAdminScenario }) => {
+    const broker = {
+      configured: true, issues: [], running: true, profile_ref: "ems-mqtt", profile_users: [], grid_meter_topic: null, host_address: "192.0.2.40",
+      settings: { schema_version: 1, enabled: true, port: 1883, anonymous: false, accounts: [{ name: "devices", credentials_ref: "mqtt-broker-devices", topic_prefix: null, bridge: false, zendure: false }], grid_meter_account: null },
+      accounts: [{ name: "devices", topic_prefix: null, bridge: false, zendure: false, password_saved: true }],
+      containers: { "ems-mqtt-broker": "running", "ems-mqtt-mapping": null },
+      stop_impact: { external_devices: [], zendure_devices: [], grid_meter: false },
+    };
+    let changes = 0;
+    await page.route("**/api/discovery/mqtt-broker", (route) => route.fulfill({ json: broker }));
+    await page.route("**/api/discovery/mqtt-broker/settings", (route) => {
+      changes += 1;
+      route.fulfill({ json: { ok: true, status: "saved" } });
+    });
+    await seededAt(page, seedAdminScenario, "#/settings/addons");
+
+    await page.getByTestId("mqtt-broker-anonymous").click();
+    const dialog = page.locator("dialog[open]");
+    await expect(dialog).toContainText("Every device on your network can then read and publish without an account.");
+    await expect(dialog).toContainText("ems-solarflow/");
+    await page.keyboard.press("Escape");
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+    expect(changes).toBe(0);
+
+    const row = page.getByTestId("mqtt-broker-accounts").locator("li").filter({ hasText: "devices" });
+    await expect(row.getByTestId("mqtt-account-password-input")).toHaveCount(0);
+    await row.getByTestId("mqtt-account-own-password").click();
+    await expect(row.getByTestId("mqtt-account-password-input")).toBeVisible();
+  });
+
+  test("a mapped device keeps its id when it is edited", async ({ page, seedAdminScenario }) => {
+    await page.route("**/api/discovery/mqtt-mapping", async (route) => {
+      const response = await route.fetch();
+      const view = await response.json();
+      view.document = { schema_version: 1, devices: [{ id: "balkon", label: "Balkon", broker_ref: "ems-mqtt", values: { inverterPower: { sources: [{ topic: "plug/status", format: "json", path: "apower" }] } } }] };
+      await route.fulfill({ response, json: view });
+    });
+    await seededAt(page, seedAdminScenario, "#/settings/devices");
+    const mapping = page.getByTestId("mqtt-mapping");
+
+    await mapping.getByRole("button", { name: "Edit" }).click();
+
+    const id = page.getByTestId("mqtt-mapping-editor").getByTestId("mqtt-device-id");
+    await expect(id).toHaveValue("balkon");
+    await expect(id).toHaveAttribute("readonly", "");
+  });
+
+  test("with the built-in broker off, a broker found on the network is offered and takes its account", async ({ page, seedAdminScenario }) => {
+    const builtin = { ref: "ems-mqtt", kind: "builtin", host: "192.0.2.40", port: 1883, state: "off", usable: false };
+    const found = { ref: "broker-192-0-2-7-1883", kind: "found", host: "192.0.2.7", port: 1883, tls: false, origin: "discovery", access: "needs_account", usable: false };
+    let accounts: { ref: string; username: string; password: string }[] = [];
+    await page.route("**/api/discovery/mqtt-mapping/brokers", (route) =>
+      route.fulfill({ json: { searching: false, brokers: [builtin, accounts.length ? { ...found, access: "account", usable: true } : found] } }),
+    );
+    await page.route("**/api/discovery/mqtt-mapping/brokers/account", async (route) => {
+      accounts.push(route.request().postDataJSON());
+      await route.fulfill({ json: { ok: true, ref: found.ref } });
+    });
+    await seededAt(page, seedAdminScenario, "#/settings/devices");
+    const chooser = page.getByTestId("mqtt-broker-chooser");
+
+    await expect(chooser.getByTestId("mqtt-chooser-none")).toBeVisible();
+    await expect(chooser.getByTestId("mqtt-chooser-enable")).toBeVisible();
+    await expect(page.getByTestId("mqtt-topics-start")).toBeDisabled();
+    const row = chooser.locator('[data-testid="mqtt-broker-choice"][data-ref="broker-192-0-2-7-1883"]');
+    await expect(row).toContainText("Needs an account");
+
+    await row.getByTestId("mqtt-chooser-account").click();
+    await row.getByTestId("mqtt-chooser-user").fill("iob");
+    await row.getByTestId("mqtt-chooser-password").fill("iob-password");
+    await row.getByTestId("mqtt-chooser-account-use").click();
+
+    await expect(row).toContainText("Account works");
+    await expect(row.locator("input[type=radio]")).toBeChecked();
+    await expect(chooser.getByTestId("mqtt-chooser-none")).toHaveCount(0);
+    await expect(page.getByTestId("mqtt-topics-start")).toBeEnabled();
+    expect(accounts).toEqual([{ ref: "broker-192-0-2-7-1883", username: "iob", password: "iob-password" }]);
+  });
+
+  test("an EMS output another broker carries too names that broker in the live topics", async ({ page, seedAdminScenario }) => {
+    const builtin = { ref: "ems-mqtt", kind: "builtin", host: "192.0.2.40", port: 1883, state: "running", usable: true };
+    await page.route("**/api/discovery/mqtt-mapping/brokers", (route) => route.fulfill({ json: { searching: false, brokers: [builtin] } }));
+    await page.route("**/api/discovery/mqtt-topics/sessions", (route) => route.fulfill({ json: { ok: true, session: "twice" } }));
+    await page.route("**/api/discovery/mqtt-topics/sessions/twice", (route) =>
+      route.fulfill({
+        json: {
+          session: "twice", broker_ref: "ems-mqtt", state: "listening", truncated: false,
+          groups: [{ key: "balkon", label: "ems_output", mappable: false, also_on: ["192.0.2.99:1883"], topics: [{ topic: "ems-solarflow/balkon/state", format: "json", retained: true, messages_per_minute: 4, changing: true, last_seen_seconds: 1, first_seen_seconds: 60, payload_preview: "{}", values: [] }] }],
+        },
+      }),
+    );
+    await seededAt(page, seedAdminScenario, "#/settings/devices");
+
+    await page.getByTestId("mqtt-topics-start").click();
+
+    const hint = page.locator('li[data-label="ems_output"][data-key="balkon"]').getByTestId("mqtt-topic-also-on");
+    await expect(hint).toContainText("192.0.2.99:1883");
+    await expect(hint).toContainText("only from the broker it was added through");
+  });
+});

@@ -14,6 +14,8 @@ import time
 import uuid
 from shutil import which
 
+from admin.mqtt_broker import mqtt_answers, render_passwd
+
 MOSQUITTO_IMAGE = "eclipse-mosquitto:2"
 
 REQUIRE_REAL_MQTT_ENV = "EMS_REQUIRE_REAL_MQTT_TESTS"
@@ -98,12 +100,18 @@ def _run_broker(name, mounts, container_port) -> int:
     raise RuntimeError(f"failed to start mosquitto: {result.stderr}")
 
 
-def _wait_for_port(host, port, timeout=15.0) -> bool:
+def _wait_for_broker(host, port, timeout=15.0) -> bool:
+    """Wait until the broker answers a CONNECT, not just until its port accepts.
+
+    Docker's port proxy accepts a connection on the published port before
+    Mosquitto in the container listens and drops it a moment later, so a test
+    that went by the open port connected to a broker that was not there yet.
+    """
+
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        with contextlib.suppress(OSError):
-            with socket.create_connection((host, port), timeout=1.0):
-                return True
+        if mqtt_answers(port, host=host):
+            return True
         time.sleep(0.1)
     return False
 
@@ -140,8 +148,9 @@ def mosquitto_broker(
     """Start a throwaway Mosquitto broker; yield ``(host, port)``.
 
     With ``username``/``password`` the broker requires authentication and rejects
-    anonymous connections; otherwise it allows anonymous access. The container is
-    always removed on exit.
+    anonymous connections; otherwise it allows anonymous access. The account is
+    in the password file before the broker starts, so a broker that answers
+    already knows it. The container is always removed on exit.
     """
 
     host = "127.0.0.1"
@@ -150,10 +159,9 @@ def mosquitto_broker(
     mounts = ["-v", f"{conf}:/mosquitto/config/mosquitto.conf:ro"]
     if username:
         pwfile = tmp_path / "passwd"
-        # mosquitto_passwd is available inside the image; build the file with it.
-        pwfile.write_text("")
+        pwfile.write_text(render_passwd({username: password}))
         lines += ["allow_anonymous false", "password_file /mosquitto/config/passwd"]
-        mounts += ["-v", f"{pwfile}:/mosquitto/config/passwd"]
+        mounts += ["-v", f"{pwfile}:/mosquitto/config/passwd:ro"]
     else:
         lines.append("allow_anonymous true")
     conf.write_text("\n".join(lines) + "\n")
@@ -161,16 +169,7 @@ def mosquitto_broker(
     name = f"ems-mosq-{uuid.uuid4().hex[:8]}"
     port = _run_broker(name, mounts, 1883)
     try:
-        if username:
-            # Populate the password file inside the running container, then reload.
-            subprocess.run(
-                ["docker", "exec", name, "mosquitto_passwd", "-b",
-                 "/mosquitto/config/passwd", username, password],
-                capture_output=True, text=True, check=True,
-            )
-            subprocess.run(["docker", "kill", "-s", "HUP", name],
-                           capture_output=True, text=True)
-        if not _wait_for_port(host, port):
+        if not _wait_for_broker(host, port):
             logs = subprocess.run(["docker", "logs", name], capture_output=True,
                                   text=True)
             raise RuntimeError(f"mosquitto never became ready: {logs.stderr}")
@@ -374,14 +373,15 @@ def mosquitto_acl_broker(tmp_path, accounts):
 
     ``accounts`` is a list of ``(username, password, topic_pattern)``; each user
     may only publish/subscribe within its own topic pattern. Anonymous access is
-    denied. Yields ``(host, port)`` and always removes the container on exit.
+    denied, and every account is in the password file before the broker starts.
+    Yields ``(host, port)`` and always removes the container on exit.
     """
 
     host = "127.0.0.1"
     conf = tmp_path / "mosquitto.conf"
     pwfile = tmp_path / "passwd"
     aclfile = tmp_path / "aclfile"
-    pwfile.write_text("")
+    pwfile.write_text(render_passwd({username: password for username, password, _ in accounts}))
     acl_lines = []
     for username, _password, pattern in accounts:
         acl_lines += [f"user {username}", f"topic readwrite {pattern}", ""]
@@ -400,21 +400,13 @@ def mosquitto_acl_broker(tmp_path, accounts):
     )
     mounts = [
         "-v", f"{conf}:/mosquitto/config/mosquitto.conf:ro",
-        "-v", f"{pwfile}:/mosquitto/config/passwd",
+        "-v", f"{pwfile}:/mosquitto/config/passwd:ro",
         "-v", f"{aclfile}:/mosquitto/config/aclfile:ro",
     ]
     name = f"ems-mosq-{uuid.uuid4().hex[:8]}"
     port = _run_broker(name, mounts, 1883)
     try:
-        for username, password, _pattern in accounts:
-            subprocess.run(
-                ["docker", "exec", name, "mosquitto_passwd", "-b",
-                 "/mosquitto/config/passwd", username, password],
-                capture_output=True, text=True, check=True,
-            )
-        subprocess.run(["docker", "kill", "-s", "HUP", name],
-                       capture_output=True, text=True)
-        if not _wait_for_port(host, port):
+        if not _wait_for_broker(host, port):
             logs = subprocess.run(["docker", "logs", name], capture_output=True,
                                   text=True)
             raise RuntimeError(f"mosquitto never became ready: {logs.stderr}")
@@ -534,7 +526,7 @@ def mosquitto_tls_broker(tmp_path, *, san_dns=None):
     name = f"ems-mosq-{uuid.uuid4().hex[:8]}"
     port = _run_broker(name, mounts, 8883)
     try:
-        if not _wait_for_port(host, port) or not _wait_for_tls(host, port):
+        if not _wait_for_tls(host, port):
             logs = subprocess.run(["docker", "logs", name], capture_output=True,
                                   text=True)
             raise RuntimeError(f"mosquitto TLS never became ready: {logs.stderr}")

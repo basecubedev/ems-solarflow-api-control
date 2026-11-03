@@ -78,8 +78,15 @@ def test_publish_full_suite_excludes_docker_marked_tests():
     assert "pytest -q tests/" not in _stripped_lines(PUBLISH_WORKFLOW)
 
 
-def test_dedicated_job_runs_docker_marked_tests():
-    assert "pytest -q -rs -m docker tests/" in CI_WORKFLOW.read_text(encoding="utf-8")
+def test_dedicated_jobs_run_docker_marked_tests_once_each():
+    """The Docker job has no browser and the browser jobs no Docker, so the
+    Docker-and-browser tests get a job of their own; the two selections
+    together are every Docker-marked test, and none of them twice."""
+
+    text = CI_WORKFLOW.read_text(encoding="utf-8")
+    assert 'pytest -q -rs -m "docker and not browser" tests/' in text
+    assert 'pytest -q -rs -m "docker and browser" tests/' in text
+    assert "pytest -q -rs -m docker tests/" not in text
 
 
 def test_browser_groups_are_split_between_the_pull_request_and_the_merge():

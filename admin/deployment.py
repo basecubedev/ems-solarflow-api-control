@@ -975,6 +975,33 @@ class DockerCompose:
                 _safe_command_detail("\n".join(tail)),
             )
 
+    def reload(self, workspace, service):
+        """Send SIGHUP to a running service so it re-reads its files without restarting."""
+
+        try:
+            result = self._run(
+                ["docker", "compose", "kill", "--signal", "SIGHUP", str(service)],
+                cwd=str(workspace),
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except FileNotFoundError as exc:
+            raise DockerError(
+                "docker_cli_missing", _DOCKER_MESSAGES["client_missing"]
+            ) from exc
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise DockerError(
+                "docker_compose_reload_failed",
+                "Could not tell the container to reload its files.",
+            ) from exc
+        if result.returncode != 0:
+            raise DockerError(
+                "docker_compose_reload_failed",
+                "Could not tell the container to reload its files.",
+                _safe_command_detail(result.stderr),
+            )
+
     def run_oneoff(
         self,
         workspace,

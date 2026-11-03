@@ -269,6 +269,14 @@ against the same meter, are in the
 Read only, never controlled. The namespace has been read end to end against a
 real broker in tests; no installation has run it yet.
 
+A device that publishes in a format of its own reaches this namespace through
+the built-in [MQTT mapping](admin/mqtt-mapping.md), on the optional built-in
+broker or on a broker of your own. The live topics label Shelly (Gen1 and
+Gen2+), Tasmota, OpenDTU and AhoyDTU devices they recognise; anything else is
+mapped by hand. A mapped device is then read like any other external device
+above, with the same status: tested against a real broker, not yet on an
+installation.
+
 ## Optional Integrations
 
 - InfluxDB analytics is optional.

@@ -329,10 +329,12 @@ leave no cross-test state. Use exact bytes or hashes when preservation matters.
 
 ### Scratch space
 
-A broad run writes tens of GB of temporary data. A temporary filesystem that
-fills part-way through does not produce a test failure: the run dies with an
-internal error and every later command on the host fails for reasons unrelated
-to the code, which makes real failures indistinguishable from environment noise.
+A broad run writes tens of GB of temporary data, though a passing test gives
+its directory back when it ends, so only a few hundred MB are held at once
+unless many tests fail. A temporary filesystem that fills part-way through does
+not produce a test failure: the run dies with an internal error and every later
+command on the host fails for reasons unrelated to the code, which makes real
+failures indistinguishable from environment noise.
 
 Point `TMPDIR` at a filesystem with room before a broad run. `tests/conftest.py`
 refuses one that cannot fit and names the fix; `EMS_ALLOW_SMALL_SCRATCH=1`
@@ -344,6 +346,15 @@ not here: this file has to stay true on a machine that is not the maintainer's.
 
 ### Playwright
 
+- An end-to-end test of what a user does drives every step through the web
+  page: no API request to take a step or to wait for one, no reload to make the
+  page catch up, no shortcut the user does not have. Preparing the world before
+  the journey and checking its effect afterwards (the config file, the EMS
+  reading) are not steps. A test that sends a request no page would send, to
+  prove the server refuses it, is an authority test, not a user journey. The
+  mapping end-to-end run passed while a user could not finish it: it polled the
+  API, registered a broker over it and reloaded the page, the three steps the
+  page did not offer.
 - Do not use arbitrary `waitForTimeout`; use response, event or locator
   authority.
 - Hold previews and temporary resources in `try/finally`.
@@ -492,7 +503,7 @@ Validation MUST match the changed risk. Use the applicable baseline:
 
 ```bash
 ruff check .
-python -m compileall -q admin appliance ems dashboard scripts tests emsctl.py ems-solarflow-api-control.py
+python -m compileall -q admin appliance ems dashboard mqtt_mapping scripts tests emsctl.py ems-solarflow-api-control.py
 node --check admin/static/admin.js
 python tools/build_config_template.py --check
 python tools/check_third_party_licenses.py
@@ -504,6 +515,27 @@ run here is the same evidence CI is about to produce. It used to leave out
 `appliance` and the licence inventory, which made the local baseline weaker than
 the gate it stands in for -- the failure mode being a push that looks validated
 and comes back red on something that was never run.
+
+CodeQL belongs to that baseline. GitHub's code scanning analyses a pull request
+only once it is pushed, and an alert the change introduces turns its check
+red, so a branch is scanned locally before it is pushed, for both languages
+and with the same code-scanning suites. The database is built from a
+directory, ignored files included, so scan a clean checkout of the branch (a
+throwaway worktree), not a working tree with local research or agent copies:
+
+```bash
+codeql database create <db-python> --language=python --source-root=. --overwrite
+codeql database analyze <db-python> --format=sarif-latest --output=python.sarif \
+  codeql/python-queries:codeql-suites/python-code-scanning.qls
+codeql database create <db-js> --language=javascript-typescript --source-root=. --overwrite
+codeql database analyze <db-js> --format=sarif-latest --output=javascript.sarif \
+  codeql/javascript-queries:codeql-suites/javascript-code-scanning.qls
+```
+
+A result the branch introduces -- one the default branch's scan does not have
+-- is fixed before the push, never dismissed to get it through. Where a query
+misreads the code, change the code so that it reads right; a sanitizer named
+like a secret is the known case.
 
 EMS/control changes additionally require focused tests, simulation and the
 `power_control` gate, self-test, and the full non-Docker suite. Admin/frontend

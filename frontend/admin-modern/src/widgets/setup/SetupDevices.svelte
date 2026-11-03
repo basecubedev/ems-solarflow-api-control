@@ -5,12 +5,16 @@
   import Bar from "../../../../shared/ui/Bar.svelte";
   import ConfirmDialog from "../../../../shared/ui/ConfirmDialog.svelte";
   import SourcesPanel from "../SourcesPanel.svelte";
+  import MqttBrokerCard from "../MqttBrokerCard.svelte";
+  import MqttMappingPanel from "../MqttMappingPanel.svelte";
+  import { routeMqtt } from "../../state/mqtt.svelte.js";
+  import { mappedProposal } from "../../lib/mqtt.js";
   import { t, tn } from "../../i18n/i18n.svelte.js";
   import { errorView } from "../../lib/errors.js";
   import { reasonKey } from "../../lib/devices.js";
   import { isExternalProposal, isGridMeterProposal, proposalRole, proposalTopic } from "../../lib/discovery.js";
   import { isReady, proposalCanBeChosen, selection } from "../../lib/setupDraft.js";
-  import { SOURCES, setupDiscovery, setupRoute, allNetworks, cancel, loadPreparation, loadSourceStatus, progressPercent, refresh, refreshMdns, rescanNetworks, rescanSource, resetResults, runDiscovery, scanManually, setMdns, sourceEnabled } from "../../state/setupDiscovery.svelte.js";
+  import { SOURCES, setupDiscovery, setupRoute, allNetworks, cancel, loadPreparation, loadProposals, loadSourceStatus, progressPercent, refresh, refreshMdns, rescanNetworks, rescanSource, resetResults, runDiscovery, scanManually, setMdns, sourceEnabled } from "../../state/setupDiscovery.svelte.js";
   import { setupDraft, enableSource, replacesGridMeter, reprioritize, toggleProposal } from "../../state/setupDraft.svelte.js";
   import { sources, routeSources } from "../../state/sources.svelte.js";
 
@@ -38,10 +42,40 @@
   const percent = $derived(progressPercent());
   const running = $derived(setupDiscovery.scans.find((entry) => entry.status === "running") || null);
 
+  const proposalFor = (device) => mappedProposal(setupDiscovery.proposals, device.id, device.broker_ref);
+  /** A saved mapping's device joins the setup draft through the proposal the server makes from the mapping. */
+  const mqttAdoption = {
+    direct: false,
+    state(device) {
+      const proposal = proposalFor(device);
+      return proposal && selection(setupDraft.draft, proposal.id) ? "draft" : null;
+    },
+    name() {
+      return "";
+    },
+    async add(device) {
+      await loadProposals();
+      const proposal = proposalFor(device);
+      if (!proposal) return { state: "missing" };
+      if (!selection(setupDraft.draft, proposal.id)) toggleProposal(proposal.id);
+      return { state: "draft" };
+    },
+    async remove(device) {
+      const proposal = proposalFor(device);
+      if (proposal && selection(setupDraft.draft, proposal.id)) toggleProposal(proposal.id);
+      await loadProposals();
+      return { state: null };
+    },
+  };
+
   $effect(() => {
     routeSources(setupRoute);
+    routeMqtt(setupRoute);
     enter();
-    return () => routeSources(null);
+    return () => {
+      routeSources(null);
+      routeMqtt(null);
+    };
   });
 
   /** The first visit runs discovery on its own; a later one only reads what it found. */
@@ -405,6 +439,14 @@
 
 <Card icon="radio-tower" tone="c-soc" title={t("setup.devices.sourcesTitle")} subtitle={t("setup.devices.sourcesSub")} span="span-12">
   <SourcesPanel onchanged={() => { loadSourceStatus(); refresh(); }} />
+</Card>
+
+<Card icon="boxes" tone="c-grid" title={t("mqtt.broker.title")} subtitle={t("mqtt.broker.setupSub")} span="span-12">
+  <MqttBrokerCard />
+</Card>
+
+<Card icon="list-checks" tone="c-grid" title={t("mqtt.mapping.title")} subtitle={t("mqtt.mapping.sub")} span="span-12">
+  <MqttMappingPanel adoption={mqttAdoption} />
 </Card>
 
 <ConfirmDialog

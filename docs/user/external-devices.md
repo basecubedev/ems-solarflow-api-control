@@ -29,7 +29,8 @@ on a schedule or against a meter of its own.
 
 - A local MQTT broker that EMS can reach (the same kind of broker a Local MQTT
   Zendure device uses — see [Connection types](connection-types.md)).
-- Something that reads the device and can publish to that broker.
+- Something that reads the device and can publish to that broker — or the
+  Admin Console's [built-in MQTT mapping](admin/mqtt-mapping.md).
 
 ## What to publish
 
@@ -141,6 +142,14 @@ while True:
     time.sleep(15)
 ```
 
+### The built-in MQTT mapping
+
+The Admin Console can do this for you: switch on its built-in broker, point the
+device at it, pick the values from the live topics and save; the same save
+adds the device to EMS. The mapping publishes the `state` object above with the
+retain flag and an expiry. See
+[Built-in MQTT broker and MQTT mapping](admin/mqtt-mapping.md).
+
 ### FHEM and ioBroker
 
 Any of their MQTT modules that can publish a reading to a topic works: publish
@@ -186,6 +195,17 @@ On the **Devices** tab the device then shows as an inverter card reading
 to another broker with **Use this connection** in the search, or remove it;
 everything else follows from the topics. See
 [Device management](admin/device-management.md).
+
+### One id, one broker
+
+EMS reads each device from the one broker it was added through. An id is
+added only once: the search shows the same id on a second broker as
+*Already set up as … via …* and names both brokers, so you can move the
+device there with **Use this connection** rather than add it twice. When a
+second broker carries an id that is already added, EMS ignores that copy and
+says so: `emsctl diagnose` reports `external_device_second_source` for the
+brokers EMS reads, and the MQTT mapping's live topics name the other broker.
+Stop the second publisher, or give it an id of its own.
 
 ## Expected result
 
