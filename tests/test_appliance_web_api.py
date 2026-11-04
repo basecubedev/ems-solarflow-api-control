@@ -1754,3 +1754,350 @@ def test_a_password_change_refusal_is_audited(signed_in):
         ("denied", "rate_limited"),
     ]
     assert app.audit_status()["degraded"] is False
+
+
+# --- what a hostile or broken client can cost the only recovery page ---------
+
+
+def raw_exchange(port, data, *, wait=5):
+    import socket as socket_module
+
+    connection = socket_module.create_connection(("127.0.0.1", port), timeout=wait)
+    try:
+        if data:
+            connection.sendall(data)
+        chunks = []
+        while True:
+            try:
+                chunk = connection.recv(65536)
+            except TimeoutError:
+                return b"".join(chunks), False
+            if not chunk:
+                return b"".join(chunks), True
+            chunks.append(chunk)
+    finally:
+        connection.close()
+
+
+def test_a_deeply_nested_body_is_refused_with_400_not_a_dropped_connection(appliance):
+    """json.loads raised RecursionError, which _body() did not catch: no
+    response, and a traceback in the journal, before any authentication."""
+
+    _, _, client = appliance
+    body = b"[" * 60_000
+    request = (
+        b"POST /api/session/login HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        b"Content-Type: application/json\r\nConnection: close\r\n"
+        + f"Content-Length: {len(body)}\r\n\r\n".encode()
+        + body
+    )
+
+    response, closed = raw_exchange(client.port, request)
+
+    assert response.startswith(b"HTTP/1.1 400"), response[:200]
+    assert b"invalid_request" in response
+
+
+def test_a_request_that_never_finishes_is_cut_off_at_its_deadline(appliance, monkeypatch):
+    """15 s per recv let a client trickle one byte every 14 s for ever."""
+
+    from appliance import web
+
+    monkeypatch.setattr(web, "REQUEST_DEADLINE_SECONDS", 0.3)
+    _, _, client = appliance
+
+    _, closed = raw_exchange(client.port, b"GET /api/session HTTP/1.1\r\nHost: 127", wait=5)
+
+    assert closed is True
+
+
+def test_one_source_cannot_hold_every_worker(appliance, monkeypatch):
+    import socket as socket_module
+
+    from appliance import web
+
+    monkeypatch.setattr(web, "MAX_CONNECTIONS_PER_SOURCE", 2)
+    _, _, client = appliance
+    held = [socket_module.create_connection(("127.0.0.1", client.port), timeout=5) for _ in range(2)]
+    try:
+        _, closed = raw_exchange(client.port, b"", wait=5)
+        assert closed is True
+    finally:
+        for connection in held:
+            connection.close()
+
+
+def _answered_and_kept(connection):
+    connection.sendall(b"GET /api/session HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+    head = b""
+    while b"\r\n\r\n" not in head:
+        chunk = connection.recv(65536)
+        if not chunk:
+            return head
+        head += chunk
+    length = int(re.search(rb"Content-Length: (\d+)", head).group(1))
+    body = head.split(b"\r\n\r\n", 1)[1]
+    while len(body) < length:
+        body += connection.recv(65536)
+    return head
+
+
+def test_a_connection_waiting_for_nothing_makes_room_for_its_sources_next(appliance, monkeypatch):
+    """Firefox keeps every answered connection open and opens new ones beside
+    them; counting the waiting ones refused its next page with a reset."""
+
+    import socket as socket_module
+
+    from appliance import web
+
+    monkeypatch.setattr(web, "MAX_CONNECTIONS_PER_SOURCE", 1)
+    waiting = threading.Event()
+    marked = web.ApplianceWebServer.connection_idle
+
+    def connection_idle(server, connection, source):
+        marked(server, connection, source)
+        waiting.set()
+
+    monkeypatch.setattr(web.ApplianceWebServer, "connection_idle", connection_idle)
+    _, _, client = appliance
+    kept = socket_module.create_connection(("127.0.0.1", client.port), timeout=5)
+    try:
+        assert _answered_and_kept(kept).startswith(b"HTTP/1.1 200")
+        assert waiting.wait(5)
+
+        response, _ = raw_exchange(
+            client.port, b"GET /api/session HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        )
+
+        assert response.startswith(b"HTTP/1.1 200"), response[:200]
+        assert kept.recv(65536) == b""
+    finally:
+        kept.close()
+
+
+def test_a_request_read_as_its_connection_is_reclaimed_is_still_answered(appliance, monkeypatch):
+    """The handler reads the line before it claims the connection; a reclaim
+    in between closed it on a request the browser had sent, and a
+    confirmation is not retried."""
+
+    import socket as socket_module
+
+    from appliance import web
+
+    monkeypatch.setattr(web, "MAX_CONNECTIONS_PER_SOURCE", 1)
+    waiting, line_in_hand, go = threading.Event(), threading.Event(), threading.Event()
+    marked, claimed = web.ApplianceWebServer.connection_idle, web.ApplianceWebServer.connection_busy
+
+    def connection_idle(server, connection, source):
+        marked(server, connection, source)
+        waiting.set()
+
+    def connection_busy(server, connection):
+        if waiting.is_set() and not line_in_hand.is_set():
+            line_in_hand.set()
+            go.wait(5)
+        return claimed(server, connection)
+
+    monkeypatch.setattr(web.ApplianceWebServer, "connection_idle", connection_idle)
+    monkeypatch.setattr(web.ApplianceWebServer, "connection_busy", connection_busy)
+    _, _, client = appliance
+    kept = socket_module.create_connection(("127.0.0.1", client.port), timeout=5)
+    try:
+        assert _answered_and_kept(kept).startswith(b"HTTP/1.1 200")
+        assert waiting.wait(5)
+        kept.sendall(b"GET /api/session HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        assert line_in_hand.wait(5)
+
+        other, _ = raw_exchange(
+            client.port, b"GET /api/session HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        )
+        go.set()
+        head = _answered_and_kept(kept)
+
+        assert other.startswith(b"HTTP/1.1 200"), other[:200]
+        assert head.startswith(b"HTTP/1.1 200"), head[:200]
+        assert b"Connection: close" in head
+        assert kept.recv(65536) == b""
+    finally:
+        go.set()
+        kept.close()
+
+
+@pytest.fixture
+def socket_pairs():
+    import socket as socket_module
+
+    pairs = []
+
+    def make():
+        pair = socket_module.socketpair()
+        pairs.append(pair)
+        return pair
+
+    yield make
+    for pair in pairs:
+        for end in pair:
+            end.close()
+
+
+def _reclaimed(connection):
+    connection.settimeout(5)
+    return connection.recv(1) == b""
+
+
+def _bare_server():
+    from appliance import web
+
+    server = web.ApplianceWebServer.__new__(web.ApplianceWebServer)
+    server._connections = {}
+    server._idle = {}
+    server._reclaimed = set()
+    server._connections_lock = threading.Lock()
+    return server
+
+
+def _admit(server, source):
+    with server._connections_lock:
+        server._reclaim_idle(source)
+        return server._has_room(source)
+
+
+def test_a_full_server_takes_the_oldest_waiting_connection_of_any_source(monkeypatch, socket_pairs):
+    from appliance import web
+
+    monkeypatch.setattr(web, "MAX_CONNECTIONS", 2)
+    server = _bare_server()
+    older, _ = socket_pairs()
+    newer, _ = socket_pairs()
+    server._connections = {"192.168.1.20": 1, "192.168.1.30": 1}
+    server.connection_idle(older, "192.168.1.20")
+    server.connection_idle(newer, "192.168.1.30")
+
+    assert _admit(server, "192.168.1.40") is True
+    assert _reclaimed(older)
+    assert server.connection_busy(older) is False
+    assert server.connection_busy(newer) is True
+
+
+def test_a_full_server_closes_the_newcomers_own_waiting_connection_first(monkeypatch, socket_pairs):
+    from appliance import web
+
+    monkeypatch.setattr(web, "MAX_CONNECTIONS", 2)
+    server = _bare_server()
+    foreign, _ = socket_pairs()
+    own, _ = socket_pairs()
+    server._connections = {"192.168.1.20": 1, "192.168.1.30": 1}
+    server.connection_idle(foreign, "192.168.1.20")
+    server.connection_idle(own, "192.168.1.30")
+
+    assert _admit(server, "192.168.1.30") is True
+    assert _reclaimed(own)
+    assert server.connection_busy(foreign) is True
+
+
+def test_a_connection_whose_next_request_has_arrived_is_not_reclaimed(monkeypatch, socket_pairs):
+    """Closing it would drop a request the browser had already sent, and a
+    confirmation is not retried."""
+
+    from appliance import web
+
+    monkeypatch.setattr(web, "MAX_CONNECTIONS_PER_SOURCE", 1)
+    server = _bare_server()
+    waiting, peer = socket_pairs()
+    server._connections = {"192.168.1.20": 1}
+    server.connection_idle(waiting, "192.168.1.20")
+    peer.sendall(b"POST /api/operations/confirm HTTP/1.1\r\n")
+
+    assert _admit(server, "192.168.1.20") is False
+    assert server.connection_busy(waiting) is True
+
+
+def test_a_reclaimed_connection_is_given_back_once(monkeypatch, socket_pairs):
+    from appliance import web
+
+    monkeypatch.setattr(web, "MAX_CONNECTIONS_PER_SOURCE", 1)
+    server = _bare_server()
+    waiting, _ = socket_pairs()
+    server._connections = {"192.168.1.20": 1}
+    server.connection_idle(waiting, "192.168.1.20")
+
+    with server._connections_lock:
+        server._reclaim_idle("192.168.1.20")
+        server._connections["192.168.1.20"] = server._connections.get("192.168.1.20", 0) + 1
+    server._release(waiting, "192.168.1.20")
+
+    assert server._connections == {"192.168.1.20": 1}
+    assert server._reclaimed == set()
+
+
+def test_an_exhausted_descriptor_table_backs_off_instead_of_spinning(monkeypatch):
+    import errno
+
+    from appliance import web
+
+    slept = []
+    monkeypatch.setattr(web.time, "sleep", lambda seconds: slept.append(seconds))
+
+    class Exhausted:
+        def accept(self):
+            raise OSError(errno.EMFILE, "Too many open files")
+
+    server = web.ApplianceWebServer.__new__(web.ApplianceWebServer)
+    server.socket = Exhausted()
+
+    with pytest.raises(OSError):
+        server.get_request()
+
+    assert slept and slept[0] > 0
+
+
+class _HeldTimer:
+    """A Timer whose callback runs only when the test says so."""
+
+    started = []
+
+    def __init__(self, interval, function):
+        self.function = function
+        self.daemon = False
+
+    def start(self):
+        _HeldTimer.started.append(self.function)
+
+    def cancel(self):
+        return None
+
+
+def test_a_deadline_already_running_when_it_is_stopped_does_not_cut(monkeypatch):
+    """Timer.cancel cannot stop a callback that has started: headers that came
+    in at the deadline had their socket shut while the request went on."""
+
+    from appliance import web
+
+    monkeypatch.setattr(web.threading, "Timer", _HeldTimer)
+    _HeldTimer.started.clear()
+    cut = []
+    deadline = web.RequestDeadline(lambda: cut.append(True))
+
+    deadline.arm(30)
+    expired = deadline.stop()
+    _HeldTimer.started[0]()
+
+    assert expired is False
+    assert cut == []
+
+
+def test_a_deadline_that_ran_out_first_is_reported_when_stopped(monkeypatch):
+    from appliance import web
+
+    monkeypatch.setattr(web.threading, "Timer", _HeldTimer)
+    _HeldTimer.started.clear()
+    cut = []
+    deadline = web.RequestDeadline(lambda: cut.append(True))
+
+    deadline.arm(30)
+    _HeldTimer.started[0]()
+
+    assert cut == [True]
+    assert deadline.stop() is True
+    deadline.arm(30)
+    assert deadline.stop() is False

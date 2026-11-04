@@ -8,6 +8,7 @@ cannot escalate beyond the agent's fixed allowlist.
 """
 
 import base64
+import errno
 import hashlib
 import ipaddress
 import json
@@ -16,6 +17,7 @@ import posixpath
 import re
 import socket
 import secrets
+import select
 import threading
 import time
 from http import cookies
@@ -67,6 +69,15 @@ HOSTNAME_FILE = "/etc/hostname"
 # a worker thread for ever, and the appliance UI is the only recovery path
 # there is when an Admin install or a rollback has gone wrong.
 CONNECTION_TIMEOUT_SECONDS = 15
+# The timeout above is per recv, so a client trickling a byte at a time held a
+# thread for ever. Reading one request -- line, headers and body -- has to
+# finish within this, however it is paced.
+REQUEST_DEADLINE_SECONDS = 30
+# Every connection is a thread. Without a bound one host could take them all,
+# and at the descriptor limit accept() failed in a hot loop.
+MAX_CONNECTIONS = 64
+MAX_CONNECTIONS_PER_SOURCE = 16
+ACCEPT_BACKOFF_SECONDS = 0.5
 
 TEST_MODE_ENV = "EMS_APPLIANCE_TEST_MODE"
 TEST_RESET_PATH = "/api/test/reset"
@@ -600,16 +611,91 @@ class ApplianceWebApp:
         )
 
 
+class RequestDeadline:
+    """A deadline on reading a request that cannot fire after it was stopped.
+
+    ``Timer.cancel`` does not stop a callback that has already started, so
+    running out and being stopped are decided under one lock: whichever comes
+    first holds, and ``stop`` says which it was.
+    """
+
+    def __init__(self, on_expiry):
+        self._on_expiry = on_expiry
+        self._lock = threading.Lock()
+        self._timer = None
+        self._expired = False
+
+    def arm(self, seconds):
+        self.stop()
+        with self._lock:
+            self._expired = False
+            timer = threading.Timer(seconds, lambda: self._expire(timer))
+            timer.daemon = True
+            self._timer = timer
+        timer.start()
+
+    def stop(self):
+        """Stop the clock; whether it had already run out."""
+
+        with self._lock:
+            timer, self._timer = self._timer, None
+            if timer is not None:
+                timer.cancel()
+            return self._expired
+
+    def _expire(self, timer):
+        with self._lock:
+            if self._timer is not timer:
+                return
+            self._timer = None
+            self._expired = True
+            self._on_expiry()
+
+
 class ApplianceRequestHandler(BaseHTTPRequestHandler):
     server_version = f"EMSApplianceManager/{installed_version() or 'unknown'}"
     protocol_version = "HTTP/1.1"
     timeout = CONNECTION_TIMEOUT_SECONDS
 
+    def setup(self):
+        super().setup()
+        self._deadline = RequestDeadline(self._cut_off)
+        self._last_request = False
+
     def handle_one_request(self):
+        self._deadline.arm(REQUEST_DEADLINE_SECONDS)
         try:
             super().handle_one_request()
         except TimeoutError:
             self.close_connection = True
+        finally:
+            self._deadline.stop()
+            if not self.close_connection:
+                self.server.connection_idle(self.connection, self._client_ip())
+
+    def parse_request(self):
+        held = self.server.connection_busy(self.connection)
+        parsed = super().parse_request()
+        if not held:
+            self._last_request = True
+            self.close_connection = True
+        # The line and the headers are in; the body is read under its own
+        # deadline in _body, and nothing after that is the client's pacing.
+        if self._deadline.stop():
+            return False
+        return parsed
+
+    def end_headers(self):
+        if self._last_request:
+            self.send_header("Connection", "close")
+        super().end_headers()
+
+    def _cut_off(self):
+        self.close_connection = True
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
 
     @property
     def app(self):
@@ -646,10 +732,16 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             return {}
         if length > MAX_BODY_BYTES:
             raise ValueError("request body too large")
-        raw = self.rfile.read(length)
+        self._deadline.arm(REQUEST_DEADLINE_SECONDS)
+        try:
+            raw = self.rfile.read(length)
+        finally:
+            expired = self._deadline.stop()
+        if expired:
+            raise TimeoutError("the request body did not arrive in time")
         try:
             payload = json.loads(raw.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError, RecursionError):
             raise ValueError("malformed JSON body")
         if not isinstance(payload, dict):
             raise ValueError("body must be a JSON object")
@@ -1274,6 +1366,15 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
 
+def _nothing_pending(connection):
+    poller = select.poll()
+    try:
+        poller.register(connection, select.POLLIN)
+        return not poller.poll(0)
+    except (OSError, TypeError, ValueError):
+        return False
+
+
 class ApplianceWebServer(ThreadingHTTPServer):
     """Dual-stack when asked to listen everywhere.
 
@@ -1288,6 +1389,10 @@ class ApplianceWebServer(ThreadingHTTPServer):
 
     def __init__(self, app, address):
         self.app = app
+        self._connections = {}
+        self._idle = {}
+        self._reclaimed = set()
+        self._connections_lock = threading.Lock()
         host = str(address[0])
         if host in ("0.0.0.0", "::"):
             self.address_family = socket.AF_INET6
@@ -1295,6 +1400,98 @@ class ApplianceWebServer(ThreadingHTTPServer):
         elif ":" in host:
             self.address_family = socket.AF_INET6
         super().__init__(address, ApplianceRequestHandler)
+
+    def get_request(self):
+        try:
+            return super().get_request()
+        except OSError as exc:
+            # Out of descriptors the listening socket stays readable, so the
+            # loop would call accept() again at once, for ever. A short pause
+            # lets the connections that are finishing give theirs back.
+            if exc.errno in (errno.EMFILE, errno.ENFILE, errno.ENOBUFS, errno.ENOMEM):
+                time.sleep(ACCEPT_BACKOFF_SECONDS)
+            raise
+
+    def process_request(self, request, client_address):
+        source = client_address[0] if client_address else ""
+        with self._connections_lock:
+            if not self._has_room(source):
+                self._reclaim_idle(source)
+            admitted = self._has_room(source)
+            if admitted:
+                self._connections[source] = self._connections.get(source, 0) + 1
+        if not admitted:
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._release(request, source)
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._release(request, client_address[0] if client_address else "")
+
+    def connection_idle(self, connection, source):
+        """A kept-alive connection has answered and waits for the next request."""
+
+        with self._connections_lock:
+            if connection not in self._reclaimed:
+                self._idle[connection] = source
+
+    def connection_busy(self, connection):
+        """A request line arrived; whether the connection may stay open after it."""
+
+        with self._connections_lock:
+            self._idle.pop(connection, None)
+            return connection not in self._reclaimed
+
+    def _has_room(self, source):
+        total = sum(self._connections.values())
+        return total < MAX_CONNECTIONS and self._connections.get(source, 0) < MAX_CONNECTIONS_PER_SOURCE
+
+    def _reclaim_idle(self, source):
+        """Close the oldest kept-alive connection that waits for nothing.
+
+        A browser keeps its connections open after each answer and opens new
+        ones beside them, so a limit that counted the waiting ones refused
+        Firefox's next page with a reset. A source makes room among its own
+        first; a full server then takes the oldest of any other source. A
+        connection whose next request has already arrived is not waiting, and
+        only the reading side is closed: a request line its handler had just
+        read is still answered.
+        """
+
+        at_limit = self._connections.get(source, 0) >= MAX_CONNECTIONS_PER_SOURCE
+        own = [connection for connection, owner in self._idle.items() if owner == source]
+        others = [] if at_limit else [connection for connection, owner in self._idle.items() if owner != source]
+        connection = next((candidate for candidate in own + others if _nothing_pending(candidate)), None)
+        if connection is None:
+            return
+        self._decrement(self._idle.pop(connection))
+        self._reclaimed.add(connection)
+        try:
+            connection.shutdown(socket.SHUT_RD)
+        except OSError:
+            pass
+
+    def _release(self, connection, source):
+        with self._connections_lock:
+            self._idle.pop(connection, None)
+            if connection in self._reclaimed:
+                self._reclaimed.discard(connection)
+            else:
+                self._decrement(source)
+
+    def _decrement(self, source):
+        remaining = self._connections.get(source, 0) - 1
+        if remaining > 0:
+            self._connections[source] = remaining
+        else:
+            self._connections.pop(source, None)
 
     def server_bind(self):
         if self.address_family == socket.AF_INET6:
