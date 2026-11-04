@@ -146,6 +146,12 @@ def _state_schemas(block):
     return parsed["implements"], parsed["reads"]
 
 
+# The release grammar dpkg and appliance/version.py order alike, plus the
+# untagged development build (0.0.0~dev.<rev>) a local package carries.
+MANIFEST_VERSION = re.compile(
+    r"^[0-9]+\.[0-9]+\.[0-9]+(~(alpha|beta|rc)[0-9]+|~dev(\.[0-9a-z]+)?)?$"
+)
+
 def parse_manifest(payload, *, release_id="", verified=VERIFIED_NONE):
     """A manifest, or a refusal naming the field that was wrong."""
 
@@ -178,6 +184,16 @@ def parse_manifest(payload, *, release_id="", verified=VERIFIED_NONE):
         raise ManagerReleaseError(
             "manager_manifest_invalid",
             f"version {version!r} uses a hyphen; a pre-release is spelled with ~",
+        )
+
+    if not MANIFEST_VERSION.match(version):
+        # version.py and dpkg disagree about other tilde spellings -- "~rc1~1",
+        # "~rc.1", "~a1b2" -- so only the form both order alike is a release,
+        # and a development build's.
+        raise ManagerReleaseError(
+            "manager_manifest_invalid",
+            f"version {version!r} is not MAJOR.MINOR.PATCH with an optional ~alphaN, "
+            "~betaN or ~rcN",
         )
 
     build_id = str(payload["build_id"]).strip()

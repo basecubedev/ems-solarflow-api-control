@@ -151,9 +151,12 @@ list may only be added to by *removing* a format, never by adding one.
 
 ## Candidates cannot be published, and that is structural
 
-A pre-release is spelled with a tilde — `0.2.0~rc1` — because that is the only
-form on which `dpkg` and `appliance/version.py`'s comparator agree about order
-(the same tilde a development build uses, and for the same reason).
+A pre-release is spelled with a tilde and one of three words and a number —
+`0.2.0~alpha1`, `~beta2`, `~rc1` — because that is the form on which `dpkg` and
+`appliance/version.py`'s comparator agree about order; other tilde spellings
+(`~rc1~1`, `~rc.1`, `~a1b2`) they order differently, and a manifest naming one
+is refused (`tests/test_appliance_manager_releases.py` checks the accepted ones
+against `dpkg --compare-versions`).
 `appliance/artifact_trust.py`'s `RELEASE_ID` grammar admits no tilde. So a
 candidate has no publishable release id, and the release workflow says so where
 the version is chosen rather than failing five steps later as

@@ -374,3 +374,42 @@ def test_an_ordinary_build_id_is_accepted():
     )
 
     assert release.build_id == "20260826010000"
+
+
+@pytest.mark.parametrize(
+    "version",
+    ["0.3.0~rc1~1", "0.3.0~rc.1", "0.3.0~a1b2", "0.3.0~preview", "0.3", "0.\u0663.0", "0.3.0~rc\u0661"],
+)
+def test_a_version_dpkg_and_the_comparator_may_order_differently_is_refused(version):
+    """version_key and dpkg disagree on these spellings; the docs promised the
+    tilde form was the one they agree on, so only that form is accepted."""
+
+    with pytest.raises(manager_releases.ManagerReleaseError):
+        manager_releases.parse_manifest(manifest(version=version))
+
+
+@pytest.mark.parametrize(
+    "version",
+    ["0.3.0", "0.3.0~rc1", "0.3.0~beta2", "0.3.0~alpha10", "0.0.0~dev", "0.3.0~dev.1a2b3c"],
+)
+def test_the_spellings_both_authorities_order_alike_are_accepted(version):
+    assert manager_releases.parse_manifest(manifest(version=version)).version == version
+
+
+def test_the_accepted_spellings_sort_as_dpkg_sorts_them():
+    import shutil
+    import subprocess
+
+    from appliance.version import version_key
+
+    if shutil.which("dpkg") is None:
+        pytest.skip("dpkg is needed to compare against")
+    corpus = ["0.3.0~alpha1", "0.3.0~alpha10", "0.3.0~alpha2", "0.3.0~beta1", "0.3.0~rc1",
+              "0.3.0~rc10", "0.3.0~rc2", "0.3.0", "0.3.1~rc1", "0.10.0"]
+    for left in corpus:
+        for right in corpus:
+            ours = (version_key(left) > version_key(right)) - (
+                version_key(left) < version_key(right))
+            gt = subprocess.run(["dpkg", "--compare-versions", left, "gt", right]).returncode == 0
+            lt = subprocess.run(["dpkg", "--compare-versions", left, "lt", right]).returncode == 0
+            assert ours == (gt - lt), (left, right)
