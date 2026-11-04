@@ -358,6 +358,12 @@ https only, refused before an http hop is contacted, and the registry's token
 goes to the registry's own host alone: not along a redirect to another host,
 and not to a next page the registry names on one (`release_registry_invalid`).
 
+At most ten pages of 100 tags are read. A registry that still names a next
+page after them is refused as `release_registry_truncated` rather than listed
+in part: GHCR lists the oldest tags first, so a cut list lost the newest
+releases and *Latest stable* resolved to an older Admin without a word. An
+exact tag in Expert mode still installs.
+
 ## "release_index_insecure"
 
 `release_index_url` is not an https URL, or the server it names redirected to

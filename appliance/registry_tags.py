@@ -179,8 +179,16 @@ def _lookup(opener, base, url, deadline):
         listed = payload.get("tags") if isinstance(payload, dict) else None
         tags.extend(item for item in (listed or []) if isinstance(item, str))
         match = _NEXT_LINK.search(link or "")
-        if not match or pages >= MAX_PAGES:
+        if not match:
             break
+        if pages >= MAX_PAGES:
+            # GHCR lists oldest first: a list cut here lost the newest tags,
+            # and "Latest stable" resolved to an older Admin without a word.
+            raise RegistryError(
+                "release_registry_truncated",
+                f"the registry lists more than {MAX_PAGES * PAGE_SIZE} tags, so the newest "
+                "ones cannot be known; install an exact tag",
+            )
         following = urllib.parse.urljoin(base, match.group(1))
         if not release_fetch._same_origin(following, base):
             raise RegistryError(
