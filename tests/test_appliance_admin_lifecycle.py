@@ -381,9 +381,9 @@ def test_a_plan_cancelled_after_its_pull_ends_as_cancelled(tmp_path, monkeypatch
     services.host.publish_image("v1.1.0")
     inspect = services.admin.docker.inspect_image
 
-    def cancel_then_inspect(reference):
+    def cancel_then_inspect(reference, **kwargs):
         _cancel_pending(services)
-        return inspect(reference)
+        return inspect(reference, **kwargs)
 
     monkeypatch.setattr(services.admin.docker, "inspect_image", cancel_then_inspect)
 
@@ -1315,3 +1315,38 @@ def test_a_plan_that_fails_while_it_is_sealed_releases_the_lock(tmp_path, monkey
     assert operation.state == "cancelled"
     assert services.operations.active() is None
     assert [entry["result"] for entry in services.audit.tail()].count("failure") == 1
+
+
+# --- a tag that moved after the Admin was started ------------------------------
+
+
+def test_the_running_admins_digest_is_its_own_repositorys_even_by_id(tmp_path):
+    """Asked by id, the inspect named no repository, and the first repo digest
+    -- a mirror's -- was taken for the Admin's own."""
+
+    services = healthy_appliance(tmp_path)
+    running = services.host.images[f"{ADMIN_REPOSITORY}:v1.0.0"]
+    running["RepoDigests"].insert(0, "mirror.example.org/ems-admin@sha256:" + "f" * 64)
+
+    state = services.admin.detect()
+
+    assert state["digest"] == running["_digest"], state["digest"]
+
+
+def test_the_running_admin_is_the_image_its_container_runs_not_the_one_its_tag_names_now(tmp_path):
+    """Docker reports a container's image by id; the Manager re-resolved the tag
+    it was created from. Once `latest` moved -- pulled for another container --
+    status, verification and the recovery identity all named an image that had
+    never run, and a failed install "recovered" to it."""
+
+    services = healthy_appliance(tmp_path, tag="latest")
+    running = services.host.images[f"{ADMIN_REPOSITORY}:latest"]
+    moved = services.host.publish_image("latest", digest="sha256:" + "b" * 64, version="v1.1.0", revision="bbbbbbb")
+    services.host.pull_local(f"{ADMIN_REPOSITORY}:latest")
+
+    state = services.admin.detect()
+
+    assert services.host.images[f"{ADMIN_REPOSITORY}:latest"] is moved
+    assert state["digest"] == running["_digest"], state["digest"]
+    assert state["revision"] == "abc1234"
+

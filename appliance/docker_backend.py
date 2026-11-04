@@ -210,9 +210,15 @@ class DockerBackend:
 
     # --- images ----------------------------------------------------------
 
-    def inspect_image(self, reference):
+    def inspect_image(self, reference, *, by=None):
+        """The image ``reference`` names; ``by`` inspects another name for it.
+
+        A container's image id is the one name a later pull cannot move, but it
+        carries no repository: the digest is still chosen for ``reference``'s.
+        """
+
         result = self.runner.run(
-            "docker", ["image", "inspect", "--format", "{{json .}}", reference], timeout=60
+            "docker", ["image", "inspect", "--format", "{{json .}}", by or reference], timeout=60
         )
         if not result.ok:
             return ImageState(reference=reference)

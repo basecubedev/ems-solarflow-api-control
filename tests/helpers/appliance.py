@@ -306,7 +306,9 @@ class FakeHost:
         entry = self.images.get(reference) or self.registry.get(reference) or {}
         self.containers[name] = {
             "Id": "c" * 64,
-            "Image": reference,
+            # Docker's own shape: the image the container was created from, by
+            # id. Config.Image keeps the reference, which a later pull can move.
+            "Image": entry.get("Id") or reference,
             "State": {
                 "Running": state == "running",
                 "Restarting": state == "restarting",
@@ -430,7 +432,9 @@ class FakeHost:
             return self._result("docker", args, 0, json.dumps(payload))
         if args[:2] == ["image", "inspect"]:
             reference = args[-1]
-            payload = self.images.get(reference)
+            payload = self.images.get(reference) or next(
+                (entry for entry in self.images.values() if entry.get("Id") == reference), None
+            )
             if payload is None:
                 return self._result("docker", args, 1, "", "No such image")
             return self._result("docker", args, 0, json.dumps(payload))

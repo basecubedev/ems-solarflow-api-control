@@ -395,7 +395,7 @@ class AdminLifecycleService:
 
         image = None
         if container.exists and container.image:
-            image = self.docker.inspect_image(container.image)
+            image = self._running_image(container)
         elif deployment.image_reference and "${" not in deployment.image_reference:
             image = self.docker.inspect_image(deployment.image_reference)
 
@@ -2213,10 +2213,20 @@ class AdminLifecycleService:
             self._sleep(2)
             container = self.docker.inspect_container(self.config.admin_container)
 
+    def _running_image(self, container):
+        """The image the container runs, by the id Docker created it from.
+
+        The reference it was created from can move: once `latest` was pulled
+        anew, status, verification and the recovery identity all named an image
+        that had never run, and a failed install recovered to it.
+        """
+
+        return self.docker.inspect_image(container.image, by=container.image_id or None)
+
     def _active_digest(self, container):
         if not container.exists or not container.image:
             return "", {}
-        image = self.docker.inspect_image(container.image)
+        image = self._running_image(container)
         return (image.digest or ""), dict(image.labels or {})
 
     def verify_admin(
