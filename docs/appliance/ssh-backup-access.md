@@ -126,6 +126,12 @@ Match User ems-backup
     PermitTunnel no
     GatewayPorts no
     PermitOpen none
+    DisableForwarding yes
+    AllowStreamLocalForwarding no
+    PermitListen none
+    AuthorizedKeysFile .ssh/authorized_keys
+    AuthorizedKeysCommand none
+    TrustedUserCAKeys none
     ForceCommand internal-sftp -R -P symlink,hardlink,rename,posix-rename,remove,mkdir,rmdir,setstat,fsetstat,lsetstat,fsync,copy-data
 ```
 
@@ -341,10 +347,17 @@ PasswordAuthentication no         AllowAgentForwarding no
 KbdInteractiveAuthentication no   X11Forwarding no
 PubkeyAuthentication yes          PermitTunnel no
 PermitOpen none                   GatewayPorts no
+DisableForwarding yes             AllowStreamLocalForwarding no
+PermitListen none                 AuthorizedKeysFile .ssh/authorized_keys
+AuthorizedKeysCommand none        TrustedUserCAKeys none
 ```
 
 The forced command is compared exactly, including its full list of denied SFTP
-requests. Everything else is compared against the value above.
+requests. Everything else is compared against the value above. The last three
+pin the one key source the appliance reads, attributes and withdraws: a second
+key file, a key command or a user CA would admit keys it never sees. A
+fail-closed disable expires the account as well, whether or not a key file was
+moved, for wherever those pins are not in force.
 
 Where SSH runs from `ssh.socket`, as the console turns it on wherever the host
 has one, the daemon is restarted rather than reloaded: sshd re-executes itself

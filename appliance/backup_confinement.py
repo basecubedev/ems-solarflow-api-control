@@ -282,11 +282,12 @@ class BackupAccessActivation:
         withdrawn through the account itself instead. Without even the account,
         nothing on the host is this package's to change.
 
-        An account with no authorized key has no access to revoke, so the
-        account itself is only expired once there is key material that an
-        unconfined daemon could accept. A key file that appeared next to an
-        already preserved one is a conflict only an operator can resolve, so
-        both are kept and authentication stays off.
+        The account is expired whether or not a key file was moved: sshd may
+        honour key sources this package does not read (a second key file, a
+        key command, a user CA) wherever the Match block's pins are not in
+        force. A key file that appeared next to an already preserved one is a
+        conflict only an operator can resolve, so both are kept and
+        authentication stays off.
 
         The key file is moved through ``AuthorizedKeysStore``, which never
         follows a symlinked ``.ssh``; with one, nothing is moved, the account
@@ -312,8 +313,7 @@ class BackupAccessActivation:
             for name in entries
             if name.startswith(preserved_name + CONFLICT_SUFFIX)
         ]
-        if preserved or conflicts:
-            self._expire_account()
+        self._expire_account()
         return {
             "state": STATE_DEGRADED,
             "reason": reason,

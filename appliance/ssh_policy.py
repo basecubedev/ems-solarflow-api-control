@@ -53,6 +53,16 @@ REQUIRED_RESTRICTIONS = (
     ("permittunnel", "no"),
     ("gatewayports", "no"),
     ("permitopen", "none"),
+    # Unix-socket forwarding and remote listeners, which the TCP settings above
+    # do not cover; DisableForwarding is the one switch for every kind.
+    ("disableforwarding", "yes"),
+    ("allowstreamlocalforwarding", "no"),
+    ("permitlisten", "none"),
+    # The one key source the appliance reads, attributes and withdraws. A
+    # second file, a key command or a user CA would admit keys it never sees.
+    ("authorizedkeysfile", ".ssh/authorized_keys"),
+    ("authorizedkeyscommand", "none"),
+    ("trustedusercakeys", "none"),
 )
 
 VERIFIED_OPTIONS = (OPTION_CHROOT, OPTION_FORCE_COMMAND) + tuple(

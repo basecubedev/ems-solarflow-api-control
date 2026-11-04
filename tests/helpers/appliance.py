@@ -96,6 +96,12 @@ x11forwarding no
 permittunnel no
 gatewayports no
 permitopen none
+disableforwarding yes
+allowstreamlocalforwarding no
+permitlisten none
+authorizedkeysfile .ssh/authorized_keys
+authorizedkeyscommand none
+trustedusercakeys none
 chrootdirectory {export_root}
 forcecommand internal-sftp -R -P symlink,hardlink,rename,posix-rename,remove,mkdir,rmdir,setstat,fsetstat,lsetstat,fsync,copy-data
 """

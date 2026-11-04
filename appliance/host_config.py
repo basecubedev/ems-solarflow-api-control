@@ -196,6 +196,12 @@ def render_sshd_policy(paths, config, *, shell_access_enabled=None):
         + "    PermitTunnel no\n"
         + "    GatewayPorts no\n"
         + "    PermitOpen none\n"
+        + "    DisableForwarding yes\n"
+        + "    AllowStreamLocalForwarding no\n"
+        + "    PermitListen none\n"
+        + "    AuthorizedKeysFile .ssh/authorized_keys\n"
+        + "    AuthorizedKeysCommand none\n"
+        + "    TrustedUserCAKeys none\n"
         + f"    ForceCommand {FORCED_COMMAND}\n"
         + render_shell_access_block(shell_access_enabled)
     )

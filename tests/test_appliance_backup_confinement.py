@@ -93,6 +93,12 @@ def test_a_compliant_match_block_confirms_every_promised_restriction(tmp_path):
         "x11forwarding",
         "permittunnel",
         "gatewayports",
+        "disableforwarding",
+        "allowstreamlocalforwarding",
+        "permitlisten",
+        "authorizedkeysfile",
+        "authorizedkeyscommand",
+        "trustedusercakeys",
     ):
         assert policy["restrictions"][option]["confirmed"] is True, option
 
@@ -108,6 +114,14 @@ def test_a_compliant_match_block_confirms_every_promised_restriction(tmp_path):
         ("x11forwarding", "yes"),
         ("permittunnel", "yes"),
         ("gatewayports", "yes"),
+        # Unix-socket forwarding: AllowTcpForwarding and PermitOpen do not cover it.
+        ("disableforwarding", "no"),
+        ("allowstreamlocalforwarding", "yes"),
+        ("permitlisten", "any"),
+        # Key sources other than the one file the appliance reads and withdraws.
+        ("authorizedkeysfile", ".ssh/authorized_keys .ssh/authorized_keys2"),
+        ("authorizedkeyscommand", "/usr/local/bin/keys"),
+        ("trustedusercakeys", "/etc/ssh/user-ca.pub"),
     ],
 )
 def test_one_relaxed_restriction_breaks_the_confinement(tmp_path, option, value):
@@ -711,3 +725,20 @@ def test_a_revocation_the_card_has_no_room_to_record_still_withdraws_access(tmp_
     assert report["authentication_disabled"] is True
     assert report["revocation_recorded"] is False
     assert not keys(services).exists()
+
+
+def test_a_fail_closed_disable_expires_the_account_even_without_a_key_file(tmp_path):
+    """Only authorized_keys was read and moved. A second key file, a key command
+    or a user CA sshd honours outside the Match block's pins stayed live while
+    the report said authentication was disabled."""
+
+    services = appliance(tmp_path)
+    if keys(services).exists():
+        keys(services).unlink()
+
+    report = activation(services).disable(reason="export_failed")
+
+    assert report["authentication_disabled"] is True, report
+    assert ("chage", ("-E", "1", "ems-backup")) in [
+        (tool, args) for tool, args, _ in services.host.calls
+    ], services.host.calls
