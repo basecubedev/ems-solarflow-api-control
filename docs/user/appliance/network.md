@@ -55,9 +55,12 @@ lose contact for a moment. A stored passphrase is never shown again.
 
 A wrong passphrase would otherwise leave a box you cannot reach and cannot fix
 without a keyboard. So the appliance treats the change as a trial: it joins,
-and if the WLAN has not joined that network and held an address within about
-ninety seconds, it returns to the previous WLAN profile on its own. The
-previous profile is never deleted.
+and if the join is refused — a wrong passphrase, or a network nmcli gives up
+on after its own ninety seconds — it returns to the previous WLAN profile at
+once; if the join succeeds but the WLAN has not held an address
+within about ninety seconds, it returns then. Joining and returning can each
+take up to ninety seconds more, so the appliance can be offline for up to about
+four minutes. The previous profile is never deleted.
 
 That way back exists **only when the appliance is already on a WLAN**. On an
 appliance that so far ran on the cable alone, the first WLAN join has nothing
@@ -144,7 +147,7 @@ the EMS opens its hour-based windows in your time zone.
 
 | Symptom | Meaning | What to do |
 | --- | --- | --- |
-| The page stopped answering after **Apply** on a WLAN change | The appliance is trying the new network | Wait two minutes; with a previous WLAN it comes back by itself. With the cable in, the old address keeps working |
+| The page stopped answering after **Apply** on a WLAN change | The appliance is trying the new network | Wait up to four minutes; with a previous WLAN it comes back by itself. With the cable in, the old address keeps working |
 | *The appliance does not answer to this address* | The page is open under the old name after a rename | Open the new name, or the IP address |
 | *That is already the appliance's time zone* | Nothing to change | — |
 | **Scan networks** finds nothing | No network is visible from here | A hidden network can still be typed in |

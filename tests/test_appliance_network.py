@@ -742,3 +742,46 @@ def test_a_wifi_retry_after_a_restart_does_not_join_without_its_passphrase(tmp_p
     assert record.state == STATE_FAILED_TERMINAL, record.to_dict()
     assert record.error["code"] == "wifi_passphrase_lost"
     assert not [args for tool, args, _ in services.host.calls if tool == "nmcli" and "connect" in args]
+
+
+def test_a_wifi_plan_shows_the_strongest_access_point_of_its_network(tmp_path, monkeypatch):
+    """The plan kept the last entry per SSID of a list sorted strongest
+    first: a mesh network was planned at its weakest signal and security."""
+
+    services = build_test_services(tmp_path)
+    monkeypatch.setattr(
+        services.network,
+        "scan",
+        lambda rescan=False: [
+            {"ssid": "GuestNet", "signal": 82, "security": "WPA2", "active": False},
+            {"ssid": "GuestNet", "signal": 24, "security": "WPA3", "active": False},
+        ],
+    )
+
+    plan = handlers_for(services).dispatch(
+        {"operation": "network.wifi.plan", "ssid": "GuestNet", "passphrase": PASSPHRASE}
+    )["plan"]
+
+    assert (plan["signal"], plan["security"]) == (82, "WPA2")
+
+
+def test_a_wifi_join_nmcli_refused_is_reverted_at_once(tmp_path, monkeypatch):
+    """A mistyped passphrase was followed by the full connectivity wait before
+    the revert: up to four and a half minutes offline."""
+
+    services = build_test_services(tmp_path)
+    waited = []
+    monkeypatch.setattr(services.network, "_wait_for_wifi", lambda ssid: waited.append(ssid) or False)
+    real = services.host._nmcli
+
+    def refuses_the_join(args):
+        if "connect" in args:
+            return services.host._result("nmcli", args, 4, "", "Error: Connection activation failed: Secrets were required")
+        return real(args)
+
+    monkeypatch.setattr(services.host, "_nmcli", refuses_the_join)
+
+    operation, _ = plan_and_execute(services, "network.wifi.plan", ssid="GuestNet", passphrase=PASSPHRASE)
+
+    assert waited == [], "it waited for a link nmcli had already refused"
+    assert operation.state == STATE_FAILED_TERMINAL, operation.to_dict()

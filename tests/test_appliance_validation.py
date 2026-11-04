@@ -513,3 +513,12 @@ def test_a_line_count_is_an_integer_and_nothing_else(value):
 
     with pytest.raises(ValidationError):
         validate_line_count(value)
+
+
+@pytest.mark.parametrize("name", ["localhost", "LocalHost"])
+def test_localhost_is_not_a_hostname_the_appliance_can_take(name):
+    """systemd and the web treat it as no hostname at all; the plan promised
+    http://localhost.local:8088, which reaches nothing."""
+
+    with pytest.raises(ValidationError):
+        validation.validate_hostname(name)

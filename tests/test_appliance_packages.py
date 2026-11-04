@@ -959,6 +959,25 @@ def test_any_other_failed_check_is_not_held_against_the_package_manager(tmp_path
     assert state.healthy is True
 
 
+DPKG_AUDIT_TWO_PACKAGES = """The following packages are only half configured, probably due to problems
+configuring them the first time.  The configuration should be retried using
+dpkg --configure <package> or the configure menu option in dselect:
+ libfoo               a library
+
+The following packages have been unpacked but not yet configured.
+They must be configured using dpkg --configure or the configure
+menu option in dselect for them to work:
+ libbar               another library
+"""
+
+
+def test_dpkg_audit_counts_the_packages_it_names_not_its_sentences():
+    """Only the first line of each paragraph was skipped: two broken packages
+    read as twelve dpkg issues."""
+
+    assert parse_dpkg_audit(DPKG_AUDIT_TWO_PACKAGES) == ["libfoo               a library", "libbar               another library"]
+
+
 def test_a_reboot_is_not_planned_while_apt_installs(tmp_path):
     services = appliance(tmp_path)
     lock = tmp_path / "var" / "lib" / "dpkg" / "lock-frontend"

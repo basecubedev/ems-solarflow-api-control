@@ -21,6 +21,7 @@ from pathlib import Path
 
 from dataclasses import dataclass, field
 
+from appliance.admin_lifecycle import command_failure_detail
 from appliance.commands import CommandError
 from appliance.operations import STATE_FAILED_TERMINAL, STATE_SUCCEEDED, STATE_VERIFYING
 from appliance.paths import atomic_write
@@ -400,7 +401,11 @@ class NetworkService:
             raise NetworkError("network_manager_unavailable", "NetworkManager is not available")
 
         previous = self.active_wifi_profile()
-        networks = {item["ssid"]: item for item in self.scan(rescan=True)}
+        networks = {}
+        # The scan is sorted strongest first; one SSID on several access
+        # points is planned as the one the appliance will join.
+        for item in self.scan(rescan=True):
+            networks.setdefault(item["ssid"], item)
         visible = networks.get(ssid)
         if visible is None and not hidden:
             raise NetworkError(
@@ -586,8 +591,13 @@ class NetworkService:
             input_text = f"{passphrase}\n"
         result = self.runner.run("nmcli", args, timeout=90, input_text=input_text)
 
-        self._advance(operation, "waiting_for_connectivity", state=STATE_VERIFYING)
-        connected = self._wait_for_wifi(ssid)
+        # A join nmcli refused -- a mistyped passphrase -- is reverted at once;
+        # waiting for its connectivity first kept the appliance offline for
+        # minutes more.
+        connected = False
+        if result.ok:
+            self._advance(operation, "waiting_for_connectivity", state=STATE_VERIFYING)
+            connected = self._wait_for_wifi(ssid)
 
         if result.ok and connected:
             self.disarm_revert()
@@ -600,6 +610,11 @@ class NetworkService:
             self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
             return payload
 
+        reason = (
+            "the new WLAN did not reach connectivity"
+            if result.ok
+            else f"nmcli could not join {ssid}: {command_failure_detail(result)}"
+        )
         self._advance(operation, "reverting_wifi")
         reverted = self._revert(previous)
         # Kept when the revert did not happen, so the next agent start tries
@@ -618,12 +633,11 @@ class NetworkService:
             stage="reverted" if reverted else "revert_failed",
             error={
                 "code": "wifi_connection_failed",
-                "message": "the new WLAN did not reach connectivity"
-                + ("; the previous network was restored" if reverted else ""),
+                "message": reason + ("; the previous network was restored" if reverted else ""),
             },
             result=payload,
         )
-        raise NetworkError("wifi_connection_failed", "the new WLAN did not reach connectivity")
+        raise NetworkError("wifi_connection_failed", reason)
 
     def _wait_for_wifi(self, ssid):
         deadline = self._time() + self.config.wifi_revert_timeout_seconds

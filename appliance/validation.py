@@ -301,6 +301,11 @@ def validate_hostname(value):
             "invalid_hostname",
             "hostname must be an RFC 1123 label of letters, digits and hyphens",
         )
+    if is_localhost(lowered):
+        raise ValidationError(
+            "invalid_hostname",
+            "localhost is no name for the appliance: systemd treats it as no hostname at all",
+        )
     return lowered
 
 

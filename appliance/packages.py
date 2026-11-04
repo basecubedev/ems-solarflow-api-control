@@ -223,12 +223,24 @@ def parse_held_packages(text):
 
 
 def parse_dpkg_audit(text):
+    """The packages `dpkg --audit` names, one indented line each.
+
+    Each group opens with a sentence over several unindented lines; only the
+    first of them was skipped, and two broken packages read as twelve issues.
+    """
+
     issues = []
+    prose = False
     for line in (text or "").splitlines():
-        entry = line.strip()
-        if not entry or entry.startswith("The following"):
-            continue
-        issues.append(entry)
+        if not line.strip():
+            prose = False
+        elif line[:1].isspace():
+            prose = False
+            issues.append(line.strip())
+        elif prose or line.startswith("The following"):
+            prose = True
+        else:
+            issues.append(line.strip())
     return issues
 
 
