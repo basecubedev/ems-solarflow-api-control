@@ -326,13 +326,23 @@ class OperationStore:
             )
         return operation
 
+    @staticmethod
+    def _require_token(operation, token):
+        if not secrets.compare_digest(str(operation.confirmation_token), str(token or "")):
+            raise OperationError("confirmation_token_mismatch", "confirmation token is invalid")
+
+    def require_token(self, operation_id, token):
+        """Refuse a caller who never saw this plan, before anything else is judged."""
+
+        with self._lock:
+            self._require_token(self._load(operation_id), token)
+
     def confirm(self, operation_id, token):
         """Start execution. The token proves the caller saw *this* plan."""
 
         with self._lock:
             operation = self._load(operation_id)
-            if not secrets.compare_digest(str(operation.confirmation_token), str(token or "")):
-                raise OperationError("confirmation_token_mismatch", "confirmation token is invalid")
+            self._require_token(operation, token)
             self._transition(operation, STATE_RUNNING)
             operation.stage = "running"
             operation.host_down_boot = ""
@@ -341,8 +351,7 @@ class OperationStore:
     def retry(self, operation_id, token):
         with self._lock:
             operation = self._load(operation_id)
-            if not secrets.compare_digest(str(operation.confirmation_token), str(token or "")):
-                raise OperationError("confirmation_token_mismatch", "confirmation token is invalid")
+            self._require_token(operation, token)
             # No longer holding the slot is not the same permission as taking
             # it back while somebody else has it.
             active = self.active()

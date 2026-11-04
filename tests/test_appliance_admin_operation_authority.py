@@ -14,7 +14,7 @@ import json
 import pytest
 
 from appliance.agent import AgentError, AgentHandlers
-from appliance.operations import STATE_FAILED_TERMINAL
+from appliance.operations import STATE_AWAITING_CONFIRMATION, STATE_FAILED_TERMINAL
 from tests.helpers.appliance import (
     ADMIN_CONTAINER,
     ADMIN_REPOSITORY,
@@ -220,6 +220,73 @@ def test_a_record_from_an_older_schema_does_not_execute_a_non_admin_operation(tm
         call for call in services.host.calls if call[0] == "systemctl" and "reboot" in call[1]
     ]
     assert not rebooted, services.host.calls
+
+
+def _from_an_older_manager(payload):
+    from appliance import operation_schema
+
+    payload["schema_version"] = 1
+    target = payload["requested_target"]
+    target[operation_schema.AUTHORITY_FIELD] = operation_schema.authority_fingerprint(
+        operation_id=payload["operation_id"],
+        operation_type=payload["type"],
+        schema_version=1,
+        target=target,
+        plan_hash=target[operation_schema.AUTHORITY_PLAN_FIELD],
+    )
+
+
+def test_a_wrong_token_does_not_end_a_record_an_older_manager_wrote(tmp_path):
+    """The schema was judged before the token: a stale page or a double submit
+    ended any such record, whoever sent it."""
+
+    services = appliance(tmp_path)
+    planned = handlers(services).dispatch({"operation": "system.plan_reboot"})
+    corrupt(services, planned, _from_an_older_manager)
+
+    with pytest.raises(AgentError) as excinfo:
+        handlers(services).dispatch(
+            {
+                "operation": "operations.execute",
+                "operation_id": planned["operation"]["operation_id"],
+                "confirmation_token": planned["confirmation_token"][::-1],
+            }
+        )
+
+    assert excinfo.value.code == "confirmation_token_mismatch"
+    operation = services.operations.get(planned["operation"]["operation_id"])
+    assert operation.state == STATE_AWAITING_CONFIRMATION, operation.to_dict()
+
+
+def test_a_refused_record_keeps_its_plan_and_claims_nothing_about_the_admin(tmp_path):
+    services = appliance(tmp_path)
+    planned = handlers(services).dispatch({"operation": "system.plan_reboot"})
+    corrupt(services, planned, _from_an_older_manager)
+
+    operation = execute(services, planned)
+
+    assert operation.state == STATE_FAILED_TERMINAL
+    assert "admin_untouched" not in operation.result, operation.result
+    assert operation.result["plan"]["action"] == "reboot", operation.result
+
+
+def test_a_refused_confirmation_never_ends_an_operation_that_is_running(tmp_path):
+    services = appliance(tmp_path)
+    planned = handlers(services).dispatch({"operation": "system.plan_reboot"})
+    operation_id = planned["operation"]["operation_id"]
+    services.operations.confirm(operation_id, planned["confirmation_token"])
+    corrupt(services, planned, _from_an_older_manager)
+
+    with pytest.raises(AgentError):
+        handlers(services).dispatch(
+            {
+                "operation": "operations.execute",
+                "operation_id": operation_id,
+                "confirmation_token": planned["confirmation_token"],
+            }
+        )
+
+    assert services.operations.get(operation_id).state == "running"
 
 
 def test_a_malformed_digest_does_not_execute(tmp_path):

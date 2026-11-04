@@ -56,6 +56,7 @@ from appliance.audit import (
 from appliance.redaction import redact_text
 from appliance.release_fetch import FetchError
 from appliance.operations import (
+    STATE_AWAITING_CONFIRMATION,
     STATE_FAILED_RECOVERABLE,
     STATE_FAILED_TERMINAL,
     STATE_SUCCEEDED,
@@ -522,6 +523,13 @@ class AgentHandlers:
         # The token proves the caller saw a plan; the authority proves the plan
         # they saw is still the one on disk. A record whose target changed after
         # the confirmation was rendered is refused before anything is confirmed.
+        # The token first: a refusal ends the record, and a stale page or a
+        # double submit must not be able to end one.
+        try:
+            store.require_token(operation_id, token)
+        except OperationError as exc:
+            self._audit(current.type, actor, source_ip, RESULT_DENIED, operation_id)
+            raise AgentError(exc.code, exc.message)
         try:
             operation_schema.validate_confirmation(
                 current,
@@ -529,13 +537,19 @@ class AgentHandlers:
                 architectures=self.services.config.supported_architectures,
             )
         except operation_schema.OperationSchemaError as exc:
-            store.finish(
-                operation_id,
-                STATE_FAILED_TERMINAL,
-                stage="preflight_failed",
-                result={"stage": "preflight", "admin_untouched": True},
-                error={"code": exc.code, "message": exc.message},
-            )
+            if current.state in (STATE_AWAITING_CONFIRMATION, STATE_FAILED_RECOVERABLE):
+                result = dict(current.result or {}) | {"stage": "preflight"}
+                # Proven only for a plan that never ran; a retried one may
+                # have stopped the Admin before it was interrupted.
+                if current.state == STATE_AWAITING_CONFIRMATION and current.type.startswith("admin."):
+                    result["admin_untouched"] = True
+                store.finish(
+                    operation_id,
+                    STATE_FAILED_TERMINAL,
+                    stage="preflight_failed",
+                    result=result,
+                    error={"code": exc.code, "message": exc.message},
+                )
             self._audit(current.type, actor, source_ip, RESULT_DENIED, operation_id)
             raise AgentError(exc.code, exc.message)
 
