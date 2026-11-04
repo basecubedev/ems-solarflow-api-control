@@ -52,7 +52,10 @@
       : !sources
         ? { key: "updates.checking", tone: "c-idle" }
         : sources.error
-          ? { key: "updates.manager.indexUnreadable", tone: "c-fault" }
+          ? {
+              key: sources.error === "release_source_insecure" ? "updates.manager.indexInsecure" : "updates.manager.indexUnreadable",
+              tone: "c-fault",
+            }
           : !sources.configured
             ? { key: "updates.manager.noIndex", tone: "c-idle" }
             : !managerLatest

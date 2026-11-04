@@ -1690,3 +1690,20 @@ def test_an_install_whose_deadline_could_not_be_armed_leaves_the_running_package
     assert manager_retention.read(services.paths).current.version == "0.1.0"
     started = [call for call in services.host.calls if call[0] == "systemctl"]
     assert not any(manager_install.INSTALL_UNIT in " ".join(call[1]) for call in started)
+
+
+@pytest.mark.parametrize(
+    ("url", "code"),
+    [("http://mirror.example.org/manager-index.json", "release_source_insecure"), ("https:///manager-index.json", "release_source_invalid")],
+)
+def test_a_manager_index_url_that_is_refused_says_why_not_that_none_is_set(tmp_path, url, code):
+    """https_url refused it and sources() dropped the reason: the Updates card
+    said "No index" and the plan blamed a missing setting."""
+
+    services, service = build(tmp_path)
+    service.config = service.config.__class__(**{**service.config.__dict__, "manager_index_url": url})
+
+    listing = service.sources()
+
+    assert listing["configured"] is True
+    assert listing["error"] == code

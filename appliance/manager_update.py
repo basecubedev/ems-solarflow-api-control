@@ -266,7 +266,12 @@ class ManagerUpdateService:
             url = release_fetch.https_url(
                 self.config.manager_index_url, label="the manager package index url"
             )
-        except release_fetch.FetchError:
+        except release_fetch.FetchError as exc:
+            # An http or malformed url is configured, just refused: reported as
+            # unconfigured, the card said "No index" and the plan blamed a
+            # missing setting.
+            if exc.code != "release_source_unconfigured":
+                listing.update(configured=True, error=exc.code, error_message=exc.message)
             return listing
         listing["configured"] = True
         try:
@@ -304,7 +309,8 @@ class ManagerUpdateService:
             )
         if listing["error"]:
             raise ManagerUpdateError(
-                listing["error"], "the manager package index could not be read"
+                listing["error"],
+                listing.get("error_message") or "the manager package index could not be read",
             )
         for candidate in listing["releases"]:
             if candidate["release_id"] == wanted:

@@ -239,7 +239,10 @@ tidiness; it is what makes the paragraph below true.
 
 1. The configured index (`manager_index_url` in `appliance.conf`) is fetched.
    Nothing in it is trusted: an entry may name a candidate and three `https`
-   URLs, and that is all it is allowed to decide.
+   URLs, and that is all it is allowed to decide. An `http://` or malformed
+   URL is refused, never upgraded, and the card says so — *Package index is
+   not https*, or the index as unreadable with the reason — rather than that
+   no index is configured.
 2. The manifest and its detached signature are fetched, and the signature is
    verified against the keyring the appliance already ships. One trust anchor,
    root-owned, and never reachable from a request.

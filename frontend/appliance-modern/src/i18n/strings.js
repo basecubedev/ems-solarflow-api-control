@@ -404,6 +404,7 @@ export const STRINGS = {
   "updates.manager.sub": s("This console and the agent behind it", "Diese Oberfläche und der Agent dahinter", "Deze console en de agent erachter", "Cette console et l’agent derrière elle"),
   "updates.manager.stateUnavailable": s("Manager state unavailable", "Manager-Zustand nicht verfügbar", "Managerstatus niet beschikbaar", "État du Manager indisponible"),
   "updates.manager.indexUnreadable": s("Package index unreadable", "Paketindex nicht lesbar", "Pakketindex niet leesbaar", "Index des paquets illisible"),
+  "updates.manager.indexInsecure": s("Package index is not https", "Paketindex ist kein https", "Pakketindex is geen https", "L’index de paquets n’est pas en https"),
   "updates.manager.noIndex": s("No package index configured", "Kein Paketindex eingerichtet", "Geen pakketindex ingesteld", "Aucun index de paquets configuré"),
   "updates.manager.noStable": s("No stable release offered", "Keine stabile Version angeboten", "Geen stabiele versie aangeboden", "Aucune version stable proposée"),
   "updates.admin.title": s("EMS Admin", "EMS-Verwaltung", "EMS-beheer", "Administration EMS"),
