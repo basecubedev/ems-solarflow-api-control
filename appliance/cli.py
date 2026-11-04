@@ -9,6 +9,7 @@ the previously installed package.
 
 import argparse
 import datetime
+import fcntl
 import json
 import os
 import sys
@@ -79,7 +80,14 @@ def _client(paths, *, local=False):
             "the appliance agent is not running and this command needs root; "
             "run it with sudo or start ems-appliance-agent.service"
         )
-    return InProcessAgentClient(AgentHandlers(build_services(paths=paths)))
+    # This stack is the agent for as long as the command runs: one systemd
+    # restarts meanwhile would recover its live operation as interrupted.
+    claim = _claim_agent(paths)
+    if claim is False:
+        raise SystemExit("the appliance agent is starting; try again in a moment")
+    client = InProcessAgentClient(AgentHandlers(build_services(paths=paths)))
+    client.agent_lock = claim
+    return client
 
 
 def command_status(args):
@@ -825,9 +833,46 @@ def command_backup_account(args):
     return EXIT_OK if completed.returncode == 0 else EXIT_ERROR
 
 
+AGENT_LOCK_NAME = "agent.lock"
+
+
+def _claim_agent(paths):
+    """Make this the only agent: a held lock file, None when none could be made, or False.
+
+    A second agent -- run by hand over SSH while the service runs -- recovered
+    the live one's operations as interrupted, took over its socket and removed
+    it on exit, and nobody could sign in until the service was restarted. The
+    socket answering covers the agent that is serving; the lock covers two
+    starting at once, and the console's own stack. It lives in agent state:
+    systemd removes the runtime directory whenever the unit stops, which is
+    the only time that stack runs.
+    """
+
+    if AgentClient(paths.agent_socket).available():
+        return False
+    try:
+        handle = open(paths.agent_state_dir / AGENT_LOCK_NAME, "a", encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return False
+    return handle
+
+
 def command_agent(args):
     paths = resolve_paths()
     ensure_directories(paths, role="agent")
+    claim = _claim_agent(paths)
+    if claim is False:
+        print(
+            "error: an appliance agent is already running; stop ems-appliance-agent.service "
+            "before starting another",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
     if os.geteuid() == 0:
         write_report(paths, migrate_state(paths))
     if os.geteuid() != 0:
