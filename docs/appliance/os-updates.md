@@ -166,6 +166,13 @@ accepts from the agent, and the banner and the status page stopped updating.
 Expert mode adds **Plan all updates**. It uses the same plan, confirmation and
 verification path.
 
+Either install puts on exactly what its plan showed. The plan records each
+package with its version, and before apt runs the offer is read again: if the
+index changed in between — `apt-daily` refreshes it twice a day — the install is
+refused with `updates_changed_since_plan`, and a new plan shows what would now
+be installed. *Install all updates* used to run whatever the index offered at
+Confirm, a kernel the operator never saw included.
+
 ## Package-manager recovery (Expert mode)
 
 **Package-manager recovery** on **Updates** is always shown in Expert, and in

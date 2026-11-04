@@ -867,6 +867,33 @@ def test_a_refresh_from_an_unreachable_mirror_leaves_the_index_old(tmp_path):
     assert services.packages.check().index_age_seconds >= 10 * 24 * 60 * 60
 
 
+@pytest.mark.parametrize("scope", ["security", "all"])
+def test_an_install_does_not_put_on_what_the_plan_never_showed(tmp_path, scope):
+    """The plan showed three packages; apt-daily refreshed the index before
+    Confirm, and the install put on forty, a kernel among them."""
+
+    services = appliance(tmp_path)
+    services.host.apt_simulation = SECURITY_ONLY
+    handlers = handlers_for(services)
+    planned = handlers.dispatch({"operation": "updates.plan", "scope": scope})
+    services.host.apt_simulation = SECURITY_ONLY + WITH_KERNEL
+    services.host.calls.clear()
+
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+
+    operation = services.operations.get(planned["operation"]["operation_id"])
+    assert operation.state == STATE_FAILED_TERMINAL, operation.to_dict()
+    assert operation.error["code"] == "updates_changed_since_plan"
+    installs = [args for tool, args, _ in services.host.calls if tool == "apt-get" and "-s" not in args]
+    assert installs == [], installs
+
+
 def test_a_reboot_is_not_planned_while_apt_installs(tmp_path):
     services = appliance(tmp_path)
     lock = tmp_path / "var" / "lib" / "dpkg" / "lock-frontend"

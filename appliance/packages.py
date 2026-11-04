@@ -409,7 +409,11 @@ class PackageService:
         if not targets and not blockers:
             raise PackageError("no_updates_available", "there is nothing to install")
 
-        values = {"scope": scope, "packages": [item.name for item in targets]}
+        values = {
+            "scope": scope,
+            "packages": [item.name for item in targets],
+            "versions": {item.name: item.new_version for item in targets},
+        }
         operation.requested_target.update(values)
         self.operations.update_target(operation.operation_id, values)
 
@@ -543,15 +547,28 @@ class PackageService:
 
     def _execute_install(self, operation):
         scope = operation.requested_target.get("scope")
-        packages = [
-            name
-            for name in operation.requested_target.get("packages", [])
-            if PACKAGE_NAME_RE.match(str(name))
-        ]
+        packages = [str(name) for name in operation.requested_target.get("packages", [])]
 
         self._advance(operation, "preflight")
         state = self.check()
         blockers = self._blockers(state)
+        if not all(PACKAGE_NAME_RE.match(name) for name in packages):
+            blockers.append(
+                {"code": "plan_invalid", "message": "the plan names a package that is not a package name; plan again"}
+            )
+        # apt-daily refreshes the index twice a day: what it offers at Confirm
+        # is not what the plan showed, and "all" installs whatever it offers.
+        planned = operation.requested_target.get("versions")
+        if isinstance(planned, dict):
+            offered = state.security_updates if scope == UPDATE_SCOPE_SECURITY else state.updates
+            if {item.name: item.new_version for item in offered} != planned:
+                blockers.append(
+                    {
+                        "code": "updates_changed_since_plan",
+                        "message": "the package index changed since this plan was made; "
+                        "plan again to see what would now be installed",
+                    }
+                )
         if blockers:
             self.operations.finish(
                 operation.operation_id,
