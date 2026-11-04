@@ -159,8 +159,16 @@ strictly defined actions, each a plan confirmed with **Run repair**, beside
 
 | Action | What it runs |
 |---|---|
-| **Complete pending configuration** | `dpkg --configure -a` |
-| **Repair dependencies** | `apt-get -y -f install` |
+| **Complete pending configuration** | `dpkg --force-confold --configure -a` |
+| **Repair dependencies** | `apt-get -y --no-remove -o Dpkg::Options::=--force-confold -f install` |
+
+`--force-confold` keeps a configuration file you edited, as every install does;
+without it the repair stopped at dpkg's question with nobody to answer it. A
+dependency repair never removes a package: its plan asks apt first what it
+would do and refuses with `repair_would_remove_packages`, naming them, when the
+only repair apt knows is a removal — one of them may be the Manager itself,
+whose removal stops the agent running the repair. Such a repair belongs at the
+console, where you decide what goes.
 
 There are no free-form apt arguments. **A real active package-manager lock is
 never removed** — the operation refuses with `package_lock_held` and asks you to

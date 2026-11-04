@@ -1592,3 +1592,18 @@ def test_prerm_names_the_directory_the_agent_keeps_the_deadline_in():
     )
     prerm = (PACKAGING / "debian" / "prerm").read_text(encoding="utf-8")
     assert f"PACKAGES=${{EMS_APPLIANCE_PACKAGES_DIR:-{installed.packages_dir}}}" in prerm
+
+
+def test_every_dpkg_configure_the_appliance_runs_keeps_an_edited_conffile():
+    """Run with stdin on /dev/null, a conffile prompt ends in "EOF on stdin": the
+    cure the installer and the deadline depend on then fails for good."""
+
+    for name in ("install-manager.sh", "verify-manager.sh"):
+        script = (PACKAGING / "bin" / name).read_text(encoding="utf-8")
+        calls = [
+            line.strip()
+            for line in script.splitlines()
+            if not line.lstrip().startswith("#") and line.strip().startswith("dpkg ") and "--configure" in line
+        ]
+        assert calls, name
+        assert all("--force-confold" in call for call in calls), (name, calls)

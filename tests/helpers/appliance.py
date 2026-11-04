@@ -630,7 +630,7 @@ class FakeHost:
             return self._result("dpkg", args, 0, self.dpkg_selections)
         if args[:1] == ["--audit"]:
             return self._result("dpkg", args, 0, self.dpkg_audit)
-        if args[:1] == ["--configure"]:
+        if "--configure" in args:
             self.dpkg_audit = ""
             return self._result("dpkg", args, 0, "Setting up pending packages\n")
         return self._result("dpkg", args, 0)

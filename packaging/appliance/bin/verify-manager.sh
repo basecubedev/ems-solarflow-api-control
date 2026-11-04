@@ -261,7 +261,7 @@ fi
 # what this clears. Running it only once the attempts were spent meant every
 # retry failed for a reason already in hand. install-manager.sh does it in this
 # order and says why.
-dpkg --configure -a || true
+dpkg --force-confold --configure -a || true
 
 if [ "$attempts" -lt "$REVERT_ATTEMPTS" ]; then
     echo "verify-manager: $PREVIOUS was refused (attempt $attempts of $REVERT_ATTEMPTS); the next tick tries again" >&2

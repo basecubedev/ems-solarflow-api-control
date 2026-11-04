@@ -189,7 +189,7 @@ fi
 echo "install-manager: the install failed; attempting to complete it" >&2
 # A half-configured package is the state everything else here is trying to
 # avoid, so try the ordinary cure once before reaching for the previous package.
-dpkg --configure -a || true
+dpkg --force-confold --configure -a || true
 
 # Whether the cure worked is a question about dpkg's database, not about an
 # exit code: an install that failed before unpacking leaves nothing to

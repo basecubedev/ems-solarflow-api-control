@@ -444,7 +444,7 @@ def test_pending_configuration_repair_runs_dpkg_configure(tmp_path):
     operation, _ = plan_and_execute(services, "updates.plan_repair", action="configure_pending")
 
     assert operation.state == STATE_SUCCEEDED
-    assert ("dpkg", ("--configure", "-a"), None) in services.host.calls
+    assert ("dpkg", ("--force-confold", "--configure", "-a"), None) in services.host.calls
     assert operation.result["package_manager"]["healthy"] is True
 
 
@@ -1065,3 +1065,45 @@ def test_a_plan_after_apts_daily_refresh_does_not_refresh_again(tmp_path):
     handlers_for(services).dispatch({"operation": "updates.plan", "scope": "security"})
 
     assert _apt_updates(services) == []
+
+
+# --- repairs that never remove and never prompt --------------------------------
+
+
+def _repair_calls(services):
+    return [(tool, list(args)) for tool, args, _ in services.host.calls if tool in ("apt-get", "dpkg")]
+
+
+def test_a_dependency_repair_that_would_remove_packages_is_refused_in_the_plan(tmp_path):
+    """apt resolves an unpacked Manager with an unmet Depends by removing it,
+    and its prerm stops the agent that is running apt."""
+
+    services = appliance(tmp_path)
+    services.host.apt_simulation = (
+        "Remv ems-appliance-manager [0.4.1]\nInst libfoo [1.0-1] (1.0-2 Debian:13/stable [arm64])\n"
+    )
+
+    planned = handlers_for(services).dispatch({"operation": "updates.plan_repair", "action": "fix_broken"})
+
+    assert planned["plan"]["removals"] == ["ems-appliance-manager"]
+    assert [b["code"] for b in planned["plan"]["blockers"]] == ["repair_would_remove_packages"]
+
+
+def test_the_dependency_repair_never_removes_and_never_prompts(tmp_path):
+    services = appliance(tmp_path)
+    services.host.calls.clear()
+
+    plan_and_execute(services, "updates.plan_repair", action="fix_broken")
+
+    runs = [args for tool, args in _repair_calls(services) if tool == "apt-get" and "-s" not in args]
+    assert runs and all("--no-remove" in args and "Dpkg::Options::=--force-confold" in args for args in runs)
+
+
+def test_configuring_pending_packages_keeps_an_edited_conffile(tmp_path):
+    services = appliance(tmp_path)
+    services.host.calls.clear()
+
+    plan_and_execute(services, "updates.plan_repair", action="configure_pending")
+
+    runs = [args for tool, args in _repair_calls(services) if tool == "dpkg" and "--configure" in args]
+    assert runs and all("--force-confold" in args for args in runs)

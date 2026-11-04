@@ -47,6 +47,7 @@ TYPE_UPDATE_REPAIR = "updates.repair"
 
 PACKAGE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9+._-]*$")
 INST_LINE = re.compile(r"^Inst\s+(\S+)\s+(?:\[(\S+)\]\s+)?\((\S+)\s+([^)]*)\)")
+REMV_LINE = re.compile(r"^Remv\s+(\S+)")
 
 KERNEL_PREFIXES = ("linux-image", "linux-headers", "raspberrypi-kernel")
 FIRMWARE_PREFIXES = ("raspi-firmware", "raspberrypi-bootloader", "firmware-", "rpi-eeprom")
@@ -430,15 +431,45 @@ class PackageService:
         values = {"action": action}
         operation.requested_target.update(values)
         self.operations.update_target(operation.operation_id, values)
+        blockers = [
+            blocker for blocker in self._blockers(state) if blocker["code"] == "package_lock_held"
+        ]
+        removals = self._repair_removals() if action == PACKAGE_REPAIR_FIX_BROKEN else []
+        if removals:
+            blockers.append(
+                {
+                    "code": "repair_would_remove_packages",
+                    "message": "apt can only repair the dependencies by removing "
+                    + ", ".join(removals)
+                    + "; removing packages is refused here, and one of them may be this "
+                    "console. Repair them at the console, deciding what to remove.",
+                }
+            )
         return {
             "type": TYPE_UPDATE_REPAIR,
             "action": action,
             "dpkg_issues": state.dpkg_issues,
             "lock_state": state.lock_state,
-            "blockers": [
-                blocker for blocker in self._blockers(state) if blocker["code"] == "package_lock_held"
-            ],
+            "removals": removals,
+            "blockers": blockers,
         }
+
+    def _repair_removals(self):
+        """What `apt-get -f install` would remove, asked without letting it.
+
+        A Manager package left unpacked with a dependency it cannot meet is one
+        apt resolves by removing it -- and its prerm stops the agent running apt.
+        """
+
+        simulated = self.runner.run(
+            "apt-get", ["-s", "-o", "Debug::NoLocking=1", "-f", "install"], timeout=APT_SIMULATE_TIMEOUT
+        )
+        names = []
+        for line in (simulated.stdout or "").splitlines():
+            match = REMV_LINE.match(line.strip())
+            if match and PACKAGE_NAME_RE.match(match.group(1)):
+                names.append(match.group(1))
+        return sorted(set(names))
 
     def _root_is_read_only(self):
         try:
@@ -597,10 +628,20 @@ class PackageService:
             raise PackageError("package_lock_held", "another package manager holds the lock")
 
         self._advance(operation, f"repair_{action}")
+        # --force-confold: the agent's stdin is /dev/null, so a conffile prompt
+        # ended the repair with "EOF on stdin"; an operator's edited conffile
+        # is kept, as on every install. --no-remove: apt fails rather than
+        # removing a package, the plan having shown that none would be.
         if action == PACKAGE_REPAIR_CONFIGURE:
-            result = self.runner.run("dpkg", ["--configure", "-a"], timeout=1800)
+            result = self.runner.run(
+                "dpkg", ["--force-confold", "--configure", "-a"], timeout=1800
+            )
         elif action == PACKAGE_REPAIR_FIX_BROKEN:
-            result = self.runner.run("apt-get", ["-y", "-f", "install"], timeout=1800)
+            result = self.runner.run(
+                "apt-get",
+                ["-y", "--no-remove", "-o", "Dpkg::Options::=--force-confold", "-f", "install"],
+                timeout=1800,
+            )
         elif action == PACKAGE_REPAIR_REFRESH_INDEX:
             result = self._refresh_index()
         else:

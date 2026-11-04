@@ -80,6 +80,7 @@ export const PLAN_EXTRA_FIELDS = Object.freeze([
   "timezone",
   "previous_timezone",
   "destination",
+  "removals",
 ]);
 
 /** The fingerprint seals the plan; a mechanism, not a statement about this appliance, so it sits with the digests. */

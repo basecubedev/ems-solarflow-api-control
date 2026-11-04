@@ -889,7 +889,7 @@ def test_a_refused_revert_is_cured_before_it_is_tried_again(paths, packaged, tmp
     run_reverter(paths, tools, now=0)
 
     calls = log.read_text(encoding="utf-8")
-    assert "dpkg --configure -a" in calls, calls
+    assert "dpkg --force-confold --configure -a" in calls, calls
     assert not manager_verify.read_verdict(paths).settled, "the tick must still leave a retry"
 def test_an_archive_swapped_under_an_armed_deadline_is_refused(paths, packaged, tmp_path):
     """`previous.deb` is a slot, and retain() rewrites it on every install.

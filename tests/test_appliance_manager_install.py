@@ -291,7 +291,7 @@ def test_the_installer_refuses_an_archive_from_outside_its_own_directory():
 def test_the_installer_puts_the_previous_package_back_when_dpkg_fails():
     script = (PACKAGING / "bin" / "install-manager.sh").read_text(encoding="utf-8")
 
-    assert "dpkg --configure -a" in script, "try the ordinary cure before reaching for the revert"
+    assert "dpkg --force-confold --configure -a" in script, "try the ordinary cure before reaching for the revert"
     assert "reverted" in script
     assert "revert_failed" in script
 

@@ -700,6 +700,7 @@ export const STRINGS = {
   "plan.field.previous_timezone": s("Current time zone", "Bisherige Zeitzone", "Huidige tijdzone", "Fuseau horaire actuel"),
   "plan.field.destination": s("Saved to", "Gespeichert unter", "Opgeslagen in", "Enregistré dans"),
   "plan.field.lock_state": s("Package-manager lock", "Sperre der Paketverwaltung", "Vergrendeling van het pakketbeheer", "Verrou du gestionnaire de paquets"),
+  "plan.field.removals": s("Packages apt would remove", "Pakete, die apt entfernen würde", "Pakketten die apt zou verwijderen", "Paquets qu’apt supprimerait"),
   "plan.field.healthy": s("Nothing to repair", "Nichts zu reparieren", "Niets te herstellen", "Rien à réparer"),
   "plan.field.repository": s("Image repository", "Image-Repository", "Image-repository", "Dépôt de l’image"),
   "plan.field.target_reference": s("Exact image", "Genaues Image", "Exact image", "Image exacte"),
