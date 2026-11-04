@@ -867,6 +867,31 @@ def test_a_refresh_from_an_unreachable_mirror_leaves_the_index_old(tmp_path):
     assert services.packages.check().index_age_seconds >= 10 * 24 * 60 * 60
 
 
+def test_a_plan_cancelled_while_apt_refreshes_keeps_a_second_operation_out(tmp_path, monkeypatch):
+    from appliance.agent import AgentError
+
+    services = appliance(tmp_path)
+    handlers = handlers_for(services)
+    refused = []
+    real = services.packages.plan_install
+
+    def cancelled_while_it_runs(operation, scope):
+        handlers.dispatch({"operation": "operations.cancel", "operation_id": operation.operation_id})
+        try:
+            handlers.dispatch({"operation": "updates.plan_repair", "action": "refresh_index"})
+        except AgentError as exc:
+            refused.append(exc.code)
+        return real(operation, scope)
+
+    monkeypatch.setattr(services.packages, "plan_install", cancelled_while_it_runs)
+    with pytest.raises(AgentError):
+        handlers.dispatch({"operation": "updates.plan", "scope": "security"})
+    monkeypatch.setattr(services.packages, "plan_install", real)
+
+    assert refused == ["operation_conflict"], refused
+    assert handlers.dispatch({"operation": "updates.plan_repair", "action": "refresh_index"})["plan"]
+
+
 @pytest.mark.parametrize("scope", ["security", "all"])
 def test_an_install_does_not_put_on_what_the_plan_never_showed(tmp_path, scope):
     """The plan showed three packages; apt-daily refreshed the index before

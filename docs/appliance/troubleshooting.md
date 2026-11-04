@@ -228,6 +228,10 @@ is closed.
 Another host mutation is still active. Only one runs at a time. Wait for it, or
 cancel it from the operation banner. Read-only pages keep working meanwhile.
 
+A plan cancelled while it was still being made keeps the slot until its planner
+returns: an `apt-get update` or an index fetch it started runs on, and the
+next operation waits rather than running beside it.
+
 ## Admin shows "missing" or "unhealthy"
 
 Use **EMS Admin → Preview repair** for a preview of what is wrong. Typical findings:

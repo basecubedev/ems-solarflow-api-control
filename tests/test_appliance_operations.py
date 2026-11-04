@@ -611,3 +611,19 @@ def test_a_later_end_writes_the_one_the_card_had_no_room_for(tmp_path, monkeypat
 
     assert store.get(operation_id).state == STATE_SUCCEEDED
     assert store.unfinished == {}
+
+
+def test_a_plan_cancelled_while_its_planner_runs_keeps_the_slot_until_the_planner_returns(tmp_path):
+    """Only the Admin pull noticed a cancel. apt-get update, the Manager index
+    fetch and the support archive ran on beside the next operation the freed
+    slot let in."""
+
+    store = OperationStore(tmp_path)
+    first = store.create("updates.install", planning=True)
+    store.cancel(first.operation_id)
+
+    with pytest.raises(OperationConflictError):
+        store.create("updates.repair")
+    store.planning_ended(first.operation_id)
+
+    assert store.create("updates.repair").state == STATE_PLANNED

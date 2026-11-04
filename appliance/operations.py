@@ -236,6 +236,10 @@ class OperationStore:
         self.unfinished = {}
         # Records the agent's start could not read and moved aside, by id.
         self.unreadable = []
+        # Plans whose planner is still running. One cancelled meanwhile is
+        # cancelled, but its planner -- apt-get update, an index fetch, a
+        # support archive -- runs on, so it keeps the slot until it returns.
+        self._planning = set()
 
     # --- persistence -----------------------------------------------------
 
@@ -284,12 +288,19 @@ class OperationStore:
 
     def active(self):
         for operation in self._all():
-            if operation.blocking:
+            if operation.blocking or operation.operation_id in self._planning:
                 return operation
         return None
 
-    def create(self, operation_type, requested_target=None, *, actor="", plan_request=""):
-        """Take the lock with a new plan; ``plan_request`` is kept only as its digest."""
+    def planning_ended(self, operation_id):
+        with self._lock:
+            self._planning.discard(operation_id)
+
+    def create(self, operation_type, requested_target=None, *, actor="", plan_request="", planning=False):
+        """Take the lock with a new plan; ``plan_request`` is kept only as its digest.
+
+        ``planning`` holds the slot, cancelled or not, until ``planning_ended``.
+        """
 
         with self._lock:
             self._close_unrecorded()
@@ -311,7 +322,10 @@ class OperationStore:
                 plan_request_digest=_request_digest(plan_request) if plan_request else "",
             )
             self._prune()
-            return self._save(operation)
+            self._save(operation)
+            if planning:
+                self._planning.add(operation.operation_id)
+            return operation
 
     def get(self, operation_id, *, include_token=False):
         operation = self._load(operation_id)

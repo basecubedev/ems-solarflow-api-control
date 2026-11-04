@@ -346,11 +346,19 @@ class AgentHandlers:
             self._require_confirmed_password(args, operation_type, actor, source_ip)
         try:
             operation = self.services.operations.create(
-                operation_type, actor=actor, plan_request=args.get(PLAN_REQUEST_FIELD, "")
+                operation_type,
+                actor=actor,
+                plan_request=args.get(PLAN_REQUEST_FIELD, ""),
+                planning=True,
             )
         except OperationConflictError as exc:
             raise AgentError(exc.code, exc.message)
+        try:
+            return self._planned(spec, operation, operation_type, args, actor=actor, source_ip=source_ip)
+        finally:
+            self.services.operations.planning_ended(operation.operation_id)
 
+    def _planned(self, spec, operation, operation_type, args, *, actor, source_ip):
         try:
             plan = self._build_plan(spec.name, operation, args)
         except (
