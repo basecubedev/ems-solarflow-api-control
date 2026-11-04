@@ -72,7 +72,7 @@ The socket is never a network listener. The agent checks the peer's credentials
 A request names an operation and typed fields:
 
 ```json
-{ "operation": "admin.install", "target_tag": "v0.8.0" }
+{ "operation": "admin.plan_install", "channel": "exact", "tag": "v0.8.0", "reinstall": false }
 ```
 
 It can never carry a command, a path, an image reference or a repository:
@@ -101,7 +101,7 @@ is refused as `invalid_request` before any handler runs.
 | `release_index.py` | Assembling and retaining a release index, for every artefact class |
 | `validation.py` | Every typed input validator and its stable error code |
 | `redaction.py` | Secret redaction and log bounding |
-| `protocol.py` | The fixed agent operation allowlist |
+| `protocol.py` | The fixed agent operation allowlist and the typed fields each request may carry |
 | `operations.py` | The durable operation model and the single-mutation lock |
 | `commands.py` | The only place a host process is started (tool allowlist, no shell) |
 | `docker_backend.py`, `systemd.py`, `hostprobe.py` | Typed host access |
@@ -126,7 +126,7 @@ is refused as `invalid_request` before any handler runs.
 | `host_config.py` | One host-path contract for everything that reads it |
 | `ssh_policy.py`, `backup_confinement.py`, `backup_ownership.py`, `export_state.py` | The generated sshd policy, what the chroot actually is, and who owns the account a purge may remove |
 | `timezone_config.py` | The zone the EMS runs its local-hour control windows in |
-| `operation_schema.py` | The typed request shape every operation is validated against |
+| `operation_schema.py` | The schema and authority of a persisted operation record: what confirmation and execution check before an operation may run |
 | `release_trust.py`, `release_attestation.py`, `release_inputs.py` | What a signed release vouches for, and the readiness invariants that bound it |
 | `build_authority.py`, `source_bundle.py`, `project_source.py` | Which build an artefact came from, and the source tree it can be rebuilt from |
 | `rpi_image_gen.py`, `runtime_gates.py` | The pinned upstream generator and the runtime evidence a release is bound to |

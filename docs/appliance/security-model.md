@@ -54,8 +54,13 @@ on state.
   audit/        root:root 0700
 ```
 
-Files the agent writes are `root:root 0600`; the agent unit runs with
-`UMask=0077` so anything it creates outside that list is root-only too.
+Files the agent writes that hold anything worth protecting — operation records
+with their confirmation tokens, the known-good record, the confirmed password
+record, the audit and operation logs — are `root:root 0600`. A file the agent
+writes outside its own state keeps its primary group: the time zone file under
+`/etc` is `root:ems-appliance 0640` and holds nothing secret. The agent unit
+runs with `UMask=0077`, so a directory or file it creates without an explicit
+mode is root-only.
 
 The web account owns the directories under `web/`, so it can replace one of
 them with a symlink. Three root passes walk that layout — the package's
