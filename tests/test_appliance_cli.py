@@ -676,3 +676,100 @@ def test_a_console_rollback_says_when_its_deadline_could_not_be_rearmed(
     assert "could not be re-armed" in err
     assert "no deadline puts it back" in err
     assert [call for call in runner.calls if call[0] == "dpkg"], "the way out stays open"
+
+
+# --- a console command waits for what it started ---------------------------------
+
+
+def test_a_repair_waits_for_the_repair_it_started(appliance_env, monkeypatch, capsys):
+    """With the agent down the command runs an in-process stack whose executor is
+    a daemon thread; it printed "started" and exited, and the repair died with it.
+
+    Interleaving: the executor's thread waits on ``started`` before it runs the
+    repair, and only the command's wait releases it, so a command that returns
+    without waiting leaves the thread unfinished.
+    """
+
+    import threading
+    import time
+
+    from appliance import cli
+    from appliance.agent import AgentHandlers
+    from appliance.agent_client import InProcessAgentClient
+    from tests.helpers.appliance import ADMIN_CONTAINER, ADMIN_REPOSITORY, build_test_services
+
+    services = build_test_services(appliance_env / "host")
+    services.host.write_deployment(tag="v1.0.0")
+    services.host.publish_image("v1.0.0")
+    services.host.pull_local(f"{ADMIN_REPOSITORY}:v1.0.0")
+    services.host.run_container(ADMIN_CONTAINER, f"{ADMIN_REPOSITORY}:v1.0.0")
+    started = threading.Event()
+    threads = []
+
+    def deferred(target):
+        def run():
+            started.wait(timeout=30)
+            target()
+
+        thread = threading.Thread(target=run, daemon=True)
+        threads.append(thread)
+        thread.start()
+
+    def released(seconds):
+        started.set()
+        threads[0].join(timeout=30)
+
+    monkeypatch.setattr(
+        cli, "_client", lambda paths, local=False: InProcessAgentClient(AgentHandlers(services, executor=deferred))
+    )
+    monkeypatch.setattr(time, "sleep", released)
+
+    code = cli.command_repair(Args(local=False, apply=True, json=False))
+
+    assert threads and not threads[0].is_alive(), "the command returned before its repair ran"
+    assert code == 0, capsys.readouterr()
+    assert "succeeded" in capsys.readouterr().out
+
+
+def test_a_repair_the_agent_could_not_be_asked_to_run_is_not_called_started(
+    appliance_env, monkeypatch, capsys
+):
+    from appliance import cli
+    from appliance.agent_client import AgentUnavailableError
+
+    class Client:
+        def call(self, operation, **fields):
+            if operation == "admin.plan_repair":
+                return {"plan": {"findings": [], "actions": []}, "operation": {"operation_id": "f" * 32},
+                        "confirmation_token": "t"}
+            raise AgentUnavailableError("cannot reach the appliance agent: Connection refused")
+
+    monkeypatch.setattr(cli, "_client", lambda paths, local=False: Client())
+
+    code = cli.command_repair(Args(local=False, apply=True, json=False))
+
+    err = capsys.readouterr().err
+    assert code != 0
+    assert "was started" not in err
+    assert "may not have started" in err and "Connection refused" in err
+
+
+def test_a_repair_whose_agent_goes_away_while_it_waits_says_so(appliance_env, monkeypatch, capsys):
+    from appliance import cli
+    from appliance.agent_client import AgentUnavailableError
+
+    class Client:
+        def call(self, operation, **fields):
+            if operation == "admin.plan_repair":
+                return {"plan": {"findings": [], "actions": []}, "operation": {"operation_id": "f" * 32},
+                        "confirmation_token": "t"}
+            if operation == "operations.execute":
+                return {}
+            raise AgentUnavailableError("the appliance agent is not reachable")
+
+    monkeypatch.setattr(cli, "_client", lambda paths, local=False: Client())
+
+    code = cli.command_repair(Args(local=False, apply=True, json=False))
+
+    assert code != 0
+    assert "stopped answering" in capsys.readouterr().err

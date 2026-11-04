@@ -14,7 +14,7 @@ import os
 import sys
 
 from appliance.agent import AgentHandlers, operation_names, serve_agent
-from appliance.agent_client import AgentCallError, AgentClient, AgentUnavailableError, InProcessAgentClient
+from appliance.agent_client import AgentCallError, AgentClient, AgentUnavailableError, InProcessAgentClient, wait_until_settled
 from appliance.auth import AuthError, AuthStore
 from appliance.config import load_config
 from appliance.migration import migrate_state, write_report
@@ -49,6 +49,11 @@ def _print_human(payload, depth):
             _print_human(item, depth)
     else:
         print(f"{pad}{payload}")
+
+
+# A repair stops, recreates and pulls the Admin; on a Pi 3B+ a pull alone has
+# taken most of half an hour.
+REPAIR_WAIT_SECONDS = 3600
 
 
 def _client(paths, *, local=False):
@@ -134,11 +139,34 @@ def command_repair(args):
             operation_id=operation_id,
             confirmation_token=planned.get("confirmation_token"),
         )
+    except AgentUnavailableError as exc:
+        print(
+            f"error: {exc.message}; repair operation {operation_id} may not have started, "
+            "see 'ems-appliance operations'",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
     except AgentCallError as exc:
         print(f"error: {exc.message}", file=sys.stderr)
         return EXIT_ERROR
-    print(f"repair operation {operation_id} started")
-    return EXIT_OK
+    try:
+        record = wait_until_settled(client, operation_id, timeout=REPAIR_WAIT_SECONDS)
+    except AgentUnavailableError:
+        print(
+            f"repair operation {operation_id} was started, and the agent stopped answering "
+            "while it ran; see 'ems-appliance operations'",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+    except AgentCallError as exc:
+        print(f"error: {exc.message}", file=sys.stderr)
+        return EXIT_ERROR
+    if not record.get("settled"):
+        print(f"repair operation {operation_id} is still {record.get('state')}; see 'ems-appliance operations'")
+        return EXIT_ERROR
+    error = (record.get("error") or {}).get("message")
+    print(f"repair operation {operation_id} {record.get('state')}" + (f": {error}" if error else ""))
+    return EXIT_OK if record.get("state") == "succeeded" else EXIT_ERROR
 
 
 def command_password_reset(args):

@@ -1107,3 +1107,81 @@ def test_configuring_pending_packages_keeps_an_edited_conffile(tmp_path):
 
     runs = [args for tool, args in _repair_calls(services) if tool == "dpkg" and "--configure" in args]
     assert runs and all("--force-confold" in args for args in runs)
+
+
+# --- what a scheduled or console command says it did -----------------------------
+
+
+def test_a_scheduled_install_says_what_apt_did_not_what_it_was_asked(tmp_path):
+    """execute returns once the executor has started; the timer used to report
+    "installed N" for an install apt then failed.
+
+    Interleaving: the agent's thread waits on ``started`` before it runs the
+    install, and the scheduler's first sleep is what releases it, so the result
+    is read only after the install it describes has ended.
+    """
+
+    import threading
+
+    from appliance.agent import AgentHandlers
+    from appliance.agent_client import InProcessAgentClient
+    from appliance.packages import run_scheduled_security_updates
+
+    services = config_with(appliance(tmp_path), automatic_security_updates=True)
+    services.host.apt_exit_code = 100
+    started = threading.Event()
+    threads = []
+
+    def deferred(target):
+        def run():
+            started.wait(timeout=30)
+            target()
+
+        thread = threading.Thread(target=run)
+        threads.append(thread)
+        thread.start()
+
+    def sleep(seconds):
+        started.set()
+        threads[0].join(timeout=30)
+
+    client = InProcessAgentClient(AgentHandlers(services, executor=deferred))
+    result = run_scheduled_security_updates(client, services.config, sleep=sleep)
+
+    assert result["ran"] is False, result
+    assert result["reason"] == "install_failed"
+    assert services.operations.list()[0].state == STATE_FAILED_TERMINAL
+
+
+def test_waiting_for_an_operation_gives_up_with_what_it_last_read():
+    from appliance.agent_client import wait_until_settled
+
+    class Client:
+        def call(self, operation, **fields):
+            return {"operation": {"operation_id": fields["operation_id"], "state": "running", "settled": False}}
+
+    ticks = iter(range(0, 100, 10))
+    record = wait_until_settled(
+        Client(), "abc", timeout=30, sleep=lambda seconds: None, clock=lambda: next(ticks)
+    )
+
+    assert record["state"] == "running" and record["settled"] is False
+
+
+def test_the_auto_update_unit_outlasts_the_wait_for_the_install():
+    from appliance.packages import SCHEDULED_INSTALL_WAIT_SECONDS
+    from appliance.protocol import DEFAULT_OPERATION_TIMEOUT, UPDATE_PLAN_TIMEOUT
+
+    from pathlib import Path
+
+    unit = (
+        Path(__file__).resolve().parents[1]
+        / "packaging" / "appliance" / "systemd" / "ems-appliance-auto-update.service"
+    ).read_text(encoding="utf-8")
+    timeout = next(
+        int(line.partition("=")[2]) for line in unit.splitlines() if line.startswith("TimeoutStartSec=")
+    )
+
+    assert timeout >= (
+        UPDATE_PLAN_TIMEOUT + DEFAULT_OPERATION_TIMEOUT + SCHEDULED_INSTALL_WAIT_SECONDS + 120
+    )

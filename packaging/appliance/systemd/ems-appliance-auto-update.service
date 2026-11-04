@@ -22,4 +22,8 @@ EnvironmentFile=-/etc/ems-appliance-manager/host-paths.env
 ExecStart=/usr/bin/ems-appliance auto-update
 # apt on a Pi 3B+ is slow, and the install unit for the manager package allows
 # the same order of magnitude.
-TimeoutStartSec=3600
+# Longer than the plan's own limit (protocol.UPDATE_PLAN_TIMEOUT), the execute
+# call and packages.SCHEDULED_INSTALL_WAIT_SECONDS together: the command waits
+# for apt to end, and a unit that ran out first failed a daily timer -- or,
+# with the agent down, killed dpkg mid-upgrade.
+TimeoutStartSec=5400

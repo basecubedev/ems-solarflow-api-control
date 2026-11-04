@@ -681,7 +681,11 @@ class PackageService:
 SCHEDULE_ACTOR = "schedule"
 
 
-def run_scheduled_security_updates(client, config):
+# The agent's own limit on one apt-get install, with room for the check after it.
+SCHEDULED_INSTALL_WAIT_SECONDS = 3600 + 300
+
+
+def run_scheduled_security_updates(client, config, *, sleep=None):
     """Install the waiting security updates, if the operator asked for that.
 
     Driven through the agent, exactly as the browser drives it: the same plan,
@@ -704,7 +708,7 @@ def run_scheduled_security_updates(client, config):
     if not config.automatic_security_updates:
         return {"ran": False, "reason": "not_enabled"}
 
-    from appliance.agent_client import AgentCallError, AgentUnavailableError
+    from appliance.agent_client import AgentCallError, AgentUnavailableError, wait_until_settled
 
     try:
         planned = client.call("updates.plan", actor=SCHEDULE_ACTOR, scope=UPDATE_SCOPE_SECURITY)
@@ -745,6 +749,11 @@ def run_scheduled_security_updates(client, config):
             operation_id=operation_id,
             confirmation_token=planned["confirmation_token"],
         )
+        # execute returns once apt has been started, and an install the timer
+        # reported before it ran is what the journal said for a failed one.
+        record = wait_until_settled(
+            client, operation_id, timeout=SCHEDULED_INSTALL_WAIT_SECONDS, sleep=sleep
+        )
     except (AgentCallError, AgentUnavailableError) as exc:
         return {
             "ran": False,
@@ -753,10 +762,21 @@ def run_scheduled_security_updates(client, config):
             "reboot_required": reboot,
         }
 
+    result = record.get("result") or {}
+    if not record.get("settled"):
+        return {"ran": False, "reason": "still_running", "operation_id": operation_id, "reboot_required": reboot}
+    if record.get("state") != STATE_SUCCEEDED:
+        return {
+            "ran": False,
+            "reason": "install_failed",
+            "detail": (record.get("error") or {}).get("message", ""),
+            "operation_id": operation_id,
+            "reboot_required": bool(result.get("reboot_required", reboot)),
+        }
     return {
         "ran": True,
         "reason": "",
-        "installed": int(plan.get("package_count") or 0),
+        "installed": int(result.get("changed_package_count", plan.get("package_count")) or 0),
         "operation_id": operation_id,
-        "reboot_required": reboot,
+        "reboot_required": bool(result.get("reboot_required", reboot)),
     }

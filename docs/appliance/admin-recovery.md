@@ -611,6 +611,11 @@ sudo ems-appliance repair
 sudo ems-appliance repair --apply
 ```
 
+`repair --apply` waits for the repair to end and prints how it ended; it exits
+non-zero unless it succeeded. With the agent down it runs the repair in its own
+process, which therefore has to stay alive until the repair is done — it used
+to print "started" and exit, and the repair died with it.
+
 ## Recovering a failed Admin update — checklist
 
 1. Open `http://ems-solarflow.local:8088` (works even when Admin is down).

@@ -136,6 +136,11 @@ one: the reboot is reported and left to somebody who knows whether the battery
 this appliance controls can be left alone for two minutes. `ems-appliance
 auto-update` runs the same thing by hand.
 
+It waits for the install to end before it says anything, and says what apt
+did: how many packages changed, whether the result now needs a restart, or
+that the install failed. It used to report "installed N" the moment apt had
+been started, so a failed install read as a successful one in the journal.
+
 Every outcome, including declining, exits 0. A daily timer that leaves a failed
 unit behind because the package manager was busy teaches an operator to stop
 reading it; what happened is in the journal and in the operation record.
