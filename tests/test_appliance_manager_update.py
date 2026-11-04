@@ -727,6 +727,56 @@ def test_reading_the_status_writes_nothing_and_shows_what_runs(tmp_path):
     assert status["can_revert"] is False
 
 
+# --- a reinstall of the package that is running -------------------------------
+
+
+def test_a_reinstall_of_the_running_package_falls_back_to_nothing_older(tmp_path):
+    """previous.deb is the release before the running one, and putting it on
+    when the reinstall failed left an older Manager running without a word."""
+
+    services, _ = build(tmp_path, installed_version="0.2.0")
+    seed_previous(services, version="0.1.0", body=b"the release before")
+    running = services.paths.packages_dir / "running.deb"
+    running.write_bytes(ARCHIVE_BYTES)
+    manager_retention.retain(
+        services.paths,
+        running,
+        sha256=ARCHIVE_DIGEST,
+        version="0.2.0",
+        state_reads=persistent_state.readable_floors(),
+    )
+    running.unlink()
+
+    operation, planned = plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+
+    assert operation.state == STATE_SUCCEEDED
+    assert "nothing is put back automatically" in planned["warning"]
+    assert planned["revert_available"] is False
+    request = json.loads(manager_install.request_path(services.paths).read_text(encoding="utf-8"))
+    assert request["fallback"] == ""
+    assert manager_verify.read(services.paths).previous_path == ""
+
+
+def test_a_reinstall_is_known_by_its_digest_even_when_the_archive_is_gone(tmp_path):
+    retention = manager_retention.Retention(
+        current=manager_retention.RetainedPackage(path=str(tmp_path / "gone.deb"), sha256=ARCHIVE_DIGEST)
+    )
+
+    assert manager_install.same_archive(retention, ARCHIVE_DIGEST)
+
+
+def test_an_update_names_the_running_package_as_its_fallback(tmp_path):
+    services, _ = build(tmp_path)
+    seed_previous(services)
+
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+
+    request = json.loads(manager_install.request_path(services.paths).read_text(encoding="utf-8"))
+    kept = manager_retention.read(services.paths)
+    assert request["fallback"] == kept.previous.path
+    assert Path(request["fallback"]).read_bytes() == b"the package that is running"
+
+
 # --- the package lock dpkg needs ----------------------------------------------
 
 

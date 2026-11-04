@@ -470,17 +470,28 @@ class ManagerUpdateService:
             "digest": release.artifact_digest,
             "blockers": blockers,
             # What a revert would have *after* this install, not before it: the
-            # package running now becomes the kept one when it is displaced.
-            "revert_available": retention.current.present,
+            # package running now becomes the kept one when it is displaced --
+            # unless it is this package, which displaces nothing.
+            "revert_available": retention.current.present
+            and not manager_install.same_archive(retention, release.artifact_digest),
             "verify_window_seconds": manager_verify.DEFAULT_WINDOW_SECONDS,
             "warning": self._warning(
-                moving, retention.current.present, unclear, raised_schemas(release)
+                moving,
+                retention.current.present,
+                unclear,
+                raised_schemas(release),
+                reinstall=manager_install.same_archive(retention, release.artifact_digest),
             ),
         }
 
     @staticmethod
-    def _warning(moving, revert_available, unclear, raised=()):
+    def _warning(moving, revert_available, unclear, raised=(), *, reinstall=False):
         parts = []
+        if reinstall:
+            parts.append(
+                "This reinstalls the package that is running. If it fails, nothing is put "
+                "back automatically: the kept package is older than the one running."
+            )
         if moving == DIRECTION_DOWNGRADE:
             parts.append("This installs an older Appliance Manager than the one running.")
         elif moving == DIRECTION_UNKNOWN:
@@ -713,6 +724,7 @@ class ManagerUpdateService:
 
         self._advance(operation, "staging_package")
         kept_before = manager_retention.read(self.paths)
+        reinstall = manager_install.same_archive(kept_before, release.artifact_digest)
         retention = manager_install.prepare(
             self.paths,
             release=release,
@@ -729,7 +741,7 @@ class ManagerUpdateService:
             operation,
             version=release.version,
             build_id=release.build_id,
-            previous=retention.previous.path,
+            previous="" if reinstall else retention.previous.path,
             kept_before=kept_before,
         )
 

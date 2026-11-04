@@ -974,3 +974,37 @@ def test_every_outcome_the_installer_records_is_named_for_the_console():
     recorded = set(re.findall(r"\b(?:record|fail|refuse) ([a-z_]+) ", code))
 
     assert recorded == set(manager_install.INSTALLER_OUTCOMES)
+
+
+def _with_fallback(state, fallback):
+    request = state / manager_install.REQUEST_NAME
+    payload = json.loads(request.read_text(encoding="utf-8"))
+    request.write_text(json.dumps({**payload, "fallback": fallback}), encoding="utf-8")
+
+
+def test_a_request_with_no_fallback_puts_nothing_older_on(tmp_path):
+    state = tmp_path / "state"
+    tools = tmp_path / "tools"
+    staged(state)
+    _with_fallback(state, "")
+    log = fake_dpkg(tools, status="half-configured", version="0.2.0", install_fails=True)
+
+    result = run_installer(state, tools)
+
+    assert result.returncode == 1
+    assert installer_outcome(state)["outcome"] == manager_install.OUTCOME_INSTALL_FAILED
+    assert "previous.deb" not in log.read_text(encoding="utf-8")
+
+
+def test_a_request_naming_a_fallback_outside_the_state_directory_is_refused(tmp_path):
+    state = tmp_path / "state"
+    tools = tmp_path / "tools"
+    staged(state)
+    _with_fallback(state, "/srv/elsewhere/other.deb")
+    log = fake_dpkg(tools, status="installed", version="0.1.0", install_fails=False)
+
+    result = run_installer(state, tools)
+
+    assert result.returncode == 1
+    assert installer_outcome(state)["outcome"] == manager_install.OUTCOME_REQUEST_INVALID
+    assert not log.exists(), "dpkg ran for a request the installer refused"

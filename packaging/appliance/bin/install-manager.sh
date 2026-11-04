@@ -203,7 +203,7 @@ if [ -n "$WANTED" ] && [ "$KNOWN" = "installed|$WANTED" ]; then
     exit 0
 fi
 
-if [ -f "$PREVIOUS" ]; then
+if [ -n "$PREVIOUS" ] && [ -f "$PREVIOUS" ]; then
     echo "install-manager: reinstalling $PREVIOUS" >&2
     if dpkg_install "$PREVIOUS"; then
         record reverted "the install failed and $PREVIOUS was put back"
@@ -213,4 +213,6 @@ if [ -f "$PREVIOUS" ]; then
     fail revert_failed "the install failed and $PREVIOUS could not be put back either"
 fi
 
+[ -n "$PREVIOUS" ] \
+    || fail install_failed "the install failed; it reinstalled the package that was running, so there is no other package to put back"
 fail install_failed "the install failed and no earlier package is retained"

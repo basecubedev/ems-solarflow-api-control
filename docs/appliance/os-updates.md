@@ -212,7 +212,12 @@ tidiness; it is what makes the paragraph below true.
    lock (`package_lock_held`) -- the plan says so, and an execution confirmed
    before the lock was taken stages nothing. Refusals happen here, before dpkg
    runs, while the code deciding is still the code that started.
-6. The running package is retained as `previous.deb`.
+6. The running package is retained as `previous.deb`, and the request names it
+   as what the installer puts back if `dpkg` refuses the new one. A reinstall
+   of the running package itself has nothing to fall back to: the kept package
+   is then the release before it, and putting that on silently is what a
+   failed reinstall used to do. The plan says so, the installer reports
+   `install_failed`, and the deadline has no way back to offer.
 7. A deadline is armed — see below.
 8. `dpkg` runs from its own systemd unit, not from the agent. The package's own
    postinst restarts the agent and the web service, so the console is briefly
