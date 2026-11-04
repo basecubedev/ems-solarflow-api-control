@@ -656,3 +656,67 @@ def test_a_private_file_outside_the_archive_path_is_not_a_fault(tmp_path):
 
     assert access["unreadable"] == [], access
     assert access["status"] == "configured", access
+
+
+# --- an operator's "off" stays off ------------------------------------------------
+
+
+def test_an_operator_revocation_survives_every_activation(tmp_path, production_chroot_chain):
+    """`backup-access disable` recorded no intent: the next boot, Admin compose
+    write, shell toggle or package install ran activate, which took the key
+    file back -- a key from a stolen laptop logged in again."""
+
+    services = appliance(tmp_path)
+    assert activation(services).activate()["state"] == STATE_ACTIVE
+
+    off = activation(services).revoke()
+    assert off["authentication_disabled"] is True
+    report = activation(services).activate()
+
+    assert report["state"] == STATE_UNAVAILABLE, report
+    assert report["reason"] == "revoked_by_operator"
+    assert not keys(services).exists()
+    assert disabled_keys(services).exists()
+
+
+def test_only_an_explicit_reinstatement_ends_a_revocation(tmp_path, production_chroot_chain):
+    services = appliance(tmp_path)
+    activation(services).activate()
+    activation(services).revoke()
+
+    report = activation(services).reinstate()
+
+    assert report["state"] == STATE_ACTIVE, report
+    assert keys(services).exists()
+
+
+def test_a_fail_closed_suspension_is_still_lifted_by_the_next_good_activation(tmp_path, production_chroot_chain):
+    """What the package and the export unit do on failure is no operator's
+    decision, and a recovered export takes the account back on its own."""
+
+    services = appliance(tmp_path)
+    activation(services).activate()
+    activation(services).disable(reason="requested")
+
+    assert activation(services).activate()["state"] == STATE_ACTIVE
+
+
+def test_a_revocation_the_card_has_no_room_to_record_still_withdraws_access(tmp_path, production_chroot_chain, monkeypatch):
+    """The flag was written first, and a full card raised before anything was
+    withdrawn: the key of a stolen laptop stayed active."""
+
+    import errno
+
+    from appliance import backup_confinement
+
+    services = appliance(tmp_path)
+    activation(services).activate()
+    monkeypatch.setattr(
+        backup_confinement, "atomic_write", lambda *a, **k: (_ for _ in ()).throw(OSError(errno.ENOSPC, "full"))
+    )
+
+    report = activation(services).revoke()
+
+    assert report["authentication_disabled"] is True
+    assert report["revocation_recorded"] is False
+    assert not keys(services).exists()

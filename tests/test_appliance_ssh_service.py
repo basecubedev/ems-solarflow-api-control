@@ -277,6 +277,25 @@ def test_a_backup_key_is_refused_while_authentication_is_withdrawn(tmp_path):
     assert not (ssh_dir / "authorized_keys").exists()
 
 
+def test_a_backup_key_is_refused_while_an_operator_has_revoked_backup_access(tmp_path):
+    """With no key at the time of the revocation nothing was set aside, and a
+    key added afterwards would have been the one file sshd reads."""
+
+    services = appliance(tmp_path)
+    services.paths.agent_state_dir.mkdir(parents=True, exist_ok=True)
+    (services.paths.agent_state_dir / "backup-access-revoked").write_text("{}\n")
+    ssh_dir = tmp_path / "home" / "ems-backup" / ".ssh"
+    handlers = handlers_for(services)
+
+    with pytest.raises(Exception) as excinfo:
+        handlers.dispatch(
+            {"operation": "ssh.plan_key_add", "account": "ems-backup", "public_key": ED25519}
+        )
+
+    assert getattr(excinfo.value, "code", "") == "backup_access_revoked"
+    assert not (ssh_dir / "authorized_keys").exists()
+
+
 def test_a_backup_key_is_refused_while_a_link_holds_the_preserved_key_files_place(tmp_path):
     """Withdrawn access is read from the entry at the preserved name, a dangling link included."""
 

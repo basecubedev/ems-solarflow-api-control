@@ -781,9 +781,26 @@ def command_backup_access(args):
     if os.geteuid() != 0:
         print("error: changing backup access needs root", file=sys.stderr)
         return EXIT_ERROR
-    report = service.disable(reason="requested") if args.action == "disable" else service.activate()
-    _print(report, args.json)
     if args.action == "disable":
+        report = service.revoke()
+    elif args.action == "suspend":
+        report = service.disable(reason="requested")
+    elif args.action == "enable":
+        report = service.reinstate()
+    else:
+        report = service.activate()
+    _print(report, args.json)
+    if args.action == "disable" and not report.get("revocation_recorded", True):
+        withdrawn = (
+            "access is withdrawn, but" if report.get("authentication_disabled") else "access could not be withdrawn, and"
+        )
+        print(
+            f"error: {withdrawn} the revocation could not be recorded, so the next activation "
+            "would restore it; free space on the card and run disable again",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+    if args.action in ("disable", "suspend"):
         # prerm reads this exit code as proof that authentication is withdrawn.
         return EXIT_OK if report.get("authentication_disabled") else EXIT_ERROR
     return EXIT_OK if report["state"] in (STATE_ACTIVE, STATE_UNAVAILABLE) else EXIT_ERROR
@@ -1190,8 +1207,10 @@ def build_parser():
         "action",
         nargs="?",
         default="status",
-        choices=("status", "activate", "disable"),
-        help="activate only enables the account once the effective confinement is verified",
+        choices=("status", "activate", "disable", "enable", "suspend"),
+        help="disable keeps the account off until enable; suspend is the package's own "
+        "fail-closed step, which the next verified activation lifts; activate only enables "
+        "the account once the effective confinement is verified",
     )
     backup_access.set_defaults(handler=command_backup_access)
 

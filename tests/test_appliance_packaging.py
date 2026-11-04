@@ -753,7 +753,7 @@ def test_a_failed_export_run_disables_backup_authentication():
     export = EXPORT_SERVICE_UNIT.read_text(encoding="utf-8")
     assert "OnFailure=ems-appliance-backup-access-disable.service" in export, export
     assert DISABLE_UNIT.is_file()
-    assert "backup-access disable" in DISABLE_UNIT.read_text(encoding="utf-8")
+    assert "backup-access suspend" in DISABLE_UNIT.read_text(encoding="utf-8")
 
 
 def test_a_successful_export_run_revalidates_backup_access():
@@ -1607,3 +1607,22 @@ def test_every_dpkg_configure_the_appliance_runs_keeps_an_edited_conffile():
         ]
         assert calls, name
         assert all("--force-confold" in call for call in calls), (name, calls)
+
+
+def test_the_package_and_its_units_suspend_backup_access_and_never_revoke_it():
+    """`disable` records an operator's intent that only `enable` ends. The
+    package's own fail-closed steps must not leave that behind, or the backup
+    account would stay off after any failed export or removal."""
+
+    callers = {
+        "debian/prerm": (PACKAGING / "debian" / "prerm").read_text(encoding="utf-8"),
+        "debian/postinst": (PACKAGING / "debian" / "postinst").read_text(encoding="utf-8"),
+        "ems-appliance-backup-access-disable.service": (
+            PACKAGING / "systemd" / "ems-appliance-backup-access-disable.service"
+        ).read_text(encoding="utf-8"),
+    }
+
+    for name, text in callers.items():
+        calls = [line for line in text.splitlines() if "backup-access " in line and not line.lstrip().startswith("#")]
+        assert calls, name
+        assert not [line for line in calls if "backup-access disable" in line], (name, calls)

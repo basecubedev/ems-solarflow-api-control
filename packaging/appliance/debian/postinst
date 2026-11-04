@@ -201,7 +201,7 @@ case "$1" in
             # A refusal leaves the confinement unproven, so the account loses
             # its authentication before the failure is reported.
             if ! /usr/lib/ems-appliance-manager/setup-export-root.sh; then
-                /usr/bin/ems-appliance backup-access disable >/dev/null 2>&1 || true
+                /usr/bin/ems-appliance backup-access suspend >/dev/null 2>&1 || true
                 fail "the read-only SFTP export root could not be configured"
             fi
 

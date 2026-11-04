@@ -23,7 +23,7 @@ PACKAGES=${EMS_APPLIANCE_PACKAGES_DIR:-/var/lib/ems-appliance-manager/agent/pack
 case "$1" in
     remove|deconfigure)
         disabled=0
-        if [ -x "$BIN" ] && "$BIN" backup-access disable >/dev/null 2>&1; then
+        if [ -x "$BIN" ] && "$BIN" backup-access suspend >/dev/null 2>&1; then
             disabled=1
         fi
         if [ "$disabled" -eq 0 ] && [ -x "$LIBDIR/backup-account.sh" ]; then

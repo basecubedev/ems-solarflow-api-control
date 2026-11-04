@@ -171,7 +171,7 @@ def test_a_disable_that_did_not_revoke_anything_reports_failure(appliance_env, m
         "appliance.backup_confinement.build_activation", lambda **kwargs: _Service()
     )
 
-    assert command_backup_access(Args(action="disable", json=True)) == EXIT_ERROR
+    assert command_backup_access(Args(action="suspend", json=True)) == EXIT_ERROR
 
 
 def test_a_disable_that_withdrew_authentication_reports_success(appliance_env, monkeypatch):
@@ -189,7 +189,7 @@ def test_a_disable_that_withdrew_authentication_reports_success(appliance_env, m
         "appliance.backup_confinement.build_activation", lambda **kwargs: _Service()
     )
 
-    assert command_backup_access(Args(action="disable", json=True)) == EXIT_OK
+    assert command_backup_access(Args(action="suspend", json=True)) == EXIT_OK
 
 
 def test_local_is_an_escape_hatch_not_a_second_way_in(tmp_path):
@@ -773,3 +773,29 @@ def test_a_repair_whose_agent_goes_away_while_it_waits_says_so(appliance_env, mo
 
     assert code != 0
     assert "stopped answering" in capsys.readouterr().err
+
+
+def test_a_revocation_that_could_not_be_recorded_does_not_report_success(appliance_env, monkeypatch, capsys):
+    class _Service:
+        def revoke(self):
+            return {"state": "degraded", "reason": "revoked_by_operator", "authentication_disabled": True,
+                    "revocation_recorded": False, "changed": True}
+
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr("appliance.backup_confinement.build_activation", lambda **kwargs: _Service())
+
+    assert command_backup_access(Args(action="disable", json=True)) == EXIT_ERROR
+    assert "could not be recorded" in capsys.readouterr().err
+
+
+def test_an_unrecorded_revocation_that_withdrew_nothing_does_not_claim_it_did(appliance_env, monkeypatch, capsys):
+    class _Service:
+        def revoke(self):
+            return {"state": "degraded", "reason": "revoked_by_operator", "authentication_disabled": False,
+                    "revocation_recorded": False, "changed": False}
+
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr("appliance.backup_confinement.build_activation", lambda **kwargs: _Service())
+
+    assert command_backup_access(Args(action="disable", json=True)) == EXIT_ERROR
+    assert "access is withdrawn" not in capsys.readouterr().err

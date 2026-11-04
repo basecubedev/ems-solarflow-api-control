@@ -448,22 +448,36 @@ package still installs.
 
 ```bash
 sudo ems-appliance backup-access            # what is in force right now
-sudo ems-appliance backup-access disable    # revoke until it is verified again
+sudo ems-appliance backup-access disable    # revoke until an operator enables it again
+sudo ems-appliance backup-access enable     # end a revocation, then verify and activate
 ```
+
+`disable` records the operator's intent in agent state
+(`backup-access-revoked`) before it withdraws anything. Every activation —
+each boot, each change under the install root, each shell-access switch, each
+package install — then keeps the account off and reports `revoked_by_operator`,
+and adding a backup key is refused with `backup_access_revoked`; only `enable`
+ends it. It used to record nothing, so the next activation took the key file
+back: a key from a stolen laptop logged in again after the next reboot.
+
+The package's own fail-closed steps — removal, a failed export setup, the
+export unit's failure handler — run `backup-access suspend` instead, which
+withdraws authentication the same way but records no intent, so the next
+verified activation lifts it.
 
 ### Removal and purge
 
 | Step | What happens to backup access |
 |---|---|
 | `apt remove` | authentication is disabled first, the account is expired, the binds are unmounted, and a bind that cannot be unmounted stops the removal; the key material is preserved next to `authorized_keys` |
-| reinstall / upgrade | the keys are restored, but only once the effective confinement is verified again |
+| reinstall / upgrade | the keys are restored, but only once the effective confinement is verified again — and not while an operator's `backup-access disable` stands |
 | `apt purge` | the ACL entries this feature granted are withdrawn, the generated sshd policy and host configuration are removed, the package-created account, its package-created home and its keys are removed, and the export root is removed once nothing is mounted |
 
 Removal takes the authentication with it because it takes the confinement with
 it: the generated policy and the read-only binds are part of the package, so a
 surviving key would open an *unconfined* SFTP session over the whole host after
 the next sshd reload. **Removal fails closed**: if neither
-`ems-appliance backup-access disable` nor the direct maintainer fallback can
+`ems-appliance backup-access suspend` nor the direct maintainer fallback can
 revoke the authentication, the removal stops and says why, instead of leaving a
 usable key without the chroot that confined it. An export bind that is still
 mounted stops the removal the same way — usually an open SFTP session of the
@@ -514,7 +528,7 @@ carry the link rule as one block of identical text, since dpkg has removed the
 helper by the time `postrm` runs.
 
 The fallback of `apt remove` (`backup-account.sh disable`, run when the CLI
-fails) does what `backup-access disable` does. A linked `.ssh` is left alone and
+fails) does what `backup-access suspend` does. A linked `.ssh` is left alone and
 the account is expired instead; if it cannot be expired, the removal stops. An
 `authorized_keys` that is a regular file or a symbolic link, dangling or not, is
 moved aside as the entry it is, to `authorized_keys.disabled-by-appliance` or,

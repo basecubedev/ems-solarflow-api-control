@@ -120,6 +120,12 @@ class SshService:
         from appliance.backup_confinement import build_activation
 
         activation = build_activation(paths=self.paths, config=self.config, runner=self.runner)
+        if activation.revoked():
+            raise SshServiceError(
+                "backup_access_revoked",
+                "backup access was revoked at the console; `ems-appliance backup-access "
+                "enable` takes it back before a key can be added",
+            )
         files = activation.key_files()
         if files.refusal is not None:
             raise SshServiceError(files.refusal.code, files.refusal.message)
