@@ -122,6 +122,28 @@ class ManagerUpdateError(Exception):
         self.message = message
 
 
+def clock_refusal_message(record):
+    """Why a download waits for the clock, which servers it waits on, and a way out.
+
+    Waiting is the answer after a power cut; on a network that blocks NTP to
+    the internet it never is, so the servers timesyncd asks are named.
+    """
+
+    servers = record.get("ntp_servers") or []
+    fallback = record.get("ntp_fallback_servers") or []
+    asked = " ".join(servers) or (
+        f"none of its own, only the fallback {' '.join(fallback)}" if fallback else "none known"
+    )
+    return (
+        "the system clock is not known to be synchronised; this board has no real-time "
+        "clock, so a download now would fail certificate and signature checks for reasons "
+        f"that do not name the clock. Time servers asked: {asked}. After a power cut, wait "
+        "a few minutes and try again. If this network blocks NTP to the internet, let its "
+        "DHCP server offer an NTP server, or set NTP= in a file under "
+        "/etc/systemd/timesyncd.conf.d/ over SSH"
+    )
+
+
 class ManagerUpdateService:
     """One owner for every mutation of the installed Appliance Manager."""
 
@@ -175,12 +197,7 @@ class ManagerUpdateService:
         record = self.probe.system_time()
         if record.get("ntp_synchronized") is True:
             return record
-        raise ManagerUpdateError(
-            "clock_not_synchronised",
-            "the system clock is not known to be synchronised; this board has no real-time "
-            "clock, so a download now would fail certificate and signature checks for reasons "
-            "that do not name the clock. Wait for time synchronisation and try again",
-        )
+        raise ManagerUpdateError("clock_not_synchronised", clock_refusal_message(record))
 
     def _staging(self, name):
         """A directory to fetch into, with abandoned ones swept first.

@@ -335,7 +335,15 @@ The Raspberry Pi has no battery-backed clock. After a cold start it believes it
 is somewhere in the past until it reaches a time server. Certificate checks and
 signature validity both depend on the time, so a download started too early
 fails with errors that mention everything except the clock. The appliance
-refuses to start a manager download until the time is confirmed.
+refuses to start a manager download until the time is confirmed, and the refusal
+names the time servers it is asking.
+
+Some networks block time servers on the internet and offer their own instead.
+The appliance takes a time server your router hands out by DHCP. If yours hands
+out none, either set one in the router's DHCP settings, or put
+`NTP=<your time server>` under `[Time]` in a file in
+`/etc/systemd/timesyncd.conf.d/` over [SSH](../../appliance/ssh-shell-access.md) and restart
+`systemd-timesyncd`.
 
 ## What happens in the background
 
@@ -360,6 +368,7 @@ after a Manager update the side menu's foot names the new version.
 | A version is greyed out | This appliance will not install it, and the entry says why — a pre-release while pre-releases are not allowed, for example | Choose another, or allow pre-releases in `appliance.conf` |
 | *Another operation is running or waiting for confirmation* | One operation at a time | Wait for the banner to end, or cancel a waiting plan there |
 | A manager download fails with a certificate or signature error after a power cut | The clock is not set yet | Wait a few minutes after start-up and try again |
+| "The system clock is not known to be synchronised" does not go away | The network blocks the time servers the appliance asks | Let the router offer an NTP server by DHCP, or set one as described under [After a power cut](#after-a-power-cut-wait-before-downloading) |
 | **Last install** reads **Going back failed** or **Nothing to go back to** | The deadline expired and could not put the previous package back | See [When it stops working](recovery.md#an-update-failed) |
 
 ## Recovery or next steps

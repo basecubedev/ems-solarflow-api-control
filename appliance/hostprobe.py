@@ -113,7 +113,23 @@ class HostProbe:
                     record["ntp_synchronized"] = value.strip().lower() == "yes"
                 elif key.strip() == "Timezone" and value.strip():
                     record["timezone"] = value.strip()
+            if record["ntp_synchronized"] is not True:
+                record.update(self._time_servers())
         return record
+
+    def _time_servers(self):
+        """Which servers timesyncd asks, for a clock that is not synchronised."""
+
+        result = self.runner.run("timedatectl", ["show-timesync"], timeout=15)
+        fields = {}
+        for line in (result.stdout or "").splitlines():
+            key, _, value = line.partition("=")
+            fields[key.strip()] = value.split()
+        servers = fields.get("SystemNTPServers", []) + fields.get("LinkNTPServers", [])
+        return {
+            "ntp_servers": servers,
+            "ntp_fallback_servers": fields.get("FallbackNTPServers", []),
+        }
 
     def temperature(self):
         raw = (self._read(THERMAL_FILE) or "").strip()

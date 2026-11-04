@@ -84,6 +84,7 @@ install -d "$STAGE/usr/lib/systemd/system"
 install -d "$STAGE/usr/lib/tmpfiles.d"
 install -d "$STAGE/etc/logrotate.d"
 install -d "$STAGE/usr/lib/systemd/system/apt-daily.service.d"
+install -d "$STAGE/usr/lib/NetworkManager/dispatcher.d"
 install -d "$STAGE/etc/ems-appliance-manager"
 install -d "$STAGE/etc/ssh/sshd_config.d"
 install -d "$STAGE/usr/lib/ems-appliance-manager"
@@ -170,6 +171,10 @@ install -m 0644 "$PACKAGING/logrotate/ems-appliance-manager" "$STAGE/etc/logrota
 install -m 0644 "$PACKAGING/apt/apt-daily.service.conf" \
         "$STAGE/usr/lib/systemd/system/apt-daily.service.d/ems-appliance-manager.conf"
 install -m 0644 "$PACKAGING/apt/apt-daily.conf" "$STAGE/usr/share/ems-appliance-manager/"
+# NetworkManager hands a lease's time servers to nobody; this hands them to
+# timesyncd, which has no other way to learn a LAN's own server.
+install -m 0755 "$PACKAGING/network/50-ems-appliance-dhcp-ntp" \
+        "$STAGE/usr/lib/NetworkManager/dispatcher.d/"
 # Templates, not conffiles, and deliberately not under /etc: a packaged copy
 # under /etc/ems-appliance-manager would put an operator edit and a package file
 # at the same path, and dpkg is entitled to the second.
