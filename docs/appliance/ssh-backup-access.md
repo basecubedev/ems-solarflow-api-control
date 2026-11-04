@@ -16,7 +16,10 @@ PubkeyAuthentication   yes
 
 **Switch SSH on**, on the **SSH service** card, enables and starts the service.
 It enables nothing else — there is no operation in the appliance that can turn
-on password authentication. **Switch SSH off** stops and disables it. Enabling
+on password authentication. **Switch SSH off** stops and disables it — `ssh.socket` first,
+where the host has one, so no connection it still accepts can start the
+service again — and then reads both units back: if sshd still runs, the
+operation fails with `ssh_still_running` instead of reporting SSH as off. Enabling
 SSH and adding a key need a session that signed in with the password the
 Appliance Manager confirmed; see
 [security-model.md](security-model.md#what-a-rewritten-file-cannot-open).

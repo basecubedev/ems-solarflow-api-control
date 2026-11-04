@@ -205,6 +205,9 @@ class FakeHost:
         self.sshd_shell_match = SSHD_SHELL_DISABLED_MATCH
         self.sshd_config_valid = True
         self.reload_failures = set()
+        # Units a disable leaves running: ssh.service restarted by a connection
+        # the socket accepted while it was being taken down.
+        self.disable_sticks = set()
         self.start_refusals = {}
         self.failing_tools = set()
 
@@ -566,7 +569,8 @@ class FakeHost:
             return self._result("systemctl", args, 0)
         if args[:1] == ["disable"]:
             unit = args[-1]
-            self.units.setdefault(unit, {}).update({"active": "inactive", "enabled": "disabled"})
+            active = "active" if unit in self.disable_sticks else "inactive"
+            self.units.setdefault(unit, {}).update({"active": active, "enabled": "disabled"})
             return self._result("systemctl", args, 0)
         if args[:1] == ["start"]:
             unit = args[-1]

@@ -619,6 +619,33 @@ def test_disabling_ssh_takes_the_socket_with_it(tmp_path):
     assert services.ssh.status()["enabled"] is False
 
 
+def test_ssh_off_takes_the_socket_down_before_the_service(tmp_path):
+    """The other order lets a connection the socket still accepts start the
+    service again after it was stopped, holding the listening descriptor."""
+
+    services = socket_activated(appliance(tmp_path))
+    services.host.units["ssh.service"]["active"] = "active"
+
+    plan_and_execute(services, "ssh.plan_service", enabled=False)
+
+    disables = [args[-1] for tool, args, _ in services.host.calls
+                if tool == "systemctl" and args[:1] == ("disable",)]
+    assert disables == ["ssh.socket", "ssh.service"], disables
+
+
+@pytest.mark.parametrize("unit", ["ssh.service", "ssh.socket"])
+def test_ssh_off_that_leaves_sshd_answering_is_a_failure(tmp_path, unit):
+    """Success was judged from systemctl's exit codes alone."""
+
+    services = socket_activated(appliance(tmp_path))
+    services.host.disable_sticks.add(unit)
+
+    operation, _ = plan_and_execute(services, "ssh.plan_service", enabled=False)
+
+    assert operation.state == "failed_terminal", operation.to_dict()
+    assert operation.error["code"] == "ssh_still_running", operation.to_dict()
+
+
 def test_enabling_ssh_on_a_socket_host_uses_the_socket(tmp_path):
     """`ssh.service` cannot bind port 22 while the socket holds it."""
 

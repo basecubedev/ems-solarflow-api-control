@@ -389,13 +389,16 @@ class SshService:
             # turning the socket on.
             result = self.systemd.enable(UNIT_SSH_SOCKET if socket else UNIT_SSH)
         else:
-            result = self.systemd.disable(UNIT_SSH)
+            result = None
             if socket:
-                # Both, always: leaving the socket would keep the port open
-                # behind a console that says it is closed.
-                socket_result = self.systemd.disable(UNIT_SSH_SOCKET)
-                if result.ok and not socket_result.ok:
-                    result = socket_result
+                # Both, always, and the socket first: leaving it would keep the
+                # port open behind a console that says it is closed, and taking
+                # it down second lets a connection it still accepts start the
+                # service again after it was stopped.
+                result = self.systemd.disable(UNIT_SSH_SOCKET)
+            service_result = self.systemd.disable(UNIT_SSH)
+            if result is None or (result.ok and not service_result.ok):
+                result = service_result
         if not result.ok:
             self.operations.finish(
                 operation.operation_id,
@@ -404,11 +407,22 @@ class SshService:
                 error={"code": "ssh_service_failed", "message": "systemctl reported an error"},
             )
             raise SshServiceError("ssh_service_failed", "the SSH service could not be changed")
-        payload = {
-            "enabled": enabled,
-            "service": self.systemd.unit_state(UNIT_SSH),
-            "socket": self._socket_state(),
-        }
+        service = self.systemd.unit_state(UNIT_SSH)
+        socket = self._socket_state()
+        if not enabled and (service["running"] or (socket or {}).get("running")):
+            # systemctl's exit codes say what it was asked to do, not whether
+            # sshd still answers; the units are read back before "off" is said.
+            self.operations.finish(
+                operation.operation_id,
+                STATE_FAILED_TERMINAL,
+                stage="ssh_still_running",
+                error={
+                    "code": "ssh_still_running",
+                    "message": "SSH was switched off, but sshd is still running",
+                },
+            )
+            raise SshServiceError("ssh_still_running", "sshd is still running after SSH was switched off")
+        payload = {"enabled": enabled, "service": service, "socket": socket}
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
         return payload
 
