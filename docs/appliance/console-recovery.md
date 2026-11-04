@@ -14,7 +14,7 @@ over a serial console.
 
 Changing that password is **optional**. The appliance runs on a private home
 network and this project does not think a forced password change is worth the
-friction of an owner who cannot get in. The Admin console reports which state
+friction of an owner who cannot get in. The Appliance Manager's **Access** page reports which state
 your appliance is in — *"still the shipped password"* or *"changed"* — and does
 not insist.
 
