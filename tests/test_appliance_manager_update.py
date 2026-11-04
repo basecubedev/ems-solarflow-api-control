@@ -1751,3 +1751,23 @@ def test_the_offer_is_only_for_this_appliances_architecture(tmp_path):
 
     assert [item["release_id"] for item in listing["releases"]] == ["ems-appliance-manager-9.9.9-arm64"]
     assert listing["latest_stable"]["release_id"] == "ems-appliance-manager-9.9.9-arm64"
+
+
+def test_an_index_that_names_nothing_as_new_as_the_installed_package_says_so(tmp_path):
+    """The index is unsigned and carries no freshness: a mirror leaving newer
+    releases out showed an old one as Latest stable and "current"."""
+
+    services, _ = build(tmp_path)
+    services.manager.installed_version = "9.9.9"
+
+    listing = services.manager.sources()
+
+    assert listing["releases"], listing
+    assert listing["index_behind_installed"] is True
+
+
+def test_an_index_that_offers_the_installed_package_or_newer_is_not_behind(tmp_path):
+    services, _ = build(tmp_path)
+    services.manager.installed_version = "0.1.0"
+
+    assert services.manager.sources()["index_behind_installed"] is False

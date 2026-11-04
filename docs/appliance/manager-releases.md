@@ -153,6 +153,16 @@ The floor on how far back an operator can go is
 makes every later package uninstallable on an appliance that recorded it. That
 list may only be added to by *removing* a format, never by adding one.
 
+## The index is not signed
+
+Only manifests are signed. The index that lists them carries no signature and
+no date, so a mirror, or anyone able to rewrite the `appliance-manager-index`
+asset, can leave newer releases out. It cannot make an appliance install
+anything the signed manifest does not describe, and a downgrade is labelled as
+one; what it can do is withhold fixes. The Updates page says so when the index
+names nothing as new as the installed package (`index_behind_installed`), and
+does not call the older entry current.
+
 ## Candidates cannot be published, and that is structural
 
 A pre-release is spelled with a tilde and one of three words and a number —

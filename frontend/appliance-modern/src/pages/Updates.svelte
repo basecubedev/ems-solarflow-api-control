@@ -218,6 +218,7 @@
           {:else if !offered.length}
             <p class="note" data-testid="manager-sources-empty"><Icon name="info" />{t("manager.indexEmpty")}</p>
           {:else}
+            {#if sources.index_behind_installed}<p class="note warn" data-testid="manager-index-behind"><Icon name="triangle-alert" />{t("manager.indexBehind")}</p>{/if}
             <label class="field">
               <span>{t("install.version")}</span>
               <select class="input" value={chosen?.id || ""} onchange={(event) => (forms.managerVersion = event.currentTarget.value)} data-testid="manager-version">

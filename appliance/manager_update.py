@@ -322,6 +322,13 @@ class ManagerUpdateService:
             version_of=lambda item: (item.get("described") or {}).get("release_version", ""),
             stable=lambda item: item["track"] == TRACK_STABLE,
         )
+        # The index is not signed and carries no date. One that names nothing
+        # as new as the package that is installed was published before it, or
+        # is a copy leaving newer releases out: the console must not call the
+        # older entry current.
+        listing["index_behind_installed"] = bool(candidates) and all(
+            item["direction"] == DIRECTION_DOWNGRADE for item in candidates
+        )
         return listing
 
     def _clock_synchronised(self):
