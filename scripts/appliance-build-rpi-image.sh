@@ -266,6 +266,9 @@ echo "== building the $PROFILE image =="
 LOG="$OUTPUT/$NAME.build.log"
 (
     cd "$GENERATOR" || exit 1
+    # Bytecode under the generator's own __pycache__ is outside every hash that
+    # proved the tree, so the build neither reads nor writes any there.
+    export PYTHONPYCACHEPREFIX="$WORK/pycache"
     ./rpi-image-gen build \
         -c "$CONFIG" \
         -S "$IMAGE_DIR" \
