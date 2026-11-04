@@ -5,7 +5,11 @@ The package manager is driven through a controlled fake backend: no apt process
 runs, and the check path must never modify a package or an index.
 """
 
+import contextlib
+import fcntl
 import os
+import subprocess
+import sys
 
 import pytest
 
@@ -32,6 +36,42 @@ Inst openssl [3.0.11-1] (3.0.14-1 Debian-Security:12/stable-security [arm64])
 WITH_KERNEL = """Inst linux-image-arm64 [6.1.0-17] (6.1.0-18 Debian-Security:12/stable-security [arm64])
 Inst raspi-firmware [1.20240101] (1.20240601 Raspberry Pi Foundation:12/stable [arm64])
 """
+
+
+# The holder takes the lock the way apt's GetLock and dpkg's file_lock do: a
+# POSIX record lock (fcntl), from a process of its own, because a process never
+# conflicts with its own record locks.
+_APT_STYLE_HOLDER = (
+    "import fcntl, os, sys\n"
+    "fd = os.open(sys.argv[1], os.O_RDWR)\n"
+    "fcntl.lockf(fd, fcntl.LOCK_EX)\n"
+    "sys.stdout.write('held\\n')\n"
+    "sys.stdout.flush()\n"
+    "sys.stdin.read()\n"
+)
+
+
+@contextlib.contextmanager
+def held_like_apt(path):
+    """Hold ``path`` as a running apt-get or dpkg does, until the block ends.
+
+    Interleaving: the probe under test runs only after the holder has written
+    "held", which it does after the lock is taken, and the holder lets go only
+    when its stdin closes after the block.
+    """
+
+    holder = subprocess.Popen(
+        [sys.executable, "-I", "-c", _APT_STYLE_HOLDER, str(path)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout.readline() == "held\n"
+        yield
+    finally:
+        holder.stdin.close()
+        holder.wait(timeout=30)
 
 
 def appliance(tmp_path, **kwargs):
@@ -168,20 +208,40 @@ def test_missing_lock_file_is_unknown_not_free(tmp_path):
     assert services.packages.lock_state() == LOCK_UNKNOWN
 
 
-def test_a_held_lock_is_detected(tmp_path):
-    import fcntl
-    import os
-
+def test_a_lock_apt_holds_is_detected(tmp_path):
     services = appliance(tmp_path)
     lock = tmp_path / "var" / "lib" / "dpkg" / "lock-frontend"
-    handle = os.open(str(lock), os.O_RDWR)
-    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    try:
+    with held_like_apt(lock):
         assert services.packages.lock_state() == LOCK_HELD
-    finally:
-        fcntl.flock(handle, fcntl.LOCK_UN)
-        os.close(handle)
+    assert services.packages.lock_state() == LOCK_FREE
     assert lock.is_file()
+
+
+def test_a_lock_dpkg_holds_without_the_frontend_is_detected(tmp_path):
+    services = appliance(tmp_path)
+    lock = tmp_path / "var" / "lib" / "dpkg" / "lock"
+    lock.write_text("", encoding="utf-8")
+    with held_like_apt(lock):
+        assert services.packages.lock_state() == LOCK_HELD
+    assert services.packages.lock_state() == LOCK_FREE
+
+
+def test_the_probe_takes_no_lock_apt_could_trip_over(tmp_path, monkeypatch):
+    services = appliance(tmp_path)
+    (tmp_path / "var" / "lib" / "dpkg" / "lock").write_text("", encoding="utf-8")
+    taken = []
+    monkeypatch.setattr(fcntl, "flock", lambda *args: taken.append(("flock", args)))
+    monkeypatch.setattr(fcntl, "lockf", lambda *args: taken.append(("lockf", args)))
+    real_fcntl = fcntl.fcntl
+
+    def only_queries(fd, cmd, arg=0):
+        if cmd not in (fcntl.F_GETLK, getattr(fcntl, "F_OFD_GETLK", fcntl.F_GETLK)):
+            taken.append(("fcntl", cmd))
+        return real_fcntl(fd, cmd, arg)
+
+    monkeypatch.setattr(fcntl, "fcntl", only_queries)
+    assert services.packages.lock_state() == LOCK_FREE
+    assert taken == []
 
 
 # --- planning --------------------------------------------------------------
@@ -291,17 +351,13 @@ def test_failed_package_install_is_reported_with_bounded_output(tmp_path):
 
 
 def test_install_is_blocked_when_the_lock_is_taken_before_execution(tmp_path):
-    import fcntl
-    import os
 
     services = appliance(tmp_path)
     handlers = handlers_for(services)
     planned = handlers.dispatch({"operation": "updates.plan", "scope": "security"})
 
     lock = tmp_path / "var" / "lib" / "dpkg" / "lock-frontend"
-    handle = os.open(str(lock), os.O_RDWR)
-    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    try:
+    with held_like_apt(lock):
         handlers.dispatch(
             {
                 "operation": "operations.execute",
@@ -309,9 +365,6 @@ def test_install_is_blocked_when_the_lock_is_taken_before_execution(tmp_path):
                 "confirmation_token": planned["confirmation_token"],
             }
         )
-    finally:
-        fcntl.flock(handle, fcntl.LOCK_UN)
-        os.close(handle)
 
     operation = services.operations.get(planned["operation"]["operation_id"])
     assert operation.state == STATE_FAILED_TERMINAL
@@ -369,8 +422,6 @@ def test_index_refresh_runs_apt_update(tmp_path):
 
 
 def test_repair_never_removes_an_active_lock(tmp_path):
-    import fcntl
-    import os
 
     services = appliance(tmp_path)
     handlers = handlers_for(services)
@@ -378,9 +429,7 @@ def test_repair_never_removes_an_active_lock(tmp_path):
         {"operation": "updates.plan_repair", "action": "configure_pending"}
     )
     lock = tmp_path / "var" / "lib" / "dpkg" / "lock-frontend"
-    handle = os.open(str(lock), os.O_RDWR)
-    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    try:
+    with held_like_apt(lock):
         handlers.dispatch(
             {
                 "operation": "operations.execute",
@@ -388,9 +437,6 @@ def test_repair_never_removes_an_active_lock(tmp_path):
                 "confirmation_token": planned["confirmation_token"],
             }
         )
-    finally:
-        fcntl.flock(handle, fcntl.LOCK_UN)
-        os.close(handle)
 
     operation = services.operations.get(planned["operation"]["operation_id"])
     assert operation.error["code"] == "package_lock_held"
@@ -751,19 +797,21 @@ def test_a_refresh_from_an_unreachable_mirror_leaves_the_index_old(tmp_path):
     assert services.packages.check().index_age_seconds >= 10 * 24 * 60 * 60
 
 
+def test_a_reboot_is_not_planned_while_apt_installs(tmp_path):
+    services = appliance(tmp_path)
+    lock = tmp_path / "var" / "lib" / "dpkg" / "lock-frontend"
+    with held_like_apt(lock):
+        planned = handlers_for(services).dispatch({"operation": "system.plan_reboot"})
+    assert [b["code"] for b in planned["plan"]["blockers"]] == ["package_operation_active"]
+
+
 def test_a_plan_the_blockers_refuse_does_not_refresh_the_index(tmp_path):
-    import fcntl
 
     services = appliance(tmp_path)
     _index_aged(services, tmp_path, 25 * 60 * 60)
     lock = tmp_path / "var" / "lib" / "dpkg" / "lock-frontend"
-    handle = os.open(str(lock), os.O_RDWR)
-    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    try:
+    with held_like_apt(lock):
         planned = handlers_for(services).dispatch({"operation": "updates.plan", "scope": "security"})
-    finally:
-        fcntl.flock(handle, fcntl.LOCK_UN)
-        os.close(handle)
 
     assert _apt_updates(services) == []
     assert [b["code"] for b in planned["plan"]["blockers"]] == ["package_lock_held"]

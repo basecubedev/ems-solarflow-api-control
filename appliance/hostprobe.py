@@ -46,6 +46,7 @@ THERMAL_FILE = "sys/class/thermal/thermal_zone0/temp"
 REBOOT_REQUIRED_FILE = "var/run/reboot-required"
 REBOOT_REQUIRED_PKGS = "var/run/reboot-required.pkgs"
 DPKG_LOCK_FILE = "var/lib/dpkg/lock-frontend"
+DPKG_DATABASE_LOCK_FILE = "var/lib/dpkg/lock"
 APT_LISTS_DIR = "var/lib/apt/lists"
 APT_DAILY_UPDATE_STAMP = "var/lib/apt/periodic/update-stamp"
 

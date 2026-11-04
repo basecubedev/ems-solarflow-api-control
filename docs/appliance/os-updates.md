@@ -78,7 +78,7 @@ minutes later, and a scheduled security run tries again the next day.
 | Kernel update | A `linux-image*` / `raspberrypi-kernel` upgrade is pending |
 | Firmware update | A `raspi-firmware` / bootloader / `firmware-*` upgrade is pending |
 | Reboot required | `/var/run/reboot-required` exists, with the packages that set it |
-| Package-manager health | dpkg consistency and whether another package manager holds the lock |
+| Package-manager health | dpkg consistency and whether apt or dpkg holds one of its locks (`lock-frontend`, or dpkg's own `lock`) |
 | Update check | whether apt could list what is available; a failure is reported on its own and does not mean dpkg needs recovery |
 
 ## Install security updates

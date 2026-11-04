@@ -11,10 +11,16 @@ import contextlib
 import fcntl
 import os
 import re
+import struct
 import time
 from dataclasses import dataclass, field
 
-from appliance.hostprobe import APT_DAILY_UPDATE_STAMP, APT_LISTS_DIR, DPKG_LOCK_FILE
+from appliance.hostprobe import (
+    APT_DAILY_UPDATE_STAMP,
+    APT_LISTS_DIR,
+    DPKG_DATABASE_LOCK_FILE,
+    DPKG_LOCK_FILE,
+)
 from appliance.operations import (
     BUSY_CODES,
     STATE_FAILED_TERMINAL,
@@ -55,6 +61,28 @@ LOCK_HELD = "held"
 UPDATE_CHECK_FAILED = "update_check_failed"
 PACKAGE_MANAGER_UNAVAILABLE = "package_manager_unavailable"
 LOCK_UNKNOWN = "unknown"
+
+# struct flock as Python is built (64-bit offsets): l_type, l_whence, l_start,
+# l_len, l_pid. The query is padded because the kernel's struct is longer than
+# the packed fields on every architecture this runs on.
+_FLOCK = struct.Struct("@hhqqi")
+_FLOCK_QUERY = _FLOCK.pack(fcntl.F_WRLCK, os.SEEK_SET, 0, 0, 0) + bytes(32)
+
+
+def _record_lock_state(path):
+    """Whether another process holds a POSIX record lock on ``path``."""
+
+    try:
+        handle = os.open(str(path), os.O_RDONLY)
+    except OSError:
+        return LOCK_UNKNOWN
+    try:
+        answer = fcntl.fcntl(handle, fcntl.F_GETLK, _FLOCK_QUERY)
+    except OSError:
+        return LOCK_UNKNOWN
+    finally:
+        os.close(handle)
+    return LOCK_FREE if _FLOCK.unpack_from(answer)[0] == fcntl.F_UNLCK else LOCK_HELD
 
 
 class PackageError(Exception):
@@ -231,26 +259,21 @@ class PackageService:
     # --- read-only -------------------------------------------------------
 
     def lock_state(self):
-        """Report whether another package manager holds the dpkg frontend lock.
+        """Report whether apt or dpkg holds a package lock.
 
-        The lock is probed with a non-blocking flock and released immediately.
-        An active lock is never removed: a half-finished dpkg run must be
-        allowed to complete.
+        apt and dpkg lock with POSIX record locks, which a flock() probe never
+        sees, so the probe asks with F_GETLK whether a write lock could be
+        placed and places none: a probe that coincides with apt starting can
+        never make apt fail. dpkg's own lock is asked as well, because a dpkg
+        run without a frontend takes only that one. An active lock is never
+        removed: a half-finished dpkg run must be allowed to complete.
         """
 
-        path = self.probe.root / DPKG_LOCK_FILE
-        try:
-            handle = os.open(str(path), os.O_RDONLY)
-        except OSError:
-            return LOCK_UNKNOWN
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            fcntl.flock(handle, fcntl.LOCK_UN)
-            return LOCK_FREE
-        except OSError:
+        frontend = _record_lock_state(self.probe.root / DPKG_LOCK_FILE)
+        database = _record_lock_state(self.probe.root / DPKG_DATABASE_LOCK_FILE)
+        if LOCK_HELD in (frontend, database):
             return LOCK_HELD
-        finally:
-            os.close(handle)
+        return frontend
 
     def check(self):
         """Read update state without modifying any package or index."""
