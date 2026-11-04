@@ -177,8 +177,13 @@ class AgentAuth:
 
         try:
             answer = self.agent.call("auth.verify", password=password)
-        except AgentCallError:
-            return ""
+        except AgentCallError as exc:
+            # A password the protocol refuses is one no record can match; any
+            # other refusal -- a peer not allowed, an exception in the agent,
+            # an answer that was not one -- has not checked the password.
+            if exc.code == "invalid_password":
+                return ""
+            raise AuthError("agent_unavailable", str(getattr(exc, "message", exc)))
         except AgentUnavailableError as exc:
             raise AuthError("agent_unavailable", str(getattr(exc, "message", exc)))
         return str(answer.get("generation") or "") if answer.get("ok") else ""
@@ -937,6 +942,9 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         payload = {
             "authenticated": session is not None,
             "password_configured": bool(password.get("configured")),
+            # Unknown is not "configured": the agent could not be asked, which
+            # also looks like a first password somebody else set.
+            "password_state_known": not password.get("_unreachable"),
             "password_file_missing": bool(password.get("file_missing")),
             "appliance_version": installed_version(),
         }

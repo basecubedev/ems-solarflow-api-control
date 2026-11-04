@@ -777,6 +777,13 @@ test.describe("access, network and diagnostics", () => {
     await expect(page.getByTestId("backup-access-enable")).toBeVisible();
   });
 
+  test("a password state the agent cannot answer is shown as that, not as a sign-in", async ({ page, request }) => {
+    await resetAppliance(request, { auth_agent_offline: true });
+    await page.goto("/");
+    await expect(page.getByTestId("sign-in-agent")).toBeVisible();
+    await resetAppliance(request, {});
+  });
+
   test("a private key is refused with the appliance's reason", async ({ page }) => {
     await createPassword(page);
     await open(page, "access");

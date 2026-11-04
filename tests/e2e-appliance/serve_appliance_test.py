@@ -253,7 +253,7 @@ def main():
     backup_home.mkdir(parents=True, exist_ok=True)
     seed_backup_account(services, home=backup_home)
 
-    live = {"app": None, "agent": None}
+    live = {"app": None, "agent": None, "auth": None}
     unconfigured_fetcher = services.manager.fetcher
 
     def seed_appliance_state(options=None):
@@ -364,6 +364,14 @@ def main():
         services.admin.catalogue.allow_prerelease = prereleases
         if options.get("break_digest"):
             host.registry[f"{ADMIN_REPOSITORY}:v1.1.0"]["RepoDigests"] = []
+        if live["app"] is not None:
+            live["app"].auth = live["auth"]
+            if options.get("auth_agent_offline"):
+                # The password store is reached through the agent on a real
+                # host; an agent that does not answer leaves its state unknown.
+                from appliance.web import AgentAuth
+
+                live["app"].auth = AgentAuth(_OfflineAgent())
         if options.get("agent_offline") and live["app"] is not None:
             # Authentication must keep working while the audit trail cannot be
             # written; the UI has to say so instead of implying it was.
@@ -466,7 +474,7 @@ def main():
         confirmed=ConfirmedPassword(services.paths.confirmed_password_file),
     )
     app.test_reset_hook = seed_appliance_state
-    live["app"], live["agent"] = app, agent
+    live["app"], live["agent"], live["auth"] = app, agent, app.auth
 
     server = ApplianceWebServer(app, ("127.0.0.1", port))
     print(f"appliance test server on http://127.0.0.1:{port} (state {root})", flush=True)

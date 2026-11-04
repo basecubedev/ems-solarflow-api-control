@@ -36,6 +36,7 @@ class Session {
   reachable = $state(true);
   authenticated = $state(false);
   configured = $state(false);
+  stateKnown = $state(true);
   fileMissing = $state(false);
   confirmed = $state(null);
   csrf = $state("");
@@ -59,6 +60,7 @@ function adopt(payload) {
   if (Boolean(payload.authenticated) !== session.authenticated) epoch += 1;
   session.authenticated = Boolean(payload.authenticated);
   session.configured = Boolean(payload.password_configured);
+  session.stateKnown = payload.password_state_known !== false;
   session.fileMissing = Boolean(payload.password_file_missing);
   session.confirmed = confirmedOf(payload);
   session.csrf = session.authenticated ? payload.csrf_token || "" : "";
@@ -66,6 +68,7 @@ function adopt(payload) {
   if (payload.appliance_version) session.version = String(payload.appliance_version);
   session.reachable = true;
   session.loaded = true;
+  if (!session.authenticated && !session.stateKnown) retryLater();
 }
 
 function retryLater() {

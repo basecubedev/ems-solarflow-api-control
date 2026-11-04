@@ -355,7 +355,7 @@ cannot regress silently.
 | Logout | destroys the session |
 | Password reset | rotates a generation marker, invalidating **all** sessions; run as root it also makes the new password the confirmed one |
 | Password confirmation | confirming a password set elsewhere keeps every session; see "What a rewritten file cannot open" |
-| Pre-auth exposure | only the login page, whether a password exists and whether its file is missing |
+| Pre-auth exposure | only the login page, whether a password exists, whether its file is missing, and whether that could be read at all. An agent that cannot be asked is said to be that — the page shows "cannot check passwords right now" rather than a sign-in form — and an agent refusal of the password check is a `503`, not a wrong password, and costs no login attempt |
 | SSH on/off | covers `ssh.socket` as well as `ssh.service`. On a host whose sshd is socket-activated the socket holds port 22 and starts sshd per connection, so acting on the service alone reported SSH as off over a box that went on accepting keys |
 
 There is no unauthenticated network password-reset endpoint. Recovery is

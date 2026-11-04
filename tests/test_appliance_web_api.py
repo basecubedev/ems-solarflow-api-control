@@ -141,6 +141,7 @@ def test_no_system_information_is_exposed_before_authentication(appliance):
         "authenticated",
         "password_configured",
         "password_file_missing",
+        "password_state_known",
         "appliance_version",
     }
 
@@ -2074,6 +2075,47 @@ def test_a_refused_csrf_check_does_not_extend_the_session(signed_in):
 
     assert status == 403
     assert app.sessions.sessions[session_id].expires_at == before
+
+
+class _RefusingAgent:
+    """An agent that answers auth.verify with an error that is not about the password."""
+
+    def __init__(self, real):
+        self.real = real
+
+    def call(self, operation, **fields):
+        from appliance.agent_client import AgentCallError
+
+        if operation == "auth.verify":
+            raise AgentCallError("agent_error", "the agent raised")
+        return self.real.call(operation, **fields)
+
+
+def test_an_agent_that_could_not_check_the_password_is_not_a_wrong_password(appliance):
+    """peer_not_allowed or an exception in the agent read as 401 "not correct"
+    and spent the operator's login attempts."""
+
+    services, app, client = appliance
+    app.auth.create(PASSWORD, PASSWORD)
+    from appliance.web import AgentAuth
+
+    app.auth = AgentAuth(_RefusingAgent(app.agent))
+
+    statuses = [client.login()[0] for _ in range(7)]
+
+    assert statuses == [503] * 7, statuses
+
+
+def test_a_password_state_nobody_could_read_is_said_to_be_unknown(appliance):
+    _, app, client = appliance
+    from appliance.web import AgentAuth
+
+    app.auth = AgentAuth(_OfflineAgent())
+
+    status, payload, _ = client.get("/api/session")
+
+    assert status == 200
+    assert payload["password_state_known"] is False
 
 
 class _HeldTimer:
