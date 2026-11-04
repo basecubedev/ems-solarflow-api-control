@@ -24,34 +24,6 @@ RESULT_DENIED = "denied"
 RESULT_CONFIRMED = "confirmed"
 RESULT_NOTHING_TO_DO = "nothing_to_do"
 
-AUDITED_ACTIONS = (
-    "login.success",
-    "login.failure",
-    "logout",
-    "password.change",
-    "password.confirm",
-    "password.reset",
-    "admin.install",
-    "admin.update",
-    "admin.rollback",
-    "admin.repair",
-    "admin.start",
-    "admin.stop",
-    "admin.restart",
-    "updates.install",
-    "updates.repair",
-    "ssh.enable",
-    "ssh.disable",
-    "ssh.key_added",
-    "ssh.key_removed",
-    "ssh.keys_revoked",
-    "network.wifi",
-    "network.hostname",
-    "system.reboot",
-    "system.shutdown",
-    "support.archive",
-)
-
 # Matched as substrings, not exact names: a detail key called signing_key,
 # private_key or api_token is the same thing as one called key or token, and an
 # audit trail that only recognised the exact spellings would log the rest.

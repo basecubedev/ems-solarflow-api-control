@@ -393,8 +393,15 @@ admin install / update / rollback / repair, admin start / stop / restart,
 OS update, package recovery,
 SSH enable or disable, root-capable shell access enable or disable,
 SSH key added or removed, all keys revoked, support archive,
-network change, hostname change, reboot, shutdown
+network change, hostname change, time zone change, reboot, shutdown,
+Appliance Manager update and revert
 ```
+
+Which way an operation went is in the entry's `detail`: on or off, start, stop
+or restart, the account and the key's fingerprint, the network, the host name,
+the time zone, the update scope and the version. Before, `ssh.shell_access
+success` twice was the whole answer to "who turned shell access on?", and the
+operation record that said more is pruned after fifty operations.
 
 Every plan the agent will execute is on that list, and a test holds it there:
 `_audit` returns silently for a type it does not recognise, so a plan added

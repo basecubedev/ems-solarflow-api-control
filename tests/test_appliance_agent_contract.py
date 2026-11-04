@@ -455,6 +455,26 @@ def test_sensitive_operations_are_audited(handlers, services):
     assert "admin.install" in [entry["action"] for entry in services.audit.tail()]
 
 
+def test_the_audit_says_which_way_an_operation_went(handlers, services):
+    """`admin.lifecycle success` twice could be a stop and a start, or two
+    restarts; months later the record that would have said so was pruned."""
+
+    for action in ("stop", "start"):
+        planned = handlers.dispatch({"operation": "admin.plan_lifecycle", "action": action})
+        handlers.dispatch(
+            {
+                "operation": "operations.execute",
+                "operation_id": planned["operation"]["operation_id"],
+                "confirmation_token": planned["confirmation_token"],
+            }
+        )
+        services.operations.acknowledge(planned["operation"]["operation_id"])
+
+    entries = [entry for entry in services.audit.tail() if entry["action"] == "admin.lifecycle"]
+
+    assert [entry["detail"]["action"] for entry in entries] == ["stop", "stop", "start", "start"], entries
+
+
 # --- socket transport ------------------------------------------------------
 
 

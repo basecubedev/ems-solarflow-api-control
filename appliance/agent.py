@@ -122,6 +122,23 @@ AUDITED_PLANS = {
     manager_update.TYPE_MANAGER_REVERT: "manager.revert.plan",
 }
 
+# What says which way an operation went -- on or off, start, stop or restart,
+# which account, which network. Only in the record, which is pruned after fifty
+# operations, "who turned shell access on?" had no answer in the audit.
+AUDIT_DETAIL_FIELDS = (
+    "action",
+    "enabled",
+    "account",
+    "fingerprint",
+    "ssid",
+    "hostname",
+    "timezone",
+    "scope",
+    "channel",
+    "tag",
+    "version",
+)
+
 # A planner's answer that there is nothing to do. No operation took place, so
 # none is kept: the daily security update left one cancelled banner and one
 # audited failure for every quiet day.
@@ -687,6 +704,12 @@ class AgentHandlers:
         action = AUDITED_PLANS.get(operation_type)
         if not action:
             return
+        target = {}
+        if operation_id:
+            try:
+                target = self.services.operations.get(operation_id).requested_target
+            except (OperationError, OSError):
+                target = {}
         self.services.audit.record(
             action,
             user=actor,
@@ -694,6 +717,7 @@ class AgentHandlers:
             target=operation_type,
             result=result,
             operation_id=operation_id,
+            detail={field: target[field] for field in AUDIT_DETAIL_FIELDS if field in target},
         )
 
 
