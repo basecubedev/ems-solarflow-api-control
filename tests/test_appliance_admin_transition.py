@@ -416,3 +416,68 @@ def test_the_appliance_stands_back_for_exactly_the_stages_admin_calls_unfinished
 
     assert set(admin_transition.FINISHED_STAGES) == set(TERMINAL_TRANSITION_STAGES)
     assert set(admin_transition.FINISHED_STAGES) <= set(VALID_TRANSITION_STAGES)
+
+
+# --- a file the EMS container can write --------------------------------------------
+
+
+def _transition_file(tmp_path):
+    path = tmp_path / "state" / admin_transition.TRANSITION_FILE
+    path.parent.mkdir(parents=True)
+    return path
+
+
+def test_a_fifo_at_the_transition_path_is_unreadable_not_a_hang(tmp_path):
+    """The EMS container mounts this tree read-write. A FIFO there hung every
+    status read and every Admin plan, the plan while it held the Admin lock."""
+
+    import os
+
+    path = _transition_file(tmp_path)
+    os.mkfifo(path)
+
+    assert admin_transition.read_transition(path)["state"] == admin_transition.STATE_UNREADABLE
+
+
+def test_a_link_at_the_transition_path_is_not_followed(tmp_path):
+    """A link to /dev/zero was read as root until memory ran out."""
+
+    path = _transition_file(tmp_path)
+    target = tmp_path / "elsewhere.json"
+    target.write_text(json.dumps(live_transition()), encoding="utf-8")
+    path.symlink_to(target)
+
+    assert admin_transition.read_transition(path)["state"] == admin_transition.STATE_UNREADABLE
+
+
+def test_an_oversized_transition_is_refused_without_reading_it_whole(tmp_path, monkeypatch):
+    import os
+
+    path = _transition_file(tmp_path)
+    path.write_bytes(b"{" + b" " * (4 * admin_transition.MAX_TRANSITION_BYTES) + b"}")
+    read = []
+    real = os.read
+    monkeypatch.setattr(os, "read", lambda fd, n: read.append(n) or real(fd, n))
+    monkeypatch.setattr(type(path), "read_bytes", lambda self: pytest.fail("the whole file was read"))
+
+    assert admin_transition.read_transition(path)["state"] == admin_transition.STATE_UNREADABLE
+    assert sum(read) <= admin_transition.MAX_TRANSITION_BYTES + 1, sum(read)
+
+
+def test_an_expiry_no_admin_would_write_does_not_block_for_ever(tmp_path):
+    """Admin renews its expiry an hour ahead. One years ahead held every
+    Install, Rollback, Repair, Start, Stop and Restart until then."""
+
+    path = _transition_file(tmp_path)
+    path.write_text(json.dumps({**live_transition(), "expires_at": "9999-12-31T00:00:00Z"}), encoding="utf-8")
+
+    record = admin_transition.read_transition(path)
+
+    assert record["state"] == admin_transition.STATE_UNREADABLE
+    assert "9999-12-31" in record["reason"]
+
+
+def test_the_expiry_ceiling_is_the_admins_own_transition_lifetime():
+    from admin.admin_update import DEFAULT_TRANSITION_TTL_SECONDS
+
+    assert admin_transition.MAX_TRANSITION_TTL_SECONDS == DEFAULT_TRANSITION_TTL_SECONDS

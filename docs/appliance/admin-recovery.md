@@ -485,7 +485,7 @@ In practice:
 | live, within its expiry | refuses Admin-mutating operations |
 | stage `completed` or `cancelled` | works normally, whatever the expiry says |
 | past its expiry | works normally |
-| corrupt or unreadable | works normally |
+| corrupt or unreadable — not a regular file, a link, larger than 256 KiB, or expiring more than an hour ahead | works normally, and says why it read the record as unreadable |
 
 The stage matters as much as the clock, because Admin keeps the record after it
 is finished and moves the deadline forward with the last write it makes — the
@@ -493,6 +493,14 @@ completing one included. A record that is over therefore looks live to a clock
 for up to a full window afterwards, and that window is exactly when an operator
 reaches for these tools. Any stage the appliance does not recognise keeps
 blocking, and so does `failed_recoverable`, which Admin may still act on.
+
+The record lives in a tree the EMS container can write, and the agent that
+reads it runs as root, so it is read without following a link, only as a
+regular file and only up to its size limit: a FIFO there used to hang every
+status read and Admin plan, and a link to `/dev/zero` was read until memory ran
+out. An expiry later than Admin ever sets — it renews one hour ahead — is not
+taken as live either, or a record dated the year 9999 would block every
+Install, Rollback, Repair, Start, Stop and Restart until then.
 
 If Admin is genuinely stuck inside a live transition, either wait for the
 expiry or delete
