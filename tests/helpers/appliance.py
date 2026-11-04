@@ -139,8 +139,11 @@ class FakeHost:
                 "ss",
                 "chage",
                 "usermod",
+                "loginctl",
             }
         )
+        # Open logind sessions per account, as `loginctl show-user` lists them.
+        self.sessions = {}
         self.docker_running = True
         self.watch_ticks = 0
         self.on_watch_tick = None
@@ -602,6 +605,19 @@ class FakeHost:
         if args[:1] in (["stop"], ["reboot"], ["poweroff"], ["try-restart"]):
             return self._result("systemctl", args, 0)
         return self._result("systemctl", args, 0)
+
+    def _loginctl(self, args):
+        account = args[1] if len(args) > 1 else ""
+        if args[:1] == ["show-user"]:
+            if not self.sessions.get(account):
+                return self._result(
+                    "loginctl", args, 1, "", f"User {account} is not logged in or lingering."
+                )
+            return self._result("loginctl", args, 0, " ".join(self.sessions[account]) + "\n")
+        if args[:1] == ["terminate-user"]:
+            self.sessions.pop(account, None)
+            return self._result("loginctl", args, 0)
+        return self._result("loginctl", args, 1, "", "unsupported")
 
     def _journalctl(self, args):
         return self._result("journalctl", args, 0, "journal line one\njournal line two\n")

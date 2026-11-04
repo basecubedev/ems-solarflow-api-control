@@ -80,9 +80,17 @@ appliance never asks for one and never displays one.
 
 Each key row under **Keys for** the account has **Remove** (by fingerprint).
 The agent also has an operation that removes every key of an account at once
-and states clearly that remote access through that account stops immediately
 (`ssh.revoke_all`), but neither console offers a button for it: remove the keys
 one by one.
+
+**Open sessions end with the access they came in on.** sshd checks a key and
+its Match block only when a session starts, so an SFTP session already open, a
+shell, or a `ControlMaster` connection opening new ones would outlive the key.
+Removing a key, revoking all of an account's keys, switching shell access off
+and switching SSH off therefore end the affected accounts' sessions through
+`loginctl terminate-user` afterwards. The operation's result says, per account,
+`ended`, `none` (logind knew no session), `failed`, or `unknown` when logind
+could not be asked.
 
 ## Generate a key pair on your own computer
 

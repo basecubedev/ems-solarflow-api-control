@@ -360,8 +360,8 @@ class SshService:
             "account": account,
             "keys": keys,
             "key_count": len(keys),
-            "warning": "Every SSH key of this account is removed. Remote access through this "
-            "account stops immediately.",
+            "warning": "Every SSH key of this account is removed, and its open SSH sessions "
+            "are ended.",
         }
 
     # --- execution -------------------------------------------------------
@@ -423,6 +423,10 @@ class SshService:
             )
             raise SshServiceError("ssh_still_running", "sshd is still running after SSH was switched off")
         payload = {"enabled": enabled, "service": service, "socket": socket}
+        if not enabled:
+            payload["sessions"] = self._end_sessions(
+                [self.config.backup_user, shell_access.ACCOUNT]
+            )
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
         return payload
 
@@ -443,6 +447,8 @@ class SshService:
             )
             raise SshServiceError(exc.code, exc.message)
         payload = {"account": shell_access.ACCOUNT, "enabled": shell_access.enabled(self.paths)}
+        if not enabled:
+            payload["sessions"] = self._end_sessions([shell_access.ACCOUNT])
         if activation.export_failed:
             payload["export_warning"] = activation.export_failed
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
@@ -495,7 +501,12 @@ class SshService:
             )
             raise SshServiceError(exc.code, exc.message)
         self._attribute(account, withdrawn, managed=False)
-        payload = {"account": account, "removed": removed, "key_count": len(store.list())}
+        payload = {
+            "account": account,
+            "removed": removed,
+            "key_count": len(store.list()),
+            "sessions": self._end_sessions([account]),
+        }
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
         return payload
 
@@ -506,9 +517,36 @@ class SshService:
         withdrawn = [key.blob for key in store.list()]
         removed = store.revoke_all()
         self._attribute(account, withdrawn, managed=False)
-        payload = {"account": account, "removed": removed, "key_count": 0}
+        payload = {
+            "account": account,
+            "removed": removed,
+            "key_count": 0,
+            "sessions": self._end_sessions([account]),
+        }
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
         return payload
+
+    def _end_sessions(self, accounts):
+        """End each account's open sessions; what was done, per account.
+
+        sshd checks a key and its Match block only when a session starts, so a
+        running SFTP session, a shell, or a ControlMaster connection opening new
+        ones outlives the access it came in on. ``none`` is an account logind
+        knows no session of; ``unknown`` is one nobody could ask about.
+        """
+
+        ended = {}
+        for account in accounts:
+            if not self.runner.available("loginctl"):
+                ended[account] = "unknown"
+                continue
+            shown = self.runner.run("loginctl", ["show-user", account], timeout=15)
+            if not shown.ok:
+                ended[account] = "none" if "not logged in" in (shown.stderr or "") else "unknown"
+                continue
+            terminated = self.runner.run("loginctl", ["terminate-user", account], timeout=30)
+            ended[account] = "ended" if terminated.ok else "failed"
+        return ended
 
     def _advance(self, operation, stage, *, state=None, detail=None):
         self.operations.advance(operation.operation_id, stage, state=state, detail=detail)

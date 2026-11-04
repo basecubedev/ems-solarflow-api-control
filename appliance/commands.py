@@ -41,6 +41,9 @@ EXECUTABLES = {
     "sshd": ("/usr/sbin/sshd",),
     "getent": ("/usr/bin/getent", "/bin/getent"),
     "chage": ("/usr/bin/chage",),
+    # Ending an account's open sessions once its access is withdrawn: sshd
+    # checks a key only when a session starts.
+    "loginctl": ("/usr/bin/loginctl", "/bin/loginctl"),
     "ss": ("/usr/bin/ss", "/bin/ss"),
     "avahi-resolve": ("/usr/bin/avahi-resolve",),
     # Finding the partition mounted at /, so the first boot can grow it. The

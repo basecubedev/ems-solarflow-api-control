@@ -233,7 +233,7 @@ def test_revoke_all_requires_a_confirmation_and_reports_the_count(tmp_path):
     handlers = handlers_for(services)
     planned = handlers.dispatch({"operation": "ssh.plan_revoke_all", "account": "ems-backup"})
     assert planned["plan"]["key_count"] == 1
-    assert "stops immediately" in planned["plan"]["warning"]
+    assert "open SSH sessions are ended" in planned["plan"]["warning"]
     assert planned["operation"]["state"] == "awaiting_confirmation"
     assert services.ssh.keystore("ems-backup").list()
 
@@ -691,3 +691,74 @@ def test_a_shell_switch_says_so_when_the_backup_export_failed_behind_it(tmp_path
     payload = services.ssh._execute_shell_access(running)
 
     assert "could not publish" in payload["export_warning"]
+
+
+# --- an open session does not outlive the access it came in on ------------
+
+
+def test_removing_a_key_ends_the_accounts_open_sessions(tmp_path):
+    """sshd checks a key only at authentication; a session, or a ControlMaster
+    connection opening new ones, went on after the key was removed."""
+
+    services = appliance(tmp_path)
+    plan_and_execute(services, "ssh.plan_key_add", account="ems-backup", public_key=ED25519)
+    fingerprint = services.ssh.keystore("ems-backup").list()[0].fingerprint
+    services.host.sessions["ems-backup"] = ["c3"]
+
+    operation, _ = plan_and_execute(
+        services, "ssh.plan_key_remove", account="ems-backup", fingerprint=fingerprint
+    )
+
+    assert operation.result["sessions"] == {"ems-backup": "ended"}, operation.result
+    assert "ems-backup" not in services.host.sessions
+
+
+def test_an_account_without_sessions_reports_none_and_is_not_terminated(tmp_path):
+    services = appliance(tmp_path)
+
+    operation, _ = plan_and_execute(services, "ssh.plan_revoke_all", account="ems-backup")
+
+    assert operation.result["sessions"] == {"ems-backup": "none"}, operation.result
+    assert not any(
+        tool == "loginctl" and args[:1] == ("terminate-user",)
+        for tool, args, _ in services.host.calls
+    )
+
+
+def test_ssh_off_ends_every_ssh_accounts_sessions(tmp_path):
+    services = socket_activated(appliance(tmp_path))
+    services.host.sessions = {"ems-backup": ["c1"], "ems-shell": ["c2"]}
+
+    operation, _ = plan_and_execute(services, "ssh.plan_service", enabled=False)
+
+    assert operation.result["sessions"] == {"ems-backup": "ended", "ems-shell": "ended"}
+    assert services.host.sessions == {}
+
+
+def test_a_session_that_could_not_be_ended_is_said_so(tmp_path):
+    services = appliance(tmp_path)
+    services.host.sessions["ems-backup"] = ["c3"]
+    services.host.fail_command("loginctl")
+
+    operation, _ = plan_and_execute(services, "ssh.plan_revoke_all", account="ems-backup")
+
+    assert operation.result["sessions"] == {"ems-backup": "unknown"}, operation.result
+
+
+def test_shell_access_off_ends_the_shell_accounts_sessions(tmp_path, monkeypatch):
+    """A root shell already open went on after shell access was switched off."""
+
+    from appliance import shell_access
+
+    services = appliance(tmp_path)
+    monkeypatch.setattr(shell_access, "apply", lambda paths, config, *, value, activation: None)
+    services.host.sessions["ems-shell"] = ["c5"]
+    operation = services.operations.create("ssh.shell_access", {"enabled": False})
+    services.operations.await_confirmation(operation.operation_id, {})
+    token = services.operations.get(operation.operation_id, include_token=True).confirmation_token
+    running = services.operations.confirm(operation.operation_id, token)
+
+    payload = services.ssh._execute_shell_access(running)
+
+    assert payload["sessions"] == {"ems-shell": "ended"}, payload
+    assert services.host.sessions == {}
