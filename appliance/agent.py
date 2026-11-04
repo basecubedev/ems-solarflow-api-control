@@ -46,8 +46,10 @@ from appliance import (
     validation,
 )
 from appliance.audit import (
+    RESULT_CONFIRMED,
     RESULT_DENIED,
     RESULT_FAILURE,
+    RESULT_NOTHING_TO_DO,
     RESULT_SUCCESS,
     RefusalAggregator,
 )
@@ -56,6 +58,7 @@ from appliance.release_fetch import FetchError
 from appliance.operations import (
     STATE_FAILED_RECOVERABLE,
     STATE_FAILED_TERMINAL,
+    STATE_SUCCEEDED,
     OperationConflictError,
     OperationError,
 )
@@ -117,6 +120,11 @@ AUDITED_PLANS = {
     manager_update.TYPE_MANAGER_UPDATE: "manager.update.plan",
     manager_update.TYPE_MANAGER_REVERT: "manager.revert.plan",
 }
+
+# A planner's answer that there is nothing to do. No operation took place, so
+# none is kept: the daily security update left one cancelled banner and one
+# audited failure for every quiet day.
+NOTHING_TO_DO_CODES = frozenset({"no_updates_available"})
 
 
 class AgentError(Exception):
@@ -340,9 +348,11 @@ class AgentHandlers:
         ) as exc:
             code = getattr(exc, "code", "plan_failed")
             message = str(getattr(exc, "message", exc))
-            self._abandon_plan(
-                operation, operation_type, actor, source_ip, error={"code": code, "message": message}
-            )
+            error = {"code": code, "message": message}
+            if code in NOTHING_TO_DO_CODES:
+                self._drop_plan(operation, operation_type, actor, source_ip, error=error)
+            else:
+                self._abandon_plan(operation, operation_type, actor, source_ip, error=error)
             raise AgentError(code, message)
         except BaseException:
             # The lock this planner took outlives the exception unless it is
@@ -413,6 +423,16 @@ class AgentHandlers:
             self.services.operations.abandon(operation.operation_id, error=error)
         finally:
             self._audit(operation_type, actor, source_ip, RESULT_FAILURE, operation.operation_id)
+
+    def _drop_plan(self, operation, operation_type, actor, source_ip, error):
+        self.services.network.discard_secret(operation.operation_id)
+        try:
+            dropped = self.services.operations.discard(operation.operation_id)
+        except OSError:
+            dropped = False
+        if not dropped:
+            self.services.operations.abandon(operation.operation_id, error=error)
+        self._audit(operation_type, actor, source_ip, RESULT_NOTHING_TO_DO, operation.operation_id)
 
     def _build_plan(self, name, operation, args):
         services = self.services
@@ -536,9 +556,10 @@ class AgentHandlers:
                 stage="blocked",
                 error={"code": blockers[0]["code"], "message": blockers[0]["message"]},
             )
+            self._audit(operation.type, actor, source_ip, RESULT_DENIED, operation_id)
             raise AgentError(blockers[0]["code"], blockers[0]["message"])
 
-        self._audit(operation.type, actor, source_ip, RESULT_SUCCESS, operation_id)
+        self._audit(operation.type, actor, source_ip, RESULT_CONFIRMED, operation_id)
         self._execute(lambda: self._run(operation, actor=actor, source_ip=source_ip))
         return {"operation": store.get(operation_id).to_dict()}
 
@@ -558,11 +579,19 @@ class AgentHandlers:
                         "message": str(getattr(exc, "message", exc)),
                     },
                 )
-            self._audit(
-                operation.type, actor, source_ip, RESULT_FAILURE, operation.operation_id
-            )
-            return
-        self._audit(operation.type, actor, source_ip, RESULT_SUCCESS, operation.operation_id)
+        # By the record, not by an exception: several executors finish a
+        # failure and return, and were audited as a success.
+        try:
+            succeeded = store.get(operation.operation_id).state == STATE_SUCCEEDED
+        except OperationError:
+            succeeded = False
+        self._audit(
+            operation.type,
+            actor,
+            source_ip,
+            RESULT_SUCCESS if succeeded else RESULT_FAILURE,
+            operation.operation_id,
+        )
 
     def _executor_for(self, operation_type):
         services = self.services
@@ -599,8 +628,6 @@ class AgentHandlers:
         return service
 
     def _execute_manager(self, operation):
-        from appliance.operations import STATE_SUCCEEDED
-
         result = self._require_manager().execute(operation)
         self.services.operations.finish(
             operation.operation_id, STATE_SUCCEEDED, result=result, stage=result.get("stage", "")
@@ -609,8 +636,6 @@ class AgentHandlers:
 
 
     def _execute_power(self, operation):
-        from appliance.operations import STATE_SUCCEEDED
-
         action = "reboot" if operation.type == "system.reboot" else "shutdown"
         # dpkg can take the lock between the plan and Confirm; going down then
         # leaves a half-unpacked system.

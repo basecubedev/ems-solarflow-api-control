@@ -145,6 +145,12 @@ Every outcome, including declining, exits 0. A daily timer that leaves a failed
 unit behind because the package manager was busy teaches an operator to stop
 reading it; what happened is in the journal and in the operation record.
 
+A day with nothing to install leaves no operation behind and is audited as
+`nothing_to_do`, and a run its blockers stopped is acknowledged as it is
+cancelled. Each quiet day used to leave a cancelled banner to click away and a
+`failure` in the audit log, and pushed one of the operator's own operations out
+of the fifty the store keeps.
+
 During installation the operation reports its stage, captures bounded output and
 prevents a second package operation. Afterwards it runs a dpkg consistency
 check, detects the reboot requirement, reports the changed package count and

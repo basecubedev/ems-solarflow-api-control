@@ -731,8 +731,11 @@ def run_scheduled_security_updates(client, config, *, sleep=None):
     reboot = bool(plan.get("reboot_required_before"))
 
     def abandon(reason, **extra):
+        # The run's result says why; a banner a day, for a timer nobody
+        # watched, says nothing more.
         try:
             client.call("operations.cancel", actor=SCHEDULE_ACTOR, operation_id=operation_id)
+            client.call("operations.acknowledge", actor=SCHEDULE_ACTOR, operation_id=operation_id)
         except (AgentCallError, AgentUnavailableError):
             pass
         return {"ran": False, "reason": reason, "reboot_required": reboot, **extra}

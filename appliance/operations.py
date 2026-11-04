@@ -392,6 +392,20 @@ class OperationStore:
     def cancel(self, operation_id):
         return self.finish(operation_id, STATE_CANCELLED, stage="cancelled")
 
+    def discard(self, operation_id):
+        """Forget a plan that found nothing to do; no operation took place.
+
+        Only a plan still being made is forgotten -- one an operator cancelled
+        meanwhile is kept as they left it.
+        """
+
+        with self._lock:
+            operation = self._load(operation_id)
+            if operation.state != STATE_PLANNED:
+                return False
+            self._path(operation_id).unlink()
+            return True
+
     def abandon(self, operation_id, *, error=None):
         """Cancel a plan that could not be made, and keep why.
 

@@ -20,6 +20,9 @@ from appliance.redaction import redact_mapping, redact_text
 RESULT_SUCCESS = "success"
 RESULT_FAILURE = "failure"
 RESULT_DENIED = "denied"
+# The operator's Confirm, apart from how the operation then ended.
+RESULT_CONFIRMED = "confirmed"
+RESULT_NOTHING_TO_DO = "nothing_to_do"
 
 AUDITED_ACTIONS = (
     "login.success",

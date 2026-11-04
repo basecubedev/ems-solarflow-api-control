@@ -744,6 +744,31 @@ def test_the_schedule_says_so_when_there_is_nothing_to_install(tmp_path):
     assert result["reason"] == "nothing_to_install", result
 
 
+def test_a_week_with_nothing_to_install_leaves_no_banner_and_no_failure(tmp_path):
+    """Each quiet day left a cancelled record to click away, logged a failure,
+    and pushed a real operation out of the 50 the store keeps."""
+
+    services = config_with(appliance(tmp_path), automatic_security_updates=True)
+    services.host.apt_simulation = NO_UPDATES
+
+    for _ in range(7):
+        auto_update(services)
+
+    assert services.operations.list() == []
+    results = [entry["result"] for entry in services.audit.tail() if entry["action"] == "updates.install"]
+    assert results and "failure" not in results, results
+
+
+def test_a_blocked_schedule_does_not_leave_a_banner_a_day(tmp_path):
+    services = config_with(appliance(tmp_path), automatic_security_updates=True)
+    services.host.dpkg_audit = "libbroken\n"
+
+    auto_update(services)
+    auto_update(services)
+
+    assert services.operations.unacknowledged() == []
+
+
 def test_the_schedule_never_reboots_on_its_own(tmp_path):
     """A reboot is visible to whoever is relying on the battery right now."""
 
@@ -875,6 +900,20 @@ def test_a_power_action_confirmed_while_apt_installs_does_not_go_down(tmp_path, 
     assert operation.state == STATE_FAILED_TERMINAL, operation.to_dict()
     assert operation.error["code"] == "package_operation_active"
     assert not [c for c in services.host.calls if c[0] == "systemctl" and call in c[1]], services.host.calls
+
+
+def test_a_reboot_systemctl_refused_is_audited_as_failed(tmp_path):
+    """The audit followed exceptions, and the power executor finishes a refused
+    reboot and returns: two success lines for a reboot that never happened."""
+
+    services = appliance(tmp_path)
+    services.host.failing_tools = {"systemctl"}
+
+    operation, _ = plan_and_execute(services, "system.plan_reboot")
+
+    assert operation.state == STATE_FAILED_TERMINAL
+    results = [entry["result"] for entry in services.audit.tail() if entry["action"] == "system.reboot"]
+    assert results == ["confirmed", "failure"], results
 
 
 class AgentStopped(BaseException):

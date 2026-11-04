@@ -397,6 +397,14 @@ Every plan the agent will execute is on that list, and a test holds it there:
 `_audit` returns silently for a type it does not recognise, so a plan added
 without an audit action would leave no trace at all.
 
+An executed operation is audited twice: `confirmed` when the operator confirms
+it, then `success` or `failure` by the state its record ended in — several
+executors record a failure and return, and were audited as a success. A reboot
+or shutdown the host carried out before the agent could audit it keeps only the
+`confirmed` entry; its record says it succeeded. A confirmation the blockers
+refused is `denied`, and a plan that found nothing to do is `nothing_to_do`, not
+a failure.
+
 Passwords, tokens, WLAN passphrases and full SSH keys are never recorded.
 
 ### Who writes the audit log
