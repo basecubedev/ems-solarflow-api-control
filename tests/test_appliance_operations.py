@@ -372,3 +372,57 @@ def test_a_note_replaces_the_detail_of_the_stage_under_way_until_it_ends(tmp_pat
 
     assert store.note(operation.operation_id, "image, 2 min so far") is False
     assert store.get(operation.operation_id).progress[-1]["stage"] == "cancelled"
+
+
+# --- a card with no room left -----------------------------------------------------
+
+
+def _interrupted(tmp_path):
+    store = OperationStore(tmp_path)
+    operation = store.create("system.timezone")
+    store.await_confirmation(operation.operation_id, {})
+    store.confirm(operation.operation_id, store.get(operation.operation_id, include_token=True).confirmation_token)
+    return store, operation.operation_id
+
+
+def test_an_agent_starts_although_the_card_has_no_room_to_record_a_recovery(tmp_path, monkeypatch):
+    """recover_interrupted runs before the socket is bound: an OSError there
+    ended every start, and systemd restarted the agent for ever -- no sign-in,
+    no logs, no support archive."""
+
+    import errno
+
+    from appliance import operations as operations_module
+
+    store, operation_id = _interrupted(tmp_path)
+
+    def full(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(operations_module, "atomic_write", full)
+    restarted = OperationStore(tmp_path)
+
+    assert restarted.recover_interrupted() == []
+    assert restarted.unrecorded == [operation_id]
+    assert restarted.get(operation_id).state == STATE_RUNNING
+
+
+def test_the_next_plan_closes_what_a_full_card_left_open(tmp_path, monkeypatch):
+    import errno
+
+    from appliance import operations as operations_module
+
+    store, operation_id = _interrupted(tmp_path)
+    real = operations_module.atomic_write
+    monkeypatch.setattr(
+        operations_module, "atomic_write", lambda *a, **k: (_ for _ in ()).throw(OSError(errno.ENOSPC, "full"))
+    )
+    restarted = OperationStore(tmp_path)
+    restarted.recover_interrupted()
+    monkeypatch.setattr(operations_module, "atomic_write", real)
+
+    planned = restarted.create("system.timezone")
+
+    assert restarted.get(operation_id).state == STATE_FAILED_RECOVERABLE
+    assert restarted.unrecorded == []
+    assert planned.state == STATE_PLANNED

@@ -201,6 +201,9 @@ class OperationStore:
         self._new_id = id_factory or (lambda: uuid.uuid4().hex)
         self._new_token = token_factory or (lambda: secrets.token_urlsafe(24))
         self._lock = threading.Lock()
+        # Operations an agent restart interrupted whose recovery could not be
+        # written -- a full card is the ordinary way. They still hold the lock.
+        self.unrecorded = []
 
     # --- persistence -----------------------------------------------------
 
@@ -248,6 +251,8 @@ class OperationStore:
     def create(self, operation_type, requested_target=None, *, actor="", plan_request=""):
         """Take the lock with a new plan; ``plan_request`` is kept only as its digest."""
 
+        if self.unrecorded:
+            self.recover_interrupted()
         with self._lock:
             active = self.active()
             if active is not None:
@@ -417,6 +422,7 @@ class OperationStore:
         """
 
         recovered = []
+        unrecorded = []
         with self._lock:
             for operation in self._all():
                 if operation.state in (STATE_RUNNING, STATE_VERIFYING, STATE_ROLLING_BACK):
@@ -426,7 +432,6 @@ class OperationStore:
                         "code": "operation_interrupted",
                         "message": "the appliance agent restarted while this operation was running",
                     }
-                    recovered.append(self._save(operation))
                 elif operation.state in (STATE_PLANNED, STATE_AWAITING_CONFIRMATION):
                     operation.state = STATE_CANCELLED
                     operation.stage = "cancelled"
@@ -435,7 +440,17 @@ class OperationStore:
                         "code": "operation_interrupted",
                         "message": "the plan expired when the appliance agent restarted",
                     }
+                else:
+                    continue
+                # The agent runs this before it serves. A record it cannot
+                # write -- a full card -- used to end the start, and systemd
+                # restarted it for ever: no sign-in, no logs, no support
+                # archive. It is left for the next plan to close instead.
+                try:
                     recovered.append(self._save(operation))
+                except OSError:
+                    unrecorded.append(operation.operation_id)
+            self.unrecorded = unrecorded
         return recovered
 
     # --- helpers ---------------------------------------------------------

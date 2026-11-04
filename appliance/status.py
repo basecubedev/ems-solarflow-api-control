@@ -367,6 +367,19 @@ class StatusService:
 
     def _health(self, sections):
         findings = list(self._manager_findings())
+        if getattr(self.operations, "unrecorded", None):
+            findings.append(
+                finding(
+                    "operations_unrecorded",
+                    FINDING_ERROR,
+                    VIEW_DIAGNOSTICS,
+                    "An interrupted operation could not be closed",
+                    "When the agent restarted there was no room on the card to record that "
+                    "an operation had ended, so it still holds the appliance and nothing "
+                    "new can start.",
+                    "Free space on the card; the next operation you plan closes it first.",
+                )
+            )
 
         for name, payload in sections.items():
             if isinstance(payload, dict) and payload.get("status") == SECTION_UNAVAILABLE:

@@ -206,6 +206,12 @@ an interrupted operation appears as `failed_recoverable` with
 sudo ems-appliance operations
 ```
 
+If the card was full when the agent restarted, that interruption could not be
+recorded. The agent starts and serves anyway — it used to fail its start and be
+restarted for ever, with no sign-in — and the Overview reports *An interrupted
+operation could not be closed*: the operation still holds the appliance. Free
+space on the card; the next operation you plan closes it first.
+
 ## "operation_conflict"
 
 Another host mutation is still active. Only one runs at a time. Wait for it, or

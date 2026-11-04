@@ -838,6 +838,12 @@ def command_agent(args):
     recovered = services.operations.recover_interrupted()
     if recovered:
         print(f"recovered {len(recovered)} interrupted operation(s)")
+    if services.operations.unrecorded:
+        print(
+            f"{len(services.operations.unrecorded)} interrupted operation(s) could not be "
+            "recorded as ended; the card may be full",
+            file=sys.stderr,
+        )
     corrected = services.manager.reconcile_record()
     if corrected:
         print(f"the kept Appliance Manager packages now say what dpkg holds ({corrected})")
