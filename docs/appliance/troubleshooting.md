@@ -408,6 +408,12 @@ Ethernet fallback.
 **Diagnostics → Create support archive**. It is bounded, redacted and ships a
 manifest of everything it contains. Check the manifest before sharing it.
 
+The console hands over archives up to 5 MB. A larger one fails its operation
+with `support_archive_too_large` and names where it is kept, under
+`/var/lib/ems-appliance-manager/agent/support/`; only a root shell reaches it
+(`ems-shell` with shell access on), not the backup account. The appliance keeps
+the three newest archives and deletes older ones when it makes a new one.
+
 ## Log sources
 
 | Source | Contents |

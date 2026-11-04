@@ -950,3 +950,52 @@ def test_a_host_not_flashed_from_an_image_is_not_measured(tmp_path):
     assert BlockProbe(root=tmp_path, runner=runner).root_medium(state_dir=tmp_path) == {
         "appliance_image": False
     }
+
+
+# --- a support archive that cannot be handed over, and old ones -------------
+
+
+def create_support_archive(handlers, services):
+    planned = handlers.dispatch({"operation": "support.plan_archive"})
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+    operation = services.operations.get(planned["operation"]["operation_id"])
+    services.operations.acknowledge(operation.operation_id)
+    return operation
+
+
+def test_an_archive_too_large_to_hand_over_fails_its_operation_and_says_where_it_is(tmp_path, monkeypatch):
+    """The size was checked only on download, after the operation said it
+    succeeded, and the answer pointed at an SFTP path the archive is not on."""
+
+    from appliance import support_archive
+
+    monkeypatch.setattr(support_archive, "MAX_ARCHIVE_BYTES", 16)
+    services = appliance(tmp_path)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    operation = create_support_archive(handlers, services)
+
+    assert operation.state == "failed_terminal", operation.to_dict()
+    assert operation.error["code"] == "support_archive_too_large"
+    destination = services.paths.support_dir / f"support-{operation.operation_id}.tar.gz"
+    assert str(destination) in operation.error["message"]
+    assert "ems-shell" in operation.error["message"]
+    assert "SFTP" not in operation.error["message"]
+    assert destination.is_file()
+
+
+def test_only_the_newest_support_archives_are_kept(tmp_path):
+    services = appliance(tmp_path)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    made = [create_support_archive(handlers, services) for _ in range(5)]
+
+    kept = sorted(item.name for item in services.paths.support_dir.glob("support-*.tar.gz"))
+    expected = sorted(f"support-{item.operation_id}.tar.gz" for item in made[-3:])
+    assert kept == expected
