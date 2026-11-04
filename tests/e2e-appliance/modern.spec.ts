@@ -528,8 +528,8 @@ test.describe("updates", () => {
     await page.getByTestId("manager-plan-update").click();
     expect((await plan).postDataJSON()).toMatchObject({ release_id: "ems-appliance-manager-0.1.0-arm64" });
     // The test server's index points at example.invalid, so the agent refuses
-    // the download; the refusal is the appliance's own sentence.
-    await expect(page.getByTestId("action-notice")).toContainText("manifest is unreachable");
+    // the download, said in the reader's language.
+    await expect(page.getByTestId("action-notice")).toContainText("could not be downloaded");
   });
 
   test("only the button that asked for a Manager plan says it is planning", async ({ page, request }) => {

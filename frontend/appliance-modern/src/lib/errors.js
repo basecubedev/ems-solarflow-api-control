@@ -7,6 +7,14 @@
  */
 
 export const KNOWN_ERRORS = Object.freeze([
+  "release_registry_unreachable",
+  "release_registry_invalid",
+  "release_registry_truncated",
+  "release_download_failed",
+  "release_download_timed_out",
+  "release_download_too_large",
+  "release_index_invalid",
+  "release_index_unsupported",
   "invalid_credentials",
   "login_rate_limited",
   "login_busy",

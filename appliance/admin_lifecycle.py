@@ -511,9 +511,9 @@ class AdminLifecycleService:
         current = self.detect()
         try:
             targets = self.catalogue.available()
-            error = ""
+            error, error_message = "", ""
         except ReleaseResolutionError as exc:
-            targets, error = [], exc.code
+            targets, error, error_message = [], exc.code, exc.message
         available = [item.to_dict() for item in targets]
         for item in available:
             item["direction"] = direction(offered=item["tag"], installed=current["version"])
@@ -524,6 +524,7 @@ class AdminLifecycleService:
                 (item for item in available if newest and item["tag"] == newest.tag), None
             ),
             "error": error,
+            "error_message": error_message,
             "current_version": current["version"],
             "previous_known_good": self.known_good.previous(),
             "allow_prerelease": self.config.images.allow_prerelease,

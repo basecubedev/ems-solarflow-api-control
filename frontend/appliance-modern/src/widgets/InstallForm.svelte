@@ -2,7 +2,8 @@
   import Icon from "../../../shared/ui/Icon.svelte";
   import PlanButton from "./PlanButton.svelte";
   import TrackHelp from "./TrackHelp.svelte";
-  import { t } from "../i18n/i18n.svelte.js";
+  import { t, say } from "../i18n/i18n.svelte.js";
+  import { errorWords } from "../lib/errors.js";
   import { forms } from "../state/forms.svelte.js";
   import { detail } from "../state/prefs.svelte.js";
   import { groupByTrack } from "../lib/host.js";
@@ -66,7 +67,7 @@
   {#if !bootstrap}
     <label class="check"><input type="checkbox" bind:checked={forms.adminReinstall} data-testid="install-reinstall" />{t("install.reinstall")}</label>
   {/if}
-  {#if releases?.error}<p class="note warn"><Icon name="triangle-alert" />{t("install.listFailed", { code: releases.error })}</p>{/if}
+  {#if releases?.error}<p class="note warn" data-testid="install-list-error"><Icon name="triangle-alert" />{t("install.listFailed", { code: say(errorWords({ code: releases.error, status: 200, payload: { message: releases.error_message } })) })}{#if releases.error_message}{" "}<span class="muted" lang="en">({releases.error_message})</span>{/if}</p>{/if}
   <div class="row-wrap">
     <PlanButton
       {plan}

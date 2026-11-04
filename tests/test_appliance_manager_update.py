@@ -1707,3 +1707,19 @@ def test_a_manager_index_url_that_is_refused_says_why_not_that_none_is_set(tmp_p
 
     assert listing["configured"] is True
     assert listing["error"] == code
+
+
+def test_an_index_that_could_not_be_read_carries_its_reason_and_the_clock(tmp_path):
+    """Only the code reached the page; "answered HTTP 404" or "did not answer in
+    time" was dropped, and the clock the plan refuses on was not mentioned."""
+
+    services, _ = build(tmp_path, synchronised=False)
+    services.manager.fetcher.read = lambda url, *, label, max_bytes: (_ for _ in ()).throw(
+        FetchError("release_download_failed", f"{label} answered HTTP 404")
+    )
+
+    listing = services.manager.sources()
+
+    assert listing["error"] == "release_download_failed"
+    assert "HTTP 404" in listing["error_message"]
+    assert listing["clock_synchronised"] is False

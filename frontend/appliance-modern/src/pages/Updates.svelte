@@ -10,6 +10,7 @@
   import TrackHelp from "../widgets/TrackHelp.svelte";
   import PackageTable from "../widgets/PackageTable.svelte";
   import { t, tn, say, langOf } from "../i18n/i18n.svelte.js";
+  import { errorWords } from "../lib/errors.js";
   import { href } from "../app/router.svelte.js";
   import { host, ensure, held } from "../state/host.svelte.js";
   import { forms } from "../state/forms.svelte.js";
@@ -211,7 +212,7 @@
           {#if sources === undefined || sources === null}
             <p class="muted"><Icon name="loader" size="sm" /> {t("manager.readingIndex")}</p>
           {:else if sources.error}
-            <p class="note warn" data-testid="manager-sources-error"><Icon name="triangle-alert" />{t("manager.indexError", { code: sources.error })}</p>
+            <p class="note warn" data-testid="manager-sources-error"><Icon name="triangle-alert" />{t("manager.indexError", { code: say(errorWords({ code: sources.error, status: 200, payload: { message: sources.error_message } })) })}{#if sources.error_message}{" "}<span class="muted" lang="en">({sources.error_message})</span>{/if}{#if sources.clock_synchronised === false}{" "}{t("manager.clockNotSynchronised")}{/if}</p>
           {:else if !sources.configured}
             <p class="note" data-testid="manager-sources-unconfigured"><Icon name="info" />{t("manager.indexUnconfigured")}</p>
           {:else if !offered.length}

@@ -1384,6 +1384,25 @@ def test_an_install_plan_going_forward_has_no_warning(tmp_path):
 
     assert plan["direction"] == "upgrade"
     assert not plan.get("warning")
+
+
+def test_a_release_list_that_failed_carries_its_reason(tmp_path):
+    from appliance.releases import ReleaseResolutionError
+    from tests.helpers.appliance import StaticCatalogue
+
+    services = healthy_appliance(
+        tmp_path,
+        catalogue=StaticCatalogue(
+            error=ReleaseResolutionError("release_registry_unreachable", "the registry answered HTTP 429")
+        ),
+    )
+
+    listing = services.admin.releases()
+
+    assert listing["error"] == "release_registry_unreachable"
+    assert "HTTP 429" in listing["error_message"]
+
+
 @pytest.mark.parametrize(
     "request_",
     [

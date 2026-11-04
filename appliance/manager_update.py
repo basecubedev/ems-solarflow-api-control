@@ -297,10 +297,11 @@ class ManagerUpdateService:
             )
             candidates = release_fetch.parse_index(json.loads(raw.decode("utf-8", errors="replace")))
         except release_fetch.FetchError as exc:
-            listing["error"] = exc.code
+            listing.update(error=exc.code, error_message=exc.message)
+            listing["clock_synchronised"] = self._clock_synchronised()
             return listing
         except ValueError:
-            listing["error"] = "release_index_invalid"
+            listing.update(error="release_index_invalid", error_message="the index is not JSON")
             return listing
         for candidate in candidates:
             offered = str((candidate.get("described") or {}).get("release_version") or "")
@@ -315,6 +316,18 @@ class ManagerUpdateService:
             stable=lambda item: item["track"] == TRACK_STABLE,
         )
         return listing
+
+    def _clock_synchronised(self):
+        """Whether the clock was synchronised, beside a download that failed.
+
+        A board without an RTC fails TLS for reasons that do not name the
+        clock; the plan refuses on it, and the list says it too.
+        """
+
+        try:
+            return self.probe.system_time().get("ntp_synchronized")
+        except Exception:
+            return None
 
     def _candidate(self, release_id):
         wanted = artifact_trust.validate_release_id(release_id)
