@@ -780,7 +780,7 @@ are host authority: the browser can influence neither.
 | Setting | Default | What it decides |
 |---|---|---|
 | `release_keyring` | `/etc/ems-appliance-manager/release-keyring.gpg` | The trust anchor. The package ships the project's own release keyring here, deliberately **not** as a conffile: it is a trust anchor rather than a setting, so a local edit must not survive an upgrade that rotates the key. With no keyring at all, every artefact is refused rather than installed unverified |
-| `release_fingerprints` | empty in code, the release primary in the shipped file | The signer, on top of the keyring. A keyring can hold more keys than a release may be signed with, so "`gpg` said good" is not the same answer as "signed by us". Names the **primary**, because `gpg` reports that one for a subkey signature — which is what makes rotating a leaked subkey cost nothing in the field. Empty accepts any key the keyring holds |
+| `release_fingerprints` | empty in code, the release primary in the shipped file | The signer, on top of the keyring. A keyring can hold more keys than a release may be signed with, so "`gpg` said good" is not the same answer as "signed by us". Names the **primary**, because `gpg` reports that one for a subkey signature — so the pin survives rotating a leaked subkey, although the keyring has to change (see *One identity, two keys*). Empty accepts any key the keyring holds |
 | `manager_index_url` | empty in code, this project's index in the shipped file | An `https` index naming downloadable Appliance Manager packages. The index is never trusted: it may only name candidates, and what is installed is decided by the signature. Empty is a working state — the package can still be installed by hand. Pinned to one release tag rather than the `/releases/latest` alias, because two products publish releases from this repository and a flashed appliance never gets the value corrected |
 
 Both settings have an empty code default and a filled-in shipped value, and the
@@ -802,14 +802,24 @@ so it could — and the release workflow makes the practice mechanical by naming
 the subkey with a trailing `!`, which is what stops `gpg` choosing a key of its
 own accord.
 
-What that buys is a rotation that costs nothing in the field. The appliance
-pins the **primary's** fingerprint, and `gpg` reports that one for a subkey
+What that buys is that the **pin** survives a rotation. The appliance pins
+the **primary's** fingerprint, and `gpg` reports that one for a subkey
 signature — field 12 of `VALIDSIG`, which
 `appliance/artifact_trust.py:valid_signature_fingerprints` reads deliberately
 instead of field 3. So a leaked signing subkey is revoked and replaced with the
-primary, and **no appliance needs a new keyring**. A leaked *primary* would
-need one, on every device, by package update — which is why it is not the key
-that travels.
+primary, and `release_fingerprints` does not change. The **keyring** does:
+`gpgv` verifies with the subkey's own public half and learns of a revocation
+only from the keyring, so a new subkey and the revocation of the old one
+reach an appliance only in a package that ships the new keyring — and that
+package has to be signed by a key the old keyring still accepts. The keyring
+is not a conffile, so dpkg replaces it with every install, a step back
+included: a revert, the installer's fallback or the deadline's revert across a
+rotation puts the old keyring back, the leaked subkey is trusted again, and
+releases signed with the new one are refused as `release_signature_invalid`.
+A rotation is therefore a bridge release signed by the old subkey and
+carrying the new keyring, and stepping back past it is to be avoided. A leaked
+*primary* needs a new pin as well, on every device, by package update — which
+is why it is not the key that travels.
 
 Two consequences worth stating, because both are easy to get wrong:
 
