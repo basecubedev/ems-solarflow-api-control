@@ -379,6 +379,19 @@ class StatusService:
                     "Free space on the card; the next operation you plan closes it first.",
                 )
             )
+        if getattr(self.operations, "unreadable", None):
+            findings.append(
+                finding(
+                    "operations_unreadable",
+                    FINDING_WARNING,
+                    VIEW_DIAGNOSTICS,
+                    "An operation record could not be read",
+                    "When the agent started, the record of an operation could not be read, "
+                    "so it was moved aside and that operation is no longer listed. It may "
+                    "have been running when the appliance lost power.",
+                    "Check that the Admin and the appliance are in the state you expect.",
+                )
+            )
 
         for name, payload in sections.items():
             if isinstance(payload, dict) and payload.get("status") == SECTION_UNAVAILABLE:

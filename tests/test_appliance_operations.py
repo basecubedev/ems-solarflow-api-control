@@ -512,3 +512,52 @@ def test_an_end_the_card_had_no_room_for_is_written_when_the_next_plan_comes(tmp
     assert ended.result == {"applied": True}
     assert store.unfinished == {}
     assert planned.state == STATE_PLANNED
+
+
+# --- a record this version cannot judge -------------------------------------------
+
+
+def test_a_state_another_manager_version_wrote_does_not_hold_the_lock_for_good(tmp_path):
+    """After a step back to an older Manager, the newer one's in-flight record
+    blocked every operation: cancel failed with a bare KeyError, and the
+    recovery at start passed it over."""
+
+    store = OperationStore(tmp_path)
+    operation = store.create("system.timezone")
+    path = tmp_path / f"{operation.operation_id}.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["state"] = "draining"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(OperationError):
+        store.cancel(operation.operation_id)
+    OperationStore(tmp_path).recover_interrupted()
+
+    recovered = OperationStore(tmp_path).get(operation.operation_id)
+    assert recovered.state == STATE_FAILED_TERMINAL, recovered.to_dict()
+    assert recovered.error["code"] == "operation_state_unknown"
+    assert OperationStore(tmp_path).active() is None
+
+
+def test_a_record_that_cannot_be_read_is_moved_aside_and_named(tmp_path):
+    """Skipped silently, a record corrupted on the card opened the lock and its
+    operation vanished from the console."""
+
+    store = OperationStore(tmp_path)
+    (tmp_path / ("ab" * 16 + ".json")).write_text('{"operation_id": "ab', encoding="utf-8")
+
+    store.recover_interrupted()
+
+    assert store.unreadable == ["ab" * 16]
+    assert not (tmp_path / ("ab" * 16 + ".json")).exists()
+    assert (tmp_path / ("ab" * 16 + ".json.unreadable")).exists()
+
+
+@pytest.mark.parametrize("content", ["null", "[]", "7"])
+def test_a_record_that_is_json_but_no_record_is_moved_aside_too(tmp_path, content):
+    store = OperationStore(tmp_path)
+    (tmp_path / ("cd" * 16 + ".json")).write_text(content, encoding="utf-8")
+
+    store.recover_interrupted()
+
+    assert store.unreadable == ["cd" * 16]

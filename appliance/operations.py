@@ -219,6 +219,8 @@ class OperationStore:
         # Ends that could not be written, by operation: the first one asked
         # for, since a failure path's own finish fails on the same card.
         self.unfinished = {}
+        # Records the agent's start could not read and moved aside, by id.
+        self.unreadable = []
 
     # --- persistence -----------------------------------------------------
 
@@ -247,13 +249,19 @@ class OperationStore:
         return operation
 
     def _all(self):
+        return self._read_all()[0]
+
+    def _read_all(self):
         records = []
+        unreadable = []
         for path in sorted(self.directory.glob("*.json")):
             try:
                 records.append(Operation.from_dict(json.loads(path.read_text(encoding="utf-8"))))
-            except (OSError, TypeError, ValueError):
+            except OSError:
                 continue
-        return records
+            except (AttributeError, TypeError, ValueError):
+                unreadable.append(path)
+        return records, unreadable
 
     # --- lifecycle -------------------------------------------------------
 
@@ -489,7 +497,16 @@ class OperationStore:
         unrecorded = []
         booted = read_boot_id()
         with self._lock:
-            for operation in self._all():
+            records, unreadable = self._read_all()
+            # Skipped silently, a record the card corrupted opened the lock and
+            # its operation vanished; moved aside, it is at least named.
+            for path in unreadable:
+                try:
+                    path.rename(path.with_name(path.name + ".unreadable"))
+                except OSError:
+                    continue
+                self.unreadable.append(path.stem)
+            for operation in records:
                 if operation.operation_id in self.unfinished:
                     continue
                 if (
@@ -521,6 +538,17 @@ class OperationStore:
                         "code": "operation_interrupted",
                         "message": "the plan expired when the appliance agent restarted",
                     }
+                elif operation.state not in ALL_STATES:
+                    # Another Manager version's state, after a step back: no
+                    # transition leads out of it, so it held the lock for good.
+                    operation.error = {
+                        "code": "operation_state_unknown",
+                        "message": f"another Appliance Manager version left this operation in "
+                        f"a state this one does not know ({operation.state})",
+                    }
+                    operation.state = STATE_FAILED_TERMINAL
+                    operation.stage = "failed"
+                    operation.finished_at = self._time()
                 else:
                     continue
                 # The agent runs this before it serves. A record it cannot
@@ -539,7 +567,7 @@ class OperationStore:
     def _transition(self, operation, target):
         if target not in ALL_STATES:
             raise InvalidTransitionError(operation.state, target)
-        if target not in TRANSITIONS[operation.state]:
+        if target not in TRANSITIONS.get(operation.state, ()):
             raise InvalidTransitionError(operation.state, target)
         operation.state = target
 

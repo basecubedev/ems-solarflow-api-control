@@ -91,6 +91,11 @@ export const FINDINGS = Object.freeze({
     message: words("finding.package_manager_unhealthy.message"),
     next: words("finding.package_manager_unhealthy.next"),
   }),
+  operations_unreadable: () => ({
+    title: words("finding.operations_unreadable.title"),
+    message: words("finding.operations_unreadable.message"),
+    next: words("finding.operations_unreadable.next"),
+  }),
   operations_unrecorded: () => ({
     title: words("finding.operations_unrecorded.title"),
     message: words("finding.operations_unrecorded.message"),

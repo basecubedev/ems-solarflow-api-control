@@ -204,6 +204,13 @@ an interrupted operation appears as `failed_recoverable` with
 or shutdown is the exception: once the appliance has come back in a new boot it
 counts as done, even when the agent was stopped before it could record that.
 
+Two kinds of record are closed at the agent's start rather than left to block.
+One in a state this Manager version does not know — left by a newer version
+before a step back — ends as `failed_terminal` with `operation_state_unknown`.
+One that cannot be read at all is renamed to `<id>.json.unreadable` in
+`/var/lib/ems-appliance-manager/agent/operations/`, and the overview says "An
+operation record could not be read" until the agent next starts; the file stays.
+
 ```bash
 sudo ems-appliance operations
 ```

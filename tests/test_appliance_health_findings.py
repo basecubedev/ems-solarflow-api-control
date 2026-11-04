@@ -320,3 +320,12 @@ def test_an_operation_a_full_card_left_open_is_on_the_overview(tmp_path):
     findings = {item["code"]: item for item in services.status._health({})["warnings"]}
 
     assert findings["operations_unrecorded"]["severity"] == "error"
+
+
+def test_an_operation_record_that_could_not_be_read_is_on_the_overview(tmp_path):
+    services = build_test_services(tmp_path)
+    services.operations.unreadable = ["0" * 32]
+
+    findings = {item["code"]: item for item in services.status._health({})["warnings"]}
+
+    assert findings["operations_unreadable"]["severity"] == "warning"
