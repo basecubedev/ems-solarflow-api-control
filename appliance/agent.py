@@ -471,24 +471,25 @@ class AgentHandlers:
         action = "reboot" if name == "system.plan_reboot" else "shutdown"
         status = self.services.status
         active = self.services.operations.active()
-        blockers = []
-        package_state = self.services.packages.check()
-        if package_state.lock_state == packages.LOCK_HELD:
-            blockers.append(
-                {
-                    "code": "package_operation_active",
-                    "message": "a package installation is running; wait until it finishes",
-                }
-            )
         return {
             "type": f"system.{action}",
             "action": action,
-            "blockers": blockers,
+            "blockers": self._power_blockers(),
             "running_operation": active.to_dict() if active else None,
             "docker": status.docker_state(),
             "warning": "EMS control stops while the appliance is "
             + ("restarting." if action == "reboot" else "powered off."),
         }
+
+    def _power_blockers(self):
+        if self.services.packages.lock_state() != packages.LOCK_HELD:
+            return []
+        return [
+            {
+                "code": "package_operation_active",
+                "message": "a package installation is running; wait until it finishes",
+            }
+        ]
 
     # --- execution -------------------------------------------------------
 
@@ -611,6 +612,18 @@ class AgentHandlers:
         from appliance.operations import STATE_SUCCEEDED
 
         action = "reboot" if operation.type == "system.reboot" else "shutdown"
+        # dpkg can take the lock between the plan and Confirm; going down then
+        # leaves a half-unpacked system.
+        blockers = self._power_blockers()
+        if blockers:
+            self.services.operations.finish(
+                operation.operation_id,
+                STATE_FAILED_TERMINAL,
+                stage="blocked",
+                error={"code": blockers[0]["code"], "message": blockers[0]["message"]},
+                result={"blockers": blockers},
+            )
+            raise AgentError(blockers[0]["code"], blockers[0]["message"])
         self.services.operations.advance(operation.operation_id, f"{action}_requested", host_down=True)
         result = (
             self.services.systemd.reboot() if action == "reboot" else self.services.systemd.shutdown()

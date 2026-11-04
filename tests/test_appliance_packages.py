@@ -850,6 +850,33 @@ def test_a_reboot_is_not_planned_while_apt_installs(tmp_path):
     assert [b["code"] for b in planned["plan"]["blockers"]] == ["package_operation_active"]
 
 
+@pytest.mark.parametrize(("plan", "call"), [("system.plan_reboot", "reboot"), ("system.plan_shutdown", "poweroff")])
+def test_a_power_action_confirmed_while_apt_installs_does_not_go_down(tmp_path, plan, call):
+    """dpkg can take the lock between the plan and Confirm -- an `apt upgrade`
+    over SSH. Going down then breaks a half-unpacked system, which the docs say
+    is recovered by re-flashing the card."""
+
+    services = appliance(tmp_path)
+    handlers = handlers_for(services)
+    planned = handlers.dispatch({"operation": plan})
+    assert planned["plan"]["blockers"] == []
+    services.host.calls.clear()
+
+    with held_like_apt(tmp_path / "var" / "lib" / "dpkg" / "lock-frontend"):
+        handlers.dispatch(
+            {
+                "operation": "operations.execute",
+                "operation_id": planned["operation"]["operation_id"],
+                "confirmation_token": planned["confirmation_token"],
+            }
+        )
+
+    operation = services.operations.get(planned["operation"]["operation_id"])
+    assert operation.state == STATE_FAILED_TERMINAL, operation.to_dict()
+    assert operation.error["code"] == "package_operation_active"
+    assert not [c for c in services.host.calls if c[0] == "systemctl" and call in c[1]], services.host.calls
+
+
 class AgentStopped(BaseException):
     """What systemd's SIGTERM is to an agent on its way down: nothing after it runs."""
 
