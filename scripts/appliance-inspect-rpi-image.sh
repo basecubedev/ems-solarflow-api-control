@@ -4,6 +4,7 @@
 #
 #   scripts/appliance-inspect-rpi-image.sh [--json] [--appliance-version V]
 #                                          [--build-id ID] [--architecture ARCH]
+#                                          [--profile rpi3|rpi4|rpi5]
 #                                          [--no-contents] <image.img>
 #
 # The inspector reads the partition table, the filesystem structures and the
@@ -32,6 +33,8 @@ IMAGE=""
 CONTENTS=1
 APPLIANCE_VERSION=""
 BUILD_ID=""
+# The board the image is for; named, its kernel and device tree must be there.
+PROFILE=""
 # Every profile builds one architecture; a release that changes that has to say so.
 ARCHITECTURE=arm64
 
@@ -49,6 +52,8 @@ while [ $# -gt 0 ]; do
         --build-id=*) BUILD_ID=${1#*=}; shift ;;
         --architecture) ARCHITECTURE=${2:?--architecture needs a value}; shift 2 ;;
         --architecture=*) ARCHITECTURE=${1#*=}; shift ;;
+        --profile) PROFILE=${2:?--profile needs a value}; shift 2 ;;
+        --profile=*) PROFILE=${1#*=}; shift ;;
         -h|--help) usage; exit 0 ;;
         -*) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
         *) [ -z "$IMAGE" ] || { echo "one image at a time" >&2; exit 2; }; IMAGE=$1; shift ;;
@@ -68,7 +73,7 @@ command -v python3 >/dev/null 2>&1 || {
 }
 
 EMS_APPLIANCE_VERSION="$APPLIANCE_VERSION" EMS_BUILD_ID="$BUILD_ID" EMS_CONTENTS="$CONTENTS" \
-EMS_ARCHITECTURE="$ARCHITECTURE" \
+EMS_ARCHITECTURE="$ARCHITECTURE" EMS_PROFILE="$PROFILE" \
 PYTHONPATH="$ROOT" python3 - "$IMAGE" "$FORMAT" <<'PY'
 import json
 import os
@@ -83,6 +88,7 @@ findings = image_inspect.inspect(
     build_id=os.environ.get("EMS_BUILD_ID") or "",
     architecture=os.environ.get("EMS_ARCHITECTURE") or "",
     contents=os.environ.get("EMS_CONTENTS") != "0",
+    profile=os.environ.get("EMS_PROFILE") or "",
 )
 summary = image_inspect.summarise(findings)
 

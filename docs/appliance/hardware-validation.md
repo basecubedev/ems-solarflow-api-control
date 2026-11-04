@@ -379,7 +379,7 @@ Pulling the plug on a `poweroff` is not the same test.
 | 0.1 | `scripts/appliance-check-rpi-image-gen.sh --rpi-image-gen <checkout>` | PASS against the pinned revision |
 | 0.2 | `scripts/appliance-build-rpi-image.sh --profile rpi5` on a builder with the upstream dependencies | PASS, image produced |
 | 0.2b | The same with `--profile rpi4` and `--profile rpi3` | PASS; three separate artefacts, not one relabelled |
-| 0.3 | `scripts/appliance-inspect-rpi-image.sh <image>` | PASS: an MBR with a FAT `boot` and an ext4 `root` |
+| 0.3 | `scripts/appliance-inspect-rpi-image.sh --profile <board> <image>` | PASS: an MBR with a FAT `boot` and an ext4 `root`, the board's own kernel and device trees, the by-slot rule in the initramfs |
 | 0.3b | The same inspection's content findings | PASS with **no** mandatory NOT RUN: the package and its exact version in the root, the dpkg status, the build marker, the four enabled units and each one's program, the writable-root fstab line, no shipped host key, the runtime helpers, and `root=/dev/disk/by-slot/system rw` on the boot partition. No mount and no root: the Pi 5 root filesystem uses 16 KiB ext4 blocks that no 4 KiB-page kernel will mount |
 | 0.4 | The `build-authority.json` the build wrote | Names the source form, the generator revision, the source tree hash and the SHA-256 of the image, `completed: true` |
 | 0.5 | `scripts/appliance-release-gates.sh --mode builder` | PASS (builder qualification) |

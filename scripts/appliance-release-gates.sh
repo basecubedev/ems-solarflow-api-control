@@ -259,7 +259,7 @@ PY
         [ -n "$BAKED" ] || BAKED=$VERSION
         gate_json "inspect-image-$profile" "image-inspection-$profile.json" \
             sh "$ROOT/scripts/appliance-inspect-rpi-image.sh" --json \
-            --appliance-version "$BAKED" --build-id "$BUILD_ID" \
+            --appliance-version "$BAKED" --build-id "$BUILD_ID" --profile "$profile" \
             "$OUTPUT/$NAME.img"
     else
         report "inspect-image-$profile" "NOT RUN (no image was built)"

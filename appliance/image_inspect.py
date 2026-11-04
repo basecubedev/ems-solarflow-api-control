@@ -18,8 +18,12 @@ version in the root, the enabled units, the absence of a shipped host key --
 are answered out of the filesystem structures directly.
 """
 
+import gzip
 import json
+import lzma
+import shutil
 import struct
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -287,6 +291,32 @@ FIRMWARE_UART_SETTINGS = ("enable_uart=1", "BOOT_UART=1", "uart_2ndstage=1")
 BOOT_KERNELS = ("kernel8.img", "kernel_2712.img", "kernel.img")
 BOOT_INITRAMFS = ("initramfs8", "initramfs_2712", "initramfs")
 
+# What each board's firmware loads, by rpi_image_gen.HARDWARE_PROFILES name.
+# Any kernel used to pass for every board, and a Pi 4 kernel on a Pi 5 card
+# does not boot. Read off built images: rpi3 and rpi4 carry kernel8.img, rpi5
+# kernel_2712.img, and every image ships every device tree; the firmware picks
+# the one its board and stepping need.
+BOARD_BOOT_FILES = {
+    "rpi3": ("kernel8.img", "initramfs8", ("bcm2710-rpi-3-b.dtb", "bcm2710-rpi-3-b-plus.dtb")),
+    "rpi4": ("kernel8.img", "initramfs8", ("bcm2711-rpi-4-b.dtb",)),
+    "rpi5": (
+        "kernel_2712.img",
+        "initramfs_2712",
+        ("bcm2712-rpi-5-b.dtb", "bcm2712d0-rpi-5-b.dtb"),
+    ),
+}
+
+# What makes /dev/disk/by-slot/system, the root the command line names: the
+# rule upstream's image layer ships and the tagger it runs. Both have to be in
+# the initramfs, because that is where the root is mounted from.
+INITRAMFS_SLOT_FILES = ("udev/rules.d/99-rpi-05-image.rules", "bin/rpi-bootdev-tag")
+INITRAMFS_LIMIT_BYTES = 512 * 1024 * 1024
+
+# Enabled under sysinit.target: the board has no real-time clock.
+TIMESYNC_WANTS = "etc/systemd/system/sysinit.target.wants/systemd-timesyncd.service"
+MACHINE_ID = "etc/machine-id"
+MACHINE_ID_UNSET = ("", "uninitialized")
+
 
 PACKAGE_INSTALLED_STATUS = "install ok installed"
 FROM_DPKG = "the dpkg database in the root"
@@ -534,6 +564,25 @@ def _root_content_findings(label, reader, *, appliance_version, build_id, archit
     )
 
 
+    record(
+        "timesyncd_enabled",
+        reader.is_symlink(TIMESYNC_WANTS),
+        "enabled under sysinit.target"
+        if reader.is_symlink(TIMESYNC_WANTS)
+        else "systemd-timesyncd is not enabled; a board without a clock never learns the time",
+    )
+    try:
+        machine_id = reader.read_text(MACHINE_ID).strip()
+    except image_filesystems.FilesystemError:
+        machine_id = ""
+    record(
+        "machine_id_uninitialized",
+        machine_id in MACHINE_ID_UNSET,
+        "left for the first boot to make"
+        if machine_id in MACHINE_ID_UNSET
+        else "the image carries a machine-id, so every card flashed from it shares one",
+    )
+
     unrunnable = []
     for check, unit in REQUIRED_UNITS.items():
         present = reader.is_file(f"{UNIT_DIRECTORY}/{unit}")
@@ -624,7 +673,109 @@ def _root_content_findings(label, reader, *, appliance_version, build_id, archit
     return findings
 
 
-def _boot_content_findings(label, reader):
+class InitramfsUnreadable(Exception):
+    pass
+
+
+def _cpio_names(data, offset, names):
+    """Read one newc archive from ``offset``; the offset after its trailer."""
+
+    while True:
+        header = data[offset:offset + 110]
+        if len(header) < 110 or header[:6] not in (b"070701", b"070702"):
+            raise InitramfsUnreadable("a cpio header is cut short or malformed")
+        try:
+            size = int(header[54:62], 16)
+            name_size = int(header[94:102], 16)
+        except ValueError:
+            raise InitramfsUnreadable("a cpio header carries no sizes")
+        start = offset + 110
+        name = data[start:start + name_size - 1].decode("utf-8", "replace")
+        offset = start + name_size
+        offset += -offset % 4
+        if name == "TRAILER!!!":
+            return offset
+        names.add(name)
+        offset += size
+        offset += -offset % 4
+
+
+def _decompress(data):
+    if data[:2] == b"\x1f\x8b":
+        return gzip.decompress(data)
+    if data[:6] == b"\xfd7zXZ\x00":
+        return lzma.decompress(data)
+    if data[:4] == b"\x28\xb5\x2f\xfd":
+        tool = shutil.which("zstd")
+        if tool is None:
+            raise InitramfsUnreadable("the main archive is zstd and zstd is not installed")
+        result = subprocess.run(
+            [tool, "-dc"], input=data, capture_output=True, timeout=120, check=False
+        )
+        if result.returncode != 0:
+            raise InitramfsUnreadable("zstd could not decompress the main archive")
+        return result.stdout
+    raise InitramfsUnreadable(f"the main archive's compression ({data[:4].hex()}) is unknown")
+
+
+def initramfs_names(data):
+    """Every path in an initramfs: early uncompressed archives, then the main one."""
+
+    names = set()
+    offset = 0
+    while offset < len(data):
+        while offset < len(data) and data[offset] == 0:
+            offset += 1
+        if offset >= len(data):
+            break
+        if data[offset:offset + 6] in (b"070701", b"070702"):
+            offset = _cpio_names(data, offset, names)
+            continue
+        main = _decompress(data[offset:])
+        if len(main) > INITRAMFS_LIMIT_BYTES:
+            raise InitramfsUnreadable("the main archive unpacks beyond any initramfs")
+        position = 0
+        while position < len(main) and main[position:position + 6] in (b"070701", b"070702"):
+            position = _cpio_names(main, position, names)
+            while position < len(main) and main[position] == 0:
+                position += 1
+        break
+    return names
+
+
+def _initramfs_finding(label, reader, initramfs):
+    check = f"boot_initramfs_slot_rules:{label}"
+    if not initramfs:
+        return Finding(check, FAIL, "there is no initramfs to look in")
+    missing = []
+    for name in initramfs:
+        try:
+            names = initramfs_names(reader.read_bytes(name))
+        except (InitramfsUnreadable, image_filesystems.FilesystemError, OSError, EOFError,
+                lzma.LZMAError, subprocess.SubprocessError) as exc:
+            return Finding(check, NOT_RUN, f"{name} could not be read: {exc}")
+        missing.extend(
+            f"{name} lacks {wanted}"
+            for wanted in INITRAMFS_SLOT_FILES
+            if not any(entry.endswith("/" + wanted) or entry == wanted for entry in names)
+        )
+    return Finding(
+        check,
+        FAIL if missing else PASS,
+        "; ".join(missing) if missing else "the by-slot rule and rpi-bootdev-tag are in "
+        + ", ".join(initramfs),
+    )
+
+
+def _board_fit(entries, profile):
+    kernel, initramfs, trees = BOARD_BOOT_FILES[profile]
+    missing = [name for name in (kernel, initramfs, *trees) if name not in entries]
+    if missing:
+        return False, f"{profile} boots {kernel}; the image lacks {', '.join(missing)}"
+    return True, f"{kernel}, {initramfs}, {', '.join(trees)}"
+
+
+def _boot_content_findings(label, reader, profile=""):
     findings = []
 
     def record(check, ok, detail):
@@ -675,6 +826,10 @@ def _boot_content_findings(label, reader):
     record("boot_kernel", bool(kernels), ", ".join(kernels) or "no kernel image")
     record("boot_initramfs", bool(initramfs), ", ".join(initramfs) or "no initramfs")
     record("boot_device_tree", bool(blobs), f"{len(blobs)} device-tree blobs")
+    if profile:
+        record("boot_board_fit", *_board_fit(entries, profile))
+        initramfs = [BOARD_BOOT_FILES[profile][1]]
+    findings.append(_initramfs_finding(label, reader, [n for n in initramfs if n in entries]))
     record("boot_configuration", "config.txt" in entries, "config.txt")
     try:
         configuration = reader.read_text("config.txt").replace(" ", "")
@@ -689,12 +844,17 @@ def _boot_content_findings(label, reader):
     return findings
 
 
-def inspect_contents(image_path, *, appliance_version="", build_id="", architecture=""):
+def inspect_contents(
+    image_path, *, appliance_version="", build_id="", architecture="", profile=""
+):
     """What the image actually contains, read without mounting anything.
 
     The boot partition and the root, in that order, each opened straight out of
-    the image file.
+    the image file. Named, ``profile`` holds the boot partition to that board.
     """
+
+    if profile and profile not in BOARD_BOOT_FILES:
+        return [Finding("image_contents", FAIL, f"{profile!r} is not a board this project builds")]
 
     try:
         partitions = {item.label: item for item in read_mbr_partitions(image_path)}
@@ -723,7 +883,7 @@ def inspect_contents(image_path, *, appliance_version="", build_id="", architect
             )
         )
         if label == "boot":
-            findings.extend(_boot_content_findings(label, reader))
+            findings.extend(_boot_content_findings(label, reader, profile))
         else:
             findings.extend(
                 _root_content_findings(
@@ -745,6 +905,7 @@ def inspect(
     build_id="",
     architecture="",
     contents=True,
+    profile="",
 ):
     """Check a built image against its contract, without booting it.
 
@@ -831,6 +992,7 @@ def inspect(
                 appliance_version=appliance_version,
                 build_id=build_id,
                 architecture=architecture,
+                profile=profile,
             )
         )
     return findings

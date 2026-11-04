@@ -52,6 +52,30 @@ CMDLINE = (
 CONFIG = "arm_64bit=1\n\n[pi4]\nenable_uart=1\n\n[pi5]\nBOOT_UART=1\n\n[all]\nuart_2ndstage=1\n"
 
 
+# The two pieces of upstream's initramfs that make /dev/disk/by-slot/system,
+# where they sit in a real one (checked against a built rpi3 image).
+INITRAMFS_SLOT_FILES = (
+    "usr/lib/udev/rules.d/99-rpi-05-image.rules",
+    "usr/bin/rpi-bootdev-tag",
+)
+
+
+def cpio_newc(names):
+    """An uncompressed newc archive of empty files, as initramfs-tools writes one."""
+
+    out = bytearray()
+    for number, name in enumerate([*names, "TRAILER!!!"], start=1):
+        encoded = name.encode() + b"\0"
+        mode = 0 if name == "TRAILER!!!" else 0o100644
+        fields = (number, mode, 0, 0, 1, 0, 0, 0, 0, 0, 0, len(encoded), 0)
+        out += b"070701" + b"".join(f"{value:08X}".encode() for value in fields) + encoded
+        out += b"\0" * (-len(out) % 4)
+    return bytes(out)
+
+
+INITRAMFS = cpio_newc(INITRAMFS_SLOT_FILES)
+
+
 def populate_root(
     base,
     *,
@@ -63,6 +87,7 @@ def populate_root(
     dpkg=True,
     fstab=FSTAB,
     units=UNITS,
+    machine_id="",
 ):
     """A root carrying exactly what an appliance image has to carry."""
 
@@ -138,6 +163,15 @@ def populate_root(
     helper.parent.mkdir(parents=True, exist_ok=True)
     helper.write_text("#!/bin/sh\n")
     helper.chmod(0o755)
+
+    # Time has to synchronise on a board without a clock, and every card
+    # flashed from one image must make its own machine-id on first boot.
+    sysinit = base / "etc/systemd/system/sysinit.target.wants"
+    sysinit.mkdir(parents=True, exist_ok=True)
+    (sysinit / "systemd-timesyncd.service").symlink_to(
+        "/usr/lib/systemd/system/systemd-timesyncd.service"
+    )
+    (base / "etc/machine-id").write_text(machine_id)
 
     (base / "etc/fstab").write_text(fstab)
 
