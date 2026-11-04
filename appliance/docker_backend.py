@@ -387,6 +387,11 @@ def _repository_digest(reference, digests):
     repository = str(reference).partition("@")[0].rpartition(":")[0] or (
         str(reference).partition("@")[0]
     )
+    # A digest reference names its digest: an image reachable by an index and
+    # a platform digest carries both, and the first one is not the one asked.
+    named = str(reference).partition("@")[2]
+    if named and f"{repository}@{named}" in (str(entry) for entry in digests):
+        return named
     fallback = ""
     for entry in digests:
         name, _, candidate = str(entry).partition("@")
