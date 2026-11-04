@@ -361,6 +361,24 @@ def test_a_console_rollback_never_reinstalls_the_package_dpkg_kept(
     assert manager_retention.read(paths).current.version == "0.1.0"
 
 
+def test_a_console_rollback_clears_the_verdict_it_settles(appliance_env, monkeypatch):
+    """A verdict an earlier deadline left -- going back failed -- went on saying
+    so on the page after the person at the keyboard had put the package back."""
+
+    import json
+
+    from appliance import manager_verify
+    from appliance.cli import command_rollback_manager
+
+    paths, runner = armed_rollback(appliance_env, monkeypatch, armed=False)
+    manager_verify.verdict_path(paths).write_text(
+        json.dumps({"verdict": "revert_failed", "detail": "", "decided_at": ""}), encoding="utf-8"
+    )
+
+    assert command_rollback_manager(Args(force=False)) == 0
+    assert not manager_verify.verdict_path(paths).exists()
+
+
 def _running_writes_newer_retention(monkeypatch):
     from appliance import persistent_state
 

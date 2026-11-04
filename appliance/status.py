@@ -10,7 +10,7 @@ import os
 import stat
 import time
 
-from appliance import rescue_account, validation
+from appliance import manager_verify, rescue_account, validation
 from appliance.config import effective_timezone
 from appliance.docker_backend import CONTAINER_RUNNING, DAEMON_RUNNING
 from appliance.packages import UPDATE_CHECK_FAILED
@@ -88,6 +88,12 @@ def _missing_admin_next_step(admin):
 def _docker_known_down(admin):
     daemon = (admin.get("docker") or {}).get("state")
     return bool(daemon) and daemon != DAEMON_RUNNING
+
+
+# How long after its deadline an install with no verdict is reported as never
+# judged: the two ticks a healthy look gets, five revert attempts a tick apart
+# and the dpkg runs between them all fit inside it.
+MANAGER_DEADLINE_SLACK_SECONDS = 900
 
 
 def health_level(findings):
@@ -275,8 +281,92 @@ class StatusService:
         sections["collected_at"] = self._time()
         return sections
 
+    def _manager_findings(self):
+        """How the last Appliance Manager install ended, when it did not stand.
+
+        Only a tile on the Updates page said so: the overview, its verdict and
+        the menu marks called an appliance whose install had been put back --
+        or could not be -- healthy. Each finding stays until the next install
+        arms a new deadline, because the state it names stays as long.
+        """
+
+        verdict = manager_verify.read_verdict(self.paths)
+        if verdict.verdict == manager_verify.VERDICT_REVERTED:
+            return [
+                finding(
+                    "manager_install_reverted",
+                    FINDING_WARNING,
+                    VIEW_UPDATES,
+                    "The last Appliance Manager install was put back",
+                    "It did not come up healthy in time, so the package that ran before it "
+                    "is installed again.",
+                    "Open Updates: Last install says what happened, and the install log "
+                    "names the step that failed.",
+                )
+            ]
+        if verdict.verdict == manager_verify.VERDICT_REVERT_FAILED and not self._manager_configured():
+            return [
+                finding(
+                    "manager_revert_failed",
+                    FINDING_ERROR,
+                    VIEW_UPDATES,
+                    "Going back to the earlier Appliance Manager failed",
+                    "The last install did not come up healthy and the kept package could not "
+                    "be put back either, so the package manager may be left half-configured.",
+                    "While this page answers, install a version from Updates. At the console, "
+                    "sudo dpkg --configure -a finishes a half-configured package.",
+                )
+            ]
+        if verdict.verdict == manager_verify.VERDICT_UNAVAILABLE:
+            return [
+                finding(
+                    "manager_revert_unavailable",
+                    FINDING_ERROR,
+                    VIEW_UPDATES,
+                    "The last Appliance Manager install could not be undone",
+                    "It did not come up healthy, and there was no earlier package to put back "
+                    "or its deadline could not be read.",
+                    "Open Updates and install a version from the list.",
+                )
+            ]
+        deadline = manager_verify.read(self.paths)
+        if (
+            deadline.armed
+            and not verdict.settled
+            and deadline.deadline_epoch
+            and self._time() > int(deadline.deadline_epoch) + MANAGER_DEADLINE_SLACK_SECONDS
+        ):
+            return [
+                finding(
+                    "manager_install_unjudged",
+                    FINDING_WARNING,
+                    VIEW_UPDATES,
+                    "An Appliance Manager install was never judged",
+                    "Its deadline ran out without a verdict, so the install stands untested.",
+                    "Open Updates and check Last install; installing a version again arms "
+                    "a new deadline.",
+                )
+            ]
+        return []
+
+    def _manager_configured(self):
+        """Whether dpkg calls the Manager package installed, configure and all.
+
+        A failed revert leaves it half-configured, and the finding says so. An
+        operator who then ran `dpkg --configure -a`, which the finding itself
+        suggests, has fixed it, while the verdict stays until the next install.
+        """
+
+        runner = getattr(self.probe, "runner", None)
+        if runner is None or not runner.available("dpkg-query"):
+            return False
+        result = runner.run(
+            "dpkg-query", ["-W", "-f=${db:Status-Status}", "--", "ems-appliance-manager"], timeout=15
+        )
+        return result.ok and result.stdout.strip() == manager_verify.DPKG_STATE_INSTALLED
+
     def _health(self, sections):
-        findings = []
+        findings = list(self._manager_findings())
 
         for name, payload in sections.items():
             if isinstance(payload, dict) and payload.get("status") == SECTION_UNAVAILABLE:

@@ -91,6 +91,26 @@ export const FINDINGS = Object.freeze({
     message: words("finding.package_manager_unhealthy.message"),
     next: words("finding.package_manager_unhealthy.next"),
   }),
+  manager_install_reverted: () => ({
+    title: words("finding.manager_install_reverted.title"),
+    message: words("finding.manager_install_reverted.message"),
+    next: words("finding.manager_install_reverted.next"),
+  }),
+  manager_revert_failed: () => ({
+    title: words("finding.manager_revert_failed.title"),
+    message: words("finding.manager_revert_failed.message"),
+    next: words("finding.manager_revert_failed.next"),
+  }),
+  manager_revert_unavailable: () => ({
+    title: words("finding.manager_revert_unavailable.title"),
+    message: words("finding.manager_revert_unavailable.message"),
+    next: words("finding.manager_revert_unavailable.next"),
+  }),
+  manager_install_unjudged: () => ({
+    title: words("finding.manager_install_unjudged.title"),
+    message: words("finding.manager_install_unjudged.message"),
+    next: words("finding.manager_install_unjudged.next"),
+  }),
   storage_low: () => ({
     title: words("finding.storage_low.title"),
     message: words("finding.storage_low.message"),

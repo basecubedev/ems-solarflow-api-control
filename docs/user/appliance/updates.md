@@ -299,6 +299,11 @@ and nothing else can be started.
 | Even the previous package refuses to install | It says so, and waits for you. | **Going back failed** |
 | The record of the deadline cannot be read | Nothing is installed and nothing is undone. It says so, and waits for you. | **Deadline record unreadable** |
 
+Every row but the first also appears on the **Overview** and in the status
+light at the top of each page — **Put back** as something to look at, the two
+failures as faults — until the next install. An install whose deadline ran out
+without any verdict is reported there as never judged.
+
 The undo is a copy taken out of the package being *replaced*, saved before the
 new one is unpacked, so the thing deciding whether to keep the update is not
 part of the update.

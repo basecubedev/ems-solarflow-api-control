@@ -421,6 +421,14 @@ def command_rollback_manager(args):
         )
         return EXIT_ERROR
 
+    # The person at the keyboard has judged this install; a verdict an earlier
+    # deadline left -- going back failed -- would go on saying so on the page.
+    try:
+        manager_verify.verdict_path(paths).unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        print(f"warning: the last verdict could not be cleared: {exc}", file=sys.stderr)
     try:
         manager_verify.disarm(paths, runner)
     except manager_verify.ManagerVerifyError as exc:
