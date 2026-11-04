@@ -17,7 +17,7 @@ MAX_WIFI_PASSPHRASE_LENGTH = 63
 MAX_LOG_LINES = 2000
 DEFAULT_LOG_LINES = 200
 
-RELEASE_TAG_RE = re.compile(r"^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z.]{0,31})?$")
+RELEASE_TAG_RE = re.compile(r"^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z][0-9A-Za-z.]{0,31})?$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 IMAGE_REPOSITORY_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+$")
 TIMEZONE_RE = re.compile(r"\A[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+){0,2}\Z")
@@ -392,10 +392,11 @@ def validate_log_source(value):
 def validate_line_count(value, default=DEFAULT_LOG_LINES):
     if value is None:
         return default
-    try:
-        lines = int(value)
-    except (TypeError, ValueError):
+    # int() took True as one line and raised OverflowError for an Infinity
+    # sent on the socket.
+    if isinstance(value, bool) or not isinstance(value, int):
         raise ValidationError("invalid_line_count", "line count must be an integer")
+    lines = value
     if lines < 1:
         raise ValidationError("invalid_line_count", "line count must be positive")
     return min(lines, MAX_LOG_LINES)
@@ -422,7 +423,9 @@ RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
 
 
 def validate_release_id(value):
-    text = str(value or "").strip()
+    if not isinstance(value, str):
+        raise ValidationError("invalid_release_id", "a release id must be a string")
+    text = value.strip()
     if not RELEASE_ID.match(text):
         raise ValidationError(
             "invalid_release_id", "a release id may only contain letters, digits, . _ + and -"
