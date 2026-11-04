@@ -221,16 +221,23 @@ class SshService:
         for name in self.config.ssh_key_accounts:
             account = self.account(name)
             keys = []
+            foreign = []
             refusal = ""
             if account.exists and account.home:
                 try:
-                    keys = [key.to_dict() for key in AuthorizedKeysStore(account.home).list()]
+                    store = AuthorizedKeysStore(account.home)
+                    keys = [key.to_dict() for key in store.list()]
+                    foreign = store.foreign()
                 except ValidationError as exc:
                     refusal = exc.code
             entry = account.to_dict()
             entry["keys_refused"] = refusal
             entry["keys"] = keys
             entry["key_count"] = len(keys)
+            # Options-prefixed, certificate or unsupported key lines: sshd
+            # honours them, this console cannot show them, and only revoking
+            # every key reaches them.
+            entry["unparsed_key_lines"] = len(foreign)
             accounts.append(entry)
 
         hardening = {}
@@ -352,6 +359,7 @@ class SshService:
     def plan_revoke_all(self, operation, account):
         store = self.keystore(account)
         keys = [key.to_dict() for key in store.list()]
+        foreign = store.foreign()
         values = {"account": account}
         operation.requested_target.update(values)
         self.operations.update_target(operation.operation_id, values)
@@ -360,8 +368,9 @@ class SshService:
             "account": account,
             "keys": keys,
             "key_count": len(keys),
-            "warning": "Every SSH key of this account is removed, and its open SSH sessions "
-            "are ended.",
+            "unparsed_lines": len(foreign),
+            "warning": "Every SSH key of this account is removed, including lines this console "
+            "cannot show, and its open SSH sessions are ended.",
         }
 
     # --- execution -------------------------------------------------------

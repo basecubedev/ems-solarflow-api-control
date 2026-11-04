@@ -731,6 +731,21 @@ test.describe("access, network and diagnostics", () => {
     await expect(page.getByTestId("plan-dialog")).toBeVisible();
   });
 
+  test("a key line the page cannot show is named and every key can be revoked", async ({ page, request }) => {
+    await resetAppliance(request, { authorized_keys: [PUBLIC_KEY, `from="10.0.0.1",no-pty ${PUBLIC_KEY}`] });
+    await createPassword(page);
+    await open(page, "access");
+    const backupCard = page.locator(".card").filter({ has: page.getByTestId("ssh-key-table") }).first();
+    await expect(backupCard.getByTestId("ssh-key-table").locator("tbody tr")).toHaveCount(1);
+    await expect(backupCard.getByTestId("ssh-unparsed-lines")).toContainText("1");
+    await backupCard.getByTestId("ssh-revoke-all").click();
+    await expect(page.getByTestId("plan-dialog")).toBeVisible();
+    await confirmPlan(page);
+    await settled(page);
+    await expect(page.getByTestId("ssh-key-table")).toHaveCount(0, { timeout: 15_000 });
+    await expect(page.getByTestId("ssh-unparsed-lines")).toHaveCount(0);
+  });
+
   test("a private key is refused with the appliance's reason", async ({ page }) => {
     await createPassword(page);
     await open(page, "access");

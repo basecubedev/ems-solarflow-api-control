@@ -762,3 +762,41 @@ def test_shell_access_off_ends_the_shell_accounts_sessions(tmp_path, monkeypatch
 
     assert payload["sessions"] == {"ems-shell": "ended"}, payload
     assert services.host.sessions == {}
+
+
+# --- what an account's key file holds beyond what the console can read -----
+
+
+def test_an_account_reports_the_key_lines_sshd_honours_that_cannot_be_shown(tmp_path):
+    """An options-prefixed or certificate line grants a login sshd accepts;
+    the root-capable account's card said "0 keys" over it, and Remove could
+    not reach it."""
+
+    services = appliance(tmp_path)
+    home = tmp_path / "home" / "ems-backup"
+    plan_and_execute(services, "ssh.plan_key_add", account="ems-backup", public_key=ED25519)
+    keys = home / ".ssh" / "authorized_keys"
+    keys.write_text(
+        keys.read_text(encoding="utf-8")
+        + f'from="10.0.0.1",no-pty {ED25519}\n'
+        + "# an operator's note\n",
+        encoding="utf-8",
+    )
+
+    accounts = {item["name"]: item for item in services.ssh.status()["accounts"]}
+
+    assert accounts["ems-backup"]["key_count"] == 1
+    assert accounts["ems-backup"]["unparsed_key_lines"] == 1
+
+
+def test_revoke_all_names_the_lines_it_removes_that_cannot_be_shown(tmp_path):
+    services = appliance(tmp_path)
+    keys = tmp_path / "home" / "ems-backup" / ".ssh" / "authorized_keys"
+    plan_and_execute(services, "ssh.plan_key_add", account="ems-backup", public_key=ED25519)
+    keys.write_text(f'cert-authority {ED25519}\n', encoding="utf-8")
+
+    handlers = handlers_for(services)
+    planned = handlers.dispatch({"operation": "ssh.plan_revoke_all", "account": "ems-backup"})
+
+    assert planned["plan"]["key_count"] == 0
+    assert planned["plan"]["unparsed_lines"] == 1

@@ -328,6 +328,11 @@ class AuthorizedKeysStore:
 
         return unparsed_lines(self._text())
 
+    def foreign(self):
+        """The unmanaged lines sshd will still honour: every one but comments."""
+
+        return foreign_key_lines(self._text())
+
     def _own(self, descriptor):
         # Ownership boundary: root owns the key material, the account's group
         # only reads it. An account that cannot write here cannot authorise

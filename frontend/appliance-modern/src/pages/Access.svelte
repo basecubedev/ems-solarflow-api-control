@@ -6,7 +6,7 @@
   import PlanButton from "../widgets/PlanButton.svelte";
   import UnconfirmedNote from "../widgets/UnconfirmedNote.svelte";
   import { session } from "../state/session.svelte.js";
-  import { t, fmt, say, langOf } from "../i18n/i18n.svelte.js";
+  import { t, tn, fmt, say, langOf } from "../i18n/i18n.svelte.js";
   import { host, ensure, held } from "../state/host.svelte.js";
   import { forms } from "../state/forms.svelte.js";
   import { detail } from "../state/prefs.svelte.js";
@@ -147,6 +147,20 @@
             {/each}
           </tbody>
         </table>
+      </div>
+    {/if}
+    {#if item.exists && item.unparsed_key_lines > 0}
+      <p class="note warn" data-testid="ssh-unparsed-lines"><Icon name="triangle-alert" />{tn("access.unparsedLines", item.unparsed_key_lines)}</p>
+    {/if}
+    {#if item.exists && ((item.keys || []).length || item.unparsed_key_lines > 0)}
+      <div class="row-wrap">
+        <PlanButton
+          plan={{ key: `key-revoke-${index}`, endpoint: "/api/ssh/keys/revoke", body: { account: item.name }, title: { key: "plan.title.revokeAll" }, confirm: "plan.remove", danger: true }}
+          label={t("access.revokeAll")}
+          icon="ban"
+          variant="secondary"
+          testid="ssh-revoke-all"
+        />
       </div>
     {/if}
   </Card>
