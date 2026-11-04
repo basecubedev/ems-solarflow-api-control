@@ -777,6 +777,48 @@ def test_an_update_names_the_running_package_as_its_fallback(tmp_path):
     assert Path(request["fallback"]).read_bytes() == b"the package that is running"
 
 
+# --- installation checks the appliance already fails ---------------------------
+
+
+FAILING = {"ok": False, "failures": ["export_service: ems-appliance-export.service is failed", "export_setup: refused"]}
+
+
+def test_an_update_plan_says_which_installation_checks_already_fail(tmp_path):
+    """postinst ends in these checks: a host condition that fails one failed
+    the install and the revert alike, and the plan never said a word."""
+
+    services, service = build(tmp_path)
+    seed_previous(services)
+    service.installation_check = lambda: FAILING
+
+    planned = plan(services, "manager.plan_update", release_id=RELEASE_ID)["plan"]
+
+    assert "fails its own installation checks right now (export_service, export_setup)" in planned["warning"]
+    assert planned["blockers"] == [], "the package on offer may be the one that fixes it"
+
+
+def test_a_revert_plan_says_which_installation_checks_already_fail(tmp_path):
+    services, service = build(tmp_path)
+    seed_previous(services)
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+    judged(services)
+    service.installation_check = lambda: FAILING
+
+    planned = plan(services, "manager.plan_revert")["plan"]
+
+    assert "export_service, export_setup" in planned["warning"]
+
+
+def test_an_appliance_that_passes_its_checks_is_not_warned(tmp_path):
+    services, service = build(tmp_path)
+    seed_previous(services)
+    service.installation_check = lambda: {"ok": True, "failures": []}
+
+    planned = plan(services, "manager.plan_update", release_id=RELEASE_ID)["plan"]
+
+    assert "installation checks" not in planned["warning"]
+
+
 # --- the package lock dpkg needs ----------------------------------------------
 
 

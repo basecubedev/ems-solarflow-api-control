@@ -211,7 +211,12 @@ tidiness; it is what makes the paragraph below true.
    appliance's disk, and whether another `apt` or `dpkg` run holds the package
    lock (`package_lock_held`) -- the plan says so, and an execution confirmed
    before the lock was taken stages nothing. Refusals happen here, before dpkg
-   runs, while the code deciding is still the code that started.
+   runs, while the code deciding is still the code that started. The plan also
+   names the installation checks the appliance already fails, because the
+   package's postinst ends in the same checks: a host condition that fails one
+   — a degraded backup export was the case on a Pi 3B+ — stops the install and
+   the revert to the package before it alike. That is a warning, not a refusal,
+   because the package on offer may be the one that fixes it.
 6. The running package is retained as `previous.deb`, and the request names it
    as what the installer puts back if `dpkg` refuses the new one. A reinstall
    of the running package itself has nothing to fall back to: the kept package

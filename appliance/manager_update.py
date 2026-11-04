@@ -104,6 +104,17 @@ def raised_schemas(release):
     )
 
 
+
+def _failing_checks_warning(failing):
+    return (
+        "This appliance fails its own installation checks right now ("
+        + ", ".join(failing)
+        + "). The package runs the same checks while it installs, so this install may "
+        "stop half-configured and be put back; repair them first unless this package is "
+        "the fix."
+    )
+
+
 class ManagerUpdateError(Exception):
     def __init__(self, code, message):
         super().__init__(message)
@@ -131,6 +142,7 @@ class ManagerUpdateService:
         architecture="arm64",
         reverter=manager_verify.PACKAGED_REVERTER,
         package_lock=None,
+        installation_check=None,
     ):
         self.paths = paths
         self.config = config
@@ -146,6 +158,9 @@ class ManagerUpdateService:
         # What packages.PackageService.lock_state answers; None where nothing
         # can be asked, as in a test that builds this service alone.
         self.package_lock = package_lock
+        # install_check.verify_installation as the agent runs it; None where it
+        # cannot be asked.
+        self.installation_check = installation_check
         self._time = time_fn
         self._operation_log = operation_log
 
@@ -346,6 +361,24 @@ class ManagerUpdateService:
             "Manager is installed by dpkg too, so wait until that run has finished",
         }
 
+    def failing_checks(self):
+        """The installation checks this appliance fails right now, by name.
+
+        Every package's postinst ends in the same checks, so a host condition
+        that fails one -- a degraded backup export was the case on a Pi 3B+ --
+        fails the install and the revert to the package before it alike. That
+        is said in the plan rather than refused: the package on offer may be
+        the one that fixes it, as 0.4.1 was.
+        """
+
+        if self.installation_check is None:
+            return []
+        try:
+            report = self.installation_check() or {}
+        except Exception:
+            return []
+        return [str(failure).split(":", 1)[0] for failure in report.get("failures") or []]
+
     def _refuse_while_unjudged(self):
         pending = self.verification_pending()
         if pending:
@@ -481,12 +514,15 @@ class ManagerUpdateService:
                 unclear,
                 raised_schemas(release),
                 reinstall=manager_install.same_archive(retention, release.artifact_digest),
+                failing=self.failing_checks(),
             ),
         }
 
     @staticmethod
-    def _warning(moving, revert_available, unclear, raised=(), *, reinstall=False):
+    def _warning(moving, revert_available, unclear, raised=(), *, reinstall=False, failing=()):
         parts = []
+        if failing:
+            parts.append(_failing_checks_warning(failing))
         if reinstall:
             parts.append(
                 "This reinstalls the package that is running. If it fails, nothing is put "
@@ -567,8 +603,9 @@ class ManagerUpdateService:
                     ""
                     if target.state_implements
                     else "It arrived before this manager recorded what a package can read, so "
-                    "its state compatibility could not be checked."
+                    "its state compatibility could not be checked. "
                 )
+                + (_failing_checks_warning(failing) if (failing := self.failing_checks()) else "")
             ).strip(),
         }
 

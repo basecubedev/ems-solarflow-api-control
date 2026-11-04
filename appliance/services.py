@@ -20,7 +20,7 @@ from appliance.auth import AuthStore, ConfirmedPassword, deployment_owner
 from appliance.network import NetworkService
 from appliance.timezone_config import TimezoneService
 from appliance.operations import OperationStore
-from appliance import persistent_state
+from appliance import install_check, persistent_state
 from appliance.manager_update import ManagerUpdateService
 from appliance.artifact_trust import SignatureVerifier
 from appliance.packages import PackageService
@@ -177,6 +177,9 @@ def build_services(
         installed_version=manager_version,
         architecture=host_architecture(),
         package_lock=packages.lock_state,
+        installation_check=lambda: install_check.verify_installation(
+            paths=paths, runner=runner, in_agent=True
+        ),
     )
     status.manager = manager
     admin.manager_pending = manager.verification_pending
