@@ -530,3 +530,17 @@ def test_a_build_short_a_board_is_not_titled_as_the_appliance_image(workflow):
     partial = publish["run"].split('if [ "${COMPLETE}" != "true" ]; then', 1)[1].split("elif", 1)[0]
     titles = re.findall(r'title="([^"]*)"', partial)
     assert titles and not any(title.startswith("Appliance image") for title in titles)
+
+
+IMMUTABLE_PIN = re.compile(r"^[\w.-]+/[\w.-]+@[0-9a-f]{40}$")
+
+
+@pytest.mark.parametrize("job", ["image", "publish"])
+def test_the_jobs_that_make_and_publish_the_image_pin_actions_by_commit(workflow, job):
+    """A tag can be moved by whoever controls the action; a commit cannot."""
+
+    used = [step["uses"] for step in steps(workflow, job) if "uses" in step]
+
+    assert used
+    for reference in used:
+        assert IMMUTABLE_PIN.match(reference), reference
