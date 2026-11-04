@@ -55,6 +55,15 @@ ROOT_START_SECTORS = (8 + 256) * MEBIBYTE // SECTOR
 IMAGED_SECTORS = 8 * 1024 * MEBIBYTE // SECTOR
 
 
+# An MBR addresses 2^32 sectors; cloud-utils growpart stops a dos partition there.
+MBR_LIMIT_SECTORS = 2**32
+
+# What mke2fs gives an 8 GiB root with 4 KiB blocks.
+BLOCKS_PER_GROUP = 32768
+INODE_BLOCKS_PER_GROUP = 512
+RESERVED_GDT_BLOCKS = 1024
+
+
 def grown_sectors(start=ROOT_START_SECTORS, disk=DISK_SECTORS):
     """What growpart would leave: the tail, aligned down to a mebibyte."""
 
@@ -129,7 +138,11 @@ class Harness:
             # The production verb accepts one layer name and refuses every
             # other answer; a stub that echoed whatever it was given would let
             # this harness pass a gate the appliance would not.
-            f'  [ "$layer" = image-rpios ] || exit 1\n'
+            f"  if [ -f {state}/image-check-crashes ]; then\n"
+            f'    echo "Traceback (most recent call last):" >&2\n'
+            f"    exit 1\n"
+            f"  fi\n"
+            f'  [ "$layer" = image-rpios ] || exit 3\n'
             f'  echo "$layer"\n'
             f"  exit 0\n"
             f"fi\n"
@@ -138,41 +151,79 @@ class Harness:
             f"    device=$(cat {state}/device 2>/dev/null || echo {BLOCK_DEVICE})\n"
             f'    PYTHONPATH={ROOT} python3 -c "\n'
             f"import sys\n"
+            f"from pathlib import Path\n"
             f"from appliance import partition_geometry\n"
+            # The disk's first sectors, when a case gives it any; otherwise the
+            # disk cannot be opened, as for an unprivileged reader.
+            f"header = Path(sys.argv[3])\n"
+            f"opener = (lambda path: header.open('rb')) if header.exists() else None\n"
             f"try:\n"
-            f"    geometry = partition_geometry.read_geometry(sys.argv[1], sysfs=sys.argv[2])\n"
+            f"    geometry = partition_geometry.read_geometry(\n"
+            f"        sys.argv[1], sysfs=sys.argv[2], opener=opener)\n"
             f"except partition_geometry.GeometryError as error:\n"
             f"    sys.exit(error.code)\n"
             f"print(chr(10).join(geometry.to_lines()))\n"
-            f'" "$device" {self.sysfs}\n'
+            f'" "$device" {self.sysfs} {state}/disk-header\n'
             f"    ;;\n"
             f"  *) exit 1 ;;\n"
             f"esac",
         )
+        # The fields of a real 4 KiB-block ext4 the slack is worked out from.
         self._tool(
             "dumpe2fs",
             f"size=$(cat {state}/filesystem)\n"
+            f'echo "Block count:              $((size / 4096))"\n'
+            f'echo "Reserved GDT blocks:      {RESERVED_GDT_BLOCKS}"\n'
             f'echo "Block size:               4096"\n'
-            f'echo "Block count:              $((size / 4096))"',
+            f'echo "Group descriptor size:    64"\n'
+            f'echo "Blocks per group:         {BLOCKS_PER_GROUP}"\n'
+            f'echo "Inode blocks per group:   {INODE_BLOCKS_PER_GROUP}"',
         )
         self._tool(
             "growpart",
-            f"if [ -f {state}/growpart-fails ]; then exit 1; fi\n"
-            f"if [ -f {state}/growpart-nochange ]; then exit 2; fi\n"
+            # cloud-utils growpart: 1 is NOCHANGE, 2 is FAILED, and the reason
+            # is on its standard output.
+            f"if [ -f {state}/growpart-fails ]; then\n"
+            f'  echo "FAILED: failed to resize: sfdisk refused the table"; exit 2\n'
+            f"fi\n"
+            f"if [ -f {state}/growpart-nochange ]; then\n"
+            f'  echo "NOCHANGE: partition 2 could only be grown by 33 [fudge=2048]"; exit 1\n'
+            f"fi\n"
             f"start=$(cat {self.partition_dir}/start)\n"
             f"disk=$(cat {self.disk_dir}/size)\n"
             f"end=$(( disk / {ALIGNMENT} * {ALIGNMENT} ))\n"
+            # On a dos label it stops where an MBR stops addressing.
+            f"if [ -f {state}/disk-header ] && [ $end -gt {MBR_LIMIT_SECTORS + 1} ]; then\n"
+            f"  end={MBR_LIMIT_SECTORS + 1}\n"
+            f"fi\n"
             f"echo $((end - start)) > {self.partition_dir}/size",
         )
         self._tool(
             "resize2fs",
             f"if [ -f {state}/resize2fs-fails ]; then exit 1; fi\n"
             f"sectors=$(cat {self.partition_dir}/size)\n"
-            f"echo $((sectors * {SECTOR})) > {state}/filesystem",
+            # ext4 drops a trailing part of a group too small for its metadata.
+            f"leaves=$(cat {state}/resize2fs-leaves 2>/dev/null || echo 0)\n"
+            f"echo $((sectors * {SECTOR} - leaves)) > {state}/filesystem",
         )
 
     def break_tool(self, name):
         (self.state / f"{name}-fails").write_text("")
+
+    def crash_image_check(self):
+        (self.state / "image-check-crashes").write_text("")
+
+    def resize2fs_leaves(self, byte_count):
+        (self.state / "resize2fs-leaves").write_text(str(byte_count))
+
+    def label_disk_dos(self):
+        """The first sector of an MBR-labelled disk, as the image writes it."""
+
+        sector = bytearray(SECTOR)
+        sector[446 + 4] = 0x0C
+        sector[446 + 16 + 4] = 0x83
+        sector[510:512] = b"\x55\xaa"
+        (self.state / "disk-header").write_bytes(bytes(sector))
 
     def growpart_reports_no_change(self):
         (self.state / "growpart-nochange").write_text("")
@@ -271,6 +322,7 @@ def test_a_failed_growpart_leaves_no_marker(medium):
 
     assert result.returncode == 1
     assert "growpart_failed" in result.stderr
+    assert "sfdisk refused the table" in result.stdout + result.stderr
     assert not medium.marker.exists()
 
 
@@ -284,6 +336,7 @@ def test_growpart_refusing_an_unused_tail_is_reported_rather_than_marked(medium)
 
     assert result.returncode == 1
     assert "growpart_refused" in result.stderr
+    assert "could only be grown by 33" in result.stdout + result.stderr
     assert not medium.marker.exists()
 
 
@@ -359,6 +412,90 @@ def test_the_marker_is_published_by_rename_and_nothing_is_left_staged(medium):
     assert not (medium.marker_root / ".root-grown.staged").exists()
 
 
+@requires_block_device
+def test_a_filesystem_ext4_ends_short_of_its_last_group_counts_as_grown(medium):
+    """resize2fs drops a trailing piece of a group too small for its metadata.
+
+    With 4 KiB blocks that leaves the filesystem a mebibyte or two short of the
+    partition, and a second resize2fs has nothing to do. Calling that a failure
+    failed the unit on every boot of a card that was grown.
+    """
+
+    medium.resize2fs_leaves(3 * MEBIBYTE // 2)
+
+    result = medium.run()
+
+    assert result.returncode == 0, result.stderr
+    assert "outcome=grown" in medium.marker.read_text()
+
+
+@requires_block_device
+def test_a_grown_card_whose_filesystem_ends_short_of_its_last_group_is_marked(tmp_path):
+    """The next boot after such a growth: nothing to grow, so mark and stop."""
+
+    host = Harness(
+        tmp_path,
+        sectors=grown_sectors(),
+        filesystem=grown_sectors() * SECTOR - 3 * MEBIBYTE // 2,
+    )
+    host.resize2fs_leaves(3 * MEBIBYTE // 2)
+
+    result = host.run()
+
+    assert result.returncode == 0, result.stderr
+    assert not host.ran("growpart")
+    assert host.marker.exists()
+
+
+@requires_block_device
+def test_a_filesystem_left_further_short_than_a_group_drop_is_still_a_failure(medium):
+    medium.resize2fs_leaves(64 * MEBIBYTE)
+
+    result = medium.run()
+
+    assert result.returncode == 1
+    assert "filesystem_not_grown" in result.stderr
+    assert not medium.marker.exists()
+
+
+@requires_block_device
+def test_a_medium_larger_than_an_mbr_addresses_grows_to_the_mbr_limit(tmp_path):
+    """The image is MBR-labelled, and an MBR stops at 2^32 sectors.
+
+    growpart stops the partition there. Counting the rest of a 4 TB disk as
+    tail failed the helper before resize2fs on every boot, and the root stayed
+    at the image's 8 GiB.
+    """
+
+    host = Harness(tmp_path, disk_sectors=4 * 1000**4 // SECTOR)
+    host.label_disk_dos()
+
+    result = host.run()
+
+    assert result.returncode == 0, result.stderr
+    assert host.marker.exists()
+    assert ROOT_START_SECTORS + host.partition_sectors <= MBR_LIMIT_SECTORS + 1
+    assert host.filesystem_bytes == host.partition_bytes
+
+
+@requires_block_device
+def test_an_image_check_that_could_not_run_fails_rather_than_passing(medium):
+    """Only "not an appliance image" leaves a medium alone with success.
+
+    A check that crashed answered nothing, so the unit fails and the next boot
+    asks again, rather than reporting a card that stays at 8 GiB as fine.
+    """
+
+    medium.crash_image_check()
+
+    result = medium.run()
+
+    assert result.returncode == 1
+    assert "image_check_failed" in result.stderr
+    assert not medium.ran("growpart")
+    assert not medium.marker.exists()
+
+
 # --- what the helper may never do --------------------------------------------
 
 
@@ -420,3 +557,24 @@ def test_the_root_geometry_verb_asks_the_block_layer_which_partition_is_root():
     assert "root_partition()" in body
     assert "read_geometry" in body
     assert 'item.mountpoint == "/"' in probe
+
+
+def test_the_image_check_verb_keeps_not_ours_apart_from_a_check_that_could_not_run(monkeypatch):
+    """The helper leaves a medium alone with success only on the first answer."""
+
+    from types import SimpleNamespace
+
+    from appliance import cli
+
+    def probe(marker):
+        return lambda args: SimpleNamespace(os_build=lambda: marker)
+
+    monkeypatch.setattr(cli, "_block_probe", probe({}))
+    assert cli.command_image_check(None) == cli.EXIT_NOT_APPLIANCE_IMAGE
+    monkeypatch.setattr(cli, "_block_probe", probe({"image_layer": "image-rpios"}))
+    assert cli.command_image_check(None) == cli.EXIT_OK
+    monkeypatch.setattr(cli, "_block_probe", lambda args: None)
+    assert cli.command_image_check(None) == cli.EXIT_ERROR
+
+    script = SCRIPT.read_text(encoding="utf-8")
+    assert f"IMAGE_CHECK_NOT_OURS={cli.EXIT_NOT_APPLIANCE_IMAGE}\n" in script

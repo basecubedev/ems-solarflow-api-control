@@ -27,6 +27,9 @@ from appliance.web import serve as serve_web
 EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_UNAVAILABLE = 2
+# image-check's "this host was not imaged by this project", kept apart from
+# every exit a check that could not run produces.
+EXIT_NOT_APPLIANCE_IMAGE = 3
 
 
 def _print(payload, as_json):
@@ -1010,9 +1013,9 @@ def command_image_check(args):
 
     Read from the build marker the image writes, and only a layer name this
     project builds is accepted. A host installed from the .deb onto somebody
-    else's Raspberry Pi OS has no marker and gets an error, which is the answer
+    else's Raspberry Pi OS has no marker and gets exit 3, which is the answer
     the first-boot growth helper needs: this project repartitions media it
-    imaged and nothing else.
+    imaged and nothing else. Any other failure means the check did not run.
     """
 
     from appliance.image_shape import IMAGE, marker_is_ours
@@ -1022,7 +1025,7 @@ def command_image_check(args):
         return EXIT_ERROR
     if not marker_is_ours(probe.os_build()):
         print("error: this host carries no appliance image build marker", file=sys.stderr)
-        return EXIT_ERROR
+        return EXIT_NOT_APPLIANCE_IMAGE
     print(IMAGE.image_layer)
     return EXIT_OK
 

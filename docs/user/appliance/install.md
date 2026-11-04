@@ -213,6 +213,11 @@ The first start takes two to three minutes: it grows the storage to fill your
 card and sets up its identity. The activity LED flickers throughout. Leave it
 alone until it settles.
 
+If the growth does not finish, the Overview says so ("The root does not fill
+the card") and the next start tries again; Diagnostics → Card resize names the
+step that failed. On a medium larger than 2 TiB the storage grows to 2 TiB: the
+image's partition table (MBR) cannot address more.
+
 ### Why the cable is not optional
 
 There is no way to put WLAN credentials on the card before the first start. The

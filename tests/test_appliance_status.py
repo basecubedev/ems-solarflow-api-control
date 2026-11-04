@@ -806,3 +806,147 @@ def test_the_operation_lists_leave_apts_output_to_the_record_itself(tmp_path):
     assert len(json.dumps(listed)) < 64 * 1024
     assert listed["unacknowledged"][0]["result"]["scope"] == "security"
     assert store.get(operation.operation_id).to_dict()["result"]["output"]
+
+
+# --- the medium the root lives on -------------------------------------------
+
+
+def medium_sections(**medium):
+    return {"system": {"status": "ok", "storage": {}, "medium": medium}}
+
+
+GROWN_SHORT = {
+    "appliance_image": True,
+    "available": True,
+    "fills_medium": False,
+    "medium_supported": True,
+    "medium_mb": 61_000,
+    "root_mb": 8_192,
+    "unused_mb": 52_800,
+}
+
+
+def test_a_root_that_does_not_fill_its_card_is_a_finding(tmp_path):
+    """The growth helper's failure used to show only in its own log."""
+
+    services = build_test_services(tmp_path)
+
+    warnings = services.status._health(medium_sections(**GROWN_SHORT))["warnings"]
+
+    assert [(item["code"], item["severity"], item["section"]) for item in warnings] == [
+        ("root_not_grown", "warning", "diagnostics")
+    ]
+
+
+def test_a_card_below_the_supported_size_is_a_finding(tmp_path):
+    services = build_test_services(tmp_path)
+    medium = {**GROWN_SHORT, "fills_medium": True, "unused_mb": 0, "medium_supported": False}
+
+    codes = [item["code"] for item in services.status._health(medium_sections(**medium))["warnings"]]
+
+    assert codes == ["medium_below_minimum"]
+
+
+@pytest.mark.parametrize(
+    "medium",
+    [
+        {**GROWN_SHORT, "appliance_image": False, "medium_supported": False},
+        {"appliance_image": True, "available": False, "error": "block_layer_unavailable"},
+    ],
+    ids=["not-an-appliance-image", "unreadable"],
+)
+def test_a_medium_nothing_grows_or_nobody_could_read_is_not_judged(tmp_path, medium):
+    """A .deb installation's storage is the owner's; an unread medium is unknown."""
+
+    services = build_test_services(tmp_path)
+
+    assert services.status._health(medium_sections(**medium))["warnings"] == []
+
+
+class LsblkRunner:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def available(self, name):
+        return name == "lsblk"
+
+    def run(self, name, args, timeout=None):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(ok=True, stdout=json.dumps(self.payload))
+
+
+def fake_medium(tmp_path, *, disk_sectors, root_sectors, image_layer="image-rpios"):
+    """A host flashed from an image: its build marker, lsblk and a sysfs tree."""
+
+    from appliance.image_shape import OS_BUILD_MARKER
+
+    marker = tmp_path / OS_BUILD_MARKER
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({"image_layer": image_layer}), encoding="utf-8")
+    disk = tmp_path / "sys" / "block" / "fakedisk"
+    partition = disk / "fakedisk2"
+    partition.mkdir(parents=True)
+    (disk / "size").write_text(f"{disk_sectors}\n")
+    (partition / "partition").write_text("2\n")
+    (partition / "start").write_text("540672\n")
+    (partition / "size").write_text(f"{root_sectors}\n")
+    class_block = tmp_path / "sys" / "class" / "block"
+    class_block.mkdir(parents=True)
+    (class_block / "fakedisk2").symlink_to(partition)
+    (class_block / "fakedisk").symlink_to(disk)
+    return LsblkRunner(
+        {"blockdevices": [{
+            "path": "/dev/fakedisk", "type": "disk", "children": [{
+                "path": "/dev/fakedisk2", "type": "part", "size": root_sectors * 512,
+                "partuuid": "", "partlabel": "", "fstype": "ext4", "mountpoint": "/",
+                "pkname": "/dev/fakedisk", "partn": 2,
+            }],
+        }]}
+    )
+
+
+def test_the_medium_is_read_from_the_partition_mounted_at_root(tmp_path):
+    from appliance.block_probe import BlockProbe
+
+    runner = fake_medium(tmp_path, disk_sectors=125_000_000, root_sectors=16_777_216)
+    state = tmp_path / "state"
+    state.mkdir()
+
+    medium = BlockProbe(root=tmp_path, runner=runner).root_medium(state_dir=state)
+
+    assert medium["appliance_image"] is True
+    assert medium["available"] is True
+    assert medium["fills_medium"] is False
+    assert medium["root_mb"] == 8192
+    assert medium["medium_mb"] == 125_000_000 * 512 // (1024 * 1024)
+    assert medium["medium_supported"] is True
+    assert medium["grown"] is None
+
+
+def test_the_medium_carries_the_last_growth_the_first_boot_recorded(tmp_path):
+    from appliance.block_probe import BlockProbe
+
+    runner = fake_medium(tmp_path, disk_sectors=30_000_000, root_sectors=29_457_000)
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / ".root-grown").write_text(
+        "grown_at=2026-11-04T10:00:00Z\ndisk_bytes=1\noutcome=grown\n", encoding="utf-8"
+    )
+
+    medium = BlockProbe(root=tmp_path, runner=runner).root_medium(state_dir=state)
+
+    assert medium["fills_medium"] is True
+    assert medium["medium_supported"] is True
+    assert medium["grown"] == {"outcome": "grown", "grown_at": "2026-11-04T10:00:00Z"}
+
+
+def test_a_host_not_flashed_from_an_image_is_not_measured(tmp_path):
+    from appliance.block_probe import BlockProbe
+
+    runner = fake_medium(tmp_path, disk_sectors=125_000_000, root_sectors=16_777_216,
+                         image_layer="image-elsewhere")
+
+    assert BlockProbe(root=tmp_path, runner=runner).root_medium(state_dir=tmp_path) == {
+        "appliance_image": False
+    }

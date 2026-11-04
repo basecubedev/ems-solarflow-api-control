@@ -10,7 +10,7 @@ import os
 import stat
 import time
 
-from appliance import manager_verify, rescue_account, validation
+from appliance import manager_verify, media_sizing, rescue_account, validation
 from appliance.config import effective_timezone
 from appliance.docker_backend import CONTAINER_RUNNING, DAEMON_RUNNING
 from appliance.packages import UPDATE_CHECK_FAILED
@@ -151,10 +151,12 @@ class StatusService:
         ssh,
         backup,
         operations,
+        block=None,
         time_fn=None,
         installed_version=None,
     ):
         self.paths = paths
+        self.block = block
         self.config = config
         self.probe = probe
         # Resolved once by the composition root rather than looked up here, the
@@ -188,6 +190,7 @@ class StatusService:
                 "root": self.probe.filesystem("/"),
                 "ems_data": self.probe.filesystem(str(self.paths.ems_data_dir)),
             },
+            "medium": self._medium(),
             "hostname": self.probe.hostname(),
             "timezone": effective_timezone(self.paths, self.config),
             "services": self.systemd.unit_states(
@@ -198,6 +201,20 @@ class StatusService:
             # the answer without going to look for it.
             "rescue": self._rescue(),
         }
+
+    def _medium(self):
+        """The card the root lives on; an unread one is carried as unread."""
+
+        if self.block is None:
+            return {"appliance_image": False}
+        try:
+            return self.block.root_medium(state_dir=self.paths.state_dir)
+        except Exception as exc:
+            return {
+                "appliance_image": True,
+                "available": False,
+                "error": getattr(exc, "code", exc.__class__.__name__),
+            }
 
     def _rescue(self):
         """The rescue account, and whether sshd actually refuses it a password.
@@ -583,6 +600,40 @@ class StatusService:
                             f"More than 90% of {label} is in use.",
                             "Writes fail once it is full, including backups and updates. "
                             "Open Diagnostics to collect a support archive before freeing space.",
+                        )
+                    )
+            # Judged only where this project grows the root: a .deb
+            # installation's storage is its owner's, and an unread medium is
+            # unknown rather than short.
+            medium = system.get("medium") or {}
+            if medium.get("appliance_image") and medium.get("available"):
+                if medium.get("fills_medium") is False:
+                    findings.append(
+                        finding(
+                            "root_not_grown",
+                            FINDING_WARNING,
+                            VIEW_DIAGNOSTICS,
+                            "The root does not fill the card",
+                            f"The root is {medium.get('root_mb')} MB of a "
+                            f"{medium.get('medium_mb')} MB medium; "
+                            f"{medium.get('unused_mb')} MB are unused. The first-boot "
+                            "growth did not finish.",
+                            "Open Diagnostics and read the Card resize log: it names the "
+                            "step that failed. The next boot tries again.",
+                        )
+                    )
+                if medium.get("medium_supported") is False:
+                    findings.append(
+                        finding(
+                            "medium_below_minimum",
+                            FINDING_WARNING,
+                            VIEW_DIAGNOSTICS,
+                            f"The card is smaller than {media_sizing.SUPPORTED_MEDIA_LABEL}",
+                            f"The medium holds {medium.get('medium_mb')} MB; "
+                            f"{media_sizing.UNSUPPORTED_MEDIA_REASON}.",
+                            "Move to a card of at least "
+                            f"{media_sizing.SUPPORTED_MEDIA_LABEL}: take a backup, flash the "
+                            "new card and restore it.",
                         )
                     )
             # Only the alarming answer is a finding. Refused is what ships;

@@ -88,7 +88,7 @@ How much you need depends on which shape you run:
 | Shape | Minimum | Why |
 |---|---|---|
 | Docker deployment | A few GB plus your history | The OS is already there; EMS adds containers and a database |
-| Appliance image | **16 GB** | The image is about 8.25 GiB and grows into whatever is left on the card. The supported floor is 14.5 GB, and **nothing on the appliance enforces it** — a smaller card flashes and then runs out of room later |
+| Appliance image | **16 GB** | The image is about 8.25 GiB and grows into whatever is left on the card. The supported floor is 14.5 GB. Nothing refuses a smaller card: it flashes, the Overview then warns "The card is smaller than 16 GB", and it runs out of room later. Above 2 TiB the root grows to 2 TiB only, the most the image's MBR partition table addresses |
 
 ## Raspberry Pi compatibility
 

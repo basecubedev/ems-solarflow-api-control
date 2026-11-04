@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from appliance.admin_lifecycle import AdminLifecycleService
 from appliance.audit import AuditLog, OperationLog
 from appliance.backup_access import BackupAccessService
+from appliance.block_probe import BlockProbe
 from appliance.commands import CommandRunner
 from appliance.config import load_config
 from appliance.docker_backend import DockerBackend
@@ -157,6 +158,7 @@ def build_services(
         ssh=ssh,
         backup=backup,
         operations=operations,
+        block=BlockProbe(root=root, runner=runner),
         time_fn=time_fn,
         installed_version=manager_version,
     )

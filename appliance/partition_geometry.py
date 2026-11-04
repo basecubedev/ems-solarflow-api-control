@@ -43,8 +43,20 @@ ALIGNMENT_TOLERANCE_SECTORS = 2 * 1024 * 1024 // SYSFS_SECTOR
 # array of 128 bytes, the layout every tool in this project writes.
 GPT_BACKUP_RESERVE_LBA = 33
 
+# An MBR stores a partition's start and length as 32-bit sector counts, and
+# growpart stops a dos partition at 2^32 sectors. The image is MBR-labelled, so
+# on a medium beyond that the rest is not something the root can grow into.
+MBR_SIGNATURE = b"\x55\xaa"
+MBR_SIGNATURE_OFFSET = 510
+MBR_ENTRIES_OFFSET = 446
+MBR_ENTRY_SIZE = 16
+MBR_ENTRY_TYPE_OFFSET = 4
+MBR_PROTECTIVE_TYPE = 0xEE
+MBR_ADDRESSABLE_SECTORS = 2**32
+
 FROM_GPT = "gpt_last_usable_lba"
 FROM_DISK_END = "disk_end_minus_gpt_backup_reserve"
+FROM_MBR_LIMIT = "mbr_addressable_end"
 
 # A logical block size the block layer cannot actually present is a parse
 # failure, not a device property.
@@ -185,6 +197,30 @@ def _gpt_usable_end(disk_path, logical_block_size, disk_sectors, *, opener=None)
     return (last_usable_lba + 1) * logical_block_size // SYSFS_SECTOR
 
 
+def _mbr_addressable_end(disk_path, logical_block_size, *, opener=None):
+    """Where a dos label stops addressing the disk, as a 512-byte sector.
+
+    ``None`` when the first sector is unreadable, carries no MBR, or is the
+    protective MBR in front of a GPT.
+    """
+
+    open_disk = opener or (lambda path: Path(path).open("rb"))
+    try:
+        with open_disk(disk_path) as handle:
+            first = handle.read(SYSFS_SECTOR)
+    except OSError:
+        return None
+    if len(first) < SYSFS_SECTOR or first[MBR_SIGNATURE_OFFSET:SYSFS_SECTOR] != MBR_SIGNATURE:
+        return None
+    types = [
+        first[MBR_ENTRIES_OFFSET + index * MBR_ENTRY_SIZE + MBR_ENTRY_TYPE_OFFSET]
+        for index in range(4)
+    ]
+    if MBR_PROTECTIVE_TYPE in types or not any(types):
+        return None
+    return MBR_ADDRESSABLE_SECTORS * logical_block_size // SYSFS_SECTOR
+
+
 def read_geometry(device, *, sysfs="/sys", opener=None):
     """The real geometry of one partition, from the kernel and the GPT."""
 
@@ -227,6 +263,10 @@ def read_geometry(device, *, sysfs="/sys", opener=None):
         usable_end_sector = max(start_sector + sectors, disk_sectors - reserve)
         usable_end_source = FROM_DISK_END
         tolerance = ALIGNMENT_TOLERANCE_SECTORS + reserve
+        mbr_end = _mbr_addressable_end(disk, logical_block_size, opener=opener)
+        if mbr_end is not None and mbr_end < usable_end_sector:
+            usable_end_sector = max(start_sector + sectors, mbr_end)
+            usable_end_source = FROM_MBR_LIMIT
 
     return PartitionGeometry(
         device=str(device),

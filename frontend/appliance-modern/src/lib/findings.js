@@ -35,6 +35,13 @@ function daemonWords(status) {
   return word("docker", DAEMON_STATES, state) || { key: "common.unknown" };
 }
 
+/** The card the root lives on (status.system.medium), in whole gigabytes. */
+function mediumFacts(status) {
+  const medium = ((status && status.system) || {}).medium || {};
+  const gb = (megabytes) => (Number(megabytes) >= 0 ? Math.round(Number(megabytes) / 1024) : "—");
+  return { root: gb(medium.root_mb), medium: gb(medium.medium_mb), unused: gb(medium.unused_mb) };
+}
+
 function emsContainer(status) {
   const docker = (status && status.docker) || {};
   return (docker.containers || []).find((item) => item.name === docker.ems_container) || {};
@@ -130,6 +137,16 @@ export const FINDINGS = Object.freeze({
     title: words("finding.persistent_storage_low.title"),
     message: words("finding.persistent_storage_low.message"),
     next: words("finding.storage.next"),
+  }),
+  root_not_grown: (status) => ({
+    title: words("finding.root_not_grown.title"),
+    message: words("finding.root_not_grown.message", mediumFacts(status)),
+    next: words("finding.root_not_grown.next"),
+  }),
+  medium_below_minimum: (status) => ({
+    title: words("finding.medium_below_minimum.title"),
+    message: words("finding.medium_below_minimum.message", mediumFacts(status)),
+    next: words("finding.medium_below_minimum.next"),
   }),
   rescue_password_accepted_over_ssh: () => ({
     title: words("finding.rescue_password_accepted_over_ssh.title"),
