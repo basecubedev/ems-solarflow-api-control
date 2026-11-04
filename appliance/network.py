@@ -563,6 +563,14 @@ class NetworkService:
         ssid = target["ssid"]
         previous = target.get("previous_profile") or ""
         passphrase = self._secrets.pop(operation.operation_id, "")
+        # Kept in memory only, so a retry after a restart has none: it dropped
+        # the working link, joined without it, reverted, and blamed the network.
+        if target.get("has_passphrase") and not passphrase:
+            raise NetworkError(
+                "wifi_passphrase_lost",
+                "the WLAN passphrase is kept only until the change runs and was lost when "
+                "the appliance agent restarted; plan the change again",
+            )
 
         self.arm_revert(operation.operation_id, previous)
 

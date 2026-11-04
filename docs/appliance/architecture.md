@@ -194,7 +194,16 @@ cannot be reported as a success.
 - A browser reload restores the current progress from the record.
 - An agent restart turns an interrupted `running` operation into a visible
   `failed_recoverable`, and expires an unconfirmed plan, so the lock is never
-  stuck.
+  stuck. Only an operation interrupted before its first change stays
+  retryable — still at `running`, in preflight, pulling, inspecting or verifying
+  a target image, refreshing the index, or with only a reboot or shutdown
+  requested (`operations.UNTOUCHED_STAGES`);
+  the time zone and the support archive change things at `running` but are
+  idempotent, so a retry repeats them harmlessly. One interrupted after it
+  began to change the host, or while it verified or
+  rolled back, ends `manual_action_required` with
+  `operation_interrupted_after_change`: a retry ran it from the top over a
+  half-made change.
 - A `failed_recoverable` operation has stopped acting on the host, so it does
   not hold the lock: the operator can plan again without cancelling it first.
   It stays retryable in place, and a retry is refused while another operation

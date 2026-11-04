@@ -718,3 +718,27 @@ def test_a_wifi_plan_cancelled_while_it_is_made_keeps_no_passphrase(tmp_path, mo
 
     assert refused.value.code == "operation_cancelled"
     assert services.network._secrets == {}
+
+
+def test_a_wifi_retry_after_a_restart_does_not_join_without_its_passphrase(tmp_path):
+    """The passphrase lives in the agent's memory only. A retry after a
+    restart still dropped the working link, tried to join without it, reverted,
+    and blamed the network for not reaching connectivity."""
+
+    services = build_test_services(tmp_path)
+    handlers = handlers_for(services)
+    planned = handlers.dispatch({"operation": "network.wifi.plan", "ssid": "GuestNet", "passphrase": PASSPHRASE})
+    operation_id = planned["operation"]["operation_id"]
+    services.operations.confirm(operation_id, planned["confirmation_token"])
+    services.operations.recover_interrupted()
+    services.network.discard_secret(operation_id)
+    services.host.calls.clear()
+
+    handlers.dispatch(
+        {"operation": "operations.execute", "operation_id": operation_id, "confirmation_token": planned["confirmation_token"]}
+    )
+
+    record = services.operations.get(operation_id)
+    assert record.state == STATE_FAILED_TERMINAL, record.to_dict()
+    assert record.error["code"] == "wifi_passphrase_lost"
+    assert not [args for tool, args, _ in services.host.calls if tool == "nmcli" and "connect" in args]

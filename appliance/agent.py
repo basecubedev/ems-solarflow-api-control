@@ -695,7 +695,8 @@ class AgentHandlers:
                 result={"blockers": blockers},
             )
             raise AgentError(blockers[0]["code"], blockers[0]["message"])
-        self.services.operations.advance(operation.operation_id, f"{action}_requested", host_down=True)
+        stage = "reboot_requested" if action == "reboot" else "shutdown_requested"
+        self.services.operations.advance(operation.operation_id, stage, host_down=True)
         result = (
             self.services.systemd.reboot() if action == "reboot" else self.services.systemd.shutdown()
         )

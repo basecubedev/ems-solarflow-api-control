@@ -627,3 +627,59 @@ def test_a_plan_cancelled_while_its_planner_runs_keeps_the_slot_until_the_planne
     store.planning_ended(first.operation_id)
 
     assert store.create("updates.repair").state == STATE_PLANNED
+
+
+@pytest.mark.parametrize("stage", ["stopping_admin", "recreating_admin", "installing", "applying_wifi"])
+def test_an_operation_interrupted_after_it_changed_the_appliance_is_not_offered_again(tmp_path, stage):
+    """A retry ran the operation again from the top: an Admin install stopped
+    half way failed its own precondition and then reported the Admin as
+    untouched, with "stopping_admin" in its progress."""
+
+    from appliance.operations import STATE_MANUAL_ACTION_REQUIRED
+
+    store = store_at(tmp_path)
+    record = planned(store)
+    store.confirm(record.operation_id, record.confirmation_token)
+    store.advance(record.operation_id, stage)
+
+    reopened = store_at(tmp_path)
+    reopened.recover_interrupted()
+
+    recovered = reopened.get(record.operation_id)
+    assert recovered.state == STATE_MANUAL_ACTION_REQUIRED, recovered.to_dict()
+    assert recovered.error["code"] == "operation_interrupted_after_change"
+    assert stage in recovered.error["message"]
+
+
+@pytest.mark.parametrize("state", ["verifying", "rolling_back"])
+def test_an_operation_interrupted_while_checking_or_undoing_is_not_retried_as_new(tmp_path, state):
+    from appliance.operations import STATE_MANUAL_ACTION_REQUIRED
+
+    store = store_at(tmp_path)
+    record = planned(store)
+    store.confirm(record.operation_id, record.confirmation_token)
+    store.advance(record.operation_id, "waiting_for_health", state=state if state == "verifying" else None)
+    if state == "rolling_back":
+        store.advance(record.operation_id, "restoring_admin", state="rolling_back")
+
+    reopened = store_at(tmp_path)
+    reopened.recover_interrupted()
+
+    assert reopened.get(record.operation_id).state == STATE_MANUAL_ACTION_REQUIRED
+
+
+def test_every_stage_a_retry_may_start_over_from_is_one_an_executor_names():
+    """The list and the executors are two registries: a stage renamed in one
+    would turn its interruption from retryable into manual, or the reverse."""
+
+    import re
+    from pathlib import Path
+
+    from appliance.operations import UNTOUCHED_STAGES
+
+    source = "\n".join(path.read_text(encoding="utf-8") for path in Path("appliance").glob("*.py"))
+    named = set(re.findall(r'_advance\(\s*operation,\s*"([a-z_]+)"', source))
+    named |= set(re.findall(r'stage = "([a-z_]+)" if action == "reboot" else "([a-z_]+)"', source)[0])
+    named |= {"running"}
+
+    assert UNTOUCHED_STAGES <= named, UNTOUCHED_STAGES - named

@@ -199,8 +199,15 @@ static hostname.
 
 The operation's banner at the top of every page shows the stage and offers
 **Cancel** where the operation can still be interrupted. After an agent restart
-an interrupted operation appears as `failed_recoverable` with
-`operation_interrupted` — acknowledge or cancel it, then start again. A reboot
+an operation interrupted before it changed anything appears as
+`failed_recoverable` with `operation_interrupted` — retry it, or acknowledge or
+cancel it and start again. One interrupted after it began to change the
+appliance — stopping or recreating the Admin, installing packages, joining a
+WLAN — appears as `manual_action_required` with
+`operation_interrupted_after_change`: check what it left (the Admin page, the
+package state, the network), then plan it anew. A WLAN change that needs a
+passphrase is never retried after a restart, because the passphrase was kept in
+memory only. A reboot
 or shutdown is the exception: once the appliance has come back in a new boot it
 counts as done, even when the agent was stopped before it could record that.
 

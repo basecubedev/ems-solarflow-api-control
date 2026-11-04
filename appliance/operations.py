@@ -102,6 +102,24 @@ TRANSITIONS = {
 MAX_PROGRESS_ENTRIES = 200
 MAX_RETAINED_OPERATIONS = 50
 
+# The stages an executor is in before it has changed anything on the host, and
+# a power request, which is safe to ask again. An operation the agent's restart
+# interrupted anywhere else may have left a change half made: a retry ran it
+# from the top again, failed its own precondition, and reported the Admin it
+# had stopped as untouched.
+UNTOUCHED_STAGES = frozenset(
+    {
+        "running",
+        "preflight",
+        "pulling_image",
+        "inspecting_image",
+        "verifying_target_image",
+        "refreshing_index",
+        "reboot_requested",
+        "shutdown_requested",
+    }
+)
+
 BOOT_ID_FILE = Path("/proc/sys/kernel/random/boot_id")
 
 
@@ -567,13 +585,24 @@ class OperationStore:
                     operation.error = None
                     operation.finished_at = self._time()
                     operation.progress.append({"stage": operation.stage, "at": operation.finished_at})
-                elif operation.state in (STATE_RUNNING, STATE_VERIFYING, STATE_ROLLING_BACK):
+                elif operation.state == STATE_RUNNING and operation.stage in UNTOUCHED_STAGES:
                     operation.state = STATE_FAILED_RECOVERABLE
                     operation.stage = "interrupted"
                     operation.error = {
                         "code": "operation_interrupted",
                         "message": "the appliance agent restarted while this operation was running",
                     }
+                elif operation.state in (STATE_RUNNING, STATE_VERIFYING, STATE_ROLLING_BACK):
+                    operation.error = {
+                        "code": "operation_interrupted_after_change",
+                        "message": "the appliance agent restarted while this operation was at "
+                        f"{operation.stage}, after it had begun to change the appliance; it is not "
+                        "run again over a change that may be half made. Check the appliance, "
+                        "then plan the operation anew.",
+                    }
+                    operation.state = STATE_MANUAL_ACTION_REQUIRED
+                    operation.stage = "interrupted"
+                    operation.finished_at = self._time()
                 elif operation.state in (STATE_PLANNED, STATE_AWAITING_CONFIRMATION):
                     operation.state = STATE_CANCELLED
                     operation.stage = "cancelled"
