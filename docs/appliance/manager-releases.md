@@ -169,7 +169,11 @@ package it names, verified the same way — see
 [`../developer/testing.md`](../developer/testing.md). Until a Manager release
 exists it builds its own package from the checkout and says so; that is exit 3
 from `scripts/appliance-fetch-manager-package.py`, deliberately distinct from a
-verification failure, which fails the build.
+verification failure, which fails the build. Exit 3 means only that: no index is
+published, or it names candidates and no stable release. A row the parser
+refuses, a row without a version and a `--version` the index does not list fail
+the build, and a **tagged** build fails on exit 3 too: a release image never
+carries a development Manager.
 
 So the ordering for a first release is: create the identity, cut the Manager
 release, then let the next weekly image pick it up. An image *built* before

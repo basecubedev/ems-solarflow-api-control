@@ -293,7 +293,7 @@ def test_no_published_release_is_a_fallback_and_anything_else_is_a_failure(workf
 
     blocks = run_blocks(workflow, "image")
 
-    assert "3) echo \"::notice::no stable Manager release is published yet" in blocks
+    assert "echo \"::notice::no stable Manager release is published yet" in blocks.split("3)", 1)[1]
     assert "*) echo \"::error::the published Manager package could not be verified\"" in blocks
 
 
@@ -544,3 +544,14 @@ def test_the_jobs_that_make_and_publish_the_image_pin_actions_by_commit(workflow
     assert used
     for reference in used:
         assert IMMUTABLE_PIN.match(reference), reference
+
+
+def test_a_tagged_image_never_carries_a_development_manager(workflow):
+    """Exit 3 lets a weekly build make its own package before the first
+    release; a tagged build is a release, and its Manager has to be one."""
+
+    blocks = run_blocks(workflow, "image")
+    fallback = blocks.split("3)", 1)[1].split(";;", 1)[0]
+
+    assert 'if [ "${GITHUB_REF_TYPE}" = tag ]' in fallback
+    assert "exit 1" in fallback

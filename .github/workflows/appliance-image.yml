@@ -338,7 +338,12 @@ jobs:
           case "${status}" in
             0) echo "EMS_APPLIANCE_MANAGER_PACKAGE=${package}" >> "$GITHUB_ENV"
                echo "the image will carry the published $(basename "${package}")" ;;
-            3) echo "::notice::no stable Manager release is published yet; building one from this checkout" ;;
+            3) # A tagged image is a release, and its Manager has to be one.
+               if [ "${GITHUB_REF_TYPE}" = tag ]; then
+                 echo "::error::a tagged image needs a published Manager release, and none is published"
+                 exit 1
+               fi
+               echo "::notice::no stable Manager release is published yet; building one from this checkout" ;;
             *) echo "::error::the published Manager package could not be verified"; exit 1 ;;
           esac
 
