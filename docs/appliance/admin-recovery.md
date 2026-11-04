@@ -266,6 +266,12 @@ success it did not achieve.
 so a tag that moved in the registry cannot change what a rollback installs. The
 button is disabled when no previous known-good version exists.
 
+When the rolled-back version does not come up healthy, the appliance puts the
+Admin that was running before the rollback back, by the digest it recorded.
+If that Admin verifies again, the operation ends as `rolled_back`: the
+rollback did not happen and nothing was lost. Only when it cannot be restored
+does the operation end as `failed_terminal`.
+
 ### The plan is bound to what it was made against
 
 A confirmed plan carries a fingerprint of everything the operation depends on:

@@ -483,12 +483,10 @@ def test_a_rollback_target_that_fails_health_reports_the_recovery_attempt(tmp_pa
 
     operation = rollback(services)
 
-    assert operation.state == STATE_FAILED_TERMINAL
     assert operation.result["admin_untouched"] is False
-    assert "recovery" in operation.result
-    assert operation.error["message"].endswith(
-        "the previously running Admin was restored"
-    ) or operation.error["message"].endswith("the previous Admin could not be restored")
+    assert operation.result["recovery"]["restored"] is True, operation.result
+    assert operation.state == "rolled_back", operation.to_dict()
+    assert operation.error["message"].endswith("the previously running Admin was restored")
 
 
 def test_automatic_rollback_after_a_failed_install_uses_the_stored_reference(tmp_path):

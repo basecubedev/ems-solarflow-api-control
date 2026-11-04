@@ -1604,8 +1604,8 @@ class AdminLifecycleService:
         }
         self.operations.finish(
             operation.operation_id,
-            STATE_FAILED_TERMINAL,
-            stage="rollback_unhealthy",
+            STATE_ROLLED_BACK if recovery["restored"] else STATE_FAILED_TERMINAL,
+            stage="rolled_back" if recovery["restored"] else "rollback_unhealthy",
             result=payload,
             error={
                 "code": getattr(exc, "code", "rollback_failed"),

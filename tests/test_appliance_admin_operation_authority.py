@@ -14,7 +14,11 @@ import json
 import pytest
 
 from appliance.agent import AgentError, AgentHandlers
-from appliance.operations import STATE_AWAITING_CONFIRMATION, STATE_FAILED_TERMINAL
+from appliance.operations import (
+    STATE_AWAITING_CONFIRMATION,
+    STATE_FAILED_TERMINAL,
+    STATE_ROLLED_BACK,
+)
 from tests.helpers.appliance import (
     ADMIN_CONTAINER,
     ADMIN_REPOSITORY,
@@ -399,6 +403,7 @@ def test_rollback_recovery_restores_the_exact_running_admin(tmp_path):
 
     operation = run_rollback(services, planned)
 
+    assert operation.state == STATE_ROLLED_BACK, operation.to_dict()
     recovery = operation.result["recovery"]
     assert recovery["restored"] is True, recovery
     assert recovery["verification"]["active_digest"] == running, recovery
