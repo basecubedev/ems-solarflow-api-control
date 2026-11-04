@@ -645,3 +645,40 @@ def test_applying_writes_the_acl_watcher_dropin(tmp_path):
     )
 
     assert acl_path_unit_dropin(str(systemd_dir)).is_file()
+
+
+# --- edits the documentation invites -------------------------------------------
+
+
+def test_a_percent_encoded_url_does_not_stop_both_services(tmp_path):
+    """ConfigParser's interpolation raised on `%20`: agent and web both failed
+    to start, and only someone with a shell could fix the file."""
+
+    paths = layout(tmp_path)
+    write_conf(paths, "manager_index_url = https://example.org/ems%20manager/index.json\n")
+
+    assert load_config(paths).manager_index_url == "https://example.org/ems%20manager/index.json"
+
+
+def test_a_comment_behind_a_value_is_a_comment(tmp_path):
+    paths = layout(tmp_path)
+    write_conf(paths, "automatic_security_updates = yes  # turned on by the operator\nweb_port = 8088 ; default\n")
+
+    config = load_config(paths)
+
+    assert config.automatic_security_updates is True
+    assert config.web_port == 8088
+
+
+@pytest.mark.parametrize(
+    "line", ["web_port = -1", "web_port = 70000", "wifi_revert_timeout_seconds = 0", "minimum_free_megabytes = -5"]
+)
+def test_a_number_outside_its_range_is_refused_by_name(tmp_path, line):
+    paths = layout(tmp_path)
+    write_conf(paths, line + "\n")
+
+    with pytest.raises(ConfigError) as excinfo:
+        load_config(paths)
+
+    assert excinfo.value.code == "config_value_invalid"
+    assert line.split(" ")[0] in excinfo.value.message

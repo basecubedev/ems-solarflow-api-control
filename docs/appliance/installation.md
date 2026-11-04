@@ -147,7 +147,14 @@ The last three are **not** under `/etc` on purpose: a packaged copy at
 `/etc/ems-appliance-manager/appliance.conf` would put an operator's edit and a
 package file at the same path, and `dpkg` is entitled to the second.
 `ems-appliance-config-seed.service` creates what is missing from these
-templates, once. The keyring is the exception in the other direction: it is a
+templates, once.
+
+`appliance.conf` is read literally: a `%` is just a percent sign, and a comment
+may follow a value after `#` or `;` (`automatic_security_updates = yes  # on`).
+A port must lie between 1 and 65535 and every timeout must be at least 1; a
+value outside its range, like a security-relevant one the package does not
+support, stops both services with an error naming the key, so a typo cannot
+quietly change what the appliance does. The keyring is the exception in the other direction: it is a
 trust anchor rather than a setting, so it *is* shipped under `/etc` and a local
 edit must not survive an upgrade that rotates the key.
 

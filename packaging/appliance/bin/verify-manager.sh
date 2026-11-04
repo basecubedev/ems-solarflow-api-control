@@ -162,8 +162,9 @@ if [ "$healthy" = yes ]; then
     for service in $SERVICES; do
         SIGNATURE="$SIGNATURE $(systemctl show -p InvocationID -p NRestarts --value "$service" 2>/dev/null | tr '\n' ':')"
     done
-    # configparser's own spellings: either separator, any case of the key.
-    PORT=$(sed -n 's/^[[:space:]]*[Ww][Ee][Bb]_[Pp][Oo][Rr][Tt][[:space:]]*[=:][[:space:]]*\([0-9][0-9]*\)[[:space:]]*$/\1/p' "$CONFIG" 2>/dev/null | tail -n 1)
+    # configparser's own spellings: either separator, any case of the key, and
+    # a comment after the value once whitespace separates it.
+    PORT=$(sed -n 's/^[[:space:]]*[Ww][Ee][Bb]_[Pp][Oo][Rr][Tt][[:space:]]*[=:][[:space:]]*\([0-9][0-9]*\)\([[:space:]][[:space:]]*[#;].*\)\{0,1\}[[:space:]]*$/\1/p' "$CONFIG" 2>/dev/null | tail -n 1)
     if command -v ss >/dev/null 2>&1; then
         ss -Hltn "sport = :${PORT:-8088}" 2>/dev/null | grep -q . || healthy=no
     fi

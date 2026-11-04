@@ -1100,12 +1100,15 @@ def test_a_window_moved_on_while_the_install_ran_is_the_one_the_reverter_judges(
     assert not manager_verify.read_verdict(paths).settled
 
 
-def test_the_web_port_is_read_the_ways_configparser_reads_it(paths, packaged, tmp_path):
+@pytest.mark.parametrize(
+    "line", ["WEB_PORT: 9000", "web_port = 9000  # moved", "web_port = 9000 ; moved"]
+)
+def test_the_web_port_is_read_the_ways_configparser_reads_it(paths, packaged, tmp_path, line):
     deadline_at(paths, packaged, epoch=4_000_000_000)
     tools = tmp_path / "tools"
     log = fake_tools(tools, installed_version="0.2.0")
     config = tmp_path / "appliance.conf"
-    config.write_text("[appliance]\nWEB_PORT: 9000\n", encoding="utf-8")
+    config.write_text(f"[appliance]\n{line}\n", encoding="utf-8")
 
     run_reverter(paths, tools, now=0, config=config)
 
