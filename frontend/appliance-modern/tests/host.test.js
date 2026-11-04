@@ -183,6 +183,7 @@ test("EMS Admin is unknown while the agent cannot say, and missing only when Doc
   assert.equal(adminHealth({ admin: {} }).key, "common.unknown");
   assert.equal(adminHealth(withDocker("inactive", { installed: false })).key, "common.unknown");
   assert.equal(adminHealth({ docker_missing: true, docker: { daemon: { state: "missing" } }, admin: { installed: false } }).key, "common.unknown");
+  assert.equal(adminHealth({ admin: { installed: null, container_state_unknown: true } }).key, "common.unknown");
   assert.equal(adminHealth(withDocker("running", { installed: false })).key, "admin.health.missing");
   assert.equal(adminHealth(withDocker("running", { installed: true, healthy: true })).key, "admin.health.healthy");
   assert.equal(adminHealth(withDocker("running", { installed: true, healthy: false })).key, "admin.health.unhealthy");

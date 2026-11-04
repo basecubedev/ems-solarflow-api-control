@@ -19,6 +19,8 @@ PULL_INTERVAL_SECONDS = 30
 DAEMON_RUNNING = "running"
 DAEMON_STOPPED = "stopped"
 DAEMON_UNAVAILABLE = "unavailable"
+# Asked and not answered in time: not "stopped", and a restart is no repair.
+DAEMON_UNRESPONSIVE = "unresponsive"
 
 CONTAINER_MISSING = "missing"
 CONTAINER_RUNNING = "running"
@@ -109,6 +111,8 @@ class DockerBackend:
         result = self.runner.run("docker", ["version", "--format", "{{.Server.Version}}"], timeout=15)
         if result.ok:
             return {"state": DAEMON_RUNNING, "version": result.stdout.strip(), "error": ""}
+        if result.timed_out:
+            return {"state": DAEMON_UNRESPONSIVE, "version": "", "error": "docker_daemon_timeout"}
         return {
             "state": DAEMON_STOPPED,
             "version": "",

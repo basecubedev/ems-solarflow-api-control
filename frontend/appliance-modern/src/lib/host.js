@@ -9,6 +9,8 @@
 export function dockerCondition(daemonState) {
   if (!daemonState) return "unknown";
   if (daemonState === "running" || daemonState === "unavailable") return daemonState;
+  // Asked and not answered in time: neither running nor stopped.
+  if (daemonState === "unresponsive") return "unknown";
   return "stopped";
 }
 
@@ -42,6 +44,8 @@ export function adminGate(status) {
   const admin = (status && status.admin) || {};
   if (admin.installed === undefined) return "unread";
   if (dockerStopped(status)) return "docker";
+  // null: Docker answered but the container could not be inspected.
+  if (admin.installed === null) return "unread";
   if (admin.bootstrap_required) return "bootstrap";
   if (!admin.installed) return "missing";
   if (adminTransitionLive(status)) return "live";
@@ -51,7 +55,7 @@ export function adminGate(status) {
 /** The installed Admin version, or why there is none: unknown, unknownVersion, notInstalled. */
 export function adminVersion(status) {
   const admin = (status && status.admin) || {};
-  if (admin.installed === undefined || (!admin.installed && dockerStopped(status))) return { key: "admin.version.unknown" };
+  if (admin.installed === undefined || admin.installed === null || (!admin.installed && dockerStopped(status))) return { key: "admin.version.unknown" };
   if (admin.version) return { text: admin.version };
   return { key: admin.installed ? "admin.version.unknownVersion" : "admin.version.notInstalled" };
 }
@@ -64,7 +68,7 @@ const UNKNOWN = Object.freeze({ key: "common.unknown", tone: "c-idle" });
  */
 export function adminHealth(status) {
   const value = (status && status.admin) || {};
-  if (value.installed === undefined || (!value.installed && dockerStopped(status))) return UNKNOWN;
+  if (value.installed === undefined || value.installed === null || (!value.installed && dockerStopped(status))) return UNKNOWN;
   if (!value.installed) return { key: "admin.health.missing", tone: "c-warn" };
   return value.healthy ? { key: "admin.health.healthy", tone: "c-ok" } : { key: "admin.health.unhealthy", tone: "c-fault" };
 }

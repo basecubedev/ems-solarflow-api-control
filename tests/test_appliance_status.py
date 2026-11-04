@@ -999,3 +999,48 @@ def test_only_the_newest_support_archives_are_kept(tmp_path):
     kept = sorted(item.name for item in services.paths.support_dir.glob("support-*.tar.gz"))
     expected = sorted(f"support-{item.operation_id}.tar.gz" for item in made[-3:])
     assert kept == expected
+
+
+# --- a Docker answer that did not come is not an answer -------------------
+
+
+def test_an_admin_whose_container_could_not_be_inspected_is_not_reported_missing(tmp_path):
+    """docker version answered, docker inspect failed: the container came back
+    absent, and the overview said "No EMS Admin is installed ... repair it"."""
+
+    services = appliance(tmp_path)
+    original = services.host._docker
+
+    def inspect_fails(args):
+        if args[:1] == ["inspect"] and "container" in args:
+            return services.host._result("docker", args, 1, "", "context deadline exceeded")
+        return original(args)
+
+    services.host._docker = inspect_fails
+
+    status = services.status.overview()
+    codes = {item["code"] for item in status["health"]["warnings"]}
+
+    assert "admin_not_installed" not in codes, codes
+    assert "container_state_unknown" in codes, codes
+    assert status["admin"]["bootstrap_required"] is False
+
+
+def test_a_docker_that_answers_too_late_is_not_called_stopped(tmp_path):
+    services = appliance(tmp_path)
+    original = services.host._docker
+
+    def version_times_out(args):
+        if args[:1] == ["version"]:
+            return services.host._result("docker", args, 124, "", "timed out", timed_out=True)
+        return original(args)
+
+    services.host._docker = version_times_out
+
+    status = services.status.overview()
+    codes = {item["code"] for item in status["health"]["warnings"]}
+
+    assert status["docker"]["daemon"]["state"] == "unresponsive"
+    assert "docker_not_running" not in codes, codes
+    assert "docker_unresponsive" in codes, codes
+

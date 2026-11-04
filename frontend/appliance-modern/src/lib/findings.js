@@ -53,6 +53,16 @@ function emsContainer(status) {
  * this table in both directions.
  */
 export const FINDINGS = Object.freeze({
+  docker_unresponsive: () => ({
+    title: words("finding.docker_unresponsive.title"),
+    message: words("finding.docker_unresponsive.message"),
+    next: words("finding.docker_unresponsive.next"),
+  }),
+  container_state_unknown: (status, finding) => ({
+    title: words("finding.container_state_unknown.title"),
+    message: words("finding.container_state_unknown.message", { name: (finding && finding.facts && finding.facts.name) || "—" }),
+    next: words("finding.container_state_unknown.next"),
+  }),
   docker_not_running: (status) => ({
     title: words("finding.docker_not_running.title"),
     message: words("finding.docker_not_running.message", { state: daemonWords(status) }),

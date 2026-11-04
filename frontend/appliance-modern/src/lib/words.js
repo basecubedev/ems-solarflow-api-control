@@ -9,7 +9,7 @@
 export const CONTAINER_STATES = Object.freeze(["created", "running", "restarting", "exited", "paused", "dead", "removing", "missing"]);
 
 /** The Docker daemon's states (appliance/docker_backend.py DAEMON_*). */
-export const DAEMON_STATES = Object.freeze(["running", "stopped", "unavailable"]);
+export const DAEMON_STATES = Object.freeze(["running", "stopped", "unavailable", "unresponsive"]);
 
 /** NetworkManager's device states, as the network section reports them. */
 export const DEVICE_STATES = Object.freeze(["connected", "connecting", "disconnected", "unavailable", "unmanaged"]);

@@ -12,7 +12,12 @@ import time
 
 from appliance import manager_verify, media_sizing, rescue_account, validation
 from appliance.config import effective_timezone
-from appliance.docker_backend import CONTAINER_RUNNING, DAEMON_RUNNING
+from appliance.docker_backend import (
+    CONTAINER_RUNNING,
+    DAEMON_RUNNING,
+    DAEMON_UNRESPONSIVE,
+    DockerError,
+)
 from appliance.packages import UPDATE_CHECK_FAILED
 from appliance.redaction import bounded_redacted_log
 from appliance.ssh_policy import REFUSAL_ACCEPTED, REFUSAL_UNKNOWN
@@ -68,8 +73,8 @@ SECTION_LABELS = {
 }
 
 
-def finding(code, severity, section, title, message, next_step):
-    return {
+def finding(code, severity, section, title, message, next_step, *, facts=None):
+    record = {
         "code": code,
         "severity": severity,
         "section": section,
@@ -77,12 +82,28 @@ def finding(code, severity, section, title, message, next_step):
         "message": message,
         "next_step": next_step,
     }
+    if facts:
+        record["facts"] = facts
+    return record
 
 
 def _missing_admin_next_step(admin):
     if admin.get("bootstrap_required"):
         return "Open Admin and install it; that is where an EMS is set up."
     return "Open Admin and repair it; choosing a version on Updates also recreates it."
+
+
+def _container_unknown(name, view):
+    return finding(
+        "container_state_unknown",
+        FINDING_WARNING,
+        view,
+        "A container's state could not be read",
+        f"Docker answered, but asking it about {name} failed, so whether it runs is unknown.",
+        "Reload in a minute. If it stays like this, collect a support archive in "
+        "Diagnostics; nothing here is reported as missing on this alone.",
+        facts={"name": name},
+    )
 
 
 def _docker_known_down(admin):
@@ -243,7 +264,12 @@ class StatusService:
         containers = []
         if daemon["state"] == DAEMON_RUNNING:
             for name in self.config.managed_containers:
-                containers.append(self.docker.inspect_container(name).to_dict())
+                try:
+                    containers.append(self.docker.inspect_container(name, strict=True).to_dict())
+                except DockerError as exc:
+                    containers.append(
+                        {"name": name, "exists": None, "state": "unknown", "error": exc.code}
+                    )
         # The list is the configured set; which of them is the EMS is said
         # here too, so the console never picks it by a name pattern.
         return {
@@ -427,7 +453,20 @@ class StatusService:
         docker = sections.get("docker", {})
         if docker.get("status") == SECTION_OK:
             daemon = docker.get("daemon", {})
-            if daemon.get("state") != DAEMON_RUNNING:
+            if daemon.get("state") == DAEMON_UNRESPONSIVE:
+                findings.append(
+                    finding(
+                        "docker_unresponsive",
+                        FINDING_WARNING,
+                        VIEW_DIAGNOSTICS,
+                        "Docker does not answer in time",
+                        "The container engine was asked and did not answer within 15 seconds; "
+                        "that is a busy or stuck engine, not a stopped one.",
+                        "Reload in a minute. If it stays like this, collect a support archive "
+                        "in Diagnostics before restarting anything.",
+                    )
+                )
+            elif daemon.get("state") != DAEMON_RUNNING:
                 findings.append(
                     finding(
                         "docker_not_running",
@@ -449,6 +488,9 @@ class StatusService:
             for container in docker.get("containers", []) or []:
                 if container.get("name") != self.config.ems_container:
                     continue
+                if container.get("exists") is None:
+                    findings.append(_container_unknown(container.get("name"), VIEW_OVERVIEW))
+                    continue
                 if not container.get("exists") or container.get("state") == CONTAINER_RUNNING:
                     continue
                 findings.append(
@@ -469,7 +511,11 @@ class StatusService:
         # A stopped daemon hides every container; docker_not_running says so, and
         # "no Admin installed" would be false.
         if admin.get("status") == SECTION_OK and not _docker_known_down(admin):
-            if not admin.get("installed"):
+            if admin.get("container_state_unknown"):
+                findings.append(
+                    _container_unknown(self.config.admin_container, VIEW_ADMIN)
+                )
+            elif not admin.get("installed"):
                 findings.append(
                     finding(
                         "admin_not_installed",

@@ -123,7 +123,9 @@ def test_docker_down_is_reported_not_crashed(tmp_path):
     services.host.docker_running = False
     detected = services.admin.detect()
     assert detected["docker"]["state"] == "stopped"
-    assert detected["installed"] is False
+    # A daemon that does not answer cannot say the Admin is absent.
+    assert detected["installed"] is None
+    assert detected["bootstrap_required"] is False
 
 
 # --- target validation -----------------------------------------------------
@@ -1382,3 +1384,31 @@ def test_an_install_plan_going_forward_has_no_warning(tmp_path):
 
     assert plan["direction"] == "upgrade"
     assert not plan.get("warning")
+@pytest.mark.parametrize(
+    "request_",
+    [
+        {"operation": "admin.plan_install", "channel": "exact", "tag": "v1.1.0"},
+        {"operation": "admin.plan_rollback"},
+        {"operation": "admin.plan_lifecycle", "action": "restart"},
+    ],
+)
+def test_an_admin_plan_is_refused_while_the_container_cannot_be_inspected(tmp_path, request_):
+    """An inspect that failed read as "no Admin": the plan recorded an empty
+    recovery identity, so a failed install could not put the running Admin back."""
+
+    services = healthy_appliance(tmp_path)
+    services.host.publish_image("v1.1.0")
+    original = services.host._docker
+
+    def inspect_fails(args):
+        if args[:1] == ["inspect"] and "container" in args:
+            return services.host._result("docker", args, 1, "", "context deadline exceeded")
+        return original(args)
+
+    services.host._docker = inspect_fails
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    with pytest.raises(AgentError) as excinfo:
+        handlers.dispatch(dict(request_))
+
+    assert excinfo.value.code == "container_state_unknown", excinfo.value.message

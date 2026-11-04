@@ -40,6 +40,7 @@ from appliance.docker_backend import (
     HEALTH_NONE,
     HEALTH_STARTING,
     HEALTH_UNHEALTHY,
+    ContainerState,
     DockerError,
 )
 from appliance.known_good import HEALTHCHECK_PASSED
@@ -378,7 +379,15 @@ class AdminLifecycleService:
 
         daemon = self.docker.daemon_state()
         deployment = self.deployment()
-        container = self.docker.inspect_container(self.config.admin_container)
+        # Strict: an inspect that failed is not an absent container, and
+        # reading it as one reported "No EMS Admin is installed" and offered a
+        # first installation over a running one.
+        state_unknown = False
+        try:
+            container = self.docker.inspect_container(self.config.admin_container, strict=True)
+        except DockerError:
+            state_unknown = True
+            container = ContainerState(name=self.config.admin_container)
 
         image = None
         if container.exists and container.image:
@@ -390,7 +399,8 @@ class AdminLifecycleService:
         version = str(labels.get(LABEL_VERSION) or "")
 
         record = {
-            "installed": bool(container.exists),
+            "installed": None if state_unknown else bool(container.exists),
+            "container_state_unknown": state_unknown,
             "docker": daemon,
             "container": container.to_dict(),
             "deployment": deployment.to_dict(),
@@ -407,7 +417,9 @@ class AdminLifecycleService:
         # A flashed appliance has an empty deployment root: no compose file
         # names the Admin service, and no container was ever created from one.
         # That is the only state a first installation may create files in.
-        record["bootstrap_required"] = not deployment.service_defined and not container.exists
+        record["bootstrap_required"] = (
+            not state_unknown and not deployment.service_defined and not container.exists
+        )
         record["restart_policy"] = restart_policy_state(deployment, container)
         record["transition"] = admin_transition.read_transition(
             admin_transition.transition_path(self.paths, deployment)
@@ -1883,6 +1895,12 @@ class AdminLifecycleService:
         if state["docker"]["state"] != DAEMON_RUNNING:
             raise AdminLifecycleError(
                 "docker_unavailable", "the Docker daemon is not running; start Docker first"
+            )
+        if state.get("container_state_unknown"):
+            raise AdminLifecycleError(
+                "container_state_unknown",
+                "Docker did not say whether the Admin container exists; "
+                "check Docker and plan again",
             )
 
     def _require_deployment(self, state):
