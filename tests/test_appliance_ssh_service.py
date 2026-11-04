@@ -800,3 +800,78 @@ def test_revoke_all_names_the_lines_it_removes_that_cannot_be_shown(tmp_path):
 
     assert planned["plan"]["key_count"] == 0
     assert planned["plan"]["unparsed_lines"] == 1
+
+
+# --- a key set aside by a fail-closed disable is still the operator's to see --
+
+
+def set_aside_backup_key(services):
+    """What the OnFailure unit leaves after a failed export: the key moved aside."""
+
+    from appliance.backup_confinement import DISABLED_SUFFIX
+
+    plan_and_execute(services, "ssh.plan_key_add", account="ems-backup", public_key=ED25519)
+    ssh_dir = services.ssh.keystore("ems-backup").ssh_dir
+    (ssh_dir / "authorized_keys").rename(ssh_dir / ("authorized_keys" + DISABLED_SUFFIX))
+    return ssh_dir
+
+
+def test_a_key_that_was_set_aside_is_listed_as_set_aside(tmp_path):
+    """The card showed 0 keys while the next activation would bring one back."""
+
+    services = appliance(tmp_path)
+    set_aside_backup_key(services)
+
+    accounts = {item["name"]: item for item in services.ssh.status()["accounts"]}
+
+    assert accounts["ems-backup"]["key_count"] == 0
+    assert [key["fingerprint"].startswith("SHA256:") for key in accounts["ems-backup"]["set_aside_keys"]] == [True]
+
+
+def test_a_key_that_was_set_aside_can_be_removed_before_it_comes_back(tmp_path):
+    from appliance.backup_confinement import DISABLED_SUFFIX
+
+    services = appliance(tmp_path)
+    ssh_dir = set_aside_backup_key(services)
+    fingerprint = services.ssh.status()["accounts"][0]["set_aside_keys"][0]["fingerprint"]
+
+    operation, _ = plan_and_execute(
+        services, "ssh.plan_key_remove", account="ems-backup", fingerprint=fingerprint
+    )
+
+    assert operation.state == "succeeded", operation.to_dict()
+    preserved = (ssh_dir / ("authorized_keys" + DISABLED_SUFFIX)).read_text(encoding="utf-8")
+    assert ED25519.split()[1] not in preserved
+    accounts = {item["name"]: item for item in services.ssh.status()["accounts"]}
+    assert accounts["ems-backup"]["set_aside_keys"] == []
+
+
+def test_revoking_every_key_reaches_the_keys_set_aside_too(tmp_path):
+    from appliance.backup_confinement import DISABLED_SUFFIX
+
+    services = appliance(tmp_path)
+    ssh_dir = set_aside_backup_key(services)
+
+    plan_and_execute(services, "ssh.plan_revoke_all", account="ems-backup")
+
+    assert not (ssh_dir / ("authorized_keys" + DISABLED_SUFFIX)).exists()
+
+
+def test_revoking_every_key_deletes_the_set_aside_and_conflict_files(tmp_path):
+    """Emptied, they were still recognised by name: activation refused with
+    key_conflict and a new key with backup_access_withdrawn, for good."""
+
+    from appliance.backup_confinement import CONFLICT_SUFFIX, DISABLED_SUFFIX
+
+    services = appliance(tmp_path)
+    ssh_dir = set_aside_backup_key(services)
+    conflict = ssh_dir / ("authorized_keys" + DISABLED_SUFFIX + CONFLICT_SUFFIX)
+    conflict.write_text(ED25519 + "\n", encoding="utf-8")
+
+    plan_and_execute(services, "ssh.plan_revoke_all", account="ems-backup")
+
+    assert not (ssh_dir / ("authorized_keys" + DISABLED_SUFFIX)).exists()
+    assert not conflict.exists()
+    services.operations.acknowledge(services.operations.list()[0].operation_id)
+    operation, _ = plan_and_execute(services, "ssh.plan_key_add", account="ems-backup", public_key=ED25519)
+    assert operation.state == "succeeded", operation.to_dict()

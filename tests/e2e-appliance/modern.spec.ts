@@ -746,6 +746,19 @@ test.describe("access, network and diagnostics", () => {
     await expect(page.getByTestId("ssh-unparsed-lines")).toHaveCount(0);
   });
 
+  test("a key set aside by a failed export is shown and can be removed before it returns", async ({ page, request }) => {
+    await resetAppliance(request, { set_aside_keys: [PUBLIC_KEY] });
+    await createPassword(page);
+    await open(page, "access");
+    await expect(page.getByTestId("ssh-set-aside-note")).toBeVisible();
+    await expect(page.getByTestId("ssh-set-aside-table")).toContainText("appliance-test@example.invalid");
+    await page.getByTestId("ssh-remove-set-aside-key").click();
+    await expect(page.getByTestId("plan-dialog")).toBeVisible();
+    await confirmPlan(page);
+    await settled(page);
+    await expect(page.getByTestId("ssh-set-aside-table")).toHaveCount(0, { timeout: 15_000 });
+  });
+
   test("a private key is refused with the appliance's reason", async ({ page }) => {
     await createPassword(page);
     await open(page, "access");

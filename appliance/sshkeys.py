@@ -178,10 +178,13 @@ def _entry_mode(directory, name):
 class AuthorizedKeysStore:
     """Read and atomically rewrite one account's ``authorized_keys``."""
 
-    def __init__(self, home, *, owner_uid=None, owner_gid=None):
+    def __init__(self, home, *, owner_uid=None, owner_gid=None, name="authorized_keys"):
         self.home = Path(home)
         self.owner_uid = owner_uid
         self.owner_gid = owner_gid
+        # Another file in .ssh, read and rewritten the same way: a key file a
+        # fail-closed disable set aside is still the operator's to manage.
+        self.name = name
 
     @property
     def ssh_dir(self):
@@ -189,7 +192,7 @@ class AuthorizedKeysStore:
 
     @property
     def path(self):
-        return self.ssh_dir / "authorized_keys"
+        return self.ssh_dir / self.name
 
     def list(self):
         return parse_authorized_keys(self._text())
@@ -328,6 +331,20 @@ class AuthorizedKeysStore:
 
         return unparsed_lines(self._text())
 
+    def discard(self):
+        """Delete this key file, as the entry it is, through the ``.ssh`` descriptor."""
+
+        directory = self._open_ssh_dir(create=False)
+        if directory is None:
+            return False
+        try:
+            os.unlink(self.path.name, dir_fd=directory)
+            return True
+        except FileNotFoundError:
+            return False
+        finally:
+            os.close(directory)
+
     def foreign(self):
         """The unmanaged lines sshd will still honour: every one but comments."""
 
@@ -349,7 +366,7 @@ class AuthorizedKeysStore:
         try:
             os.fchmod(directory, SSH_DIR_MODE)
             self._own(directory)
-            tmp = f".authorized_keys.{secrets.token_hex(8)}.tmp"
+            tmp = f".{self.name}.{secrets.token_hex(8)}.tmp"
             descriptor = os.open(
                 tmp,
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,

@@ -293,6 +293,8 @@ def main():
         for account in services.config.ssh_key_accounts:
             try:
                 services.ssh.keystore(account).revoke_all()
+                for aside in services.ssh.set_aside_stores(account):
+                    aside.path.unlink(missing_ok=True)
             except Exception:
                 continue
         if options.get("authorized_keys"):
@@ -302,6 +304,16 @@ def main():
             store.ssh_dir.mkdir(parents=True, exist_ok=True)
             store.path.write_text("".join(f"{line}\n" for line in options["authorized_keys"]), encoding="utf-8")
             os.chmod(store.path, 0o600)
+        if options.get("set_aside_keys"):
+            # What a failed export's OnFailure unit leaves: the key file moved
+            # out of sshd's reach, to come back with the next activation.
+            from appliance.backup_confinement import DISABLED_SUFFIX
+
+            store = services.ssh.keystore(services.config.backup_user)
+            store.ssh_dir.mkdir(parents=True, exist_ok=True)
+            aside = store.ssh_dir / (store.path.name + DISABLED_SUFFIX)
+            aside.write_text("".join(f"{line}\n" for line in options["set_aside_keys"]), encoding="utf-8")
+            os.chmod(aside, 0o600)
         host.units["ssh.service"] = {"active": "inactive", "enabled": "disabled"}
         host.sshd_backup_match = SSHD_BACKUP_MATCH.format(export_root=services.paths.export_root)
         host.ss_exit_code, host.ss_stderr, host.listening_ports = 0, "", ""

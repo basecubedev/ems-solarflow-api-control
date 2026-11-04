@@ -149,10 +149,36 @@
         </table>
       </div>
     {/if}
+    {#if item.exists && (item.set_aside_keys || []).length}
+      <p class="note warn" data-testid="ssh-set-aside-note"><Icon name="triangle-alert" />{t("access.setAside")}</p>
+      <div class="table-scroll">
+        <table class="data" data-testid="ssh-set-aside-table">
+          <thead><tr><th>{t("access.keyType")}</th><th>{t("access.keyComment")}</th><th>{t("access.fingerprint")}</th><th class="r">{t("access.action")}</th></tr></thead>
+          <tbody>
+            {#each item.set_aside_keys as key, row (row)}
+              <tr>
+                <td>{key.key_type}</td>
+                <td>{key.comment || "—"}</td>
+                <td class="mono">{key.fingerprint}</td>
+                <td class="r">
+                  <PlanButton
+                    plan={{ key: `key-aside-remove-${index}-${row}`, endpoint: "/api/ssh/keys/remove-plan", body: { account: item.name, fingerprint: key.fingerprint }, title: { key: "plan.title.keyRemove" }, confirm: "plan.remove", danger: true }}
+                    label={t("access.remove")}
+                    icon="trash-2"
+                    variant="secondary"
+                    testid="ssh-remove-set-aside-key"
+                  />
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
     {#if item.exists && item.unparsed_key_lines > 0}
       <p class="note warn" data-testid="ssh-unparsed-lines"><Icon name="triangle-alert" />{tn("access.unparsedLines", item.unparsed_key_lines)}</p>
     {/if}
-    {#if item.exists && ((item.keys || []).length || item.unparsed_key_lines > 0)}
+    {#if item.exists && ((item.keys || []).length || (item.set_aside_keys || []).length || item.unparsed_key_lines > 0)}
       <div class="row-wrap">
         <PlanButton
           plan={{ key: `key-revoke-${index}`, endpoint: "/api/ssh/keys/revoke", body: { account: item.name }, title: { key: "plan.title.revokeAll" }, confirm: "plan.remove", danger: true }}

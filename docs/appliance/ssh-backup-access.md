@@ -392,9 +392,14 @@ and the account is expired. The UI then reports the reason by name. The
 appliance never reports confined, read-only access as active on the strength of
 a file it wrote.
 
+A key set aside this way is not gone: the next successful activation puts it
+back. The **Keys for ems-backup** card therefore lists such keys under their
+own note, each with **Remove**, and **Revoke every key** clears the set-aside
+files as well, so a key that should not return can be taken out before it does.
+
 Adding a key to the backup account is refused while that is the case: with a
 disabled or conflicting key file present the agent answers
-`backup_access_withdrawn`, and while the running daemon does not report the
+`backup_access_withdrawn`, and while sshd's configuration does not report the
 account's confinement it answers `backup_confinement_not_confirmed`. A new key
 never becomes the one file sshd reads in place of a withdrawn one. Removing a
 key is always allowed.

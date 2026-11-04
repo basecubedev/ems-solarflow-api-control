@@ -169,6 +169,31 @@ class SshService:
             )
         return AuthorizedKeysStore(account.home, owner_uid=account.uid, owner_gid=account.gid)
 
+    def set_aside_stores(self, name):
+        """The key files a fail-closed disable moved out of sshd's reach.
+
+        The next successful activation puts the preserved one back, so a key in
+        it is not gone: it is waiting, and the operator has to be able to see
+        it and remove it before it returns.
+        """
+
+        from appliance.backup_confinement import CONFLICT_SUFFIX, DISABLED_SUFFIX
+
+        if name != self.config.backup_user:
+            return []
+        store = self.keystore(name)
+        preserved = store.path.name + DISABLED_SUFFIX
+        names = sorted(
+            entry for entry in store.entries()
+            if entry == preserved or entry.startswith(preserved + CONFLICT_SUFFIX)
+        )
+        return [
+            AuthorizedKeysStore(
+                store.home, owner_uid=store.owner_uid, owner_gid=store.owner_gid, name=entry
+            )
+            for entry in names
+        ]
+
     def effective_config(self, user=None):
         """The configuration sshd would apply, optionally for one account.
 
@@ -234,6 +259,7 @@ class SshService:
             entry["keys_refused"] = refusal
             entry["keys"] = keys
             entry["key_count"] = len(keys)
+            entry["set_aside_keys"] = self._set_aside_keys(name) if account.exists else []
             # Options-prefixed, certificate or unsupported key lines: sshd
             # honours them, this console cannot show them, and only revoking
             # every key reaches them.
@@ -349,9 +375,18 @@ class SshService:
     def plan_key_remove(self, operation, *, account, fingerprint):
         store = self.keystore(account)
         match = next((item for item in store.list() if item.fingerprint == fingerprint), None)
+        source = store.path.name
+        if match is None:
+            for aside in self.set_aside_stores(account):
+                match = next(
+                    (item for item in aside.list() if item.fingerprint == fingerprint), None
+                )
+                if match is not None:
+                    source = aside.path.name
+                    break
         if match is None:
             raise SshServiceError("unknown_public_key", "no authorized key with that fingerprint")
-        values = {"account": account, "fingerprint": fingerprint}
+        values = {"account": account, "fingerprint": fingerprint, "key_file": source}
         operation.requested_target.update(values)
         self.operations.update_target(operation.operation_id, values)
         return {"type": TYPE_SSH_KEY_REMOVE, "account": account, "key": match.to_dict()}
@@ -497,6 +532,12 @@ class SshService:
         account = operation.requested_target["account"]
         fingerprint = operation.requested_target["fingerprint"]
         store = self.keystore(account)
+        key_file = operation.requested_target.get("key_file") or store.path.name
+        if key_file != store.path.name:
+            store = next(
+                (aside for aside in self.set_aside_stores(account) if aside.path.name == key_file),
+                store,
+            )
         self._advance(operation, "writing_authorized_keys")
         withdrawn = [key.blob for key in store.list() if key.fingerprint == fingerprint]
         try:
@@ -525,6 +566,14 @@ class SshService:
         self._advance(operation, "writing_authorized_keys")
         withdrawn = [key.blob for key in store.list()]
         removed = store.revoke_all()
+        # A key set aside comes back with the next activation; "every key"
+        # includes it.
+        for aside in self.set_aside_stores(account):
+            withdrawn.extend(key.blob for key in aside.list())
+            removed += len(aside.list()) + len(aside.unparsed())
+            # Deleted, not emptied: a preserved or conflict file is recognised
+            # by its name, and an empty one still blocks activation and keys.
+            aside.discard()
         self._attribute(account, withdrawn, managed=False)
         payload = {
             "account": account,
@@ -534,6 +583,16 @@ class SshService:
         }
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
         return payload
+
+    def _set_aside_keys(self, name):
+        try:
+            return [
+                {**key.to_dict(), "key_file": aside.path.name}
+                for aside in self.set_aside_stores(name)
+                for key in aside.list()
+            ]
+        except (SshServiceError, ValidationError):
+            return []
 
     def _end_sessions(self, accounts):
         """End each account's open sessions; what was done, per account.
