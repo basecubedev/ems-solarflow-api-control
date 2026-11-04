@@ -8,6 +8,7 @@ import os
 import sqlite3
 import threading
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import NamedTuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -152,6 +153,9 @@ class DashboardStore:
         # map and the finished summary are cached here and dropped on write.
         self._coverage = None
         self._summary = None
+        self._consumer_cache = None
+        self._consumer_past = None
+        self._consumer_month_start = ""
         self._schema_ready = True
 
         parent = os.path.dirname(self.path)
@@ -268,6 +272,33 @@ class DashboardStore:
                 f"ADD COLUMN {column} REAL NOT NULL DEFAULT 0"
             )
 
+        # One row per consumer and day: what it drew, the grid's part of it
+        # (ems.energy_channels.home_grid_share) and both priced at the day's
+        # price, as the cost it caused and the cost the installation saved.
+        # ``consumer`` is its history key (consumer_history_key), ``name``
+        # what it was called that day.
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS daily_consumer_energy (
+                date TEXT NOT NULL,
+                consumer TEXT NOT NULL,
+                name TEXT NOT NULL DEFAULT '',
+                energy_wh REAL NOT NULL DEFAULT 0,
+                grid_wh REAL NOT NULL DEFAULT 0,
+                cost_value REAL NOT NULL DEFAULT 0,
+                savings_value REAL NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(date, consumer)
+            )
+        """)
+        # A table created before it recorded names gets the column; its rows
+        # read as their key until the consumer draws again.
+        if "name" not in {
+            row[1] for row in con.execute("PRAGMA table_info(daily_consumer_energy)")
+        }:
+            con.execute(
+                "ALTER TABLE daily_consumer_energy "
+                "ADD COLUMN name TEXT NOT NULL DEFAULT ''"
+            )
         con.execute("""
             CREATE TABLE IF NOT EXISTS energy_channel_coverage (
                 channel TEXT PRIMARY KEY,
@@ -401,12 +432,14 @@ class DashboardStore:
             self._latest = None
             self._coverage = None
             self._summary = None
+            self._consumer_past = None
             try:
                 yield
             finally:
                 self._latest = None
                 self._coverage = None
                 self._summary = None
+                self._consumer_past = None
                 # The restored file can come from an older version, and this
                 # store outlives the swap. Without bringing the schema forward
                 # here, every later record() raises on a missing column until
@@ -543,6 +576,9 @@ class DashboardStore:
                 updated_at,
                 charge_delta_wh,
                 grid_to_battery_wh,
+            )
+            self._record_consumer_energy(
+                con, snapshot, date_key, elapsed_hours, updated_at
             )
             self._record_channel_coverage(con, date_key, updated_at, measured)
         elif elapsed_hours > 0:
@@ -736,9 +772,165 @@ class DashboardStore:
             ),
         )
 
+    def _record_consumer_energy(self, con, snapshot, date_key, elapsed_hours, updated_at):
+        """Integrate each reading consumer over the interval its sample closes."""
+
+        consumers = snapshot.get("consumers")
+        if not isinstance(consumers, dict):
+            return
+        share = _energy_channels_module().home_grid_share(snapshot)
+        row = con.execute(
+            "SELECT price_per_kwh FROM daily_energy_stats WHERE date = ?",
+            (date_key,),
+        ).fetchone()
+        price_per_kwh = _as_float(row[0], 0.0, minimum=0) if row else 0.0
+        for key, consumer in consumers.items():
+            power_w = (consumer or {}).get("power_w")
+            if not isinstance(key, str) or power_w is None:
+                continue
+            name = consumer.get("name")
+            energy_wh = max(0.0, _as_float(power_w, 0.0)) * elapsed_hours
+            grid_wh = energy_wh * share
+            con.execute(
+                """
+                INSERT INTO daily_consumer_energy(
+                    date, consumer, name, energy_wh, grid_wh, cost_value,
+                    savings_value, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(date, consumer) DO UPDATE SET
+                    name = excluded.name,
+                    energy_wh = daily_consumer_energy.energy_wh
+                        + excluded.energy_wh,
+                    grid_wh = daily_consumer_energy.grid_wh + excluded.grid_wh,
+                    cost_value = daily_consumer_energy.cost_value
+                        + excluded.cost_value,
+                    savings_value = daily_consumer_energy.savings_value
+                        + excluded.savings_value,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    date_key,
+                    key,
+                    name if isinstance(name, str) and name else key,
+                    energy_wh,
+                    grid_wh,
+                    grid_wh / 1000.0 * price_per_kwh,
+                    (energy_wh - grid_wh) / 1000.0 * price_per_kwh,
+                    updated_at,
+                ),
+            )
+        # A sample of an earlier month, recorded once a summary of the next
+        # had kept that month, changes what was kept.
+        if self._consumer_past is not None and date_key < self._consumer_past[0][0]:
+            self._consumer_past = None
+
+    def _consumer_totals(self, con, start_date, end_date):
+        """``history key -> totals`` of every consumer that drew in the range.
+
+        Each carries the name and the day it was last recorded under, in any
+        range: a renamed consumer is called by its new name in every period,
+        and one that is gone says until when it drew.
+        """
+
+        rows = con.execute(
+            """
+            SELECT consumer, SUM(energy_wh), SUM(grid_wh), SUM(cost_value),
+                SUM(savings_value)
+            FROM daily_consumer_energy
+            WHERE date BETWEEN ? AND ?
+            GROUP BY consumer
+            ORDER BY consumer
+            """,
+            (start_date, end_date),
+        ).fetchall()
+        _months, last = self._consumer_months(con)
+        return {key: _consumer_entry(key, sums, last) for key, *sums in rows}
+
+    def _consumer_months(self, con):
+        """``(year, month) -> history key -> sums`` and ``history key -> (name, last day)``.
+
+        Read once per summary, so the months, the years and the lifetime are
+        added up from it rather than each scanning every day of every consumer
+        again. The months before this one hardly change: they are kept with the
+        number of their rows and the highest row id, read from the index, and
+        read again when either moved -- a file restored by another process --
+        or a sample for an earlier day came in late; only this month is read
+        on every summary.
+        """
+
+        if self._consumer_cache is None:
+            first = self._consumer_month_start
+            mark = (first, *con.execute(
+                "SELECT COUNT(*), MAX(rowid) FROM daily_consumer_energy WHERE date < ?",
+                (first,),
+            ).fetchone())
+            if self._consumer_past is None or self._consumer_past[0] != mark:
+                self._consumer_past = (mark, *self._consumer_scan(con, "date < ?", first))
+            _mark, past_months, past_last = self._consumer_past
+            months, last = self._consumer_scan(con, "date >= ?", first)
+            self._consumer_cache = ({**past_months, **months}, {**past_last, **last})
+        return self._consumer_cache
+
+    @staticmethod
+    def _consumer_scan(con, where, first):
+        months = {}
+        last = {}
+        for year, month, key, *sums, name, last_date in con.execute(
+            f"""
+            SELECT CAST(substr(date, 1, 4) AS INTEGER),
+                CAST(substr(date, 6, 2) AS INTEGER), consumer,
+                SUM(energy_wh), SUM(grid_wh), SUM(cost_value),
+                SUM(savings_value), name, MAX(date)
+            FROM daily_consumer_energy
+            WHERE {where}
+            GROUP BY 1, 2, consumer
+            """,
+            (first,),
+        ):
+            months.setdefault((year, month), {})[key] = sums
+            if key not in last or last_date > last[key][1]:
+                last[key] = (name, last_date)
+        return months, last
+
+    def _consumer_rollup(self, con, part, keep=None):
+        """Consumer totals added up from their months: ``part(year, month)`` names
+        the bucket each month joins, ``keep(year, month)`` which months count."""
+
+        months, last = self._consumer_months(con)
+        buckets = {}
+        for (year, month), consumers in months.items():
+            if keep is not None and not keep(year, month):
+                continue
+            bucket = buckets.setdefault(part(year, month), {})
+            for key, sums in consumers.items():
+                bucket[key] = [a + (b or 0.0) for a, b in zip(bucket.get(key, (0.0,) * 4), sums)]
+        return {
+            number: {key: _consumer_entry(key, sums, last) for key, sums in sorted(consumers.items())}
+            for number, consumers in buckets.items()
+        }
+
+    def _consumer_peak_day(self, con):
+        """The day the consumers drew most together, with what each drew that day."""
+
+        row = con.execute(
+            """
+            SELECT date FROM daily_consumer_energy
+            GROUP BY date
+            ORDER BY SUM(energy_wh) DESC, date ASC
+            LIMIT 1
+            """
+        ).fetchone()
+        if not row:
+            return {"date": None, "consumers": {}}
+        return {"date": row[0], "consumers": self._consumer_totals(con, row[0], row[0])}
+
     def _energy_summary(self, con, now=None):
         current_time = _parse_timestamp(now) or datetime.now(timezone.utc)
         today = current_time.astimezone(self.energy_timezone).date()
+        # The consumers' months and last names, read once for the whole summary.
+        self._consumer_cache = None
+        self._consumer_month_start = today.replace(day=1).isoformat()
         coverage = self._channel_coverage(con)
 
         summary = {
@@ -779,6 +971,7 @@ class DashboardStore:
                 today.isoformat(),
             ),
             "best_day": self._best_day(con, coverage),
+            "consumer_peak_day": self._consumer_peak_day(con),
             "monthly_current_year": self._monthly_summary(
                 con,
                 coverage,
@@ -798,6 +991,7 @@ class DashboardStore:
                 "last_4_weeks": _energy_payload(0, 0),
                 "last_12_months": _energy_payload(0, 0),
                 "best_day": _energy_payload(0, 0, date=None),
+                "consumer_peak_day": {"date": None, "consumers": {}},
                 "monthly_current_year": [
                     {
                         "month": month,
@@ -869,7 +1063,7 @@ class DashboardStore:
         ).fetchone()
         channel_wh, grid_to_battery_wh = _daily_totals(row[5:])
 
-        return _energy_payload(
+        payload = _energy_payload(
             row[0],
             row[1],
             peak_output_w=row[2] if include_peak else None,
@@ -881,6 +1075,8 @@ class DashboardStore:
             charge_wh=row[4],
             grid_to_battery_wh=grid_to_battery_wh,
         )
+        payload["consumers"] = self._consumer_totals(con, start_date, end_date)
+        return payload
 
     def _best_day(self, con, coverage):
         row = con.execute(
@@ -933,6 +1129,9 @@ class DashboardStore:
             (f"{year:04d}",),
         ).fetchall()
         values = {int(row[0]): row for row in rows}
+        consumers = self._consumer_rollup(
+            con, lambda _year, month: month, keep=lambda in_year, _month: in_year == year
+        )
 
         months = []
         for month in range(1, 13):
@@ -957,6 +1156,7 @@ class DashboardStore:
                     charge_wh=row[4] if row else 0,
                     grid_to_battery_wh=grid_to_battery_wh,
                 ),
+                "consumers": consumers.get(month, {}),
             })
 
         return months
@@ -976,6 +1176,7 @@ class DashboardStore:
             ORDER BY year ASC
             """
         ).fetchall()
+        consumers = self._consumer_rollup(con, lambda year, _month: year)
 
         years = []
         for row in rows:
@@ -993,6 +1194,7 @@ class DashboardStore:
                     charge_wh=row[4],
                     grid_to_battery_wh=grid_to_battery_wh,
                 ),
+                "consumers": consumers.get(int(row[0]), {}),
             })
 
         return years
@@ -1026,6 +1228,7 @@ class DashboardStore:
             grid_to_battery_wh=grid_to_battery_wh,
         )
         payload["since_date"] = row[2]
+        payload["consumers"] = self._consumer_rollup(con, lambda _year, _month: 0).get(0, {})
         return payload
 
     def _cleanup(self, con):
@@ -1043,6 +1246,9 @@ def empty_snapshot():
         "devices": {},
         "grid_power_w": 0,
         "home_load_w": 0,
+        "consumers": {},
+        "consumer_total_w": 0,
+        "home_other_w": 0,
         "pv_total_w": 0,
         "inverter_output_w": 0,
         "inverter_charge_w": 0,
@@ -1065,6 +1271,58 @@ def empty_snapshot():
             "currency": "EUR",
             "price_per_kwh": 0.0,
         },
+    }
+
+
+def _consumer_entry(key, sums, last):
+    """One consumer's totals from its ``(energy, grid, cost, saved)`` sums, named as it was last called."""
+
+    energy_wh, grid_wh, cost, saved = sums
+    name, last_date = last.get(key, (key, None))
+    return {
+        "name": name or key,
+        "last_date": last_date,
+        "kwh": round(energy_wh / 1000.0, 3),
+        "grid_kwh": round(grid_wh / 1000.0, 3),
+        "own_kwh": round(max(0.0, energy_wh - grid_wh) / 1000.0, 3),
+        "cost": round(cost, 4),
+        "saved": round(saved, 4),
+    }
+
+
+def consumer_histories(path):
+    """``history key -> {name, last_date, kwh}`` of every consumer ``path`` recorded.
+
+    Read only, for Admin to ask before a rename or a new consumer joins or
+    parts a history. A missing or unreadable database has none.
+    """
+
+    if not path or not os.path.isfile(path):
+        return {}
+    try:
+        con = sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error:
+        return {}
+    try:
+        rows = con.execute(
+            """
+            SELECT consumer, name, MAX(date), SUM(energy_wh)
+            FROM daily_consumer_energy
+            GROUP BY consumer
+            """
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    finally:
+        con.close()
+    return {
+        key: {
+            "name": name or key,
+            "last_date": last_date,
+            "kwh": round((energy_wh or 0.0) / 1000.0, 3),
+        }
+        for key, name, last_date, energy_wh in rows
+        if isinstance(key, str)
     }
 
 

@@ -14,7 +14,6 @@ from admin.models import MqttHardwareCandidate
 from admin.mqtt_broker import local_profile_endpoints
 from admin.zendure_mqtt_config_proposals import build_proposals, connection_dedup_key
 from ems.zendure_mqtt.builtin_broker import BUILTIN_PROFILE_REF, mappings_path
-from ems.zendure_mqtt.external_catalog import EMS_SOLARFLOW
 from mqtt_mapping.config import read_mappings_document, saved_brokers
 
 MAPPING_BROKER_REF_FIELD = "mapping_broker_ref"
@@ -67,14 +66,12 @@ def _observation(device, endpoint):
         broker_id=f"mqtt:{endpoint['host']}:{endpoint['port']}",
         broker_host=endpoint["host"],
         broker_port=endpoint["port"],
-        topic_family=EMS_SOLARFLOW.family,
+        topic_family=device.family,
         device_id=device.id,
-        display_name=EMS_SOLARFLOW.label,
+        display_name=device.catalog.label,
         credentials_ref=endpoint["credentials_ref"],
     )
-    candidate.metrics_seen = [
-        metric for target in device.targets if target.key in EMS_SOLARFLOW.keys for metric in EMS_SOLARFLOW.keys[target.key].metrics
-    ]
+    candidate.metrics_seen = [metric for target in device.targets for metric in device.catalog.keys[target.key].metrics]
     candidate.topics_seen = [device.output_topic]
     return {**candidate.to_dict(), "tls": endpoint["tls"], "tls_insecure": endpoint["tls_insecure"]}
 

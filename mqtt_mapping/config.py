@@ -15,16 +15,24 @@ from dataclasses import dataclass
 
 from ems.file_io import file_signature
 from ems.zendure_mqtt.builtin_broker import NATIVE_TOPIC_ROOTS
-from ems.zendure_mqtt.external_catalog import EMS_SOLARFLOW, valid_device_id
+from ems.zendure_mqtt.external_catalog import (
+    EMS_CONSUMER,
+    EMS_SOLARFLOW,
+    EXTERNAL_TOPIC_FAMILIES,
+    external_topic_family,
+    in_catalog_namespace,
+    valid_device_id,
+)
 from ems.zendure_mqtt.payload_values import PAYLOAD_FORMATS, valid_json_path
 
 SCHEMA_VERSION = 1
-OUTPUT_PREFIX = EMS_SOLARFLOW.prefix
-OUTPUT_KEY = EMS_SOLARFLOW.bundle_key
+DEFAULT_FAMILY = EMS_SOLARFLOW.family
+FAMILIES = tuple(EXTERNAL_TOPIC_FAMILIES)
 TARGETS = tuple(EMS_SOLARFLOW.keys)
-REQUIRED_TARGET = EMS_SOLARFLOW.required_key
+CONSUMER_TARGETS = tuple(EMS_CONSUMER.keys)
 SPLIT_TARGET = "batteryPower"
 NEGATIVE_MODES = ("keep", "zero")
+_OUTPUT_ROOTS = " or ".join(f"{entry.prefix}/" for entry in EXTERNAL_TOPIC_FAMILIES.values())
 
 MAX_DEVICES = 32
 MAX_SUBSCRIPTIONS = 64
@@ -49,6 +57,7 @@ ISSUE_CODES = (
     "mqtt_mapping_broker_invalid",
     "mqtt_mapping_device_id_invalid",
     "mqtt_mapping_device_id_duplicate",
+    "mqtt_mapping_family_unknown",
     "mqtt_mapping_target_unknown",
     "mqtt_mapping_target_required_missing",
     "mqtt_mapping_battery_shape_invalid",
@@ -102,10 +111,15 @@ class MappedDevice:
     targets: tuple[Target, ...]
     label: str = ""
     enabled: bool = True
+    family: str = DEFAULT_FAMILY
+
+    @property
+    def catalog(self):
+        return external_topic_family(self.family)
 
     @property
     def output_topic(self) -> str:
-        return f"{OUTPUT_PREFIX}/{self.id}/{OUTPUT_KEY}"
+        return f"{self.catalog.prefix}/{self.id}/{self.catalog.bundle_key}"
 
     def all_sources(self) -> tuple[Source, ...]:
         return tuple(source for target in self.targets for source in target.all_sources())
@@ -159,10 +173,9 @@ def topic_problem(topic) -> str | None:
         return "mqtt_mapping_topic_invalid"
     if any(ord(char) < 32 or ord(char) == 127 for char in topic):
         return "mqtt_mapping_topic_invalid"
-    root = topic.split("/", 1)[0]
-    if root == OUTPUT_PREFIX:
+    if in_catalog_namespace(topic):
         return "mqtt_mapping_topic_invalid"
-    if root in NATIVE_TOPIC_ROOTS:
+    if topic.split("/", 1)[0] in NATIVE_TOPIC_ROOTS:
         return "mqtt_mapping_topic_native"
     return None
 
@@ -257,7 +270,16 @@ class _Parser:
                 f"{path}.broker_ref",
                 "The broker must be the built-in broker or a local MQTT profile.",
             )
-        targets = self.targets(raw.get("values"), f"{path}.values")
+        family = raw.get("family", DEFAULT_FAMILY)
+        catalog = external_topic_family(family) if isinstance(family, str) else None
+        if catalog is None:
+            self.add(
+                "mqtt_mapping_family_unknown",
+                f"{path}.family",
+                f"The family is one of {', '.join(FAMILIES)}.",
+            )
+            return None
+        targets = self.targets(raw.get("values"), f"{path}.values", catalog)
         if len(self.issues) != before:
             return None
         return MappedDevice(
@@ -266,6 +288,7 @@ class _Parser:
             targets=targets,
             label=label,
             enabled=enabled,
+            family=family,
         )
 
     def valid_broker_ref(self, ref) -> bool:
@@ -273,27 +296,27 @@ class _Parser:
             return False
         return self.broker_refs is None or ref in self.broker_refs
 
-    def targets(self, raw, path):
+    def targets(self, raw, path, catalog):
         if not isinstance(raw, dict):
             self.add("mqtt_mapping_document_invalid", path, "values must be a JSON object.")
             return ()
         targets = []
         for key, spec in raw.items():
-            if key not in TARGETS:
+            if key not in catalog.keys:
                 self.add(
                     "mqtt_mapping_target_unknown",
                     f"{path}.{key}",
-                    f"{key} is no key of the external-device standard.",
+                    f"{key} is no key of the {catalog.prefix} standard.",
                 )
                 continue
             target = self.target(key, spec, f"{path}.{key}")
             if target is not None:
                 targets.append(target)
-        if REQUIRED_TARGET not in raw:
+        if catalog.required_key not in raw:
             self.add(
                 "mqtt_mapping_target_required_missing",
                 path,
-                f"Every mapped device needs {REQUIRED_TARGET}.",
+                f"Every mapped {catalog.prefix} device needs {catalog.required_key}.",
             )
         return tuple(targets)
 
@@ -359,7 +382,7 @@ class _Parser:
                 problem,
                 f"{path}.topic",
                 "A source topic is exact, without + or #, not $-prefixed, not in "
-                f"{OUTPUT_PREFIX}/ and at most {MAX_TOPIC_LENGTH} characters.",
+                f"{_OUTPUT_ROOTS} and at most {MAX_TOPIC_LENGTH} characters.",
             )
         payload_format = raw.get("format")
         payload_path = raw.get("path")

@@ -15,6 +15,7 @@ import {
   planCandidates,
   planIndex,
   planState,
+  proposalName,
   readStore,
   reassertPriority,
   serializeSelection,
@@ -169,4 +170,13 @@ test("a source moved in the order hands the hand-made connection choices back to
   const draft = reassertPriority(draftWith({ items: [{ role: "inverter", auto_added: false }, { role: "grid_meter", auto_added: false }], selections: [{ id: "a", selection_origin: "manual" }, { id: "b", selection_origin: "automatic" }] }));
   assert.deepEqual(draft.items.map((item) => item.auto_added), [true, false]);
   assert.deepEqual(draft.selections.map((entry) => entry.selection_origin), ["priority", "automatic"]);
+});
+
+test("a consumer chosen in Setup keeps the name it is offered under, an inverter takes the next free one", () => {
+  const consumer = { id: "p-w", config_fragment: { type: "external_mqtt", name: "External consumer washer", mqtt: { topic_family: "ems_consumer", device_id: "washer" } } };
+  const inverter = { id: "p-g", config_fragment: { type: "external_mqtt", name: "External device garage", mqtt: { topic_family: "ems_solarflow", device_id: "garage" } } };
+  assert.equal(proposalName(emptyDraft(), consumer), "External consumer washer");
+  assert.equal(proposalName(emptyDraft(), inverter), "INV_1");
+  const { config_name: _unnamed, ...stored } = serializeSelection(consumer, { target: "device" });
+  assert.equal(withNames(draftWith({ selections: [stored] })).selections[0].config_name, "External consumer washer");
 });

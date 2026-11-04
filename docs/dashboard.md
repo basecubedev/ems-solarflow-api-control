@@ -14,8 +14,8 @@ browser — it is the shared EMS/Admin password), or with
 Both write the same `config/dashboard-auth.json`; the EMS Dashboard's own web UI
 does not create it.
 
-The address opens the dashboard's pages — **Overview**, **Devices**, **Energy**,
-**Analytics**, **Control**, **Schedule**, and under **System** **Diagnose**,
+The address opens the dashboard's pages — **Overview**, **Devices**,
+**Consumers**, **Energy**, **Analytics**, **Control**, **Schedule**, and under **System** **Diagnose**,
 **Logs** and **Maintenance** — in English, German, Dutch or French. The
 [step-by-step guides](user/dashboard/index.md) walk through each of them; this
 page is the reference for what they show, how they are configured and the API
@@ -114,6 +114,51 @@ from the local history with a device choice. See
 [Device cards](user/dashboard/devices.md).
 
 ![Devices page demo screenshot with the grid meter card first, then two inverter cards, the energy flow per device and the power chart](assets/preview-devices.jpg)
+
+## Consumers Page
+
+A consumer is an `external_mqtt` device of the `ems_consumer` family (see
+[External Devices over MQTT](technical/configuration.md#external-devices-over-mqtt-external_mqtt)):
+a meter that says what one appliance draws. It is part of the house load the
+grid meter already measured, so it joins no device total, no validity flag and
+no control decision, and it is not a device card. The live snapshot carries:
+
+| Field | Meaning |
+| --- | --- |
+| `consumers` | `{history key: {"name": str, "online": bool, "power_w": number or null}}`; `null` while the consumer does not read |
+| `consumer_total_w` | The sum of the consumers that read |
+| `home_other_w` | `home_load_w` minus `consumer_total_w`, never below 0: the home use no consumer measured |
+
+The store integrates each consumer per day like the channels below, under the
+same per-sample gate, and prices it by `ems.energy_channels.home_grid_share`:
+the share of the house load the grid supplied in that sample (import beyond the
+house load charged a battery and is not the house's). That part of the
+consumer's energy costs `price_per_kwh`, the rest counts as saved at the same
+price. Every period of `/api/energy-stats` except `best_day` carries
+`consumers: {history key: {name, last_date, kwh, grid_kwh, own_kwh, cost, saved}}`,
+and so does each month of `monthly_current_year` and each year of `yearly`;
+`consumer_peak_day` is `{date, consumers}`, the day the consumers drew most
+together.
+
+Everything a consumer records hangs on its **history key**: its `history_id`,
+else its `mqtt.device_id` (`ems.zendure_mqtt.config_entries.consumer_history_keys`;
+should a hand-edited config give two enabled consumers one key, the second
+records under `<key>@<broker>`).
+A rename or a move to another broker keeps the key, so its energy, cost and
+power history follow it; `name` is what it is called now, or, for one that is
+gone, what it was last called, with `last_date` the last day it drew. Admin's
+maintenance preview asks before a change joins or parts a recorded history
+(`admin/consumer_history.py`) and writes the answer as `history_id`.
+
+The **Consumers** page ranks them live, by power or by name, stacks the five
+that drew most over the last seven days as `consumer:<key>` series on the rest of the house (`home`
+less them, see
+[`/api/history/series`](#apihistoryseries--operational-history-sqlite)), and
+prices them per period. The Overview's flow draws a line from **Home use** to
+one **Consumers** block in **System**, and per device to the two consumers
+drawing most and to **Other**, the rest of the house. The **Energy** page
+repeats the period table, and **Analytics** has a **Consumers** view of the five
+that drew most and the rest. See [Consumers](user/dashboard/consumers.md).
 
 ## Analytics Page
 
@@ -742,7 +787,13 @@ GET /api/history/series?start=1717200000&end=1717286400&series=pv
 
 Supported ranges are `1h`, `6h`, `24h`, `7d`, `30d`, `365d`. `series` and
 `devices` are optional comma-separated lists; an empty/invalid `series` falls
-back to the default `pv,output,battery`. For a **custom range**, pass `start`
+back to the default `pv,output,battery`. Besides the catalog series
+(`ems/history/provider.py`, including `consumers` and `home_other`),
+`consumer:<key>` reads one consumer's power by its history key, up to 32 of
+them in a request; the key is percent-encoded (`consumer:plug%40Dryer`), because
+the list is split on commas, and at most 256 characters long. InfluxDB answers the same
+ids from its `consumer` measurement (tag `device`, the history key; field `power`) and the
+meter's `house_other` field. For a **custom range**, pass `start`
 and `end` (epoch seconds or ISO 8601) instead of `range`; the response then
 reports `"range": "custom"`. `start >= end` or unparseable bounds return
 `400 invalid_range`. The response is columnar

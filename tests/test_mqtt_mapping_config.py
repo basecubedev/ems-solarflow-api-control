@@ -12,6 +12,7 @@ import pytest
 
 from mqtt_mapping.brokers import load_broker_file
 from mqtt_mapping.config import (
+    CONSUMER_TARGETS,
     DEFAULT_MAX_AGE_SECONDS,
     DEFAULT_PUBLISH_INTERVAL_SECONDS,
     ISSUE_CODES,
@@ -92,6 +93,25 @@ def test_a_valid_document_becomes_its_model_with_every_default_filled_in():
     }
 
 
+def test_a_consumer_maps_one_power_onto_its_own_tree():
+    document = _document(dict(_device(device_id="washer", power={"sources": [dict(SHELLY)]}), family="ems_consumer"))
+
+    mappings, issues = parse_mappings(document, broker_refs={"ems-mqtt"})
+
+    assert issues == []
+    (device,) = mappings.devices
+    assert device.family == "ems_consumer"
+    assert device.output_topic == "ems-consumer/washer/state"
+    assert [target.key for target in device.targets] == ["power"]
+    assert CONSUMER_TARGETS == ("power",)
+
+
+def test_a_consumer_needs_its_power():
+    document = _document(dict(_device(device_id="washer", inverterPower={"sources": [dict(SHELLY)]}), family="ems_consumer"))
+
+    assert set(_codes(document)) == {"mqtt_mapping_target_unknown", "mqtt_mapping_target_required_missing"}
+
+
 def test_one_source_may_serve_two_targets_of_one_device():
     document = _document(
         _device(inverterPower={"sources": [dict(SHELLY)]}, solarPower={"sources": [dict(SHELLY)]})
@@ -131,6 +151,11 @@ RULE_CASES = [
         (_document(_device(device_id="+")), "mqtt_mapping_device_id_invalid"),
         (_document(_device(device_id="redacted")), "mqtt_mapping_device_id_invalid"),
         (_document(_device(), _device()), "mqtt_mapping_device_id_duplicate"),
+        (_document(dict(_device(), family="kostal_piko")), "mqtt_mapping_family_unknown"),
+        (_document(dict(_device(), family=None)), "mqtt_mapping_family_unknown"),
+        (_document(dict(_device(), family="ems_consumer")), "mqtt_mapping_target_unknown"),
+        (_document(_device(power={"sources": [dict(SHELLY)]})), "mqtt_mapping_target_unknown"),
+        (_document(_device(inverterPower={"sources": [{"topic": "ems-consumer/x/power", "format": "number"}]})), "mqtt_mapping_topic_invalid"),
         (_document(dict(_device(), label=5)), "mqtt_mapping_option_invalid"),
         (_document(dict(_device(), label="x" * 65)), "mqtt_mapping_option_invalid"),
         (_document(dict(_device(), enabled="yes")), "mqtt_mapping_option_invalid"),

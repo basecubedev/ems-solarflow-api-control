@@ -31,7 +31,7 @@
 
   $effect(() => {
     if (!powerKey) powerKey = keyOf(likelyValue(values, "power") || values[0]);
-    if (!socKey && kind && kind !== "balcony") socKey = keyOf(likelyValue(values, "soc"));
+    if (!socKey && kind && kind !== "balcony" && kind !== "consumer") socKey = keyOf(likelyValue(values, "soc"));
   });
 
   $effect(() => {
@@ -61,7 +61,7 @@
     return result;
   });
 
-  const turned = $derived(Boolean(device?.values?.inverterPower?.sources?.[0]?.invert));
+  const turned = $derived(Boolean((device?.values?.inverterPower || device?.values?.power)?.sources?.[0]?.invert));
 
   function choose(next) {
     kind = next;
@@ -100,7 +100,7 @@
     {:else}
       <div class="row-wrap">
         <label class="field grow">
-          <span class="small muted">{kind === "ac_battery" ? t("mqtt.wizard.powerAc") : t("mqtt.wizard.power")}</span>
+          <span class="small muted">{t(kind === "ac_battery" ? "mqtt.wizard.powerAc" : kind === "consumer" ? "mqtt.wizard.powerConsumer" : "mqtt.wizard.power")}</span>
           <select class="input" bind:value={powerKey} data-testid="mqtt-wizard-power">
             {#each values as value (keyOf(value))}<option value={keyOf(value)}>{display(value)}</option>{/each}
           </select>
@@ -113,6 +113,7 @@
         </label>
       </div>
       {#if kind === "ac_battery"}<p class="muted small">{t("mqtt.wizard.whyInverter")}</p>{/if}
+      {#if kind === "consumer"}<p class="muted small">{t("mqtt.wizard.whyConsumer")}</p>{/if}
       {#if turned}<p class="note" data-testid="mqtt-wizard-turned"><Icon name="info" />{t("mqtt.wizard.turned")}</p>{/if}
       {#if changeOnly}<p class="muted small">{t("mqtt.wizard.changeOnly")}</p>{/if}
 

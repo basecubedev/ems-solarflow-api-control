@@ -2,7 +2,7 @@
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { prefs } from "../state/prefs.svelte.js";
   import Icon from "../../../shared/ui/Icon.svelte";
-  import { withGapBreaks, gapRanges, sampleSpacing, shownValue, batteryReading, axisPower, tickLabels, tickPad, tickSpace, atLeastAMinute, ZOOM_STEP, escapeLeavesZoom, zoomCenter, zoomDiffers, zoomStep } from "../lib/history.js";
+  import { withGapBreaks, stackLists, gapRanges, sampleSpacing, shownValue, batteryReading, axisPower, tickLabels, tickPad, tickSpace, atLeastAMinute, ZOOM_STEP, escapeLeavesZoom, zoomCenter, zoomDiffers, zoomStep } from "../lib/history.js";
 
   /**
    * One uPlot instance per chart, kept across data refreshes (setData) and
@@ -20,6 +20,8 @@
    * ``ink`` -- a text colour, since the line's own may be too dark to read.
    * The battery is drawn as Classic draws it, charging below zero, and its
    * legend and table read Charge or Discharge (``shownValue``).
+   * ``stacked`` draws each series on top of the ones before it, as parts of
+   * one whole; the legend and the table keep each series' own value.
    */
   let {
     series,
@@ -33,6 +35,7 @@
     scope = "",
     bounds = null,
     onzoom = null,
+    stacked = false,
   } = $props();
 
   let host = $state();
@@ -50,6 +53,7 @@
     const broken = withGapBreaks(time, lists);
     return { time: broken.time, lists: broken.series, gaps: gapRanges(time, lists) };
   });
+  const plotted = $derived(stacked ? stackLists(prepared.lists) : prepared.lists);
   const hasData = $derived(prepared.lists.some((list) => list.some((v) => v !== null)));
   const shown = $derived.by(() => {
     if (xRange) return { from: xRange[0], to: xRange[1] - 1 };
@@ -237,7 +241,7 @@
         ],
         series: [
           {},
-          ...series.map((s) => {
+          ...series.map((s, index) => {
             const color = token(s.token);
             return {
               label: s.id,
@@ -245,26 +249,27 @@
               stroke: color,
               dash: s.dash,
               width: 1.75,
-              fill: s.fill === false ? undefined : areaFill(color),
+              fill: s.fill === false || (stacked && index > 0) ? undefined : areaFill(color),
               points: { show: false },
               spanGaps: false,
             };
           }),
         ],
+        bands: stacked ? series.slice(1).map((s, index) => ({ series: [index + 2, index + 1], fill: alpha(token(s.token), 0.28) })) : [],
         hooks: {
           setCursor: [(u) => (cursorIndex = u.cursor.idx ?? null)],
           setSelect: [zoomToSelection],
           draw: [drawGaps],
         },
       },
-      [prepared.time, ...prepared.lists],
+      [prepared.time, ...plotted],
       host,
     );
     chart.over.addEventListener("wheel", onWheel, { passive: false });
   }
 
   $effect(() => {
-    const next = [series.map((s) => s.id).join(","), prefs.theme, prefs.lang, height, xRange ? xRange.join("-") : ""].join("|");
+    const next = [series.map((s) => `${s.id}=${s.token}`).join(","), stacked, prefs.theme, prefs.lang, height, xRange ? xRange.join("-") : ""].join("|");
     const reach = `${scope}|${xRange ? xRange.join("-") : ""}`;
     if (zoomScope !== null && reach !== zoomScope) {
       zoomWindow = null;
@@ -276,7 +281,7 @@
       signature = next;
       build();
     } else {
-      chart.setData([prepared.time, ...prepared.lists]);
+      chart.setData([prepared.time, ...plotted]);
     }
   });
 

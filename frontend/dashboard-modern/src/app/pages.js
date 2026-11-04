@@ -11,6 +11,7 @@ export { swapPinned } from "../../../shared/shell/pages.js";
 export const PAGES = Object.freeze([
   { id: "overview", icon: "layout-dashboard", group: "main", classicView: "aggregated" },
   { id: "devices", icon: "cpu", group: "main", classicView: "devices" },
+  { id: "consumers", icon: "plug-zap", group: "main" },
   { id: "energy", icon: "chart-column", group: "main", classicView: "energy" },
   { id: "analytics", icon: "chart-spline", group: "main", classicView: "analytics" },
   { id: "control", icon: "sliders-horizontal", group: "main", classicView: "control" },

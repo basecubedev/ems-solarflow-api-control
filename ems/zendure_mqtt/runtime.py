@@ -848,7 +848,7 @@ def build_zendure_mqtt_runtime(
                 broker_devices,
                 service=broker_service,
                 service_factory=service_factory,
-                watched={key: (device_id, owner) for device_id, (owner, _topic, key) in watched.items()},
+                watched={key: (device_id, owner) for key, (owner, _topic, device_id) in watched.items()},
             )
         )
 

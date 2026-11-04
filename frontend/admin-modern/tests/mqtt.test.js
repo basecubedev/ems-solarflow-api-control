@@ -213,3 +213,23 @@ test("the broker a mapping starts on is the chosen one while it can be read, els
   assert.equal(brokerAddress(found), "192.168.1.7:1883");
   assert.equal(brokerAddress({ ref: BUILTIN_BROKER, host: null }), "");
 });
+
+test("a consumer is one power value on its own family, a negative reading turned round", () => {
+  const device = deviceFromAnswers({ kind: "consumer", name: "Washer", brokerRef: "ems-mqtt", power: { ...shelly, value: -437.2 } });
+  assert.equal(device.family, "ems_consumer");
+  assert.deepEqual(Object.keys(device.values), ["power"]);
+  assert.equal(device.values.power.sources[0].invert, true);
+  assert.equal(device.values.power.sources[0].negative, "zero");
+});
+
+test("a consumer added without a free label keeps the name it is offered under, not an INV_ name", () => {
+  const offered = {
+    id: "p-washer",
+    broker_ref: "local_mqtt_x",
+    catalog_connection_id: "conn-w",
+    config_fragment: { type: "external_mqtt", name: "External consumer washer", mqtt: { broker_ref: "local_mqtt_x", topic_family: "ems_consumer", device_id: "washer" } },
+  };
+  const devices = [{ kind: "local_api", name: "Washer" }];
+  assert.equal(withMappedDevice(devices, offered, "Washer")[1].name, "External consumer washer");
+  assert.equal(withMappedDevice(devices, offered, "Dryer")[1].name, "Dryer");
+});

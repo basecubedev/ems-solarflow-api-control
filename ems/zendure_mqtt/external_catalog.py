@@ -7,9 +7,11 @@ JSON object -- and what the payload behind each known key means. A topic of any
 other shape, or a key the entry does not name, is never read and never offered,
 because nobody can say what its payload is.
 
-The one entry is the project's own namespace: whatever bridges a device to the
-broker publishes into it, so the payload is fixed by this project rather than by
-a manufacturer.
+Both entries are the project's own namespaces: whatever bridges a device to the
+broker publishes into them, so the payload is fixed by this project rather than
+by a manufacturer. ``ems-solarflow`` carries an inverter's power flows,
+``ems-consumer`` the draw of one consumer in the house, which the EMS only
+shows and accounts and never regulates.
 """
 
 import re
@@ -24,6 +26,9 @@ from ems.zendure_mqtt.payloads import parse_json_object
 Readings = dict[str, int | float]
 
 _DEVICE_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+INVERTER = "inverter"
+CONSUMER = "consumer"
 
 
 @dataclass(frozen=True)
@@ -80,6 +85,7 @@ class ExternalTopicFamily:
     keys: Mapping[str, CatalogKey]
     required_key: str
     bundle_key: str
+    role: str = INVERTER
 
     def subscription(self, device_id: str = "+") -> str:
         return f"{self.prefix}/{device_id}/+"
@@ -144,8 +150,18 @@ EMS_SOLARFLOW = ExternalTopicFamily(
     bundle_key="state",
 )
 
+EMS_CONSUMER = ExternalTopicFamily(
+    family="ems_consumer",
+    label="External consumer",
+    prefix="ems-consumer",
+    keys=MappingProxyType({"power": _non_negative("consumerPower")}),
+    required_key="power",
+    bundle_key="state",
+    role=CONSUMER,
+)
+
 EXTERNAL_TOPIC_FAMILIES: Mapping[str, ExternalTopicFamily] = MappingProxyType(
-    {entry.family: entry for entry in (EMS_SOLARFLOW,)}
+    {entry.family: entry for entry in (EMS_SOLARFLOW, EMS_CONSUMER)}
 )
 
 RETIRED_TOPIC_FAMILIES: Mapping[str, str] = MappingProxyType(
@@ -159,6 +175,19 @@ def external_topic_family(family) -> ExternalTopicFamily | None:
     """The catalog entry named ``family``, or ``None``."""
 
     return EXTERNAL_TOPIC_FAMILIES.get(str(family or "").strip())
+
+
+def is_consumer_family(family) -> bool:
+    """Whether ``family`` names a catalog entry whose devices are consumers."""
+
+    entry = external_topic_family(family)
+    return entry is not None and entry.role == CONSUMER
+
+
+def default_device_name(entry: ExternalTopicFamily, device_id: str) -> str:
+    """The name a catalog device is offered under before anyone names it."""
+
+    return f"{entry.label} {device_id}"
 
 
 def successor_family(family) -> ExternalTopicFamily | None:

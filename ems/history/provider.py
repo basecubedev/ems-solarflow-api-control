@@ -17,6 +17,7 @@ import sqlite3
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from urllib.parse import unquote
 
 # Canonical chart series. Each entry maps a stable series id to the snapshot
 # field used by the SQLite provider. The InfluxDB provider maps the same ids to
@@ -41,6 +42,16 @@ SERIES_CATALOG = {
     },
     "soc": {"label": "SoC", "color_var": "--accent", "sqlite_field": "average_soc"},
     "home": {"label": "Home Load", "color_var": "--output", "sqlite_field": "home_load_w"},
+    "consumers": {
+        "label": "Consumers",
+        "color_var": "--output",
+        "sqlite_field": "consumer_total_w",
+    },
+    "home_other": {
+        "label": "Other Home Load",
+        "color_var": "--output",
+        "sqlite_field": "home_other_w",
+    },
     "grid": {"label": "Grid", "color_var": "--grid", "sqlite_field": "grid_power_w"},
     "target": {
         "label": "EMS Target",
@@ -50,6 +61,13 @@ SERIES_CATALOG = {
 }
 
 DEFAULT_SERIES = ["pv", "output", "battery"]
+
+# ``consumer:<name>`` reads one consumer's power, so a chart gets every
+# consumer as its own line from one request. The name is percent-encoded, as
+# the series list is split on commas and a name may hold one.
+CONSUMER_SERIES_PREFIX = "consumer:"
+MAX_CONSUMER_SERIES = 32
+MAX_CONSUMER_NAME = 256
 
 # Per-device snapshot fields (under payload["devices"][name]) used when the
 # SQLite provider is asked to filter by device. Series absent from this map are
@@ -154,12 +172,22 @@ class HistoryResult:
         }
 
 
+def consumer_of_series(series_name):
+    """The consumer a ``consumer:<name>`` series reads, or ``None``."""
+
+    if not isinstance(series_name, str) or not series_name.startswith(CONSUMER_SERIES_PREFIX):
+        return None
+    name = unquote(series_name[len(CONSUMER_SERIES_PREFIX):])
+    return name if 0 < len(name) <= MAX_CONSUMER_NAME else None
+
+
 def normalize_series(series):
     """Validate requested series ids against the catalog; default if empty."""
     if not series:
         return list(DEFAULT_SERIES)
-    valid = [name for name in series if name in SERIES_CATALOG]
-    return valid or list(DEFAULT_SERIES)
+    consumers = list(dict.fromkeys(name for name in series if consumer_of_series(name)))[:MAX_CONSUMER_SERIES]
+    valid = [name for name in series if name in SERIES_CATALOG or name in consumers]
+    return list(dict.fromkeys(valid)) or list(DEFAULT_SERIES)
 
 
 class HistoryProvider(ABC):
@@ -177,10 +205,18 @@ class HistoryProvider(ABC):
 MAX_HISTORY_POINTS = 2000
 
 _SUMMARY_FIELDS = ("timestamp", *(spec["sqlite_field"] for spec in SERIES_CATALOG.values()))
+
+
 _SUMMARY_SELECT = (
     "SELECT json_extract(payload, "
     + ", ".join(f"'$.{field}'" for field in _SUMMARY_FIELDS)
     + ") FROM snapshots WHERE rowid = ?"
+)
+# Each consumer's power by its name as a JSON key, so no name has to fit
+# inside a JSON path.
+_CONSUMERS_SELECT = (
+    "SELECT key, json_extract(value, '$.power_w') FROM snapshots, "
+    "json_each(snapshots.payload, '$.consumers') WHERE snapshots.rowid = ?"
 )
 
 
@@ -214,15 +250,24 @@ class SqliteHistoryProvider(HistoryProvider):
             return result
 
         device_filter = [d for d in (devices or []) if d]
+        consumers = {name: consumer_of_series(name) for name in series if consumer_of_series(name)}
 
-        rows = self._read_snapshots(start, end, result.meta, whole=bool(device_filter))
+        rows = self._read_snapshots(
+            start,
+            end,
+            result.meta,
+            whole=bool(device_filter),
+            consumers=bool(consumers),
+        )
         for payload in rows:
             ts = _parse_iso(payload.get("timestamp"))
             if ts is None:
                 continue
             result.time.append(int(ts.timestamp()))
             for name in series:
-                if device_filter:
+                if name in consumers:
+                    value = _consumer_series_value(payload, consumers[name])
+                elif device_filter:
                     value = _device_series_value(payload, name, device_filter)
                 else:
                     spec = SERIES_CATALOG[name]
@@ -233,7 +278,7 @@ class SqliteHistoryProvider(HistoryProvider):
         result.meta["point_count"] = len(result.time)
         return result
 
-    def _read_snapshots(self, start, end, meta=None, *, whole=False):
+    def _read_snapshots(self, start, end, meta=None, *, whole=False, consumers=False):
         """Yield snapshots, thinned to at most ``MAX_HISTORY_POINTS``.
 
         A 24 h window at a 5 s write interval is 17,280 snapshots of about
@@ -241,7 +286,8 @@ class SqliteHistoryProvider(HistoryProvider):
         to keep are picked from the timestamp index and only they are read.
         Unless ``whole`` asks for the decoded payload (the per-device series),
         SQLite picks the system-level fields out of it, keyed by their dotted
-        catalog path. Reading and decoding every payload took 30 s for two
+        catalog path; ``consumers`` adds each consumer's power under
+        ``consumers``. Reading and decoding every payload took 30 s for two
         days on a Raspberry Pi 3, and the chart stayed empty that long.
         """
 
@@ -267,9 +313,16 @@ class SqliteHistoryProvider(HistoryProvider):
                 try:
                     row = con.execute(select, (rowid,)).fetchone()
                     values = json.loads(row[0])
+                    if not whole:
+                        values = dict(zip(_SUMMARY_FIELDS, values))
+                        if consumers:
+                            values["consumers"] = {
+                                key: {"power_w": power}
+                                for key, power in con.execute(_CONSUMERS_SELECT, (rowid,))
+                            }
                 except (sqlite3.OperationalError, TypeError, ValueError):
                     continue
-                yield values if whole else dict(zip(_SUMMARY_FIELDS, values))
+                yield values
         finally:
             con.close()
 
@@ -315,6 +368,14 @@ def _parse_iso(value):
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed
+
+
+def _consumer_series_value(payload, name):
+    """One consumer's power from a snapshot, ``None`` while it did not read."""
+
+    consumers = payload.get("consumers")
+    consumer = consumers.get(name) if isinstance(consumers, dict) else None
+    return _coerce_number(consumer.get("power_w")) if isinstance(consumer, dict) else None
 
 
 def _device_series_value(payload, series_name, device_names):

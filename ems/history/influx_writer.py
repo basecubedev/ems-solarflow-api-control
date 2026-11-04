@@ -217,6 +217,7 @@ def build_telemetry_lines(
     target=None,
     timestamp_ns=None,
     read_only_tiles=(),
+    consumers=None,
 ):
     """Build InfluxDB line protocol from one control-loop telemetry snapshot.
 
@@ -233,6 +234,10 @@ def build_telemetry_lines(
     the devices the EMS reads but does not control (an E3/DC); they are written
     the same way, tagged with their own ``source``, and their output counts in
     ``house_load`` as it does on the dashboard.
+
+    ``consumers`` maps each consumer's name to its power, ``None`` while it
+    does not read. Each becomes a ``consumer`` point; the meter point adds
+    ``house_other``, the house load no consumer measured.
     """
     if timestamp_ns is None:
         timestamp_ns = time.time_ns()
@@ -278,13 +283,29 @@ def build_telemetry_lines(
         if line:
             lines.append(line)
 
+    consumer_total = 0.0
+    for name, power in (consumers or {}).items():
+        fields = {"available": _is_number(power)}
+        if _is_number(power):
+            fields["power"] = float(power)
+            consumer_total += float(power)
+        line = build_line_protocol(
+            "consumer", {"device": name, "source": "mqtt"}, fields, timestamp_ns
+        )
+        if line:
+            lines.append(line)
+
     if _is_number(grid_power):
         grid_power = float(grid_power)
         house_load = derive_house_load_w(inverter_total, grid_power, charge_total)
         line = build_line_protocol(
             "shelly_meter",
             {"source": "shelly"},
-            {"grid_power": grid_power, "house_load": house_load},
+            {
+                "grid_power": grid_power,
+                "house_load": house_load,
+                "house_other": max(0.0, house_load - consumer_total),
+            },
             timestamp_ns,
         )
         if line:

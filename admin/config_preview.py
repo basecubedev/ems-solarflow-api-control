@@ -71,7 +71,9 @@ from ems.zendure_mqtt.config_entries import (
     is_mqtt_telemetry_device_config,
     zendure_config_device_identity,
     zendure_mqtt_broker_ref,
+    zendure_mqtt_topic_family,
 )
+from ems.zendure_mqtt.external_catalog import is_consumer_family
 
 
 _GRID_TYPES = {
@@ -188,6 +190,8 @@ def _merge_zendure_mqtt_proposals(preview, proposals, validation, cloud_auth_ava
         external = is_external_mqtt_device_config(entry)
         if "config_name" in proposal:
             config_name = str(proposal.get("config_name") or "").strip()
+        elif external and is_consumer_family(zendure_mqtt_topic_family(entry)):
+            config_name = str(entry.get("name") or "").strip()
         else:
             config_name = next_compact_inverter_name(
                 allocation_names, allocation_count

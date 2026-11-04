@@ -13,6 +13,7 @@ use the operator tools.
 | --- | --- |
 | Understand the top bar, the menu and the Overview page | [Overview and navigation](overview.md) |
 | Read a single inverter's state | [Devices](devices.md) |
+| See where the house's power goes, and what each consumer cost | [Consumers](consumers.md) |
 | See how much energy was delivered, or look further back | [Energy and analytics](energy.md) |
 | Understand *why* the EMS wrote that value | [Control pipeline](control.md) |
 | Change a live setting, or plan one with a schedule | [Runtime settings and schedules](runtime-settings.md) |
@@ -24,7 +25,7 @@ use the operator tools.
 The side menu lists the pages in two groups, in this order:
 
 ```text
-Overview · Devices · Energy · Analytics · Control · Schedule
+Overview · Devices · Consumers · Energy · Analytics · Control · Schedule
 System: Diagnose · Logs · Maintenance
 ```
 
@@ -32,6 +33,7 @@ System: Diagnose · Logs · Maintenance
 | --- | --- |
 | **Overview** | *Your energy system right now*: system status, self-sufficiency, solar and savings, the energy flow, the batteries, the active rules, today's energy and the power chart |
 | **Devices** | *Inverters, batteries and grid meters*: the grid meter first, then one card per inverter, the energy flow per device and the power history |
+| **Consumers** | *Where the house's power goes, and what it costs*: each metered consumer now, stacked over time, and its energy, cost and share by period |
 | **Energy** | *Delivered energy and savings by period*: periods, months, years and the lifetime, in **Basic** or **Expert** |
 | **Analytics** | *Long-range history from InfluxDB*, when InfluxDB is set up |
 | **Control** | *What the EMS is doing and why*: the current decision, the runtime settings, the six stages of the control pipeline and the decision per device |

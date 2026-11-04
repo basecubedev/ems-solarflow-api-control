@@ -243,11 +243,11 @@ console.log(JSON.stringify({{
         assert overlay in out["meta"], f"overlay {overlay} has no series metadata"
     assert set(out["overlays"]) == {"soc", "target", "grid", "ac_charge"}
 
-    # Frontend metadata and the backend catalog are two lists of the same
-    # series. A name that exists in one only serves an empty chart.
+    # Every series Classic labels must be one the backend serves, or it charts
+    # nothing. The catalog also serves series only Modern draws (consumers).
     from ems.history.provider import SERIES_CATALOG
 
-    assert set(out["meta"]) == set(SERIES_CATALOG)
+    assert set(out["meta"]) <= set(SERIES_CATALOG)
 
 
 def test_analytics_overlays_extend_active_series_and_custom_range():

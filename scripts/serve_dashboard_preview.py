@@ -40,7 +40,7 @@ from datetime import datetime, timezone
 from html import escape
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import sys
 
@@ -498,6 +498,8 @@ class PreviewHandler(BaseHTTPRequestHandler):
         "home": "home_load_w",
         "grid": "grid_power_w",
         "target": "inverter_output_w",
+        "consumers": "consumer_total_w",
+        "home_other": "home_other_w",
     }
 
     def _history_series(self, query, source):
@@ -506,7 +508,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         # differs so the dashboard can label the data origin.
         items = self._scenario()["history"]
         requested = [s for s in (query.get("series", [""])[0] or "").split(",") if s]
-        keys = [s for s in requested if s in self._SERIES_FIELDS] or [
+        keys = [s for s in requested if s in self._SERIES_FIELDS or s.startswith("consumer:")] or [
             "pv",
             "output",
             "battery",
@@ -521,7 +523,11 @@ class PreviewHandler(BaseHTTPRequestHandler):
                 continue
             time_axis.append(epoch)
             for key in keys:
-                cols[key].append(item.get(self._SERIES_FIELDS[key]))
+                if key.startswith("consumer:"):
+                    consumer = (item.get("consumers") or {}).get(unquote(key[len("consumer:"):])) or {}
+                    cols[key].append(consumer.get("power_w"))
+                else:
+                    cols[key].append(item.get(self._SERIES_FIELDS[key]))
         return {
             "source": source,
             "range": query.get("range", ["24h"])[0],

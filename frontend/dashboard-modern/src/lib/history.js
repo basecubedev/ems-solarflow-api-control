@@ -124,6 +124,25 @@ export function gapRanges(time, seriesList, { maxGap } = {}) {
 }
 
 /**
+ * Running sums for a stacked chart: each list drawn on top of the ones before
+ * it. A list with no value at a time adds nothing there; a time no list has
+ * stays empty, so a gap remains a gap. Negative values add nothing.
+ */
+export function stackLists(lists) {
+  const length = Math.max(0, ...lists.map((list) => list.length));
+  const sums = new Array(length).fill(null);
+  return lists.map((list) => {
+    const out = new Array(length).fill(null);
+    for (let i = 0; i < length; i += 1) {
+      const value = Number(list[i]);
+      if (list[i] !== null && list[i] !== undefined && Number.isFinite(value)) sums[i] = (sums[i] ?? 0) + Math.max(0, value);
+      out[i] = sums[i];
+    }
+    return out;
+  });
+}
+
+/**
  * uPlot draws a line between neighbouring points even across a missing hour
  * when the samples simply are not there. A null inserted into every gap longer
  * than the limit makes the chart show the gap.

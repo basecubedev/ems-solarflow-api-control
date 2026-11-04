@@ -24,6 +24,7 @@ Admin Console screenshots live in [`../admin/`](../admin/).
 | `dashboard-devices.png` | Devices — the grid meter, then the two inverter cards, the flow per device | `normal` |
 | `dashboard-devices-details.png` | Devices — WR1 with Firmware status and Device settings opened | `normal` |
 | `dashboard-devices-offline.png` | Devices — WR2 offline, the grid meter importing | `offline-device` |
+| `dashboard-consumers.png` | Consumers — four metered consumers now, stacked over 24 h, energy and costs per consumer | `consumers` |
 | `dashboard-energy.png` | Energy — Basic: periods, context strip, months, years and lifetime | `normal` |
 | `dashboard-energy-expert.png` | Energy — Expert with September's month detail | `normal` |
 | `dashboard-analytics.png` | Analytics — Overview view with the Grid overlay, KPI cards | `normal` |

@@ -177,6 +177,11 @@ Devices → MQTT mapping** (in Guided Setup, step 02), asks one question first:
    - *AC-coupled battery*: its AC output, its battery power and its charge
      level. The EMS counts a device by what it feeds into the house, so a
      battery needs its AC output too.
+   - *Consumer (washing machine, heat pump, plug …)*: the one power value the
+     device draws. It is published as `ems-consumer/<id>/state` and shown on
+     the dashboard's [Consumers](../dashboard/consumers.md) page and in its
+     energy flow; the EMS never regulates by it, because the grid meter already
+     sees what it draws.
    - *Something else*: the free editor, where you choose every value.
 2. Give it a name, and check **Which value is the power (W)?** — the likely
    value is already chosen; pick the unit (Watt or Kilowatt; for a charge level
@@ -217,6 +222,24 @@ happen is offered again with **Try again**, or made under **Devices**. **Remove*
 keep it only when you move the device to another broker, see below. EMS uses a
 new name, and drops a removed device, after a restart, as for any change to a
 device under Settings.
+
+### Renaming a consumer
+
+A consumer's energy and power history belong to its device id, so a new name,
+or a move to another broker, keeps them. When the consumer has recorded values,
+saving the change asks first, with what it recorded and when it last drew:
+
+- **Carry them along** — the consumer counts on from them under its new name.
+- **Begin anew** — it starts at zero; the old values stay on the dashboard's
+  Consumers page as a former consumer, with the day it last drew.
+
+The same question comes, as **Take them over** or **Begin anew**, when a new
+consumer would continue values recorded before: under its own device id, or
+under a removed consumer of the same name — a new meter under the old washing
+machine, say. Closing the question writes nothing. In the settings' review the
+questions stand above **Apply**, which waits for an answer to each. The answer
+is written as the consumer's `history_id` (see
+[Configuration](../../technical/configuration.md)).
 
 ![Settings, Devices, MQTT mapping: the question what the device measures, with Balcony plant chosen, the name, the power value from the Shelly and Save and add to the EMS](../../assets/screenshots/admin/admin-mqtt-question.png)
 

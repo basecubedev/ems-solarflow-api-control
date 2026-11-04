@@ -205,7 +205,7 @@ export function isExternalProposal(proposal) {
 /** An MQTT proposal's hardware role, from the server's target and role hint only. */
 export function proposalRole(proposal) {
   if (!proposal) return "unknown";
-  if (isExternalProposal(proposal)) return "inverter";
+  if (isExternalProposal(proposal)) return isConsumerProposal(proposal) ? "consumer" : "inverter";
   const hint = String(proposal.role_hint || "").toLowerCase();
   if (isGridMeterProposal(proposal) || String(proposal.target || "").toLowerCase() === "grid_meter" || hint === "grid_meter_candidate") return "grid_meter";
   return hint === "battery_inverter_candidate" ? "inverter" : "unknown";
@@ -482,7 +482,7 @@ export function itemAction(item, draft, ignored) {
       if (isExternalProposal(item.proposal)) return { label: "useConnection", kind: "externalConnection", disabled: false };
       return { label: isControlDowngrade(item, draft) ? "replaceControl" : "useConnection", kind: "switch", disabled: false };
     }
-    return { label: "addInverter", kind: isExternalProposal(item.proposal) ? "addExternal" : "addProposal", disabled: false };
+    return { label: isConsumerProposal(item.proposal) ? "addConsumer" : "addInverter", kind: isExternalProposal(item.proposal) ? "addExternal" : "addProposal", disabled: false };
   }
   if (ignored) return { label: "ignored", disabled: true };
   if (item.state === "found") return { label: "inConfig", disabled: true };
@@ -553,6 +553,11 @@ export function mqttDeviceFromProposal(proposal, devices, catalog) {
   );
 }
 
+/** Whether a proposal offers a consumer: it keeps the name it is offered under rather than an INV_ name. */
+export function isConsumerProposal(proposal) {
+  return isExternalProposal(proposal) && proposal.config_fragment?.mqtt?.topic_family === "ems_consumer";
+}
+
 /** A draft entry for an external catalogue device a proposal offers; the server rebuilds it from the proposal. */
 export function externalDeviceFromProposal(proposal, devices) {
   const mqtt = proposal.config_fragment?.mqtt || {};
@@ -565,7 +570,7 @@ export function externalDeviceFromProposal(proposal, devices) {
     catalog_connection_id: catalogId(proposal, "catalog_connection_id"),
     catalog_label: proposal.catalog_label || "",
     display_name: proposal.display_name || "",
-    name: nextInverterName(devices),
+    name: (isConsumerProposal(proposal) && proposal.config_fragment?.name) || nextInverterName(devices),
     enabled: true,
     mqtt: { broker_ref: mqtt.broker_ref || "", topic_family: mqtt.topic_family || "", device_id: mqtt.device_id || "" },
   };

@@ -28,6 +28,7 @@ from ems.logging_utils import log_event
 from ems.history.provider import (
     HistoryProvider,
     HistoryResult,
+    consumer_of_series,
     normalize_series,
 )
 from ems.history.schema import bucket_name, planned_bucket_names
@@ -66,6 +67,18 @@ INFLUX_SERIES = {
         "device_scoped": False,
         "collapse": "mean",
     },
+    "consumers": {
+        "measurement": "consumer",
+        "field": "power",
+        "device_scoped": False,
+        "collapse": "sum",
+    },
+    "home_other": {
+        "measurement": "shelly_meter",
+        "field": "house_other",
+        "device_scoped": False,
+        "collapse": "mean",
+    },
     # grid = meter exchange power (positive import, negative export).
     "grid": {
         "measurement": "shelly_meter",
@@ -87,6 +100,14 @@ INFLUX_SERIES = {
         "device_scoped": True,
         "collapse": "sum",
     },
+}
+
+# One consumer's power, selected by its name in the ``device`` tag.
+CONSUMER_SERIES = {
+    "measurement": "consumer",
+    "field": "power",
+    "device_scoped": True,
+    "collapse": "sum",
 }
 
 
@@ -407,14 +428,15 @@ class InfluxHistoryProvider(HistoryProvider):
         all_timestamps = set()
 
         for name in series:
-            spec = INFLUX_SERIES.get(name)
+            consumer = consumer_of_series(name)
+            spec = CONSUMER_SERIES if consumer else INFLUX_SERIES.get(name)
             if spec is None:
                 # Series with no InfluxDB mapping; leave empty rather than fail.
                 per_series_points[name] = {}
                 continue
             try:
                 points = self._query_series(
-                    spec, bucket, window, devices, start, end
+                    spec, bucket, window, [consumer] if consumer else devices, start, end
                 )
             except Exception as exc:
                 self._forget_rejected_client(exc)

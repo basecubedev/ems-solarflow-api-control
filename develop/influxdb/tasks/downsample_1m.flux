@@ -17,6 +17,8 @@ numeric_fields = [
   "temp",
   "remain_minutes",
   "house_load",
+  "house_other",
+  "power",
 ]
 
 state_fields = [
@@ -37,14 +39,14 @@ state_fields = [
 
 from(bucket: "zendure_raw")
   |> range(start: -task.every)
-  |> filter(fn: (r) => r._measurement == "zendure_device" or r._measurement == "shelly_meter" or r._measurement == "ems_runtime")
+  |> filter(fn: (r) => r._measurement == "zendure_device" or r._measurement == "shelly_meter" or r._measurement == "ems_runtime" or r._measurement == "consumer")
   |> filter(fn: (r) => contains(value: r._field, set: numeric_fields))
   |> aggregateWindow(every: 1m, fn: last, createEmpty: false)
   |> to(bucket: "zendure_1m", org: "zendure-dev")
 
 from(bucket: "zendure_raw")
   |> range(start: -task.every)
-  |> filter(fn: (r) => r._measurement == "zendure_device" or r._measurement == "shelly_meter" or r._measurement == "ems_runtime")
+  |> filter(fn: (r) => r._measurement == "zendure_device" or r._measurement == "shelly_meter" or r._measurement == "ems_runtime" or r._measurement == "consumer")
   |> filter(fn: (r) => contains(value: r._field, set: state_fields))
   |> aggregateWindow(every: 1m, fn: last, createEmpty: false)
   |> to(bucket: "zendure_1m", org: "zendure-dev")

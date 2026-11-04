@@ -797,7 +797,7 @@ test.describe("Modern dashboard on a phone @smoke", () => {
     const sheet = page.getByRole("dialog", { name: "More" });
     await more.click();
     await expect(sheet).toBeVisible();
-    await expect(sheet.getByRole("link", { name: /^Analytics/ })).toBeFocused();
+    await expect(sheet.getByRole("link", { name: /^Consumers/ })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(sheet).toBeHidden();
     await expect(more).toBeFocused();

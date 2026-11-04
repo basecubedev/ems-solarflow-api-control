@@ -31,6 +31,7 @@ import {
   manualItem,
   nameKey,
   nextName,
+  proposalName,
   opaqueIds,
   planCandidates,
   planIndex,
@@ -378,7 +379,7 @@ export function addProposal(id) {
   if (!proposal) return;
   const physical = issuedFor(setupDraft.index, "proposals", id);
   const draft = undismiss(setupDraft.draft, { physical });
-  const name = rememberedName(draft, setupDraft.index, setupDraft.names, physical, proposal, "proposal") || nextName(draft);
+  const name = rememberedName(draft, setupDraft.index, setupDraft.names, physical, proposal, "proposal") || proposalName(draft, proposal);
   const entry = { ...serializeSelection(proposal, { target: "device", configName: name }), selection_origin: "manual", display_name: proposal.display_name || proposal.hardware_model || "" };
   setupDraft.draft = { ...draft, selections: putSelection(draft.selections, entry) };
   changed({ plan: true });
@@ -410,7 +411,7 @@ export function toggleProposal(id, { replace = false } = {}) {
     if (previous && String(previous.id) !== key) draft = { ...draft, selections: dropSelection(draft.selections, previous.id) };
   }
   const physical = grid ? "" : issuedFor(setupDraft.index, "proposals", key);
-  const name = grid ? undefined : rememberedName(draft, setupDraft.index, setupDraft.names, physical, proposal, "proposal") || nextName(draft);
+  const name = grid ? undefined : rememberedName(draft, setupDraft.index, setupDraft.names, physical, proposal, "proposal") || proposalName(draft, proposal);
   const entry = { ...serializeSelection(proposal, { target: grid ? "grid_meter" : "device", replaceGridMeter: grid && replace, configName: name }), selection_origin: "manual", display_name: proposal.display_name || proposal.hardware_model || "" };
   if (!grid) draft = undismiss(draft, { physical });
   setupDraft.draft = { ...draft, selections: putSelection(draft.selections, entry) };

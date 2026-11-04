@@ -247,9 +247,9 @@ MQTT client and does not control Zendure devices or inverters through it.
 
 ## External devices (read only)
 
-Inverters and batteries EMS does not control, read over MQTT when something
-else — FHEM, ioBroker, Node-RED or a script — publishes their values into
-this project's own namespace. The list is a whitelist: discovery offers, and EMS
+Inverters, batteries and household consumers EMS does not control, read over
+MQTT when something else — FHEM, ioBroker, Node-RED, a metered plug or a script —
+publishes their values into this project's own namespace. The list is a whitelist: discovery offers, and EMS
 reads, only the topic shapes below, because for anything else nobody can say
 what the payload means. Topics are case-sensitive and must match exactly.
 Publish retained, at least every 30 seconds, also when nothing changed. How to
@@ -265,9 +265,15 @@ against the same meter, are in the
 | External device | `ems-solarflow/<id>/batteryPower` | Watts, positive charging, negative discharging | Reverse-engineered | Optional. Negate a value whose source counts the other way round. |
 | External device | `ems-solarflow/<id>/batterySoc` | Percent, 0 to 100 | Reverse-engineered | Optional. Without it the device counts as having no battery. |
 | External device | `ems-solarflow/<id>/state` | JSON object with any of the keys above | Reverse-engineered | All values at once; mixes with the single topics. |
+| External consumer | `ems-consumer/<id>/power` | Watts, 0 or more | Reverse-engineered | Required. What one consumer in the house draws: a washing machine, a heat pump, a metered plug. |
+| External consumer | `ems-consumer/<id>/state` | JSON object `{"power": …}` | Reverse-engineered | The same value as a JSON object. |
 
 Read only, never controlled. The namespace has been read end to end against a
 real broker in tests; no installation has run it yet.
+
+A consumer is part of the house load the grid meter already measures. The
+dashboard shows where that load goes and what each consumer cost
+([Consumers](dashboard/consumers.md)); it never changes what EMS regulates.
 
 A device that publishes in a format of its own reaches this namespace through
 the built-in [MQTT mapping](admin/mqtt-mapping.md), on the optional built-in

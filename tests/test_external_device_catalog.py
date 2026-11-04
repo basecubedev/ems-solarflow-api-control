@@ -33,6 +33,7 @@ from ems.zendure_mqtt.config_entries import (
     validate_external_mqtt_device_config,
 )
 from ems.zendure_mqtt.external_catalog import (
+    CONSUMER,
     EXTERNAL_TOPIC_FAMILIES,
     RETIRED_TOPIC_FAMILIES,
     successor_family,
@@ -328,6 +329,11 @@ def test_the_runtime_subscribes_and_reads_every_key(entry):
 
 @pytest.mark.parametrize("entry", ENTRIES, ids=_ids)
 def test_every_metric_it_maps_to_is_one_the_device_view_reads(entry):
+    """A consumer's power is read by the dashboard's consumer view instead (tests/test_dashboard_consumers.py)."""
+
+    if entry.role == CONSUMER:
+        assert _all_metrics(entry) == {"consumerPower"}
+        return
     empty = parse_device({"properties": {}})
     for metric in _all_metrics(entry):
         assert parse_device({"properties": {metric: 123}}) != empty, metric

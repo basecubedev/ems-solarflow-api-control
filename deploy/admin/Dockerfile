@@ -144,6 +144,10 @@ COPY ems/schedule_store.py ./ems/schedule_store.py
 # Shared HTTPS helper: the optional Admin HTTPS listener reuses the Dashboard's
 # certificate generation and SSLContext code instead of duplicating it.
 COPY dashboard/https.py ./dashboard/https.py
+# Maintenance asks before a change joins or parts a consumer's recorded values
+# (admin.consumer_history); it reads them, never writes, through the store
+# that owns them, which imports nothing beyond the standard library at load.
+COPY dashboard/sqlite_store.py ./dashboard/sqlite_store.py
 
 # --- Paired system-build identity + embedded Setup resources -------------
 # CI passes the SAME values as build args to the Admin AND EMS image builds, so

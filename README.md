@@ -4,7 +4,7 @@
 [![Repo browser e2e](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/playwright-e2e.yml/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/playwright-e2e.yml)
 [![CodeQL](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/github-code-scanning/codeql)
 [![Dependabot](https://img.shields.io/badge/Dependabot-enabled-brightgreen?logo=dependabot)](.github/dependabot.yml)
-![automated tests](https://img.shields.io/badge/automated%20tests-18400%2B-blue)
+![automated tests](https://img.shields.io/badge/automated%20tests-18500%2B-blue)
 [![Test-Driven Development](https://img.shields.io/badge/Test--Driven%20Development-contract--first-blue)](docs/developer/testing.md#development-approach)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.14-blue)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue)](LICENSE)
@@ -12,7 +12,8 @@
 
 Local-first EMS control for Zendure SolarFlow systems.
 It reads local grid meter and Zendure telemetry, controls inverter output,
-and provides a local dashboard.
+and provides a local dashboard — including where the house's power goes, for
+every consumer a plug or meter measures over MQTT.
 
 The dashboard, the Admin Console and the Appliance Manager speak
 **English, Deutsch, Nederlands and Français** — pick yours under Appearance at
@@ -42,7 +43,8 @@ wider coverage needs community reports. Definitions and the full matrix live in
 | Zendure & Shelly grid meters — Shelly Pro, Zendure Smart Meter 3CT / Smart Meter D0 (Local API) | HTTP | Shelly Pro Validated; Zendure meters Reverse-engineered |
 | Other HTTP / MQTT grid meters — Shelly Plus/Gen2/Gen3, Shelly 3EM Gen1, everHome EcoTracker, Tasmota, generic MQTT, D0 over local MQTT | HTTP / MQTT | Family-supported / Reverse-engineered |
 | External inverters and batteries — whatever FHEM, ioBroker, Node-RED or a script publishes into `ems-solarflow/<id>/…` ([guide](docs/user/external-devices.md)) | Local MQTT, read only | Reverse-engineered |
-| Devices that publish over MQTT in their own format — Shelly plugs and meters, Tasmota, OpenDTU, AhoyDTU or anything else measuring an inverter or battery — through the built-in MQTT mapping and the optional built-in broker ([guide](docs/user/admin/mqtt-mapping.md)) | Local MQTT, read only | Reverse-engineered |
+| Household consumers — a washing machine, heat pump or dishwasher behind a Shelly plug, a Tasmota plug or any meter that publishes its power, into `ems-consumer/<id>/…` or through the MQTT mapping ([guide](docs/user/dashboard/consumers.md)) | Local MQTT, read only — shown with energy, cost and share of the house, never controlled | Reverse-engineered |
+| Devices that publish over MQTT in their own format — Shelly plugs and meters, Tasmota, OpenDTU, AhoyDTU or anything else measuring an inverter, a battery or a consumer — through the built-in MQTT mapping and the optional built-in broker ([guide](docs/user/admin/mqtt-mapping.md)) | Local MQTT, read only | Reverse-engineered |
 
 **MQTT control is an implemented EMS transport**, not a future feature: a
 supported inverter joins the same control loop, target calculation and safety

@@ -33,6 +33,7 @@ from ems.zendure_mqtt.config_entries import EXTERNAL_MQTT_TYPE, SOURCE_LOCAL_MQT
 from ems.zendure_mqtt.external_catalog import (
     EXTERNAL_TOPIC_FAMILIES,
     ExternalTopicFamily,
+    default_device_name,
 )
 from ems.zendure_mqtt.snapshot import ZendureMqttSnapshot
 from ems.zendure_mqtt.topics import (
@@ -843,7 +844,7 @@ def _build_external_proposal(
     device id; there is no model to resolve and no write method to grant.
     """
 
-    name = f"{entry.label} {view.device_id}"
+    name = default_device_name(entry, view.device_id)
     mqtt: dict[str, Any] = {}
     if broker_ref:
         mqtt["broker_ref"] = broker_ref
@@ -851,7 +852,7 @@ def _build_external_proposal(
         mqtt["source"] = source
     mqtt["topic_family"] = entry.family
     mqtt["device_id"] = view.device_id
-    has_power = _has_power(view.metric_keys)
+    has_power = entry.offerable(view.metric_keys)
     has_soc = bool(view.metric_keys & _SOC_METRICS)
     return ZendureMqttConfigProposal(
         proposal_id=f"external-mqtt:{entry.family}:{view.device_id}",

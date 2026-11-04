@@ -58,6 +58,7 @@ it changes, and what to do when the result differs.
 | [Overview and navigation](dashboard/overview.md) | Status tiles, energy flow, active rules, today, the menu and the phone bar |
 | [Device cards](dashboard/devices.md) | Per-inverter state, offline and write-blocked reasons |
 | [Energy and analytics](dashboard/energy.md) | Delivered energy, history, long-range analytics |
+| [Consumers](dashboard/consumers.md) | Where the house's power goes: each measured consumer's power, energy, cost and share |
 | [Control pipeline](dashboard/control.md) | Why EMS wrote that value |
 | [Runtime settings and schedules](dashboard/runtime-settings.md) | Change live values safely, now or at set times |
 | [Diagnostics and maintenance](dashboard/diagnostics.md) | Diagnose, logs, browser backups |

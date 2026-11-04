@@ -286,6 +286,14 @@ export function storable(hardware) {
   return { ...hardware, values };
 }
 
+/** What a change did to a consumer with recorded values (admin/consumer_history.py). */
+export const HISTORY_KINDS = Object.freeze(["renamed", "moved", "reused"]);
+
+/** The consumer history questions of a preview that have no answer yet. */
+export function openHistory(preview) {
+  return (Array.isArray(preview?.consumer_history) ? preview.consumer_history : []).filter((question) => !question?.answered);
+}
+
 /** A refusal with the server's validation reasons as its message, when it gave any. */
 export function refused(answer) {
   const reasons = (answer?.validation?.errors || []).map((issue) => issue?.message).filter((message) => typeof message === "string" && message);
@@ -300,16 +308,26 @@ export function refused(answer) {
  * when the server finds it valid on that same revision, applied with a backup
  * first through ``send(path, body)``. Answers ``{ ok, reason, error, applied }``;
  * ``reason`` ``changed`` means the config moved on between reading and the check.
+ * A change that touches a consumer's recorded values is asked about first:
+ * ``decide(questions)`` answers ``{ name: "keep" | "new" }``, or ``null`` to
+ * write nothing (``reason`` ``cancelled``).
  */
-export async function writeAtOnce(build, { read, send, paths }) {
+export async function writeAtOnce(build, { read, send, paths, decide = null }) {
   try {
     const { saved, editable, error } = await read();
     if (!saved || !editable) return { ok: false, error };
     const changes = build(editable);
     if (!changes) return { ok: true };
     const features = saved.draft?.features && typeof saved.draft.features === "object" ? saved.draft.features : {};
-    const draft = { ...editable, ...changes, features: { ...features } };
-    const preview = await send(paths.preview, { draft });
+    let draft = { ...editable, ...changes, features: { ...features } };
+    let preview = await send(paths.preview, { draft });
+    const open = openHistory(preview);
+    if (open.length && decide) {
+      const answers = await decide(open);
+      if (!answers) return { ok: false, reason: "cancelled" };
+      draft = { ...draft, consumer_history: { ...answers } };
+      preview = await send(paths.preview, { draft });
+    }
     if (!preview?.validation?.ok || !preview.revision) return { ok: false, error: refused(preview) };
     if (saved.revision && preview.revision !== saved.revision) return { ok: false, reason: "changed" };
     const result = await send(paths.apply, { draft, revision: preview.revision, confirm: true, backup: true });
