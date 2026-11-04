@@ -425,7 +425,11 @@ dpkg --purge ems-appliance-manager
 ```
 
 This checks the package layout, the service accounts, the directory modes and
-that purge removes only appliance state. It is not a substitute for the appliance
+that purge removes only appliance state. Purge keeps the host settings seeded
+under `/etc/ems-appliance-manager` (`appliance.conf`, `allowed-images.conf`,
+`timezone`), so a reinstall finds them; remove the directory by hand for a clean
+start. Removing or purging also retires an armed Manager install deadline, which
+used to outlive the package and judge a stale install after a reinstall. It is not a substitute for the appliance
 tests on a real board — a Pi 3, 4 or 5, whichever image it runs; only the
 hardware covers first boot, reboot persistence and the update paths.
 
