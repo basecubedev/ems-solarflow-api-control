@@ -281,7 +281,9 @@ installed. So the appliance sets itself a deadline before it unpacks
 anything.
 
 Once a minute, it checks whether the version now installed is the one the update
-promised, and whether the manager's two services are running. The window is
+promised, and whether the manager's two services are running — still the same
+two processes one check later, so a service that keeps restarting does not
+count — with the web service answering on its port. The window is
 fifteen minutes of the appliance running — the board has no real-time clock,
 so the deadline is counted in the checks themselves rather than in wall-clock
 time — and it survives a reboot inside it: rebooting is exactly what you would

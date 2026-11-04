@@ -19,6 +19,12 @@ REQUEST="$STATE/install-request.json"
 RESULT="$STATE/install-result.json"
 PREVIOUS="$STATE/previous.deb"
 PACKAGE=ems-appliance-manager
+# The deadline the agent armed for this install, and what disarming it removes:
+# the files verify-manager.sh's disarm() removes, held together by a test.
+DEADLINE="$STATE/verify-deadline.json"
+VERDICT="$STATE/verify-verdict.json"
+DEADLINE_FILES="$DEADLINE $STATE/verify-revert-attempts $STATE/verify-ticks $STATE/verify-stable $STATE/verify-extended-until"
+TIMER=ems-appliance-manager-verify.timer
 
 # dpkg runs the installed package's postinst, which tightens agent state and
 # leaves the armed reverter unable to run. A revert installs an older retained
@@ -68,6 +74,28 @@ fail() {
     exit 1
 }
 
+# A revert this script has already made is the outcome the deadline exists to
+# reach. Left armed, it waited out the window expecting the refused version,
+# reinstalled previous.deb a second time and restarted both services again,
+# while the console refused Update and Revert as "not judged yet".
+retire_deadline() {
+    [ -f "$DEADLINE" ] || return 0
+    umask 077
+    cat > "$VERDICT.part" <<VERDICT_EOF
+{
+  "verdict": "$1",
+  "detail": "$2",
+  "decided_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+VERDICT_EOF
+    mv "$VERDICT.part" "$VERDICT"
+    # Word splitting is the point: one variable names every file disarm removes.
+    # shellcheck disable=SC2086
+    rm -f $DEADLINE_FILES
+    systemctl disable --now "$TIMER" >/dev/null 2>&1 \
+        || echo "install-manager: could not stop $TIMER" >&2
+}
+
 [ -f "$REQUEST" ] || fail no_request "no install request is waiting at $REQUEST"
 
 # The request names a file the agent already verified and retained. Reading it
@@ -115,6 +143,7 @@ if [ -f "$PREVIOUS" ]; then
     echo "install-manager: reinstalling $PREVIOUS" >&2
     if dpkg --force-confold --install "$PREVIOUS"; then
         record reverted "the install failed and $PREVIOUS was put back"
+        retire_deadline reverted "the install failed and the installer put $PREVIOUS back"
         exit 1
     fi
     fail revert_failed "the install failed and $PREVIOUS could not be put back either"

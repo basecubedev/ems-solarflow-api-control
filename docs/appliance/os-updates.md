@@ -234,11 +234,26 @@ answer must end up back where it was, and a deadline is what makes silence mean
 that rather than mean consent.
 
 A repeating timer asks, once a minute, whether dpkg calls the manager
-*installed* at the version the install promised, and whether the agent and the
-web service are running. Both halves of the first question matter: dpkg reports
-a version for a package it unpacked and never configured, and for one it has
-only config files left for, and those are the states this exists to catch. That
-gate is narrow and is not a functional test of the manager.
+*installed* at the version the install promised, whether the agent and the web
+service are running, and whether the web service listens on its port. Both
+halves of the first question matter: dpkg reports a version for a package it
+unpacked and never configured, and for one it has only config files left for,
+and those are the states this exists to catch. One healthy answer does not
+confirm the install: a second tick has to find the same two processes (by
+systemd's invocation id and restart count), because a unit that restarts every
+few seconds reads *running* at almost any single look. A healthy answer at the
+very end of the window gets up to two more ticks to prove it stays up rather
+than being reverted. That gate is narrow and is not a functional test of the
+manager.
+
+No tick is spent while the install unit is still running: nothing can be known
+about a package dpkg is still unpacking, and the first tick used to fire the
+moment the deadline was armed — before the install had started — which
+confirmed a reinstall of the running version without judging it. Each tick that
+waits also moves the end of the window to a whole window from then, and writes
+that end into a file beside the deadline record, which the console reads too;
+the record itself is never rewritten, because the installer may be retiring it
+on the same tick. The install unit's own timeout bounds the wait.
 
 The window is measured in those ticks as much as on the clock: fifteen checks
 a minute apart, and a reboot inside the window does not restart the count. The
@@ -253,7 +268,8 @@ counts against it.
 | The gate passes | The deadline is retired and the install stands. |
 | The gate has not passed when the deadline expires | `previous.deb` is installed again, and the console reports **Put back** (`reverted`) under **Last install**. |
 | There is no `previous.deb` | The console reports **Nothing to go back to** (`revert_unavailable`), and the appliance is left to a person. |
-| `dpkg` refuses the previous package too | The next tick tries again, up to five times, and only then does the console report **Going back failed** (`revert_failed`). |
+| `dpkg` refuses the previous package too | The next tick tries again, up to five times, and only then does the console report **Going back failed** (`revert_failed`). An attempt is counted before `dpkg` runs, so one the reverter's own timeout kills still counts. |
+| The installer already put `previous.deb` back | It records **Put back** (`reverted`) itself and retires the deadline, which would otherwise have reinstalled the same package a second time when the window ran out. |
 | The deadline record cannot be read by the reverter | Nothing is installed. The record is retired, the console reports **Nothing to go back to** (`revert_unavailable`), and the appliance is left to a person. A record the *console* cannot read, but the reverter can, holds Install and Revert shut until the reverter retires it. |
 
 The retries are there because the commonest reason dpkg refuses is a frontend

@@ -19,9 +19,15 @@ VERDICT="$STATE/verify-verdict.json"
 RESULT="$STATE/install-result.json"
 ATTEMPTS="$STATE/verify-revert-attempts"
 TICKS="$STATE/verify-ticks"
+STABLE="$STATE/verify-stable"
+EXTENDED="$STATE/verify-extended-until"
 PACKAGE=ems-appliance-manager
 TIMER=ems-appliance-manager-verify.timer
+INSTALL_UNIT=ems-appliance-manager-install.service
 SERVICES="ems-appliance-agent.service ems-appliance-web.service"
+# The web service's port, read the way the manager reads it; a missing file or
+# key is the shipped default.
+CONFIG=${2:-/etc/ems-appliance-manager/appliance.conf}
 
 # The dpkg frontend lock is held for as long as an operator's apt run takes, and
 # repairing the package manager is the console action a bad install invites. One
@@ -75,7 +81,7 @@ EOF
 }
 
 disarm() {
-    rm -f "$DEADLINE" "$ATTEMPTS" "$TICKS"
+    rm -f "$DEADLINE" "$ATTEMPTS" "$TICKS" "$STABLE" "$EXTENDED"
     systemctl disable --now "$TIMER" >/dev/null 2>&1 || true
 }
 
@@ -105,6 +111,28 @@ EXPECTED=$(text expected_version)
 PREVIOUS=$(text previous_path)
 PREVIOUS_SHA=$(text previous_sha256)
 NOW=$(date -u +%s)
+EXTENDED_UNTIL=$(cat "$EXTENDED" 2>/dev/null || echo 0)
+case "$EXTENDED_UNTIL" in '' | *[!0-9]*) EXTENDED_UNTIL=0 ;; esac
+[ "$EXTENDED_UNTIL" -gt "$DEADLINE_EPOCH" ] && DEADLINE_EPOCH=$EXTENDED_UNTIL
+
+# dpkg is still working on the package this deadline judges. Nothing about it
+# can be known yet, and a tick spent here is one the judgement does not get:
+# a slow card used to spend most of the window waiting for its own install. The
+# unit's TimeoutStartSec bounds the wait. The clock half of the window is moved
+# on too, to a whole window from now, in a file the console reads beside the
+# record: a lock wait plus a slow unpack otherwise left the judgement a minute,
+# and reverted an install still binding its port.
+case "$(systemctl is-active "$INSTALL_UNIT" 2>/dev/null || true)" in
+    activating | active | deactivating | reloading)
+        if [ "$((NOW + WINDOW))" -gt "$DEADLINE_EPOCH" ]; then
+            umask 077
+            printf '%s\n' "$((NOW + WINDOW))" > "$EXTENDED.part"
+            mv "$EXTENDED.part" "$EXTENDED"
+        fi
+        echo "verify-manager: $INSTALL_UNIT is still running; nothing is judged yet" >&2
+        exit 0
+        ;;
+esac
 
 # ${Version} answers for a package dpkg unpacked and never configured, and for
 # one it has only config files left for. Those are what the deadline exists to
@@ -123,17 +151,44 @@ for service in $SERVICES; do
     systemctl is-active --quiet "$service" || healthy=no
 done
 
-# What this proves is narrow and stated as such: the package dpkg reports is the
-# one the install promised, and the two units that make the appliance reachable
-# are running. It is not a functional test of the manager.
+# A unit with Restart=on-failure that dies a second after it starts is "active"
+# at almost any single look, so one healthy look confirmed a console that
+# never answered. The processes are named by systemd's invocation id and
+# restart count, and only a second healthy tick that finds the same ones
+# confirms: they stayed up for a whole tick. The web service must also be
+# listening; without ss to ask, that part is not known and not held against it.
+SIGNATURE=
 if [ "$healthy" = yes ]; then
-    record confirmed "$PACKAGE $INSTALLED is installed and its services are running"
-    disarm
-    exit 0
+    for service in $SERVICES; do
+        SIGNATURE="$SIGNATURE $(systemctl show -p InvocationID -p NRestarts --value "$service" 2>/dev/null | tr '\n' ':')"
+    done
+    # configparser's own spellings: either separator, any case of the key.
+    PORT=$(sed -n 's/^[[:space:]]*[Ww][Ee][Bb]_[Pp][Oo][Rr][Tt][[:space:]]*[=:][[:space:]]*\([0-9][0-9]*\)[[:space:]]*$/\1/p' "$CONFIG" 2>/dev/null | tail -n 1)
+    if command -v ss >/dev/null 2>&1; then
+        ss -Hltn "sport = :${PORT:-8088}" 2>/dev/null | grep -q . || healthy=no
+    fi
 fi
 
-# One tick spent. Counted after the health gate, so a confirmed install
-# never writes the file, and read the way the revert attempts are.
+# What this proves is narrow and stated as such: the package dpkg reports is the
+# one the install promised, and the two units that make the appliance reachable
+# have been running for a tick, the web one listening. It is not a functional
+# test of the manager.
+if [ "$healthy" = yes ]; then
+    if [ -f "$STABLE" ] && [ "$(cat "$STABLE")" = "$SIGNATURE" ]; then
+        record confirmed "$PACKAGE $INSTALLED is installed and its services have stayed up"
+        disarm
+        exit 0
+    fi
+    umask 077
+    printf '%s\n' "$SIGNATURE" > "$STABLE.part"
+    mv "$STABLE.part" "$STABLE"
+else
+    rm -f "$STABLE"
+fi
+
+# One tick spent, healthy or not: a unit that keeps restarting looks healthy
+# on every tick and must still run out of window. Read the way the revert
+# attempts are.
 TICKS_N=$(cat "$TICKS" 2>/dev/null || echo 0)
 case "$TICKS_N" in '' | *[!0-9]*) TICKS_N=0 ;; esac
 TICKS_N=$((TICKS_N + 1))
@@ -141,9 +196,14 @@ umask 077
 printf '%s\n' "$TICKS_N" > "$TICKS.part"
 mv "$TICKS.part" "$TICKS"
 
-if [ "$NOW" -lt "$DEADLINE_EPOCH" ] && [ "$((TICKS_N * TICK_SECONDS))" -lt "$WINDOW" ]; then
-    echo "verify-manager: not healthy yet, $((DEADLINE_EPOCH - NOW))s on the clock and" \
-         "$((WINDOW - TICKS_N * TICK_SECONDS))s of ticks left" >&2
+# A healthy look at the end of the window gets the ticks that can prove it
+# stays up, rather than a revert of a working install.
+GRACE=0
+[ "$healthy" = yes ] && GRACE=$((2 * TICK_SECONDS))
+if [ "$NOW" -lt "$((DEADLINE_EPOCH + GRACE))" ] \
+    && [ "$((TICKS_N * TICK_SECONDS))" -lt "$((WINDOW + GRACE))" ]; then
+    echo "verify-manager: not confirmed yet, $((DEADLINE_EPOCH + GRACE - NOW))s on the clock and" \
+         "$((WINDOW + GRACE - TICKS_N * TICK_SECONDS))s of ticks left" >&2
     exit 0
 fi
 
@@ -170,6 +230,22 @@ if [ -n "$PREVIOUS_SHA" ]; then
     fi
 fi
 
+# Counted before dpkg runs, not after: the unit's TimeoutStartSec can kill an
+# old postinst that waits on its services, and an attempt counted only on
+# return was then never counted, so the deadline tried for ever.
+attempts=$(cat "$ATTEMPTS" 2>/dev/null || echo 0)
+case "$attempts" in '' | *[!0-9]*) attempts=0 ;; esac
+if [ "$attempts" -ge "$REVERT_ATTEMPTS" ]; then
+    record revert_failed \
+        "the deadline expired and $PREVIOUS could not be installed in $REVERT_ATTEMPTS attempts"
+    disarm
+    exit 0
+fi
+attempts=$((attempts + 1))
+umask 077
+printf '%s\n' "$attempts" > "$ATTEMPTS.part"
+mv "$ATTEMPTS.part" "$ATTEMPTS"
+
 echo "verify-manager: the deadline expired without a healthy $PACKAGE; reinstalling $PREVIOUS" >&2
 if dpkg --force-confold --install "$PREVIOUS"; then
     record reverted "the deadline expired without a healthy $PACKAGE $EXPECTED; $PREVIOUS was put back"
@@ -187,13 +263,7 @@ fi
 # order and says why.
 dpkg --configure -a || true
 
-attempts=$(cat "$ATTEMPTS" 2>/dev/null || echo 0)
-case "$attempts" in '' | *[!0-9]*) attempts=0 ;; esac
-attempts=$((attempts + 1))
 if [ "$attempts" -lt "$REVERT_ATTEMPTS" ]; then
-    umask 077
-    printf '%s\n' "$attempts" > "$ATTEMPTS.part"
-    mv "$ATTEMPTS.part" "$ATTEMPTS"
     echo "verify-manager: $PREVIOUS was refused (attempt $attempts of $REVERT_ATTEMPTS); the next tick tries again" >&2
     exit 0
 fi

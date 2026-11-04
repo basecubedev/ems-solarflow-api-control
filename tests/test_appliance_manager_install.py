@@ -782,3 +782,62 @@ def test_the_installer_asks_dpkg_the_question_manager_verify_names():
     script = INSTALLER.read_text(encoding="utf-8")
     assert f"-f '{manager_verify.DPKG_STATE_QUERY}'" in script
     assert f'"{manager_verify.DPKG_STATE_INSTALLED}|$WANTED"' in script
+
+
+# --- the deadline an installer revert leaves behind ---------------------------
+
+
+def _deadline_files(state):
+    return [
+        state / name
+        for name in (
+            manager_verify.DEADLINE_NAME,
+            manager_verify.TICKS_NAME,
+            manager_verify.ATTEMPTS_NAME,
+            manager_verify.STABLE_NAME,
+            manager_verify.EXTENDED_NAME,
+        )
+    ]
+
+
+def _fake_systemctl(tools, log):
+    (tools / "systemctl").write_text(
+        f'#!/bin/sh\necho "systemctl $*" >> "{log}"\nexit 0\n', encoding="utf-8"
+    )
+    (tools / "systemctl").chmod(0o755)
+
+
+def test_a_revert_the_installer_made_retires_the_deadline_armed_for_it(tmp_path):
+    """Left armed, the deadline reinstalled previous.deb a second time a quarter
+    of an hour later, and the console refused Update and Revert until then."""
+
+    state = tmp_path / "state"
+    tools = tmp_path / "tools"
+    staged(state)
+    log = fake_dpkg(tools, status="half-configured", version="0.2.0", install_fails=True)
+    _fake_systemctl(tools, log)
+    for path in _deadline_files(state):
+        path.write_text("{}\n", encoding="utf-8")
+
+    result = run_installer(state, tools)
+
+    assert result.returncode == 1, result.stderr
+    assert installer_outcome(state)["outcome"] == manager_install.OUTCOME_REVERTED
+    verdict = json.loads((state / manager_verify.VERDICT_NAME).read_text(encoding="utf-8"))
+    assert verdict["verdict"] == manager_verify.VERDICT_REVERTED
+    assert [path.name for path in _deadline_files(state) if path.exists()] == []
+    assert f"systemctl disable --now {manager_verify.VERIFY_TIMER}" in log.read_text(encoding="utf-8")
+
+
+def test_an_installer_revert_with_no_deadline_armed_writes_no_verdict(tmp_path):
+    state = tmp_path / "state"
+    tools = tmp_path / "tools"
+    staged(state)
+    log = fake_dpkg(tools, status="half-configured", version="0.2.0", install_fails=True)
+    _fake_systemctl(tools, log)
+
+    run_installer(state, tools)
+
+    assert installer_outcome(state)["outcome"] == manager_install.OUTCOME_REVERTED
+    assert not (state / manager_verify.VERDICT_NAME).exists()
+    assert "systemctl" not in log.read_text(encoding="utf-8")
