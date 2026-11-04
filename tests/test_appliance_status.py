@@ -1044,3 +1044,22 @@ def test_a_docker_that_answers_too_late_is_not_called_stopped(tmp_path):
     assert "docker_not_running" not in codes, codes
     assert "docker_unresponsive" in codes, codes
 
+
+def test_a_section_that_failed_says_why_and_logs_it(capsys):
+    """The finding's next step said "read the appliance log for the probe that
+    failed", and nothing logged it: only the exception's class name was kept."""
+
+    from appliance.status import section
+
+    def broken():
+        raise RuntimeError("lsblk said password=hunter2-s3cret and failed")
+
+    payload = section("system", broken)
+
+    assert payload["status"] == "unavailable"
+    assert "lsblk said" in payload["detail"]
+    assert "hunter2-s3cret" not in payload["detail"]
+    logged = capsys.readouterr().err
+    assert "status section system failed" in logged
+    assert "Traceback" in logged
+    assert "hunter2-s3cret" not in logged

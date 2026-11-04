@@ -8,7 +8,9 @@ down with it.
 
 import os
 import stat
+import sys
 import time
+import traceback
 
 from appliance import manager_verify, media_sizing, rescue_account, validation
 from appliance.config import effective_timezone
@@ -19,7 +21,7 @@ from appliance.docker_backend import (
     DockerError,
 )
 from appliance.packages import UPDATE_CHECK_FAILED
-from appliance.redaction import bounded_redacted_log
+from appliance.redaction import bounded_redacted_log, redact_text
 from appliance.ssh_policy import REFUSAL_ACCEPTED, REFUSAL_UNKNOWN
 from appliance.systemd import (
     UNIT_APPLIANCE_AGENT,
@@ -151,7 +153,19 @@ def section(name, collector):
     try:
         payload = collector()
     except Exception as exc:
-        return {"section": name, "status": SECTION_UNAVAILABLE, "error": exc.__class__.__name__}
+        # The agent's journal is where the finding's next step sends an
+        # operator, so the reason and its traceback go there, redacted.
+        print(
+            f"status section {name} failed: " + redact_text(traceback.format_exc()),
+            file=sys.stderr,
+            flush=True,
+        )
+        return {
+            "section": name,
+            "status": SECTION_UNAVAILABLE,
+            "error": exc.__class__.__name__,
+            "detail": redact_text(str(exc))[:200],
+        }
     payload = dict(payload) if isinstance(payload, dict) else {"value": payload}
     payload.update({"section": name, "status": SECTION_OK})
     return payload
