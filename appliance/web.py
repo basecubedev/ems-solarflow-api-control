@@ -832,7 +832,7 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         }
         if session is not None:
             payload["csrf_token"] = session.csrf_token
-            payload["expires_at"] = session.expires_at
+            payload["expires_at"] = self.app.sessions.expires_at_wall(session)
             payload["password_confirmed"] = password.get("confirmed")
             # Only an authenticated caller learns anything about the host.
             payload["security_audit"] = self.app.audit_status()

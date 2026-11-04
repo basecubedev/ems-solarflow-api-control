@@ -21,6 +21,7 @@ import json
 import os
 import secrets
 import stat
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -629,24 +630,39 @@ class Session:
 
 
 class SessionStore:
+    """The web service's sessions, on the monotonic clock.
+
+    The board has no real-time clock and NTP steps the wall clock after boot,
+    so expiry is measured on ``time_fn`` (monotonic by default) and only the
+    displayed expiry is converted to wall time. Every request thread reads and
+    changes the table, so every access holds the store's lock.
+    """
+
     def __init__(
         self,
         *,
         idle_timeout=DEFAULT_IDLE_TIMEOUT,
         absolute_max=DEFAULT_ABSOLUTE_MAX,
         time_fn=None,
+        wall_fn=None,
     ):
         self.idle_timeout = self._normalise(idle_timeout)
         self.absolute_max = self._normalise(absolute_max)
-        self._time = time_fn or time.time
+        self._time = time_fn or time.monotonic
+        self._wall = wall_fn or time.time
+        self._lock = threading.RLock()
         self.sessions = {}
 
     @staticmethod
     def _normalise(value):
+        """``None`` is no bound; zero or less was silently the same and is refused."""
+
         if value is None:
             return None
         value = int(value)
-        return None if value <= 0 else value
+        if value <= 0:
+            raise ValueError("a session limit must be a whole number of seconds from 1 up")
+        return value
 
     def _expiry(self, created_at, now):
         bounds = []
@@ -656,55 +672,68 @@ class SessionStore:
             bounds.append(created_at + self.absolute_max)
         return min(bounds) if bounds else None
 
+    def expires_at_wall(self, session):
+        """When ``session`` ends, as a wall-clock timestamp for display."""
+
+        if session.expires_at is None:
+            return None
+        return self._wall() + (session.expires_at - self._time())
+
     def create(self, generation):
-        self.cleanup()
-        now = self._time()
-        session = Session(
-            session_id=secrets.token_urlsafe(32),
-            csrf_token=secrets.token_urlsafe(32),
-            generation=str(generation),
-            created_at=now,
-            expires_at=self._expiry(now, now),
-        )
-        self.sessions[session.session_id] = session
-        return session
+        with self._lock:
+            self.cleanup()
+            now = self._time()
+            session = Session(
+                session_id=secrets.token_urlsafe(32),
+                csrf_token=secrets.token_urlsafe(32),
+                generation=str(generation),
+                created_at=now,
+                expires_at=self._expiry(now, now),
+            )
+            self.sessions[session.session_id] = session
+            return session
 
     def get(self, session_id, generation):
         if not session_id:
             return None
-        session = self.sessions.get(session_id)
-        if session is None:
-            return None
-        if session.generation != str(generation):
-            self.sessions.pop(session_id, None)
-            return None
-        if session.expires_at is not None and session.expires_at <= self._time():
-            self.sessions.pop(session_id, None)
-            return None
-        return session
+        with self._lock:
+            session = self.sessions.get(session_id)
+            if session is None:
+                return None
+            if session.generation != str(generation):
+                self.sessions.pop(session_id, None)
+                return None
+            if session.expires_at is not None and session.expires_at <= self._time():
+                self.sessions.pop(session_id, None)
+                return None
+            return session
 
     def touch(self, session_id, generation):
-        session = self.get(session_id, generation)
-        if session is None:
-            return None
-        session.expires_at = self._expiry(session.created_at, self._time())
-        return session
+        with self._lock:
+            session = self.get(session_id, generation)
+            if session is None:
+                return None
+            session.expires_at = self._expiry(session.created_at, self._time())
+            return session
 
     def destroy(self, session_id):
         if session_id:
-            self.sessions.pop(session_id, None)
+            with self._lock:
+                self.sessions.pop(session_id, None)
 
     def destroy_all(self):
-        self.sessions.clear()
+        with self._lock:
+            self.sessions.clear()
 
     def cleanup(self):
-        now = self._time()
-        for session_id in [
-            key
-            for key, session in self.sessions.items()
-            if session.expires_at is not None and session.expires_at <= now
-        ]:
-            self.sessions.pop(session_id, None)
+        with self._lock:
+            now = self._time()
+            for session_id in [
+                key
+                for key, session in self.sessions.items()
+                if session.expires_at is not None and session.expires_at <= now
+            ]:
+                self.sessions.pop(session_id, None)
 
 
 def throttle_sources(address):
