@@ -585,15 +585,31 @@ test.describe("updates", () => {
     await resetAppliance(request, { manager_package_kept: true });
     await createPassword(page);
     await open(page, "updates");
-    await expect(page.getByTestId("manager-kept")).toContainText("0.1.0");
+    await expect(page.getByTestId("manager-kept")).toContainText("0.0.9");
     await page.getByTestId("manager-plan-revert").click();
-    await expect(page.getByRole("dialog")).toContainText("Go back to Appliance Manager 0.1.0");
+    await expect(page.getByRole("dialog")).toContainText("Go back to Appliance Manager 0.0.9");
     await expect(page.getByTestId("plan-confirm")).toHaveClass(/danger/);
     const facts = page.getByTestId("plan-dialog").locator(".kv");
     await expect(facts.locator("dt", { hasText: "Installed version" })).toBeVisible();
     await expect(facts.locator("div", { hasText: "Time to confirm it works" }).locator("dd")).toHaveText("15 minutes");
     await expect(facts.locator('dt[lang="en"]')).toHaveCount(0);
     await expect(facts).not.toContainText("warning");
+  });
+
+  test("going back to the kept Manager package waits for its restart and asks to sign in again", async ({ page, request }) => {
+    await resetAppliance(request, { manager_package_kept: true });
+    await createPassword(page);
+    await open(page, "updates");
+    await page.getByTestId("manager-plan-revert").click();
+    await confirmPlan(page);
+    await expect(page.getByTestId("reconnect-detail")).toContainText("Appliance Manager is being installed");
+    // The old service still answers and still knows the session: the page keeps waiting.
+    await page.getByTestId("reconnect-check").click();
+    await expect(page.getByTestId("reconnect-screen")).toBeVisible();
+    // The package's postinst restarts the web service, which forgets every session.
+    await request.post("/api/test/reset", { data: { expire_sessions: true } });
+    await page.getByTestId("reconnect-check").click();
+    await expect(page.getByTestId("sign-in-notice")).toContainText("installed and restarted");
   });
 
   test("a plan field this build has no name for is labelled in the appliance's English", async ({ page }) => {

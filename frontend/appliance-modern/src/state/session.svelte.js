@@ -10,6 +10,27 @@ export const UNREACHABLE_RETRY_MS = 5000;
  * whole console sits behind it; nothing but the sign-in is reachable without
  * a session.
  */
+const NOTICE_KEY = "ems-appliance.notice";
+
+/** A sign-in notice that has to outlive a reload, such as the one after the Manager restarted itself. */
+export function rememberNotice(key) {
+  try {
+    globalThis.sessionStorage.setItem(NOTICE_KEY, key);
+  } catch {
+    // Without storage the sign-in shows without the reason; nothing else depends on it.
+  }
+}
+
+function rememberedNotice() {
+  try {
+    const key = globalThis.sessionStorage.getItem(NOTICE_KEY) || "";
+    globalThis.sessionStorage.removeItem(NOTICE_KEY);
+    return key;
+  } catch {
+    return "";
+  }
+}
+
 class Session {
   loaded = $state(false);
   reachable = $state(true);
@@ -20,7 +41,7 @@ class Session {
   csrf = $state("");
   audit = $state.raw(null);
   version = $state("");
-  notice = $state("");
+  notice = $state(rememberedNotice());
 }
 
 export const session = new Session();

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { acknowledgeable, archiveHref, cancellable, currentOperation, operationDetails, operationStage, operationTitleKey, planRequestId, recentProgress, settledSince, stateOf } from "../src/lib/operations.js";
+import { acknowledgeable, findOperation, archiveHref, cancellable, currentOperation, operationDetails, operationStage, operationTitleKey, planRequestId, managerReconnectState, recentProgress, settledSince, stateOf } from "../src/lib/operations.js";
 
 const ID = "0123456789abcdef0123456789abcdef";
 
@@ -76,4 +76,54 @@ test("the refresh leaves the recovery repairs and takes nothing else with it", a
   assert.deepEqual([...RECOVERY_ACTIONS, REFRESH_INDEX_ACTION].sort(), [...REPAIR_ACTIONS].sort());
   assert.ok(!RECOVERY_ACTIONS.includes(REFRESH_INDEX_ACTION));
   assert.deepEqual(refreshIndexPlan().body, { action: REFRESH_INDEX_ACTION });
+});
+
+test("a Manager install that has only started does not read as completed", () => {
+  for (const type of ["manager.update", "manager.revert"]) {
+    assert.deepEqual(stateOf({ type, state: "succeeded" }), { key: "op.managerStarted", tone: "c-idle" });
+  }
+  assert.equal(stateOf({ type: "admin.install", state: "succeeded" }).key, "opstate.succeeded");
+});
+
+test("the wait on a Manager install ends on a restart, not on the old service answering", () => {
+  const before = "0.4.1";
+  const old = { authenticated: true, appliance_version: "0.4.1" };
+  const started = { state: "succeeded", settled: true };
+  assert.equal(managerReconnectState({ before, session: old, manager: { outcome: { outcome: "pending" } }, operation: started }), "waiting");
+  assert.equal(managerReconnectState({ before, session: { ...old, appliance_version: "0.4.2" } }), "back");
+  assert.equal(managerReconnectState({ before, session: { authenticated: false, appliance_version: "0.4.1" } }), "back");
+  assert.equal(managerReconnectState({ before, outage: true, session: old }), "back");
+  assert.equal(managerReconnectState({ before, session: null }), "waiting");
+});
+
+test("an install that ended without a restart ends the wait", () => {
+  const old = { authenticated: true, appliance_version: "0.4.1" };
+  const started = { state: "succeeded", settled: true };
+  for (const outcome of ["not_started", "no_request", "request_invalid", "install_failed", "revert_failed"]) {
+    assert.equal(managerReconnectState({ before: "0.4.1", session: old, manager: { outcome: { outcome } }, operation: started }), "unchanged");
+  }
+  assert.equal(managerReconnectState({ before: "0.4.1", session: old, manager: { outcome: { outcome: "pending" } }, operation: started }), "waiting");
+  assert.equal(managerReconnectState({ before: "0.4.1", session: old, manager: {}, operation: started }), "waiting");
+});
+
+test("a Manager operation that fails after the confirm ends the wait", () => {
+  const old = { authenticated: true, appliance_version: "0.4.1" };
+  const failed = { state: "failed_terminal", settled: true };
+  assert.equal(managerReconnectState({ before: "0.4.1", session: old, operation: failed }), "unchanged");
+});
+
+test("the last install's outcome does not end the wait for this one", () => {
+  const old = { authenticated: true, appliance_version: "0.4.1" };
+  const downloading = { state: "running", settled: false };
+  const stale = { outcome: { outcome: "not_started" } };
+  assert.equal(managerReconnectState({ before: "0.4.1", session: old, manager: stale, operation: downloading }), "waiting");
+  assert.equal(managerReconnectState({ before: "0.4.1", session: old, manager: stale, operation: null }), "waiting");
+});
+
+test("the waited-on operation is found wherever the answer lists it", () => {
+  const record = { operation_id: "b", state: "running" };
+  assert.equal(findOperation({ active: record, unacknowledged: [], recent: [] }, "b"), record);
+  assert.equal(findOperation({ active: null, unacknowledged: [], recent: [record] }, "b"), record);
+  assert.equal(findOperation({ active: null, unacknowledged: [], recent: [] }, "b"), null);
+  assert.equal(findOperation(null, "b"), null);
 });

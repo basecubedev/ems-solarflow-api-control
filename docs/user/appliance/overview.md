@@ -174,6 +174,7 @@ it, and every change you make goes through a plan you read first.
 | *The appliance is holding a plan this page did not ask for* | A plan from another tab or browser waits for confirmation | Cancel it in the banner, then plan again |
 | Every tile shows dashes | The status could not be read | Read the entry at the top; open **Diagnostics** and create a support archive |
 | *Your session ended* | The session timed out or the password was changed | Sign in again |
+| *The Appliance Manager was installed and restarted* | An install or a step back of the Manager restarted its web service, which forgets every session | Sign in again |
 
 ## While the appliance is down
 

@@ -1412,10 +1412,10 @@ test.describe("appliance manager @smoke", () => {
     await signIn(page);
     await openView(page, "updates");
 
-    await expect(page.locator('[data-test="manager-kept"]')).toContainText("0.1.0");
+    await expect(page.locator('[data-test="manager-kept"]')).toContainText("0.0.9");
     const revert = page.locator('[data-test="manager-plan-revert"]');
     await expect(revert).toBeEnabled();
-    await expect(revert).toContainText("0.1.0");
+    await expect(revert).toContainText("0.0.9");
   });
 
   test("a deadline in flight blocks both controls", async ({ page, request }) => {
@@ -1488,7 +1488,7 @@ test.describe("appliance manager @smoke", () => {
 
     const dialog = page.locator("#dialog");
     await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText("0.1.0");
+    await expect(dialog).toContainText("0.0.9");
   });
 });
 

@@ -243,9 +243,14 @@ as installed**, or **cannot be compared**.
 3. Read the plan. It names the version, says whether it moves forward or back,
    and lists everything that could refuse. **Install** is red when the step
    goes back, or when its direction cannot be compared.
-4. Press **Install**. The console goes briefly unreachable while the package is
-   unpacked — the update restarts the very services answering your browser.
-   Once the new version answers, the page loads itself again from it.
+4. Press **Install**. The page shows *The Appliance Manager is being
+   installed* and waits: the update restarts the very services answering your
+   browser. Once the restarted Manager answers, the page loads itself again
+   from it and asks you to sign in, saying why. If nothing was installed —
+   another `apt` run kept the package manager busy for five minutes — it goes
+   back to the console instead, and **Last install** says so. The operation
+   banner reads *Started; its deadline decides* rather than *Completed*: the
+   deadline below decides whether the install stands.
 
 Before anything is installed, the appliance fetches the package over HTTPS and
 checks it against the signing keyring it ships. An unsigned package, one whose

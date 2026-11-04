@@ -3,8 +3,10 @@
   import Icon from "../../../shared/ui/Icon.svelte";
   import { t } from "../i18n/i18n.svelte.js";
   import { actions, checkReconnect } from "../state/actions.svelte.js";
+  import { MANAGER_OPERATIONS } from "../lib/operations.js";
 
   const shutdown = $derived(actions.reconnect === "system.shutdown");
+  const manager = $derived(MANAGER_OPERATIONS.includes(actions.reconnect));
   let checking = $state(false);
 
   async function check() {
@@ -30,10 +32,10 @@
       <span class="icon-tile {shutdown ? 'c-idle' : 'c-acc'}"><Icon name={shutdown ? "power" : "rotate-cw"} /></span>
       <div>
         <h1 class="title">{t("reconnect.title")}</h1>
-        <p class="lead" role="status" aria-live="polite" data-testid="reconnect-detail">{shutdown ? t("reconnect.shutdown") : t("reconnect.reboot")}</p>
+        <p class="lead" role="status" aria-live="polite" data-testid="reconnect-detail">{manager ? t("reconnect.manager") : shutdown ? t("reconnect.shutdown") : t("reconnect.reboot")}</p>
       </div>
     </div>
-    <p class="muted hint">{t("reconnect.hint")}</p>
+    <p class="muted hint">{manager ? t("reconnect.managerHint") : t("reconnect.hint")}</p>
     <button class="btn" type="button" onclick={check} disabled={checking} aria-busy={checking ? "true" : undefined} data-testid="reconnect-check">
       <Icon name={checking ? "loader" : "refresh-cw"} />{t("reconnect.check")}
     </button>

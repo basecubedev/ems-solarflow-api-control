@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { getJson } from "../../../shared/lib/api.js";
-import { applianceSend, loadSession, session } from "./session.svelte.js";
+import { applianceSend, loadSession, rememberNotice, session } from "./session.svelte.js";
 import { host, refresh, stopPolling, watchOperations } from "./host.svelte.js";
 import { forget } from "./forms.svelte.js";
-import { POWER_OPERATIONS, planRequestId } from "../lib/operations.js";
+import { MANAGER_OPERATIONS, POWER_OPERATIONS, findOperation, managerReconnectState, planRequestId } from "../lib/operations.js";
 import { errorWords } from "../lib/errors.js";
 
 /** The first look waits long enough for the host to have gone down; then every few seconds. */
 export const RECONNECT_FIRST_MS = 8000;
 export const RECONNECT_EVERY_MS = 5000;
+/** Unpacking on a Pi 3B+ plus the installer's five minutes for a busy package manager, with room. */
+export const MANAGER_RECONNECT_LIMIT_MS = 15 * 60 * 1000;
 
 /**
  * Plan -> preview -> confirmation -> execution -> verification -> result.
@@ -32,6 +34,7 @@ export const actions = new Actions();
 let lostPlan = null;
 let resuming = false;
 let reconnectTimer = null;
+let waiting = { before: "", outage: false, since: 0, operationId: "" };
 
 function showPlan(payload, options) {
   actions.notice = null;
@@ -116,7 +119,9 @@ export async function confirmPlan() {
     if (pending.options.forget) forget(...pending.options.forget);
     actions.pending = null;
     const type = (pending.payload.plan || {}).type || "";
-    if (POWER_OPERATIONS.includes(type)) startReconnect(type);
+    if (POWER_OPERATIONS.includes(type) || MANAGER_OPERATIONS.includes(type)) {
+      startReconnect(type, pending.payload.operation.operation_id);
+    }
   } catch (error) {
     actions.dialogError = errorWords(error, "error.confirmFailed");
   } finally {
@@ -169,9 +174,13 @@ function scheduleReconnect(ms) {
   reconnectTimer = setTimeout(checkReconnect, ms);
 }
 
-/** The Raspberry Pi restarts or shuts down: the page waits for it instead of reporting errors. */
-export function startReconnect(type) {
+/**
+ * The Raspberry Pi restarts or shuts down, or the Manager package restarts its
+ * own services: the page waits for it instead of reporting errors.
+ */
+export function startReconnect(type, operationId = "") {
   actions.reconnect = type;
+  waiting = { before: session.version, outage: false, since: Date.now(), operationId };
   stopPolling();
   scheduleReconnect(RECONNECT_FIRST_MS);
 }
@@ -179,11 +188,30 @@ export function startReconnect(type) {
 export async function checkReconnect() {
   if (!actions.reconnect) return;
   clearTimeout(reconnectTimer);
+  let answer;
   try {
-    await getJson("/api/session");
+    answer = await getJson("/api/session");
   } catch {
+    waiting.outage = true;
     scheduleReconnect(RECONNECT_EVERY_MS);
     return;
+  }
+  if (MANAGER_OPERATIONS.includes(actions.reconnect)) {
+    const signedIn = Boolean(answer && answer.authenticated);
+    const manager = signedIn ? await getJson("/api/manager").catch(() => null) : null;
+    const operations = signedIn ? await getJson("/api/operations").catch(() => null) : null;
+    const operation = findOperation(operations, waiting.operationId);
+    const state = managerReconnectState({ ...waiting, session: answer, manager, operation });
+    if (state === "back") {
+      // A reload, not a fresh read: the new package may ship a new console.
+      rememberNotice("signIn.managerRestarted");
+      globalThis.location.reload();
+      return;
+    }
+    if (state === "waiting" && Date.now() - waiting.since < MANAGER_RECONNECT_LIMIT_MS) {
+      scheduleReconnect(RECONNECT_EVERY_MS);
+      return;
+    }
   }
   await loadSession();
   actions.reconnect = "";

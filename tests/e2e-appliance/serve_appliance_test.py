@@ -26,6 +26,7 @@ from appliance.config import AllowedImages  # noqa: E402
 from appliance.hostprobe import APT_DAILY_UPDATE_STAMP  # noqa: E402
 from tests.helpers.appliance import (  # noqa: E402
     ADMIN_CONTAINER,
+    INSTALLED_VERSION,
     APT_SIMULATION,
     ADMIN_REPOSITORY,
     appliance_config,
@@ -100,18 +101,20 @@ def seed_manager_state(services, *, kept=False, verdict="", armed=False, deadlin
             services.paths,
             staged,
             sha256="sha256:" + "a" * 64,
-            version="0.1.0",
+            version="0.0.9",
             build_id="20260801000000",
             rotate=False,
         )
         # Rotate once so there is something to go back to, as an install does.
+        # The running one is the version dpkg reports, or the console corrects
+        # the record to what dpkg holds and keeps nothing.
         newer = packages / ".seed-newer.deb"
         newer.write_bytes(b"the package that is running")
         manager_retention.retain(
             services.paths,
             newer,
             sha256="sha256:" + "b" * 64,
-            version="0.2.0",
+            version=INSTALLED_VERSION,
             build_id="20260826010000",
         )
         staged.unlink(missing_ok=True)

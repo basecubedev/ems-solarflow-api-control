@@ -74,6 +74,47 @@ export const VERIFICATION_FAILURES = Object.freeze([
 /** The two operations after which the appliance stops answering for a while. */
 export const POWER_OPERATIONS = Object.freeze(["system.reboot", "system.shutdown"]);
 
+/**
+ * Installing or reverting the Manager package: the record ends once the
+ * install unit is started, and the agent and web service restart a little
+ * later, while dpkg unpacks it. Whether the install stands is the deadline's
+ * verdict, minutes after that.
+ */
+export const MANAGER_OPERATIONS = Object.freeze(["manager.update", "manager.revert"]);
+
+/**
+ * Whether the page waiting on a Manager install may stop: "back" once the web
+ * service has restarted, "unchanged" when nothing was installed, else
+ * "waiting". The old service keeps answering until the new package restarts
+ * it, so an answer alone proves nothing -- a new version does, a session it no
+ * longer knows does, and so does a gap between two answers. Confirming
+ * returns before the operation runs: one that then fails installs nothing,
+ * and until it has reached the installer the installer's outcome is the last
+ * install's, not this one's.
+ */
+export function managerReconnectState({ before = "", outage = false, session = null, manager = null, operation = null } = {}) {
+  if (outage) return "back";
+  if (!session) return "waiting";
+  if (session.authenticated === false) return "back";
+  if (before && session.appliance_version && session.appliance_version !== before) return "back";
+  if (!operation) return "waiting";
+  if (operation.settled && operation.state !== "succeeded") return "unchanged";
+  if (operation.state !== "succeeded") return "waiting";
+  // Sessions live in the web service's memory: an outcome answered by a service
+  // that still knows this session, at the same version, was reached without
+  // a restart -- an install that did not start, or a dpkg run that failed
+  // before its postinst.
+  const outcome = manager && manager.outcome && manager.outcome.outcome;
+  return outcome && outcome !== "pending" ? "unchanged" : "waiting";
+}
+
+/** The record of one operation in an /api/operations answer, wherever it is listed. */
+export function findOperation(payload, operationId) {
+  if (!payload || !operationId) return null;
+  const records = [payload.active, ...(payload.unacknowledged || []), ...(payload.recent || [])];
+  return records.find((record) => record && record.operation_id === operationId) || null;
+}
+
 const spelled = (value) => String(value || "").replace(/_/g, " ");
 
 /** The operation the banner shows: the one running, else the newest the owner has not acknowledged. */
@@ -100,6 +141,9 @@ export function operationStage(operation) {
 /** The state pill: a known state in the reader's language, an unknown one spelled out. */
 export function stateOf(operation) {
   const state = String((operation || {}).state || "");
+  if (state === "succeeded" && MANAGER_OPERATIONS.includes(String((operation || {}).type || ""))) {
+    return { key: "op.managerStarted", tone: "c-idle" };
+  }
   if (OPERATION_STATES[state]) return { key: `opstate.${state}`, tone: OPERATION_STATES[state] };
   return { text: spelled(state), lang: "en", tone: operation && operation.settled ? "c-fault" : "c-warn" };
 }

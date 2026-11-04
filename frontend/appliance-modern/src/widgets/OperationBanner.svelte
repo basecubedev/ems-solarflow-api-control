@@ -5,7 +5,8 @@
   import { t, say, langOf, fmt } from "../i18n/i18n.svelte.js";
   import { host } from "../state/host.svelte.js";
   import { actions, acknowledgeOperation, cancelOperation } from "../state/actions.svelte.js";
-  import { acknowledgeable, archiveHref, cancellable, operationStage, operationTitleKey, recentProgress, stateOf } from "../lib/operations.js";
+  import { MANAGER_OPERATIONS, acknowledgeable, archiveHref, cancellable, operationStage, operationTitleKey, recentProgress, stateOf } from "../lib/operations.js";
+  import { href } from "../app/router.svelte.js";
 
   /**
    * What an owner watches while their appliance is being changed, on every
@@ -21,6 +22,7 @@
   const steps = $derived(recentProgress(operation));
   const archive = $derived(archiveHref(operation));
   const settled = $derived(Boolean(operation?.settled));
+  const managerStarted = $derived(operation?.state === "succeeded" && MANAGER_OPERATIONS.includes(String(operation?.type || "")));
   const icon = $derived(!settled ? "loader" : state.tone === "c-ok" ? "circle-check" : state.tone === "c-idle" ? "circle-minus" : state.tone === "c-warn" ? "triangle-alert" : "circle-x");
 </script>
 
@@ -35,6 +37,7 @@
       <span data-testid="operation-outcome"><Status tone={state.tone} text={say(state)} lang={langOf(state)} /></span>
     </div>
     {#if operation.error?.message}<p class="error" lang="en" data-testid="operation-error">{operation.error.message}</p>{/if}
+    {#if managerStarted}<p class="note" data-testid="operation-manager-started"><Icon name="info" /><span>{t("op.managerStartedNote")} <a href={href("updates")}>{t("op.managerLastInstall")}</a></span></p>{/if}
     <OperationDetails {operation} />
     {#if steps.length}
       <ol class="steps" aria-label={t("op.progress")}>
