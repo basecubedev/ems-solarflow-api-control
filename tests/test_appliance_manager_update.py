@@ -1723,3 +1723,31 @@ def test_an_index_that_could_not_be_read_carries_its_reason_and_the_clock(tmp_pa
     assert listing["error"] == "release_download_failed"
     assert "HTTP 404" in listing["error_message"]
     assert listing["clock_synchronised"] is False
+
+
+def test_the_offer_is_only_for_this_appliances_architecture(tmp_path):
+    """A multi-architecture index lists each version twice; the button could
+    plan the other architecture's package, which the plan then refused."""
+
+    services, _ = build(tmp_path)
+    services.manager.architecture = "arm64"
+    index = {
+        "format_version": 1,
+        "releases": [
+            {
+                "release_id": f"ems-appliance-manager-9.9.9-{arch}",
+                "release_version": "9.9.9",
+                "architecture": arch,
+                "manifest_url": f"{BASE}/{arch}.json",
+                "signature_url": f"{BASE}/{arch}.json.asc",
+                "archive_url": f"{BASE}/{arch}.deb",
+            }
+            for arch in ("armhf", "arm64")
+        ],
+    }
+    services.manager.fetcher.read = lambda url, *, label, max_bytes: json.dumps(index).encode()
+
+    listing = services.manager.sources()
+
+    assert [item["release_id"] for item in listing["releases"]] == ["ems-appliance-manager-9.9.9-arm64"]
+    assert listing["latest_stable"]["release_id"] == "ems-appliance-manager-9.9.9-arm64"

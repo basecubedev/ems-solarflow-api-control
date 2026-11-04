@@ -303,6 +303,13 @@ class ManagerUpdateService:
         except ValueError:
             listing.update(error="release_index_invalid", error_message="the index is not JSON")
             return listing
+        # Another architecture's package is not on offer here; the signed
+        # manifest stays the authority, this only keeps the button honest.
+        candidates = [
+            candidate for candidate in candidates
+            if (candidate.get("described") or {}).get("architecture", self.architecture)
+            == self.architecture
+        ]
         for candidate in candidates:
             offered = str((candidate.get("described") or {}).get("release_version") or "")
             candidate["direction"] = direction(
