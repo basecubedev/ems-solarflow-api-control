@@ -93,6 +93,29 @@ def test_a_command_that_said_nothing_is_reported_as_saying_nothing():
     )
 
 
+def stray_byte(tmp_path):
+    executable = tmp_path / "docker"
+    executable.write_text("#!/bin/sh\nprintf 'line one\\377\\n'\nprintf 'odd \\376\\n' >&2\n", encoding="utf-8")
+    executable.chmod(0o755)
+    return CommandRunner(executables={"docker": [str(executable)]})
+
+
+@pytest.mark.parametrize("watched", [False, True], ids=["run", "run_watched"])
+def test_one_byte_that_is_not_utf8_does_not_lose_the_whole_answer(tmp_path, watched):
+    """A container that printed one stray byte made its log unloadable until the
+    line scrolled out of --tail: the bare UnicodeDecodeError was the answer."""
+
+    runner = stray_byte(tmp_path)
+    if watched:
+        result = runner.run_watched("docker", ["logs"], timeout=30, interval=5, keep_going=lambda elapsed: True)
+    else:
+        result = runner.run("docker", ["logs"])
+
+    assert result.stdout.startswith("line one")
+    assert "\ufffd" in result.stdout
+    assert result.stderr.startswith("odd")
+
+
 # --- a tool an operator waits on ---------------------------------------------
 
 

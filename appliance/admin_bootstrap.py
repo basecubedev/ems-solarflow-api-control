@@ -261,7 +261,8 @@ class DeploymentBootstrap:
             completed = self._run(  # noqa: S603 - fixed packaged path, no caller input
                 command,
                 capture_output=True,
-                text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
                 timeout=INSTALL_TIMEOUT_SECONDS,
                 env=environment,
