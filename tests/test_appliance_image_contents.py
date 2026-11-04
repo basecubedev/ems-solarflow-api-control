@@ -426,3 +426,41 @@ def test_a_unit_whose_program_is_not_executable_is_a_failure(tmp_path):
     ].detail
     assert "grow-root.sh" in findings["unit_programs_present:root"].detail
     assert "203/EXEC" in findings["unit_programs_present:root"].detail
+
+
+def image_with_linked_grower(tmp_path, *, target_mode):
+    """grow-root.sh as a link to the real script, the way /usr/bin/python3 is."""
+
+    root_tree = tmp_path / "root"
+    populate_root(root_tree)
+    grower = root_tree / "usr/lib/ems-appliance-manager/grow-root.sh"
+    real = grower.with_name("grow-root-real.sh")
+    grower.rename(real)
+    real.chmod(target_mode)
+    grower.symlink_to("grow-root-real.sh")
+    root = make_ext4(tmp_path / "root.ext4", root_tree)
+    boot = make_fat(
+        tmp_path / "boot.vfat",
+        {"cmdline.txt": CMDLINE, "config.txt": CONFIG, "kernel8.img": b"k",
+         "initramfs8": b"i", "bcm2712-rpi-5-b.dtb": b"d"},
+    )
+    return assemble_mbr(tmp_path / "appliance.img", boot, root)
+
+
+@requires_mkfs
+def test_a_unit_program_that_is_a_link_to_an_executable_passes(tmp_path):
+    """access(X_OK) follows the link, so the gate has to as well."""
+
+    findings = by_check(contents(image_with_linked_grower(tmp_path, target_mode=0o755)))
+
+    assert findings["unit_programs_present:root"].result == PASS, findings[
+        "unit_programs_present:root"
+    ].detail
+
+
+@requires_mkfs
+def test_a_unit_program_that_links_to_a_file_without_an_execute_bit_fails(tmp_path):
+    findings = by_check(contents(image_with_linked_grower(tmp_path, target_mode=0o644)))
+
+    assert findings["unit_programs_present:root"].result == FAIL
+    assert "203/EXEC" in findings["unit_programs_present:root"].detail
