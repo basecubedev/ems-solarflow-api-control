@@ -177,7 +177,7 @@ Then, whatever happened:
 
 | | What to include |
 | --- | --- |
-| **Board and storage** | which Pi, how much RAM, and whether you booted from SD, USB SSD or NVMe |
+| **Board and storage** | which Pi, how much RAM, and whether you booted from SD or NVMe |
 | **Image** | the file name you flashed, and its `.sha256` |
 | **How far it got** | no LED, LED but never on the network, web page reached, or fully working |
 | **If it worked** | say so — a plain "Pi 5, NVMe, came up in three minutes" is the report that moves this to a supported tier |

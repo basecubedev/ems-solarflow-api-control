@@ -289,7 +289,6 @@ one Raspberry Pi of each supported board:
   Raspberry Pi 4
   Raspberry Pi 5
 one microSD card per board, 16 GB or larger
-one USB SSD, 16 GB or larger        (Pi 4 and Pi 5)
 one NVMe drive on a Pi 5 carrier    (Pi 5)
 a serial adapter, for a boot that never reaches the network
 a card reader, for reading the boot partition afterwards
@@ -442,8 +441,8 @@ never reported for another.**
 | microSD | Pi 3B+ | PARTIAL — 1.1, 1.3, 1.4, 1.5, 1.6 and 1.11 on a Pi 3B+ on microSD, each carried by a row in the evidence table below. 1.2, 1.7 to 1.10, 1.12 and 1.13 are NOT RUN. |
 | microSD | Pi 4 | NOT RUN |
 | microSD | Pi 5 | NOT RUN |
-| USB SSD | Pi 4 | NOT RUN |
-| USB SSD | Pi 5 | NOT RUN |
+| USB SSD | Pi 4 | NOT SUPPORTED — the root is found through `RPI_ONBOOTDEV`, which the pinned `rpi-bootdev-tag` sets for boot modes 1 (SD) and 6 (NVMe) only; a USB boot waits for `disk/by-slot/system` in the initramfs |
+| USB SSD | Pi 5 | NOT SUPPORTED — as for the Pi 4 |
 | NVMe | Pi 5 | NOT RUN |
 
 ## Which steps destroy something
