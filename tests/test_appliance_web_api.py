@@ -2118,6 +2118,77 @@ def test_a_password_state_nobody_could_read_is_said_to_be_unknown(appliance):
     assert payload["password_state_known"] is False
 
 
+def test_a_router_dns_name_the_operator_listed_is_accepted(appliance):
+    """ems-solarflow.fritz.box loaded the page and then refused every change
+    with "after a rename use the new name", although nothing was renamed."""
+
+    import dataclasses
+
+    _, app, client = appliance
+    app.config = dataclasses.replace(app.config, extra_host_names=("ems-solarflow.fritz.box",))
+
+    assert app.names_this_appliance("ems-solarflow.fritz.box:8088") is True
+    assert app.names_this_appliance("ems-solarflow.fritz.box.evil.example") is False
+
+
+def test_a_refused_host_name_is_told_which_names_are_accepted(appliance):
+    _, app, client = appliance
+
+    status, payload, _ = client.post(
+        "/api/session/setup",
+        {"password": PASSWORD, "confirmation": PASSWORD},
+        headers={"Host": "ems-solarflow.lan"},
+    )
+
+    assert status == 403 and payload["error"] == "csrf_host_rejected"
+    assert "extra_host_names" in payload["message"]
+    assert "rename" not in payload["message"]
+
+
+def test_extra_host_names_are_read_and_checked(tmp_path):
+    from appliance.config import load_config
+    from tests.helpers.appliance import appliance_paths
+
+    paths = appliance_paths(tmp_path)
+    paths.appliance_conf.parent.mkdir(parents=True, exist_ok=True)
+    paths.appliance_conf.write_text(
+        "[appliance]\nextra_host_names = ems-solarflow.fritz.box, EMS.home\n", encoding="utf-8"
+    )
+
+    assert load_config(paths).extra_host_names == ("ems-solarflow.fritz.box", "ems.home")
+
+    paths.appliance_conf.write_text(
+        "[appliance]\nextra_host_names = *.fritz.box, ems.home\n", encoding="utf-8"
+    )
+    config = load_config(paths)
+
+    assert config.extra_host_names == ("ems.home",)
+    assert config.ignored_host_names == ("*.fritz.box",)
+
+
+def test_a_mistyped_extra_host_name_is_named_when_a_host_is_refused(appliance):
+    """One bad entry made load_config raise, and web and agent both refused to
+    start: the console was gone for a typo."""
+
+    import dataclasses
+
+    _, app, _ = appliance
+    app.config = dataclasses.replace(app.config, ignored_host_names=("*.fritz.box",))
+
+    assert "*.fritz.box" in app.host_refusal_message()
+
+
+def test_a_host_name_with_the_root_dot_is_the_same_name(appliance):
+    import dataclasses
+
+    _, app, _ = appliance
+    app.config = dataclasses.replace(app.config, extra_host_names=("ems-solarflow.fritz.box",))
+
+    assert app.names_this_appliance("ems-solarflow.fritz.box.") is True
+    assert app.names_this_appliance("ems-solarflow.fritz.box.:8088") is True
+    assert app.names_this_appliance("localhost.") is True
+
+
 class _HeldTimer:
     """A Timer whose callback runs only when the test says so."""
 

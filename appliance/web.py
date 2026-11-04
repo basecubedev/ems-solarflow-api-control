@@ -331,6 +331,7 @@ class ApplianceWebApp:
             name = name.partition("]")[0].lstrip("[")
         elif name.count(":") == 1:
             name = name.partition(":")[0]
+        name = name.rstrip(".")
         if name in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
             return True
         try:
@@ -338,6 +339,8 @@ class ApplianceWebApp:
         except Exception:
             configured = ""
         if configured and name in (configured, f"{configured}.local"):
+            return True
+        if name in tuple(getattr(self.config, "extra_host_names", ()) or ()):
             return True
         # An address literal is the appliance's own LAN address as typed by the
         # operator; a name we cannot resolve to ourselves is not. Parsed as an
@@ -349,6 +352,29 @@ class ApplianceWebApp:
         except ValueError:
             return False
         return True
+
+    def host_refusal_message(self):
+        """Which names this appliance answers to, for a refused Host."""
+
+        try:
+            configured = str(self.probe_hostname() or "").strip().lower()
+        except Exception:
+            configured = ""
+        names = [configured, f"{configured}.local"] if configured else []
+        names.extend(getattr(self.config, "extra_host_names", ()) or ())
+        accepted = ", ".join(names) if names else "its hostname"
+        message = (
+            f"this appliance answers to {accepted} and its IP addresses, not to the name in "
+            "the request; open it by one of those, or add the name to extra_host_names in "
+            "/etc/ems-appliance-manager/appliance.conf"
+        )
+        ignored = getattr(self.config, "ignored_host_names", ()) or ()
+        if ignored:
+            message += (
+                "; these extra_host_names entries are not whole DNS names and are ignored: "
+                + ", ".join(ignored)
+            )
+        return message
 
     def probe_hostname(self):
         """The host's static hostname, read on every call.
@@ -831,12 +857,7 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         if not self.app.names_this_appliance(host):
             # Under DNS rebinding the browser makes Origin and Host agree on the
             # attacker's name, so comparing them proves nothing on its own.
-            self._error(
-                403,
-                "csrf_host_rejected",
-                "this appliance does not answer to the name in the request; after a "
-                "rename use the new name, or open the Appliance Manager by its IP address",
-            )
+            self._error(403, "csrf_host_rejected", self.app.host_refusal_message())
             return False
         origin = self.headers.get("Origin")
         if origin:

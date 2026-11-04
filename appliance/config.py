@@ -91,6 +91,11 @@ class ApplianceConfig:
     timezone: str = DEFAULT_TIMEZONE
     web_address: str = DEFAULT_WEB_ADDRESS
     web_port: int = DEFAULT_WEB_PORT
+    # Further names the Manager answers to, exactly: a router's DNS name such
+    # as ems-solarflow.fritz.box. Never a suffix, which would reopen DNS
+    # rebinding.
+    extra_host_names: tuple = ()
+    ignored_host_names: tuple = ()
     web_user: str = DEFAULT_WEB_USER
     socket_group: str = DEFAULT_SOCKET_GROUP
     backup_user: str = DEFAULT_BACKUP_USER
@@ -158,6 +163,35 @@ def _as_int(values, key, default, *, minimum=1, maximum=None):
         bounds = f"from {minimum}" + (f" to {maximum}" if maximum is not None else " up")
         raise ConfigError("config_value_invalid", f"{key} must be a whole number {bounds}")
     return number
+
+
+def _host_names(values, key):
+    """Exact DNS names, each label RFC 1123, and the entries that are not.
+
+    An address or a wildcard is ignored rather than refused: a refusal stops
+    both the web service and the agent, and a typo would take the console away.
+    """
+
+    import re
+
+    label = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+    names = []
+    ignored = []
+    for raw in re.split(r"[\s,]+", values.get(key) or ""):
+        name = raw.strip().lower().rstrip(".")
+        if not name:
+            continue
+        labels = name.split(".")
+        if (
+            len(name) > 253
+            or len(labels) < 2
+            or not all(label.match(part) for part in labels)
+            or labels[-1].isdigit()
+        ):
+            ignored.append(raw.strip())
+            continue
+        names.append(name)
+    return tuple(names), tuple(ignored)
 
 
 def _as_bool(values, key, default):
@@ -356,10 +390,13 @@ def load_config(paths):
 
     _backup_user(values)
     _deployment_user(values)
+    extra_host_names, ignored_host_names = _host_names(values, "extra_host_names")
     return ApplianceConfig(
         timezone=chosen_zone or values.get("timezone") or DEFAULT_TIMEZONE,
         web_address=values.get("web_address") or DEFAULT_WEB_ADDRESS,
         web_port=_as_int(values, "web_port", DEFAULT_WEB_PORT, maximum=65535),
+        extra_host_names=extra_host_names,
+        ignored_host_names=ignored_host_names,
         web_user=values.get("web_user") or DEFAULT_WEB_USER,
         socket_group=values.get("socket_group") or DEFAULT_SOCKET_GROUP,
         backup_user=DEFAULT_BACKUP_USER,

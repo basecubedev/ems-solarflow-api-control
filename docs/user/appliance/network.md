@@ -148,7 +148,7 @@ the EMS opens its hour-based windows in your time zone.
 | Symptom | Meaning | What to do |
 | --- | --- | --- |
 | The page stopped answering after **Apply** on a WLAN change | The appliance is trying the new network | Wait up to four minutes; with a previous WLAN it comes back by itself. With the cable in, the old address keeps working |
-| *The appliance does not answer to this address* | The page is open under the old name after a rename | Open the new name, or the IP address |
+| *The appliance does not answer to this address* | The page is open under the old name after a rename, or under a name your router gives it (`ems-solarflow.fritz.box`, `.lan`, `.home`) | Open the new name, `name.local` or the IP address. To use the router's name, add it to `extra_host_names` in `/etc/ems-appliance-manager/appliance.conf` |
 | *That is already the appliance's time zone* | Nothing to change | — |
 | **Scan networks** finds nothing | No network is visible from here | A hidden network can still be typed in |
 
