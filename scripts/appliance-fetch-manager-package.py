@@ -159,7 +159,7 @@ def main(argv=None):
     # of them as OSError, so catching the base class turned every one of them
     # into "nothing published yet" and a silently unsigned package in the image.
     try:
-        document = fetch(args.index, limit=MAX_DOCUMENT_BYTES, label="the index")
+        document = fetch(args.index, limit=release_fetch.MAX_INDEX_BYTES, label="the index")
     except urllib.error.HTTPError as exc:
         if exc.code != 404:
             raise SystemExit(f"the index at {args.index} could not be read: HTTP {exc.code}")

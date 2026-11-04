@@ -138,7 +138,11 @@ Going back to an earlier package is the *whole* recovery this path provides.
 There is no second slot behind it: `dpkg` runs, and what is installed is
 installed. An index naming only the newest package would take that away from
 every appliance that did not keep a copy locally, so `--keep` is left unset and
-a test refuses to let one appear on a command line.
+a test refuses to let one appear on a command line. The index therefore grows,
+and appliances read at most 1 MiB of it (`release_fetch.MAX_INDEX_BYTES`, about
+a thousand entries): publishing refuses an index past that size, so the day it
+comes, retention is a decision rather than every appliance finding the index
+unreadable.
 
 Asset URLs are pinned to the release that carries them rather than to
 `/releases/latest`, because an index entry written today has to still resolve
