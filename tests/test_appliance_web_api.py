@@ -2051,6 +2051,31 @@ def test_an_exhausted_descriptor_table_backs_off_instead_of_spinning(monkeypatch
     assert slept and slept[0] > 0
 
 
+def test_a_foreign_cookie_on_the_same_host_does_not_sign_the_operator_out(signed_in):
+    """SimpleCookie drops the whole header for one cookie it dislikes, and any
+    service on the same host name sets cookies the Manager receives."""
+
+    _, _, client = signed_in
+    client.cookie = 'other={"json": "value"}; ' + client.cookie + "; path=x"
+
+    status, payload, _ = client.get("/api/session")
+
+    assert status == 200 and payload["authenticated"] is True, payload
+
+
+def test_a_refused_csrf_check_does_not_extend_the_session(signed_in):
+    services, app, client = signed_in
+    session_id = client.cookie.split("=", 1)[1]
+    before = app.sessions.sessions[session_id].expires_at
+    later = app.sessions._time() + 600
+    app.sessions._time = lambda: later
+
+    status, _, _ = client.post("/api/ssh/disable", csrf=False)
+
+    assert status == 403
+    assert app.sessions.sessions[session_id].expires_at == before
+
+
 class _HeldTimer:
     """A Timer whose callback runs only when the test says so."""
 

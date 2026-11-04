@@ -44,6 +44,8 @@ DEFAULT_LOCK_WAIT_SECONDS = 10
 LOCK_POLL_SECONDS = 0.05
 MAX_RECORD_BYTES = 64 * 1024
 IPV6_NETWORK_PREFIX = 64
+CONTAINER_NETWORK = ipaddress.ip_network("172.16.0.0/12")
+DOCKER_DAEMON_CONFIG = "/etc/docker/daemon.json"
 
 
 def lock_path(path):
@@ -627,6 +629,8 @@ class Session:
     generation: str
     created_at: float
     expires_at: float
+    # The client the session was created for; see session_binding().
+    binding: str = ""
 
 
 class SessionStore:
@@ -679,7 +683,7 @@ class SessionStore:
             return None
         return self._wall() + (session.expires_at - self._time())
 
-    def create(self, generation):
+    def create(self, generation, *, binding=""):
         with self._lock:
             self.cleanup()
             now = self._time()
@@ -689,16 +693,23 @@ class SessionStore:
                 generation=str(generation),
                 created_at=now,
                 expires_at=self._expiry(now, now),
+                binding=str(binding or ""),
             )
             self.sessions[session.session_id] = session
             return session
 
-    def get(self, session_id, generation):
+    def get(self, session_id, generation, *, binding=None):
         if not session_id:
             return None
         with self._lock:
             session = self.sessions.get(session_id)
             if session is None:
+                return None
+            if (
+                binding is not None
+                and session.binding
+                and not binding_accepts(session.binding, binding)
+            ):
                 return None
             if session.generation != str(generation):
                 self.sessions.pop(session_id, None)
@@ -708,9 +719,9 @@ class SessionStore:
                 return None
             return session
 
-    def touch(self, session_id, generation):
+    def touch(self, session_id, generation, *, binding=None):
         with self._lock:
-            session = self.get(session_id, generation)
+            session = self.get(session_id, generation, binding=binding)
             if session is None:
                 return None
             session.expires_at = self._expiry(session.created_at, self._time())
@@ -734,6 +745,108 @@ class SessionStore:
                 if session.expires_at is not None and session.expires_at <= now
             ]:
                 self.sessions.pop(session_id, None)
+
+
+def session_binding(address):
+    """What a session is tied to: the client's IPv4 address, or its IPv6 /64.
+
+    The cookie is scoped to the host, not the port, so the browser hands it to
+    every service on the same name, the EMS containers included. A copy used
+    from elsewhere must not count. An IPv6 client rotates privacy addresses
+    inside its /64, so that is the bound there.
+    """
+
+    single, network = throttle_sources(address)
+    if _on_this_host(single):
+        return single
+    return network or single
+
+
+def binding_accepts(bound, presented):
+    """Whether a session bound to ``bound`` is honoured from ``presented``.
+
+    A dual-stack browser reaches the appliance over either family, and a
+    provider rotates the IPv6 prefix, so a different network address is the
+    same operator. What the binding refuses is the copy a container on this
+    host read from the Admin console or the dashboard: a session never crosses
+    between this host -- loopback or Docker's container network -- and the LAN.
+    """
+
+    if bound == presented:
+        return True
+    return not (_on_this_host(bound) or _on_this_host(presented))
+
+
+def _on_this_host(binding):
+    """Loopback, a container network, or one of this host's own addresses.
+
+    A host-networked service reaches the Manager from the host's own LAN
+    address, so that address is on this host too, and is bound to itself
+    rather than to its /64, which LAN clients share.
+    """
+
+    try:
+        network = ipaddress.ip_network(binding, strict=False)
+    except ValueError:
+        return True
+    if network.is_loopback:
+        return True
+    if any(
+        network.version == pool.version and network.subnet_of(pool)
+        for pool in container_networks()
+    ):
+        return True
+    return network.num_addresses == 1 and network.network_address in host_addresses()
+
+
+def container_networks(path=DOCKER_DAEMON_CONFIG, *, proc="/proc/net"):
+    """The networks Docker's containers sit on: its configured pools and its live bridges.
+
+    The pools in ``daemon.json`` say where Docker will put a network; the
+    routes of ``docker0`` and its ``br-`` bridges say where it has. Docker's
+    built-in default pools are not assumed: they include 192.168.0.0/16, which
+    on most home networks is the LAN itself.
+    """
+
+    networks = []
+    with contextlib.suppress(OSError, ValueError, KeyError, TypeError):
+        pools = json.loads(Path(path).read_text(encoding="utf-8"))["default-address-pools"]
+        networks.extend(ipaddress.ip_network(pool["base"], strict=False) for pool in pools)
+    with contextlib.suppress(OSError):
+        for line in Path(proc, "route").read_text(encoding="utf-8").splitlines()[1:]:
+            fields = line.split()
+            if len(fields) < 8 or not fields[0].startswith(("docker", "br-")):
+                continue
+            with contextlib.suppress(ValueError):
+                address = ipaddress.IPv4Address(int(fields[1], 16).to_bytes(4, "little"))
+                mask = ipaddress.IPv4Address(int(fields[7], 16).to_bytes(4, "little"))
+                networks.append(ipaddress.ip_network(f"{address}/{mask}", strict=False))
+    return tuple(networks)
+
+
+_HOST_ADDRESSES = {"at": None, "addresses": frozenset()}
+
+
+def host_addresses(*, proc="/proc/net", now=None):
+    """This host's own addresses, read from the kernel at most once a minute."""
+
+    moment = time.monotonic() if now is None else now
+    if _HOST_ADDRESSES["at"] is not None and moment - _HOST_ADDRESSES["at"] < 60:
+        return _HOST_ADDRESSES["addresses"]
+    found = set()
+    with contextlib.suppress(OSError):
+        lines = Path(proc, "fib_trie").read_text(encoding="utf-8").splitlines()
+        for previous, line in zip(lines, lines[1:]):
+            if "/32 host LOCAL" in line:
+                with contextlib.suppress(ValueError):
+                    found.add(ipaddress.ip_address(previous.strip().split()[-1]))
+    with contextlib.suppress(OSError):
+        for line in Path(proc, "if_inet6").read_text(encoding="utf-8").splitlines():
+            raw = line.split()[0] if line.split() else ""
+            with contextlib.suppress(ValueError):
+                found.add(ipaddress.IPv6Address(int(raw, 16)))
+    _HOST_ADDRESSES.update(at=moment, addresses=frozenset(found))
+    return _HOST_ADDRESSES["addresses"]
 
 
 def throttle_sources(address):

@@ -20,7 +20,6 @@ import secrets
 import select
 import threading
 import time
-from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from appliance import validation
@@ -33,6 +32,7 @@ from appliance.auth import (
     LoginRateLimiter,
     SessionStore,
     record_generation,
+    session_binding,
 )
 from appliance.audit import RESULT_DENIED, RESULT_FAILURE, RESULT_SUCCESS, WebLog
 from appliance.config import load_config
@@ -373,8 +373,9 @@ class ApplianceWebApp:
 
     # --- session ---------------------------------------------------------
 
-    def session_for(self, session_id):
-        return self.sessions.get(session_id, self.auth.generation())
+    def session_for(self, session_id, client_ip=None):
+        binding = None if client_ip is None else session_binding(client_ip)
+        return self.sessions.get(session_id, self.auth.generation(), binding=binding)
 
     def login(self, password, *, source_ip):
         """The lock serialises the rate limiter and the session store, nothing else.
@@ -423,7 +424,7 @@ class ApplianceWebApp:
 
         with self._lock:
             self._clear(source_ip, attempt)
-            session = self.sessions.create(generation)
+            session = self.sessions.create(generation, binding=session_binding(source_ip))
         self.audit.record("login.success", source_ip=source_ip, result=RESULT_SUCCESS)
         return session
 
@@ -505,7 +506,7 @@ class ApplianceWebApp:
             raise
         generation = created.get("generation") or record_generation(created)
         self.audit.record("password.change", source_ip=source_ip, reason="first_password")
-        return self.sessions.create(generation)
+        return self.sessions.create(generation, binding=session_binding(source_ip))
 
     def change_password(self, current, new_password, confirmation, *, source_ip):
         """The current password is checked the way a sign-in is: against the
@@ -611,6 +612,23 @@ class ApplianceWebApp:
         )
 
 
+def session_cookie_value(headers):
+    """The Manager's session cookie out of the Cookie header(s), parsed by hand.
+
+    SimpleCookie drops the whole header for one cookie it dislikes -- a JSON
+    value, a cookie named ``path`` -- and any service on the same host name may
+    set one, which signed the operator out. Only this cookie's name is looked
+    for; the first occurrence counts.
+    """
+
+    for header in headers:
+        for part in str(header).split(";"):
+            name, separator, value = part.strip().partition("=")
+            if separator and name == SESSION_COOKIE_NAME:
+                return value.strip().strip('"')
+    return ""
+
+
 class RequestDeadline:
     """A deadline on reading a request that cannot fire after it was stopped.
 
@@ -710,18 +728,10 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         return self.client_address[0] if self.client_address else ""
 
     def _session(self):
-        raw = self.headers.get("Cookie")
-        if not raw:
+        value = session_cookie_value(self.headers.get_all("Cookie") or ())
+        if not value:
             return None
-        jar = cookies.SimpleCookie()
-        try:
-            jar.load(raw)
-        except cookies.CookieError:
-            return None
-        morsel = jar.get(SESSION_COOKIE_NAME)
-        if morsel is None:
-            return None
-        return self.app.session_for(morsel.value)
+        return self.app.session_for(value, self._client_ip())
 
     def _body(self):
         try:
@@ -785,13 +795,21 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             parts.append("Secure")
         return ("Set-Cookie", "; ".join(parts))
 
-    def _require_session(self):
+    def _require_session(self, *, touch=True):
         session = self._session()
         if session is None:
             self._error(401, "authentication_required", "sign in to use the Appliance Manager")
             return None
-        self.app.sessions.touch(session.session_id, self.app.auth.generation())
+        if touch:
+            self._touch(session)
         return session
+
+    def _touch(self, session):
+        self.app.sessions.touch(
+            session.session_id,
+            self.app.auth.generation(),
+            binding=session_binding(self._client_ip()),
+        )
 
     def _require_same_origin(self):
         """The half of the CSRF gate that needs no session to apply.
@@ -1083,11 +1101,14 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
     # --- mutating API ----------------------------------------------------
 
     def _api_post(self, path, body):
-        session = self._require_session()
+        # Touched only once the request has proved it is the page's own: a
+        # refused one must not keep a copied cookie alive.
+        session = self._require_session(touch=False)
         if session is None:
             return None
         if not self._require_csrf(session):
             return None
+        self._touch(session)
 
         if path == "/api/settings/password/confirm":
             try:
