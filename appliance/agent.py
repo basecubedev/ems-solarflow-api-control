@@ -568,17 +568,22 @@ class AgentHandlers:
         try:
             self._executor_for(operation.type)(operation)
         except Exception as exc:
-            current = store.get(operation.operation_id)
-            if not current.terminal:
-                store.finish(
-                    operation.operation_id,
-                    STATE_FAILED_TERMINAL,
-                    stage="failed",
-                    error={
-                        "code": getattr(exc, "code", "operation_failed"),
-                        "message": str(getattr(exc, "message", exc)),
-                    },
-                )
+            try:
+                current = store.get(operation.operation_id)
+                if not current.terminal:
+                    store.finish(
+                        operation.operation_id,
+                        STATE_FAILED_TERMINAL,
+                        stage="failed",
+                        error={
+                            "code": getattr(exc, "code", "operation_failed"),
+                            "message": str(getattr(exc, "message", exc)),
+                        },
+                    )
+            except OSError:
+                # The store keeps the end it could not write and writes it
+                # before the next plan; this thread has nothing left to do.
+                pass
         # By the record, not by an exception: several executors finish a
         # failure and return, and were audited as a success.
         try:

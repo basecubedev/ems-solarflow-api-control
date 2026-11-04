@@ -916,6 +916,33 @@ def test_a_reboot_systemctl_refused_is_audited_as_failed(tmp_path):
     assert results == ["confirmed", "failure"], results
 
 
+def test_an_operation_whose_end_could_not_be_written_does_not_take_the_agent_down(tmp_path, monkeypatch):
+    import errno
+
+    from appliance import operations as operations_module
+
+    services = appliance(tmp_path)
+    real = operations_module.atomic_write
+    finished = services.operations.finish
+
+    def full_at_the_end(*args, **kwargs):
+        monkeypatch.setattr(
+            operations_module, "atomic_write", lambda *a, **k: (_ for _ in ()).throw(OSError(errno.ENOSPC, "full"))
+        )
+        return finished(*args, **kwargs)
+
+    monkeypatch.setattr(services.operations, "finish", full_at_the_end)
+    operation, _ = plan_and_execute(services, "updates.plan", scope="security")
+    monkeypatch.setattr(services.operations, "finish", finished)
+    monkeypatch.setattr(operations_module, "atomic_write", real)
+
+    assert services.operations.unfinished, "nothing kept the end to write later"
+    planned = handlers_for(services).dispatch({"operation": "system.plan_reboot"})
+
+    assert planned["plan"]["blockers"] == []
+    assert services.operations.get(operation.operation_id).state == STATE_SUCCEEDED
+
+
 class AgentStopped(BaseException):
     """What systemd's SIGTERM is to an agent on its way down: nothing after it runs."""
 

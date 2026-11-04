@@ -216,6 +216,9 @@ class OperationStore:
         # Operations an agent restart interrupted whose recovery could not be
         # written -- a full card is the ordinary way. They still hold the lock.
         self.unrecorded = []
+        # Ends that could not be written, by operation: the first one asked
+        # for, since a failure path's own finish fails on the same card.
+        self.unfinished = {}
 
     # --- persistence -----------------------------------------------------
 
@@ -263,8 +266,7 @@ class OperationStore:
     def create(self, operation_type, requested_target=None, *, actor="", plan_request=""):
         """Take the lock with a new plan; ``plan_request`` is kept only as its digest."""
 
-        if self.unrecorded:
-            self.recover_interrupted()
+        self._close_unrecorded()
         with self._lock:
             active = self.active()
             if active is not None:
@@ -375,9 +377,32 @@ class OperationStore:
 
     def finish(self, operation_id, state, *, result=None, error=None, stage=None):
         with self._lock:
-            return self._finish(
-                self._load(operation_id), state, result=result, error=error, stage=stage
-            )
+            try:
+                return self._finish(
+                    self._load(operation_id), state, result=result, error=error, stage=stage
+                )
+            except OSError:
+                self.unfinished.setdefault(
+                    operation_id, {"state": state, "result": result, "error": error, "stage": stage}
+                )
+                raise
+
+    def _close_unrecorded(self):
+        """Write the ends and recoveries a full card refused, now that there may be room."""
+
+        for operation_id, end in list(self.unfinished.items()):
+            with self._lock:
+                try:
+                    operation = self._load(operation_id)
+                    if not operation.terminal:
+                        self._finish(operation, **end)
+                except OSError:
+                    continue
+                except OperationError:
+                    pass
+                del self.unfinished[operation_id]
+        if self.unrecorded:
+            self.recover_interrupted()
 
     def _finish(self, operation, state, *, result=None, error=None, stage=None):
         self._transition(operation, state)
@@ -456,6 +481,8 @@ class OperationStore:
         booted = read_boot_id()
         with self._lock:
             for operation in self._all():
+                if operation.operation_id in self.unfinished:
+                    continue
                 if (
                     operation.state == STATE_RUNNING
                     and operation.host_down_boot

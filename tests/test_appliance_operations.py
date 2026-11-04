@@ -483,3 +483,32 @@ def test_an_agent_restart_in_the_same_boot_leaves_a_reboot_retryable(tmp_path, m
     restarted.recover_interrupted()
 
     assert restarted.get(operation_id).state == STATE_FAILED_RECOVERABLE
+
+
+def test_an_end_the_card_had_no_room_for_is_written_when_the_next_plan_comes(tmp_path, monkeypatch):
+    """A finish() that raised left the record running for good: Cancel was an
+    invalid transition and every plan, reboot included, a conflict -- even
+    after the operator had made room."""
+
+    import errno
+
+    from appliance import operations as operations_module
+
+    store, operation_id = _interrupted(tmp_path)
+    real = operations_module.atomic_write
+    monkeypatch.setattr(
+        operations_module, "atomic_write", lambda *a, **k: (_ for _ in ()).throw(OSError(errno.ENOSPC, "full"))
+    )
+    with pytest.raises(OSError):
+        store.finish(operation_id, STATE_SUCCEEDED, result={"applied": True})
+    with pytest.raises(OSError):
+        store.finish(operation_id, STATE_FAILED_TERMINAL, error={"code": "operation_failed", "message": "full"})
+    monkeypatch.setattr(operations_module, "atomic_write", real)
+
+    planned = store.create("system.timezone")
+
+    ended = store.get(operation_id)
+    assert ended.state == STATE_SUCCEEDED, ended.to_dict()
+    assert ended.result == {"applied": True}
+    assert store.unfinished == {}
+    assert planned.state == STATE_PLANNED
