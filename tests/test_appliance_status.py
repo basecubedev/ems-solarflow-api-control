@@ -784,3 +784,25 @@ def test_boot_files_written_since_this_boot_owe_a_restart(tmp_path):
     os.utime(fresh, (1_800_000_000 - 60, 1_800_000_000 - 60))
 
     assert probe.reboot_required() == {"required": True, "packages": ["boot firmware"]}
+
+
+def test_the_operation_lists_leave_apts_output_to_the_record_itself(tmp_path):
+    """Every two-second poll carried each listed record in full. Twenty-odd
+    update records with apt's output at its clamp passed the client's 8 MiB
+    limit, and the banner and the status page stopped updating."""
+
+    from appliance.operations import STATE_SUCCEEDED
+
+    services = build_test_services(tmp_path)
+    store = services.operations
+    for _ in range(3):
+        operation = store.create("updates.install")
+        store.await_confirmation(operation.operation_id, {})
+        store.confirm(operation.operation_id, store.get(operation.operation_id, include_token=True).confirmation_token)
+        store.finish(operation.operation_id, STATE_SUCCEEDED, result={"scope": "security", "output": "x" * 256 * 1024})
+
+    listed = services.status.operations_state()
+
+    assert len(json.dumps(listed)) < 64 * 1024
+    assert listed["unacknowledged"][0]["result"]["scope"] == "security"
+    assert store.get(operation.operation_id).to_dict()["result"]["output"]

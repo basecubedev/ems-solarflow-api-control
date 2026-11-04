@@ -259,9 +259,9 @@ class StatusService:
     def operations_state(self):
         active = self.operations.active()
         return {
-            "active": active.to_dict() if active else None,
-            "recent": [item.to_dict() for item in self.operations.list(limit=10)],
-            "unacknowledged": [item.to_dict() for item in self.operations.unacknowledged()],
+            "active": active.summary() if active else None,
+            "recent": [item.summary() for item in self.operations.list(limit=10)],
+            "unacknowledged": [item.summary() for item in self.operations.unacknowledged()],
         }
 
     # --- aggregate -------------------------------------------------------

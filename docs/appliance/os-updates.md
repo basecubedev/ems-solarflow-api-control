@@ -156,6 +156,11 @@ prevents a second package operation. Afterwards it runs a dpkg consistency
 check, detects the reboot requirement, reports the changed package count and
 shows failures explicitly.
 
+apt's output stays in the operation's own record and leaves the lists the
+console polls every two seconds: at up to 256 KiB a record, a few
+unacknowledged updates took those answers past the 8 MiB the web service
+accepts from the agent, and the banner and the status page stopped updating.
+
 ## Install all updates (Expert mode)
 
 Expert mode adds **Plan all updates**. It uses the same plan, confirmation and

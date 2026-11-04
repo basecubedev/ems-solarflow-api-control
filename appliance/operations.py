@@ -193,6 +193,18 @@ class Operation:
         data["settled"] = self.settled
         return redact_mapping(data)
 
+    def summary(self):
+        """The record as a list shows it: without the tool output a result carries.
+
+        Lists are polled every two seconds; apt's output, clamped at 256 KiB a
+        record, took a few unacknowledged updates past the client's 8 MiB limit.
+        """
+
+        data = self.to_dict()
+        if isinstance(data.get("result"), dict) and "output" in data["result"]:
+            data["result"] = {key: value for key, value in data["result"].items() if key != "output"}
+        return data
+
     @classmethod
     def from_dict(cls, data):
         known = {f for f in cls.__dataclass_fields__}
