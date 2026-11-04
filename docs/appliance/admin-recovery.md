@@ -593,10 +593,13 @@ None of these report `succeeded`:
 retry cannot fix either. The others end as `failed_recoverable`.
 
 Start and Restart measure against what the **deployment** names, and the
-repair's identity check accepts a container that runs it. A repair's start,
-restart or recreate verifies against the known-good history's current entry,
-which follows a console upgrade once a status read has seen the console's
-Admin pass the checks listed with the known-good history above. A history that
+repair's identity check accepts a container that runs it. A repair's own start
+or restart does the same: neither can bring up anything but what the
+deployment names, and held against the known-good history a restart that fixed
+the Admin read as `image_mismatch`. A repair's recreate verifies against the
+known-good history's current entry, which follows a console upgrade once a
+status read has seen the console's Admin pass the checks listed with the
+known-good history above. A history that
 still named the Admin this appliance installed last made a healthy, up-to-date
 Admin report `image_mismatch` with no appliance action able to clear it, and
 told the operator to reinstall a working Admin to satisfy a bookkeeping entry.

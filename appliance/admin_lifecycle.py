@@ -1747,12 +1747,12 @@ class AdminLifecycleService:
         if action == "start_admin":
             if not self.docker.start_container(container).ok:
                 return "start_failed"
-            return self._verified_or_reason()
+            return self._verified_or_reason(as_deployed=True)
 
         if action == "restart_admin":
             if not self.docker.restart_container(container).ok:
                 return "restart_failed"
-            return self._verified_or_reason()
+            return self._verified_or_reason(as_deployed=True)
 
         if action == "recreate_admin":
             try:
@@ -1825,13 +1825,24 @@ class AdminLifecycleService:
             return "restart_policy_not_applied"
         return "verified"
 
-    def _verified_or_reason(self):
-        """A repair action reports the failing fact, never a bare "unhealthy"."""
+    def _verified_or_reason(self, *, as_deployed=False):
+        """A repair action reports the failing fact, never a bare "unhealthy".
+
+        ``as_deployed`` is for a start or restart, which can bring up nothing
+        but what the deployment names -- the same expectation Lifecycle holds
+        them to. Against known-good, which a console-installed build never
+        becomes, a restart that fixed the Admin read as an image mismatch.
+        """
 
         expected = self.known_good.current() or {}
+        expected_version = str(expected.get("admin_version") or "")
+        expected_digest = str(expected.get("admin_digest") or "")
+        deployed = self._deployed_digest() if as_deployed else ""
+        if deployed and deployed != expected_digest:
+            expected_digest, expected_version = deployed, ""
         verification = self.verify_admin(
-            expected_version=str(expected.get("admin_version") or ""),
-            expected_digest=str(expected.get("admin_digest") or ""),
+            expected_version=expected_version,
+            expected_digest=expected_digest,
         )
         self.last_repair_verification = verification
         return "verified" if verification["verified"] else verification["error"]
