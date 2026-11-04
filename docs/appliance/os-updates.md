@@ -83,6 +83,15 @@ minutes later, and a scheduled security run tries again the next day.
 
 ## Install security updates
 
+*Security* means what apt lists from the Debian security archive — an update
+whose origin names `security`, such as `Debian-Security:13/stable-security`.
+Nothing else is security here, however urgent: the kernel, the boot firmware
+and `rpi-eeprom` come from `archive.raspberrypi.com`, `docker-ce`,
+`containerd.io` and `runc` from `download.docker.com`, and neither origin
+labels a release as security. Those arrive as **other updates**, are installed
+only by *Install all updates*, and never by the automatic security updates —
+a kernel or container-runtime fix has to be planned by hand.
+
 **Plan security updates** on the **Operating system** card, or **Install
 security updates** on the **Raspberry Pi OS** card above it and in the
 Overview's quick actions, plans them. Only the packages the appliance itself
@@ -120,7 +129,8 @@ documented repair for a broken package manager here is re-flashing.
 `automatic_security_updates` in `/etc/ems-appliance-manager/appliance.conf` is
 off by default. Turned on, `ems-appliance-auto-update.timer` runs once a day at
 a randomised hour and installs the waiting **security** updates — and nothing
-else. It takes effect at the next run; no unit has to be enabled by hand.
+else: not the kernel, the firmware or the container runtime, whose origins are
+never security (see above). It takes effect at the next run; no unit has to be enabled by hand.
 
 It is a caller of the agent, not a second one beside it. The same plan, the
 same blockers, the same operation lock and the same audit entry the console

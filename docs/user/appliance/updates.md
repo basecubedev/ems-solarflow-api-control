@@ -15,6 +15,12 @@ Everything on the appliance that has a version is updated from one page,
 Nothing updates on its own unless you switch automatic security updates on:
 every install shows its plan first and waits for your confirmation.
 
+*Security updates* are those from Debian's security archive. The Raspberry Pi
+kernel and firmware and Docker's container runtime come from other sources that
+never mark an update as security: they count as other updates, and only
+**Install all updates** (Expert mode) puts them on — automatic security
+updates never do.
+
 ## When to use this workflow
 
 - The assistant's **Install security updates** row, or the Overview, says
