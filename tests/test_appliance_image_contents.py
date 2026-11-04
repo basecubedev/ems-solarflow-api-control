@@ -601,3 +601,24 @@ def test_the_published_file_is_checked_to_be_the_inspected_image():
 
     assert 'xz -t "$OUTPUT/$NAME.img.xz"' in after
     assert 'xz -dc "$OUTPUT/$NAME.img.xz" | sha256sum' in after
+
+
+def test_dockers_address_pools_stay_out_of_the_lans_ranges():
+    """After fifteen /16 bridge networks Docker's default pools hand out
+    192.168.x ranges, which swallow LAN devices behind the router -- the
+    inverters the EMS controls among them."""
+
+    import ipaddress
+    import json
+
+    daemon = json.loads(
+        (ROOT / "packaging/appliance/image/layer/ems-appliance.rootfs-overlay/etc/docker/daemon.json")
+        .read_text(encoding="utf-8")
+    )
+    pools = daemon["default-address-pools"]
+
+    assert pools
+    for pool in pools:
+        network = ipaddress.ip_network(pool["base"])
+        assert network.subnet_of(ipaddress.ip_network("172.16.0.0/12")), pool
+        assert pool["size"] >= 24, pool

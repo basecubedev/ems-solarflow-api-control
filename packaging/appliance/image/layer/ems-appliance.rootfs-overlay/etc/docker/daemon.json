@@ -4,5 +4,8 @@
     "max-size": "16m",
     "max-file": "3"
   },
-  "live-restore": true
+  "live-restore": true,
+  "default-address-pools": [
+    {"base": "172.16.0.0/12", "size": 24}
+  ]
 }

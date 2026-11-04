@@ -243,7 +243,15 @@ http://ems-solarflow.local:8090   EMS Admin Console
 ```
 
 The recovery UI deliberately does not depend on a reverse-proxy container. A
-proxy may later add `/system` and `/admin` paths in front of both.
+reverse proxy is not supported in front of the Manager; see
+[security-model.md](security-model.md#authentication-and-sessions).
+
+The image's `/etc/docker/daemon.json` confines Docker's own networks to
+`172.16.0.0/12` in /24 pieces. Docker's default pools reach into `192.168.x`
+after fifteen networks, and a bridge there swallows LAN devices behind the
+router, the inverters the EMS controls among them. The file belongs to the
+image, not to the package: an appliance flashed before this keeps its own until
+it is re-flashed or the file is edited.
 
 ## Related documents
 
