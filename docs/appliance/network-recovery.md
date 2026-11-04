@@ -157,8 +157,9 @@ On an appliance image the recovery paths are therefore, in order:
 4. Add your own SSH key through the manager **while it is still reachable**. If
    `ems-shell` is enabled, that is a shell. If it is not, the key still reaches
    `ems-backup` — chroot-confined, read-only, SFTP-only — which retrieves your
-   configuration, data and backups from a box you can otherwise no longer
-   reach, so step 5 costs you nothing.
+   backups from a box you can otherwise no longer reach. Make a fresh backup
+   first if you can (Admin → Backups): the backup account reads the backups,
+   not the live configuration. Then step 5 costs you nothing.
 5. Re-flash. This erases the card: writing the image back replaces the
    operator's configuration, data and on-box backups with a fresh installation.
    The backup in step 4 is not a convenience — it is the only copy.

@@ -40,7 +40,7 @@ BACKUP_USER = "ems-backup"
 UNRELATED_USER = "ems-outsider"
 
 EXPORT_ROOT = "/srv/ems-appliance-export"
-EXPORT_NAMES = ("config", "backups", "data")
+EXPORT_NAMES = ("backups",)
 BACKUP_KEY = "/root/appliance-backup-key"
 INSTALL_ROOT = "/opt/ems-solarflow"
 
@@ -520,10 +520,10 @@ class SystemdContainer:
 
     def seed_ems_installation(self, *, marker="exported-config-marker"):
         self.shell(
-            "mkdir -p /opt/ems-solarflow/config /opt/ems-solarflow/backups "
-            "/opt/ems-solarflow/data /opt/ems-solarflow/secrets && "
+            "mkdir -p /opt/ems-solarflow/config /opt/ems-solarflow/data/backups "
+            "/opt/ems-solarflow/secrets && "
             f"printf '%s\\n' {shlex.quote(marker)} > /opt/ems-solarflow/config/config.json && "
-            "printf 'backup-bytes\\n' > /opt/ems-solarflow/backups/backup-1.tar && "
+            "printf 'backup-bytes\\n' > /opt/ems-solarflow/data/backups/backup-1.tar && "
             "printf 'runtime\\n' > /opt/ems-solarflow/data/runtime-state.json && "
             "printf 'do-not-export\\n' > /opt/ems-solarflow/secrets/mqtt.pass",
             timeout=180,

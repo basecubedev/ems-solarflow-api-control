@@ -257,7 +257,7 @@ def test_appliance_layout_is_centrally_defined(tmp_path):
     assert paths.agent_socket.name == "agent.sock"
     assert paths.appliance_conf.name == "appliance.conf"
     assert paths.allowed_images_conf.name == "allowed-images.conf"
-    assert set(paths.export_paths()) == {"config", "backups", "data"}
+    assert set(paths.export_paths()) == {"backups"}
 
 
 # --- hostnames, accounts, scopes ------------------------------------------

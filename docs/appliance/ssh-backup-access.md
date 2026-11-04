@@ -138,15 +138,27 @@ root can write:
 
 ```text
 /srv/ems-appliance-export/          root:root 0755   ← the session's "/"
-  config/    read-only bind mount of /opt/ems-solarflow/config
-  backups/   read-only bind mount of /opt/ems-solarflow/backups
-  data/      read-only bind mount of /opt/ems-solarflow/data
+  backups/   read-only bind mount of /opt/ems-solarflow/data/backups
 ```
 
-The account therefore sees exactly three directories and cannot reach anything
-else. The exports are **bind mounts of the live EMS directories**, not copies:
-a backup taken through SFTP is always current, and nothing is duplicated into a
-shadow tree that could go stale.
+The account therefore sees exactly one directory, the archives EMS writes, and
+cannot reach anything else. **No live configuration and no live data** (owner
+decision 2026-11-04): a backup key fetches backups, unencrypted ones included,
+and reads no secret the running EMS holds — not the password hash in
+`config/dashboard-auth.json`, not the InfluxDB token, not the TLS key. What an
+archive contains is the archive's business; see
+[backups](../user/appliance/backup.md). The export is a bind mount, not a copy,
+so a new archive is there as soon as EMS has written it.
+
+Earlier packages exported `config`, `backups` and `data`. The first run of this
+one unmounts the two live exports, removes their empty mount points and
+withdraws the ACL entries its manifest says it granted on them; an entry an
+operator changed since is left alone and named in the journal, and a mount
+point with anything in it is refused rather than emptied. Earlier packages also
+set a default ACL on those roots, which files EMS wrote since have inherited.
+Below `data/backups` those entries are recognised as the package's and a purge
+withdraws them; elsewhere under `config` and `data` they stay as `ems-backup`
+entries with an empty mask, unreachable from the chroot.
 
 The export root is an **exclusive** boundary. Anything else inside it — a file,
 a hidden file, a symlink, an extra directory — would be visible to the account,
@@ -178,24 +190,22 @@ satisfies both.
 
 | Path in the SFTP session | Host path | Access |
 |---|---|---|
-| `/config` | `/opt/ems-solarflow/config` | read-only |
-| `/backups` | `/opt/ems-solarflow/backups` | read-only — **always empty**, see below |
-| `/data` | `/opt/ems-solarflow/data` | read-only |
+| `/backups` | `/opt/ems-solarflow/data/backups` | read-only |
 
-`/backups` publishes a directory nothing writes to. EMS keeps its archives in
-`data/backups` (`ems/backup.py`), which the `/data` export already carries, so
-that is where an operator finds them and what `backup_access.examples()` now
-puts on screen. The export is not repointed at `data/backups` because the two
-sources would then overlap, and `setup-export-root.sh` grants ACLs recursively
-per source — the first run's own grant would look pre-existing to the second and
-the transaction would stop being idempotent, which one of its tests refuses.
+`data/backups` exists once EMS has written its first archive. Until then the
+export is *pending*, and `ems-appliance-export-acl.path`, which watches that
+path, mounts it the moment it appears.
 
 Read-only is enforced twice: the bind mount carries `ro`, and POSIX ACLs grant
 the account read-and-traverse only. `/usr/lib/ems-appliance-manager/setup-export-root.sh`
 applies both — a traversal-only ACL entry on the install root and a recursive
-read ACL on each export, with the mask set explicitly, because a named-user
+read ACL on the export, with the mask set explicitly, because a named-user
 grant on a 0600 file would otherwise be capped to nothing. The `acl` package is
-a declared dependency.
+a declared dependency. The walk goes through `/proc/self/fd/N/.`: given the
+handle itself, a link, `setfacl -R` and `getfacl -R` change and read the
+directory and never a file in it, which is how every archive once stayed
+unreadable. An archive EMS rotates away while the walk runs is skipped, not a
+failed run.
 
 **A file EMS writes later is not automatically readable.** The script sets the
 default ACL for the same reason, but a file's mask is re-derived from its create
@@ -211,7 +221,9 @@ file 0640:  user:ems-backup:r-x  #effective:r--   mask::r--
 So an archive created after the last export run carries the grant with an empty
 mask. `ems-appliance-export-acl.path` watches `data/backups` for exactly that
 and starts `ems-appliance-export-acl.service`, which runs
-`setup-export-root.sh --refresh-acl`: the recursive grant and nothing else.
+`setup-export-root.sh --refresh-acl`: the recursive grant, and the bind only
+where none is mounted yet. A refresh that fails leaves the report of the last
+full run as it was and says so in the journal.
 
 Its own watcher and its own unit, rather than a second path on
 `ems-appliance-export.path`, for two reasons. A full export run rebuilds the
@@ -226,10 +238,6 @@ when the newest archive under `data/backups` has neither a group-read nor an
 other-read bit. Until the export service runs again, fetch that archive through
 the Admin Console's own download instead.
 
-Only the archive path is judged. What else lives under an export is the
-business of whoever writes it — the shared password store sits under `config`
-at 0600 on purpose — and reporting that as a fault would call the appliance
-broken for doing the right thing.
 
 A bind mount that cannot be made read-only is unmounted again rather than left
 as a writable export.
@@ -247,7 +255,7 @@ or mount change, and the whole run is refused if one of them fails:
 | a real directory, not a symlink, at exactly the configured location | both roots and every export source and target |
 | every **existing** parent component is a real directory | both roots |
 | the two roots are not identical and neither lives inside the other | the two roots |
-| only `config`, `backups` and `data` exist inside it | the export root |
+| only `backups` exists inside it (and, until a run retires them, `config` and `data`) | the export root |
 | root-owned, mode 0755 | every export target |
 
 A path that does not exist yet is validated against its nearest existing
@@ -621,11 +629,7 @@ enabled by default.
 Paths are relative to the export root, so they are short:
 
 ```bash
-sftp -r ems-backup@ems-solarflow.local:/data/backups ./ems-backups
-```
-
-```bash
-sftp -r ems-backup@ems-solarflow.local:/config ./ems-config
+sftp -r ems-backup@ems-solarflow.local:/backups ./ems-backups
 ```
 
 ```bash

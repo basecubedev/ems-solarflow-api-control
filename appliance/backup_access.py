@@ -100,9 +100,6 @@ class ExportPath:
 # installed or on this process being able to become the account.
 READABLE_BY_OTHERS = stat.S_IRGRP | stat.S_IROTH
 
-# Where ems/backup.py puts its archives, relative to the EMS data directory.
-# `examples()` puts the matching /data/backups on the operator's screen.
-ARCHIVE_SUBDIRECTORY = "backups"
 
 
 def newest_file(path, *, max_entries=5000):
@@ -346,41 +343,22 @@ class BackupAccessService:
         than all of them: it is the file the operator is about to ask for, and
         the one written after the last recursive ACL pass.
 
-        Only where the archives are -- the paths `examples()` puts on screen.
-        Everything else under an export is judged by whoever writes it: the
-        shared password store lives under `config` at 0600 on purpose, and
-        reporting that as a fault would say the appliance is broken for doing
-        the right thing.
+        The one export is the archive directory itself, the path `examples()`
+        puts on screen.
         """
 
         names = []
         for item in present:
-            for directory in self._archive_directories(Path(item["path"]), item["name"]):
-                newest = newest_file(directory)
-                if newest is None:
-                    continue
-                try:
-                    mode = newest.stat().st_mode
-                except OSError:
-                    continue
-                if not mode & READABLE_BY_OTHERS:
-                    names.append(item["name"])
-                    break
+            newest = newest_file(Path(item["path"]))
+            if newest is None:
+                continue
+            try:
+                mode = newest.stat().st_mode
+            except OSError:
+                continue
+            if not mode & READABLE_BY_OTHERS:
+                names.append(item["name"])
         return names
-
-    @staticmethod
-    def _archive_directories(source, name):
-        """Where EMS writes its archives, inside one export source.
-
-        `data/backups` is the path `examples()` puts on screen; the separate
-        `backups` export publishes a directory no writer in this project uses,
-        and is checked only in case one does.
-        """
-
-        candidates = [source / ARCHIVE_SUBDIRECTORY]
-        if name == ARCHIVE_SUBDIRECTORY:
-            candidates.append(source)
-        return [item for item in candidates if item.is_dir()]
 
     def _recorded_status(self):
         """What the packaged setup script last wrote, for diagnosis only."""
@@ -394,18 +372,11 @@ class BackupAccessService:
         return payload
 
     def examples(self, account_name, target_host):
-        # /data/backups, not /backups. EMS writes its archives under data, and
-        # the separate /backups export publishes a directory no writer in this
-        # project has ever used -- so the obvious command came back empty and
-        # said nothing, which a backup feature only discovers at restore time.
+        # /backups is the EMS's own data/backups: the one export there is.
         return [
             {
                 "title": "Copy all EMS backups",
-                "command": f"sftp -r {account_name}@{target_host}:/data/backups ./ems-backups",
-            },
-            {
-                "title": "Copy the EMS configuration",
-                "command": f"sftp -r {account_name}@{target_host}:/config ./ems-config",
+                "command": f"sftp -r {account_name}@{target_host}:/backups ./ems-backups",
             },
             {
                 "title": "Browse the exported paths",

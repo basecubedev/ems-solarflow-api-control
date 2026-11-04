@@ -1452,7 +1452,7 @@ def test_the_appliance_ships_no_second_unattended_upgrader():
 def test_the_acl_refresh_units_are_shipped_and_enabled():
     """The pass that makes a new archive readable, without the mount work."""
 
-    from appliance.backup_access import ARCHIVE_SUBDIRECTORY
+    from appliance.paths import export_sources
 
     build = (PACKAGING / "build-deb.sh").read_text(encoding="utf-8")
     postinst = (PACKAGING / "debian" / "postinst").read_text(encoding="utf-8")
@@ -1466,24 +1466,25 @@ def test_the_acl_refresh_units_are_shipped_and_enabled():
     # No ExecStartPost: re-activating the confinement from a watcher races the
     # `backup-access activate` an install is running, which fails the install.
     assert "ExecStartPost" not in service["Service"]
-    assert f"PathChanged=/opt/ems-solarflow/data/{ARCHIVE_SUBDIRECTORY}" in watcher.read_text(
-        encoding="utf-8"
-    )
+    archives = export_sources(Path("/opt/ems-solarflow"))["backups"]
+    assert f"PathChanged={archives}" in watcher.read_text(encoding="utf-8")
 
 
-def test_the_acl_refresh_touches_no_mounts():
-    """Tearing the binds down would cut an SFTP fetch that is in progress."""
+def test_the_acl_refresh_mounts_only_where_nothing_is_mounted_yet():
+    """Tearing a proven bind down would cut an SFTP fetch that is in progress.
+
+    The harness simulates a bind as a link, so a second run over a "mounted"
+    export cannot be exercised there; the order is pinned here instead.
+    """
 
     script = (PACKAGING / "bin" / "setup-export-root.sh").read_text(encoding="utf-8")
-    body = script.split("REFRESH_ACL_ONLY=no", 1)[1]
+    loop = script.split('for name in $EXPORTS; do\n    source_dir=$(export_source "$name")', 1)[1]
 
-    assert '--refresh-acl) REFRESH_ACL_ONLY=yes' in body
-    guarded = [
-        line
-        for line in body.splitlines()
-        if 'if [ "$REFRESH_ACL_ONLY" = yes ]; then' in line
-    ]
-    assert len(guarded) == 2, guarded
+    proven = loop.index('if mount_proves "$target_dir" "$identity"; then')
+    refresh = loop.index('if [ "$REFRESH_ACL_ONLY" = yes ]; then\n        REFRESH_RECORD=yes')
+    assert proven < refresh
+    assert 'if [ "$REFRESH_ACL_ONLY" != yes ]; then\n    for name in $RETIRED_EXPORTS' in script
+    assert '--refresh-acl) REFRESH_ACL_ONLY=yes' in script
 
 
 def test_removal_takes_the_acl_units_with_it():

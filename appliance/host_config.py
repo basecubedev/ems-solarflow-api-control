@@ -117,9 +117,7 @@ def render_acl_path_unit(paths):
     install root's inode, so the export watcher never saw it.
     """
 
-    from appliance.backup_access import ARCHIVE_SUBDIRECTORY
-
-    archives = paths.ems_data_dir / ARCHIVE_SUBDIRECTORY
+    archives = paths.ems_backups_dir
     return HEADER + "[Path]\n" + "PathChanged=\n" + f"PathChanged={archives}\n"
 
 

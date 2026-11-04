@@ -3,8 +3,7 @@
 
 The backup account is chrooted into the export root, so the usable boundary is
 not the sshd policy alone: it is the policy plus an export root that contains
-only the three managed mount points, each publishing the configured EMS
-directory, read-only. This module answers that question once, and the
+only the managed mount point, publishing the EMS backup directory, read-only. This module answers that question once, and the
 activation path, the runtime status and ``verify-install`` all use the answer
 rather than each deciding for themselves.
 
@@ -19,7 +18,7 @@ from pathlib import Path
 
 from appliance.paths import chroot_chain_problems, runtime_boundary_problems
 
-EXPECTED_EXPORTS = ("config", "backups", "data")
+EXPECTED_EXPORTS = ("backups",)
 
 STATE_MOUNTED = "mounted"
 STATE_MISSING = "missing"

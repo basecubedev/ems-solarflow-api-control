@@ -295,7 +295,7 @@ def test_a_fully_verified_status_may_promise_the_restrictions(tmp_path, producti
 # --- authentication follows the complete confinement ------------------------
 
 
-def seed_exports(services, *, names=("config", "backups", "data"), read_only=True):
+def seed_exports(services, *, names=("backups",), read_only=True):
     import shutil
 
     for name, source in services.paths.export_paths().items():
@@ -319,9 +319,9 @@ def test_activation_needs_the_export_mounts_not_only_the_ssh_policy(tmp_path, pr
 
 def test_an_unmounted_export_disables_backup_authentication(tmp_path):
     services = appliance(tmp_path)
-    for name in ("config", "backups", "data"):
-        (services.paths.install_root / name).mkdir(parents=True, exist_ok=True)
-    services.host.write_export_mounts(names=("config", "backups"))
+    for source in services.paths.export_paths().values():
+        source.mkdir(parents=True, exist_ok=True)
+    services.host.write_export_mounts(names=())
 
     report = activation(services).activate()
 
@@ -343,9 +343,7 @@ def test_a_read_write_export_disables_backup_authentication(tmp_path):
 def test_a_foreign_source_at_an_export_target_disables_backup_authentication(tmp_path):
     services = appliance(tmp_path)
     seed_exports(services)
-    services.host.write_export_mounts(
-        source_for=lambda name: "/etc" if name == "config" else services.paths.install_root / name
-    )
+    services.host.write_export_mounts(source_for=lambda name: "/etc")
 
     report = activation(services).activate()
 
@@ -367,12 +365,12 @@ def test_an_unmanaged_entry_in_the_export_root_disables_backup_authentication(tm
 
 def test_a_missing_ems_directory_stays_pending_and_still_activates(tmp_path, production_chroot_chain):
     services = appliance(tmp_path)
-    seed_exports(services, names=("config", "backups"))
+    seed_exports(services, names=())
 
     report = activation(services).activate()
 
     assert report["state"] == STATE_ACTIVE, report
-    assert "data" in report["exports"]["pending"], report["exports"]
+    assert "backups" in report["exports"]["pending"], report["exports"]
 
 
 # --- key-file conflicts are never resolved by discarding a key --------------
@@ -424,24 +422,23 @@ def test_the_status_reports_the_mounted_source_identity(tmp_path):
 
     status = services.backup.status()
 
-    config = next(item for item in status["paths"] if item["name"] == "config")
-    assert config["mounted_source"] == mount_root_of(services.paths.install_root / "config"), config
-    assert config["path"] == str(services.paths.install_root / "config"), config
-    assert config["source_verified"] is True, config
+    source = services.paths.export_paths()["backups"]
+    backups = next(item for item in status["paths"] if item["name"] == "backups")
+    assert backups["mounted_source"] == mount_root_of(source), backups
+    assert backups["path"] == str(source), backups
+    assert backups["source_verified"] is True, backups
 
 
 def test_a_foreign_read_only_mount_is_not_reported_as_confined(tmp_path):
     services = appliance(tmp_path)
     seed_exports(services)
-    services.host.write_export_mounts(
-        source_for=lambda name: "/etc" if name == "config" else services.paths.install_root / name
-    )
+    services.host.write_export_mounts(source_for=lambda name: "/etc")
 
     status = services.backup.status()
 
     assert status["confined"] is False, status["export_access"]
-    config = next(item for item in status["paths"] if item["name"] == "config")
-    assert config["source_verified"] is False, config
+    backups = next(item for item in status["paths"] if item["name"] == "backups")
+    assert backups["source_verified"] is False, backups
 
 
 # --- the forced command is the confinement, not its first word --------------
@@ -549,16 +546,12 @@ def test_a_forced_command_without_the_read_only_flag_is_refused(tmp_path):
     assert policy["restrictions"]["forcecommand"]["confirmed"] is False, policy
 
 
-def test_the_advertised_command_names_where_backups_actually_are(tmp_path):
-    """``/backups`` is a known-empty export and cannot simply be repointed.
+def test_the_backups_export_is_where_ems_writes_its_archives(tmp_path):
+    """The one export, and the command on screen, name the directory EMS writes.
 
-    ``ems/backup.py`` writes ``data/backups``, which lives inside the ``data``
-    export -- and ``setup-export-root.sh`` grants ACLs recursively per source,
-    so exporting both makes the first run's own grant look pre-existing to the
-    second and the transaction stops being idempotent. The archives are
-    reachable through ``data``; what has to be true is the command the appliance
-    puts on screen, which used to send the owner to the empty one and report
-    nothing when it came back with nothing.
+    ``/backups`` once published an install-root directory nothing wrote to, and
+    the command on screen came back empty and said nothing. The appliance may
+    not import ``ems``, so this pins the two names to each other.
     """
 
     from ems.backup import DEFAULT_BACKUP_DIR_NAME
@@ -569,8 +562,11 @@ def test_the_advertised_command_names_where_backups_actually_are(tmp_path):
         for entry in services.backup.examples("ems-backup", "ems-solarflow.local")
     )
 
-    assert "/" + DEFAULT_BACKUP_DIR_NAME in commands, commands
-    assert ":/backups " not in commands, "still sends the owner to the empty export"
+    assert services.paths.export_paths() == {
+        "backups": services.paths.install_root / DEFAULT_BACKUP_DIR_NAME
+    }
+    assert ":/backups " in commands, commands
+    assert ":/config" not in commands and ":/data" not in commands, commands
 
 
 # --- whether the account can read what is exported --------------------------
@@ -581,7 +577,7 @@ def exported_file(services, name, mode):
 
     import os
 
-    source = services.paths.export_paths()[name] / "backups"
+    source = services.paths.export_paths()[name]
     source.mkdir(parents=True, exist_ok=True)
     target = source / "ems-config-manual-20260922.tar.gz"
     handle = os.open(target, os.O_WRONLY | os.O_CREAT, mode)
@@ -607,20 +603,20 @@ def test_an_export_whose_newest_file_the_account_cannot_read_is_degraded(tmp_pat
     """
 
     services = appliance(tmp_path)
-    exported_file(services, "data", 0o600)
+    exported_file(services, "backups", 0o600)
 
     access = services.backup.export_access()
 
     assert access["status"] == "degraded", access
     assert services.config.backup_user in access["detail"], access["detail"]
-    assert "data" in access["unreadable"], access
+    assert "backups" in access["unreadable"], access
 
 
 def test_an_export_whose_files_carry_a_group_read_bit_is_not_degraded(tmp_path):
     """0640 leaves a non-empty mask, so the grant is effective."""
 
     services = appliance(tmp_path)
-    exported_file(services, "data", 0o640)
+    exported_file(services, "backups", 0o640)
 
     access = services.backup.export_access()
 
@@ -629,33 +625,28 @@ def test_an_export_whose_files_carry_a_group_read_bit_is_not_degraded(tmp_path):
 
 def test_an_export_with_nothing_in_it_yet_is_not_called_unreadable(tmp_path):
     services = appliance(tmp_path)
-    services.paths.export_paths()["data"].mkdir(parents=True, exist_ok=True)
+    services.paths.export_paths()["backups"].mkdir(parents=True, exist_ok=True)
 
     access = services.backup.export_access()
 
     assert access["unreadable"] == [], access
 
 
-def test_a_private_file_outside_the_archive_path_is_not_a_fault(tmp_path):
-    """The shared password store lives under `config` at 0600 on purpose.
+def test_the_live_configuration_is_not_exported_at_all(tmp_path):
+    """Owner decision 2026-11-04: backups over SFTP, the live configuration not.
 
-    Reporting that as "exported files are not readable" would say the appliance
-    is broken for doing the right thing, and would bury the one case that
-    matters: the archive an operator was just told exists.
+    The password hash in config/dashboard-auth.json opens the Manager and,
+    through it, root; a backup key may read archives and nothing the running
+    EMS holds.
     """
 
-    import os
-
     services = appliance(tmp_path)
-    source = services.paths.export_paths()["config"]
-    source.mkdir(parents=True, exist_ok=True)
-    handle = os.open(source / "dashboard-auth.json", os.O_WRONLY | os.O_CREAT, 0o600)
-    os.close(handle)
 
-    access = services.backup.export_access()
+    exported = list(services.paths.export_paths().values())
 
-    assert access["unreadable"] == [], access
-    assert access["status"] == "configured", access
+    assert services.paths.ems_config_dir not in exported
+    assert services.paths.ems_data_dir not in exported
+    assert all(services.paths.ems_config_dir not in path.parents for path in exported)
 
 
 # --- an operator's "off" stays off ------------------------------------------------

@@ -38,6 +38,8 @@ SHELL_SUDOERS=${EMS_APPLIANCE_SHELL_SUDOERS:-/etc/sudoers.d/ems-shell}
 RESCUE_USER=${EMS_APPLIANCE_RESCUE_ACCOUNT:-ems-rescue}
 RESCUE_POLICY="$SSHD_DIR/ems-appliance-rescue.conf"
 EXPORT_ROOT=/srv/ems-appliance-export
+# The export this package publishes, and the two earlier packages did: a purge
+# after an upgrade that never ran the export setup still finds them mounted.
 EXPORTS="config backups data"
 DISABLED_SUFFIX=.disabled-by-appliance
 RECORD_SCHEMA=3

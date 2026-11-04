@@ -208,9 +208,7 @@ class FakeHost:
         self.start_refusals = {}
         self.failing_tools = set()
 
-    def write_export_mounts(
-        self, *, read_only=True, names=("config", "backups", "data"), source_for=None
-    ):
+    def write_export_mounts(self, *, read_only=True, names=None, source_for=None):
         """Publish the export binds in the fake ``/proc/1/mountinfo``.
 
         The mount root and the device are what the kernel reports for a bind:
@@ -220,6 +218,7 @@ class FakeHost:
 
         options = "ro,relatime" if read_only else "rw,relatime"
         lines = ["21 1 0:20 / /proc rw,relatime shared:5 - proc proc rw"]
+        names = tuple(self.paths.export_paths()) if names is None else names
         for index, name in enumerate(names):
             target = self.paths.export_root / name
             # Derived from the same map production binds from, never restated
@@ -936,9 +935,9 @@ def build_test_services(
 ):
     paths = appliance_paths(tmp_path)
     host = host or FakeHost(paths, root=tmp_path)
-    # A normal host has the EMS directories and their read-only binds; a test
-    # that needs one of them absent removes it explicitly.
-    for source in paths.export_paths().values():
+    # A normal host has the EMS directories and the read-only bind of its
+    # backups; a test that needs one of them absent removes it explicitly.
+    for source in (paths.ems_config_dir, paths.ems_data_dir, *paths.export_paths().values()):
         source.mkdir(parents=True, exist_ok=True)
     host.write_export_mounts()
     clock = clock or FrozenClock()

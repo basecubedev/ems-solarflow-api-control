@@ -601,7 +601,6 @@ def test_the_acl_watcher_sees_the_directory_the_archives_land_in(tmp_path):
     package install measurably fails that way.
     """
 
-    from appliance.backup_access import ARCHIVE_SUBDIRECTORY
     from appliance.host_config import render_acl_path_unit
 
     paths = layout(tmp_path, install_root=tmp_path / "srv" / "ems")
@@ -612,7 +611,7 @@ def test_the_acl_watcher_sees_the_directory_the_archives_land_in(tmp_path):
         if line.startswith("PathChanged=") and line.partition("=")[2]
     ]
 
-    assert watched == [str(paths.ems_data_dir / ARCHIVE_SUBDIRECTORY)], watched
+    assert watched == [str(paths.ems_data_dir / "backups")], watched
 
 
 def test_the_export_watcher_still_watches_only_the_install_root(tmp_path):

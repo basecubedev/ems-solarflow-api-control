@@ -91,8 +91,7 @@ session and other tools are refused. **Copy files from this appliance** shows
 the commands to run on your own computer, for example:
 
 ```bash
-sftp -r ems-backup@ems-solarflow.local:/data/backups ./ems-backups
-sftp -r ems-backup@ems-solarflow.local:/config ./ems-config
+sftp -r ems-backup@ems-solarflow.local:/backups ./ems-backups
 ```
 
 Or open a session and fetch what you need:
@@ -102,12 +101,13 @@ sftp -i ~/.ssh/your-key ems-backup@ems-solarflow.local
 ```
 
 ```text
-get -r /config
-get -r /data
+get -r /backups
 ```
 
-`/data` is the one that carries your snapshots — they live in `data/backups`.
-There is a `/backups` entry in the session too; it is a leftover and is empty.
+`/backups` is the only thing the session shows: the backups EMS made, each one
+as it is, unencrypted ones included. The live configuration is not reachable
+this way, on purpose — the key on your computer opens your backups and nothing
+the running system holds. To have a copy of the configuration, make a backup.
 
 A graphical client works too: FileZilla, WinSCP or Cyberduck, protocol **SFTP**,
 user `ems-backup`, and your key file.

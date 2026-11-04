@@ -816,11 +816,7 @@ class AdminLifecycleService:
             )
         )
 
-        for name, path in (
-            ("config", self.paths.ems_config_dir),
-            ("data", self.paths.ems_data_dir),
-            ("backups", self.paths.ems_backups_dir),
-        ):
+        for name, path in self._bind_paths().items():
             exists = path.is_dir()
             findings.append(
                 RepairFinding(
@@ -1781,12 +1777,21 @@ class AdminLifecycleService:
 
         if action.startswith("create_bind_path:"):
             name = action.split(":", 1)[1]
-            target = self.paths.export_paths().get(name)
+            target = self._bind_paths().get(name)
             if target is None:
                 return "unknown_path"
             return self._create_bind_path(target)
 
         return "unsupported"
+
+    def _bind_paths(self):
+        """The EMS directories the deployment writes, by repair-finding name."""
+
+        return {
+            "config": self.paths.ems_config_dir,
+            "data": self.paths.ems_data_dir,
+            "backups": self.paths.ems_backups_dir,
+        }
 
     def _create_bind_path(self, target):
         """Create a missing bind directory as the deployment's, and prove it is.

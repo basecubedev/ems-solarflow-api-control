@@ -68,13 +68,13 @@ def test_a_normal_installation_is_exported_read_only(harness):
 def test_a_source_on_another_filesystem_is_still_exported(harness):
     """A data partition is a mount, not a redirection: it must be allowed."""
 
-    harness.mark_mounted(harness.install_root / "data", options="rw,relatime")
+    harness.mark_mounted(harness.export_source("backups"), options="rw,relatime")
 
     result = harness.run()
 
     assert result.returncode == 0, result.stdout + result.stderr
-    data = next(item for item in harness.status()["paths"] if item["name"] == "data")
-    assert data["state"] == "mounted", harness.status()
+    backups = next(item for item in harness.status()["paths"] if item["name"] == "backups")
+    assert backups["state"] == "mounted", harness.status()
 
 
 # --- refused sources --------------------------------------------------------
@@ -82,7 +82,7 @@ def test_a_source_on_another_filesystem_is_still_exported(harness):
 
 def test_a_source_symlinked_to_etc_is_refused_before_any_mutation(harness):
     outside = harness.outside("etc")
-    harness.replace_with_symlink(harness.install_root / "config", outside)
+    harness.replace_with_symlink(harness.export_source("backups"), outside)
 
     result = harness.run()
 
@@ -90,6 +90,20 @@ def test_a_source_symlinked_to_etc_is_refused_before_any_mutation(harness):
     assert harness.status()["status"] == "failed", harness.status()
     assert not mutations(harness), harness.calls()
     assert not any(str(outside) in line for line in harness.calls())
+
+
+def test_a_data_directory_symlinked_elsewhere_is_refused_before_any_mutation(harness):
+    """The export lives one level down; a redirected parent redirects it too."""
+
+    outside = harness.outside("etc")
+    (outside / "backups").mkdir()
+    harness.replace_with_symlink(harness.install_root / "data", outside)
+
+    result = harness.run()
+
+    assert result.returncode != 0
+    assert harness.status()["status"] == "failed", harness.status()
+    assert not mutations(harness), harness.calls()
 
 
 def test_a_source_symlinked_to_a_sibling_is_refused(harness):
@@ -120,12 +134,12 @@ def test_a_symlinked_install_root_is_refused(harness):
 
 def test_the_refusal_names_the_export_and_not_the_redirected_host_path(harness):
     outside = harness.outside("etc")
-    harness.replace_with_symlink(harness.install_root / "config", outside)
+    harness.replace_with_symlink(harness.export_source("backups"), outside)
 
     result = harness.run()
 
     status = harness.status()
-    assert "config" in status["detail"]
+    assert "backups" in status["detail"]
     assert str(outside) not in status["detail"], status
     assert str(outside) not in result.stderr, result.stderr
 
@@ -136,8 +150,8 @@ def test_a_source_replaced_after_validation_is_refused_before_it_is_mounted(harn
     outside = harness.outside("etc")
     harness.hook(
         "setfacl",
-        f'rm -rf "{harness.install_root}/config" && '
-        f'ln -s "{outside}" "{harness.install_root}/config"',
+        f'rm -rf "{harness.export_source("backups")}" && '
+        f'ln -s "{outside}" "{harness.export_source("backups")}"',
     )
 
     result = harness.run()
@@ -267,7 +281,7 @@ def test_unexpected_content_is_reported_but_never_deleted(harness):
 
 def test_a_symlinked_export_target_is_refused(harness):
     outside = harness.outside("etc")
-    harness.replace_with_symlink(harness.export_root / "config", outside)
+    harness.replace_with_symlink(harness.export_root / "backups", outside)
 
     result = harness.run()
 
@@ -290,12 +304,12 @@ def test_a_target_mounted_from_the_wrong_source_is_not_reported_as_exported(harn
     """A pre-existing mount is replaced or refused, never adopted."""
 
     outside = harness.outside("etc")
-    harness.mark_mounted(harness.export_root / "config", options="ro,relatime")
+    harness.mark_mounted(harness.export_root / "backups", options="ro,relatime")
     harness.environment["EMS_STUB_BIND_SOURCE"] = str(outside)
 
     result = harness.run()
 
-    config = next(item for item in harness.status()["paths"] if item["name"] == "config")
+    config = next(item for item in harness.status()["paths"] if item["name"] == "backups")
     assert config["state"] != "mounted", harness.status()
     assert result.returncode != 0
 
@@ -334,7 +348,7 @@ def test_a_foreign_mount_is_revalidated_after_it_has_been_unmounted(harness):
     """Unmounting reveals the real target; it must be checked again, not used."""
 
     outside = harness.outside("etc")
-    target = harness.export_root / "config"
+    target = harness.export_root / "backups"
     for entry in sorted(target.rglob("*"), reverse=True):
         entry.unlink() if not entry.is_dir() else entry.rmdir()
     target.rmdir()
@@ -448,7 +462,7 @@ def test_a_recorded_identity_is_more_than_a_device_and_inode(harness):
     harness.run()
 
     roots = manifest_roots(harness)
-    source = str(harness.install_root / "config")
+    source = str(harness.export_source("backups"))
     fields = roots[source][2].split(":")
     entry = os.stat(source)
     assert fields[0] == str(entry.st_dev), roots[source]
@@ -465,13 +479,13 @@ def test_a_recursive_grant_records_every_object_it_changed(harness):
     harness.run()
 
     entries = manifest_entries(harness)
-    marker = str(harness.install_root / "config" / "marker")
+    marker = str(harness.export_source("backups") / "marker")
     assert (marker, "access") in entries, harness.manifest_lines()
     assert entries[(marker, "access")][4] == "no", entries[(marker, "access")]
 
 
 def test_an_acl_entry_that_predates_the_installation_is_recorded_as_preserved(harness):
-    operator = harness.install_root / "config" / "operator.json"
+    operator = harness.export_source("backups") / "operator.json"
     operator.write_text("{}\n", encoding="utf-8")
     harness.set_acl(operator, BACKUP_USER, "rwx")
 
@@ -497,7 +511,7 @@ def test_the_manifest_declares_the_schema_its_reader_requires(harness):
 
 
 def test_a_second_run_does_not_record_its_own_grants_as_pre_existing(harness):
-    operator = harness.install_root / "config" / "operator.json"
+    operator = harness.export_source("backups") / "operator.json"
     operator.write_text("{}\n", encoding="utf-8")
     harness.set_acl(operator, BACKUP_USER, "rwx")
     assert harness.run().returncode == 0
