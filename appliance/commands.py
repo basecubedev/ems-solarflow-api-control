@@ -14,6 +14,8 @@ import subprocess
 import time
 from dataclasses import dataclass
 
+from appliance.redaction import bounded_redacted_log
+
 DEFAULT_TIMEOUT = 60
 
 # Linux MAX_ARG_STRLEN. A longer member cannot reach execve at all, so refusing
@@ -111,6 +113,18 @@ def validated_arguments(args):
             )
         argv.append(arg)
     return argv
+
+
+def command_failure_detail(result):
+    """What the failed command said, bounded and redacted.
+
+    An operator has no shell on the appliance, so a refusal that drops the
+    tool's own output leaves nobody able to find out what went wrong.
+    """
+
+    bounded = bounded_redacted_log((result.stderr or "") + (result.stdout or ""))
+    lines = [line.strip() for line in bounded["text"].splitlines() if line.strip()]
+    return lines[-1] if lines else "no output"
 
 
 def _captured(value):

@@ -32,7 +32,7 @@ from appliance.admin_deployment import (
     snapshot,
 )
 from appliance.auth import deployment_owner
-from appliance.commands import CommandError
+from appliance.commands import CommandError, command_failure_detail
 from appliance.docker_backend import (
     CONTAINER_RUNNING,
     DAEMON_RUNNING,
@@ -60,7 +60,6 @@ from appliance.operations import (
     STATE_SUCCEEDED,
     STATE_VERIFYING,
 )
-from appliance.redaction import bounded_redacted_log
 from appliance.releases import (
     ReleaseCatalogue,
     ReleaseResolutionError,
@@ -128,18 +127,6 @@ def repair_failure_message(remaining, unverified):
     if remaining:
         parts.append(f"{len(remaining)} finding(s) still block a healthy Admin")
     return "the repair ran but " + " — ".join(parts)
-
-
-def command_failure_detail(result):
-    """What the failed command said, bounded and redacted.
-
-    An operator has no shell on the appliance, so a refusal that drops the
-    tool's own output leaves nobody able to find out what went wrong.
-    """
-
-    bounded = bounded_redacted_log((result.stderr or "") + (result.stdout or ""))
-    lines = [line.strip() for line in bounded["text"].splitlines() if line.strip()]
-    return lines[-1] if lines else "no output"
 
 
 def pull_progress_note(image_ref, elapsed):

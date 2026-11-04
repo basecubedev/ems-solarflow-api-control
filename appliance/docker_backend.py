@@ -10,7 +10,7 @@ shell.
 import json
 from dataclasses import dataclass, field
 
-from appliance.commands import CommandError
+from appliance.commands import CommandError, command_failure_detail
 
 IMAGE_PULL_TIMEOUT = 1800
 UNWATCHED_PULL_TIMEOUT = 600
@@ -264,7 +264,7 @@ class DockerBackend:
                 f"{reference} did not finish downloading within {limit // 60} minutes",
             )
         if not result.ok:
-            raise DockerError("image_pull_failed", f"cannot pull {reference}")
+            raise DockerError("image_pull_failed", f"cannot pull {reference}: {command_failure_detail(result)}")
         return result
 
     def save_image(self, reference, path):
@@ -274,7 +274,7 @@ class DockerBackend:
             "docker", ["save", "-o", str(path), reference], timeout=max(self.timeout, 900)
         )
         if not result.ok:
-            raise DockerError("image_save_failed", f"cannot save {reference}")
+            raise DockerError("image_save_failed", f"cannot save {reference}: {command_failure_detail(result)}")
         return result
 
     def load_image(self, path):
@@ -282,7 +282,7 @@ class DockerBackend:
             "docker", ["load", "-i", str(path)], timeout=max(self.timeout, 900)
         )
         if not result.ok:
-            raise DockerError("image_load_failed", f"cannot load {path}")
+            raise DockerError("image_load_failed", f"cannot load {path}: {command_failure_detail(result)}")
         return result
 
     # --- compose ---------------------------------------------------------

@@ -272,3 +272,24 @@ def test_a_child_that_left_the_group_does_not_hold_the_call(tmp_path, monkeypatc
 
     assert result.stopped
     assert time.monotonic() - started < 5
+
+
+def test_a_failed_pull_says_why_docker_refused_it(tmp_path):
+    """The pull discarded Docker's answer: a full card read as "cannot pull",
+    while the recovery guide told the operator to read the reason."""
+
+    from appliance.docker_backend import DockerBackend, DockerError
+
+    executable = tmp_path / "docker"
+    executable.write_text(
+        "#!/bin/sh\necho 'failed to register layer: write /var/lib/docker/x: no space left on device' >&2\nexit 1\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    backend = DockerBackend(CommandRunner(executables={"docker": [str(executable)]}))
+
+    with pytest.raises(DockerError) as excinfo:
+        backend.pull_image("ghcr.io/example/admin:v1.0.0")
+
+    assert excinfo.value.code == "image_pull_failed"
+    assert "no space left on device" in str(excinfo.value.message)

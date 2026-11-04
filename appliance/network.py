@@ -21,8 +21,7 @@ from pathlib import Path
 
 from dataclasses import dataclass, field
 
-from appliance.admin_lifecycle import command_failure_detail
-from appliance.commands import CommandError
+from appliance.commands import CommandError, command_failure_detail
 from appliance.operations import STATE_FAILED_TERMINAL, STATE_SUCCEEDED, STATE_VERIFYING
 from appliance.paths import atomic_write
 from appliance.validation import is_localhost, validate_hostname
