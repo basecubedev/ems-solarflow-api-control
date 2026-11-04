@@ -516,12 +516,10 @@ class AgentHandlers:
     def _plan_power(self, operation, name):
         action = "reboot" if name == "system.plan_reboot" else "shutdown"
         status = self.services.status
-        active = self.services.operations.active()
         return {
             "type": f"system.{action}",
             "action": action,
             "blockers": self._power_blockers(),
-            "running_operation": active.to_dict() if active else None,
             "docker": status.docker_state(),
             "warning": "EMS control stops while the appliance is "
             + ("restarting." if action == "reboot" else "powered off."),

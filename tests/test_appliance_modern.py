@@ -335,7 +335,6 @@ PLAN_OBJECT_FIELDS = frozenset(
         "preserves",
         "recovery",
         "rollback_target",
-        "running_operation",
         "target",
     }
 )

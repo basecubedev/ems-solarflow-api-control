@@ -1362,3 +1362,16 @@ def test_the_auto_update_unit_outlasts_the_wait_for_the_install():
     assert timeout >= (
         UPDATE_PLAN_TIMEOUT + DEFAULT_OPERATION_TIMEOUT + SCHEDULED_INSTALL_WAIT_SECONDS + 120
     )
+
+
+def test_a_reboot_plan_does_not_name_itself_as_the_operation_running(tmp_path):
+    """Read after its own record existed, the plan's "running operation" was
+    always the reboot plan itself."""
+
+    services = appliance(tmp_path)
+    services.host.calls.clear()
+
+    planned = handlers_for(services).dispatch({"operation": "system.plan_reboot"})
+
+    assert "running_operation" not in planned["plan"]
+    assert not [args for tool, args, _ in services.host.calls if tool == "apt-get"], services.host.calls
