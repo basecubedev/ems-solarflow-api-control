@@ -257,6 +257,13 @@ def load_allowed_images(path):
             key = key.strip().lower()
             value = value.strip()
             if key == "expected_source":
+                # Empty would switch the OCI source comparison off.
+                if not value:
+                    raise ConfigError(
+                        "config_value_invalid",
+                        "expected_source names the repository images must come from; it "
+                        "may not be empty",
+                    )
                 expected_source = value
             elif key == "legacy_exempt_tags":
                 legacy.extend(item.strip() for item in value.split(",") if item.strip())

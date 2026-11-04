@@ -1627,3 +1627,16 @@ def test_the_package_and_its_units_suspend_backup_access_and_never_revoke_it():
         calls = [line for line in text.splitlines() if "backup-access " in line and not line.lstrip().startswith("#")]
         assert calls, name
         assert not [line for line in calls if "backup-access disable" in line], (name, calls)
+
+
+def test_a_blank_expected_source_is_refused_not_a_switched_off_check(tmp_path):
+    """An empty value overrode the default with "", and validate_oci_labels then
+    skipped the source comparison: a typo failed open."""
+
+    from appliance.config import ConfigError
+
+    conf = tmp_path / "allowed-images.conf"
+    conf.write_text("ghcr.io/basecubedev/ems-solarflow-admin\nexpected_source =\n", encoding="utf-8")
+
+    with pytest.raises(ConfigError):
+        load_allowed_images(conf)
