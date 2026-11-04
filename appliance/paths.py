@@ -602,9 +602,18 @@ def ensure_directories(paths, *, role="all", mode=None):
     for directory, default in directory_modes(paths, role=role):
         try:
             directory.mkdir(parents=True, exist_ok=True)
-            directory.chmod(default if mode is None else mode)
+            # The web account can replace its own directories with a link, and
+            # this runs as root from `password-reset`: chmod through the link
+            # re-moded whatever it named, / included.
+            handle = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         except OSError:
             continue
+        try:
+            os.fchmod(handle, default if mode is None else mode)
+        except OSError:
+            pass
+        finally:
+            os.close(handle)
     return paths
 
 

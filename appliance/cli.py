@@ -179,7 +179,7 @@ def command_repair(args):
 
 def command_password_reset(args):
     paths = resolve_paths()
-    ensure_directories(paths)
+    ensure_directories(paths, role="agent")
     from appliance.auth import ConfirmedPassword, deployment_owner
 
     privileged = os.geteuid() == 0
