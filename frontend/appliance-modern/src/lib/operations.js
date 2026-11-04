@@ -30,6 +30,7 @@ export const OPERATION_TYPES = Object.freeze([
   "ssh.key_remove",
   "ssh.revoke_all",
   "ssh.shell_access",
+  "ssh.backup_access",
   "support.archive",
 ]);
 

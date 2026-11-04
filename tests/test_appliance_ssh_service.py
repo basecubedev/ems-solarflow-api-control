@@ -857,6 +857,45 @@ def test_revoking_every_key_reaches_the_keys_set_aside_too(tmp_path):
     assert not (ssh_dir / ("authorized_keys" + DISABLED_SUFFIX)).exists()
 
 
+# --- backup access off, from the console, and it stays off ------------------
+
+
+def test_backup_access_that_cannot_be_activated_again_says_so(tmp_path):
+    """Lifting the revocation is not access: activation still has to prove it."""
+
+    services = appliance(tmp_path)
+    plan_and_execute(services, "ssh.plan_backup_access", enabled=False)
+    services.operations.acknowledge(services.operations.list()[0].operation_id)
+    services.host.write_export_mounts(names=())
+
+    operation, _ = plan_and_execute(services, "ssh.plan_backup_access", enabled=True)
+
+    assert operation.state == "failed_terminal", operation.to_dict()
+    assert operation.error["code"] != "", operation.to_dict()
+
+
+def test_backup_access_off_that_could_not_withdraw_authentication_fails(tmp_path, monkeypatch):
+    """Recorded is not withdrawn: an account the package cannot prove it owns
+    is not expired, and its keys still authenticate."""
+
+    from appliance import backup_confinement
+
+    class Unowned:
+        def revoke(self):
+            return {"revocation_recorded": True, "authentication_disabled": False, "ownership": "not_owned"}
+
+        def revoked(self):
+            return True
+
+    services = appliance(tmp_path)
+    monkeypatch.setattr(backup_confinement, "build_activation", lambda **kwargs: Unowned())
+
+    operation, _ = plan_and_execute(services, "ssh.plan_backup_access", enabled=False)
+
+    assert operation.state == "failed_terminal", operation.to_dict()
+    assert operation.error["code"] == "backup_access_not_withdrawn"
+
+
 def test_revoking_every_key_deletes_the_set_aside_and_conflict_files(tmp_path):
     """Emptied, they were still recognised by name: activation refused with
     key_conflict and a new key with backup_access_withdrawn, for good."""

@@ -759,6 +759,24 @@ test.describe("access, network and diagnostics", () => {
     await expect(page.getByTestId("ssh-set-aside-table")).toHaveCount(0, { timeout: 15_000 });
   });
 
+  test("the SSH card says whether a socket or the service listens", async ({ page, request }) => {
+    await resetAppliance(request, { ssh_socket: true });
+    await createPassword(page);
+    await open(page, "access");
+    await expect(page.getByTestId("ssh-listens-via")).toContainText("ssh.socket");
+  });
+
+  test("backup access is switched off at the console and says it stays off", async ({ page }) => {
+    await createPassword(page);
+    await open(page, "access");
+    await page.getByTestId("backup-access-disable").click();
+    await expect(page.getByTestId("plan-dialog")).toBeVisible();
+    await confirmPlan(page);
+    await settled(page);
+    await expect(page.getByTestId("backup-access-revoked")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("backup-access-enable")).toBeVisible();
+  });
+
   test("a private key is refused with the appliance's reason", async ({ page }) => {
     await createPassword(page);
     await open(page, "access");

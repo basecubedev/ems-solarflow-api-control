@@ -54,6 +54,8 @@ export const PLAN_FIELD_ORDER = Object.freeze([
  * this list, so a new field is named before an owner meets it.
  */
 export const PLAN_EXTRA_FIELDS = Object.freeze([
+  "currently_revoked",
+  "unparsed_lines",
   "free_space_known",
   "version",
   "installed_version",

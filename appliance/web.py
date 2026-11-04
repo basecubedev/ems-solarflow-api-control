@@ -1052,6 +1052,12 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             "/api/ssh/shell-access/disable": (
                 "ssh.plan_shell_access", lambda _: {"enabled": False},
             ),
+            "/api/backup/access/disable": (
+                "ssh.plan_backup_access", lambda _: {"enabled": False},
+            ),
+            "/api/backup/access/enable": (
+                "ssh.plan_backup_access", lambda _: {"enabled": True},
+            ),
             "/api/ssh/keys": ("ssh.plan_key_add", self._key_fields),
             "/api/ssh/keys/remove-plan": ("ssh.plan_key_remove", self._fingerprint_fields),
             "/api/ssh/keys/revoke": ("ssh.plan_revoke_all", self._account_fields),

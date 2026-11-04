@@ -132,6 +132,7 @@ def build_services(
         config=config,
         operations=operations,
         paths=paths,
+        probe=probe,
         time_fn=time_fn,
         operation_log=operation_log,
     )

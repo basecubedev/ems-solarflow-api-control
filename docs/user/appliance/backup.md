@@ -121,15 +121,17 @@ user `ems-backup`, and your key file.
   it cannot prove the account is off afterwards, it reports failure rather than
   success.
 
-Revoking the export itself is a console command rather than a button, because
-it must work when the browser does not:
+- **Switch backup access off** on the **Backup account** card switches the
+  whole account off and ends its open sessions. The same works at the console,
+  for when the browser does not:
 
 ```bash
 sudo ems-appliance backup-access disable
 ```
 
 It stays off — across reboots, updates and every automatic re-check — until you
-run `sudo ems-appliance backup-access enable`; adding a key for `ems-backup` is
+switch it on again (**Switch backup access on**, or
+`sudo ems-appliance backup-access enable`); adding a key for `ems-backup` is
 refused meanwhile. Use it when a key may be in the wrong hands, for example on
 a lost laptop.
 

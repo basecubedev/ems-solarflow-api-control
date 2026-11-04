@@ -687,6 +687,7 @@
     "ssh.key_remove": "Removing a public key",
     "ssh.revoke_all": "Revoking every public key",
     "ssh.shell_access": "Changing root-capable shell access",
+    "ssh.backup_access": "Switching backup access",
     "support.archive": "Creating a support archive"
   };
 

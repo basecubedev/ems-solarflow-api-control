@@ -35,6 +35,7 @@ from tests.helpers.appliance import (  # noqa: E402
     IMAGE_SOURCE,
     SSHD_BACKUP_MATCH,
     StaticCatalogue,
+    seed_backup_account,
 )
 
 OS_RELEASE = """NAME="Raspberry Pi OS"
@@ -250,7 +251,7 @@ def main():
 
     backup_home = root / "home" / "ems-backup"
     backup_home.mkdir(parents=True, exist_ok=True)
-    host.add_account("ems-backup", backup_home)
+    seed_backup_account(services, home=backup_home)
 
     live = {"app": None, "agent": None}
     unconfigured_fetcher = services.manager.fetcher
@@ -315,9 +316,18 @@ def main():
             aside.write_text("".join(f"{line}\n" for line in options["set_aside_keys"]), encoding="utf-8")
             os.chmod(aside, 0o600)
         host.units["ssh.service"] = {"active": "inactive", "enabled": "disabled"}
+        host.units.pop("ssh.socket", None)
+        host.absent_units.add("ssh.socket")
+        if options.get("ssh_socket"):
+            # Trixie's shape: the socket holds port 22 and starts sshd per connection.
+            host.absent_units.discard("ssh.socket")
+            host.units["ssh.socket"] = {"active": "active", "enabled": "enabled"}
         host.sshd_backup_match = SSHD_BACKUP_MATCH.format(export_root=services.paths.export_root)
         host.ss_exit_code, host.ss_stderr, host.listening_ports = 0, "", ""
         services.paths.export_status_file.unlink(missing_ok=True)
+        from appliance.backup_confinement import REVOKED_NAME
+
+        (services.paths.agent_state_dir / REVOKED_NAME).unlink(missing_ok=True)
         services.paths.confirmed_password_file.unlink(missing_ok=True)
         if options.get("confirmed_password"):
             ConfirmedPassword(services.paths.confirmed_password_file).store(

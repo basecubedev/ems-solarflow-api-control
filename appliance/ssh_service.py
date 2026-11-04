@@ -28,6 +28,7 @@ TYPE_SSH_KEY_ADD = "ssh.key_add"
 TYPE_SSH_KEY_REMOVE = "ssh.key_remove"
 TYPE_SSH_REVOKE_ALL = "ssh.revoke_all"
 TYPE_SSH_SHELL_ACCESS = "ssh.shell_access"
+TYPE_SSH_BACKUP_ACCESS = "ssh.backup_access"
 
 RECOMMENDED_DEFAULTS = {
     "permitrootlogin": "no",
@@ -85,10 +86,13 @@ class SshService:
         config,
         operations,
         paths=None,
+        probe=None,
         time_fn=None,
         operation_log=None,
     ):
         self.runner = runner
+        # The host probe the backup activation reads the mount table through.
+        self.probe = probe
         self.systemd = systemd
         self.config = config
         self.operations = operations
@@ -110,16 +114,18 @@ class SshService:
     def _admit_backup_key(self, account):
         """Refuse a backup key that sshd would accept without its confinement.
 
-        A fail-closed disable moves the key file aside and only expires the
-        account when there was a key; a key written after it would be the one
-        file sshd reads, confined or not. Removing a key never needs this.
+        A fail-closed disable moves the key file aside and expires the account;
+        a key written after it would be the one file sshd reads, confined or
+        not. Removing a key never needs this.
         """
 
         if self.paths is None or account != self.config.backup_user:
             return
         from appliance.backup_confinement import build_activation
 
-        activation = build_activation(paths=self.paths, config=self.config, runner=self.runner)
+        activation = build_activation(
+            paths=self.paths, config=self.config, runner=self.runner, probe=self.probe
+        )
         if activation.revoked():
             raise SshServiceError(
                 "backup_access_revoked",
@@ -349,6 +355,38 @@ class SshService:
             ),
         }
 
+    def plan_backup_access(self, operation, enabled):
+        """Switch backup access off until an operator switches it back on.
+
+        Off is the console's ``backup-access disable``: recorded first, so no
+        boot, export run or package install brings the account back, then the
+        keys are set aside and the account expired. On lifts that record and
+        activates, which refuses for whatever reason the confinement cannot be
+        proven.
+        """
+
+        from appliance.backup_confinement import build_activation
+
+        values = {"enabled": bool(enabled)}
+        operation.requested_target.update(values)
+        self.operations.update_target(operation.operation_id, values)
+        activation = build_activation(
+            paths=self.paths, config=self.config, runner=self.runner, probe=self.probe
+        )
+        return {
+            "type": TYPE_SSH_BACKUP_ACCESS,
+            "account": self.config.backup_user,
+            "enabled": bool(enabled),
+            "currently_revoked": activation.revoked(),
+            "note": (
+                "Backup access stays off until it is switched on again, through every "
+                "boot, export run and package install; open SFTP sessions are ended."
+                if not enabled
+                else "Backup access is activated again; it stays off if its confinement "
+                "cannot be proven."
+            ),
+        }
+
     def plan_key_add(self, operation, *, account, public_key):
         store = self.keystore(account)
         try:
@@ -421,6 +459,8 @@ class SshService:
             return self._execute_revoke_all(operation)
         if operation.type == TYPE_SSH_SHELL_ACCESS:
             return self._execute_shell_access(operation)
+        if operation.type == TYPE_SSH_BACKUP_ACCESS:
+            return self._execute_backup_access(operation)
         raise SshServiceError("unknown_operation_type", f"{operation.type} is not executable")
 
     def _execute_service(self, operation):
@@ -495,6 +535,64 @@ class SshService:
             payload["sessions"] = self._end_sessions([shell_access.ACCOUNT])
         if activation.export_failed:
             payload["export_warning"] = activation.export_failed
+        self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
+        return payload
+
+    def _execute_backup_access(self, operation):
+        from appliance.backup_confinement import STATE_ACTIVE, build_activation
+
+        enabled = bool(operation.requested_target.get("enabled"))
+        self._advance(operation, "enabling_backup_access" if enabled else "revoking_backup_access")
+        activation = build_activation(
+            paths=self.paths, config=self.config, runner=self.runner, probe=self.probe
+        )
+        report = activation.reinstate() if enabled else activation.revoke()
+        payload = {"enabled": enabled, "revoked": activation.revoked(), "report": report}
+        if enabled and report.get("state") != STATE_ACTIVE:
+            self.operations.finish(
+                operation.operation_id,
+                STATE_FAILED_TERMINAL,
+                stage="backup_access_not_active",
+                error={
+                    "code": report.get("reason") or "backup_access_not_active",
+                    "message": "the revocation was lifted, but backup access could not be "
+                    "activated: its confinement is not proven",
+                },
+            )
+            raise SshServiceError(
+                report.get("reason") or "backup_access_not_active",
+                "backup access could not be activated",
+            )
+        if not enabled:
+            if not report.get("revocation_recorded", True):
+                self.operations.finish(
+                    operation.operation_id,
+                    STATE_FAILED_TERMINAL,
+                    stage="revocation_not_recorded",
+                    error={
+                        "code": "revocation_not_recorded",
+                        "message": "access was withdrawn now, but the revocation could not be "
+                        "recorded, so the next activation would bring it back",
+                    },
+                )
+                raise SshServiceError("revocation_not_recorded", "the revocation was not recorded")
+            if not report.get("authentication_disabled"):
+                # Recorded, but the keys still authenticate: an account this
+                # package cannot prove it owns, or one that could not expire.
+                self.operations.finish(
+                    operation.operation_id,
+                    STATE_FAILED_TERMINAL,
+                    stage="backup_access_not_withdrawn",
+                    error={
+                        "code": "backup_access_not_withdrawn",
+                        "message": "the revocation was recorded, but authentication could not be "
+                        "withdrawn: " + str(report.get("ownership") or report.get("reason") or "unknown"),
+                    },
+                )
+                raise SshServiceError(
+                    "backup_access_not_withdrawn", "backup authentication could not be withdrawn"
+                )
+            payload["sessions"] = self._end_sessions([self.config.backup_user])
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
         return payload
 

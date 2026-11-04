@@ -159,6 +159,16 @@ class BackupAccessService:
             mounts = {}
         return inspect_exports(self.paths, mounts=mounts)
 
+    def _revoked(self):
+        from appliance.backup_confinement import build_activation
+
+        try:
+            return build_activation(
+                paths=self.paths, config=self.config, runner=self.ssh_service.runner
+            ).revoked()
+        except Exception:
+            return None
+
     def confinement_state(self):
         """Every restriction the appliance promises, as sshd would apply it."""
 
@@ -236,6 +246,8 @@ class BackupAccessService:
             "write_access": False,
             "protocol": ACCESS_PROTOCOL,
             "shell_access": False,
+            # Switched off at the console or the CLI, and staying off.
+            "revoked": self._revoked(),
             "confined": bool(policy["confirmed"]) and state["confined"],
             "chroot": chroot,
             "confinement": policy,

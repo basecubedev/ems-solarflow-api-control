@@ -742,3 +742,39 @@ def test_a_fail_closed_disable_expires_the_account_even_without_a_key_file(tmp_p
     assert ("chage", ("-E", "1", "ems-backup")) in [
         (tool, args) for tool, args, _ in services.host.calls
     ], services.host.calls
+
+
+def test_backup_access_switched_back_on_at_the_console_lifts_the_revocation(tmp_path, production_chroot_chain):
+    """The console's counterpart of `backup-access enable`: the record goes and
+    the account is activated, for real, against a proven confinement."""
+
+    from tests.helpers.appliance import SignedInHandlers
+
+    services = seed_exports(appliance(tmp_path))
+    handlers = SignedInHandlers(services)
+
+    def switch(enabled):
+        planned = handlers.dispatch({"operation": "ssh.plan_backup_access", "enabled": enabled})
+        handlers.dispatch({
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        })
+        operation = services.operations.get(planned["operation"]["operation_id"])
+        services.operations.acknowledge(operation.operation_id)
+        return operation
+
+    services.host.sessions["ems-backup"] = ["c9"]
+
+    off = switch(False)
+    assert off.state == "succeeded", (off.error, off.stage)
+    assert activation(services).revoked() is True
+    assert not keys(services).exists()
+    assert off.result["sessions"] == {"ems-backup": "ended"}
+    assert services.backup.status()["revoked"] is True
+
+    on = switch(True)
+
+    assert on.state == "succeeded", (on.error, on.stage)
+    assert activation(services).revoked() is False
+    assert keys(services).exists()

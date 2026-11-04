@@ -44,6 +44,7 @@
     <KeyValues
       rows={[
         { label: t("access.unitState"), value: say(word("systemd", UNIT_STATES, ssh.service?.active)), lang: langOf(word("systemd", UNIT_STATES, ssh.service?.active)) },
+        { label: t("access.listensVia"), value: ssh.socket?.running ? t("access.viaSocket") : ssh.service?.running ? t("access.viaService") : t("access.notListening"), testid: "ssh-listens-via" },
         { label: t("access.passwordLogin"), value: ssh.hardening?.passwordauthentication?.value || ssh.password_authentication, lang: "en" },
       ]}
     />
@@ -209,6 +210,14 @@
           { label: t("access.writeAccess"), value: yesNo(backup.write_access) },
         ]}
       />
+      {#if backup.revoked}<p class="note warn" data-testid="backup-access-revoked"><Icon name="lock" />{t("access.backupRevoked")}</p>{/if}
+      <div class="row-wrap">
+        {#if backup.revoked}
+          <PlanButton plan={{ key: "backup-access-enable", endpoint: "/api/backup/access/enable", title: { key: "plan.title.backupEnable" } }} label={t("access.backupEnable")} icon="unlock" testid="backup-access-enable" />
+        {:else}
+          <PlanButton plan={{ key: "backup-access-disable", endpoint: "/api/backup/access/disable", title: { key: "plan.title.backupDisable" }, danger: true }} label={t("access.backupDisable")} icon="lock" variant="secondary" testid="backup-access-disable" />
+        {/if}
+      </div>
     {/if}
   </div>
 </Card>
