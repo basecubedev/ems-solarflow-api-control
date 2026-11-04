@@ -28,6 +28,22 @@ RESULT_NAME = "install-result.json"
 OUTCOME_INSTALLED = "installed"
 OUTCOME_REVERTED = "reverted"
 OUTCOME_PENDING = "pending"
+# What install-manager.sh records besides those, every one of them named so the
+# console can say each in words; a test walks the script against this list.
+OUTCOME_NOT_STARTED = "not_started"
+OUTCOME_REVERT_FAILED = "revert_failed"
+OUTCOME_INSTALL_FAILED = "install_failed"
+OUTCOME_NO_REQUEST = "no_request"
+OUTCOME_REQUEST_INVALID = "request_invalid"
+INSTALLER_OUTCOMES = (
+    OUTCOME_INSTALLED,
+    OUTCOME_REVERTED,
+    OUTCOME_NOT_STARTED,
+    OUTCOME_REVERT_FAILED,
+    OUTCOME_INSTALL_FAILED,
+    OUTCOME_NO_REQUEST,
+    OUTCOME_REQUEST_INVALID,
+)
 
 STOPPED_UNIT_STATES = frozenset({"inactive", "failed"})
 

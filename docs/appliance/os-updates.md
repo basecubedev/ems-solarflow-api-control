@@ -207,14 +207,21 @@ tidiness; it is what makes the paragraph below true.
 4. The package is downloaded under exactly that declared size and hashed
    against the verified manifest.
 5. Everything that can refuse has now refused: signature, digest, architecture,
-   and whether that package's manager can read the state already on this
-   appliance's disk. Refusals happen here, before dpkg runs, while the code
-   deciding is still the code that started.
+   whether that package's manager can read the state already on this
+   appliance's disk, and whether another `apt` or `dpkg` run holds the package
+   lock (`package_lock_held`) -- the plan says so, and an execution confirmed
+   before the lock was taken stages nothing. Refusals happen here, before dpkg
+   runs, while the code deciding is still the code that started.
 6. The running package is retained as `previous.deb`.
 7. A deadline is armed — see below.
 8. `dpkg` runs from its own systemd unit, not from the agent. The package's own
    postinst restarts the agent and the web service, so the console is briefly
-   unreachable. That is expected.
+   unreachable. That is expected. A lock another `apt` run takes in between is
+   waited out for up to five minutes; if it never comes free, nothing is
+   installed, nothing is put back, the deadline is retired and **Last install**
+   says the install did not start (`not_started`). The kept packages have
+   already rotated by then: the running package is the way back, and the one
+   kept before it is gone.
 
 ### Going backwards is not an error
 

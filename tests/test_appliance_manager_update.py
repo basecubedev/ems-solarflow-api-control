@@ -727,6 +727,44 @@ def test_reading_the_status_writes_nothing_and_shows_what_runs(tmp_path):
     assert status["can_revert"] is False
 
 
+# --- the package lock dpkg needs ----------------------------------------------
+
+
+def test_an_update_is_not_planned_while_apt_holds_the_package_lock(tmp_path):
+    services, service = build(tmp_path)
+    seed_previous(services)
+    service.package_lock = lambda: "held"
+
+    planned = plan(services, "manager.plan_update", release_id=RELEASE_ID)
+
+    assert "package_lock_held" in [b["code"] for b in planned["plan"]["blockers"]]
+
+
+def test_a_revert_is_not_planned_while_apt_holds_the_package_lock(tmp_path):
+    services, service = build(tmp_path)
+    seed_previous(services)
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+    judged(services)
+    service.package_lock = lambda: "held"
+
+    planned = plan(services, "manager.plan_revert")
+
+    assert "package_lock_held" in [b["code"] for b in planned["plan"]["blockers"]]
+
+
+def test_an_update_confirmed_before_apt_took_the_lock_stages_nothing(tmp_path):
+    services, service = build(tmp_path)
+    seed_previous(services)
+    planned = plan(services, "manager.plan_update", release_id=RELEASE_ID)
+    service.package_lock = lambda: "held"
+
+    record = execute_planned(services, planned)
+
+    assert record.state == STATE_FAILED_TERMINAL, record.state
+    assert record.error["code"] == "package_lock_held"
+    assert not manager_install.request_path(services.paths).exists()
+
+
 # --- an axis nothing has written yet ----------------------------------------
 
 
@@ -1365,6 +1403,16 @@ def test_a_second_install_inside_an_unjudged_window_is_refused(tmp_path):
     assert answer.get("plan", {}).get("blockers"), answer
     codes = [item["code"] for item in answer["plan"]["blockers"]]
     assert "manager_verification_pending" in codes, codes
+
+
+def test_a_revert_inside_an_unjudged_window_says_so_in_its_plan(tmp_path):
+    services, _ = build(tmp_path)
+    seed_previous(services)
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+
+    planned = plan(services, "manager.plan_revert")["plan"]
+
+    assert "manager_verification_pending" in [b["code"] for b in planned["blockers"]]
 
 
 def test_a_deadline_that_has_run_out_without_a_verdict_does_not_block(tmp_path):

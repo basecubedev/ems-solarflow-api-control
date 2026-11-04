@@ -176,6 +176,7 @@ def build_services(
         operation_log=operation_log,
         installed_version=manager_version,
         architecture=host_architecture(),
+        package_lock=packages.lock_state,
     )
     status.manager = manager
     admin.manager_pending = manager.verification_pending

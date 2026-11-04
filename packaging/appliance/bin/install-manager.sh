@@ -11,6 +11,9 @@
 #   No Python. dpkg replaces appliance/*.py while this runs.
 #
 set -eu
+# dpkg's own words are matched below; a translated locale would hide the lock.
+LC_ALL=C
+export LC_ALL
 
 # What appliance/paths.py resolves packages_dir to, pinned to it by a test. The
 # pre-split path one level up is the one migration.py moves away from.
@@ -25,6 +28,13 @@ DEADLINE="$STATE/verify-deadline.json"
 VERDICT="$STATE/verify-verdict.json"
 DEADLINE_FILES="$DEADLINE $STATE/verify-revert-attempts $STATE/verify-ticks $STATE/verify-stable $STATE/verify-extended-until"
 TIMER=ems-appliance-manager-verify.timer
+# dpkg refuses at once while apt or another dpkg holds its lock, and this unit
+# is the only run a request gets. The lock is waited out for this long, well
+# inside the unit's TimeoutStartSec; the deadline spends no tick while it waits.
+LOCK_WAIT_SECONDS=300
+LOCK_RETRY_SECONDS=10
+ERRORS="$STATE/dpkg-errors"
+LOCKED=no
 
 # dpkg runs the installed package's postinst, which tightens agent state and
 # leaves the armed reverter unable to run. A revert installs an older retained
@@ -78,6 +88,14 @@ fail() {
 # reach. Left armed, it waited out the window expecting the refused version,
 # reinstalled previous.deb a second time and restarted both services again,
 # while the console refused Update and Revert as "not judged yet".
+disarm_deadline() {
+    # Word splitting is the point: one variable names every file disarm removes.
+    # shellcheck disable=SC2086
+    rm -f $DEADLINE_FILES
+    systemctl disable --now "$TIMER" >/dev/null 2>&1 \
+        || echo "install-manager: could not stop $TIMER" >&2
+}
+
 retire_deadline() {
     [ -f "$DEADLINE" ] || return 0
     umask 077
@@ -89,37 +107,83 @@ retire_deadline() {
 }
 VERDICT_EOF
     mv "$VERDICT.part" "$VERDICT"
-    # Word splitting is the point: one variable names every file disarm removes.
-    # shellcheck disable=SC2086
-    rm -f $DEADLINE_FILES
-    systemctl disable --now "$TIMER" >/dev/null 2>&1 \
-        || echo "install-manager: could not stop $TIMER" >&2
+    disarm_deadline
 }
 
-[ -f "$REQUEST" ] || fail no_request "no install request is waiting at $REQUEST"
+# Install one archive, waiting out a lock another apt or dpkg run holds.
+# LOCKED=yes only when the wait ran out and dpkg never got the lock: a pass
+# that got it and then failed -- a postinst, say -- has changed the system and
+# goes on to the cure and the fallback like any other failure.
+dpkg_install() {
+    waited=0
+    LOCKED=no
+    while :; do
+        if dpkg --force-confold --install "$1" 2>"$ERRORS"; then
+            cat "$ERRORS" >&2
+            return 0
+        fi
+        cat "$ERRORS" >&2
+        grep -q "locked by another process" "$ERRORS" || return 1
+        if [ "$waited" -ge "$LOCK_WAIT_SECONDS" ]; then
+            LOCKED=yes
+            return 1
+        fi
+        echo "install-manager: the package manager is busy; waiting" >&2
+        sleep "$LOCK_RETRY_SECONDS"
+        waited=$((waited + LOCK_RETRY_SECONDS))
+    done
+}
+
+# Refused before dpkg runs: nothing is installed, so there is nothing for the
+# deadline to judge, and left armed it reinstalled the running package.
+refuse() {
+    disarm_deadline
+    fail "$1" "$2"
+}
+
+[ -f "$REQUEST" ] || refuse no_request "no install request is waiting at $REQUEST"
 
 # The request names a file the agent already verified and retained. Reading it
 # with sed rather than a JSON parser keeps this script free of interpreters that
 # the install itself is replacing.
 ARCHIVE=$(sed -n 's/.*"archive"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$REQUEST")
 WANTED=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$REQUEST")
-[ -n "$ARCHIVE" ] || fail request_invalid "the request names no archive"
-[ -f "$ARCHIVE" ] || fail request_invalid "$ARCHIVE is not a file"
+[ -n "$ARCHIVE" ] || refuse request_invalid "the request names no archive"
+[ -f "$ARCHIVE" ] || refuse request_invalid "$ARCHIVE is not a file"
 
 case "$ARCHIVE" in
     "$STATE"/*) ;;
-    *) fail request_invalid "$ARCHIVE is outside $STATE" ;;
+    *) refuse request_invalid "$ARCHIVE is outside $STATE" ;;
 esac
+
+# What to put on if dpkg refuses the archive. A request that names it says so,
+# an empty name included: a reinstall of the running package has no fallback,
+# and previous.deb is then an older release than the one that ran. A request
+# that predates the field falls back to previous.deb, as it always did.
+if grep -q '"fallback"' "$REQUEST"; then
+    PREVIOUS=$(sed -n 's/.*"fallback"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$REQUEST")
+    case "$PREVIOUS" in
+        "" | "$STATE"/*) ;;
+        *) refuse request_invalid "$PREVIOUS is outside $STATE" ;;
+    esac
+fi
 
 echo "install-manager: installing $ARCHIVE"
 
 # --force-confold: an operator's edited conffile is not collateral of an update.
 # A tty-less run cannot answer a conffile prompt, and the alternative to
 # answering is dpkg picking for us.
-if dpkg --force-confold --install "$ARCHIVE"; then
+if dpkg_install "$ARCHIVE"; then
     record installed "$ARCHIVE"
     echo "install-manager: installed"
     exit 0
+fi
+
+# Nothing was unpacked: the lock never came free. The running package stays,
+# so there is nothing for the deadline to judge and nothing to put back.
+if [ "$LOCKED" = yes ]; then
+    disarm_deadline
+    fail not_started "another apt or dpkg run held the package lock for ${LOCK_WAIT_SECONDS}s; nothing was installed"
 fi
 
 echo "install-manager: the install failed; attempting to complete it" >&2
@@ -141,7 +205,7 @@ fi
 
 if [ -f "$PREVIOUS" ]; then
     echo "install-manager: reinstalling $PREVIOUS" >&2
-    if dpkg --force-confold --install "$PREVIOUS"; then
+    if dpkg_install "$PREVIOUS"; then
         record reverted "the install failed and $PREVIOUS was put back"
         retire_deadline reverted "the install failed and the installer put $PREVIOUS back"
         exit 1

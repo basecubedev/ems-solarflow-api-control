@@ -9,7 +9,7 @@
 export const MANAGER_DIRECTIONS = Object.freeze(["upgrade", "downgrade", "reinstall", "unknown", "revert"]);
 
 /** How the last install of a package ended (appliance/manager_install.py OUTCOME_*). */
-export const MANAGER_OUTCOMES = Object.freeze(["installed", "reverted", "pending"]);
+export const MANAGER_OUTCOMES = Object.freeze(["installed", "reverted", "pending", "not_started", "revert_failed", "install_failed", "no_request", "request_invalid"]);
 
 /** What the reverter decided about the last install, and its tone. */
 export const MANAGER_VERDICTS = Object.freeze({

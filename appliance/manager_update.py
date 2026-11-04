@@ -29,6 +29,7 @@ from appliance import (
     persistent_state,
 )
 from appliance.commands import CommandError
+from appliance.packages import LOCK_HELD
 from appliance.version import (
     DIRECTION_DOWNGRADE,
     DIRECTION_REINSTALL,
@@ -129,6 +130,7 @@ class ManagerUpdateService:
         installed_version="",
         architecture="arm64",
         reverter=manager_verify.PACKAGED_REVERTER,
+        package_lock=None,
     ):
         self.paths = paths
         self.config = config
@@ -141,6 +143,9 @@ class ManagerUpdateService:
         self.installed_version = installed_version
         self.architecture = architecture
         self.reverter = reverter
+        # What packages.PackageService.lock_state answers; None where nothing
+        # can be asked, as in a test that builds this service alone.
+        self.package_lock = package_lock
         self._time = time_fn
         self._operation_log = operation_log
 
@@ -324,6 +329,23 @@ class ManagerUpdateService:
             ),
         }
 
+    def package_lock_held(self):
+        """The blocker for a package lock apt or dpkg holds, or None.
+
+        The Manager is installed by dpkg, and dpkg refuses at once while the
+        lock is held: the installer's fallback then met the same lock and the
+        install was filed as a failed revert on an appliance nothing had
+        touched.
+        """
+
+        if self.package_lock is None or self.package_lock() != LOCK_HELD:
+            return None
+        return {
+            "code": "package_lock_held",
+            "message": "another apt or dpkg run holds the package lock; the Appliance "
+            "Manager is installed by dpkg too, so wait until that run has finished",
+        }
+
     def _refuse_while_unjudged(self):
         pending = self.verification_pending()
         if pending:
@@ -411,6 +433,9 @@ class ManagerUpdateService:
         pending = self.verification_pending()
         if pending:
             blockers.append(pending)
+        locked = self.package_lock_held()
+        if locked:
+            blockers.append(locked)
         claimed = str((candidate.get("described") or {}).get("release_version") or "")
         # The page offers the claim as "Update to <version>".
         if claimed and not release_fetch.claim_matches(claimed, release.version):
@@ -504,6 +529,12 @@ class ManagerUpdateService:
         )
         if verdict.outcome == persistent_state.STATE_BEHIND:
             blockers.append({"code": "state_schema_behind", "message": verdict.detail})
+        pending = self.verification_pending()
+        if pending:
+            blockers.append(pending)
+        locked = self.package_lock_held()
+        if locked:
+            blockers.append(locked)
 
         self.operations.update_target(
             operation.operation_id,
@@ -535,6 +566,9 @@ class ManagerUpdateService:
     def execute(self, operation):
         self._refuse_while_unjudged()
         self.reconcile_record()
+        locked = self.package_lock_held()
+        if locked:
+            raise ManagerUpdateError(locked["code"], locked["message"])
         if operation.type == TYPE_MANAGER_REVERT:
             return self._execute_revert(operation)
         return self._execute_update(operation)
