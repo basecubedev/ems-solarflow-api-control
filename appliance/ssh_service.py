@@ -138,7 +138,7 @@ class SshService:
         if not activation.effective_policy()["confirmed"]:
             raise SshServiceError(
                 "backup_confinement_not_confirmed",
-                "the running sshd does not apply the backup account's confinement, "
+                "sshd's configuration does not apply the backup account's confinement, "
                 "so no key is deployed on it",
             )
 

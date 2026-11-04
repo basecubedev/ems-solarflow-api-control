@@ -222,7 +222,7 @@ loaded.
 
 `ems-appliance host-config` (without `--apply`) shows what is configured and
 whether every generated artefact still matches — including the chroot directory
-the running sshd would apply and the path the running watcher follows. Any
+sshd -T reports from its configuration and the path the running watcher follows. Any
 mismatch is drift, and `verify-install` fails on it.
 
 ## What "installed" means

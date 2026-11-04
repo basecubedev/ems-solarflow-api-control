@@ -140,7 +140,7 @@ the appliance when the web console does not answer. Its state says whether it
 still has the **Shipped password**, which is published with this project — fine
 on a private network, a login for anyone who reaches the appliance from outside
 one — or **Changed**, and whether the running SSH server refuses its password
-from the network (**Refused by the running sshd**). Change it at the console
+from the network (**Refused by sshd’s configuration**). Change it at the console
 with `sudo passwd ems-rescue`. See
 [When it stops working](recovery.md#the-web-page-does-not-load).
 
