@@ -121,6 +121,13 @@ Both go through the same transaction: the flag and the sshd policy move
 together, or neither moves. If sshd refuses the candidate policy, the files and
 the flag are put back and the failure says which half of the rollback succeeded.
 
+The transaction ends by starting the backup export, which a switch of this
+account does not depend on: a failing export — a degraded backup state — no
+longer rolls the switch back. It did, and on a Pi whose export failed for twelve
+days, **Disable shell access** answered `export_setup_failed` and the account
+kept accepting keys. The export unit's own failure handler withdraws the backup
+account's access in that case.
+
 ## Where the account lives, and why it is not /home
 
 The home is `/var/lib/ems-shell`, beside `/var/lib/ems-backup`.

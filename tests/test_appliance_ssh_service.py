@@ -623,3 +623,25 @@ def test_status_reports_a_symlinked_ssh_directory_instead_of_following_it(tmp_pa
 
     assert accounts["ems-backup"]["key_count"] == 0
     assert accounts["ems-backup"]["keys_refused"] == "ssh_directory_unsafe"
+
+
+def test_a_shell_switch_says_so_when_the_backup_export_failed_behind_it(tmp_path, monkeypatch):
+    """The switch goes through without the export; that the export failed was
+    recorded and then shown to nobody."""
+
+    from appliance import shell_access
+
+    services = appliance(tmp_path)
+
+    def applied(paths, config, *, value, activation):
+        activation.export_failed = "ems-appliance-export.service could not publish the install root"
+
+    monkeypatch.setattr(shell_access, "apply", applied)
+    operation = services.operations.create("ssh.shell_access", {"enabled": False})
+    services.operations.await_confirmation(operation.operation_id, {})
+    token = services.operations.get(operation.operation_id, include_token=True).confirmation_token
+    running = services.operations.confirm(operation.operation_id, token)
+
+    payload = services.ssh._execute_shell_access(running)
+
+    assert "could not publish" in payload["export_warning"]

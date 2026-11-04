@@ -623,15 +623,17 @@ def command_shell_access(args):
 
     wanted = args.action == "enable"
     runner = CommandRunner()
+    activation = live_activation(runner=runner, export_required=False)
     try:
-        shell_access.apply(
-            paths, config, value=wanted, activation=live_activation(runner=runner)
-        )
+        shell_access.apply(paths, config, value=wanted, activation=activation)
     except HostConfigError as exc:
         _print({"enabled": shell_access.enabled(paths), "error": exc.code,
                 "message": exc.message, **exc.rollback}, args.json)
         return EXIT_ERROR
-    _print({"account": shell_access.ACCOUNT, "enabled": wanted}, args.json)
+    result = {"account": shell_access.ACCOUNT, "enabled": wanted}
+    if activation.export_failed:
+        result["export_warning"] = activation.export_failed
+    _print(result, args.json)
     return EXIT_OK
 
 

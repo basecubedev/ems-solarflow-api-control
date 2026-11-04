@@ -411,13 +411,9 @@ class SshService:
         self._advance(operation, "enabling_shell_access" if enabled else "disabling_shell_access")
         from appliance.host_config import HostConfigError, live_activation
 
+        activation = live_activation(runner=self.runner, export_required=False)
         try:
-            shell_access.apply(
-                self.paths,
-                self.config,
-                value=enabled,
-                activation=live_activation(runner=self.runner),
-            )
+            shell_access.apply(self.paths, self.config, value=enabled, activation=activation)
         except HostConfigError as exc:
             self.operations.finish(
                 operation.operation_id,
@@ -427,6 +423,8 @@ class SshService:
             )
             raise SshServiceError(exc.code, exc.message)
         payload = {"account": shell_access.ACCOUNT, "enabled": shell_access.enabled(self.paths)}
+        if activation.export_failed:
+            payload["export_warning"] = activation.export_failed
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
         return payload
 

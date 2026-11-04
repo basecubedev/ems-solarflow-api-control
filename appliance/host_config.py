@@ -686,6 +686,7 @@ class LiveActivation:
         systemd=None,
         marker=SYSTEMD_RUNTIME_MARKER,
         disable_authentication=None,
+        export_required=True,
     ):
         from appliance.commands import CommandRunner
         from appliance.systemd import SystemdBackend
@@ -694,6 +695,11 @@ class LiveActivation:
         self.systemd = systemd or SystemdBackend(self.runner)
         self.marker = marker
         self._disable_authentication = disable_authentication
+        # A change that moves no path -- the shell-access switch -- does not
+        # need the export to come up, and must not be refused when it cannot:
+        # the export unit's own failure handler withdraws backup access then.
+        self.export_required = export_required
+        self.export_failed = ""
         self._paths = None
         self._config = None
         self.sshd_state, self.sshd_detail = self._probe_sshd()
@@ -830,11 +836,10 @@ class LiveActivation:
         # before the reload meant activating against a policy sshd had not read
         # yet, which refuses and failed the whole package install.
         if not self.runner.run("systemctl", ["start", EXPORT_UNIT], timeout=600).ok:
-            raise HostConfigError(
-                "export_setup_failed",
-                f"{EXPORT_UNIT} could not publish {paths.install_root} into "
-                f"{paths.export_root}",
-            )
+            message = f"{EXPORT_UNIT} could not publish {paths.install_root} into {paths.export_root}"
+            if self.export_required:
+                raise HostConfigError("export_setup_failed", message)
+            self.export_failed = message
         return True
 
     def _reload_ssh(self):
@@ -937,13 +942,19 @@ class LiveActivation:
 
 
 def live_activation(
-    *, runner=None, systemd=None, marker=SYSTEMD_RUNTIME_MARKER, disable_authentication=None
+    *,
+    runner=None,
+    systemd=None,
+    marker=SYSTEMD_RUNTIME_MARKER,
+    disable_authentication=None,
+    export_required=True,
 ):
     return LiveActivation(
         runner=runner,
         systemd=systemd,
         marker=marker,
         disable_authentication=disable_authentication,
+        export_required=export_required,
     )
 
 
