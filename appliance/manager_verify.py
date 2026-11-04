@@ -189,6 +189,20 @@ def read(paths):
     )
 
 
+
+def window_open(paths, now):
+    """An armed deadline nothing has judged, inside its window: an install in flight.
+
+    Afterwards -- judged, expired, or a reverter that never ran -- the console
+    hands Update and Revert back, and whatever touches the kept packages may
+    go ahead.
+    """
+
+    deadline = read(paths)
+    if not deadline.armed or read_verdict(paths).settled:
+        return False
+    return int(deadline.deadline_epoch) > int(now)
+
 def read_verdict(paths):
     try:
         payload = json.loads(verdict_path(paths).read_text(encoding="utf-8"))
@@ -381,4 +395,5 @@ __all__ = [
     "reverter_path",
     "ticks_path",
     "verdict_path",
+    "window_open",
 ]

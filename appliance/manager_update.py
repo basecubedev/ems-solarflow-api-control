@@ -329,26 +329,43 @@ class ManagerUpdateService:
         if pending:
             raise ManagerUpdateError(pending["code"], pending["message"])
 
-    def _reconcile_outcome(self):
-        """Fold a revert the shell drove back into the record, once.
+    def _reverted(self):
+        return manager_install.read_outcome(self.paths).outcome == manager_install.OUTCOME_REVERTED
 
-        The two revert paths that run without Python -- install-manager.sh's
-        fallback and the armed deadline -- cannot amend the retention record,
-        so it is corrected here, at the one place that reads their result.
+    def reconcile_record(self):
+        """Make the retention record say what dpkg holds; returns what changed.
+
+        Writes, so it runs only where nothing else writes the record: at agent
+        start, and at the start of a plan or an execution, which hold the one
+        operation slot. The two revert paths that run without Python --
+        install-manager.sh's fallback and the armed deadline -- cannot amend
+        the record, and dpkg can refuse a package without either of them.
+
+        Never while an install is in flight -- a deadline armed, unjudged and
+        inside its window, which the reverter moves on while the install unit
+        runs. The slot is free again once that unit has started, and until
+        dpkg has unpacked the staged package the version it reports is the
+        outgoing one: a correction then copied the outgoing archive over the
+        one the install request names. Once the window is over the console
+        hands Update and Revert back, so the correction has to run again by
+        then, deadline file or not.
         """
 
-        if manager_install.read_outcome(self.paths).outcome != manager_install.OUTCOME_REVERTED:
-            return
+        if manager_verify.window_open(self.paths, self._now()):
+            return manager_retention.RECORD_AGREES
         try:
-            manager_retention.adopt_previous_as_current(self.paths)
+            return manager_retention.reconcile(
+                self.paths, self.installed_version, reverted=self._reverted()
+            )
         except manager_retention.RetentionError:
             # A record this cannot rewrite is reported by everything that reads
-            # it; refusing to answer status as well would hide the state.
-            pass
+            # it; refusing to plan as well would hide the state.
+            return manager_retention.RECORD_AGREES
 
     def status(self):
-        self._reconcile_outcome()
-        retention = manager_retention.read(self.paths)
+        retention, _ = manager_retention.reconciled(
+            manager_retention.read(self.paths), self.installed_version, reverted=self._reverted()
+        )
         return {
             "installed_version": self.installed_version,
             "configured": bool(str(self.config.manager_index_url or "").strip()),
@@ -362,9 +379,12 @@ class ManagerUpdateService:
     # --- planning ---------------------------------------------------------
 
     def plan_update(self, operation, release_id):
-        """Say what would be installed and what stands in the way. Writes nothing."""
+        """Say what would be installed and what stands in the way.
 
-        self._reconcile_outcome()
+        Writes nothing but a retention record dpkg has outrun (``reconcile_record``).
+        """
+
+        self.reconcile_record()
         self._advance(operation, "preflight")
         self._require_clock()
         candidate = self._candidate(release_id)
@@ -466,8 +486,12 @@ class ManagerUpdateService:
         return " ".join(parts)
 
     def plan_revert(self, operation):
-        """Say which kept package would go back on. Writes nothing."""
+        """Say which kept package would go back on.
 
+        Writes nothing but a retention record dpkg has outrun (``reconcile_record``).
+        """
+
+        self.reconcile_record()
         self._advance(operation, "preflight")
         try:
             target = manager_retention.revert_target(self.paths)
@@ -510,6 +534,7 @@ class ManagerUpdateService:
 
     def execute(self, operation):
         self._refuse_while_unjudged()
+        self.reconcile_record()
         if operation.type == TYPE_MANAGER_REVERT:
             return self._execute_revert(operation)
         return self._execute_update(operation)

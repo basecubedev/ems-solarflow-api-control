@@ -276,11 +276,21 @@ itself. Once the window has run out without a verdict both become available
 again, which is deliberate: taking them away on a board whose only alternative
 is a keyboard would be the failure the deadline exists to prevent.
 
-A revert that one of the two paths without Python performed -- the installer's
-own fallback, or the armed reverter -- is folded back into the retained record
-before the next install is planned. Neither can amend it, so the record went on
-naming the package `dpkg` refused as the current one, and the next update
-rotated *that* into the way-back slot.
+The retained record is read against the version `dpkg` holds, and corrected
+when the agent starts and before an install or revert is planned or executed.
+`prepare` names the incoming package as current before `dpkg` runs, and the
+paths that can undo or refuse it -- the installer's own fallback, the armed
+reverter, a postinst that fails and a fallback that fails as well -- run
+without Python and cannot amend the record. So the record went on naming the
+package `dpkg` never configured as the current one, and the next update rotated
+*that* into the way-back slot and deleted the package that had run. A Pi 3B+
+was left keeping 0.4.0, whose postinst failed on it, as the way back from
+0.4.1. When `dpkg` holds the kept previous package, that one becomes current
+and nothing is kept behind it; when it holds neither, nothing is offered as a
+way back. Reading the status never writes the record: the page polls it while
+an install executes, and a correction between staging and arming copied one
+archive over another. `ems-appliance rollback-manager` makes the same
+correction first, so it no longer reinstalls the package `dpkg` already holds.
 
 An install whose unit systemd would not start is taken back before the console
 hears of the failure. The request is removed, so a start systemd still carries

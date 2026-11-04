@@ -340,6 +340,27 @@ def test_a_console_rollback_retires_the_deadline_it_outran(appliance_env, monkey
     assert not manager_verify.read(paths).armed, "the deadline outlived the rescue"
 
 
+def test_a_console_rollback_never_reinstalls_the_package_dpkg_kept(
+    appliance_env, monkeypatch, capsys
+):
+    """v2 never took: dpkg still holds v1, so there is no earlier package to go back to.
+
+    The record went on naming v2 as current, and the rollback reinstalled v1
+    over itself while telling the operator it had gone back.
+    """
+
+    from appliance import cli, manager_retention
+    from appliance.cli import command_rollback_manager
+
+    paths, runner = armed_rollback(appliance_env, monkeypatch, armed=False)
+    monkeypatch.setattr(cli, "installed_version", lambda: "0.1.0")
+
+    assert command_rollback_manager(Args(force=False)) != 0
+    assert not [call for call in runner.calls if call[0] == "dpkg"]
+    assert "nothing to go back to" in capsys.readouterr().err
+    assert manager_retention.read(paths).current.version == "0.1.0"
+
+
 def _running_writes_newer_retention(monkeypatch):
     from appliance import persistent_state
 

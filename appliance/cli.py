@@ -308,6 +308,27 @@ def command_rollback_manager(args):
     if os.geteuid() != 0:
         print("error: run this command as root", file=sys.stderr)
         return EXIT_ERROR
+    corrected = ""
+    try:
+        # Not while an install is in flight: it may still be on its way to
+        # dpkg, which then reports the outgoing version.
+        if not manager_verify.window_open(
+            paths, datetime.datetime.now(datetime.timezone.utc).timestamp()
+        ):
+            corrected = manager_retention.reconcile(
+                paths,
+                installed_version(),
+                reverted=manager_install.read_outcome(paths).outcome
+                == manager_install.OUTCOME_REVERTED,
+            )
+    except manager_retention.RetentionError as exc:
+        print(f"warning: {exc.message}", file=sys.stderr)
+    if corrected:
+        print(
+            f"note: the kept packages now say what dpkg holds ({corrected}); "
+            "a package dpkg left half-configured is finished with `dpkg --configure -a`",
+            file=sys.stderr,
+        )
     try:
         kept = manager_retention.revert_target(paths)
     except manager_retention.RetentionError as exc:
@@ -781,6 +802,9 @@ def command_agent(args):
     recovered = services.operations.recover_interrupted()
     if recovered:
         print(f"recovered {len(recovered)} interrupted operation(s)")
+    corrected = services.manager.reconcile_record()
+    if corrected:
+        print(f"the kept Appliance Manager packages now say what dpkg holds ({corrected})")
     # A WLAN change interrupted inside its revert window left the new profile
     # active with nothing to take it back; NetworkManager then reconnects to it
     # on every boot. After the socket is bound, never before: nmcli waits up to

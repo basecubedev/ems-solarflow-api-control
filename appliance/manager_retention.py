@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from appliance.paths import sync_parent
+from appliance.version import same_version
 
 RECORD_NAME = "retention.json"
 RECORD_SCHEMA_VERSION = 2
@@ -27,6 +28,10 @@ PREVIOUS_NAME = "previous.deb"
 
 FILE_MODE = 0o600
 DIRECTORY_MODE = 0o700
+
+RECORD_AGREES = ""
+RECORD_ADOPTED_PREVIOUS = "adopted_previous"
+RECORD_NOT_INSTALLED = "not_installed"
 
 
 class RetentionError(Exception):
@@ -320,6 +325,60 @@ def adopt_previous_as_current(paths):
     retention = Retention(current=current, previous=RetainedPackage())
     _write_record(paths, retention)
     return retention
+
+
+def reconciled(retention, installed_version, *, reverted=False):
+    """The record read beside the version dpkg holds, and what had to change.
+
+    ``prepare`` keeps the incoming package as current before dpkg runs, so a
+    package dpkg never configured goes on being named as current: the
+    installer's fallback, the armed reverter and a fallback that failed as well
+    all end without Python. The next install would rotate that package into
+    the way-back slot and take the one that ran off the disk -- which is what a
+    Pi 3B+ was left with after 0.4.0's postinst failed on it. dpkg is the
+    authority on what runs (``version.installed_version``), so:
+
+    - dpkg holds the kept previous package, or a revert put it back: that one
+      is current, and nothing is kept behind it;
+    - dpkg holds neither: nothing kept is known to be what ran before the
+      package that runs now, so nothing is offered as a way back.
+
+    A version dpkg cannot tell (no dpkg, a source checkout) or a record without
+    versions changes nothing but a recorded revert. Pure: ``reconcile`` writes
+    what this returns.
+    """
+
+    if retention.unreadable:
+        return retention, RECORD_AGREES
+    installed = str(installed_version or "").strip()
+
+    def runs(package):
+        return bool(installed and package.version) and same_version(
+            package.version, installed, package=True
+        )
+
+    if retention.previous.present and (
+        reverted or (runs(retention.previous) and not runs(retention.current))
+    ):
+        return Retention(current=retention.previous), RECORD_ADOPTED_PREVIOUS
+    if installed and retention.current.version and not runs(retention.current):
+        return Retention(), RECORD_NOT_INSTALLED
+    return retention, RECORD_AGREES
+
+
+def reconcile(paths, installed_version, *, reverted=False):
+    """Write what ``reconciled`` says; returns what changed, empty when nothing did.
+
+    Never from a read path: status is polled while an install executes, and a
+    rewrite between staging and arming would copy one archive over another.
+    """
+
+    view, change = reconciled(read(paths), installed_version, reverted=reverted)
+    if change == RECORD_ADOPTED_PREVIOUS:
+        adopt_previous_as_current(paths)
+    elif change == RECORD_NOT_INSTALLED:
+        _write_record(paths, view)
+    return change
 
 
 def revert_target(paths):
