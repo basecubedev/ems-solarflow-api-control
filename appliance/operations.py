@@ -224,10 +224,13 @@ class OperationStore:
         self._time = time_fn or time.time
         self._new_id = id_factory or (lambda: uuid.uuid4().hex)
         self._new_token = token_factory or (lambda: secrets.token_urlsafe(24))
-        self._lock = threading.Lock()
+        # Reentrant: a plan closes what a full card left open and checks for an
+        # active operation under one hold, and the close is the recovery.
+        self._lock = threading.RLock()
         # Operations an agent restart interrupted whose recovery could not be
         # written -- a full card is the ordinary way. They still hold the lock.
-        self.unrecorded = []
+        # By id, with the record's updated_at as that recovery read it.
+        self.unrecorded = {}
         # Ends that could not be written, by operation: the first one asked
         # for, since a failure path's own finish fails on the same card.
         self.unfinished = {}
@@ -258,6 +261,8 @@ class OperationStore:
             mode=AGENT_FILE_MODE,
             owner_root=True,
         )
+        self.unrecorded.pop(operation.operation_id, None)
+        self.unfinished.pop(operation.operation_id, None)
         return operation
 
     def _all(self):
@@ -286,8 +291,8 @@ class OperationStore:
     def create(self, operation_type, requested_target=None, *, actor="", plan_request=""):
         """Take the lock with a new plan; ``plan_request`` is kept only as its digest."""
 
-        self._close_unrecorded()
         with self._lock:
+            self._close_unrecorded()
             active = self.active()
             if active is not None:
                 raise OperationConflictError(active.operation_id, active.type)
@@ -406,6 +411,11 @@ class OperationStore:
 
     def finish(self, operation_id, state, *, result=None, error=None, stage=None):
         with self._lock:
+            # The end the card had no room for is the one that happened; a
+            # failure path's later finish is only about the write.
+            kept = self.unfinished.get(operation_id)
+            if kept is not None:
+                state, result, error, stage = kept["state"], kept["result"], kept["error"], kept["stage"]
             try:
                 return self._finish(
                     self._load(operation_id), state, result=result, error=error, stage=stage
@@ -419,8 +429,8 @@ class OperationStore:
     def _close_unrecorded(self):
         """Write the ends and recoveries a full card refused, now that there may be room."""
 
-        for operation_id, end in list(self.unfinished.items()):
-            with self._lock:
+        with self._lock:
+            for operation_id, end in list(self.unfinished.items()):
                 try:
                     operation = self._load(operation_id)
                     if not operation.terminal:
@@ -429,9 +439,9 @@ class OperationStore:
                     continue
                 except OperationError:
                     pass
-                del self.unfinished[operation_id]
-        if self.unrecorded:
-            self.recover_interrupted()
+                self.unfinished.pop(operation_id, None)
+            if self.unrecorded:
+                self.recover_interrupted(only=dict(self.unrecorded))
 
     def _finish(self, operation, state, *, result=None, error=None, stage=None):
         self._transition(operation, state)
@@ -498,21 +508,26 @@ class OperationStore:
     def unacknowledged(self):
         return [item for item in self.list() if item.settled and not item.acknowledged]
 
-    def recover_interrupted(self):
+    def recover_interrupted(self, *, only=None):
         """Turn operations interrupted by a service restart into a visible failure.
 
         Without this, a crash during ``running`` would hold the mutation lock
         forever and the UI would show progress that nothing is driving.
+
+        ``only`` maps ids to the ``updated_at`` this recovery once read: the
+        records a full card kept it from writing. Any other record, or one
+        written since -- a plan confirmed once there was room -- is live, and
+        recovering it as interrupted let a second operation start beside it.
         """
 
         recovered = []
-        unrecorded = []
+        unrecorded = {}
         booted = read_boot_id()
         with self._lock:
             records, unreadable = self._read_all()
             # Skipped silently, a record the card corrupted opened the lock and
             # its operation vanished; moved aside, it is at least named.
-            for path in unreadable:
+            for path in unreadable if only is None else ():
                 try:
                     path.rename(path.with_name(path.name + ".unreadable"))
                 except OSError:
@@ -520,6 +535,9 @@ class OperationStore:
                 self.unreadable.append(path.stem)
             for operation in records:
                 if operation.operation_id in self.unfinished:
+                    continue
+                seen = operation.updated_at
+                if only is not None and only.get(operation.operation_id) != seen:
                     continue
                 if (
                     operation.state == STATE_RUNNING
@@ -570,7 +588,7 @@ class OperationStore:
                 try:
                     recovered.append(self._save(operation))
                 except OSError:
-                    unrecorded.append(operation.operation_id)
+                    unrecorded[operation.operation_id] = seen
             self.unrecorded = unrecorded
         return recovered
 

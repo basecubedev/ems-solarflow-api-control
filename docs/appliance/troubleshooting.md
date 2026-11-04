@@ -215,11 +215,13 @@ operation record could not be read" until the agent next starts; the file stays.
 sudo ems-appliance operations
 ```
 
-If the card was full when the agent restarted, that interruption could not be
-recorded. The agent starts and serves anyway — it used to fail its start and be
-restarted for ever, with no sign-in — and the Overview reports *An interrupted
+If the card was full when the agent restarted, or when an operation ended, that
+could not be recorded. The agent starts and serves anyway — it used to fail its
+start and be restarted for ever, with no sign-in — and the Overview reports *An
 operation could not be closed*: the operation still holds the appliance. Free
-space on the card; the next operation you plan closes it first.
+space on the card; the next operation you plan closes it first. A plan you
+confirm in the meantime is left alone: only a record nothing has written since
+is closed.
 
 ## "operation_conflict"
 

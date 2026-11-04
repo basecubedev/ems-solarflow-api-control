@@ -315,7 +315,7 @@ def test_a_failed_revert_that_dpkg_has_since_configured_is_no_longer_a_fault(tmp
 
 def test_an_operation_a_full_card_left_open_is_on_the_overview(tmp_path):
     services = build_test_services(tmp_path)
-    services.operations.unrecorded = ["0" * 32]
+    services.operations.unrecorded = {"0" * 32: 0.0}
 
     findings = {item["code"]: item for item in services.status._health({})["warnings"]}
 

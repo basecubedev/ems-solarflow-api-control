@@ -601,9 +601,11 @@ class AgentHandlers:
         # By the record, not by an exception: several executors finish a
         # failure and return, and were audited as a success.
         try:
-            succeeded = store.get(operation.operation_id).state == STATE_SUCCEEDED
+            kept = store.unfinished.get(operation.operation_id)
+            state = kept["state"] if kept else store.get(operation.operation_id).state
         except OperationError:
-            succeeded = False
+            state = None
+        succeeded = state == STATE_SUCCEEDED
         self._audit(
             operation.type,
             actor,

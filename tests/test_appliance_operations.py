@@ -403,7 +403,7 @@ def test_an_agent_starts_although_the_card_has_no_room_to_record_a_recovery(tmp_
     restarted = OperationStore(tmp_path)
 
     assert restarted.recover_interrupted() == []
-    assert restarted.unrecorded == [operation_id]
+    assert list(restarted.unrecorded) == [operation_id]
     assert restarted.get(operation_id).state == STATE_RUNNING
 
 
@@ -424,7 +424,7 @@ def test_the_next_plan_closes_what_a_full_card_left_open(tmp_path, monkeypatch):
     planned = restarted.create("system.timezone")
 
     assert restarted.get(operation_id).state == STATE_FAILED_RECOVERABLE
-    assert restarted.unrecorded == []
+    assert not restarted.unrecorded
     assert planned.state == STATE_PLANNED
 
 
@@ -561,3 +561,53 @@ def test_a_record_that_is_json_but_no_record_is_moved_aside_too(tmp_path, conten
     store.recover_interrupted()
 
     assert store.unreadable == ["cd" * 16]
+
+
+def test_closing_what_a_full_card_left_open_never_touches_an_operation_since_confirmed(tmp_path, monkeypatch):
+    """The close re-ran the whole start-of-agent recovery: a plan confirmed once
+    there was room again was running and live, and the next plan recovered it
+    as interrupted and started beside it -- two host mutations at once."""
+
+    import errno
+
+    from appliance import operations as operations_module
+
+    store = OperationStore(tmp_path)
+    operation = store.create("system.timezone")
+    store.await_confirmation(operation.operation_id, {})
+    token = store.get(operation.operation_id, include_token=True).confirmation_token
+    real = operations_module.atomic_write
+    monkeypatch.setattr(
+        operations_module, "atomic_write", lambda *a, **k: (_ for _ in ()).throw(OSError(errno.ENOSPC, "full"))
+    )
+    restarted = OperationStore(tmp_path)
+    restarted.recover_interrupted()
+    monkeypatch.setattr(operations_module, "atomic_write", real)
+    assert list(restarted.unrecorded) == [operation.operation_id]
+
+    restarted.confirm(operation.operation_id, token)
+
+    assert not restarted.unrecorded, "the finding still says nothing can start"
+    with pytest.raises(OperationConflictError):
+        restarted.create("system.timezone")
+    assert restarted.get(operation.operation_id).state == STATE_RUNNING
+
+
+def test_a_later_end_writes_the_one_the_card_had_no_room_for(tmp_path, monkeypatch):
+    import errno
+
+    from appliance import operations as operations_module
+
+    store, operation_id = _interrupted(tmp_path)
+    real = operations_module.atomic_write
+    monkeypatch.setattr(
+        operations_module, "atomic_write", lambda *a, **k: (_ for _ in ()).throw(OSError(errno.ENOSPC, "full"))
+    )
+    with pytest.raises(OSError):
+        store.finish(operation_id, STATE_SUCCEEDED, result={"applied": True})
+    monkeypatch.setattr(operations_module, "atomic_write", real)
+
+    store.finish(operation_id, STATE_FAILED_TERMINAL, error={"code": "operation_failed", "message": "full"})
+
+    assert store.get(operation_id).state == STATE_SUCCEEDED
+    assert store.unfinished == {}
