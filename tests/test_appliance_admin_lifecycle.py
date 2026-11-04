@@ -1350,3 +1350,35 @@ def test_the_running_admin_is_the_image_its_container_runs_not_the_one_its_tag_n
     assert state["digest"] == running["_digest"], state["digest"]
     assert state["revision"] == "abc1234"
 
+
+
+# --- which way an install moves -------------------------------------------------
+
+
+def _plan_for(services, **fields):
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    return handlers.dispatch({"operation": "admin.plan_install", **fields})["plan"]
+
+
+def test_an_install_plan_says_it_goes_back_and_warns(tmp_path):
+    """The Manager's own plan named its direction and warned about a downgrade;
+    the Admin's did neither, so "Latest stable" resolving below a running
+    release candidate was confirmed without a word."""
+
+    services = healthy_appliance(tmp_path, tag="v1.1.0", catalogue=StaticCatalogue(["v1.1.0", "v1.0.0"]))
+    services.host.publish_image("v1.0.0")
+
+    plan = _plan_for(services, channel="exact", tag="v1.0.0")
+
+    assert plan["direction"] == "downgrade"
+    assert "older" in plan["warning"], plan.get("warning")
+
+
+def test_an_install_plan_going_forward_has_no_warning(tmp_path):
+    services = healthy_appliance(tmp_path, tag="v1.0.0")
+    services.host.publish_image("v1.1.0")
+
+    plan = _plan_for(services, channel="exact", tag="v1.1.0")
+
+    assert plan["direction"] == "upgrade"
+    assert not plan.get("warning")

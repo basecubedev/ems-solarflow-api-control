@@ -183,6 +183,11 @@ That immutable reference — not the tag — is what gets deployed. If no
 canonical digest can be resolved the installation is refused with
 `digest_unresolved` before anything is touched.
 
+With an Admin installed, the plan also names its **direction** — upgrade,
+downgrade, reinstall or unknown — and warns before a downgrade, or when the two
+versions cannot be compared. *Latest stable* can resolve below a running
+release candidate, and that used to be confirmed without a word.
+
 A confirmed plan is executed later, possibly by an agent that restarted in
 between, so the record it leaves behind is the only authority the mutation has.
 Before the first Docker or filesystem call, the persisted plan must still carry

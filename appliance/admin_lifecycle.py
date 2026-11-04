@@ -67,7 +67,7 @@ from appliance.releases import (
     resolve_channel,
 )
 from appliance.systemd import UNIT_DOCKER
-from appliance.version import direction
+from appliance.version import DIRECTION_DOWNGRADE, DIRECTION_UNKNOWN, direction
 from appliance.validation import (
     ValidationError,
     build_digest_ref,
@@ -620,6 +620,21 @@ class AdminLifecycleService:
                 "unrelated containers and volumes",
             ],
         }
+        if state["version"]:
+            # The Manager's own plan names its direction and warns about going
+            # back; this one did neither, so "Latest stable" resolving below a
+            # running release candidate was confirmed without a word.
+            plan["direction"] = direction(offered=target.tag, installed=state["version"])
+            if plan["direction"] == DIRECTION_DOWNGRADE:
+                plan["warning"] = (
+                    f"{target.tag} is older than the running {state['version']}. Admin data "
+                    "written by the newer version may not be readable by the older one."
+                )
+            elif plan["direction"] == DIRECTION_UNKNOWN:
+                plan["warning"] = (
+                    f"Whether {target.tag} is newer or older than the running "
+                    f"{state['version']} cannot be told from their versions."
+                )
         if bootstrap:
             # Announced, not done: the files appear when the operator confirms.
             plan["creates_deployment"] = {
