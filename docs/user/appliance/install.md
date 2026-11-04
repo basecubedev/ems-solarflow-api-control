@@ -64,7 +64,8 @@ are the entries **whose title starts with "Appliance image"** — open the one y
 want and scroll to **Assets**, a collapsed list at the bottom of the release
 notes. EMS releases are on that page too and carry no image, and the green
 *Latest* badge is deliberately on one of those: only one of the two products
-owns the `v*` tags.
+owns the `v*` tags. An entry titled *Partial build* was made for some boards
+only, for a hardware test; the download link above never points at one.
 
 </details>
 

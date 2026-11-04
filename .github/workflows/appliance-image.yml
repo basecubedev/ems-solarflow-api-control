@@ -90,6 +90,9 @@ jobs:
       contents: read
     outputs:
       profiles: ${{ steps.pick.outputs.profiles }}
+      # Whether every board is in this build. Only such a build may take the
+      # title install.md sends owners to and move the fixed download link.
+      complete: ${{ steps.pick.outputs.complete }}
 
     steps:
       - name: Checkout repository
@@ -122,6 +125,7 @@ jobs:
           else:
               raise SystemExit(f"{wanted!r} is not a board this project builds: {known}")
           print("profiles=" + json.dumps(chosen))
+          print("complete=" + ("true" if chosen == known else "false"))
           PY
           cat "$GITHUB_OUTPUT"
 
@@ -683,6 +687,8 @@ jobs:
           # `appliance-` prefix that makes VERSION_PATTERN.fullmatch fail.
           TAG: ${{ github.ref_type == 'tag' && github.ref_name || format('appliance-image-ci-{0}', github.run_number) }}
           IS_TAG: ${{ github.ref_type == 'tag' }}
+          COMPLETE: ${{ needs.plan.outputs.complete }}
+          BOARDS: ${{ join(fromJSON(needs.plan.outputs.profiles), ', ') }}
         run: |
           set -euo pipefail
           state="$(gh release view "${TAG}" --json isDraft --jq .isDraft 2>/dev/null || true)"
@@ -709,7 +715,12 @@ jobs:
           # "CI build <n>" is true of a weekly run and a lie about a tagged one;
           # unsigned is true of both and stays in both, because a hosted runner
           # is refused at signing time by design.
-          if [ "${IS_TAG}" = "true" ]; then
+          # A build short a board is for whoever asked for it, and its title
+          # must not make it the newest "Appliance image" an owner of another
+          # board is sent to.
+          if [ "${COMPLETE}" != "true" ]; then
+            title="Partial build ${APPLIANCE_VERSION} for ${BOARDS} only (CI build ${GITHUB_RUN_NUMBER}, unsigned)"
+          elif [ "${IS_TAG}" = "true" ]; then
             title="Appliance image ${APPLIANCE_VERSION} (${TAG}, unsigned)"
           else
             title="Appliance image ${APPLIANCE_VERSION} (CI build ${GITHUB_RUN_NUMBER}, unsigned)"
@@ -740,6 +751,9 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Keep the fixed download link pointing at this build
+        # Every board, or the link would offer the owners of the missing ones
+        # nothing until the next weekly build.
+        if: ${{ needs.plan.outputs.complete == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

@@ -499,3 +499,34 @@ def test_the_release_says_it_is_not_a_release(workflow):
     assert "not signable" in blocks
     assert "builder_environment_untrusted" in blocks
     assert "This is not a release" in blocks
+
+
+def step_named(workflow, job, fragment):
+    return next(step for step in steps(workflow, job) if fragment in step.get("name", ""))
+
+
+def test_the_plan_says_whether_every_board_is_in_the_build(workflow):
+    plan = workflow["jobs"]["plan"]
+
+    assert plan["outputs"]["complete"] == "${{ steps.pick.outputs.complete }}"
+    assert 'print("complete="' in run_blocks(workflow, "plan")
+
+
+def test_a_build_short_a_board_does_not_move_the_fixed_download_link(workflow):
+    """A one-board rebuild for a hardware round left owners of the other boards
+    with a download link that offered them nothing until the next weekly build."""
+
+    pointer = step_named(workflow, "publish", "fixed download link")
+
+    assert pointer["if"] == "${{ needs.plan.outputs.complete == 'true' }}"
+
+
+def test_a_build_short_a_board_is_not_titled_as_the_appliance_image(workflow):
+    """install.md sends an owner to the newest entry titled "Appliance image"."""
+
+    publish = step_named(workflow, "publish", "Publish the download page")
+
+    assert publish["env"]["COMPLETE"] == "${{ needs.plan.outputs.complete }}"
+    partial = publish["run"].split('if [ "${COMPLETE}" != "true" ]; then', 1)[1].split("elif", 1)[0]
+    titles = re.findall(r'title="([^"]*)"', partial)
+    assert titles and not any(title.startswith("Appliance image") for title in titles)
