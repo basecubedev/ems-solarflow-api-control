@@ -283,8 +283,14 @@ class PackageService:
             state.error = PACKAGE_MANAGER_UNAVAILABLE
             return state
 
+        # --with-new-pkgs: a Raspberry Pi kernel is a versioned package, so every
+        # kernel bump needs a new one, and plain `upgrade` keeps it back -- the
+        # kernel fix was never shown and never installed. upgrade still never
+        # removes a package.
         simulated = self.runner.run(
-            "apt-get", ["-s", "-o", "Debug::NoLocking=1", "upgrade"], timeout=APT_SIMULATE_TIMEOUT
+            "apt-get",
+            ["-s", "-o", "Debug::NoLocking=1", "--with-new-pkgs", "upgrade"],
+            timeout=APT_SIMULATE_TIMEOUT,
         )
         if simulated.ok:
             state.updates = parse_simulated_upgrade(simulated.stdout)
@@ -527,7 +533,14 @@ class PackageService:
 
         self._advance(operation, "installing")
         if scope == UPDATE_SCOPE_ALL:
-            args = ["-y", "--no-remove", "-o", "Dpkg::Options::=--force-confold", "upgrade"]
+            args = [
+                "-y",
+                "--no-remove",
+                "--with-new-pkgs",
+                "-o",
+                "Dpkg::Options::=--force-confold",
+                "upgrade",
+            ]
         else:
             if not packages:
                 raise PackageError("no_updates_available", "no security updates are pending")

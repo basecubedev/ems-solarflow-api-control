@@ -75,9 +75,9 @@ minutes later, and a scheduled security run tries again the next day.
 | Security updates | Packages whose candidate comes from a security archive |
 | Normal package updates | Everything else that is upgradable |
 | Held packages | Packages pinned with `dpkg` hold |
-| Kernel update | A `linux-image*` / `raspberrypi-kernel` upgrade is pending |
-| Firmware update | A `raspi-firmware` / bootloader / `firmware-*` upgrade is pending |
-| Reboot required | `/var/run/reboot-required` exists, with the packages that set it |
+| Kernel update | A `linux-image*` / `raspberrypi-kernel` upgrade is pending, a new versioned kernel package included: apt is asked with `--with-new-pkgs`, because every Raspberry Pi kernel bump is a new package that a plain `upgrade` keeps back, unseen and never installed. *Install all updates* installs it the same way; neither ever removes a package, so every kernel bump leaves the one before it installed — modules and initramfs, roughly 100–150 MB per flavour on the root filesystem — until it is removed by hand (`apt-get autoremove` at the console) |
+| Firmware update | A `raspi-firmware` / bootloader / `firmware-*` / `rpi-eeprom` upgrade is pending |
+| Reboot required | `/var/run/reboot-required` exists, with the packages that set it; or a kernel of the running flavour newer than the running one is installed (`kernel <release>`); or a file under `/boot/firmware` was written since this boot (`boot firmware`). No kernel, firmware or libc package on Debian or Raspberry Pi OS writes the marker, so the marker alone said "not required" after exactly the updates that need a restart |
 | Package-manager health | dpkg consistency and whether apt or dpkg holds one of its locks (`lock-frontend`, or dpkg's own `lock`) |
 | Update check | whether apt could list what is available; a failure is reported on its own and does not mean dpkg needs recovery |
 

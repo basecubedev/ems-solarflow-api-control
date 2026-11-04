@@ -162,6 +162,51 @@ def test_kernel_and_firmware_updates_are_flagged(tmp_path):
     assert state["firmware_update"] is True
 
 
+# A Raspberry Pi kernel bump, as `apt-get -s --with-new-pkgs upgrade` prints it: the
+# metapackage is an upgrade, the versioned image it now depends on is new.
+KERNEL_BUMP = """Inst linux-image-6.18.52+rpt-rpi-v8 (1:6.18.52-1+rpt1 Raspberry Pi Foundation:stable [arm64])
+Inst linux-image-rpi-v8 [1:6.18.50-1+rpt1] (1:6.18.52-1+rpt1 Raspberry Pi Foundation:stable [arm64])
+"""
+
+
+def _apt_calls(services):
+    return [list(args) for tool, args, _ in services.host.calls if tool == "apt-get"]
+
+
+def test_the_check_asks_for_updates_that_need_a_new_package(tmp_path):
+    """Plain `upgrade` keeps such an update back, and every kernel bump is one."""
+
+    services = appliance(tmp_path)
+    services.host.calls.clear()
+    services.packages.check()
+
+    simulations = [args for args in _apt_calls(services) if "-s" in args]
+    assert simulations and all("--with-new-pkgs" in args for args in simulations)
+
+
+def test_a_kernel_bump_that_needs_a_new_package_is_a_kernel_update(tmp_path):
+    services = appliance(tmp_path)
+    services.host.apt_simulation = KERNEL_BUMP
+
+    state = services.packages.check().to_dict()
+
+    assert state["kernel_update"] is True
+    assert state["normal_count"] == 2
+    new = [item for item in state["normal_updates"] if item["name"].startswith("linux-image-6.18.52")]
+    assert new and new[0]["current_version"] == ""
+
+
+def test_installing_every_update_installs_the_new_packages_they_need(tmp_path):
+    services = appliance(tmp_path)
+    services.host.apt_simulation = KERNEL_BUMP
+    services.host.calls.clear()
+
+    plan_and_execute(services, "updates.plan", scope="all")
+
+    installs = [args for args in _apt_calls(services) if "upgrade" in args and "-s" not in args]
+    assert installs and all("--with-new-pkgs" in args and "--no-remove" in args for args in installs)
+
+
 def test_held_packages_are_reported(tmp_path):
     services = appliance(tmp_path)
     assert services.packages.check().to_dict()["held"] == ["held-package"]
