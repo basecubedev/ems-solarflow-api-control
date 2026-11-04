@@ -349,10 +349,12 @@ Not a recommendation. The image is about **8.25 GiB** — a 256 MiB boot
 partition and an 8 GiB root — and the root grows to fill the medium on first
 boot.
 
-What the medium has to hold *after* that decides the floor: the Docker store the
-seed archive is unpacked into, the EMS data and the operator's backups, about
-**3.9 GiB** beyond the image. Those are measured rather than estimated; see
-`reports/appliance/<run-id>/media-sizing.json` for the run they came from.
+What the medium has to hold *after* that decides the floor: the Admin, EMS and
+InfluxDB images the first install downloads, the previous pair an update keeps,
+the EMS data and the operator's backups, about **5.25 GiB** beyond the image.
+Measured on the Pi 3B+ test appliance on 2026-11-04 after several updates: 5.8 GB
+of the root in use in all, 1.33 GB of it the three running images; the numbers
+and how they were taken are in `appliance/media_sizing.py`.
 
 The enforced floor is **14,500,000,000 bytes**, below the nominal 16 GB because
 media are marketed in decimal gigabytes and vendors differ by a few percent, so
