@@ -413,3 +413,23 @@ def test_the_accepted_spellings_sort_as_dpkg_sorts_them():
             gt = subprocess.run(["dpkg", "--compare-versions", left, "gt", right]).returncode == 0
             lt = subprocess.run(["dpkg", "--compare-versions", left, "lt", right]).returncode == 0
             assert ours == (gt - lt), (left, right)
+
+
+def test_a_package_that_does_not_say_what_it_reads_on_an_axis_reads_only_what_it_implements():
+    """A reads block that omitted an implemented axis was judged as "reads
+    from 1", the most permissive answer there is."""
+
+    implemented = persistent_state.implemented_schemas()
+    axis = "manager_retention"
+    newer = manager_releases.implemented_state_schemas()
+    newer["implements"] = {**newer["implements"], axis: implemented[axis] + 1}
+    newer["reads"] = {key: value for key, value in newer["reads"].items() if key != axis}
+
+    problems = manager_releases.compatibility_problems(
+        release(state_schemas=newer),
+        architecture="arm64",
+        state_schemas=implemented,
+        writing=implemented,
+    )
+
+    assert [p["code"] for p in problems] == ["artifact_state_schema_unreadable"], problems
