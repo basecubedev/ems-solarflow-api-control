@@ -55,10 +55,10 @@ FIRMWARE_PREFIXES = ("raspi-firmware", "raspberrypi-bootloader", "firmware-", "r
 LOCK_FREE = "free"
 LOCK_HELD = "held"
 
-# The two ways a check can end without an answer. The first says the
-# appliance could not ask what is available -- an unreachable mirror, a
-# broken sources list -- and nothing about dpkg; the second that there is
-# no apt to ask at all.
+# The two ways a check can end without an answer. The first says apt could
+# not work out what is available; `apt-get -s` asks no mirror, so the cause is
+# local -- a dependency it cannot meet, a malformed sources entry, damaged
+# lists, the timeout. The second says there is no apt to ask at all.
 UPDATE_CHECK_FAILED = "update_check_failed"
 PACKAGE_MANAGER_UNAVAILABLE = "package_manager_unavailable"
 LOCK_UNKNOWN = "unknown"
@@ -126,6 +126,8 @@ class PackageState:
     free_space_known: bool = True
     index_age_seconds: int = None
     error: str = ""
+    # apt's own reason when the check failed, its first E: line.
+    error_detail: str = ""
 
     @property
     def security_updates(self):
@@ -148,16 +150,18 @@ class PackageState:
         """Whether dpkg and apt would take an install.
 
         A report, not a gate: the blockers decide installs on their own. A
-        failed update check is not held against the package manager -- it
-        says the mirror could not be asked, and the console reports that as
-        itself. Every other error, including one this build does not know,
-        stays unhealthy.
+        failed update check is reported as itself, not held against the
+        package manager -- except when apt names unmet dependencies, the one
+        such failure the console's own Repair dependencies cures. Every other
+        error, including one this build does not know, stays unhealthy.
         """
 
+        unmet = self.error == UPDATE_CHECK_FAILED and "unmet dependencies" in self.error_detail.lower()
         return (
             not self.dpkg_issues
             and self.lock_state != LOCK_HELD
             and self.error in ("", UPDATE_CHECK_FAILED)
+            and not unmet
         )
 
     def to_dict(self):
@@ -180,6 +184,7 @@ class PackageState:
             "free_space_known": self.free_space_known,
             "index_age_seconds": self.index_age_seconds,
             "error": self.error,
+            "error_detail": self.error_detail,
         }
 
 
@@ -297,6 +302,7 @@ class PackageService:
             state.updates = parse_simulated_upgrade(simulated.stdout)
         else:
             state.error = UPDATE_CHECK_FAILED
+            state.error_detail = apt_failure_line(simulated)
 
         selections = self.runner.run("dpkg", ["--get-selections"], timeout=DPKG_QUERY_TIMEOUT)
         state.held = parse_held_packages(selections.stdout if selections.ok else "")
@@ -403,6 +409,14 @@ class PackageService:
     def plan_install(self, operation, scope):
         self._refresh_stale_index(operation)
         state = self.check()
+        # Without an answer there is no list to be empty: planning that as
+        # "nothing to install" hid the failure, every day, behind the timer.
+        if state.error:
+            raise PackageError(
+                state.error,
+                "apt could not work out what there is to install"
+                + (f": {state.error_detail}" if state.error_detail else ""),
+            )
         targets = state.security_updates if scope == UPDATE_SCOPE_SECURITY else state.updates
         blockers = self._blockers(state)
 

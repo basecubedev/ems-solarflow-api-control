@@ -521,9 +521,9 @@ class StatusService:
                         "an empty list.",
                     )
                 )
-            # A check that could not ask the mirror is reported as that, and
-            # never as a package manager in need of the repairs the console
-            # offers, none of which reaches a mirror.
+            # A check apt could not finish is reported as that. It counts against
+            # the package manager only for unmet dependencies, which the
+            # package-manager finding below then asks to repair.
             if updates.get("error") == UPDATE_CHECK_FAILED:
                 findings.append(
                     finding(
@@ -531,11 +531,11 @@ class StatusService:
                         FINDING_WARNING,
                         VIEW_UPDATES,
                         "The update check did not finish",
-                        "apt could not list what is available, so the counts on this page are "
-                        "not an answer; an unreachable mirror or a broken sources list is the "
-                        "usual cause.",
-                        "Open Updates and refresh the package indexes; the appliance "
-                        "log names the repository that did not answer.",
+                        "apt could not work out what is available, so the counts on this page "
+                        "are not an answer. The check asks no mirror: a dependency apt cannot "
+                        "meet, a broken sources entry or a damaged package list is the usual cause.",
+                        "Open Updates: planning names apt's own reason. Refresh the package "
+                        "indexes; when apt names unmet dependencies, run Repair dependencies.",
                     )
                 )
             if not (updates.get("package_manager") or {}).get("healthy", True):

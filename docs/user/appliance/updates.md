@@ -106,9 +106,13 @@ distribution upgrades are not performed here.* — shows what is pending:
 | **Restart** | **Required** or **Not required** after the updates. Expert names the packages that ask for it |
 | **Package manager** | **Healthy** or **Needs recovery**, and its lock |
 
-A check that could not reach its mirrors is reported as exactly that, and the
-counts then describe nothing: the tiles show `—`, and **Plan security updates**
-waits. A tile the appliance has not answered yet says **Unknown**. The check
+A check apt could not finish is reported as exactly that, and the counts then
+describe nothing: the tiles show `—`, and **Plan security updates** waits —
+planning names apt's own reason instead of "nothing to install". The check asks
+no mirror, so the cause is on the appliance: a dependency apt cannot meet, a
+broken sources entry or a damaged package list. When apt names unmet
+dependencies, **Package manager** reads **Needs recovery** and **Repair
+dependencies** is the way out. A tile the appliance has not answered yet says **Unknown**. The check
 itself changes nothing.
 
 1. **Plan security updates** (or **Install security updates** on the card

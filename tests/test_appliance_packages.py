@@ -919,6 +919,46 @@ def test_an_install_does_not_put_on_what_the_plan_never_showed(tmp_path, scope):
     assert installs == [], installs
 
 
+UNMET = "E: Unmet dependencies. Try 'apt --fix-broken install' with no packages (or specify a solution).\n"
+
+
+def test_a_check_apt_could_not_finish_is_refused_with_its_reason_not_planned_as_nothing(tmp_path):
+    """apt-get -s asks no mirror; its failures are local. The planner turned
+    one into "nothing to install", every day, with apt's reason dropped."""
+
+    from appliance.agent import AgentError
+
+    services = appliance(tmp_path)
+    services.host.apt_simulation_error = "W: Some index files failed to download.\n" + UNMET
+
+    with pytest.raises(AgentError) as excinfo:
+        handlers_for(services).dispatch({"operation": "updates.plan", "scope": "security"})
+
+    assert excinfo.value.code == "update_check_failed"
+    assert "Unmet dependencies" in excinfo.value.message
+
+
+def test_unmet_dependencies_leave_the_package_manager_needing_recovery(tmp_path):
+    services = appliance(tmp_path)
+    services.host.apt_simulation_error = UNMET
+
+    state = services.packages.check()
+
+    assert state.error == "update_check_failed"
+    assert "Unmet dependencies" in state.error_detail
+    assert state.healthy is False
+
+
+def test_any_other_failed_check_is_not_held_against_the_package_manager(tmp_path):
+    services = appliance(tmp_path)
+    services.host.apt_simulation_error = "E: Malformed entry 3 in list file /etc/apt/sources.list.d/x.list (Component)\n"
+
+    state = services.packages.check()
+
+    assert "Malformed entry" in state.error_detail
+    assert state.healthy is True
+
+
 def test_a_reboot_is_not_planned_while_apt_installs(tmp_path):
     services = appliance(tmp_path)
     lock = tmp_path / "var" / "lib" / "dpkg" / "lock-frontend"

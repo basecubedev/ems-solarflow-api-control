@@ -162,6 +162,8 @@ class FakeHost:
         self.absent_units = {"ssh.socket"}
         self.hostname = "ems-solarflow"
         self.apt_simulation = APT_SIMULATION
+        # What apt-get -s writes to stderr when it fails; it then exits 100.
+        self.apt_simulation_error = ""
         self.apt_exit_code = 0
         self.apt_mirror_unreachable = False
         self.apt_published = None
@@ -601,6 +603,8 @@ class FakeHost:
 
     def _apt_get(self, args):
         if args[:1] == ["-s"] or "-s" in args[:2]:
+            if self.apt_simulation_error:
+                return self._result("apt-get", args, 100, "Reading package lists...\n", self.apt_simulation_error)
             return self._result("apt-get", args, 0, self.apt_simulation)
         if "update" in args:
             if self.apt_mirror_unreachable:
