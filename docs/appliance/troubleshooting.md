@@ -200,7 +200,9 @@ static hostname.
 The operation's banner at the top of every page shows the stage and offers
 **Cancel** where the operation can still be interrupted. After an agent restart
 an interrupted operation appears as `failed_recoverable` with
-`operation_interrupted` — acknowledge or cancel it, then start again.
+`operation_interrupted` — acknowledge or cancel it, then start again. A reboot
+or shutdown is the exception: once the appliance has come back in a new boot it
+counts as done, even when the agent was stopped before it could record that.
 
 ```bash
 sudo ems-appliance operations

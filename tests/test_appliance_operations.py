@@ -426,3 +426,60 @@ def test_the_next_plan_closes_what_a_full_card_left_open(tmp_path, monkeypatch):
     assert restarted.get(operation_id).state == STATE_FAILED_RECOVERABLE
     assert restarted.unrecorded == []
     assert planned.state == STATE_PLANNED
+
+
+# --- a host that went down before its agent could say so ------------------------------
+
+
+def _asked_the_host_down(tmp_path, monkeypatch):
+    from appliance import operations as operations_module
+
+    boot = tmp_path / "boot_id"
+    boot.write_text("1f0c8d2e-first-boot\n", encoding="utf-8")
+    monkeypatch.setattr(operations_module, "BOOT_ID_FILE", boot)
+    store = OperationStore(tmp_path / "operations")
+    operation = store.create("system.reboot")
+    store.await_confirmation(operation.operation_id, {})
+    store.confirm(operation.operation_id, store.get(operation.operation_id, include_token=True).confirmation_token)
+    store.advance(operation.operation_id, "reboot_requested", host_down=True)
+    return boot, operation.operation_id
+
+
+def test_a_reboot_its_agent_did_not_live_to_record_is_recovered_as_done(tmp_path, monkeypatch):
+    """systemd stops the agent on the way down, often before finish() reached
+    the card. Recovered as interrupted, a normal reboot came back as a red
+    banner, and its Retry rebooted the appliance a second time."""
+
+    boot, operation_id = _asked_the_host_down(tmp_path, monkeypatch)
+    boot.write_text("7a2e40b1-next-boot\n", encoding="utf-8")
+
+    restarted = OperationStore(tmp_path / "operations")
+    restarted.recover_interrupted()
+    operation = restarted.get(operation_id)
+
+    assert operation.state == STATE_SUCCEEDED, operation.to_dict()
+    assert operation.error is None
+
+
+def test_a_retry_does_not_inherit_the_boot_an_earlier_attempt_went_down_from(tmp_path, monkeypatch):
+    boot, operation_id = _asked_the_host_down(tmp_path, monkeypatch)
+    store = OperationStore(tmp_path / "operations")
+    store.recover_interrupted()
+    assert store.get(operation_id).state == STATE_FAILED_RECOVERABLE
+    boot.write_text("7a2e40b1-next-boot\n", encoding="utf-8")
+    store.retry(operation_id, store.get(operation_id, include_token=True).confirmation_token)
+    boot.write_text("c04d11e9-third-boot\n", encoding="utf-8")
+
+    restarted = OperationStore(tmp_path / "operations")
+    restarted.recover_interrupted()
+
+    assert restarted.get(operation_id).state == STATE_FAILED_RECOVERABLE
+
+
+def test_an_agent_restart_in_the_same_boot_leaves_a_reboot_retryable(tmp_path, monkeypatch):
+    _, operation_id = _asked_the_host_down(tmp_path, monkeypatch)
+
+    restarted = OperationStore(tmp_path / "operations")
+    restarted.recover_interrupted()
+
+    assert restarted.get(operation_id).state == STATE_FAILED_RECOVERABLE

@@ -611,7 +611,7 @@ class AgentHandlers:
         from appliance.operations import STATE_SUCCEEDED
 
         action = "reboot" if operation.type == "system.reboot" else "shutdown"
-        self.services.operations.advance(operation.operation_id, f"{action}_requested")
+        self.services.operations.advance(operation.operation_id, f"{action}_requested", host_down=True)
         result = (
             self.services.systemd.reboot() if action == "reboot" else self.services.systemd.shutdown()
         )

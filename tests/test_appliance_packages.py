@@ -850,6 +850,38 @@ def test_a_reboot_is_not_planned_while_apt_installs(tmp_path):
     assert [b["code"] for b in planned["plan"]["blockers"]] == ["package_operation_active"]
 
 
+class AgentStopped(BaseException):
+    """What systemd's SIGTERM is to an agent on its way down: nothing after it runs."""
+
+
+@pytest.mark.parametrize(("plan", "call"), [("system.plan_reboot", "reboot"), ("system.plan_shutdown", "poweroff")])
+def test_a_power_action_the_host_carried_out_is_not_offered_again(tmp_path, monkeypatch, plan, call):
+    from appliance import operations as operations_module
+    from appliance.operations import OperationStore
+
+    boot = tmp_path / "boot_id"
+    boot.write_text("1f0c8d2e-first-boot\n", encoding="utf-8")
+    monkeypatch.setattr(operations_module, "BOOT_ID_FILE", boot)
+    services = appliance(tmp_path)
+    systemctl = services.host._systemctl
+
+    def going_down(args):
+        answer = systemctl(args)
+        if args[:1] == [call]:
+            raise AgentStopped()
+        return answer
+
+    monkeypatch.setattr(services.host, "_systemctl", going_down)
+    with pytest.raises(AgentStopped):
+        plan_and_execute(services, plan)
+    boot.write_text("7a2e40b1-next-boot\n", encoding="utf-8")
+
+    restarted = OperationStore(services.operations.directory)
+    restarted.recover_interrupted()
+
+    assert [op.state for op in restarted.list() if op.type.startswith("system.")] == [STATE_SUCCEEDED]
+
+
 def test_a_plan_the_blockers_refuse_does_not_refresh_the_index(tmp_path):
 
     services = appliance(tmp_path)

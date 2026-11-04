@@ -102,6 +102,15 @@ TRANSITIONS = {
 MAX_PROGRESS_ENTRIES = 200
 MAX_RETAINED_OPERATIONS = 50
 
+BOOT_ID_FILE = Path("/proc/sys/kernel/random/boot_id")
+
+
+def read_boot_id():
+    try:
+        return BOOT_ID_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
 
 class OperationError(Exception):
     def __init__(self, code, message):
@@ -157,6 +166,9 @@ class Operation:
     acknowledged: bool = False
     actor: str = ""
     plan_request_digest: str = ""
+    # The boot an operation asked the host to go down in. A later boot is the
+    # host having done it, whether or not the record said so before it went.
+    host_down_boot: str = ""
 
     @property
     def terminal(self):
@@ -321,6 +333,7 @@ class OperationStore:
                 raise OperationError("confirmation_token_mismatch", "confirmation token is invalid")
             self._transition(operation, STATE_RUNNING)
             operation.stage = "running"
+            operation.host_down_boot = ""
             return self._save(operation)
 
     def retry(self, operation_id, token):
@@ -336,6 +349,7 @@ class OperationStore:
             self._transition(operation, STATE_RUNNING)
             operation.stage = "running"
             operation.error = None
+            operation.host_down_boot = ""
             return self._save(operation)
 
     def update_target(self, operation_id, values):
@@ -344,11 +358,13 @@ class OperationStore:
             operation.requested_target.update(dict(values))
             return self._save(operation)
 
-    def advance(self, operation_id, stage, *, state=None, detail=None):
+    def advance(self, operation_id, stage, *, state=None, detail=None, host_down=False):
         with self._lock:
             operation = self._load(operation_id)
             if state is not None and state != operation.state:
                 self._transition(operation, state)
+            if host_down:
+                operation.host_down_boot = read_boot_id()
             operation.stage = str(stage)
             entry = {"stage": operation.stage, "at": self._time()}
             if detail:
@@ -423,9 +439,24 @@ class OperationStore:
 
         recovered = []
         unrecorded = []
+        booted = read_boot_id()
         with self._lock:
             for operation in self._all():
-                if operation.state in (STATE_RUNNING, STATE_VERIFYING, STATE_ROLLING_BACK):
+                if (
+                    operation.state == STATE_RUNNING
+                    and operation.host_down_boot
+                    and booted
+                    and operation.host_down_boot != booted
+                ):
+                    # systemd stops the agent on the way down, often before
+                    # finish() reached the card; a retry would go down again.
+                    operation.state = STATE_SUCCEEDED
+                    operation.stage = STATE_SUCCEEDED
+                    operation.result = {"accepted": True, "host_went_down": True}
+                    operation.error = None
+                    operation.finished_at = self._time()
+                    operation.progress.append({"stage": operation.stage, "at": operation.finished_at})
+                elif operation.state in (STATE_RUNNING, STATE_VERIFYING, STATE_ROLLING_BACK):
                     operation.state = STATE_FAILED_RECOVERABLE
                     operation.stage = "interrupted"
                     operation.error = {
