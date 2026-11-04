@@ -8,6 +8,7 @@ running machine.
 
 import os
 import platform
+import re
 import time
 from pathlib import Path
 
@@ -45,6 +46,11 @@ UNDERVOLTAGE_ALARM = "in0_lcrit_alarm"
 THERMAL_FILE = "sys/class/thermal/thermal_zone0/temp"
 REBOOT_REQUIRED_FILE = "var/run/reboot-required"
 REBOOT_REQUIRED_PKGS = "var/run/reboot-required.pkgs"
+# Debian's and Raspberry Pi's kernel and firmware packages never write the
+# marker above, so a new kernel and new boot files are read off the system.
+RUNNING_KERNEL_FILE = "proc/sys/kernel/osrelease"
+KERNEL_MODULES_DIR = "lib/modules"
+BOOT_FIRMWARE_DIR = "boot/firmware"
 DPKG_LOCK_FILE = "var/lib/dpkg/lock-frontend"
 DPKG_DATABASE_LOCK_FILE = "var/lib/dpkg/lock"
 APT_LISTS_DIR = "var/lib/apt/lists"
@@ -242,12 +248,69 @@ class HostProbe:
         return table
 
     def reboot_required(self):
+        """Whether a restart is owed, and what owes it.
+
+        ``/run/reboot-required`` is written by a few packages only -- dbus is
+        one -- and by no kernel, firmware or libc package on Debian or
+        Raspberry Pi OS, so after those the page said "not required" and old
+        code kept running. A kernel of the running flavour newer than the
+        running one, or boot files written since this boot, owe one too.
+        """
+
         marker = self.root / REBOOT_REQUIRED_FILE
         packages = []
         raw = self._read(REBOOT_REQUIRED_PKGS)
         if raw:
             packages = sorted({line.strip() for line in raw.splitlines() if line.strip()})
-        return {"required": marker.exists(), "packages": packages}
+        kernel = self._newer_kernel()
+        if kernel:
+            packages.append(f"kernel {kernel}")
+        firmware = self._boot_files_since_boot()
+        if firmware:
+            packages.append("boot firmware")
+        return {
+            "required": marker.exists() or bool(kernel) or firmware,
+            "packages": packages,
+        }
+
+    def _newer_kernel(self):
+        """The newest installed kernel of the running flavour, if it is not the running one."""
+
+        running = (self._read(RUNNING_KERNEL_FILE) or "").strip()
+        if not running:
+            return ""
+        flavour = running.partition("+")[2] or running.rpartition("-")[2]
+        try:
+            installed = [
+                entry.name
+                for entry in (self.root / KERNEL_MODULES_DIR).iterdir()
+                if entry.is_dir() and entry.name.endswith(flavour)
+            ]
+        except OSError:
+            return ""
+        if not installed:
+            return ""
+        newest = max(installed, key=_kernel_key)
+        return newest if _kernel_key(newest) > _kernel_key(running) else ""
+
+    def _boot_files_since_boot(self):
+        """Whether a file the bootloader reads was written after this boot."""
+
+        uptime = uptime_seconds(self.root)
+        if not uptime:
+            return False
+        booted = self._time() - uptime
+        try:
+            entries = list((self.root / BOOT_FIRMWARE_DIR).iterdir())
+        except OSError:
+            return False
+        for entry in entries:
+            try:
+                if entry.is_file() and entry.stat().st_mtime > booted:
+                    return True
+            except OSError:
+                continue
+        return False
 
     def hostname(self):
         record = {"hostname": platform.node(), "mdns": ""}
@@ -258,6 +321,15 @@ class HostProbe:
         if record["hostname"]:
             record["mdns"] = f"{record['hostname']}.local"
         return record
+
+
+def _kernel_key(release):
+    """A kernel release as numbers and words, so 6.18.52 sorts after 6.18.9."""
+
+    return tuple(
+        (0, int(part), "") if part.isdigit() else (1, 0, part)
+        for part in re.findall(r"\d+|[A-Za-z]+", release)
+    )
 
 
 def host_architecture(machine=None):

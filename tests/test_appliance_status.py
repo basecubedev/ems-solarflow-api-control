@@ -729,3 +729,58 @@ def test_an_appliance_with_no_ems_installed_is_not_accused_of_a_stopped_one(tmp_
     codes = [item["code"] for item in services.status.overview()["health"]["warnings"]]
 
     assert "ems_not_running" not in codes
+
+
+# --- a restart no package asked for ---------------------------------------------
+
+
+def _host(tmp_path, *, running, modules, uptime=3600.0):
+    (tmp_path / "proc" / "sys" / "kernel").mkdir(parents=True)
+    (tmp_path / "proc" / "sys" / "kernel" / "osrelease").write_text(running + "\n", encoding="utf-8")
+    (tmp_path / "proc" / "uptime").write_text(f"{uptime} 1.0\n", encoding="utf-8")
+    for name in modules:
+        (tmp_path / "lib" / "modules" / name).mkdir(parents=True)
+    return HostProbe(root=tmp_path, time_fn=lambda: 1_800_000_000.0)
+
+
+def test_a_newer_kernel_of_the_running_flavour_owes_a_restart(tmp_path):
+    """No kernel package on Debian or Raspberry Pi OS writes /run/reboot-required."""
+
+    probe = _host(
+        tmp_path,
+        running="6.18.9+rpt-rpi-v8",
+        modules=["6.18.9+rpt-rpi-v8", "6.18.52+rpt-rpi-v8", "6.18.60+rpt-rpi-2712"],
+    )
+
+    reboot = probe.reboot_required()
+
+    assert reboot["required"] is True
+    assert reboot["packages"] == ["kernel 6.18.52+rpt-rpi-v8"]
+
+
+def test_the_running_kernel_being_the_newest_owes_nothing(tmp_path):
+    probe = _host(
+        tmp_path,
+        running="6.18.52+rpt-rpi-v8",
+        modules=["6.18.9+rpt-rpi-v8", "6.18.52+rpt-rpi-v8", "6.18.60+rpt-rpi-2712"],
+    )
+
+    assert probe.reboot_required() == {"required": False, "packages": []}
+
+
+def test_boot_files_written_since_this_boot_owe_a_restart(tmp_path):
+    import os
+
+    probe = _host(tmp_path, running="6.18.52+rpt-rpi-v8", modules=["6.18.52+rpt-rpi-v8"])
+    boot = tmp_path / "boot" / "firmware"
+    boot.mkdir(parents=True)
+    old = boot / "bcm2710-rpi-3-b-plus.dtb"
+    old.write_bytes(b"dtb")
+    os.utime(old, (1_700_000_000, 1_700_000_000))
+    assert probe.reboot_required()["required"] is False
+
+    fresh = boot / "start.elf"
+    fresh.write_bytes(b"firmware")
+    os.utime(fresh, (1_800_000_000 - 60, 1_800_000_000 - 60))
+
+    assert probe.reboot_required() == {"required": True, "packages": ["boot firmware"]}

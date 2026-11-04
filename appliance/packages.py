@@ -49,7 +49,7 @@ PACKAGE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9+._-]*$")
 INST_LINE = re.compile(r"^Inst\s+(\S+)\s+(?:\[(\S+)\]\s+)?\((\S+)\s+([^)]*)\)")
 
 KERNEL_PREFIXES = ("linux-image", "linux-headers", "raspberrypi-kernel")
-FIRMWARE_PREFIXES = ("raspi-firmware", "raspberrypi-bootloader", "firmware-")
+FIRMWARE_PREFIXES = ("raspi-firmware", "raspberrypi-bootloader", "firmware-", "rpi-eeprom")
 
 LOCK_FREE = "free"
 LOCK_HELD = "held"
