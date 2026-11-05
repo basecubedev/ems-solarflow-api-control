@@ -93,6 +93,11 @@ export const FINDINGS = Object.freeze({
     message: words("finding.security_updates_pending.message", {}, Number(updates(status).security_count) || 0),
     next: words("finding.security_updates_pending.next"),
   }),
+  manual_updates_pending: (status, finding) => ({
+    title: words("finding.manual_updates_pending.title"),
+    message: words("finding.manual_updates_pending.message", { packages: (finding && finding.facts && finding.facts.packages) || "—" }),
+    next: words("finding.manual_updates_pending.next"),
+  }),
   reboot_required: () => ({
     title: words("finding.reboot_required.title"),
     message: words("finding.reboot_required.message"),

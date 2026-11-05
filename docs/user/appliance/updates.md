@@ -141,6 +141,16 @@ In Expert, **Plan all updates** takes the same path for everything that is
 upgradable rather than only the security archive, and **Pending security
 packages** lists them.
 
+*Security updates* means the Debian security archive only — the tile says so.
+The kernel, the firmware and the container runtime (`docker-ce`,
+`containerd.io`) come from the Raspberry Pi and Docker archives, which never
+mark an update as security, and automatic security updates never install
+them. When one waits, the card shows it under **Important, install by hand**,
+the Overview reports it, and **Plan all updates** appears without Expert. A
+plan with a container-runtime package says that the Docker engine restarts:
+the containers keep running, the EMS Admin console may show an error for a
+moment.
+
 Kernel and firmware upgrades are **not** held back or singled out for a separate
 approval. If `apt` offers one, installing updates installs it. That is
 deliberate: an appliance that quietly skips kernel security fixes is worse than

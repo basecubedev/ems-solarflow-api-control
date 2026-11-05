@@ -279,6 +279,12 @@ def main():
         host.write_deployment(tag="v1.0.0")
         host.run_container(ADMIN_CONTAINER, f"{ADMIN_REPOSITORY}:v1.0.0")
         host.apt_simulation = APT_SIMULATION
+        if options.get("manual_updates"):
+            host.apt_simulation = APT_SIMULATION + (
+                "Inst linux-image-rpi-v8 [1:6.12.1-1+rpt1] "
+                "(1:6.12.2-1+rpt1 Raspberry Pi Foundation:stable [arm64])\n"
+                "Inst containerd.io [1.7.26-1] (1.7.27-1 Docker CE:trixie [arm64])\n"
+            )
         age_index(root, clock.now, 86400 * int(options.get("index_days_old") or 0) or 3600)
         # Re-publish every scripted image so a previous test that broke one
         # cannot leak into the next.

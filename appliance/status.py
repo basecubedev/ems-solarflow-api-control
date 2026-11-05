@@ -586,6 +586,21 @@ class StatusService:
                         "Open Updates and install them.",
                     )
                 )
+            if updates.get("manual_count"):
+                names = ", ".join(item["name"] for item in updates.get("manual_updates") or ())
+                findings.append(
+                    finding(
+                        "manual_updates_pending",
+                        FINDING_WARNING,
+                        VIEW_UPDATES,
+                        "Important updates need installing by hand",
+                        f"Kernel, firmware or container-runtime updates are waiting: {names}. "
+                        "Automatic security updates cover only the Debian security archive "
+                        "and never install these.",
+                        "Open Updates and install all updates.",
+                        facts={"packages": names},
+                    )
+                )
             if updates.get("reboot_required"):
                 findings.append(
                     finding(

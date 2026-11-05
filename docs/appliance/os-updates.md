@@ -92,6 +92,17 @@ labels a release as security. Those arrive as **other updates**, are installed
 only by *Install all updates*, and never by the automatic security updates —
 a kernel or container-runtime fix has to be planned by hand.
 
+That is a decision, not a gap to close later: the kernel and the firmware need
+a restart and are the one update that can leave the board unbootable, and a
+container-runtime upgrade restarts the Docker engine under the running EMS. So
+they are named instead. While one waits, status reports
+`manual_updates_pending` with the packages, the security tile says *Debian
+security archive only*, the **Operating system** card lists them as
+*Important, install by hand*, and **Plan all updates** is offered outside
+Expert. A plan that contains `docker-ce`, `containerd.io` or another runtime
+package says that the Docker engine restarts and the EMS Admin console loses
+its Docker connection for a moment.
+
 **Plan security updates** on the **Operating system** card, or **Install
 security updates** on the **Raspberry Pi OS** card above it and in the
 Overview's quick actions, plans them. Only the packages the appliance itself

@@ -51,6 +51,17 @@ REMV_LINE = re.compile(r"^Remv\s+(\S+)")
 
 KERNEL_PREFIXES = ("linux-image", "linux-headers", "raspberrypi-kernel")
 FIRMWARE_PREFIXES = ("raspi-firmware", "raspberrypi-bootloader", "firmware-", "rpi-eeprom")
+RUNTIME_PACKAGES = frozenset(
+    {
+        "docker-ce",
+        "docker-ce-cli",
+        "docker-ce-rootless-extras",
+        "containerd.io",
+        "runc",
+        "docker-buildx-plugin",
+        "docker-compose-plugin",
+    }
+)
 
 LOCK_FREE = "free"
 LOCK_HELD = "held"
@@ -138,6 +149,25 @@ class PackageState:
         return [item for item in self.updates if not item.security]
 
     @property
+    def manual_updates(self):
+        """Kernel, firmware and container runtime outside the security set.
+
+        Their origins -- the Raspberry Pi archive, Docker's -- carry no
+        "security", so automatic security updates never install them, however
+        important they are. They are named so the owner installs them by hand.
+        """
+
+        return [
+            item
+            for item in self.updates
+            if not item.security
+            and (
+                item.name.startswith(KERNEL_PREFIXES + FIRMWARE_PREFIXES)
+                or item.name in RUNTIME_PACKAGES
+            )
+        ]
+
+    @property
     def kernel_update(self):
         return any(item.name.startswith(KERNEL_PREFIXES) for item in self.updates)
 
@@ -170,6 +200,8 @@ class PackageState:
             "normal_updates": [item.to_dict() for item in self.normal_updates],
             "security_count": len(self.security_updates),
             "normal_count": len(self.normal_updates),
+            "manual_updates": [item.to_dict() for item in self.manual_updates],
+            "manual_count": len(self.manual_updates),
             "held": list(self.held),
             "kernel_update": self.kernel_update,
             "firmware_update": self.firmware_update,
@@ -443,7 +475,7 @@ class PackageService:
         operation.requested_target.update(values)
         self.operations.update_target(operation.operation_id, values)
 
-        return {
+        plan = {
             "type": TYPE_UPDATE_INSTALL,
             "scope": scope,
             "packages": [item.to_dict() for item in targets],
@@ -455,6 +487,14 @@ class PackageService:
             "reboot_required_before": state.reboot_required,
             "package_manager": state.to_dict()["package_manager"],
         }
+        runtime = sorted(item.name for item in targets if item.name in RUNTIME_PACKAGES)
+        if runtime:
+            plan["note"] = (
+                f"{', '.join(runtime)} restarts the Docker engine. The containers keep "
+                "running, but the EMS Admin console loses its connection to Docker for a "
+                "moment and may show an error until it reconnects."
+            )
+        return plan
 
     def plan_repair(self, operation, action):
         state = self._read_gates(PackageState())

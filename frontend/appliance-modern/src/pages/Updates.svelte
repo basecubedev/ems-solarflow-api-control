@@ -289,6 +289,7 @@
         <div class="tile-label">{t("overview.securityUpdates")}</div>
         <div class="tile-value num">{tiles.securityCount ?? "—"}</div>
         <Status tone={tiles.security.tone} text={t(tiles.security.key)} />
+        <div class="tile-sub" data-testid="updates-security-scope">{t("os.securityScope")}</div>
       </div>
       <div class="tile" data-testid="updates-normal">
         <div class="tile-label">{t("overview.otherUpdates")}</div>
@@ -313,9 +314,12 @@
       </div>
     </div>
 
+    {#if (updates.manual_updates || []).length}
+      <p class="callout c-warn" data-testid="updates-manual"><Icon name="triangle-alert" /><span><strong>{t("os.manualTitle")}</strong>{" "}{t("os.manualText", { packages: updates.manual_updates.map((item) => item.name).join(", ") })}</span></p>
+    {/if}
     <div class="row-wrap actions">
       <PlanButton plan={securityUpdatesPlan("updates-install-security")} label={t("os.planSecurity")} icon="shield-check" small={false} disabled={!securityUpdatesOffered(updates)} testid="updates-install-security" />
-      {#if detail.expert}
+      {#if detail.expert || (updates.manual_updates || []).length}
         <PlanButton plan={allUpdatesPlan()} label={t("os.planAll")} icon="package" variant="secondary" small={false} testid="updates-install-all" />
       {/if}
       <PlanButton plan={refreshIndexPlan()} label={t("repair.refresh_index")} icon="refresh-cw" variant="secondary" small={false} testid="updates-refresh-index" />

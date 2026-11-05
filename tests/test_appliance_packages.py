@@ -1434,3 +1434,53 @@ def test_a_reboot_plan_does_not_name_itself_as_the_operation_running(tmp_path):
 
     assert "running_operation" not in planned["plan"]
     assert not [args for tool, args, _ in services.host.calls if tool == "apt-get"], services.host.calls
+
+
+# --- what automatic security updates never install --------------------------
+
+RUNTIME_AND_KERNEL = """Inst openssl [3.0.11-1] (3.0.14-1 Debian-Security:13/stable-security [arm64])
+Inst linux-image-rpi-v8 [1:6.12.1-1+rpt1] (1:6.12.2-1+rpt1 Raspberry Pi Foundation:stable [arm64])
+Inst rpi-eeprom [28.1-1] (28.2-1 Raspberry Pi Foundation:stable [arm64])
+Inst docker-ce [5:28.1.0-1~debian.13~trixie] (5:28.2.0-1~debian.13~trixie Docker CE:trixie [arm64])
+Inst containerd.io [1.7.26-1] (1.7.27-1 Docker CE:trixie [arm64])
+Inst libfoo [1.0-1] (1.0-2 Debian:13/stable [arm64])
+"""
+
+
+def test_kernel_firmware_and_runtime_updates_are_named_as_important_and_manual(tmp_path):
+    """Their origins carry no "security", so the security set and automatic
+    security updates never include them: a runc or kernel CVE went unpatched
+    while everything read as up to date."""
+
+    services = appliance(tmp_path)
+    services.host.apt_simulation = RUNTIME_AND_KERNEL
+
+    state = services.packages.check().to_dict()
+
+    assert [item["name"] for item in state["manual_updates"]] == [
+        "linux-image-rpi-v8",
+        "rpi-eeprom",
+        "docker-ce",
+        "containerd.io",
+    ]
+    assert state["manual_count"] == 4
+
+
+def test_an_upgrade_that_restarts_the_container_engine_says_so(tmp_path):
+    services = appliance(tmp_path)
+    services.host.apt_simulation = RUNTIME_AND_KERNEL
+    handlers = handlers_for(services)
+
+    plan = handlers.dispatch({"operation": "updates.plan", "scope": "all"})["plan"]
+
+    assert "Docker" in plan["note"] and "restarts" in plan["note"], plan.get("note")
+
+
+def test_status_flags_important_manual_updates(tmp_path):
+    services = appliance(tmp_path)
+    services.host.apt_simulation = RUNTIME_AND_KERNEL
+
+    status = services.status.overview()
+    codes = {item["code"] for item in status["health"]["warnings"]}
+
+    assert "manual_updates_pending" in codes, codes

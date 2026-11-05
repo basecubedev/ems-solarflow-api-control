@@ -661,6 +661,16 @@ test.describe("updates", () => {
     await expect(page.getByTestId("manager-plan-revert")).toBeDisabled();
   });
 
+  test("kernel and runtime updates are named as important and can be planned without Expert", async ({ page, request }) => {
+    await resetAppliance(request, { manual_updates: true });
+    await createPassword(page);
+    await open(page, "updates");
+    await expect(page.getByTestId("updates-security-scope")).toContainText("Debian security archive only");
+    await expect(page.getByTestId("updates-manual")).toContainText("linux-image-rpi-v8, containerd.io");
+    await page.getByTestId("updates-install-all").click();
+    await expect(page.getByTestId("plan-dialog")).toContainText("restarts the Docker engine");
+  });
+
   test("Expert adds every update and the package-manager repairs, and is remembered", async ({ page }) => {
     await createPassword(page);
     await open(page, "updates");
