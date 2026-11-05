@@ -576,14 +576,18 @@ the container exists
 the container is running
 the active image digest matches the expected known-good digest
 the Admin HTTP endpoint answers on the loopback address
-the reported Admin version can be read
+the running image's version label can be read
 that version matches the expected target when one is known
 ```
 
 A container **without a Docker health check does not count as healthy** just
-because its process is running: the HTTP endpoint has to answer. The version is
-read from the health payload, and from the running image's
-`org.opencontainers.image.version` label when the payload does not carry one.
+because its process is running: the HTTP endpoint has to answer. The Admin's
+endpoint (`/api/admin/auth/status`) does not report a version, so the version
+is the `org.opencontainers.image.version` label of the image whose digest was
+just compared. The check therefore adds no evidence beyond the digest: it
+catches an image built with the wrong label, not a wrong `EMS_ADMIN_TAG` in the
+compose file. A version the payload names is preferred over the label, so an
+Admin that starts reporting one is compared against it.
 
 For **Stop**, the appliance verifies that the container really stopped. A
 container that a restart policy brings straight back up is reported as

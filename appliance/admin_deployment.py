@@ -413,8 +413,9 @@ def apply_digest(deployment, repository, digest, *, tag=""):
 
     updated = set_service_image(compose_text, deployment.service, reference)
     if tag:
-        # The container reports its own version from here, not from the
-        # environment file, which this install only keeps for reference.
+        # The Admin names its own image from here when Docker cannot be
+        # asked, not from the environment file, which this install only keeps
+        # for reference.
         updated = set_service_environment(updated, deployment.service, {ENV_TAG_KEY: tag})
     atomic_write(deployment.compose_file, updated, owner=owner)
 
