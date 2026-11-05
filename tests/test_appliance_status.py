@@ -1087,3 +1087,14 @@ def test_the_expected_mdns_name_raises_nothing(tmp_path):
 
     assert status["network"]["mdns"] == "ems-solarflow.local"
     assert "mdns_name_taken" not in codes
+
+
+def test_a_path_already_under_the_probe_root_is_not_rooted_twice(tmp_path):
+    """In test mode the EMS data tile read a path with the root in it twice."""
+
+    probe = HostProbe(None, root=tmp_path)
+    data = tmp_path / "opt" / "ems" / "data"
+    data.mkdir(parents=True)
+
+    assert probe.filesystem(str(data))["path"] == str(data)
+    assert probe.filesystem("/opt/ems/data")["path"] == str(data)

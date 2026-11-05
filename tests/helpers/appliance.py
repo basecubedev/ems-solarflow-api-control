@@ -203,6 +203,7 @@ class FakeHost:
         self.wifi_device_state = "connected"
         self.wifi_address = "192.168.1.50/24"
         self.wifi_address6 = ""
+        self.wired_address = ""
         self.wifi_hwaddr = "B8:27:EB:12:34:56"
         # nmcli radio: the hardware switch (rfkill) and NetworkManager's own.
         self.wifi_radio = ("enabled", "enabled")
@@ -713,6 +714,8 @@ class FakeHost:
                 return self._result("nmcli", args, 1, "", "Error: NetworkManager is not running")
             return self._result("nmcli", args, 0, self._device_status())
         if "device show" in joined:
+            if args[-1] != "wlan0":
+                return self._result("nmcli", args, 0, self._wired_device_show())
             return self._result("nmcli", args, 0, self._device_show())
         if args[-1:] == ["radio"]:
             return self._result("nmcli", args, 0, ":".join(self.wifi_radio) + "\n")
@@ -749,6 +752,14 @@ class FakeHost:
             "eth0:ethernet:unavailable:\n"
             "lo:loopback:unmanaged:\n"
         )
+
+    def _wired_device_show(self):
+        """eth0 as the fake reports it: unplugged, with an address only if given one."""
+
+        lines = ["GENERAL.CONNECTION:", "GENERAL.HWADDR:B8:27:EB:00:00:01"]
+        if self.wired_address:
+            lines.append(f"IP4.ADDRESS[1]:{self.wired_address}")
+        return "\n".join(lines) + "\n"
 
     def _device_show(self):
         lines = [f"GENERAL.CONNECTION:{self.wifi_profile}"]

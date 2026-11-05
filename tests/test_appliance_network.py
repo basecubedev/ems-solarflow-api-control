@@ -961,3 +961,12 @@ def test_a_call_nobody_signed_in_made_does_not_confirm_a_wifi_switch(tmp_path, r
     )
 
     assert operation.state == STATE_FAILED_TERMINAL, operation.to_dict()
+
+
+def test_each_interface_shows_its_own_addresses(tmp_path):
+    services = build_test_services(tmp_path)
+
+    interfaces = {item["device"]: item for item in services.network.status()["interfaces"]}
+
+    assert interfaces["wlan0"]["addresses"] == ["192.168.1.50/24"]
+    assert interfaces["eth0"]["addresses"] == []

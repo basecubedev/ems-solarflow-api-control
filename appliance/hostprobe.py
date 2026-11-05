@@ -199,9 +199,12 @@ class HostProbe:
         }
 
     def _path(self, absolute):
+        """``absolute`` read through the probe root, once: a path already under it stays."""
+
         root = Path(self.root)
-        if root == Path("/"):
-            return Path(absolute)
+        target = Path(absolute)
+        if root == Path("/") or target.is_relative_to(root):
+            return target
         return root / str(absolute).lstrip("/")
 
     def filesystem(self, path):
