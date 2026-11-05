@@ -428,6 +428,7 @@ export const STRINGS = {
   "track.development": s("Development", "Entwicklung", "Ontwikkeling", "Développement"),
   "track.development.help": s("Feature builds with unfinished changes. Intended for testing only; offered in Expert.", "Feature-Builds mit unfertigen Änderungen. Nur zum Testen gedacht; im Expertenmodus angeboten.", "Featurebuilds met onafgemaakte wijzigingen. Alleen bedoeld om te testen; aangeboden in Expert.", "Builds de fonctionnalités aux changements inachevés. Réservés aux tests ; proposés en mode Expert."),
 
+  "updates.details": s("Details and every version", "Details und alle Versionen", "Details en alle versies", "Détails et toutes les versions"),
   "updates.summary": s("What is out of date", "Was veraltet ist", "Wat verouderd is", "Ce qui n’est pas à jour"),
   "updates.checking": s("Checking", "Wird geprüft", "Wordt gecontroleerd", "Vérification"),
   "updates.installed": s("Installed", "Installiert", "Geïnstalleerd", "Installée"),

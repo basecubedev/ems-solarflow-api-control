@@ -1234,6 +1234,14 @@ test.describe("what an outcome says", () => {
 test.describe("on a phone", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
+  test("each update summary takes the owner straight to its details", async ({ page }) => {
+    await createPassword(page);
+    await page.locator('.bottom-nav a[data-page="updates"]').click();
+    await page.getByTestId("update-summary-os-details").click();
+    await expect(page.getByTestId("os-section")).toBeFocused();
+    await expect(page.getByTestId("os-section")).toBeInViewport();
+  });
+
   test("the bar holds four pages and More reaches the rest, handing focus to the page", async ({ page }) => {
     await createPassword(page);
     const bar = page.locator(".bottom-nav");

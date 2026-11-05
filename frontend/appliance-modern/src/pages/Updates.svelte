@@ -125,6 +125,13 @@
     return parts.join(" · ");
   }
 
+  /** The summary is where each part starts; its detail card is one press away, also on a phone. */
+  function toDetail(id) {
+    const target = document.getElementById(id);
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    target.focus({ preventScroll: true });
+  }
   const yesNo = (value) => (value === true ? t("common.yes") : value === false ? t("common.no") : null);
 </script>
 
@@ -133,6 +140,7 @@
     <div class="summary-body" data-testid="update-summary-manager">
       <span data-testid="update-summary-manager-state"><Status tone={managerSummary.tone} text={t(managerSummary.key)} /></span>
       <KeyValues rows={[{ label: t("updates.installed"), value: manager?.installed_version }, { label: t("updates.latestStable"), value: managerLatestVersion }]} />
+      <button class="link-btn" type="button" onclick={() => toDetail("updates-manager")} data-testid="update-summary-manager-details">{t("updates.details")}</button>
       {#if managerLatest?.direction === "upgrade"}
         <PlanButton plan={managerInstallPlan(managerLatest, false, "update-manager-latest")} label={t("updates.updateTo", { version: managerLatestVersion || "" })} icon="download" disabled={!managerKnown || !rights.canUpdate || unconfirmed} testid="update-manager-latest" />
         <UnconfirmedNote testid="update-manager-latest-unconfirmed" />
@@ -143,6 +151,7 @@
     <div class="summary-body" data-testid="update-summary-admin">
       <span data-testid="update-summary-admin-state"><Status tone={adminSummary.tone} text={t(adminSummary.key)} /></span>
       <KeyValues rows={[{ label: t("updates.installed"), value: version.key ? t(version.key) : version.text }, { label: t("updates.latestStable"), value: adminLatest?.tag }]} />
+      <button class="link-btn" type="button" onclick={() => toDetail("updates-admin")} data-testid="update-summary-admin-details">{t("updates.details")}</button>
       {#if gate === "bootstrap"}
         <a class="btn small" href={href("admin")} data-testid="update-admin-install"><Icon name="download" />{t("install.installAdmin")}</a>
       {:else if gate === "missing"}
@@ -162,6 +171,7 @@
           { label: t("updates.os.restart"), value: yesNo(updates.reboot_required) },
         ]}
       />
+      <button class="link-btn" type="button" onclick={() => toDetail("updates-os")} data-testid="update-summary-os-details">{t("updates.details")}</button>
       {#if securityUpdatesOffered(updates)}
         <PlanButton plan={securityUpdatesPlan("update-os-security")} label={t("overview.installSecurity")} icon="shield-check" testid="update-os-security" />
       {/if}
@@ -170,7 +180,7 @@
 </section>
 
 <Card icon="package" tone="c-out" title={t("manager.title")} subtitle={t("manager.sub")} span="span-12">
-  <div data-testid="manager-section">
+  <div data-testid="manager-section" id="updates-manager" class="anchor" tabindex="-1">
     {#if manager === undefined || manager === null}
       <p class="muted"><Icon name="loader" size="sm" /> {t("manager.reading")}</p>
     {:else if manager.error}
@@ -258,7 +268,7 @@
 </Card>
 
 <Card icon="server" tone="c-inv" title={t("adminVersions.title")} subtitle={t("adminVersions.sub")} span="span-12">
-  <div data-testid="admin-versions">
+  <div data-testid="admin-versions" id="updates-admin" class="anchor" tabindex="-1">
     {#if gate === "unread"}
       <div data-testid="admin-versions-unavailable"><Empty><strong>{t("adminVersions.unread")}</strong> {t("adminVersions.unreadText")}</Empty></div>
     {:else if gate === "bootstrap"}
@@ -289,7 +299,7 @@
 </Card>
 
 <Card icon="hard-drive" tone="c-pv" title={t("os.title")} subtitle={t("os.sub")} span="span-12">
-  <div data-testid="os-section">
+  <div data-testid="os-section" id="updates-os" class="anchor" tabindex="-1">
     <div class="tiles">
       <div class="tile" data-testid="updates-security">
         <div class="tile-label">{t("overview.securityUpdates")}</div>
@@ -355,6 +365,9 @@
 </Card>
 
 <style>
+  .anchor { scroll-margin-top: 72px; }
+  .anchor:focus { outline: none; }
+  .link-btn { background: none; border: 0; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; font-size: 13px; justify-self: start; }
   .summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s5); }
   .summary-body { display: flex; flex-direction: column; gap: var(--s3); align-items: flex-start; }
   .summary-body :global(.kv) { align-self: stretch; }
