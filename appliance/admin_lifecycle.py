@@ -45,6 +45,7 @@ from appliance.docker_backend import (
     DockerError,
 )
 from appliance.known_good import HEALTHCHECK_PASSED
+from appliance.packages import LOCK_HELD
 from appliance.operation_schema import (
     OperationSchemaError,
     is_bootstrap,
@@ -345,6 +346,7 @@ class AdminLifecycleService:
         sleep=None,
         operation_log=None,
         bootstrap=None,
+        package_lock=None,
         manager_pending=None,
     ):
         self.paths = paths
@@ -357,6 +359,7 @@ class AdminLifecycleService:
         self.systemd = systemd
         self.catalogue = catalogue or ReleaseCatalogue(config)
         self.bootstrap = bootstrap or DeploymentBootstrap(paths, config)
+        self.package_lock = package_lock
         self._time = time_fn or time.time
         self._sleep = sleep or time.sleep
         self._operation_log = operation_log
@@ -545,6 +548,7 @@ class AdminLifecycleService:
         self._advance(operation, "preflight")
         self._require_docker(state)
         self._require_no_admin_transition()
+        self._require_no_package_run()
         bootstrap = self._deployment_state(state)
         if bootstrap:
             # Planning must stay a preview, so the only thing done here is to
@@ -693,6 +697,7 @@ class AdminLifecycleService:
         self._advance(operation, "preflight")
         self._require_docker(state)
         self._require_no_admin_transition()
+        self._require_no_package_run()
         self._require_deployment(state)
 
         problem = self.known_good.problem()
@@ -746,6 +751,7 @@ class AdminLifecycleService:
         state = self.detect()
         self._require_docker(state)
         self._require_no_admin_transition()
+        self._require_no_package_run()
         operation.requested_target.update({"action": action})
         self.operations.update_target(operation.operation_id, {"action": action})
         return {
@@ -757,6 +763,8 @@ class AdminLifecycleService:
 
     def plan_repair(self, operation, *, restart_policy_only=False):
         self._require_no_admin_transition()
+        if not restart_policy_only:
+            self._require_no_package_run()
         findings = self.inspect_restart_policy() if restart_policy_only else self.inspect_repair()
         actions = [item.action for item in findings if item.action]
         manual = [
@@ -1226,6 +1234,7 @@ class AdminLifecycleService:
             # binding below still holds while its record is already live. This
             # comes first, before any time is spent verifying an image.
             self._require_no_admin_transition()
+            self._require_no_package_run()
             self._require_planned_deployment(target)
             self._require_planned_current_admin(target)
             self._require_planned_image(target, reference, require_labels=True)
@@ -1516,6 +1525,7 @@ class AdminLifecycleService:
         self._advance(operation, "verifying_target_image", detail=reference)
         try:
             self._require_no_admin_transition()
+            self._require_no_package_run()
             self._require_planned_deployment(target)
             self._require_planned_current_admin(target)
             # A rollback deploys an image this appliance validated once, when it
@@ -1744,6 +1754,7 @@ class AdminLifecycleService:
         return payload
 
     def _execute_lifecycle(self, operation):
+        self._require_no_package_run()
         action = operation.requested_target.get("action")
         container = self.config.admin_container
         self._advance(operation, f"{action}_admin")
@@ -1811,6 +1822,8 @@ class AdminLifecycleService:
         return STATE_FAILED_RECOVERABLE
 
     def _execute_repair(self, operation):
+        if operation.requested_target.get("scope") != REPAIR_SCOPE_RESTART_POLICY:
+            self._require_no_package_run()
         actions = list(operation.requested_target.get("actions") or [])
         manual = list(operation.requested_target.get("manual_actions") or [])
         applied = []
@@ -2073,6 +2086,20 @@ class AdminLifecycleService:
                 f"the Admin environment file {deployment['env_file']} is missing; "
                 "recreate it with install-admin-console.sh before installing or "
                 "rolling back",
+            )
+
+    def _require_no_package_run(self):
+        """Wait for a package run, which may be upgrading the Docker engine underneath.
+
+        A run that outlasts the agent's wait is left running in its own unit,
+        and its operation record no longer holds the slot; the lock does.
+        """
+
+        if self.package_lock is not None and self.package_lock() == LOCK_HELD:
+            raise AdminLifecycleError(
+                "package_operation_active",
+                "a package installation is running and may be upgrading Docker; wait until "
+                "it finishes",
             )
 
     def _require_no_admin_transition(self):

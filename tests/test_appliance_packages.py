@@ -1521,3 +1521,58 @@ def test_half_configured_packages_while_dpkg_holds_its_lock_are_its_work(tmp_pat
     assert state.healthy is True
     assert "dpkg_incomplete" not in blockers
     assert "package_lock_held" in blockers
+
+
+# --- dpkg outlives the agent ---------------------------------------------------
+
+
+def test_an_install_runs_apt_in_a_unit_of_its_own(tmp_path):
+    """apt and dpkg ran as children of the agent, whose unit stops its whole
+    control group: an OOM kill or a restart of the agent killed dpkg in the
+    middle of a transaction."""
+
+    services = appliance(tmp_path)
+
+    operation, _ = plan_and_execute(services, "updates.plan", scope="security")
+
+    assert operation.state == STATE_SUCCEEDED, operation.to_dict()
+    assert len(services.host.units_run) == 1
+    assert services.host.units_run[0].startswith(f"ems-appliance-packages-{operation.operation_id[:12]}-")
+    assert "Setting up libfoo" in operation.result["output"]["text"]
+    run = next(args for tool, args, _ in services.host.calls if tool == "systemd-run")
+    assert not any(arg.startswith("--property=RuntimeMaxSec") for arg in run)
+    calls = [(tool, args) for tool, args, _ in services.host.calls if tool == "journalctl"]
+    assert calls.index(("journalctl", ("--sync",))) < len(calls) - 1
+
+
+def test_a_dpkg_repair_runs_in_a_unit_of_its_own(tmp_path):
+    services = appliance(tmp_path)
+    services.host.dpkg_audit = "The following packages are only half configured:\n libfoo\n"
+
+    operation, _ = plan_and_execute(services, "updates.plan_repair", action="configure_pending")
+
+    assert services.host.units_run, operation.to_dict()
+    assert any(tool == "dpkg" and "--configure" in args for tool, args, _ in services.host.calls)
+
+
+def test_an_install_that_outlasts_its_wait_is_left_running_and_said_so(tmp_path, monkeypatch):
+    """Stopping the unit at its deadline would kill dpkg mid-transaction, the
+    state the unit exists to avoid."""
+
+    from appliance.commands import CommandResult
+    from appliance.operations import STATE_FAILED_RECOVERABLE
+
+    services = appliance(tmp_path)
+    original = services.packages.runner.run
+
+    def outlasting(tool, args=(), **kwargs):
+        if tool == "systemd-run":
+            return CommandResult(tool, tuple(args), 124, "", "", timed_out=True)
+        return original(tool, args, **kwargs)
+
+    monkeypatch.setattr(services.packages.runner, "run", outlasting)
+    operation, _ = plan_and_execute(services, "updates.plan", scope="security")
+
+    assert operation.state == STATE_FAILED_RECOVERABLE, operation.to_dict()
+    assert operation.error["code"] == "package_unit_still_running"
+    assert "is still running in ems-appliance-packages-" in operation.error["message"]

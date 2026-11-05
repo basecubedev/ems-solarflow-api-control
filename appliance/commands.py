@@ -25,6 +25,7 @@ MAX_ARGUMENT_BYTES = 128 * 1024
 EXECUTABLES = {
     "docker": ("/usr/bin/docker", "/usr/local/bin/docker"),
     "systemctl": ("/usr/bin/systemctl", "/bin/systemctl"),
+    "systemd-run": ("/usr/bin/systemd-run", "/bin/systemd-run"),
     "journalctl": ("/usr/bin/journalctl", "/bin/journalctl"),
     "apt-get": ("/usr/bin/apt-get",),
     "apt": ("/usr/bin/apt",),

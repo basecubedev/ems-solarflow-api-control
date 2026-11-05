@@ -140,6 +140,7 @@ class FakeHost:
                 "nmcli",
                 "hostnamectl",
                 "busctl",
+                "systemd-run",
                 "timedatectl",
                 "getent",
                 "sshd",
@@ -173,6 +174,8 @@ class FakeHost:
         self.hostname = "ems-solarflow"
         # What avahi publishes; None answers with this host's own name.
         self.mdns_published = None
+        self.units_run = []
+        self.unit_output = {}
         self.apt_simulation = APT_SIMULATION
         # What apt-get -s writes to stderr when it fails; it then exits 100.
         self.apt_simulation_error = ""
@@ -633,7 +636,20 @@ class FakeHost:
         return self._result("loginctl", args, 1, "", "unsupported")
 
     def _journalctl(self, args):
+        if "--unit" in args and args[args.index("--unit") + 1] in self.unit_output:
+            return self._result("journalctl", args, 0, self.unit_output[args[args.index("--unit") + 1]])
         return self._result("journalctl", args, 0, "journal line one\njournal line two\n")
+
+    def _systemd_run(self, args):
+        """A transient unit: the wrapped tool runs, its output goes to the journal."""
+
+        split = args.index("--")
+        unit = next(arg.partition("=")[2] for arg in args[:split] if arg.startswith("--unit="))
+        tool = Path(args[split + 1]).name
+        result = self.handle(tool, list(args[split + 2 :]))
+        self.units_run.append(unit)
+        self.unit_output[unit] = (result.stdout or "") + (result.stderr or "")
+        return self._result("systemd-run", args, result.returncode, "", "")
 
     # --- packages --------------------------------------------------------
 

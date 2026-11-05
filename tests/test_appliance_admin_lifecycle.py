@@ -1592,3 +1592,72 @@ def test_a_refused_time_zone_or_support_archive_plan_keeps_its_reason(tmp_path, 
 
     assert excinfo.value.code == "support_archive_too_large"
     assert services.operations.list(limit=1)[0].error["code"] == "support_archive_too_large"
+
+
+@pytest.mark.parametrize(
+    "request_",
+    [
+        {"operation": "admin.plan_install", "channel": "exact", "tag": "v1.1.0"},
+        {"operation": "admin.plan_lifecycle", "action": "restart"},
+        {"operation": "admin.plan_repair"},
+    ],
+)
+def test_an_admin_plan_waits_while_a_package_run_holds_the_lock(tmp_path, request_):
+    """A package run left running past the agent's wait upgrades docker-ce or
+    containerd; recreating the Admin in the middle of that is a second hand
+    on the same engine."""
+
+    from appliance.packages import LOCK_HELD
+
+    services = healthy_appliance(tmp_path)
+    services.host.publish_image("v1.1.0")
+    services.admin.package_lock = lambda: LOCK_HELD
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    with pytest.raises(AgentError) as excinfo:
+        handlers.dispatch(dict(request_))
+
+    assert excinfo.value.code == "package_operation_active", excinfo.value.message
+
+
+def test_an_admin_restart_confirmed_after_a_package_run_started_waits_for_it(tmp_path):
+    from appliance.packages import LOCK_HELD
+
+    services = healthy_appliance(tmp_path)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    planned = handlers.dispatch({"operation": "admin.plan_lifecycle", "action": "restart"})
+    services.admin.package_lock = lambda: LOCK_HELD
+
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+    record = services.operations.get(planned["operation"]["operation_id"])
+
+    assert record.error["code"] == "package_operation_active", record.to_dict()
+    assert not any(tool == "docker" and "restart" in args for tool, args, _ in services.host.calls)
+
+
+def test_a_repair_confirmed_after_a_package_run_started_waits_for_it(tmp_path):
+    from appliance.packages import LOCK_HELD
+
+    services = healthy_appliance(tmp_path)
+    services.host.containers[ADMIN_CONTAINER]["State"].update({"Running": False, "Status": "exited"})
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    planned = handlers.dispatch({"operation": "admin.plan_repair"})
+    services.admin.package_lock = lambda: LOCK_HELD
+
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+    record = services.operations.get(planned["operation"]["operation_id"])
+
+    assert record.error["code"] == "package_operation_active", record.to_dict()
+    assert services.host.containers[ADMIN_CONTAINER]["State"]["Running"] is False

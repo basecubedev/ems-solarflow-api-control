@@ -297,6 +297,22 @@ def test_the_boot_run_neither_stops_nor_starts_nor_recreates_the_admin(tmp_path)
     assert services.host.containers[ADMIN_CONTAINER]["State"]["Running"] is True
 
 
+def test_the_boot_run_sets_the_policy_while_dpkg_holds_the_lock(tmp_path):
+    """postinst starts the boot unit while dpkg holds the package lock; a gate
+    on this scope would put the policy off until the next boot."""
+
+    from appliance.packages import LOCK_HELD
+
+    services = installed_before_the_fix(tmp_path)
+    services.admin.package_lock = lambda: LOCK_HELD
+
+    result = boot_run(services)
+
+    assert result["ran"] is True, result
+    assert services.operations.get(result["operation_id"]).state == STATE_SUCCEEDED
+    assert container_policy(services) == "unless-stopped"
+
+
 def test_an_admin_that_is_down_is_not_started_by_the_boot_run(tmp_path):
     """Only the policy is automatic.
 

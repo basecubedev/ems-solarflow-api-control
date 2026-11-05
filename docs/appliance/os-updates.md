@@ -110,6 +110,17 @@ Overview's quick actions, plans them. Only the packages the appliance itself
 parsed out of a simulated apt run are upgraded — the browser never sends a
 package name.
 
+apt runs in a transient unit of its own, `ems-appliance-packages-<id>-<run>.service`,
+and so do the package-manager repairs, outside the agent's control group. An
+agent the OOM killer picks or that is restarted no longer takes dpkg with it in
+the middle of a transaction; the unit runs to its end, and its output is read
+back from the journal (`journalctl -u 'ems-appliance-packages-<id>-*'`). A run
+that outlasts the agent's wait (an hour for an install, half an hour for a
+repair) is not stopped: the operation ends *Incomplete* with
+`package_unit_still_running`, and package operations, power actions, the
+Manager's own install and every EMS Admin operation wait for the package lock
+until the unit ends (`package_operation_active`).
+
 No install removes a package. The plan is read from `apt-get -s upgrade`, which
 never removes anything, while the security install runs `apt-get install
 --only-upgrade`, which under `-y` would remove whatever a new version conflicts

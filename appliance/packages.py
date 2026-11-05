@@ -15,6 +15,7 @@ import struct
 import time
 from dataclasses import dataclass, field
 
+from appliance.commands import CommandResult
 from appliance.hostprobe import (
     APT_DAILY_UPDATE_STAMP,
     APT_LISTS_DIR,
@@ -24,6 +25,7 @@ from appliance.hostprobe import (
 )
 from appliance.operations import (
     BUSY_CODES,
+    STATE_FAILED_RECOVERABLE,
     STATE_FAILED_TERMINAL,
     STATE_SUCCEEDED,
     STATE_VERIFYING,
@@ -63,6 +65,8 @@ RUNTIME_PACKAGES = frozenset(
         "docker-compose-plugin",
     }
 )
+
+PACKAGE_UNIT_PREFIX = "ems-appliance-packages-"
 
 LOCK_FREE = "free"
 LOCK_HELD = "held"
@@ -539,6 +543,70 @@ class PackageService:
             "blockers": blockers,
         }
 
+    def _run_in_unit(self, operation, tool, args, *, timeout):
+        """apt or dpkg in a transient unit of its own, outside the agent's cgroup.
+
+        The agent's unit stops its whole control group, so an agent stopped by
+        the OOM killer or a restart took dpkg with it in the middle of a
+        transaction, as the Manager's own package never is. The unit keeps
+        running without the agent, under the same deadline the agent waits
+        for, and its output is read back from the journal once journald has
+        written it. Each run has a unit of its own, so a retry never reads the
+        output of the run before it.
+        """
+
+        unit = f"{PACKAGE_UNIT_PREFIX}{operation.operation_id[:12]}-{os.urandom(3).hex()}.service"
+        result = self.runner.run(
+            "systemd-run",
+            [
+                f"--unit={unit}",
+                "--collect",
+                "--wait",
+                "--quiet",
+                "--property=Type=exec",
+                "--setenv=DEBIAN_FRONTEND=noninteractive",
+                "--setenv=LC_ALL=C",
+                "--setenv=PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+                "--",
+                self.runner.resolve(tool),
+                *args,
+            ],
+            timeout=timeout,
+        )
+        self.runner.run("journalctl", ["--sync"], timeout=60)
+        journal = self.runner.run(
+            "journalctl", ["--unit", unit, "--output", "cat", "--no-pager"], timeout=60
+        )
+        return CommandResult(
+            tool,
+            tuple(args),
+            result.returncode,
+            journal.stdout if journal.ok else "",
+            f"{tool} is still running in {unit}" if result.timed_out else result.stderr,
+            timed_out=result.timed_out,
+        )
+
+    def _still_running(self, operation, result, payload, *, failed_code):
+        """Stop waiting for a unit that outlasted its time, and leave it running.
+
+        Stopping apt or dpkg in the middle of a transaction is the
+        half-configured package manager the unit exists to avoid. The package
+        lock holds every other change off until it ends.
+        """
+
+        message = (
+            f"{result.stderr}; it is not stopped, and package, power, Manager and EMS Admin "
+            "operations wait for it through the package lock. Check Updates again later."
+        )
+        self.operations.finish(
+            operation.operation_id,
+            STATE_FAILED_RECOVERABLE,
+            stage="still_running",
+            error={"code": "package_unit_still_running", "message": message},
+            result=payload,
+        )
+        raise PackageError(failed_code, message)
+
     def _repair_removals(self):
         """What `apt-get -f install` would remove, asked without letting it.
 
@@ -682,7 +750,7 @@ class PackageService:
                 "--only-upgrade",
                 *packages,
             ]
-        result = self.runner.run("apt-get", args, timeout=3600)
+        result = self._run_in_unit(operation, "apt-get", args, timeout=3600)
         output = bounded_redacted_log((result.stdout or "") + (result.stderr or ""))
 
         self._advance(operation, "verifying", state=STATE_VERIFYING)
@@ -697,6 +765,8 @@ class PackageService:
             "output": output,
         }
 
+        if result.timed_out:
+            self._still_running(operation, result, payload, failed_code="package_install_failed")
         if not result.ok:
             self.operations.finish(
                 operation.operation_id,
@@ -731,11 +801,12 @@ class PackageService:
         # is kept, as on every install. --no-remove: apt fails rather than
         # removing a package, the plan having shown that none would be.
         if action == PACKAGE_REPAIR_CONFIGURE:
-            result = self.runner.run(
-                "dpkg", ["--force-confold", "--configure", "-a"], timeout=1800
+            result = self._run_in_unit(
+                operation, "dpkg", ["--force-confold", "--configure", "-a"], timeout=1800
             )
         elif action == PACKAGE_REPAIR_FIX_BROKEN:
-            result = self.runner.run(
+            result = self._run_in_unit(
+                operation,
                 "apt-get",
                 ["-y", "--no-remove", "-o", "Dpkg::Options::=--force-confold", "-f", "install"],
                 timeout=1800,
@@ -753,6 +824,8 @@ class PackageService:
             "package_manager": after.to_dict()["package_manager"],
             "output": output,
         }
+        if result.timed_out:
+            self._still_running(operation, result, payload, failed_code="package_repair_failed")
         if not result.ok:
             self.operations.finish(
                 operation.operation_id,

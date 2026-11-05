@@ -100,6 +100,7 @@ def build_services(
         sleep=sleep,
         operation_log=operation_log,
         bootstrap=admin_bootstrap,
+        package_lock=lambda: packages.lock_state(),
     )
     packages = PackageService(
         runner=runner,
