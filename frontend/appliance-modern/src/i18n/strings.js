@@ -830,6 +830,7 @@ export const STRINGS = {
   "access.running": s("Running", "Läuft", "Draait", "En marche"),
   "access.stopped": s("Stopped", "Gestoppt", "Gestopt", "Arrêté"),
   "access.unitState": s("Service state", "Dienstzustand", "Dienststatus", "État du service"),
+  "access.hostKeysText": s("This appliance's SSH host keys. If ssh says the key changed, compare it with these before you trust it.", "Die SSH-Host-Schlüssel dieses Geräts. Meldet ssh einen geänderten Schlüssel, vergleiche ihn mit diesen, bevor du ihm vertraust.", "De SSH-hostsleutels van dit apparaat. Meldt ssh een gewijzigde sleutel, vergelijk die dan met deze voordat je hem vertrouwt.", "Les clés d’hôte SSH de cet appareil. Si ssh signale une clé modifiée, comparez-la à celles-ci avant de lui faire confiance."),
   "access.passwordLogin": s("Password login", "Passwort-Login", "Wachtwoordlogin", "Connexion par mot de passe"),
   "access.enable": s("Switch SSH on", "SSH einschalten", "SSH inschakelen", "Activer SSH"),
   "access.disable": s("Switch SSH off", "SSH ausschalten", "SSH uitschakelen", "Désactiver SSH"),

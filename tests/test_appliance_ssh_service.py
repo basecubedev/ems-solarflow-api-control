@@ -914,3 +914,24 @@ def test_revoking_every_key_deletes_the_set_aside_and_conflict_files(tmp_path):
     services.operations.acknowledge(services.operations.list()[0].operation_id)
     operation, _ = plan_and_execute(services, "ssh.plan_key_add", account="ems-backup", public_key=ED25519)
     assert operation.state == "succeeded", operation.to_dict()
+
+
+def test_the_hosts_own_keys_are_shown_by_fingerprint(tmp_path):
+    """After a reflash or an address change ssh warns that the host key
+    changed; comparing fingerprints is the only way to tell a stale
+    known_hosts line from an attack, and the console never showed them."""
+
+    import base64
+    import hashlib
+
+    services = build_test_services(tmp_path)
+    ssh_dir = services.probe.root / "etc" / "ssh"
+    ssh_dir.mkdir(parents=True, exist_ok=True)
+    blob = base64.b64encode(b"\x00\x00\x00\x0bssh-ed25519" + b"\x00\x00\x00\x20" + b"k" * 32).decode()
+    (ssh_dir / "ssh_host_ed25519_key.pub").write_text(f"ssh-ed25519 {blob} root@ems\n", encoding="utf-8")
+    (ssh_dir / "ssh_host_ed25519_key").write_text("PRIVATE", encoding="utf-8")
+    expected = "SHA256:" + base64.b64encode(hashlib.sha256(base64.b64decode(blob)).digest()).decode().rstrip("=")
+
+    keys = services.ssh.status()["host_keys"]
+
+    assert keys == [{"key_type": "ssh-ed25519", "fingerprint": expected}]

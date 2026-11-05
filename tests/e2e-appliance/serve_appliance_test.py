@@ -252,6 +252,11 @@ def main():
     backup_home = root / "home" / "ems-backup"
     backup_home.mkdir(parents=True, exist_ok=True)
     seed_backup_account(services, home=backup_home)
+    (root / "etc" / "ssh").mkdir(parents=True, exist_ok=True)
+    (root / "etc" / "ssh" / "ssh_host_ed25519_key.pub").write_text(
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEhzVK7WbLB5GNzCNZnmdLB2C0pYW1Zj0xNKxcXNEEmF root@ems\n",
+        encoding="utf-8",
+    )
 
     live = {"app": None, "agent": None, "auth": None}
     hostname = host.hostname

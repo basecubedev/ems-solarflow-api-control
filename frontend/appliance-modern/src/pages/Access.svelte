@@ -20,6 +20,8 @@
    */
   const status = $derived(host.status);
   const ssh = $derived(status?.ssh || {});
+  const yesNoKey = (value) => (value === "yes" || value === "no" ? { key: `common.${value}` } : { text: String(value || "—"), lang: "en" });
+  const yesNoWord = (value) => say(yesNoKey(value));
   const rescue = $derived(status?.system?.rescue || {});
   const backup = $derived(held("backup"));
   const account = $derived(backup?.account || {});
@@ -45,9 +47,15 @@
       rows={[
         { label: t("access.unitState"), value: say(word("systemd", UNIT_STATES, ssh.service?.active)), lang: langOf(word("systemd", UNIT_STATES, ssh.service?.active)) },
         { label: t("access.listensVia"), value: ssh.socket?.running ? t("access.viaSocket") : ssh.service?.running ? t("access.viaService") : t("access.notListening"), testid: "ssh-listens-via" },
-        { label: t("access.passwordLogin"), value: ssh.hardening?.passwordauthentication?.value || ssh.password_authentication, lang: "en" },
+        { label: t("access.passwordLogin"), value: yesNoWord(ssh.hardening?.passwordauthentication?.value || ssh.password_authentication), lang: langOf(yesNoKey(ssh.hardening?.passwordauthentication?.value || ssh.password_authentication)) },
       ]}
     />
+    {#if (ssh.host_keys || []).length}
+      <div class="host-keys" data-testid="ssh-host-keys">
+        <p class="muted small">{t("access.hostKeysText")}</p>
+        <KeyValues rows={ssh.host_keys.map((key) => ({ label: key.key_type, labelLang: "en", value: key.fingerprint, mono: true }))} />
+      </div>
+    {/if}
     <div class="row-wrap" data-testid="ssh-stage-service">
       <PlanButton plan={{ key: "ssh-enable", endpoint: "/api/ssh/enable", title: { key: "plan.title.sshEnable" } }} label={t("access.enable")} icon="play" disabled={session.confirmed === false} testid="ssh-enable" />
       <PlanButton plan={{ key: "ssh-disable", endpoint: "/api/ssh/disable", title: { key: "plan.title.sshDisable" }, danger: true }} label={t("access.disable")} icon="square" variant="secondary" testid="ssh-disable" />
@@ -280,6 +288,7 @@
 {/if}
 
 <style>
+  .host-keys { margin-top: var(--s2); }
   .body { display: flex; flex-direction: column; gap: var(--s3); align-items: stretch; }
   .body > :global(.status) { align-self: flex-start; }
   .body .note, .body .callout { margin: 0; }

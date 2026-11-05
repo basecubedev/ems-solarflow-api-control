@@ -925,6 +925,13 @@ test.describe("access, network and diagnostics", () => {
     });
   });
 
+  test("the SSH card shows the host's own key fingerprints and says yes or no in the reader's words", async ({ page }) => {
+    await createPassword(page);
+    await open(page, "access");
+    await expect(page.getByTestId("ssh-host-keys")).toContainText("ssh-ed25519");
+    await expect(page.getByTestId("ssh-host-keys")).toContainText("SHA256:");
+  });
+
   test("a hostname change is planned with the new name", async ({ page }) => {
     await createPassword(page);
     await open(page, "network");

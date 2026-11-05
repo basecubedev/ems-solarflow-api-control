@@ -128,6 +128,15 @@ days, **Disable shell access** answered `export_setup_failed` and the account
 kept accepting keys. The export unit's own failure handler withdraws the backup
 account's access in that case.
 
+## Checking the host key
+
+The SSH card on **Access** lists this appliance's own host keys by their
+SHA256 fingerprints. A first connection, or one after a reflash or an address
+change, makes ssh show a fingerprint or warn that the key changed; compare it
+with the card, which is reached over the same LAN, before you accept it. A
+warning with a fingerprint the card shows is a stale `known_hosts` line
+(`ssh-keygen -R <address>` removes it); any other is not this appliance.
+
 ## Where the account lives, and why it is not /home
 
 The home is `/var/lib/ems-shell`, beside `/var/lib/ems-backup`.

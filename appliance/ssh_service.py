@@ -6,8 +6,10 @@ enables password authentication and never handles a private key: enabling SSH
 enables the service, nothing else.
 """
 
+import binascii
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from appliance import shell_access
 from appliance.operations import STATE_FAILED_TERMINAL, STATE_SUCCEEDED
@@ -19,7 +21,7 @@ from appliance.ssh_policy import (
     parse_sshd_config,
     read_password_refusal,
 )
-from appliance.sshkeys import AuthorizedKeysStore, validate_public_key
+from appliance.sshkeys import AuthorizedKeysStore, fingerprint_of, validate_public_key
 from appliance.systemd import UNIT_SSH, UNIT_SSH_SOCKET
 from appliance.validation import ValidationError
 
@@ -244,6 +246,26 @@ class SshService:
             self.runner, user=shell_access.ACCOUNT, methods=SHELL_REFUSED_METHODS
         )
 
+    def host_keys(self):
+        """The host's own SSH keys by fingerprint, as ssh shows them to a client.
+
+        After a reflash or an address change ssh warns that the host key
+        changed; the console, reached over the same LAN, is where the new one
+        can be compared before trusting it.
+        """
+
+        directory = (
+            self.probe._path("/etc/ssh") if self.probe is not None else Path("/etc/ssh")
+        )
+        keys = []
+        for path in sorted(directory.glob("ssh_host_*_key.pub")):
+            try:
+                key_type, blob = path.read_text(encoding="utf-8").split()[:2]
+                keys.append({"key_type": key_type, "fingerprint": fingerprint_of(blob)})
+            except (OSError, ValueError, binascii.Error):
+                continue
+        return keys
+
     def status(self):
         unit = self.systemd.unit_state(UNIT_SSH)
         socket = self._socket_state()
@@ -299,6 +321,7 @@ class SshService:
             # went on accepting keys -- including one on the sudo-capable
             # shell account.
             "enabled": bool(unit["running"] or (socket or {}).get("running")),
+            "host_keys": self.host_keys(),
             "accounts": accounts,
             "hardening": hardening,
             "password_authentication": effective.get("passwordauthentication", "unknown"),
