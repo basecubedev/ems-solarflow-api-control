@@ -40,7 +40,8 @@
   const DIRECTION_LABELS = Object.freeze({ reinstall: "install.installed", upgrade: "install.newer", downgrade: "install.older" });
   const label = (item) => {
     let text = DIRECTION_LABELS[item.direction] ? t(DIRECTION_LABELS[item.direction], { tag: item.tag }) : item.tag;
-    if (item.installable === false && item.reason) text += ` — ${item.reason}`;
+    if (item.installable === false && item.prerelease) text += ` — ${t("install.prereleaseOff")}`;
+    else if (item.installable === false && item.reason) text += ` — ${item.reason}`;
     return text;
   };
   const channelLabel = (channel) =>
@@ -58,7 +59,7 @@
       </optgroup>
       {#each groups as group (group.track)}
         <optgroup label={t(`track.${group.track}`)}>
-          {#each group.items as item, index (index)}<option value="tag:{item.tag}" disabled={item.installable === false} lang={item.installable === false && item.reason && item.direction !== "reinstall" ? "en" : undefined}>{label(item)}</option>{/each}
+          {#each group.items as item, index (index)}<option value="tag:{item.tag}" disabled={item.installable === false} lang={item.installable === false && item.reason && !item.prerelease && item.direction !== "reinstall" ? "en" : undefined}>{label(item)}</option>{/each}
         </optgroup>
       {/each}
     </select>

@@ -10,7 +10,7 @@
   import { host, ensure, held } from "../state/host.svelte.js";
   import { forms } from "../state/forms.svelte.js";
   import { detail } from "../state/prefs.svelte.js";
-  import { EXPORT_ACCESS_STATUSES, EXPORT_STATES, confinementGaps, exportPathTone, exportSetupReport, exportTone, rescueSsh, rescueState, shellAccess } from "../lib/access.js";
+  import { EXPORT_ACCESS_STATUSES, EXPORT_STATES, SFTP_EXAMPLES, confinementGaps, exportPathTone, exportSetupReport, exportTone, rescueSsh, rescueState, shellAccess } from "../lib/access.js";
   import { UNIT_STATES, word } from "../lib/words.js";
 
   /**
@@ -236,13 +236,13 @@
   {/snippet}
   <div class="body" data-testid="backup-export">
     {#if backup && !backup.error}
-      <Status tone={backup.confined ? "c-ok" : "c-warn"} text={backup.confined ? t("access.confined") : t("access.notConfined")} />
+      <Status tone={backup.confined && !setup ? "c-ok" : "c-warn"} text={!backup.confined ? t("access.notConfined") : setup ? t("access.exportNotSetUp") : t("access.confined")} />
       <KeyValues
         rows={[
-          { label: t("access.detail"), value: backup.export_access?.detail, lang: "en" },
+          detail.expert && { label: t("access.detail"), value: backup.export_access?.detail, lang: "en" },
           gaps.unverified && { label: t("access.confinement"), value: t("access.confinementUnverified") },
           gaps.violations.length && { label: t("access.notEnforced"), value: gaps.violations.join(", "), mono: true },
-          setup && { label: t("access.exportSetup"), value: setup.detail ? `${setup.status} — ${setup.detail}` : setup.status, lang: "en" },
+          setup && detail.expert && { label: t("access.exportSetup"), value: setup.detail ? `${setup.status} — ${setup.detail}` : setup.status, lang: "en" },
           { label: t("access.exportRoot"), value: backup.export_root, mono: true },
           (backup.unmanaged_entries || []).length && { label: t("access.unmanaged"), value: backup.unmanaged_entries.join(", "), mono: true },
           detail.expert && { label: t("access.chroot"), value: backup.chroot?.configured, mono: true },
@@ -278,7 +278,7 @@
       <div class="examples">
         {#each backup.examples as example, index (index)}
           <div class="example" data-testid="backup-example">
-            <p class="example-title" lang="en">{example.title}</p>
+            {#if SFTP_EXAMPLES.includes(example.id)}<p class="example-title">{t(`access.example.${example.id}`)}</p>{:else}<p class="example-title" lang="en">{example.title}</p>{/if}
             <pre class="log">{example.command}</pre>
           </div>
         {/each}

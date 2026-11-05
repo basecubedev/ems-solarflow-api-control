@@ -12,7 +12,7 @@
   import { detail } from "../state/prefs.svelte.js";
   import { adminContainer, adminHealth, adminTransitionLive, adminTransitionUntil, adminVersion } from "../lib/host.js";
   import { LIFECYCLE_ACTIONS, adminRepairPlan, adminRollbackPlan, lifecyclePlan } from "../lib/plans.js";
-  import { CONTAINER_STATES, word } from "../lib/words.js";
+  import { CONTAINER_STATES, HEALTH_STATES, word } from "../lib/words.js";
 
   /**
    * Restart, repair and roll back the EMS Admin container; the version itself
@@ -54,7 +54,7 @@
       <KeyValues
         rows={[
           { label: t("admin.containerState"), value: say(word("container", CONTAINER_STATES, container.state)), lang: langOf(word("container", CONTAINER_STATES, container.state)) },
-          { label: t("admin.healthCheck"), value: container.health, lang: "en" },
+          { label: t("admin.healthCheck"), value: say(word("health", HEALTH_STATES, container.health)), lang: langOf(word("health", HEALTH_STATES, container.health)) },
         ]}
       />
     </div>

@@ -326,6 +326,23 @@ def test_the_daemon_states_are_docker_backend_s():
     assert set(js_list("lib/words.js", "DAEMON_STATES")) == constants(docker_backend, "DAEMON_")
 
 
+def test_the_health_and_lock_words_are_the_backends():
+    from appliance import packages
+
+    assert set(js_list("lib/words.js", "HEALTH_STATES")) == constants(docker_backend, "HEALTH_")
+    assert set(js_list("lib/words.js", "LOCK_STATES")) == {
+        packages.LOCK_FREE,
+        packages.LOCK_HELD,
+        packages.LOCK_UNKNOWN,
+    }
+
+
+def test_the_sftp_examples_are_named_by_the_ids_the_console_translates():
+    ids = {item["id"] for item in backup_access.BackupAccessService.examples(None, "ems-backup", "host")}
+
+    assert set(js_list("lib/access.js", "SFTP_EXAMPLES")) == ids
+
+
 def test_the_audit_finding_states_only_what_the_backend_says():
     """The translated finding names the cause and the reassurance of the
     backend's own sentence; it must stop doing so when that sentence does."""

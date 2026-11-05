@@ -11,6 +11,7 @@
   import TrackHelp from "../widgets/TrackHelp.svelte";
   import PackageTable from "../widgets/PackageTable.svelte";
   import { t, tn, say, langOf } from "../i18n/i18n.svelte.js";
+  import { LOCK_STATES, word } from "../lib/words.js";
   import { errorWords } from "../lib/errors.js";
   import { href } from "../app/router.svelte.js";
   import { host, ensure, held } from "../state/host.svelte.js";
@@ -315,7 +316,7 @@
       <div class="tile" data-testid="updates-manager">
         <div class="tile-label">{t("os.packageManager")}</div>
         <div class="tile-value"><Status tone={tiles.manager.tone} text={t(tiles.manager.key)} /></div>
-        <KeyValues rows={[{ label: t("os.lock"), value: updates.package_manager?.lock_state, lang: "en" }, { label: t("overview.index"), value: say(indexAgeWords(updates)), testid: "updates-index-age" }, detail.expert && { label: t("os.dpkgIssues"), value: (updates.package_manager?.dpkg_issues || []).length }]} />
+        <KeyValues rows={[{ label: t("os.lock"), value: say(word("lock", LOCK_STATES, updates.package_manager?.lock_state)), lang: langOf(word("lock", LOCK_STATES, updates.package_manager?.lock_state)) }, { label: t("overview.index"), value: say(indexAgeWords(updates)), testid: "updates-index-age" }, detail.expert && { label: t("os.dpkgIssues"), value: (updates.package_manager?.dpkg_issues || []).length }]} />
       </div>
     </div>
 

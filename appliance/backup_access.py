@@ -387,10 +387,12 @@ class BackupAccessService:
         # /backups is the EMS's own data/backups: the one export there is.
         return [
             {
+                "id": "copy_all",
                 "title": "Copy all EMS backups",
                 "command": f"sftp -r {account_name}@{target_host}:/backups ./ems-backups",
             },
             {
+                "id": "browse",
                 "title": "Browse the exported paths",
                 "command": f"sftp {account_name}@{target_host}",
             },

@@ -20,6 +20,12 @@ export const CONNECTIVITY = Object.freeze(["full", "limited", "portal", "none", 
 /** A systemd unit's ActiveState, and "unknown" when systemctl answered nothing (appliance/systemd.py). */
 export const UNIT_STATES = Object.freeze(["active", "inactive", "failed", "activating", "deactivating", "reloading", "unknown"]);
 
+/** A container's Docker health check (appliance/docker_backend.py HEALTH_*). */
+export const HEALTH_STATES = Object.freeze(["healthy", "unhealthy", "starting", "none"]);
+
+/** Whether another package manager holds a lock (appliance/packages.py LOCK_*). */
+export const LOCK_STATES = Object.freeze(["free", "held", "unknown"]);
+
 /** { key } when the value is in the vocabulary, else the value itself as English text. */
 export function word(prefix, vocabulary, value) {
   if (value === null || value === undefined || value === "") return null;

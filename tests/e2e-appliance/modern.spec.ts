@@ -1206,6 +1206,13 @@ test.describe("what an outcome says", () => {
     await expect(page.getByTestId("manager-plan-revert")).toBeEnabled();
   });
 
+  test("a confined export whose setup has not reported yet says not set up, once", async ({ page }) => {
+    await createPassword(page);
+    await open(page, "access");
+    await expect(page.getByTestId("backup-export")).toContainText("Not set up yet");
+    await expect(page.getByTestId("backup-export")).not.toContainText("Confined to the export root");
+  });
+
   test("an export mounted read-write is never shown as read-only", async ({ page, request }) => {
     await resetAppliance(request, { export_read_write: true });
     await createPassword(page);

@@ -13,9 +13,9 @@ import { OPERATION_STATES, OPERATION_TYPES, VERIFICATION_FAILURES } from "../src
 import { PLAN_EXTRA_FIELDS, PLAN_FIELD_ORDER, PLAN_SCOPES } from "../src/lib/plan.js";
 import { RELEASE_TRACKS } from "../src/lib/host.js";
 import { MANAGER_DIRECTIONS, MANAGER_OUTCOMES, MANAGER_VERDICTS } from "../src/lib/manager.js";
-import { EXPORT_ACCESS_STATUSES, EXPORT_STATES, RESCUE_SSH_STATES } from "../src/lib/access.js";
+import { EXPORT_ACCESS_STATUSES, EXPORT_STATES, RESCUE_SSH_STATES, SFTP_EXAMPLES } from "../src/lib/access.js";
 import { KNOWN_LOG_SOURCES } from "../src/lib/logs.js";
-import { CONNECTIVITY, CONTAINER_STATES, DAEMON_STATES, DEVICE_STATES, UNIT_STATES } from "../src/lib/words.js";
+import { CONNECTIVITY, CONTAINER_STATES, DAEMON_STATES, DEVICE_STATES, HEALTH_STATES, LOCK_STATES, UNIT_STATES } from "../src/lib/words.js";
 import { INSTALL_CHANNELS, LIFECYCLE_ACTIONS, REPAIR_ACTIONS } from "../src/lib/plans.js";
 import { APPLIANCE_KINDS, STEP_IDS, TASKS } from "../src/lib/assistant.js";
 
@@ -97,6 +97,9 @@ const GENERATED = [
   ...UNIT_STATES.map((state) => `systemd.${state}`),
   ...DEVICE_STATES.map((state) => `device.${state}`),
   ...DAEMON_STATES.map((state) => `docker.${state}`),
+  ...HEALTH_STATES.map((state) => `health.${state}`),
+  ...LOCK_STATES.map((state) => `lock.${state}`),
+  ...SFTP_EXAMPLES.map((id) => `access.example.${id}`),
   ...LIFECYCLE_ACTIONS.flatMap((action) => [`admin.${action}`, `plan.title.admin.${action}`]),
   ...REPAIR_ACTIONS.map((action) => `repair.${action}`),
   ...INSTALL_CHANNELS.map((channel) => `install.channel.${channel}`),
