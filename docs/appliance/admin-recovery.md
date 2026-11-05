@@ -115,6 +115,12 @@ decides which tag *Latest stable* installs, so it is read over https only: an
 `http:` or `file:` URL, or a redirect to http, is refused with
 `release_index_insecure` and the list stays empty.
 
+The images themselves still come from `ghcr.io/basecubedev/ems-solarflow-admin`.
+The Admin console recognises its own deployment only under that repository and
+updates itself from there, so an `allowed-images.conf` that lists a mirror
+first is refused at the plan with `admin_repository_unsupported` rather than
+leaving an Admin that cannot update itself.
+
 1. Open **Updates → Choose an EMS Admin version**. To go straight to the
    newest stable release, the **Update to …** button on the EMS Admin card at
    the top of the page plans exactly that tag and skips steps 2 to 4.

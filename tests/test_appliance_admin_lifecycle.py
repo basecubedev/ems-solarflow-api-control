@@ -1528,3 +1528,34 @@ def test_an_install_cut_off_after_pinning_is_offered_the_recorded_admin_back(tmp
 
     assert record.state == STATE_SUCCEEDED, (record.state, record.error, record.result)
     assert services.admin.detect()["digest"] == running
+
+
+def test_an_install_from_a_repository_the_admin_cannot_update_from_is_refused(tmp_path):
+    """The Manager pins <first allowlisted repository>@digest, and the Admin
+    finds its own image only under ghcr.io/basecubedev/ems-solarflow-admin: an
+    install from a mirror left the Admin unable to update itself."""
+
+    import dataclasses
+
+    services = healthy_appliance(tmp_path)
+    images = dataclasses.replace(
+        services.admin.config.images,
+        repositories=("registry.example/mirror/ems-solarflow-admin",),
+    )
+    services.admin.config = dataclasses.replace(services.admin.config, images=images)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    with pytest.raises(AgentError) as excinfo:
+        handlers.dispatch({"operation": "admin.plan_install", "channel": "exact", "tag": "v1.1.0"})
+
+    assert excinfo.value.code == "admin_repository_unsupported", excinfo.value.message
+
+
+def test_the_repository_the_manager_installs_is_the_one_the_admin_updates_itself_from():
+    from admin import update_apply
+    from admin.admin_update import ADMIN_IMAGE_REPO
+    from appliance.config import DEFAULT_ADMIN_REPOSITORY
+
+    assert DEFAULT_ADMIN_REPOSITORY == ADMIN_IMAGE_REPO
+    assert update_apply.ADMIN_IMAGE_RE.fullmatch(f"{DEFAULT_ADMIN_REPOSITORY}:v1.0.0")
+    assert update_apply.ADMIN_DIGEST_RE.fullmatch(f"{DEFAULT_ADMIN_REPOSITORY}@sha256:{'a' * 64}")

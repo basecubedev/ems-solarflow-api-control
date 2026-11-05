@@ -33,6 +33,7 @@ from appliance.admin_deployment import (
 )
 from appliance.auth import deployment_owner
 from appliance.commands import CommandError, command_failure_detail
+from appliance.config import DEFAULT_ADMIN_REPOSITORY
 from appliance.docker_backend import (
     CONTAINER_RUNNING,
     DAEMON_RUNNING,
@@ -563,6 +564,14 @@ class AdminLifecycleService:
             raise AdminLifecycleError(exc.code, exc.message)
 
         repository = self.config.images.admin_repository
+        if repository != DEFAULT_ADMIN_REPOSITORY:
+            raise AdminLifecycleError(
+                "admin_repository_unsupported",
+                f"the Admin console updates itself only from {DEFAULT_ADMIN_REPOSITORY}; "
+                f"installing it from {repository} would leave it unable to. Put "
+                f"{DEFAULT_ADMIN_REPOSITORY} first in /etc/ems-appliance-manager/"
+                "allowed-images.conf",
+            )
         image_ref = build_image_ref(repository, target.tag)
 
         if self.operations.get(operation.operation_id).terminal:
