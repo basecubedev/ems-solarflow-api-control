@@ -136,10 +136,10 @@ function lost(error) {
 }
 
 /** A read; a 401 means the session ended, and the sign-in shows again. */
-export async function applianceGet(path) {
+export async function applianceGet(path, { timeoutMs = 0 } = {}) {
   const mine = epoch;
   try {
-    return await getJson(path);
+    return await getJson(path, timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {});
   } catch (error) {
     if (lost(error) && session.authenticated && mine === epoch) sessionEnded("signIn.expired");
     throw error;

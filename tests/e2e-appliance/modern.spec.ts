@@ -699,6 +699,16 @@ test.describe("EMS Admin", () => {
     await settled(page);
   });
 
+  test("a running operation the appliance stopped answering about is not shown as running", async ({ page, request }) => {
+    await resetAppliance(request, { operation_running: true });
+    await createPassword(page);
+    await expect(page.getByTestId("operation-banner")).toHaveAttribute("data-state", "running");
+    await page.route("**/api/operations", (route) => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "agent_unavailable" }) }));
+    await expect(page.getByTestId("operation-unknown")).toBeVisible();
+    await page.unroute("**/api/operations");
+    await expect(page.getByTestId("operation-unknown")).toBeHidden();
+  });
+
   test("a sign-in in another tab does not leave this tab with a stale token", async ({ page }) => {
     await createPassword(page);
     await open(page, "admin");

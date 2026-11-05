@@ -6,6 +6,8 @@ import { ADMIN_CHOICES, MANAGER_CHOICES, forget } from "./forms.svelte.js";
 
 /** Operations are polled for responsiveness; the host state costs a docker inspect and a statvfs, so it joins every fifth tick. */
 export const POLL_MS = 2000;
+/** A read of the operations that has not answered in this long is given up. */
+export const POLL_TIMEOUT_MS = 10000;
 export const STATUS_EVERY_TICKS = 5;
 
 /**
@@ -17,6 +19,8 @@ class Host {
   status = $state.raw(undefined);
   manager = $state.raw(undefined);
   operation = $state.raw(null);
+  /** The last read of the operations failed, so what the banner shows may no longer be so. */
+  operationUnknown = $state(false);
   readAt = $state(0);
   releases = $state.raw(undefined);
   managerSources = $state.raw(undefined);
@@ -210,16 +214,29 @@ export function watchOperations(watcher) {
   };
 }
 
+let polling = false;
+
+/**
+ * One read at a time, and none that waits for ever: on a hung link, reads that
+ * piled up against the browser's connection limit delayed the owner's own
+ * writes, and an agent that stopped answering left a spinning "Running".
+ */
 export async function pollOperations() {
+  if (polling) return null;
+  polling = true;
   const mine = sessionEpoch;
   const startedAt = Date.now();
   let payload;
   try {
-    payload = await applianceGet("/api/operations");
+    payload = await applianceGet("/api/operations", { timeoutMs: POLL_TIMEOUT_MS });
   } catch {
+    if (mine === sessionEpoch) host.operationUnknown = true;
     return null;
+  } finally {
+    polling = false;
   }
   if (mine !== sessionEpoch) return null;
+  host.operationUnknown = false;
   host.operation = currentOperation(payload);
   const next = settledSince(payload, seen);
   seen = { count: next.count, finishedAt: next.finishedAt };
