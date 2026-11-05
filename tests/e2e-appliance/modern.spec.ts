@@ -803,6 +803,13 @@ test.describe("access, network and diagnostics", () => {
     await expect(page.getByTestId("plan-dialog")).toBeHidden();
   });
 
+  test("each interface shows its MAC address and the WLAN radio its switch", async ({ page }) => {
+    await createPassword(page);
+    await open(page, "network");
+    await expect(page.getByTestId("network-mac").first()).toContainText("B8:27:EB:12:34:56");
+    await expect(page.getByTestId("network-radio")).toContainText("On");
+  });
+
   test("a hostname change is planned with the new name", async ({ page }) => {
     await createPassword(page);
     await open(page, "network");

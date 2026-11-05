@@ -878,6 +878,45 @@ def test_the_wifi_plan_says_the_ems_pauses_and_how_long_there_is_to_confirm(tmp_
 
     assert "EMS" in plan["warning"] and "pause" in plan["warning"], plan["warning"]
 
+
+# --- what a DHCP reservation and a dead radio need ----------------------------
+
+
+def test_each_interface_names_its_mac_address(tmp_path):
+    """The docs ask for a DHCP reservation, and the console never showed the
+    MAC address a reservation needs."""
+
+    services = build_test_services(tmp_path)
+
+    status = services.network.status()
+    wifi = next(item for item in status["interfaces"] if item["type"] == "wifi")
+
+    assert wifi["mac"] == "B8:27:EB:12:34:56"
+
+
+def test_the_wifi_radio_state_is_reported(tmp_path):
+    services = build_test_services(tmp_path)
+    services.host.wifi_radio = ("disabled", "enabled")
+
+    status = services.network.status()
+
+    assert status["wifi_radio"] == {"hardware": "disabled", "software": "enabled"}
+
+
+def test_a_network_not_found_with_the_radio_off_says_the_radio_is_off(tmp_path):
+    """A blocked radio read as "network not found; mark it hidden"."""
+
+    services = build_test_services(tmp_path)
+    services.host.wifi_radio = ("enabled", "disabled")
+
+    with pytest.raises(Exception) as excinfo:
+        handlers_for(services).dispatch(
+            {"operation": "network.wifi.plan", "ssid": "Elsewhere", "passphrase": PASSPHRASE}
+        )
+
+    assert getattr(excinfo.value, "code", "") == "wifi_radio_off"
+
+
 @pytest.mark.parametrize(
     "request_, actor",
     [

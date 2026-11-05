@@ -209,3 +209,12 @@ export function exactDuration(seconds) {
   if (total >= 60 && total % 60 === 0) return { unit: "minute", count: total / 60 };
   return { unit: "second", count: total };
 }
+
+/** The WLAN radio as one word key: off by its hardware switch, off in NetworkManager, on; "" when unknown. */
+export function wifiRadio(network) {
+  const radio = (network && network.wifi_radio) || {};
+  if (radio.hardware === "disabled") return "network.radioOffHardware";
+  if (radio.software === "disabled") return "network.radioOffSoftware";
+  if (radio.hardware === "enabled" && radio.software === "enabled") return "network.radioOn";
+  return "";
+}

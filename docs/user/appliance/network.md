@@ -158,7 +158,8 @@ the EMS opens its hour-based windows in your time zone.
 | The page stopped answering after **Apply** on a WLAN change | The appliance is trying the new network | Wait up to four minutes; with a previous WLAN it comes back by itself. With the cable in, the old address keeps working |
 | *The appliance does not answer to this address* | The page is open under the old name after a rename, or under a name your router gives it (`ems-solarflow.fritz.box`, `.lan`, `.home`) | Open the new name, `name.local` or the IP address. To use the router's name, add it to `extra_host_names` in `/etc/ems-appliance-manager/appliance.conf` |
 | *That is already the appliance's time zone* | Nothing to change | — |
-| **Scan networks** finds nothing | No network is visible from here | A hidden network can still be typed in |
+| **Scan networks** finds nothing | No network is visible from here, or the radio is off — the WLAN card's *WLAN radio* row says which switch turned it off | A hidden network can still be typed in. A radio off by its hardware switch (rfkill) or by NetworkManager has to be switched on at the console first; a plan for an invisible network is then refused as `wifi_radio_off` |
+| The WLAN change was taken back with *nobody reached the console* | The appliance joined, but no signed-in page reached it within five minutes — a guest network with client isolation, another subnet, or no page left open | Keep the page open while the change runs, or reopen it under the appliance's new address or over a cable. The interface cards show each MAC address for a DHCP reservation |
 
 ## Recovery or next steps
 

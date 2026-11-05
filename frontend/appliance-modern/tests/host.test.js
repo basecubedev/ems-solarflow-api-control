@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { adminContainer, adminGate, adminHealth, adminTransitionUntil, adminVersion, dockerCondition, exactDuration, gigabytes, groupByTrack, indexAge, indexAgeWords, latestVerdict, osTiles, securityUpdatesOffered, systemVerdict } from "../src/lib/host.js";
+import { wifiRadio, adminContainer, adminGate, adminHealth, adminTransitionUntil, adminVersion, dockerCondition, exactDuration, gigabytes, groupByTrack, indexAge, indexAgeWords, latestVerdict, osTiles, securityUpdatesOffered, systemVerdict } from "../src/lib/host.js";
 import { planBlocked, planFields, vocabularyWords } from "../src/lib/plan.js";
 import { logSources, logSummary } from "../src/lib/logs.js";
 import { errorWords } from "../src/lib/errors.js";
@@ -200,4 +200,12 @@ test("a live Admin transition names when it stops blocking, in the browser's tim
   assert.equal(adminTransitionUntil({ admin: { transition: { state: "live", expires_at: "" } } }), "");
   assert.equal(adminTransitionUntil({ admin: { transition: { state: "live", expires_at: "soon" } } }), "");
   assert.equal(adminTransitionUntil({}), "");
+});
+
+test("the WLAN radio names which switch turned it off", () => {
+  assert.equal(wifiRadio({ wifi_radio: { hardware: "disabled", software: "enabled" } }), "network.radioOffHardware");
+  assert.equal(wifiRadio({ wifi_radio: { hardware: "enabled", software: "disabled" } }), "network.radioOffSoftware");
+  assert.equal(wifiRadio({ wifi_radio: { hardware: "enabled", software: "enabled" } }), "network.radioOn");
+  assert.equal(wifiRadio({ wifi_radio: { hardware: "unknown", software: "unknown" } }), "");
+  assert.equal(wifiRadio({}), "");
 });

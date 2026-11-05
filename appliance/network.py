@@ -60,6 +60,7 @@ class Interface:
     dns: list = field(default_factory=list)
     ssid: str = ""
     signal: int = None
+    mac: str = ""
 
     def to_dict(self):
         return {
@@ -67,6 +68,7 @@ class Interface:
             "type": self.kind,
             "state": self.state,
             "connection": self.connection,
+            "mac": self.mac,
             "addresses": list(self.addresses),
             "gateway": self.gateway,
             "dns": list(self.dns),
@@ -118,7 +120,7 @@ def parse_device_details(text):
     chose, which is why the SSID is resolved from the profile separately.
     """
 
-    details = {"addresses": [], "gateway": "", "dns": [], "connection": ""}
+    details = {"addresses": [], "gateway": "", "dns": [], "connection": "", "mac": ""}
     for line in (text or "").splitlines():
         key, _, value = line.partition(":")
         key, value = key.strip(), value.strip()
@@ -134,6 +136,8 @@ def parse_device_details(text):
             details["dns"].append(value)
         elif key == "GENERAL.CONNECTION":
             details["connection"] = value
+        elif key == "GENERAL.HWADDR":
+            details["mac"] = value.replace("\\:", ":").upper()
     return details
 
 
@@ -272,6 +276,7 @@ class NetworkService:
             # thing that knows would not answer".
             record["error"] = "network_manager_unreachable"
             return record
+        record["wifi_radio"] = self.wifi_radio()
         interfaces = parse_device_status(status.stdout)
         for interface in interfaces:
             if interface.kind in ("loopback",):
@@ -283,6 +288,7 @@ class NetworkService:
             )
             parsed = parse_device_details(detail.stdout if detail.ok else "")
             interface.addresses = parsed["addresses"]
+            interface.mac = parsed["mac"]
             interface.gateway = parsed["gateway"]
             interface.dns = parsed["dns"]
             if interface.kind == "wifi":
@@ -292,6 +298,15 @@ class NetworkService:
             if interface.state.startswith(STATE_CONNECTED) and not record["active_connection"]:
                 record["active_connection"] = interface.connection
         return record
+
+    def wifi_radio(self):
+        """The hardware switch (rfkill) and NetworkManager's own WLAN switch."""
+
+        result = self.runner.run("nmcli", ["-t", "-f", "WIFI-HW,WIFI", "radio"], timeout=20)
+        parts = (result.stdout or "").strip().split(":") if result.ok else []
+        if len(parts) != 2:
+            return {"hardware": "unknown", "software": "unknown"}
+        return {"hardware": parts[0], "software": parts[1]}
 
     def _signal_for(self, ssid):
         """Signal strength is decoration on the overview, never its verdict.
@@ -423,6 +438,17 @@ class NetworkService:
         for item in self.scan(rescan=True):
             networks.setdefault(item["ssid"], item)
         visible = networks.get(ssid)
+        if visible is None:
+            radio = self.wifi_radio()
+            if "disabled" in (radio["hardware"], radio["software"]):
+                switch = "a hardware switch (rfkill)" if radio["hardware"] == "disabled" else (
+                    "NetworkManager"
+                )
+                raise NetworkError(
+                    "wifi_radio_off",
+                    f"the WLAN radio is switched off by {switch}, so no network can be "
+                    "seen or joined; switch it on first",
+                )
         if visible is None and not hidden:
             raise NetworkError(
                 "wifi_network_not_found",

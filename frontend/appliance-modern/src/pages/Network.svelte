@@ -9,6 +9,7 @@
   import { actions as flow, planOperation } from "../state/actions.svelte.js";
   import { forms } from "../state/forms.svelte.js";
   import { detail } from "../state/prefs.svelte.js";
+  import { wifiRadio } from "../lib/host.js";
   import { CONNECTIVITY, DEVICE_STATES, word } from "../lib/words.js";
 
   /**
@@ -59,6 +60,8 @@
       <KeyValues
         rows={[
           { label: t("network.addresses"), value: (item.addresses || []).join(", ") },
+          { label: t("network.mac"), value: item.mac, mono: true, testid: "network-mac" },
+          item.type === "wifi" && wifiRadio(network) && { label: t("network.radio"), value: t(wifiRadio(network)), testid: "network-radio" },
           item.type === "wifi" && { label: t("network.ssid"), value: item.ssid },
           item.type === "wifi" && { label: t("network.signal"), value: item.signal === null || item.signal === undefined ? null : `${item.signal} %` },
           detail.expert && { label: t("network.gateway"), value: item.gateway },

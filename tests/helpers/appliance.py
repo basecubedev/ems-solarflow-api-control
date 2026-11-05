@@ -197,6 +197,9 @@ class FakeHost:
         self.wifi_device_state = "connected"
         self.wifi_address = "192.168.1.50/24"
         self.wifi_address6 = ""
+        self.wifi_hwaddr = "B8:27:EB:12:34:56"
+        # nmcli radio: the hardware switch (rfkill) and NetworkManager's own.
+        self.wifi_radio = ("enabled", "enabled")
         self.wifi_gateway = "192.168.1.1"
         self.listening_ports = ""
         self.ss_exit_code = 0
@@ -686,6 +689,8 @@ class FakeHost:
             return self._result("nmcli", args, 0, self._device_status())
         if "device show" in joined:
             return self._result("nmcli", args, 0, self._device_show())
+        if args[-1:] == ["radio"]:
+            return self._result("nmcli", args, 0, ":".join(self.wifi_radio) + "\n")
         if "device wifi list" in joined:
             if not self.nmcli_scan_ok:
                 return self._result("nmcli", args, 1, "", "Error: scan failed")
@@ -722,6 +727,8 @@ class FakeHost:
 
     def _device_show(self):
         lines = [f"GENERAL.CONNECTION:{self.wifi_profile}"]
+        if self.wifi_hwaddr:
+            lines.append(f"GENERAL.HWADDR:{self.wifi_hwaddr}")
         if self.wifi_address:
             lines.append(f"IP4.ADDRESS[1]:{self.wifi_address}")
         if self.wifi_address6:
