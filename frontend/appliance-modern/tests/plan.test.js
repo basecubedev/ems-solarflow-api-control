@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { planDanger } from "../src/lib/plan.js";
+import { planBlocks, planDanger } from "../src/lib/plan.js";
 
 test("the confirm button is red for what the plan itself says is risky", () => {
   assert.equal(planDanger({ type: "admin.rollback" }, {}), true);
@@ -13,4 +13,19 @@ test("the confirm button is red for what the plan itself says is risky", () => {
   assert.equal(planDanger({ type: "manager.update", direction: "downgrade" }, {}), true);
   assert.equal(planDanger({ type: "updates.install" }, {}), false);
   assert.equal(planDanger({ type: "updates.install" }, { danger: true }), true);
+});
+
+test("a list or object the dialog has no block for is spelled out, not hidden", () => {
+  const plan = {
+    type: "updates.repair",
+    dpkg_issues: ["libfoo half-configured", "bar unpacked"],
+    keys: [{ fingerprint: "SHA256:abc", comment: "laptop" }],
+    docker: { state: "running" },
+    packages: [{ name: "openssl" }],
+  };
+  const basic = planBlocks(plan, false);
+  assert.deepEqual(basic.map((block) => block.key), ["dpkg_issues", "keys"]);
+  assert.deepEqual(basic[0].lines, ["libfoo half-configured, bar unpacked"]);
+  assert.deepEqual(basic[1].lines, ["SHA256:abc · laptop"]);
+  assert.deepEqual(planBlocks(plan, true).map((block) => block.key), ["dpkg_issues", "keys", "docker"]);
 });

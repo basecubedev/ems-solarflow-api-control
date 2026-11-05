@@ -195,3 +195,32 @@ export function planDanger(plan, options) {
   if (value.direction === "downgrade" || value.direction === "revert") return true;
   return value.type === "ssh.key_add" && value.account === SHELL_ACCOUNT;
 }
+
+/** The lists and objects the dialog draws blocks of its own for. */
+export const PLAN_BLOCK_FIELDS = Object.freeze(["blockers", "findings", "packages", "key", "target", "preserves", "bootstrap", "creates_deployment"]);
+
+const scalar = (value) => value === null || typeof value !== "object";
+
+/**
+ * Every other list or object in a plan, spelled out rather than hidden: a list
+ * of values as one line, a list of records one line each, an object -- an
+ * identity rather than a fact an owner decides on -- in Expert only.
+ */
+export function planBlocks(plan, expert) {
+  return Object.keys(plan || {})
+    .filter((key) => {
+      const value = plan[key];
+      if (scalar(value) || PLAN_BLOCK_FIELDS.includes(key)) return false;
+      if (Array.isArray(value)) return value.length > 0;
+      return expert;
+    })
+    .map((key) => {
+      const value = plan[key];
+      const known = NAMED_FIELDS.includes(key);
+      let lines;
+      if (!Array.isArray(value)) lines = [JSON.stringify(value, null, 2)];
+      else if (value.every(scalar)) lines = [value.join(", ")];
+      else lines = value.map((item) => (scalar(item) ? String(item) : Object.values(item).filter(scalar).join(" · ")));
+      return { key, known, label: key.replace(/_/g, " "), lines, mono: !Array.isArray(value) };
+    });
+}

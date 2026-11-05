@@ -811,6 +811,7 @@ test.describe("access, network and diagnostics", () => {
     await expect(backupCard.getByTestId("ssh-unparsed-lines")).toContainText("1");
     await backupCard.getByTestId("ssh-revoke-all").click();
     await expect(page.getByTestId("plan-dialog")).toBeVisible();
+    await expect(page.getByTestId("plan-block-keys")).toContainText("SHA256:");
     await confirmPlan(page);
     await settled(page);
     await expect(page.getByTestId("ssh-key-table")).toHaveCount(0, { timeout: 15_000 });
