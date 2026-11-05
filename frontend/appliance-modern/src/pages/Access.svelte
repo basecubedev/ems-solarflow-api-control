@@ -75,6 +75,16 @@
       ]}
     />
     <p class="note"><Icon name="info" />{t(`${rescueVerdict.key}.hint`, { account: rescue.account || "ems-rescue" })}</p>
+    {#if rescueVerdict.key === "rescue.shipped" || rescueVerdict.key === "rescue.network"}
+      <details class="more" data-testid="rescue-console-route">
+        <summary><Icon name="chevron-right" />{t("rescue.consoleRoute")}</summary>
+        <ol class="body steps">
+          <li>{t("rescue.consoleRoute.keyboard")}</li>
+          <li>{t("rescue.consoleRoute.signIn", { account: rescue.account || "ems-rescue" })}</li>
+          <li>{t("rescue.consoleRoute.passwd")}</li>
+        </ol>
+      </details>
+    {/if}
   </div>
 </Card>
 
@@ -288,6 +298,7 @@
 {/if}
 
 <style>
+  .steps { margin: 0; padding-left: var(--s4); font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
   .host-keys { margin-top: var(--s2); }
   .body { display: flex; flex-direction: column; gap: var(--s3); align-items: stretch; }
   .body > :global(.status) { align-self: flex-start; }

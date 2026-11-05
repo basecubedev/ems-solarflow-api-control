@@ -932,6 +932,14 @@ test.describe("access, network and diagnostics", () => {
     await expect(page.getByTestId("ssh-host-keys")).toContainText("SHA256:");
   });
 
+  test("the shipped rescue password says how to change it without SSH", async ({ page }) => {
+    await createPassword(page);
+    await open(page, "access");
+    await page.getByTestId("rescue-console-route").locator("summary").click();
+    await expect(page.getByTestId("rescue-console-route")).toContainText("passwd");
+    await expect(page.getByTestId("rescue-console-route")).toContainText("keyboard");
+  });
+
   test("a hostname change is planned with the new name", async ({ page }) => {
     await createPassword(page);
     await open(page, "network");
