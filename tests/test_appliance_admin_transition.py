@@ -118,6 +118,56 @@ def test_the_state_directory_comes_from_the_deployment_not_from_a_guess(tmp_path
     assert str(path) == "/srv/elsewhere/admin/state/pending-transition.json"
 
 
+def test_the_compose_environment_the_container_runs_with_outranks_the_env_file(tmp_path):
+    """The installer bakes the value into the compose file and keeps .env.admin
+    for reference; a value changed in the compose only had the Manager watch a
+    file the Admin never writes."""
+
+    from appliance.admin_deployment import set_service_environment
+
+    services = healthy_appliance(tmp_path)
+    deployment = services.admin.deployment()
+    env_file = services.paths.install_root / ".env.admin"
+    env_file.write_text(
+        env_file.read_text(encoding="utf-8") + "EMS_ADMIN_DATA_DIR=/srv/stale/admin\n",
+        encoding="utf-8",
+    )
+    compose = deployment.compose_file.read_text(encoding="utf-8")
+    deployment.compose_file.write_text(
+        set_service_environment(
+            compose, deployment.service, {"EMS_ADMIN_DATA_DIR": "/srv/current/admin"}
+        ),
+        encoding="utf-8",
+    )
+
+    path = admin_transition.transition_path(services.paths, services.admin.deployment())
+
+    assert str(path) == "/srv/current/admin/state/pending-transition.json"
+
+
+def test_a_compose_value_taken_from_the_env_file_reads_the_env_file(tmp_path):
+    from appliance.admin_deployment import set_service_environment
+
+    services = healthy_appliance(tmp_path)
+    deployment = services.admin.deployment()
+    env_file = services.paths.install_root / ".env.admin"
+    env_file.write_text(
+        env_file.read_text(encoding="utf-8") + "EMS_ADMIN_DATA_DIR=/srv/elsewhere/admin\n",
+        encoding="utf-8",
+    )
+    compose = deployment.compose_file.read_text(encoding="utf-8")
+    deployment.compose_file.write_text(
+        set_service_environment(
+            compose, deployment.service, {"EMS_ADMIN_DATA_DIR": "${EMS_ADMIN_DATA_DIR}"}
+        ),
+        encoding="utf-8",
+    )
+
+    path = admin_transition.transition_path(services.paths, services.admin.deployment())
+
+    assert str(path) == "/srv/elsewhere/admin/state/pending-transition.json"
+
+
 def test_a_deployment_that_names_no_data_dir_falls_back_to_the_shipped_layout(tmp_path):
     services = healthy_appliance(tmp_path)
 

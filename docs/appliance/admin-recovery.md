@@ -514,8 +514,11 @@ taken as live either, or a record dated the year 9999 would block every
 Install, Rollback, Repair, Start, Stop and Restart until then.
 
 If Admin is genuinely stuck inside a live transition, either wait for the
-expiry or delete
-`<install root>/data/admin/state/pending-transition.json` yourself.
+expiry — the refusal and the EMS Admin page name the time — or, with a shell,
+delete `state/pending-transition.json` under Admin's data directory yourself.
+That directory is the `EMS_ADMIN_DATA_DIR` the compose file gives the Admin
+service, then the one in `.env.admin` when the compose value only refers to it,
+and `<install root>/data/admin` when neither names one.
 
 ## Repair
 

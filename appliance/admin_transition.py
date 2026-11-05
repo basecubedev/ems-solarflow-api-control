@@ -34,7 +34,7 @@ import stat
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from appliance.admin_deployment import read_env
+from appliance.admin_deployment import read_env, read_service_environment
 
 # Copies of names Admin owns. The appliance runs outside every container and
 # cannot import the authority, so a contract test pins these to it.
@@ -65,12 +65,23 @@ FINISHED_STAGES = frozenset({"completed", "cancelled"})
 def admin_data_dir(paths, deployment=None):
     """Where Admin keeps its state, taken from the deployment, not assumed.
 
-    The environment file is what the running container was started with, so it
-    is the honest source. A deployment that does not name one falls back to the
-    layout the shipped installer creates.
+    The installer writes the value into the compose service's environment,
+    which is what the container is started with; the environment file is kept
+    for reference and answers only for a compose value that interpolates it. A
+    deployment that names neither falls back to the layout the shipped
+    installer creates.
     """
 
     if deployment is not None:
+        try:
+            compose = read_service_environment(
+                deployment.compose_file.read_text(encoding="utf-8"), deployment.service
+            )
+        except OSError:
+            compose = {}
+        configured = str(compose.get(ENV_ADMIN_DATA_DIR) or "").strip()
+        if configured.startswith("/"):
+            return Path(configured)
         try:
             values = read_env(deployment.env_file.read_text(encoding="utf-8"))
         except OSError:
