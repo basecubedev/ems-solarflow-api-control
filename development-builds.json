@@ -1,3 +1,19 @@
 {
-  "builds": []
+  "builds": [
+    {
+      "admin_digest": "sha256:0b012fe73dc650b018c3e80f90dae93d18cbb65148f4ea34d655905ad5a04085",
+      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-fix-mqtt-mapping-dialog-1451760396-30fcb96-42126709560-1",
+      "build_id": "dev-fix-mqtt-mapping-dialog-1451760396-30fcb96-42126709560-1",
+      "channel": "development",
+      "created_at": "2026-11-05T23:15:02Z",
+      "display_name": "Feature fix-mqtt-mapping-dialog",
+      "ems_digest": "sha256:16f2e3e920285f4181d928d867a789cc2175036228677a90790f2f85df14a2e1",
+      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-fix-mqtt-mapping-dialog-1451760396-30fcb96-42126709560-1",
+      "installable": true,
+      "revision": "30fcb96b1be296727e9e95d48d3078cfa3eb7fe6",
+      "run_attempt": 1,
+      "run_id": "42126709560",
+      "tag": "dev-fix-mqtt-mapping-dialog-1451760396-30fcb96-42126709560-1"
+    }
+  ]
 }
