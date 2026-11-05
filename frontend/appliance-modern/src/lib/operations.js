@@ -57,7 +57,7 @@ export const OPERATION_STATES = Object.freeze({
  * Cancel is a legal transition only out of a plan that has not started; a
  * running image write cannot be interrupted by a state flip.
  */
-export const CANCELLABLE_STATES = Object.freeze(["planned", "awaiting_confirmation", "failed_recoverable"]);
+export const CANCELLABLE_STATES = Object.freeze(["planned", "awaiting_confirmation"]);
 
 /** Why a verified Admin was not one (admin_lifecycle verification failures). */
 export const VERIFICATION_FAILURES = Object.freeze([
@@ -167,6 +167,28 @@ export function cancellable(operation) {
 
 export function acknowledgeable(operation) {
   return Boolean(operation) && Boolean(operation.settled) && !operation.acknowledged;
+}
+
+/** Where an operation that did not finish is taken up again, by its family. */
+const NEXT_STEPS = Object.freeze({
+  "updates.install": Object.freeze({ key: "op.next.updates", page: "updates" }),
+  "updates.repair": Object.freeze({ key: "op.next.updates", page: "updates" }),
+  "manager.update": Object.freeze({ key: "op.next.manager", page: "updates" }),
+  "manager.revert": Object.freeze({ key: "op.next.manager", page: "updates" }),
+  "admin.install": Object.freeze({ key: "op.next.admin", page: "admin" }),
+  "admin.rollback": Object.freeze({ key: "op.next.admin", page: "admin" }),
+  "admin.repair": Object.freeze({ key: "op.next.admin", page: "admin" }),
+  "admin.lifecycle": Object.freeze({ key: "op.next.admin", page: "admin" }),
+  "network.wifi": Object.freeze({ key: "op.next.network", page: "network" }),
+  "network.hostname": Object.freeze({ key: "op.next.network", page: "network" }),
+});
+const FALLBACK_STEP = Object.freeze({ key: "op.next.diagnostics", page: "diagnostics" });
+const UNFINISHED = Object.freeze(["failed_recoverable", "failed_terminal", "manual_action_required"]);
+
+/** What to do about an operation that did not finish, and on which page; null for any other. */
+export function nextStep(operation) {
+  if (!operation || !UNFINISHED.includes(operation.state)) return null;
+  return NEXT_STEPS[String(operation.type || "")] || FALLBACK_STEP;
 }
 
 /** The archive lives in root-owned agent state; without this link it could be created and never retrieved. */

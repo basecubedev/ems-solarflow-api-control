@@ -1083,6 +1083,9 @@ test.describe("what an outcome says", () => {
     await createPassword(page);
     await expect(page.getByTestId("replan-required")).toContainText("Nothing was written", { timeout: 20_000 });
     await expect(page.getByTestId("operation-outcome")).toHaveText("Incomplete");
+    await expect(page.getByTestId("operation-next")).toContainText("installs a version again");
+    await expect(page.getByTestId("cancel-operation")).toHaveCount(0);
+    await expect(page.getByTestId("acknowledge-operation")).toBeVisible();
   });
 
   test("a rollback that fails preflight says the running EMS Admin was left alone", async ({ page, request }) => {

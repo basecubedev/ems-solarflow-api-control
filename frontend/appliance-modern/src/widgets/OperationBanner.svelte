@@ -5,7 +5,7 @@
   import { t, say, langOf, fmt } from "../i18n/i18n.svelte.js";
   import { host } from "../state/host.svelte.js";
   import { actions, acknowledgeOperation, cancelOperation } from "../state/actions.svelte.js";
-  import { MANAGER_OPERATIONS, acknowledgeable, archiveHref, cancellable, operationStage, operationTitleKey, recentProgress, stateOf } from "../lib/operations.js";
+  import { MANAGER_OPERATIONS, nextStep, acknowledgeable, archiveHref, cancellable, operationStage, operationTitleKey, recentProgress, stateOf } from "../lib/operations.js";
   import { href } from "../app/router.svelte.js";
 
   /**
@@ -24,6 +24,7 @@
   const settled = $derived(Boolean(operation?.settled));
   const managerStarted = $derived(operation?.state === "succeeded" && MANAGER_OPERATIONS.includes(String(operation?.type || "")));
   const unknown = $derived(!settled && host.operationUnknown);
+  const next = $derived(nextStep(operation));
   const renamed = $derived(operation?.type === "network.hostname" && operation?.state === "succeeded" ? operation.result || {} : null);
   const icon = $derived(unknown ? "circle-help" : !settled ? "loader" : state.tone === "c-ok" ? "circle-check" : state.tone === "c-idle" ? "circle-minus" : state.tone === "c-warn" ? "triangle-alert" : "circle-x");
 </script>
@@ -41,6 +42,7 @@
     {#if renamed?.new_url}
       <p class="note" data-testid="operation-new-address"><Icon name="info" /><span>{t("op.renamedNote")} <a href={renamed.new_url} rel="noopener">{renamed.new_url}</a>{#if renamed.admin_url}{" "}· {t("op.renamedAdmin")} <a href={renamed.admin_url} rel="noopener">{renamed.admin_url}</a>{/if}</span></p>
     {/if}
+    {#if next}<p class="note" data-testid="operation-next"><Icon name="info" /><span>{t(next.key)} <a href={href(next.page)}>{t(`nav.${next.page}`)}</a></span></p>{/if}
     {#if unknown}<p class="note warn" data-testid="operation-unknown"><Icon name="triangle-alert" />{t("op.readFailed")}</p>{/if}
     {#if operation.error?.message}<p class="error" lang="en" data-testid="operation-error">{operation.error.message}</p>{/if}
     {#if managerStarted}<p class="note" data-testid="operation-manager-started"><Icon name="info" /><span>{t("op.managerStartedNote")} <a href={href("updates")}>{t("op.managerLastInstall")}</a></span></p>{/if}

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { acknowledgeable, findOperation, archiveHref, cancellable, currentOperation, operationDetails, operationStage, operationTitleKey, planRequestId, managerReconnectState, recentProgress, settledSince, stateOf } from "../src/lib/operations.js";
+import { nextStep, acknowledgeable, findOperation, archiveHref, cancellable, currentOperation, operationDetails, operationStage, operationTitleKey, planRequestId, managerReconnectState, recentProgress, settledSince, stateOf } from "../src/lib/operations.js";
 
 const ID = "0123456789abcdef0123456789abcdef";
 
@@ -25,7 +25,7 @@ test("a known state is translated; an unknown one is spelled out in the tone of 
 test("cancel is offered only before a plan starts, acknowledge only on a settled outcome", () => {
   assert.equal(cancellable({ state: "awaiting_confirmation" }), true);
   assert.equal(cancellable({ state: "running" }), false);
-  assert.equal(cancellable({ state: "failed_recoverable" }), true);
+  assert.equal(cancellable({ state: "failed_recoverable" }), false);
   assert.equal(acknowledgeable({ settled: true, acknowledged: false }), true);
   assert.equal(acknowledgeable({ settled: true, acknowledged: true }), false);
   assert.equal(acknowledgeable({ settled: false }), false);
@@ -133,4 +133,11 @@ test("the banner title names the action or the way a switch goes", () => {
   assert.equal(operationTitleKey({ type: "ssh.service", requested_target: { enabled: false } }), "op.ssh.service.off");
   assert.equal(operationTitleKey({ type: "ssh.shell_access", requested_target: { enabled: true } }), "op.ssh.shell_access.on");
   assert.equal(operationTitleKey({ type: "ssh.service", requested_target: {} }), "op.ssh.service");
+});
+
+test("an operation that did not finish names where it is taken up again", () => {
+  assert.deepEqual(nextStep({ type: "updates.install", state: "failed_recoverable" }), { key: "op.next.updates", page: "updates" });
+  assert.deepEqual(nextStep({ type: "admin.lifecycle", state: "manual_action_required" }), { key: "op.next.admin", page: "admin" });
+  assert.deepEqual(nextStep({ type: "ssh.service", state: "failed_terminal" }), { key: "op.next.diagnostics", page: "diagnostics" });
+  assert.equal(nextStep({ type: "updates.install", state: "succeeded" }), null);
 });
