@@ -69,6 +69,7 @@ from appliance.protocol import (
     PLAN_REQUEST_FIELD,
     ROOT_ACCESS_PLANS,
     SESSION_GENERATION_FIELD,
+    WEB_SESSION_ACTOR,
     ProtocolError,
     ValidationContext,
     validate_request,
@@ -246,6 +247,8 @@ class AgentHandlers:
 
     def dispatch(self, payload, *, actor="", source_ip=""):
         spec, args = validate_request(payload, self.context)
+        if actor == WEB_SESSION_ACTOR and spec.name != "audit.record_web_event":
+            self.services.network.note_operator_contact()
         if spec.name in PLAN_TYPES:
             return self._plan(spec, args, actor=actor, source_ip=source_ip)
         if spec.name == "operations.execute":

@@ -806,3 +806,119 @@ def test_a_rename_whose_mdns_restart_failed_says_so(tmp_path):
     assert operation.state == STATE_SUCCEEDED
     assert operation.result["mdns_restarted"] is False
     assert "avahi" in operation.result["note"]
+
+
+# --- a switch counts once somebody reached the console over it ---------------
+
+
+def confirming(tmp_path, *, contact):
+    """Services whose WLAN switch waits for the operator; ``contact`` decides
+    whether an authenticated request arrives while it waits."""
+
+    import dataclasses
+
+    services = build_test_services(tmp_path)
+    services.network.config = dataclasses.replace(
+        services.network.config, wifi_confirm_timeout_seconds=30
+    )
+    clock = {"now": 1000.0}
+    services.network._time = lambda: clock["now"]
+
+    def sleep(seconds):
+        clock["now"] += seconds
+        if contact:
+            handlers_for(services).dispatch({"operation": "status.get"}, actor="appliance-admin")
+
+    services.network._sleep = sleep
+    return services
+
+
+def test_a_wifi_switch_nobody_reaches_is_taken_back(tmp_path):
+    """Joining and getting an address counted as success and disarmed the
+    revert; on a guest network with client isolation nobody could reach the
+    appliance again without a keyboard or a cable."""
+
+    services = confirming(tmp_path, contact=False)
+
+    operation, _ = plan_and_execute(
+        services, "network.wifi.plan", ssid="GuestNet", passphrase=PASSPHRASE
+    )
+
+    assert operation.state == STATE_FAILED_TERMINAL, operation.to_dict()
+    assert operation.result["reverted"] is True
+    assert "nobody reached" in operation.error["message"]
+    assert ("nmcli", ("connection", "up", "HomeNet"), None) in services.host.calls
+
+
+def test_a_wifi_switch_the_operator_reached_succeeds(tmp_path):
+    services = confirming(tmp_path, contact=True)
+
+    operation, _ = plan_and_execute(
+        services, "network.wifi.plan", ssid="GuestNet", passphrase=PASSPHRASE
+    )
+
+    assert operation.state == STATE_SUCCEEDED, operation.to_dict()
+    assert services.network.pending_revert() is None
+
+
+def test_a_link_local_address_is_not_an_address_to_be_reached_at(tmp_path):
+    services = build_test_services(tmp_path)
+    services.host.wifi_address = ""
+    services.host.wifi_address6 = "fe80::1234:5678:9abc:def0/64"
+
+    assert services.network.wifi_link("HomeNet") is False
+
+
+def test_the_wifi_plan_says_the_ems_pauses_and_how_long_there_is_to_confirm(tmp_path):
+    services = build_test_services(tmp_path)
+
+    plan = handlers_for(services).dispatch(
+        {"operation": "network.wifi.plan", "ssid": "GuestNet", "passphrase": PASSPHRASE}
+    )["plan"]
+
+    assert "EMS" in plan["warning"] and "pause" in plan["warning"], plan["warning"]
+
+@pytest.mark.parametrize(
+    "request_, actor",
+    [
+        ({"operation": "status.get"}, "schedule"),
+        ({"operation": "status.get"}, "boot"),
+        (
+            {
+                "operation": "audit.record_web_event",
+                "event": "login.failure",
+                "result": "denied",
+                "reason": "invalid_password",
+            },
+            "appliance-admin",
+        ),
+    ],
+)
+def test_a_call_nobody_signed_in_made_does_not_confirm_a_wifi_switch(tmp_path, request_, actor):
+    """The daily update, the boot repair and the web's audit of a refused
+    sign-in all reach the agent with an actor; none is somebody who reached
+    the console over the new network."""
+
+    import dataclasses
+
+    services = build_test_services(tmp_path)
+    services.network.config = dataclasses.replace(
+        services.network.config, wifi_confirm_timeout_seconds=30
+    )
+    clock = {"now": 1000.0}
+    services.network._time = lambda: clock["now"]
+
+    def sleep(seconds):
+        clock["now"] += seconds
+        try:
+            handlers_for(services).dispatch(dict(request_), actor=actor)
+        except Exception:  # noqa: BLE001 - only whether it counts is under test
+            pass
+
+    services.network._sleep = sleep
+
+    operation, _ = plan_and_execute(
+        services, "network.wifi.plan", ssid="GuestNet", passphrase=PASSPHRASE
+    )
+
+    assert operation.state == STATE_FAILED_TERMINAL, operation.to_dict()

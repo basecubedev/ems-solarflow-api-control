@@ -151,7 +151,8 @@ templates, once.
 
 `appliance.conf` is read literally: a `%` is just a percent sign, and a comment
 may follow a value after `#` or `;` (`automatic_security_updates = yes  # on`).
-A port must lie between 1 and 65535 and every timeout must be at least 1; a
+A port must lie between 1 and 65535 and every timeout must be at least 1, except
+`wifi_confirm_timeout_seconds`, where 0 trusts a WLAN join alone; a
 value outside its range, like a security-relevant one the package does not
 support, stops both services with an error naming the key, so a typo cannot
 quietly change what the appliance does. The keyring is the exception in the other direction: it is a

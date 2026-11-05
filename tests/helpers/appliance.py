@@ -196,6 +196,7 @@ class FakeHost:
         self.wifi_profile = "HomeNet"
         self.wifi_device_state = "connected"
         self.wifi_address = "192.168.1.50/24"
+        self.wifi_address6 = ""
         self.wifi_gateway = "192.168.1.1"
         self.listening_ports = ""
         self.ss_exit_code = 0
@@ -723,6 +724,8 @@ class FakeHost:
         lines = [f"GENERAL.CONNECTION:{self.wifi_profile}"]
         if self.wifi_address:
             lines.append(f"IP4.ADDRESS[1]:{self.wifi_address}")
+        if self.wifi_address6:
+            lines.append(f"IP6.ADDRESS[1]:{self.wifi_address6}")
         if self.wifi_gateway:
             lines.append(f"IP4.GATEWAY:{self.wifi_gateway}")
             lines.append(f"IP4.DNS[1]:{self.wifi_gateway}")
@@ -950,6 +953,7 @@ def appliance_config(**overrides):
         "ssh_key_accounts": ("ems-backup",),
         "health_timeout_seconds": 1,
         "wifi_revert_timeout_seconds": 1,
+        "wifi_confirm_timeout_seconds": 0,
         "images": AllowedImages(
             repositories=(ADMIN_REPOSITORY,), expected_source=IMAGE_SOURCE
         ),

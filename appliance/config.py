@@ -50,6 +50,7 @@ DEFAULT_SESSION_TIMEOUT = 1800
 DEFAULT_SESSION_ABSOLUTE_MAX = 43200
 DEFAULT_HEALTH_TIMEOUT = 120
 DEFAULT_WIFI_REVERT_TIMEOUT = 90
+DEFAULT_WIFI_CONFIRM_TIMEOUT = 300
 DEFAULT_MIN_FREE_MB = 1024
 # The keyring every signed artifact this appliance installs is verified
 # against. Root-owned, shipped with the package, and never reachable from
@@ -115,6 +116,7 @@ class ApplianceConfig:
     session_absolute_max_seconds: int = DEFAULT_SESSION_ABSOLUTE_MAX
     health_timeout_seconds: int = DEFAULT_HEALTH_TIMEOUT
     wifi_revert_timeout_seconds: int = DEFAULT_WIFI_REVERT_TIMEOUT
+    wifi_confirm_timeout_seconds: int = DEFAULT_WIFI_CONFIRM_TIMEOUT
     minimum_free_megabytes: int = DEFAULT_MIN_FREE_MB
     supported_architectures: tuple = ("arm64",)
     automatic_security_updates: bool = False
@@ -426,6 +428,9 @@ def load_config(paths):
         health_timeout_seconds=_as_int(values, "health_timeout_seconds", DEFAULT_HEALTH_TIMEOUT),
         wifi_revert_timeout_seconds=_as_int(
             values, "wifi_revert_timeout_seconds", DEFAULT_WIFI_REVERT_TIMEOUT
+        ),
+        wifi_confirm_timeout_seconds=_as_int(
+            values, "wifi_confirm_timeout_seconds", DEFAULT_WIFI_CONFIRM_TIMEOUT, minimum=0
         ),
         minimum_free_megabytes=_as_int(values, "minimum_free_megabytes", DEFAULT_MIN_FREE_MB, minimum=0),
         supported_architectures=_as_tuple(values, "supported_architectures", ("arm64",)),

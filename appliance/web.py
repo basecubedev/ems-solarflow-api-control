@@ -36,7 +36,12 @@ from appliance.auth import (
 )
 from appliance.audit import RESULT_DENIED, RESULT_FAILURE, RESULT_SUCCESS, WebLog
 from appliance.config import load_config
-from appliance.protocol import PLAN_REQUEST_FIELD, ROOT_ACCESS_PLANS, SESSION_GENERATION_FIELD
+from appliance.protocol import (
+    PLAN_REQUEST_FIELD,
+    ROOT_ACCESS_PLANS,
+    SESSION_GENERATION_FIELD,
+    WEB_SESSION_ACTOR,
+)
 from appliance.paths import ensure_directories, resolve_paths
 from appliance.version import installed_version
 from appliance.web_audit import WebAuditReporter
@@ -664,7 +669,7 @@ class ApplianceWebApp:
 
     def call(self, operation, *, session=None, source_ip="", **fields):
         return self.agent.call(
-            operation, actor="appliance-admin" if session else "", source_ip=source_ip, **fields
+            operation, actor=WEB_SESSION_ACTOR if session else "", source_ip=source_ip, **fields
         )
 
 

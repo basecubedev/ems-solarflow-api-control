@@ -209,6 +209,16 @@ def hosts_naming(text, previous, hostname):
     return rewritten + f"{HOSTNAME_LOOPBACK}\t{hostname}\n"
 
 
+def _reachable_address(address):
+    """An address somebody else on a network could reach; not link-local."""
+
+    try:
+        parsed = ipaddress.ip_interface(str(address).strip()).ip
+    except ValueError:
+        return False
+    return not (parsed.is_link_local or parsed.is_loopback)
+
+
 class NetworkService:
     def __init__(self, *, runner, probe, config, operations, time_fn=None, sleep=None,
                  operation_log=None, revert_intent_dir=None):
@@ -223,6 +233,7 @@ class NetworkService:
         # WLAN passphrases live in memory between plan and apply only; they are
         # never written to the operation record, a log or the state directory.
         self._secrets = {}
+        self._operator_contact = None
 
     @property
     def available(self):
@@ -390,9 +401,14 @@ class NetworkService:
             joined = self.profile_ssid(interface.connection) or interface.connection
             if joined != ssid:
                 continue
-            if parsed["addresses"]:
+            if any(_reachable_address(address) for address in parsed["addresses"]):
                 return True
         return False
+
+    def note_operator_contact(self):
+        """A signed-in request reached the agent; a WLAN switch waiting for one counts it."""
+
+        self._operator_contact = self._time()
 
     # --- planning --------------------------------------------------------
 
@@ -431,10 +447,19 @@ class NetworkService:
             "signal": (visible or {}).get("signal"),
             "previous_profile": previous,
             "revert_timeout_seconds": self.config.wifi_revert_timeout_seconds,
-            "warning": "Applying a WLAN change can disconnect this browser session. "
+            "warning": "Applying a WLAN change can disconnect this browser session, and the "
+            "EMS pauses while the appliance changes networks: it cannot reach the battery "
+            "or the meter until the new network is up. "
             + (
                 "The previous profile is kept and reactivated automatically if the new "
-                "network does not reach connectivity."
+                "network does not reach connectivity"
+                + (
+                    f", or if nobody signed in reaches this console within "
+                    f"{self.config.wifi_confirm_timeout_seconds} seconds of the switch -- "
+                    "over the new network or a cable."
+                    if self.config.wifi_confirm_timeout_seconds
+                    else "."
+                )
                 if previous
                 else "This appliance has no WLAN profile to fall back to, so nothing "
                 "takes the change back if the new network does not reach connectivity."
@@ -595,11 +620,20 @@ class NetworkService:
         # waiting for its connectivity first kept the appliance offline for
         # minutes more.
         connected = False
+        reached = True
         if result.ok:
             self._advance(operation, "waiting_for_connectivity", state=STATE_VERIFYING)
             connected = self._wait_for_wifi(ssid)
+        if result.ok and connected and previous and self.config.wifi_confirm_timeout_seconds:
+            self._advance(
+                operation,
+                "waiting_for_operator",
+                detail=f"open this console within {self.config.wifi_confirm_timeout_seconds} "
+                "seconds, over the new network or a cable, or the previous network comes back",
+            )
+            reached = self._wait_for_operator()
 
-        if result.ok and connected:
+        if result.ok and connected and reached:
             self.disarm_revert()
             payload = {
                 "ssid": ssid,
@@ -610,11 +644,15 @@ class NetworkService:
             self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
             return payload
 
-        reason = (
-            "the new WLAN did not reach connectivity"
-            if result.ok
-            else f"nmcli could not join {ssid}: {command_failure_detail(result)}"
-        )
+        if not result.ok:
+            reason = f"nmcli could not join {ssid}: {command_failure_detail(result)}"
+        elif not connected:
+            reason = "the new WLAN did not reach connectivity"
+        else:
+            reason = (
+                f"the appliance joined {ssid}, but nobody reached the console within "
+                f"{self.config.wifi_confirm_timeout_seconds} seconds"
+            )
         self._advance(operation, "reverting_wifi")
         reverted = self._revert(previous)
         # Kept when the revert did not happen, so the next agent start tries
@@ -647,6 +685,24 @@ class NetworkService:
             if self._time() >= deadline:
                 return False
             self._sleep(3)
+
+    def _wait_for_operator(self):
+        """Whether a signed-in request reaches the agent after the switch.
+
+        Joining and holding an address says nothing about whether anybody can
+        still get here: a guest network with client isolation, or another
+        subnet, joins perfectly and leaves the console and the EMS's devices
+        out of reach.
+        """
+
+        since = self._time()
+        deadline = since + self.config.wifi_confirm_timeout_seconds
+        while True:
+            if self._operator_contact is not None and self._operator_contact > since:
+                return True
+            if self._time() >= deadline:
+                return False
+            self._sleep(2)
 
     def _revert(self, previous_profile):
         """Reactivate the saved profile. The previous profile is never deleted.

@@ -427,6 +427,9 @@ ROOT_ACCESS_PLANS = frozenset(
 
 RESERVED_REQUEST_KEYS = frozenset({"operation"})
 
+# The actor the web names a call with when a signed-in session made it.
+WEB_SESSION_ACTOR = "appliance-admin"
+
 
 class ValidationContext:
     """Host-owned value sets a request is validated against."""
