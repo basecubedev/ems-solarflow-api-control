@@ -389,8 +389,9 @@ was installed. Check the appliance's connection and plan the update again.
 
 ## "package_lock_held"
 
-Another package manager (`apt`, `unattended-upgrades`) is running. Wait for it
-to finish. The lock is never removed by the appliance.
+Another package manager (`apt`, `dpkg`, or apt-daily refreshing the package
+lists) is running. Wait for it to finish. The lock is never removed by the
+appliance.
 
 ## "dpkg_incomplete"
 

@@ -1484,3 +1484,40 @@ def test_status_flags_important_manual_updates(tmp_path):
     codes = {item["code"] for item in status["health"]["warnings"]}
 
     assert "manual_updates_pending" in codes, codes
+
+
+# --- apt-daily's refresh holds only the lists lock ----------------------------
+
+
+def test_apt_daily_refreshing_the_lists_is_another_package_manager_at_work(tmp_path):
+    """apt-daily's refresh takes apt's lists lock and not dpkg's: the console
+    called the package manager free, and a refresh planned then was refused by
+    apt with its own lock message."""
+
+    services = appliance(tmp_path)
+    lists_lock = tmp_path / "var" / "lib" / "apt" / "lists" / "lock"
+    lists_lock.write_text("", encoding="utf-8")
+
+    with held_like_apt(lists_lock):
+        state = services.packages.check()
+        plan = handlers_for(services).dispatch({"operation": "updates.plan", "scope": "all"})["plan"]
+
+    assert state.to_dict()["package_manager"]["lock_state"] == LOCK_HELD
+    assert "package_lock_held" in [item["code"] for item in plan["blockers"]]
+
+
+def test_half_configured_packages_while_dpkg_holds_its_lock_are_its_work(tmp_path):
+    """The audit lists packages half-configured while dpkg is configuring
+    them; that is the run under way, not one in need of recovery."""
+
+    services = appliance(tmp_path)
+    services.host.dpkg_audit = "The following packages are only half configured:\n libfoo\n"
+    lock = tmp_path / "var" / "lib" / "dpkg" / "lock-frontend"
+
+    with held_like_apt(lock):
+        state = services.packages.check()
+        blockers = [item["code"] for item in services.packages._blockers(state)]
+
+    assert state.healthy is True
+    assert "dpkg_incomplete" not in blockers
+    assert "package_lock_held" in blockers

@@ -66,9 +66,10 @@ raises a warning that names the number of days. **Refresh package indexes** on
 the **Operating system** card, in Basic and Expert alike, refreshes it at any
 time: `apt-get update --error-on=any` as a plan confirmed with **Refresh**,
 refused like the repairs below while another package manager holds the lock.
-If apt-daily is refreshing at that moment, apt itself refuses this refresh,
-and a plan's own, with its own lock message; it can simply be run again a few
-minutes later, and a scheduled security run tries again the next day.
+apt-daily's own refresh counts as one: it holds apt's lists lock, so the plan
+says so and can simply be made again a few minutes later. Should apt-daily start
+between the plan and the refresh, apt refuses with its own lock message, and
+the same retry applies.
 
 | Item | Meaning |
 |---|---|
@@ -78,7 +79,7 @@ minutes later, and a scheduled security run tries again the next day.
 | Kernel update | A `linux-image*` / `raspberrypi-kernel` upgrade is pending, a new versioned kernel package included: apt is asked with `--with-new-pkgs`, because every Raspberry Pi kernel bump is a new package that a plain `upgrade` keeps back, unseen and never installed. *Install all updates* installs it the same way; neither ever removes a package, so every kernel bump leaves the one before it installed — modules and initramfs, roughly 100–150 MB per flavour on the root filesystem — until it is removed by hand (`apt-get autoremove` at the console) |
 | Firmware update | A `raspi-firmware` / bootloader / `firmware-*` / `rpi-eeprom` upgrade is pending |
 | Reboot required | `/var/run/reboot-required` exists, with the packages that set it; or a kernel of the running flavour newer than the running one is installed (`kernel <release>`); or a file under `/boot/firmware` was written since this boot (`boot firmware`). No kernel, firmware or libc package on Debian or Raspberry Pi OS writes the marker, so the marker alone said "not required" after exactly the updates that need a restart |
-| Package-manager health | dpkg consistency and whether apt or dpkg holds one of its locks (`lock-frontend`, or dpkg's own `lock`) |
+| Package-manager health | dpkg consistency, and beside it whether another package manager holds a lock — apt's or dpkg's (`lock-frontend`, dpkg's own `lock`), or apt's lists lock while apt-daily refreshes. A held lock is work under way, which plans wait for, not a fault: the packages dpkg's audit lists as half-configured while it holds its lock are the run it is in |
 | Update check | whether apt could list what is available; a failure is reported on its own and does not mean dpkg needs recovery |
 
 ## Install security updates

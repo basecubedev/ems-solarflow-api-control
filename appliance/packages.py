@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from appliance.hostprobe import (
     APT_DAILY_UPDATE_STAMP,
     APT_LISTS_DIR,
+    APT_LISTS_LOCK,
     DPKG_DATABASE_LOCK_FILE,
     DPKG_LOCK_FILE,
 )
@@ -128,6 +129,7 @@ class PackageState:
     held: list = field(default_factory=list)
     dpkg_issues: list = field(default_factory=list)
     lock_state: str = LOCK_UNKNOWN
+    lists_locked: bool = False
     reboot_required: bool = False
     reboot_packages: list = field(default_factory=list)
     free_megabytes: int = 0
@@ -177,10 +179,12 @@ class PackageState:
 
     @property
     def healthy(self):
-        """Whether dpkg and apt would take an install.
+        """Whether the package manager is sound, rather than in need of recovery.
 
-        A report, not a gate: the blockers decide installs on their own. A
-        failed update check is reported as itself, not held against the
+        A report, not a gate: the blockers decide installs on their own. A held
+        lock is another package manager at work, which the blockers wait for,
+        and the half-configured packages dpkg's audit lists while it holds its
+        lock are that work. A failed update check is reported as itself, not held against the
         package manager -- except when apt names unmet dependencies, the one
         such failure the console's own Repair dependencies cures. Every other
         error, including one this build does not know, stays unhealthy.
@@ -188,11 +192,16 @@ class PackageState:
 
         unmet = self.error == UPDATE_CHECK_FAILED and "unmet dependencies" in self.error_detail.lower()
         return (
-            not self.dpkg_issues
-            and self.lock_state != LOCK_HELD
+            (not self.dpkg_issues or self.lock_state == LOCK_HELD)
             and self.error in ("", UPDATE_CHECK_FAILED)
             and not unmet
         )
+
+    @property
+    def package_lock(self):
+        """dpkg's lock, or held while apt's lists lock is, as during apt-daily's refresh."""
+
+        return LOCK_HELD if self.lists_locked else self.lock_state
 
     def to_dict(self):
         return {
@@ -210,7 +219,7 @@ class PackageState:
             "package_manager": {
                 "healthy": self.healthy,
                 "dpkg_issues": list(self.dpkg_issues),
-                "lock_state": self.lock_state,
+                "lock_state": self.package_lock,
             },
             "free_megabytes": self.free_megabytes,
             "free_space_known": self.free_space_known,
@@ -325,6 +334,11 @@ class PackageService:
             return LOCK_HELD
         return frontend
 
+    def lists_locked(self):
+        """Whether apt holds the package lists, as apt-daily's refresh does alone."""
+
+        return _record_lock_state(self.probe.root / APT_LISTS_LOCK) == LOCK_HELD
+
     def check(self):
         """Read update state without modifying any package or index."""
 
@@ -367,6 +381,7 @@ class PackageService:
         state.dpkg_issues = parse_dpkg_audit(audit.stdout if audit.ok else audit.stderr)
 
         state.lock_state = self.lock_state()
+        state.lists_locked = self.lists_locked()
 
         filesystem = self.probe.filesystem("/var")
         state.free_space_known = bool(filesystem.get("available"))
@@ -519,7 +534,7 @@ class PackageService:
             "type": TYPE_UPDATE_REPAIR,
             "action": action,
             "dpkg_issues": state.dpkg_issues,
-            "lock_state": state.lock_state,
+            "lock_state": state.package_lock,
             "removals": removals,
             "blockers": blockers,
         }
@@ -565,14 +580,14 @@ class PackageService:
                     ),
                 }
             )
-        if state.lock_state == LOCK_HELD:
+        if state.package_lock == LOCK_HELD:
             blockers.append(
                 {
                     "code": "package_lock_held",
                     "message": "another package manager is running; wait until it finishes",
                 }
             )
-        if state.dpkg_issues:
+        if state.dpkg_issues and state.lock_state != LOCK_HELD:
             blockers.append(
                 {
                     "code": "dpkg_incomplete",
@@ -698,7 +713,7 @@ class PackageService:
     def _execute_repair(self, operation):
         action = operation.requested_target.get("action")
         self._advance(operation, "preflight")
-        if self.lock_state() == LOCK_HELD:
+        if self.lock_state() == LOCK_HELD or self.lists_locked():
             self.operations.finish(
                 operation.operation_id,
                 STATE_FAILED_TERMINAL,

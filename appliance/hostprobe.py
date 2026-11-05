@@ -54,6 +54,7 @@ BOOT_FIRMWARE_DIR = "boot/firmware"
 DPKG_LOCK_FILE = "var/lib/dpkg/lock-frontend"
 DPKG_DATABASE_LOCK_FILE = "var/lib/dpkg/lock"
 APT_LISTS_DIR = "var/lib/apt/lists"
+APT_LISTS_LOCK = "var/lib/apt/lists/lock"
 APT_DAILY_UPDATE_STAMP = "var/lib/apt/periodic/update-stamp"
 
 
