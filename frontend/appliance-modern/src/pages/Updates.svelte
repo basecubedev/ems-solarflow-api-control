@@ -1,5 +1,6 @@
 <script>
   import Card from "../../../shared/ui/Card.svelte";
+  import Empty from "../../../shared/ui/Empty.svelte";
   import Icon from "../../../shared/ui/Icon.svelte";
   import Status from "../../../shared/ui/Status.svelte";
   import KeyValues from "../widgets/KeyValues.svelte";
@@ -171,7 +172,7 @@
     {#if manager === undefined || manager === null}
       <p class="muted"><Icon name="loader" size="sm" /> {t("manager.reading")}</p>
     {:else if manager.error}
-      <div class="empty error" data-testid="manager-unavailable"><Icon name="triangle-alert" /><span>{t("manager.unavailable", { code: manager.error })}</span></div>
+      <div data-testid="manager-unavailable"><Empty error text={t("manager.unavailable", { code: manager.error })} /></div>
     {:else}
       <div class="tiles">
         <div class="tile" data-testid="manager-installed">
@@ -254,11 +255,11 @@
 <Card icon="server" tone="c-inv" title={t("adminVersions.title")} subtitle={t("adminVersions.sub")} span="span-12">
   <div data-testid="admin-versions">
     {#if gate === "unread"}
-      <div class="empty" data-testid="admin-versions-unavailable"><Icon name="info" /><span><strong>{t("adminVersions.unread")}</strong> {t("adminVersions.unreadText")}</span></div>
+      <div data-testid="admin-versions-unavailable"><Empty><strong>{t("adminVersions.unread")}</strong> {t("adminVersions.unreadText")}</Empty></div>
     {:else if gate === "bootstrap"}
-      <div class="empty" data-testid="admin-versions-bootstrap"><Icon name="info" /><span><strong>{t("adminVersions.bootstrap")}</strong> {t("adminVersions.bootstrapText")}</span><a class="btn small" href={href("admin")}>{t("updates.openAdmin")}</a></div>
+      <div data-testid="admin-versions-bootstrap"><Empty><strong>{t("adminVersions.bootstrap")}</strong> {t("adminVersions.bootstrapText")}{#snippet action()}<a class="btn small" href={href("admin")}>{t("updates.openAdmin")}</a>{/snippet}</Empty></div>
     {:else if gate === "docker"}
-      <div class="empty error" data-testid="admin-versions-docker"><Icon name="triangle-alert" /><span><strong>{docker === "unavailable" ? t("docker.notInstalled") : t("docker.notRunning")}.</strong> {docker === "unavailable" ? t("adminVersions.noDocker") : t("adminVersions.dockerDown")}</span></div>
+      <div data-testid="admin-versions-docker"><Empty error><strong>{docker === "unavailable" ? t("docker.notInstalled") : t("docker.notRunning")}.</strong> {docker === "unavailable" ? t("adminVersions.noDocker") : t("adminVersions.dockerDown")}</Empty></div>
     {:else}
       {#if gate === "missing"}
         <p class="callout c-fault" data-testid="admin-versions-container-missing"><Icon name="triangle-alert" /><span><strong>{t("adminVersions.missing")}</strong> {t("adminVersions.missingText")}</span></p>

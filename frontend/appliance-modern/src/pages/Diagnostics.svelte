@@ -79,7 +79,7 @@
   </Card>
 {/if}
 
-<Card icon="file-archive" tone="c-soc" title={t("diag.archive")} subtitle={t("diag.archiveSub")} span={detail.expert ? "span-4" : "span-4"}>
+<Card icon="file-archive" tone="c-soc" title={t("diag.archive")} subtitle={t("diag.archiveSub")} span="span-4">
   <div class="stack-sm" data-testid="diag-support">
     <p class="note"><Icon name="shield-check" />{t("diag.archiveRedacted")}</p>
     <PlanButton plan={{ key: "support-archive", endpoint: "/api/support/archive", title: { key: "plan.title.archive" }, confirm: "plan.create" }} label={t("diag.createArchive")} icon="file-archive" small={false} testid="support-archive" />

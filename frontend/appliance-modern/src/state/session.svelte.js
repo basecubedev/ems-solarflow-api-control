@@ -177,11 +177,10 @@ async function sendFresh(path, body, extra) {
 }
 
 /** Every write carries the session's CSRF token; the server decides whether it is allowed. */
-export async function applianceSend(path, { body = {}, account } = {}) {
-  const extra = account ? { "X-Appliance-Account": account } : {};
+export async function applianceSend(path, { body = {} } = {}) {
   const mine = epoch;
   try {
-    return await sendFresh(path, body, extra);
+    return await sendFresh(path, body, {});
   } catch (error) {
     if (lost(error) && session.authenticated && mine === epoch) sessionEnded("signIn.expired");
     throw error;
