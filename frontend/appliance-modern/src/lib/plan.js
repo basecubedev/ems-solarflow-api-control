@@ -177,3 +177,21 @@ export function planFields(plan, expert) {
 export function planBlocked(plan) {
   return ((plan && plan.blockers) || []).length > 0;
 }
+
+/** Acts that can cut this page off, whatever their payload says (appliance/network.py, the power plans). */
+export const DANGER_TYPES = Object.freeze(["network.wifi", "network.hostname", "admin.rollback", "manager.revert", "system.reboot", "system.shutdown"]);
+/** The account a key opens a root shell for (appliance/shell_access.py). */
+export const SHELL_ACCOUNT = "ems-shell";
+
+/**
+ * Red for an act worth a second thought, read off the plan the agent made
+ * rather than off the button that asked: one that can cut the page off, go
+ * back to an older version or open a root login.
+ */
+export function planDanger(plan, options) {
+  if (options && options.danger) return true;
+  const value = plan || {};
+  if (DANGER_TYPES.includes(value.type)) return true;
+  if (value.direction === "downgrade" || value.direction === "revert") return true;
+  return value.type === "ssh.key_add" && value.account === SHELL_ACCOUNT;
+}

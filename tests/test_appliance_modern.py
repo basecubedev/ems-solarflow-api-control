@@ -253,6 +253,16 @@ def test_every_operation_type_the_agent_runs_has_a_title():
     assert set(js_list("lib/operations.js", "OPERATION_TYPES")) == declared
 
 
+def test_the_plans_painted_red_name_types_and_the_account_the_agent_has():
+    from appliance import shell_access
+
+    types = set(js_list("lib/operations.js", "OPERATION_TYPES"))
+    source = (SOURCE / "src" / "lib" / "plan.js").read_text(encoding="utf-8")
+
+    assert set(js_list("lib/plan.js", "DANGER_TYPES")) <= types
+    assert f'export const SHELL_ACCOUNT = "{shell_access.ACCOUNT}";' in source
+
+
 def test_every_operation_state_has_words():
     assert keys("lib/operations.js", "OPERATION_STATES") == constants(operations, "STATE_")
 

@@ -7,7 +7,7 @@
   import { t, tn, say, langOf, fmt } from "../i18n/i18n.svelte.js";
   import { detail } from "../state/prefs.svelte.js";
   import { actions as flow, confirmPlan, dismissPlan } from "../state/actions.svelte.js";
-  import { planBlocked, planFields, vocabularyWords } from "../lib/plan.js";
+  import { planBlocked, planDanger, planFields, vocabularyWords } from "../lib/plan.js";
   import { operationTitleKey } from "../lib/operations.js";
   import { exactDuration, gigabytes } from "../lib/host.js";
 
@@ -132,7 +132,7 @@
     <button class="btn secondary" type="button" onclick={dismissPlan} disabled={flow.confirming} data-testid="plan-cancel">{t("auth.cancel")}</button>
     <button
       class="btn"
-      class:danger={options.danger}
+      class:danger={planDanger(plan, options)}
       type="button"
       onclick={confirmPlan}
       disabled={blocked || flow.confirming}
