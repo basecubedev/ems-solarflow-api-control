@@ -507,10 +507,14 @@ class ApplianceWebApp:
                         "login_rate_limited",
                         "too many failed attempts from this IPv6 network; try again in "
                         f"{retry_after} seconds, or sign in over the appliance's IPv4 address",
+                        retry_after=retry_after,
+                        scope="network",
                     )
                 raise AuthError(
                     "login_rate_limited",
                     f"too many failed attempts; try again in {retry_after} seconds",
+                    retry_after=retry_after,
+                    scope="address",
                 )
             return self.rate_limiter.record_failure(source_ip)
 
@@ -671,6 +675,16 @@ class ApplianceWebApp:
         return self.agent.call(
             operation, actor=WEB_SESSION_ACTOR if session else "", source_ip=source_ip, **fields
         )
+
+
+def _fields(exc):
+    """The facts an error carries beside its sentence, never ones that name a key."""
+
+    return {
+        key: value
+        for key, value in (getattr(exc, "fields", None) or {}).items()
+        if key not in ("error", "message")
+    }
 
 
 def session_cookie_value(headers):
@@ -1041,7 +1055,9 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
                 body.get("password"), body.get("confirmation"), source_ip=self._client_ip()
             )
         except AuthError as exc:
-            return self._error(STATUS_FOR_CODE.get(exc.code, 400), exc.code, exc.message)
+            return self._error(
+                STATUS_FOR_CODE.get(exc.code, 400), exc.code, exc.message, **_fields(exc)
+            )
         return self._send(
             200,
             {
@@ -1058,7 +1074,9 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         try:
             session = self.app.login(body.get("password"), source_ip=self._client_ip())
         except AuthError as exc:
-            return self._error(STATUS_FOR_CODE.get(exc.code, 401), exc.code, exc.message)
+            return self._error(
+                STATUS_FOR_CODE.get(exc.code, 401), exc.code, exc.message, **_fields(exc)
+            )
         return self._send(
             200,
             {
@@ -1175,7 +1193,9 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
                     body.get("password"), session, source_ip=self._client_ip()
                 )
             except AuthError as exc:
-                return self._error(STATUS_FOR_CODE.get(exc.code, 400), exc.code, exc.message)
+                return self._error(
+                    STATUS_FOR_CODE.get(exc.code, 400), exc.code, exc.message, **_fields(exc)
+                )
             return self._send(
                 200, {"confirmed": True, "security_audit": self.app.audit_status()}
             )
@@ -1189,7 +1209,9 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
                     source_ip=self._client_ip(),
                 )
             except AuthError as exc:
-                return self._error(STATUS_FOR_CODE.get(exc.code, 400), exc.code, exc.message)
+                return self._error(
+                    STATUS_FOR_CODE.get(exc.code, 400), exc.code, exc.message, **_fields(exc)
+                )
             return self._send(
                 200,
                 {

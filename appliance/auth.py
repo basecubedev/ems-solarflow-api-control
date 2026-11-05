@@ -64,10 +64,13 @@ def lock_path(path):
 
 
 class AuthError(Exception):
-    def __init__(self, code, message):
+    """A refusal; ``fields`` are facts the page needs beside the sentence."""
+
+    def __init__(self, code, message, **fields):
         super().__init__(message)
         self.code = code
         self.message = message
+        self.fields = fields
 
 
 def _b64encode(raw):

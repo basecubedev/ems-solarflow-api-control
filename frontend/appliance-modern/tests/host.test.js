@@ -209,3 +209,10 @@ test("the WLAN radio names which switch turned it off", () => {
   assert.equal(wifiRadio({ wifi_radio: { hardware: "unknown", software: "unknown" } }), "");
   assert.equal(wifiRadio({}), "");
 });
+
+test("a rate-limited sign-in says how long, and the IPv4 way out for a whole IPv6 network", () => {
+  const limited = (payload) => errorWords({ code: "login_rate_limited", status: 429, payload });
+  assert.deepEqual(limited({ retry_after: 120, scope: "address" }), { key: "error.loginRateLimitedWait", vars: { seconds: 120 } });
+  assert.deepEqual(limited({ retry_after: 30, scope: "network" }), { key: "error.loginRateLimitedNetwork", vars: { seconds: 30 } });
+  assert.deepEqual(limited({}), { key: "error.login_rate_limited" });
+});

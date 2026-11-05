@@ -1563,6 +1563,21 @@ def test_a_wrong_current_password_spends_the_same_budget_as_a_sign_in(signed_in)
     assert client.login()[0] == 429
 
 
+def test_a_rate_limited_sign_in_says_how_long_and_whose_budget(signed_in):
+    """The page said "wait a moment": the seconds and the IPv4 way out were in
+    the English sentence only."""
+
+    _, app, client = signed_in
+    for _ in range(app.rate_limiter.max_failures):
+        _change(client, "not-the-password")
+
+    status, payload, _ = client.login()
+
+    assert status == 429, payload
+    assert payload["scope"] == "address"
+    assert isinstance(payload["retry_after"], int) and payload["retry_after"] > 0
+
+
 def test_only_a_wrong_current_password_is_counted(signed_in):
     """A refusal after the current password was read and found right -- a new
     password that does not match its confirmation -- is no failed guess."""

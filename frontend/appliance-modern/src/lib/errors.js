@@ -43,6 +43,10 @@ export const KNOWN_ERRORS = Object.freeze([
  */
 export function errorWords(error, fallbackKey = "error.failed") {
   const code = error && error.code;
+  const seconds = Number(error && error.payload && error.payload.retry_after);
+  if (code === "login_rate_limited" && Number.isFinite(seconds) && seconds > 0) {
+    return { key: error.payload.scope === "network" ? "error.loginRateLimitedNetwork" : "error.loginRateLimitedWait", vars: { seconds } };
+  }
   if (code && KNOWN_ERRORS.includes(code)) return { key: `error.${code}` };
   if (error && error.status === undefined && !(error.payload && error.payload.message)) return { key: "error.unreachable" };
   const message = error && error.payload && error.payload.message;
