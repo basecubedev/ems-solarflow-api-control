@@ -25,7 +25,7 @@
   import { prefs, chooseClassic, welcome } from "./state/prefs.svelte.js";
   import { session, logout } from "./state/session.svelte.js";
   import { host, ensure, pollWhile, refresh, resetHost, stopPolling } from "./state/host.svelte.js";
-  import { actions } from "./state/actions.svelte.js";
+  import { actions, forgetPlan } from "./state/actions.svelte.js";
   import { adminLink } from "./lib/links.js";
   import { attentionBySection, sessionFindings } from "./lib/findings.js";
   import { URGENT_STEPS, assistantMark, assistantSteps, bareAddress, installationRead, markedSteps, opensOnAssistant } from "./lib/assistant.js";
@@ -70,6 +70,7 @@
       if (!session.authenticated) {
         signedIn = false;
         lastAdmin = "";
+        untrack(forgetPlan);
       }
       return;
     }

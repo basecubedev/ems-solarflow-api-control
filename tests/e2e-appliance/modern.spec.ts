@@ -699,6 +699,34 @@ test.describe("EMS Admin", () => {
     await settled(page);
   });
 
+  test("a plan cancelled in another tab closes its dialog here", async ({ page, context }) => {
+    await createPassword(page);
+    await open(page, "admin");
+    await page.getByTestId("admin-stop").click();
+    await expect(page.getByTestId("plan-dialog")).toBeVisible();
+    const other = await context.newPage();
+    await other.goto("/");
+    await other.getByTestId("cancel-operation").click();
+    await expect(page.getByTestId("plan-dialog")).toBeHidden({ timeout: 15_000 });
+    await expect(page.getByTestId("action-notice")).toContainText("cancelled or ended elsewhere");
+    await other.close();
+  });
+
+  test("a confirmation whose answer was lost hands over to the banner", async ({ page }) => {
+    await createPassword(page);
+    await open(page, "admin");
+    await page.getByTestId("admin-stop").click();
+    await expect(page.getByTestId("plan-dialog")).toBeVisible();
+    await page.route("**/api/operations/confirm", async (route) => {
+      await route.fetch();
+      await route.abort();
+    });
+    await page.getByTestId("plan-confirm").click();
+    await expect(page.getByTestId("plan-dialog")).toBeHidden();
+    await settled(page);
+    await page.unroute("**/api/operations/confirm");
+  });
+
   test("an appliance that never had EMS Admin offers to install it", async ({ page, request }) => {
     await resetAppliance(request, { never_installed: true });
     await createPassword(page);

@@ -31,6 +31,7 @@ export const KNOWN_ERRORS = Object.freeze([
   "csrf_host_rejected",
   "operation_conflict",
   "plan_not_awaiting_confirmation",
+  "invalid_operation_transition",
   "confirmation_token_mismatch",
   "timezone_unchanged",
 ]);

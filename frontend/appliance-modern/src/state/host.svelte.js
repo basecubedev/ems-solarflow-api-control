@@ -212,6 +212,7 @@ export function watchOperations(watcher) {
 
 export async function pollOperations() {
   const mine = sessionEpoch;
+  const startedAt = Date.now();
   let payload;
   try {
     payload = await applianceGet("/api/operations");
@@ -227,7 +228,7 @@ export async function pollOperations() {
     invalidateHeld();
     freshHostRead().finally(done);
   }
-  operationWatchers.forEach((watcher) => watcher(payload.active || null));
+  operationWatchers.forEach((watcher) => watcher(payload.active || null, payload, startedAt));
   return payload;
 }
 

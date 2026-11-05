@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { getJson } from "../../../shared/lib/api.js";
-import { applianceSend, loadSession, rememberNotice, session } from "./session.svelte.js";
+import { applianceGet, applianceSend, loadSession, rememberNotice, session } from "./session.svelte.js";
 import { host, refresh, stopPolling, watchOperations } from "./host.svelte.js";
 import { forget } from "./forms.svelte.js";
 import { MANAGER_OPERATIONS, POWER_OPERATIONS, findOperation, managerReconnectState, planRequestId } from "../lib/operations.js";
@@ -39,7 +39,36 @@ let waiting = { before: "", outage: false, since: 0, operationId: "" };
 function showPlan(payload, options) {
   actions.notice = null;
   actions.dialogError = null;
-  actions.pending = { payload, options };
+  actions.pending = { payload, options, shownAt: Date.now() };
+}
+
+/**
+ * The dialog follows its operation. A plan cancelled in another tab, or ended
+ * when the agent restarted, is no plan to confirm, so a listing read after the
+ * dialog opened that holds it in any other state, or holds another operation
+ * in the one slot, closes the dialog and leaves the banner to say the rest.
+ */
+function followPending(active, payload, startedAt) {
+  const pending = actions.pending;
+  if (!pending || actions.confirming || startedAt < pending.shownAt) return;
+  const id = pending.payload?.operation?.operation_id;
+  if (!id) return;
+  const known = [active, ...((payload && payload.unacknowledged) || []), ...((payload && payload.recent) || [])];
+  const record = known.find((item) => item && item.operation_id === id);
+  if (record && record.state === "awaiting_confirmation") return;
+  actions.pending = null;
+  actions.dialogError = null;
+  actions.notice = { key: "plan.gone", tone: "c-warn" };
+}
+
+watchOperations(followPending);
+
+/** A session that ended takes its plan and its notices with it; the next sign-in may be hours later. */
+export function forgetPlan() {
+  lostPlan = null;
+  actions.pending = null;
+  actions.dialogError = null;
+  actions.notice = null;
 }
 
 /**
@@ -123,6 +152,19 @@ export async function confirmPlan() {
       startReconnect(type, pending.payload.operation.operation_id);
     }
   } catch (error) {
+    if (!error || error.status === undefined) {
+      const id = pending.payload.operation.operation_id;
+      const record = await applianceGet(`/api/operations/${id}`).then(
+        (answer) => (answer && answer.operation) || null,
+        () => null,
+      );
+      if (record && record.state !== "awaiting_confirmation") {
+        host.operation = record;
+        if (pending.options.forget) forget(...pending.options.forget);
+        actions.pending = null;
+        return;
+      }
+    }
     actions.dialogError = errorWords(error, "error.confirmFailed");
   } finally {
     actions.confirming = false;
