@@ -1348,13 +1348,15 @@ class AdminLifecycleService:
     def _rollback_after_failure(self, operation, saved, before, exc):
         """Restore the previous deployment bytes and the captured recovery digest."""
 
+        target = self._recovery_target(operation)
+        if not target["digest"]:
+            return self._nothing_to_restore(operation, saved, exc)
         self.operations.advance(
             operation.operation_id,
             "rolling_back",
             state=STATE_ROLLING_BACK,
             detail=getattr(exc, "code", "install_failed"),
         )
-        target = self._recovery_target(operation)
         expected_digest = target["digest"]
         try:
             deployment = self.deployment()
@@ -1554,6 +1556,33 @@ class AdminLifecycleService:
             },
         )
         return payload
+
+    def _nothing_to_restore(self, operation, saved, exc):
+        """No Admin ran before and none was recorded: stop, and put the files back.
+
+        Bringing up what the old deployment names would start a mutable tag
+        nobody verified and call it the previous Admin. The deployment is
+        written back so nothing starts the unverified target later either.
+        """
+
+        message = (
+            f"{getattr(exc, 'message', exc)}; no previous Admin was recorded to restore, "
+            "so the Admin is left stopped and the deployment as it was before the install"
+        )
+        try:
+            self._stop_admin(self.deployment())
+            if not self._safe_restore(saved):
+                message += "; writing the previous deployment back failed as well"
+        except (AdminLifecycleError, DockerError, DeploymentError, OSError) as stop_exc:
+            message += f"; stopping the new Admin failed: {getattr(stop_exc, 'message', stop_exc)}"
+        self.operations.finish(
+            operation.operation_id,
+            STATE_MANUAL_ACTION_REQUIRED,
+            stage="no_previous_admin",
+            result={"admin_untouched": False, "restored": False},
+            error={"code": getattr(exc, "code", "install_failed"), "message": message},
+        )
+        raise AdminLifecycleError("no_previous_admin", message)
 
     def _rollback_recovery_failure(self, operation, saved, exc, *, verification=None):
         """Mutation had started: put the exact previous Admin back, or say it is gone.

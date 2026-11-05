@@ -255,6 +255,13 @@ as known good, and must not count as a successful recovery.
 The operation ends as `rolled_back` and shows the failure that caused it. The
 Appliance Manager itself stays reachable the whole time.
 
+When no Admin ran at plan time and none was ever recorded as known-good, there
+is nothing to put back. The appliance then stops the Admin that failed, writes
+the previous deployment files back and starts nothing: whatever tag the old
+compose file names was never verified. The operation ends as
+`manual_action_required` with `no previous Admin was recorded to restore`;
+installing a version that works is the way on.
+
 If the previous image is no longer available locally and cannot be pulled, the
 operation ends as `failed_terminal` with `rollback_failed` — it never reports a
 success it did not achieve.

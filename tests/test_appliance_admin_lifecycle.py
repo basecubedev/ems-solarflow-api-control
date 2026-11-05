@@ -1431,3 +1431,26 @@ def test_an_admin_plan_is_refused_while_the_container_cannot_be_inspected(tmp_pa
         handlers.dispatch(dict(request_))
 
     assert excinfo.value.code == "container_state_unknown", excinfo.value.message
+
+
+def test_a_failed_install_with_nothing_to_restore_leaves_the_admin_stopped(tmp_path):
+    """No Admin ran at plan time and no known-good Admin was recorded: the
+    recovery restored the old compose and started its mutable tag, unverified,
+    and reported the previous Admin as restored."""
+
+    services = build_test_services(tmp_path, catalogue=StaticCatalogue(["v1.1.0", "v1.0.0"]))
+    host = services.host
+    host.write_deployment(tag="latest", variable_tag=False)
+    host.publish_image("latest", version="latest")
+    host.pull_local(f"{ADMIN_REPOSITORY}:latest")
+    host.publish_image("v1.1.0", healthy=False)
+    compose_before = services.admin.deployment().compose_file.read_text(encoding="utf-8")
+
+    operation, plan = plan_and_execute(services, channel="exact", tag="v1.1.0")
+
+    assert plan["recovery"]["digest"] == ""
+    assert operation.state == STATE_MANUAL_ACTION_REQUIRED, operation.to_dict()
+    assert "no previous Admin" in operation.error["message"], operation.error
+    running = host.containers.get(ADMIN_CONTAINER)
+    assert running is None or not running["State"]["Running"], running
+    assert services.admin.deployment().compose_file.read_text(encoding="utf-8") == compose_before
