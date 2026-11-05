@@ -31,6 +31,7 @@ from appliance import (
 from appliance.commands import CommandError
 from appliance.packages import LOCK_HELD
 from appliance.version import (
+    PACKAGE_NAME,
     DIRECTION_DOWNGRADE,
     DIRECTION_REINSTALL,
     DIRECTION_UNKNOWN,
@@ -479,7 +480,29 @@ class ManagerUpdateService:
             "verify": manager_verify.read(self.paths).to_dict(),
             "verdict": manager_verify.read_verdict(self.paths).to_dict(),
             "outcome": manager_install.read_outcome(self.paths).to_dict(),
+            "dpkg": self._dpkg_holds(),
         }
+
+    def _dpkg_holds(self):
+        """What dpkg itself records for the Manager package, its state and version.
+
+        After an install that did not end confirmed, that decides what to do
+        next: a half-configured package wants dpkg --configure -a, an installed
+        one of the wrong version the rollback.
+        """
+
+        unknown = {"status": "unknown", "version": ""}
+        if self.runner is None or not self.runner.available("dpkg-query"):
+            return unknown
+        result = self.runner.run(
+            "dpkg-query",
+            ["-W", "-f=${db:Status-Status}|${Version}", "--", PACKAGE_NAME],
+            timeout=15,
+        )
+        if not result.ok or "|" not in (result.stdout or ""):
+            return unknown
+        status, _, version = result.stdout.strip().partition("|")
+        return {"status": status or "unknown", "version": version}
 
     # --- planning ---------------------------------------------------------
 

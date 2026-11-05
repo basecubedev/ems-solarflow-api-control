@@ -1146,6 +1146,15 @@ test.describe("what an outcome says", () => {
     await expect(page.getByTestId("install-plan")).toHaveCount(0);
   });
 
+  test("a Manager install that was not confirmed says what dpkg holds and what to run", async ({ page, request }) => {
+    await resetAppliance(request, { manager_package_kept: true, manager_verdict: "revert_failed", manager_dpkg: ["half-configured", "0.4.0"] });
+    await createPassword(page);
+    await open(page, "updates");
+    await expect(page.getByTestId("manager-dpkg")).toContainText("0.4.0");
+    await expect(page.getByTestId("manager-dpkg")).toContainText("half-configured");
+    await expect(page.getByTestId("manager-dpkg").locator("code")).toHaveText("sudo dpkg --configure -a");
+  });
+
   test("a reverted Manager install and an expired deadline are said, not left silent", async ({ page, request }) => {
     await resetAppliance(request, { manager_package_kept: true, manager_verdict: "reverted" });
     await createPassword(page);

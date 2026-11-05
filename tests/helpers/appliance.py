@@ -137,6 +137,7 @@ class FakeHost:
                 "journalctl",
                 "apt-get",
                 "dpkg",
+                "dpkg-query",
                 "nmcli",
                 "hostnamectl",
                 "busctl",
@@ -176,6 +177,8 @@ class FakeHost:
         self.mdns_published = None
         self.units_run = []
         self.unit_output = {}
+        # What dpkg records for the Manager package: (db:Status-Status, Version).
+        self.manager_dpkg = ("installed", INSTALLED_VERSION)
         self.apt_simulation = APT_SIMULATION
         # What apt-get -s writes to stderr when it fails; it then exits 100.
         self.apt_simulation_error = ""
@@ -639,6 +642,12 @@ class FakeHost:
         if "--unit" in args and args[args.index("--unit") + 1] in self.unit_output:
             return self._result("journalctl", args, 0, self.unit_output[args[args.index("--unit") + 1]])
         return self._result("journalctl", args, 0, "journal line one\njournal line two\n")
+
+    def _dpkg_query(self, args):
+        if "ems-appliance-manager" not in args:
+            return self._result("dpkg-query", args, 1, "", "no packages found")
+        status, version = self.manager_dpkg
+        return self._result("dpkg-query", args, 0, f"{status}|{version}")
 
     def _systemd_run(self, args):
         """A transient unit: the wrapped tool runs, its output goes to the journal."""

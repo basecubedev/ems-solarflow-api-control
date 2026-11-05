@@ -463,6 +463,7 @@ def main():
             services.config, "manager_index_url", MANAGER_INDEX_URL if indexed else ""
         )
         services.manager.fetcher = StaticManagerIndex() if indexed else unconfigured_fetcher
+        host.manager_dpkg = tuple(options.get("manager_dpkg") or ("installed", INSTALLED_VERSION))
         seed_manager_state(
             services,
             kept=bool(options.get("manager_package_kept")),

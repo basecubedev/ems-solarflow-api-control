@@ -1771,3 +1771,13 @@ def test_an_index_that_offers_the_installed_package_or_newer_is_not_behind(tmp_p
     services.manager.installed_version = "0.1.0"
 
     assert services.manager.sources()["index_behind_installed"] is False
+
+
+def test_the_status_says_what_dpkg_holds_for_the_manager(tmp_path):
+    """After a failed install the console said "failed" and nothing about the
+    package dpkg was left with, which decides what the operator does next."""
+
+    services, service = build(tmp_path)
+    services.host.manager_dpkg = ("half-configured", "0.4.0")
+
+    assert service.status()["dpkg"] == {"status": "half-configured", "version": "0.4.0"}

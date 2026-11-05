@@ -18,7 +18,7 @@
   import { detail } from "../state/prefs.svelte.js";
   import { rankedFindings, findingWords } from "../lib/findings.js";
   import { adminGate, adminTransitionUntil, adminVersion, daemonState, dockerCondition, groupByTrack, indexAgeWords, latestVerdict, osTiles, securityUpdatesOffered, systemVerdict, updatesInDoubt } from "../lib/host.js";
-  import { MANAGER_OUTCOMES, MANAGER_VERDICTS, applianceNow, latestStableVersion, managerActions, managerOptions, riskyDirection } from "../lib/manager.js";
+  import { MANAGER_OUTCOMES, MANAGER_VERDICTS, applianceNow, managerRecovery, latestStableVersion, managerActions, managerOptions, riskyDirection } from "../lib/manager.js";
   import { RECOVERY_ACTIONS, adminInstallPlan, allUpdatesPlan, managerInstallPlan, managerRevertPlan, refreshIndexPlan, repairPlan, securityUpdatesPlan } from "../lib/plans.js";
 
   /**
@@ -92,6 +92,7 @@
   const kept = $derived(manager?.retention?.previous || {});
   const verify = $derived(manager?.verify || {});
   const verdict = $derived(manager?.verdict || {});
+  const recovery = $derived(managerRecovery(manager));
   const lastInstall = $derived(
     rights.inFlight
       ? { key: "manager.last.waiting", tone: "c-warn" }
@@ -204,6 +205,9 @@
         <p class="callout c-fault" data-testid="manager-deadline-expired"><Icon name="triangle-alert" /><span><strong>{t("manager.expired.title")}</strong> {t("manager.expired.text", { version: verify.expected_version || "—" })}</span></p>
       {:else if verdict.settled && verdict.verdict !== "confirmed"}
         <p class="callout {MANAGER_VERDICTS[verdict.verdict] || 'c-warn'}" data-testid="manager-verdict"><Icon name="info" /><span>{MANAGER_VERDICTS[verdict.verdict] ? t(`manager.verdict.${verdict.verdict}`) : t("manager.verdict.other", { verdict: String(verdict.verdict || "—") })}</span></p>
+      {/if}
+      {#if recovery && !rights.inFlight}
+        <p class="note" data-testid="manager-dpkg"><Icon name="info" /><span>{t("manager.dpkgHolds", { version: recovery.version, status: recovery.status })}{#if recovery.revertTo}{" "}{t("manager.revertWould", { version: recovery.revertTo })}{/if}{" "}{t("manager.consoleCommand")} <code lang="en">{recovery.command}</code></span></p>
       {/if}
 
       <div class="split">

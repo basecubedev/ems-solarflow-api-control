@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applianceNow, managerActions, managerOptions, releaseStamp, riskyDirection } from "../src/lib/manager.js";
+import { managerRecovery, applianceNow, managerActions, managerOptions, releaseStamp, riskyDirection } from "../src/lib/manager.js";
 import { confinementGaps, exportSetupReport, rescueState, rescueSsh, shellAccess } from "../src/lib/access.js";
 
 test("a deadline in flight blocks both install and revert; an expired one blocks neither", () => {
@@ -66,4 +66,12 @@ test("shell access shows both gates", () => {
   assert.deepEqual(shellAccess({ shell_access: { account: "ems-shell", enabled: false, effectively_disabled: true, daemon: "refused", key_deployment_allowed: false, home_writable: false } }), {
     account: "ems-shell", enabled: false, confirmedOff: true, daemonAccepts: false, keysAllowed: false, homeBroken: true,
   });
+});
+
+test("after an install that did not end confirmed, what dpkg holds and the command to run", () => {
+  const failed = { verdict: { settled: true, verdict: "revert_failed" }, retention: { previous: { version: "0.3.0" } } };
+  assert.deepEqual(managerRecovery({ ...failed, dpkg: { status: "half-configured", version: "0.4.0" } }), { status: "half-configured", version: "0.4.0", revertTo: "0.3.0", command: "sudo dpkg --configure -a" });
+  assert.equal(managerRecovery({ ...failed, dpkg: { status: "installed", version: "0.4.0" } }).command, "sudo ems-appliance rollback-manager");
+  assert.equal(managerRecovery({ verdict: { settled: true, verdict: "confirmed" }, dpkg: { status: "installed", version: "0.4.0" } }), null);
+  assert.equal(managerRecovery({ ...failed, dpkg: { status: "unknown" } }), null);
 });
