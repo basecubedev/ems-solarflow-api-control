@@ -699,6 +699,16 @@ test.describe("EMS Admin", () => {
     await settled(page);
   });
 
+  test("a sign-in in another tab does not leave this tab with a stale token", async ({ page }) => {
+    await createPassword(page);
+    await open(page, "admin");
+    const again = await page.request.post("/api/session/login", { data: { password: PASSWORD }, headers: { Origin: new URL(page.url()).origin } });
+    expect(again.ok()).toBe(true);
+    await page.getByTestId("admin-stop").click();
+    await expect(page.getByTestId("plan-dialog")).toBeVisible();
+    await page.getByTestId("plan-cancel").click();
+  });
+
   test("focus returns to the control that asked, and to the banner after a confirm", async ({ page }) => {
     await createPassword(page);
     await open(page, "admin");

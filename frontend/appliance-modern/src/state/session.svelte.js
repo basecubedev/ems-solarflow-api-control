@@ -123,7 +123,7 @@ export function sessionEnded(noticeKey = "") {
  */
 export async function logout() {
   try {
-    await sendJson("/api/session/logout", { body: {}, headers: { [CSRF_HEADER]: session.csrf } });
+    await sendFresh("/api/session/logout", {}, {});
   } catch (error) {
     await loadSession();
     if (session.authenticated) throw error;
@@ -146,13 +146,31 @@ export async function applianceGet(path) {
   }
 }
 
+/**
+ * The tabs share one cookie, so a sign-in in another tab replaces this tab's
+ * session under it: reads go on, and every write is refused for a token from
+ * the session before. That refusal re-reads the session's token once and
+ * sends the write again with it.
+ */
+async function sendFresh(path, body, extra) {
+  const send = () => sendJson(path, { body, headers: { ...extra, [CSRF_HEADER]: session.csrf } });
+  try {
+    return await send();
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.code !== "csrf_token_invalid") throw error;
+    const payload = await getJson("/api/session").catch(() => null);
+    if (!payload || !payload.authenticated || !payload.csrf_token || payload.csrf_token === session.csrf) throw error;
+    adopt(payload);
+    return send();
+  }
+}
+
 /** Every write carries the session's CSRF token; the server decides whether it is allowed. */
 export async function applianceSend(path, { body = {}, account } = {}) {
-  const headers = { [CSRF_HEADER]: session.csrf };
-  if (account) headers["X-Appliance-Account"] = account;
+  const extra = account ? { "X-Appliance-Account": account } : {};
   const mine = epoch;
   try {
-    return await sendJson(path, { body, headers });
+    return await sendFresh(path, body, extra);
   } catch (error) {
     if (lost(error) && session.authenticated && mine === epoch) sessionEnded("signIn.expired");
     throw error;
