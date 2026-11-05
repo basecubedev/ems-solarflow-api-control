@@ -24,6 +24,7 @@
   const settled = $derived(Boolean(operation?.settled));
   const managerStarted = $derived(operation?.state === "succeeded" && MANAGER_OPERATIONS.includes(String(operation?.type || "")));
   const unknown = $derived(!settled && host.operationUnknown);
+  const renamed = $derived(operation?.type === "network.hostname" && operation?.state === "succeeded" ? operation.result || {} : null);
   const icon = $derived(unknown ? "circle-help" : !settled ? "loader" : state.tone === "c-ok" ? "circle-check" : state.tone === "c-idle" ? "circle-minus" : state.tone === "c-warn" ? "triangle-alert" : "circle-x");
 </script>
 
@@ -37,6 +38,9 @@
       </div>
       <span data-testid="operation-outcome"><Status tone={state.tone} text={say(state)} lang={langOf(state)} /></span>
     </div>
+    {#if renamed?.new_url}
+      <p class="note" data-testid="operation-new-address"><Icon name="info" /><span>{t("op.renamedNote")} <a href={renamed.new_url} rel="noopener">{renamed.new_url}</a>{#if renamed.admin_url}{" "}· {t("op.renamedAdmin")} <a href={renamed.admin_url} rel="noopener">{renamed.admin_url}</a>{/if}</span></p>
+    {/if}
     {#if unknown}<p class="note warn" data-testid="operation-unknown"><Icon name="triangle-alert" />{t("op.readFailed")}</p>{/if}
     {#if operation.error?.message}<p class="error" lang="en" data-testid="operation-error">{operation.error.message}</p>{/if}
     {#if managerStarted}<p class="note" data-testid="operation-manager-started"><Icon name="info" /><span>{t("op.managerStartedNote")} <a href={href("updates")}>{t("op.managerLastInstall")}</a></span></p>{/if}

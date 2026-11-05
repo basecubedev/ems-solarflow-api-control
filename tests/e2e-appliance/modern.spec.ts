@@ -878,6 +878,9 @@ test.describe("access, network and diagnostics", () => {
     await page.getByTestId("hostname-input").fill("ems-garage");
     await page.getByTestId("hostname-plan").click();
     await expect(page.getByTestId("plan-dialog")).toContainText("ems-garage");
+    await confirmPlan(page);
+    await settled(page);
+    await expect(page.getByTestId("operation-new-address").locator("a").first()).toHaveAttribute("href", /^http:\/\/ems-garage\.local:/);
   });
 
   test("a WLAN change warns about the disconnect and keeps no passphrase", async ({ page }) => {
