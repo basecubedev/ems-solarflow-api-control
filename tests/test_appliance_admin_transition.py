@@ -481,3 +481,27 @@ def test_the_expiry_ceiling_is_the_admins_own_transition_lifetime():
     from admin.admin_update import DEFAULT_TRANSITION_TTL_SECONDS
 
     assert admin_transition.MAX_TRANSITION_TTL_SECONDS == DEFAULT_TRANSITION_TTL_SECONDS
+
+
+def test_the_refusal_says_when_the_transition_stops_blocking(monkeypatch):
+    """"Clear <path> if it never will" gave no time and asked for a shell the
+    operator of the console may not have."""
+
+    monkeypatch.setenv("TZ", "Europe/Berlin")
+    import time
+
+    time.tzset()
+    try:
+        message = admin_transition.refusal_message(
+            {
+                "path": "/opt/ems/data/admin/transition.json",
+                "stage": "admin_update_pending",
+                "expires_at": "2026-11-05T13:45:00Z",
+            }
+        )
+    finally:
+        monkeypatch.delenv("TZ")
+        time.tzset()
+
+    assert "14:45" in message, message
+    assert "at the latest" in message, message

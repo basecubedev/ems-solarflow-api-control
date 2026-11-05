@@ -204,9 +204,18 @@ def blocks_admin_mutation(record):
 
 
 def refusal_message(record):
+    """Why an Admin operation is refused, and when that ends without a shell."""
+
     stage = record.get("stage") or "an unnamed stage"
+    expires = _expiry(record.get("expires_at"))
+    until = (
+        f" It stops blocking by itself at {expires.astimezone():%H:%M %Z} at the latest."
+        if expires is not None
+        else ""
+    )
     return (
         "the Admin console is replacing itself right now "
-        f"({stage}); this operation would fight it. Wait for that to finish, or "
-        f"clear {record.get('path')} if it never will"
+        f"({stage}); this operation would fight it. Wait for that to finish.{until} "
+        f"With a shell on the appliance, {record.get('path')} can be removed if it "
+        "never will"
     )

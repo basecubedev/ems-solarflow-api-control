@@ -10,7 +10,7 @@
   import { href } from "../app/router.svelte.js";
   import { host, ensure, held } from "../state/host.svelte.js";
   import { detail } from "../state/prefs.svelte.js";
-  import { adminContainer, adminHealth, adminTransitionLive, adminVersion } from "../lib/host.js";
+  import { adminContainer, adminHealth, adminTransitionLive, adminTransitionUntil, adminVersion } from "../lib/host.js";
   import { LIFECYCLE_ACTIONS, adminRepairPlan, adminRollbackPlan, lifecyclePlan } from "../lib/plans.js";
   import { CONTAINER_STATES, word } from "../lib/words.js";
 
@@ -35,7 +35,7 @@
 </script>
 
 {#if live}
-  <p class="callout c-warn span-12" data-testid="admin-transition-live"><Icon name="loader" /><span><strong>{t("admin.transition.title")}</strong> {t("admin.transition.text", { stage: admin.transition?.stage || t("admin.transition.unnamed") })}</span></p>
+  <p class="callout c-warn span-12" data-testid="admin-transition-live"><Icon name="loader" /><span><strong>{t("admin.transition.title")}</strong> {t("admin.transition.text", { stage: admin.transition?.stage || t("admin.transition.unnamed") })}{#if adminTransitionUntil(status)}{" "}{t("admin.transition.until", { time: adminTransitionUntil(status) })}{/if}</span></p>
 {/if}
 
 {#if bootstrap}

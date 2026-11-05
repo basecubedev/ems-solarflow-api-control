@@ -2101,12 +2101,16 @@
 
   function adminTransitionNotice(testId) {
     var transition = (((state.data.status || {}).admin || {}).transition) || {};
+    var expires = new Date(String(transition.expires_at || ""));
+    var until = isNaN(expires.getTime()) ? "" : " It stops blocking by itself at "
+      + String(expires.getHours()).padStart(2, "0") + ":"
+      + String(expires.getMinutes()).padStart(2, "0") + " at the latest.";
     return el("p", { class: "empty-state", "data-test": testId }, [
       el("strong", { text: "The Admin console is replacing itself right now. " }),
       el("span", {
         text: "Installing, rolling back, repairing, starting, stopping and restarting are "
           + "refused until that finishes, because both would write the same deployment files. "
-          + "Stage: " + (transition.stage || "unnamed") + "."
+          + "Stage: " + (transition.stage || "unnamed") + "." + until
       })
     ]);
   }

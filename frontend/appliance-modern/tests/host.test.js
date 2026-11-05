@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { adminContainer, adminGate, adminHealth, adminVersion, dockerCondition, exactDuration, gigabytes, groupByTrack, indexAge, indexAgeWords, latestVerdict, osTiles, securityUpdatesOffered, systemVerdict } from "../src/lib/host.js";
+import { adminContainer, adminGate, adminHealth, adminTransitionUntil, adminVersion, dockerCondition, exactDuration, gigabytes, groupByTrack, indexAge, indexAgeWords, latestVerdict, osTiles, securityUpdatesOffered, systemVerdict } from "../src/lib/host.js";
 import { planBlocked, planFields, vocabularyWords } from "../src/lib/plan.js";
 import { logSources, logSummary } from "../src/lib/logs.js";
 import { errorWords } from "../src/lib/errors.js";
@@ -190,4 +190,14 @@ test("EMS Admin is unknown while the agent cannot say, and missing only when Doc
   assert.deepEqual(adminContainer(withDocker("inactive", { installed: false, container: { state: "missing", health: "none" } })), {});
   assert.deepEqual(adminContainer(withDocker("running", { installed: true, container: { state: "running", health: "healthy" } })), { state: "running", health: "healthy" });
   assert.deepEqual(adminContainer(undefined), {});
+});
+
+test("a live Admin transition names when it stops blocking, in the browser's time", () => {
+  const expires = "2026-11-05T13:45:00Z";
+  const local = new Date(expires);
+  const expected = `${String(local.getHours()).padStart(2, "0")}:${String(local.getMinutes()).padStart(2, "0")}`;
+  assert.equal(adminTransitionUntil({ admin: { transition: { state: "live", expires_at: expires } } }), expected);
+  assert.equal(adminTransitionUntil({ admin: { transition: { state: "live", expires_at: "" } } }), "");
+  assert.equal(adminTransitionUntil({ admin: { transition: { state: "live", expires_at: "soon" } } }), "");
+  assert.equal(adminTransitionUntil({}), "");
 });

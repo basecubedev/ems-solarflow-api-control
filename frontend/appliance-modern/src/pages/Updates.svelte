@@ -16,7 +16,7 @@
   import { forms } from "../state/forms.svelte.js";
   import { detail } from "../state/prefs.svelte.js";
   import { rankedFindings, findingWords } from "../lib/findings.js";
-  import { adminGate, adminVersion, daemonState, dockerCondition, groupByTrack, indexAgeWords, latestVerdict, osTiles, securityUpdatesOffered, systemVerdict, updatesInDoubt } from "../lib/host.js";
+  import { adminGate, adminTransitionUntil, adminVersion, daemonState, dockerCondition, groupByTrack, indexAgeWords, latestVerdict, osTiles, securityUpdatesOffered, systemVerdict, updatesInDoubt } from "../lib/host.js";
   import { MANAGER_OUTCOMES, MANAGER_VERDICTS, applianceNow, latestStableVersion, managerActions, managerOptions, riskyDirection } from "../lib/manager.js";
   import { RECOVERY_ACTIONS, adminInstallPlan, allUpdatesPlan, managerInstallPlan, managerRevertPlan, refreshIndexPlan, repairPlan, securityUpdatesPlan } from "../lib/plans.js";
 
@@ -264,7 +264,7 @@
         <p class="callout c-fault" data-testid="admin-versions-container-missing"><Icon name="triangle-alert" /><span><strong>{t("adminVersions.missing")}</strong> {t("adminVersions.missingText")}</span></p>
       {/if}
       {#if gate === "live"}
-        <p class="callout c-warn" data-testid="admin-versions-transition-live"><Icon name="loader" /><span><strong>{t("admin.transition.title")}</strong> {t("admin.transition.text", { stage: status?.admin?.transition?.stage || t("admin.transition.unnamed") })}</span></p>
+        <p class="callout c-warn" data-testid="admin-versions-transition-live"><Icon name="loader" /><span><strong>{t("admin.transition.title")}</strong> {t("admin.transition.text", { stage: status?.admin?.transition?.stage || t("admin.transition.unnamed") })}{#if adminTransitionUntil(status)}{" "}{t("admin.transition.until", { time: adminTransitionUntil(status) })}{/if}</span></p>
       {/if}
       <div class="split">
         <div class="pane" data-testid="admin-install-version">

@@ -35,6 +35,15 @@ export function adminTransitionLive(status) {
   return ((((status && status.admin) || {}).transition || {}).state) === "live";
 }
 
+/** When a live Admin transition stops blocking by itself, in this browser's time; "" without a usable expiry. */
+export function adminTransitionUntil(status) {
+  const expires = String(((((status && status.admin) || {}).transition) || {}).expires_at || "");
+  const parsed = new Date(expires);
+  if (!expires || Number.isNaN(parsed.getTime())) return "";
+  const pad = (part) => String(part).padStart(2, "0");
+  return `${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`;
+}
+
 /**
  * Which Admin version actions this host can take now: unread, docker (the
  * daemon is down or absent), bootstrap (nothing deployed), missing (the
