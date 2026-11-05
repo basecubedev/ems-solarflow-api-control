@@ -700,6 +700,15 @@ test.describe("EMS Admin", () => {
     await settled(page);
   });
 
+  test("plan buttons wait while another operation holds the appliance", async ({ page, request }) => {
+    await resetAppliance(request, { operation_running: true });
+    await createPassword(page);
+    await open(page, "admin");
+    await expect(page.getByTestId("operation-banner")).toHaveAttribute("data-state", "running");
+    await expect(page.getByTestId("admin-stop")).toBeDisabled();
+    await expect(page.getByTestId("admin-stop")).toHaveAttribute("title", /Waiting for the operation/);
+  });
+
   test("a running operation the appliance stopped answering about is not shown as running", async ({ page, request }) => {
     await resetAppliance(request, { operation_running: true });
     await createPassword(page);
