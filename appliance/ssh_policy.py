@@ -1,23 +1,26 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The one effective-SSH-policy model the appliance judges its accounts by.
 
-``sshd -T -C user=…`` is the only authority for what the running daemon would
-apply, and every consumer — activation, ``backup-access status``,
+``sshd -T -C user=…`` is the only authority for what sshd's configuration
+applies to an account, and every consumer — activation, ``backup-access status``,
 ``host-config`` drift detection and ``verify-install`` — must judge the same
 directives against the same expectations. A second, smaller model somewhere
 would report "confined" for a policy nobody checked.
 
 The backup account is judged by its confinement. The rescue account, whose
 password is printed in this repository, is judged by whether that password
-is refused at all. Both are read back from the daemon, because the drop-in
-the package writes is a promise and only ``sshd`` knows whether it read it.
+is refused at all. Both are read back through ``sshd -T``, because the
+drop-in the package writes is a promise and only ``sshd`` knows whether its
+configuration includes it. ``sshd -T`` parses the files on disk: a daemon
+that was not reloaded since runs what it read before, which is why every
+change here is followed by a reload or restart.
 """
 
 OPTION_CHROOT = "chrootdirectory"
 OPTION_FORCE_COMMAND = "forcecommand"
 
 # The one forced command: generated into the Match block and expected back from
-# the running daemon. A second, shorter definition anywhere would let the
+# sshd -T. A second, shorter definition anywhere would let the
 # generator and the check drift apart without anything failing.
 SFTP_PROGRAM = "internal-sftp"
 DENIED_SFTP_REQUESTS = (
@@ -53,6 +56,16 @@ REQUIRED_RESTRICTIONS = (
     ("permittunnel", "no"),
     ("gatewayports", "no"),
     ("permitopen", "none"),
+    # Unix-socket forwarding and remote listeners, which the TCP settings above
+    # do not cover; DisableForwarding is the one switch for every kind.
+    ("disableforwarding", "yes"),
+    ("allowstreamlocalforwarding", "no"),
+    ("permitlisten", "none"),
+    # The one key source the appliance reads, attributes and withdraws. A
+    # second file, a key command or a user CA would admit keys it never sees.
+    ("authorizedkeysfile", ".ssh/authorized_keys"),
+    ("authorizedkeyscommand", "none"),
+    ("trustedusercakeys", "none"),
 )
 
 VERIFIED_OPTIONS = (OPTION_CHROOT, OPTION_FORCE_COMMAND) + tuple(
@@ -129,7 +142,7 @@ def evaluate_policy(effective, *, export_root):
 
 
 def read_effective_policy(runner, *, user, export_root):
-    """The policy the running daemon would apply to ``user``, evaluated.
+    """The policy sshd's configuration applies to ``user``, evaluated.
 
     Without a connection specification ``sshd -T`` skips every ``Match`` block,
     so the backup account's chroot and forced command are only visible when the
@@ -191,7 +204,7 @@ def evaluate_password_refusal(effective, *, methods=RESCUE_REFUSED_METHODS):
 
 
 def read_password_refusal(runner, *, user, methods=RESCUE_REFUSED_METHODS):
-    """Whether the running daemon refuses ``user`` a password, asked of the daemon.
+    """Whether sshd's configuration refuses ``user`` a password, asked of sshd -T.
 
     A drop-in on disk is a promise. An ``/etc/ssh/sshd_config`` carried over
     from an older install has no ``Include`` line for the drop-in directory,

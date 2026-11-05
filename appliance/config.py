@@ -50,6 +50,7 @@ DEFAULT_SESSION_TIMEOUT = 1800
 DEFAULT_SESSION_ABSOLUTE_MAX = 43200
 DEFAULT_HEALTH_TIMEOUT = 120
 DEFAULT_WIFI_REVERT_TIMEOUT = 90
+DEFAULT_WIFI_CONFIRM_TIMEOUT = 300
 DEFAULT_MIN_FREE_MB = 1024
 # The keyring every signed artifact this appliance installs is verified
 # against. Root-owned, shipped with the package, and never reachable from
@@ -91,6 +92,11 @@ class ApplianceConfig:
     timezone: str = DEFAULT_TIMEZONE
     web_address: str = DEFAULT_WEB_ADDRESS
     web_port: int = DEFAULT_WEB_PORT
+    # Further names the Manager answers to, exactly: a router's DNS name such
+    # as ems-solarflow.fritz.box. Never a suffix, which would reopen DNS
+    # rebinding.
+    extra_host_names: tuple = ()
+    ignored_host_names: tuple = ()
     web_user: str = DEFAULT_WEB_USER
     socket_group: str = DEFAULT_SOCKET_GROUP
     backup_user: str = DEFAULT_BACKUP_USER
@@ -110,6 +116,7 @@ class ApplianceConfig:
     session_absolute_max_seconds: int = DEFAULT_SESSION_ABSOLUTE_MAX
     health_timeout_seconds: int = DEFAULT_HEALTH_TIMEOUT
     wifi_revert_timeout_seconds: int = DEFAULT_WIFI_REVERT_TIMEOUT
+    wifi_confirm_timeout_seconds: int = DEFAULT_WIFI_CONFIRM_TIMEOUT
     minimum_free_megabytes: int = DEFAULT_MIN_FREE_MB
     supported_architectures: tuple = ("arm64",)
     automatic_security_updates: bool = False
@@ -135,7 +142,10 @@ class ApplianceConfig:
 
 
 def _read_ini(path):
-    parser = configparser.ConfigParser()
+    # Values the guides invite an operator to edit: a percent-encoded mirror
+    # URL raised as interpolation, and "yes  # on" was no boolean -- either
+    # stopped the agent and the web service until someone with a shell came.
+    parser = configparser.ConfigParser(interpolation=None, inline_comment_prefixes=("#", ";"))
     text = Path(path).read_text(encoding="utf-8")
     parser.read_string(text)
     if not parser.has_section(SECTION):
@@ -143,14 +153,47 @@ def _read_ini(path):
     return {key: value.strip() for key, value in parser.items(SECTION)}
 
 
-def _as_int(values, key, default):
+def _as_int(values, key, default, *, minimum=1, maximum=None):
     raw = values.get(key)
     if raw in (None, ""):
         return default
     try:
-        return int(raw)
+        number = int(raw)
     except ValueError:
         raise ConfigError("config_value_invalid", f"{key} must be an integer")
+    if number < minimum or (maximum is not None and number > maximum):
+        bounds = f"from {minimum}" + (f" to {maximum}" if maximum is not None else " up")
+        raise ConfigError("config_value_invalid", f"{key} must be a whole number {bounds}")
+    return number
+
+
+def _host_names(values, key):
+    """Exact DNS names, each label RFC 1123, and the entries that are not.
+
+    An address or a wildcard is ignored rather than refused: a refusal stops
+    both the web service and the agent, and a typo would take the console away.
+    """
+
+    import re
+
+    label = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+    names = []
+    ignored = []
+    for raw in re.split(r"[\s,]+", values.get(key) or ""):
+        name = raw.strip().lower().rstrip(".")
+        if not name:
+            continue
+        labels = name.split(".")
+        if (
+            len(name) > 253
+            or len(labels) < 2
+            or not all(label.match(part) for part in labels)
+            or labels[-1].isdigit()
+        ):
+            ignored.append(raw.strip())
+            continue
+        names.append(name)
+    return tuple(names), tuple(ignored)
 
 
 def _as_bool(values, key, default):
@@ -216,6 +259,13 @@ def load_allowed_images(path):
             key = key.strip().lower()
             value = value.strip()
             if key == "expected_source":
+                # Empty would switch the OCI source comparison off.
+                if not value:
+                    raise ConfigError(
+                        "config_value_invalid",
+                        "expected_source names the repository images must come from; it "
+                        "may not be empty",
+                    )
                 expected_source = value
             elif key == "legacy_exempt_tags":
                 legacy.extend(item.strip() for item in value.split(",") if item.strip())
@@ -349,10 +399,13 @@ def load_config(paths):
 
     _backup_user(values)
     _deployment_user(values)
+    extra_host_names, ignored_host_names = _host_names(values, "extra_host_names")
     return ApplianceConfig(
         timezone=chosen_zone or values.get("timezone") or DEFAULT_TIMEZONE,
         web_address=values.get("web_address") or DEFAULT_WEB_ADDRESS,
-        web_port=_as_int(values, "web_port", DEFAULT_WEB_PORT),
+        web_port=_as_int(values, "web_port", DEFAULT_WEB_PORT, maximum=65535),
+        extra_host_names=extra_host_names,
+        ignored_host_names=ignored_host_names,
         web_user=values.get("web_user") or DEFAULT_WEB_USER,
         socket_group=values.get("socket_group") or DEFAULT_SOCKET_GROUP,
         backup_user=DEFAULT_BACKUP_USER,
@@ -366,7 +419,7 @@ def load_config(paths):
         admin_service=values.get("admin_service") or DEFAULT_ADMIN_SERVICE,
         ems_service=values.get("ems_service") or DEFAULT_EMS_SERVICE,
         influx_service=values.get("influx_service") or DEFAULT_INFLUX_SERVICE,
-        admin_port=_as_int(values, "admin_port", DEFAULT_ADMIN_PORT),
+        admin_port=_as_int(values, "admin_port", DEFAULT_ADMIN_PORT, maximum=65535),
         admin_health_path=values.get("admin_health_path") or DEFAULT_ADMIN_HEALTH_PATH,
         session_timeout_seconds=_as_int(values, "session_timeout_seconds", DEFAULT_SESSION_TIMEOUT),
         session_absolute_max_seconds=_as_int(
@@ -376,7 +429,10 @@ def load_config(paths):
         wifi_revert_timeout_seconds=_as_int(
             values, "wifi_revert_timeout_seconds", DEFAULT_WIFI_REVERT_TIMEOUT
         ),
-        minimum_free_megabytes=_as_int(values, "minimum_free_megabytes", DEFAULT_MIN_FREE_MB),
+        wifi_confirm_timeout_seconds=_as_int(
+            values, "wifi_confirm_timeout_seconds", DEFAULT_WIFI_CONFIRM_TIMEOUT, minimum=0
+        ),
+        minimum_free_megabytes=_as_int(values, "minimum_free_megabytes", DEFAULT_MIN_FREE_MB, minimum=0),
         supported_architectures=_as_tuple(values, "supported_architectures", ("arm64",)),
         automatic_security_updates=_as_bool(values, "automatic_security_updates", False),
         release_index_url=values.get("release_index_url") or "",

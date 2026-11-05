@@ -201,7 +201,7 @@ case "$1" in
             # A refusal leaves the confinement unproven, so the account loses
             # its authentication before the failure is reported.
             if ! /usr/lib/ems-appliance-manager/setup-export-root.sh; then
-                /usr/bin/ems-appliance backup-access disable >/dev/null 2>&1 || true
+                /usr/bin/ems-appliance backup-access suspend >/dev/null 2>&1 || true
                 fail "the read-only SFTP export root could not be configured"
             fi
 
@@ -259,6 +259,16 @@ case "$1" in
     abort-upgrade|abort-remove|abort-deconfigure)
         if [ "$1" = "abort-upgrade" ] && { [ -x /bin/systemctl ] || [ -x /usr/bin/systemctl ]; }; then
             systemctl enable ems-appliance-admin-restart-policy.service >/dev/null 2>&1 || true
+        fi
+        # prerm stops and disables the Manager before its last checks, and a
+        # check that fails calls the removal off: the package stays installed
+        # with its console stopped and nothing to start it again at boot.
+        if [ "$1" != "abort-upgrade" ] && live_system; then
+            # shellcheck disable=SC2086
+            systemctl enable $UNITS >/dev/null 2>&1 || true
+            systemctl start ems-appliance-agent.service ems-appliance-web.service \
+                ems-appliance-export.path ems-appliance-export-acl.path >/dev/null 2>&1 \
+                || note "the Manager's services did not all start again; start ems-appliance-web.service by hand"
         fi
         ;;
 esac

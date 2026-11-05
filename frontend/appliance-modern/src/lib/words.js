@@ -9,7 +9,7 @@
 export const CONTAINER_STATES = Object.freeze(["created", "running", "restarting", "exited", "paused", "dead", "removing", "missing"]);
 
 /** The Docker daemon's states (appliance/docker_backend.py DAEMON_*). */
-export const DAEMON_STATES = Object.freeze(["running", "stopped", "unavailable"]);
+export const DAEMON_STATES = Object.freeze(["running", "stopped", "unavailable", "unresponsive"]);
 
 /** NetworkManager's device states, as the network section reports them. */
 export const DEVICE_STATES = Object.freeze(["connected", "connecting", "disconnected", "unavailable", "unmanaged"]);
@@ -19,6 +19,12 @@ export const CONNECTIVITY = Object.freeze(["full", "limited", "portal", "none", 
 
 /** A systemd unit's ActiveState, and "unknown" when systemctl answered nothing (appliance/systemd.py). */
 export const UNIT_STATES = Object.freeze(["active", "inactive", "failed", "activating", "deactivating", "reloading", "unknown"]);
+
+/** A container's Docker health check (appliance/docker_backend.py HEALTH_*). */
+export const HEALTH_STATES = Object.freeze(["healthy", "unhealthy", "starting", "none"]);
+
+/** Whether another package manager holds a lock (appliance/packages.py LOCK_*). */
+export const LOCK_STATES = Object.freeze(["free", "held", "unknown"]);
 
 /** { key } when the value is in the vocabulary, else the value itself as English text. */
 export function word(prefix, vocabulary, value) {

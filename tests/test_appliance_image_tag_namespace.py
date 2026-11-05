@@ -157,10 +157,12 @@ def test_both_release_titles_open_with_the_words_the_install_guide_names():
         if line.strip().startswith("title=")
     ]
 
-    assert len(titles) == 2, (
+    # A build short a board is the one title that must not answer to it.
+    complete = [title for title in titles if not title.startswith("Partial build ")]
+    assert len(complete) == 2, (
         f"expected a title for a tagged build and one for a weekly build, found {titles}"
     )
-    for title in titles:
+    for title in complete:
         assert title.startswith("Appliance image "), (
             f"{title!r} does not open with the words the install guide names"
         )

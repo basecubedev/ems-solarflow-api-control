@@ -34,14 +34,14 @@ pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
     [
         ("0.3.8", version.TRACK_STABLE),
         ("v1.1.0", version.TRACK_STABLE),
-        ("v1.2.0-rc1", version.TRACK_UNSTABLE),
-        ("0.4.0~rc2", version.TRACK_UNSTABLE),
-        ("1.0.0-beta.1", version.TRACK_UNSTABLE),
-        ("0.3.8~test1", version.TRACK_UNSTABLE),
-        ("v1.2.0-dev.7", version.TRACK_UNSTABLE),
-        ("0.4.0~rc1+b2", version.TRACK_UNSTABLE),
-        ("0.0.0~dev", version.TRACK_EXPERIMENTAL),
-        ("0.0.0~dev.abc123", version.TRACK_EXPERIMENTAL),
+        ("v1.2.0-rc1", version.TRACK_RC),
+        ("0.4.0~rc2", version.TRACK_RC),
+        ("1.0.0-beta.1", version.TRACK_RC),
+        ("0.3.8~test1", version.TRACK_RC),
+        ("v1.2.0-dev.7", version.TRACK_RC),
+        ("0.4.0~rc1+b2", version.TRACK_RC),
+        ("0.0.0~dev", version.TRACK_DEVELOPMENT),
+        ("0.0.0~dev.abc123", version.TRACK_DEVELOPMENT),
     ],
 )
 def test_every_version_lands_on_exactly_one_track(text, track):
@@ -50,7 +50,7 @@ def test_every_version_lands_on_exactly_one_track(text, track):
 
 @pytest.mark.parametrize(
     "text",
-    ["", None, "garbage", "latest", "0.3.8+dev1", "0.3.8+local", "0.4.0~", "1.0.0-", "0.3.8.1", "1.2",
+    ["", None, "garbage", "0.3.8+dev1", "0.3.8+local", "0.4.0~", "1.0.0-", "0.3.8.1", "1.2",
      "V0.3.8"],
 )
 def test_a_version_nobody_can_read_is_never_stable(text):
@@ -58,7 +58,7 @@ def test_a_version_nobody_can_read_is_never_stable(text):
     drops what it does not read. The button that installs "the latest stable",
     and the image that bakes one in, must not be pointed at either."""
 
-    assert version.release_track(text) == version.TRACK_EXPERIMENTAL
+    assert version.release_track(text) == version.TRACK_DEVELOPMENT
     assert version.is_stable(text) is False
 
 
@@ -114,8 +114,8 @@ def test_an_admin_release_carries_its_track():
 
     assert listed == {
         "v1.1.0": "stable",
-        "v1.2.0-rc1": "unstable",
-        "v1.2.0-dev.3": "unstable",
+        "v1.2.0-rc1": "rc",
+        "v1.2.0-dev.3": "rc",
     }
 
 
@@ -131,7 +131,7 @@ def test_an_admin_tag_is_grouped_as_the_admin_console_groups_it(tag):
     from admin.releases import _is_release_candidate
 
     appliance = parse_release_index([tag])[0].track
-    admin = "unstable" if _is_release_candidate(tag) else "stable"
+    admin = "rc" if _is_release_candidate(tag) else "stable"
 
     assert appliance == admin
 
@@ -139,7 +139,7 @@ def test_an_admin_tag_is_grouped_as_the_admin_console_groups_it(tag):
 def test_an_index_that_flags_a_plain_tag_as_prerelease_is_not_shown_as_stable():
     target = ReleaseTarget(tag="v1.3.0", channel="exact", prerelease=True)
 
-    assert target.to_dict()["track"] == version.TRACK_UNSTABLE
+    assert target.to_dict()["track"] == version.TRACK_RC
 
 
 def _admin_services(tmp_path, tags):
@@ -207,7 +207,7 @@ def test_the_manager_list_carries_tracks_and_names_the_latest_stable(tmp_path):
 
     tracks = {entry["release_id"]: entry["track"] for entry in listing["releases"]}
     assert tracks == {
-        "ems-appliance-manager-0.0.0-dev.abc1234-arm64": "experimental",
+        "ems-appliance-manager-0.0.0-dev.abc1234-arm64": "development",
         "ems-appliance-manager-0.2.0-arm64": "stable",
         "ems-appliance-manager-0.1.5-arm64": "stable",
     }
@@ -221,7 +221,7 @@ def test_an_index_that_says_nothing_about_a_version_offers_no_latest_stable(tmp_
 
     listing = service.sources()
 
-    assert listing["releases"][0]["track"] == version.TRACK_EXPERIMENTAL
+    assert listing["releases"][0]["track"] == version.TRACK_DEVELOPMENT
     assert listing["latest_stable"] is None
 
 
@@ -392,7 +392,7 @@ def test_a_debian_revision_offered_to_the_manager_is_not_compared(tmp_path):
     entry = [e for e in service.sources()["releases"] if e["described"]["release_version"] == "0.3.8-1"][0]
 
     assert entry["direction"] == version.DIRECTION_UNKNOWN
-    assert entry["track"] == version.TRACK_EXPERIMENTAL
+    assert entry["track"] == version.TRACK_DEVELOPMENT
 
 
 def test_an_uppercase_prefix_is_not_offered_as_the_latest_stable(tmp_path):
@@ -427,8 +427,8 @@ def test_a_package_revision_is_not_ordered_anywhere(offered, installed):
 
 
 def test_a_package_revision_is_experimental_wherever_it_is_grouped():
-    assert version.release_track("0.3.9~rc-1", package=True) == version.TRACK_EXPERIMENTAL
-    assert version.release_track("0.3.9~rc1", package=True) == version.TRACK_UNSTABLE
+    assert version.release_track("0.3.9~rc-1", package=True) == version.TRACK_DEVELOPMENT
+    assert version.release_track("0.3.9~rc1", package=True) == version.TRACK_RC
 
 
 def test_the_manager_plan_does_not_order_a_revision_it_is_running(tmp_path):

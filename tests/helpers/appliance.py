@@ -96,6 +96,12 @@ x11forwarding no
 permittunnel no
 gatewayports no
 permitopen none
+disableforwarding yes
+allowstreamlocalforwarding no
+permitlisten none
+authorizedkeysfile .ssh/authorized_keys
+authorizedkeyscommand none
+trustedusercakeys none
 chrootdirectory {export_root}
 forcecommand internal-sftp -R -P symlink,hardlink,rename,posix-rename,remove,mkdir,rmdir,setstat,fsetstat,lsetstat,fsync,copy-data
 """
@@ -131,16 +137,22 @@ class FakeHost:
                 "journalctl",
                 "apt-get",
                 "dpkg",
+                "dpkg-query",
                 "nmcli",
                 "hostnamectl",
+                "busctl",
+                "systemd-run",
                 "timedatectl",
                 "getent",
                 "sshd",
                 "ss",
                 "chage",
                 "usermod",
+                "loginctl",
             }
         )
+        # Open logind sessions per account, as `loginctl show-user` lists them.
+        self.sessions = {}
         self.docker_running = True
         self.watch_ticks = 0
         self.on_watch_tick = None
@@ -161,7 +173,15 @@ class FakeHost:
         # that wants Trixie's socket activation removes it from here.
         self.absent_units = {"ssh.socket"}
         self.hostname = "ems-solarflow"
+        # What avahi publishes; None answers with this host's own name.
+        self.mdns_published = None
+        self.units_run = []
+        self.unit_output = {}
+        # What dpkg records for the Manager package: (db:Status-Status, Version).
+        self.manager_dpkg = ("installed", INSTALLED_VERSION)
         self.apt_simulation = APT_SIMULATION
+        # What apt-get -s writes to stderr when it fails; it then exits 100.
+        self.apt_simulation_error = ""
         self.apt_exit_code = 0
         self.apt_mirror_unreachable = False
         self.apt_published = None
@@ -182,6 +202,11 @@ class FakeHost:
         self.wifi_profile = "HomeNet"
         self.wifi_device_state = "connected"
         self.wifi_address = "192.168.1.50/24"
+        self.wifi_address6 = ""
+        self.wired_address = ""
+        self.wifi_hwaddr = "B8:27:EB:12:34:56"
+        # nmcli radio: the hardware switch (rfkill) and NetworkManager's own.
+        self.wifi_radio = ("enabled", "enabled")
         self.wifi_gateway = "192.168.1.1"
         self.listening_ports = ""
         self.ss_exit_code = 0
@@ -203,12 +228,13 @@ class FakeHost:
         self.sshd_shell_match = SSHD_SHELL_DISABLED_MATCH
         self.sshd_config_valid = True
         self.reload_failures = set()
+        # Units a disable leaves running: ssh.service restarted by a connection
+        # the socket accepted while it was being taken down.
+        self.disable_sticks = set()
         self.start_refusals = {}
         self.failing_tools = set()
 
-    def write_export_mounts(
-        self, *, read_only=True, names=("config", "backups", "data"), source_for=None
-    ):
+    def write_export_mounts(self, *, read_only=True, names=None, source_for=None):
         """Publish the export binds in the fake ``/proc/1/mountinfo``.
 
         The mount root and the device are what the kernel reports for a bind:
@@ -218,6 +244,7 @@ class FakeHost:
 
         options = "ro,relatime" if read_only else "rw,relatime"
         lines = ["21 1 0:20 / /proc rw,relatime shared:5 - proc proc rw"]
+        names = tuple(self.paths.export_paths()) if names is None else names
         for index, name in enumerate(names):
             target = self.paths.export_root / name
             # Derived from the same map production binds from, never restated
@@ -304,7 +331,9 @@ class FakeHost:
         entry = self.images.get(reference) or self.registry.get(reference) or {}
         self.containers[name] = {
             "Id": "c" * 64,
-            "Image": reference,
+            # Docker's own shape: the image the container was created from, by
+            # id. Config.Image keeps the reference, which a later pull can move.
+            "Image": entry.get("Id") or reference,
             "State": {
                 "Running": state == "running",
                 "Restarting": state == "restarting",
@@ -428,7 +457,9 @@ class FakeHost:
             return self._result("docker", args, 0, json.dumps(payload))
         if args[:2] == ["image", "inspect"]:
             reference = args[-1]
-            payload = self.images.get(reference)
+            payload = self.images.get(reference) or next(
+                (entry for entry in self.images.values() if entry.get("Id") == reference), None
+            )
             if payload is None:
                 return self._result("docker", args, 1, "", "No such image")
             return self._result("docker", args, 0, json.dumps(payload))
@@ -561,7 +592,8 @@ class FakeHost:
             return self._result("systemctl", args, 0)
         if args[:1] == ["disable"]:
             unit = args[-1]
-            self.units.setdefault(unit, {}).update({"active": "inactive", "enabled": "disabled"})
+            active = "active" if unit in self.disable_sticks else "inactive"
+            self.units.setdefault(unit, {}).update({"active": active, "enabled": "disabled"})
             return self._result("systemctl", args, 0)
         if args[:1] == ["start"]:
             unit = args[-1]
@@ -594,13 +626,47 @@ class FakeHost:
             return self._result("systemctl", args, 0)
         return self._result("systemctl", args, 0)
 
+    def _loginctl(self, args):
+        account = args[1] if len(args) > 1 else ""
+        if args[:1] == ["show-user"]:
+            if not self.sessions.get(account):
+                return self._result(
+                    "loginctl", args, 1, "", f"User {account} is not logged in or lingering."
+                )
+            return self._result("loginctl", args, 0, " ".join(self.sessions[account]) + "\n")
+        if args[:1] == ["terminate-user"]:
+            self.sessions.pop(account, None)
+            return self._result("loginctl", args, 0)
+        return self._result("loginctl", args, 1, "", "unsupported")
+
     def _journalctl(self, args):
+        if "--unit" in args and args[args.index("--unit") + 1] in self.unit_output:
+            return self._result("journalctl", args, 0, self.unit_output[args[args.index("--unit") + 1]])
         return self._result("journalctl", args, 0, "journal line one\njournal line two\n")
+
+    def _dpkg_query(self, args):
+        if "ems-appliance-manager" not in args:
+            return self._result("dpkg-query", args, 1, "", "no packages found")
+        status, version = self.manager_dpkg
+        return self._result("dpkg-query", args, 0, f"{status}|{version}")
+
+    def _systemd_run(self, args):
+        """A transient unit: the wrapped tool runs, its output goes to the journal."""
+
+        split = args.index("--")
+        unit = next(arg.partition("=")[2] for arg in args[:split] if arg.startswith("--unit="))
+        tool = Path(args[split + 1]).name
+        result = self.handle(tool, list(args[split + 2 :]))
+        self.units_run.append(unit)
+        self.unit_output[unit] = (result.stdout or "") + (result.stderr or "")
+        return self._result("systemd-run", args, result.returncode, "", "")
 
     # --- packages --------------------------------------------------------
 
     def _apt_get(self, args):
         if args[:1] == ["-s"] or "-s" in args[:2]:
+            if self.apt_simulation_error:
+                return self._result("apt-get", args, 100, "Reading package lists...\n", self.apt_simulation_error)
             return self._result("apt-get", args, 0, self.apt_simulation)
         if "update" in args:
             if self.apt_mirror_unreachable:
@@ -630,7 +696,7 @@ class FakeHost:
             return self._result("dpkg", args, 0, self.dpkg_selections)
         if args[:1] == ["--audit"]:
             return self._result("dpkg", args, 0, self.dpkg_audit)
-        if args[:1] == ["--configure"]:
+        if "--configure" in args:
             self.dpkg_audit = ""
             return self._result("dpkg", args, 0, "Setting up pending packages\n")
         return self._result("dpkg", args, 0)
@@ -648,7 +714,11 @@ class FakeHost:
                 return self._result("nmcli", args, 1, "", "Error: NetworkManager is not running")
             return self._result("nmcli", args, 0, self._device_status())
         if "device show" in joined:
+            if args[-1] != "wlan0":
+                return self._result("nmcli", args, 0, self._wired_device_show())
             return self._result("nmcli", args, 0, self._device_show())
+        if args[-1:] == ["radio"]:
+            return self._result("nmcli", args, 0, ":".join(self.wifi_radio) + "\n")
         if "device wifi list" in joined:
             if not self.nmcli_scan_ok:
                 return self._result("nmcli", args, 1, "", "Error: scan failed")
@@ -683,10 +753,22 @@ class FakeHost:
             "lo:loopback:unmanaged:\n"
         )
 
+    def _wired_device_show(self):
+        """eth0 as the fake reports it: unplugged, with an address only if given one."""
+
+        lines = ["GENERAL.CONNECTION:", "GENERAL.HWADDR:B8:27:EB:00:00:01"]
+        if self.wired_address:
+            lines.append(f"IP4.ADDRESS[1]:{self.wired_address}")
+        return "\n".join(lines) + "\n"
+
     def _device_show(self):
         lines = [f"GENERAL.CONNECTION:{self.wifi_profile}"]
+        if self.wifi_hwaddr:
+            lines.append(f"GENERAL.HWADDR:{self.wifi_hwaddr}")
         if self.wifi_address:
             lines.append(f"IP4.ADDRESS[1]:{self.wifi_address}")
+        if self.wifi_address6:
+            lines.append(f"IP6.ADDRESS[1]:{self.wifi_address6}")
         if self.wifi_gateway:
             lines.append(f"IP4.GATEWAY:{self.wifi_gateway}")
             lines.append(f"IP4.DNS[1]:{self.wifi_gateway}")
@@ -699,6 +781,12 @@ class FakeHost:
             self.hostname = args[1]
             return self._result("hostnamectl", args, 0)
         return self._result("hostnamectl", args, 0, f"{self.hostname}\n")
+
+    def _busctl(self, args):
+        if "GetHostNameFqdn" not in args:
+            return self._result("busctl", args, 1, "", "unknown method")
+        name = self.mdns_published or f"{self.hostname}.local"
+        return self._result("busctl", args, 0, f's "{name}"\n')
 
     def _timedatectl(self, args):
         return self._result(
@@ -908,6 +996,7 @@ def appliance_config(**overrides):
         "ssh_key_accounts": ("ems-backup",),
         "health_timeout_seconds": 1,
         "wifi_revert_timeout_seconds": 1,
+        "wifi_confirm_timeout_seconds": 0,
         "images": AllowedImages(
             repositories=(ADMIN_REPOSITORY,), expected_source=IMAGE_SOURCE
         ),
@@ -928,9 +1017,9 @@ def build_test_services(
 ):
     paths = appliance_paths(tmp_path)
     host = host or FakeHost(paths, root=tmp_path)
-    # A normal host has the EMS directories and their read-only binds; a test
-    # that needs one of them absent removes it explicitly.
-    for source in paths.export_paths().values():
+    # A normal host has the EMS directories and the read-only bind of its
+    # backups; a test that needs one of them absent removes it explicitly.
+    for source in (paths.ems_config_dir, paths.ems_data_dir, *paths.export_paths().values()):
         source.mkdir(parents=True, exist_ok=True)
     host.write_export_mounts()
     clock = clock or FrozenClock()

@@ -118,6 +118,56 @@ def test_the_state_directory_comes_from_the_deployment_not_from_a_guess(tmp_path
     assert str(path) == "/srv/elsewhere/admin/state/pending-transition.json"
 
 
+def test_the_compose_environment_the_container_runs_with_outranks_the_env_file(tmp_path):
+    """The installer bakes the value into the compose file and keeps .env.admin
+    for reference; a value changed in the compose only had the Manager watch a
+    file the Admin never writes."""
+
+    from appliance.admin_deployment import set_service_environment
+
+    services = healthy_appliance(tmp_path)
+    deployment = services.admin.deployment()
+    env_file = services.paths.install_root / ".env.admin"
+    env_file.write_text(
+        env_file.read_text(encoding="utf-8") + "EMS_ADMIN_DATA_DIR=/srv/stale/admin\n",
+        encoding="utf-8",
+    )
+    compose = deployment.compose_file.read_text(encoding="utf-8")
+    deployment.compose_file.write_text(
+        set_service_environment(
+            compose, deployment.service, {"EMS_ADMIN_DATA_DIR": "/srv/current/admin"}
+        ),
+        encoding="utf-8",
+    )
+
+    path = admin_transition.transition_path(services.paths, services.admin.deployment())
+
+    assert str(path) == "/srv/current/admin/state/pending-transition.json"
+
+
+def test_a_compose_value_taken_from_the_env_file_reads_the_env_file(tmp_path):
+    from appliance.admin_deployment import set_service_environment
+
+    services = healthy_appliance(tmp_path)
+    deployment = services.admin.deployment()
+    env_file = services.paths.install_root / ".env.admin"
+    env_file.write_text(
+        env_file.read_text(encoding="utf-8") + "EMS_ADMIN_DATA_DIR=/srv/elsewhere/admin\n",
+        encoding="utf-8",
+    )
+    compose = deployment.compose_file.read_text(encoding="utf-8")
+    deployment.compose_file.write_text(
+        set_service_environment(
+            compose, deployment.service, {"EMS_ADMIN_DATA_DIR": "${EMS_ADMIN_DATA_DIR}"}
+        ),
+        encoding="utf-8",
+    )
+
+    path = admin_transition.transition_path(services.paths, services.admin.deployment())
+
+    assert str(path) == "/srv/elsewhere/admin/state/pending-transition.json"
+
+
 def test_a_deployment_that_names_no_data_dir_falls_back_to_the_shipped_layout(tmp_path):
     services = healthy_appliance(tmp_path)
 
@@ -416,3 +466,153 @@ def test_the_appliance_stands_back_for_exactly_the_stages_admin_calls_unfinished
 
     assert set(admin_transition.FINISHED_STAGES) == set(TERMINAL_TRANSITION_STAGES)
     assert set(admin_transition.FINISHED_STAGES) <= set(VALID_TRANSITION_STAGES)
+
+
+# --- a file the EMS container can write --------------------------------------------
+
+
+def _transition_file(tmp_path):
+    path = tmp_path / "state" / admin_transition.TRANSITION_FILE
+    path.parent.mkdir(parents=True)
+    return path
+
+
+def test_a_fifo_at_the_transition_path_is_unreadable_not_a_hang(tmp_path):
+    """The EMS container mounts this tree read-write. A FIFO there hung every
+    status read and every Admin plan, the plan while it held the Admin lock."""
+
+    import os
+
+    path = _transition_file(tmp_path)
+    os.mkfifo(path)
+
+    assert admin_transition.read_transition(path)["state"] == admin_transition.STATE_UNREADABLE
+
+
+def test_a_link_at_the_transition_path_is_not_followed(tmp_path):
+    """A link to /dev/zero was read as root until memory ran out."""
+
+    path = _transition_file(tmp_path)
+    target = tmp_path / "elsewhere.json"
+    target.write_text(json.dumps(live_transition()), encoding="utf-8")
+    path.symlink_to(target)
+
+    assert admin_transition.read_transition(path)["state"] == admin_transition.STATE_UNREADABLE
+
+
+def test_an_oversized_transition_is_refused_without_reading_it_whole(tmp_path, monkeypatch):
+    import os
+
+    path = _transition_file(tmp_path)
+    path.write_bytes(b"{" + b" " * (4 * admin_transition.MAX_TRANSITION_BYTES) + b"}")
+    read = []
+    real = os.read
+    monkeypatch.setattr(os, "read", lambda fd, n: read.append(n) or real(fd, n))
+    monkeypatch.setattr(type(path), "read_bytes", lambda self: pytest.fail("the whole file was read"))
+
+    assert admin_transition.read_transition(path)["state"] == admin_transition.STATE_UNREADABLE
+    assert sum(read) <= admin_transition.MAX_TRANSITION_BYTES + 1, sum(read)
+
+
+def test_an_expiry_no_admin_would_write_does_not_block_for_ever(tmp_path):
+    """Admin renews its expiry an hour ahead. One years ahead held every
+    Install, Rollback, Repair, Start, Stop and Restart until then."""
+
+    path = _transition_file(tmp_path)
+    path.write_text(json.dumps({**live_transition(), "expires_at": "9999-12-31T00:00:00Z"}), encoding="utf-8")
+
+    record = admin_transition.read_transition(path)
+
+    assert record["state"] == admin_transition.STATE_UNREADABLE
+    assert "9999-12-31" in record["reason"]
+
+
+def test_the_expiry_ceiling_is_the_admins_own_transition_lifetime():
+    from admin.admin_update import DEFAULT_TRANSITION_TTL_SECONDS
+
+    assert admin_transition.MAX_TRANSITION_TTL_SECONDS == DEFAULT_TRANSITION_TTL_SECONDS
+
+
+def test_the_refusal_says_when_the_transition_stops_blocking(monkeypatch):
+    """"Clear <path> if it never will" gave no time and asked for a shell the
+    operator of the console may not have."""
+
+    monkeypatch.setenv("TZ", "Europe/Berlin")
+    import time
+
+    time.tzset()
+    try:
+        message = admin_transition.refusal_message(
+            {
+                "path": "/opt/ems/data/admin/transition.json",
+                "stage": "admin_update_pending",
+                "expires_at": "2026-11-05T13:45:00Z",
+            }
+        )
+    finally:
+        monkeypatch.delenv("TZ")
+        time.tzset()
+
+    assert "14:45" in message, message
+    assert "at the latest" in message, message
+
+
+def _execute_with_transition_starting(services, planned, when):
+    """Execute ``planned``, letting Admin start replacing itself at ``when``."""
+
+    original = getattr(services.admin, when)
+
+    def starting(*args, **kwargs):
+        write_transition(services, live_transition())
+        return original(*args, **kwargs)
+
+    setattr(services.admin, when, starting)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    try:
+        handlers.dispatch(
+            {
+                "operation": "operations.execute",
+                "operation_id": planned["operation"]["operation_id"],
+                "confirmation_token": planned["confirmation_token"],
+            }
+        )
+    except Exception:  # noqa: BLE001 - the record is what is under test
+        pass
+    finally:
+        delattr(services.admin, when)
+    return services.operations.get(planned["operation"]["operation_id"])
+
+
+def test_an_install_stands_back_from_a_transition_that_started_after_its_preflight(tmp_path):
+    """The record was read once when execution began; one that went live while
+    the target was verified was then fought: the Admin stopped and recreated."""
+
+    services = healthy_appliance(tmp_path)
+    services.host.publish_image("v1.1.0")
+    compose_before = services.admin.deployment().compose_file.read_text(encoding="utf-8")
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    planned = handlers.dispatch(
+        {"operation": "admin.plan_install", "channel": "exact", "tag": "v1.1.0"}
+    )
+
+    operation = _execute_with_transition_starting(services, planned, "_record_running_admin")
+
+    assert operation.error["code"] == "admin_transition_in_flight", operation.to_dict()
+    assert operation.result["admin_untouched"] is True
+    assert services.admin.deployment().compose_file.read_text(encoding="utf-8") == compose_before
+    assert services.admin.detect()["container"]["state"] == "running"
+
+
+def test_a_failed_install_does_not_recover_over_a_transition_the_new_admin_started(tmp_path):
+    services = healthy_appliance(tmp_path)
+    services.host.publish_image("v1.1.0", healthy=False)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    planned = handlers.dispatch(
+        {"operation": "admin.plan_install", "channel": "exact", "tag": "v1.1.0"}
+    )
+
+    operation = _execute_with_transition_starting(services, planned, "_verify_admin")
+
+    assert operation.state == "manual_action_required", operation.to_dict()
+    assert operation.stage == "admin_transition_in_flight"
+    assert "nothing was restored" in operation.error["message"]

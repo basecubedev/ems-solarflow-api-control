@@ -27,6 +27,15 @@ ATTEMPTS_NAME = "verify-revert-attempts"
 # The ticks the reverter has spent on the armed deadline: the window is
 # counted in them as well as on a clock this board restores stale at boot.
 TICKS_NAME = "verify-ticks"
+# What the two services were on the last healthy tick. An install is confirmed
+# only by a second healthy tick that finds the same processes, so a unit that
+# restarts every few seconds -- active at almost any single look -- is never.
+STABLE_NAME = "verify-stable"
+# Where the reverter moves the end of the window while the install unit still
+# runs. A file of its own rather than a rewrite of the deadline: the installer
+# retires the deadline on the same ticks, and a rewrite landing after its
+# removal armed a deadline again with no timer left to judge it.
+EXTENDED_NAME = "verify-extended-until"
 REVERTER_NAME = "verify-manager.armed.sh"
 
 # How the reverter asks dpkg what it has, named here so the shell script and the
@@ -184,9 +193,30 @@ def read(paths):
         previous_sha256=str(payload.get("previous_sha256") or ""),
         operation_id=str(payload.get("operation_id") or ""),
         armed_at=int(payload.get("armed_at") or 0),
-        deadline_epoch=int(payload.get("deadline_epoch") or 0),
+        deadline_epoch=max(int(payload.get("deadline_epoch") or 0), _extended_until(paths)),
         window_seconds=int(payload.get("window_seconds") or 0),
     )
+
+
+def _extended_until(paths):
+    try:
+        return int(extended_path(paths).read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return 0
+
+
+def window_open(paths, now):
+    """An armed deadline nothing has judged, inside its window: an install in flight.
+
+    Afterwards -- judged, expired, or a reverter that never ran -- the console
+    hands Update and Revert back, and whatever touches the kept packages may
+    go ahead.
+    """
+
+    deadline = read(paths)
+    if not deadline.armed or read_verdict(paths).settled:
+        return False
+    return int(deadline.deadline_epoch) > int(now)
 
 
 def read_verdict(paths):
@@ -292,7 +322,7 @@ def arm(
     except FileNotFoundError:
         pass
     # A tick or attempt count a previous deadline left behind would shorten this one.
-    for count in (ticks_path(paths), attempts_path(paths)):
+    for count in (ticks_path(paths), attempts_path(paths), stable_path(paths), extended_path(paths)):
         try:
             count.unlink()
         except FileNotFoundError:
@@ -336,6 +366,14 @@ def ticks_path(paths):
     return Path(paths.packages_dir) / TICKS_NAME
 
 
+def stable_path(paths):
+    return Path(paths.packages_dir) / STABLE_NAME
+
+
+def extended_path(paths):
+    return Path(paths.packages_dir) / EXTENDED_NAME
+
+
 def attempts_path(paths):
     """Where the reverter counts its refused reverts. Written only by it.
 
@@ -354,7 +392,7 @@ def disarm(paths, runner):
         pass
     except OSError as exc:
         raise ManagerVerifyError("deadline_not_writable", f"{deadline_path(paths)}: {exc}")
-    for count in (ticks_path(paths), attempts_path(paths)):
+    for count in (ticks_path(paths), attempts_path(paths), stable_path(paths), extended_path(paths)):
         try:
             count.unlink()
         except OSError:
@@ -369,6 +407,8 @@ __all__ = [
     "DPKG_STATE_QUERY",
     "ManagerVerifyError",
     "REVERT_ATTEMPTS",
+    "EXTENDED_NAME",
+    "STABLE_NAME",
     "TICKS_NAME",
     "VerifyDeadline",
     "VerifyVerdict",
@@ -376,9 +416,12 @@ __all__ = [
     "attempts_path",
     "deadline_path",
     "disarm",
+    "extended_path",
     "read",
     "read_verdict",
     "reverter_path",
+    "stable_path",
     "ticks_path",
     "verdict_path",
+    "window_open",
 ]

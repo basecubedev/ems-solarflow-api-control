@@ -38,8 +38,9 @@ plan with an automatic revert:
 05 Save the previously working connection
 06 Apply the new connection
 07 Wait for connectivity
-08 Confirm success
-09 Revert automatically when the connection fails
+08 Wait for somebody signed in to reach the console
+09 Confirm success
+10 Revert automatically when the connection fails or nobody reached it
 ```
 
 Details that matter:
@@ -52,6 +53,17 @@ Details that matter:
   NetworkManager's host-wide connectivity value: with a cable plugged in that
   value reads `full` whatever the radio did, and on a LAN without internet it
   never reads `full` even when the join was perfect.
+- Joining is not success. An address counts only when another device could
+  reach it — a link-local `fe80::` or `169.254.x.x` address does not — and
+  even then the change stays armed until a signed-in request reaches the
+  console after the switch, over the new network or a cable, within
+  `wifi_confirm_timeout_seconds` (300 s by default). A guest network with
+  client isolation, or another subnet, joins perfectly and leaves the console
+  and the EMS's devices out of reach; nobody reaching the console within that
+  time reverts the change with *nobody reached the console*. The page the
+  change was started from keeps polling, so it is enough to keep it open or
+  reopen it under the appliance's address. `0` trusts the join alone. The plan
+  also says that the EMS pauses while the appliance changes networks.
 - Which SSID the device joined is resolved from the **active profile's
   configured SSID**, not from the profile's name. `nmcli device show` reports
   no SSID at all, and a profile may be called anything — rpi-imager writes
@@ -157,8 +169,9 @@ On an appliance image the recovery paths are therefore, in order:
 4. Add your own SSH key through the manager **while it is still reachable**. If
    `ems-shell` is enabled, that is a shell. If it is not, the key still reaches
    `ems-backup` — chroot-confined, read-only, SFTP-only — which retrieves your
-   configuration, data and backups from a box you can otherwise no longer
-   reach, so step 5 costs you nothing.
+   backups from a box you can otherwise no longer reach. Make a fresh backup
+   first if you can (Admin → Backups): the backup account reads the backups,
+   not the live configuration. Then step 5 costs you nothing.
 5. Re-flash. This erases the card: writing the image back replaces the
    operator's configuration, data and on-box backups with a fresh installation.
    The backup in step 4 is not a convenience — it is the only copy.

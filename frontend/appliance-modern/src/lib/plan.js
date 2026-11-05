@@ -2,6 +2,7 @@
 import { CONTAINER_STATES } from "./words.js";
 import { MANAGER_DIRECTIONS } from "./manager.js";
 import { INSTALL_CHANNELS, LIFECYCLE_ACTIONS, REPAIR_ACTIONS } from "./plans.js";
+import { RELEASE_TRACKS } from "./host.js";
 
 /**
  * The plan an owner agrees to before this appliance is changed, read as named
@@ -54,6 +55,9 @@ export const PLAN_FIELD_ORDER = Object.freeze([
  * this list, so a new field is named before an owner meets it.
  */
 export const PLAN_EXTRA_FIELDS = Object.freeze([
+  "track",
+  "currently_revoked",
+  "unparsed_lines",
   "free_space_known",
   "version",
   "installed_version",
@@ -80,6 +84,7 @@ export const PLAN_EXTRA_FIELDS = Object.freeze([
   "timezone",
   "previous_timezone",
   "destination",
+  "removals",
 ]);
 
 /** The fingerprint seals the plan; a mechanism, not a statement about this appliance, so it sits with the digests. */
@@ -111,6 +116,7 @@ const VOCABULARY = Object.freeze({
   direction: (value) => (MANAGER_DIRECTIONS.includes(value) ? `manager.direction.${value}` : null),
   current_state: (value) => (CONTAINER_STATES.includes(value) ? `container.${value}` : null),
   target_channel: (value) => (INSTALL_CHANNELS.includes(value) ? `install.channel.${value}` : null),
+  track: (value) => (RELEASE_TRACKS.includes(value) ? `track.${value}` : null),
   lock_state: () => null,
   security: () => null,
   note: () => null,
@@ -173,4 +179,57 @@ export function planFields(plan, expert) {
 
 export function planBlocked(plan) {
   return ((plan && plan.blockers) || []).length > 0;
+}
+
+/** Acts that can cut this page off, whatever their payload says (appliance/network.py, the power plans). */
+export const DANGER_TYPES = Object.freeze(["network.wifi", "network.hostname", "admin.rollback", "manager.revert", "system.reboot", "system.shutdown"]);
+/** The account a key opens a root shell for (appliance/shell_access.py). */
+export const SHELL_ACCOUNT = "ems-shell";
+
+/**
+ * Red for an act worth a second thought, read off the plan the agent made
+ * rather than off the button that asked: one that can cut the page off, go
+ * back to an older version or open a root login.
+ */
+export function planDanger(plan, options) {
+  if (options && options.danger) return true;
+  const value = plan || {};
+  if (DANGER_TYPES.includes(value.type)) return true;
+  if (value.direction === "downgrade" || value.direction === "revert") return true;
+  return value.type === "ssh.key_add" && value.account === SHELL_ACCOUNT;
+}
+
+/** The lists and objects the dialog draws blocks of its own for. */
+export const PLAN_BLOCK_FIELDS = Object.freeze(["blockers", "findings", "packages", "key", "target", "preserves", "bootstrap", "creates_deployment"]);
+
+const scalar = (value) => value === null || typeof value !== "object";
+
+/**
+ * Every other list or object in a plan, spelled out rather than hidden: a list
+ * of values as one line, a list of records one line each, an object -- an
+ * identity rather than a fact an owner decides on -- in Expert only.
+ */
+export function planBlocks(plan, expert) {
+  return Object.keys(plan || {})
+    .filter((key) => {
+      const value = plan[key];
+      if (scalar(value) || PLAN_BLOCK_FIELDS.includes(key)) return false;
+      if (Array.isArray(value)) return value.length > 0;
+      return expert;
+    })
+    .map((key) => {
+      const value = plan[key];
+      const known = NAMED_FIELDS.includes(key);
+      let lines;
+      if (!Array.isArray(value)) lines = [JSON.stringify(value, null, 2)];
+      else if (value.every(scalar)) lines = [value.join(", ")];
+      else lines = value.map((item) => (scalar(item) ? String(item) : Object.values(item).filter(scalar).join(" · ")));
+      return { key, known, label: key.replace(/_/g, " "), lines, mono: !Array.isArray(value) };
+    });
+}
+
+/** A plan for anything but a stable release is confirmed for this install on its own, in the dialog. */
+export function planNeedsPrereleaseAck(plan) {
+  const track = (plan || {}).track;
+  return Boolean(track) && track !== "stable";
 }

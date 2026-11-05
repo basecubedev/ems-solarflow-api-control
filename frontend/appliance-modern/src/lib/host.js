@@ -9,6 +9,8 @@
 export function dockerCondition(daemonState) {
   if (!daemonState) return "unknown";
   if (daemonState === "running" || daemonState === "unavailable") return daemonState;
+  // Asked and not answered in time: neither running nor stopped.
+  if (daemonState === "unresponsive") return "unknown";
   return "stopped";
 }
 
@@ -33,6 +35,15 @@ export function adminTransitionLive(status) {
   return ((((status && status.admin) || {}).transition || {}).state) === "live";
 }
 
+/** When a live Admin transition stops blocking by itself, in this browser's time; "" without a usable expiry. */
+export function adminTransitionUntil(status) {
+  const expires = String(((((status && status.admin) || {}).transition) || {}).expires_at || "");
+  const parsed = new Date(expires);
+  if (!expires || Number.isNaN(parsed.getTime())) return "";
+  const pad = (part) => String(part).padStart(2, "0");
+  return `${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`;
+}
+
 /**
  * Which Admin version actions this host can take now: unread, docker (the
  * daemon is down or absent), bootstrap (nothing deployed), missing (the
@@ -42,6 +53,8 @@ export function adminGate(status) {
   const admin = (status && status.admin) || {};
   if (admin.installed === undefined) return "unread";
   if (dockerStopped(status)) return "docker";
+  // null: Docker answered but the container could not be inspected.
+  if (admin.installed === null) return "unread";
   if (admin.bootstrap_required) return "bootstrap";
   if (!admin.installed) return "missing";
   if (adminTransitionLive(status)) return "live";
@@ -51,7 +64,7 @@ export function adminGate(status) {
 /** The installed Admin version, or why there is none: unknown, unknownVersion, notInstalled. */
 export function adminVersion(status) {
   const admin = (status && status.admin) || {};
-  if (admin.installed === undefined || (!admin.installed && dockerStopped(status))) return { key: "admin.version.unknown" };
+  if (admin.installed === undefined || admin.installed === null || (!admin.installed && dockerStopped(status))) return { key: "admin.version.unknown" };
   if (admin.version) return { text: admin.version };
   return { key: admin.installed ? "admin.version.unknownVersion" : "admin.version.notInstalled" };
 }
@@ -64,7 +77,7 @@ const UNKNOWN = Object.freeze({ key: "common.unknown", tone: "c-idle" });
  */
 export function adminHealth(status) {
   const value = (status && status.admin) || {};
-  if (value.installed === undefined || (!value.installed && dockerStopped(status))) return UNKNOWN;
+  if (value.installed === undefined || value.installed === null || (!value.installed && dockerStopped(status))) return UNKNOWN;
   if (!value.installed) return { key: "admin.health.missing", tone: "c-warn" };
   return value.healthy ? { key: "admin.health.healthy", tone: "c-ok" } : { key: "admin.health.unhealthy", tone: "c-fault" };
 }
@@ -81,14 +94,19 @@ export function emsContainer(status) {
 }
 
 /** The words and their order are the Admin console's, so a version reads the same on both surfaces. */
-export const RELEASE_TRACKS = Object.freeze(["stable", "unstable", "experimental"]);
+export const RELEASE_TRACKS = Object.freeze(["stable", "rc", "latest", "development"]);
 
-/** An entry without a known track is shown with the least trusted group. */
-export function groupByTrack(items) {
-  return RELEASE_TRACKS.map((track) => ({
-    track,
-    items: (items || []).filter((item) => (RELEASE_TRACKS.includes(item.track) ? item.track : "experimental") === track),
-  })).filter((group) => group.items.length > 0);
+/** Development builds are offered in Expert only, as the owner decided for the Manager. */
+export const EXPERT_TRACKS = Object.freeze(["development"]);
+
+/** An entry without a known track is shown with the least trusted group; Basic leaves the Expert tracks out. */
+export function groupByTrack(items, expert = true) {
+  return RELEASE_TRACKS.filter((track) => expert || !EXPERT_TRACKS.includes(track))
+    .map((track) => ({
+      track,
+      items: (items || []).filter((item) => (RELEASE_TRACKS.includes(item.track) ? item.track : "development") === track),
+    }))
+    .filter((group) => group.items.length > 0);
 }
 
 /** Only an upgrade gets a button: an unknown direction may be the same image. */
@@ -195,4 +213,13 @@ export function exactDuration(seconds) {
   if (total >= 3600 && total % 3600 === 0) return { unit: "hour", count: total / 3600 };
   if (total >= 60 && total % 60 === 0) return { unit: "minute", count: total / 60 };
   return { unit: "second", count: total };
+}
+
+/** The WLAN radio as one word key: off by its hardware switch, off in NetworkManager, on; "" when unknown. */
+export function wifiRadio(network) {
+  const radio = (network && network.wifi_radio) || {};
+  if (radio.hardware === "disabled") return "network.radioOffHardware";
+  if (radio.software === "disabled") return "network.radioOffSoftware";
+  if (radio.hardware === "enabled" && radio.software === "enabled") return "network.radioOn";
+  return "";
 }

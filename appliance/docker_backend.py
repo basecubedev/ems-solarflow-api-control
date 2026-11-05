@@ -10,7 +10,7 @@ shell.
 import json
 from dataclasses import dataclass, field
 
-from appliance.commands import CommandError
+from appliance.commands import CommandError, command_failure_detail
 
 IMAGE_PULL_TIMEOUT = 1800
 UNWATCHED_PULL_TIMEOUT = 600
@@ -19,6 +19,8 @@ PULL_INTERVAL_SECONDS = 30
 DAEMON_RUNNING = "running"
 DAEMON_STOPPED = "stopped"
 DAEMON_UNAVAILABLE = "unavailable"
+# Asked and not answered in time: not "stopped", and a restart is no repair.
+DAEMON_UNRESPONSIVE = "unresponsive"
 
 CONTAINER_MISSING = "missing"
 CONTAINER_RUNNING = "running"
@@ -109,6 +111,8 @@ class DockerBackend:
         result = self.runner.run("docker", ["version", "--format", "{{.Server.Version}}"], timeout=15)
         if result.ok:
             return {"state": DAEMON_RUNNING, "version": result.stdout.strip(), "error": ""}
+        if result.timed_out:
+            return {"state": DAEMON_UNRESPONSIVE, "version": "", "error": "docker_daemon_timeout"}
         return {
             "state": DAEMON_STOPPED,
             "version": "",
@@ -126,9 +130,12 @@ class DockerBackend:
         "No such container" and "the daemon did not answer" are the same exit
         status. Only the first is a state a plan may be made against, so a
         caller that has to tell them apart asks for ``strict`` and gets an
-        error instead of a container that looks absent.
+        error instead of a container that looks absent. A host without Docker
+        has no container at all, which is no unknown state.
         """
 
+        if not self.runner.available("docker"):
+            return ContainerState(name=name)
         result = self.runner.run(
             "docker", ["inspect", "--type", "container", "--format", "{{json .}}", name], timeout=30
         )
@@ -210,9 +217,15 @@ class DockerBackend:
 
     # --- images ----------------------------------------------------------
 
-    def inspect_image(self, reference):
+    def inspect_image(self, reference, *, by=None):
+        """The image ``reference`` names; ``by`` inspects another name for it.
+
+        A container's image id is the one name a later pull cannot move, but it
+        carries no repository: the digest is still chosen for ``reference``'s.
+        """
+
         result = self.runner.run(
-            "docker", ["image", "inspect", "--format", "{{json .}}", reference], timeout=60
+            "docker", ["image", "inspect", "--format", "{{json .}}", by or reference], timeout=60
         )
         if not result.ok:
             return ImageState(reference=reference)
@@ -258,7 +271,7 @@ class DockerBackend:
                 f"{reference} did not finish downloading within {limit // 60} minutes",
             )
         if not result.ok:
-            raise DockerError("image_pull_failed", f"cannot pull {reference}")
+            raise DockerError("image_pull_failed", f"cannot pull {reference}: {command_failure_detail(result)}")
         return result
 
     def save_image(self, reference, path):
@@ -268,7 +281,7 @@ class DockerBackend:
             "docker", ["save", "-o", str(path), reference], timeout=max(self.timeout, 900)
         )
         if not result.ok:
-            raise DockerError("image_save_failed", f"cannot save {reference}")
+            raise DockerError("image_save_failed", f"cannot save {reference}: {command_failure_detail(result)}")
         return result
 
     def load_image(self, path):
@@ -276,7 +289,7 @@ class DockerBackend:
             "docker", ["load", "-i", str(path)], timeout=max(self.timeout, 900)
         )
         if not result.ok:
-            raise DockerError("image_load_failed", f"cannot load {path}")
+            raise DockerError("image_load_failed", f"cannot load {path}: {command_failure_detail(result)}")
         return result
 
     # --- compose ---------------------------------------------------------
@@ -377,6 +390,11 @@ def _repository_digest(reference, digests):
     repository = str(reference).partition("@")[0].rpartition(":")[0] or (
         str(reference).partition("@")[0]
     )
+    # A digest reference names its digest: an image reachable by an index and
+    # a platform digest carries both, and the first one is not the one asked.
+    named = str(reference).partition("@")[2]
+    if named and f"{repository}@{named}" in (str(entry) for entry in digests):
+        return named
     fallback = ""
     for entry in digests:
         name, _, candidate = str(entry).partition("@")

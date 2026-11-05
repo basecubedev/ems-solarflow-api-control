@@ -8,7 +8,7 @@
 | What does the EMS Admin Console manage? | EMS configuration, device discovery, grid meter and inverters, control parameters, EMS runtime state, EMS diagnostics, EMS backup/restore, Guided Setup and Guided Upgrade. |
 | How do I recover a failed Admin update? | [admin-recovery.md](admin-recovery.md) — the appliance rolls back automatically; otherwise use **Preview repair** on the **EMS Admin** page, or **Updates → Choose an EMS Admin version → Previous known-good**. |
 | The appliance will not come up at all | [console-recovery.md](console-recovery.md) — log in as `ems-rescue` at a keyboard, then work down the list. |
-| How do I install a specific Admin version? | [admin-recovery.md](admin-recovery.md) — pick it from the **Stable** or **Unstable** group in **Updates → Choose an EMS Admin version**. |
+| How do I install a specific Admin version? | [admin-recovery.md](admin-recovery.md) — pick it from the **Stable** or **Release candidate** group in **Updates → Choose an EMS Admin version**. |
 | How do I add an SSH key? | [ssh-backup-access.md](ssh-backup-access.md) |
 | How do I back up files with rsync? | rsync is not available: the backup account is SFTP-only by design. Use the `sftp` commands in [ssh-backup-access.md](ssh-backup-access.md). |
 | How do I install OS updates? | [os-updates.md](os-updates.md) |
@@ -199,17 +199,45 @@ static hostname.
 
 The operation's banner at the top of every page shows the stage and offers
 **Cancel** where the operation can still be interrupted. After an agent restart
-an interrupted operation appears as `failed_recoverable` with
-`operation_interrupted` — acknowledge or cancel it, then start again.
+an operation interrupted before it changed anything appears as
+`failed_recoverable` with `operation_interrupted` — retry it, or acknowledge or
+cancel it and start again. One interrupted after it began to change the
+appliance — stopping or recreating the Admin, installing packages, joining a
+WLAN — appears as `manual_action_required` with
+`operation_interrupted_after_change`: check what it left (the Admin page, the
+package state, the network), then plan it anew. A WLAN change that needs a
+passphrase is never retried after a restart, because the passphrase was kept in
+memory only. A reboot
+or shutdown is the exception: once the appliance has come back in a new boot it
+counts as done, even when the agent was stopped before it could record that.
+
+Two kinds of record are closed at the agent's start rather than left to block.
+One in a state this Manager version does not know — left by a newer version
+before a step back — ends as `failed_terminal` with `operation_state_unknown`.
+One that cannot be read at all is renamed to `<id>.json.unreadable` in
+`/var/lib/ems-appliance-manager/agent/operations/`, and the overview says "An
+operation record could not be read" until the agent next starts; the file stays.
 
 ```bash
 sudo ems-appliance operations
 ```
 
+If the card was full when the agent restarted, or when an operation ended, that
+could not be recorded. The agent starts and serves anyway — it used to fail its
+start and be restarted for ever, with no sign-in — and the Overview reports *An
+operation could not be closed*: the operation still holds the appliance. Free
+space on the card; the next operation you plan closes it first. A plan you
+confirm in the meantime is left alone: only a record nothing has written since
+is closed.
+
 ## "operation_conflict"
 
 Another host mutation is still active. Only one runs at a time. Wait for it, or
 cancel it from the operation banner. Read-only pages keep working meanwhile.
+
+A plan cancelled while it was still being made keeps the slot until its planner
+returns: an `apt-get update` or an index fetch it started runs on, and the
+next operation waits rather than running beside it.
 
 ## Admin shows "missing" or "unhealthy"
 
@@ -298,13 +326,13 @@ reported as a success.
 The chosen channel names no version: the list carries no stable release, or
 *Current version (reinstall)* was chosen with nothing installed, or *Previous
 known-good* with no history recorded yet. Pick a version from the **Stable**
-group, or from **Unstable** if this host accepts candidates, or use Expert mode
+group, or from **Release candidate** if this host accepts candidates, or use Expert mode
 and enter an exact release tag.
 
 ## "prerelease_not_allowed"
 
 The chosen version is a release candidate and this host does not accept them.
-Candidates are still listed under **Unstable**, greyed out, and the same refusal
+Candidates are still listed under **Release candidate**, greyed out, and the same refusal
 applies to a candidate tag typed by hand in Expert mode. A version a configured
 release index marks as a pre-release counts as a candidate even when its tag
 carries no pre-release suffix. Set
@@ -329,6 +357,12 @@ next connection is then refused at once. A redirect is followed to
 https only, refused before an http hop is contacted, and the registry's token
 goes to the registry's own host alone: not along a redirect to another host,
 and not to a next page the registry names on one (`release_registry_invalid`).
+
+At most ten pages of 100 tags are read. A registry that still names a next
+page after them is refused as `release_registry_truncated` rather than listed
+in part: GHCR lists the oldest tags first, so a cut list lost the newest
+releases and *Latest stable* resolved to an older Admin without a word. An
+exact tag in Expert mode still installs.
 
 ## "release_index_insecure"
 
@@ -355,8 +389,9 @@ was installed. Check the appliance's connection and plan the update again.
 
 ## "package_lock_held"
 
-Another package manager (`apt`, `unattended-upgrades`) is running. Wait for it
-to finish. The lock is never removed by the appliance.
+Another package manager (`apt`, `dpkg`, or apt-daily refreshing the package
+lists) is running. Wait for it to finish. The lock is never removed by the
+appliance.
 
 ## "dpkg_incomplete"
 
@@ -373,6 +408,12 @@ Ethernet fallback.
 
 **Diagnostics → Create support archive**. It is bounded, redacted and ships a
 manifest of everything it contains. Check the manifest before sharing it.
+
+The console hands over archives up to 5 MB. A larger one fails its operation
+with `support_archive_too_large` and names where it is kept, under
+`/var/lib/ems-appliance-manager/agent/support/`; only a root shell reaches it
+(`ems-shell` with shell access on), not the backup account. The appliance keeps
+the three newest archives and deletes older ones when it makes a new one.
 
 ## Log sources
 
@@ -391,7 +432,7 @@ manifest of everything it contains. Check the manifest before sharing it.
 | `manager_verify` | The deadline that decides whether a manager install stays |
 | `export` | The read-only export mounts for the backup account |
 | `config_seed` | First-boot configuration seeding |
-| `grow_root` | The one-shot root growth on a freshly imaged card |
+| `grow_root` | The one-shot root growth on a freshly imaged card, with growpart's own NOCHANGE/FAILED line; the Overview finding `root_not_grown` points here |
 | `sshd_keys` | The sshd drop-in and host-key generation |
 | `backup_access` | The unit that disables backup access when the export fails |
 | `admin_restart_policy` | The boot unit that gives an older Admin installation its restart policy |

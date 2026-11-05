@@ -729,3 +729,372 @@ def test_an_appliance_with_no_ems_installed_is_not_accused_of_a_stopped_one(tmp_
     codes = [item["code"] for item in services.status.overview()["health"]["warnings"]]
 
     assert "ems_not_running" not in codes
+
+
+# --- a restart no package asked for ---------------------------------------------
+
+
+def _host(tmp_path, *, running, modules, uptime=3600.0):
+    (tmp_path / "proc" / "sys" / "kernel").mkdir(parents=True)
+    (tmp_path / "proc" / "sys" / "kernel" / "osrelease").write_text(running + "\n", encoding="utf-8")
+    (tmp_path / "proc" / "uptime").write_text(f"{uptime} 1.0\n", encoding="utf-8")
+    for name in modules:
+        (tmp_path / "lib" / "modules" / name).mkdir(parents=True)
+    return HostProbe(root=tmp_path, time_fn=lambda: 1_800_000_000.0)
+
+
+def test_a_newer_kernel_of_the_running_flavour_owes_a_restart(tmp_path):
+    """No kernel package on Debian or Raspberry Pi OS writes /run/reboot-required."""
+
+    probe = _host(
+        tmp_path,
+        running="6.18.9+rpt-rpi-v8",
+        modules=["6.18.9+rpt-rpi-v8", "6.18.52+rpt-rpi-v8", "6.18.60+rpt-rpi-2712"],
+    )
+
+    reboot = probe.reboot_required()
+
+    assert reboot["required"] is True
+    assert reboot["packages"] == ["kernel 6.18.52+rpt-rpi-v8"]
+
+
+def test_the_running_kernel_being_the_newest_owes_nothing(tmp_path):
+    probe = _host(
+        tmp_path,
+        running="6.18.52+rpt-rpi-v8",
+        modules=["6.18.9+rpt-rpi-v8", "6.18.52+rpt-rpi-v8", "6.18.60+rpt-rpi-2712"],
+    )
+
+    assert probe.reboot_required() == {"required": False, "packages": []}
+
+
+def test_boot_files_written_since_this_boot_owe_a_restart(tmp_path):
+    import os
+
+    probe = _host(tmp_path, running="6.18.52+rpt-rpi-v8", modules=["6.18.52+rpt-rpi-v8"])
+    boot = tmp_path / "boot" / "firmware"
+    boot.mkdir(parents=True)
+    old = boot / "bcm2710-rpi-3-b-plus.dtb"
+    old.write_bytes(b"dtb")
+    os.utime(old, (1_700_000_000, 1_700_000_000))
+    assert probe.reboot_required()["required"] is False
+
+    fresh = boot / "start.elf"
+    fresh.write_bytes(b"firmware")
+    os.utime(fresh, (1_800_000_000 - 60, 1_800_000_000 - 60))
+
+    assert probe.reboot_required() == {"required": True, "packages": ["boot firmware"]}
+
+
+def test_the_operation_lists_leave_apts_output_to_the_record_itself(tmp_path):
+    """Every two-second poll carried each listed record in full. Twenty-odd
+    update records with apt's output at its clamp passed the client's 8 MiB
+    limit, and the banner and the status page stopped updating."""
+
+    from appliance.operations import STATE_SUCCEEDED
+
+    services = build_test_services(tmp_path)
+    store = services.operations
+    for _ in range(3):
+        operation = store.create("updates.install")
+        store.await_confirmation(operation.operation_id, {})
+        store.confirm(operation.operation_id, store.get(operation.operation_id, include_token=True).confirmation_token)
+        store.finish(operation.operation_id, STATE_SUCCEEDED, result={"scope": "security", "output": "x" * 256 * 1024})
+
+    listed = services.status.operations_state()
+
+    assert len(json.dumps(listed)) < 64 * 1024
+    assert listed["unacknowledged"][0]["result"]["scope"] == "security"
+    assert store.get(operation.operation_id).to_dict()["result"]["output"]
+
+
+# --- the medium the root lives on -------------------------------------------
+
+
+def medium_sections(**medium):
+    return {"system": {"status": "ok", "storage": {}, "medium": medium}}
+
+
+GROWN_SHORT = {
+    "appliance_image": True,
+    "available": True,
+    "fills_medium": False,
+    "medium_supported": True,
+    "medium_mb": 61_000,
+    "root_mb": 8_192,
+    "unused_mb": 52_800,
+}
+
+
+def test_a_root_that_does_not_fill_its_card_is_a_finding(tmp_path):
+    """The growth helper's failure used to show only in its own log."""
+
+    services = build_test_services(tmp_path)
+
+    warnings = services.status._health(medium_sections(**GROWN_SHORT))["warnings"]
+
+    assert [(item["code"], item["severity"], item["section"]) for item in warnings] == [
+        ("root_not_grown", "warning", "diagnostics")
+    ]
+
+
+def test_a_card_below_the_supported_size_is_a_finding(tmp_path):
+    services = build_test_services(tmp_path)
+    medium = {**GROWN_SHORT, "fills_medium": True, "unused_mb": 0, "medium_supported": False}
+
+    codes = [item["code"] for item in services.status._health(medium_sections(**medium))["warnings"]]
+
+    assert codes == ["medium_below_minimum"]
+
+
+@pytest.mark.parametrize(
+    "medium",
+    [
+        {**GROWN_SHORT, "appliance_image": False, "medium_supported": False},
+        {"appliance_image": True, "available": False, "error": "block_layer_unavailable"},
+    ],
+    ids=["not-an-appliance-image", "unreadable"],
+)
+def test_a_medium_nothing_grows_or_nobody_could_read_is_not_judged(tmp_path, medium):
+    """A .deb installation's storage is the owner's; an unread medium is unknown."""
+
+    services = build_test_services(tmp_path)
+
+    assert services.status._health(medium_sections(**medium))["warnings"] == []
+
+
+class LsblkRunner:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def available(self, name):
+        return name == "lsblk"
+
+    def run(self, name, args, timeout=None):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(ok=True, stdout=json.dumps(self.payload))
+
+
+def fake_medium(tmp_path, *, disk_sectors, root_sectors, image_layer="image-rpios"):
+    """A host flashed from an image: its build marker, lsblk and a sysfs tree."""
+
+    from appliance.image_shape import OS_BUILD_MARKER
+
+    marker = tmp_path / OS_BUILD_MARKER
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({"image_layer": image_layer}), encoding="utf-8")
+    disk = tmp_path / "sys" / "block" / "fakedisk"
+    partition = disk / "fakedisk2"
+    partition.mkdir(parents=True)
+    (disk / "size").write_text(f"{disk_sectors}\n")
+    (partition / "partition").write_text("2\n")
+    (partition / "start").write_text("540672\n")
+    (partition / "size").write_text(f"{root_sectors}\n")
+    class_block = tmp_path / "sys" / "class" / "block"
+    class_block.mkdir(parents=True)
+    (class_block / "fakedisk2").symlink_to(partition)
+    (class_block / "fakedisk").symlink_to(disk)
+    return LsblkRunner(
+        {"blockdevices": [{
+            "path": "/dev/fakedisk", "type": "disk", "children": [{
+                "path": "/dev/fakedisk2", "type": "part", "size": root_sectors * 512,
+                "partuuid": "", "partlabel": "", "fstype": "ext4", "mountpoint": "/",
+                "pkname": "/dev/fakedisk", "partn": 2,
+            }],
+        }]}
+    )
+
+
+def test_the_medium_is_read_from_the_partition_mounted_at_root(tmp_path):
+    from appliance.block_probe import BlockProbe
+
+    runner = fake_medium(tmp_path, disk_sectors=125_000_000, root_sectors=16_777_216)
+    state = tmp_path / "state"
+    state.mkdir()
+
+    medium = BlockProbe(root=tmp_path, runner=runner).root_medium(state_dir=state)
+
+    assert medium["appliance_image"] is True
+    assert medium["available"] is True
+    assert medium["fills_medium"] is False
+    assert medium["root_mb"] == 8192
+    assert medium["medium_mb"] == 125_000_000 * 512 // (1024 * 1024)
+    assert medium["medium_supported"] is True
+    assert medium["grown"] is None
+
+
+def test_the_medium_carries_the_last_growth_the_first_boot_recorded(tmp_path):
+    from appliance.block_probe import BlockProbe
+
+    runner = fake_medium(tmp_path, disk_sectors=30_000_000, root_sectors=29_457_000)
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / ".root-grown").write_text(
+        "grown_at=2026-11-04T10:00:00Z\ndisk_bytes=1\noutcome=grown\n", encoding="utf-8"
+    )
+
+    medium = BlockProbe(root=tmp_path, runner=runner).root_medium(state_dir=state)
+
+    assert medium["fills_medium"] is True
+    assert medium["medium_supported"] is True
+    assert medium["grown"] == {"outcome": "grown", "grown_at": "2026-11-04T10:00:00Z"}
+
+
+def test_a_host_not_flashed_from_an_image_is_not_measured(tmp_path):
+    from appliance.block_probe import BlockProbe
+
+    runner = fake_medium(tmp_path, disk_sectors=125_000_000, root_sectors=16_777_216,
+                         image_layer="image-elsewhere")
+
+    assert BlockProbe(root=tmp_path, runner=runner).root_medium(state_dir=tmp_path) == {
+        "appliance_image": False
+    }
+
+
+# --- a support archive that cannot be handed over, and old ones -------------
+
+
+def create_support_archive(handlers, services):
+    planned = handlers.dispatch({"operation": "support.plan_archive"})
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+    operation = services.operations.get(planned["operation"]["operation_id"])
+    services.operations.acknowledge(operation.operation_id)
+    return operation
+
+
+def test_an_archive_too_large_to_hand_over_fails_its_operation_and_says_where_it_is(tmp_path, monkeypatch):
+    """The size was checked only on download, after the operation said it
+    succeeded, and the answer pointed at an SFTP path the archive is not on."""
+
+    from appliance import support_archive
+
+    monkeypatch.setattr(support_archive, "MAX_ARCHIVE_BYTES", 16)
+    services = appliance(tmp_path)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    operation = create_support_archive(handlers, services)
+
+    assert operation.state == "failed_terminal", operation.to_dict()
+    assert operation.error["code"] == "support_archive_too_large"
+    destination = services.paths.support_dir / f"support-{operation.operation_id}.tar.gz"
+    assert str(destination) in operation.error["message"]
+    assert "ems-shell" in operation.error["message"]
+    assert "SFTP" not in operation.error["message"]
+    assert destination.is_file()
+
+
+def test_only_the_newest_support_archives_are_kept(tmp_path):
+    services = appliance(tmp_path)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    made = [create_support_archive(handlers, services) for _ in range(5)]
+
+    kept = sorted(item.name for item in services.paths.support_dir.glob("support-*.tar.gz"))
+    expected = sorted(f"support-{item.operation_id}.tar.gz" for item in made[-3:])
+    assert kept == expected
+
+
+# --- a Docker answer that did not come is not an answer -------------------
+
+
+def test_an_admin_whose_container_could_not_be_inspected_is_not_reported_missing(tmp_path):
+    """docker version answered, docker inspect failed: the container came back
+    absent, and the overview said "No EMS Admin is installed ... repair it"."""
+
+    services = appliance(tmp_path)
+    original = services.host._docker
+
+    def inspect_fails(args):
+        if args[:1] == ["inspect"] and "container" in args:
+            return services.host._result("docker", args, 1, "", "context deadline exceeded")
+        return original(args)
+
+    services.host._docker = inspect_fails
+
+    status = services.status.overview()
+    codes = {item["code"] for item in status["health"]["warnings"]}
+
+    assert "admin_not_installed" not in codes, codes
+    assert "container_state_unknown" in codes, codes
+    assert status["admin"]["bootstrap_required"] is False
+
+
+def test_a_docker_that_answers_too_late_is_not_called_stopped(tmp_path):
+    services = appliance(tmp_path)
+    original = services.host._docker
+
+    def version_times_out(args):
+        if args[:1] == ["version"]:
+            return services.host._result("docker", args, 124, "", "timed out", timed_out=True)
+        return original(args)
+
+    services.host._docker = version_times_out
+
+    status = services.status.overview()
+    codes = {item["code"] for item in status["health"]["warnings"]}
+
+    assert status["docker"]["daemon"]["state"] == "unresponsive"
+    assert "docker_not_running" not in codes, codes
+    assert "docker_unresponsive" in codes, codes
+
+
+def test_a_section_that_failed_says_why_and_logs_it(capsys):
+    """The finding's next step said "read the appliance log for the probe that
+    failed", and nothing logged it: only the exception's class name was kept."""
+
+    from appliance.status import section
+
+    def broken():
+        raise RuntimeError("lsblk said password=hunter2-s3cret and failed")
+
+    payload = section("system", broken)
+
+    assert payload["status"] == "unavailable"
+    assert "lsblk said" in payload["detail"]
+    assert "hunter2-s3cret" not in payload["detail"]
+    logged = capsys.readouterr().err
+    assert "status section system failed" in logged
+    assert "Traceback" in logged
+    assert "hunter2-s3cret" not in logged
+
+
+def test_the_mdns_name_avahi_publishes_is_the_one_shown(tmp_path):
+    """After a name conflict avahi publishes ems-solarflow-2.local; the console
+    kept showing ems-solarflow.local, which may be another appliance."""
+
+    services = appliance(tmp_path)
+    services.host.mdns_published = "ems-solarflow-2.local"
+
+    status = services.status.overview()
+    codes = {item["code"] for item in status["health"]["warnings"]}
+
+    assert status["network"]["mdns"] == "ems-solarflow-2.local", status["network"]
+    assert "mdns_name_taken" in codes, codes
+
+
+def test_the_expected_mdns_name_raises_nothing(tmp_path):
+    services = appliance(tmp_path)
+
+    status = services.status.overview()
+    codes = {item["code"] for item in status["health"]["warnings"]}
+
+    assert status["network"]["mdns"] == "ems-solarflow.local"
+    assert "mdns_name_taken" not in codes
+
+
+def test_a_path_already_under_the_probe_root_is_not_rooted_twice(tmp_path):
+    """In test mode the EMS data tile read a path with the root in it twice."""
+
+    probe = HostProbe(None, root=tmp_path)
+    data = tmp_path / "opt" / "ems" / "data"
+    data.mkdir(parents=True)
+
+    assert probe.filesystem(str(data))["path"] == str(data)
+    assert probe.filesystem("/opt/ems/data")["path"] == str(data)

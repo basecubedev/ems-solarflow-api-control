@@ -152,3 +152,24 @@ class InProcessAgentClient:
 
     def available(self):
         return True
+
+
+def wait_until_settled(client, operation_id, *, timeout, interval=2.0, sleep=None, clock=None):
+    """The operation's record once it has settled, or as last read when ``timeout`` ran out.
+
+    ``operations.execute`` returns as soon as the executor has started: on the
+    agent's own thread, or -- in the console's in-process fallback -- on a
+    daemon thread that dies with the command. A command that says what
+    happened has to wait for it to happen.
+    """
+
+    import time
+
+    sleep = sleep or time.sleep
+    clock = clock or time.monotonic
+    deadline = clock() + timeout
+    while True:
+        record = client.call("operations.get", operation_id=operation_id)["operation"]
+        if record.get("settled") or clock() >= deadline:
+            return record
+        sleep(interval)

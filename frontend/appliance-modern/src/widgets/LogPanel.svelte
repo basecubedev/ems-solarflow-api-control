@@ -46,6 +46,6 @@
 </Card>
 
 <style>
-  .source .input { height: 28px; width: auto; max-width: 220px; }
+  .source .input { height: 28px; width: auto; max-width: 100%; }
   .empty-line { margin: 0; font-size: 13px; }
 </style>

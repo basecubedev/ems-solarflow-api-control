@@ -147,7 +147,15 @@ The last three are **not** under `/etc` on purpose: a packaged copy at
 `/etc/ems-appliance-manager/appliance.conf` would put an operator's edit and a
 package file at the same path, and `dpkg` is entitled to the second.
 `ems-appliance-config-seed.service` creates what is missing from these
-templates, once. The keyring is the exception in the other direction: it is a
+templates, once.
+
+`appliance.conf` is read literally: a `%` is just a percent sign, and a comment
+may follow a value after `#` or `;` (`automatic_security_updates = yes  # on`).
+A port must lie between 1 and 65535 and every timeout must be at least 1, except
+`wifi_confirm_timeout_seconds`, where 0 trusts a WLAN join alone; a
+value outside its range, like a security-relevant one the package does not
+support, stops both services with an error naming the key, so a typo cannot
+quietly change what the appliance does. The keyring is the exception in the other direction: it is a
 trust anchor rather than a setting, so it *is* shipped under `/etc` and a local
 edit must not survive an upgrade that rotates the key.
 
@@ -215,7 +223,7 @@ loaded.
 
 `ems-appliance host-config` (without `--apply`) shows what is configured and
 whether every generated artefact still matches — including the chroot directory
-the running sshd would apply and the path the running watcher follows. Any
+sshd -T reports from its configuration and the path the running watcher follows. Any
 mismatch is drift, and `verify-install` fails on it.
 
 ## What "installed" means
@@ -425,7 +433,11 @@ dpkg --purge ems-appliance-manager
 ```
 
 This checks the package layout, the service accounts, the directory modes and
-that purge removes only appliance state. It is not a substitute for the appliance
+that purge removes only appliance state. Purge keeps the host settings seeded
+under `/etc/ems-appliance-manager` (`appliance.conf`, `allowed-images.conf`,
+`timezone`), so a reinstall finds them; remove the directory by hand for a clean
+start. Removing or purging also retires an armed Manager install deadline, which
+used to outlive the package and judge a stale install after a reinstall. It is not a substitute for the appliance
 tests on a real board — a Pi 3, 4 or 5, whichever image it runs; only the
 hardware covers first boot, reboot persistence and the update paths.
 

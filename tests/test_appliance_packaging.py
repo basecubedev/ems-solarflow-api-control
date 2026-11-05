@@ -753,7 +753,7 @@ def test_a_failed_export_run_disables_backup_authentication():
     export = EXPORT_SERVICE_UNIT.read_text(encoding="utf-8")
     assert "OnFailure=ems-appliance-backup-access-disable.service" in export, export
     assert DISABLE_UNIT.is_file()
-    assert "backup-access disable" in DISABLE_UNIT.read_text(encoding="utf-8")
+    assert "backup-access suspend" in DISABLE_UNIT.read_text(encoding="utf-8")
 
 
 def test_a_successful_export_run_revalidates_backup_access():
@@ -1452,7 +1452,7 @@ def test_the_appliance_ships_no_second_unattended_upgrader():
 def test_the_acl_refresh_units_are_shipped_and_enabled():
     """The pass that makes a new archive readable, without the mount work."""
 
-    from appliance.backup_access import ARCHIVE_SUBDIRECTORY
+    from appliance.paths import export_sources
 
     build = (PACKAGING / "build-deb.sh").read_text(encoding="utf-8")
     postinst = (PACKAGING / "debian" / "postinst").read_text(encoding="utf-8")
@@ -1466,24 +1466,25 @@ def test_the_acl_refresh_units_are_shipped_and_enabled():
     # No ExecStartPost: re-activating the confinement from a watcher races the
     # `backup-access activate` an install is running, which fails the install.
     assert "ExecStartPost" not in service["Service"]
-    assert f"PathChanged=/opt/ems-solarflow/data/{ARCHIVE_SUBDIRECTORY}" in watcher.read_text(
-        encoding="utf-8"
-    )
+    archives = export_sources(Path("/opt/ems-solarflow"))["backups"]
+    assert f"PathChanged={archives}" in watcher.read_text(encoding="utf-8")
 
 
-def test_the_acl_refresh_touches_no_mounts():
-    """Tearing the binds down would cut an SFTP fetch that is in progress."""
+def test_the_acl_refresh_mounts_only_where_nothing_is_mounted_yet():
+    """Tearing a proven bind down would cut an SFTP fetch that is in progress.
+
+    The harness simulates a bind as a link, so a second run over a "mounted"
+    export cannot be exercised there; the order is pinned here instead.
+    """
 
     script = (PACKAGING / "bin" / "setup-export-root.sh").read_text(encoding="utf-8")
-    body = script.split("REFRESH_ACL_ONLY=no", 1)[1]
+    loop = script.split('for name in $EXPORTS; do\n    source_dir=$(export_source "$name")', 1)[1]
 
-    assert '--refresh-acl) REFRESH_ACL_ONLY=yes' in body
-    guarded = [
-        line
-        for line in body.splitlines()
-        if 'if [ "$REFRESH_ACL_ONLY" = yes ]; then' in line
-    ]
-    assert len(guarded) == 2, guarded
+    proven = loop.index('if mount_proves "$target_dir" "$identity"; then')
+    refresh = loop.index('if [ "$REFRESH_ACL_ONLY" = yes ]; then\n        REFRESH_RECORD=yes')
+    assert proven < refresh
+    assert 'if [ "$REFRESH_ACL_ONLY" != yes ]; then\n    for name in $RETIRED_EXPORTS' in script
+    assert '--refresh-acl) REFRESH_ACL_ONLY=yes' in script
 
 
 def test_removal_takes_the_acl_units_with_it():
@@ -1493,3 +1494,149 @@ def test_removal_takes_the_acl_units_with_it():
     assert "ems-appliance-export-acl.path" in prerm
     assert "ems-appliance-export-acl.service" in prerm
     assert "ems-appliance-export-acl.path.d" in postrm
+
+
+# --- a removal that is called off, and one that goes through -------------------
+
+
+def _maintainer_tools(tmp_path, *, teardown_ok):
+    import os
+
+    tools = tmp_path / "tools"
+    libdir = tmp_path / "lib"
+    tools.mkdir()
+    libdir.mkdir()
+    log = tmp_path / "calls.log"
+    scripts = {
+        tools / "systemctl": f'echo "systemctl $*" >> "{log}"\nexit 0\n',
+        tools / "sshd": "exit 1\n",
+        tmp_path / "ems-appliance": f'echo "ems-appliance $*" >> "{log}"\nexit 0\n',
+        libdir / "setup-export-root.sh": f'echo "setup-export-root $*" >> "{log}"\nexit {0 if teardown_ok else 1}\n',
+    }
+    for path, body in scripts.items():
+        path.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+        path.chmod(0o755)
+    packages = tmp_path / "packages"
+    packages.mkdir()
+    environment = {
+        **os.environ,
+        "PATH": f"{tools}:{os.environ['PATH']}",
+        "EMS_APPLIANCE_BIN": str(tmp_path / "ems-appliance"),
+        "EMS_APPLIANCE_LIBDIR": str(libdir),
+        "EMS_APPLIANCE_PACKAGES_DIR": str(packages),
+    }
+    return environment, log, packages
+
+
+@pytest.mark.skipif(
+    not Path("/run/systemd/system").is_dir(),
+    reason="postinst restarts units only on a host that runs systemd",
+)
+def test_a_removal_called_off_starts_the_manager_again(tmp_path):
+    import subprocess
+
+    environment, log, _ = _maintainer_tools(tmp_path, teardown_ok=False)
+    removed = subprocess.run(
+        ["sh", str(PACKAGING / "debian" / "prerm"), "remove"],
+        env=environment, capture_output=True, text=True, timeout=60,
+    )
+    assert removed.returncode == 1, removed.stderr
+    assert "systemctl stop ems-appliance-web.service" in log.read_text(encoding="utf-8")
+
+    aborted = subprocess.run(
+        ["sh", str(PACKAGING / "debian" / "postinst"), "abort-remove"],
+        env=environment, capture_output=True, text=True, timeout=60,
+    )
+
+    assert aborted.returncode == 0, aborted.stderr
+    calls = log.read_text(encoding="utf-8")
+    assert "systemctl enable ems-appliance-config-seed.service ems-appliance-agent.service" in calls
+    assert "systemctl start ems-appliance-agent.service ems-appliance-web.service" in calls
+
+
+def test_a_removal_retires_the_install_deadline(tmp_path):
+    import subprocess
+
+    from appliance import manager_verify
+
+    environment, log, packages = _maintainer_tools(tmp_path, teardown_ok=True)
+    names = (
+        manager_verify.DEADLINE_NAME,
+        manager_verify.ATTEMPTS_NAME,
+        manager_verify.TICKS_NAME,
+        manager_verify.STABLE_NAME,
+        manager_verify.EXTENDED_NAME,
+        manager_verify.REVERTER_NAME,
+    )
+    for name in names:
+        (packages / name).write_text("x\n", encoding="utf-8")
+
+    removed = subprocess.run(
+        ["sh", str(PACKAGING / "debian" / "prerm"), "remove"],
+        env=environment, capture_output=True, text=True, timeout=60,
+    )
+
+    assert removed.returncode == 0, removed.stderr
+    assert [name for name in names if (packages / name).exists()] == []
+    assert f"systemctl disable --now {manager_verify.VERIFY_TIMER}" in log.read_text(encoding="utf-8")
+
+
+def test_prerm_names_the_directory_the_agent_keeps_the_deadline_in():
+    from appliance import paths as appliance_paths
+
+    installed = appliance_paths.AppliancePaths(
+        install_root=Path(appliance_paths.DEFAULT_INSTALL_ROOT),
+        config_dir=Path(appliance_paths.DEFAULT_CONFIG_DIR),
+        state_dir=Path(appliance_paths.DEFAULT_STATE_DIR),
+        log_dir=Path(appliance_paths.DEFAULT_LOG_DIR),
+        runtime_dir=Path(appliance_paths.DEFAULT_RUNTIME_DIR),
+    )
+    prerm = (PACKAGING / "debian" / "prerm").read_text(encoding="utf-8")
+    assert f"PACKAGES=${{EMS_APPLIANCE_PACKAGES_DIR:-{installed.packages_dir}}}" in prerm
+
+
+def test_every_dpkg_configure_the_appliance_runs_keeps_an_edited_conffile():
+    """Run with stdin on /dev/null, a conffile prompt ends in "EOF on stdin": the
+    cure the installer and the deadline depend on then fails for good."""
+
+    for name in ("install-manager.sh", "verify-manager.sh"):
+        script = (PACKAGING / "bin" / name).read_text(encoding="utf-8")
+        calls = [
+            line.strip()
+            for line in script.splitlines()
+            if not line.lstrip().startswith("#") and line.strip().startswith("dpkg ") and "--configure" in line
+        ]
+        assert calls, name
+        assert all("--force-confold" in call for call in calls), (name, calls)
+
+
+def test_the_package_and_its_units_suspend_backup_access_and_never_revoke_it():
+    """`disable` records an operator's intent that only `enable` ends. The
+    package's own fail-closed steps must not leave that behind, or the backup
+    account would stay off after any failed export or removal."""
+
+    callers = {
+        "debian/prerm": (PACKAGING / "debian" / "prerm").read_text(encoding="utf-8"),
+        "debian/postinst": (PACKAGING / "debian" / "postinst").read_text(encoding="utf-8"),
+        "ems-appliance-backup-access-disable.service": (
+            PACKAGING / "systemd" / "ems-appliance-backup-access-disable.service"
+        ).read_text(encoding="utf-8"),
+    }
+
+    for name, text in callers.items():
+        calls = [line for line in text.splitlines() if "backup-access " in line and not line.lstrip().startswith("#")]
+        assert calls, name
+        assert not [line for line in calls if "backup-access disable" in line], (name, calls)
+
+
+def test_a_blank_expected_source_is_refused_not_a_switched_off_check(tmp_path):
+    """An empty value overrode the default with "", and validate_oci_labels then
+    skipped the source comparison: a typo failed open."""
+
+    from appliance.config import ConfigError
+
+    conf = tmp_path / "allowed-images.conf"
+    conf.write_text("ghcr.io/basecubedev/ems-solarflow-admin\nexpected_source =\n", encoding="utf-8")
+
+    with pytest.raises(ConfigError):
+        load_allowed_images(conf)

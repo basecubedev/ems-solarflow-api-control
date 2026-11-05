@@ -784,6 +784,16 @@ def probe_checkout(
     )
     findings.append(identity_finding)
 
+    stray = _sourceless_bytecode(root)
+    bytecode_finding = Finding(
+        "bytecode",
+        FAIL if stray else PASS,
+        "bytecode Python imports without a source, outside the tree hash: " + ", ".join(stray[:5])
+        if stray
+        else "none outside __pycache__",
+    )
+    findings.append(bytecode_finding)
+
     dependencies = probe_dependencies(
         root, lock, which=which, package_query=package_query
     )
@@ -793,6 +803,8 @@ def probe_checkout(
         # A tree that named itself correctly and then changed is a different
         # failure from a tree that could never say what it was.
         reason = identity_reason or REASON_SOURCE_UNVERIFIED
+    elif bytecode_finding.result == FAIL:
+        reason = REASON_SOURCE_MODIFIED
     elif any(finding.result == FAIL for finding in findings):
         reason = REASON_INCOMPATIBLE
     elif missing:
@@ -1093,6 +1105,25 @@ def tree_manifest(root, *, exclude=(SOURCE_IDENTITY_NAME,)):
         else:
             entries.append({"path": relative, "type": "other", "mode": mode})
     return entries
+
+
+def _sourceless_bytecode(root):
+    """Bytecode outside ``__pycache__``, which no tree hash here covers.
+
+    A cache under ``__pycache__`` is read only through its own source, and the
+    build runs with a cache prefix outside the tree, so it is never read at
+    all. A ``.pyc`` beside the sources is imported as a module in its own
+    right, so a planted one would run without anything that was proven.
+    """
+
+    base = Path(root)
+    found = []
+    for path in base.rglob("*.py[co]"):
+        relative = path.relative_to(base)
+        if ".git" in relative.parts or path.parent.name == "__pycache__":
+            continue
+        found.append(str(relative))
+    return sorted(found)
 
 
 def _outside_the_tree_manifest(relative, skipped):

@@ -16,11 +16,14 @@ set -e
 
 BIN=${EMS_APPLIANCE_BIN:-/usr/bin/ems-appliance}
 LIBDIR=${EMS_APPLIANCE_LIBDIR:-/usr/lib/ems-appliance-manager}
+# Where the agent keeps the Manager install deadline: appliance/paths.py's
+# packages_dir, pinned to it by a test.
+PACKAGES=${EMS_APPLIANCE_PACKAGES_DIR:-/var/lib/ems-appliance-manager/agent/packages}
 
 case "$1" in
     remove|deconfigure)
         disabled=0
-        if [ -x "$BIN" ] && "$BIN" backup-access disable >/dev/null 2>&1; then
+        if [ -x "$BIN" ] && "$BIN" backup-access suspend >/dev/null 2>&1; then
             disabled=1
         fi
         if [ "$disabled" -eq 0 ] && [ -x "$LIBDIR/backup-account.sh" ]; then
@@ -69,6 +72,19 @@ case "$1" in
             echo "  removal again. The backup account's authentication is already disabled." >&2
             exit 1
         fi
+
+        # A deadline armed for an install has nothing left to judge once the
+        # package is gone. Its timer's enablement outlived the removal, so the
+        # next boot of a reinstalled Manager judged a stale deadline -- and put
+        # the old previous.deb over the fresh package -- or, after a purge, ran a
+        # missing snapshot every minute. Retired here, after the last step that
+        # can still call the removal off.
+        if [ -x /bin/systemctl ] || [ -x /usr/bin/systemctl ]; then
+            systemctl disable --now ems-appliance-manager-verify.timer >/dev/null 2>&1 || true
+        fi
+        rm -f "$PACKAGES/verify-deadline.json" "$PACKAGES/verify-revert-attempts" \
+              "$PACKAGES/verify-ticks" "$PACKAGES/verify-stable" \
+              "$PACKAGES/verify-extended-until" "$PACKAGES/verify-manager.armed.sh"
 
         if command -v sshd >/dev/null 2>&1 && sshd -t >/dev/null 2>&1; then
             # A daemon started from ssh.socket exits on a reload: it binds port

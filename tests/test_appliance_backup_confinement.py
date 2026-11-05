@@ -93,6 +93,12 @@ def test_a_compliant_match_block_confirms_every_promised_restriction(tmp_path):
         "x11forwarding",
         "permittunnel",
         "gatewayports",
+        "disableforwarding",
+        "allowstreamlocalforwarding",
+        "permitlisten",
+        "authorizedkeysfile",
+        "authorizedkeyscommand",
+        "trustedusercakeys",
     ):
         assert policy["restrictions"][option]["confirmed"] is True, option
 
@@ -108,6 +114,14 @@ def test_a_compliant_match_block_confirms_every_promised_restriction(tmp_path):
         ("x11forwarding", "yes"),
         ("permittunnel", "yes"),
         ("gatewayports", "yes"),
+        # Unix-socket forwarding: AllowTcpForwarding and PermitOpen do not cover it.
+        ("disableforwarding", "no"),
+        ("allowstreamlocalforwarding", "yes"),
+        ("permitlisten", "any"),
+        # Key sources other than the one file the appliance reads and withdraws.
+        ("authorizedkeysfile", ".ssh/authorized_keys .ssh/authorized_keys2"),
+        ("authorizedkeyscommand", "/usr/local/bin/keys"),
+        ("trustedusercakeys", "/etc/ssh/user-ca.pub"),
     ],
 )
 def test_one_relaxed_restriction_breaks_the_confinement(tmp_path, option, value):
@@ -295,7 +309,7 @@ def test_a_fully_verified_status_may_promise_the_restrictions(tmp_path, producti
 # --- authentication follows the complete confinement ------------------------
 
 
-def seed_exports(services, *, names=("config", "backups", "data"), read_only=True):
+def seed_exports(services, *, names=("backups",), read_only=True):
     import shutil
 
     for name, source in services.paths.export_paths().items():
@@ -319,9 +333,9 @@ def test_activation_needs_the_export_mounts_not_only_the_ssh_policy(tmp_path, pr
 
 def test_an_unmounted_export_disables_backup_authentication(tmp_path):
     services = appliance(tmp_path)
-    for name in ("config", "backups", "data"):
-        (services.paths.install_root / name).mkdir(parents=True, exist_ok=True)
-    services.host.write_export_mounts(names=("config", "backups"))
+    for source in services.paths.export_paths().values():
+        source.mkdir(parents=True, exist_ok=True)
+    services.host.write_export_mounts(names=())
 
     report = activation(services).activate()
 
@@ -343,9 +357,7 @@ def test_a_read_write_export_disables_backup_authentication(tmp_path):
 def test_a_foreign_source_at_an_export_target_disables_backup_authentication(tmp_path):
     services = appliance(tmp_path)
     seed_exports(services)
-    services.host.write_export_mounts(
-        source_for=lambda name: "/etc" if name == "config" else services.paths.install_root / name
-    )
+    services.host.write_export_mounts(source_for=lambda name: "/etc")
 
     report = activation(services).activate()
 
@@ -367,12 +379,12 @@ def test_an_unmanaged_entry_in_the_export_root_disables_backup_authentication(tm
 
 def test_a_missing_ems_directory_stays_pending_and_still_activates(tmp_path, production_chroot_chain):
     services = appliance(tmp_path)
-    seed_exports(services, names=("config", "backups"))
+    seed_exports(services, names=())
 
     report = activation(services).activate()
 
     assert report["state"] == STATE_ACTIVE, report
-    assert "data" in report["exports"]["pending"], report["exports"]
+    assert "backups" in report["exports"]["pending"], report["exports"]
 
 
 # --- key-file conflicts are never resolved by discarding a key --------------
@@ -424,24 +436,23 @@ def test_the_status_reports_the_mounted_source_identity(tmp_path):
 
     status = services.backup.status()
 
-    config = next(item for item in status["paths"] if item["name"] == "config")
-    assert config["mounted_source"] == mount_root_of(services.paths.install_root / "config"), config
-    assert config["path"] == str(services.paths.install_root / "config"), config
-    assert config["source_verified"] is True, config
+    source = services.paths.export_paths()["backups"]
+    backups = next(item for item in status["paths"] if item["name"] == "backups")
+    assert backups["mounted_source"] == mount_root_of(source), backups
+    assert backups["path"] == str(source), backups
+    assert backups["source_verified"] is True, backups
 
 
 def test_a_foreign_read_only_mount_is_not_reported_as_confined(tmp_path):
     services = appliance(tmp_path)
     seed_exports(services)
-    services.host.write_export_mounts(
-        source_for=lambda name: "/etc" if name == "config" else services.paths.install_root / name
-    )
+    services.host.write_export_mounts(source_for=lambda name: "/etc")
 
     status = services.backup.status()
 
     assert status["confined"] is False, status["export_access"]
-    config = next(item for item in status["paths"] if item["name"] == "config")
-    assert config["source_verified"] is False, config
+    backups = next(item for item in status["paths"] if item["name"] == "backups")
+    assert backups["source_verified"] is False, backups
 
 
 # --- the forced command is the confinement, not its first word --------------
@@ -549,16 +560,12 @@ def test_a_forced_command_without_the_read_only_flag_is_refused(tmp_path):
     assert policy["restrictions"]["forcecommand"]["confirmed"] is False, policy
 
 
-def test_the_advertised_command_names_where_backups_actually_are(tmp_path):
-    """``/backups`` is a known-empty export and cannot simply be repointed.
+def test_the_backups_export_is_where_ems_writes_its_archives(tmp_path):
+    """The one export, and the command on screen, name the directory EMS writes.
 
-    ``ems/backup.py`` writes ``data/backups``, which lives inside the ``data``
-    export -- and ``setup-export-root.sh`` grants ACLs recursively per source,
-    so exporting both makes the first run's own grant look pre-existing to the
-    second and the transaction stops being idempotent. The archives are
-    reachable through ``data``; what has to be true is the command the appliance
-    puts on screen, which used to send the owner to the empty one and report
-    nothing when it came back with nothing.
+    ``/backups`` once published an install-root directory nothing wrote to, and
+    the command on screen came back empty and said nothing. The appliance may
+    not import ``ems``, so this pins the two names to each other.
     """
 
     from ems.backup import DEFAULT_BACKUP_DIR_NAME
@@ -569,8 +576,11 @@ def test_the_advertised_command_names_where_backups_actually_are(tmp_path):
         for entry in services.backup.examples("ems-backup", "ems-solarflow.local")
     )
 
-    assert "/" + DEFAULT_BACKUP_DIR_NAME in commands, commands
-    assert ":/backups " not in commands, "still sends the owner to the empty export"
+    assert services.paths.export_paths() == {
+        "backups": services.paths.install_root / DEFAULT_BACKUP_DIR_NAME
+    }
+    assert ":/backups " in commands, commands
+    assert ":/config" not in commands and ":/data" not in commands, commands
 
 
 # --- whether the account can read what is exported --------------------------
@@ -581,7 +591,7 @@ def exported_file(services, name, mode):
 
     import os
 
-    source = services.paths.export_paths()[name] / "backups"
+    source = services.paths.export_paths()[name]
     source.mkdir(parents=True, exist_ok=True)
     target = source / "ems-config-manual-20260922.tar.gz"
     handle = os.open(target, os.O_WRONLY | os.O_CREAT, mode)
@@ -607,20 +617,20 @@ def test_an_export_whose_newest_file_the_account_cannot_read_is_degraded(tmp_pat
     """
 
     services = appliance(tmp_path)
-    exported_file(services, "data", 0o600)
+    exported_file(services, "backups", 0o600)
 
     access = services.backup.export_access()
 
     assert access["status"] == "degraded", access
     assert services.config.backup_user in access["detail"], access["detail"]
-    assert "data" in access["unreadable"], access
+    assert "backups" in access["unreadable"], access
 
 
 def test_an_export_whose_files_carry_a_group_read_bit_is_not_degraded(tmp_path):
     """0640 leaves a non-empty mask, so the grant is effective."""
 
     services = appliance(tmp_path)
-    exported_file(services, "data", 0o640)
+    exported_file(services, "backups", 0o640)
 
     access = services.backup.export_access()
 
@@ -629,30 +639,142 @@ def test_an_export_whose_files_carry_a_group_read_bit_is_not_degraded(tmp_path):
 
 def test_an_export_with_nothing_in_it_yet_is_not_called_unreadable(tmp_path):
     services = appliance(tmp_path)
-    services.paths.export_paths()["data"].mkdir(parents=True, exist_ok=True)
+    services.paths.export_paths()["backups"].mkdir(parents=True, exist_ok=True)
 
     access = services.backup.export_access()
 
     assert access["unreadable"] == [], access
 
 
-def test_a_private_file_outside_the_archive_path_is_not_a_fault(tmp_path):
-    """The shared password store lives under `config` at 0600 on purpose.
+def test_the_live_configuration_is_not_exported_at_all(tmp_path):
+    """Owner decision 2026-11-04: backups over SFTP, the live configuration not.
 
-    Reporting that as "exported files are not readable" would say the appliance
-    is broken for doing the right thing, and would bury the one case that
-    matters: the archive an operator was just told exists.
+    The password hash in config/dashboard-auth.json opens the Manager and,
+    through it, root; a backup key may read archives and nothing the running
+    EMS holds.
     """
 
-    import os
+    services = appliance(tmp_path)
+
+    exported = list(services.paths.export_paths().values())
+
+    assert services.paths.ems_config_dir not in exported
+    assert services.paths.ems_data_dir not in exported
+    assert all(services.paths.ems_config_dir not in path.parents for path in exported)
+
+
+# --- an operator's "off" stays off ------------------------------------------------
+
+
+def test_an_operator_revocation_survives_every_activation(tmp_path, production_chroot_chain):
+    """`backup-access disable` recorded no intent: the next boot, Admin compose
+    write, shell toggle or package install ran activate, which took the key
+    file back -- a key from a stolen laptop logged in again."""
 
     services = appliance(tmp_path)
-    source = services.paths.export_paths()["config"]
-    source.mkdir(parents=True, exist_ok=True)
-    handle = os.open(source / "dashboard-auth.json", os.O_WRONLY | os.O_CREAT, 0o600)
-    os.close(handle)
+    assert activation(services).activate()["state"] == STATE_ACTIVE
 
-    access = services.backup.export_access()
+    off = activation(services).revoke()
+    assert off["authentication_disabled"] is True
+    report = activation(services).activate()
 
-    assert access["unreadable"] == [], access
-    assert access["status"] == "configured", access
+    assert report["state"] == STATE_UNAVAILABLE, report
+    assert report["reason"] == "revoked_by_operator"
+    assert not keys(services).exists()
+    assert disabled_keys(services).exists()
+
+
+def test_only_an_explicit_reinstatement_ends_a_revocation(tmp_path, production_chroot_chain):
+    services = appliance(tmp_path)
+    activation(services).activate()
+    activation(services).revoke()
+
+    report = activation(services).reinstate()
+
+    assert report["state"] == STATE_ACTIVE, report
+    assert keys(services).exists()
+
+
+def test_a_fail_closed_suspension_is_still_lifted_by_the_next_good_activation(tmp_path, production_chroot_chain):
+    """What the package and the export unit do on failure is no operator's
+    decision, and a recovered export takes the account back on its own."""
+
+    services = appliance(tmp_path)
+    activation(services).activate()
+    activation(services).disable(reason="requested")
+
+    assert activation(services).activate()["state"] == STATE_ACTIVE
+
+
+def test_a_revocation_the_card_has_no_room_to_record_still_withdraws_access(tmp_path, production_chroot_chain, monkeypatch):
+    """The flag was written first, and a full card raised before anything was
+    withdrawn: the key of a stolen laptop stayed active."""
+
+    import errno
+
+    from appliance import backup_confinement
+
+    services = appliance(tmp_path)
+    activation(services).activate()
+    monkeypatch.setattr(
+        backup_confinement, "atomic_write", lambda *a, **k: (_ for _ in ()).throw(OSError(errno.ENOSPC, "full"))
+    )
+
+    report = activation(services).revoke()
+
+    assert report["authentication_disabled"] is True
+    assert report["revocation_recorded"] is False
+    assert not keys(services).exists()
+
+
+def test_a_fail_closed_disable_expires_the_account_even_without_a_key_file(tmp_path):
+    """Only authorized_keys was read and moved. A second key file, a key command
+    or a user CA sshd honours outside the Match block's pins stayed live while
+    the report said authentication was disabled."""
+
+    services = appliance(tmp_path)
+    if keys(services).exists():
+        keys(services).unlink()
+
+    report = activation(services).disable(reason="export_failed")
+
+    assert report["authentication_disabled"] is True, report
+    assert ("chage", ("-E", "1", "ems-backup")) in [
+        (tool, args) for tool, args, _ in services.host.calls
+    ], services.host.calls
+
+
+def test_backup_access_switched_back_on_at_the_console_lifts_the_revocation(tmp_path, production_chroot_chain):
+    """The console's counterpart of `backup-access enable`: the record goes and
+    the account is activated, for real, against a proven confinement."""
+
+    from tests.helpers.appliance import SignedInHandlers
+
+    services = seed_exports(appliance(tmp_path))
+    handlers = SignedInHandlers(services)
+
+    def switch(enabled):
+        planned = handlers.dispatch({"operation": "ssh.plan_backup_access", "enabled": enabled})
+        handlers.dispatch({
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        })
+        operation = services.operations.get(planned["operation"]["operation_id"])
+        services.operations.acknowledge(operation.operation_id)
+        return operation
+
+    services.host.sessions["ems-backup"] = ["c9"]
+
+    off = switch(False)
+    assert off.state == "succeeded", (off.error, off.stage)
+    assert activation(services).revoked() is True
+    assert not keys(services).exists()
+    assert off.result["sessions"] == {"ems-backup": "ended"}
+    assert services.backup.status()["revoked"] is True
+
+    on = switch(True)
+
+    assert on.state == "succeeded", (on.error, on.stage)
+    assert activation(services).revoked() is False
+    assert keys(services).exists()

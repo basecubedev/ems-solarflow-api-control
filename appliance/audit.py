@@ -20,34 +20,9 @@ from appliance.redaction import redact_mapping, redact_text
 RESULT_SUCCESS = "success"
 RESULT_FAILURE = "failure"
 RESULT_DENIED = "denied"
-
-AUDITED_ACTIONS = (
-    "login.success",
-    "login.failure",
-    "logout",
-    "password.change",
-    "password.confirm",
-    "password.reset",
-    "admin.install",
-    "admin.update",
-    "admin.rollback",
-    "admin.repair",
-    "admin.start",
-    "admin.stop",
-    "admin.restart",
-    "updates.install",
-    "updates.repair",
-    "ssh.enable",
-    "ssh.disable",
-    "ssh.key_added",
-    "ssh.key_removed",
-    "ssh.keys_revoked",
-    "network.wifi",
-    "network.hostname",
-    "system.reboot",
-    "system.shutdown",
-    "support.archive",
-)
+# The operator's Confirm, apart from how the operation then ended.
+RESULT_CONFIRMED = "confirmed"
+RESULT_NOTHING_TO_DO = "nothing_to_do"
 
 # Matched as substrings, not exact names: a detail key called signing_key,
 # private_key or api_token is the same thing as one called key or token, and an

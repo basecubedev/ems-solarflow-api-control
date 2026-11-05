@@ -3,9 +3,10 @@
 # Build the read-only SFTP export root for the EMS backup account.
 #
 # The account is chrooted into the export root, so what it can see is exactly
-# what this script puts there: three read-only bind mounts of the live EMS
-# directories, and nothing else. Paths come from the root-owned host
-# configuration only.
+# what this script puts there: one read-only bind mount of the archives EMS
+# writes to data/backups, published as /backups, and nothing else. No live
+# configuration and no live data: a backup key reads backups and no secret the
+# running EMS holds. Paths come from the root-owned host configuration only.
 #
 # Idempotent, and safe to run at boot, from the postinst and whenever the EMS
 # installation changes. See docs/appliance/security-model.md.
@@ -31,7 +32,17 @@ STATUS_FILE=${STATUS_FILE:-/var/lib/ems-appliance-manager/agent/export-access.js
 STATE_DIR=${EMS_APPLIANCE_STATE_DIR:-/var/lib/ems-appliance-manager}
 ACL_MANIFEST=${EMS_APPLIANCE_ACL_MANIFEST:-$STATE_DIR/agent/package-state/acl-manifest.tsv}
 ACL_OWNERSHIP_RECORD=${EMS_APPLIANCE_OWNERSHIP_RECORD:-$STATE_DIR/agent/package-state/backup-account.json}
-EXPORTS="config backups data"
+EXPORTS="backups"
+# Exports earlier packages published (config, data). A run unmounts them,
+# removes their empty mount points and withdraws the ACL entries the manifest
+# says this package granted on them.
+RETIRED_EXPORTS="config data"
+# --refresh-acl re-grants the read ACL; see the entry point below.
+REFRESH_ACL_ONLY=no
+REFRESH_RECORD=no
+# "root|perms" for each retired root whose default grant the previous manifest
+# recorded, so entries inherited from it are recognised.
+RETIRED_DEFAULTS=""
 ACL_STAGED=""
 ACL_BEFORE=""
 ACL_PREVIOUS=""
@@ -69,9 +80,17 @@ detail=""
 entries=""
 missing=""
 
+# Where an export is bound from, by its name in the chroot.
+export_source() {
+    case "$1" in
+        backups) printf '%s\n' "$INSTALL_ROOT/data/backups" ;;
+        *) printf '%s\n' "$INSTALL_ROOT/$1" ;;
+    esac
+}
+
 teardown() {
     remaining=""
-    for name in $EXPORTS; do
+    for name in $EXPORTS $RETIRED_EXPORTS; do
         target="$EXPORT_ROOT/$name"
         while mountpoint -q "$target" 2>/dev/null; do
             umount "$target" || break
@@ -93,6 +112,12 @@ teardown() {
 }
 
 record() {
+    # A refresh leaves the report of the last full run alone unless it mounted
+    # something itself; a failed refresh is a journal line, not a report that
+    # every mount failed.
+    if [ "$REFRESH_ACL_ONLY" = yes ] && [ "$REFRESH_RECORD" != yes ]; then
+        return 0
+    fi
     directory=$(dirname "$STATUS_FILE")
     [ -d "$directory" ] || return 0
     staged="$directory/.$(basename "$STATUS_FILE").staged"
@@ -191,7 +216,7 @@ canonical() {
 
 require_export_source() {
     name=$1
-    source_dir="$INSTALL_ROOT/$name"
+    source_dir=$(export_source "$name")
     if [ -L "$source_dir" ]; then
         fail "$name is a symlink; an export source must be a real directory in $INSTALL_ROOT"
     fi
@@ -229,7 +254,8 @@ require_exclusive_export_root() {
         [ -e "$entry" ] || [ -L "$entry" ] || continue
         name=${entry##*/}
         managed=0
-        for expected in $EXPORTS; do
+        # A retired export's mount point is removed by this run, not refused.
+        for expected in $EXPORTS $RETIRED_EXPORTS; do
             [ "$name" = "$expected" ] && managed=1
         done
         if [ "$managed" = 1 ] && [ ! -L "$entry" ] && [ -d "$entry" ]; then
@@ -590,12 +616,27 @@ acl_capture() {
     acl_mode=$2
     acl_shown=$3
     acl_output=$4
+    acl_walked=$acl_handle
     if [ "$acl_mode" = "recursive" ]; then
-        getfacl -R -p --absolute-names "$acl_handle" > "$acl_output.raw" 2>/dev/null || return 1
+        # The handle is a link, and getfacl -R, like setfacl -R, does not walk
+        # below a link it was given. Through "/." the walk starts at the
+        # directory itself and stays physical below it.
+        acl_walked="$acl_handle/."
+        if ! getfacl -R -p --absolute-names "$acl_walked" \
+                > "$acl_output.raw" 2> "$acl_output.err"; then
+            # An archive the EMS rotated away between the walk and its read is
+            # gone, not unreadable; anything else is.
+            if [ ! -s "$acl_output.err" ] \
+               || grep -qv 'No such file or directory' "$acl_output.err"; then
+                rm -f "$acl_output.err"
+                return 1
+            fi
+        fi
+        rm -f "$acl_output.err"
     else
         getfacl -p --absolute-names "$acl_handle" > "$acl_output.raw" 2>/dev/null || return 1
     fi
-    awk -v user="$BACKUP_USER" -v prefix="$acl_handle" -v shown="$acl_shown" -v OFS='\t' '
+    awk -v user="$BACKUP_USER" -v prefix="$acl_walked" -v shown="$acl_shown" -v OFS='\t' '
         function visible(path) {
             if (path == prefix) return shown
             if (index(path, prefix "/") == 1) return shown substr(path, length(prefix) + 1)
@@ -636,7 +677,11 @@ acl_identify_entries() {
     while IFS="$TAB" read -r object handle_path scope perms; do
         [ -n "$object" ] && [ -n "$handle_path" ] && [ -n "$scope" ] || continue
         entry_identity=$(object_identity "$handle_path")
-        [ -n "$entry_identity" ] || return 1
+        if [ -z "$entry_identity" ]; then
+            # Removed since the walk read it: there is nothing left to put back.
+            [ -e "$handle_path" ] || [ -L "$handle_path" ] || continue
+            return 1
+        fi
         printf '%s\t%s\t%s\t%s\t%s\n' \
             "$object" "$handle_path" "$scope" "$perms" "$entry_identity" >> "$1.identified" \
             || return 1
@@ -805,8 +850,11 @@ record_granted_acl() {
     while IFS="$TAB" read -r object handle_path scope perms; do
         [ -n "$object" ] && [ -n "$handle_path" ] && [ -n "$scope" ] && [ -n "$perms" ] || continue
         entry_identity=$(object_identity "$handle_path")
-        [ -n "$entry_identity" ] \
-            || acl_abort "$object could not be identified after its ACL was set"
+        if [ -z "$entry_identity" ]; then
+            # An archive removed after its grant holds no grant to record.
+            [ -e "$handle_path" ] || [ -L "$handle_path" ] || continue
+            acl_abort "$object could not be identified after its ACL was set"
+        fi
         carried=$(awk -F"$TAB" -v o="$object" -v i="$entry_identity" -v s="$scope" \
             '$1 == "entry" && $2 == o && $3 == i && $4 == s { print $5 "\t" $6 "\t" $7; exit }' \
             "$ACL_PREVIOUS" 2>/dev/null || true)
@@ -827,6 +875,13 @@ record_granted_acl() {
             previous=$(awk -F"$TAB" -v o="$object" -v s="$scope" \
                 '$1 == o && $3 == s { print $4; exit }' "$ACL_BEFORE" 2>/dev/null || true)
             if [ -n "$previous" ]; then preexisting=yes; else preexisting=no; fi
+            # What an earlier package's default grant on a retired root made
+            # its descendants inherit is this package's, not an operator's:
+            # purge withdraws it instead of putting it back.
+            if [ -n "$previous" ] && inherited_from_retired "$object" "$previous"; then
+                preexisting=no
+                previous=""
+            fi
         fi
         # Tab is IFS whitespace, so an empty field would collapse and shift
         # every field after it when the manifest is read back.
@@ -836,6 +891,86 @@ record_granted_acl() {
             >> "$ACL_STAGED" \
             || acl_abort "the ACL manifest entry for $object could not be written"
     done < "$ACL_AFTER"
+    return 0
+}
+
+inherited_from_retired() {
+    for pair in $RETIRED_DEFAULTS; do
+        retired_root=${pair%|*}
+        retired_perms=${pair##*|}
+        case "$1" in
+            "$retired_root"/*) [ "$2" = "$retired_perms" ] && return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# Withdraw what the previous manifest says this package granted on a retired
+# export's root, through an open handle and inside this transaction: an abort
+# puts it back with everything else. What the package granted below that root
+# is carried into the new manifest unchanged, so a purge still owns it; an
+# entry an operator changed since is left to them and reported.
+acl_withdraw_retired() {
+    retired=$1
+    [ -s "$ACL_PREVIOUS" ] || return 0
+    awk -F"$TAB" -v root="$retired" '$1 == "entry" && ($2 == root || index($2, root "/") == 1)' \
+        "$ACL_PREVIOUS" > "$ACL_SLICE.retired" 2>/dev/null || true
+    if [ ! -s "$ACL_SLICE.retired" ]; then
+        rm -f "$ACL_SLICE.retired"
+        return 0
+    fi
+    for current_name in $EXPORTS; do
+        current_source=$(export_source "$current_name")
+        awk -F"$TAB" -v keep="$current_source" '!($2 == keep || index($2, keep "/") == 1)' \
+            "$ACL_SLICE.retired" > "$ACL_SLICE.retired.next" \
+            && mv -f "$ACL_SLICE.retired.next" "$ACL_SLICE.retired"
+    done
+    retired_default=$(awk -F"$TAB" -v root="$retired" \
+        '$2 == root && $4 == "default" { print $7; exit }' "$ACL_SLICE.retired" 2>/dev/null || true)
+    if [ -n "$retired_default" ]; then
+        RETIRED_DEFAULTS="$RETIRED_DEFAULTS $retired|$retired_default"
+    fi
+    awk -F"$TAB" -v root="$retired" '$2 != root' "$ACL_SLICE.retired" >> "$ACL_STAGED" \
+        || acl_abort "the ACL entries below the retired $retired could not be carried over"
+    if [ -d "$retired" ] && [ ! -L "$retired" ] \
+       && awk -F"$TAB" -v root="$retired" '$2 == root { found = 1 } END { exit !found }' \
+            "$ACL_SLICE.retired"; then
+        acl_open_root "$retired" || acl_abort "the retired $retired cannot be opened"
+        retired_handle=$ACL_HANDLE
+        [ "$(readlink "$retired_handle" 2>/dev/null)" = "$retired" ] \
+            || acl_abort "the retired $retired is not the directory it claims to be"
+        acl_capture_before "$retired_handle" single "$retired"
+        while IFS="$TAB" read -r kind object identity scope preexisting previous granted; do
+            [ "$kind" = "entry" ] && [ "$object" = "$retired" ] || continue
+            if ! identity_agrees "$identity" "$(object_identity "$retired_handle")"; then
+                ACL_CONFLICTS="$ACL_CONFLICTS $object"
+                continue
+            fi
+            observed=$(awk -F"$TAB" -v o="$object" -v s="$scope" \
+                '$1 == o && $3 == s { print $4; exit }' "$ACL_BEFORE" 2>/dev/null || true)
+            if [ "$observed" != "$granted" ]; then
+                ACL_CONFLICTS="$ACL_CONFLICTS $object"
+                continue
+            fi
+            [ "$previous" = "-" ] && previous=""
+            if [ "$preexisting" = "yes" ] && [ -n "$previous" ]; then
+                if [ "$scope" = "default" ]; then
+                    setfacl -d -m "u:${BACKUP_USER}:$previous" "$retired_handle" \
+                        || acl_abort "cannot restore the default ACL on the retired $retired"
+                else
+                    setfacl -m "u:${BACKUP_USER}:$previous" "$retired_handle" \
+                        || acl_abort "cannot restore the ACL on the retired $retired"
+                fi
+            elif [ "$scope" = "default" ]; then
+                setfacl -d -x "u:${BACKUP_USER}" "$retired_handle" \
+                    || acl_abort "cannot withdraw the default ACL on the retired $retired"
+            else
+                setfacl -x "u:${BACKUP_USER}" "$retired_handle" \
+                    || acl_abort "cannot withdraw the ACL on the retired $retired"
+            fi
+        done < "$ACL_SLICE.retired"
+    fi
+    rm -f "$ACL_SLICE.retired"
     return 0
 }
 
@@ -995,13 +1130,14 @@ bind_read_only() {
 
 # --- entry point ------------------------------------------------------------
 
-# --refresh-acl re-grants the recursive read ACL and nothing else: no mounts are
-# touched, no status file is written, and the confinement is not re-activated.
-# A backup archive is created 0600, which caps the inherited named-user grant to
-# nothing, and only this pass repairs that -- but running the whole setup for it
-# would tear the exports down and back up under an SFTP session, and would race
-# the `backup-access activate` of a concurrent install.
-REFRESH_ACL_ONLY=no
+# --refresh-acl re-grants the recursive read ACL and nothing else: a mount that
+# is already proven is not touched, no status file is written, and the
+# confinement is not re-activated. A backup archive is created 0600, which caps
+# the inherited named-user grant to nothing, and only this pass repairs that --
+# but running the whole setup for it would tear the exports down and back up
+# under an SFTP session, and would race the `backup-access activate` of a
+# concurrent install. The one mount it makes is the first: data/backups exists
+# only once EMS wrote its first archive, and this is the pass that sees it appear.
 case "${1:-}" in
     --teardown|"") ;;
     --refresh-acl) REFRESH_ACL_ONLY=yes ;;
@@ -1059,7 +1195,7 @@ if [ ! -d "$INSTALL_ROOT" ]; then
     status="pending"
     detail="no EMS installation found yet"
     for name in $EXPORTS; do
-        add_entry "$name" "$INSTALL_ROOT/$name" "$EXPORT_ROOT/$name" "missing" "true"
+        add_entry "$name" "$(export_source "$name")" "$EXPORT_ROOT/$name" "missing" "true"
     done
     record
     echo "ems-appliance: $INSTALL_ROOT does not exist yet; the export root is empty."
@@ -1073,6 +1209,20 @@ done
 # --- mutation pass ----------------------------------------------------------
 
 ensure_root_owned_directory "$EXPORT_ROOT" "the export root"
+
+# A retired export is not published any more: its mount comes down and its
+# mount point goes. Anything else in it is operator content, and rmdir refuses.
+if [ "$REFRESH_ACL_ONLY" != yes ]; then
+    for name in $RETIRED_EXPORTS; do
+        target_dir="$EXPORT_ROOT/$name"
+        [ -e "$target_dir" ] || [ -L "$target_dir" ] || continue
+        unmount_all "$target_dir" \
+            || fail "the retired export $name is still mounted at $target_dir; an SFTP session may hold it"
+        require_export_target "$name"
+        rmdir "$target_dir" \
+            || fail "the retired export target $target_dir is not empty; move its content out of $EXPORT_ROOT"
+    done
+fi
 
 acl_manifest_begin
 
@@ -1093,8 +1243,12 @@ setfacl -m "u:${BACKUP_USER}:x" "$install_handle" \
     || acl_abort "the EMS installation root changed while it was being prepared"
 record_granted_acl "$install_handle" single "$INSTALL_ROOT"
 
+for name in $RETIRED_EXPORTS; do
+    acl_withdraw_retired "$INSTALL_ROOT/$name"
+done
+
 for name in $EXPORTS; do
-    source_dir="$INSTALL_ROOT/$name"
+    source_dir=$(export_source "$name")
     target_dir="$EXPORT_ROOT/$name"
     # A source that is not there yet is pending; a source that is there and is
     # not a real directory is a refusal, not a missing export.
@@ -1121,9 +1275,11 @@ for name in $EXPORTS; do
     # is capped by the mask, and on a 0600 file or a 0700 directory -- which is
     # what the EMS writes its secrets as -- the derived mask is empty, so the
     # grant would read as present in getfacl and be effective for nothing.
-    setfacl -R -m "u:${BACKUP_USER}:rX,m::rX" "$handle" \
+    # Through "/.", as in acl_capture: given the handle itself, setfacl -R
+    # changes the directory and never a file in it.
+    setfacl -R -m "u:${BACKUP_USER}:rX,m::rX" "$handle/." \
         || acl_abort "cannot set the read ACL on $name"
-    setfacl -R -d -m "u:${BACKUP_USER}:rX,m::rX" "$handle" \
+    setfacl -R -d -m "u:${BACKUP_USER}:rX,m::rX" "$handle/." \
         || acl_abort "cannot set the default ACL on $name"
 
     [ "$(readlink "$handle" 2>/dev/null)" = "$source_dir" ] \
@@ -1133,13 +1289,12 @@ for name in $EXPORTS; do
 
     record_granted_acl "$handle" recursive "$source_dir"
 
-    if [ "$REFRESH_ACL_ONLY" = yes ]; then
-        continue
-    fi
-
     if mount_proves "$target_dir" "$identity"; then
         add_entry "$name" "$source_dir" "$target_dir" "mounted" "true"
         continue
+    fi
+    if [ "$REFRESH_ACL_ONLY" = yes ]; then
+        REFRESH_RECORD=yes
     fi
 
     prepare_target "$name"
@@ -1156,7 +1311,7 @@ done
 acl_manifest_commit
 acl_close_roots
 
-if [ "$REFRESH_ACL_ONLY" = yes ]; then
+if [ "$REFRESH_ACL_ONLY" = yes ] && [ "$REFRESH_RECORD" != yes ]; then
     echo "ems-appliance: re-granted the read ACL on the exported sources."
     exit 0
 fi

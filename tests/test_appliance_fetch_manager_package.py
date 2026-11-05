@@ -417,3 +417,30 @@ def test_a_key_in_the_keyring_that_is_not_a_listed_signer_is_refused(
 
 def test_the_default_signers_are_the_ones_the_shipped_appliance_accepts():
     assert fetcher.shipped_fingerprints() == ("C5226401689A7AFFDC92D55742B3EB428EC5BD63",)
+
+
+# --- "nothing published yet" is one answer, and only one ---------------------
+
+
+def test_an_index_entry_the_parser_refuses_is_not_nothing_published(tmp_path, monkeypatch, signer):
+    """parse_index skips a malformed row silently; an index with nothing it can
+    take but a row it refused is a broken index, not the time before the first
+    release, and the image must not quietly bake a development Manager."""
+
+    index = {"format_version": 1, "releases": [{"release_id": "not a release", "manifest_url": "x"}]}
+
+    with pytest.raises(SystemExit) as refusal:
+        run(monkeypatch, tmp_path, index, {}, signer, tmp_path / "into")
+
+    assert refusal.value.code not in (0, 3)
+
+
+@gpg_required
+def test_a_named_version_the_index_does_not_list_fails_the_build(tmp_path, monkeypatch, signer):
+    released = [("0.1.0", publish(tmp_path, signer, version="0.1.0")[0])]
+
+    with pytest.raises(SystemExit) as refusal:
+        run(monkeypatch, tmp_path, index_for(tmp_path, released), urls_for(tmp_path, released),
+            signer, tmp_path / "into", version="0.9.9")
+
+    assert refusal.value.code not in (0, 3)

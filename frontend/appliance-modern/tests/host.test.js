@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { adminContainer, adminGate, adminHealth, adminVersion, dockerCondition, exactDuration, gigabytes, groupByTrack, indexAge, indexAgeWords, latestVerdict, osTiles, securityUpdatesOffered, systemVerdict } from "../src/lib/host.js";
+import { wifiRadio, adminContainer, adminGate, adminHealth, adminTransitionUntil, adminVersion, dockerCondition, exactDuration, gigabytes, groupByTrack, indexAge, indexAgeWords, latestVerdict, osTiles, securityUpdatesOffered, systemVerdict } from "../src/lib/host.js";
 import { planBlocked, planFields, vocabularyWords } from "../src/lib/plan.js";
 import { logSources, logSummary } from "../src/lib/logs.js";
 import { errorWords } from "../src/lib/errors.js";
@@ -34,8 +34,10 @@ test("the installed version never reads as missing while Docker is down", () => 
 });
 
 test("releases group by track in the trusted order, an unknown track with the least trusted", () => {
-  const groups = groupByTrack([{ tag: "a", track: "unstable" }, { tag: "b", track: "stable" }, { tag: "c", track: "odd" }]);
-  assert.deepEqual(groups.map((group) => [group.track, group.items.map((item) => item.tag)]), [["stable", ["b"]], ["unstable", ["a"]], ["experimental", ["c"]]]);
+  const items = [{ tag: "a", track: "rc" }, { tag: "b", track: "stable" }, { tag: "c", track: "odd" }, { tag: "latest", track: "latest" }];
+  const groups = groupByTrack(items);
+  assert.deepEqual(groups.map((group) => [group.track, group.items.map((item) => item.tag)]), [["stable", ["b"]], ["rc", ["a"]], ["latest", ["latest"]], ["development", ["c"]]]);
+  assert.deepEqual(groupByTrack(items, false).map((group) => group.track), ["stable", "rc", "latest"]);
 });
 
 test("only an upgrade is an update; an unknown direction may be the same image", () => {
@@ -183,10 +185,36 @@ test("EMS Admin is unknown while the agent cannot say, and missing only when Doc
   assert.equal(adminHealth({ admin: {} }).key, "common.unknown");
   assert.equal(adminHealth(withDocker("inactive", { installed: false })).key, "common.unknown");
   assert.equal(adminHealth({ docker_missing: true, docker: { daemon: { state: "missing" } }, admin: { installed: false } }).key, "common.unknown");
+  assert.equal(adminHealth({ admin: { installed: null, container_state_unknown: true } }).key, "common.unknown");
   assert.equal(adminHealth(withDocker("running", { installed: false })).key, "admin.health.missing");
   assert.equal(adminHealth(withDocker("running", { installed: true, healthy: true })).key, "admin.health.healthy");
   assert.equal(adminHealth(withDocker("running", { installed: true, healthy: false })).key, "admin.health.unhealthy");
   assert.deepEqual(adminContainer(withDocker("inactive", { installed: false, container: { state: "missing", health: "none" } })), {});
   assert.deepEqual(adminContainer(withDocker("running", { installed: true, container: { state: "running", health: "healthy" } })), { state: "running", health: "healthy" });
   assert.deepEqual(adminContainer(undefined), {});
+});
+
+test("a live Admin transition names when it stops blocking, in the browser's time", () => {
+  const expires = "2026-11-05T13:45:00Z";
+  const local = new Date(expires);
+  const expected = `${String(local.getHours()).padStart(2, "0")}:${String(local.getMinutes()).padStart(2, "0")}`;
+  assert.equal(adminTransitionUntil({ admin: { transition: { state: "live", expires_at: expires } } }), expected);
+  assert.equal(adminTransitionUntil({ admin: { transition: { state: "live", expires_at: "" } } }), "");
+  assert.equal(adminTransitionUntil({ admin: { transition: { state: "live", expires_at: "soon" } } }), "");
+  assert.equal(adminTransitionUntil({}), "");
+});
+
+test("the WLAN radio names which switch turned it off", () => {
+  assert.equal(wifiRadio({ wifi_radio: { hardware: "disabled", software: "enabled" } }), "network.radioOffHardware");
+  assert.equal(wifiRadio({ wifi_radio: { hardware: "enabled", software: "disabled" } }), "network.radioOffSoftware");
+  assert.equal(wifiRadio({ wifi_radio: { hardware: "enabled", software: "enabled" } }), "network.radioOn");
+  assert.equal(wifiRadio({ wifi_radio: { hardware: "unknown", software: "unknown" } }), "");
+  assert.equal(wifiRadio({}), "");
+});
+
+test("a rate-limited sign-in says how long, and the IPv4 way out for a whole IPv6 network", () => {
+  const limited = (payload) => errorWords({ code: "login_rate_limited", status: 429, payload });
+  assert.deepEqual(limited({ retry_after: 120, scope: "address" }), { key: "error.loginRateLimitedWait", vars: { seconds: 120 } });
+  assert.deepEqual(limited({ retry_after: 30, scope: "network" }), { key: "error.loginRateLimitedNetwork", vars: { seconds: 30 } });
+  assert.deepEqual(limited({}), { key: "error.login_rate_limited" });
 });

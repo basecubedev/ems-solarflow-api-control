@@ -72,7 +72,7 @@ The socket is never a network listener. The agent checks the peer's credentials
 A request names an operation and typed fields:
 
 ```json
-{ "operation": "admin.install", "target_tag": "v0.8.0" }
+{ "operation": "admin.plan_install", "channel": "exact", "tag": "v0.8.0", "reinstall": false }
 ```
 
 It can never carry a command, a path, an image reference or a repository:
@@ -101,7 +101,7 @@ is refused as `invalid_request` before any handler runs.
 | `release_index.py` | Assembling and retaining a release index, for every artefact class |
 | `validation.py` | Every typed input validator and its stable error code |
 | `redaction.py` | Secret redaction and log bounding |
-| `protocol.py` | The fixed agent operation allowlist |
+| `protocol.py` | The fixed agent operation allowlist and the typed fields each request may carry |
 | `operations.py` | The durable operation model and the single-mutation lock |
 | `commands.py` | The only place a host process is started (tool allowlist, no shell) |
 | `docker_backend.py`, `systemd.py`, `hostprobe.py` | Typed host access |
@@ -126,7 +126,7 @@ is refused as `invalid_request` before any handler runs.
 | `host_config.py` | One host-path contract for everything that reads it |
 | `ssh_policy.py`, `backup_confinement.py`, `backup_ownership.py`, `export_state.py` | The generated sshd policy, what the chroot actually is, and who owns the account a purge may remove |
 | `timezone_config.py` | The zone the EMS runs its local-hour control windows in |
-| `operation_schema.py` | The typed request shape every operation is validated against |
+| `operation_schema.py` | The schema and authority of a persisted operation record: what confirmation and execution check before an operation may run |
 | `release_trust.py`, `release_attestation.py`, `release_inputs.py` | What a signed release vouches for, and the readiness invariants that bound it |
 | `build_authority.py`, `source_bundle.py`, `project_source.py` | Which build an artefact came from, and the source tree it can be rebuilt from |
 | `rpi_image_gen.py`, `runtime_gates.py` | The pinned upstream generator and the runtime evidence a release is bound to |
@@ -194,7 +194,16 @@ cannot be reported as a success.
 - A browser reload restores the current progress from the record.
 - An agent restart turns an interrupted `running` operation into a visible
   `failed_recoverable`, and expires an unconfirmed plan, so the lock is never
-  stuck.
+  stuck. Only an operation interrupted before its first change stays
+  retryable — still at `running`, in preflight, pulling, inspecting or verifying
+  a target image, refreshing the index, or with only a reboot or shutdown
+  requested (`operations.UNTOUCHED_STAGES`);
+  the time zone and the support archive change things at `running` but are
+  idempotent, so a retry repeats them harmlessly. One interrupted after it
+  began to change the host, or while it verified or
+  rolled back, ends `manual_action_required` with
+  `operation_interrupted_after_change`: a retry ran it from the top over a
+  half-made change.
 - A `failed_recoverable` operation has stopped acting on the host, so it does
   not hold the lock: the operator can plan again without cancelling it first.
   It stays retryable in place, and a retry is refused while another operation
@@ -234,7 +243,15 @@ http://ems-solarflow.local:8090   EMS Admin Console
 ```
 
 The recovery UI deliberately does not depend on a reverse-proxy container. A
-proxy may later add `/system` and `/admin` paths in front of both.
+reverse proxy is not supported in front of the Manager; see
+[security-model.md](security-model.md#authentication-and-sessions).
+
+The image's `/etc/docker/daemon.json` confines Docker's own networks to
+`172.16.0.0/12` in /24 pieces. Docker's default pools reach into `192.168.x`
+after fifteen networks, and a bridge there swallows LAN devices behind the
+router, the inverters the EMS controls among them. The file belongs to the
+image, not to the package: an appliance flashed before this keeps its own until
+it is re-flashed or the file is edited.
 
 ## Related documents
 

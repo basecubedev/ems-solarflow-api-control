@@ -195,3 +195,19 @@ def test_an_index_that_lost_entries_is_never_uploaded(tmp_path):
     assert "names 1 releases, the one it replaces named 3" in (
         result.stdout + result.stderr
     )
+
+
+def test_an_index_larger_than_an_appliance_reads_is_refused_at_publication(monkeypatch):
+    """The index grows for ever by policy and every appliance reads at most
+    MAX_INDEX_BYTES: past it they all show the index as unreadable, and the
+    publisher would not have noticed."""
+
+    from appliance import release_fetch, release_index
+
+    monkeypatch.setattr(release_fetch, "MAX_INDEX_BYTES", 16)
+    index = {"format_version": release_fetch.INDEX_FORMAT_VERSION, "releases": []}
+
+    with pytest.raises(release_index.ReleaseIndexError) as refusal:
+        release_index.verify(index)
+
+    assert "16" in refusal.value.message

@@ -178,13 +178,17 @@ def test_without_a_configured_index_the_registry_holding_the_images_is_asked():
     result = catalogue(None, url="", registry=_registry).available()
 
     assert asked == [REPOSITORY]
-    assert [item.tag for item in result] == ["v1.1.0", "v1.0.0"]
+    assert [item.tag for item in result] == ["v1.1.0", "v1.0.0", "latest"]
 
 
-def test_a_mutable_tag_the_registry_publishes_is_not_an_installable_version():
+def test_only_the_rolling_tag_the_admin_console_offers_is_listed_beside_versions():
+    """latest is the Admin console's Rolling channel and is listed as a
+    pre-release; any other mutable name a registry publishes is not."""
+
     result = catalogue(None, url="", registry=lambda _r: ["latest", "main", "v1.0.0"]).available()
 
-    assert [item.tag for item in result] == ["v1.0.0"]
+    assert [item.tag for item in result] == ["v1.0.0", "latest"]
+    assert [item.prerelease for item in result] == [False, True]
 
 
 def test_a_configured_index_wins_over_the_registry():

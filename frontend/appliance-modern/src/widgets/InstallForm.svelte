@@ -2,7 +2,8 @@
   import Icon from "../../../shared/ui/Icon.svelte";
   import PlanButton from "./PlanButton.svelte";
   import TrackHelp from "./TrackHelp.svelte";
-  import { t } from "../i18n/i18n.svelte.js";
+  import { t, say } from "../i18n/i18n.svelte.js";
+  import { errorWords } from "../lib/errors.js";
   import { forms } from "../state/forms.svelte.js";
   import { detail } from "../state/prefs.svelte.js";
   import { groupByTrack } from "../lib/host.js";
@@ -22,7 +23,7 @@
   const channels = $derived(
     INSTALL_CHANNELS.filter((channel) => (channel === "exact" ? detail.expert : !bootstrap || channel === "latest_stable")),
   );
-  const groups = $derived(groupByTrack((releases && releases.available) || []));
+  const groups = $derived(groupByTrack((releases && releases.available) || [], detail.expert));
   const offered = $derived([
     ...channels,
     ...groups.flatMap((group) => group.items.filter((item) => item.installable !== false).map((item) => `tag:${item.tag}`)),
@@ -36,11 +37,17 @@
         : { channel: selected, tag: "" },
   );
   const plan = $derived(adminInstallPlan(target.channel, target.tag, bootstrap ? false : forms.adminReinstall, bootstrap ? "admin-bootstrap-plan" : "install-plan"));
+  const DIRECTION_LABELS = Object.freeze({ reinstall: "install.installed", upgrade: "install.newer", downgrade: "install.older" });
   const label = (item) => {
-    let text = item.direction === "reinstall" ? t("install.installed", { tag: item.tag }) : item.tag;
-    if (item.installable === false && item.reason) text += ` — ${item.reason}`;
+    let text = DIRECTION_LABELS[item.direction] ? t(DIRECTION_LABELS[item.direction], { tag: item.tag }) : item.tag;
+    if (item.installable === false && item.prerelease) text += ` — ${t("install.prereleaseOff")}`;
+    else if (item.installable === false && item.reason) text += ` — ${item.reason}`;
     return text;
   };
+  const channelLabel = (channel) =>
+    channel === "latest_stable" && releases?.latest_stable?.tag
+      ? t("install.channel.latestStableTag", { tag: releases.latest_stable.tag })
+      : t(`install.channel.${channel}`);
 </script>
 
 <div class="form">
@@ -48,11 +55,11 @@
     <span>{t("install.version")}</span>
     <select class="input" value={selected} onchange={(event) => (forms[versionKey] = event.currentTarget.value)} data-testid="install-channel">
       <optgroup label={t("install.channels")}>
-        {#each channels as channel (channel)}<option value={channel}>{t(`install.channel.${channel}`)}</option>{/each}
+        {#each channels as channel (channel)}<option value={channel}>{channelLabel(channel)}</option>{/each}
       </optgroup>
       {#each groups as group (group.track)}
         <optgroup label={t(`track.${group.track}`)}>
-          {#each group.items as item, index (index)}<option value="tag:{item.tag}" disabled={item.installable === false} lang={item.installable === false && item.reason && item.direction !== "reinstall" ? "en" : undefined}>{label(item)}</option>{/each}
+          {#each group.items as item, index (index)}<option value="tag:{item.tag}" disabled={item.installable === false} lang={item.installable === false && item.reason && !item.prerelease && item.direction !== "reinstall" ? "en" : undefined}>{label(item)}</option>{/each}
         </optgroup>
       {/each}
     </select>
@@ -66,7 +73,7 @@
   {#if !bootstrap}
     <label class="check"><input type="checkbox" bind:checked={forms.adminReinstall} data-testid="install-reinstall" />{t("install.reinstall")}</label>
   {/if}
-  {#if releases?.error}<p class="note warn"><Icon name="triangle-alert" />{t("install.listFailed", { code: releases.error })}</p>{/if}
+  {#if releases?.error}<p class="note warn" data-testid="install-list-error"><Icon name="triangle-alert" />{t("install.listFailed", { code: say(errorWords({ code: releases.error, status: 200, payload: { message: releases.error_message } })) })}{#if releases.error_message}{" "}<span class="muted" lang="en">({releases.error_message})</span>{/if}</p>{/if}
   <div class="row-wrap">
     <PlanButton
       {plan}

@@ -289,7 +289,6 @@ one Raspberry Pi of each supported board:
   Raspberry Pi 4
   Raspberry Pi 5
 one microSD card per board, 16 GB or larger
-one USB SSD, 16 GB or larger        (Pi 4 and Pi 5)
 one NVMe drive on a Pi 5 carrier    (Pi 5)
 a serial adapter, for a boot that never reaches the network
 a card reader, for reading the boot partition afterwards
@@ -350,10 +349,12 @@ Not a recommendation. The image is about **8.25 GiB** — a 256 MiB boot
 partition and an 8 GiB root — and the root grows to fill the medium on first
 boot.
 
-What the medium has to hold *after* that decides the floor: the Docker store the
-seed archive is unpacked into, the EMS data and the operator's backups, about
-**3.9 GiB** beyond the image. Those are measured rather than estimated; see
-`reports/appliance/<run-id>/media-sizing.json` for the run they came from.
+What the medium has to hold *after* that decides the floor: the Admin, EMS and
+InfluxDB images the first install downloads, the previous pair an update keeps,
+the EMS data and the operator's backups, about **5.25 GiB** beyond the image.
+Measured on the Pi 3B+ test appliance on 2026-11-04 after several updates: 5.8 GB
+of the root in use in all, 1.33 GB of it the three running images; the numbers
+and how they were taken are in `appliance/media_sizing.py`.
 
 The enforced floor is **14,500,000,000 bytes**, below the nominal 16 GB because
 media are marketed in decimal gigabytes and vendors differ by a few percent, so
@@ -380,7 +381,7 @@ Pulling the plug on a `poweroff` is not the same test.
 | 0.1 | `scripts/appliance-check-rpi-image-gen.sh --rpi-image-gen <checkout>` | PASS against the pinned revision |
 | 0.2 | `scripts/appliance-build-rpi-image.sh --profile rpi5` on a builder with the upstream dependencies | PASS, image produced |
 | 0.2b | The same with `--profile rpi4` and `--profile rpi3` | PASS; three separate artefacts, not one relabelled |
-| 0.3 | `scripts/appliance-inspect-rpi-image.sh <image>` | PASS: an MBR with a FAT `boot` and an ext4 `root` |
+| 0.3 | `scripts/appliance-inspect-rpi-image.sh --profile <board> <image>` | PASS: an MBR with a FAT `boot` and an ext4 `root`, the board's own kernel and device trees, the by-slot rule in the initramfs |
 | 0.3b | The same inspection's content findings | PASS with **no** mandatory NOT RUN: the package and its exact version in the root, the dpkg status, the build marker, the four enabled units and each one's program, the writable-root fstab line, no shipped host key, the runtime helpers, and `root=/dev/disk/by-slot/system rw` on the boot partition. No mount and no root: the Pi 5 root filesystem uses 16 KiB ext4 blocks that no 4 KiB-page kernel will mount |
 | 0.4 | The `build-authority.json` the build wrote | Names the source form, the generator revision, the source tree hash and the SHA-256 of the image, `completed: true` |
 | 0.5 | `scripts/appliance-release-gates.sh --mode builder` | PASS (builder qualification) |
@@ -442,8 +443,8 @@ never reported for another.**
 | microSD | Pi 3B+ | PARTIAL — 1.1, 1.3, 1.4, 1.5, 1.6 and 1.11 on a Pi 3B+ on microSD, each carried by a row in the evidence table below. 1.2, 1.7 to 1.10, 1.12 and 1.13 are NOT RUN. |
 | microSD | Pi 4 | NOT RUN |
 | microSD | Pi 5 | NOT RUN |
-| USB SSD | Pi 4 | NOT RUN |
-| USB SSD | Pi 5 | NOT RUN |
+| USB SSD | Pi 4 | NOT SUPPORTED — the root is found through `RPI_ONBOOTDEV`, which the pinned `rpi-bootdev-tag` sets for boot modes 1 (SD) and 6 (NVMe) only; a USB boot waits for `disk/by-slot/system` in the initramfs |
+| USB SSD | Pi 5 | NOT SUPPORTED — as for the Pi 4 |
 | NVMe | Pi 5 | NOT RUN |
 
 ## Which steps destroy something

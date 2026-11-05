@@ -8,7 +8,12 @@ Documentation=file:///usr/share/doc/ems-appliance-manager/os-updates.md
 # rebooted inside the window, and a one-shot timer a reboot cancels is a
 # deadline that never expires. The tick disarms itself once no deadline is
 # waiting, so the steady state is a stopped timer.
-OnBootSec=90
+#
+# No OnBootSec: arming activates this timer long after boot, and a boot offset
+# already in the past elapses at once -- the first tick ran before the install
+# had started, and confirmed a same-version reinstall dpkg had not touched.
+# OnActiveSec covers a reboot, because the enabled timer is activated again at
+# boot.
 OnActiveSec=60
 OnUnitActiveSec=60
 AccuracySec=15s

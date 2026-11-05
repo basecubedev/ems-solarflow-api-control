@@ -43,7 +43,7 @@ def test_valid_release_tags(tag):
 @pytest.mark.parametrize(
     "tag",
     [
-        "latest",
+        "latest_stable",
         "main",
         "v0.8",
         "v0.8.0; rm -rf /",
@@ -257,7 +257,7 @@ def test_appliance_layout_is_centrally_defined(tmp_path):
     assert paths.agent_socket.name == "agent.sock"
     assert paths.appliance_conf.name == "appliance.conf"
     assert paths.allowed_images_conf.name == "allowed-images.conf"
-    assert set(paths.export_paths()) == {"config", "backups", "data"}
+    assert set(paths.export_paths()) == {"backups"}
 
 
 # --- hostnames, accounts, scopes ------------------------------------------
@@ -484,3 +484,41 @@ def test_a_timezone_that_does_not_resolve_is_refused():
     for bad in ("Europe/Nowhere", "../../etc/passwd", "", "a" * 80):
         with pytest.raises(ValidationError):
             validate_timezone(bad)
+
+
+@pytest.mark.parametrize("tag", ["v١.٠.٠", "v1.0.٣", "１.0.0"])
+def test_a_release_tag_is_written_in_ascii_digits(tag):
+    """`\\d` matches any Unicode digit: these passed a check whose name promises
+    a release tag."""
+
+    from appliance.validation import validate_release_tag
+
+    with pytest.raises(ValidationError):
+        validate_release_tag(tag)
+
+
+@pytest.mark.parametrize("value", [True, 1, 1.5, None, ["v1"]])
+def test_a_release_id_is_a_string(value):
+    from appliance.validation import validate_release_id
+
+    with pytest.raises(ValidationError):
+        validate_release_id(value)
+
+
+@pytest.mark.parametrize("value", [True, False, float("inf"), float("nan"), 12.7, "12"])
+def test_a_line_count_is_an_integer_and_nothing_else(value):
+    """True became one line, and Infinity on the socket ended as a bare agent_error."""
+
+    from appliance.validation import validate_line_count
+
+    with pytest.raises(ValidationError):
+        validate_line_count(value)
+
+
+@pytest.mark.parametrize("name", ["localhost", "LocalHost"])
+def test_localhost_is_not_a_hostname_the_appliance_can_take(name):
+    """systemd and the web treat it as no hostname at all; the plan promised
+    http://localhost.local:8088, which reaches nothing."""
+
+    with pytest.raises(ValidationError):
+        validation.validate_hostname(name)

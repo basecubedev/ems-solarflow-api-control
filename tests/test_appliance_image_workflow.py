@@ -293,7 +293,7 @@ def test_no_published_release_is_a_fallback_and_anything_else_is_a_failure(workf
 
     blocks = run_blocks(workflow, "image")
 
-    assert "3) echo \"::notice::no stable Manager release is published yet" in blocks
+    assert "echo \"::notice::no stable Manager release is published yet" in blocks.split("3)", 1)[1]
     assert "*) echo \"::error::the published Manager package could not be verified\"" in blocks
 
 
@@ -499,3 +499,59 @@ def test_the_release_says_it_is_not_a_release(workflow):
     assert "not signable" in blocks
     assert "builder_environment_untrusted" in blocks
     assert "This is not a release" in blocks
+
+
+def step_named(workflow, job, fragment):
+    return next(step for step in steps(workflow, job) if fragment in step.get("name", ""))
+
+
+def test_the_plan_says_whether_every_board_is_in_the_build(workflow):
+    plan = workflow["jobs"]["plan"]
+
+    assert plan["outputs"]["complete"] == "${{ steps.pick.outputs.complete }}"
+    assert 'print("complete="' in run_blocks(workflow, "plan")
+
+
+def test_a_build_short_a_board_does_not_move_the_fixed_download_link(workflow):
+    """A one-board rebuild for a hardware round left owners of the other boards
+    with a download link that offered them nothing until the next weekly build."""
+
+    pointer = step_named(workflow, "publish", "fixed download link")
+
+    assert pointer["if"] == "${{ needs.plan.outputs.complete == 'true' }}"
+
+
+def test_a_build_short_a_board_is_not_titled_as_the_appliance_image(workflow):
+    """install.md sends an owner to the newest entry titled "Appliance image"."""
+
+    publish = step_named(workflow, "publish", "Publish the download page")
+
+    assert publish["env"]["COMPLETE"] == "${{ needs.plan.outputs.complete }}"
+    partial = publish["run"].split('if [ "${COMPLETE}" != "true" ]; then', 1)[1].split("elif", 1)[0]
+    titles = re.findall(r'title="([^"]*)"', partial)
+    assert titles and not any(title.startswith("Appliance image") for title in titles)
+
+
+IMMUTABLE_PIN = re.compile(r"^[\w.-]+/[\w.-]+@[0-9a-f]{40}$")
+
+
+@pytest.mark.parametrize("job", ["image", "publish"])
+def test_the_jobs_that_make_and_publish_the_image_pin_actions_by_commit(workflow, job):
+    """A tag can be moved by whoever controls the action; a commit cannot."""
+
+    used = [step["uses"] for step in steps(workflow, job) if "uses" in step]
+
+    assert used
+    for reference in used:
+        assert IMMUTABLE_PIN.match(reference), reference
+
+
+def test_a_tagged_image_never_carries_a_development_manager(workflow):
+    """Exit 3 lets a weekly build make its own package before the first
+    release; a tagged build is a release, and its Manager has to be one."""
+
+    blocks = run_blocks(workflow, "image")
+    fallback = blocks.split("3)", 1)[1].split(";;", 1)[0]
+
+    assert 'if [ "${GITHUB_REF_TYPE}" = tag ]' in fallback
+    assert "exit 1" in fallback

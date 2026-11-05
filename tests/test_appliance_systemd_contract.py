@@ -350,17 +350,24 @@ def test_the_chroot_itself_still_carries_the_mode_sshd_requires():
 
 
 def test_no_mode_is_asserted_on_a_path_something_is_mounted_over():
-    """setup-export-root.sh bind-mounts the EMS paths onto these three and
-    remounts them read-only. Every package install therefore ran
+    """setup-export-root.sh bind-mounts the EMS backups onto this mount point and
+    remounts it read-only. Every package install therefore ran
     systemd-tmpfiles and collected three "fchownat() ... failed: Read-only file
     system" errors -- observed on a live Pi 3B+ at 19:33, 23:04 and 23:41, once
     per install. A mount point's own mode is invisible while something is
     mounted over it, so the rule could never do anything but fail."""
 
-    rules = tmpfiles_rules()
+    from appliance.paths import export_sources
 
-    for exported in ("config", "backups", "data"):
-        rule = rules[f"/srv/ems-appliance-export/{exported}"]
+    rules = tmpfiles_rules()
+    exported = sorted(export_sources("/opt/ems-solarflow"))
+
+    targets = sorted(path.rsplit("/", 1)[1] for path in rules if path.startswith("/srv/ems-appliance-export/"))
+    # Only the exports there are: a retired one tmpfiles kept recreating made
+    # every fresh install's export root "not exclusive".
+    assert targets == exported, targets
+    for name in exported:
+        rule = rules[f"/srv/ems-appliance-export/{name}"]
         assert rule["mode"] == "-", rule
         assert rule["owner"] == "-", rule
         assert rule["group"] == "-", rule

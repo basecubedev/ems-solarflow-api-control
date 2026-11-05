@@ -19,7 +19,7 @@
    * password file is gone and this page may not create one again) or login.
    */
   const mode = $derived(
-    !session.loaded ? "loading" : !session.reachable ? "unreachable" : !session.configured ? "create" : session.fileMissing ? "missing" : "login",
+    !session.loaded ? "loading" : !session.reachable ? "unreachable" : !session.stateKnown ? "agent" : !session.configured ? "create" : session.fileMissing ? "missing" : "login",
   );
 
   async function submit(event) {
@@ -59,6 +59,10 @@
     {:else if mode === "unreachable"}
       <h1 class="title">{t("signIn.unreachableTitle")}</h1>
       <p class="lead" role="status">{t("signIn.unreachable")}</p>
+      <button class="btn" type="button" onclick={loadSession}><Icon name="refresh-cw" />{t("common.retry")}</button>
+    {:else if mode === "agent"}
+      <h1 class="title">{t("signIn.agentTitle")}</h1>
+      <p class="lead" role="status" data-testid="sign-in-agent">{t("signIn.agent")}</p>
       <button class="btn" type="button" onclick={loadSession}><Icon name="refresh-cw" />{t("common.retry")}</button>
     {:else}
       <h1 class="title">{mode === "create" ? t("signIn.createTitle") : t("signIn.title")}</h1>

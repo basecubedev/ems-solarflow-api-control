@@ -8,13 +8,20 @@ down with it.
 
 import os
 import stat
+import sys
 import time
+import traceback
 
-from appliance import rescue_account, validation
+from appliance import manager_verify, media_sizing, rescue_account, validation
 from appliance.config import effective_timezone
-from appliance.docker_backend import CONTAINER_RUNNING, DAEMON_RUNNING
+from appliance.docker_backend import (
+    CONTAINER_RUNNING,
+    DAEMON_RUNNING,
+    DAEMON_UNRESPONSIVE,
+    DockerError,
+)
 from appliance.packages import UPDATE_CHECK_FAILED
-from appliance.redaction import bounded_redacted_log
+from appliance.redaction import bounded_redacted_log, redact_text
 from appliance.ssh_policy import REFUSAL_ACCEPTED, REFUSAL_UNKNOWN
 from appliance.systemd import (
     UNIT_APPLIANCE_AGENT,
@@ -48,6 +55,7 @@ VIEW_OVERVIEW = "overview"
 VIEW_ADMIN = "admin"
 VIEW_UPDATES = "updates"
 VIEW_ACCESS = "access"
+VIEW_NETWORK = "network"
 
 # An update check here is deliberately read-only: it never runs apt-get update,
 # which is what keeps a status poll from changing the machine it reports on.
@@ -68,8 +76,8 @@ SECTION_LABELS = {
 }
 
 
-def finding(code, severity, section, title, message, next_step):
-    return {
+def finding(code, severity, section, title, message, next_step, *, facts=None):
+    record = {
         "code": code,
         "severity": severity,
         "section": section,
@@ -77,6 +85,9 @@ def finding(code, severity, section, title, message, next_step):
         "message": message,
         "next_step": next_step,
     }
+    if facts:
+        record["facts"] = facts
+    return record
 
 
 def _missing_admin_next_step(admin):
@@ -85,9 +96,28 @@ def _missing_admin_next_step(admin):
     return "Open Admin and repair it; choosing a version on Updates also recreates it."
 
 
+def _container_unknown(name, view):
+    return finding(
+        "container_state_unknown",
+        FINDING_WARNING,
+        view,
+        "A container's state could not be read",
+        f"Docker answered, but asking it about {name} failed, so whether it runs is unknown.",
+        "Reload in a minute. If it stays like this, collect a support archive in "
+        "Diagnostics; nothing here is reported as missing on this alone.",
+        facts={"name": name},
+    )
+
+
 def _docker_known_down(admin):
     daemon = (admin.get("docker") or {}).get("state")
     return bool(daemon) and daemon != DAEMON_RUNNING
+
+
+# How long after its deadline an install with no verdict is reported as never
+# judged: the two ticks a healthy look gets, five revert attempts a tick apart
+# and the dpkg runs between them all fit inside it.
+MANAGER_DEADLINE_SLACK_SECONDS = 900
 
 
 def health_level(findings):
@@ -124,7 +154,19 @@ def section(name, collector):
     try:
         payload = collector()
     except Exception as exc:
-        return {"section": name, "status": SECTION_UNAVAILABLE, "error": exc.__class__.__name__}
+        # The agent's journal is where the finding's next step sends an
+        # operator, so the reason and its traceback go there, redacted.
+        print(
+            f"status section {name} failed: " + redact_text(traceback.format_exc()),
+            file=sys.stderr,
+            flush=True,
+        )
+        return {
+            "section": name,
+            "status": SECTION_UNAVAILABLE,
+            "error": exc.__class__.__name__,
+            "detail": redact_text(str(exc))[:200],
+        }
     payload = dict(payload) if isinstance(payload, dict) else {"value": payload}
     payload.update({"section": name, "status": SECTION_OK})
     return payload
@@ -145,10 +187,12 @@ class StatusService:
         ssh,
         backup,
         operations,
+        block=None,
         time_fn=None,
         installed_version=None,
     ):
         self.paths = paths
+        self.block = block
         self.config = config
         self.probe = probe
         # Resolved once by the composition root rather than looked up here, the
@@ -182,6 +226,7 @@ class StatusService:
                 "root": self.probe.filesystem("/"),
                 "ems_data": self.probe.filesystem(str(self.paths.ems_data_dir)),
             },
+            "medium": self._medium(),
             "hostname": self.probe.hostname(),
             "timezone": effective_timezone(self.paths, self.config),
             "services": self.systemd.unit_states(
@@ -192,6 +237,20 @@ class StatusService:
             # the answer without going to look for it.
             "rescue": self._rescue(),
         }
+
+    def _medium(self):
+        """The card the root lives on; an unread one is carried as unread."""
+
+        if self.block is None:
+            return {"appliance_image": False}
+        try:
+            return self.block.root_medium(state_dir=self.paths.state_dir)
+        except Exception as exc:
+            return {
+                "appliance_image": True,
+                "available": False,
+                "error": getattr(exc, "code", exc.__class__.__name__),
+            }
 
     def _rescue(self):
         """The rescue account, and whether sshd actually refuses it a password.
@@ -220,7 +279,12 @@ class StatusService:
         containers = []
         if daemon["state"] == DAEMON_RUNNING:
             for name in self.config.managed_containers:
-                containers.append(self.docker.inspect_container(name).to_dict())
+                try:
+                    containers.append(self.docker.inspect_container(name, strict=True).to_dict())
+                except DockerError as exc:
+                    containers.append(
+                        {"name": name, "exists": None, "state": "unknown", "error": exc.code}
+                    )
         # The list is the configured set; which of them is the EMS is said
         # here too, so the console never picks it by a name pattern.
         return {
@@ -253,9 +317,9 @@ class StatusService:
     def operations_state(self):
         active = self.operations.active()
         return {
-            "active": active.to_dict() if active else None,
-            "recent": [item.to_dict() for item in self.operations.list(limit=10)],
-            "unacknowledged": [item.to_dict() for item in self.operations.unacknowledged()],
+            "active": active.summary() if active else None,
+            "recent": [item.summary() for item in self.operations.list(limit=10)],
+            "unacknowledged": [item.summary() for item in self.operations.unacknowledged()],
         }
 
     # --- aggregate -------------------------------------------------------
@@ -275,8 +339,117 @@ class StatusService:
         sections["collected_at"] = self._time()
         return sections
 
+    def _manager_findings(self):
+        """How the last Appliance Manager install ended, when it did not stand.
+
+        Only a tile on the Updates page said so: the overview, its verdict and
+        the menu marks called an appliance whose install had been put back --
+        or could not be -- healthy. Each finding stays until the next install
+        arms a new deadline, because the state it names stays as long.
+        """
+
+        verdict = manager_verify.read_verdict(self.paths)
+        if verdict.verdict == manager_verify.VERDICT_REVERTED:
+            return [
+                finding(
+                    "manager_install_reverted",
+                    FINDING_WARNING,
+                    VIEW_UPDATES,
+                    "The last Appliance Manager install was put back",
+                    "It did not come up healthy in time, so the package that ran before it "
+                    "is installed again.",
+                    "Open Updates: Last install says what happened, and the install log "
+                    "names the step that failed.",
+                )
+            ]
+        if verdict.verdict == manager_verify.VERDICT_REVERT_FAILED and not self._manager_configured():
+            return [
+                finding(
+                    "manager_revert_failed",
+                    FINDING_ERROR,
+                    VIEW_UPDATES,
+                    "Going back to the earlier Appliance Manager failed",
+                    "The last install did not come up healthy and the kept package could not "
+                    "be put back either, so the package manager may be left half-configured.",
+                    "While this page answers, install a version from Updates. At the console, "
+                    "sudo dpkg --configure -a finishes a half-configured package.",
+                )
+            ]
+        if verdict.verdict == manager_verify.VERDICT_UNAVAILABLE:
+            return [
+                finding(
+                    "manager_revert_unavailable",
+                    FINDING_ERROR,
+                    VIEW_UPDATES,
+                    "The last Appliance Manager install could not be undone",
+                    "It did not come up healthy, and there was no earlier package to put back "
+                    "or its deadline could not be read.",
+                    "Open Updates and install a version from the list.",
+                )
+            ]
+        deadline = manager_verify.read(self.paths)
+        if (
+            deadline.armed
+            and not verdict.settled
+            and deadline.deadline_epoch
+            and self._time() > int(deadline.deadline_epoch) + MANAGER_DEADLINE_SLACK_SECONDS
+        ):
+            return [
+                finding(
+                    "manager_install_unjudged",
+                    FINDING_WARNING,
+                    VIEW_UPDATES,
+                    "An Appliance Manager install was never judged",
+                    "Its deadline ran out without a verdict, so the install stands untested.",
+                    "Open Updates and check Last install; installing a version again arms "
+                    "a new deadline.",
+                )
+            ]
+        return []
+
+    def _manager_configured(self):
+        """Whether dpkg calls the Manager package installed, configure and all.
+
+        A failed revert leaves it half-configured, and the finding says so. An
+        operator who then ran `dpkg --configure -a`, which the finding itself
+        suggests, has fixed it, while the verdict stays until the next install.
+        """
+
+        runner = getattr(self.probe, "runner", None)
+        if runner is None or not runner.available("dpkg-query"):
+            return False
+        result = runner.run(
+            "dpkg-query", ["-W", "-f=${db:Status-Status}", "--", "ems-appliance-manager"], timeout=15
+        )
+        return result.ok and result.stdout.strip() == manager_verify.DPKG_STATE_INSTALLED
+
     def _health(self, sections):
-        findings = []
+        findings = list(self._manager_findings())
+        if getattr(self.operations, "unrecorded", None) or getattr(self.operations, "unfinished", None):
+            findings.append(
+                finding(
+                    "operations_unrecorded",
+                    FINDING_ERROR,
+                    VIEW_DIAGNOSTICS,
+                    "An operation could not be closed",
+                    "There was no room on the card to record that an operation had ended, "
+                    "so it still holds the appliance and nothing new can start.",
+                    "Free space on the card; the next operation you plan closes it first.",
+                )
+            )
+        if getattr(self.operations, "unreadable", None):
+            findings.append(
+                finding(
+                    "operations_unreadable",
+                    FINDING_WARNING,
+                    VIEW_DIAGNOSTICS,
+                    "An operation record could not be read",
+                    "When the agent started, the record of an operation could not be read, "
+                    "so it was moved aside and that operation is no longer listed. It may "
+                    "have been running when the appliance lost power.",
+                    "Check that the Admin and the appliance are in the state you expect.",
+                )
+            )
 
         for name, payload in sections.items():
             if isinstance(payload, dict) and payload.get("status") == SECTION_UNAVAILABLE:
@@ -295,7 +468,20 @@ class StatusService:
         docker = sections.get("docker", {})
         if docker.get("status") == SECTION_OK:
             daemon = docker.get("daemon", {})
-            if daemon.get("state") != DAEMON_RUNNING:
+            if daemon.get("state") == DAEMON_UNRESPONSIVE:
+                findings.append(
+                    finding(
+                        "docker_unresponsive",
+                        FINDING_WARNING,
+                        VIEW_DIAGNOSTICS,
+                        "Docker does not answer in time",
+                        "The container engine was asked and did not answer within 15 seconds; "
+                        "that is a busy or stuck engine, not a stopped one.",
+                        "Reload in a minute. If it stays like this, collect a support archive "
+                        "in Diagnostics before restarting anything.",
+                    )
+                )
+            elif daemon.get("state") != DAEMON_RUNNING:
                 findings.append(
                     finding(
                         "docker_not_running",
@@ -317,6 +503,9 @@ class StatusService:
             for container in docker.get("containers", []) or []:
                 if container.get("name") != self.config.ems_container:
                     continue
+                if container.get("exists") is None:
+                    findings.append(_container_unknown(container.get("name"), VIEW_OVERVIEW))
+                    continue
                 if not container.get("exists") or container.get("state") == CONTAINER_RUNNING:
                     continue
                 findings.append(
@@ -337,7 +526,11 @@ class StatusService:
         # A stopped daemon hides every container; docker_not_running says so, and
         # "no Admin installed" would be false.
         if admin.get("status") == SECTION_OK and not _docker_known_down(admin):
-            if not admin.get("installed"):
+            if admin.get("container_state_unknown"):
+                findings.append(
+                    _container_unknown(self.config.admin_container, VIEW_ADMIN)
+                )
+            elif not admin.get("installed"):
                 findings.append(
                     finding(
                         "admin_not_installed",
@@ -360,6 +553,38 @@ class StatusService:
                         "restart does not bring it back.",
                     )
                 )
+            problem = (admin.get("known_good") or {}).get("problem")
+            if problem:
+                findings.append(
+                    finding(
+                        "known_good_history_unreadable",
+                        FINDING_WARNING,
+                        VIEW_ADMIN,
+                        "The known-good Admin history cannot be read",
+                        f"{problem}, so there is no verified version to roll back to.",
+                        "Installing a version on Updates starts a new history and keeps the "
+                        "unreadable file beside it.",
+                        facts={"problem": problem},
+                    )
+                )
+
+        network = sections.get("network", {})
+        published = str(network.get("mdns") or "")
+        expected = str(network.get("mdns_expected") or "")
+        if network.get("status") == SECTION_OK and expected and published != expected:
+            findings.append(
+                finding(
+                    "mdns_name_taken",
+                    FINDING_WARNING,
+                    VIEW_NETWORK,
+                    "Another device uses this appliance's name",
+                    f"The network knows this appliance as {published}, because {expected} "
+                    "was already taken, possibly by another appliance.",
+                    f"Open it as {published}, or give one of the devices another name "
+                    "under Network.",
+                    facts={"published": published, "expected": expected},
+                )
+            )
 
         updates = sections.get("updates", {})
         if updates.get("status") == SECTION_OK:
@@ -378,6 +603,21 @@ class StatusService:
                         "Security updates are waiting",
                         f"{count} {plural} available.",
                         "Open Updates and install them.",
+                    )
+                )
+            if updates.get("manual_count"):
+                names = ", ".join(item["name"] for item in updates.get("manual_updates") or ())
+                findings.append(
+                    finding(
+                        "manual_updates_pending",
+                        FINDING_WARNING,
+                        VIEW_UPDATES,
+                        "Important updates need installing by hand",
+                        f"Kernel, firmware or container-runtime updates are waiting: {names}. "
+                        "Automatic security updates cover only the Debian security archive "
+                        "and never install these.",
+                        "Open Updates and install all updates.",
+                        facts={"packages": names},
                     )
                 )
             if updates.get("reboot_required"):
@@ -406,9 +646,9 @@ class StatusService:
                         "an empty list.",
                     )
                 )
-            # A check that could not ask the mirror is reported as that, and
-            # never as a package manager in need of the repairs the console
-            # offers, none of which reaches a mirror.
+            # A check apt could not finish is reported as that. It counts against
+            # the package manager only for unmet dependencies, which the
+            # package-manager finding below then asks to repair.
             if updates.get("error") == UPDATE_CHECK_FAILED:
                 findings.append(
                     finding(
@@ -416,11 +656,11 @@ class StatusService:
                         FINDING_WARNING,
                         VIEW_UPDATES,
                         "The update check did not finish",
-                        "apt could not list what is available, so the counts on this page are "
-                        "not an answer; an unreachable mirror or a broken sources list is the "
-                        "usual cause.",
-                        "Open Updates and refresh the package indexes; the appliance "
-                        "log names the repository that did not answer.",
+                        "apt could not work out what is available, so the counts on this page "
+                        "are not an answer. The check asks no mirror: a dependency apt cannot "
+                        "meet, a broken sources entry or a damaged package list is the usual cause.",
+                        "Open Updates: planning names apt's own reason. Refresh the package "
+                        "indexes; when apt names unmet dependencies, run Repair dependencies.",
                     )
                 )
             if not (updates.get("package_manager") or {}).get("healthy", True):
@@ -468,6 +708,40 @@ class StatusService:
                             f"More than 90% of {label} is in use.",
                             "Writes fail once it is full, including backups and updates. "
                             "Open Diagnostics to collect a support archive before freeing space.",
+                        )
+                    )
+            # Judged only where this project grows the root: a .deb
+            # installation's storage is its owner's, and an unread medium is
+            # unknown rather than short.
+            medium = system.get("medium") or {}
+            if medium.get("appliance_image") and medium.get("available"):
+                if medium.get("fills_medium") is False:
+                    findings.append(
+                        finding(
+                            "root_not_grown",
+                            FINDING_WARNING,
+                            VIEW_DIAGNOSTICS,
+                            "The root does not fill the card",
+                            f"The root is {medium.get('root_mb')} MB of a "
+                            f"{medium.get('medium_mb')} MB medium; "
+                            f"{medium.get('unused_mb')} MB are unused. The first-boot "
+                            "growth did not finish.",
+                            "Open Diagnostics and read the Card resize log: it names the "
+                            "step that failed. The next boot tries again.",
+                        )
+                    )
+                if medium.get("medium_supported") is False:
+                    findings.append(
+                        finding(
+                            "medium_below_minimum",
+                            FINDING_WARNING,
+                            VIEW_DIAGNOSTICS,
+                            f"The card is smaller than {media_sizing.SUPPORTED_MEDIA_LABEL}",
+                            f"The medium holds {medium.get('medium_mb')} MB; "
+                            f"{media_sizing.UNSUPPORTED_MEDIA_REASON}.",
+                            "Move to a card of at least "
+                            f"{media_sizing.SUPPORTED_MEDIA_LABEL}: take a backup, flash the "
+                            "new card and restore it.",
                         )
                     )
             # Only the alarming answer is a finding. Refused is what ships;

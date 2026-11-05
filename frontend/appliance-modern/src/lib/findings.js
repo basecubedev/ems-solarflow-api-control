@@ -35,6 +35,13 @@ function daemonWords(status) {
   return word("docker", DAEMON_STATES, state) || { key: "common.unknown" };
 }
 
+/** The card the root lives on (status.system.medium), in whole gigabytes. */
+function mediumFacts(status) {
+  const medium = ((status && status.system) || {}).medium || {};
+  const gb = (megabytes) => (Number(megabytes) >= 0 ? Math.round(Number(megabytes) / 1024) : "—");
+  return { root: gb(medium.root_mb), medium: gb(medium.medium_mb), unused: gb(medium.unused_mb) };
+}
+
 function emsContainer(status) {
   const docker = (status && status.docker) || {};
   return (docker.containers || []).find((item) => item.name === docker.ems_container) || {};
@@ -46,6 +53,21 @@ function emsContainer(status) {
  * this table in both directions.
  */
 export const FINDINGS = Object.freeze({
+  docker_unresponsive: () => ({
+    title: words("finding.docker_unresponsive.title"),
+    message: words("finding.docker_unresponsive.message"),
+    next: words("finding.docker_unresponsive.next"),
+  }),
+  container_state_unknown: (status, finding) => ({
+    title: words("finding.container_state_unknown.title"),
+    message: words("finding.container_state_unknown.message", { name: (finding && finding.facts && finding.facts.name) || "—" }),
+    next: words("finding.container_state_unknown.next"),
+  }),
+  known_good_history_unreadable: (status, finding) => ({
+    title: words("finding.known_good_history_unreadable.title"),
+    message: words("finding.known_good_history_unreadable.message", { problem: (finding && finding.facts && finding.facts.problem) || "—" }),
+    next: words("finding.known_good_history_unreadable.next"),
+  }),
   docker_not_running: (status) => ({
     title: words("finding.docker_not_running.title"),
     message: words("finding.docker_not_running.message", { state: daemonWords(status) }),
@@ -71,6 +93,16 @@ export const FINDINGS = Object.freeze({
     message: words("finding.security_updates_pending.message", {}, Number(updates(status).security_count) || 0),
     next: words("finding.security_updates_pending.next"),
   }),
+  mdns_name_taken: (status, finding) => ({
+    title: words("finding.mdns_name_taken.title"),
+    message: words("finding.mdns_name_taken.message", { published: (finding && finding.facts && finding.facts.published) || "—", expected: (finding && finding.facts && finding.facts.expected) || "—" }),
+    next: words("finding.mdns_name_taken.next", { published: (finding && finding.facts && finding.facts.published) || "—" }),
+  }),
+  manual_updates_pending: (status, finding) => ({
+    title: words("finding.manual_updates_pending.title"),
+    message: words("finding.manual_updates_pending.message", { packages: (finding && finding.facts && finding.facts.packages) || "—" }),
+    next: words("finding.manual_updates_pending.next"),
+  }),
   reboot_required: () => ({
     title: words("finding.reboot_required.title"),
     message: words("finding.reboot_required.message"),
@@ -91,6 +123,36 @@ export const FINDINGS = Object.freeze({
     message: words("finding.package_manager_unhealthy.message"),
     next: words("finding.package_manager_unhealthy.next"),
   }),
+  operations_unreadable: () => ({
+    title: words("finding.operations_unreadable.title"),
+    message: words("finding.operations_unreadable.message"),
+    next: words("finding.operations_unreadable.next"),
+  }),
+  operations_unrecorded: () => ({
+    title: words("finding.operations_unrecorded.title"),
+    message: words("finding.operations_unrecorded.message"),
+    next: words("finding.operations_unrecorded.next"),
+  }),
+  manager_install_reverted: () => ({
+    title: words("finding.manager_install_reverted.title"),
+    message: words("finding.manager_install_reverted.message"),
+    next: words("finding.manager_install_reverted.next"),
+  }),
+  manager_revert_failed: () => ({
+    title: words("finding.manager_revert_failed.title"),
+    message: words("finding.manager_revert_failed.message"),
+    next: words("finding.manager_revert_failed.next"),
+  }),
+  manager_revert_unavailable: () => ({
+    title: words("finding.manager_revert_unavailable.title"),
+    message: words("finding.manager_revert_unavailable.message"),
+    next: words("finding.manager_revert_unavailable.next"),
+  }),
+  manager_install_unjudged: () => ({
+    title: words("finding.manager_install_unjudged.title"),
+    message: words("finding.manager_install_unjudged.message"),
+    next: words("finding.manager_install_unjudged.next"),
+  }),
   storage_low: () => ({
     title: words("finding.storage_low.title"),
     message: words("finding.storage_low.message"),
@@ -100,6 +162,16 @@ export const FINDINGS = Object.freeze({
     title: words("finding.persistent_storage_low.title"),
     message: words("finding.persistent_storage_low.message"),
     next: words("finding.storage.next"),
+  }),
+  root_not_grown: (status) => ({
+    title: words("finding.root_not_grown.title"),
+    message: words("finding.root_not_grown.message", mediumFacts(status)),
+    next: words("finding.root_not_grown.next"),
+  }),
+  medium_below_minimum: (status) => ({
+    title: words("finding.medium_below_minimum.title"),
+    message: words("finding.medium_below_minimum.message", mediumFacts(status)),
+    next: words("finding.medium_below_minimum.next"),
   }),
   rescue_password_accepted_over_ssh: () => ({
     title: words("finding.rescue_password_accepted_over_ssh.title"),

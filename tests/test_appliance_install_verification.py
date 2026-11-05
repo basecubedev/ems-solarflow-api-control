@@ -122,7 +122,7 @@ def device_of(path):
     return f"{os.major(entry.st_dev)}:{os.minor(entry.st_dev)}"
 
 
-def seed_sources(paths, *, names=("config", "backups", "data")):
+def seed_sources(paths, *, names=("backups",)):
     # Taken from the map production binds from, never restated: a fixture that
     # decides for itself where an export comes from turns a wrong mapping into a
     # passing test.
@@ -335,13 +335,13 @@ def test_a_configured_report_missing_an_expected_export_is_not_believed(tmp_path
     paths = appliance_paths(tmp_path)
     seed_sources(paths)
     payload = configured_status(paths)
-    payload["paths"] = [item for item in payload["paths"] if item["name"] != "data"]
+    payload["paths"] = [item for item in payload["paths"] if item["name"] != "backups"]
     write_status(paths, payload)
 
     named = verify(paths)
 
     assert named["export_setup"]["status"] == STATUS_FAILED, named
-    assert "data" in named["export_setup"]["detail"], named
+    assert "backups" in named["export_setup"]["detail"], named
 
 
 def test_a_configured_report_with_an_extra_export_is_not_believed(tmp_path):
@@ -380,7 +380,7 @@ def test_a_configured_report_with_a_wrong_target_is_not_believed(tmp_path):
     paths = appliance_paths(tmp_path)
     seed_sources(paths)
     payload = configured_status(paths)
-    payload["paths"][0]["target"] = "/srv/somewhere-else/config"
+    payload["paths"][0]["target"] = "/srv/somewhere-else/backups"
     write_status(paths, payload)
 
     named = verify(paths)
@@ -395,7 +395,7 @@ def test_a_foreign_read_only_mount_at_an_expected_target_is_not_confined(tmp_pat
     seed_sources(paths)
     write_status(paths, configured_status(paths))
     table = mounts(paths)
-    table[str(paths.export_root / "config")]["root"] = "/etc"
+    table[str(paths.export_root / "backups")]["root"] = "/etc"
 
     named = verify(paths, mounts_table=table)
 
@@ -415,19 +415,17 @@ def test_an_unexpected_entry_inside_the_export_root_fails_verification(tmp_path)
 
 
 def test_a_missing_ems_directory_stays_pending_and_exact(tmp_path, production_chroot_chain):
-    """The absent one is ``backups``: the archives live under ``data``, so
-    creating that source creates ``data`` with it and no fixture can leave
-    ``data`` missing while ``backups`` is present."""
+    """``data/backups`` exists once EMS wrote its first archive."""
 
     paths = appliance_paths(tmp_path)
-    seed_sources(paths, names=("config", "data"))
+    seed_sources(paths, names=())
     payload = configured_status(paths)
     for entry in payload["paths"]:
         if entry["name"] == "backups":
             entry["state"] = "missing"
     write_status(paths, payload)
 
-    named = verify(paths, mounts_table=mounts(paths, names=("config", "data")))
+    named = verify(paths, mounts_table=mounts(paths, names=()))
 
     assert named["export_setup"]["status"] == STATUS_OK, named
 

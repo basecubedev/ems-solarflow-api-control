@@ -291,7 +291,7 @@ def test_the_installer_refuses_an_archive_from_outside_its_own_directory():
 def test_the_installer_puts_the_previous_package_back_when_dpkg_fails():
     script = (PACKAGING / "bin" / "install-manager.sh").read_text(encoding="utf-8")
 
-    assert "dpkg --configure -a" in script, "try the ordinary cure before reaching for the revert"
+    assert "dpkg --force-confold --configure -a" in script, "try the ordinary cure before reaching for the revert"
     assert "reverted" in script
     assert "revert_failed" in script
 
@@ -782,3 +782,229 @@ def test_the_installer_asks_dpkg_the_question_manager_verify_names():
     script = INSTALLER.read_text(encoding="utf-8")
     assert f"-f '{manager_verify.DPKG_STATE_QUERY}'" in script
     assert f'"{manager_verify.DPKG_STATE_INSTALLED}|$WANTED"' in script
+
+
+# --- the deadline an installer revert leaves behind ---------------------------
+
+
+def _deadline_files(state):
+    return [
+        state / name
+        for name in (
+            manager_verify.DEADLINE_NAME,
+            manager_verify.TICKS_NAME,
+            manager_verify.ATTEMPTS_NAME,
+            manager_verify.STABLE_NAME,
+            manager_verify.EXTENDED_NAME,
+        )
+    ]
+
+
+def _fake_systemctl(tools, log):
+    (tools / "systemctl").write_text(
+        f'#!/bin/sh\necho "systemctl $*" >> "{log}"\nexit 0\n', encoding="utf-8"
+    )
+    (tools / "systemctl").chmod(0o755)
+
+
+def test_a_revert_the_installer_made_retires_the_deadline_armed_for_it(tmp_path):
+    """Left armed, the deadline reinstalled previous.deb a second time a quarter
+    of an hour later, and the console refused Update and Revert until then."""
+
+    state = tmp_path / "state"
+    tools = tmp_path / "tools"
+    staged(state)
+    log = fake_dpkg(tools, status="half-configured", version="0.2.0", install_fails=True)
+    _fake_systemctl(tools, log)
+    for path in _deadline_files(state):
+        path.write_text("{}\n", encoding="utf-8")
+
+    result = run_installer(state, tools)
+
+    assert result.returncode == 1, result.stderr
+    assert installer_outcome(state)["outcome"] == manager_install.OUTCOME_REVERTED
+    verdict = json.loads((state / manager_verify.VERDICT_NAME).read_text(encoding="utf-8"))
+    assert verdict["verdict"] == manager_verify.VERDICT_REVERTED
+    assert [path.name for path in _deadline_files(state) if path.exists()] == []
+    assert f"systemctl disable --now {manager_verify.VERIFY_TIMER}" in log.read_text(encoding="utf-8")
+
+
+def test_a_request_the_installer_refuses_retires_the_deadline(tmp_path):
+    """Nothing is installed, and a deadline left armed reinstalled the running
+    package a quarter of an hour later and filed it as put back."""
+
+    state = tmp_path / "state"
+    tools = tmp_path / "tools"
+    staged(state)
+    (state / manager_install.REQUEST_NAME).unlink()
+    log = fake_dpkg(tools, status="installed", version="0.1.0", install_fails=False)
+    _fake_systemctl(tools, log)
+    for path in _deadline_files(state):
+        path.write_text("{}\n", encoding="utf-8")
+
+    result = run_installer(state, tools)
+
+    assert result.returncode == 1
+    assert installer_outcome(state)["outcome"] == manager_install.OUTCOME_NO_REQUEST
+    assert [path.name for path in _deadline_files(state) if path.exists()] == []
+    assert f"systemctl disable --now {manager_verify.VERIFY_TIMER}" in log.read_text(encoding="utf-8")
+
+
+def test_an_installer_revert_with_no_deadline_armed_writes_no_verdict(tmp_path):
+    state = tmp_path / "state"
+    tools = tmp_path / "tools"
+    staged(state)
+    log = fake_dpkg(tools, status="half-configured", version="0.2.0", install_fails=True)
+    _fake_systemctl(tools, log)
+
+    run_installer(state, tools)
+
+    assert installer_outcome(state)["outcome"] == manager_install.OUTCOME_REVERTED
+    assert not (state / manager_verify.VERDICT_NAME).exists()
+    assert "systemctl" not in log.read_text(encoding="utf-8")
+
+
+# --- a package lock someone else holds ----------------------------------------
+
+
+def _locked_dpkg(tools, log, *, refusals):
+    """A dpkg that refuses with the lock message ``refusals`` times, then installs."""
+
+    count = tools / "lock-refusals"
+    (tools / "dpkg").write_text(
+        "#!/bin/sh\n"
+        f'echo "dpkg $*" >> "{log}"\n'
+        f'n=$(cat "{count}" 2>/dev/null || echo 0)\n'
+        f'if [ "$n" -lt {refusals} ]; then\n'
+        f'  echo $((n + 1)) > "{count}"\n'
+        '  echo "dpkg: error: dpkg frontend lock was locked by another process with pid 4242" >&2\n'
+        "  exit 2\n"
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    (tools / "dpkg").chmod(0o755)
+    # The installer's own wait, not an ordering device: the fake returns at once.
+    (tools / "sleep").write_text(f'#!/bin/sh\necho "sleep $*" >> "{log}"\n', encoding="utf-8")
+    (tools / "sleep").chmod(0o755)
+
+
+def test_an_install_waits_for_a_lock_another_apt_run_frees(tmp_path):
+    state = tmp_path / "state"
+    tools = tmp_path / "tools"
+    staged(state)
+    log = fake_dpkg(tools, status="installed", version="0.2.0", install_fails=False)
+    _fake_systemctl(tools, log)
+    _locked_dpkg(tools, log, refusals=3)
+
+    result = run_installer(state, tools)
+
+    assert result.returncode == 0, result.stderr
+    assert installer_outcome(state)["outcome"] == manager_install.OUTCOME_INSTALLED
+    calls = log.read_text(encoding="utf-8")
+    assert calls.count("sleep ") == 3
+    assert "previous.deb" not in calls
+
+
+def test_a_lock_that_never_frees_installs_nothing_and_puts_nothing_back(tmp_path):
+    """Going on to the fallback met the same lock and filed revert_failed."""
+
+    state = tmp_path / "state"
+    tools = tmp_path / "tools"
+    staged(state)
+    log = fake_dpkg(tools, status="installed", version="0.1.0", install_fails=False)
+    _fake_systemctl(tools, log)
+    _locked_dpkg(tools, log, refusals=10_000)
+    for path in _deadline_files(state):
+        path.write_text("{}\n", encoding="utf-8")
+
+    result = run_installer(state, tools)
+
+    assert result.returncode == 1
+    assert installer_outcome(state)["outcome"] == manager_install.OUTCOME_NOT_STARTED
+    calls = log.read_text(encoding="utf-8")
+    assert "previous.deb" not in calls
+    assert "--configure" not in calls
+    assert [path.name for path in _deadline_files(state) if path.exists()] == []
+    assert not (state / manager_verify.VERDICT_NAME).exists()
+
+
+def test_an_install_that_got_the_lock_late_and_then_failed_still_falls_back(tmp_path):
+    """Waiting once for the lock used to brand any later failure not_started:
+    a postinst that failed after the wait left the new package half-configured
+    with no cure, no fallback and no deadline."""
+
+    state = tmp_path / "state"
+    tools = tmp_path / "tools"
+    staged(state)
+    log = fake_dpkg(tools, status="half-configured", version="0.2.0", install_fails=True)
+    _fake_systemctl(tools, log)
+    (tools / "dpkg").rename(tools / "dpkg-after-the-lock")
+    once = tools / "lock-refused-once"
+    (tools / "dpkg").write_text(
+        "#!/bin/sh\n"
+        f'if [ ! -f "{once}" ]; then\n'
+        f'  : > "{once}"\n'
+        '  echo "dpkg: error: dpkg frontend lock was locked by another process with pid 4242" >&2\n'
+        "  exit 2\n"
+        "fi\n"
+        f'exec "{tools / "dpkg-after-the-lock"}" "$@"\n',
+        encoding="utf-8",
+    )
+    (tools / "dpkg").chmod(0o755)
+    (tools / "sleep").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (tools / "sleep").chmod(0o755)
+
+    result = run_installer(state, tools)
+
+    assert result.returncode == 1, result.stderr
+    assert installer_outcome(state)["outcome"] == manager_install.OUTCOME_REVERTED
+    calls = log.read_text(encoding="utf-8")
+    assert "--configure -a" in calls
+    assert "previous.deb" in calls
+
+
+def test_every_outcome_the_installer_records_is_named_for_the_console():
+    """SELF-13: an outcome the console does not know is shown as a raw code."""
+
+    code = "\n".join(
+        line for line in INSTALLER.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    recorded = set(re.findall(r"\b(?:record|fail|refuse) ([a-z_]+) ", code))
+
+    assert recorded == set(manager_install.INSTALLER_OUTCOMES)
+
+
+def _with_fallback(state, fallback):
+    request = state / manager_install.REQUEST_NAME
+    payload = json.loads(request.read_text(encoding="utf-8"))
+    request.write_text(json.dumps({**payload, "fallback": fallback}), encoding="utf-8")
+
+
+def test_a_request_with_no_fallback_puts_nothing_older_on(tmp_path):
+    state = tmp_path / "state"
+    tools = tmp_path / "tools"
+    staged(state)
+    _with_fallback(state, "")
+    log = fake_dpkg(tools, status="half-configured", version="0.2.0", install_fails=True)
+
+    result = run_installer(state, tools)
+
+    assert result.returncode == 1
+    assert installer_outcome(state)["outcome"] == manager_install.OUTCOME_INSTALL_FAILED
+    assert "previous.deb" not in log.read_text(encoding="utf-8")
+
+
+def test_a_request_naming_a_fallback_outside_the_state_directory_is_refused(tmp_path):
+    state = tmp_path / "state"
+    tools = tmp_path / "tools"
+    staged(state)
+    _with_fallback(state, "/srv/elsewhere/other.deb")
+    log = fake_dpkg(tools, status="installed", version="0.1.0", install_fails=False)
+
+    result = run_installer(state, tools)
+
+    assert result.returncode == 1
+    assert installer_outcome(state)["outcome"] == manager_install.OUTCOME_REQUEST_INVALID
+    assert not log.exists(), "dpkg ran for a request the installer refused"

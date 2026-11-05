@@ -422,7 +422,7 @@ class HttpsFetcher:
 # identifiers. The signed manifest remains the only authority. The one way a
 # claim reaches a plan is as a refusal -- a release_version the signed manifest
 # contradicts blocks the install the page offered under that name.
-DESCRIPTION_FIELDS = ("release_version", "created_at", "build_id", "board")
+DESCRIPTION_FIELDS = ("release_version", "created_at", "build_id", "board", "architecture")
 
 MAX_DESCRIPTION = 64
 

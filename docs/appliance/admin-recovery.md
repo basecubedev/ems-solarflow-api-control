@@ -63,7 +63,7 @@ actions.
    this appliance*.
 2. Choose the **Version**. Under **Channels** only *Latest stable* is offered —
    there is no current version and no known-good history to fall back on — but
-   the **Stable** and **Unstable** groups below it list every version the
+   the **Stable** and **Release candidate** groups below it list every version the
    registry publishes, so a first installation can pin an older release just as
    readily as the newest one. A candidate this host will not accept is listed
    greyed out with the reason. Expert mode adds *Exact release tag* for a
@@ -115,6 +115,12 @@ decides which tag *Latest stable* installs, so it is read over https only: an
 `http:` or `file:` URL, or a redirect to http, is refused with
 `release_index_insecure` and the list stays empty.
 
+The images themselves still come from `ghcr.io/basecubedev/ems-solarflow-admin`.
+The Admin console recognises its own deployment only under that repository and
+updates itself from there, so an `allowed-images.conf` that lists a mirror
+first is refused at the plan with `admin_repository_unsupported` rather than
+leaving an Admin that cannot update itself.
+
 1. Open **Updates → Choose an EMS Admin version**. To go straight to the
    newest stable release, the **Update to …** button on the EMS Admin card at
    the top of the page plans exactly that tag and skips steps 2 to 4.
@@ -122,8 +128,15 @@ decides which tag *Latest stable* installs, so it is read over https only: an
    - **Channels**: *Latest stable*, *Current version (reinstall)*, *Previous
      known-good*.
    - **Stable**: every release the registry publishes, newest first.
-   - **Unstable**: every pre-release tag (`-rc1`, `-beta`, `-dev.3`, …),
-     newest first — the Admin console's own grouping. Whether a candidate can be chosen is `allow_prerelease` in
+   - **Release candidate**: every pre-release tag (`-rc1`, `-beta`, `-dev.3`, …),
+     newest first — the Admin console's own grouping.
+   - **Rolling**: `latest`, the build of the main branch the Admin console can
+     move itself to; it is pulled, proven by its version label and pinned by
+     its digest like any release.
+   - **Development** (Expert only): the `dev-…` feature builds.
+
+   Anything but a stable release needs its own confirmation in the plan. Whether
+     such a build can be chosen is `allow_prerelease` in
      `/etc/ems-appliance-manager/allowed-images.conf`: a host that sets it to
      false shows every candidate greyed out with the reason, and the agent
      refuses the tag with `prerelease_not_allowed` even when it is typed by
@@ -182,6 +195,11 @@ The plan shows the resolved **digest reference** (`repository@sha256:...`).
 That immutable reference — not the tag — is what gets deployed. If no
 canonical digest can be resolved the installation is refused with
 `digest_unresolved` before anything is touched.
+
+With an Admin installed, the plan also names its **direction** — upgrade,
+downgrade, reinstall or unknown — and warns before a downgrade, or when the two
+versions cannot be compared. *Latest stable* can resolve below a running
+release candidate, and that used to be confirmed without a word.
 
 A confirmed plan is executed later, possibly by an agent that restarted in
 between, so the record it leaves behind is the only authority the mutation has.
@@ -250,6 +268,13 @@ as known good, and must not count as a successful recovery.
 The operation ends as `rolled_back` and shows the failure that caused it. The
 Appliance Manager itself stays reachable the whole time.
 
+When no Admin ran at plan time and none was ever recorded as known-good, there
+is nothing to put back. The appliance then stops the Admin that failed, writes
+the previous deployment files back and starts nothing: whatever tag the old
+compose file names was never verified. The operation ends as
+`manual_action_required` with `no previous Admin was recorded to restore`;
+installing a version that works is the way on.
+
 If the previous image is no longer available locally and cannot be pulled, the
 operation ends as `failed_terminal` with `rollback_failed` — it never reports a
 success it did not achieve.
@@ -260,6 +285,18 @@ success it did not achieve.
 **stored** `repository@sha256:...` reference. The tag is never resolved again,
 so a tag that moved in the registry cannot change what a rollback installs. The
 button is disabled when no previous known-good version exists.
+
+A known-good history that cannot be read is not taken for an empty one. The
+EMS Admin page reports `known_good_history_unreadable`, a rollback is refused
+with the same code, and a status read does not record the running Admin over
+it. The next install starts a new history and keeps the unreadable file beside
+it as `history.json.unreadable-<time>`.
+
+When the rolled-back version does not come up healthy, the appliance puts the
+Admin that was running before the rollback back, by the digest it recorded.
+If that Admin verifies again, the operation ends as `rolled_back`: the
+rollback did not happen and nothing was lost. Only when it cannot be restored
+does the operation end as `failed_terminal`.
 
 ### The plan is bound to what it was made against
 
@@ -383,6 +420,14 @@ goes looking for an outage that did not happen:
 A mutable tag is never a fallback: if the immutable reference cannot be
 prepared, the operation ends and the current Admin keeps running.
 
+The stored image may be gone: Admin keeps the five newest images of its
+repository plus those its own records name, and it cannot read this
+appliance's history, so a few Admin updates can remove the image a rollback
+returns to. It is then pulled by its digest while the current Admin still runs,
+watched like an install's pull and with the same 30-minute limit a slow card
+needs; the stage shows how long it has been running, and cancelling the
+operation stops it. Offline, such a rollback is not possible.
+
 Once step 07 has run, a failure is no longer free. The appliance then puts the
 snapshot back and recreates the Admin that was running before, and the result
 carries a `recovery` block saying whether that worked — it never claims a
@@ -467,6 +512,19 @@ Restart are refused** with `admin_transition_in_flight`. The message names the
 stage Admin reached and the file holding it. Reading still works: status,
 version, health and logs are unaffected.
 
+The record is read again right before an Install or Roll back stops the
+running Admin, because verifying the target takes time in which Admin can start
+replacing itself; the pinned deployment is then written back and the Admin is
+left running. A failed install does not start its recovery over a live record
+either: it ends `manual_action_required` and leaves Admin to finish.
+
+The yielding goes one way. Admin does not consult the appliance's operation
+lock, and its older per-release update path
+(`/api/admin/maintenance/admin-update/execute`, which no page calls) records
+only `pending-admin-update.json`, which carries no expiry and which the
+appliance does not read. Do not start that path while an appliance operation
+runs.
+
 The appliance never edits or deletes that record. It belongs to Admin.
 
 ### It yields to a live transition, not to a stuck one
@@ -485,7 +543,7 @@ In practice:
 | live, within its expiry | refuses Admin-mutating operations |
 | stage `completed` or `cancelled` | works normally, whatever the expiry says |
 | past its expiry | works normally |
-| corrupt or unreadable | works normally |
+| corrupt or unreadable — not a regular file, a link, larger than 256 KiB, or expiring more than an hour ahead | works normally, and says why it read the record as unreadable |
 
 The stage matters as much as the clock, because Admin keeps the record after it
 is finished and moves the deadline forward with the last write it makes — the
@@ -494,9 +552,20 @@ for up to a full window afterwards, and that window is exactly when an operator
 reaches for these tools. Any stage the appliance does not recognise keeps
 blocking, and so does `failed_recoverable`, which Admin may still act on.
 
+The record lives in a tree the EMS container can write, and the agent that
+reads it runs as root, so it is read without following a link, only as a
+regular file and only up to its size limit: a FIFO there used to hang every
+status read and Admin plan, and a link to `/dev/zero` was read until memory ran
+out. An expiry later than Admin ever sets — it renews one hour ahead — is not
+taken as live either, or a record dated the year 9999 would block every
+Install, Rollback, Repair, Start, Stop and Restart until then.
+
 If Admin is genuinely stuck inside a live transition, either wait for the
-expiry or delete
-`<install root>/data/admin/state/pending-transition.json` yourself.
+expiry — the refusal and the EMS Admin page name the time — or, with a shell,
+delete `state/pending-transition.json` under Admin's data directory yourself.
+That directory is the `EMS_ADMIN_DATA_DIR` the compose file gives the Admin
+service, then the one in `.env.admin` when the compose value only refers to it,
+and `<install root>/data/admin` when neither names one.
 
 ## Repair
 
@@ -505,8 +574,10 @@ expiry or delete
 | Finding | Suggestion |
 |---|---|
 | Docker is stopped | Start Docker |
-| Admin container is missing | Reinstall the selected Admin version |
+| Admin container is missing | Reinstall the recorded Admin version |
 | Container exists but is stopped | Start Admin |
+| The container runs neither the recorded known-good Admin nor what the deployment names (`admin_identity`) | Reinstall the recorded Admin version |
+| The deployment names a digest this appliance never verified and nothing runs it (`admin_deployment`) — what an install cut off between pinning and starting leaves | Reinstall the recorded Admin version; Start is not offered, because it would be held to the unverified digest |
 | Container restarts repeatedly | Review the logs, then reinstall |
 | Compose file is missing | Manual: recreate it with `TZ=<the zone shown under Network → Change the time zone> /usr/lib/ems-appliance-manager/install-admin-console.sh …`, so the Admin keeps the appliance's zone (the host itself runs on UTC). With no Admin container either, the EMS Admin page offers **Install EMS Admin** instead |
 | Admin service is not defined | Manual: add the service with `install-admin-console.sh` |
@@ -517,6 +588,11 @@ expiry or delete
 
 Repair also reports image availability, container state, health-check state and
 file permissions.
+
+**Reinstall the recorded Admin version** pins the deployment to the known-good
+record's `repository@sha256:…` reference, pulling it by digest when it is not
+local, and recreates the Admin from that. It is verified against the same
+digest. Without a known-good record it recreates what the deployment names.
 
 ### What the repair result means
 
@@ -557,14 +633,18 @@ the container exists
 the container is running
 the active image digest matches the expected known-good digest
 the Admin HTTP endpoint answers on the loopback address
-the reported Admin version can be read
+the running image's version label can be read
 that version matches the expected target when one is known
 ```
 
 A container **without a Docker health check does not count as healthy** just
-because its process is running: the HTTP endpoint has to answer. The version is
-read from the health payload, and from the running image's
-`org.opencontainers.image.version` label when the payload does not carry one.
+because its process is running: the HTTP endpoint has to answer. The Admin's
+endpoint (`/api/admin/auth/status`) does not report a version, so the version
+is the `org.opencontainers.image.version` label of the image whose digest was
+just compared. The check therefore adds no evidence beyond the digest: it
+catches an image built with the wrong label, not a wrong `EMS_ADMIN_TAG` in the
+compose file. A version the payload names is preferred over the label, so an
+Admin that starts reporting one is compared against it.
 
 For **Stop**, the appliance verifies that the container really stopped. A
 container that a restart policy brings straight back up is reported as
@@ -585,10 +665,13 @@ None of these report `succeeded`:
 retry cannot fix either. The others end as `failed_recoverable`.
 
 Start and Restart measure against what the **deployment** names, and the
-repair's identity check accepts a container that runs it. A repair's start,
-restart or recreate verifies against the known-good history's current entry,
-which follows a console upgrade once a status read has seen the console's
-Admin pass the checks listed with the known-good history above. A history that
+repair's identity check accepts a container that runs it. A repair's own start
+or restart does the same: neither can bring up anything but what the
+deployment names, and held against the known-good history a restart that fixed
+the Admin read as `image_mismatch`. A repair's recreate verifies against the
+known-good history's current entry, which follows a console upgrade once a
+status read has seen the console's Admin pass the checks listed with the
+known-good history above. A history that
 still named the Admin this appliance installed last made a healthy, up-to-date
 Admin report `image_mismatch` with no appliance action able to clear it, and
 told the operator to reinstall a working Admin to satisfy a bookkeeping entry.
@@ -610,6 +693,11 @@ sudo ems-appliance status
 sudo ems-appliance repair
 sudo ems-appliance repair --apply
 ```
+
+`repair --apply` waits for the repair to end and prints how it ended; it exits
+non-zero unless it succeeded. With the agent down it runs the repair in its own
+process, which therefore has to stay alive until the repair is done — it used
+to print "started" and exit, and the repair died with it.
 
 ## Recovering a failed Admin update — checklist
 

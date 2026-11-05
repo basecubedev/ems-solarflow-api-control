@@ -810,3 +810,49 @@ def test_a_plan_made_while_a_status_read_records_reads_the_history_that_record_l
 
     assert versions(services) == [CONSOLE_TAG, "v1.1.0", "v1.0.0"]
     assert target_of(answer["planned"]["plan"]) == "v1.1.0"
+
+
+# --- an unreadable history is not an empty one ------------------------------
+
+
+def test_an_unreadable_history_is_kept_aside_when_the_next_admin_is_recorded(tmp_path):
+    """history.json that did not parse read as empty, and the next record
+    rewrote it with one entry: every older known-good Admin was gone."""
+
+    services = healthy_appliance(tmp_path)
+    store = services.known_good
+    store.path.write_text("{ not json", encoding="utf-8")
+
+    assert store.problem()
+    store.record(
+        admin_image=f"{ADMIN_REPOSITORY}:v1.0.0",
+        admin_digest="sha256:" + "d" * 64,
+        admin_version="v1.0.0",
+    )
+
+    aside = sorted(store.directory.glob("history.json.unreadable-*"))
+    assert len(aside) == 1, list(store.directory.iterdir())
+    assert aside[0].read_text(encoding="utf-8") == "{ not json"
+    assert store.problem() == ""
+    assert store.current()["admin_version"] == "v1.0.0"
+
+
+def test_a_rollback_over_an_unreadable_history_names_the_history(tmp_path):
+    services = healthy_appliance(tmp_path)
+    services.known_good.path.write_text("[1, 2", encoding="utf-8")
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    with pytest.raises(Exception) as caught:
+        handlers.dispatch({"operation": "admin.plan_rollback"})
+
+    assert getattr(caught.value, "code", "") == "known_good_history_unreadable"
+
+
+def test_status_reports_an_unreadable_history(tmp_path):
+    services = healthy_appliance(tmp_path)
+    services.known_good.path.write_text("{}", encoding="utf-8")
+
+    status = services.status.overview()
+    codes = {item["code"] for item in status["health"]["warnings"]}
+
+    assert "known_good_history_unreadable" in codes, codes

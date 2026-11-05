@@ -13,12 +13,15 @@ is really there, and fail when it is not.
 """
 
 import struct
+from pathlib import Path
 
 import pytest
 
 from appliance import image_inspect, media_sizing
 from appliance.image_inspect import FAIL, PASS
 from tests.helpers.appliance_image import (
+    INITRAMFS,
+    cpio_newc,
     APPLIANCE_VERSION,
     BUILD_ID,
     CONFIG,
@@ -43,6 +46,8 @@ CMDLINE = (
 )
 
 REQUIRED_UNITS = tuple(sorted(image_inspect.REQUIRED_UNITS.values()))
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def assemble_mbr(target, boot, root):
@@ -84,7 +89,7 @@ def build_single_image(tmp_path, **overrides):
             "cmdline.txt": overrides.get("cmdline", CMDLINE),
             "config.txt": CONFIG,
             "kernel8.img": b"kernel",
-            "initramfs8": b"initramfs",
+            "initramfs8": INITRAMFS,
             "bcm2712-rpi-5-b.dtb": b"dtb",
         },
     )
@@ -426,3 +431,194 @@ def test_a_unit_whose_program_is_not_executable_is_a_failure(tmp_path):
     ].detail
     assert "grow-root.sh" in findings["unit_programs_present:root"].detail
     assert "203/EXEC" in findings["unit_programs_present:root"].detail
+
+
+def image_with_linked_grower(tmp_path, *, target_mode):
+    """grow-root.sh as a link to the real script, the way /usr/bin/python3 is."""
+
+    root_tree = tmp_path / "root"
+    populate_root(root_tree)
+    grower = root_tree / "usr/lib/ems-appliance-manager/grow-root.sh"
+    real = grower.with_name("grow-root-real.sh")
+    grower.rename(real)
+    real.chmod(target_mode)
+    grower.symlink_to("grow-root-real.sh")
+    root = make_ext4(tmp_path / "root.ext4", root_tree)
+    boot = make_fat(
+        tmp_path / "boot.vfat",
+        {"cmdline.txt": CMDLINE, "config.txt": CONFIG, "kernel8.img": b"k",
+         "initramfs8": b"i", "bcm2712-rpi-5-b.dtb": b"d"},
+    )
+    return assemble_mbr(tmp_path / "appliance.img", boot, root)
+
+
+@requires_mkfs
+def test_a_unit_program_that_is_a_link_to_an_executable_passes(tmp_path):
+    """access(X_OK) follows the link, so the gate has to as well."""
+
+    findings = by_check(contents(image_with_linked_grower(tmp_path, target_mode=0o755)))
+
+    assert findings["unit_programs_present:root"].result == PASS, findings[
+        "unit_programs_present:root"
+    ].detail
+
+
+@requires_mkfs
+def test_a_unit_program_that_links_to_a_file_without_an_execute_bit_fails(tmp_path):
+    findings = by_check(contents(image_with_linked_grower(tmp_path, target_mode=0o644)))
+
+    assert findings["unit_programs_present:root"].result == FAIL
+    assert "203/EXEC" in findings["unit_programs_present:root"].detail
+
+
+# --- what the board, the initramfs and the first boot need -------------------
+
+
+def boot_image(tmp_path, boot_files, **root_overrides):
+    root_tree = tmp_path / "root"
+    populate_root(root_tree, **root_overrides)
+    root = make_ext4(tmp_path / "root.ext4", root_tree)
+    boot = make_fat(
+        tmp_path / "boot.vfat",
+        {"cmdline.txt": CMDLINE, "config.txt": CONFIG, **boot_files},
+    )
+    return assemble_mbr(tmp_path / "appliance.img", boot, root)
+
+
+PI4_BOOT = {
+    "kernel8.img": b"k",
+    "initramfs8": INITRAMFS,
+    "bcm2711-rpi-4-b.dtb": b"d",
+    "bcm2712-rpi-5-b.dtb": b"d",
+}
+
+
+def test_every_board_this_project_builds_has_its_boot_files_named():
+    from appliance import rpi_image_gen
+
+    assert set(image_inspect.BOARD_BOOT_FILES) == set(rpi_image_gen.HARDWARE_PROFILES)
+
+
+@requires_mkfs
+def test_an_image_carrying_its_boards_kernel_and_device_tree_fits_it(tmp_path):
+    findings = by_check(contents(boot_image(tmp_path, PI4_BOOT), profile="rpi4"))
+
+    assert findings["boot_board_fit:boot"].result == PASS, findings["boot_board_fit:boot"].detail
+
+
+@requires_mkfs
+def test_an_image_without_its_boards_kernel_does_not_fit_it(tmp_path):
+    """Any of the three kernel names used to pass for every board."""
+
+    findings = by_check(contents(boot_image(tmp_path, PI4_BOOT), profile="rpi5"))
+
+    assert findings["boot_board_fit:boot"].result == FAIL
+    assert "kernel_2712.img" in findings["boot_board_fit:boot"].detail
+    assert "bcm2712d0-rpi-5-b.dtb" in findings["boot_board_fit:boot"].detail
+
+
+@requires_mkfs
+def test_an_initramfs_without_the_slot_rules_fails(tmp_path):
+    """Without them /dev/disk/by-slot/system never appears and the root never mounts."""
+
+    boot = {**PI4_BOOT, "initramfs8": cpio_newc(["usr/bin/busybox"])}
+
+    findings = by_check(contents(boot_image(tmp_path, boot)))
+
+    assert findings["boot_initramfs_slot_rules:boot"].result == FAIL
+    assert "rpi-bootdev-tag" in findings["boot_initramfs_slot_rules:boot"].detail
+
+
+@requires_mkfs
+@pytest.mark.parametrize("compressor", ["gzip", "xz", "zstd"])
+def test_the_slot_rules_are_found_behind_an_early_archive_and_compression(tmp_path, compressor):
+    """initramfs-tools writes an uncompressed early archive, then the main one compressed."""
+
+    import shutil
+    import subprocess
+
+    if shutil.which(compressor) is None:
+        pytest.skip(f"{compressor} is not installed")
+    main = subprocess.run(
+        [compressor, "-c"], input=INITRAMFS, capture_output=True, check=True
+    ).stdout
+    boot = {**PI4_BOOT, "initramfs8": cpio_newc(["kernel"]) + main}
+
+    findings = by_check(contents(boot_image(tmp_path, boot)))
+
+    assert findings["boot_initramfs_slot_rules:boot"].result == PASS, findings[
+        "boot_initramfs_slot_rules:boot"
+    ].detail
+
+
+@requires_mkfs
+def test_a_root_that_does_not_synchronise_time_fails(tmp_path):
+    root_tree = tmp_path / "root"
+    populate_root(root_tree)
+    (root_tree / "etc/systemd/system/sysinit.target.wants/systemd-timesyncd.service").unlink()
+    root = make_ext4(tmp_path / "root.ext4", root_tree)
+    boot = make_fat(tmp_path / "boot.vfat", {"cmdline.txt": CMDLINE, "config.txt": CONFIG, **PI4_BOOT})
+    image = assemble_mbr(tmp_path / "appliance.img", boot, root)
+
+    findings = by_check(contents(image))
+
+    assert findings["timesyncd_enabled:root"].result == FAIL
+
+
+@requires_mkfs
+@pytest.mark.parametrize("machine_id", ["", "uninitialized\n"])
+def test_a_machine_id_left_for_the_first_boot_passes(tmp_path, machine_id):
+    findings = by_check(contents(boot_image(tmp_path, PI4_BOOT, machine_id=machine_id)))
+
+    assert findings["machine_id_uninitialized:root"].result == PASS
+
+
+@requires_mkfs
+def test_a_machine_id_baked_into_the_image_fails(tmp_path):
+    """Every card flashed from it would share one identity."""
+
+    image = boot_image(tmp_path, PI4_BOOT, machine_id="0123456789abcdef0123456789abcdef\n")
+
+    findings = by_check(contents(image))
+
+    assert findings["machine_id_uninitialized:root"].result == FAIL
+
+
+def test_the_release_gate_inspects_each_image_against_its_board():
+    gates = (ROOT / "scripts/appliance-release-gates.sh").read_text(encoding="utf-8")
+    inspector = (ROOT / "scripts/appliance-inspect-rpi-image.sh").read_text(encoding="utf-8")
+
+    call = gates.split('sh "$ROOT/scripts/appliance-inspect-rpi-image.sh"', 1)[1].split('"$OUTPUT', 1)[0]
+    assert '--profile "$profile"' in call
+    assert "profile=os.environ.get(\"EMS_PROFILE\")" in inspector
+
+
+def test_the_published_file_is_checked_to_be_the_inspected_image():
+    """The inspection reads the raw .img; owners download the .img.xz."""
+
+    build = (ROOT / "scripts/appliance-build-rpi-image.sh").read_text(encoding="utf-8")
+    after = build.split('xz -T0 -6 -k -c "$OUTPUT/$NAME.img"', 1)[1]
+
+    assert 'xz -t "$OUTPUT/$NAME.img.xz"' in after
+    assert 'xz -dc "$OUTPUT/$NAME.img.xz" | sha256sum' in after
+
+
+def test_dockers_address_pools_stay_out_of_the_lans_ranges():
+    """After fifteen /16 bridge networks Docker's default pools hand out
+    192.168.x ranges, which swallow LAN devices behind the router -- the
+    inverters the EMS controls among them."""
+
+    import ipaddress
+    import json
+
+    daemon = json.loads(
+        (ROOT / "packaging/appliance/image/layer/ems-appliance.rootfs-overlay/etc/docker/daemon.json")
+        .read_text(encoding="utf-8")
+    )
+    pools = daemon["default-address-pools"]
+
+    assert pools
+    for pool in pools:
+        network = ipaddress.ip_network(pool["base"])
+        assert network.subnet_of(ipaddress.ip_network("172.16.0.0/12")), pool
+        assert pool["size"] >= 24, pool

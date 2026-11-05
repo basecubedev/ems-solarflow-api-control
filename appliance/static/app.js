@@ -687,6 +687,7 @@
     "ssh.key_remove": "Removing a public key",
     "ssh.revoke_all": "Revoking every public key",
     "ssh.shell_access": "Changing root-capable shell access",
+    "ssh.backup_access": "Switching backup access",
     "support.archive": "Creating a support archive"
   };
 
@@ -1893,8 +1894,9 @@
      an entry without one is shown with the least trusted group. */
   var RELEASE_TRACKS = [
     { id: "stable", label: "Stable", help: "Recommended versioned releases for normal use." },
-    { id: "unstable", label: "Unstable", help: "Release candidates for early testing. Mostly complete, but they may still contain issues." },
-    { id: "experimental", label: "Experimental", help: "Feature builds with unfinished changes. Intended for testing only." }
+    { id: "rc", label: "Release candidate", help: "Release candidates for early testing. Mostly complete, but they may still contain issues." },
+    { id: "latest", label: "Rolling", help: "The current build from the main branch. Updated automatically and not a versioned release." },
+    { id: "development", label: "Development", help: "Feature builds with unfinished changes. Intended for testing only." }
   ];
 
   function groupByTrack(items) {
@@ -1903,7 +1905,7 @@
       return {
         track: track,
         items: (items || []).filter(function (item) {
-          var id = known.indexOf(item.track) === -1 ? "experimental" : item.track;
+          var id = known.indexOf(item.track) === -1 ? "development" : item.track;
           return id === track.id;
         })
       };
@@ -2100,12 +2102,16 @@
 
   function adminTransitionNotice(testId) {
     var transition = (((state.data.status || {}).admin || {}).transition) || {};
+    var expires = new Date(String(transition.expires_at || ""));
+    var until = isNaN(expires.getTime()) ? "" : " It stops blocking by itself at "
+      + String(expires.getHours()).padStart(2, "0") + ":"
+      + String(expires.getMinutes()).padStart(2, "0") + " at the latest.";
     return el("p", { class: "empty-state", "data-test": testId }, [
       el("strong", { text: "The Admin console is replacing itself right now. " }),
       el("span", {
         text: "Installing, rolling back, repairing, starting, stopping and restarting are "
           + "refused until that finishes, because both would write the same deployment files. "
-          + "Stage: " + (transition.stage || "unnamed") + "."
+          + "Stage: " + (transition.stage || "unnamed") + "." + until
       })
     ]);
   }

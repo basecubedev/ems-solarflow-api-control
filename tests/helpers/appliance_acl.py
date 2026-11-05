@@ -43,7 +43,10 @@ def targets(path, recursive):
     through a handle, so the stub keeps it.
     """
 
-    if not recursive:
+    # libacl walks physically: an argument that is itself a link (as
+    # /proc/self/fd/N is) is acted on, never walked below. A stub that recursed
+    # through it hid that the export grant never reached a single archive.
+    if not recursive or os.path.islink(path):
         return [path]
     found = [path]
     for directory, subdirectories, files in os.walk(path):
@@ -118,10 +121,19 @@ def getfacl(arguments):
             paths.append(argument)
 
     state = load()
+    status = 0
+    # A file EMS rotates away between getfacl's readdir and its read: real
+    # getfacl skips it, says so on stderr and exits 1.
+    vanish = os.environ.get("EMS_STUB_GETFACL_VANISH", "")
     for path in paths:
         if not os.path.exists(path):
             return 1
         for item in targets(path, recursive):
+            if vanish and recursive and os.path.realpath(item) == os.path.realpath(vanish):
+                os.remove(item)
+                print(f"getfacl: {item}: No such file or directory", file=sys.stderr)
+                status = 1
+                continue
             entries = state.get(key_for(item)) or {"access": {}, "default": {}}
             print(f"# file: {item}")
             print("# owner: root")
@@ -134,7 +146,7 @@ def getfacl(arguments):
             for name, perms in sorted(entries.get("default", {}).items()):
                 print(f"default:user:{name}:{perms}")
             print()
-    return 0
+    return status
 
 
 tool = sys.argv[1]

@@ -143,6 +143,10 @@ What replaces it is a deadline, and a deadline is not equivalent:
 - Its health gate is narrow and the script says so: the package dpkg reports is
   the one the install promised, and the two units that make the appliance
   reachable are running. It is not a functional test of the manager.
+  (Amended 2026-11-04: "running" means the same two processes on two ticks in
+  a row, the web one listening, because a unit in a restart loop reads active
+  at a single look; and no tick is judged while the install unit still runs,
+  because the timer's first tick used to fire at arming, before the install.)
 - **It is software.** A kernel that will not boot, a filesystem that will not
   mount or an init that never reaches the timer all defeat it, and A/B's boot
   selector would not have been defeated by any of them.

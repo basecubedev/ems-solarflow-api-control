@@ -9,7 +9,7 @@
 export const MANAGER_DIRECTIONS = Object.freeze(["upgrade", "downgrade", "reinstall", "unknown", "revert"]);
 
 /** How the last install of a package ended (appliance/manager_install.py OUTCOME_*). */
-export const MANAGER_OUTCOMES = Object.freeze(["installed", "reverted", "pending"]);
+export const MANAGER_OUTCOMES = Object.freeze(["installed", "reverted", "pending", "not_started", "revert_failed", "install_failed", "no_request", "request_invalid"]);
 
 /** What the reverter decided about the last install, and its tone. */
 export const MANAGER_VERDICTS = Object.freeze({
@@ -98,4 +98,28 @@ export function latestStableVersion(sources) {
 /** An older or uncomparable package is a deliberate step back: the plan asks in the danger colour. */
 export function riskyDirection(entry) {
   return entry && (entry.direction === "downgrade" || entry.direction === "unknown");
+}
+
+/** Outcomes of the last install after which dpkg may not hold the package that was asked for. */
+const FAILED_OUTCOMES = Object.freeze(["reverted", "revert_failed", "install_failed"]);
+
+/**
+ * What dpkg holds after an install that did not end confirmed, what a revert
+ * would put back, and the one console command that takes it from there:
+ * dpkg --configure -a for a package dpkg has not finished, the rollback for
+ * one it has. Null after a confirmed install or while dpkg cannot be asked.
+ */
+export function managerRecovery(manager) {
+  const value = manager || {};
+  const verdict = value.verdict || {};
+  const outcome = String((value.outcome || {}).outcome || "");
+  const failed = (verdict.settled && verdict.verdict !== "confirmed") || FAILED_OUTCOMES.includes(outcome);
+  const dpkg = value.dpkg || {};
+  if (!failed || !dpkg.status || dpkg.status === "unknown") return null;
+  return {
+    status: dpkg.status,
+    version: dpkg.version || "—",
+    revertTo: ((value.retention || {}).previous || {}).version || "",
+    command: dpkg.status === "installed" ? "sudo ems-appliance rollback-manager" : "sudo dpkg --configure -a",
+  };
 }

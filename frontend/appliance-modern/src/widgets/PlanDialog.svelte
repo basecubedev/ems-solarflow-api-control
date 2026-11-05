@@ -7,7 +7,7 @@
   import { t, tn, say, langOf, fmt } from "../i18n/i18n.svelte.js";
   import { detail } from "../state/prefs.svelte.js";
   import { actions as flow, confirmPlan, dismissPlan } from "../state/actions.svelte.js";
-  import { planBlocked, planFields, vocabularyWords } from "../lib/plan.js";
+  import { planBlocked, planBlocks, planDanger, planFields, planNeedsPrereleaseAck, vocabularyWords } from "../lib/plan.js";
   import { operationTitleKey } from "../lib/operations.js";
   import { exactDuration, gigabytes } from "../lib/host.js";
 
@@ -50,6 +50,12 @@
     })),
   );
   const created = $derived(plan.creates_deployment || null);
+  const needsAck = $derived(planNeedsPrereleaseAck(plan));
+  let acknowledged = $state(false);
+  $effect(() => {
+    if (pending) acknowledged = false;
+  });
+  const blocks = $derived(planBlocks(plan, detail.expert));
 
   /**
    * Esc while the confirmation is out must not lose the dialog: its answer,
@@ -100,6 +106,13 @@
       {#if (plan.findings || []).length}<div class="block"><RepairChecks findings={plan.findings} /></div>{/if}
       {#if (plan.packages || []).length}<div class="block"><PackageTable packages={plan.packages} limit={12} /></div>{/if}
 
+      {#each blocks as block (block.key)}
+        <div class="block" data-testid="plan-block-{block.key}">
+          <p class="sub" lang={block.known ? undefined : "en"}>{block.known ? t(`plan.field.${block.key}`) : block.label}</p>
+          {#if block.mono}<pre class="mono lines">{block.lines[0]}</pre>{:else}<ul class="lines">{#each block.lines as line, index (index)}<li lang="en">{line}</li>{/each}</ul>{/if}
+        </div>
+      {/each}
+
       {#if plan.key}
         <div class="block" data-testid="plan-key">
           <KeyValues
@@ -123,6 +136,9 @@
         </div>
       {/if}
 
+      {#if needsAck}
+        <label class="check prerelease" data-testid="plan-prerelease-ack"><input type="checkbox" bind:checked={acknowledged} />{t("plan.prereleaseAck", { track: t(`track.${plan.track}`) })}</label>
+      {/if}
       {#if plan.warning}<p class="warning" lang="en"><Icon name="triangle-alert" size="sm" />{plan.warning}</p>{/if}
       {#if (plan.preserves || []).length}<p class="note"><Icon name="shield-check" /><span>{t("plan.preserves")} <span lang="en">{plan.preserves.join(", ")}</span></span></p>{/if}
       {#if flow.dialogError}<p class="form-error" role="alert" lang={langOf(flow.dialogError)} data-testid="plan-error">{say(flow.dialogError)}</p>{/if}
@@ -132,10 +148,10 @@
     <button class="btn secondary" type="button" onclick={dismissPlan} disabled={flow.confirming} data-testid="plan-cancel">{t("auth.cancel")}</button>
     <button
       class="btn"
-      class:danger={options.danger}
+      class:danger={planDanger(plan, options)}
       type="button"
       onclick={confirmPlan}
-      disabled={blocked || flow.confirming}
+      disabled={blocked || flow.confirming || (needsAck && !acknowledged)}
       aria-busy={flow.confirming ? "true" : undefined}
       data-testid="plan-confirm"
     >
@@ -152,6 +168,8 @@
   .blockers { list-style: none; margin: 0; padding: var(--s3); display: flex; flex-direction: column; gap: 6px; border-radius: var(--m-radius-inner); background: color-mix(in srgb, var(--m-fault) 10%, var(--m-surface-1)); font-size: 13px; }
   .blockers li { display: flex; gap: 8px; align-items: flex-start; }
   .blockers :global(svg.i) { color: var(--m-fault); margin-top: 2px; }
+  .lines { margin: 0; padding: 0 0 0 var(--s4); font-size: 13px; overflow-wrap: anywhere; }
+  pre.lines { padding: var(--s2); white-space: pre-wrap; border-radius: var(--m-radius-inner); background: var(--m-surface-2); font-size: 12px; }
   .warning { display: flex; gap: 8px; align-items: flex-start; margin: 0; font-size: 13px; }
   .warning :global(svg.i) { color: var(--m-warn); margin-top: 2px; }
 </style>

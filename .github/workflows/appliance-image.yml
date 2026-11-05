@@ -90,10 +90,13 @@ jobs:
       contents: read
     outputs:
       profiles: ${{ steps.pick.outputs.profiles }}
+      # Whether every board is in this build. Only such a build may take the
+      # title install.md sends owners to and move the fixed download link.
+      complete: ${{ steps.pick.outputs.complete }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
@@ -122,6 +125,7 @@ jobs:
           else:
               raise SystemExit(f"{wanted!r} is not a board this project builds: {known}")
           print("profiles=" + json.dumps(chosen))
+          print("complete=" + ("true" if chosen == known else "false"))
           PY
           cat "$GITHUB_OUTPUT"
 
@@ -140,7 +144,7 @@ jobs:
     # build and a re-flash.
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -164,7 +168,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the package
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: appliance-manager-deb
           path: ${{ runner.temp }}/package/
@@ -206,7 +210,7 @@ jobs:
           df -h / /mnt || true
 
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           # The build refuses to attribute an image to a revision whose commit
           # object it cannot see, and the source bundle is written from the
@@ -334,7 +338,12 @@ jobs:
           case "${status}" in
             0) echo "EMS_APPLIANCE_MANAGER_PACKAGE=${package}" >> "$GITHUB_ENV"
                echo "the image will carry the published $(basename "${package}")" ;;
-            3) echo "::notice::no stable Manager release is published yet; building one from this checkout" ;;
+            3) # A tagged image is a release, and its Manager has to be one.
+               if [ "${GITHUB_REF_TYPE}" = tag ]; then
+                 echo "::error::a tagged image needs a published Manager release, and none is published"
+                 exit 1
+               fi
+               echo "::notice::no stable Manager release is published yet; building one from this checkout" ;;
             *) echo "::error::the published Manager package could not be verified"; exit 1 ;;
           esac
 
@@ -431,7 +440,7 @@ jobs:
 
       - name: Upload the image
         if: always() && env.APPLIANCE_OUTPUT != ''
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: appliance-image-${{ matrix.profile }}
           # The raw .img is 8.25 GiB and mostly empty; Imager and balenaEtcher
@@ -448,7 +457,7 @@ jobs:
 
       - name: Upload the gate evidence
         if: always() && env.APPLIANCE_OUTPUT != ''
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: appliance-gates-${{ matrix.profile }}
           path: |
@@ -491,7 +500,7 @@ jobs:
 
     steps:
       - name: Take the release identity these images carry
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
       # The fingerprint a card pins is frozen the moment it is flashed:
       # appliance.conf ships to /usr/share, is not a conffile, and config-seed
@@ -504,7 +513,7 @@ jobs:
         run: python3 scripts/appliance-check-release-identity.py
 
       - name: Collect what the build produced
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           path: ${{ runner.temp }}/collected
           pattern: appliance-*
@@ -683,6 +692,8 @@ jobs:
           # `appliance-` prefix that makes VERSION_PATTERN.fullmatch fail.
           TAG: ${{ github.ref_type == 'tag' && github.ref_name || format('appliance-image-ci-{0}', github.run_number) }}
           IS_TAG: ${{ github.ref_type == 'tag' }}
+          COMPLETE: ${{ needs.plan.outputs.complete }}
+          BOARDS: ${{ join(fromJSON(needs.plan.outputs.profiles), ', ') }}
         run: |
           set -euo pipefail
           state="$(gh release view "${TAG}" --json isDraft --jq .isDraft 2>/dev/null || true)"
@@ -709,7 +720,12 @@ jobs:
           # "CI build <n>" is true of a weekly run and a lie about a tagged one;
           # unsigned is true of both and stays in both, because a hosted runner
           # is refused at signing time by design.
-          if [ "${IS_TAG}" = "true" ]; then
+          # A build short a board is for whoever asked for it, and its title
+          # must not make it the newest "Appliance image" an owner of another
+          # board is sent to.
+          if [ "${COMPLETE}" != "true" ]; then
+            title="Partial build ${APPLIANCE_VERSION} for ${BOARDS} only (CI build ${GITHUB_RUN_NUMBER}, unsigned)"
+          elif [ "${IS_TAG}" = "true" ]; then
             title="Appliance image ${APPLIANCE_VERSION} (${TAG}, unsigned)"
           else
             title="Appliance image ${APPLIANCE_VERSION} (CI build ${GITHUB_RUN_NUMBER}, unsigned)"
@@ -740,6 +756,9 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Keep the fixed download link pointing at this build
+        # Every board, or the link would offer the owners of the missing ones
+        # nothing until the next weekly build.
+        if: ${{ needs.plan.outputs.complete == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

@@ -314,6 +314,15 @@ MUTATING_OPERATIONS = (
         summary="Plan enabling or disabling the root-capable shell account",
     ),
     _spec(
+        "ssh.plan_backup_access",
+        mutating=True,
+        takes_lock=True,
+        # No session generation: it reopens SFTP to the backups for keys that
+        # were vetted when they were added, and hands out no shell.
+        fields=(Field("enabled", KIND_BOOL),),
+        summary="Plan switching backup access off until it is switched on again, or back on",
+    ),
+    _spec(
         "ssh.plan_key_add",
         mutating=True,
         takes_lock=True,
@@ -417,6 +426,9 @@ ROOT_ACCESS_PLANS = frozenset(
 )
 
 RESERVED_REQUEST_KEYS = frozenset({"operation"})
+
+# The actor the web names a call with when a signed-in session made it.
+WEB_SESSION_ACTOR = "appliance-admin"
 
 
 class ValidationContext:

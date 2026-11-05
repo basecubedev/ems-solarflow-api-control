@@ -13,7 +13,7 @@ import tarfile
 import time
 
 from appliance import validation
-from appliance.operations import STATE_SUCCEEDED
+from appliance.operations import STATE_FAILED_TERMINAL, STATE_SUCCEEDED
 from appliance.redaction import bounded_redacted_log, redact_mapping
 from appliance.version import installed_version
 
@@ -34,6 +34,10 @@ MAX_ARCHIVE_BYTES = 5 * 1024 * 1024
 
 MAX_LOG_LINES = 400
 
+# Archives kept in the agent's support directory, the newest first. Each one is
+# found through its operation record, never by its file name alone.
+KEEP_ARCHIVES = 3
+
 
 
 class SupportArchiveError(Exception):
@@ -41,6 +45,21 @@ class SupportArchiveError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+def too_large_message(destination, size):
+    """Where an archive this console cannot hand over is, and how to fetch it.
+
+    It is in the agent's own state, which the backup account's chroot does not
+    reach; only a root shell does.
+    """
+
+    return (
+        f"the support archive is {size // (1024 * 1024)} MB, more than the "
+        f"{MAX_ARCHIVE_BYTES // (1024 * 1024)} MB this console can hand over. It is kept at "
+        f"{destination}; with shell access on, fetch it as ems-shell: "
+        f"ssh ems-shell@<appliance> 'sudo cat {destination}' > support.tar.gz"
+    )
+
+
 class SupportArchiveService:
     def __init__(self, *, paths, config, status_service, operations, time_fn=None):
         self.paths = paths
@@ -76,13 +95,38 @@ class SupportArchiveService:
                 self._add(archive, name, payload)
             self._add(archive, "manifest.json", json.dumps(manifest, indent=2, sort_keys=True))
 
-        payload = {
-            "path": str(destination),
-            "size_bytes": destination.stat().st_size,
-            "manifest": manifest,
-        }
+        size = destination.stat().st_size
+        self._prune(keep=operation.operation_id)
+        if size > MAX_ARCHIVE_BYTES:
+            # Said now, by the operation, rather than by the download after it
+            # reported success; the file stays where root can fetch it.
+            message = too_large_message(destination, size)
+            self.operations.finish(
+                operation.operation_id,
+                STATE_FAILED_TERMINAL,
+                stage="support_archive_too_large",
+                error={"code": "support_archive_too_large", "message": message},
+            )
+            raise SupportArchiveError("support_archive_too_large", message)
+        payload = {"path": str(destination), "size_bytes": size, "manifest": manifest}
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
         return payload
+
+    def _prune(self, *, keep):
+        """Delete all but the newest archives, each found through its record."""
+
+        recorded = [
+            item for item in self.operations.list()
+            if item.type == TYPE_SUPPORT_ARCHIVE and item.operation_id != keep
+        ]
+        recorded.sort(key=lambda item: item.started_at or 0, reverse=True)
+        for item in recorded[KEEP_ARCHIVES - 1:]:
+            try:
+                self._destination(item.operation_id).unlink()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                continue
 
     def read(self, operation_id):
         """Hand a finished archive to the caller.
@@ -102,8 +146,7 @@ class SupportArchiveService:
             )
         if len(data) > MAX_ARCHIVE_BYTES:
             raise SupportArchiveError(
-                "support_archive_too_large",
-                "the support archive is too large to be served; copy it off over SFTP",
+                "support_archive_too_large", too_large_message(destination, len(data))
             )
         return {
             "name": destination.name,

@@ -29,10 +29,12 @@ exactly when an operator reaches for the repair tools.
 """
 
 import json
-from datetime import datetime, timezone
+import os
+import stat
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from appliance.admin_deployment import read_env
+from appliance.admin_deployment import read_env, read_service_environment
 
 # Copies of names Admin owns. The appliance runs outside every container and
 # cannot import the authority, so a contract test pins these to it.
@@ -42,6 +44,10 @@ STATE_SUBDIR = "state"
 TRANSITION_FILE = "pending-transition.json"
 
 MAX_TRANSITION_BYTES = 256 * 1024
+# Admin's own DEFAULT_TRANSITION_TTL_SECONDS, pinned by a contract test: it
+# renews the expiry this far ahead on every step, so a record that expires
+# later than that was not written by Admin, and would block for ever.
+MAX_TRANSITION_TTL_SECONDS = 3600
 
 STATE_NONE = "none"
 STATE_LIVE = "live"
@@ -59,12 +65,23 @@ FINISHED_STAGES = frozenset({"completed", "cancelled"})
 def admin_data_dir(paths, deployment=None):
     """Where Admin keeps its state, taken from the deployment, not assumed.
 
-    The environment file is what the running container was started with, so it
-    is the honest source. A deployment that does not name one falls back to the
-    layout the shipped installer creates.
+    The installer writes the value into the compose service's environment,
+    which is what the container is started with; the environment file is kept
+    for reference and answers only for a compose value that interpolates it. A
+    deployment that names neither falls back to the layout the shipped
+    installer creates.
     """
 
     if deployment is not None:
+        try:
+            compose = read_service_environment(
+                deployment.compose_file.read_text(encoding="utf-8"), deployment.service
+            )
+        except OSError:
+            compose = {}
+        configured = str(compose.get(ENV_ADMIN_DATA_DIR) or "").strip()
+        if configured.startswith("/"):
+            return Path(configured)
         try:
             values = read_env(deployment.env_file.read_text(encoding="utf-8"))
         except OSError:
@@ -102,7 +119,7 @@ def read_transition(path, *, now=None):
 
     path = Path(path)
     try:
-        raw = path.read_bytes()
+        raw = _read_bounded(path)
     except FileNotFoundError:
         return {"state": STATE_NONE, "path": str(path)}
     except OSError as exc:
@@ -156,8 +173,41 @@ def read_transition(path, *, now=None):
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
         current = current.replace(tzinfo=timezone.utc)
+    # A minute of slack for a stamp rounded up on the way to disk.
+    if expires > current + timedelta(seconds=MAX_TRANSITION_TTL_SECONDS + 60):
+        record["state"] = STATE_UNREADABLE
+        record["reason"] = (
+            f"the transition state expires at {record['expires_at']}, later than Admin "
+            "ever sets one"
+        )
+        return record
     record["state"] = STATE_LIVE if current < expires else STATE_EXPIRED
     return record
+
+
+def _read_bounded(path):
+    """At most one byte past the limit, from a regular file and not through a link.
+
+    The EMS container can write this tree, and the agent reading it is root: a
+    FIFO there hung every status read and Admin plan, and a link to /dev/zero
+    was read until memory ran out.
+    """
+
+    handle = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        if not stat.S_ISREG(os.fstat(handle).st_mode):
+            raise OSError("the transition state is not a regular file")
+        chunks = []
+        remaining = MAX_TRANSITION_BYTES + 1
+        while remaining > 0:
+            chunk = os.read(handle, min(remaining, 65536))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(handle)
 
 
 def blocks_admin_mutation(record):
@@ -165,9 +215,18 @@ def blocks_admin_mutation(record):
 
 
 def refusal_message(record):
+    """Why an Admin operation is refused, and when that ends without a shell."""
+
     stage = record.get("stage") or "an unnamed stage"
+    expires = _expiry(record.get("expires_at"))
+    until = (
+        f" It stops blocking by itself at {expires.astimezone():%H:%M %Z} at the latest."
+        if expires is not None
+        else ""
+    )
     return (
         "the Admin console is replacing itself right now "
-        f"({stage}); this operation would fight it. Wait for that to finish, or "
-        f"clear {record.get('path')} if it never will"
+        f"({stage}); this operation would fight it. Wait for that to finish.{until} "
+        f"With a shell on the appliance, {record.get('path')} can be removed if it "
+        "never will"
     )

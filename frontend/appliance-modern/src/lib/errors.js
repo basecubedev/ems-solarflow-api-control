@@ -7,6 +7,14 @@
  */
 
 export const KNOWN_ERRORS = Object.freeze([
+  "release_registry_unreachable",
+  "release_registry_invalid",
+  "release_registry_truncated",
+  "release_download_failed",
+  "release_download_timed_out",
+  "release_download_too_large",
+  "release_index_invalid",
+  "release_index_unsupported",
   "invalid_credentials",
   "login_rate_limited",
   "login_busy",
@@ -23,6 +31,7 @@ export const KNOWN_ERRORS = Object.freeze([
   "csrf_host_rejected",
   "operation_conflict",
   "plan_not_awaiting_confirmation",
+  "invalid_operation_transition",
   "confirmation_token_mismatch",
   "timezone_unchanged",
 ]);
@@ -34,6 +43,10 @@ export const KNOWN_ERRORS = Object.freeze([
  */
 export function errorWords(error, fallbackKey = "error.failed") {
   const code = error && error.code;
+  const seconds = Number(error && error.payload && error.payload.retry_after);
+  if (code === "login_rate_limited" && Number.isFinite(seconds) && seconds > 0) {
+    return { key: error.payload.scope === "network" ? "error.loginRateLimitedNetwork" : "error.loginRateLimitedWait", vars: { seconds } };
+  }
   if (code && KNOWN_ERRORS.includes(code)) return { key: `error.${code}` };
   if (error && error.status === undefined && !(error.payload && error.payload.message)) return { key: "error.unreachable" };
   const message = error && error.payload && error.payload.message;

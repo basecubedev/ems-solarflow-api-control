@@ -455,6 +455,26 @@ def test_sensitive_operations_are_audited(handlers, services):
     assert "admin.install" in [entry["action"] for entry in services.audit.tail()]
 
 
+def test_the_audit_says_which_way_an_operation_went(handlers, services):
+    """`admin.lifecycle success` twice could be a stop and a start, or two
+    restarts; months later the record that would have said so was pruned."""
+
+    for action in ("stop", "start"):
+        planned = handlers.dispatch({"operation": "admin.plan_lifecycle", "action": action})
+        handlers.dispatch(
+            {
+                "operation": "operations.execute",
+                "operation_id": planned["operation"]["operation_id"],
+                "confirmation_token": planned["confirmation_token"],
+            }
+        )
+        services.operations.acknowledge(planned["operation"]["operation_id"])
+
+    entries = [entry for entry in services.audit.tail() if entry["action"] == "admin.lifecycle"]
+
+    assert [entry["detail"]["action"] for entry in entries] == ["stop", "stop", "start", "start"], entries
+
+
 # --- socket transport ------------------------------------------------------
 
 
@@ -1094,6 +1114,90 @@ def test_the_agent_start_path_hands_the_wlan_recovery_to_the_post_ready_hook(tmp
     assert handed["after_ready"] is not None, "the recovery never reached serve_agent"
     assert handed["ran_before_serve"] == [], "the recovery ran before the socket was bound"
     assert ran == ["recovery"]
+
+
+def test_a_second_agent_leaves_the_running_one_alone(tmp_path, monkeypatch):
+    """Run by hand over SSH during an install, a second agent recovered the live
+    one's operations as interrupted, took over its socket, and removed it on
+    exit: nobody could sign in until the service was restarted."""
+
+    from appliance import cli
+    from appliance.operations import STATE_PLANNED
+
+    import dataclasses
+
+    services = build_test_services(tmp_path)
+    services.paths = dataclasses.replace(services.paths, runtime_dir=tmp_path / "r")
+    services.paths.runtime_dir.mkdir()
+    live = AgentServer(services, handlers=AgentHandlers(services, executor=lambda target: target()))
+    thread = threading.Thread(target=live.serve_forever, daemon=True)
+    thread.start()
+    try:
+        operation = services.operations.create("system.timezone")
+        served = []
+        monkeypatch.setattr(cli, "serve_agent", lambda *args, **kwargs: served.append(args))
+        monkeypatch.setattr(cli, "resolve_paths", lambda: services.paths)
+        monkeypatch.setattr(cli, "ensure_directories", lambda paths, role=None: None)
+        monkeypatch.setattr(cli, "migrate_state", lambda paths: None)
+        monkeypatch.setattr(cli, "write_report", lambda paths, report: None)
+        monkeypatch.setattr(cli, "build_services", lambda paths: services)
+        monkeypatch.setattr(os, "geteuid", lambda: 0)
+
+        code = cli.command_agent(type("Args", (), {"socket": None})())
+
+        assert code != cli.EXIT_OK
+        assert served == []
+        assert services.operations.get(operation.operation_id).state == STATE_PLANNED
+        assert AgentClient(services.paths.agent_socket).available()
+    finally:
+        live.shutdown()
+        live.server_close()
+        thread.join(timeout=10)
+
+
+def test_an_agent_starting_beside_another_that_has_not_bound_yet_is_refused(tmp_path, monkeypatch):
+    import fcntl
+
+    from appliance import cli
+
+    services = build_test_services(tmp_path)
+    served = []
+    monkeypatch.setattr(cli, "serve_agent", lambda *args, **kwargs: served.append(args))
+    monkeypatch.setattr(cli, "resolve_paths", lambda: services.paths)
+    monkeypatch.setattr(cli, "ensure_directories", lambda paths, role=None: None)
+    monkeypatch.setattr(cli, "migrate_state", lambda paths: None)
+    monkeypatch.setattr(cli, "write_report", lambda paths, report: None)
+    monkeypatch.setattr(cli, "build_services", lambda paths: services)
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+
+    with open(services.paths.agent_state_dir / cli.AGENT_LOCK_NAME, "a", encoding="utf-8") as first:
+        fcntl.flock(first.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        code = cli.command_agent(type("Args", (), {"socket": None})())
+
+    assert code != cli.EXIT_OK
+    assert served == []
+
+
+def test_the_consoles_own_stack_keeps_a_restarted_agent_out_while_it_runs(tmp_path, monkeypatch):
+    """`sudo ems-appliance repair --apply` with the agent down runs the stack
+    in process. An agent systemd restarted meanwhile found neither a socket nor
+    a lock, and recovered the console's live operation as interrupted."""
+
+    from appliance import cli
+
+    import shutil
+
+    services = build_test_services(tmp_path)
+    monkeypatch.setattr(cli, "build_services", lambda paths: services)
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    # systemd removes the agent's runtime directory when the unit stops, and
+    # a stopped agent is the only time this stack runs.
+    shutil.rmtree(services.paths.runtime_dir)
+
+    client = cli._client(services.paths)
+
+    assert cli._claim_agent(services.paths) is False
+    del client
 
 
 def test_the_agent_unit_says_how_long_a_start_may_take():

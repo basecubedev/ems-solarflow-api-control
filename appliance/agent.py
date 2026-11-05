@@ -46,16 +46,20 @@ from appliance import (
     validation,
 )
 from appliance.audit import (
+    RESULT_CONFIRMED,
     RESULT_DENIED,
     RESULT_FAILURE,
+    RESULT_NOTHING_TO_DO,
     RESULT_SUCCESS,
     RefusalAggregator,
 )
 from appliance.redaction import redact_text
 from appliance.release_fetch import FetchError
 from appliance.operations import (
+    STATE_AWAITING_CONFIRMATION,
     STATE_FAILED_RECOVERABLE,
     STATE_FAILED_TERMINAL,
+    STATE_SUCCEEDED,
     OperationConflictError,
     OperationError,
 )
@@ -65,6 +69,7 @@ from appliance.protocol import (
     PLAN_REQUEST_FIELD,
     ROOT_ACCESS_PLANS,
     SESSION_GENERATION_FIELD,
+    WEB_SESSION_ACTOR,
     ProtocolError,
     ValidationContext,
     validate_request,
@@ -86,6 +91,7 @@ PLAN_TYPES = {
     "system.timezone.plan": timezone_config.TYPE_TIMEZONE,
     "ssh.plan_service": ssh_service.TYPE_SSH_SERVICE,
     "ssh.plan_shell_access": ssh_service.TYPE_SSH_SHELL_ACCESS,
+    "ssh.plan_backup_access": ssh_service.TYPE_SSH_BACKUP_ACCESS,
     "ssh.plan_key_add": ssh_service.TYPE_SSH_KEY_ADD,
     "ssh.plan_key_remove": ssh_service.TYPE_SSH_KEY_REMOVE,
     "ssh.plan_revoke_all": ssh_service.TYPE_SSH_REVOKE_ALL,
@@ -108,6 +114,7 @@ AUDITED_PLANS = {
     timezone_config.TYPE_TIMEZONE: "system.timezone",
     ssh_service.TYPE_SSH_SERVICE: "ssh.service",
     ssh_service.TYPE_SSH_SHELL_ACCESS: "ssh.shell_access",
+    ssh_service.TYPE_SSH_BACKUP_ACCESS: "ssh.backup_access",
     ssh_service.TYPE_SSH_KEY_ADD: "ssh.key_added",
     ssh_service.TYPE_SSH_KEY_REMOVE: "ssh.key_removed",
     ssh_service.TYPE_SSH_REVOKE_ALL: "ssh.keys_revoked",
@@ -117,6 +124,28 @@ AUDITED_PLANS = {
     manager_update.TYPE_MANAGER_UPDATE: "manager.update.plan",
     manager_update.TYPE_MANAGER_REVERT: "manager.revert.plan",
 }
+
+# What says which way an operation went -- on or off, start, stop or restart,
+# which account, which network. Only in the record, which is pruned after fifty
+# operations, "who turned shell access on?" had no answer in the audit.
+AUDIT_DETAIL_FIELDS = (
+    "action",
+    "enabled",
+    "account",
+    "fingerprint",
+    "ssid",
+    "hostname",
+    "timezone",
+    "scope",
+    "channel",
+    "tag",
+    "version",
+)
+
+# A planner's answer that there is nothing to do. No operation took place, so
+# none is kept: the daily security update left one cancelled banner and one
+# audited failure for every quiet day.
+NOTHING_TO_DO_CODES = frozenset({"no_updates_available"})
 
 
 class AgentError(Exception):
@@ -218,6 +247,8 @@ class AgentHandlers:
 
     def dispatch(self, payload, *, actor="", source_ip=""):
         spec, args = validate_request(payload, self.context)
+        if actor == WEB_SESSION_ACTOR and spec.name != "audit.record_web_event":
+            self.services.network.note_operator_contact()
         if spec.name in PLAN_TYPES:
             return self._plan(spec, args, actor=actor, source_ip=source_ip)
         if spec.name == "operations.execute":
@@ -320,11 +351,19 @@ class AgentHandlers:
             self._require_confirmed_password(args, operation_type, actor, source_ip)
         try:
             operation = self.services.operations.create(
-                operation_type, actor=actor, plan_request=args.get(PLAN_REQUEST_FIELD, "")
+                operation_type,
+                actor=actor,
+                plan_request=args.get(PLAN_REQUEST_FIELD, ""),
+                planning=True,
             )
         except OperationConflictError as exc:
             raise AgentError(exc.code, exc.message)
+        try:
+            return self._planned(spec, operation, operation_type, args, actor=actor, source_ip=source_ip)
+        finally:
+            self.services.operations.planning_ended(operation.operation_id)
 
+    def _planned(self, spec, operation, operation_type, args, *, actor, source_ip):
         try:
             plan = self._build_plan(spec.name, operation, args)
         except (
@@ -337,12 +376,16 @@ class AgentHandlers:
             FetchError,
             ValidationError,
             OperationError,
+            timezone_config.TimezoneError,
+            support_archive.SupportArchiveError,
         ) as exc:
             code = getattr(exc, "code", "plan_failed")
             message = str(getattr(exc, "message", exc))
-            self._abandon_plan(
-                operation, operation_type, actor, source_ip, error={"code": code, "message": message}
-            )
+            error = {"code": code, "message": message}
+            if code in NOTHING_TO_DO_CODES:
+                self._drop_plan(operation, operation_type, actor, source_ip, error=error)
+            else:
+                self._abandon_plan(operation, operation_type, actor, source_ip, error=error)
             raise AgentError(code, message)
         except BaseException:
             # The lock this planner took outlives the exception unless it is
@@ -410,9 +453,21 @@ class AgentHandlers:
 
         self.services.network.discard_secret(operation.operation_id)
         try:
-            self.services.operations.abandon(operation.operation_id, error=error)
+            self.services.operations.abandon(
+                operation.operation_id, error=error, acknowledge=error is not None
+            )
         finally:
             self._audit(operation_type, actor, source_ip, RESULT_FAILURE, operation.operation_id)
+
+    def _drop_plan(self, operation, operation_type, actor, source_ip, error):
+        self.services.network.discard_secret(operation.operation_id)
+        try:
+            dropped = self.services.operations.discard(operation.operation_id)
+        except OSError:
+            dropped = False
+        if not dropped:
+            self.services.operations.abandon(operation.operation_id, error=error)
+        self._audit(operation_type, actor, source_ip, RESULT_NOTHING_TO_DO, operation.operation_id)
 
     def _build_plan(self, name, operation, args):
         services = self.services
@@ -447,6 +502,8 @@ class AgentHandlers:
             return services.ssh.plan_service(operation, args["enabled"])
         if name == "ssh.plan_shell_access":
             return services.ssh.plan_shell_access(operation, args["enabled"])
+        if name == "ssh.plan_backup_access":
+            return services.ssh.plan_backup_access(operation, args["enabled"])
         if name == "ssh.plan_key_add":
             return services.ssh.plan_key_add(
                 operation, account=args["account"], public_key=args["public_key"]
@@ -470,25 +527,24 @@ class AgentHandlers:
     def _plan_power(self, operation, name):
         action = "reboot" if name == "system.plan_reboot" else "shutdown"
         status = self.services.status
-        active = self.services.operations.active()
-        blockers = []
-        package_state = self.services.packages.check()
-        if package_state.lock_state == packages.LOCK_HELD:
-            blockers.append(
-                {
-                    "code": "package_operation_active",
-                    "message": "a package installation is running; wait until it finishes",
-                }
-            )
         return {
             "type": f"system.{action}",
             "action": action,
-            "blockers": blockers,
-            "running_operation": active.to_dict() if active else None,
+            "blockers": self._power_blockers(),
             "docker": status.docker_state(),
             "warning": "EMS control stops while the appliance is "
             + ("restarting." if action == "reboot" else "powered off."),
         }
+
+    def _power_blockers(self):
+        if self.services.packages.lock_state() != packages.LOCK_HELD:
+            return []
+        return [
+            {
+                "code": "package_operation_active",
+                "message": "a package installation is running; wait until it finishes",
+            }
+        ]
 
     # --- execution -------------------------------------------------------
 
@@ -501,6 +557,13 @@ class AgentHandlers:
         # The token proves the caller saw a plan; the authority proves the plan
         # they saw is still the one on disk. A record whose target changed after
         # the confirmation was rendered is refused before anything is confirmed.
+        # The token first: a refusal ends the record, and a stale page or a
+        # double submit must not be able to end one.
+        try:
+            store.require_token(operation_id, token)
+        except OperationError as exc:
+            self._audit(current.type, actor, source_ip, RESULT_DENIED, operation_id)
+            raise AgentError(exc.code, exc.message)
         try:
             operation_schema.validate_confirmation(
                 current,
@@ -508,13 +571,19 @@ class AgentHandlers:
                 architectures=self.services.config.supported_architectures,
             )
         except operation_schema.OperationSchemaError as exc:
-            store.finish(
-                operation_id,
-                STATE_FAILED_TERMINAL,
-                stage="preflight_failed",
-                result={"stage": "preflight", "admin_untouched": True},
-                error={"code": exc.code, "message": exc.message},
-            )
+            if current.state in (STATE_AWAITING_CONFIRMATION, STATE_FAILED_RECOVERABLE):
+                result = dict(current.result or {}) | {"stage": "preflight"}
+                # Proven only for a plan that never ran; a retried one may
+                # have stopped the Admin before it was interrupted.
+                if current.state == STATE_AWAITING_CONFIRMATION and current.type.startswith("admin."):
+                    result["admin_untouched"] = True
+                store.finish(
+                    operation_id,
+                    STATE_FAILED_TERMINAL,
+                    stage="preflight_failed",
+                    result=result,
+                    error={"code": exc.code, "message": exc.message},
+                )
             self._audit(current.type, actor, source_ip, RESULT_DENIED, operation_id)
             raise AgentError(exc.code, exc.message)
 
@@ -535,9 +604,10 @@ class AgentHandlers:
                 stage="blocked",
                 error={"code": blockers[0]["code"], "message": blockers[0]["message"]},
             )
+            self._audit(operation.type, actor, source_ip, RESULT_DENIED, operation_id)
             raise AgentError(blockers[0]["code"], blockers[0]["message"])
 
-        self._audit(operation.type, actor, source_ip, RESULT_SUCCESS, operation_id)
+        self._audit(operation.type, actor, source_ip, RESULT_CONFIRMED, operation_id)
         self._execute(lambda: self._run(operation, actor=actor, source_ip=source_ip))
         return {"operation": store.get(operation_id).to_dict()}
 
@@ -546,22 +616,37 @@ class AgentHandlers:
         try:
             self._executor_for(operation.type)(operation)
         except Exception as exc:
-            current = store.get(operation.operation_id)
-            if not current.terminal:
-                store.finish(
-                    operation.operation_id,
-                    STATE_FAILED_TERMINAL,
-                    stage="failed",
-                    error={
-                        "code": getattr(exc, "code", "operation_failed"),
-                        "message": str(getattr(exc, "message", exc)),
-                    },
-                )
-            self._audit(
-                operation.type, actor, source_ip, RESULT_FAILURE, operation.operation_id
-            )
-            return
-        self._audit(operation.type, actor, source_ip, RESULT_SUCCESS, operation.operation_id)
+            try:
+                current = store.get(operation.operation_id)
+                if not current.settled:
+                    store.finish(
+                        operation.operation_id,
+                        STATE_FAILED_TERMINAL,
+                        stage="failed",
+                        error={
+                            "code": getattr(exc, "code", "operation_failed"),
+                            "message": str(getattr(exc, "message", exc)),
+                        },
+                    )
+            except OSError:
+                # The store keeps the end it could not write and writes it
+                # before the next plan; this thread has nothing left to do.
+                pass
+        # By the record, not by an exception: several executors finish a
+        # failure and return, and were audited as a success.
+        try:
+            kept = store.unfinished.get(operation.operation_id)
+            state = kept["state"] if kept else store.get(operation.operation_id).state
+        except OperationError:
+            state = None
+        succeeded = state == STATE_SUCCEEDED
+        self._audit(
+            operation.type,
+            actor,
+            source_ip,
+            RESULT_SUCCESS if succeeded else RESULT_FAILURE,
+            operation.operation_id,
+        )
 
     def _executor_for(self, operation_type):
         services = self.services
@@ -598,8 +683,6 @@ class AgentHandlers:
         return service
 
     def _execute_manager(self, operation):
-        from appliance.operations import STATE_SUCCEEDED
-
         result = self._require_manager().execute(operation)
         self.services.operations.finish(
             operation.operation_id, STATE_SUCCEEDED, result=result, stage=result.get("stage", "")
@@ -608,10 +691,21 @@ class AgentHandlers:
 
 
     def _execute_power(self, operation):
-        from appliance.operations import STATE_SUCCEEDED
-
         action = "reboot" if operation.type == "system.reboot" else "shutdown"
-        self.services.operations.advance(operation.operation_id, f"{action}_requested")
+        # dpkg can take the lock between the plan and Confirm; going down then
+        # leaves a half-unpacked system.
+        blockers = self._power_blockers()
+        if blockers:
+            self.services.operations.finish(
+                operation.operation_id,
+                STATE_FAILED_TERMINAL,
+                stage="blocked",
+                error={"code": blockers[0]["code"], "message": blockers[0]["message"]},
+                result={"blockers": blockers},
+            )
+            raise AgentError(blockers[0]["code"], blockers[0]["message"])
+        stage = "reboot_requested" if action == "reboot" else "shutdown_requested"
+        self.services.operations.advance(operation.operation_id, stage, host_down=True)
         result = (
             self.services.systemd.reboot() if action == "reboot" else self.services.systemd.shutdown()
         )
@@ -628,6 +722,12 @@ class AgentHandlers:
         action = AUDITED_PLANS.get(operation_type)
         if not action:
             return
+        target = {}
+        if operation_id:
+            try:
+                target = self.services.operations.get(operation_id).requested_target
+            except (OperationError, OSError):
+                target = {}
         self.services.audit.record(
             action,
             user=actor,
@@ -635,6 +735,7 @@ class AgentHandlers:
             target=operation_type,
             result=result,
             operation_id=operation_id,
+            detail={field: target[field] for field in AUDIT_DETAIL_FIELDS if field in target},
         )
 
 

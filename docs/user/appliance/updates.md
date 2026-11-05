@@ -15,6 +15,12 @@ Everything on the appliance that has a version is updated from one page,
 Nothing updates on its own unless you switch automatic security updates on:
 every install shows its plan first and waits for your confirmation.
 
+*Security updates* are those from Debian's security archive. The Raspberry Pi
+kernel and firmware and Docker's container runtime come from other sources that
+never mark an update as security: they count as other updates, and only
+**Install all updates** (Expert mode) puts them on — automatic security
+updates never do.
+
 ## When to use this workflow
 
 - The assistant's **Install security updates** row, or the Overview, says
@@ -74,22 +80,36 @@ confirm; see [Changing something](overview.md#changing-something).
 Below the cards, the Appliance Manager and EMS Admin each have a version list,
 **Choose a Manager version** and **Choose an EMS Admin version**. Both use the
 group names and explanations of the EMS Admin console's version list, and
-**What do Stable, Unstable and Experimental mean?** opens them:
+**What do Stable, Release candidate, Rolling and Development mean?** opens
+them:
 
 | Group | What it holds |
 | --- | --- |
 | **Stable** | Recommended versioned releases for normal use. |
-| **Unstable** | Release candidates for early testing. Mostly complete, but they may still contain issues. |
-| **Experimental** | Feature builds with unfinished changes. Intended for testing only. |
+| **Release candidate** | Release candidates for early testing. Mostly complete, but they may still contain issues. |
+| **Rolling** | The current build from the main branch (`latest`). Updated automatically and not a versioned release. |
+| **Development** | Feature builds with unfinished changes. Intended for testing only. Shown in Expert only. |
 
 The appliance decides the group from the version itself, never from the
 browser, and by the EMS Admin console's rule for both lists: a release is
-Stable, every pre-release (`-rc1`, `~rc2`, `-beta`, `~test1`, …) is Unstable,
-and Experimental is a development build — for the Appliance Manager the
-untagged `0.0.0~dev…` builds. A version the appliance cannot read in full is
-Experimental, never Stable. A group with nothing in it is left out, and a
+Stable, every pre-release (`-rc1`, `~rc2`, `-beta`, `~test1`, …) is a release
+candidate, `latest` is Rolling, and Development is a development build — the
+EMS Admin's `dev-…-<commit>-<run>-<attempt>` images (a development build
+is offered only by that immutable tag, the one its version label names), and
+for the Appliance Manager the untagged
+`0.0.0~dev…` builds. A version the appliance cannot read in full is
+Development, never Stable. A group with nothing in it is left out, and a
 version this appliance will not install stays listed, greyed out with the
 reason.
+
+Anything but a stable release is confirmed for each install on its own: the
+plan names its group, and **Install** stays disabled until you tick that you
+install it knowingly. Whether this appliance installs such builds of the EMS
+Admin at all is still `allow_prerelease` in
+`/etc/ems-appliance-manager/allowed-images.conf`; Rolling and Development count
+as pre-releases there. A Rolling or Development image is proven like any
+release: its version label has to name the tag, and it is pinned by the digest
+that was pulled.
 
 **What you select:** a version, then **Install selected version**.
 
@@ -106,9 +126,13 @@ distribution upgrades are not performed here.* — shows what is pending:
 | **Restart** | **Required** or **Not required** after the updates. Expert names the packages that ask for it |
 | **Package manager** | **Healthy** or **Needs recovery**, and its lock |
 
-A check that could not reach its mirrors is reported as exactly that, and the
-counts then describe nothing: the tiles show `—`, and **Plan security updates**
-waits. A tile the appliance has not answered yet says **Unknown**. The check
+A check apt could not finish is reported as exactly that, and the counts then
+describe nothing: the tiles show `—`, and **Plan security updates** waits —
+planning names apt's own reason instead of "nothing to install". The check asks
+no mirror, so the cause is on the appliance: a dependency apt cannot meet, a
+broken sources entry or a damaged package list. When apt names unmet
+dependencies, **Package manager** reads **Needs recovery** and **Repair
+dependencies** is the way out. A tile the appliance has not answered yet says **Unknown**. The check
 itself changes nothing.
 
 1. **Plan security updates** (or **Install security updates** on the card
@@ -130,6 +154,16 @@ itself changes nothing.
 In Expert, **Plan all updates** takes the same path for everything that is
 upgradable rather than only the security archive, and **Pending security
 packages** lists them.
+
+*Security updates* means the Debian security archive only — the tile says so.
+The kernel, the firmware and the container runtime (`docker-ce`,
+`containerd.io`) come from the Raspberry Pi and Docker archives, which never
+mark an update as security, and automatic security updates never install
+them. When one waits, the card shows it under **Important, install by hand**,
+the Overview reports it, and **Plan all updates** appears without Expert. A
+plan with a container-runtime package says that the Docker engine restarts:
+the containers keep running, the EMS Admin console may show an error for a
+moment.
 
 Kernel and firmware upgrades are **not** held back or singled out for a separate
 approval. If `apt` offers one, installing updates installs it. That is
@@ -243,9 +277,14 @@ as installed**, or **cannot be compared**.
 3. Read the plan. It names the version, says whether it moves forward or back,
    and lists everything that could refuse. **Install** is red when the step
    goes back, or when its direction cannot be compared.
-4. Press **Install**. The console goes briefly unreachable while the package is
-   unpacked — the update restarts the very services answering your browser.
-   Once the new version answers, the page loads itself again from it.
+4. Press **Install**. The page shows *The Appliance Manager is being
+   installed* and waits: the update restarts the very services answering your
+   browser. Once the restarted Manager answers, the page loads itself again
+   from it and asks you to sign in, saying why. If nothing was installed —
+   another `apt` run kept the package manager busy for five minutes — it goes
+   back to the console instead, and **Last install** says so. The operation
+   banner reads *Started; its deadline decides* rather than *Completed*: the
+   deadline below decides whether the install stands.
 
 Before anything is installed, the appliance fetches the package over HTTPS and
 checks it against the signing keyring it ships. An unsigned package, one whose
@@ -281,7 +320,9 @@ installed. So the appliance sets itself a deadline before it unpacks
 anything.
 
 Once a minute, it checks whether the version now installed is the one the update
-promised, and whether the manager's two services are running. The window is
+promised, and whether the manager's two services are running — still the same
+two processes one check later, so a service that keeps restarting does not
+count — with the web service answering on its port. The window is
 fifteen minutes of the appliance running — the board has no real-time clock,
 so the deadline is counted in the checks themselves rather than in wall-clock
 time — and it survives a reboot inside it: rebooting is exactly what you would
@@ -296,6 +337,11 @@ and nothing else can be started.
 | There is no previous package to go back to | It says so, and waits for you. A first install has nothing behind it. | **Nothing to go back to** |
 | Even the previous package refuses to install | It says so, and waits for you. | **Going back failed** |
 | The record of the deadline cannot be read | Nothing is installed and nothing is undone. It says so, and waits for you. | **Deadline record unreadable** |
+
+Every row but the first also appears on the **Overview** and in the status
+light at the top of each page — **Put back** as something to look at, the two
+failures as faults — until the next install. An install whose deadline ran out
+without any verdict is reported there as never judged.
 
 The undo is a copy taken out of the package being *replaced*, saved before the
 new one is unpacked, so the thing deciding whether to keep the update is not
@@ -313,7 +359,15 @@ The Raspberry Pi has no battery-backed clock. After a cold start it believes it
 is somewhere in the past until it reaches a time server. Certificate checks and
 signature validity both depend on the time, so a download started too early
 fails with errors that mention everything except the clock. The appliance
-refuses to start a manager download until the time is confirmed.
+refuses to start a manager download until the time is confirmed, and the refusal
+names the time servers it is asking.
+
+Some networks block time servers on the internet and offer their own instead.
+The appliance takes a time server your router hands out by DHCP. If yours hands
+out none, either set one in the router's DHCP settings, or put
+`NTP=<your time server>` under `[Time]` in a file in
+`/etc/systemd/timesyncd.conf.d/` over [SSH](../../appliance/ssh-shell-access.md) and restart
+`systemd-timesyncd`.
 
 ## What happens in the background
 
@@ -338,6 +392,7 @@ after a Manager update the side menu's foot names the new version.
 | A version is greyed out | This appliance will not install it, and the entry says why — a pre-release while pre-releases are not allowed, for example | Choose another, or allow pre-releases in `appliance.conf` |
 | *Another operation is running or waiting for confirmation* | One operation at a time | Wait for the banner to end, or cancel a waiting plan there |
 | A manager download fails with a certificate or signature error after a power cut | The clock is not set yet | Wait a few minutes after start-up and try again |
+| "The system clock is not known to be synchronised" does not go away | The network blocks the time servers the appliance asks | Let the router offer an NTP server by DHCP, or set one as described under [After a power cut](#after-a-power-cut-wait-before-downloading) |
 | **Last install** reads **Going back failed** or **Nothing to go back to** | The deadline expired and could not put the previous package back | See [When it stops working](recovery.md#an-update-failed) |
 
 ## Recovery or next steps

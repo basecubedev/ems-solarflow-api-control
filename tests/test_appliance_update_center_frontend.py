@@ -34,9 +34,9 @@ def test_updates_is_the_second_section_so_it_is_found_without_searching():
 
 
 def test_the_tracks_use_the_admin_consoles_words_in_its_order():
-    labels = re.findall(r'label: "([A-Za-z]+)", help:', TRACKS)
+    labels = re.findall(r'label: "([A-Za-z ]+)", help:', TRACKS)
 
-    assert labels == ["Stable", "Unstable", "Experimental"]
+    assert labels == ["Stable", "Release candidate", "Rolling", "Development"]
 
 
 @requires_node
@@ -44,14 +44,14 @@ def test_versions_are_grouped_in_track_order_and_empty_groups_are_left_out():
     groups = evaluate(
         "groupByTrack",
         [
-            {"tag": "v1.2.0-dev.1", "track": "experimental"},
+            {"tag": "v1.2.0-dev.1", "track": "development"},
             {"tag": "v1.1.0", "track": "stable"},
             {"tag": "v1.0.0", "track": "stable"},
         ],
         preamble=TRACKS,
     )
 
-    assert [group["track"]["id"] for group in groups] == ["stable", "experimental"]
+    assert [group["track"]["id"] for group in groups] == ["stable", "development"]
     assert [item["tag"] for item in groups[0]["items"]] == ["v1.1.0", "v1.0.0"]
 
 
@@ -59,7 +59,7 @@ def test_versions_are_grouped_in_track_order_and_empty_groups_are_left_out():
 def test_a_version_without_a_track_is_never_shown_as_stable():
     groups = evaluate("groupByTrack", [{"tag": "v9.9.9"}], preamble=TRACKS)
 
-    assert [group["track"]["id"] for group in groups] == ["experimental"]
+    assert [group["track"]["id"] for group in groups] == ["development"]
 
 
 @requires_node
@@ -277,7 +277,7 @@ def test_a_missing_admin_container_is_sent_to_repair_not_called_uncomparable():
 @requires_node
 def test_the_running_version_keeps_its_marker_when_it_is_also_refused():
     releases = {"available": [{
-        "tag": "v1.2.0-rc1", "track": "unstable", "direction": "reinstall",
+        "tag": "v1.2.0-rc1", "track": "rc", "direction": "reinstall",
         "installable": False, "reason": "candidates are not enabled",
     }]}
     script = (
@@ -474,17 +474,18 @@ def test_the_disclosure_arrow_is_drawn_where_webkit_draws_it_too():
     assert "summary::marker" not in css
 
 
-def test_the_track_explanations_are_the_admin_consoles_words():
+def test_the_track_names_are_the_admin_consoles_words():
     """A copy across two deployables is one source only with a test comparing
-    them (agent-rules §2); the appliance cannot link the Admin page."""
+    them (agent-rules §2); the appliance cannot link the Admin page. The Admin
+    console names its channels in its Modern strings."""
 
-    admin = (APP_JS.parents[2] / "admin" / "static" / "index.html").read_text(encoding="utf-8")
-    help_block = admin.split('class="system-build-channel-help"', 1)[1].split("</dl>", 1)[0]
-    pairs = re.findall(r"<dt>([^<]+)</dt>\s*<dd>\s*(.*?)\s*</dd>", help_block, re.S)
-    admin_words = {term: " ".join(text.split()) for term, text in pairs}
-    ours = dict(re.findall(r'label: "([A-Za-z]+)", help: "([^"]+)"', TRACKS))
+    admin = (APP_JS.parents[2] / "frontend" / "admin-modern" / "src" / "i18n" / "strings.js").read_text(
+        encoding="utf-8"
+    )
+    admin_words = dict(re.findall(r'"updates\.channel\.([a-z]+)": s\("([^"]+)"', admin))
+    ours = dict(re.findall(r'id: "([a-z]+)", label: "([A-Za-z ]+)"', TRACKS))
 
-    assert ours == {term: admin_words[term] for term in ours}
+    assert ours == {channel: admin_words[channel] for channel in ours}
 
 
 def test_the_overview_tile_and_the_updates_gate_read_docker_in_one_place():

@@ -48,7 +48,7 @@ def prepared_host(package):
     container.seed_ems_installation(marker=CONFIG_MARKER)
     container.install_package(package)
     container.enable_sshd()
-    container.setup_export_root()
+    container.publish_exports()
     return container
 
 
@@ -59,7 +59,7 @@ def removed(package):
     except SystemdUnavailable as exc:
         pytest.skip(str(exc))
     try:
-        assert "config" in container.sftp(["ls /"]).stdout, "the export was not usable to begin with"
+        assert "backups" in container.sftp(["ls /"]).stdout, "the export was not usable to begin with"
         container.remove_package()
         container.reload_sshd()
         yield container
@@ -84,7 +84,7 @@ def purged(package):
 def ems_data_intact(host):
     return (
         CONFIG_MARKER in host.read_file(f"{INSTALL_ROOT}/config/config.json")
-        and "backup-bytes" in host.read_file(f"{INSTALL_ROOT}/backups/backup-1.tar")
+        and "backup-bytes" in host.read_file(f"{INSTALL_ROOT}/data/backups/backup-1.tar")
         and "runtime" in host.read_file(f"{INSTALL_ROOT}/data/runtime-state.json")
     )
 
@@ -102,7 +102,7 @@ def test_removal_denies_the_preserved_key_an_sftp_session(removed):
     result = removed.sftp(["ls /"])
 
     assert result.returncode != 0, result.stdout
-    assert "config" not in result.stdout, result.stdout
+    assert "backups" not in result.stdout, result.stdout
 
 
 def test_removal_denies_an_unconfined_view_of_the_host(removed):
@@ -118,7 +118,7 @@ def test_removal_keeps_ems_configuration_data_and_backups(removed):
 
 def test_a_reinstall_restores_the_confinement_and_the_preserved_key(removed, package):
     removed.install_package(package)
-    removed.setup_export_root()
+    removed.publish_exports()
     removed.reload_sshd()
 
     listing = removed.sftp(["ls /"])
@@ -144,7 +144,7 @@ def test_purge_removes_the_backup_home_and_its_authorized_keys(purged):
 def test_purge_removes_the_feature_specific_acl_entries(purged):
     assert purged.acl_entries(INSTALL_ROOT, user=BACKUP_USER) == []
     for name in EXPORT_NAMES:
-        assert purged.acl_entries(f"{INSTALL_ROOT}/{name}", user=BACKUP_USER) == [], name
+        assert purged.acl_entries(f"{INSTALL_ROOT}/data/{name}", user=BACKUP_USER) == [], name
 
 
 def test_purge_leaves_unrelated_acl_entries_alone(package):
@@ -156,12 +156,12 @@ def test_purge_leaves_unrelated_acl_entries_alone(package):
         pytest.skip(str(exc))
     try:
         outsider = container.add_unrelated_user()
-        container.shell(f"setfacl -m u:{outsider}:rx {INSTALL_ROOT}/config", check=True)
+        container.shell(f"setfacl -m u:{outsider}:rx {INSTALL_ROOT}/data/backups", check=True)
 
         container.purge_package()
 
-        assert container.acl_entries(f"{INSTALL_ROOT}/config", user=outsider) != []
-        assert container.acl_entries(f"{INSTALL_ROOT}/config", user=BACKUP_USER) == []
+        assert container.acl_entries(f"{INSTALL_ROOT}/data/backups", user=outsider) != []
+        assert container.acl_entries(f"{INSTALL_ROOT}/data/backups", user=BACKUP_USER) == []
     finally:
         container.stop()
 

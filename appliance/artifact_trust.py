@@ -223,7 +223,7 @@ def _recorded_schema_problem(release, axis, value):
                 f"the artifact's manager implements {implements} and could not read it"
             ),
         }
-    floor = release.state_reads.get(axis, 1)
+    floor = release.state_reads.get(axis, implements)
     if value < floor:
         return {
             "code": "artifact_state_schema_unreadable",
@@ -239,7 +239,7 @@ def _written_schema_problem(release, axis, value):
     if axis not in release.state_implements:
         return None
     implements = release.state_implements[axis]
-    floor = release.state_reads.get(axis, 1)
+    floor = release.state_reads.get(axis, implements)
     if value > implements:
         code, reads = "artifact_state_schema_too_old", f"implements {implements}"
     elif value < floor:

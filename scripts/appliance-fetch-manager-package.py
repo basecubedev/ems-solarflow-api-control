@@ -159,7 +159,7 @@ def main(argv=None):
     # of them as OSError, so catching the base class turned every one of them
     # into "nothing published yet" and a silently unsigned package in the image.
     try:
-        document = fetch(args.index, limit=MAX_DOCUMENT_BYTES, label="the index")
+        document = fetch(args.index, limit=release_fetch.MAX_INDEX_BYTES, label="the index")
     except urllib.error.HTTPError as exc:
         if exc.code != 404:
             raise SystemExit(f"the index at {args.index} could not be read: HTTP {exc.code}")
@@ -172,10 +172,25 @@ def main(argv=None):
     except ValueError as exc:
         raise SystemExit(f"the index at {args.index} is not readable json: {exc}")
 
+    wanted = args.version.strip().lstrip("vV")
     try:
-        chosen = newest_stable(index, wanted=args.version.strip().lstrip("vV"))
+        listed = release_fetch.parse_index(index)
+        chosen = newest_stable(index, wanted=wanted)
     except release_fetch.FetchError as exc:
         raise SystemExit(f"{exc.code}: {exc.message}")
+    # Only "no stable release yet" falls back to a package built from the
+    # checkout. A row the parser refused, a row that claims no version, and a
+    # version that was asked for and is not listed are a broken index or a
+    # broken request, and a fallback would bake a development Manager into an
+    # image without anybody noticing.
+    refused = len(index.get("releases") or []) - len(listed)
+    if refused:
+        raise SystemExit(f"the index at {args.index} has {refused} entries this build cannot read")
+    unclaimed = [entry["release_id"] for entry in listed if not described_version(entry)]
+    if unclaimed:
+        raise SystemExit(f"the index names releases without a version: {', '.join(unclaimed)}")
+    if chosen is None and wanted:
+        raise SystemExit(f"the index lists no stable release {wanted}")
     if chosen is None:
         print("the index names no stable release", file=sys.stderr)
         return 3

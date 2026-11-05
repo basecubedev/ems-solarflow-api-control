@@ -253,6 +253,30 @@ def test_every_operation_type_the_agent_runs_has_a_title():
     assert set(js_list("lib/operations.js", "OPERATION_TYPES")) == declared
 
 
+def test_the_plans_painted_red_name_types_and_the_account_the_agent_has():
+    from appliance import shell_access
+
+    types = set(js_list("lib/operations.js", "OPERATION_TYPES"))
+    source = (SOURCE / "src" / "lib" / "plan.js").read_text(encoding="utf-8")
+
+    assert set(js_list("lib/plan.js", "DANGER_TYPES")) <= types
+    assert f'export const SHELL_ACCOUNT = "{shell_access.ACCOUNT}";' in source
+
+
+def test_the_archives_the_console_lists_are_the_ones_the_agent_keeps():
+    from appliance.support_archive import KEEP_ARCHIVES
+
+    source = (SOURCE / "src" / "lib" / "operations.js").read_text(encoding="utf-8")
+
+    assert f"export const KEPT_ARCHIVES = {KEEP_ARCHIVES};" in source
+
+
+def test_the_release_tracks_are_the_backends():
+    from appliance.version import TRACK_DEVELOPMENT, TRACK_LATEST, TRACK_RC, TRACK_STABLE
+
+    assert js_list("lib/host.js", "RELEASE_TRACKS") == [TRACK_STABLE, TRACK_RC, TRACK_LATEST, TRACK_DEVELOPMENT]
+
+
 def test_every_operation_state_has_words():
     assert keys("lib/operations.js", "OPERATION_STATES") == constants(operations, "STATE_")
 
@@ -302,6 +326,23 @@ def test_the_daemon_states_are_docker_backend_s():
     assert set(js_list("lib/words.js", "DAEMON_STATES")) == constants(docker_backend, "DAEMON_")
 
 
+def test_the_health_and_lock_words_are_the_backends():
+    from appliance import packages
+
+    assert set(js_list("lib/words.js", "HEALTH_STATES")) == constants(docker_backend, "HEALTH_")
+    assert set(js_list("lib/words.js", "LOCK_STATES")) == {
+        packages.LOCK_FREE,
+        packages.LOCK_HELD,
+        packages.LOCK_UNKNOWN,
+    }
+
+
+def test_the_sftp_examples_are_named_by_the_ids_the_console_translates():
+    ids = {item["id"] for item in backup_access.BackupAccessService.examples(None, "ems-backup", "host")}
+
+    assert set(js_list("lib/access.js", "SFTP_EXAMPLES")) == ids
+
+
 def test_the_audit_finding_states_only_what_the_backend_says():
     """The translated finding names the cause and the reassurance of the
     backend's own sentence; it must stop doing so when that sentence does."""
@@ -335,7 +376,6 @@ PLAN_OBJECT_FIELDS = frozenset(
         "preserves",
         "recovery",
         "rollback_target",
-        "running_operation",
         "target",
     }
 )

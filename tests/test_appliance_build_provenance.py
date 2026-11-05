@@ -352,13 +352,14 @@ def test_running_the_upstream_tooling_does_not_invalidate_the_tree(tmp_path, loc
 
     A bytecode cache is not a build input, and an authority that counted one
     would refuse the second build on a tree the first build was fine with.
+    Python 3 writes nothing beside the sources, so a .pyc there is refused
+    (test_bytecode_python_would_import_without_a_source_is_refused).
     """
 
     root = tarball_source(tmp_path, lock)
     cache = root / "site" / "__pycache__"
     cache.mkdir(parents=True)
     (cache / "config_loader.cpython-313.pyc").write_bytes(b"\x00compiled")
-    (root / "site" / "layer_manager.pyc").write_bytes(b"\x00compiled")
 
     report = probe(root, lock)
 
@@ -855,3 +856,85 @@ def test_a_well_formed_package_gets_past_the_command_line(tmp_path):
 
     assert run.returncode == 3, run.stderr
     assert "NOT RUN" in run.stderr
+
+
+# --- what the hashes do not cover ---------------------------------------------
+
+
+def bytecode_finding(report):
+    return next(finding for finding in report.findings if finding.check == "bytecode")
+
+
+@pytest.mark.parametrize("relative", ["site/config_loader.pyc", "site/helpers.pyo"])
+def test_bytecode_python_would_import_without_a_source_is_refused(tmp_path, lock, relative):
+    """The tree hash and the git check leave bytecode out, and Python imports a
+    .pyc beside the sources whether or not a .py exists for it."""
+
+    root = tarball_source(tmp_path, lock)
+    write(root, relative, "not what upstream shipped\n")
+
+    report = probe(root, lock)
+
+    assert not report.compatible
+    assert report.reason == rpi_image_gen.REASON_SOURCE_MODIFIED
+    assert relative in bytecode_finding(report).detail
+
+
+def test_a_bytecode_cache_the_generator_wrote_itself_is_not_refused(tmp_path, lock):
+    """Upstream writes __pycache__ into site/ on its first run; the build never
+    reads it, because it runs with a cache prefix of its own."""
+
+    root = tarball_source(tmp_path, lock)
+    write(root, "site/__pycache__/config_loader.cpython-313.pyc", "cached\n")
+
+    report = probe(root, lock)
+
+    assert report.compatible, [finding.to_dict() for finding in report.findings]
+
+
+def test_the_generator_runs_with_a_bytecode_cache_outside_its_tree():
+    wrapper = (ROOT / "scripts/appliance-build-rpi-image.sh").read_text(encoding="utf-8")
+    build = wrapper.split("    ./rpi-image-gen build \\\n", 1)[0].rsplit("(\n", 1)[1]
+
+    assert 'PYTHONPYCACHEPREFIX="$WORK/' in build
+
+
+@requires_git
+def test_an_ignored_file_in_a_tree_the_package_takes_whole_is_refused(tmp_path):
+    """build-deb.sh packages every file under appliance/static, ignored or not;
+    an attested tree hash that left one out does not describe the package."""
+
+    from appliance import project_source
+
+    root = tmp_path / "project"
+    write(root, "appliance/static/modern/index.html", "<!doctype html>\n")
+    write(root, ".gitignore", "*.log\nnode_modules/\n__pycache__/\n")
+    git(root, "init", "--quiet", "-b", "main")
+    git(root, "config", "user.email", "builder@example.invalid")
+    git(root, "config", "user.name", "builder")
+    git(root, "add", "-A")
+    git(root, "commit", "--quiet", "-m", "clean")
+    write(root, "appliance/static/modern/debug.log", "left behind\n")
+
+    with pytest.raises(project_source.ProjectSourceError) as refusal:
+        project_source.assert_clean(root)
+
+    assert refusal.value.code == project_source.UNTRACKED
+    assert "appliance/static/modern/debug.log" in refusal.value.message
+
+
+@requires_git
+def test_an_ignored_cache_outside_the_packaged_trees_is_tolerated(tmp_path):
+    from appliance import project_source
+
+    root = tmp_path / "project"
+    write(root, "appliance/version.py", 'APPLIANCE_VERSION = "0.0.0"\n')
+    write(root, ".gitignore", "__pycache__/\n")
+    git(root, "init", "--quiet", "-b", "main")
+    git(root, "config", "user.email", "builder@example.invalid")
+    git(root, "config", "user.name", "builder")
+    git(root, "add", "-A")
+    git(root, "commit", "--quiet", "-m", "clean")
+    write(root, "appliance/__pycache__/version.cpython-313.pyc", "cache\n")
+
+    assert project_source.assert_clean(root).revision

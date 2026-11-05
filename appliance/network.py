@@ -21,7 +21,7 @@ from pathlib import Path
 
 from dataclasses import dataclass, field
 
-from appliance.commands import CommandError
+from appliance.commands import CommandError, command_failure_detail
 from appliance.operations import STATE_FAILED_TERMINAL, STATE_SUCCEEDED, STATE_VERIFYING
 from appliance.paths import atomic_write
 from appliance.validation import is_localhost, validate_hostname
@@ -60,6 +60,7 @@ class Interface:
     dns: list = field(default_factory=list)
     ssid: str = ""
     signal: int = None
+    mac: str = ""
 
     def to_dict(self):
         return {
@@ -67,6 +68,7 @@ class Interface:
             "type": self.kind,
             "state": self.state,
             "connection": self.connection,
+            "mac": self.mac,
             "addresses": list(self.addresses),
             "gateway": self.gateway,
             "dns": list(self.dns),
@@ -118,7 +120,7 @@ def parse_device_details(text):
     chose, which is why the SSID is resolved from the profile separately.
     """
 
-    details = {"addresses": [], "gateway": "", "dns": [], "connection": ""}
+    details = {"addresses": [], "gateway": "", "dns": [], "connection": "", "mac": ""}
     for line in (text or "").splitlines():
         key, _, value = line.partition(":")
         key, value = key.strip(), value.strip()
@@ -134,6 +136,8 @@ def parse_device_details(text):
             details["dns"].append(value)
         elif key == "GENERAL.CONNECTION":
             details["connection"] = value
+        elif key == "GENERAL.HWADDR":
+            details["mac"] = value.replace("\\:", ":").upper()
     return details
 
 
@@ -209,6 +213,16 @@ def hosts_naming(text, previous, hostname):
     return rewritten + f"{HOSTNAME_LOOPBACK}\t{hostname}\n"
 
 
+def _reachable_address(address):
+    """An address somebody else on a network could reach; not link-local."""
+
+    try:
+        parsed = ipaddress.ip_interface(str(address).strip()).ip
+    except ValueError:
+        return False
+    return not (parsed.is_link_local or parsed.is_loopback)
+
+
 class NetworkService:
     def __init__(self, *, runner, probe, config, operations, time_fn=None, sleep=None,
                  operation_log=None, revert_intent_dir=None):
@@ -223,6 +237,7 @@ class NetworkService:
         # WLAN passphrases live in memory between plan and apply only; they are
         # never written to the operation record, a log or the state directory.
         self._secrets = {}
+        self._operator_contact = None
 
     @property
     def available(self):
@@ -235,6 +250,7 @@ class NetworkService:
         record = {
             "hostname": hostname["hostname"],
             "mdns": hostname["mdns"],
+            "mdns_expected": hostname.get("mdns_expected", ""),
             "manager": "NetworkManager" if self.available else "unavailable",
             "connectivity": "unknown",
             "interfaces": [],
@@ -260,6 +276,7 @@ class NetworkService:
             # thing that knows would not answer".
             record["error"] = "network_manager_unreachable"
             return record
+        record["wifi_radio"] = self.wifi_radio()
         interfaces = parse_device_status(status.stdout)
         for interface in interfaces:
             if interface.kind in ("loopback",):
@@ -271,6 +288,7 @@ class NetworkService:
             )
             parsed = parse_device_details(detail.stdout if detail.ok else "")
             interface.addresses = parsed["addresses"]
+            interface.mac = parsed["mac"]
             interface.gateway = parsed["gateway"]
             interface.dns = parsed["dns"]
             if interface.kind == "wifi":
@@ -280,6 +298,15 @@ class NetworkService:
             if interface.state.startswith(STATE_CONNECTED) and not record["active_connection"]:
                 record["active_connection"] = interface.connection
         return record
+
+    def wifi_radio(self):
+        """The hardware switch (rfkill) and NetworkManager's own WLAN switch."""
+
+        result = self.runner.run("nmcli", ["-t", "-f", "WIFI-HW,WIFI", "radio"], timeout=20)
+        parts = (result.stdout or "").strip().split(":") if result.ok else []
+        if len(parts) != 2:
+            return {"hardware": "unknown", "software": "unknown"}
+        return {"hardware": parts[0], "software": parts[1]}
 
     def _signal_for(self, ssid):
         """Signal strength is decoration on the overview, never its verdict.
@@ -389,9 +416,14 @@ class NetworkService:
             joined = self.profile_ssid(interface.connection) or interface.connection
             if joined != ssid:
                 continue
-            if parsed["addresses"]:
+            if any(_reachable_address(address) for address in parsed["addresses"]):
                 return True
         return False
+
+    def note_operator_contact(self):
+        """A signed-in request reached the agent; a WLAN switch waiting for one counts it."""
+
+        self._operator_contact = self._time()
 
     # --- planning --------------------------------------------------------
 
@@ -400,8 +432,23 @@ class NetworkService:
             raise NetworkError("network_manager_unavailable", "NetworkManager is not available")
 
         previous = self.active_wifi_profile()
-        networks = {item["ssid"]: item for item in self.scan(rescan=True)}
+        networks = {}
+        # The scan is sorted strongest first; one SSID on several access
+        # points is planned as the one the appliance will join.
+        for item in self.scan(rescan=True):
+            networks.setdefault(item["ssid"], item)
         visible = networks.get(ssid)
+        if visible is None:
+            radio = self.wifi_radio()
+            if "disabled" in (radio["hardware"], radio["software"]):
+                switch = "a hardware switch (rfkill)" if radio["hardware"] == "disabled" else (
+                    "NetworkManager"
+                )
+                raise NetworkError(
+                    "wifi_radio_off",
+                    f"the WLAN radio is switched off by {switch}, so no network can be "
+                    "seen or joined; switch it on first",
+                )
         if visible is None and not hidden:
             raise NetworkError(
                 "wifi_network_not_found",
@@ -426,10 +473,19 @@ class NetworkService:
             "signal": (visible or {}).get("signal"),
             "previous_profile": previous,
             "revert_timeout_seconds": self.config.wifi_revert_timeout_seconds,
-            "warning": "Applying a WLAN change can disconnect this browser session. "
+            "warning": "Applying a WLAN change can disconnect this browser session, and the "
+            "EMS pauses while the appliance changes networks: it cannot reach the battery "
+            "or the meter until the new network is up. "
             + (
                 "The previous profile is kept and reactivated automatically if the new "
-                "network does not reach connectivity."
+                "network does not reach connectivity"
+                + (
+                    f", or if nobody signed in reaches this console within "
+                    f"{self.config.wifi_confirm_timeout_seconds} seconds of the switch -- "
+                    "over the new network or a cable."
+                    if self.config.wifi_confirm_timeout_seconds
+                    else "."
+                )
                 if previous
                 else "This appliance has no WLAN profile to fall back to, so nothing "
                 "takes the change back if the new network does not reach connectivity."
@@ -563,6 +619,14 @@ class NetworkService:
         ssid = target["ssid"]
         previous = target.get("previous_profile") or ""
         passphrase = self._secrets.pop(operation.operation_id, "")
+        # Kept in memory only, so a retry after a restart has none: it dropped
+        # the working link, joined without it, reverted, and blamed the network.
+        if target.get("has_passphrase") and not passphrase:
+            raise NetworkError(
+                "wifi_passphrase_lost",
+                "the WLAN passphrase is kept only until the change runs and was lost when "
+                "the appliance agent restarted; plan the change again",
+            )
 
         self.arm_revert(operation.operation_id, previous)
 
@@ -578,10 +642,24 @@ class NetworkService:
             input_text = f"{passphrase}\n"
         result = self.runner.run("nmcli", args, timeout=90, input_text=input_text)
 
-        self._advance(operation, "waiting_for_connectivity", state=STATE_VERIFYING)
-        connected = self._wait_for_wifi(ssid)
+        # A join nmcli refused -- a mistyped passphrase -- is reverted at once;
+        # waiting for its connectivity first kept the appliance offline for
+        # minutes more.
+        connected = False
+        reached = True
+        if result.ok:
+            self._advance(operation, "waiting_for_connectivity", state=STATE_VERIFYING)
+            connected = self._wait_for_wifi(ssid)
+        if result.ok and connected and previous and self.config.wifi_confirm_timeout_seconds:
+            self._advance(
+                operation,
+                "waiting_for_operator",
+                detail=f"open this console within {self.config.wifi_confirm_timeout_seconds} "
+                "seconds, over the new network or a cable, or the previous network comes back",
+            )
+            reached = self._wait_for_operator()
 
-        if result.ok and connected:
+        if result.ok and connected and reached:
             self.disarm_revert()
             payload = {
                 "ssid": ssid,
@@ -592,6 +670,15 @@ class NetworkService:
             self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
             return payload
 
+        if not result.ok:
+            reason = f"nmcli could not join {ssid}: {command_failure_detail(result)}"
+        elif not connected:
+            reason = "the new WLAN did not reach connectivity"
+        else:
+            reason = (
+                f"the appliance joined {ssid}, but nobody reached the console within "
+                f"{self.config.wifi_confirm_timeout_seconds} seconds"
+            )
         self._advance(operation, "reverting_wifi")
         reverted = self._revert(previous)
         # Kept when the revert did not happen, so the next agent start tries
@@ -610,12 +697,11 @@ class NetworkService:
             stage="reverted" if reverted else "revert_failed",
             error={
                 "code": "wifi_connection_failed",
-                "message": "the new WLAN did not reach connectivity"
-                + ("; the previous network was restored" if reverted else ""),
+                "message": reason + ("; the previous network was restored" if reverted else ""),
             },
             result=payload,
         )
-        raise NetworkError("wifi_connection_failed", "the new WLAN did not reach connectivity")
+        raise NetworkError("wifi_connection_failed", reason)
 
     def _wait_for_wifi(self, ssid):
         deadline = self._time() + self.config.wifi_revert_timeout_seconds
@@ -625,6 +711,24 @@ class NetworkService:
             if self._time() >= deadline:
                 return False
             self._sleep(3)
+
+    def _wait_for_operator(self):
+        """Whether a signed-in request reaches the agent after the switch.
+
+        Joining and holding an address says nothing about whether anybody can
+        still get here: a guest network with client isolation, or another
+        subnet, joins perfectly and leaves the console and the EMS's devices
+        out of reach.
+        """
+
+        since = self._time()
+        deadline = since + self.config.wifi_confirm_timeout_seconds
+        while True:
+            if self._operator_contact is not None and self._operator_contact > since:
+                return True
+            if self._time() >= deadline:
+                return False
+            self._sleep(2)
 
     def _revert(self, previous_profile):
         """Reactivate the saved profile. The previous profile is never deleted.
@@ -661,7 +765,9 @@ class NetworkService:
         self._advance(operation, "updating_hosts", detail=hosts)
 
         self._advance(operation, "updating_mdns", state=STATE_VERIFYING)
-        self.runner.run("systemctl", ["try-restart", "avahi-daemon.service"], timeout=60)
+        restarted = self.runner.run(
+            "systemctl", ["try-restart", "avahi-daemon.service"], timeout=60
+        ).ok
 
         payload = {
             "hostname": hostname,
@@ -669,7 +775,13 @@ class NetworkService:
             "hosts": hosts,
             "new_url": f"http://{hostname}.local:{self.config.web_port}",
             "admin_url": f"http://{hostname}.local:{self.config.admin_port}",
+            "mdns_restarted": restarted,
         }
+        if not restarted:
+            payload["note"] = (
+                "avahi-daemon did not restart, so the network may still know this "
+                "appliance by its old .local name until it does; the IP address works"
+            )
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
         return payload
 

@@ -43,9 +43,11 @@ If none of that helps: **plug in a keyboard and a screen.** The appliance has a
 rescue account for exactly this — user `ems-rescue`, password `rescue-me` — and
 it can become root with `sudo`. That password is written down here and in the
 source, so it is public knowledge: fine on a home network, and worth changing
-with `sudo passwd ems-rescue` if your appliance can be reached from outside one.
-The **Console rescue account** card on **SSH & backup access** reports which of
-the two it is; it does not insist.
+if your appliance can be reached from outside one. No SSH is needed for that:
+at the keyboard, sign in as `ems-rescue` and type `passwd` — the default
+password once, your own twice. The **Console rescue account** card on
+**SSH & backup access** reports which of the two it is, and spells out these
+steps under *Change it without SSH*; it does not insist.
 
 The full order of attempts, down to reading the card in another computer, is in
 [the console recovery guide](../../appliance/console-recovery.md).

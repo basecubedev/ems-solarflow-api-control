@@ -14,7 +14,11 @@ import json
 import pytest
 
 from appliance.agent import AgentError, AgentHandlers
-from appliance.operations import STATE_FAILED_TERMINAL
+from appliance.operations import (
+    STATE_AWAITING_CONFIRMATION,
+    STATE_FAILED_TERMINAL,
+    STATE_ROLLED_BACK,
+)
 from tests.helpers.appliance import (
     ADMIN_CONTAINER,
     ADMIN_REPOSITORY,
@@ -222,6 +226,73 @@ def test_a_record_from_an_older_schema_does_not_execute_a_non_admin_operation(tm
     assert not rebooted, services.host.calls
 
 
+def _from_an_older_manager(payload):
+    from appliance import operation_schema
+
+    payload["schema_version"] = 1
+    target = payload["requested_target"]
+    target[operation_schema.AUTHORITY_FIELD] = operation_schema.authority_fingerprint(
+        operation_id=payload["operation_id"],
+        operation_type=payload["type"],
+        schema_version=1,
+        target=target,
+        plan_hash=target[operation_schema.AUTHORITY_PLAN_FIELD],
+    )
+
+
+def test_a_wrong_token_does_not_end_a_record_an_older_manager_wrote(tmp_path):
+    """The schema was judged before the token: a stale page or a double submit
+    ended any such record, whoever sent it."""
+
+    services = appliance(tmp_path)
+    planned = handlers(services).dispatch({"operation": "system.plan_reboot"})
+    corrupt(services, planned, _from_an_older_manager)
+
+    with pytest.raises(AgentError) as excinfo:
+        handlers(services).dispatch(
+            {
+                "operation": "operations.execute",
+                "operation_id": planned["operation"]["operation_id"],
+                "confirmation_token": planned["confirmation_token"][::-1],
+            }
+        )
+
+    assert excinfo.value.code == "confirmation_token_mismatch"
+    operation = services.operations.get(planned["operation"]["operation_id"])
+    assert operation.state == STATE_AWAITING_CONFIRMATION, operation.to_dict()
+
+
+def test_a_refused_record_keeps_its_plan_and_claims_nothing_about_the_admin(tmp_path):
+    services = appliance(tmp_path)
+    planned = handlers(services).dispatch({"operation": "system.plan_reboot"})
+    corrupt(services, planned, _from_an_older_manager)
+
+    operation = execute(services, planned)
+
+    assert operation.state == STATE_FAILED_TERMINAL
+    assert "admin_untouched" not in operation.result, operation.result
+    assert operation.result["plan"]["action"] == "reboot", operation.result
+
+
+def test_a_refused_confirmation_never_ends_an_operation_that_is_running(tmp_path):
+    services = appliance(tmp_path)
+    planned = handlers(services).dispatch({"operation": "system.plan_reboot"})
+    operation_id = planned["operation"]["operation_id"]
+    services.operations.confirm(operation_id, planned["confirmation_token"])
+    corrupt(services, planned, _from_an_older_manager)
+
+    with pytest.raises(AgentError):
+        handlers(services).dispatch(
+            {
+                "operation": "operations.execute",
+                "operation_id": operation_id,
+                "confirmation_token": planned["confirmation_token"],
+            }
+        )
+
+    assert services.operations.get(operation_id).state == "running"
+
+
 def test_a_malformed_digest_does_not_execute(tmp_path):
     services = appliance(tmp_path)
     planned = plan_install(services, channel="exact", tag="v1.1.0")
@@ -332,6 +403,7 @@ def test_rollback_recovery_restores_the_exact_running_admin(tmp_path):
 
     operation = run_rollback(services, planned)
 
+    assert operation.state == STATE_ROLLED_BACK, operation.to_dict()
     recovery = operation.result["recovery"]
     assert recovery["restored"] is True, recovery
     assert recovery["verification"]["active_digest"] == running, recovery
@@ -713,3 +785,25 @@ def test_a_recovery_hash_that_is_not_a_digest_does_not_execute(tmp_path, field):
 
     assert operation.state == STATE_FAILED_TERMINAL, operation.to_dict()
     assert operation.result["admin_untouched"] is True, operation.result
+
+
+def test_a_rollback_whose_image_was_pruned_pulls_it_watched_while_the_admin_runs(tmp_path):
+    """Admin's own retention can remove the image the Manager rolls back to.
+    The pull then ran unwatched with the ten-minute limit a Pi 3B+ outlasts,
+    although the Admin was still running and the pull could be watched."""
+
+    services = rollback_appliance(tmp_path)
+    previous = services.known_good.previous()
+    services.host.images.pop(previous["admin_reference"], None)
+    services.host.images.pop(previous["admin_image"], None)
+    services.host.watch_ticks = 2
+    ticks = []
+    services.host.on_watch_tick = ticks.append
+    planned = handlers(services).dispatch({"operation": "admin.plan_rollback"})
+
+    operation = run_rollback(services, planned)
+
+    assert ticks == [1, 2], ticks
+    assert "pulling_image" in [entry["stage"] for entry in operation.progress]
+    assert previous["admin_reference"] in services.host.images
+    assert (operation.error or {}).get("code") != "known_good_image_unavailable"

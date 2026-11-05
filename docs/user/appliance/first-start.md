@@ -66,6 +66,15 @@ and the password alike — so keep a backup somewhere else.
 > The appliance serves plain HTTP on your local network. Anyone who can reach
 > port 8088 sees the sign-in page, so a real password matters even at home.
 
+> **Set the password as soon as the page answers.** Until then, whoever on your
+> network reaches the page first can set it — a browser on another page cannot,
+> but any device on the network that knows to ask can, and that password opens
+> SSH, keys and the root shell switch. If the page asks you to **sign in**
+> although you never set a password, somebody else did: reset it at the
+> console (`sudo ems-appliance password-reset`), then on the **Access** page
+> remove every SSH key you do not know, switch shell access off, and check the
+> audit log under Diagnostics.
+
 **What it changes:** the password is stored on the appliance, and you are
 signed in.
 
@@ -100,7 +109,7 @@ Overview's quick actions. Both open the **EMS Admin** page.
 review the plan before anything is written* — and what installing does: it
 creates the deployment under `/opt/ems-solarflow` and starts the version you
 choose. **Version** offers **Latest stable** and every published version,
-grouped as **Stable**, **Unstable** and **Experimental**; a version this
+grouped as **Stable**, **Release candidate**, **Rolling** and **Development**; a version this
 appliance will not install is listed greyed out, with the reason. In Expert,
 **Exact release tag** takes a tag you type.
 
@@ -193,7 +202,7 @@ console has taken over setting up the EMS.
 | The name does not resolve | Use the IP address from your router |
 | Connection refused on the address | Give it another two minutes. The first start grows the card to its full size, sets up the host identity and starts its services, and the page answers only once the web service runs |
 | *The appliance does not answer* | The page tries again every few seconds by itself; **Try again** asks at once |
-| The page asks to sign in, not to create a password | A password was set already. If it is unknown, see [When it stops working](recovery.md#the-password-is-lost) |
+| The page asks to sign in, not to create a password | A password was set already — by you, or by another device on your network that reached the page first. If you did not set it, reset it at the console and then check SSH keys and shell access on the Access page; see [When it stops working](recovery.md#the-password-is-lost) |
 | *The password file the EMS Admin console and the dashboard share is missing* | A password was set before and its file is gone, so the page may not create one again: run `sudo ems-appliance password-reset` at the appliance, or set a password in the EMS Admin console and confirm it here afterwards |
 | *Too many attempts* | Wait a moment, then sign in again |
 | The address opens the Classic console | It carries `?ui=classic`, or the browser is too old for Modern; see [The deprecated Classic console](index.md#the-deprecated-classic-console) |

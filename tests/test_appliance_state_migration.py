@@ -340,6 +340,28 @@ def test_an_agent_directory_replaced_by_a_symlink_does_not_hand_over_its_target(
     assert stat.S_IMODE(victim.stat().st_mode) == 0o755
 
 
+@pytest.mark.parametrize("role", ["all", "agent", "web"])
+def test_creating_the_layout_does_not_re_mode_what_a_planted_link_points_at(tmp_path, role):
+    """`sudo ems-appliance password-reset`, the documented way back in, is a
+    third root pass over this layout. It followed a link with mkdir and chmod:
+    one to / left the root directory 0750, and every service not running as
+    root could no longer reach anything."""
+
+    from appliance.paths import ensure_directories
+
+    paths = appliance_paths(tmp_path)
+    victim = tmp_path / "victim"
+    victim.mkdir(parents=True)
+    victim.chmod(0o755)
+    for planted in (paths.web_preferences_dir, paths.operations_dir):
+        planted.parent.mkdir(parents=True, exist_ok=True)
+        planted.symlink_to(victim, target_is_directory=True)
+
+    ensure_directories(paths, role=role)
+
+    assert stat.S_IMODE(victim.stat().st_mode) == 0o755
+
+
 def test_a_symlinked_destination_is_reported_rather_than_passed_over(tmp_path):
     """Silence would leave an operator with a link nothing will ever resolve."""
 

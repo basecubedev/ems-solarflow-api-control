@@ -29,7 +29,9 @@ from appliance import (
     persistent_state,
 )
 from appliance.commands import CommandError
+from appliance.packages import LOCK_HELD
 from appliance.version import (
+    PACKAGE_NAME,
     DIRECTION_DOWNGRADE,
     DIRECTION_REINSTALL,
     DIRECTION_UNKNOWN,
@@ -103,11 +105,44 @@ def raised_schemas(release):
     )
 
 
+
+def _failing_checks_warning(failing):
+    return (
+        "This appliance fails its own installation checks right now ("
+        + ", ".join(failing)
+        + "). The package runs the same checks while it installs, so this install may "
+        "stop half-configured and be put back; repair them first unless this package is "
+        "the fix."
+    )
+
+
 class ManagerUpdateError(Exception):
     def __init__(self, code, message):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+def clock_refusal_message(record):
+    """Why a download waits for the clock, which servers it waits on, and a way out.
+
+    Waiting is the answer after a power cut; on a network that blocks NTP to
+    the internet it never is, so the servers timesyncd asks are named.
+    """
+
+    servers = record.get("ntp_servers") or []
+    fallback = record.get("ntp_fallback_servers") or []
+    asked = " ".join(servers) or (
+        f"none of its own, only the fallback {' '.join(fallback)}" if fallback else "none known"
+    )
+    return (
+        "the system clock is not known to be synchronised; this board has no real-time "
+        "clock, so a download now would fail certificate and signature checks for reasons "
+        f"that do not name the clock. Time servers asked: {asked}. After a power cut, wait "
+        "a few minutes and try again. If this network blocks NTP to the internet, let its "
+        "DHCP server offer an NTP server, or set NTP= in a file under "
+        "/etc/systemd/timesyncd.conf.d/ over SSH"
+    )
 
 
 class ManagerUpdateService:
@@ -129,6 +164,8 @@ class ManagerUpdateService:
         installed_version="",
         architecture="arm64",
         reverter=manager_verify.PACKAGED_REVERTER,
+        package_lock=None,
+        installation_check=None,
     ):
         self.paths = paths
         self.config = config
@@ -141,6 +178,12 @@ class ManagerUpdateService:
         self.installed_version = installed_version
         self.architecture = architecture
         self.reverter = reverter
+        # What packages.PackageService.lock_state answers; None where nothing
+        # can be asked, as in a test that builds this service alone.
+        self.package_lock = package_lock
+        # install_check.verify_installation as the agent runs it; None where it
+        # cannot be asked.
+        self.installation_check = installation_check
         self._time = time_fn
         self._operation_log = operation_log
 
@@ -155,12 +198,7 @@ class ManagerUpdateService:
         record = self.probe.system_time()
         if record.get("ntp_synchronized") is True:
             return record
-        raise ManagerUpdateError(
-            "clock_not_synchronised",
-            "the system clock is not known to be synchronised; this board has no real-time "
-            "clock, so a download now would fail certificate and signature checks for reasons "
-            "that do not name the clock. Wait for time synchronisation and try again",
-        )
+        raise ManagerUpdateError("clock_not_synchronised", clock_refusal_message(record))
 
     def _staging(self, name):
         """A directory to fetch into, with abandoned ones swept first.
@@ -246,7 +284,12 @@ class ManagerUpdateService:
             url = release_fetch.https_url(
                 self.config.manager_index_url, label="the manager package index url"
             )
-        except release_fetch.FetchError:
+        except release_fetch.FetchError as exc:
+            # An http or malformed url is configured, just refused: reported as
+            # unconfigured, the card said "No index" and the plan blamed a
+            # missing setting.
+            if exc.code != "release_source_unconfigured":
+                listing.update(configured=True, error=exc.code, error_message=exc.message)
             return listing
         listing["configured"] = True
         try:
@@ -255,11 +298,19 @@ class ManagerUpdateService:
             )
             candidates = release_fetch.parse_index(json.loads(raw.decode("utf-8", errors="replace")))
         except release_fetch.FetchError as exc:
-            listing["error"] = exc.code
+            listing.update(error=exc.code, error_message=exc.message)
+            listing["clock_synchronised"] = self._clock_synchronised()
             return listing
         except ValueError:
-            listing["error"] = "release_index_invalid"
+            listing.update(error="release_index_invalid", error_message="the index is not JSON")
             return listing
+        # Another architecture's package is not on offer here; the signed
+        # manifest stays the authority, this only keeps the button honest.
+        candidates = [
+            candidate for candidate in candidates
+            if (candidate.get("described") or {}).get("architecture", self.architecture)
+            == self.architecture
+        ]
         for candidate in candidates:
             offered = str((candidate.get("described") or {}).get("release_version") or "")
             candidate["direction"] = direction(
@@ -272,7 +323,26 @@ class ManagerUpdateService:
             version_of=lambda item: (item.get("described") or {}).get("release_version", ""),
             stable=lambda item: item["track"] == TRACK_STABLE,
         )
+        # The index is not signed and carries no date. One that names nothing
+        # as new as the package that is installed was published before it, or
+        # is a copy leaving newer releases out: the console must not call the
+        # older entry current.
+        listing["index_behind_installed"] = bool(candidates) and all(
+            item["direction"] == DIRECTION_DOWNGRADE for item in candidates
+        )
         return listing
+
+    def _clock_synchronised(self):
+        """Whether the clock was synchronised, beside a download that failed.
+
+        A board without an RTC fails TLS for reasons that do not name the
+        clock; the plan refuses on it, and the list says it too.
+        """
+
+        try:
+            return self.probe.system_time().get("ntp_synchronized")
+        except Exception:
+            return None
 
     def _candidate(self, release_id):
         wanted = artifact_trust.validate_release_id(release_id)
@@ -284,7 +354,8 @@ class ManagerUpdateService:
             )
         if listing["error"]:
             raise ManagerUpdateError(
-                listing["error"], "the manager package index could not be read"
+                listing["error"],
+                listing.get("error_message") or "the manager package index could not be read",
             )
         for candidate in listing["releases"]:
             if candidate["release_id"] == wanted:
@@ -324,31 +395,83 @@ class ManagerUpdateService:
             ),
         }
 
+    def package_lock_held(self):
+        """The blocker for a package lock apt or dpkg holds, or None.
+
+        The Manager is installed by dpkg, and dpkg refuses at once while the
+        lock is held: the installer's fallback then met the same lock and the
+        install was filed as a failed revert on an appliance nothing had
+        touched.
+        """
+
+        if self.package_lock is None or self.package_lock() != LOCK_HELD:
+            return None
+        return {
+            "code": "package_lock_held",
+            "message": "another apt or dpkg run holds the package lock; the Appliance "
+            "Manager is installed by dpkg too, so wait until that run has finished",
+        }
+
+    def failing_checks(self):
+        """The installation checks this appliance fails right now, by name.
+
+        Every package's postinst ends in the same checks, so a host condition
+        that fails one -- a degraded backup export was the case on a Pi 3B+ --
+        fails the install and the revert to the package before it alike. That
+        is said in the plan rather than refused: the package on offer may be
+        the one that fixes it, as 0.4.1 was.
+        """
+
+        if self.installation_check is None:
+            return []
+        try:
+            report = self.installation_check() or {}
+        except Exception:
+            return []
+        return [str(failure).split(":", 1)[0] for failure in report.get("failures") or []]
+
     def _refuse_while_unjudged(self):
         pending = self.verification_pending()
         if pending:
             raise ManagerUpdateError(pending["code"], pending["message"])
 
-    def _reconcile_outcome(self):
-        """Fold a revert the shell drove back into the record, once.
+    def _reverted(self):
+        return manager_install.read_outcome(self.paths).outcome == manager_install.OUTCOME_REVERTED
 
-        The two revert paths that run without Python -- install-manager.sh's
-        fallback and the armed deadline -- cannot amend the retention record,
-        so it is corrected here, at the one place that reads their result.
+    def reconcile_record(self):
+        """Make the retention record say what dpkg holds; returns what changed.
+
+        Writes, so it runs only where nothing else writes the record: at agent
+        start, and at the start of a plan or an execution, which hold the one
+        operation slot. The two revert paths that run without Python --
+        install-manager.sh's fallback and the armed deadline -- cannot amend
+        the record, and dpkg can refuse a package without either of them.
+
+        Never while an install is in flight -- a deadline armed, unjudged and
+        inside its window, which the reverter moves on while the install unit
+        runs. The slot is free again once that unit has started, and until
+        dpkg has unpacked the staged package the version it reports is the
+        outgoing one: a correction then copied the outgoing archive over the
+        one the install request names. Once the window is over the console
+        hands Update and Revert back, so the correction has to run again by
+        then, deadline file or not.
         """
 
-        if manager_install.read_outcome(self.paths).outcome != manager_install.OUTCOME_REVERTED:
-            return
+        if manager_verify.window_open(self.paths, self._now()):
+            return manager_retention.RECORD_AGREES
         try:
-            manager_retention.adopt_previous_as_current(self.paths)
+            return manager_retention.reconcile(
+                self.paths, self.installed_version, reverted=self._reverted()
+            )
         except manager_retention.RetentionError:
             # A record this cannot rewrite is reported by everything that reads
-            # it; refusing to answer status as well would hide the state.
-            pass
+            # it; refusing to plan as well would hide the state.
+            return manager_retention.RECORD_AGREES
 
     def status(self):
-        self._reconcile_outcome()
-        retention = manager_retention.read(self.paths)
+        retention, _ = manager_retention.reconciled(
+            manager_retention.read(self.paths), self.installed_version, reverted=self._reverted()
+        )
         return {
             "installed_version": self.installed_version,
             "configured": bool(str(self.config.manager_index_url or "").strip()),
@@ -357,14 +480,39 @@ class ManagerUpdateService:
             "verify": manager_verify.read(self.paths).to_dict(),
             "verdict": manager_verify.read_verdict(self.paths).to_dict(),
             "outcome": manager_install.read_outcome(self.paths).to_dict(),
+            "dpkg": self._dpkg_holds(),
         }
+
+    def _dpkg_holds(self):
+        """What dpkg itself records for the Manager package, its state and version.
+
+        After an install that did not end confirmed, that decides what to do
+        next: a half-configured package wants dpkg --configure -a, an installed
+        one of the wrong version the rollback.
+        """
+
+        unknown = {"status": "unknown", "version": ""}
+        if self.runner is None or not self.runner.available("dpkg-query"):
+            return unknown
+        result = self.runner.run(
+            "dpkg-query",
+            ["-W", "-f=${db:Status-Status}|${Version}", "--", PACKAGE_NAME],
+            timeout=15,
+        )
+        if not result.ok or "|" not in (result.stdout or ""):
+            return unknown
+        status, _, version = result.stdout.strip().partition("|")
+        return {"status": status or "unknown", "version": version}
 
     # --- planning ---------------------------------------------------------
 
     def plan_update(self, operation, release_id):
-        """Say what would be installed and what stands in the way. Writes nothing."""
+        """Say what would be installed and what stands in the way.
 
-        self._reconcile_outcome()
+        Writes nothing but a retention record dpkg has outrun (``reconcile_record``).
+        """
+
+        self.reconcile_record()
         self._advance(operation, "preflight")
         self._require_clock()
         candidate = self._candidate(release_id)
@@ -391,6 +539,9 @@ class ManagerUpdateService:
         pending = self.verification_pending()
         if pending:
             blockers.append(pending)
+        locked = self.package_lock_held()
+        if locked:
+            blockers.append(locked)
         claimed = str((candidate.get("described") or {}).get("release_version") or "")
         # The page offers the claim as "Update to <version>".
         if claimed and not release_fetch.claim_matches(claimed, release.version):
@@ -421,21 +572,36 @@ class ManagerUpdateService:
             "build_id": release.build_id,
             "installed_version": self.installed_version,
             "direction": moving,
+            "track": release_track(release.version, package=True),
             "size_bytes": release.artifact_size,
             "digest": release.artifact_digest,
             "blockers": blockers,
             # What a revert would have *after* this install, not before it: the
-            # package running now becomes the kept one when it is displaced.
-            "revert_available": retention.current.present,
+            # package running now becomes the kept one when it is displaced --
+            # unless it is this package, which displaces nothing.
+            "revert_available": retention.current.present
+            and not manager_install.same_archive(retention, release.artifact_digest),
             "verify_window_seconds": manager_verify.DEFAULT_WINDOW_SECONDS,
             "warning": self._warning(
-                moving, retention.current.present, unclear, raised_schemas(release)
+                moving,
+                retention.current.present,
+                unclear,
+                raised_schemas(release),
+                reinstall=manager_install.same_archive(retention, release.artifact_digest),
+                failing=self.failing_checks(),
             ),
         }
 
     @staticmethod
-    def _warning(moving, revert_available, unclear, raised=()):
+    def _warning(moving, revert_available, unclear, raised=(), *, reinstall=False, failing=()):
         parts = []
+        if failing:
+            parts.append(_failing_checks_warning(failing))
+        if reinstall:
+            parts.append(
+                "This reinstalls the package that is running. If it fails, nothing is put "
+                "back automatically: the kept package is older than the one running."
+            )
         if moving == DIRECTION_DOWNGRADE:
             parts.append("This installs an older Appliance Manager than the one running.")
         elif moving == DIRECTION_UNKNOWN:
@@ -466,8 +632,12 @@ class ManagerUpdateService:
         return " ".join(parts)
 
     def plan_revert(self, operation):
-        """Say which kept package would go back on. Writes nothing."""
+        """Say which kept package would go back on.
 
+        Writes nothing but a retention record dpkg has outrun (``reconcile_record``).
+        """
+
+        self.reconcile_record()
         self._advance(operation, "preflight")
         try:
             target = manager_retention.revert_target(self.paths)
@@ -480,6 +650,12 @@ class ManagerUpdateService:
         )
         if verdict.outcome == persistent_state.STATE_BEHIND:
             blockers.append({"code": "state_schema_behind", "message": verdict.detail})
+        pending = self.verification_pending()
+        if pending:
+            blockers.append(pending)
+        locked = self.package_lock_held()
+        if locked:
+            blockers.append(locked)
 
         self.operations.update_target(
             operation.operation_id,
@@ -501,8 +677,9 @@ class ManagerUpdateService:
                     ""
                     if target.state_implements
                     else "It arrived before this manager recorded what a package can read, so "
-                    "its state compatibility could not be checked."
+                    "its state compatibility could not be checked. "
                 )
+                + (_failing_checks_warning(failing) if (failing := self.failing_checks()) else "")
             ).strip(),
         }
 
@@ -510,6 +687,10 @@ class ManagerUpdateService:
 
     def execute(self, operation):
         self._refuse_while_unjudged()
+        self.reconcile_record()
+        locked = self.package_lock_held()
+        if locked:
+            raise ManagerUpdateError(locked["code"], locked["message"])
         if operation.type == TYPE_MANAGER_REVERT:
             return self._execute_revert(operation)
         return self._execute_update(operation)
@@ -654,6 +835,7 @@ class ManagerUpdateService:
 
         self._advance(operation, "staging_package")
         kept_before = manager_retention.read(self.paths)
+        reinstall = manager_install.same_archive(kept_before, release.artifact_digest)
         retention = manager_install.prepare(
             self.paths,
             release=release,
@@ -670,7 +852,7 @@ class ManagerUpdateService:
             operation,
             version=release.version,
             build_id=release.build_id,
-            previous=retention.previous.path,
+            previous="" if reinstall else retention.previous.path,
             kept_before=kept_before,
         )
 

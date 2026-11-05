@@ -1,0 +1,68 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Hand the time servers of a DHCP lease to systemd-timesyncd.
+#
+# The board has no real-time clock. timesyncd learns servers from
+# systemd-networkd, which this appliance masks because NetworkManager owns the
+# interfaces, and NetworkManager hands them to nobody. On a network that blocks
+# NTP to the internet and offers its own server by DHCP the clock therefore
+# stayed at the image's build time, and every signed download was refused.
+#
+# One drop-in per interface under /run, so a lease that is gone at the next
+# boot takes its servers with it. The lease comes from whoever answers DHCP on
+# the LAN, so only server-shaped words are written.
+set -u
+
+DROP_IN_DIR=${EMS_NTP_DROP_IN_DIR:-/run/systemd/timesyncd.conf.d}
+INTERFACE=${1:-}
+ACTION=${2:-}
+
+case "$INTERFACE" in
+    ''|*[!A-Za-z0-9_.-]*|.|..) exit 0 ;;
+esac
+DROP_IN="$DROP_IN_DIR/50-ems-appliance-dhcp-$INTERFACE.conf"
+
+restart_timesyncd() {
+    systemctl try-restart systemd-timesyncd.service >/dev/null 2>&1 || true
+}
+
+servers=""
+set -f
+for word in ${DHCP4_NTP_SERVERS:-}; do
+    case "$word" in
+        -*|*..*|*[!A-Za-z0-9.:-]*) continue ;;
+    esac
+    servers="${servers:+$servers }$word"
+done
+set +f
+
+case "$ACTION" in
+    up|dhcp4-change) ;;
+    down)
+        if [ -e "$DROP_IN" ]; then
+            rm -f "$DROP_IN"
+            restart_timesyncd
+        fi
+        exit 0
+        ;;
+    *) exit 0 ;;
+esac
+
+if [ -z "$servers" ]; then
+    if [ -e "$DROP_IN" ]; then
+        rm -f "$DROP_IN"
+        restart_timesyncd
+    fi
+    exit 0
+fi
+
+wanted=$(printf '[Time]\nNTP=%s\n' "$servers")
+[ -f "$DROP_IN" ] && [ "$(cat "$DROP_IN")" = "$wanted" ] && exit 0
+
+mkdir -p "$DROP_IN_DIR" || exit 0
+staged="$DROP_IN.staged"
+printf '%s\n' "$wanted" > "$staged" && mv -f "$staged" "$DROP_IN" || {
+    rm -f "$staged"
+    exit 0
+}
+restart_timesyncd

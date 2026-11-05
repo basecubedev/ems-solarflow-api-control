@@ -190,6 +190,13 @@ def plan(services, operation, **fields):
 
 
 def plan_and_execute(services, operation, **fields):
+    """Plan, confirm and execute; a started install then runs the package it put on.
+
+    On an appliance the install restarts the agent, and the one that comes up
+    asks dpkg which Manager it is. Here the same service carries on, so it is
+    told -- otherwise every later step would read a record that dpkg contradicts.
+    """
+
     planned = plan(services, operation, **fields)
     handlers(services).dispatch(
         {
@@ -198,7 +205,10 @@ def plan_and_execute(services, operation, **fields):
             "confirmation_token": planned["confirmation_token"],
         }
     )
-    return services.operations.get(planned["operation"]["operation_id"]), planned["plan"]
+    executed = services.operations.get(planned["operation"]["operation_id"])
+    if executed.state == STATE_SUCCEEDED and operation in ("manager.plan_update", "manager.plan_revert"):
+        services.manager.installed_version = planned["plan"]["version"]
+    return executed, planned["plan"]
 
 
 def judged(services):
@@ -577,6 +587,276 @@ def test_the_status_surfaces_a_reverting_verdict(tmp_path):
     assert status["verdict"]["settled"] is True
 
 
+# --- the record says what dpkg holds ------------------------------------------
+
+
+REFUSED_BODY = b"the package whose postinst failed on this board"
+
+
+def stage_refused(services, *, version="0.1.5", outcome="revert_failed"):
+    """An install prepare() kept as current and dpkg never configured.
+
+    What the Pi 3B+ was left with on 2026-11-01: the incoming package failed its
+    postinst, the fallback did too, and dpkg kept holding the earlier version.
+    """
+
+    staged = services.paths.packages_dir / "refused.deb"
+    staged.write_bytes(REFUSED_BODY)
+    manager_retention.retain(
+        services.paths,
+        staged,
+        sha256="sha256:" + hashlib.sha256(REFUSED_BODY).hexdigest(),
+        version=version,
+        build_id="20260901000000",
+        state_reads=persistent_state.readable_floors(),
+    )
+    staged.unlink()
+    manager_install.result_path(services.paths).write_text(
+        json.dumps({"outcome": outcome, "detail": "dpkg could not configure it"}),
+        encoding="utf-8",
+    )
+
+
+def test_a_package_dpkg_never_took_is_not_made_the_way_back(tmp_path):
+    services, _ = build(tmp_path, installed_version="0.1.0")
+    seed_previous(services, version="0.1.0")
+    stage_refused(services)
+
+    operation, planned = plan_and_execute(
+        services, "manager.plan_update", release_id=RELEASE_ID
+    )
+
+    assert operation.state == STATE_SUCCEEDED
+    assert planned["revert_available"] is True
+    kept = manager_retention.read(services.paths)
+    assert kept.current.version == "0.2.0"
+    assert kept.previous.version == "0.1.0"
+    assert Path(kept.previous.path).read_bytes() == b"the package that is running"
+
+
+def test_a_record_naming_neither_package_dpkg_holds_offers_no_way_back(tmp_path):
+    services, _ = build(tmp_path, installed_version="0.0.9")
+    seed_previous(services, version="0.1.0")
+    stage_refused(services)
+
+    operation, planned = plan_and_execute(
+        services, "manager.plan_update", release_id=RELEASE_ID
+    )
+
+    assert operation.state == STATE_SUCCEEDED
+    assert planned["revert_available"] is False
+    kept = manager_retention.read(services.paths)
+    assert kept.current.version == "0.2.0"
+    assert kept.previous.path == ""
+
+
+def test_a_revert_is_not_offered_to_the_package_that_is_running(tmp_path):
+    services, _ = build(tmp_path, installed_version="0.1.0")
+    seed_previous(services, version="0.1.0")
+    stage_refused(services)
+
+    with pytest.raises(Exception) as refused:
+        plan(services, "manager.plan_revert")
+
+    assert getattr(refused.value, "code", "") == "no_previous_package"
+
+
+def test_the_record_is_not_corrected_while_an_install_is_on_its_way_to_dpkg(tmp_path):
+    """Until dpkg has unpacked the staged package it reports the outgoing
+    version, and a correction then copied the outgoing archive over the one the
+    install request names -- from any plan, even one that was refused."""
+
+    services, service = build(tmp_path)
+    seed_previous(services)
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+    service.installed_version = "0.1.0"
+    staged = manager_retention.read(services.paths)
+
+    plan(services, "manager.plan_revert")
+    service.reconcile_record()
+
+    kept = manager_retention.read(services.paths)
+    assert kept == staged
+    assert Path(kept.current.path).read_bytes() == ARCHIVE_BYTES
+
+
+def test_a_record_is_corrected_once_the_window_of_an_unjudged_install_is_over(tmp_path):
+    """The console hands Update and Revert back when the window runs out, deadline
+    file or not -- during the reverter's grace and attempts, or when it never
+    runs. Skipping the correction then rotated the refused package into
+    previous.deb again."""
+
+    services, service = build(tmp_path, installed_version="0.1.0")
+    seed_previous(services, version="0.1.0")
+    stage_refused(services)
+    manager_verify.arm(
+        services.paths,
+        services.runner,
+        expected_version="0.1.5",
+        build_id="20260901000000",
+        previous=str(manager_retention.read(services.paths).previous.path),
+        now=int(services.clock()) - 2 * manager_verify.DEFAULT_WINDOW_SECONDS,
+        reverter=str(service.reverter),
+    )
+    assert manager_verify.read(services.paths).armed
+
+    operation, _ = plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+
+    assert operation.state == STATE_SUCCEEDED, operation.error
+    kept = manager_retention.read(services.paths)
+    assert kept.previous.version == "0.1.0"
+    assert Path(kept.previous.path).read_bytes() == b"the package that is running"
+
+
+def test_reading_the_status_writes_nothing_and_shows_what_runs(tmp_path):
+    """The page polls this while an install executes on another thread, so a
+    read that rewrote the record could copy the kept package over the one
+    being staged."""
+
+    services, service = build(tmp_path, installed_version="0.1.0")
+    seed_previous(services, version="0.1.0")
+    stage_refused(services, outcome=manager_install.OUTCOME_REVERTED)
+    record = services.paths.packages_dir / manager_retention.RECORD_NAME
+    before = {path.name: path.read_bytes() for path in services.paths.packages_dir.iterdir()}
+
+    status = service.status()
+
+    assert {path.name: path.read_bytes() for path in services.paths.packages_dir.iterdir()} == before
+    assert record.is_file()
+    assert status["retention"]["current"]["version"] == "0.1.0"
+    assert status["can_revert"] is False
+
+
+# --- a reinstall of the package that is running -------------------------------
+
+
+def test_a_reinstall_of_the_running_package_falls_back_to_nothing_older(tmp_path):
+    """previous.deb is the release before the running one, and putting it on
+    when the reinstall failed left an older Manager running without a word."""
+
+    services, _ = build(tmp_path, installed_version="0.2.0")
+    seed_previous(services, version="0.1.0", body=b"the release before")
+    running = services.paths.packages_dir / "running.deb"
+    running.write_bytes(ARCHIVE_BYTES)
+    manager_retention.retain(
+        services.paths,
+        running,
+        sha256=ARCHIVE_DIGEST,
+        version="0.2.0",
+        state_reads=persistent_state.readable_floors(),
+    )
+    running.unlink()
+
+    operation, planned = plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+
+    assert operation.state == STATE_SUCCEEDED
+    assert "nothing is put back automatically" in planned["warning"]
+    assert planned["revert_available"] is False
+    request = json.loads(manager_install.request_path(services.paths).read_text(encoding="utf-8"))
+    assert request["fallback"] == ""
+    assert manager_verify.read(services.paths).previous_path == ""
+
+
+def test_a_reinstall_is_known_by_its_digest_even_when_the_archive_is_gone(tmp_path):
+    retention = manager_retention.Retention(
+        current=manager_retention.RetainedPackage(path=str(tmp_path / "gone.deb"), sha256=ARCHIVE_DIGEST)
+    )
+
+    assert manager_install.same_archive(retention, ARCHIVE_DIGEST)
+
+
+def test_an_update_names_the_running_package_as_its_fallback(tmp_path):
+    services, _ = build(tmp_path)
+    seed_previous(services)
+
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+
+    request = json.loads(manager_install.request_path(services.paths).read_text(encoding="utf-8"))
+    kept = manager_retention.read(services.paths)
+    assert request["fallback"] == kept.previous.path
+    assert Path(request["fallback"]).read_bytes() == b"the package that is running"
+
+
+# --- installation checks the appliance already fails ---------------------------
+
+
+FAILING = {"ok": False, "failures": ["export_service: ems-appliance-export.service is failed", "export_setup: refused"]}
+
+
+def test_an_update_plan_says_which_installation_checks_already_fail(tmp_path):
+    """postinst ends in these checks: a host condition that fails one failed
+    the install and the revert alike, and the plan never said a word."""
+
+    services, service = build(tmp_path)
+    seed_previous(services)
+    service.installation_check = lambda: FAILING
+
+    planned = plan(services, "manager.plan_update", release_id=RELEASE_ID)["plan"]
+
+    assert "fails its own installation checks right now (export_service, export_setup)" in planned["warning"]
+    assert planned["blockers"] == [], "the package on offer may be the one that fixes it"
+
+
+def test_a_revert_plan_says_which_installation_checks_already_fail(tmp_path):
+    services, service = build(tmp_path)
+    seed_previous(services)
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+    judged(services)
+    service.installation_check = lambda: FAILING
+
+    planned = plan(services, "manager.plan_revert")["plan"]
+
+    assert "export_service, export_setup" in planned["warning"]
+
+
+def test_an_appliance_that_passes_its_checks_is_not_warned(tmp_path):
+    services, service = build(tmp_path)
+    seed_previous(services)
+    service.installation_check = lambda: {"ok": True, "failures": []}
+
+    planned = plan(services, "manager.plan_update", release_id=RELEASE_ID)["plan"]
+
+    assert "installation checks" not in planned["warning"]
+
+
+# --- the package lock dpkg needs ----------------------------------------------
+
+
+def test_an_update_is_not_planned_while_apt_holds_the_package_lock(tmp_path):
+    services, service = build(tmp_path)
+    seed_previous(services)
+    service.package_lock = lambda: "held"
+
+    planned = plan(services, "manager.plan_update", release_id=RELEASE_ID)
+
+    assert "package_lock_held" in [b["code"] for b in planned["plan"]["blockers"]]
+
+
+def test_a_revert_is_not_planned_while_apt_holds_the_package_lock(tmp_path):
+    services, service = build(tmp_path)
+    seed_previous(services)
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+    judged(services)
+    service.package_lock = lambda: "held"
+
+    planned = plan(services, "manager.plan_revert")
+
+    assert "package_lock_held" in [b["code"] for b in planned["plan"]["blockers"]]
+
+
+def test_an_update_confirmed_before_apt_took_the_lock_stages_nothing(tmp_path):
+    services, service = build(tmp_path)
+    seed_previous(services)
+    planned = plan(services, "manager.plan_update", release_id=RELEASE_ID)
+    service.package_lock = lambda: "held"
+
+    record = execute_planned(services, planned)
+
+    assert record.state == STATE_FAILED_TERMINAL, record.state
+    assert record.error["code"] == "package_lock_held"
+    assert not manager_install.request_path(services.paths).exists()
+
+
 # --- an axis nothing has written yet ----------------------------------------
 
 
@@ -831,6 +1111,7 @@ def test_a_revert_executes_only_the_kept_package_it_was_planned_for(tmp_path):
         state_reads=persistent_state.readable_floors(),
     )
     other.unlink()
+    services.manager.installed_version = "0.0.5"
     assert manager_retention.revert_target(services.paths).sha256 != planned_target.sha256
     before = staged_request(services)
     record = execute_planned(services, planned)
@@ -1107,9 +1388,10 @@ def test_the_package_the_plan_showed_still_installs(tmp_path):
 def reverted_install(services):
     """What install-manager.sh leaves behind when dpkg refused the new package.
 
-    It puts `previous.deb` back and records the outcome, and it cannot amend
-    the retention record -- there is no Python on that path by design. The
-    record therefore goes on naming the package dpkg refused as current.
+    It puts `previous.deb` back, records the outcome and retires the deadline
+    armed for the install, and it cannot amend the retention record -- there
+    is no Python on that path by design. The record therefore goes on naming
+    the package dpkg refused as current.
     """
 
     import json
@@ -1124,6 +1406,7 @@ def reverted_install(services):
         ),
         encoding="utf-8",
     )
+    judged(services)
 
 
 def test_a_revert_the_shell_drove_is_reconciled_before_the_next_install(tmp_path):
@@ -1144,7 +1427,7 @@ def test_a_revert_the_shell_drove_is_reconciled_before_the_next_install(tmp_path
     record = manager_retention.read(services.paths)
     assert record.current.version == "0.2.0", "precondition: the record names the refused one"
 
-    service.status()
+    service.reconcile_record()
 
     healed = manager_retention.read(services.paths)
     assert healed.current.version == "0.1.0", healed.to_dict()
@@ -1212,6 +1495,16 @@ def test_a_second_install_inside_an_unjudged_window_is_refused(tmp_path):
     assert answer.get("plan", {}).get("blockers"), answer
     codes = [item["code"] for item in answer["plan"]["blockers"]]
     assert "manager_verification_pending" in codes, codes
+
+
+def test_a_revert_inside_an_unjudged_window_says_so_in_its_plan(tmp_path):
+    services, _ = build(tmp_path)
+    seed_previous(services)
+    plan_and_execute(services, "manager.plan_update", release_id=RELEASE_ID)
+
+    planned = plan(services, "manager.plan_revert")["plan"]
+
+    assert "manager_verification_pending" in [b["code"] for b in planned["blockers"]]
 
 
 def test_a_deadline_that_has_run_out_without_a_verdict_does_not_block(tmp_path):
@@ -1397,3 +1690,94 @@ def test_an_install_whose_deadline_could_not_be_armed_leaves_the_running_package
     assert manager_retention.read(services.paths).current.version == "0.1.0"
     started = [call for call in services.host.calls if call[0] == "systemctl"]
     assert not any(manager_install.INSTALL_UNIT in " ".join(call[1]) for call in started)
+
+
+@pytest.mark.parametrize(
+    ("url", "code"),
+    [("http://mirror.example.org/manager-index.json", "release_source_insecure"), ("https:///manager-index.json", "release_source_invalid")],
+)
+def test_a_manager_index_url_that_is_refused_says_why_not_that_none_is_set(tmp_path, url, code):
+    """https_url refused it and sources() dropped the reason: the Updates card
+    said "No index" and the plan blamed a missing setting."""
+
+    services, service = build(tmp_path)
+    service.config = service.config.__class__(**{**service.config.__dict__, "manager_index_url": url})
+
+    listing = service.sources()
+
+    assert listing["configured"] is True
+    assert listing["error"] == code
+
+
+def test_an_index_that_could_not_be_read_carries_its_reason_and_the_clock(tmp_path):
+    """Only the code reached the page; "answered HTTP 404" or "did not answer in
+    time" was dropped, and the clock the plan refuses on was not mentioned."""
+
+    services, _ = build(tmp_path, synchronised=False)
+    services.manager.fetcher.read = lambda url, *, label, max_bytes: (_ for _ in ()).throw(
+        FetchError("release_download_failed", f"{label} answered HTTP 404")
+    )
+
+    listing = services.manager.sources()
+
+    assert listing["error"] == "release_download_failed"
+    assert "HTTP 404" in listing["error_message"]
+    assert listing["clock_synchronised"] is False
+
+
+def test_the_offer_is_only_for_this_appliances_architecture(tmp_path):
+    """A multi-architecture index lists each version twice; the button could
+    plan the other architecture's package, which the plan then refused."""
+
+    services, _ = build(tmp_path)
+    services.manager.architecture = "arm64"
+    index = {
+        "format_version": 1,
+        "releases": [
+            {
+                "release_id": f"ems-appliance-manager-9.9.9-{arch}",
+                "release_version": "9.9.9",
+                "architecture": arch,
+                "manifest_url": f"{BASE}/{arch}.json",
+                "signature_url": f"{BASE}/{arch}.json.asc",
+                "archive_url": f"{BASE}/{arch}.deb",
+            }
+            for arch in ("armhf", "arm64")
+        ],
+    }
+    services.manager.fetcher.read = lambda url, *, label, max_bytes: json.dumps(index).encode()
+
+    listing = services.manager.sources()
+
+    assert [item["release_id"] for item in listing["releases"]] == ["ems-appliance-manager-9.9.9-arm64"]
+    assert listing["latest_stable"]["release_id"] == "ems-appliance-manager-9.9.9-arm64"
+
+
+def test_an_index_that_names_nothing_as_new_as_the_installed_package_says_so(tmp_path):
+    """The index is unsigned and carries no freshness: a mirror leaving newer
+    releases out showed an old one as Latest stable and "current"."""
+
+    services, _ = build(tmp_path)
+    services.manager.installed_version = "9.9.9"
+
+    listing = services.manager.sources()
+
+    assert listing["releases"], listing
+    assert listing["index_behind_installed"] is True
+
+
+def test_an_index_that_offers_the_installed_package_or_newer_is_not_behind(tmp_path):
+    services, _ = build(tmp_path)
+    services.manager.installed_version = "0.1.0"
+
+    assert services.manager.sources()["index_behind_installed"] is False
+
+
+def test_the_status_says_what_dpkg_holds_for_the_manager(tmp_path):
+    """After a failed install the console said "failed" and nothing about the
+    package dpkg was left with, which decides what the operator does next."""
+
+    services, service = build(tmp_path)
+    services.host.manager_dpkg = ("half-configured", "0.4.0")
+
+    assert service.status()["dpkg"] == {"status": "half-configured", "version": "0.4.0"}

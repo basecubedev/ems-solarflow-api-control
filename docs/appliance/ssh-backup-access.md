@@ -16,7 +16,10 @@ PubkeyAuthentication   yes
 
 **Switch SSH on**, on the **SSH service** card, enables and starts the service.
 It enables nothing else — there is no operation in the appliance that can turn
-on password authentication. **Switch SSH off** stops and disables it. Enabling
+on password authentication. **Switch SSH off** stops and disables it — `ssh.socket` first,
+where the host has one, so no connection it still accepts can start the
+service again — and then reads both units back: if sshd still runs, the
+operation fails with `ssh_still_running` instead of reporting SSH as off. Enabling
 SSH and adding a key need a session that signed in with the password the
 Appliance Manager confirmed; see
 [security-model.md](security-model.md#what-a-rewritten-file-cannot-open).
@@ -77,9 +80,17 @@ appliance never asks for one and never displays one.
 
 Each key row under **Keys for** the account has **Remove** (by fingerprint).
 The agent also has an operation that removes every key of an account at once
-and states clearly that remote access through that account stops immediately
 (`ssh.revoke_all`), but neither console offers a button for it: remove the keys
 one by one.
+
+**Open sessions end with the access they came in on.** sshd checks a key and
+its Match block only when a session starts, so an SFTP session already open, a
+shell, or a `ControlMaster` connection opening new ones would outlive the key.
+Removing a key, revoking all of an account's keys, switching shell access off
+and switching SSH off therefore end the affected accounts' sessions through
+`loginctl terminate-user` afterwards. The operation's result says, per account,
+`ended`, `none` (logind knew no session), `failed`, or `unknown` when logind
+could not be asked.
 
 ## Generate a key pair on your own computer
 
@@ -115,6 +126,12 @@ Match User ems-backup
     PermitTunnel no
     GatewayPorts no
     PermitOpen none
+    DisableForwarding yes
+    AllowStreamLocalForwarding no
+    PermitListen none
+    AuthorizedKeysFile .ssh/authorized_keys
+    AuthorizedKeysCommand none
+    TrustedUserCAKeys none
     ForceCommand internal-sftp -R -P symlink,hardlink,rename,posix-rename,remove,mkdir,rmdir,setstat,fsetstat,lsetstat,fsync,copy-data
 ```
 
@@ -138,15 +155,27 @@ root can write:
 
 ```text
 /srv/ems-appliance-export/          root:root 0755   ← the session's "/"
-  config/    read-only bind mount of /opt/ems-solarflow/config
-  backups/   read-only bind mount of /opt/ems-solarflow/backups
-  data/      read-only bind mount of /opt/ems-solarflow/data
+  backups/   read-only bind mount of /opt/ems-solarflow/data/backups
 ```
 
-The account therefore sees exactly three directories and cannot reach anything
-else. The exports are **bind mounts of the live EMS directories**, not copies:
-a backup taken through SFTP is always current, and nothing is duplicated into a
-shadow tree that could go stale.
+The account therefore sees exactly one directory, the archives EMS writes, and
+cannot reach anything else. **No live configuration and no live data** (owner
+decision 2026-11-04): a backup key fetches backups, unencrypted ones included,
+and reads no secret the running EMS holds — not the password hash in
+`config/dashboard-auth.json`, not the InfluxDB token, not the TLS key. What an
+archive contains is the archive's business; see
+[backups](../user/appliance/backup.md). The export is a bind mount, not a copy,
+so a new archive is there as soon as EMS has written it.
+
+Earlier packages exported `config`, `backups` and `data`. The first run of this
+one unmounts the two live exports, removes their empty mount points and
+withdraws the ACL entries its manifest says it granted on them; an entry an
+operator changed since is left alone and named in the journal, and a mount
+point with anything in it is refused rather than emptied. Earlier packages also
+set a default ACL on those roots, which files EMS wrote since have inherited.
+Below `data/backups` those entries are recognised as the package's and a purge
+withdraws them; elsewhere under `config` and `data` they stay as `ems-backup`
+entries with an empty mask, unreachable from the chroot.
 
 The export root is an **exclusive** boundary. Anything else inside it — a file,
 a hidden file, a symlink, an extra directory — would be visible to the account,
@@ -178,24 +207,22 @@ satisfies both.
 
 | Path in the SFTP session | Host path | Access |
 |---|---|---|
-| `/config` | `/opt/ems-solarflow/config` | read-only |
-| `/backups` | `/opt/ems-solarflow/backups` | read-only — **always empty**, see below |
-| `/data` | `/opt/ems-solarflow/data` | read-only |
+| `/backups` | `/opt/ems-solarflow/data/backups` | read-only |
 
-`/backups` publishes a directory nothing writes to. EMS keeps its archives in
-`data/backups` (`ems/backup.py`), which the `/data` export already carries, so
-that is where an operator finds them and what `backup_access.examples()` now
-puts on screen. The export is not repointed at `data/backups` because the two
-sources would then overlap, and `setup-export-root.sh` grants ACLs recursively
-per source — the first run's own grant would look pre-existing to the second and
-the transaction would stop being idempotent, which one of its tests refuses.
+`data/backups` exists once EMS has written its first archive. Until then the
+export is *pending*, and `ems-appliance-export-acl.path`, which watches that
+path, mounts it the moment it appears.
 
 Read-only is enforced twice: the bind mount carries `ro`, and POSIX ACLs grant
 the account read-and-traverse only. `/usr/lib/ems-appliance-manager/setup-export-root.sh`
 applies both — a traversal-only ACL entry on the install root and a recursive
-read ACL on each export, with the mask set explicitly, because a named-user
+read ACL on the export, with the mask set explicitly, because a named-user
 grant on a 0600 file would otherwise be capped to nothing. The `acl` package is
-a declared dependency.
+a declared dependency. The walk goes through `/proc/self/fd/N/.`: given the
+handle itself, a link, `setfacl -R` and `getfacl -R` change and read the
+directory and never a file in it, which is how every archive once stayed
+unreadable. An archive EMS rotates away while the walk runs is skipped, not a
+failed run.
 
 **A file EMS writes later is not automatically readable.** The script sets the
 default ACL for the same reason, but a file's mask is re-derived from its create
@@ -211,7 +238,9 @@ file 0640:  user:ems-backup:r-x  #effective:r--   mask::r--
 So an archive created after the last export run carries the grant with an empty
 mask. `ems-appliance-export-acl.path` watches `data/backups` for exactly that
 and starts `ems-appliance-export-acl.service`, which runs
-`setup-export-root.sh --refresh-acl`: the recursive grant and nothing else.
+`setup-export-root.sh --refresh-acl`: the recursive grant, and the bind only
+where none is mounted yet. A refresh that fails leaves the report of the last
+full run as it was and says so in the journal.
 
 Its own watcher and its own unit, rather than a second path on
 `ems-appliance-export.path`, for two reasons. A full export run rebuilds the
@@ -226,10 +255,6 @@ when the newest archive under `data/backups` has neither a group-read nor an
 other-read bit. Until the export service runs again, fetch that archive through
 the Admin Console's own download instead.
 
-Only the archive path is judged. What else lives under an export is the
-business of whoever writes it — the shared password store sits under `config`
-at 0600 on purpose — and reporting that as a fault would call the appliance
-broken for doing the right thing.
 
 A bind mount that cannot be made read-only is unmounted again rather than left
 as a writable export.
@@ -247,7 +272,7 @@ or mount change, and the whole run is refused if one of them fails:
 | a real directory, not a symlink, at exactly the configured location | both roots and every export source and target |
 | every **existing** parent component is a real directory | both roots |
 | the two roots are not identical and neither lives inside the other | the two roots |
-| only `config`, `backups` and `data` exist inside it | the export root |
+| only `backups` exists inside it (and, until a run retires them, `config` and `data`) | the export root |
 | root-owned, mode 0755 | every export target |
 
 A path that does not exist yet is validated against its nearest existing
@@ -322,10 +347,17 @@ PasswordAuthentication no         AllowAgentForwarding no
 KbdInteractiveAuthentication no   X11Forwarding no
 PubkeyAuthentication yes          PermitTunnel no
 PermitOpen none                   GatewayPorts no
+DisableForwarding yes             AllowStreamLocalForwarding no
+PermitListen none                 AuthorizedKeysFile .ssh/authorized_keys
+AuthorizedKeysCommand none        TrustedUserCAKeys none
 ```
 
 The forced command is compared exactly, including its full list of denied SFTP
-requests. Everything else is compared against the value above.
+requests. Everything else is compared against the value above. The last three
+pin the one key source the appliance reads, attributes and withdraws: a second
+key file, a key command or a user CA would admit keys it never sees. A
+fail-closed disable expires the account as well, whether or not a key file was
+moved, for wherever those pins are not in force.
 
 Where SSH runs from `ssh.socket`, as the console turns it on wherever the host
 has one, the daemon is restarted rather than reloaded: sshd re-executes itself
@@ -360,9 +392,14 @@ and the account is expired. The UI then reports the reason by name. The
 appliance never reports confined, read-only access as active on the strength of
 a file it wrote.
 
+A key set aside this way is not gone: the next successful activation puts it
+back. The **Keys for ems-backup** card therefore lists such keys under their
+own note, each with **Remove**, and **Revoke every key** clears the set-aside
+files as well, so a key that should not return can be taken out before it does.
+
 Adding a key to the backup account is refused while that is the case: with a
 disabled or conflicting key file present the agent answers
-`backup_access_withdrawn`, and while the running daemon does not report the
+`backup_access_withdrawn`, and while sshd's configuration does not report the
 account's confinement it answers `backup_confinement_not_confirmed`. A new key
 never becomes the one file sshd reads in place of a withdrawn one. Removing a
 key is always allowed.
@@ -448,22 +485,36 @@ package still installs.
 
 ```bash
 sudo ems-appliance backup-access            # what is in force right now
-sudo ems-appliance backup-access disable    # revoke until it is verified again
+sudo ems-appliance backup-access disable    # revoke until an operator enables it again
+sudo ems-appliance backup-access enable     # end a revocation, then verify and activate
 ```
+
+`disable` records the operator's intent in agent state
+(`backup-access-revoked`) before it withdraws anything. Every activation —
+each boot, each change under the install root, each shell-access switch, each
+package install — then keeps the account off and reports `revoked_by_operator`,
+and adding a backup key is refused with `backup_access_revoked`; only `enable`
+ends it. It used to record nothing, so the next activation took the key file
+back: a key from a stolen laptop logged in again after the next reboot.
+
+The package's own fail-closed steps — removal, a failed export setup, the
+export unit's failure handler — run `backup-access suspend` instead, which
+withdraws authentication the same way but records no intent, so the next
+verified activation lifts it.
 
 ### Removal and purge
 
 | Step | What happens to backup access |
 |---|---|
 | `apt remove` | authentication is disabled first, the account is expired, the binds are unmounted, and a bind that cannot be unmounted stops the removal; the key material is preserved next to `authorized_keys` |
-| reinstall / upgrade | the keys are restored, but only once the effective confinement is verified again |
+| reinstall / upgrade | the keys are restored, but only once the effective confinement is verified again — and not while an operator's `backup-access disable` stands |
 | `apt purge` | the ACL entries this feature granted are withdrawn, the generated sshd policy and host configuration are removed, the package-created account, its package-created home and its keys are removed, and the export root is removed once nothing is mounted |
 
 Removal takes the authentication with it because it takes the confinement with
 it: the generated policy and the read-only binds are part of the package, so a
 surviving key would open an *unconfined* SFTP session over the whole host after
 the next sshd reload. **Removal fails closed**: if neither
-`ems-appliance backup-access disable` nor the direct maintainer fallback can
+`ems-appliance backup-access suspend` nor the direct maintainer fallback can
 revoke the authentication, the removal stops and says why, instead of leaving a
 usable key without the chroot that confined it. An export bind that is still
 mounted stops the removal the same way — usually an open SFTP session of the
@@ -514,7 +565,7 @@ carry the link rule as one block of identical text, since dpkg has removed the
 helper by the time `postrm` runs.
 
 The fallback of `apt remove` (`backup-account.sh disable`, run when the CLI
-fails) does what `backup-access disable` does. A linked `.ssh` is left alone and
+fails) does what `backup-access suspend` does. A linked `.ssh` is left alone and
 the account is expired instead; if it cannot be expired, the removal stops. An
 `authorized_keys` that is a regular file or a symbolic link, dangling or not, is
 moved aside as the entry it is, to `authorized_keys.disabled-by-appliance` or,
@@ -607,11 +658,7 @@ enabled by default.
 Paths are relative to the export root, so they are short:
 
 ```bash
-sftp -r ems-backup@ems-solarflow.local:/data/backups ./ems-backups
-```
-
-```bash
-sftp -r ems-backup@ems-solarflow.local:/config ./ems-config
+sftp -r ems-backup@ems-solarflow.local:/backups ./ems-backups
 ```
 
 ```bash

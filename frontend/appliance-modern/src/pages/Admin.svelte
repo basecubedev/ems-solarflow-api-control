@@ -10,9 +10,9 @@
   import { href } from "../app/router.svelte.js";
   import { host, ensure, held } from "../state/host.svelte.js";
   import { detail } from "../state/prefs.svelte.js";
-  import { adminContainer, adminHealth, adminTransitionLive, adminVersion } from "../lib/host.js";
+  import { adminContainer, adminHealth, adminTransitionLive, adminTransitionUntil, adminVersion } from "../lib/host.js";
   import { LIFECYCLE_ACTIONS, adminRepairPlan, adminRollbackPlan, lifecyclePlan } from "../lib/plans.js";
-  import { CONTAINER_STATES, word } from "../lib/words.js";
+  import { CONTAINER_STATES, HEALTH_STATES, word } from "../lib/words.js";
 
   /**
    * Restart, repair and roll back the EMS Admin container; the version itself
@@ -30,12 +30,12 @@
   const LIFECYCLE_ICONS = { start: "play", stop: "square", restart: "rotate-cw" };
 
   $effect(() => {
-    if (bootstrap && host.releases === undefined) ensure("releases");
+    if (host.releases === undefined) ensure("releases");
   });
 </script>
 
 {#if live}
-  <p class="callout c-warn span-12" data-testid="admin-transition-live"><Icon name="loader" /><span><strong>{t("admin.transition.title")}</strong> {t("admin.transition.text", { stage: admin.transition?.stage || t("admin.transition.unnamed") })}</span></p>
+  <p class="callout c-warn span-12" data-testid="admin-transition-live"><Icon name="loader" /><span><strong>{t("admin.transition.title")}</strong> {t("admin.transition.text", { stage: admin.transition?.stage || t("admin.transition.unnamed") })}{#if adminTransitionUntil(status)}{" "}{t("admin.transition.until", { time: adminTransitionUntil(status) })}{/if}</span></p>
 {/if}
 
 {#if bootstrap}
@@ -54,7 +54,7 @@
       <KeyValues
         rows={[
           { label: t("admin.containerState"), value: say(word("container", CONTAINER_STATES, container.state)), lang: langOf(word("container", CONTAINER_STATES, container.state)) },
-          { label: t("admin.healthCheck"), value: container.health, lang: "en" },
+          { label: t("admin.healthCheck"), value: say(word("health", HEALTH_STATES, container.health)), lang: langOf(word("health", HEALTH_STATES, container.health)) },
         ]}
       />
     </div>
@@ -89,8 +89,7 @@
   {:else}
     <Card icon="circle-arrow-up" tone="c-out" title={t("admin.version")} subtitle={t("admin.versionSub")} span="span-4">
       <div class="stack-sm" data-testid="admin-install">
-        <p class="muted small">{t("admin.versionText")}</p>
-        <a class="btn small" href={href("updates")} data-testid="admin-open-updates"><Icon name="circle-arrow-up" />{t("overview.openUpdates")}</a>
+        <InstallForm releases={held("releases")} blocked={live} />
       </div>
     </Card>
   {/if}

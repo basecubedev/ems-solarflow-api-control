@@ -6,8 +6,10 @@ enables password authentication and never handles a private key: enabling SSH
 enables the service, nothing else.
 """
 
+import binascii
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from appliance import shell_access
 from appliance.operations import STATE_FAILED_TERMINAL, STATE_SUCCEEDED
@@ -19,7 +21,7 @@ from appliance.ssh_policy import (
     parse_sshd_config,
     read_password_refusal,
 )
-from appliance.sshkeys import AuthorizedKeysStore, validate_public_key
+from appliance.sshkeys import AuthorizedKeysStore, fingerprint_of, validate_public_key
 from appliance.systemd import UNIT_SSH, UNIT_SSH_SOCKET
 from appliance.validation import ValidationError
 
@@ -28,6 +30,7 @@ TYPE_SSH_KEY_ADD = "ssh.key_add"
 TYPE_SSH_KEY_REMOVE = "ssh.key_remove"
 TYPE_SSH_REVOKE_ALL = "ssh.revoke_all"
 TYPE_SSH_SHELL_ACCESS = "ssh.shell_access"
+TYPE_SSH_BACKUP_ACCESS = "ssh.backup_access"
 
 RECOMMENDED_DEFAULTS = {
     "permitrootlogin": "no",
@@ -85,10 +88,13 @@ class SshService:
         config,
         operations,
         paths=None,
+        probe=None,
         time_fn=None,
         operation_log=None,
     ):
         self.runner = runner
+        # The host probe the backup activation reads the mount table through.
+        self.probe = probe
         self.systemd = systemd
         self.config = config
         self.operations = operations
@@ -110,16 +116,24 @@ class SshService:
     def _admit_backup_key(self, account):
         """Refuse a backup key that sshd would accept without its confinement.
 
-        A fail-closed disable moves the key file aside and only expires the
-        account when there was a key; a key written after it would be the one
-        file sshd reads, confined or not. Removing a key never needs this.
+        A fail-closed disable moves the key file aside and expires the account;
+        a key written after it would be the one file sshd reads, confined or
+        not. Removing a key never needs this.
         """
 
         if self.paths is None or account != self.config.backup_user:
             return
         from appliance.backup_confinement import build_activation
 
-        activation = build_activation(paths=self.paths, config=self.config, runner=self.runner)
+        activation = build_activation(
+            paths=self.paths, config=self.config, runner=self.runner, probe=self.probe
+        )
+        if activation.revoked():
+            raise SshServiceError(
+                "backup_access_revoked",
+                "backup access was revoked at the console; `ems-appliance backup-access "
+                "enable` takes it back before a key can be added",
+            )
         files = activation.key_files()
         if files.refusal is not None:
             raise SshServiceError(files.refusal.code, files.refusal.message)
@@ -132,7 +146,7 @@ class SshService:
         if not activation.effective_policy()["confirmed"]:
             raise SshServiceError(
                 "backup_confinement_not_confirmed",
-                "the running sshd does not apply the backup account's confinement, "
+                "sshd's configuration does not apply the backup account's confinement, "
                 "so no key is deployed on it",
             )
 
@@ -162,6 +176,31 @@ class SshService:
                 f"can be deployed on {name}; update the Appliance Manager to move it",
             )
         return AuthorizedKeysStore(account.home, owner_uid=account.uid, owner_gid=account.gid)
+
+    def set_aside_stores(self, name):
+        """The key files a fail-closed disable moved out of sshd's reach.
+
+        The next successful activation puts the preserved one back, so a key in
+        it is not gone: it is waiting, and the operator has to be able to see
+        it and remove it before it returns.
+        """
+
+        from appliance.backup_confinement import CONFLICT_SUFFIX, DISABLED_SUFFIX
+
+        if name != self.config.backup_user:
+            return []
+        store = self.keystore(name)
+        preserved = store.path.name + DISABLED_SUFFIX
+        names = sorted(
+            entry for entry in store.entries()
+            if entry == preserved or entry.startswith(preserved + CONFLICT_SUFFIX)
+        )
+        return [
+            AuthorizedKeysStore(
+                store.home, owner_uid=store.owner_uid, owner_gid=store.owner_gid, name=entry
+            )
+            for entry in names
+        ]
 
     def effective_config(self, user=None):
         """The configuration sshd would apply, optionally for one account.
@@ -207,6 +246,26 @@ class SshService:
             self.runner, user=shell_access.ACCOUNT, methods=SHELL_REFUSED_METHODS
         )
 
+    def host_keys(self):
+        """The host's own SSH keys by fingerprint, as ssh shows them to a client.
+
+        After a reflash or an address change ssh warns that the host key
+        changed; the console, reached over the same LAN, is where the new one
+        can be compared before trusting it.
+        """
+
+        directory = (
+            self.probe._path("/etc/ssh") if self.probe is not None else Path("/etc/ssh")
+        )
+        keys = []
+        for path in sorted(directory.glob("ssh_host_*_key.pub")):
+            try:
+                key_type, blob = path.read_text(encoding="utf-8").split()[:2]
+                keys.append({"key_type": key_type, "fingerprint": fingerprint_of(blob)})
+            except (OSError, ValueError, binascii.Error):
+                continue
+        return keys
+
     def status(self):
         unit = self.systemd.unit_state(UNIT_SSH)
         socket = self._socket_state()
@@ -215,16 +274,24 @@ class SshService:
         for name in self.config.ssh_key_accounts:
             account = self.account(name)
             keys = []
+            foreign = []
             refusal = ""
             if account.exists and account.home:
                 try:
-                    keys = [key.to_dict() for key in AuthorizedKeysStore(account.home).list()]
+                    store = AuthorizedKeysStore(account.home)
+                    keys = [key.to_dict() for key in store.list()]
+                    foreign = store.foreign()
                 except ValidationError as exc:
                     refusal = exc.code
             entry = account.to_dict()
             entry["keys_refused"] = refusal
             entry["keys"] = keys
             entry["key_count"] = len(keys)
+            entry["set_aside_keys"] = self._set_aside_keys(name) if account.exists else []
+            # Options-prefixed, certificate or unsupported key lines: sshd
+            # honours them, this console cannot show them, and only revoking
+            # every key reaches them.
+            entry["unparsed_key_lines"] = len(foreign)
             accounts.append(entry)
 
         hardening = {}
@@ -254,6 +321,7 @@ class SshService:
             # went on accepting keys -- including one on the sudo-capable
             # shell account.
             "enabled": bool(unit["running"] or (socket or {}).get("running")),
+            "host_keys": self.host_keys(),
             "accounts": accounts,
             "hardening": hardening,
             "password_authentication": effective.get("passwordauthentication", "unknown"),
@@ -310,6 +378,38 @@ class SshService:
             ),
         }
 
+    def plan_backup_access(self, operation, enabled):
+        """Switch backup access off until an operator switches it back on.
+
+        Off is the console's ``backup-access disable``: recorded first, so no
+        boot, export run or package install brings the account back, then the
+        keys are set aside and the account expired. On lifts that record and
+        activates, which refuses for whatever reason the confinement cannot be
+        proven.
+        """
+
+        from appliance.backup_confinement import build_activation
+
+        values = {"enabled": bool(enabled)}
+        operation.requested_target.update(values)
+        self.operations.update_target(operation.operation_id, values)
+        activation = build_activation(
+            paths=self.paths, config=self.config, runner=self.runner, probe=self.probe
+        )
+        return {
+            "type": TYPE_SSH_BACKUP_ACCESS,
+            "account": self.config.backup_user,
+            "enabled": bool(enabled),
+            "currently_revoked": activation.revoked(),
+            "note": (
+                "Backup access stays off until it is switched on again, through every "
+                "boot, export run and package install; open SFTP sessions are ended."
+                if not enabled
+                else "Backup access is activated again; it stays off if its confinement "
+                "cannot be proven."
+            ),
+        }
+
     def plan_key_add(self, operation, *, account, public_key):
         store = self.keystore(account)
         try:
@@ -336,9 +436,18 @@ class SshService:
     def plan_key_remove(self, operation, *, account, fingerprint):
         store = self.keystore(account)
         match = next((item for item in store.list() if item.fingerprint == fingerprint), None)
+        source = store.path.name
+        if match is None:
+            for aside in self.set_aside_stores(account):
+                match = next(
+                    (item for item in aside.list() if item.fingerprint == fingerprint), None
+                )
+                if match is not None:
+                    source = aside.path.name
+                    break
         if match is None:
             raise SshServiceError("unknown_public_key", "no authorized key with that fingerprint")
-        values = {"account": account, "fingerprint": fingerprint}
+        values = {"account": account, "fingerprint": fingerprint, "key_file": source}
         operation.requested_target.update(values)
         self.operations.update_target(operation.operation_id, values)
         return {"type": TYPE_SSH_KEY_REMOVE, "account": account, "key": match.to_dict()}
@@ -346,6 +455,7 @@ class SshService:
     def plan_revoke_all(self, operation, account):
         store = self.keystore(account)
         keys = [key.to_dict() for key in store.list()]
+        foreign = store.foreign()
         values = {"account": account}
         operation.requested_target.update(values)
         self.operations.update_target(operation.operation_id, values)
@@ -354,8 +464,9 @@ class SshService:
             "account": account,
             "keys": keys,
             "key_count": len(keys),
-            "warning": "Every SSH key of this account is removed. Remote access through this "
-            "account stops immediately.",
+            "unparsed_lines": len(foreign),
+            "warning": "Every SSH key of this account is removed, including lines this console "
+            "cannot show, and its open SSH sessions are ended.",
         }
 
     # --- execution -------------------------------------------------------
@@ -371,6 +482,8 @@ class SshService:
             return self._execute_revoke_all(operation)
         if operation.type == TYPE_SSH_SHELL_ACCESS:
             return self._execute_shell_access(operation)
+        if operation.type == TYPE_SSH_BACKUP_ACCESS:
+            return self._execute_backup_access(operation)
         raise SshServiceError("unknown_operation_type", f"{operation.type} is not executable")
 
     def _execute_service(self, operation):
@@ -383,13 +496,16 @@ class SshService:
             # turning the socket on.
             result = self.systemd.enable(UNIT_SSH_SOCKET if socket else UNIT_SSH)
         else:
-            result = self.systemd.disable(UNIT_SSH)
+            result = None
             if socket:
-                # Both, always: leaving the socket would keep the port open
-                # behind a console that says it is closed.
-                socket_result = self.systemd.disable(UNIT_SSH_SOCKET)
-                if result.ok and not socket_result.ok:
-                    result = socket_result
+                # Both, always, and the socket first: leaving it would keep the
+                # port open behind a console that says it is closed, and taking
+                # it down second lets a connection it still accepts start the
+                # service again after it was stopped.
+                result = self.systemd.disable(UNIT_SSH_SOCKET)
+            service_result = self.systemd.disable(UNIT_SSH)
+            if result is None or (result.ok and not service_result.ok):
+                result = service_result
         if not result.ok:
             self.operations.finish(
                 operation.operation_id,
@@ -398,11 +514,26 @@ class SshService:
                 error={"code": "ssh_service_failed", "message": "systemctl reported an error"},
             )
             raise SshServiceError("ssh_service_failed", "the SSH service could not be changed")
-        payload = {
-            "enabled": enabled,
-            "service": self.systemd.unit_state(UNIT_SSH),
-            "socket": self._socket_state(),
-        }
+        service = self.systemd.unit_state(UNIT_SSH)
+        socket = self._socket_state()
+        if not enabled and (service["running"] or (socket or {}).get("running")):
+            # systemctl's exit codes say what it was asked to do, not whether
+            # sshd still answers; the units are read back before "off" is said.
+            self.operations.finish(
+                operation.operation_id,
+                STATE_FAILED_TERMINAL,
+                stage="ssh_still_running",
+                error={
+                    "code": "ssh_still_running",
+                    "message": "SSH was switched off, but sshd is still running",
+                },
+            )
+            raise SshServiceError("ssh_still_running", "sshd is still running after SSH was switched off")
+        payload = {"enabled": enabled, "service": service, "socket": socket}
+        if not enabled:
+            payload["sessions"] = self._end_sessions(
+                [self.config.backup_user, shell_access.ACCOUNT]
+            )
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
         return payload
 
@@ -411,13 +542,9 @@ class SshService:
         self._advance(operation, "enabling_shell_access" if enabled else "disabling_shell_access")
         from appliance.host_config import HostConfigError, live_activation
 
+        activation = live_activation(runner=self.runner, export_required=False)
         try:
-            shell_access.apply(
-                self.paths,
-                self.config,
-                value=enabled,
-                activation=live_activation(runner=self.runner),
-            )
+            shell_access.apply(self.paths, self.config, value=enabled, activation=activation)
         except HostConfigError as exc:
             self.operations.finish(
                 operation.operation_id,
@@ -427,6 +554,68 @@ class SshService:
             )
             raise SshServiceError(exc.code, exc.message)
         payload = {"account": shell_access.ACCOUNT, "enabled": shell_access.enabled(self.paths)}
+        if not enabled:
+            payload["sessions"] = self._end_sessions([shell_access.ACCOUNT])
+        if activation.export_failed:
+            payload["export_warning"] = activation.export_failed
+        self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
+        return payload
+
+    def _execute_backup_access(self, operation):
+        from appliance.backup_confinement import STATE_ACTIVE, build_activation
+
+        enabled = bool(operation.requested_target.get("enabled"))
+        self._advance(operation, "enabling_backup_access" if enabled else "revoking_backup_access")
+        activation = build_activation(
+            paths=self.paths, config=self.config, runner=self.runner, probe=self.probe
+        )
+        report = activation.reinstate() if enabled else activation.revoke()
+        payload = {"enabled": enabled, "revoked": activation.revoked(), "report": report}
+        if enabled and report.get("state") != STATE_ACTIVE:
+            self.operations.finish(
+                operation.operation_id,
+                STATE_FAILED_TERMINAL,
+                stage="backup_access_not_active",
+                error={
+                    "code": report.get("reason") or "backup_access_not_active",
+                    "message": "the revocation was lifted, but backup access could not be "
+                    "activated: its confinement is not proven",
+                },
+            )
+            raise SshServiceError(
+                report.get("reason") or "backup_access_not_active",
+                "backup access could not be activated",
+            )
+        if not enabled:
+            if not report.get("revocation_recorded", True):
+                self.operations.finish(
+                    operation.operation_id,
+                    STATE_FAILED_TERMINAL,
+                    stage="revocation_not_recorded",
+                    error={
+                        "code": "revocation_not_recorded",
+                        "message": "access was withdrawn now, but the revocation could not be "
+                        "recorded, so the next activation would bring it back",
+                    },
+                )
+                raise SshServiceError("revocation_not_recorded", "the revocation was not recorded")
+            if not report.get("authentication_disabled"):
+                # Recorded, but the keys still authenticate: an account this
+                # package cannot prove it owns, or one that could not expire.
+                self.operations.finish(
+                    operation.operation_id,
+                    STATE_FAILED_TERMINAL,
+                    stage="backup_access_not_withdrawn",
+                    error={
+                        "code": "backup_access_not_withdrawn",
+                        "message": "the revocation was recorded, but authentication could not be "
+                        "withdrawn: " + str(report.get("ownership") or report.get("reason") or "unknown"),
+                    },
+                )
+                raise SshServiceError(
+                    "backup_access_not_withdrawn", "backup authentication could not be withdrawn"
+                )
+            payload["sessions"] = self._end_sessions([self.config.backup_user])
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
         return payload
 
@@ -464,6 +653,12 @@ class SshService:
         account = operation.requested_target["account"]
         fingerprint = operation.requested_target["fingerprint"]
         store = self.keystore(account)
+        key_file = operation.requested_target.get("key_file") or store.path.name
+        if key_file != store.path.name:
+            store = next(
+                (aside for aside in self.set_aside_stores(account) if aside.path.name == key_file),
+                store,
+            )
         self._advance(operation, "writing_authorized_keys")
         withdrawn = [key.blob for key in store.list() if key.fingerprint == fingerprint]
         try:
@@ -477,7 +672,12 @@ class SshService:
             )
             raise SshServiceError(exc.code, exc.message)
         self._attribute(account, withdrawn, managed=False)
-        payload = {"account": account, "removed": removed, "key_count": len(store.list())}
+        payload = {
+            "account": account,
+            "removed": removed,
+            "key_count": len(store.list()),
+            "sessions": self._end_sessions([account]),
+        }
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
         return payload
 
@@ -487,10 +687,55 @@ class SshService:
         self._advance(operation, "writing_authorized_keys")
         withdrawn = [key.blob for key in store.list()]
         removed = store.revoke_all()
+        # A key set aside comes back with the next activation; "every key"
+        # includes it.
+        for aside in self.set_aside_stores(account):
+            withdrawn.extend(key.blob for key in aside.list())
+            removed += len(aside.list()) + len(aside.unparsed())
+            # Deleted, not emptied: a preserved or conflict file is recognised
+            # by its name, and an empty one still blocks activation and keys.
+            aside.discard()
         self._attribute(account, withdrawn, managed=False)
-        payload = {"account": account, "removed": removed, "key_count": 0}
+        payload = {
+            "account": account,
+            "removed": removed,
+            "key_count": 0,
+            "sessions": self._end_sessions([account]),
+        }
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
         return payload
+
+    def _set_aside_keys(self, name):
+        try:
+            return [
+                {**key.to_dict(), "key_file": aside.path.name}
+                for aside in self.set_aside_stores(name)
+                for key in aside.list()
+            ]
+        except (SshServiceError, ValidationError):
+            return []
+
+    def _end_sessions(self, accounts):
+        """End each account's open sessions; what was done, per account.
+
+        sshd checks a key and its Match block only when a session starts, so a
+        running SFTP session, a shell, or a ControlMaster connection opening new
+        ones outlives the access it came in on. ``none`` is an account logind
+        knows no session of; ``unknown`` is one nobody could ask about.
+        """
+
+        ended = {}
+        for account in accounts:
+            if not self.runner.available("loginctl"):
+                ended[account] = "unknown"
+                continue
+            shown = self.runner.run("loginctl", ["show-user", account], timeout=15)
+            if not shown.ok:
+                ended[account] = "none" if "not logged in" in (shown.stderr or "") else "unknown"
+                continue
+            terminated = self.runner.run("loginctl", ["terminate-user", account], timeout=30)
+            ended[account] = "ended" if terminated.ok else "failed"
+        return ended
 
     def _advance(self, operation, stage, *, state=None, detail=None):
         self.operations.advance(operation.operation_id, stage, state=state, detail=detail)

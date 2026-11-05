@@ -108,7 +108,7 @@ def test_a_read_back_that_fails_restores_the_captured_pre_state(harness):
 
 def test_a_failing_setfacl_restores_everything_already_granted(harness):
     # The traversal grant on the install root lands first; the recursive read
-    # ACL on config is the one that fails.
+    # ACL on the backups is the one that fails.
     harness.environment["EMS_STUB_SETFACL_FAIL_AT"] = "2"
 
     result = harness.run()
@@ -119,7 +119,7 @@ def test_a_failing_setfacl_restores_everything_already_granted(harness):
 
 
 def test_a_partial_grant_never_leaves_an_operator_entry_behind(harness):
-    operator = harness.install_root / "config" / "operator.json"
+    operator = harness.export_source("backups") / "operator.json"
     operator.write_text("{}\n", encoding="utf-8")
     harness.set_acl(operator, BACKUP_USER, "rwx")
     harness.environment["EMS_STUB_SETFACL_FAIL_AT"] = "3"
@@ -214,7 +214,7 @@ def test_the_manifest_records_the_canonical_path_not_the_open_handle(harness):
             assert line.split("\t")[1].startswith(str(harness.install_root)), line
 
 
-def swap_config_after_the_first_recursive_grant(harness):
+def swap_the_export_after_the_first_recursive_grant(harness):
     """Move the validated source aside and put a new directory at its path.
 
     The hook fires between the ACL mutation and the identity check that follows
@@ -222,6 +222,7 @@ def swap_config_after_the_first_recursive_grant(harness):
     this run changed.
     """
 
+    source = harness.export_source("backups")
     harness.hook(
         "setfacl",
         "\n".join(
@@ -229,19 +230,19 @@ def swap_config_after_the_first_recursive_grant(harness):
                 'case " $* " in *" -R "*) ;; *) exit 0 ;; esac',
                 f'[ -e "{harness.root}/swapped" ] && exit 0',
                 f': > "{harness.root}/swapped"',
-                f'mv "{harness.install_root}/config" "{harness.root}/config-moved"',
-                f'mkdir -p "{harness.install_root}/config"',
+                f'mv "{source}" "{harness.root}/backups-moved"',
+                f'mkdir -p "{source}"',
                 "exit 0",
             ]
         ),
     )
-    return harness.root / "config-moved"
+    return harness.root / "backups-moved"
 
 
 def test_a_source_swapped_after_validation_is_refused_and_rolled_back(harness):
     """A swap between validation and record-keeping may not survive as a grant."""
 
-    swap_config_after_the_first_recursive_grant(harness)
+    swap_the_export_after_the_first_recursive_grant(harness)
 
     result = harness.run()
 
@@ -257,7 +258,7 @@ def test_a_path_swap_cannot_redirect_the_rollback(harness):
     is left exactly as its creator left it.
     """
 
-    moved = swap_config_after_the_first_recursive_grant(harness)
+    moved = swap_the_export_after_the_first_recursive_grant(harness)
 
     result = harness.run()
 
@@ -275,8 +276,8 @@ def test_a_path_swap_cannot_redirect_the_rollback(harness):
 def test_a_path_swap_leaves_the_replacement_directory_untouched(harness):
     """Whoever put a directory at the configured path keeps it as they left it."""
 
-    swap_config_after_the_first_recursive_grant(harness)
-    replacement = harness.install_root / "config"
+    swap_the_export_after_the_first_recursive_grant(harness)
+    replacement = harness.export_source("backups")
 
     harness.run()
 
@@ -291,7 +292,7 @@ def test_a_path_swap_leaves_the_replacement_directory_untouched(harness):
 def test_a_rollback_that_could_not_reach_the_swapped_object_says_so(harness):
     """An unrestorable grant is recorded, never left for nobody to find."""
 
-    swap_config_after_the_first_recursive_grant(harness)
+    swap_the_export_after_the_first_recursive_grant(harness)
     harness.environment["EMS_STUB_SETFACL_FAIL_FROM"] = "2"
 
     harness.run()
@@ -344,11 +345,11 @@ def test_an_incomplete_rollback_after_the_rename_still_writes_the_recovery_manif
     """
 
     fail_the_parent_flush(harness)
-    # Seven grants succeed -- one traversal grant on the install root, then
-    # -R and -R -d per export -- and every restore the rollback makes after
-    # them fails, which is what leaves it incomplete and makes the recovery
-    # manifest necessary at all.
-    harness.environment["EMS_STUB_SETFACL_FAIL_FROM"] = "8"
+    # Three grants succeed -- one traversal grant on the install root, then
+    # -R and -R -d on the one export -- and every restore the rollback makes
+    # after them fails, which is what leaves it incomplete and makes the
+    # recovery manifest necessary at all.
+    harness.environment["EMS_STUB_SETFACL_FAIL_FROM"] = "4"
 
     result = harness.run()
 
@@ -585,7 +586,7 @@ def test_a_reinstall_reports_an_operator_change_it_granted_again(harness):
     """The original pre-package state is still what purge restores."""
 
     assert harness.run().returncode == 0
-    granted = harness.install_root / "config" / "marker"
+    granted = harness.export_source("backups") / "marker"
     harness.set_acl(granted, BACKUP_USER, "rwx")
 
     result = reinstall(harness)

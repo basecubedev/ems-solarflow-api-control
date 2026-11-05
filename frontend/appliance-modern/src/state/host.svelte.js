@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { applianceGet } from "./session.svelte.js";
-import { currentOperation, settledSince } from "../lib/operations.js";
+import { adoptSecurityFacts, applianceGet } from "./session.svelte.js";
+import { currentOperation, keptArchives, settledSince } from "../lib/operations.js";
 import { logPath } from "../lib/logs.js";
 import { ADMIN_CHOICES, MANAGER_CHOICES, forget } from "./forms.svelte.js";
 
 /** Operations are polled for responsiveness; the host state costs a docker inspect and a statvfs, so it joins every fifth tick. */
 export const POLL_MS = 2000;
+/** A read of the operations that has not answered in this long is given up. */
+export const POLL_TIMEOUT_MS = 10000;
 export const STATUS_EVERY_TICKS = 5;
 
 /**
@@ -17,6 +19,10 @@ class Host {
   status = $state.raw(undefined);
   manager = $state.raw(undefined);
   operation = $state.raw(null);
+  /** The last read of the operations failed, so what the banner shows may no longer be so. */
+  operationUnknown = $state(false);
+  /** The support archives the agent still keeps, from the operations listing. */
+  archives = $state.raw([]);
   readAt = $state(0);
   releases = $state.raw(undefined);
   managerSources = $state.raw(undefined);
@@ -189,11 +195,13 @@ export function readHostState() {
   const read = Promise.all([
     applianceGet("/api/status").catch(failure),
     applianceGet("/api/manager").catch(failure),
-  ]).then(([status, manager]) => {
+    applianceGet("/api/session").catch(() => null),
+  ]).then(([status, manager, facts]) => {
     if (hostRead === read) hostRead = null;
     if (mine !== sessionEpoch) return;
     host.status = status;
     host.manager = manager;
+    adoptSecurityFacts(facts);
     host.readAt = Date.now();
     reconcile("releases", ADMIN_CHOICES);
     reconcile("managerSources", MANAGER_CHOICES);
@@ -210,16 +218,31 @@ export function watchOperations(watcher) {
   };
 }
 
+let polling = false;
+
+/**
+ * One read at a time, and none that waits for ever: on a hung link, reads that
+ * piled up against the browser's connection limit delayed the owner's own
+ * writes, and an agent that stopped answering left a spinning "Running".
+ */
 export async function pollOperations() {
+  if (polling) return null;
+  polling = true;
   const mine = sessionEpoch;
+  const startedAt = Date.now();
   let payload;
   try {
-    payload = await applianceGet("/api/operations");
+    payload = await applianceGet("/api/operations", { timeoutMs: POLL_TIMEOUT_MS });
   } catch {
+    if (mine === sessionEpoch) host.operationUnknown = true;
     return null;
+  } finally {
+    polling = false;
   }
   if (mine !== sessionEpoch) return null;
+  host.operationUnknown = false;
   host.operation = currentOperation(payload);
+  host.archives = keptArchives(payload);
   const next = settledSince(payload, seen);
   seen = { count: next.count, finishedAt: next.finishedAt };
   if (next.settled) {
@@ -227,7 +250,7 @@ export async function pollOperations() {
     invalidateHeld();
     freshHostRead().finally(done);
   }
-  operationWatchers.forEach((watcher) => watcher(payload.active || null));
+  operationWatchers.forEach((watcher) => watcher(payload.active || null, payload, startedAt));
   return payload;
 }
 

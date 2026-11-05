@@ -9,4 +9,4 @@ Documentation=file:///usr/share/doc/ems-appliance-manager/ssh-backup-access.md
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/ems-appliance backup-access disable
+ExecStart=/usr/bin/ems-appliance backup-access suspend

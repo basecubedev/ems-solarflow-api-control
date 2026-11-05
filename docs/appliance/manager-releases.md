@@ -138,7 +138,11 @@ Going back to an earlier package is the *whole* recovery this path provides.
 There is no second slot behind it: `dpkg` runs, and what is installed is
 installed. An index naming only the newest package would take that away from
 every appliance that did not keep a copy locally, so `--keep` is left unset and
-a test refuses to let one appear on a command line.
+a test refuses to let one appear on a command line. The index therefore grows,
+and appliances read at most 1 MiB of it (`release_fetch.MAX_INDEX_BYTES`, about
+a thousand entries): publishing refuses an index past that size, so the day it
+comes, retention is a decision rather than every appliance finding the index
+unreadable.
 
 Asset URLs are pinned to the release that carries them rather than to
 `/releases/latest`, because an index entry written today has to still resolve
@@ -149,11 +153,24 @@ The floor on how far back an operator can go is
 makes every later package uninstallable on an appliance that recorded it. That
 list may only be added to by *removing* a format, never by adding one.
 
+## The index is not signed
+
+Only manifests are signed. The index that lists them carries no signature and
+no date, so a mirror, or anyone able to rewrite the `appliance-manager-index`
+asset, can leave newer releases out. It cannot make an appliance install
+anything the signed manifest does not describe, and a downgrade is labelled as
+one; what it can do is withhold fixes. The Updates page says so when the index
+names nothing as new as the installed package (`index_behind_installed`), and
+does not call the older entry current.
+
 ## Candidates cannot be published, and that is structural
 
-A pre-release is spelled with a tilde — `0.2.0~rc1` — because that is the only
-form on which `dpkg` and `appliance/version.py`'s comparator agree about order
-(the same tilde a development build uses, and for the same reason).
+A pre-release is spelled with a tilde and one of three words and a number —
+`0.2.0~alpha1`, `~beta2`, `~rc1` — because that is the form on which `dpkg` and
+`appliance/version.py`'s comparator agree about order; other tilde spellings
+(`~rc1~1`, `~rc.1`, `~a1b2`) they order differently, and a manifest naming one
+is refused (`tests/test_appliance_manager_releases.py` checks the accepted ones
+against `dpkg --compare-versions`).
 `appliance/artifact_trust.py`'s `RELEASE_ID` grammar admits no tilde. So a
 candidate has no publishable release id, and the release workflow says so where
 the version is chosen rather than failing five steps later as
@@ -169,7 +186,11 @@ package it names, verified the same way — see
 [`../developer/testing.md`](../developer/testing.md). Until a Manager release
 exists it builds its own package from the checkout and says so; that is exit 3
 from `scripts/appliance-fetch-manager-package.py`, deliberately distinct from a
-verification failure, which fails the build.
+verification failure, which fails the build. Exit 3 means only that: no index is
+published, or it names candidates and no stable release. A row the parser
+refuses, a row without a version and a `--version` the index does not list fail
+the build, and a **tagged** build fails on exit 3 too: a release image never
+carries a development Manager.
 
 So the ordering for a first release is: create the identity, cut the Manager
 release, then let the next weekly image pick it up. An image *built* before

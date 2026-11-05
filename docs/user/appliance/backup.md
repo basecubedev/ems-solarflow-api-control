@@ -91,8 +91,7 @@ session and other tools are refused. **Copy files from this appliance** shows
 the commands to run on your own computer, for example:
 
 ```bash
-sftp -r ems-backup@ems-solarflow.local:/data/backups ./ems-backups
-sftp -r ems-backup@ems-solarflow.local:/config ./ems-config
+sftp -r ems-backup@ems-solarflow.local:/backups ./ems-backups
 ```
 
 Or open a session and fetch what you need:
@@ -102,12 +101,13 @@ sftp -i ~/.ssh/your-key ems-backup@ems-solarflow.local
 ```
 
 ```text
-get -r /config
-get -r /data
+get -r /backups
 ```
 
-`/data` is the one that carries your snapshots — they live in `data/backups`.
-There is a `/backups` entry in the session too; it is a leftover and is empty.
+`/backups` is the only thing the session shows: the backups EMS made, each one
+as it is, unencrypted ones included. The live configuration is not reachable
+this way, on purpose — the key on your computer opens your backups and nothing
+the running system holds. To have a copy of the configuration, make a backup.
 
 A graphical client works too: FileZilla, WinSCP or Cyberduck, protocol **SFTP**,
 user `ems-backup`, and your key file.
@@ -121,12 +121,19 @@ user `ems-backup`, and your key file.
   it cannot prove the account is off afterwards, it reports failure rather than
   success.
 
-Revoking the export itself is a console command rather than a button, because
-it must work when the browser does not:
+- **Switch backup access off** on the **Backup account** card switches the
+  whole account off and ends its open sessions. The same works at the console,
+  for when the browser does not:
 
 ```bash
 sudo ems-appliance backup-access disable
 ```
+
+It stays off — across reboots, updates and every automatic re-check — until you
+switch it on again (**Switch backup access on**, or
+`sudo ems-appliance backup-access enable`); adding a key for `ems-backup` is
+refused meanwhile. Use it when a key may be in the wrong hands, for example on
+a lost laptop.
 
 ## The console rescue account
 
@@ -135,7 +142,7 @@ the appliance when the web console does not answer. Its state says whether it
 still has the **Shipped password**, which is published with this project — fine
 on a private network, a login for anyone who reaches the appliance from outside
 one — or **Changed**, and whether the running SSH server refuses its password
-from the network (**Refused by the running sshd**). Change it at the console
+from the network (**Refused by sshd’s configuration**). Change it at the console
 with `sudo passwd ems-rescue`. See
 [When it stops working](recovery.md#the-web-page-does-not-load).
 

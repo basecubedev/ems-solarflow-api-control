@@ -11,12 +11,21 @@ import contextlib
 import fcntl
 import os
 import re
+import struct
 import time
 from dataclasses import dataclass, field
 
-from appliance.hostprobe import APT_DAILY_UPDATE_STAMP, APT_LISTS_DIR, DPKG_LOCK_FILE
+from appliance.commands import CommandResult
+from appliance.hostprobe import (
+    APT_DAILY_UPDATE_STAMP,
+    APT_LISTS_DIR,
+    APT_LISTS_LOCK,
+    DPKG_DATABASE_LOCK_FILE,
+    DPKG_LOCK_FILE,
+)
 from appliance.operations import (
     BUSY_CODES,
+    STATE_FAILED_RECOVERABLE,
     STATE_FAILED_TERMINAL,
     STATE_SUCCEEDED,
     STATE_VERIFYING,
@@ -41,20 +50,56 @@ TYPE_UPDATE_REPAIR = "updates.repair"
 
 PACKAGE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9+._-]*$")
 INST_LINE = re.compile(r"^Inst\s+(\S+)\s+(?:\[(\S+)\]\s+)?\((\S+)\s+([^)]*)\)")
+REMV_LINE = re.compile(r"^Remv\s+(\S+)")
 
 KERNEL_PREFIXES = ("linux-image", "linux-headers", "raspberrypi-kernel")
-FIRMWARE_PREFIXES = ("raspi-firmware", "raspberrypi-bootloader", "firmware-")
+FIRMWARE_PREFIXES = ("raspi-firmware", "raspberrypi-bootloader", "firmware-", "rpi-eeprom")
+RUNTIME_PACKAGES = frozenset(
+    {
+        "docker-ce",
+        "docker-ce-cli",
+        "docker-ce-rootless-extras",
+        "containerd.io",
+        "runc",
+        "docker-buildx-plugin",
+        "docker-compose-plugin",
+    }
+)
+
+PACKAGE_UNIT_PREFIX = "ems-appliance-packages-"
 
 LOCK_FREE = "free"
 LOCK_HELD = "held"
 
-# The two ways a check can end without an answer. The first says the
-# appliance could not ask what is available -- an unreachable mirror, a
-# broken sources list -- and nothing about dpkg; the second that there is
-# no apt to ask at all.
+# The two ways a check can end without an answer. The first says apt could
+# not work out what is available; `apt-get -s` asks no mirror, so the cause is
+# local -- a dependency it cannot meet, a malformed sources entry, damaged
+# lists, the timeout. The second says there is no apt to ask at all.
 UPDATE_CHECK_FAILED = "update_check_failed"
 PACKAGE_MANAGER_UNAVAILABLE = "package_manager_unavailable"
 LOCK_UNKNOWN = "unknown"
+
+# struct flock as Python is built (64-bit offsets): l_type, l_whence, l_start,
+# l_len, l_pid. The query is padded because the kernel's struct is longer than
+# the packed fields on every architecture this runs on.
+_FLOCK = struct.Struct("@hhqqi")
+_FLOCK_QUERY = _FLOCK.pack(fcntl.F_WRLCK, os.SEEK_SET, 0, 0, 0) + bytes(32)
+
+
+def _record_lock_state(path):
+    """Whether another process holds a POSIX record lock on ``path``."""
+
+    try:
+        handle = os.open(str(path), os.O_RDONLY)
+    except OSError:
+        return LOCK_UNKNOWN
+    try:
+        answer = fcntl.fcntl(handle, fcntl.F_GETLK, _FLOCK_QUERY)
+    except OSError:
+        return LOCK_UNKNOWN
+    finally:
+        os.close(handle)
+    return LOCK_FREE if _FLOCK.unpack_from(answer)[0] == fcntl.F_UNLCK else LOCK_HELD
 
 
 class PackageError(Exception):
@@ -88,6 +133,7 @@ class PackageState:
     held: list = field(default_factory=list)
     dpkg_issues: list = field(default_factory=list)
     lock_state: str = LOCK_UNKNOWN
+    lists_locked: bool = False
     reboot_required: bool = False
     reboot_packages: list = field(default_factory=list)
     free_megabytes: int = 0
@@ -97,6 +143,8 @@ class PackageState:
     free_space_known: bool = True
     index_age_seconds: int = None
     error: str = ""
+    # apt's own reason when the check failed, its first E: line.
+    error_detail: str = ""
 
     @property
     def security_updates(self):
@@ -105,6 +153,25 @@ class PackageState:
     @property
     def normal_updates(self):
         return [item for item in self.updates if not item.security]
+
+    @property
+    def manual_updates(self):
+        """Kernel, firmware and container runtime outside the security set.
+
+        Their origins -- the Raspberry Pi archive, Docker's -- carry no
+        "security", so automatic security updates never install them, however
+        important they are. They are named so the owner installs them by hand.
+        """
+
+        return [
+            item
+            for item in self.updates
+            if not item.security
+            and (
+                item.name.startswith(KERNEL_PREFIXES + FIRMWARE_PREFIXES)
+                or item.name in RUNTIME_PACKAGES
+            )
+        ]
 
     @property
     def kernel_update(self):
@@ -116,20 +183,29 @@ class PackageState:
 
     @property
     def healthy(self):
-        """Whether dpkg and apt would take an install.
+        """Whether the package manager is sound, rather than in need of recovery.
 
-        A report, not a gate: the blockers decide installs on their own. A
-        failed update check is not held against the package manager -- it
-        says the mirror could not be asked, and the console reports that as
-        itself. Every other error, including one this build does not know,
-        stays unhealthy.
+        A report, not a gate: the blockers decide installs on their own. A held
+        lock is another package manager at work, which the blockers wait for,
+        and the half-configured packages dpkg's audit lists while it holds its
+        lock are that work. A failed update check is reported as itself, not held against the
+        package manager -- except when apt names unmet dependencies, the one
+        such failure the console's own Repair dependencies cures. Every other
+        error, including one this build does not know, stays unhealthy.
         """
 
+        unmet = self.error == UPDATE_CHECK_FAILED and "unmet dependencies" in self.error_detail.lower()
         return (
-            not self.dpkg_issues
-            and self.lock_state != LOCK_HELD
+            (not self.dpkg_issues or self.lock_state == LOCK_HELD)
             and self.error in ("", UPDATE_CHECK_FAILED)
+            and not unmet
         )
+
+    @property
+    def package_lock(self):
+        """dpkg's lock, or held while apt's lists lock is, as during apt-daily's refresh."""
+
+        return LOCK_HELD if self.lists_locked else self.lock_state
 
     def to_dict(self):
         return {
@@ -137,6 +213,8 @@ class PackageState:
             "normal_updates": [item.to_dict() for item in self.normal_updates],
             "security_count": len(self.security_updates),
             "normal_count": len(self.normal_updates),
+            "manual_updates": [item.to_dict() for item in self.manual_updates],
+            "manual_count": len(self.manual_updates),
             "held": list(self.held),
             "kernel_update": self.kernel_update,
             "firmware_update": self.firmware_update,
@@ -145,12 +223,13 @@ class PackageState:
             "package_manager": {
                 "healthy": self.healthy,
                 "dpkg_issues": list(self.dpkg_issues),
-                "lock_state": self.lock_state,
+                "lock_state": self.package_lock,
             },
             "free_megabytes": self.free_megabytes,
             "free_space_known": self.free_space_known,
             "index_age_seconds": self.index_age_seconds,
             "error": self.error,
+            "error_detail": self.error_detail,
         }
 
 
@@ -189,12 +268,24 @@ def parse_held_packages(text):
 
 
 def parse_dpkg_audit(text):
+    """The packages `dpkg --audit` names, one indented line each.
+
+    Each group opens with a sentence over several unindented lines; only the
+    first of them was skipped, and two broken packages read as twelve issues.
+    """
+
     issues = []
+    prose = False
     for line in (text or "").splitlines():
-        entry = line.strip()
-        if not entry or entry.startswith("The following"):
-            continue
-        issues.append(entry)
+        if not line.strip():
+            prose = False
+        elif line[:1].isspace():
+            prose = False
+            issues.append(line.strip())
+        elif prose or line.startswith("The following"):
+            prose = True
+        else:
+            issues.append(line.strip())
     return issues
 
 
@@ -231,26 +322,26 @@ class PackageService:
     # --- read-only -------------------------------------------------------
 
     def lock_state(self):
-        """Report whether another package manager holds the dpkg frontend lock.
+        """Report whether apt or dpkg holds a package lock.
 
-        The lock is probed with a non-blocking flock and released immediately.
-        An active lock is never removed: a half-finished dpkg run must be
-        allowed to complete.
+        apt and dpkg lock with POSIX record locks, which a flock() probe never
+        sees, so the probe asks with F_GETLK whether a write lock could be
+        placed and places none: a probe that coincides with apt starting can
+        never make apt fail. dpkg's own lock is asked as well, because a dpkg
+        run without a frontend takes only that one. An active lock is never
+        removed: a half-finished dpkg run must be allowed to complete.
         """
 
-        path = self.probe.root / DPKG_LOCK_FILE
-        try:
-            handle = os.open(str(path), os.O_RDONLY)
-        except OSError:
-            return LOCK_UNKNOWN
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            fcntl.flock(handle, fcntl.LOCK_UN)
-            return LOCK_FREE
-        except OSError:
+        frontend = _record_lock_state(self.probe.root / DPKG_LOCK_FILE)
+        database = _record_lock_state(self.probe.root / DPKG_DATABASE_LOCK_FILE)
+        if LOCK_HELD in (frontend, database):
             return LOCK_HELD
-        finally:
-            os.close(handle)
+        return frontend
+
+    def lists_locked(self):
+        """Whether apt holds the package lists, as apt-daily's refresh does alone."""
+
+        return _record_lock_state(self.probe.root / APT_LISTS_LOCK) == LOCK_HELD
 
     def check(self):
         """Read update state without modifying any package or index."""
@@ -260,13 +351,20 @@ class PackageService:
             state.error = PACKAGE_MANAGER_UNAVAILABLE
             return state
 
+        # --with-new-pkgs: a Raspberry Pi kernel is a versioned package, so every
+        # kernel bump needs a new one, and plain `upgrade` keeps it back -- the
+        # kernel fix was never shown and never installed. upgrade still never
+        # removes a package.
         simulated = self.runner.run(
-            "apt-get", ["-s", "-o", "Debug::NoLocking=1", "upgrade"], timeout=APT_SIMULATE_TIMEOUT
+            "apt-get",
+            ["-s", "-o", "Debug::NoLocking=1", "--with-new-pkgs", "upgrade"],
+            timeout=APT_SIMULATE_TIMEOUT,
         )
         if simulated.ok:
             state.updates = parse_simulated_upgrade(simulated.stdout)
         else:
             state.error = UPDATE_CHECK_FAILED
+            state.error_detail = apt_failure_line(simulated)
 
         selections = self.runner.run("dpkg", ["--get-selections"], timeout=DPKG_QUERY_TIMEOUT)
         state.held = parse_held_packages(selections.stdout if selections.ok else "")
@@ -287,6 +385,7 @@ class PackageService:
         state.dpkg_issues = parse_dpkg_audit(audit.stdout if audit.ok else audit.stderr)
 
         state.lock_state = self.lock_state()
+        state.lists_locked = self.lists_locked()
 
         filesystem = self.probe.filesystem("/var")
         state.free_space_known = bool(filesystem.get("available"))
@@ -373,17 +472,29 @@ class PackageService:
     def plan_install(self, operation, scope):
         self._refresh_stale_index(operation)
         state = self.check()
+        # Without an answer there is no list to be empty: planning that as
+        # "nothing to install" hid the failure, every day, behind the timer.
+        if state.error:
+            raise PackageError(
+                state.error,
+                "apt could not work out what there is to install"
+                + (f": {state.error_detail}" if state.error_detail else ""),
+            )
         targets = state.security_updates if scope == UPDATE_SCOPE_SECURITY else state.updates
         blockers = self._blockers(state)
 
         if not targets and not blockers:
             raise PackageError("no_updates_available", "there is nothing to install")
 
-        values = {"scope": scope, "packages": [item.name for item in targets]}
+        values = {
+            "scope": scope,
+            "packages": [item.name for item in targets],
+            "versions": {item.name: item.new_version for item in targets},
+        }
         operation.requested_target.update(values)
         self.operations.update_target(operation.operation_id, values)
 
-        return {
+        plan = {
             "type": TYPE_UPDATE_INSTALL,
             "scope": scope,
             "packages": [item.to_dict() for item in targets],
@@ -395,21 +506,123 @@ class PackageService:
             "reboot_required_before": state.reboot_required,
             "package_manager": state.to_dict()["package_manager"],
         }
+        runtime = sorted(item.name for item in targets if item.name in RUNTIME_PACKAGES)
+        if runtime:
+            plan["note"] = (
+                f"{', '.join(runtime)} restarts the Docker engine. The containers keep "
+                "running, but the EMS Admin console loses its connection to Docker for a "
+                "moment and may show an error until it reconnects."
+            )
+        return plan
 
     def plan_repair(self, operation, action):
         state = self._read_gates(PackageState())
         values = {"action": action}
         operation.requested_target.update(values)
         self.operations.update_target(operation.operation_id, values)
+        blockers = [
+            blocker for blocker in self._blockers(state) if blocker["code"] == "package_lock_held"
+        ]
+        removals = self._repair_removals() if action == PACKAGE_REPAIR_FIX_BROKEN else []
+        if removals:
+            blockers.append(
+                {
+                    "code": "repair_would_remove_packages",
+                    "message": "apt can only repair the dependencies by removing "
+                    + ", ".join(removals)
+                    + "; removing packages is refused here, and one of them may be this "
+                    "console. Repair them at the console, deciding what to remove.",
+                }
+            )
         return {
             "type": TYPE_UPDATE_REPAIR,
             "action": action,
             "dpkg_issues": state.dpkg_issues,
-            "lock_state": state.lock_state,
-            "blockers": [
-                blocker for blocker in self._blockers(state) if blocker["code"] == "package_lock_held"
-            ],
+            "lock_state": state.package_lock,
+            "removals": removals,
+            "blockers": blockers,
         }
+
+    def _run_in_unit(self, operation, tool, args, *, timeout):
+        """apt or dpkg in a transient unit of its own, outside the agent's cgroup.
+
+        The agent's unit stops its whole control group, so an agent stopped by
+        the OOM killer or a restart took dpkg with it in the middle of a
+        transaction, as the Manager's own package never is. The unit keeps
+        running without the agent, under the same deadline the agent waits
+        for, and its output is read back from the journal once journald has
+        written it. Each run has a unit of its own, so a retry never reads the
+        output of the run before it.
+        """
+
+        unit = f"{PACKAGE_UNIT_PREFIX}{operation.operation_id[:12]}-{os.urandom(3).hex()}.service"
+        result = self.runner.run(
+            "systemd-run",
+            [
+                f"--unit={unit}",
+                "--collect",
+                "--wait",
+                "--quiet",
+                "--property=Type=exec",
+                "--setenv=DEBIAN_FRONTEND=noninteractive",
+                "--setenv=LC_ALL=C",
+                "--setenv=PATH=/usr/sbin:/usr/bin:/sbin:/bin",
+                "--",
+                self.runner.resolve(tool),
+                *args,
+            ],
+            timeout=timeout,
+        )
+        self.runner.run("journalctl", ["--sync"], timeout=60)
+        journal = self.runner.run(
+            "journalctl", ["--unit", unit, "--output", "cat", "--no-pager"], timeout=60
+        )
+        return CommandResult(
+            tool,
+            tuple(args),
+            result.returncode,
+            journal.stdout if journal.ok else "",
+            f"{tool} is still running in {unit}" if result.timed_out else result.stderr,
+            timed_out=result.timed_out,
+        )
+
+    def _still_running(self, operation, result, payload, *, failed_code):
+        """Stop waiting for a unit that outlasted its time, and leave it running.
+
+        Stopping apt or dpkg in the middle of a transaction is the
+        half-configured package manager the unit exists to avoid. The package
+        lock holds every other change off until it ends.
+        """
+
+        message = (
+            f"{result.stderr}; it is not stopped, and package, power, Manager and EMS Admin "
+            "operations wait for it through the package lock. Check Updates again later."
+        )
+        self.operations.finish(
+            operation.operation_id,
+            STATE_FAILED_RECOVERABLE,
+            stage="still_running",
+            error={"code": "package_unit_still_running", "message": message},
+            result=payload,
+        )
+        raise PackageError(failed_code, message)
+
+    def _repair_removals(self):
+        """What `apt-get -f install` would remove, asked without letting it.
+
+        A Manager package left unpacked with a dependency it cannot meet is one
+        apt resolves by removing it -- and its prerm stops the agent running apt.
+        """
+
+        simulated = self.runner.run(
+            "apt-get", ["-s", "-o", "Debug::NoLocking=1", "-f", "install"], timeout=APT_SIMULATE_TIMEOUT
+        )
+        names = []
+        for line in (simulated.stdout or "").splitlines():
+            match = REMV_LINE.match(line.strip())
+            if match and PACKAGE_NAME_RE.match(match.group(1)):
+                names.append(match.group(1))
+        return sorted(set(names))
 
     def _root_is_read_only(self):
         try:
@@ -435,14 +648,14 @@ class PackageService:
                     ),
                 }
             )
-        if state.lock_state == LOCK_HELD:
+        if state.package_lock == LOCK_HELD:
             blockers.append(
                 {
                     "code": "package_lock_held",
                     "message": "another package manager is running; wait until it finishes",
                 }
             )
-        if state.dpkg_issues:
+        if state.dpkg_issues and state.lock_state != LOCK_HELD:
             blockers.append(
                 {
                     "code": "dpkg_incomplete",
@@ -483,15 +696,28 @@ class PackageService:
 
     def _execute_install(self, operation):
         scope = operation.requested_target.get("scope")
-        packages = [
-            name
-            for name in operation.requested_target.get("packages", [])
-            if PACKAGE_NAME_RE.match(str(name))
-        ]
+        packages = [str(name) for name in operation.requested_target.get("packages", [])]
 
         self._advance(operation, "preflight")
         state = self.check()
         blockers = self._blockers(state)
+        if not all(PACKAGE_NAME_RE.match(name) for name in packages):
+            blockers.append(
+                {"code": "plan_invalid", "message": "the plan names a package that is not a package name; plan again"}
+            )
+        # apt-daily refreshes the index twice a day: what it offers at Confirm
+        # is not what the plan showed, and "all" installs whatever it offers.
+        planned = operation.requested_target.get("versions")
+        if isinstance(planned, dict):
+            offered = state.security_updates if scope == UPDATE_SCOPE_SECURITY else state.updates
+            if {item.name: item.new_version for item in offered} != planned:
+                blockers.append(
+                    {
+                        "code": "updates_changed_since_plan",
+                        "message": "the package index changed since this plan was made; "
+                        "plan again to see what would now be installed",
+                    }
+                )
         if blockers:
             self.operations.finish(
                 operation.operation_id,
@@ -504,7 +730,14 @@ class PackageService:
 
         self._advance(operation, "installing")
         if scope == UPDATE_SCOPE_ALL:
-            args = ["-y", "--no-remove", "-o", "Dpkg::Options::=--force-confold", "upgrade"]
+            args = [
+                "-y",
+                "--no-remove",
+                "--with-new-pkgs",
+                "-o",
+                "Dpkg::Options::=--force-confold",
+                "upgrade",
+            ]
         else:
             if not packages:
                 raise PackageError("no_updates_available", "no security updates are pending")
@@ -517,7 +750,7 @@ class PackageService:
                 "--only-upgrade",
                 *packages,
             ]
-        result = self.runner.run("apt-get", args, timeout=3600)
+        result = self._run_in_unit(operation, "apt-get", args, timeout=3600)
         output = bounded_redacted_log((result.stdout or "") + (result.stderr or ""))
 
         self._advance(operation, "verifying", state=STATE_VERIFYING)
@@ -532,6 +765,8 @@ class PackageService:
             "output": output,
         }
 
+        if result.timed_out:
+            self._still_running(operation, result, payload, failed_code="package_install_failed")
         if not result.ok:
             self.operations.finish(
                 operation.operation_id,
@@ -548,7 +783,7 @@ class PackageService:
     def _execute_repair(self, operation):
         action = operation.requested_target.get("action")
         self._advance(operation, "preflight")
-        if self.lock_state() == LOCK_HELD:
+        if self.lock_state() == LOCK_HELD or self.lists_locked():
             self.operations.finish(
                 operation.operation_id,
                 STATE_FAILED_TERMINAL,
@@ -561,10 +796,21 @@ class PackageService:
             raise PackageError("package_lock_held", "another package manager holds the lock")
 
         self._advance(operation, f"repair_{action}")
+        # --force-confold: the agent's stdin is /dev/null, so a conffile prompt
+        # ended the repair with "EOF on stdin"; an operator's edited conffile
+        # is kept, as on every install. --no-remove: apt fails rather than
+        # removing a package, the plan having shown that none would be.
         if action == PACKAGE_REPAIR_CONFIGURE:
-            result = self.runner.run("dpkg", ["--configure", "-a"], timeout=1800)
+            result = self._run_in_unit(
+                operation, "dpkg", ["--force-confold", "--configure", "-a"], timeout=1800
+            )
         elif action == PACKAGE_REPAIR_FIX_BROKEN:
-            result = self.runner.run("apt-get", ["-y", "-f", "install"], timeout=1800)
+            result = self._run_in_unit(
+                operation,
+                "apt-get",
+                ["-y", "--no-remove", "-o", "Dpkg::Options::=--force-confold", "-f", "install"],
+                timeout=1800,
+            )
         elif action == PACKAGE_REPAIR_REFRESH_INDEX:
             result = self._refresh_index()
         else:
@@ -578,6 +824,8 @@ class PackageService:
             "package_manager": after.to_dict()["package_manager"],
             "output": output,
         }
+        if result.timed_out:
+            self._still_running(operation, result, payload, failed_code="package_repair_failed")
         if not result.ok:
             self.operations.finish(
                 operation.operation_id,
@@ -604,7 +852,11 @@ class PackageService:
 SCHEDULE_ACTOR = "schedule"
 
 
-def run_scheduled_security_updates(client, config):
+# The agent's own limit on one apt-get install, with room for the check after it.
+SCHEDULED_INSTALL_WAIT_SECONDS = 3600 + 300
+
+
+def run_scheduled_security_updates(client, config, *, sleep=None):
     """Install the waiting security updates, if the operator asked for that.
 
     Driven through the agent, exactly as the browser drives it: the same plan,
@@ -627,7 +879,7 @@ def run_scheduled_security_updates(client, config):
     if not config.automatic_security_updates:
         return {"ran": False, "reason": "not_enabled"}
 
-    from appliance.agent_client import AgentCallError, AgentUnavailableError
+    from appliance.agent_client import AgentCallError, AgentUnavailableError, wait_until_settled
 
     try:
         planned = client.call("updates.plan", actor=SCHEDULE_ACTOR, scope=UPDATE_SCOPE_SECURITY)
@@ -650,8 +902,11 @@ def run_scheduled_security_updates(client, config):
     reboot = bool(plan.get("reboot_required_before"))
 
     def abandon(reason, **extra):
+        # The run's result says why; a banner a day, for a timer nobody
+        # watched, says nothing more.
         try:
             client.call("operations.cancel", actor=SCHEDULE_ACTOR, operation_id=operation_id)
+            client.call("operations.acknowledge", actor=SCHEDULE_ACTOR, operation_id=operation_id)
         except (AgentCallError, AgentUnavailableError):
             pass
         return {"ran": False, "reason": reason, "reboot_required": reboot, **extra}
@@ -668,6 +923,11 @@ def run_scheduled_security_updates(client, config):
             operation_id=operation_id,
             confirmation_token=planned["confirmation_token"],
         )
+        # execute returns once apt has been started, and an install the timer
+        # reported before it ran is what the journal said for a failed one.
+        record = wait_until_settled(
+            client, operation_id, timeout=SCHEDULED_INSTALL_WAIT_SECONDS, sleep=sleep
+        )
     except (AgentCallError, AgentUnavailableError) as exc:
         return {
             "ran": False,
@@ -676,10 +936,21 @@ def run_scheduled_security_updates(client, config):
             "reboot_required": reboot,
         }
 
+    result = record.get("result") or {}
+    if not record.get("settled"):
+        return {"ran": False, "reason": "still_running", "operation_id": operation_id, "reboot_required": reboot}
+    if record.get("state") != STATE_SUCCEEDED:
+        return {
+            "ran": False,
+            "reason": "install_failed",
+            "detail": (record.get("error") or {}).get("message", ""),
+            "operation_id": operation_id,
+            "reboot_required": bool(result.get("reboot_required", reboot)),
+        }
     return {
         "ran": True,
         "reason": "",
-        "installed": int(plan.get("package_count") or 0),
+        "installed": int(result.get("changed_package_count", plan.get("package_count")) or 0),
         "operation_id": operation_id,
-        "reboot_required": reboot,
+        "reboot_required": bool(result.get("reboot_required", reboot)),
     }

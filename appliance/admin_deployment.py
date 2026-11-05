@@ -131,6 +131,42 @@ def read_service_image(compose_text, service):
     return None
 
 
+def read_service_environment(compose_text, service):
+    """The service's environment entries as written, map or list form.
+
+    A value is returned verbatim, so an interpolation such as
+    ``${EMS_ADMIN_DATA_DIR}`` comes back as that text, not resolved.
+    """
+
+    plain = compose_text.splitlines()
+    start, end = _service_block(plain, service)
+    if start is None:
+        return {}
+    env_index = None
+    env_indent = 0
+    for index in range(start + 1, end):
+        match = _ENVIRONMENT.match(plain[index])
+        if match:
+            env_index, env_indent = index, len(match.group(1))
+            break
+    if env_index is None:
+        return {}
+    values = {}
+    for line in plain[env_index + 1 : end]:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if _indent(line) <= env_indent:
+            break
+        entry = line.strip()
+        if entry.startswith("- "):
+            key, separator, value = entry[2:].strip().strip("'\"").partition("=")
+        else:
+            key, separator, value = entry.partition(":")
+        if separator:
+            values[key.strip()] = value.strip().strip("'\"")
+    return values
+
+
 def set_service_image(compose_text, service, image_reference):
     lines = compose_text.splitlines(keepends=True)
     plain = compose_text.splitlines()
@@ -413,8 +449,9 @@ def apply_digest(deployment, repository, digest, *, tag=""):
 
     updated = set_service_image(compose_text, deployment.service, reference)
     if tag:
-        # The container reports its own version from here, not from the
-        # environment file, which this install only keeps for reference.
+        # The Admin names its own image from here when Docker cannot be
+        # asked, not from the environment file, which this install only keeps
+        # for reference.
         updated = set_service_environment(updated, deployment.service, {ENV_TAG_KEY: tag})
     atomic_write(deployment.compose_file, updated, owner=owner)
 

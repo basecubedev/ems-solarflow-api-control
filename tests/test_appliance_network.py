@@ -718,3 +718,255 @@ def test_a_wifi_plan_cancelled_while_it_is_made_keeps_no_passphrase(tmp_path, mo
 
     assert refused.value.code == "operation_cancelled"
     assert services.network._secrets == {}
+
+
+def test_a_wifi_retry_after_a_restart_does_not_join_without_its_passphrase(tmp_path):
+    """The passphrase lives in the agent's memory only. A retry after a
+    restart still dropped the working link, tried to join without it, reverted,
+    and blamed the network for not reaching connectivity."""
+
+    services = build_test_services(tmp_path)
+    handlers = handlers_for(services)
+    planned = handlers.dispatch({"operation": "network.wifi.plan", "ssid": "GuestNet", "passphrase": PASSPHRASE})
+    operation_id = planned["operation"]["operation_id"]
+    services.operations.confirm(operation_id, planned["confirmation_token"])
+    services.operations.recover_interrupted()
+    services.network.discard_secret(operation_id)
+    services.host.calls.clear()
+
+    handlers.dispatch(
+        {"operation": "operations.execute", "operation_id": operation_id, "confirmation_token": planned["confirmation_token"]}
+    )
+
+    record = services.operations.get(operation_id)
+    assert record.state == STATE_FAILED_TERMINAL, record.to_dict()
+    assert record.error["code"] == "wifi_passphrase_lost"
+    assert not [args for tool, args, _ in services.host.calls if tool == "nmcli" and "connect" in args]
+
+
+def test_a_wifi_plan_shows_the_strongest_access_point_of_its_network(tmp_path, monkeypatch):
+    """The plan kept the last entry per SSID of a list sorted strongest
+    first: a mesh network was planned at its weakest signal and security."""
+
+    services = build_test_services(tmp_path)
+    monkeypatch.setattr(
+        services.network,
+        "scan",
+        lambda rescan=False: [
+            {"ssid": "GuestNet", "signal": 82, "security": "WPA2", "active": False},
+            {"ssid": "GuestNet", "signal": 24, "security": "WPA3", "active": False},
+        ],
+    )
+
+    plan = handlers_for(services).dispatch(
+        {"operation": "network.wifi.plan", "ssid": "GuestNet", "passphrase": PASSPHRASE}
+    )["plan"]
+
+    assert (plan["signal"], plan["security"]) == (82, "WPA2")
+
+
+def test_a_wifi_join_nmcli_refused_is_reverted_at_once(tmp_path, monkeypatch):
+    """A mistyped passphrase was followed by the full connectivity wait before
+    the revert: up to four and a half minutes offline."""
+
+    services = build_test_services(tmp_path)
+    waited = []
+    monkeypatch.setattr(services.network, "_wait_for_wifi", lambda ssid: waited.append(ssid) or False)
+    real = services.host._nmcli
+
+    def refuses_the_join(args):
+        if "connect" in args:
+            return services.host._result("nmcli", args, 4, "", "Error: Connection activation failed: Secrets were required")
+        return real(args)
+
+    monkeypatch.setattr(services.host, "_nmcli", refuses_the_join)
+
+    operation, _ = plan_and_execute(services, "network.wifi.plan", ssid="GuestNet", passphrase=PASSPHRASE)
+
+    assert waited == [], "it waited for a link nmcli had already refused"
+    assert operation.state == STATE_FAILED_TERMINAL, operation.to_dict()
+
+
+def test_a_rename_whose_mdns_restart_failed_says_so(tmp_path):
+    """The try-restart result was ignored: the console announced the new
+    .local address while avahi still published the old one."""
+
+    services = build_test_services(tmp_path)
+    original = services.host.handle
+
+    def systemctl_fails(tool, args, input_text=None):
+        if tool == "systemctl" and "avahi-daemon.service" in args:
+            services.host.calls.append((tool, tuple(args), input_text))
+            return services.host._result("systemctl", args, 1, "", "Failed to restart")
+        return original(tool, args, input_text)
+
+    services.host.handle = systemctl_fails
+    operation, _ = plan_and_execute(services, "network.hostname.plan", hostname="ems-pi5")
+
+    assert operation.state == STATE_SUCCEEDED
+    assert operation.result["mdns_restarted"] is False
+    assert "avahi" in operation.result["note"]
+
+
+# --- a switch counts once somebody reached the console over it ---------------
+
+
+def confirming(tmp_path, *, contact):
+    """Services whose WLAN switch waits for the operator; ``contact`` decides
+    whether an authenticated request arrives while it waits."""
+
+    import dataclasses
+
+    services = build_test_services(tmp_path)
+    services.network.config = dataclasses.replace(
+        services.network.config, wifi_confirm_timeout_seconds=30
+    )
+    clock = {"now": 1000.0}
+    services.network._time = lambda: clock["now"]
+
+    def sleep(seconds):
+        clock["now"] += seconds
+        if contact:
+            handlers_for(services).dispatch({"operation": "status.get"}, actor="appliance-admin")
+
+    services.network._sleep = sleep
+    return services
+
+
+def test_a_wifi_switch_nobody_reaches_is_taken_back(tmp_path):
+    """Joining and getting an address counted as success and disarmed the
+    revert; on a guest network with client isolation nobody could reach the
+    appliance again without a keyboard or a cable."""
+
+    services = confirming(tmp_path, contact=False)
+
+    operation, _ = plan_and_execute(
+        services, "network.wifi.plan", ssid="GuestNet", passphrase=PASSPHRASE
+    )
+
+    assert operation.state == STATE_FAILED_TERMINAL, operation.to_dict()
+    assert operation.result["reverted"] is True
+    assert "nobody reached" in operation.error["message"]
+    assert ("nmcli", ("connection", "up", "HomeNet"), None) in services.host.calls
+
+
+def test_a_wifi_switch_the_operator_reached_succeeds(tmp_path):
+    services = confirming(tmp_path, contact=True)
+
+    operation, _ = plan_and_execute(
+        services, "network.wifi.plan", ssid="GuestNet", passphrase=PASSPHRASE
+    )
+
+    assert operation.state == STATE_SUCCEEDED, operation.to_dict()
+    assert services.network.pending_revert() is None
+
+
+def test_a_link_local_address_is_not_an_address_to_be_reached_at(tmp_path):
+    services = build_test_services(tmp_path)
+    services.host.wifi_address = ""
+    services.host.wifi_address6 = "fe80::1234:5678:9abc:def0/64"
+
+    assert services.network.wifi_link("HomeNet") is False
+
+
+def test_the_wifi_plan_says_the_ems_pauses_and_how_long_there_is_to_confirm(tmp_path):
+    services = build_test_services(tmp_path)
+
+    plan = handlers_for(services).dispatch(
+        {"operation": "network.wifi.plan", "ssid": "GuestNet", "passphrase": PASSPHRASE}
+    )["plan"]
+
+    assert "EMS" in plan["warning"] and "pause" in plan["warning"], plan["warning"]
+
+
+# --- what a DHCP reservation and a dead radio need ----------------------------
+
+
+def test_each_interface_names_its_mac_address(tmp_path):
+    """The docs ask for a DHCP reservation, and the console never showed the
+    MAC address a reservation needs."""
+
+    services = build_test_services(tmp_path)
+
+    status = services.network.status()
+    wifi = next(item for item in status["interfaces"] if item["type"] == "wifi")
+
+    assert wifi["mac"] == "B8:27:EB:12:34:56"
+
+
+def test_the_wifi_radio_state_is_reported(tmp_path):
+    services = build_test_services(tmp_path)
+    services.host.wifi_radio = ("disabled", "enabled")
+
+    status = services.network.status()
+
+    assert status["wifi_radio"] == {"hardware": "disabled", "software": "enabled"}
+
+
+def test_a_network_not_found_with_the_radio_off_says_the_radio_is_off(tmp_path):
+    """A blocked radio read as "network not found; mark it hidden"."""
+
+    services = build_test_services(tmp_path)
+    services.host.wifi_radio = ("enabled", "disabled")
+
+    with pytest.raises(Exception) as excinfo:
+        handlers_for(services).dispatch(
+            {"operation": "network.wifi.plan", "ssid": "Elsewhere", "passphrase": PASSPHRASE}
+        )
+
+    assert getattr(excinfo.value, "code", "") == "wifi_radio_off"
+
+
+@pytest.mark.parametrize(
+    "request_, actor",
+    [
+        ({"operation": "status.get"}, "schedule"),
+        ({"operation": "status.get"}, "boot"),
+        (
+            {
+                "operation": "audit.record_web_event",
+                "event": "login.failure",
+                "result": "denied",
+                "reason": "invalid_password",
+            },
+            "appliance-admin",
+        ),
+    ],
+)
+def test_a_call_nobody_signed_in_made_does_not_confirm_a_wifi_switch(tmp_path, request_, actor):
+    """The daily update, the boot repair and the web's audit of a refused
+    sign-in all reach the agent with an actor; none is somebody who reached
+    the console over the new network."""
+
+    import dataclasses
+
+    services = build_test_services(tmp_path)
+    services.network.config = dataclasses.replace(
+        services.network.config, wifi_confirm_timeout_seconds=30
+    )
+    clock = {"now": 1000.0}
+    services.network._time = lambda: clock["now"]
+
+    def sleep(seconds):
+        clock["now"] += seconds
+        try:
+            handlers_for(services).dispatch(dict(request_), actor=actor)
+        except Exception:  # noqa: BLE001 - only whether it counts is under test
+            pass
+
+    services.network._sleep = sleep
+
+    operation, _ = plan_and_execute(
+        services, "network.wifi.plan", ssid="GuestNet", passphrase=PASSPHRASE
+    )
+
+    assert operation.state == STATE_FAILED_TERMINAL, operation.to_dict()
+
+
+def test_each_interface_shows_its_own_addresses(tmp_path):
+    services = build_test_services(tmp_path)
+
+    interfaces = {item["device"]: item for item in services.network.status()["interfaces"]}
+
+    assert interfaces["wlan0"]["addresses"] == ["192.168.1.50/24"]
+    assert interfaces["eth0"]["addresses"] == []

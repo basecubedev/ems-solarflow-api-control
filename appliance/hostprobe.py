@@ -8,6 +8,7 @@ running machine.
 
 import os
 import platform
+import re
 import time
 from pathlib import Path
 
@@ -45,8 +46,15 @@ UNDERVOLTAGE_ALARM = "in0_lcrit_alarm"
 THERMAL_FILE = "sys/class/thermal/thermal_zone0/temp"
 REBOOT_REQUIRED_FILE = "var/run/reboot-required"
 REBOOT_REQUIRED_PKGS = "var/run/reboot-required.pkgs"
+# Debian's and Raspberry Pi's kernel and firmware packages never write the
+# marker above, so a new kernel and new boot files are read off the system.
+RUNNING_KERNEL_FILE = "proc/sys/kernel/osrelease"
+KERNEL_MODULES_DIR = "lib/modules"
+BOOT_FIRMWARE_DIR = "boot/firmware"
 DPKG_LOCK_FILE = "var/lib/dpkg/lock-frontend"
+DPKG_DATABASE_LOCK_FILE = "var/lib/dpkg/lock"
 APT_LISTS_DIR = "var/lib/apt/lists"
+APT_LISTS_LOCK = "var/lib/apt/lists/lock"
 APT_DAILY_UPDATE_STAMP = "var/lib/apt/periodic/update-stamp"
 
 
@@ -106,7 +114,23 @@ class HostProbe:
                     record["ntp_synchronized"] = value.strip().lower() == "yes"
                 elif key.strip() == "Timezone" and value.strip():
                     record["timezone"] = value.strip()
+            if record["ntp_synchronized"] is not True:
+                record.update(self._time_servers())
         return record
+
+    def _time_servers(self):
+        """Which servers timesyncd asks, for a clock that is not synchronised."""
+
+        result = self.runner.run("timedatectl", ["show-timesync"], timeout=15)
+        fields = {}
+        for line in (result.stdout or "").splitlines():
+            key, _, value = line.partition("=")
+            fields[key.strip()] = value.split()
+        servers = fields.get("SystemNTPServers", []) + fields.get("LinkNTPServers", [])
+        return {
+            "ntp_servers": servers,
+            "ntp_fallback_servers": fields.get("FallbackNTPServers", []),
+        }
 
     def temperature(self):
         raw = (self._read(THERMAL_FILE) or "").strip()
@@ -175,9 +199,12 @@ class HostProbe:
         }
 
     def _path(self, absolute):
+        """``absolute`` read through the probe root, once: a path already under it stays."""
+
         root = Path(self.root)
-        if root == Path("/"):
-            return Path(absolute)
+        target = Path(absolute)
+        if root == Path("/") or target.is_relative_to(root):
+            return target
         return root / str(absolute).lstrip("/")
 
     def filesystem(self, path):
@@ -241,22 +268,114 @@ class HostProbe:
         return table
 
     def reboot_required(self):
+        """Whether a restart is owed, and what owes it.
+
+        ``/run/reboot-required`` is written by a few packages only -- dbus is
+        one -- and by no kernel, firmware or libc package on Debian or
+        Raspberry Pi OS, so after those the page said "not required" and old
+        code kept running. A kernel of the running flavour newer than the
+        running one, or boot files written since this boot, owe one too.
+        """
+
         marker = self.root / REBOOT_REQUIRED_FILE
         packages = []
         raw = self._read(REBOOT_REQUIRED_PKGS)
         if raw:
             packages = sorted({line.strip() for line in raw.splitlines() if line.strip()})
-        return {"required": marker.exists(), "packages": packages}
+        kernel = self._newer_kernel()
+        if kernel:
+            packages.append(f"kernel {kernel}")
+        firmware = self._boot_files_since_boot()
+        if firmware:
+            packages.append("boot firmware")
+        return {
+            "required": marker.exists() or bool(kernel) or firmware,
+            "packages": packages,
+        }
+
+    def _newer_kernel(self):
+        """The newest installed kernel of the running flavour, if it is not the running one."""
+
+        running = (self._read(RUNNING_KERNEL_FILE) or "").strip()
+        if not running:
+            return ""
+        flavour = running.partition("+")[2] or running.rpartition("-")[2]
+        try:
+            installed = [
+                entry.name
+                for entry in (self.root / KERNEL_MODULES_DIR).iterdir()
+                if entry.is_dir() and entry.name.endswith(flavour)
+            ]
+        except OSError:
+            return ""
+        if not installed:
+            return ""
+        newest = max(installed, key=_kernel_key)
+        return newest if _kernel_key(newest) > _kernel_key(running) else ""
+
+    def _boot_files_since_boot(self):
+        """Whether a file the bootloader reads was written after this boot."""
+
+        uptime = uptime_seconds(self.root)
+        if not uptime:
+            return False
+        booted = self._time() - uptime
+        try:
+            entries = list((self.root / BOOT_FIRMWARE_DIR).iterdir())
+        except OSError:
+            return False
+        for entry in entries:
+            try:
+                if entry.is_file() and entry.stat().st_mtime > booted:
+                    return True
+            except OSError:
+                continue
+        return False
 
     def hostname(self):
-        record = {"hostname": platform.node(), "mdns": ""}
+        """The hostname, and the .local name avahi actually publishes.
+
+        After a name conflict avahi publishes ``<name>-2.local``; the name
+        derived from the hostname may then belong to another appliance.
+        ``mdns_expected`` is the derived one, ``mdns`` the published one when
+        avahi answers.
+        """
+
+        record = {"hostname": platform.node(), "mdns": "", "mdns_expected": ""}
         if self.runner is not None and self.runner.available("hostnamectl"):
             result = self.runner.run("hostnamectl", ["--static"], timeout=15)
             if result.ok and result.stdout.strip():
                 record["hostname"] = result.stdout.strip()
         if record["hostname"]:
-            record["mdns"] = f"{record['hostname']}.local"
+            record["mdns_expected"] = f"{record['hostname']}.local"
+            record["mdns"] = self._published_mdns() or record["mdns_expected"]
         return record
+
+    def _published_mdns(self):
+        if self.runner is None or not self.runner.available("busctl"):
+            return ""
+        result = self.runner.run(
+            "busctl",
+            [
+                "call",
+                "org.freedesktop.Avahi",
+                "/",
+                "org.freedesktop.Avahi.Server",
+                "GetHostNameFqdn",
+            ],
+            timeout=5,
+        )
+        match = re.fullmatch(r's "([A-Za-z0-9.-]{1,253})"', (result.stdout or "").strip())
+        return match.group(1).lower() if result.ok and match else ""
+
+
+def _kernel_key(release):
+    """A kernel release as numbers and words, so 6.18.52 sorts after 6.18.9."""
+
+    return tuple(
+        (0, int(part), "") if part.isdigit() else (1, 0, part)
+        for part in re.findall(r"\d+|[A-Za-z]+", release)
+    )
 
 
 def host_architecture(machine=None):

@@ -24,6 +24,7 @@ from types import SimpleNamespace
 from appliance.commands import CommandRunner
 from appliance.export_state import inspect_exports
 from appliance.hostprobe import HostProbe
+from appliance.paths import atomic_write
 from appliance.ssh_policy import (
     FORCED_COMMAND,
     OPTION_CHROOT,
@@ -42,6 +43,11 @@ STATE_DEGRADED = "degraded"
 STATE_UNAVAILABLE = "unavailable"
 
 DISABLED_SUFFIX = ".disabled-by-appliance"
+# An operator's "off", kept in agent state: every activation -- each boot,
+# each change under the install root, each package install -- otherwise took
+# the key file back, and a key from a stolen laptop logged in again.
+REVOKED_NAME = "backup-access-revoked"
+REVOKED_REASON = "revoked_by_operator"
 CONFLICT_SUFFIX = ".conflict"
 MAX_CONFLICT_FILES = 20
 
@@ -210,11 +216,44 @@ class BackupAccessActivation:
             raise files.refusal
         return [files.ssh_dir / name for name in files.conflicted]
 
+    def _revoked_path(self):
+        return self.paths.agent_state_dir / REVOKED_NAME
+
+    def revoked(self):
+        return self._revoked_path().exists()
+
+    def revoke(self):
+        """Withdraw authentication until an operator reinstates it.
+
+        Recorded before anything else, so a disable that half fails still
+        leaves the intent that no activation may undo. A record the card has
+        no room for does not stop the withdrawal: access goes now, and the
+        report says the next activation would bring it back.
+        """
+
+        try:
+            self.paths.agent_state_dir.mkdir(parents=True, exist_ok=True)
+            atomic_write(self._revoked_path(), "{}\n", mode=0o600, owner_root=True)
+            recorded = True
+        except OSError:
+            recorded = False
+        report = dict(self.disable(reason=REVOKED_REASON))
+        report["revocation_recorded"] = recorded
+        return report
+
+    def reinstate(self):
+        try:
+            self._revoked_path().unlink()
+        except FileNotFoundError:
+            pass
+        return self.activate()
+
     def observe(self):
         home = self.account_home()
         files = read_key_files(home)
         return {
             "account": self.config.backup_user,
+            "revoked": self.revoked(),
             "home": str(home) if home is not None else "",
             "keys_present": files.active,
             "keys_disabled": files.disabled,
@@ -243,11 +282,12 @@ class BackupAccessActivation:
         withdrawn through the account itself instead. Without even the account,
         nothing on the host is this package's to change.
 
-        An account with no authorized key has no access to revoke, so the
-        account itself is only expired once there is key material that an
-        unconfined daemon could accept. A key file that appeared next to an
-        already preserved one is a conflict only an operator can resolve, so
-        both are kept and authentication stays off.
+        The account is expired whether or not a key file was moved: sshd may
+        honour key sources this package does not read (a second key file, a
+        key command, a user CA) wherever the Match block's pins are not in
+        force. A key file that appeared next to an already preserved one is a
+        conflict only an operator can resolve, so both are kept and
+        authentication stays off.
 
         The key file is moved through ``AuthorizedKeysStore``, which never
         follows a symlinked ``.ssh``; with one, nothing is moved, the account
@@ -273,8 +313,7 @@ class BackupAccessActivation:
             for name in entries
             if name.startswith(preserved_name + CONFLICT_SUFFIX)
         ]
-        if preserved or conflicts:
-            self._expire_account()
+        self._expire_account()
         return {
             "state": STATE_DEGRADED,
             "reason": reason,
@@ -371,6 +410,10 @@ class BackupAccessActivation:
         that publishes something other than the configured EMS directory would
         widen what a restored key can reach.
         """
+
+        if self.revoked():
+            outcome = self.disable(reason=REVOKED_REASON)
+            return self._report(STATE_UNAVAILABLE, REVOKED_REASON, disabled=outcome)
 
         if not self.runner.available("sshd"):
             return self._report(

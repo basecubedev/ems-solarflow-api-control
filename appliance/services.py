@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from appliance.admin_lifecycle import AdminLifecycleService
 from appliance.audit import AuditLog, OperationLog
 from appliance.backup_access import BackupAccessService
+from appliance.block_probe import BlockProbe
 from appliance.commands import CommandRunner
 from appliance.config import load_config
 from appliance.docker_backend import DockerBackend
@@ -20,7 +21,7 @@ from appliance.auth import AuthStore, ConfirmedPassword, deployment_owner
 from appliance.network import NetworkService
 from appliance.timezone_config import TimezoneService
 from appliance.operations import OperationStore
-from appliance import persistent_state
+from appliance import install_check, persistent_state
 from appliance.manager_update import ManagerUpdateService
 from appliance.artifact_trust import SignatureVerifier
 from appliance.packages import PackageService
@@ -99,6 +100,7 @@ def build_services(
         sleep=sleep,
         operation_log=operation_log,
         bootstrap=admin_bootstrap,
+        package_lock=lambda: packages.lock_state(),
     )
     packages = PackageService(
         runner=runner,
@@ -131,6 +133,7 @@ def build_services(
         config=config,
         operations=operations,
         paths=paths,
+        probe=probe,
         time_fn=time_fn,
         operation_log=operation_log,
     )
@@ -157,6 +160,7 @@ def build_services(
         ssh=ssh,
         backup=backup,
         operations=operations,
+        block=BlockProbe(root=root, runner=runner),
         time_fn=time_fn,
         installed_version=manager_version,
     )
@@ -176,6 +180,10 @@ def build_services(
         operation_log=operation_log,
         installed_version=manager_version,
         architecture=host_architecture(),
+        package_lock=packages.lock_state,
+        installation_check=lambda: install_check.verify_installation(
+            paths=paths, runner=runner, in_agent=True
+        ),
     )
     status.manager = manager
     admin.manager_pending = manager.verification_pending

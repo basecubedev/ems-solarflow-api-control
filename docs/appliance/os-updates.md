@@ -66,28 +66,60 @@ raises a warning that names the number of days. **Refresh package indexes** on
 the **Operating system** card, in Basic and Expert alike, refreshes it at any
 time: `apt-get update --error-on=any` as a plan confirmed with **Refresh**,
 refused like the repairs below while another package manager holds the lock.
-If apt-daily is refreshing at that moment, apt itself refuses this refresh,
-and a plan's own, with its own lock message; it can simply be run again a few
-minutes later, and a scheduled security run tries again the next day.
+apt-daily's own refresh counts as one: it holds apt's lists lock, so the plan
+says so and can simply be made again a few minutes later. Should apt-daily start
+between the plan and the refresh, apt refuses with its own lock message, and
+the same retry applies.
 
 | Item | Meaning |
 |---|---|
 | Security updates | Packages whose candidate comes from a security archive |
 | Normal package updates | Everything else that is upgradable |
 | Held packages | Packages pinned with `dpkg` hold |
-| Kernel update | A `linux-image*` / `raspberrypi-kernel` upgrade is pending |
-| Firmware update | A `raspi-firmware` / bootloader / `firmware-*` upgrade is pending |
-| Reboot required | `/var/run/reboot-required` exists, with the packages that set it |
-| Package-manager health | dpkg consistency and whether another package manager holds the lock |
+| Kernel update | A `linux-image*` / `raspberrypi-kernel` upgrade is pending, a new versioned kernel package included: apt is asked with `--with-new-pkgs`, because every Raspberry Pi kernel bump is a new package that a plain `upgrade` keeps back, unseen and never installed. *Install all updates* installs it the same way; neither ever removes a package, so every kernel bump leaves the one before it installed — modules and initramfs, roughly 100–150 MB per flavour on the root filesystem — until it is removed by hand (`apt-get autoremove` at the console) |
+| Firmware update | A `raspi-firmware` / bootloader / `firmware-*` / `rpi-eeprom` upgrade is pending |
+| Reboot required | `/var/run/reboot-required` exists, with the packages that set it; or a kernel of the running flavour newer than the running one is installed (`kernel <release>`); or a file under `/boot/firmware` was written since this boot (`boot firmware`). No kernel, firmware or libc package on Debian or Raspberry Pi OS writes the marker, so the marker alone said "not required" after exactly the updates that need a restart |
+| Package-manager health | dpkg consistency, and beside it whether another package manager holds a lock — apt's or dpkg's (`lock-frontend`, dpkg's own `lock`), or apt's lists lock while apt-daily refreshes. A held lock is work under way, which plans wait for, not a fault: the packages dpkg's audit lists as half-configured while it holds its lock are the run it is in |
 | Update check | whether apt could list what is available; a failure is reported on its own and does not mean dpkg needs recovery |
 
 ## Install security updates
+
+*Security* means what apt lists from the Debian security archive — an update
+whose origin names `security`, such as `Debian-Security:13/stable-security`.
+Nothing else is security here, however urgent: the kernel, the boot firmware
+and `rpi-eeprom` come from `archive.raspberrypi.com`, `docker-ce`,
+`containerd.io` and `runc` from `download.docker.com`, and neither origin
+labels a release as security. Those arrive as **other updates**, are installed
+only by *Install all updates*, and never by the automatic security updates —
+a kernel or container-runtime fix has to be planned by hand.
+
+That is a decision, not a gap to close later: the kernel and the firmware need
+a restart and are the one update that can leave the board unbootable, and a
+container-runtime upgrade restarts the Docker engine under the running EMS. So
+they are named instead. While one waits, status reports
+`manual_updates_pending` with the packages, the security tile says *Debian
+security archive only*, the **Operating system** card lists them as
+*Important, install by hand*, and **Plan all updates** is offered outside
+Expert. A plan that contains `docker-ce`, `containerd.io` or another runtime
+package says that the Docker engine restarts and the EMS Admin console loses
+its Docker connection for a moment.
 
 **Plan security updates** on the **Operating system** card, or **Install
 security updates** on the **Raspberry Pi OS** card above it and in the
 Overview's quick actions, plans them. Only the packages the appliance itself
 parsed out of a simulated apt run are upgraded — the browser never sends a
 package name.
+
+apt runs in a transient unit of its own, `ems-appliance-packages-<id>-<run>.service`,
+and so do the package-manager repairs, outside the agent's control group. An
+agent the OOM killer picks or that is restarted no longer takes dpkg with it in
+the middle of a transaction; the unit runs to its end, and its output is read
+back from the journal (`journalctl -u 'ems-appliance-packages-<id>-*'`). A run
+that outlasts the agent's wait (an hour for an install, half an hour for a
+repair) is not stopped: the operation ends *Incomplete* with
+`package_unit_still_running`, and package operations, power actions, the
+Manager's own install and every EMS Admin operation wait for the package lock
+until the unit ends (`package_operation_active`).
 
 No install removes a package. The plan is read from `apt-get -s upgrade`, which
 never removes anything, while the security install runs `apt-get install
@@ -120,7 +152,8 @@ documented repair for a broken package manager here is re-flashing.
 `automatic_security_updates` in `/etc/ems-appliance-manager/appliance.conf` is
 off by default. Turned on, `ems-appliance-auto-update.timer` runs once a day at
 a randomised hour and installs the waiting **security** updates — and nothing
-else. It takes effect at the next run; no unit has to be enabled by hand.
+else: not the kernel, the firmware or the container runtime, whose origins are
+never security (see above). It takes effect at the next run; no unit has to be enabled by hand.
 
 It is a caller of the agent, not a second one beside it. The same plan, the
 same blockers, the same operation lock and the same audit entry the console
@@ -136,19 +169,42 @@ one: the reboot is reported and left to somebody who knows whether the battery
 this appliance controls can be left alone for two minutes. `ems-appliance
 auto-update` runs the same thing by hand.
 
+It waits for the install to end before it says anything, and says what apt
+did: how many packages changed, whether the result now needs a restart, or
+that the install failed. It used to report "installed N" the moment apt had
+been started, so a failed install read as a successful one in the journal.
+
 Every outcome, including declining, exits 0. A daily timer that leaves a failed
 unit behind because the package manager was busy teaches an operator to stop
 reading it; what happened is in the journal and in the operation record.
+
+A day with nothing to install leaves no operation behind and is audited as
+`nothing_to_do`, and a run its blockers stopped is acknowledged as it is
+cancelled. Each quiet day used to leave a cancelled banner to click away and a
+`failure` in the audit log, and pushed one of the operator's own operations out
+of the fifty the store keeps.
 
 During installation the operation reports its stage, captures bounded output and
 prevents a second package operation. Afterwards it runs a dpkg consistency
 check, detects the reboot requirement, reports the changed package count and
 shows failures explicitly.
 
+apt's output stays in the operation's own record and leaves the lists the
+console polls every two seconds: at up to 256 KiB a record, a few
+unacknowledged updates took those answers past the 8 MiB the web service
+accepts from the agent, and the banner and the status page stopped updating.
+
 ## Install all updates (Expert mode)
 
 Expert mode adds **Plan all updates**. It uses the same plan, confirmation and
 verification path.
+
+Either install puts on exactly what its plan showed. The plan records each
+package with its version, and before apt runs the offer is read again: if the
+index changed in between — `apt-daily` refreshes it twice a day — the install is
+refused with `updates_changed_since_plan`, and a new plan shows what would now
+be installed. *Install all updates* used to run whatever the index offered at
+Confirm, a kernel the operator never saw included.
 
 ## Package-manager recovery (Expert mode)
 
@@ -159,8 +215,16 @@ strictly defined actions, each a plan confirmed with **Run repair**, beside
 
 | Action | What it runs |
 |---|---|
-| **Complete pending configuration** | `dpkg --configure -a` |
-| **Repair dependencies** | `apt-get -y -f install` |
+| **Complete pending configuration** | `dpkg --force-confold --configure -a` |
+| **Repair dependencies** | `apt-get -y --no-remove -o Dpkg::Options::=--force-confold -f install` |
+
+`--force-confold` keeps a configuration file you edited, as every install does;
+without it the repair stopped at dpkg's question with nobody to answer it. A
+dependency repair never removes a package: its plan asks apt first what it
+would do and refuses with `repair_would_remove_packages`, naming them, when the
+only repair apt knows is a removal — one of them may be the Manager itself,
+whose removal stops the agent running the repair. Such a repair belongs at the
+console, where you decide what goes.
 
 There are no free-form apt arguments. **A real active package-manager lock is
 never removed** — the operation refuses with `package_lock_held` and asks you to
@@ -198,7 +262,10 @@ tidiness; it is what makes the paragraph below true.
 
 1. The configured index (`manager_index_url` in `appliance.conf`) is fetched.
    Nothing in it is trusted: an entry may name a candidate and three `https`
-   URLs, and that is all it is allowed to decide.
+   URLs, and that is all it is allowed to decide. An `http://` or malformed
+   URL is refused, never upgraded, and the card says so — *Package index is
+   not https*, or the index as unreadable with the reason — rather than that
+   no index is configured.
 2. The manifest and its detached signature are fetched, and the signature is
    verified against the keyring the appliance already ships. One trust anchor,
    root-owned, and never reachable from a request.
@@ -207,14 +274,31 @@ tidiness; it is what makes the paragraph below true.
 4. The package is downloaded under exactly that declared size and hashed
    against the verified manifest.
 5. Everything that can refuse has now refused: signature, digest, architecture,
-   and whether that package's manager can read the state already on this
-   appliance's disk. Refusals happen here, before dpkg runs, while the code
-   deciding is still the code that started.
-6. The running package is retained as `previous.deb`.
+   whether that package's manager can read the state already on this
+   appliance's disk, and whether another `apt` or `dpkg` run holds the package
+   lock (`package_lock_held`) -- the plan says so, and an execution confirmed
+   before the lock was taken stages nothing. Refusals happen here, before dpkg
+   runs, while the code deciding is still the code that started. The plan also
+   names the installation checks the appliance already fails, because the
+   package's postinst ends in the same checks: a host condition that fails one
+   — a degraded backup export was the case on a Pi 3B+ — stops the install and
+   the revert to the package before it alike. That is a warning, not a refusal,
+   because the package on offer may be the one that fixes it.
+6. The running package is retained as `previous.deb`, and the request names it
+   as what the installer puts back if `dpkg` refuses the new one. A reinstall
+   of the running package itself has nothing to fall back to: the kept package
+   is then the release before it, and putting that on silently is what a
+   failed reinstall used to do. The plan says so, the installer reports
+   `install_failed`, and the deadline has no way back to offer.
 7. A deadline is armed — see below.
 8. `dpkg` runs from its own systemd unit, not from the agent. The package's own
    postinst restarts the agent and the web service, so the console is briefly
-   unreachable. That is expected.
+   unreachable. That is expected. A lock another `apt` run takes in between is
+   waited out for up to five minutes; if it never comes free, nothing is
+   installed, nothing is put back, the deadline is retired and **Last install**
+   says the install did not start (`not_started`). The kept packages have
+   already rotated by then: the running package is the way back, and the one
+   kept before it is gone.
 
 ### Going backwards is not an error
 
@@ -234,11 +318,26 @@ answer must end up back where it was, and a deadline is what makes silence mean
 that rather than mean consent.
 
 A repeating timer asks, once a minute, whether dpkg calls the manager
-*installed* at the version the install promised, and whether the agent and the
-web service are running. Both halves of the first question matter: dpkg reports
-a version for a package it unpacked and never configured, and for one it has
-only config files left for, and those are the states this exists to catch. That
-gate is narrow and is not a functional test of the manager.
+*installed* at the version the install promised, whether the agent and the web
+service are running, and whether the web service listens on its port. Both
+halves of the first question matter: dpkg reports a version for a package it
+unpacked and never configured, and for one it has only config files left for,
+and those are the states this exists to catch. One healthy answer does not
+confirm the install: a second tick has to find the same two processes (by
+systemd's invocation id and restart count), because a unit that restarts every
+few seconds reads *running* at almost any single look. A healthy answer at the
+very end of the window gets up to two more ticks to prove it stays up rather
+than being reverted. That gate is narrow and is not a functional test of the
+manager.
+
+No tick is spent while the install unit is still running: nothing can be known
+about a package dpkg is still unpacking, and the first tick used to fire the
+moment the deadline was armed — before the install had started — which
+confirmed a reinstall of the running version without judging it. Each tick that
+waits also moves the end of the window to a whole window from then, and writes
+that end into a file beside the deadline record, which the console reads too;
+the record itself is never rewritten, because the installer may be retiring it
+on the same tick. The install unit's own timeout bounds the wait.
 
 The window is measured in those ticks as much as on the clock: fifteen checks
 a minute apart, and a reboot inside the window does not restart the count. The
@@ -253,7 +352,8 @@ counts against it.
 | The gate passes | The deadline is retired and the install stands. |
 | The gate has not passed when the deadline expires | `previous.deb` is installed again, and the console reports **Put back** (`reverted`) under **Last install**. |
 | There is no `previous.deb` | The console reports **Nothing to go back to** (`revert_unavailable`), and the appliance is left to a person. |
-| `dpkg` refuses the previous package too | The next tick tries again, up to five times, and only then does the console report **Going back failed** (`revert_failed`). |
+| `dpkg` refuses the previous package too | The next tick tries again, up to five times, and only then does the console report **Going back failed** (`revert_failed`). An attempt is counted before `dpkg` runs, so one the reverter's own timeout kills still counts. |
+| The installer already put `previous.deb` back | It records **Put back** (`reverted`) itself and retires the deadline, which would otherwise have reinstalled the same package a second time when the window ran out. |
 | The deadline record cannot be read by the reverter | Nothing is installed. The record is retired, the console reports **Nothing to go back to** (`revert_unavailable`), and the appliance is left to a person. A record the *console* cannot read, but the reverter can, holds Install and Revert shut until the reverter retires it. |
 
 The retries are there because the commonest reason dpkg refuses is a frontend
@@ -276,11 +376,21 @@ itself. Once the window has run out without a verdict both become available
 again, which is deliberate: taking them away on a board whose only alternative
 is a keyboard would be the failure the deadline exists to prevent.
 
-A revert that one of the two paths without Python performed -- the installer's
-own fallback, or the armed reverter -- is folded back into the retained record
-before the next install is planned. Neither can amend it, so the record went on
-naming the package `dpkg` refused as the current one, and the next update
-rotated *that* into the way-back slot.
+The retained record is read against the version `dpkg` holds, and corrected
+when the agent starts and before an install or revert is planned or executed.
+`prepare` names the incoming package as current before `dpkg` runs, and the
+paths that can undo or refuse it -- the installer's own fallback, the armed
+reverter, a postinst that fails and a fallback that fails as well -- run
+without Python and cannot amend the record. So the record went on naming the
+package `dpkg` never configured as the current one, and the next update rotated
+*that* into the way-back slot and deleted the package that had run. A Pi 3B+
+was left keeping 0.4.0, whose postinst failed on it, as the way back from
+0.4.1. When `dpkg` holds the kept previous package, that one becomes current
+and nothing is kept behind it; when it holds neither, nothing is offered as a
+way back. Reading the status never writes the record: the page polls it while
+an install executes, and a correction between staging and arming copied one
+archive over another. `ems-appliance rollback-manager` makes the same
+correction first, so it no longer reinstalls the package `dpkg` already holds.
 
 An install whose unit systemd would not start is taken back before the console
 hears of the failure. The request is removed, so a start systemd still carries

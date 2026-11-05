@@ -30,6 +30,7 @@ export const OPERATION_TYPES = Object.freeze([
   "ssh.key_remove",
   "ssh.revoke_all",
   "ssh.shell_access",
+  "ssh.backup_access",
   "support.archive",
 ]);
 
@@ -56,7 +57,7 @@ export const OPERATION_STATES = Object.freeze({
  * Cancel is a legal transition only out of a plan that has not started; a
  * running image write cannot be interrupted by a state flip.
  */
-export const CANCELLABLE_STATES = Object.freeze(["planned", "awaiting_confirmation", "failed_recoverable"]);
+export const CANCELLABLE_STATES = Object.freeze(["planned", "awaiting_confirmation"]);
 
 /** Why a verified Admin was not one (admin_lifecycle verification failures). */
 export const VERIFICATION_FAILURES = Object.freeze([
@@ -74,6 +75,47 @@ export const VERIFICATION_FAILURES = Object.freeze([
 /** The two operations after which the appliance stops answering for a while. */
 export const POWER_OPERATIONS = Object.freeze(["system.reboot", "system.shutdown"]);
 
+/**
+ * Installing or reverting the Manager package: the record ends once the
+ * install unit is started, and the agent and web service restart a little
+ * later, while dpkg unpacks it. Whether the install stands is the deadline's
+ * verdict, minutes after that.
+ */
+export const MANAGER_OPERATIONS = Object.freeze(["manager.update", "manager.revert"]);
+
+/**
+ * Whether the page waiting on a Manager install may stop: "back" once the web
+ * service has restarted, "unchanged" when nothing was installed, else
+ * "waiting". The old service keeps answering until the new package restarts
+ * it, so an answer alone proves nothing -- a new version does, a session it no
+ * longer knows does, and so does a gap between two answers. Confirming
+ * returns before the operation runs: one that then fails installs nothing,
+ * and until it has reached the installer the installer's outcome is the last
+ * install's, not this one's.
+ */
+export function managerReconnectState({ before = "", outage = false, session = null, manager = null, operation = null } = {}) {
+  if (outage) return "back";
+  if (!session) return "waiting";
+  if (session.authenticated === false) return "back";
+  if (before && session.appliance_version && session.appliance_version !== before) return "back";
+  if (!operation) return "waiting";
+  if (operation.settled && operation.state !== "succeeded") return "unchanged";
+  if (operation.state !== "succeeded") return "waiting";
+  // Sessions live in the web service's memory: an outcome answered by a service
+  // that still knows this session, at the same version, was reached without
+  // a restart -- an install that did not start, or a dpkg run that failed
+  // before its postinst.
+  const outcome = manager && manager.outcome && manager.outcome.outcome;
+  return outcome && outcome !== "pending" ? "unchanged" : "waiting";
+}
+
+/** The record of one operation in an /api/operations answer, wherever it is listed. */
+export function findOperation(payload, operationId) {
+  if (!payload || !operationId) return null;
+  const records = [payload.active, ...(payload.unacknowledged || []), ...(payload.recent || [])];
+  return records.find((record) => record && record.operation_id === operationId) || null;
+}
+
 const spelled = (value) => String(value || "").replace(/_/g, " ");
 
 /** The operation the banner shows: the one running, else the newest the owner has not acknowledged. */
@@ -83,11 +125,23 @@ export function currentOperation(payload) {
 }
 
 /** A refresh runs as one of the package manager's repairs, but nothing about it is a repair. */
-const ACTION_TITLES = Object.freeze({ "updates.repair": Object.freeze({ [REFRESH_INDEX_ACTION]: "op.updates.refresh_index" }) });
+const ACTION_TITLES = Object.freeze({
+  "updates.repair": Object.freeze({ [REFRESH_INDEX_ACTION]: "op.updates.refresh_index" }),
+  "admin.lifecycle": Object.freeze({ start: "op.admin.lifecycle.start", stop: "op.admin.lifecycle.stop", restart: "op.admin.lifecycle.restart" }),
+});
+
+/** A switch says which way it goes; its target names it by "enabled" (appliance/ssh_service.py). */
+const SWITCH_TITLES = Object.freeze({
+  "ssh.service": Object.freeze({ on: "op.ssh.service.on", off: "op.ssh.service.off" }),
+  "ssh.shell_access": Object.freeze({ on: "op.ssh.shell_access.on", off: "op.ssh.shell_access.off" }),
+  "ssh.backup_access": Object.freeze({ on: "op.ssh.backup_access.on", off: "op.ssh.backup_access.off" }),
+});
 
 export function operationTitleKey(operation, action = ((operation || {}).requested_target || {}).action) {
   const type = String((operation || {}).type || "");
   if (!OPERATION_TYPES.includes(type)) return null;
+  const enabled = ((operation || {}).requested_target || {}).enabled;
+  if (SWITCH_TITLES[type] && typeof enabled === "boolean") return SWITCH_TITLES[type][enabled ? "on" : "off"];
   return (ACTION_TITLES[type] || {})[action] || `op.${type}`;
 }
 
@@ -100,6 +154,9 @@ export function operationStage(operation) {
 /** The state pill: a known state in the reader's language, an unknown one spelled out. */
 export function stateOf(operation) {
   const state = String((operation || {}).state || "");
+  if (state === "succeeded" && MANAGER_OPERATIONS.includes(String((operation || {}).type || ""))) {
+    return { key: "op.managerStarted", tone: "c-idle" };
+  }
   if (OPERATION_STATES[state]) return { key: `opstate.${state}`, tone: OPERATION_STATES[state] };
   return { text: spelled(state), lang: "en", tone: operation && operation.settled ? "c-fault" : "c-warn" };
 }
@@ -110,6 +167,46 @@ export function cancellable(operation) {
 
 export function acknowledgeable(operation) {
   return Boolean(operation) && Boolean(operation.settled) && !operation.acknowledged;
+}
+
+/** Where an operation that did not finish is taken up again, by its family. */
+const NEXT_STEPS = Object.freeze({
+  "updates.install": Object.freeze({ key: "op.next.updates", page: "updates" }),
+  "updates.repair": Object.freeze({ key: "op.next.updates", page: "updates" }),
+  "manager.update": Object.freeze({ key: "op.next.manager", page: "updates" }),
+  "manager.revert": Object.freeze({ key: "op.next.manager", page: "updates" }),
+  "admin.install": Object.freeze({ key: "op.next.admin", page: "admin" }),
+  "admin.rollback": Object.freeze({ key: "op.next.admin", page: "admin" }),
+  "admin.repair": Object.freeze({ key: "op.next.admin", page: "admin" }),
+  "admin.lifecycle": Object.freeze({ key: "op.next.admin", page: "admin" }),
+  "network.wifi": Object.freeze({ key: "op.next.network", page: "network" }),
+  "network.hostname": Object.freeze({ key: "op.next.network", page: "network" }),
+});
+const FALLBACK_STEP = Object.freeze({ key: "op.next.diagnostics", page: "diagnostics" });
+const UNFINISHED = Object.freeze(["failed_recoverable", "failed_terminal", "manual_action_required"]);
+
+/** What to do about an operation that did not finish, and on which page; null for any other. */
+export function nextStep(operation) {
+  if (!operation || !UNFINISHED.includes(operation.state)) return null;
+  return NEXT_STEPS[String(operation.type || "")] || FALLBACK_STEP;
+}
+
+/** How many support archives the agent keeps, counted by record (appliance/support_archive.py). */
+export const KEPT_ARCHIVES = 3;
+
+/**
+ * The support archives still kept, newest first, from an operations listing:
+ * the agent keeps the files of its newest archive records, failed ones
+ * included, so only those of them that succeeded can still be fetched.
+ */
+export function keptArchives(payload) {
+  const seen = new Set();
+  return [...((payload && payload.recent) || []), ...((payload && payload.unacknowledged) || [])]
+    .filter((item) => item && item.type === "support.archive" && !seen.has(item.operation_id) && seen.add(item.operation_id))
+    .sort((left, right) => (Number(right.started_at) || 0) - (Number(left.started_at) || 0))
+    .slice(0, KEPT_ARCHIVES)
+    .map((item) => ({ id: item.operation_id, href: archiveHref(item), at: Number(item.finished_at) || 0 }))
+    .filter((item) => item.href);
 }
 
 /** The archive lives in root-owned agent state; without this link it could be created and never retrieved. */

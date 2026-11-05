@@ -16,6 +16,7 @@ import os
 import re
 import stat
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -292,8 +293,15 @@ def fake_tools(
     agent="active",
     web="active",
     dpkg_exit=0,
+    install_unit="inactive",
+    restarting=False,
+    listening=True,
 ):
-    """A PATH whose systemctl, dpkg and dpkg-query answer as instructed.
+    """A PATH whose systemctl, dpkg, dpkg-query and ss answer as instructed.
+
+    ``restarting`` makes every `systemctl show` name a new invocation, as a unit
+    systemd keeps restarting does; ``listening`` is whether ss finds the web
+    service's port.
 
     The dpkg-query fake honours the format string it is handed. One that prints
     the version whatever it was asked for cannot tell a package dpkg calls
@@ -324,29 +332,48 @@ def fake_tools(
     (directory / "dpkg").write_text(
         f'#!/bin/sh\necho "dpkg $*" >> "{log}"\nexit {dpkg_exit}\n', encoding="utf-8"
     )
+    invocations = directory / "invocations"
     (directory / "systemctl").write_text(
         "#!/bin/sh\n"
         f'echo "systemctl $*" >> "{log}"\n'
         'case "$*" in\n'
+        f'  "is-active ems-appliance-manager-install.service")\n'
+        f'    echo "{install_unit}"; [ "{install_unit}" = active ] || exit 3 ;;\n'
+        "  show*)\n"
+        f'    if [ "{restarting}" = True ]; then\n'
+        f'      n=$(( $(cat "{invocations}" 2>/dev/null || echo 0) + 1 ))\n'
+        f'      echo "$n" > "{invocations}"\n'
+        '      echo "invocation-$n"; echo "$n"\n'
+        "    else\n"
+        '      echo "invocation-1"; echo "0"\n'
+        "    fi\n"
+        "    exit 0 ;;\n"
         f'  *ems-appliance-agent*) [ "{agent}" = active ] || exit 3 ;;\n'
         f'  *ems-appliance-web*) [ "{web}" = active ] || exit 3 ;;\n'
         "esac\n"
         "exit 0\n",
         encoding="utf-8",
     )
-    for name in ("dpkg-query", "dpkg", "systemctl"):
+    (directory / "ss").write_text(
+        "#!/bin/sh\n"
+        f'echo "ss $*" >> "{log}"\n'
+        f'[ "{listening}" = True ] && echo "LISTEN 0 5 0.0.0.0:8088 0.0.0.0:*"\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    for name in ("dpkg-query", "dpkg", "systemctl", "ss"):
         (directory / name).chmod(0o755)
     return log
 
 
-def run_reverter(paths, tools, *, now):
+def run_reverter(paths, tools, *, now, config=None):
     environment = dict(os.environ)
     environment["PATH"] = f"{tools}:{environment['PATH']}"
     # The reverter reads the clock through `date`, which the fake PATH does not
     # shadow: a test that fixed the clock by shadowing it would be testing the
     # fake. The deadline is moved instead.
     return subprocess.run(
-        ["sh", str(REVERTER), str(paths.packages_dir)],
+        ["sh", str(REVERTER), str(paths.packages_dir), *([str(config)] if config else [])],
         capture_output=True,
         text=True,
         env=environment,
@@ -373,6 +400,10 @@ def test_a_healthy_install_confirms_itself_before_the_deadline(paths, packaged, 
     deadline_at(paths, packaged, epoch=4_000_000_000)
     tools = tmp_path / "tools"
     log = fake_tools(tools, installed_version="0.2.0")
+
+    first = run_reverter(paths, tools, now=0)
+    assert first.returncode == 0, first.stderr
+    assert not manager_verify.read_verdict(paths).settled, "one healthy look proves nothing yet"
 
     result = run_reverter(paths, tools, now=0)
 
@@ -630,9 +661,11 @@ def test_a_confirmed_install_leaves_no_tick_count_behind(paths, packaged, tmp_pa
     fake_tools(tools, installed_version="0.2.0")
 
     run_reverter(paths, tools, now=0)
+    run_reverter(paths, tools, now=0)
 
     assert manager_verify.read_verdict(paths).verdict == manager_verify.VERDICT_CONFIRMED
     assert not manager_verify.ticks_path(paths).exists()
+    assert not manager_verify.stable_path(paths).exists()
 
 
 def test_arming_starts_a_fresh_tick_count(paths, packaged):
@@ -716,18 +749,32 @@ def test_the_reverter_imports_nothing_the_install_replaces():
 
     assert "python" not in commands.lower()
     assert "ems-appliance " not in commands
-    assert "appliance." not in commands
+    assert not re.search(r"appliance\.(?!conf\b)", commands), "no Python module of the manager"
 
 
 def test_the_deadline_survives_a_reboot_inside_the_window():
-    """A one-shot timer that a reboot cancels is a deadline that never expires."""
+    """A one-shot timer that a reboot cancels is a deadline that never expires.
 
+    The enabled timer is activated again at boot, so OnActiveSec ticks after a
+    reboot. A boot offset is not wanted: arming activates the timer long after
+    boot, and an OnBootSec already in the past elapses at once, before the
+    install it is to judge has started.
+    """
+
+    settings = [
+        line.partition("=")[0]
+        for line in (PACKAGING / "systemd" / "ems-appliance-manager-verify.timer")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if "=" in line and not line.startswith("#")
+    ]
+
+    assert "OnActiveSec" in settings
+    assert "OnUnitActiveSec" in settings
+    assert "OnBootSec" not in settings and "OnStartupSec" not in settings
     timer = (PACKAGING / "systemd" / "ems-appliance-manager-verify.timer").read_text(
         encoding="utf-8"
     )
-
-    assert "OnBootSec=" in timer
-    assert "OnUnitActiveSec=" in timer
     assert "[Install]" in timer, "arming enables the timer, so it needs an install section"
 
 
@@ -842,7 +889,7 @@ def test_a_refused_revert_is_cured_before_it_is_tried_again(paths, packaged, tmp
     run_reverter(paths, tools, now=0)
 
     calls = log.read_text(encoding="utf-8")
-    assert "dpkg --configure -a" in calls, calls
+    assert "dpkg --force-confold --configure -a" in calls, calls
     assert not manager_verify.read_verdict(paths).settled, "the tick must still leave a retry"
 def test_an_archive_swapped_under_an_armed_deadline_is_refused(paths, packaged, tmp_path):
     """`previous.deb` is a slot, and retain() rewrites it on every install.
@@ -901,3 +948,168 @@ def test_a_revert_the_deadline_drove_is_folded_into_the_retention_record(
     outcome = manager_install.read_outcome(paths)
     assert outcome.outcome == manager_install.OUTCOME_REVERTED
     assert "previous.deb" in outcome.detail
+
+
+# --- what one look at a running manager cannot prove --------------------------
+
+
+def test_nothing_is_judged_while_the_install_is_still_running(paths, packaged, tmp_path):
+    """A same-version reinstall reads healthy before dpkg has touched anything."""
+
+    deadline_at(paths, packaged, epoch=4_000_000_000, version="0.1.0")
+    tools = tmp_path / "tools"
+    fake_tools(tools, installed_version="0.1.0", install_unit="activating")
+
+    for _ in range(3):
+        result = run_reverter(paths, tools, now=0)
+        assert result.returncode == 0, result.stderr
+
+    assert not manager_verify.read_verdict(paths).settled
+    assert not manager_verify.ticks_path(paths).exists(), "a tick spent waiting for dpkg"
+    assert manager_verify.deadline_path(paths).exists()
+
+
+def test_a_unit_systemd_keeps_restarting_is_never_confirmed(paths, packaged, tmp_path):
+    deadline_at(paths, packaged, epoch=4_000_000_000)
+    tools = tmp_path / "tools"
+    fake_tools(tools, installed_version="0.2.0", restarting=True)
+
+    for _ in range(4):
+        run_reverter(paths, tools, now=0)
+
+    assert not manager_verify.read_verdict(paths).settled
+    assert manager_verify.ticks_path(paths).read_text(encoding="utf-8").strip() == "4"
+
+
+def test_a_web_service_that_listens_on_nothing_is_never_confirmed(paths, packaged, tmp_path):
+    deadline_at(paths, packaged, epoch=4_000_000_000)
+    tools = tmp_path / "tools"
+    log = fake_tools(tools, installed_version="0.2.0", listening=False)
+
+    for _ in range(3):
+        run_reverter(paths, tools, now=0)
+
+    assert not manager_verify.read_verdict(paths).settled
+    assert "sport = :8088" in log.read_text(encoding="utf-8")
+
+
+def test_a_healthy_look_when_the_window_ends_gets_the_tick_that_proves_it(
+    paths, packaged, tmp_path
+):
+    deadline_at(paths, packaged, epoch=int(time.time()) - 5)
+    tools = tmp_path / "tools"
+    log = fake_tools(tools, installed_version="0.2.0")
+
+    run_reverter(paths, tools, now=0)
+    assert "dpkg --force-confold" not in log.read_text(encoding="utf-8")
+
+    run_reverter(paths, tools, now=0)
+
+    assert manager_verify.read_verdict(paths).verdict == manager_verify.VERDICT_CONFIRMED
+    assert "dpkg --force-confold" not in log.read_text(encoding="utf-8")
+
+
+def test_a_revert_attempt_is_counted_before_dpkg_runs(paths, packaged, tmp_path):
+    """systemd can kill the attempt inside dpkg; one counted afterwards never was."""
+
+    deadline_at(paths, packaged, epoch=1)
+    tools = tmp_path / "tools"
+    log = fake_tools(tools, installed_version="0.1.0", dpkg_exit=1)
+    attempts = manager_verify.attempts_path(paths)
+    (tools / "dpkg").write_text(
+        f'#!/bin/sh\necho "dpkg $* attempts=$(cat {attempts} 2>/dev/null)" >> "{log}"\nexit 1\n',
+        encoding="utf-8",
+    )
+
+    run_reverter(paths, tools, now=0)
+
+    assert "--install" in log.read_text(encoding="utf-8")
+    assert "attempts=1" in log.read_text(encoding="utf-8")
+
+
+def test_a_revert_killed_on_every_attempt_still_settles(paths, packaged, tmp_path):
+    deadline_at(paths, packaged, epoch=1)
+    tools = tmp_path / "tools"
+    log = fake_tools(tools, installed_version="0.1.0")
+    manager_verify.attempts_path(paths).write_text(
+        f"{manager_verify.REVERT_ATTEMPTS}\n", encoding="utf-8"
+    )
+
+    run_reverter(paths, tools, now=0)
+
+    assert manager_verify.read_verdict(paths).verdict == manager_verify.VERDICT_REVERT_FAILED
+    assert "dpkg --force-confold" not in log.read_text(encoding="utf-8")
+    assert not manager_verify.deadline_path(paths).exists()
+
+
+def test_every_disarm_removes_what_the_reverter_keeps_beside_the_deadline(paths, packaged, tmp_path):
+    """Python's disarm, the reverter's and the installer's name the same files."""
+
+    kept = [
+        manager_verify.deadline_path(paths),
+        manager_verify.ticks_path(paths),
+        manager_verify.attempts_path(paths),
+        manager_verify.stable_path(paths),
+        manager_verify.extended_path(paths),
+    ]
+    reverter = REVERTER.read_text(encoding="utf-8")
+    installer = (PACKAGING / "bin" / "install-manager.sh").read_text(encoding="utf-8")
+    files_line = next(line for line in installer.splitlines() if line.startswith("DEADLINE_FILES="))
+    for path in kept[1:]:
+        assert f'"$STATE/{path.name}"' in reverter, path.name
+        assert f"$STATE/{path.name}" in files_line, path.name
+    assert '"$DEADLINE" "$ATTEMPTS" "$TICKS" "$STABLE" "$EXTENDED"' in reverter
+
+    deadline_at(paths, packaged, epoch=4_000_000_000)
+    for path in kept[1:]:
+        path.write_text("1\n", encoding="utf-8")
+    manager_verify.disarm(paths, FakeRunner())
+    assert [path for path in kept if path.exists()] == []
+
+
+
+def test_a_tick_that_waits_for_the_install_moves_the_end_of_the_window(paths, packaged, tmp_path):
+    """A lock wait and a slow unpack used to leave the judgement a minute."""
+
+    epoch = int(time.time()) + 30
+    deadline_at(paths, packaged, epoch=epoch)
+    tools = tmp_path / "tools"
+    fake_tools(tools, installed_version="0.1.0", install_unit="activating")
+
+    run_reverter(paths, tools, now=0)
+
+    moved = manager_verify.read(paths)
+    assert moved.armed
+    assert moved.deadline_epoch >= int(time.time()) + 900 - 5
+    assert moved.expected_version == "0.2.0", "the rest of the record is left as it was"
+    record = json.loads(manager_verify.deadline_path(paths).read_text(encoding="utf-8"))
+    assert record["deadline_epoch"] == epoch, "the record itself is never rewritten"
+
+
+def test_a_window_moved_on_while_the_install_ran_is_the_one_the_reverter_judges(
+    paths, packaged, tmp_path
+):
+    deadline_at(paths, packaged, epoch=int(time.time()) - 5)
+    manager_verify.extended_path(paths).write_text(f"{int(time.time()) + 600}\n", encoding="utf-8")
+    tools = tmp_path / "tools"
+    log = fake_tools(tools, installed_version="0.1.0")
+
+    run_reverter(paths, tools, now=0)
+
+    assert "dpkg --force-confold" not in log.read_text(encoding="utf-8")
+    assert not manager_verify.read_verdict(paths).settled
+
+
+@pytest.mark.parametrize(
+    "line", ["WEB_PORT: 9000", "web_port = 9000  # moved", "web_port = 9000 ; moved"]
+)
+def test_the_web_port_is_read_the_ways_configparser_reads_it(paths, packaged, tmp_path, line):
+    deadline_at(paths, packaged, epoch=4_000_000_000)
+    tools = tmp_path / "tools"
+    log = fake_tools(tools, installed_version="0.2.0")
+    config = tmp_path / "appliance.conf"
+    config.write_text(f"[appliance]\n{line}\n", encoding="utf-8")
+
+    run_reverter(paths, tools, now=0, config=config)
+
+    assert "sport = :9000" in log.read_text(encoding="utf-8")

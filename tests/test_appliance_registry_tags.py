@@ -138,14 +138,19 @@ def test_the_whole_lookup_is_bounded_by_one_budget_not_by_request():
     assert len(registry.requests) == 3
 
 
-def test_paging_stops_at_the_bound_rather_than_following_forever():
-    """A registry that always claims another page must not hold the agent."""
+def test_paging_stops_at_the_bound_and_says_the_list_is_incomplete():
+    """A registry that always claims another page must not hold the agent --
+    and what it returned by then is not the list. GHCR lists oldest first, so
+    a list cut at the bound lost the newest tags, and "Latest stable" resolved
+    to an older Admin with nothing on the page."""
 
     endless = page(["v0.7.0"], link='</v2/x/tags/list?last=v0.7.0>; rel="next"')
     registry = _Registry([endless] * (registry_tags.MAX_PAGES + 5), challenge="")
 
-    registry_tags.list_tags(REPOSITORY, opener=registry)
+    with pytest.raises(RegistryError) as error:
+        registry_tags.list_tags(REPOSITORY, opener=registry)
 
+    assert error.value.code == "release_registry_truncated"
     assert len(registry.requests) == registry_tags.MAX_PAGES
 
 

@@ -5,10 +5,19 @@ The image is not the requirement. It is the floor: a 256 MiB boot partition and
 an 8 GiB root come to roughly 8.25 GiB before anything has run.
 
 What the medium has to hold afterwards is the part that decides the answer. The
-root carries the Docker store the seed archive is unpacked into, the EMS data
-and the operator's backups. Those are measured, not guessed: see
-``reports/appliance/*/media-sizing.json`` for the run that produced the numbers
-below.
+single-slot image carries no seed archive: the Admin, EMS and InfluxDB images
+are downloaded on the first install, containerd keeps both the compressed blobs
+and the unpacked snapshots, and an update keeps the previous Admin and EMS
+images for going back. The root also carries the EMS data and the operator's
+backups.
+
+Measured on 2026-11-04 on the Raspberry Pi 3B+ test appliance, read only, with
+Manager 0.4.1, the Admin, EMS and InfluxDB running and several updates behind
+it: the three running images take 1.33 GB of the store, images earlier updates
+left behind another 2.3 GB, the EMS data 0.44 GB after two months, the journal
+76 MB and apt's cache 235 MB -- 5.8 GB of the root in use in all. The image's
+8 GiB root is mostly empty space, so counting it whole keeps the sum below
+conservative.
 
 The image is grown to fill the medium on first boot, which is the one partition
 change this project makes.
@@ -24,17 +33,17 @@ ROOT_PARTITION_BYTES = 8 * GIB
 
 IMAGE_BYTES = BOOT_PARTITION_BYTES + ROOT_PARTITION_BYTES
 
-# Measured on 2026-08-09 from the images this project publishes: the Admin and
-# EMS images unpacked into a Docker store, plus Influx.
-DOCKER_STORE_BYTES = 900 * MIB
+# The running Admin, EMS and InfluxDB images (1.33 GB measured) and the previous
+# Admin and EMS pair an update keeps for going back.
+DOCKER_STORE_BYTES = 2 * GIB + 256 * MIB
 # EMS configuration, the dashboard's SQLite history, Influx data and the
 # operator's backups.
 APPLICATION_DATA_BYTES = 2 * GIB
 SAFETY_MARGIN_BYTES = 1 * GIB
 
-# What the root has to hold beyond the image it was flashed from. The seed
-# archive and the OS are already inside those 8 GiB; the store the seed is
-# unpacked into, the application data and the margin are not.
+# What the root has to hold beyond the image it was flashed from. The OS is
+# already inside those 8 GiB; the downloaded images, the application data and
+# the margin are not.
 ROOT_GROWTH_BYTES = DOCKER_STORE_BYTES + APPLICATION_DATA_BYTES + SAFETY_MARGIN_BYTES
 
 RECOMMENDED_MEDIA_BYTES = IMAGE_BYTES + ROOT_GROWTH_BYTES

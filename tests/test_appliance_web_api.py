@@ -141,6 +141,7 @@ def test_no_system_information_is_exposed_before_authentication(appliance):
         "authenticated",
         "password_configured",
         "password_file_missing",
+        "password_state_known",
         "appliance_version",
     }
 
@@ -1562,6 +1563,21 @@ def test_a_wrong_current_password_spends_the_same_budget_as_a_sign_in(signed_in)
     assert client.login()[0] == 429
 
 
+def test_a_rate_limited_sign_in_says_how_long_and_whose_budget(signed_in):
+    """The page said "wait a moment": the seconds and the IPv4 way out were in
+    the English sentence only."""
+
+    _, app, client = signed_in
+    for _ in range(app.rate_limiter.max_failures):
+        _change(client, "not-the-password")
+
+    status, payload, _ = client.login()
+
+    assert status == 429, payload
+    assert payload["scope"] == "address"
+    assert isinstance(payload["retry_after"], int) and payload["retry_after"] > 0
+
+
 def test_only_a_wrong_current_password_is_counted(signed_in):
     """A refusal after the current password was read and found right -- a new
     password that does not match its confirmation -- is no failed guess."""
@@ -1754,3 +1770,511 @@ def test_a_password_change_refusal_is_audited(signed_in):
         ("denied", "rate_limited"),
     ]
     assert app.audit_status()["degraded"] is False
+
+
+# --- what a hostile or broken client can cost the only recovery page ---------
+
+
+def raw_exchange(port, data, *, wait=5):
+    import socket as socket_module
+
+    connection = socket_module.create_connection(("127.0.0.1", port), timeout=wait)
+    try:
+        if data:
+            connection.sendall(data)
+        chunks = []
+        while True:
+            try:
+                chunk = connection.recv(65536)
+            except TimeoutError:
+                return b"".join(chunks), False
+            if not chunk:
+                return b"".join(chunks), True
+            chunks.append(chunk)
+    finally:
+        connection.close()
+
+
+def test_a_deeply_nested_body_is_refused_with_400_not_a_dropped_connection(appliance):
+    """json.loads raised RecursionError, which _body() did not catch: no
+    response, and a traceback in the journal, before any authentication."""
+
+    _, _, client = appliance
+    body = b"[" * 60_000
+    request = (
+        b"POST /api/session/login HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        b"Content-Type: application/json\r\nConnection: close\r\n"
+        + f"Content-Length: {len(body)}\r\n\r\n".encode()
+        + body
+    )
+
+    response, closed = raw_exchange(client.port, request)
+
+    assert response.startswith(b"HTTP/1.1 400"), response[:200]
+    assert b"invalid_request" in response
+
+
+def test_a_request_that_never_finishes_is_cut_off_at_its_deadline(appliance, monkeypatch):
+    """15 s per recv let a client trickle one byte every 14 s for ever."""
+
+    from appliance import web
+
+    monkeypatch.setattr(web, "REQUEST_DEADLINE_SECONDS", 0.3)
+    _, _, client = appliance
+
+    _, closed = raw_exchange(client.port, b"GET /api/session HTTP/1.1\r\nHost: 127", wait=5)
+
+    assert closed is True
+
+
+def test_one_source_cannot_hold_every_worker(appliance, monkeypatch):
+    import socket as socket_module
+
+    from appliance import web
+
+    monkeypatch.setattr(web, "MAX_CONNECTIONS_PER_SOURCE", 2)
+    _, _, client = appliance
+    held = [socket_module.create_connection(("127.0.0.1", client.port), timeout=5) for _ in range(2)]
+    try:
+        _, closed = raw_exchange(client.port, b"", wait=5)
+        assert closed is True
+    finally:
+        for connection in held:
+            connection.close()
+
+
+def _answered_and_kept(connection):
+    connection.sendall(b"GET /api/session HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+    head = b""
+    while b"\r\n\r\n" not in head:
+        chunk = connection.recv(65536)
+        if not chunk:
+            return head
+        head += chunk
+    length = int(re.search(rb"Content-Length: (\d+)", head).group(1))
+    body = head.split(b"\r\n\r\n", 1)[1]
+    while len(body) < length:
+        body += connection.recv(65536)
+    return head
+
+
+def test_a_connection_waiting_for_nothing_makes_room_for_its_sources_next(appliance, monkeypatch):
+    """Firefox keeps every answered connection open and opens new ones beside
+    them; counting the waiting ones refused its next page with a reset."""
+
+    import socket as socket_module
+
+    from appliance import web
+
+    monkeypatch.setattr(web, "MAX_CONNECTIONS_PER_SOURCE", 1)
+    waiting = threading.Event()
+    marked = web.ApplianceWebServer.connection_idle
+
+    def connection_idle(server, connection, source):
+        marked(server, connection, source)
+        waiting.set()
+
+    monkeypatch.setattr(web.ApplianceWebServer, "connection_idle", connection_idle)
+    _, _, client = appliance
+    kept = socket_module.create_connection(("127.0.0.1", client.port), timeout=5)
+    try:
+        assert _answered_and_kept(kept).startswith(b"HTTP/1.1 200")
+        assert waiting.wait(5)
+
+        response, _ = raw_exchange(
+            client.port, b"GET /api/session HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        )
+
+        assert response.startswith(b"HTTP/1.1 200"), response[:200]
+        assert kept.recv(65536) == b""
+    finally:
+        kept.close()
+
+
+def test_a_request_read_as_its_connection_is_reclaimed_is_still_answered(appliance, monkeypatch):
+    """The handler reads the line before it claims the connection; a reclaim
+    in between closed it on a request the browser had sent, and a
+    confirmation is not retried."""
+
+    import socket as socket_module
+
+    from appliance import web
+
+    monkeypatch.setattr(web, "MAX_CONNECTIONS_PER_SOURCE", 1)
+    waiting, line_in_hand, go = threading.Event(), threading.Event(), threading.Event()
+    marked, claimed = web.ApplianceWebServer.connection_idle, web.ApplianceWebServer.connection_busy
+
+    def connection_idle(server, connection, source):
+        marked(server, connection, source)
+        waiting.set()
+
+    def connection_busy(server, connection):
+        if waiting.is_set() and not line_in_hand.is_set():
+            line_in_hand.set()
+            go.wait(5)
+        return claimed(server, connection)
+
+    monkeypatch.setattr(web.ApplianceWebServer, "connection_idle", connection_idle)
+    monkeypatch.setattr(web.ApplianceWebServer, "connection_busy", connection_busy)
+    _, _, client = appliance
+    kept = socket_module.create_connection(("127.0.0.1", client.port), timeout=5)
+    try:
+        assert _answered_and_kept(kept).startswith(b"HTTP/1.1 200")
+        assert waiting.wait(5)
+        kept.sendall(b"GET /api/session HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        assert line_in_hand.wait(5)
+
+        other, _ = raw_exchange(
+            client.port, b"GET /api/session HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        )
+        go.set()
+        head = _answered_and_kept(kept)
+
+        assert other.startswith(b"HTTP/1.1 200"), other[:200]
+        assert head.startswith(b"HTTP/1.1 200"), head[:200]
+        assert b"Connection: close" in head
+        assert kept.recv(65536) == b""
+    finally:
+        go.set()
+        kept.close()
+
+
+@pytest.fixture
+def socket_pairs():
+    import socket as socket_module
+
+    pairs = []
+
+    def make():
+        pair = socket_module.socketpair()
+        pairs.append(pair)
+        return pair
+
+    yield make
+    for pair in pairs:
+        for end in pair:
+            end.close()
+
+
+def _reclaimed(connection):
+    connection.settimeout(5)
+    return connection.recv(1) == b""
+
+
+def _bare_server():
+    from appliance import web
+
+    server = web.ApplianceWebServer.__new__(web.ApplianceWebServer)
+    server._connections = {}
+    server._idle = {}
+    server._reclaimed = set()
+    server._connections_lock = threading.Lock()
+    return server
+
+
+def _admit(server, source):
+    with server._connections_lock:
+        server._reclaim_idle(source)
+        return server._has_room(source)
+
+
+def test_a_full_server_takes_the_oldest_waiting_connection_of_any_source(monkeypatch, socket_pairs):
+    from appliance import web
+
+    monkeypatch.setattr(web, "MAX_CONNECTIONS", 2)
+    server = _bare_server()
+    older, _ = socket_pairs()
+    newer, _ = socket_pairs()
+    server._connections = {"192.168.1.20": 1, "192.168.1.30": 1}
+    server.connection_idle(older, "192.168.1.20")
+    server.connection_idle(newer, "192.168.1.30")
+
+    assert _admit(server, "192.168.1.40") is True
+    assert _reclaimed(older)
+    assert server.connection_busy(older) is False
+    assert server.connection_busy(newer) is True
+
+
+def test_a_full_server_closes_the_newcomers_own_waiting_connection_first(monkeypatch, socket_pairs):
+    from appliance import web
+
+    monkeypatch.setattr(web, "MAX_CONNECTIONS", 2)
+    server = _bare_server()
+    foreign, _ = socket_pairs()
+    own, _ = socket_pairs()
+    server._connections = {"192.168.1.20": 1, "192.168.1.30": 1}
+    server.connection_idle(foreign, "192.168.1.20")
+    server.connection_idle(own, "192.168.1.30")
+
+    assert _admit(server, "192.168.1.30") is True
+    assert _reclaimed(own)
+    assert server.connection_busy(foreign) is True
+
+
+def test_a_connection_whose_next_request_has_arrived_is_not_reclaimed(monkeypatch, socket_pairs):
+    """Closing it would drop a request the browser had already sent, and a
+    confirmation is not retried."""
+
+    from appliance import web
+
+    monkeypatch.setattr(web, "MAX_CONNECTIONS_PER_SOURCE", 1)
+    server = _bare_server()
+    waiting, peer = socket_pairs()
+    server._connections = {"192.168.1.20": 1}
+    server.connection_idle(waiting, "192.168.1.20")
+    peer.sendall(b"POST /api/operations/confirm HTTP/1.1\r\n")
+
+    assert _admit(server, "192.168.1.20") is False
+    assert server.connection_busy(waiting) is True
+
+
+def test_a_reclaimed_connection_is_given_back_once(monkeypatch, socket_pairs):
+    from appliance import web
+
+    monkeypatch.setattr(web, "MAX_CONNECTIONS_PER_SOURCE", 1)
+    server = _bare_server()
+    waiting, _ = socket_pairs()
+    server._connections = {"192.168.1.20": 1}
+    server.connection_idle(waiting, "192.168.1.20")
+
+    with server._connections_lock:
+        server._reclaim_idle("192.168.1.20")
+        server._connections["192.168.1.20"] = server._connections.get("192.168.1.20", 0) + 1
+    server._release(waiting, "192.168.1.20")
+
+    assert server._connections == {"192.168.1.20": 1}
+    assert server._reclaimed == set()
+
+
+def test_an_exhausted_descriptor_table_backs_off_instead_of_spinning(monkeypatch):
+    import errno
+
+    from appliance import web
+
+    slept = []
+    monkeypatch.setattr(web.time, "sleep", lambda seconds: slept.append(seconds))
+
+    class Exhausted:
+        def accept(self):
+            raise OSError(errno.EMFILE, "Too many open files")
+
+    server = web.ApplianceWebServer.__new__(web.ApplianceWebServer)
+    server.socket = Exhausted()
+
+    with pytest.raises(OSError):
+        server.get_request()
+
+    assert slept and slept[0] > 0
+
+
+def test_a_foreign_cookie_on_the_same_host_does_not_sign_the_operator_out(signed_in):
+    """SimpleCookie drops the whole header for one cookie it dislikes, and any
+    service on the same host name sets cookies the Manager receives."""
+
+    _, _, client = signed_in
+    client.cookie = 'other={"json": "value"}; ' + client.cookie + "; path=x"
+
+    status, payload, _ = client.get("/api/session")
+
+    assert status == 200 and payload["authenticated"] is True, payload
+
+
+def test_a_refused_csrf_check_does_not_extend_the_session(signed_in):
+    services, app, client = signed_in
+    session_id = client.cookie.split("=", 1)[1]
+    before = app.sessions.sessions[session_id].expires_at
+    later = app.sessions._time() + 600
+    app.sessions._time = lambda: later
+
+    status, _, _ = client.post("/api/ssh/disable", csrf=False)
+
+    assert status == 403
+    assert app.sessions.sessions[session_id].expires_at == before
+
+
+class _RefusingAgent:
+    """An agent that answers auth.verify with an error that is not about the password."""
+
+    def __init__(self, real):
+        self.real = real
+
+    def call(self, operation, **fields):
+        from appliance.agent_client import AgentCallError
+
+        if operation == "auth.verify":
+            raise AgentCallError("agent_error", "the agent raised")
+        return self.real.call(operation, **fields)
+
+
+def test_an_agent_that_could_not_check_the_password_is_not_a_wrong_password(appliance):
+    """peer_not_allowed or an exception in the agent read as 401 "not correct"
+    and spent the operator's login attempts."""
+
+    services, app, client = appliance
+    app.auth.create(PASSWORD, PASSWORD)
+    from appliance.web import AgentAuth
+
+    app.auth = AgentAuth(_RefusingAgent(app.agent))
+
+    statuses = [client.login()[0] for _ in range(7)]
+
+    assert statuses == [503] * 7, statuses
+
+
+def test_a_password_state_nobody_could_read_is_said_to_be_unknown(appliance):
+    _, app, client = appliance
+    from appliance.web import AgentAuth
+
+    app.auth = AgentAuth(_OfflineAgent())
+
+    status, payload, _ = client.get("/api/session")
+
+    assert status == 200
+    assert payload["password_state_known"] is False
+
+
+def test_a_router_dns_name_the_operator_listed_is_accepted(appliance):
+    """ems-solarflow.fritz.box loaded the page and then refused every change
+    with "after a rename use the new name", although nothing was renamed."""
+
+    import dataclasses
+
+    _, app, client = appliance
+    app.config = dataclasses.replace(app.config, extra_host_names=("ems-solarflow.fritz.box",))
+
+    assert app.names_this_appliance("ems-solarflow.fritz.box:8088") is True
+    assert app.names_this_appliance("ems-solarflow.fritz.box.evil.example") is False
+
+
+def test_a_refused_host_name_is_told_which_names_are_accepted(appliance):
+    _, app, client = appliance
+
+    status, payload, _ = client.post(
+        "/api/session/setup",
+        {"password": PASSWORD, "confirmation": PASSWORD},
+        headers={"Host": "ems-solarflow.lan"},
+    )
+
+    assert status == 403 and payload["error"] == "csrf_host_rejected"
+    assert "extra_host_names" in payload["message"]
+    assert "rename" not in payload["message"]
+
+
+def test_extra_host_names_are_read_and_checked(tmp_path):
+    from appliance.config import load_config
+    from tests.helpers.appliance import appliance_paths
+
+    paths = appliance_paths(tmp_path)
+    paths.appliance_conf.parent.mkdir(parents=True, exist_ok=True)
+    paths.appliance_conf.write_text(
+        "[appliance]\nextra_host_names = ems-solarflow.fritz.box, EMS.home\n", encoding="utf-8"
+    )
+
+    assert load_config(paths).extra_host_names == ("ems-solarflow.fritz.box", "ems.home")
+
+    paths.appliance_conf.write_text(
+        "[appliance]\nextra_host_names = *.fritz.box, ems.home\n", encoding="utf-8"
+    )
+    config = load_config(paths)
+
+    assert config.extra_host_names == ("ems.home",)
+    assert config.ignored_host_names == ("*.fritz.box",)
+
+
+def test_a_mistyped_extra_host_name_is_named_when_a_host_is_refused(appliance):
+    """One bad entry made load_config raise, and web and agent both refused to
+    start: the console was gone for a typo."""
+
+    import dataclasses
+
+    _, app, _ = appliance
+    app.config = dataclasses.replace(app.config, ignored_host_names=("*.fritz.box",))
+
+    assert "*.fritz.box" in app.host_refusal_message()
+
+
+def test_a_host_name_with_the_root_dot_is_the_same_name(appliance):
+    import dataclasses
+
+    _, app, _ = appliance
+    app.config = dataclasses.replace(app.config, extra_host_names=("ems-solarflow.fritz.box",))
+
+    assert app.names_this_appliance("ems-solarflow.fritz.box.") is True
+    assert app.names_this_appliance("ems-solarflow.fritz.box.:8088") is True
+    assert app.names_this_appliance("localhost.") is True
+
+
+class _HeldTimer:
+    """A Timer whose callback runs only when the test says so."""
+
+    started = []
+
+    def __init__(self, interval, function):
+        self.function = function
+        self.daemon = False
+
+    def start(self):
+        _HeldTimer.started.append(self.function)
+
+    def cancel(self):
+        return None
+
+
+def test_a_deadline_already_running_when_it_is_stopped_does_not_cut(monkeypatch):
+    """Timer.cancel cannot stop a callback that has started: headers that came
+    in at the deadline had their socket shut while the request went on."""
+
+    from appliance import web
+
+    monkeypatch.setattr(web.threading, "Timer", _HeldTimer)
+    _HeldTimer.started.clear()
+    cut = []
+    deadline = web.RequestDeadline(lambda: cut.append(True))
+
+    deadline.arm(30)
+    expired = deadline.stop()
+    _HeldTimer.started[0]()
+
+    assert expired is False
+    assert cut == []
+
+
+def test_a_deadline_that_ran_out_first_is_reported_when_stopped(monkeypatch):
+    from appliance import web
+
+    monkeypatch.setattr(web.threading, "Timer", _HeldTimer)
+    _HeldTimer.started.clear()
+    cut = []
+    deadline = web.RequestDeadline(lambda: cut.append(True))
+
+    deadline.arm(30)
+    _HeldTimer.started[0]()
+
+    assert cut == [True]
+    assert deadline.stop() is True
+    deadline.arm(30)
+    assert deadline.stop() is False
+
+
+def test_the_name_avahi_falls_back_to_after_a_conflict_is_this_appliance(appliance):
+    """A second appliance on the LAN is published as ems-solarflow-2.local;
+    sign-in there was refused with csrf_host_rejected."""
+
+    services, app, _ = appliance
+    configured = app.probe_hostname()
+    services.host.mdns_published = f"{configured}-2.local"
+
+    assert app.names_this_appliance(f"{configured}-2.local:8088") is True
+    assert app.names_this_appliance(f"{configured}-12.local") is False
+    assert app.names_this_appliance(f"{configured}-x.local") is False
+    assert app.names_this_appliance(f"{configured}-2.example") is False
+
+
+def test_a_numbered_local_name_avahi_does_not_publish_is_not_this_appliance(appliance):
+    """While this appliance holds its own name, any device may claim the -2
+    name, and the Host check is the DNS-rebinding defence."""
+
+    _, app, _ = appliance
+    configured = app.probe_hostname()
+
+    assert app.names_this_appliance(f"{configured}-2.local") is False

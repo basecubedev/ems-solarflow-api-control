@@ -216,7 +216,9 @@ class Ext4Reader:
             position += rec_len
         return entries
 
-    def _resolve(self, path, hops=0):
+    def _resolve(self, path, hops=0, *, follow=False):
+        """The inode at ``path``; a final link is followed only when asked."""
+
         if hops > MAX_SYMLINK_HOPS:
             raise FilesystemError("filesystem_symlink_loop", f"{path} loops through symlinks")
         number = ROOT_INODE
@@ -230,12 +232,13 @@ class Ext4Reader:
                 return None
             number = entry[0]
             inode = self._inode(number)
-            if inode["mode"] & S_IFMT == S_IFLNK and index < len(parts) - 1:
+            last = index == len(parts) - 1
+            if inode["mode"] & S_IFMT == S_IFLNK and (follow or not last):
                 target = self._link_target(inode)
                 prefix = "/".join(parts[:index])
                 base = target if target.startswith("/") else f"/{prefix}/{target}"
-                inode = self._resolve(f"{base}/{'/'.join(parts[index + 1:])}", hops + 1)
-                return inode
+                rest = "/".join(parts[index + 1:])
+                return self._resolve(f"{base}/{rest}" if rest else base, hops + 1, follow=follow)
         return inode
 
     def _link_target(self, inode):
@@ -262,10 +265,11 @@ class Ext4Reader:
         systemd resolves ExecStart with access(X_OK) and fails the unit with
         203/EXEC when it comes back no -- for root as well. An inspection that
         asks only whether the image carries the program cannot see that, and
-        the mode is right here in the inode.
+        the mode is right here in the inode. access() follows a link, and so
+        does this.
         """
 
-        inode = self._resolve(path)
+        inode = self._resolve(path, follow=True)
         if not inode or inode["mode"] & S_IFMT != S_IFREG:
             return False
         return bool(inode["mode"] & 0o111)

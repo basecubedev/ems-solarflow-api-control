@@ -328,3 +328,34 @@ def test_a_port_conflict_cannot_be_repaired_automatically(tmp_path):
 
     assert operation.state == STATE_FAILED_RECOVERABLE
     assert any(item["check"] == "admin_port" for item in operation.result["remaining_findings"])
+
+
+def test_a_repair_restart_that_brought_the_admin_back_is_not_a_mismatch(tmp_path):
+    """A console-installed build is never adopted, so known-good still names the
+    Manager's last release. A repair's restart was held against that record,
+    while a lifecycle restart is held against what the deployment names: the
+    same container came back healthy and the repair said manual action."""
+
+    services = appliance(tmp_path)
+    services.host.write_deployment(tag="v1.0.0", variable_tag=False)
+    older = services.host.publish_image("v0.9.0")
+    services.admin.known_good.record(
+        admin_image=f"{ADMIN_REPOSITORY}:v0.9.0", admin_digest=older["_digest"], admin_version="v0.9.0"
+    )
+    container = services.host.containers[ADMIN_CONTAINER]
+    container["State"]["Health"]["Status"] = "unhealthy"
+    docker = services.host._docker
+
+    def restart_heals(args):
+        if args[:1] == ["restart"]:
+            container["State"]["Health"]["Status"] = "healthy"
+        return docker(args)
+
+    services.host._docker = restart_heals
+
+    operation, plan = repair(services)
+
+    assert "restart_admin" in plan["actions"], plan["actions"]
+    applied = {item["action"]: item for item in operation.result["applied"]}
+    assert applied["restart_admin"]["result"] == "verified", applied
+    assert operation.state == STATE_SUCCEEDED, (operation.state, operation.error)

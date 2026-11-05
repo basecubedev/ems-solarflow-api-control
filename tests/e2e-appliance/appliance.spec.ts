@@ -764,7 +764,7 @@ test.describe("admin lifecycle @authority", () => {
       "v1.1.0",
       "v1.0.0 · installed",
     ]);
-    await expect(select.locator('optgroup[label="Unstable"] option')).toHaveText(["v1.2.0-rc1"]);
+    await expect(select.locator('optgroup[label="Release candidate"] option')).toHaveText(["v1.2.0-rc1"]);
     // Basic mode: the versions are listed without the expert free-text field.
     await expect(select).not.toContainText("Exact release tag");
   });
@@ -778,7 +778,7 @@ test.describe("admin lifecycle @authority", () => {
     await openView(page, "updates");
 
     const candidate = page.locator(
-      '[data-test="install-channel"] optgroup[label="Unstable"] option',
+      '[data-test="install-channel"] optgroup[label="Release candidate"] option',
     );
     await expect(candidate).toHaveCount(1);
     await expect(candidate).toContainText("v1.2.0-rc1");
@@ -1412,10 +1412,10 @@ test.describe("appliance manager @smoke", () => {
     await signIn(page);
     await openView(page, "updates");
 
-    await expect(page.locator('[data-test="manager-kept"]')).toContainText("0.1.0");
+    await expect(page.locator('[data-test="manager-kept"]')).toContainText("0.0.9");
     const revert = page.locator('[data-test="manager-plan-revert"]');
     await expect(revert).toBeEnabled();
-    await expect(revert).toContainText("0.1.0");
+    await expect(revert).toContainText("0.0.9");
   });
 
   test("a deadline in flight blocks both controls", async ({ page, request }) => {
@@ -1488,7 +1488,7 @@ test.describe("appliance manager @smoke", () => {
 
     const dialog = page.locator("#dialog");
     await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText("0.1.0");
+    await expect(dialog).toContainText("0.0.9");
   });
 });
 
@@ -1568,8 +1568,8 @@ test.describe("updates page @smoke", () => {
 
     const select = page.locator('[data-test="manager-version"]');
     await expect(select.locator('optgroup[label="Stable"] option')).toHaveCount(2);
-    await expect(select.locator('optgroup[label="Unstable"] option')).toContainText("0.3.0~rc1");
-    await expect(select.locator('optgroup[label="Experimental"] option')).toContainText(
+    await expect(select.locator('optgroup[label="Release candidate"] option')).toContainText("0.3.0~rc1");
+    await expect(select.locator('optgroup[label="Development"] option')).toContainText(
       "0.0.0~dev.abc1234",
     );
 

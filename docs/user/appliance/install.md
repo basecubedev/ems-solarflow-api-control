@@ -64,7 +64,8 @@ are the entries **whose title starts with "Appliance image"** — open the one y
 want and scroll to **Assets**, a collapsed list at the bottom of the release
 notes. EMS releases are on that page too and carry no image, and the green
 *Latest* badge is deliberately on one of those: only one of the two products
-owns the `v*` tags.
+owns the `v*` tags. An entry titled *Partial build* was made for some boards
+only, for a hardware test; the download link above never points at one.
 
 </details>
 
@@ -77,9 +78,12 @@ firmware differ.
 | Raspberry Pi 4 | `ems-solarflow-appliance-<version>-rpi4-arm64.img.xz` |
 | Raspberry Pi 3 / 3B+ | `ems-solarflow-appliance-<version>-rpi3-arm64.img.xz` |
 
-A **Raspberry Pi 3 boots from its SD card and nothing else**: booting from a USB
-SSD or an NVMe drive is a Pi 4 and Pi 5 arrangement, and no `rpi3` image is
-built for it.
+A **Raspberry Pi 3 boots from its SD card and nothing else**, and no `rpi3`
+image is built for anything else. The Pi 4 image boots from an SD card, the
+Pi 5 image from an SD card or an NVMe drive. **Neither boots from a USB SSD**:
+the image finds its root through a boot-device tag that is set only for SD and
+NVMe, so written to a USB SSD it stops in its initramfs and never reaches the
+network.
 
 Download the `.img.xz` **and** the `.img.xz.sha256` file beside it. The second
 one is how you check the first arrived intact. The download is about 240 MB and
@@ -209,6 +213,11 @@ In this order:
 The first start takes two to three minutes: it grows the storage to fill your
 card and sets up its identity. The activity LED flickers throughout. Leave it
 alone until it settles.
+
+If the growth does not finish, the Overview says so ("The root does not fill
+the card") and the next start tries again; Diagnostics → Card resize names the
+step that failed. On a medium larger than 2 TiB the storage grows to 2 TiB: the
+image's partition table (MBR) cannot address more.
 
 ### Why the cable is not optional
 

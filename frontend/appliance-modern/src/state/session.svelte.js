@@ -10,17 +10,39 @@ export const UNREACHABLE_RETRY_MS = 5000;
  * whole console sits behind it; nothing but the sign-in is reachable without
  * a session.
  */
+const NOTICE_KEY = "ems-appliance.notice";
+
+/** A sign-in notice that has to outlive a reload, such as the one after the Manager restarted itself. */
+export function rememberNotice(key) {
+  try {
+    globalThis.sessionStorage.setItem(NOTICE_KEY, key);
+  } catch {
+    // Without storage the sign-in shows without the reason; nothing else depends on it.
+  }
+}
+
+function rememberedNotice() {
+  try {
+    const key = globalThis.sessionStorage.getItem(NOTICE_KEY) || "";
+    globalThis.sessionStorage.removeItem(NOTICE_KEY);
+    return key;
+  } catch {
+    return "";
+  }
+}
+
 class Session {
   loaded = $state(false);
   reachable = $state(true);
   authenticated = $state(false);
   configured = $state(false);
+  stateKnown = $state(true);
   fileMissing = $state(false);
   confirmed = $state(null);
   csrf = $state("");
   audit = $state.raw(null);
   version = $state("");
-  notice = $state("");
+  notice = $state(rememberedNotice());
 }
 
 export const session = new Session();
@@ -38,6 +60,7 @@ function adopt(payload) {
   if (Boolean(payload.authenticated) !== session.authenticated) epoch += 1;
   session.authenticated = Boolean(payload.authenticated);
   session.configured = Boolean(payload.password_configured);
+  session.stateKnown = payload.password_state_known !== false;
   session.fileMissing = Boolean(payload.password_file_missing);
   session.confirmed = confirmedOf(payload);
   session.csrf = session.authenticated ? payload.csrf_token || "" : "";
@@ -45,6 +68,7 @@ function adopt(payload) {
   if (payload.appliance_version) session.version = String(payload.appliance_version);
   session.reachable = true;
   session.loaded = true;
+  if (!session.authenticated && !session.stateKnown) retryLater();
 }
 
 function retryLater() {
@@ -84,6 +108,17 @@ export async function login(password) {
   session.notice = "";
 }
 
+/**
+ * What the session says about the appliance's security, re-read with every
+ * host read: the audit and the password confirmation change during a session,
+ * and one source keeps the verdict, the pill and Settings in agreement.
+ */
+export function adoptSecurityFacts(payload) {
+  if (!payload || !payload.authenticated || !session.authenticated) return;
+  session.audit = payload.security_audit || null;
+  session.confirmed = confirmedOf(payload);
+}
+
 /** The session is gone: the sign-in shows again, with the reason when there is one to give. */
 export function sessionEnded(noticeKey = "") {
   request += 1;
@@ -99,7 +134,7 @@ export function sessionEnded(noticeKey = "") {
  */
 export async function logout() {
   try {
-    await sendJson("/api/session/logout", { body: {}, headers: { [CSRF_HEADER]: session.csrf } });
+    await sendFresh("/api/session/logout", {}, {});
   } catch (error) {
     await loadSession();
     if (session.authenticated) throw error;
@@ -112,23 +147,40 @@ function lost(error) {
 }
 
 /** A read; a 401 means the session ended, and the sign-in shows again. */
-export async function applianceGet(path) {
+export async function applianceGet(path, { timeoutMs = 0 } = {}) {
   const mine = epoch;
   try {
-    return await getJson(path);
+    return await getJson(path, timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {});
   } catch (error) {
     if (lost(error) && session.authenticated && mine === epoch) sessionEnded("signIn.expired");
     throw error;
   }
 }
 
+/**
+ * The tabs share one cookie, so a sign-in in another tab replaces this tab's
+ * session under it: reads go on, and every write is refused for a token from
+ * the session before. That refusal re-reads the session's token once and
+ * sends the write again with it.
+ */
+async function sendFresh(path, body, extra) {
+  const send = () => sendJson(path, { body, headers: { ...extra, [CSRF_HEADER]: session.csrf } });
+  try {
+    return await send();
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.code !== "csrf_token_invalid") throw error;
+    const payload = await getJson("/api/session").catch(() => null);
+    if (!payload || !payload.authenticated || !payload.csrf_token || payload.csrf_token === session.csrf) throw error;
+    adopt(payload);
+    return send();
+  }
+}
+
 /** Every write carries the session's CSRF token; the server decides whether it is allowed. */
-export async function applianceSend(path, { body = {}, account } = {}) {
-  const headers = { [CSRF_HEADER]: session.csrf };
-  if (account) headers["X-Appliance-Account"] = account;
+export async function applianceSend(path, { body = {} } = {}) {
   const mine = epoch;
   try {
-    return await sendJson(path, { body, headers });
+    return await sendFresh(path, body, {});
   } catch (error) {
     if (lost(error) && session.authenticated && mine === epoch) sessionEnded("signIn.expired");
     throw error;

@@ -7,6 +7,7 @@ are retained.
 """
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -37,6 +38,35 @@ class KnownGoodStore:
         if not isinstance(payload, list):
             return []
         return [entry for entry in payload if isinstance(entry, dict)]
+
+    def problem(self):
+        """Why the history cannot be read; "" when it reads or does not exist.
+
+        An unreadable history is not an empty one: read as empty, a rollback
+        said nothing had been recorded and the next record replaced every
+        older entry.
+        """
+
+        try:
+            text = self.path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return ""
+        except (OSError, ValueError) as exc:
+            return f"{HISTORY_FILE} could not be read: {getattr(exc, 'strerror', '') or exc}"
+        try:
+            payload = json.loads(text)
+        except ValueError:
+            return f"{HISTORY_FILE} is not valid JSON"
+        if not isinstance(payload, list):
+            return f"{HISTORY_FILE} is not a list of records"
+        return ""
+
+    def _set_aside(self):
+        """Keep an unreadable history beside the new one instead of over it."""
+
+        aside = self.path.with_name(f"{HISTORY_FILE}.unreadable-{int(self._time())}")
+        os.replace(self.path, aside)
+        return aside
 
     def current(self):
         entries = self.entries()
@@ -89,6 +119,8 @@ class KnownGoodStore:
             "verified_at": self._time(),
             "healthcheck": str(healthcheck),
         }
+        if self.problem():
+            self._set_aside()
         entries = [
             item
             for item in self.entries()

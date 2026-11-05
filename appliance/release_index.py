@@ -68,8 +68,14 @@ def assemble(entries, *, previous="", keep=0):
 
 
 def verify(index):
-    """Refuse an index the appliance would silently shrink."""
+    """Refuse an index the appliance would silently shrink, or not read at all."""
 
+    published = len((json.dumps(index, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    if published > release_fetch.MAX_INDEX_BYTES:
+        raise ReleaseIndexError(
+            f"the index is {published} bytes and appliances read at most "
+            f"{release_fetch.MAX_INDEX_BYTES}; set a retention (--keep) before publishing"
+        )
     accepted = release_fetch.parse_index(index)
     if len(accepted) != len(index["releases"]):
         raise ReleaseIndexError("the appliance would drop entries from this index")

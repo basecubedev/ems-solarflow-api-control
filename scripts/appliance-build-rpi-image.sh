@@ -266,6 +266,9 @@ echo "== building the $PROFILE image =="
 LOG="$OUTPUT/$NAME.build.log"
 (
     cd "$GENERATOR" || exit 1
+    # Bytecode under the generator's own __pycache__ is outside every hash that
+    # proved the tree, so the build neither reads nor writes any there.
+    export PYTHONPYCACHEPREFIX="$WORK/pycache"
     ./rpi-image-gen build \
         -c "$CONFIG" \
         -S "$IMAGE_DIR" \
@@ -305,6 +308,14 @@ cp "$BUILT" "$OUTPUT/$NAME.img" || fail "the built image could not be collected"
 # because a digest over the raw image cannot verify what was downloaded.
 xz -T0 -6 -k -c "$OUTPUT/$NAME.img" > "$OUTPUT/$NAME.img.xz" \
     || fail "the image could not be compressed" output_unusable
+# The inspection reads the raw image and owners download this file, so it has
+# to unpack, whole, to exactly the image that was inspected.
+xz -t "$OUTPUT/$NAME.img.xz" || fail "the compressed image does not verify" output_unusable
+RAW_SHA256=$(cut -d' ' -f1 "$OUTPUT/$NAME.img.sha256")
+PACKED_SHA256=$(xz -dc "$OUTPUT/$NAME.img.xz" | sha256sum | cut -d' ' -f1)
+[ "$PACKED_SHA256" = "$RAW_SHA256" ] \
+    || fail "the compressed image unpacks to $PACKED_SHA256, not the image $RAW_SHA256" \
+            output_unusable
 ( cd "$OUTPUT" && sha256sum "$NAME.img.xz" > "$NAME.img.xz.sha256" )
 
 echo "== proving both source trees are still the ones that were read =="

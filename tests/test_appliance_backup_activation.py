@@ -378,7 +378,7 @@ def redirect_parent(services):
     install_root = services.paths.install_root
     elsewhere = services.paths.install_root.parent / "elsewhere"
     elsewhere.mkdir(parents=True, exist_ok=True)
-    for name in ("config", "backups", "data"):
+    for name in ("config", "data", "data/backups"):
         (elsewhere / name).mkdir(parents=True, exist_ok=True)
     import shutil
 
@@ -409,8 +409,8 @@ def test_a_symlinked_install_root_is_a_named_boundary_problem(tmp_path):
 
 def test_a_symlinked_export_target_is_a_named_boundary_problem(tmp_path):
     services = appliance(tmp_path)
-    target = services.paths.export_targets()["config"]
-    elsewhere = tmp_path / "elsewhere-config"
+    target = services.paths.export_targets()["backups"]
+    elsewhere = tmp_path / "elsewhere-backups"
     elsewhere.mkdir(parents=True, exist_ok=True)
     target.rmdir()
     target.symlink_to(elsewhere)

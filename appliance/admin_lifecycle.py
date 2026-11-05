@@ -32,7 +32,8 @@ from appliance.admin_deployment import (
     snapshot,
 )
 from appliance.auth import deployment_owner
-from appliance.commands import CommandError
+from appliance.commands import CommandError, command_failure_detail
+from appliance.config import DEFAULT_ADMIN_REPOSITORY
 from appliance.docker_backend import (
     CONTAINER_RUNNING,
     DAEMON_RUNNING,
@@ -40,9 +41,11 @@ from appliance.docker_backend import (
     HEALTH_NONE,
     HEALTH_STARTING,
     HEALTH_UNHEALTHY,
+    ContainerState,
     DockerError,
 )
 from appliance.known_good import HEALTHCHECK_PASSED
+from appliance.packages import LOCK_HELD
 from appliance.operation_schema import (
     OperationSchemaError,
     is_bootstrap,
@@ -60,7 +63,6 @@ from appliance.operations import (
     STATE_SUCCEEDED,
     STATE_VERIFYING,
 )
-from appliance.redaction import bounded_redacted_log
 from appliance.releases import (
     ReleaseCatalogue,
     ReleaseResolutionError,
@@ -68,7 +70,7 @@ from appliance.releases import (
     resolve_channel,
 )
 from appliance.systemd import UNIT_DOCKER
-from appliance.version import direction
+from appliance.version import DIRECTION_DOWNGRADE, DIRECTION_UNKNOWN, direction, release_track
 from appliance.validation import (
     ValidationError,
     build_digest_ref,
@@ -128,18 +130,6 @@ def repair_failure_message(remaining, unverified):
     if remaining:
         parts.append(f"{len(remaining)} finding(s) still block a healthy Admin")
     return "the repair ran but " + " — ".join(parts)
-
-
-def command_failure_detail(result):
-    """What the failed command said, bounded and redacted.
-
-    An operator has no shell on the appliance, so a refusal that drops the
-    tool's own output leaves nobody able to find out what went wrong.
-    """
-
-    bounded = bounded_redacted_log((result.stderr or "") + (result.stdout or ""))
-    lines = [line.strip() for line in bounded["text"].splitlines() if line.strip()]
-    return lines[-1] if lines else "no output"
 
 
 def pull_progress_note(image_ref, elapsed):
@@ -356,6 +346,7 @@ class AdminLifecycleService:
         sleep=None,
         operation_log=None,
         bootstrap=None,
+        package_lock=None,
         manager_pending=None,
     ):
         self.paths = paths
@@ -368,6 +359,7 @@ class AdminLifecycleService:
         self.systemd = systemd
         self.catalogue = catalogue or ReleaseCatalogue(config)
         self.bootstrap = bootstrap or DeploymentBootstrap(paths, config)
+        self.package_lock = package_lock
         self._time = time_fn or time.time
         self._sleep = sleep or time.sleep
         self._operation_log = operation_log
@@ -391,11 +383,19 @@ class AdminLifecycleService:
 
         daemon = self.docker.daemon_state()
         deployment = self.deployment()
-        container = self.docker.inspect_container(self.config.admin_container)
+        # Strict: an inspect that failed is not an absent container, and
+        # reading it as one reported "No EMS Admin is installed" and offered a
+        # first installation over a running one.
+        state_unknown = False
+        try:
+            container = self.docker.inspect_container(self.config.admin_container, strict=True)
+        except DockerError:
+            state_unknown = True
+            container = ContainerState(name=self.config.admin_container)
 
         image = None
         if container.exists and container.image:
-            image = self.docker.inspect_image(container.image)
+            image = self._running_image(container)
         elif deployment.image_reference and "${" not in deployment.image_reference:
             image = self.docker.inspect_image(deployment.image_reference)
 
@@ -403,7 +403,8 @@ class AdminLifecycleService:
         version = str(labels.get(LABEL_VERSION) or "")
 
         record = {
-            "installed": bool(container.exists),
+            "installed": None if state_unknown else bool(container.exists),
+            "container_state_unknown": state_unknown,
             "docker": daemon,
             "container": container.to_dict(),
             "deployment": deployment.to_dict(),
@@ -420,7 +421,9 @@ class AdminLifecycleService:
         # A flashed appliance has an empty deployment root: no compose file
         # names the Admin service, and no container was ever created from one.
         # That is the only state a first installation may create files in.
-        record["bootstrap_required"] = not deployment.service_defined and not container.exists
+        record["bootstrap_required"] = (
+            not state_unknown and not deployment.service_defined and not container.exists
+        )
         record["restart_policy"] = restart_policy_state(deployment, container)
         record["transition"] = admin_transition.read_transition(
             admin_transition.transition_path(self.paths, deployment)
@@ -429,6 +432,7 @@ class AdminLifecycleService:
         record["known_good"] = {
             "current": self.known_good.current(),
             "previous": self.known_good.previous(),
+            "problem": self.known_good.problem(),
         }
         return record
 
@@ -450,6 +454,8 @@ class AdminLifecycleService:
 
         digest = str(state.get("digest") or "")
         if not (digest and state.get("healthy")):
+            return None
+        if self.known_good.problem():
             return None
         if not self._admin_mutation.acquire(blocking=False):
             return None
@@ -512,9 +518,9 @@ class AdminLifecycleService:
         current = self.detect()
         try:
             targets = self.catalogue.available()
-            error = ""
+            error, error_message = "", ""
         except ReleaseResolutionError as exc:
-            targets, error = [], exc.code
+            targets, error, error_message = [], exc.code, exc.message
         available = [item.to_dict() for item in targets]
         for item in available:
             item["direction"] = direction(offered=item["tag"], installed=current["version"])
@@ -525,6 +531,7 @@ class AdminLifecycleService:
                 (item for item in available if newest and item["tag"] == newest.tag), None
             ),
             "error": error,
+            "error_message": error_message,
             "current_version": current["version"],
             "previous_known_good": self.known_good.previous(),
             "allow_prerelease": self.config.images.allow_prerelease,
@@ -541,6 +548,7 @@ class AdminLifecycleService:
         self._advance(operation, "preflight")
         self._require_docker(state)
         self._require_no_admin_transition()
+        self._require_no_package_run()
         bootstrap = self._deployment_state(state)
         if bootstrap:
             # Planning must stay a preview, so the only thing done here is to
@@ -560,6 +568,14 @@ class AdminLifecycleService:
             raise AdminLifecycleError(exc.code, exc.message)
 
         repository = self.config.images.admin_repository
+        if repository != DEFAULT_ADMIN_REPOSITORY:
+            raise AdminLifecycleError(
+                "admin_repository_unsupported",
+                f"the Admin console updates itself only from {DEFAULT_ADMIN_REPOSITORY}; "
+                f"installing it from {repository} would leave it unable to. Put "
+                f"{DEFAULT_ADMIN_REPOSITORY} first in /etc/ems-appliance-manager/"
+                "allowed-images.conf",
+            )
         image_ref = build_image_ref(repository, target.tag)
 
         if self.operations.get(operation.operation_id).terminal:
@@ -613,6 +629,7 @@ class AdminLifecycleService:
             "repository": repository,
             "target_tag": target.tag,
             "target_channel": target.channel,
+            "track": release_track(target.tag),
             "target_digest": image.digest,
             "target_reference": build_digest_ref(repository, image.digest),
             "target_revision": str(image.labels.get(LABEL_REVISION) or ""),
@@ -633,6 +650,21 @@ class AdminLifecycleService:
                 "unrelated containers and volumes",
             ],
         }
+        if state["version"]:
+            # The Manager's own plan names its direction and warns about going
+            # back; this one did neither, so "Latest stable" resolving below a
+            # running release candidate was confirmed without a word.
+            plan["direction"] = direction(offered=target.tag, installed=state["version"])
+            if plan["direction"] == DIRECTION_DOWNGRADE:
+                plan["warning"] = (
+                    f"{target.tag} is older than the running {state['version']}. Admin data "
+                    "written by the newer version may not be readable by the older one."
+                )
+            elif plan["direction"] == DIRECTION_UNKNOWN:
+                plan["warning"] = (
+                    f"Whether {target.tag} is newer or older than the running "
+                    f"{state['version']} cannot be told from their versions."
+                )
         if bootstrap:
             # Announced, not done: the files appear when the operator confirms.
             plan["creates_deployment"] = {
@@ -666,8 +698,17 @@ class AdminLifecycleService:
         self._advance(operation, "preflight")
         self._require_docker(state)
         self._require_no_admin_transition()
+        self._require_no_package_run()
         self._require_deployment(state)
 
+        problem = self.known_good.problem()
+        if problem:
+            raise AdminLifecycleError(
+                "known_good_history_unreadable",
+                f"the known-good Admin history cannot be read ({problem}), so there is no "
+                "verified version to roll back to; installing a version starts a new "
+                "history and keeps the unreadable file beside it",
+            )
         previous = self.known_good.previous()
         if not previous:
             raise AdminLifecycleError(
@@ -711,6 +752,7 @@ class AdminLifecycleService:
         state = self.detect()
         self._require_docker(state)
         self._require_no_admin_transition()
+        self._require_no_package_run()
         operation.requested_target.update({"action": action})
         self.operations.update_target(operation.operation_id, {"action": action})
         return {
@@ -722,6 +764,8 @@ class AdminLifecycleService:
 
     def plan_repair(self, operation, *, restart_policy_only=False):
         self._require_no_admin_transition()
+        if not restart_policy_only:
+            self._require_no_package_run()
         findings = self.inspect_restart_policy() if restart_policy_only else self.inspect_repair()
         actions = [item.action for item in findings if item.action]
         manual = [
@@ -814,11 +858,7 @@ class AdminLifecycleService:
             )
         )
 
-        for name, path in (
-            ("config", self.paths.ems_config_dir),
-            ("data", self.paths.ems_data_dir),
-            ("backups", self.paths.ems_backups_dir),
-        ):
+        for name, path in self._bind_paths().items():
             exists = path.is_dir()
             findings.append(
                 RepairFinding(
@@ -838,20 +878,25 @@ class AdminLifecycleService:
                         check="admin_container",
                         ok=False,
                         detail="The Admin container does not exist",
-                        suggestion="Reinstall the selected Admin version",
+                        suggestion=self._reinstall_suggestion(),
                         action="recreate_admin",
                     )
                 )
             elif container.state != CONTAINER_RUNNING:
+                unverified = self._deployment_finding(container)
                 findings.append(
                     RepairFinding(
                         check="admin_container",
                         ok=False,
                         detail=f"The Admin container is {container.state}",
-                        suggestion="Start the Admin container",
-                        action="start_admin",
+                        suggestion="Reinstalling the recorded Admin version starts it"
+                        if unverified
+                        else "Start the Admin container",
+                        action="" if unverified else "start_admin",
                     )
                 )
+                if unverified:
+                    findings.append(unverified)
             elif container.restart_count > 3:
                 findings.append(
                     RepairFinding(
@@ -913,6 +958,34 @@ class AdminLifecycleService:
             return ""
         return str(image.digest or "") if image.exists else ""
 
+    def _reinstall_suggestion(self):
+        version = str((self.known_good.current() or {}).get("admin_version") or "")
+        return f"Reinstall the recorded Admin version {version}".rstrip()
+
+    def _deployment_finding(self, container):
+        """A deployment pinned to a digest neither verified nor running here.
+
+        An install cut off between pinning the deployment and starting the new
+        Admin leaves exactly that: the old container stopped, the deployment
+        naming an image nothing verified, and a Start held to it.
+        """
+
+        expected = str((self.known_good.current() or {}).get("admin_digest") or "")
+        deployed = self._deployed_digest()
+        if not (expected and deployed) or deployed == expected:
+            return None
+        active, _ = self._active_digest(container)
+        if active == deployed:
+            return None
+        return RepairFinding(
+            check="admin_deployment",
+            ok=False,
+            detail=f"The Admin deployment names {deployed}, which this appliance never "
+            f"verified; it last verified {expected}",
+            suggestion=self._reinstall_suggestion(),
+            action="recreate_admin",
+        )
+
     def _identity_finding(self, container):
         """Is the container running the Admin the appliance last verified?"""
 
@@ -940,7 +1013,7 @@ class AdminLifecycleService:
             ok=False,
             detail=f"The container runs {active or 'an unidentifiable image'}, "
             f"not the known-good {expected}",
-            suggestion="Reinstall the recorded Admin version",
+            suggestion=self._reinstall_suggestion(),
             action="recreate_admin",
         )
 
@@ -1162,6 +1235,7 @@ class AdminLifecycleService:
             # binding below still holds while its record is already live. This
             # comes first, before any time is spent verifying an image.
             self._require_no_admin_transition()
+            self._require_no_package_run()
             self._require_planned_deployment(target)
             self._require_planned_current_admin(target)
             self._require_planned_image(target, reference, require_labels=True)
@@ -1213,6 +1287,10 @@ class AdminLifecycleService:
             raise AdminLifecycleError(
                 "digest_pin_failed", "the immutable image reference could not be written"
             )
+
+        refused = self._transition_started(operation, saved)
+        if refused is not None:
+            return refused
 
         try:
             self._advance(operation, "stopping_admin")
@@ -1326,13 +1404,30 @@ class AdminLifecycleService:
     def _rollback_after_failure(self, operation, saved, before, exc):
         """Restore the previous deployment bytes and the captured recovery digest."""
 
+        try:
+            self._require_no_admin_transition()
+        except AdminLifecycleError as live:
+            message = (
+                f"{getattr(exc, 'message', exc)}; {live.message}, so nothing was restored "
+                "and the Admin is left to finish"
+            )
+            self.operations.finish(
+                operation.operation_id,
+                STATE_MANUAL_ACTION_REQUIRED,
+                stage="admin_transition_in_flight",
+                result={"admin_untouched": False, "restored": False},
+                error={"code": getattr(exc, "code", "install_failed"), "message": message},
+            )
+            raise AdminLifecycleError(live.code, message)
+        target = self._recovery_target(operation)
+        if not target["digest"]:
+            return self._nothing_to_restore(operation, saved, exc)
         self.operations.advance(
             operation.operation_id,
             "rolling_back",
             state=STATE_ROLLING_BACK,
             detail=getattr(exc, "code", "install_failed"),
         )
-        target = self._recovery_target(operation)
         expected_digest = target["digest"]
         try:
             deployment = self.deployment()
@@ -1431,13 +1526,16 @@ class AdminLifecycleService:
         self._advance(operation, "verifying_target_image", detail=reference)
         try:
             self._require_no_admin_transition()
+            self._require_no_package_run()
             self._require_planned_deployment(target)
             self._require_planned_current_admin(target)
             # A rollback deploys an image this appliance validated once, when it
             # installed it or recorded it running; its labels belong to that
             # older release, so the digest and the architecture are what have to
             # still hold.
-            self._require_planned_image(target, reference, require_labels=False)
+            self._require_planned_image(
+                target, reference, require_labels=False, operation=operation
+            )
         except AdminLifecycleError as exc:
             return self._preflight_failure(
                 operation, STATE_FAILED_TERMINAL, exc.code, exc.message
@@ -1461,6 +1559,10 @@ class AdminLifecycleService:
                 getattr(exc, "code", "rollback_pin_failed"),
                 "the rollback image reference could not be written",
             )
+
+        refused = self._transition_started(operation, saved)
+        if refused is not None:
+            return refused
 
         # Everything reversible is done; from here the Admin is interrupted.
         self._advance(operation, "stopping_admin")
@@ -1533,6 +1635,50 @@ class AdminLifecycleService:
         )
         return payload
 
+    def _transition_started(self, operation, saved):
+        """A transition that went live since the preflight: files back, stop here.
+
+        The preflight read the record once, and verifying the target takes
+        time in which the Admin can start replacing itself. Nothing is stopped
+        yet, so standing back costs only the pinned deployment, written back.
+        """
+
+        try:
+            self._require_no_admin_transition()
+        except AdminLifecycleError as exc:
+            self._safe_restore(saved)
+            return self._preflight_failure(
+                operation, STATE_FAILED_TERMINAL, exc.code, exc.message
+            )
+        return None
+
+    def _nothing_to_restore(self, operation, saved, exc):
+        """No Admin ran before and none was recorded: stop, and put the files back.
+
+        Bringing up what the old deployment names would start a mutable tag
+        nobody verified and call it the previous Admin. The deployment is
+        written back so nothing starts the unverified target later either.
+        """
+
+        message = (
+            f"{getattr(exc, 'message', exc)}; no previous Admin was recorded to restore, "
+            "so the Admin is left stopped and the deployment as it was before the install"
+        )
+        try:
+            self._stop_admin(self.deployment())
+            if not self._safe_restore(saved):
+                message += "; writing the previous deployment back failed as well"
+        except (AdminLifecycleError, DockerError, DeploymentError, OSError) as stop_exc:
+            message += f"; stopping the new Admin failed: {getattr(stop_exc, 'message', stop_exc)}"
+        self.operations.finish(
+            operation.operation_id,
+            STATE_MANUAL_ACTION_REQUIRED,
+            stage="no_previous_admin",
+            result={"admin_untouched": False, "restored": False},
+            error={"code": getattr(exc, "code", "install_failed"), "message": message},
+        )
+        raise AdminLifecycleError("no_previous_admin", message)
+
     def _rollback_recovery_failure(self, operation, saved, exc, *, verification=None):
         """Mutation had started: put the exact previous Admin back, or say it is gone.
 
@@ -1593,8 +1739,8 @@ class AdminLifecycleService:
         }
         self.operations.finish(
             operation.operation_id,
-            STATE_FAILED_TERMINAL,
-            stage="rollback_unhealthy",
+            STATE_ROLLED_BACK if recovery["restored"] else STATE_FAILED_TERMINAL,
+            stage="rolled_back" if recovery["restored"] else "rollback_unhealthy",
             result=payload,
             error={
                 "code": getattr(exc, "code", "rollback_failed"),
@@ -1609,6 +1755,7 @@ class AdminLifecycleService:
         return payload
 
     def _execute_lifecycle(self, operation):
+        self._require_no_package_run()
         action = operation.requested_target.get("action")
         container = self.config.admin_container
         self._advance(operation, f"{action}_admin")
@@ -1676,6 +1823,8 @@ class AdminLifecycleService:
         return STATE_FAILED_RECOVERABLE
 
     def _execute_repair(self, operation):
+        if operation.requested_target.get("scope") != REPAIR_SCOPE_RESTART_POLICY:
+            self._require_no_package_run()
         actions = list(operation.requested_target.get("actions") or [])
         manual = list(operation.requested_target.get("manual_actions") or [])
         applied = []
@@ -1760,31 +1909,36 @@ class AdminLifecycleService:
         if action == "start_admin":
             if not self.docker.start_container(container).ok:
                 return "start_failed"
-            return self._verified_or_reason()
+            return self._verified_or_reason(as_deployed=True)
 
         if action == "restart_admin":
             if not self.docker.restart_container(container).ok:
                 return "restart_failed"
-            return self._verified_or_reason()
+            return self._verified_or_reason(as_deployed=True)
 
         if action == "recreate_admin":
-            try:
-                self._compose_up(self.deployment())
-            except AdminLifecycleError:
-                return "recreate_failed"
-            return self._verified_or_reason()
+            return self._recreate_admin()
 
         if action == ACTION_SET_RESTART_POLICY:
             return self._apply_restart_policy()
 
         if action.startswith("create_bind_path:"):
             name = action.split(":", 1)[1]
-            target = self.paths.export_paths().get(name)
+            target = self._bind_paths().get(name)
             if target is None:
                 return "unknown_path"
             return self._create_bind_path(target)
 
         return "unsupported"
+
+    def _bind_paths(self):
+        """The EMS directories the deployment writes, by repair-finding name."""
+
+        return {
+            "config": self.paths.ems_config_dir,
+            "data": self.paths.ems_data_dir,
+            "backups": self.paths.ems_backups_dir,
+        }
 
     def _create_bind_path(self, target):
         """Create a missing bind directory as the deployment's, and prove it is.
@@ -1838,13 +1992,51 @@ class AdminLifecycleService:
             return "restart_policy_not_applied"
         return "verified"
 
-    def _verified_or_reason(self):
-        """A repair action reports the failing fact, never a bare "unhealthy"."""
+    def _recreate_admin(self):
+        """Bring up the recorded known-good Admin by its digest; else the deployment.
+
+        Composing up whatever the deployment names could never clear a finding
+        about a deployment off the known-good image, and would start an image
+        an interrupted install pinned without verifying it.
+        """
+
+        record = self.known_good.current()
+        try:
+            if record:
+                try:
+                    repository, digest, reference = self._validated_rollback_target(record)
+                except ValidationError:
+                    return "invalid_known_good_record"
+                self._require_local_image(reference)
+                apply_digest(
+                    self.deployment(),
+                    repository,
+                    digest,
+                    tag=str(record.get("admin_version") or ""),
+                )
+            self._compose_up(self.deployment())
+        except (AdminLifecycleError, DockerError, DeploymentError, OSError):
+            return "recreate_failed"
+        return self._verified_or_reason()
+
+    def _verified_or_reason(self, *, as_deployed=False):
+        """A repair action reports the failing fact, never a bare "unhealthy".
+
+        ``as_deployed`` is for a start or restart, which can bring up nothing
+        but what the deployment names -- the same expectation Lifecycle holds
+        them to. Against known-good, which a console-installed build never
+        becomes, a restart that fixed the Admin read as an image mismatch.
+        """
 
         expected = self.known_good.current() or {}
+        expected_version = str(expected.get("admin_version") or "")
+        expected_digest = str(expected.get("admin_digest") or "")
+        deployed = self._deployed_digest() if as_deployed else ""
+        if deployed and deployed != expected_digest:
+            expected_digest, expected_version = deployed, ""
         verification = self.verify_admin(
-            expected_version=str(expected.get("admin_version") or ""),
-            expected_digest=str(expected.get("admin_digest") or ""),
+            expected_version=expected_version,
+            expected_digest=expected_digest,
         )
         self.last_repair_verification = verification
         return "verified" if verification["verified"] else verification["error"]
@@ -1865,6 +2057,12 @@ class AdminLifecycleService:
         if state["docker"]["state"] != DAEMON_RUNNING:
             raise AdminLifecycleError(
                 "docker_unavailable", "the Docker daemon is not running; start Docker first"
+            )
+        if state.get("container_state_unknown"):
+            raise AdminLifecycleError(
+                "container_state_unknown",
+                "Docker did not say whether the Admin container exists; "
+                "check Docker and plan again",
             )
 
     def _require_deployment(self, state):
@@ -1889,6 +2087,20 @@ class AdminLifecycleService:
                 f"the Admin environment file {deployment['env_file']} is missing; "
                 "recreate it with install-admin-console.sh before installing or "
                 "rolling back",
+            )
+
+    def _require_no_package_run(self):
+        """Wait for a package run, which may be upgrading the Docker engine underneath.
+
+        A run that outlasts the agent's wait is left running in its own unit,
+        and its operation record no longer holds the slot; the lock does.
+        """
+
+        if self.package_lock is not None and self.package_lock() == LOCK_HELD:
+            raise AdminLifecycleError(
+                "package_operation_active",
+                "a package installation is running and may be upgrading Docker; wait until "
+                "it finishes",
             )
 
     def _require_no_admin_transition(self):
@@ -2127,7 +2339,7 @@ class AdminLifecycleService:
             )
         return True
 
-    def _require_planned_image(self, target, reference, *, require_labels):
+    def _require_planned_image(self, target, reference, *, require_labels, operation=None):
         """Prove the image is still exactly the one the plan described.
 
         ``architecture``, ``source`` and ``revision`` are strings in a record; a
@@ -2136,7 +2348,7 @@ class AdminLifecycleService:
         again while the healthy Admin is still running.
         """
 
-        self._require_local_image(reference)
+        self._require_local_image(reference, operation=operation)
         image = self.docker.inspect_image(reference)
         if not image.exists:
             raise AdminLifecycleError("image_inspect_failed", f"{reference} cannot be inspected")
@@ -2178,14 +2390,29 @@ class AdminLifecycleService:
                 raise AdminLifecycleError(exc.code, exc.message)
         return True
 
-    def _require_local_image(self, reference):
-        """Make sure the immutable reference is present before deploying it."""
+    def _require_local_image(self, reference, *, operation=None):
+        """Make sure the immutable reference is present before deploying it.
+
+        With ``operation``, the Admin still runs and the pull is watched, so it
+        gets the long limit a slow card needs; the Admin's own image retention
+        can have removed the image a rollback returns to. Without, a recovery
+        waits on it while the Admin is down, and it keeps the short one.
+        """
 
         image = self.docker.inspect_image(reference)
         if image.exists:
             return True
+        keep_going = None
+        if operation is not None:
+            self._advance(operation, "pulling_image", detail=reference)
+
+            def keep_going(elapsed):
+                return self.operations.note(
+                    operation.operation_id, pull_progress_note(reference, elapsed)
+                )
+
         try:
-            self.docker.pull_image(reference)
+            self.docker.pull_image(reference, keep_going=keep_going)
         except DockerError as exc:
             raise AdminLifecycleError(
                 "known_good_image_unavailable",
@@ -2213,10 +2440,20 @@ class AdminLifecycleService:
             self._sleep(2)
             container = self.docker.inspect_container(self.config.admin_container)
 
+    def _running_image(self, container):
+        """The image the container runs, by the id Docker created it from.
+
+        The reference it was created from can move: once `latest` was pulled
+        anew, status, verification and the recovery identity all named an image
+        that had never run, and a failed install recovered to it.
+        """
+
+        return self.docker.inspect_image(container.image, by=container.image_id or None)
+
     def _active_digest(self, container):
         if not container.exists or not container.image:
             return "", {}
-        image = self.docker.inspect_image(container.image)
+        image = self._running_image(container)
         return (image.digest or ""), dict(image.labels or {})
 
     def verify_admin(

@@ -9,12 +9,13 @@ the previously installed package.
 
 import argparse
 import datetime
+import fcntl
 import json
 import os
 import sys
 
 from appliance.agent import AgentHandlers, operation_names, serve_agent
-from appliance.agent_client import AgentCallError, AgentClient, AgentUnavailableError, InProcessAgentClient
+from appliance.agent_client import AgentCallError, AgentClient, AgentUnavailableError, InProcessAgentClient, wait_until_settled
 from appliance.auth import AuthError, AuthStore
 from appliance.config import load_config
 from appliance.migration import migrate_state, write_report
@@ -26,6 +27,9 @@ from appliance.web import serve as serve_web
 EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_UNAVAILABLE = 2
+# image-check's "this host was not imaged by this project", kept apart from
+# every exit a check that could not run produces.
+EXIT_NOT_APPLIANCE_IMAGE = 3
 
 
 def _print(payload, as_json):
@@ -51,6 +55,11 @@ def _print_human(payload, depth):
         print(f"{pad}{payload}")
 
 
+# A repair stops, recreates and pulls the Admin; on a Pi 3B+ a pull alone has
+# taken most of half an hour.
+REPAIR_WAIT_SECONDS = 3600
+
+
 def _client(paths, *, local=False):
     """Prefer the running agent; fall back to an in-process privileged client.
 
@@ -74,7 +83,14 @@ def _client(paths, *, local=False):
             "the appliance agent is not running and this command needs root; "
             "run it with sudo or start ems-appliance-agent.service"
         )
-    return InProcessAgentClient(AgentHandlers(build_services(paths=paths)))
+    # This stack is the agent for as long as the command runs: one systemd
+    # restarts meanwhile would recover its live operation as interrupted.
+    claim = _claim_agent(paths)
+    if claim is False:
+        raise SystemExit("the appliance agent is starting; try again in a moment")
+    client = InProcessAgentClient(AgentHandlers(build_services(paths=paths)))
+    client.agent_lock = claim
+    return client
 
 
 def command_status(args):
@@ -134,16 +150,39 @@ def command_repair(args):
             operation_id=operation_id,
             confirmation_token=planned.get("confirmation_token"),
         )
+    except AgentUnavailableError as exc:
+        print(
+            f"error: {exc.message}; repair operation {operation_id} may not have started, "
+            "see 'ems-appliance operations'",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
     except AgentCallError as exc:
         print(f"error: {exc.message}", file=sys.stderr)
         return EXIT_ERROR
-    print(f"repair operation {operation_id} started")
-    return EXIT_OK
+    try:
+        record = wait_until_settled(client, operation_id, timeout=REPAIR_WAIT_SECONDS)
+    except AgentUnavailableError:
+        print(
+            f"repair operation {operation_id} was started, and the agent stopped answering "
+            "while it ran; see 'ems-appliance operations'",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+    except AgentCallError as exc:
+        print(f"error: {exc.message}", file=sys.stderr)
+        return EXIT_ERROR
+    if not record.get("settled"):
+        print(f"repair operation {operation_id} is still {record.get('state')}; see 'ems-appliance operations'")
+        return EXIT_ERROR
+    error = (record.get("error") or {}).get("message")
+    print(f"repair operation {operation_id} {record.get('state')}" + (f": {error}" if error else ""))
+    return EXIT_OK if record.get("state") == "succeeded" else EXIT_ERROR
 
 
 def command_password_reset(args):
     paths = resolve_paths()
-    ensure_directories(paths)
+    ensure_directories(paths, role="agent")
     from appliance.auth import ConfirmedPassword, deployment_owner
 
     privileged = os.geteuid() == 0
@@ -308,6 +347,27 @@ def command_rollback_manager(args):
     if os.geteuid() != 0:
         print("error: run this command as root", file=sys.stderr)
         return EXIT_ERROR
+    corrected = ""
+    try:
+        # Not while an install is in flight: it may still be on its way to
+        # dpkg, which then reports the outgoing version.
+        if not manager_verify.window_open(
+            paths, datetime.datetime.now(datetime.timezone.utc).timestamp()
+        ):
+            corrected = manager_retention.reconcile(
+                paths,
+                installed_version(),
+                reverted=manager_install.read_outcome(paths).outcome
+                == manager_install.OUTCOME_REVERTED,
+            )
+    except manager_retention.RetentionError as exc:
+        print(f"warning: {exc.message}", file=sys.stderr)
+    if corrected:
+        print(
+            f"note: the kept packages now say what dpkg holds ({corrected}); "
+            "a package dpkg left half-configured is finished with `dpkg --configure -a`",
+            file=sys.stderr,
+        )
     try:
         kept = manager_retention.revert_target(paths)
     except manager_retention.RetentionError as exc:
@@ -400,6 +460,14 @@ def command_rollback_manager(args):
         )
         return EXIT_ERROR
 
+    # The person at the keyboard has judged this install; a verdict an earlier
+    # deadline left -- going back failed -- would go on saying so on the page.
+    try:
+        manager_verify.verdict_path(paths).unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        print(f"warning: the last verdict could not be cleared: {exc}", file=sys.stderr)
     try:
         manager_verify.disarm(paths, runner)
     except manager_verify.ManagerVerifyError as exc:
@@ -558,15 +626,17 @@ def command_shell_access(args):
 
     wanted = args.action == "enable"
     runner = CommandRunner()
+    activation = live_activation(runner=runner, export_required=False)
     try:
-        shell_access.apply(
-            paths, config, value=wanted, activation=live_activation(runner=runner)
-        )
+        shell_access.apply(paths, config, value=wanted, activation=activation)
     except HostConfigError as exc:
         _print({"enabled": shell_access.enabled(paths), "error": exc.code,
                 "message": exc.message, **exc.rollback}, args.json)
         return EXIT_ERROR
-    _print({"account": shell_access.ACCOUNT, "enabled": wanted}, args.json)
+    result = {"account": shell_access.ACCOUNT, "enabled": wanted}
+    if activation.export_failed:
+        result["export_warning"] = activation.export_failed
+    _print(result, args.json)
     return EXIT_OK
 
 
@@ -714,9 +784,26 @@ def command_backup_access(args):
     if os.geteuid() != 0:
         print("error: changing backup access needs root", file=sys.stderr)
         return EXIT_ERROR
-    report = service.disable(reason="requested") if args.action == "disable" else service.activate()
-    _print(report, args.json)
     if args.action == "disable":
+        report = service.revoke()
+    elif args.action == "suspend":
+        report = service.disable(reason="requested")
+    elif args.action == "enable":
+        report = service.reinstate()
+    else:
+        report = service.activate()
+    _print(report, args.json)
+    if args.action == "disable" and not report.get("revocation_recorded", True):
+        withdrawn = (
+            "access is withdrawn, but" if report.get("authentication_disabled") else "access could not be withdrawn, and"
+        )
+        print(
+            f"error: {withdrawn} the revocation could not be recorded, so the next activation "
+            "would restore it; free space on the card and run disable again",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
+    if args.action in ("disable", "suspend"):
         # prerm reads this exit code as proof that authentication is withdrawn.
         return EXIT_OK if report.get("authentication_disabled") else EXIT_ERROR
     return EXIT_OK if report["state"] in (STATE_ACTIVE, STATE_UNAVAILABLE) else EXIT_ERROR
@@ -768,9 +855,46 @@ def command_backup_account(args):
     return EXIT_OK if completed.returncode == 0 else EXIT_ERROR
 
 
+AGENT_LOCK_NAME = "agent.lock"
+
+
+def _claim_agent(paths):
+    """Make this the only agent: a held lock file, None when none could be made, or False.
+
+    A second agent -- run by hand over SSH while the service runs -- recovered
+    the live one's operations as interrupted, took over its socket and removed
+    it on exit, and nobody could sign in until the service was restarted. The
+    socket answering covers the agent that is serving; the lock covers two
+    starting at once, and the console's own stack. It lives in agent state:
+    systemd removes the runtime directory whenever the unit stops, which is
+    the only time that stack runs.
+    """
+
+    if AgentClient(paths.agent_socket).available():
+        return False
+    try:
+        handle = open(paths.agent_state_dir / AGENT_LOCK_NAME, "a", encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return False
+    return handle
+
+
 def command_agent(args):
     paths = resolve_paths()
     ensure_directories(paths, role="agent")
+    claim = _claim_agent(paths)
+    if claim is False:
+        print(
+            "error: an appliance agent is already running; stop ems-appliance-agent.service "
+            "before starting another",
+            file=sys.stderr,
+        )
+        return EXIT_ERROR
     if os.geteuid() == 0:
         write_report(paths, migrate_state(paths))
     if os.geteuid() != 0:
@@ -781,6 +905,15 @@ def command_agent(args):
     recovered = services.operations.recover_interrupted()
     if recovered:
         print(f"recovered {len(recovered)} interrupted operation(s)")
+    if services.operations.unrecorded:
+        print(
+            f"{len(services.operations.unrecorded)} interrupted operation(s) could not be "
+            "recorded as ended; the card may be full",
+            file=sys.stderr,
+        )
+    corrected = services.manager.reconcile_record()
+    if corrected:
+        print(f"the kept Appliance Manager packages now say what dpkg holds ({corrected})")
     # A WLAN change interrupted inside its revert window left the new profile
     # active with nothing to take it back; NetworkManager then reconnects to it
     # on every boot. After the socket is bound, never before: nmcli waits up to
@@ -880,9 +1013,9 @@ def command_image_check(args):
 
     Read from the build marker the image writes, and only a layer name this
     project builds is accepted. A host installed from the .deb onto somebody
-    else's Raspberry Pi OS has no marker and gets an error, which is the answer
+    else's Raspberry Pi OS has no marker and gets exit 3, which is the answer
     the first-boot growth helper needs: this project repartitions media it
-    imaged and nothing else.
+    imaged and nothing else. Any other failure means the check did not run.
     """
 
     from appliance.image_shape import IMAGE, marker_is_ours
@@ -892,7 +1025,7 @@ def command_image_check(args):
         return EXIT_ERROR
     if not marker_is_ours(probe.os_build()):
         print("error: this host carries no appliance image build marker", file=sys.stderr)
-        return EXIT_ERROR
+        return EXIT_NOT_APPLIANCE_IMAGE
     print(IMAGE.image_layer)
     return EXIT_OK
 
@@ -1077,8 +1210,10 @@ def build_parser():
         "action",
         nargs="?",
         default="status",
-        choices=("status", "activate", "disable"),
-        help="activate only enables the account once the effective confinement is verified",
+        choices=("status", "activate", "disable", "enable", "suspend"),
+        help="disable keeps the account off until enable; suspend is the package's own "
+        "fail-closed step, which the next verified activation lifts; activate only enables "
+        "the account once the effective confinement is verified",
     )
     backup_access.set_defaults(handler=command_backup_access)
 

@@ -215,3 +215,117 @@ def test_an_interrupted_dpkg_still_asks_for_the_repair(tmp_path):
     )
 
     assert "package_manager_unhealthy" in {item["code"] for item in health["warnings"]}
+
+
+# --- what became of the last Appliance Manager install -------------------------
+
+
+def _verdict(services, verdict):
+    import json
+
+    from appliance import manager_verify
+
+    path = manager_verify.verdict_path(services.paths)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"verdict": verdict, "detail": "", "decided_at": ""}), encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "verdict, code, severity",
+    [
+        ("reverted", "manager_install_reverted", "warning"),
+        ("revert_failed", "manager_revert_failed", "error"),
+        ("revert_unavailable", "manager_revert_unavailable", "error"),
+    ],
+)
+def test_an_install_that_did_not_stand_is_on_the_overview(tmp_path, verdict, code, severity):
+    """Only a tile on Updates said so; the overview called the appliance healthy."""
+
+    services = build_test_services(tmp_path)
+    _verdict(services, verdict)
+
+    findings = {item["code"]: item for item in services.status._health({})["warnings"]}
+
+    assert findings[code]["severity"] == severity
+    assert findings[code]["section"] == "updates"
+
+
+def test_a_confirmed_install_raises_nothing(tmp_path):
+    services = build_test_services(tmp_path)
+    _verdict(services, "confirmed")
+
+    health = services.status._health({})
+
+    assert not [item for item in health["warnings"] if item["code"].startswith("manager_")]
+
+
+def test_a_deadline_that_ran_out_unjudged_is_reported_after_the_reverter_had_its_ticks(tmp_path):
+    from appliance import manager_verify
+
+    services = build_test_services(tmp_path)
+    reverter = tmp_path / "verify-manager.sh"
+    reverter.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+
+    class Runner:
+        def available(self, tool):
+            return True
+
+        def run(self, tool, arguments, timeout=None):
+            from types import SimpleNamespace
+
+            return SimpleNamespace(ok=True, stdout="", stderr="", returncode=0)
+
+    now = services.clock()
+    manager_verify.arm(
+        services.paths, Runner(), expected_version="0.2.0", build_id="b2", previous="",
+        now=int(now) - 900 - 60, window_seconds=900, reverter=str(reverter),
+    )
+    assert not [i for i in services.status._health({})["warnings"] if i["code"] == "manager_install_unjudged"]
+
+    manager_verify.arm(
+        services.paths, Runner(), expected_version="0.2.0", build_id="b2", previous="",
+        now=int(now) - 900 - 3600, window_seconds=900, reverter=str(reverter),
+    )
+    codes = [i["code"] for i in services.status._health({})["warnings"]]
+    assert "manager_install_unjudged" in codes
+
+
+def test_a_failed_revert_that_dpkg_has_since_configured_is_no_longer_a_fault(tmp_path):
+    """The finding suggests `dpkg --configure -a`; once that has fixed it, the
+    verdict stays until the next install but the fault is gone."""
+
+    from types import SimpleNamespace
+
+    services = build_test_services(tmp_path)
+    _verdict(services, "revert_failed")
+
+    class Dpkg:
+        def available(self, tool):
+            return tool == "dpkg-query"
+
+        def run(self, tool, arguments, timeout=None):
+            return SimpleNamespace(ok=True, stdout="installed", stderr="", returncode=0)
+
+    services.status.probe.runner = Dpkg()
+
+    codes = [item["code"] for item in services.status._health({})["warnings"]]
+
+    assert "manager_revert_failed" not in codes
+
+
+def test_an_operation_a_full_card_left_open_is_on_the_overview(tmp_path):
+    services = build_test_services(tmp_path)
+    services.operations.unrecorded = {"0" * 32: 0.0}
+
+    findings = {item["code"]: item for item in services.status._health({})["warnings"]}
+
+    assert findings["operations_unrecorded"]["severity"] == "error"
+
+
+def test_an_operation_record_that_could_not_be_read_is_on_the_overview(tmp_path):
+    services = build_test_services(tmp_path)
+    services.operations.unreadable = ["0" * 32]
+
+    findings = {item["code"]: item for item in services.status._health({})["warnings"]}
+
+    assert findings["operations_unreadable"]["severity"] == "warning"

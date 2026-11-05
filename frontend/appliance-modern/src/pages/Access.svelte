@@ -6,11 +6,11 @@
   import PlanButton from "../widgets/PlanButton.svelte";
   import UnconfirmedNote from "../widgets/UnconfirmedNote.svelte";
   import { session } from "../state/session.svelte.js";
-  import { t, fmt, say, langOf } from "../i18n/i18n.svelte.js";
+  import { t, tn, fmt, say, langOf } from "../i18n/i18n.svelte.js";
   import { host, ensure, held } from "../state/host.svelte.js";
   import { forms } from "../state/forms.svelte.js";
   import { detail } from "../state/prefs.svelte.js";
-  import { EXPORT_ACCESS_STATUSES, EXPORT_STATES, confinementGaps, exportPathTone, exportSetupReport, exportTone, rescueSsh, rescueState, shellAccess } from "../lib/access.js";
+  import { EXPORT_ACCESS_STATUSES, EXPORT_STATES, SFTP_EXAMPLES, confinementGaps, exportPathTone, exportSetupReport, exportTone, rescueSsh, rescueState, shellAccess } from "../lib/access.js";
   import { UNIT_STATES, word } from "../lib/words.js";
 
   /**
@@ -20,6 +20,8 @@
    */
   const status = $derived(host.status);
   const ssh = $derived(status?.ssh || {});
+  const yesNoKey = (value) => (value === "yes" || value === "no" ? { key: `common.${value}` } : { text: String(value || "—"), lang: "en" });
+  const yesNoWord = (value) => say(yesNoKey(value));
   const rescue = $derived(status?.system?.rescue || {});
   const backup = $derived(held("backup"));
   const account = $derived(backup?.account || {});
@@ -44,9 +46,16 @@
     <KeyValues
       rows={[
         { label: t("access.unitState"), value: say(word("systemd", UNIT_STATES, ssh.service?.active)), lang: langOf(word("systemd", UNIT_STATES, ssh.service?.active)) },
-        { label: t("access.passwordLogin"), value: ssh.hardening?.passwordauthentication?.value || ssh.password_authentication, lang: "en" },
+        { label: t("access.listensVia"), value: ssh.socket?.running ? t("access.viaSocket") : ssh.service?.running ? t("access.viaService") : t("access.notListening"), testid: "ssh-listens-via" },
+        { label: t("access.passwordLogin"), value: yesNoWord(ssh.hardening?.passwordauthentication?.value || ssh.password_authentication), lang: langOf(yesNoKey(ssh.hardening?.passwordauthentication?.value || ssh.password_authentication)) },
       ]}
     />
+    {#if (ssh.host_keys || []).length}
+      <div class="host-keys" data-testid="ssh-host-keys">
+        <p class="muted small">{t("access.hostKeysText")}</p>
+        <KeyValues rows={ssh.host_keys.map((key) => ({ label: key.key_type, labelLang: "en", value: key.fingerprint, mono: true }))} />
+      </div>
+    {/if}
     <div class="row-wrap" data-testid="ssh-stage-service">
       <PlanButton plan={{ key: "ssh-enable", endpoint: "/api/ssh/enable", title: { key: "plan.title.sshEnable" } }} label={t("access.enable")} icon="play" disabled={session.confirmed === false} testid="ssh-enable" />
       <PlanButton plan={{ key: "ssh-disable", endpoint: "/api/ssh/disable", title: { key: "plan.title.sshDisable" }, danger: true }} label={t("access.disable")} icon="square" variant="secondary" testid="ssh-disable" />
@@ -66,6 +75,16 @@
       ]}
     />
     <p class="note"><Icon name="info" />{t(`${rescueVerdict.key}.hint`, { account: rescue.account || "ems-rescue" })}</p>
+    {#if rescueVerdict.key === "rescue.shipped" || rescueVerdict.key === "rescue.network"}
+      <details class="more" data-testid="rescue-console-route">
+        <summary><Icon name="chevron-right" />{t("rescue.consoleRoute")}</summary>
+        <ol class="body steps">
+          <li>{t("rescue.consoleRoute.keyboard")}</li>
+          <li>{t("rescue.consoleRoute.signIn", { account: rescue.account || "ems-rescue" })}</li>
+          <li>{t("rescue.consoleRoute.passwd")}</li>
+        </ol>
+      </details>
+    {/if}
   </div>
 </Card>
 
@@ -149,6 +168,46 @@
         </table>
       </div>
     {/if}
+    {#if item.exists && (item.set_aside_keys || []).length}
+      <p class="note warn" data-testid="ssh-set-aside-note"><Icon name="triangle-alert" />{t("access.setAside")}</p>
+      <div class="table-scroll">
+        <table class="data" data-testid="ssh-set-aside-table">
+          <thead><tr><th>{t("access.keyType")}</th><th>{t("access.keyComment")}</th><th>{t("access.fingerprint")}</th><th class="r">{t("access.action")}</th></tr></thead>
+          <tbody>
+            {#each item.set_aside_keys as key, row (row)}
+              <tr>
+                <td>{key.key_type}</td>
+                <td>{key.comment || "—"}</td>
+                <td class="mono">{key.fingerprint}</td>
+                <td class="r">
+                  <PlanButton
+                    plan={{ key: `key-aside-remove-${index}-${row}`, endpoint: "/api/ssh/keys/remove-plan", body: { account: item.name, fingerprint: key.fingerprint }, title: { key: "plan.title.keyRemove" }, confirm: "plan.remove", danger: true }}
+                    label={t("access.remove")}
+                    icon="trash-2"
+                    variant="secondary"
+                    testid="ssh-remove-set-aside-key"
+                  />
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      </div>
+    {/if}
+    {#if item.exists && item.unparsed_key_lines > 0}
+      <p class="note warn" data-testid="ssh-unparsed-lines"><Icon name="triangle-alert" />{tn("access.unparsedLines", item.unparsed_key_lines)}</p>
+    {/if}
+    {#if item.exists && ((item.keys || []).length || (item.set_aside_keys || []).length || item.unparsed_key_lines > 0)}
+      <div class="row-wrap">
+        <PlanButton
+          plan={{ key: `key-revoke-${index}`, endpoint: "/api/ssh/keys/revoke", body: { account: item.name }, title: { key: "plan.title.revokeAll" }, confirm: "plan.remove", danger: true }}
+          label={t("access.revokeAll")}
+          icon="ban"
+          variant="secondary"
+          testid="ssh-revoke-all"
+        />
+      </div>
+    {/if}
   </Card>
 {/each}
 
@@ -169,6 +228,14 @@
           { label: t("access.writeAccess"), value: yesNo(backup.write_access) },
         ]}
       />
+      {#if backup.revoked}<p class="note warn" data-testid="backup-access-revoked"><Icon name="lock" />{t("access.backupRevoked")}</p>{/if}
+      <div class="row-wrap">
+        {#if backup.revoked}
+          <PlanButton plan={{ key: "backup-access-enable", endpoint: "/api/backup/access/enable", title: { key: "plan.title.backupEnable" } }} label={t("access.backupEnable")} icon="unlock" testid="backup-access-enable" />
+        {:else}
+          <PlanButton plan={{ key: "backup-access-disable", endpoint: "/api/backup/access/disable", title: { key: "plan.title.backupDisable" }, danger: true }} label={t("access.backupDisable")} icon="lock" variant="secondary" testid="backup-access-disable" />
+        {/if}
+      </div>
     {/if}
   </div>
 </Card>
@@ -179,13 +246,13 @@
   {/snippet}
   <div class="body" data-testid="backup-export">
     {#if backup && !backup.error}
-      <Status tone={backup.confined ? "c-ok" : "c-warn"} text={backup.confined ? t("access.confined") : t("access.notConfined")} />
+      <Status tone={backup.confined && !setup ? "c-ok" : "c-warn"} text={!backup.confined ? t("access.notConfined") : setup ? t("access.exportNotSetUp") : t("access.confined")} />
       <KeyValues
         rows={[
-          { label: t("access.detail"), value: backup.export_access?.detail, lang: "en" },
+          detail.expert && { label: t("access.detail"), value: backup.export_access?.detail, lang: "en" },
           gaps.unverified && { label: t("access.confinement"), value: t("access.confinementUnverified") },
           gaps.violations.length && { label: t("access.notEnforced"), value: gaps.violations.join(", "), mono: true },
-          setup && { label: t("access.exportSetup"), value: setup.detail ? `${setup.status} — ${setup.detail}` : setup.status, lang: "en" },
+          setup && detail.expert && { label: t("access.exportSetup"), value: setup.detail ? `${setup.status} — ${setup.detail}` : setup.status, lang: "en" },
           { label: t("access.exportRoot"), value: backup.export_root, mono: true },
           (backup.unmanaged_entries || []).length && { label: t("access.unmanaged"), value: backup.unmanaged_entries.join(", "), mono: true },
           detail.expert && { label: t("access.chroot"), value: backup.chroot?.configured, mono: true },
@@ -221,7 +288,7 @@
       <div class="examples">
         {#each backup.examples as example, index (index)}
           <div class="example" data-testid="backup-example">
-            <p class="example-title" lang="en">{example.title}</p>
+            {#if SFTP_EXAMPLES.includes(example.id)}<p class="example-title">{t(`access.example.${example.id}`)}</p>{:else}<p class="example-title" lang="en">{example.title}</p>{/if}
             <pre class="log">{example.command}</pre>
           </div>
         {/each}
@@ -231,6 +298,8 @@
 {/if}
 
 <style>
+  .steps { margin: 0; padding-left: var(--s4); font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
+  .host-keys { margin-top: var(--s2); }
   .body { display: flex; flex-direction: column; gap: var(--s3); align-items: stretch; }
   .body > :global(.status) { align-self: flex-start; }
   .body .note, .body .callout { margin: 0; }

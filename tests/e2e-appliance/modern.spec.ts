@@ -229,9 +229,10 @@ test.describe("the overview", () => {
 
   test("a page that waited at the sign-in reloads when another Manager answers the sign-in", async ({ page }) => {
     await page.route("**/api/session", async (route) => {
-      const response = await route.fetch();
-      const body = await response.json();
-      await route.fulfill({ response, json: { ...body, appliance_version: "0.1.0" } });
+      const response = await route.fetch().catch(() => null);
+      const body = response && (await response.json().catch(() => null));
+      if (!body) return;
+      await route.fulfill({ response, json: { ...body, appliance_version: "0.1.0" } }).catch(() => undefined);
     });
     await createPassword(page);
     await page.getByTestId("sign-out").click();
@@ -522,14 +523,14 @@ test.describe("updates", () => {
     await page.getByTestId("action-notice").getByRole("button").click();
 
     await expect(page.getByTestId("manager-version")).toHaveValue("ems-appliance-manager-0.2.0-arm64");
-    await expect(page.getByTestId("manager-version").locator("optgroup")).toHaveCount(3);
+    await expect(page.getByTestId("manager-version").locator("optgroup")).toHaveCount(2);
     await page.getByTestId("manager-version").selectOption("ems-appliance-manager-0.1.0-arm64");
     const plan = page.waitForRequest((request) => request.url().includes("/api/manager/plan-update"));
     await page.getByTestId("manager-plan-update").click();
     expect((await plan).postDataJSON()).toMatchObject({ release_id: "ems-appliance-manager-0.1.0-arm64" });
     // The test server's index points at example.invalid, so the agent refuses
-    // the download; the refusal is the appliance's own sentence.
-    await expect(page.getByTestId("action-notice")).toContainText("manifest is unreachable");
+    // the download, said in the reader's language.
+    await expect(page.getByTestId("action-notice")).toContainText("could not be downloaded");
   });
 
   test("only the button that asked for a Manager plan says it is planning", async ({ page, request }) => {
@@ -581,19 +582,57 @@ test.describe("updates", () => {
     expect((await plan).postDataJSON()).toMatchObject({ channel: "exact", tag: "v1.2.0-rc1", reinstall: false });
   });
 
+  test("the version list names the latest stable tag and which way each version goes", async ({ page }) => {
+    await createPassword(page);
+    await open(page, "updates");
+    const select = page.getByTestId("install-channel");
+    await expect(select.locator('option[value="latest_stable"]')).toHaveText("Latest stable (v1.1.0)");
+    await expect(select.locator('option[value="tag:v1.1.0"]')).toHaveText("v1.1.0 · newer");
+    await expect(select.locator('option[value="tag:v1.0.0"]')).toHaveText("v1.0.0 · installed");
+  });
+
+  test("a release candidate is installed only after it is confirmed for this install", async ({ page }) => {
+    await createPassword(page);
+    await open(page, "updates");
+    await expect(page.getByTestId("install-channel").locator("optgroup")).toHaveCount(3);
+    await page.getByTestId("install-channel").selectOption("tag:v1.2.0-rc1");
+    await page.getByTestId("install-plan").click();
+    await expect(page.getByTestId("plan-dialog")).toContainText("Release candidate");
+    await expect(page.getByTestId("plan-confirm")).toBeDisabled();
+    await page.getByTestId("plan-prerelease-ack").locator("input").check();
+    await expect(page.getByTestId("plan-confirm")).toBeEnabled();
+    await page.getByTestId("plan-cancel").click();
+  });
+
   test("the kept Manager package is offered as the way back", async ({ page, request }) => {
     await resetAppliance(request, { manager_package_kept: true });
     await createPassword(page);
     await open(page, "updates");
-    await expect(page.getByTestId("manager-kept")).toContainText("0.1.0");
+    await expect(page.getByTestId("manager-kept")).toContainText("0.0.9");
     await page.getByTestId("manager-plan-revert").click();
-    await expect(page.getByRole("dialog")).toContainText("Go back to Appliance Manager 0.1.0");
+    await expect(page.getByRole("dialog")).toContainText("Go back to Appliance Manager 0.0.9");
     await expect(page.getByTestId("plan-confirm")).toHaveClass(/danger/);
     const facts = page.getByTestId("plan-dialog").locator(".kv");
     await expect(facts.locator("dt", { hasText: "Installed version" })).toBeVisible();
     await expect(facts.locator("div", { hasText: "Time to confirm it works" }).locator("dd")).toHaveText("15 minutes");
     await expect(facts.locator('dt[lang="en"]')).toHaveCount(0);
     await expect(facts).not.toContainText("warning");
+  });
+
+  test("going back to the kept Manager package waits for its restart and asks to sign in again", async ({ page, request }) => {
+    await resetAppliance(request, { manager_package_kept: true });
+    await createPassword(page);
+    await open(page, "updates");
+    await page.getByTestId("manager-plan-revert").click();
+    await confirmPlan(page);
+    await expect(page.getByTestId("reconnect-detail")).toContainText("Appliance Manager is being installed");
+    // The old service still answers and still knows the session: the page keeps waiting.
+    await page.getByTestId("reconnect-check").click();
+    await expect(page.getByTestId("reconnect-screen")).toBeVisible();
+    // The package's postinst restarts the web service, which forgets every session.
+    await request.post("/api/test/reset", { data: { expire_sessions: true } });
+    await page.getByTestId("reconnect-check").click();
+    await expect(page.getByTestId("sign-in-notice")).toContainText("installed and restarted");
   });
 
   test("a plan field this build has no name for is labelled in the appliance's English", async ({ page }) => {
@@ -645,6 +684,16 @@ test.describe("updates", () => {
     await expect(page.getByTestId("manager-plan-revert")).toBeDisabled();
   });
 
+  test("kernel and runtime updates are named as important and can be planned without Expert", async ({ page, request }) => {
+    await resetAppliance(request, { manual_updates: true });
+    await createPassword(page);
+    await open(page, "updates");
+    await expect(page.getByTestId("updates-security-scope")).toContainText("Debian security archive only");
+    await expect(page.getByTestId("updates-manual")).toContainText("linux-image-rpi-v8, containerd.io");
+    await page.getByTestId("updates-install-all").click();
+    await expect(page.getByTestId("plan-dialog")).toContainText("restarts the Docker engine");
+  });
+
   test("Expert adds every update and the package-manager repairs, and is remembered", async ({ page }) => {
     await createPassword(page);
     await open(page, "updates");
@@ -660,6 +709,16 @@ test.describe("updates", () => {
 });
 
 test.describe("EMS Admin", () => {
+  test("another EMS Admin version is chosen on the EMS Admin page itself", async ({ page }) => {
+    await createPassword(page);
+    await open(page, "admin");
+    await page.getByTestId("admin-install").getByTestId("install-channel").selectOption("tag:v1.1.0");
+    const plan = page.waitForRequest((request) => request.url().includes("/api/admin/plan-install"));
+    await page.getByTestId("admin-install").getByTestId("install-plan").click();
+    expect((await plan).postDataJSON()).toMatchObject({ channel: "exact", tag: "v1.1.0" });
+    await page.getByTestId("plan-cancel").click();
+  });
+
   test("the container is stopped and started through its plans", async ({ page }) => {
     await createPassword(page);
     await open(page, "admin");
@@ -671,6 +730,75 @@ test.describe("EMS Admin", () => {
     await page.getByTestId("admin-start").click();
     await confirmPlan(page);
     await settled(page);
+  });
+
+  test("plan buttons wait while another operation holds the appliance", async ({ page, request }) => {
+    await resetAppliance(request, { operation_running: true });
+    await createPassword(page);
+    await open(page, "admin");
+    await expect(page.getByTestId("operation-banner")).toHaveAttribute("data-state", "running");
+    await expect(page.getByTestId("admin-stop")).toBeDisabled();
+    await expect(page.getByTestId("admin-stop")).toHaveAttribute("title", /Waiting for the operation/);
+  });
+
+  test("a running operation the appliance stopped answering about is not shown as running", async ({ page, request }) => {
+    await resetAppliance(request, { operation_running: true });
+    await createPassword(page);
+    await expect(page.getByTestId("operation-banner")).toHaveAttribute("data-state", "running");
+    await page.route("**/api/operations", (route) => route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "agent_unavailable" }) }));
+    await expect(page.getByTestId("operation-unknown")).toBeVisible();
+    await page.unroute("**/api/operations");
+    await expect(page.getByTestId("operation-unknown")).toBeHidden();
+  });
+
+  test("a sign-in in another tab does not leave this tab with a stale token", async ({ page }) => {
+    await createPassword(page);
+    await open(page, "admin");
+    const again = await page.request.post("/api/session/login", { data: { password: PASSWORD }, headers: { Origin: new URL(page.url()).origin } });
+    expect(again.ok()).toBe(true);
+    await page.getByTestId("admin-stop").click();
+    await expect(page.getByTestId("plan-dialog")).toBeVisible();
+    await page.getByTestId("plan-cancel").click();
+  });
+
+  test("focus returns to the control that asked, and to the banner after a confirm", async ({ page }) => {
+    await createPassword(page);
+    await open(page, "admin");
+    await page.getByTestId("admin-stop").click();
+    await page.getByTestId("plan-cancel").click();
+    await expect(page.getByTestId("plan-dialog")).toBeHidden();
+    await expect(page.getByTestId("admin-stop")).toBeFocused();
+    await page.getByTestId("admin-stop").click();
+    await confirmPlan(page);
+    await expect(page.getByTestId("operation-banner")).toBeFocused();
+  });
+
+  test("a plan cancelled in another tab closes its dialog here", async ({ page, context }) => {
+    await createPassword(page);
+    await open(page, "admin");
+    await page.getByTestId("admin-stop").click();
+    await expect(page.getByTestId("plan-dialog")).toBeVisible();
+    const other = await context.newPage();
+    await other.goto("/");
+    await other.getByTestId("cancel-operation").click();
+    await expect(page.getByTestId("plan-dialog")).toBeHidden({ timeout: 15_000 });
+    await expect(page.getByTestId("action-notice")).toContainText("cancelled or ended elsewhere");
+    await other.close();
+  });
+
+  test("a confirmation whose answer was lost hands over to the banner", async ({ page }) => {
+    await createPassword(page);
+    await open(page, "admin");
+    await page.getByTestId("admin-stop").click();
+    await expect(page.getByTestId("plan-dialog")).toBeVisible();
+    await page.route("**/api/operations/confirm", async (route) => {
+      await route.fetch();
+      await route.abort();
+    });
+    await page.getByTestId("plan-confirm").click();
+    await expect(page.getByTestId("plan-dialog")).toBeHidden();
+    await settled(page);
+    await page.unroute("**/api/operations/confirm");
   });
 
   test("an appliance that never had EMS Admin offers to install it", async ({ page, request }) => {
@@ -715,6 +843,60 @@ test.describe("access, network and diagnostics", () => {
     await expect(page.getByTestId("plan-dialog")).toBeVisible();
   });
 
+  test("a key line the page cannot show is named and every key can be revoked", async ({ page, request }) => {
+    await resetAppliance(request, { authorized_keys: [PUBLIC_KEY, `from="10.0.0.1",no-pty ${PUBLIC_KEY}`] });
+    await createPassword(page);
+    await open(page, "access");
+    const backupCard = page.locator(".card").filter({ has: page.getByTestId("ssh-key-table") }).first();
+    await expect(backupCard.getByTestId("ssh-key-table").locator("tbody tr")).toHaveCount(1);
+    await expect(backupCard.getByTestId("ssh-unparsed-lines")).toContainText("1");
+    await backupCard.getByTestId("ssh-revoke-all").click();
+    await expect(page.getByTestId("plan-dialog")).toBeVisible();
+    await expect(page.getByTestId("plan-block-keys")).toContainText("SHA256:");
+    await confirmPlan(page);
+    await settled(page);
+    await expect(page.getByTestId("ssh-key-table")).toHaveCount(0, { timeout: 15_000 });
+    await expect(page.getByTestId("ssh-unparsed-lines")).toHaveCount(0);
+  });
+
+  test("a key set aside by a failed export is shown and can be removed before it returns", async ({ page, request }) => {
+    await resetAppliance(request, { set_aside_keys: [PUBLIC_KEY] });
+    await createPassword(page);
+    await open(page, "access");
+    await expect(page.getByTestId("ssh-set-aside-note")).toBeVisible();
+    await expect(page.getByTestId("ssh-set-aside-table")).toContainText("appliance-test@example.invalid");
+    await page.getByTestId("ssh-remove-set-aside-key").click();
+    await expect(page.getByTestId("plan-dialog")).toBeVisible();
+    await confirmPlan(page);
+    await settled(page);
+    await expect(page.getByTestId("ssh-set-aside-table")).toHaveCount(0, { timeout: 15_000 });
+  });
+
+  test("the SSH card says whether a socket or the service listens", async ({ page, request }) => {
+    await resetAppliance(request, { ssh_socket: true });
+    await createPassword(page);
+    await open(page, "access");
+    await expect(page.getByTestId("ssh-listens-via")).toContainText("ssh.socket");
+  });
+
+  test("backup access is switched off at the console and says it stays off", async ({ page }) => {
+    await createPassword(page);
+    await open(page, "access");
+    await page.getByTestId("backup-access-disable").click();
+    await expect(page.getByTestId("plan-dialog")).toBeVisible();
+    await confirmPlan(page);
+    await settled(page);
+    await expect(page.getByTestId("backup-access-revoked")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId("backup-access-enable")).toBeVisible();
+  });
+
+  test("a password state the agent cannot answer is shown as that, not as a sign-in", async ({ page, request }) => {
+    await resetAppliance(request, { auth_agent_offline: true });
+    await page.goto("/");
+    await expect(page.getByTestId("sign-in-agent")).toBeVisible();
+    await resetAppliance(request, {});
+  });
+
   test("a private key is refused with the appliance's reason", async ({ page }) => {
     await createPassword(page);
     await open(page, "access");
@@ -724,12 +906,49 @@ test.describe("access, network and diagnostics", () => {
     await expect(page.getByTestId("plan-dialog")).toBeHidden();
   });
 
+  test("each interface shows its MAC address and the WLAN radio its switch", async ({ page }) => {
+    await createPassword(page);
+    await open(page, "network");
+    await expect(page.getByTestId("network-mac").first()).toContainText("B8:27:EB:12:34:56");
+    await expect(page.getByTestId("network-radio")).toContainText("On");
+  });
+
+  test.describe("in a browser in another zone", () => {
+    test.use({ timezoneId: "Asia/Tokyo" });
+
+    test("the time zone is picked from a list, and the browser's own zone is offered", async ({ page }) => {
+      await createPassword(page);
+      await open(page, "network");
+      expect(await page.locator("#timezone-options option").count()).toBeGreaterThan(100);
+      await page.getByTestId("timezone-browser").click();
+      await expect(page.getByTestId("timezone-input")).toHaveValue("Asia/Tokyo");
+    });
+  });
+
+  test("the SSH card shows the host's own key fingerprints and says yes or no in the reader's words", async ({ page }) => {
+    await createPassword(page);
+    await open(page, "access");
+    await expect(page.getByTestId("ssh-host-keys")).toContainText("ssh-ed25519");
+    await expect(page.getByTestId("ssh-host-keys")).toContainText("SHA256:");
+  });
+
+  test("the shipped rescue password says how to change it without SSH", async ({ page }) => {
+    await createPassword(page);
+    await open(page, "access");
+    await page.getByTestId("rescue-console-route").locator("summary").click();
+    await expect(page.getByTestId("rescue-console-route")).toContainText("passwd");
+    await expect(page.getByTestId("rescue-console-route")).toContainText("keyboard");
+  });
+
   test("a hostname change is planned with the new name", async ({ page }) => {
     await createPassword(page);
     await open(page, "network");
     await page.getByTestId("hostname-input").fill("ems-garage");
     await page.getByTestId("hostname-plan").click();
     await expect(page.getByTestId("plan-dialog")).toContainText("ems-garage");
+    await confirmPlan(page);
+    await settled(page);
+    await expect(page.getByTestId("operation-new-address").locator("a").first()).toHaveAttribute("href", /^http:\/\/ems-garage\.local:/);
   });
 
   test("a WLAN change warns about the disconnect and keeps no passphrase", async ({ page }) => {
@@ -814,6 +1033,11 @@ test.describe("access, network and diagnostics", () => {
     const download = page.waitForEvent("download");
     await page.getByTestId("download-support-archive").click();
     expect((await download).suggestedFilename()).toMatch(/\.tar\.gz$/);
+    await page.getByTestId("acknowledge-operation").click();
+    await expect(page.getByTestId("operation-banner")).toHaveCount(0);
+    const again = page.waitForEvent("download");
+    await page.getByTestId("diag-archives").locator("a").first().click();
+    expect((await again).suggestedFilename()).toMatch(/\.tar\.gz$/);
   });
 
   test("a slow earlier log answer does not replace the log asked for last", async ({ page }) => {
@@ -932,6 +1156,9 @@ test.describe("what an outcome says", () => {
     await createPassword(page);
     await expect(page.getByTestId("replan-required")).toContainText("Nothing was written", { timeout: 20_000 });
     await expect(page.getByTestId("operation-outcome")).toHaveText("Incomplete");
+    await expect(page.getByTestId("operation-next")).toContainText("installs a version again");
+    await expect(page.getByTestId("cancel-operation")).toHaveCount(0);
+    await expect(page.getByTestId("acknowledge-operation")).toBeVisible();
   });
 
   test("a rollback that fails preflight says the running EMS Admin was left alone", async ({ page, request }) => {
@@ -962,8 +1189,17 @@ test.describe("what an outcome says", () => {
     await createPassword(page);
     await expect(page.getByTestId("card-docker")).toContainText("Docker is not installed, so containers cannot be managed here.");
     await open(page, "updates");
-    await expect(page.getByTestId("admin-versions-unavailable")).toBeVisible();
+    await expect(page.getByTestId("admin-versions-docker")).toContainText("Docker is not installed");
     await expect(page.getByTestId("install-plan")).toHaveCount(0);
+  });
+
+  test("a Manager install that was not confirmed says what dpkg holds and what to run", async ({ page, request }) => {
+    await resetAppliance(request, { manager_package_kept: true, manager_verdict: "revert_failed", manager_dpkg: ["half-configured", "0.4.0"] });
+    await createPassword(page);
+    await open(page, "updates");
+    await expect(page.getByTestId("manager-dpkg")).toContainText("0.4.0");
+    await expect(page.getByTestId("manager-dpkg")).toContainText("half-configured");
+    await expect(page.getByTestId("manager-dpkg").locator("code")).toHaveText("sudo dpkg --configure -a");
   });
 
   test("a reverted Manager install and an expired deadline are said, not left silent", async ({ page, request }) => {
@@ -978,6 +1214,13 @@ test.describe("what an outcome says", () => {
     await expect(page.getByTestId("manager-plan-revert")).toBeEnabled();
   });
 
+  test("a confined export whose setup has not reported yet says not set up, once", async ({ page }) => {
+    await createPassword(page);
+    await open(page, "access");
+    await expect(page.getByTestId("backup-export")).toContainText("Not set up yet");
+    await expect(page.getByTestId("backup-export")).not.toContainText("Confined to the export root");
+  });
+
   test("an export mounted read-write is never shown as read-only", async ({ page, request }) => {
     await resetAppliance(request, { export_read_write: true });
     await createPassword(page);
@@ -990,6 +1233,14 @@ test.describe("what an outcome says", () => {
 
 test.describe("on a phone", () => {
   test.use({ viewport: { width: 390, height: 844 } });
+
+  test("each update summary takes the owner straight to its details", async ({ page }) => {
+    await createPassword(page);
+    await page.locator('.bottom-nav a[data-page="updates"]').click();
+    await page.getByTestId("update-summary-os-details").click();
+    await expect(page.getByTestId("os-section")).toBeFocused();
+    await expect(page.getByTestId("os-section")).toBeInViewport();
+  });
 
   test("the bar holds four pages and More reaches the rest, handing focus to the page", async ({ page }) => {
     await createPassword(page);

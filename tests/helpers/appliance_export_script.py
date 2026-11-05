@@ -25,7 +25,7 @@ ROOT = Path(__file__).resolve().parents[2]
 EXPORT_SCRIPT = ROOT / "packaging" / "appliance" / "bin" / "setup-export-root.sh"
 
 BACKUP_USER = "ems-backup"
-EXPORT_NAMES = ("config", "backups", "data")
+EXPORT_NAMES = ("backups",)
 
 # Every tool the script may call that needs root or changes the kernel state.
 STUBBED_TOOLS = (

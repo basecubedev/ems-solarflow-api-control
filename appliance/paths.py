@@ -235,21 +235,15 @@ def export_sources(install_root):
     Defined once and away from the dataclass so the shell harness, the test
     fixtures and the runtime read the same answer instead of each restating it.
 
-    ``backups`` is a known-empty export and cannot simply be repointed. EMS
-    writes its archives to ``data/backups`` (``ems/backup.py``), which is inside
-    the ``data`` export -- and ``setup-export-root.sh`` grants ACLs recursively
-    per source, so two overlapping sources make the first run's own grant look
-    pre-existing to the second and the transaction stops being idempotent. The
-    archives are reachable through ``data``; what is fixed instead is the
-    command the appliance puts on screen.
+    One export: the archives EMS writes to ``data/backups`` (``ems/backup.py``),
+    published as ``/backups``. The live ``config`` and ``data`` are not exported
+    (owner decision 2026-11-04): a backup key fetches backups and reads no
+    secret the running EMS holds. ``setup-export-root.sh`` retires the two
+    earlier exports on its next run.
     """
 
     root = Path(install_root)
-    return {
-        "config": root / "config",
-        "backups": root / "backups",
-        "data": root / "data",
-    }
+    return {"backups": root / "data" / "backups"}
 
 
 
@@ -602,9 +596,18 @@ def ensure_directories(paths, *, role="all", mode=None):
     for directory, default in directory_modes(paths, role=role):
         try:
             directory.mkdir(parents=True, exist_ok=True)
-            directory.chmod(default if mode is None else mode)
+            # The web account can replace its own directories with a link, and
+            # this runs as root from `password-reset`: chmod through the link
+            # re-moded whatever it named, / included.
+            handle = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         except OSError:
             continue
+        try:
+            os.fchmod(handle, default if mode is None else mode)
+        except OSError:
+            pass
+        finally:
+            os.close(handle)
     return paths
 
 

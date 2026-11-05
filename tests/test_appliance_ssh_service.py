@@ -233,7 +233,7 @@ def test_revoke_all_requires_a_confirmation_and_reports_the_count(tmp_path):
     handlers = handlers_for(services)
     planned = handlers.dispatch({"operation": "ssh.plan_revoke_all", "account": "ems-backup"})
     assert planned["plan"]["key_count"] == 1
-    assert "stops immediately" in planned["plan"]["warning"]
+    assert "open SSH sessions are ended" in planned["plan"]["warning"]
     assert planned["operation"]["state"] == "awaiting_confirmation"
     assert services.ssh.keystore("ems-backup").list()
 
@@ -274,6 +274,25 @@ def test_a_backup_key_is_refused_while_authentication_is_withdrawn(tmp_path):
         )
 
     assert getattr(excinfo.value, "code", "") == "backup_access_withdrawn"
+    assert not (ssh_dir / "authorized_keys").exists()
+
+
+def test_a_backup_key_is_refused_while_an_operator_has_revoked_backup_access(tmp_path):
+    """With no key at the time of the revocation nothing was set aside, and a
+    key added afterwards would have been the one file sshd reads."""
+
+    services = appliance(tmp_path)
+    services.paths.agent_state_dir.mkdir(parents=True, exist_ok=True)
+    (services.paths.agent_state_dir / "backup-access-revoked").write_text("{}\n")
+    ssh_dir = tmp_path / "home" / "ems-backup" / ".ssh"
+    handlers = handlers_for(services)
+
+    with pytest.raises(Exception) as excinfo:
+        handlers.dispatch(
+            {"operation": "ssh.plan_key_add", "account": "ems-backup", "public_key": ED25519}
+        )
+
+    assert getattr(excinfo.value, "code", "") == "backup_access_revoked"
     assert not (ssh_dir / "authorized_keys").exists()
 
 
@@ -382,7 +401,7 @@ def test_backup_access_reports_paths_and_ready_to_use_commands(tmp_path):
     assert status["account"]["exists"] is True
     assert status["write_access"] is False
     names = {item["name"]: item for item in status["paths"]}
-    assert set(names) == {"config", "data", "backups"}
+    assert set(names) == {"backups"}
     assert all(item["access"] == "read-only" for item in status["paths"])
     assert names["backups"]["size_bytes"] == 2048
 
@@ -442,13 +461,13 @@ def test_a_writable_export_is_never_called_read_only(tmp_path):
 
 def test_an_unpublished_export_is_reported_as_degraded(tmp_path):
     services = seeded_exports(tmp_path)
-    services.host.write_export_mounts(names=("config", "backups"))
+    services.host.write_export_mounts(names=())
 
     status = services.backup.status()
 
     assert status["confined"] is False
     assert status["export_access"]["status"] == "degraded"
-    assert "data" in status["export_access"]["detail"]
+    assert "backups" in status["export_access"]["detail"]
 
 
 def test_a_missing_chroot_is_reported_even_when_the_mounts_are_right(tmp_path):
@@ -475,7 +494,7 @@ def test_a_host_without_an_ems_installation_is_pending_not_broken(tmp_path):
     status = services.backup.status()
 
     assert status["export_access"]["status"] == "pending"
-    assert status["export_access"]["missing"] == ["config", "backups", "data"]
+    assert status["export_access"]["missing"] == ["backups"]
 
 
 # --- what each word in the status means -------------------------------------
@@ -555,8 +574,8 @@ def test_the_shown_commands_use_paths_inside_the_chroot(tmp_path):
     commands = " ".join(item["command"] for item in services.backup.status()["examples"])
 
     # Inside the chroot the export root is "/", so a host path would not resolve.
-    assert ":/data/backups" in commands, "the /backups export is empty; see export_sources()"
-    assert ":/config" in commands
+    assert ":/backups " in commands, commands
+    assert ":/config" not in commands and ":/data" not in commands, commands
     assert str(services.paths.install_root) not in commands
 
 
@@ -600,6 +619,33 @@ def test_disabling_ssh_takes_the_socket_with_it(tmp_path):
     assert services.ssh.status()["enabled"] is False
 
 
+def test_ssh_off_takes_the_socket_down_before_the_service(tmp_path):
+    """The other order lets a connection the socket still accepts start the
+    service again after it was stopped, holding the listening descriptor."""
+
+    services = socket_activated(appliance(tmp_path))
+    services.host.units["ssh.service"]["active"] = "active"
+
+    plan_and_execute(services, "ssh.plan_service", enabled=False)
+
+    disables = [args[-1] for tool, args, _ in services.host.calls
+                if tool == "systemctl" and args[:1] == ("disable",)]
+    assert disables == ["ssh.socket", "ssh.service"], disables
+
+
+@pytest.mark.parametrize("unit", ["ssh.service", "ssh.socket"])
+def test_ssh_off_that_leaves_sshd_answering_is_a_failure(tmp_path, unit):
+    """Success was judged from systemctl's exit codes alone."""
+
+    services = socket_activated(appliance(tmp_path))
+    services.host.disable_sticks.add(unit)
+
+    operation, _ = plan_and_execute(services, "ssh.plan_service", enabled=False)
+
+    assert operation.state == "failed_terminal", operation.to_dict()
+    assert operation.error["code"] == "ssh_still_running", operation.to_dict()
+
+
 def test_enabling_ssh_on_a_socket_host_uses_the_socket(tmp_path):
     """`ssh.service` cannot bind port 22 while the socket holds it."""
 
@@ -623,3 +669,269 @@ def test_status_reports_a_symlinked_ssh_directory_instead_of_following_it(tmp_pa
 
     assert accounts["ems-backup"]["key_count"] == 0
     assert accounts["ems-backup"]["keys_refused"] == "ssh_directory_unsafe"
+
+
+def test_a_shell_switch_says_so_when_the_backup_export_failed_behind_it(tmp_path, monkeypatch):
+    """The switch goes through without the export; that the export failed was
+    recorded and then shown to nobody."""
+
+    from appliance import shell_access
+
+    services = appliance(tmp_path)
+
+    def applied(paths, config, *, value, activation):
+        activation.export_failed = "ems-appliance-export.service could not publish the install root"
+
+    monkeypatch.setattr(shell_access, "apply", applied)
+    operation = services.operations.create("ssh.shell_access", {"enabled": False})
+    services.operations.await_confirmation(operation.operation_id, {})
+    token = services.operations.get(operation.operation_id, include_token=True).confirmation_token
+    running = services.operations.confirm(operation.operation_id, token)
+
+    payload = services.ssh._execute_shell_access(running)
+
+    assert "could not publish" in payload["export_warning"]
+
+
+# --- an open session does not outlive the access it came in on ------------
+
+
+def test_removing_a_key_ends_the_accounts_open_sessions(tmp_path):
+    """sshd checks a key only at authentication; a session, or a ControlMaster
+    connection opening new ones, went on after the key was removed."""
+
+    services = appliance(tmp_path)
+    plan_and_execute(services, "ssh.plan_key_add", account="ems-backup", public_key=ED25519)
+    fingerprint = services.ssh.keystore("ems-backup").list()[0].fingerprint
+    services.host.sessions["ems-backup"] = ["c3"]
+
+    operation, _ = plan_and_execute(
+        services, "ssh.plan_key_remove", account="ems-backup", fingerprint=fingerprint
+    )
+
+    assert operation.result["sessions"] == {"ems-backup": "ended"}, operation.result
+    assert "ems-backup" not in services.host.sessions
+
+
+def test_an_account_without_sessions_reports_none_and_is_not_terminated(tmp_path):
+    services = appliance(tmp_path)
+
+    operation, _ = plan_and_execute(services, "ssh.plan_revoke_all", account="ems-backup")
+
+    assert operation.result["sessions"] == {"ems-backup": "none"}, operation.result
+    assert not any(
+        tool == "loginctl" and args[:1] == ("terminate-user",)
+        for tool, args, _ in services.host.calls
+    )
+
+
+def test_ssh_off_ends_every_ssh_accounts_sessions(tmp_path):
+    services = socket_activated(appliance(tmp_path))
+    services.host.sessions = {"ems-backup": ["c1"], "ems-shell": ["c2"]}
+
+    operation, _ = plan_and_execute(services, "ssh.plan_service", enabled=False)
+
+    assert operation.result["sessions"] == {"ems-backup": "ended", "ems-shell": "ended"}
+    assert services.host.sessions == {}
+
+
+def test_a_session_that_could_not_be_ended_is_said_so(tmp_path):
+    services = appliance(tmp_path)
+    services.host.sessions["ems-backup"] = ["c3"]
+    services.host.fail_command("loginctl")
+
+    operation, _ = plan_and_execute(services, "ssh.plan_revoke_all", account="ems-backup")
+
+    assert operation.result["sessions"] == {"ems-backup": "unknown"}, operation.result
+
+
+def test_shell_access_off_ends_the_shell_accounts_sessions(tmp_path, monkeypatch):
+    """A root shell already open went on after shell access was switched off."""
+
+    from appliance import shell_access
+
+    services = appliance(tmp_path)
+    monkeypatch.setattr(shell_access, "apply", lambda paths, config, *, value, activation: None)
+    services.host.sessions["ems-shell"] = ["c5"]
+    operation = services.operations.create("ssh.shell_access", {"enabled": False})
+    services.operations.await_confirmation(operation.operation_id, {})
+    token = services.operations.get(operation.operation_id, include_token=True).confirmation_token
+    running = services.operations.confirm(operation.operation_id, token)
+
+    payload = services.ssh._execute_shell_access(running)
+
+    assert payload["sessions"] == {"ems-shell": "ended"}, payload
+    assert services.host.sessions == {}
+
+
+# --- what an account's key file holds beyond what the console can read -----
+
+
+def test_an_account_reports_the_key_lines_sshd_honours_that_cannot_be_shown(tmp_path):
+    """An options-prefixed or certificate line grants a login sshd accepts;
+    the root-capable account's card said "0 keys" over it, and Remove could
+    not reach it."""
+
+    services = appliance(tmp_path)
+    home = tmp_path / "home" / "ems-backup"
+    plan_and_execute(services, "ssh.plan_key_add", account="ems-backup", public_key=ED25519)
+    keys = home / ".ssh" / "authorized_keys"
+    keys.write_text(
+        keys.read_text(encoding="utf-8")
+        + f'from="10.0.0.1",no-pty {ED25519}\n'
+        + "# an operator's note\n",
+        encoding="utf-8",
+    )
+
+    accounts = {item["name"]: item for item in services.ssh.status()["accounts"]}
+
+    assert accounts["ems-backup"]["key_count"] == 1
+    assert accounts["ems-backup"]["unparsed_key_lines"] == 1
+
+
+def test_revoke_all_names_the_lines_it_removes_that_cannot_be_shown(tmp_path):
+    services = appliance(tmp_path)
+    keys = tmp_path / "home" / "ems-backup" / ".ssh" / "authorized_keys"
+    plan_and_execute(services, "ssh.plan_key_add", account="ems-backup", public_key=ED25519)
+    keys.write_text(f'cert-authority {ED25519}\n', encoding="utf-8")
+
+    handlers = handlers_for(services)
+    planned = handlers.dispatch({"operation": "ssh.plan_revoke_all", "account": "ems-backup"})
+
+    assert planned["plan"]["key_count"] == 0
+    assert planned["plan"]["unparsed_lines"] == 1
+
+
+# --- a key set aside by a fail-closed disable is still the operator's to see --
+
+
+def set_aside_backup_key(services):
+    """What the OnFailure unit leaves after a failed export: the key moved aside."""
+
+    from appliance.backup_confinement import DISABLED_SUFFIX
+
+    plan_and_execute(services, "ssh.plan_key_add", account="ems-backup", public_key=ED25519)
+    ssh_dir = services.ssh.keystore("ems-backup").ssh_dir
+    (ssh_dir / "authorized_keys").rename(ssh_dir / ("authorized_keys" + DISABLED_SUFFIX))
+    return ssh_dir
+
+
+def test_a_key_that_was_set_aside_is_listed_as_set_aside(tmp_path):
+    """The card showed 0 keys while the next activation would bring one back."""
+
+    services = appliance(tmp_path)
+    set_aside_backup_key(services)
+
+    accounts = {item["name"]: item for item in services.ssh.status()["accounts"]}
+
+    assert accounts["ems-backup"]["key_count"] == 0
+    assert [key["fingerprint"].startswith("SHA256:") for key in accounts["ems-backup"]["set_aside_keys"]] == [True]
+
+
+def test_a_key_that_was_set_aside_can_be_removed_before_it_comes_back(tmp_path):
+    from appliance.backup_confinement import DISABLED_SUFFIX
+
+    services = appliance(tmp_path)
+    ssh_dir = set_aside_backup_key(services)
+    fingerprint = services.ssh.status()["accounts"][0]["set_aside_keys"][0]["fingerprint"]
+
+    operation, _ = plan_and_execute(
+        services, "ssh.plan_key_remove", account="ems-backup", fingerprint=fingerprint
+    )
+
+    assert operation.state == "succeeded", operation.to_dict()
+    preserved = (ssh_dir / ("authorized_keys" + DISABLED_SUFFIX)).read_text(encoding="utf-8")
+    assert ED25519.split()[1] not in preserved
+    accounts = {item["name"]: item for item in services.ssh.status()["accounts"]}
+    assert accounts["ems-backup"]["set_aside_keys"] == []
+
+
+def test_revoking_every_key_reaches_the_keys_set_aside_too(tmp_path):
+    from appliance.backup_confinement import DISABLED_SUFFIX
+
+    services = appliance(tmp_path)
+    ssh_dir = set_aside_backup_key(services)
+
+    plan_and_execute(services, "ssh.plan_revoke_all", account="ems-backup")
+
+    assert not (ssh_dir / ("authorized_keys" + DISABLED_SUFFIX)).exists()
+
+
+# --- backup access off, from the console, and it stays off ------------------
+
+
+def test_backup_access_that_cannot_be_activated_again_says_so(tmp_path):
+    """Lifting the revocation is not access: activation still has to prove it."""
+
+    services = appliance(tmp_path)
+    plan_and_execute(services, "ssh.plan_backup_access", enabled=False)
+    services.operations.acknowledge(services.operations.list()[0].operation_id)
+    services.host.write_export_mounts(names=())
+
+    operation, _ = plan_and_execute(services, "ssh.plan_backup_access", enabled=True)
+
+    assert operation.state == "failed_terminal", operation.to_dict()
+    assert operation.error["code"] != "", operation.to_dict()
+
+
+def test_backup_access_off_that_could_not_withdraw_authentication_fails(tmp_path, monkeypatch):
+    """Recorded is not withdrawn: an account the package cannot prove it owns
+    is not expired, and its keys still authenticate."""
+
+    from appliance import backup_confinement
+
+    class Unowned:
+        def revoke(self):
+            return {"revocation_recorded": True, "authentication_disabled": False, "ownership": "not_owned"}
+
+        def revoked(self):
+            return True
+
+    services = appliance(tmp_path)
+    monkeypatch.setattr(backup_confinement, "build_activation", lambda **kwargs: Unowned())
+
+    operation, _ = plan_and_execute(services, "ssh.plan_backup_access", enabled=False)
+
+    assert operation.state == "failed_terminal", operation.to_dict()
+    assert operation.error["code"] == "backup_access_not_withdrawn"
+
+
+def test_revoking_every_key_deletes_the_set_aside_and_conflict_files(tmp_path):
+    """Emptied, they were still recognised by name: activation refused with
+    key_conflict and a new key with backup_access_withdrawn, for good."""
+
+    from appliance.backup_confinement import CONFLICT_SUFFIX, DISABLED_SUFFIX
+
+    services = appliance(tmp_path)
+    ssh_dir = set_aside_backup_key(services)
+    conflict = ssh_dir / ("authorized_keys" + DISABLED_SUFFIX + CONFLICT_SUFFIX)
+    conflict.write_text(ED25519 + "\n", encoding="utf-8")
+
+    plan_and_execute(services, "ssh.plan_revoke_all", account="ems-backup")
+
+    assert not (ssh_dir / ("authorized_keys" + DISABLED_SUFFIX)).exists()
+    assert not conflict.exists()
+    services.operations.acknowledge(services.operations.list()[0].operation_id)
+    operation, _ = plan_and_execute(services, "ssh.plan_key_add", account="ems-backup", public_key=ED25519)
+    assert operation.state == "succeeded", operation.to_dict()
+
+
+def test_the_hosts_own_keys_are_shown_by_fingerprint(tmp_path):
+    """After a reflash or an address change ssh warns that the host key
+    changed; comparing fingerprints is the only way to tell a stale
+    known_hosts line from an attack, and the console never showed them."""
+
+    import base64
+    import hashlib
+
+    services = build_test_services(tmp_path)
+    ssh_dir = services.probe.root / "etc" / "ssh"
+    ssh_dir.mkdir(parents=True, exist_ok=True)
+    blob = base64.b64encode(b"\x00\x00\x00\x0bssh-ed25519" + b"\x00\x00\x00\x20" + b"k" * 32).decode()
+    (ssh_dir / "ssh_host_ed25519_key.pub").write_text(f"ssh-ed25519 {blob} root@ems\n", encoding="utf-8")
+    (ssh_dir / "ssh_host_ed25519_key").write_text("PRIVATE", encoding="utf-8")
+    expected = "SHA256:" + base64.b64encode(hashlib.sha256(base64.b64decode(blob)).digest()).decode().rstrip("=")
+
+    keys = services.ssh.status()["host_keys"]
+
+    assert keys == [{"key_type": "ssh-ed25519", "fingerprint": expected}]

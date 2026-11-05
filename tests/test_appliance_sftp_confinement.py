@@ -57,7 +57,7 @@ def host(package):
             container.enable_sshd()
         except SystemdUnavailable as exc:
             pytest.skip(str(exc))
-        container.setup_export_root()
+        container.publish_exports()
         yield container
     finally:
         container.stop()
@@ -93,10 +93,10 @@ def test_the_exported_data_is_the_live_ems_data(host):
     """A shadow copy would go stale; the export must be the real directory."""
 
     host.shell(f"rm -f /tmp/live-check.json; printf 'fresh-value\\n' > "
-               f"{INSTALL_ROOT}/config/live-check.json")
-    assert "fresh-value" in host.read_file(f"{EXPORT_ROOT}/config/live-check.json")
+               f"{INSTALL_ROOT}/data/backups/live-check.json")
+    assert "fresh-value" in host.read_file(f"{EXPORT_ROOT}/backups/live-check.json")
 
-    result = host.sftp(["get /config/live-check.json /tmp/live-check.json"])
+    result = host.sftp(["get /backups/live-check.json /tmp/live-check.json"])
     assert result.returncode == 0, result.stdout
     assert "fresh-value" in host.read_file("/tmp/live-check.json")
 
@@ -119,15 +119,24 @@ def test_the_account_can_list_every_export(host):
     listing = sftp_output(host, "ls /")
     for name in EXPORT_NAMES:
         assert name in listing, listing
-    result = host.sftp(["ls /config", "ls /backups", "ls /data"])
+    assert "config" not in listing and "data" not in listing, listing
+    result = host.sftp(["ls /backups"])
     assert result.returncode == 0, result.stdout
 
 
 def test_the_account_can_read_an_exported_file(host):
-    host.shell("rm -f /tmp/fetched.json")
-    result = host.sftp(["get /config/config.json /tmp/fetched.json"])
+    host.shell("rm -f /tmp/fetched.tar")
+    result = host.sftp(["get /backups/backup-1.tar /tmp/fetched.tar"])
     assert result.returncode == 0, result.stdout
-    assert CONFIG_MARKER in host.read_file("/tmp/fetched.json")
+    assert "backup-bytes" in host.read_file("/tmp/fetched.tar")
+
+
+def test_the_live_configuration_is_not_reachable(host):
+    """Backups can be fetched; the configuration the EMS runs on cannot."""
+
+    result = host.sftp(["get /config/config.json /tmp/live-config.json"])
+    assert result.returncode != 0, result.stdout
+    assert not host.exists("/tmp/live-config.json")
 
 
 # --- what the account cannot do ---------------------------------------------
@@ -136,22 +145,22 @@ def test_the_account_can_read_an_exported_file(host):
 @pytest.mark.parametrize(
     "command",
     [
-        "put /etc/hostname /config/injected.json",
-        "rm /config/config.json",
-        "rename /config/config.json /config/moved.json",
-        "mkdir /config/new-directory",
-        "rmdir /config",
-        "chmod 777 /config/config.json",
+        "put /etc/hostname /backups/injected.json",
+        "rm /backups/backup-1.tar",
+        "rename /backups/backup-1.tar /backups/moved.tar",
+        "mkdir /backups/new-directory",
+        "rmdir /backups",
+        "chmod 777 /backups/backup-1.tar",
     ],
 )
 def test_every_write_is_refused(host, command):
     host.shell("printf 'x\\n' > /tmp/upload-probe")
     result = host.sftp([command.replace("/etc/hostname", "/tmp/upload-probe")])
     assert result.returncode != 0, result.stdout
-    assert CONFIG_MARKER in host.read_file(f"{INSTALL_ROOT}/config/config.json")
-    assert not host.exists(f"{INSTALL_ROOT}/config/injected.json")
-    assert not host.exists(f"{INSTALL_ROOT}/config/moved.json")
-    assert not host.exists(f"{INSTALL_ROOT}/config/new-directory")
+    assert "backup-bytes" in host.read_file(f"{INSTALL_ROOT}/data/backups/backup-1.tar")
+    assert not host.exists(f"{INSTALL_ROOT}/data/backups/injected.json")
+    assert not host.exists(f"{INSTALL_ROOT}/data/backups/moved.tar")
+    assert not host.exists(f"{INSTALL_ROOT}/data/backups/new-directory")
 
 
 @pytest.mark.parametrize(
@@ -166,7 +175,7 @@ def test_the_host_filesystem_is_not_reachable(host, path):
 
 @pytest.mark.parametrize(
     "target",
-    ["/../etc/passwd", "/config/../../etc/passwd", "../../../../etc/passwd", "/config/../../.."],
+    ["/../etc/passwd", "/backups/../../etc/passwd", "../../../../etc/passwd", "/backups/../../.."],
 )
 def test_path_traversal_out_of_the_export_root_is_refused(host, target):
     result = host.sftp([f"get {target} /tmp/traversed"])
@@ -175,7 +184,7 @@ def test_path_traversal_out_of_the_export_root_is_refused(host, target):
 
 
 def test_the_secrets_sibling_of_the_exports_is_not_visible(host):
-    """Only the three exported directories are published, not their parent."""
+    """Only the exported directory is published, not its parent."""
 
     listing = sftp_output(host, "ls /")
     assert "secrets" not in listing, listing
@@ -187,17 +196,17 @@ def test_the_secrets_sibling_of_the_exports_is_not_visible(host):
 @pytest.mark.parametrize(
     "command",
     [
-        "symlink /etc/passwd /config/escape-link",
-        "symlink / /data/root-link",
-        "ln /etc/passwd /config/escape-hardlink",
+        "symlink /etc/passwd /backups/escape-link",
+        "symlink / /backups/root-link",
+        "ln /etc/passwd /backups/escape-hardlink",
     ],
 )
 def test_symlink_and_hardlink_escapes_are_refused(host, command):
     result = host.sftp([command])
     assert result.returncode != 0, result.stdout
-    assert not host.exists(f"{INSTALL_ROOT}/config/escape-link")
-    assert not host.exists(f"{INSTALL_ROOT}/config/escape-hardlink")
-    assert not host.exists(f"{INSTALL_ROOT}/data/root-link")
+    assert not host.exists(f"{INSTALL_ROOT}/data/backups/escape-link")
+    assert not host.exists(f"{INSTALL_ROOT}/data/backups/escape-hardlink")
+    assert not host.exists(f"{INSTALL_ROOT}/data/backups/root-link")
 
 
 # --- what the SSH session cannot do -----------------------------------------
@@ -241,10 +250,10 @@ def test_password_authentication_is_refused(host):
 
 def test_confinement_survives_a_package_reinstall(host, package):
     host.install_package(package)
-    options = host.shell(f"findmnt -no OPTIONS --mountpoint {EXPORT_ROOT}/config").stdout
+    options = host.shell(f"findmnt -no OPTIONS --mountpoint {EXPORT_ROOT}/backups").stdout
     assert "ro" in options.split(","), options
-    assert host.sftp(["ls /config"]).returncode == 0
-    assert host.sftp(["put /tmp/upload-probe /config/after-reinstall"]).returncode != 0
+    assert host.sftp(["ls /backups"]).returncode == 0
+    assert host.sftp(["put /tmp/upload-probe /backups/after-reinstall"]).returncode != 0
 
 
 def test_confinement_is_reestablished_after_the_mounts_are_lost(host):
@@ -252,39 +261,49 @@ def test_confinement_is_reestablished_after_the_mounts_are_lost(host):
 
     for name in EXPORT_NAMES:
         host.shell(f"umount {EXPORT_ROOT}/{name} 2>/dev/null || true")
-    assert not host.shell(f"findmnt -no OPTIONS --mountpoint {EXPORT_ROOT}/config").stdout.strip()
+    assert not host.shell(f"findmnt -no OPTIONS --mountpoint {EXPORT_ROOT}/backups").stdout.strip()
 
     host.shell("systemctl start ems-appliance-export.service", timeout=300)
-    options = host.shell(f"findmnt -no OPTIONS --mountpoint {EXPORT_ROOT}/config").stdout
+    options = host.shell(f"findmnt -no OPTIONS --mountpoint {EXPORT_ROOT}/backups").stdout
     assert "ro" in options.split(","), host.journal("ems-appliance-export.service")
-    assert host.sftp(["ls /config"]).returncode == 0
+    assert host.sftp(["ls /backups"]).returncode == 0
 
 
 def test_an_export_path_created_later_is_published(host):
     """The unit is the trigger: it publishes the path and re-validates access."""
 
-    host.shell(f"umount {EXPORT_ROOT}/data 2>/dev/null || true; rm -rf {INSTALL_ROOT}/data")
+    host.shell(
+        f"umount {EXPORT_ROOT}/backups 2>/dev/null || true; rm -rf {INSTALL_ROOT}/data/backups"
+    )
     host.publish_exports()
-    assert not host.shell(f"findmnt -no OPTIONS --mountpoint {EXPORT_ROOT}/data").stdout.strip()
+    assert not host.shell(f"findmnt -no OPTIONS --mountpoint {EXPORT_ROOT}/backups").stdout.strip()
 
-    host.shell(f"mkdir -p {INSTALL_ROOT}/data && printf 'late\\n' > {INSTALL_ROOT}/data/late.json")
+    host.shell(
+        f"mkdir -p {INSTALL_ROOT}/data/backups && "
+        f"printf 'late\\n' > {INSTALL_ROOT}/data/backups/late.json && "
+        f"printf 'backup-bytes\\n' > {INSTALL_ROOT}/data/backups/backup-1.tar"
+    )
     host.publish_exports()
 
-    options = host.shell(f"findmnt -no OPTIONS --mountpoint {EXPORT_ROOT}/data").stdout
+    options = host.shell(f"findmnt -no OPTIONS --mountpoint {EXPORT_ROOT}/backups").stdout
     assert "ro" in options.split(","), options
-    assert "late" in sftp_output(host, "get /data/late.json /tmp/late.json")
+    assert "late" in sftp_output(host, "get /backups/late.json /tmp/late.json")
 
 
 def test_a_raw_setup_run_does_not_re_enable_access_on_its_own(host):
-    """Authentication follows a verified boundary, not a script's exit code."""
+    """Authentication follows a verified boundary, not a script's exit code.
 
-    host.shell("/usr/bin/ems-appliance backup-access disable >/dev/null 2>&1", timeout=180)
+    Suspended rather than disabled: disable is the owner's durable off, which
+    no publication lifts.
+    """
+
+    host.shell("/usr/bin/ems-appliance backup-access suspend >/dev/null 2>&1", timeout=180)
     host.setup_export_root()
 
-    assert "Permission denied" in sftp_output(host, "ls /config")
+    assert "Permission denied" in sftp_output(host, "ls /backups")
 
     host.publish_exports()
-    assert host.sftp(["ls /config"]).returncode == 0
+    assert host.sftp(["ls /backups"]).returncode == 0
 
 
 def test_the_agent_reads_the_host_mount_table_not_its_own_namespace(host):
@@ -292,10 +311,10 @@ def test_the_agent_reads_the_host_mount_table_not_its_own_namespace(host):
 
     import json
 
-    host.shell(f"umount {EXPORT_ROOT}/data 2>/dev/null || true", timeout=120)
+    host.shell(f"umount {EXPORT_ROOT}/backups 2>/dev/null || true", timeout=120)
     try:
         payload = json.loads(host.agent_call({"operation": "backup.get"}).stdout.strip())["result"]
-        data = [item for item in payload["paths"] if item["name"] == "data"][0]
+        data = [item for item in payload["paths"] if item["name"] == "backups"][0]
         assert data["state"] != "mounted", (
             "the agent reported a mount that no longer exists on the host"
         )
@@ -304,7 +323,7 @@ def test_the_agent_reads_the_host_mount_table_not_its_own_namespace(host):
         host.setup_export_root()
 
     payload = json.loads(host.agent_call({"operation": "backup.get"}).stdout.strip())["result"]
-    data = [item for item in payload["paths"] if item["name"] == "data"][0]
+    data = [item for item in payload["paths"] if item["name"] == "backups"][0]
     assert data["state"] == "mounted", data
 
 
@@ -332,7 +351,7 @@ def test_a_read_write_export_is_reported_as_degraded_not_configured(host):
 
     host.shell(
         f"umount {EXPORT_ROOT}/backups 2>/dev/null || true; "
-        f"mount --bind {INSTALL_ROOT}/backups {EXPORT_ROOT}/backups",
+        f"mount --bind {INSTALL_ROOT}/data/backups {EXPORT_ROOT}/backups",
         timeout=120,
     )
     try:
@@ -360,18 +379,24 @@ def export_status(host):
 def test_a_source_symlinked_to_etc_is_never_mounted(host):
     """The attack the export root exists to prevent, on a real host."""
 
-    host.shell(f"mv {INSTALL_ROOT}/config {INSTALL_ROOT}/config.real && ln -s /etc {INSTALL_ROOT}/config")
+    host.shell(
+        f"mv {INSTALL_ROOT}/data/backups {INSTALL_ROOT}/data/backups.real && "
+        f"ln -s /etc {INSTALL_ROOT}/data/backups"
+    )
     try:
         result = host.setup_export_root()
 
         assert result.returncode != 0, result.stdout
         assert export_status(host)["status"] == "failed", export_status(host)
-        source = host.shell(f"findmnt -no FSROOT --mountpoint {EXPORT_ROOT}/config").stdout.strip()
+        source = host.shell(f"findmnt -no FSROOT --mountpoint {EXPORT_ROOT}/backups").stdout.strip()
         assert source != "/etc", source
-        assert not host.exists(f"{EXPORT_ROOT}/config/passwd")
+        assert not host.exists(f"{EXPORT_ROOT}/backups/passwd")
         assert host.acl_entries("/etc", user=BACKUP_USER) == []
     finally:
-        host.shell(f"rm -f {INSTALL_ROOT}/config && mv {INSTALL_ROOT}/config.real {INSTALL_ROOT}/config")
+        host.shell(
+            f"rm -f {INSTALL_ROOT}/data/backups && "
+            f"mv {INSTALL_ROOT}/data/backups.real {INSTALL_ROOT}/data/backups"
+        )
         host.setup_export_root()
 
 
@@ -379,8 +404,8 @@ def test_a_symlinked_export_target_never_receives_root_operations(host):
     outside = "/srv/decoy-target"
     host.shell(
         f"mkdir -p {outside} && chmod 0700 {outside} && "
-        f"umount {EXPORT_ROOT}/data 2>/dev/null; rmdir {EXPORT_ROOT}/data 2>/dev/null; "
-        f"ln -s {outside} {EXPORT_ROOT}/data"
+        f"umount {EXPORT_ROOT}/backups 2>/dev/null; rmdir {EXPORT_ROOT}/backups 2>/dev/null; "
+        f"ln -s {outside} {EXPORT_ROOT}/backups"
     )
     try:
         result = host.setup_export_root()
@@ -390,21 +415,21 @@ def test_a_symlinked_export_target_never_receives_root_operations(host):
         assert entry["mode"] == "700", entry
         assert host.shell(f"mountpoint -q {outside}").returncode != 0
     finally:
-        host.shell(f"rm -f {EXPORT_ROOT}/data && mkdir -p {EXPORT_ROOT}/data")
+        host.shell(f"rm -f {EXPORT_ROOT}/backups && mkdir -p {EXPORT_ROOT}/backups")
         host.setup_export_root()
 
 
 def test_a_target_mounted_from_the_wrong_source_is_replaced(host):
     host.shell(
         f"mkdir -p /srv/foreign && printf 'foreign\\n' > /srv/foreign/marker && "
-        f"umount {EXPORT_ROOT}/data 2>/dev/null; mount --bind /srv/foreign {EXPORT_ROOT}/data"
+        f"umount {EXPORT_ROOT}/backups 2>/dev/null; mount --bind /srv/foreign {EXPORT_ROOT}/backups"
     )
     try:
         host.setup_export_root()
 
-        assert not host.exists(f"{EXPORT_ROOT}/data/marker")
-        fsroot = host.shell(f"findmnt -no FSROOT --mountpoint {EXPORT_ROOT}/data").stdout.strip()
-        assert fsroot.endswith("/ems-solarflow/data"), fsroot
+        assert not host.exists(f"{EXPORT_ROOT}/backups/marker")
+        fsroot = host.shell(f"findmnt -no FSROOT --mountpoint {EXPORT_ROOT}/backups").stdout.strip()
+        assert fsroot.endswith("/ems-solarflow/data/backups"), fsroot
     finally:
         host.setup_export_root()
 
@@ -412,16 +437,19 @@ def test_a_target_mounted_from_the_wrong_source_is_replaced(host):
 def test_an_export_source_on_another_filesystem_is_still_published(host):
     """A data partition is a mount, not a redirection."""
 
-    host.shell(f"umount {EXPORT_ROOT}/data 2>/dev/null; mount -t tmpfs tmpfs {INSTALL_ROOT}/data")
-    host.shell(f"printf 'partition\\n' > {INSTALL_ROOT}/data/runtime-state.json")
+    host.shell(
+        f"umount {EXPORT_ROOT}/backups 2>/dev/null; mount -t tmpfs tmpfs {INSTALL_ROOT}/data/backups"
+    )
+    host.shell(f"printf 'partition\\n' > {INSTALL_ROOT}/data/backups/backup-2.tar")
     try:
         result = host.setup_export_root()
 
         assert result.returncode == 0, result.stdout
-        assert "partition" in host.read_file(f"{EXPORT_ROOT}/data/runtime-state.json")
+        assert "partition" in host.read_file(f"{EXPORT_ROOT}/backups/backup-2.tar")
     finally:
         host.shell(
-            f"umount {EXPORT_ROOT}/data 2>/dev/null; umount {INSTALL_ROOT}/data 2>/dev/null; true"
+            f"umount {EXPORT_ROOT}/backups 2>/dev/null; "
+            f"umount {INSTALL_ROOT}/data/backups 2>/dev/null; true"
         )
         host.setup_export_root()
 
@@ -430,5 +458,15 @@ def test_the_kernel_mount_state_proves_source_and_read_only_target(host):
     for name in EXPORT_NAMES:
         fsroot = host.shell(f"findmnt -no FSROOT --mountpoint {EXPORT_ROOT}/{name}").stdout.strip()
         options = host.shell(f"findmnt -no OPTIONS --mountpoint {EXPORT_ROOT}/{name}").stdout.strip()
-        assert fsroot.endswith(f"/ems-solarflow/{name}"), (name, fsroot)
+        assert fsroot.endswith(f"/ems-solarflow/data/{name}"), (name, fsroot)
         assert "ro" in options.split(","), (name, options)
+
+
+def test_access_switched_off_for_good_stays_off_through_a_publication(host):
+    host.shell("/usr/bin/ems-appliance backup-access disable >/dev/null 2>&1", timeout=180)
+    try:
+        host.publish_exports()
+        assert "Permission denied" in sftp_output(host, "ls /backups")
+    finally:
+        host.shell("/usr/bin/ems-appliance backup-access enable >/dev/null 2>&1", timeout=180)
+    assert host.sftp(["ls /backups"]).returncode == 0

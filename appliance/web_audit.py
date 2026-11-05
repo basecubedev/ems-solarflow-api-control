@@ -13,6 +13,7 @@ import time
 
 from appliance.agent_client import AgentCallError, AgentUnavailableError
 from appliance.audit import RESULT_SUCCESS
+from appliance.protocol import WEB_SESSION_ACTOR
 
 AGENT_OPERATION = "audit.record_web_event"
 
@@ -28,7 +29,7 @@ DEGRADED_MESSAGE = (
 class WebAuditReporter:
     """Hands one fixed authentication event to the agent and tracks the truth."""
 
-    def __init__(self, agent, *, log=None, actor="appliance-admin", time_fn=None):
+    def __init__(self, agent, *, log=None, actor=WEB_SESSION_ACTOR, time_fn=None):
         self.agent = agent
         self.log = log
         self.actor = actor

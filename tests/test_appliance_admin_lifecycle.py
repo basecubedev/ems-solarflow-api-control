@@ -123,7 +123,9 @@ def test_docker_down_is_reported_not_crashed(tmp_path):
     services.host.docker_running = False
     detected = services.admin.detect()
     assert detected["docker"]["state"] == "stopped"
-    assert detected["installed"] is False
+    # A daemon that does not answer cannot say the Admin is absent.
+    assert detected["installed"] is None
+    assert detected["bootstrap_required"] is False
 
 
 # --- target validation -----------------------------------------------------
@@ -381,9 +383,9 @@ def test_a_plan_cancelled_after_its_pull_ends_as_cancelled(tmp_path, monkeypatch
     services.host.publish_image("v1.1.0")
     inspect = services.admin.docker.inspect_image
 
-    def cancel_then_inspect(reference):
+    def cancel_then_inspect(reference, **kwargs):
         _cancel_pending(services)
-        return inspect(reference)
+        return inspect(reference, **kwargs)
 
     monkeypatch.setattr(services.admin.docker, "inspect_image", cancel_then_inspect)
 
@@ -1315,3 +1317,347 @@ def test_a_plan_that_fails_while_it_is_sealed_releases_the_lock(tmp_path, monkey
     assert operation.state == "cancelled"
     assert services.operations.active() is None
     assert [entry["result"] for entry in services.audit.tail()].count("failure") == 1
+
+
+# --- a tag that moved after the Admin was started ------------------------------
+
+
+def test_the_running_admins_digest_is_its_own_repositorys_even_by_id(tmp_path):
+    """Asked by id, the inspect named no repository, and the first repo digest
+    -- a mirror's -- was taken for the Admin's own."""
+
+    services = healthy_appliance(tmp_path)
+    running = services.host.images[f"{ADMIN_REPOSITORY}:v1.0.0"]
+    running["RepoDigests"].insert(0, "mirror.example.org/ems-admin@sha256:" + "f" * 64)
+
+    state = services.admin.detect()
+
+    assert state["digest"] == running["_digest"], state["digest"]
+
+
+def test_the_running_admin_is_the_image_its_container_runs_not_the_one_its_tag_names_now(tmp_path):
+    """Docker reports a container's image by id; the Manager re-resolved the tag
+    it was created from. Once `latest` moved -- pulled for another container --
+    status, verification and the recovery identity all named an image that had
+    never run, and a failed install "recovered" to it."""
+
+    services = healthy_appliance(tmp_path, tag="latest")
+    running = services.host.images[f"{ADMIN_REPOSITORY}:latest"]
+    moved = services.host.publish_image("latest", digest="sha256:" + "b" * 64, version="v1.1.0", revision="bbbbbbb")
+    services.host.pull_local(f"{ADMIN_REPOSITORY}:latest")
+
+    state = services.admin.detect()
+
+    assert services.host.images[f"{ADMIN_REPOSITORY}:latest"] is moved
+    assert state["digest"] == running["_digest"], state["digest"]
+    assert state["revision"] == "abc1234"
+
+
+
+# --- which way an install moves -------------------------------------------------
+
+
+def _plan_for(services, **fields):
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    return handlers.dispatch({"operation": "admin.plan_install", **fields})["plan"]
+
+
+def test_an_install_plan_says_it_goes_back_and_warns(tmp_path):
+    """The Manager's own plan named its direction and warned about a downgrade;
+    the Admin's did neither, so "Latest stable" resolving below a running
+    release candidate was confirmed without a word."""
+
+    services = healthy_appliance(tmp_path, tag="v1.1.0", catalogue=StaticCatalogue(["v1.1.0", "v1.0.0"]))
+    services.host.publish_image("v1.0.0")
+
+    plan = _plan_for(services, channel="exact", tag="v1.0.0")
+
+    assert plan["direction"] == "downgrade"
+    assert "older" in plan["warning"], plan.get("warning")
+
+
+def test_an_install_plan_going_forward_has_no_warning(tmp_path):
+    services = healthy_appliance(tmp_path, tag="v1.0.0")
+    services.host.publish_image("v1.1.0")
+
+    plan = _plan_for(services, channel="exact", tag="v1.1.0")
+
+    assert plan["direction"] == "upgrade"
+    assert not plan.get("warning")
+
+
+def test_a_release_list_that_failed_carries_its_reason(tmp_path):
+    from appliance.releases import ReleaseResolutionError
+    from tests.helpers.appliance import StaticCatalogue
+
+    services = healthy_appliance(
+        tmp_path,
+        catalogue=StaticCatalogue(
+            error=ReleaseResolutionError("release_registry_unreachable", "the registry answered HTTP 429")
+        ),
+    )
+
+    listing = services.admin.releases()
+
+    assert listing["error"] == "release_registry_unreachable"
+    assert "HTTP 429" in listing["error_message"]
+
+
+@pytest.mark.parametrize(
+    "request_",
+    [
+        {"operation": "admin.plan_install", "channel": "exact", "tag": "v1.1.0"},
+        {"operation": "admin.plan_rollback"},
+        {"operation": "admin.plan_lifecycle", "action": "restart"},
+    ],
+)
+def test_an_admin_plan_is_refused_while_the_container_cannot_be_inspected(tmp_path, request_):
+    """An inspect that failed read as "no Admin": the plan recorded an empty
+    recovery identity, so a failed install could not put the running Admin back."""
+
+    services = healthy_appliance(tmp_path)
+    services.host.publish_image("v1.1.0")
+    original = services.host._docker
+
+    def inspect_fails(args):
+        if args[:1] == ["inspect"] and "container" in args:
+            return services.host._result("docker", args, 1, "", "context deadline exceeded")
+        return original(args)
+
+    services.host._docker = inspect_fails
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    with pytest.raises(AgentError) as excinfo:
+        handlers.dispatch(dict(request_))
+
+    assert excinfo.value.code == "container_state_unknown", excinfo.value.message
+
+
+def test_a_failed_install_with_nothing_to_restore_leaves_the_admin_stopped(tmp_path):
+    """No Admin ran at plan time and no known-good Admin was recorded: the
+    recovery restored the old compose and started its mutable tag, unverified,
+    and reported the previous Admin as restored."""
+
+    services = build_test_services(tmp_path, catalogue=StaticCatalogue(["v1.1.0", "v1.0.0"]))
+    host = services.host
+    host.write_deployment(tag="latest", variable_tag=False)
+    host.publish_image("latest", version="latest")
+    host.pull_local(f"{ADMIN_REPOSITORY}:latest")
+    host.publish_image("v1.1.0", healthy=False)
+    compose_before = services.admin.deployment().compose_file.read_text(encoding="utf-8")
+
+    operation, plan = plan_and_execute(services, channel="exact", tag="v1.1.0")
+
+    assert plan["recovery"]["digest"] == ""
+    assert operation.state == STATE_MANUAL_ACTION_REQUIRED, operation.to_dict()
+    assert "no previous Admin" in operation.error["message"], operation.error
+    running = host.containers.get(ADMIN_CONTAINER)
+    assert running is None or not running["State"]["Running"], running
+    assert services.admin.deployment().compose_file.read_text(encoding="utf-8") == compose_before
+
+
+def test_a_repair_reinstall_brings_back_the_recorded_admin_not_the_deployment(tmp_path):
+    """recreate_admin ran compose-up on whatever the deployment named, so a
+    deployment off the known-good image could never clear the finding."""
+
+    services = admin_replaced_itself(healthy_appliance(tmp_path))
+    services.host.publish_image("v9.9.9")
+    services.host.pull_local(f"{ADMIN_REPOSITORY}:v9.9.9")
+    services.host.run_container(ADMIN_CONTAINER, f"{ADMIN_REPOSITORY}:v9.9.9")
+    recorded = services.known_good.current()
+
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    planned = handlers.dispatch({"operation": "admin.plan_repair"})
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+    record = services.operations.get(planned["operation"]["operation_id"])
+
+    assert record.state == STATE_SUCCEEDED, (record.state, record.error, record.result)
+    assert services.admin.detect()["digest"] == recorded["admin_digest"]
+
+
+def test_an_install_cut_off_after_pinning_is_offered_the_recorded_admin_back(tmp_path):
+    """A power cut between stopping the old Admin and starting the new one left
+    the deployment pinned to a digest nothing verified. Start then held the old
+    Admin to that digest, and Repair saw nothing wrong."""
+
+    services = healthy_appliance(tmp_path)
+    services.host.publish_image("v1.1.0")
+    running = services.admin.detect()["digest"]
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    planned = handlers.dispatch(
+        {"operation": "admin.plan_install", "channel": "exact", "tag": "v1.1.0"}
+    )
+
+    def killed(deployment):
+        raise SystemExit("agent killed")
+
+    services.admin._compose_up = killed
+    with pytest.raises(SystemExit):
+        handlers.dispatch(
+            {
+                "operation": "operations.execute",
+                "operation_id": planned["operation"]["operation_id"],
+                "confirmation_token": planned["confirmation_token"],
+            }
+        )
+    del services.admin._compose_up
+    services.operations.recover_interrupted()
+    services.operations.acknowledge(planned["operation"]["operation_id"])
+
+    findings = {item.check: item for item in services.admin.inspect_repair()}
+
+    assert findings["admin_deployment"].ok is False, findings["admin_deployment"].detail
+    assert findings["admin_deployment"].action == "recreate_admin"
+    assert findings["admin_container"].action == "", findings["admin_container"]
+
+    planned = handlers.dispatch({"operation": "admin.plan_repair"})
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+    record = services.operations.get(planned["operation"]["operation_id"])
+
+    assert record.state == STATE_SUCCEEDED, (record.state, record.error, record.result)
+    assert services.admin.detect()["digest"] == running
+
+
+def test_an_install_from_a_repository_the_admin_cannot_update_from_is_refused(tmp_path):
+    """The Manager pins <first allowlisted repository>@digest, and the Admin
+    finds its own image only under ghcr.io/basecubedev/ems-solarflow-admin: an
+    install from a mirror left the Admin unable to update itself."""
+
+    import dataclasses
+
+    services = healthy_appliance(tmp_path)
+    images = dataclasses.replace(
+        services.admin.config.images,
+        repositories=("registry.example/mirror/ems-solarflow-admin",),
+    )
+    services.admin.config = dataclasses.replace(services.admin.config, images=images)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    with pytest.raises(AgentError) as excinfo:
+        handlers.dispatch({"operation": "admin.plan_install", "channel": "exact", "tag": "v1.1.0"})
+
+    assert excinfo.value.code == "admin_repository_unsupported", excinfo.value.message
+
+
+def test_the_repository_the_manager_installs_is_the_one_the_admin_updates_itself_from():
+    from admin import update_apply
+    from admin.admin_update import ADMIN_IMAGE_REPO
+    from appliance.config import DEFAULT_ADMIN_REPOSITORY
+
+    assert DEFAULT_ADMIN_REPOSITORY == ADMIN_IMAGE_REPO
+    assert update_apply.ADMIN_IMAGE_RE.fullmatch(f"{DEFAULT_ADMIN_REPOSITORY}:v1.0.0")
+    assert update_apply.ADMIN_DIGEST_RE.fullmatch(f"{DEFAULT_ADMIN_REPOSITORY}@sha256:{'a' * 64}")
+
+
+def test_a_refused_plan_leaves_no_banner_to_acknowledge(tmp_path):
+    """The refusal is reported to the page that asked; the cancelled record
+    also became a banner titled as if the operation ran, with Acknowledge."""
+
+    services = healthy_appliance(tmp_path)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    with pytest.raises(AgentError):
+        handlers.dispatch({"operation": "admin.plan_install", "channel": "exact", "tag": "v9.9.9"})
+
+    assert services.operations.unacknowledged() == []
+    refused = services.operations.list(limit=1)[0]
+    assert refused.state == "cancelled" and refused.error, refused.to_dict()
+
+
+def test_a_refused_time_zone_or_support_archive_plan_keeps_its_reason(tmp_path, monkeypatch):
+    from appliance.support_archive import SupportArchiveError
+
+    services = healthy_appliance(tmp_path)
+
+    def refuse(*args, **kwargs):
+        raise SupportArchiveError("support_archive_too_large", "too large")
+
+    monkeypatch.setattr(services.support, "plan", refuse)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    with pytest.raises(AgentError) as excinfo:
+        handlers.dispatch({"operation": "support.plan_archive"})
+
+    assert excinfo.value.code == "support_archive_too_large"
+    assert services.operations.list(limit=1)[0].error["code"] == "support_archive_too_large"
+
+
+@pytest.mark.parametrize(
+    "request_",
+    [
+        {"operation": "admin.plan_install", "channel": "exact", "tag": "v1.1.0"},
+        {"operation": "admin.plan_lifecycle", "action": "restart"},
+        {"operation": "admin.plan_repair"},
+    ],
+)
+def test_an_admin_plan_waits_while_a_package_run_holds_the_lock(tmp_path, request_):
+    """A package run left running past the agent's wait upgrades docker-ce or
+    containerd; recreating the Admin in the middle of that is a second hand
+    on the same engine."""
+
+    from appliance.packages import LOCK_HELD
+
+    services = healthy_appliance(tmp_path)
+    services.host.publish_image("v1.1.0")
+    services.admin.package_lock = lambda: LOCK_HELD
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    with pytest.raises(AgentError) as excinfo:
+        handlers.dispatch(dict(request_))
+
+    assert excinfo.value.code == "package_operation_active", excinfo.value.message
+
+
+def test_an_admin_restart_confirmed_after_a_package_run_started_waits_for_it(tmp_path):
+    from appliance.packages import LOCK_HELD
+
+    services = healthy_appliance(tmp_path)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    planned = handlers.dispatch({"operation": "admin.plan_lifecycle", "action": "restart"})
+    services.admin.package_lock = lambda: LOCK_HELD
+
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+    record = services.operations.get(planned["operation"]["operation_id"])
+
+    assert record.error["code"] == "package_operation_active", record.to_dict()
+    assert not any(tool == "docker" and "restart" in args for tool, args, _ in services.host.calls)
+
+
+def test_a_repair_confirmed_after_a_package_run_started_waits_for_it(tmp_path):
+    from appliance.packages import LOCK_HELD
+
+    services = healthy_appliance(tmp_path)
+    services.host.containers[ADMIN_CONTAINER]["State"].update({"Running": False, "Status": "exited"})
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    planned = handlers.dispatch({"operation": "admin.plan_repair"})
+    services.admin.package_lock = lambda: LOCK_HELD
+
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+    record = services.operations.get(planned["operation"]["operation_id"])
+
+    assert record.error["code"] == "package_operation_active", record.to_dict()
+    assert services.host.containers[ADMIN_CONTAINER]["State"]["Running"] is False

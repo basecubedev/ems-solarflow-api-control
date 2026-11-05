@@ -54,14 +54,22 @@ on state.
   audit/        root:root 0700
 ```
 
-Files the agent writes are `root:root 0600`; the agent unit runs with
-`UMask=0077` so anything it creates outside that list is root-only too.
+Files the agent writes that hold anything worth protecting — operation records
+with their confirmation tokens, the known-good record, the confirmed password
+record, the audit and operation logs — are `root:root 0600`. A file the agent
+writes outside its own state keeps its primary group: the time zone file under
+`/etc` is `root:ems-appliance 0640` and holds nothing secret. The agent unit
+runs with `UMask=0077`, so a directory or file it creates without an explicit
+mode is root-only.
 
 The web account owns the directories under `web/`, so it can replace one of
-them with a symlink. Two root passes walk that layout — the package's postinst
-and `migrate_state`, which the agent also runs at every start — and `chown`,
-`chmod` and `mkdir -p` all follow a link. Both passes therefore refuse to touch
-a managed path that is a symlink, and neither descends into one. The refusal is
+them with a symlink. Three root passes walk that layout — the package's
+postinst, `migrate_state`, which the agent also runs at every start, and the
+directory set-up behind the agent's start and `sudo ems-appliance
+password-reset` — and `chown`, `chmod` and `mkdir -p` all follow a link. All
+three therefore refuse to touch a managed path that is a symlink, and none
+descends into one; `password-reset` no longer sets up the web account's
+directories at all. The refusal is
 reported rather than fatal: whoever can plant such a link already holds the web
 account, and failing the install would hand them a way to block every later
 package as well.
@@ -336,18 +344,19 @@ cannot regress silently.
 | Default password | none for the browser — the first start must create one. The **console** rescue account is the other way round: `ems-rescue` ships with a documented password, and changing it is optional. See [console-recovery.md](console-recovery.md) |
 | Independence | none — one secret for the Appliance Manager, the Admin console and the dashboard, in one shared store |
 | Transport | **Plain HTTP on every interface.** The manager terminates no TLS and has no certificate; anyone who can reach the port sees the login page |
-| Session cookie | `HttpOnly`, `SameSite=Strict`, `Path=/`. The `Secure` attribute is set only when a reverse proxy in front of it terminates TLS — the appliance never does |
+| Session cookie | `HttpOnly`, `SameSite=Strict`, `Path=/`. The `Secure` attribute is set when a request says `X-Forwarded-Proto: https`, which any client can send. **A reverse proxy is not supported**: behind one every client shares the proxy's rate-limit budget, so five typos lock everyone out, sessions bind to the proxy's address, and the Host check refuses the proxy's name unless it is listed in `extra_host_names`. A cookie is scoped to the host, not the port, so the browser also hands it to the Admin console and the dashboard on the same name, and a container could read it there. A session therefore never crosses between this host and the network: one signed in from the LAN is refused from loopback, from the host's own addresses (where a host-networked service comes from) and from Docker's container networks (the pools `/etc/docker/daemon.json` names, `172.16.0.0/12` on this image, and the networks of its live `docker0` and `br-` bridges; Docker's built-in default pools are not assumed, because `192.168.0.0/16` is most home networks' LAN), and one signed in from there is refused from the LAN, without ending the owner's session. Between two LAN addresses it is honoured: one dual-stack browser reaches the appliance over either family, and a provider rotates the IPv6 prefix. A copy carried off the host to another LAN machine is therefore not refused. A mutation touches the session only after its CSRF and origin checks passed. The Cookie header is parsed by hand: a foreign cookie on the same name that Python's parser rejects no longer signs the operator out |
 | CSRF | `X-Appliance-CSRF` must match the session token on every mutation, and the `Host` must name this appliance; a foreign `Origin` is refused |
-| Host check | On the first password, every sign-in and every change the `Host` must be an address literal, loopback, or the current hostname with or without `.local`; any other is refused with `403 csrf_host_rejected` and told to use the IP address. A read, or signing out, carries no session a rebound name could use: the cookie belongs to the real name. The hostname is read from `/etc/hostname` on every request, not from `gethostname()`: `ProtectHostname=` gives the web unit a UTS namespace of its own that keeps the name the host had when the unit started, and a name taken from there refuses every request after a rename. A host with no static hostname falls back to that start-time name, so a name that only DHCP or a transient hostname changes is still refused until the unit restarts |
+| Host check | On the first password, every sign-in and every change the `Host` must be an address literal, loopback, the current hostname with or without `.local`, the `<hostname>-N.local` avahi publishes after a name conflict (only that one, while avahi publishes it — asked of the agent at most once a minute), or a name listed exactly in `extra_host_names` (a router's DNS name; never a suffix, which would reopen DNS rebinding), each with or without the root dot; any other is refused with `403 csrf_host_rejected` and the accepted names. An `extra_host_names` entry that is not a whole DNS name — a wildcard, an address — is ignored and named in that refusal, rather than stopping both services over a typo. A read, or signing out, carries no session a rebound name could use: the cookie belongs to the real name. The hostname is read from `/etc/hostname` on every request, not from `gethostname()`: `ProtectHostname=` gives the web unit a UTS namespace of its own that keeps the name the host had when the unit started, and a name taken from there refuses every request after a rename. A host with no static hostname falls back to that start-time name, so a name that only DHCP or a transient hostname changes is still refused until the unit restarts |
 | CSRF before a session exists | Enrolment and login hold no token, so the `Host` and `Origin` halves apply to them on their own. Without that, a page opened anywhere on the LAN could claim the first password during the first-start window, or spend the operator's login attempts against their own address |
+| First password | **First come.** The Host and Origin checks stop a browser on another page, not a device on the LAN that sends the request itself with an address as `Host` and no `Origin`; whoever does that first sets the password, and that password may enable SSH, add keys and switch the root shell on. There is no setup code (owner decision 2026-11-04). The defence is the documented one: set the password as soon as the page answers, and if the page asks to sign in on a box nobody set up, reset at the console and check keys and shell access, because a console reset changes the password and leaves those as they are |
 | Rate limiting | 5 failed password checks per client address per 5 minutes, then `429`. An IPv6 address also counts toward its /64, which allows 20: a host chooses its own addresses inside its /64, so the address alone bounded nothing, while every host on a SLAAC network shares that /64 and every link-local client shares `fe80::/64` — five typos lock out one device, not the network. An IPv4 client, also one reaching the dual-stack listener as `::ffff:a.b.c.d`, counts by its address only. A sign-in or password change that goes through clears its own address, never the /64; a lockout held by the /64 alone says so and names the appliance's IPv4 address as the way in. The current-password check of a password change counts against the same budget, and a wrong current password, or a change refused by the rate limit, as busy or with the agent unreachable, is audited like a sign-in. A change audited with `agent_unavailable` has an unknown outcome: the agent may have stored the new password before its answer was lost. The window runs on the monotonic clock, so a wall-clock step neither extends nor ends a lockout. The counters live in the web process; restarting `ems-appliance-web` clears them |
 | Ceiling across sources | none. One dual-stack host holds four sources (IPv4, global, unique-local and link-local IPv6); a ceiling it could fill on its own would keep the operator out with only the physical console left, and would not protect the password anyway, because Admin and the dashboard check the same one per address |
 | Concurrent password checks | at most two at once, sign-ins and the current-password check of a password change together. Each is a PBKDF2 derivation in the root agent; a further one is refused at once with `503 login_busy` and "try again in a moment", not queued, and not counted against its source. A busy refusal costs its source nothing, so a client holding many addresses — dozens of IPv4 addresses claimed on the LAN, fewer the slower each check — can keep both slots full and every sign-in busy, the IPv4 way out included; the physical console stays the way in. Each refusal is audited with the reason `busy` |
-| Expiration | idle timeout plus an absolute maximum lifetime |
+| Expiration | idle timeout plus an absolute maximum lifetime, both on the monotonic clock and both at least one second; neither can be switched off |
 | Logout | destroys the session |
 | Password reset | rotates a generation marker, invalidating **all** sessions; run as root it also makes the new password the confirmed one |
 | Password confirmation | confirming a password set elsewhere keeps every session; see "What a rewritten file cannot open" |
-| Pre-auth exposure | only the login page, whether a password exists and whether its file is missing |
+| Pre-auth exposure | the exact Manager version (`/api/session` and the `Server` header of every response), the login page, whether a password exists, whether its file is missing, and whether that could be read at all. An agent that cannot be asked is said to be that — the page shows "cannot check passwords right now" rather than a sign-in form — and an agent refusal of the password check is a `503`, not a wrong password, and costs no login attempt |
 | SSH on/off | covers `ssh.socket` as well as `ssh.service`. On a host whose sshd is socket-activated the socket holds port 22 and starts sshd per connection, so acting on the service alone reported SSH as off over a box that went on accepting keys |
 
 There is no unauthenticated network password-reset endpoint. Recovery is
@@ -358,8 +367,9 @@ There is no unauthenticated network password-reset endpoint. Recovery is
 Every API response carries `Cache-Control: no-store`,
 `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
 `Referrer-Policy: no-referrer` and a Content-Security-Policy with
-`default-src 'self'` and `frame-ancestors 'none'`. Static assets are an explicit
-two-file allowlist; a traversal attempt returns `404`.
+`default-src 'self'` and `frame-ancestors 'none'`. Static assets are three named
+Classic files plus every `.html`, `.js`, `.css`, `.json`, `.woff2` and
+`.LICENSE` file under `static/modern`; a traversal attempt returns `404`.
 
 ## Secret handling
 
@@ -390,12 +400,28 @@ admin install / update / rollback / repair, admin start / stop / restart,
 OS update, package recovery,
 SSH enable or disable, root-capable shell access enable or disable,
 SSH key added or removed, all keys revoked, support archive,
-network change, hostname change, reboot, shutdown
+network change, hostname change, time zone change, reboot, shutdown,
+Appliance Manager update and revert
 ```
+
+Which way an operation went is in the entry's `detail`: on or off, start, stop
+or restart, the account and the key's fingerprint, the network, the host name,
+the time zone, the update scope and the version. Before, `ssh.shell_access
+success` twice was the whole answer to "who turned shell access on?", and the
+operation record that said more is pruned after fifty operations.
 
 Every plan the agent will execute is on that list, and a test holds it there:
 `_audit` returns silently for a type it does not recognise, so a plan added
 without an audit action would leave no trace at all.
+
+An executed operation is audited twice: `confirmed` when the operator confirms
+it, then `success` or `failure` by the state its record ended in — several
+executors record a failure and return, and were audited as a success. An end
+the card had no room for is audited as the end that happened, not as the write
+that failed. A reboot or shutdown the host carried out before the agent could
+audit it keeps only the `confirmed` entry; its record says it succeeded. A
+confirmation the blockers refused is `denied`, and a plan that found nothing to
+do is `nothing_to_do`, not a failure.
 
 Passwords, tokens, WLAN passphrases and full SSH keys are never recorded.
 
@@ -752,6 +778,18 @@ the appliance modules on purpose: no partitioning tool is reachable from the
 Python command runner, so no code path that handles a request can repartition
 anything.
 
+### What each card makes of its own
+
+Every card flashed from one image starts with the same bytes, so whatever has
+to be unique is made on the first boot. The SSH host keys are deleted from the
+image and generated by `ems-appliance-sshd-keys.service`; the Manager's secrets
+are created at runtime; `/etc/machine-id` ships uninitialised, which the image
+inspection checks (`machine_id_uninitialized`). What is **not** made per card:
+the filesystem UUIDs, the MBR disk id and the ext4 hash seed are the same on
+every card from one build. Nothing on the appliance authenticates by them and
+the root is named by the by-slot alias, so this is accepted rather than changed;
+two cards from one build in the same machine would look alike to `blkid`.
+
 ## Update trust: one keyring, two artefact classes
 
 One thing reaches this appliance over HTTPS and is installed only if a
@@ -780,7 +818,7 @@ are host authority: the browser can influence neither.
 | Setting | Default | What it decides |
 |---|---|---|
 | `release_keyring` | `/etc/ems-appliance-manager/release-keyring.gpg` | The trust anchor. The package ships the project's own release keyring here, deliberately **not** as a conffile: it is a trust anchor rather than a setting, so a local edit must not survive an upgrade that rotates the key. With no keyring at all, every artefact is refused rather than installed unverified |
-| `release_fingerprints` | empty in code, the release primary in the shipped file | The signer, on top of the keyring. A keyring can hold more keys than a release may be signed with, so "`gpg` said good" is not the same answer as "signed by us". Names the **primary**, because `gpg` reports that one for a subkey signature — which is what makes rotating a leaked subkey cost nothing in the field. Empty accepts any key the keyring holds |
+| `release_fingerprints` | empty in code, the release primary in the shipped file | The signer, on top of the keyring. A keyring can hold more keys than a release may be signed with, so "`gpg` said good" is not the same answer as "signed by us". Names the **primary**, because `gpg` reports that one for a subkey signature — so the pin survives rotating a leaked subkey, although the keyring has to change (see *One identity, two keys*). Empty accepts any key the keyring holds |
 | `manager_index_url` | empty in code, this project's index in the shipped file | An `https` index naming downloadable Appliance Manager packages. The index is never trusted: it may only name candidates, and what is installed is decided by the signature. Empty is a working state — the package can still be installed by hand. Pinned to one release tag rather than the `/releases/latest` alias, because two products publish releases from this repository and a flashed appliance never gets the value corrected |
 
 Both settings have an empty code default and a filled-in shipped value, and the
@@ -802,14 +840,24 @@ so it could — and the release workflow makes the practice mechanical by naming
 the subkey with a trailing `!`, which is what stops `gpg` choosing a key of its
 own accord.
 
-What that buys is a rotation that costs nothing in the field. The appliance
-pins the **primary's** fingerprint, and `gpg` reports that one for a subkey
+What that buys is that the **pin** survives a rotation. The appliance pins
+the **primary's** fingerprint, and `gpg` reports that one for a subkey
 signature — field 12 of `VALIDSIG`, which
 `appliance/artifact_trust.py:valid_signature_fingerprints` reads deliberately
 instead of field 3. So a leaked signing subkey is revoked and replaced with the
-primary, and **no appliance needs a new keyring**. A leaked *primary* would
-need one, on every device, by package update — which is why it is not the key
-that travels.
+primary, and `release_fingerprints` does not change. The **keyring** does:
+`gpgv` verifies with the subkey's own public half and learns of a revocation
+only from the keyring, so a new subkey and the revocation of the old one
+reach an appliance only in a package that ships the new keyring — and that
+package has to be signed by a key the old keyring still accepts. The keyring
+is not a conffile, so dpkg replaces it with every install, a step back
+included: a revert, the installer's fallback or the deadline's revert across a
+rotation puts the old keyring back, the leaked subkey is trusted again, and
+releases signed with the new one are refused as `release_signature_invalid`.
+A rotation is therefore a bridge release signed by the old subkey and
+carrying the new keyring, and stepping back past it is to be avoided. A leaked
+*primary* needs a new pin as well, on every device, by package update — which
+is why it is not the key that travels.
 
 Two consequences worth stating, because both are easy to get wrong:
 

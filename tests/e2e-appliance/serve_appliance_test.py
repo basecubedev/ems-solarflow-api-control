@@ -26,6 +26,7 @@ from appliance.config import AllowedImages  # noqa: E402
 from appliance.hostprobe import APT_DAILY_UPDATE_STAMP  # noqa: E402
 from tests.helpers.appliance import (  # noqa: E402
     ADMIN_CONTAINER,
+    INSTALLED_VERSION,
     APT_SIMULATION,
     ADMIN_REPOSITORY,
     appliance_config,
@@ -34,6 +35,7 @@ from tests.helpers.appliance import (  # noqa: E402
     IMAGE_SOURCE,
     SSHD_BACKUP_MATCH,
     StaticCatalogue,
+    seed_backup_account,
 )
 
 OS_RELEASE = """NAME="Raspberry Pi OS"
@@ -100,18 +102,20 @@ def seed_manager_state(services, *, kept=False, verdict="", armed=False, deadlin
             services.paths,
             staged,
             sha256="sha256:" + "a" * 64,
-            version="0.1.0",
+            version="0.0.9",
             build_id="20260801000000",
             rotate=False,
         )
         # Rotate once so there is something to go back to, as an install does.
+        # The running one is the version dpkg reports, or the console corrects
+        # the record to what dpkg holds and keeps nothing.
         newer = packages / ".seed-newer.deb"
         newer.write_bytes(b"the package that is running")
         manager_retention.retain(
             services.paths,
             newer,
             sha256="sha256:" + "b" * 64,
-            version="0.2.0",
+            version=INSTALLED_VERSION,
             build_id="20260826010000",
         )
         staged.unlink(missing_ok=True)
@@ -247,9 +251,15 @@ def main():
 
     backup_home = root / "home" / "ems-backup"
     backup_home.mkdir(parents=True, exist_ok=True)
-    host.add_account("ems-backup", backup_home)
+    seed_backup_account(services, home=backup_home)
+    (root / "etc" / "ssh").mkdir(parents=True, exist_ok=True)
+    (root / "etc" / "ssh" / "ssh_host_ed25519_key.pub").write_text(
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEhzVK7WbLB5GNzCNZnmdLB2C0pYW1Zj0xNKxcXNEEmF root@ems\n",
+        encoding="utf-8",
+    )
 
-    live = {"app": None, "agent": None}
+    live = {"app": None, "agent": None, "auth": None}
+    hostname = host.hostname
     unconfigured_fetcher = services.manager.fetcher
 
     def seed_appliance_state(options=None):
@@ -274,7 +284,14 @@ def main():
         )
         host.write_deployment(tag="v1.0.0")
         host.run_container(ADMIN_CONTAINER, f"{ADMIN_REPOSITORY}:v1.0.0")
+        host.hostname, host.mdns_published = hostname, None
         host.apt_simulation = APT_SIMULATION
+        if options.get("manual_updates"):
+            host.apt_simulation = APT_SIMULATION + (
+                "Inst linux-image-rpi-v8 [1:6.12.1-1+rpt1] "
+                "(1:6.12.2-1+rpt1 Raspberry Pi Foundation:stable [arm64])\n"
+                "Inst containerd.io [1.7.26-1] (1.7.27-1 Docker CE:trixie [arm64])\n"
+            )
         age_index(root, clock.now, 86400 * int(options.get("index_days_old") or 0) or 3600)
         # Re-publish every scripted image so a previous test that broke one
         # cannot leak into the next.
@@ -290,6 +307,8 @@ def main():
         for account in services.config.ssh_key_accounts:
             try:
                 services.ssh.keystore(account).revoke_all()
+                for aside in services.ssh.set_aside_stores(account):
+                    aside.path.unlink(missing_ok=True)
             except Exception:
                 continue
         if options.get("authorized_keys"):
@@ -299,10 +318,29 @@ def main():
             store.ssh_dir.mkdir(parents=True, exist_ok=True)
             store.path.write_text("".join(f"{line}\n" for line in options["authorized_keys"]), encoding="utf-8")
             os.chmod(store.path, 0o600)
+        if options.get("set_aside_keys"):
+            # What a failed export's OnFailure unit leaves: the key file moved
+            # out of sshd's reach, to come back with the next activation.
+            from appliance.backup_confinement import DISABLED_SUFFIX
+
+            store = services.ssh.keystore(services.config.backup_user)
+            store.ssh_dir.mkdir(parents=True, exist_ok=True)
+            aside = store.ssh_dir / (store.path.name + DISABLED_SUFFIX)
+            aside.write_text("".join(f"{line}\n" for line in options["set_aside_keys"]), encoding="utf-8")
+            os.chmod(aside, 0o600)
         host.units["ssh.service"] = {"active": "inactive", "enabled": "disabled"}
+        host.units.pop("ssh.socket", None)
+        host.absent_units.add("ssh.socket")
+        if options.get("ssh_socket"):
+            # Trixie's shape: the socket holds port 22 and starts sshd per connection.
+            host.absent_units.discard("ssh.socket")
+            host.units["ssh.socket"] = {"active": "active", "enabled": "enabled"}
         host.sshd_backup_match = SSHD_BACKUP_MATCH.format(export_root=services.paths.export_root)
         host.ss_exit_code, host.ss_stderr, host.listening_ports = 0, "", ""
         services.paths.export_status_file.unlink(missing_ok=True)
+        from appliance.backup_confinement import REVOKED_NAME
+
+        (services.paths.agent_state_dir / REVOKED_NAME).unlink(missing_ok=True)
         services.paths.confirmed_password_file.unlink(missing_ok=True)
         if options.get("confirmed_password"):
             ConfirmedPassword(services.paths.confirmed_password_file).store(
@@ -339,6 +377,14 @@ def main():
         services.admin.catalogue.allow_prerelease = prereleases
         if options.get("break_digest"):
             host.registry[f"{ADMIN_REPOSITORY}:v1.1.0"]["RepoDigests"] = []
+        if live["app"] is not None:
+            live["app"].auth = live["auth"]
+            if options.get("auth_agent_offline"):
+                # The password store is reached through the agent on a real
+                # host; an agent that does not answer leaves its state unknown.
+                from appliance.web import AgentAuth
+
+                live["app"].auth = AgentAuth(_OfflineAgent())
         if options.get("agent_offline") and live["app"] is not None:
             # Authentication must keep working while the audit trail cannot be
             # written; the UI has to say so instead of implying it was.
@@ -422,6 +468,7 @@ def main():
             services.config, "manager_index_url", MANAGER_INDEX_URL if indexed else ""
         )
         services.manager.fetcher = StaticManagerIndex() if indexed else unconfigured_fetcher
+        host.manager_dpkg = tuple(options.get("manager_dpkg") or ("installed", INSTALLED_VERSION))
         seed_manager_state(
             services,
             kept=bool(options.get("manager_package_kept")),
@@ -441,7 +488,7 @@ def main():
         confirmed=ConfirmedPassword(services.paths.confirmed_password_file),
     )
     app.test_reset_hook = seed_appliance_state
-    live["app"], live["agent"] = app, agent
+    live["app"], live["agent"], live["auth"] = app, agent, app.auth
 
     server = ApplianceWebServer(app, ("127.0.0.1", port))
     print(f"appliance test server on http://127.0.0.1:{port} (state {root})", flush=True)

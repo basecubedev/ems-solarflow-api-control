@@ -1,5 +1,6 @@
 <script>
   import Card from "../../../shared/ui/Card.svelte";
+  import Empty from "../../../shared/ui/Empty.svelte";
   import Icon from "../../../shared/ui/Icon.svelte";
   import Status from "../../../shared/ui/Status.svelte";
   import KeyValues from "../widgets/KeyValues.svelte";
@@ -10,13 +11,15 @@
   import TrackHelp from "../widgets/TrackHelp.svelte";
   import PackageTable from "../widgets/PackageTable.svelte";
   import { t, tn, say, langOf } from "../i18n/i18n.svelte.js";
+  import { LOCK_STATES, word } from "../lib/words.js";
+  import { errorWords } from "../lib/errors.js";
   import { href } from "../app/router.svelte.js";
   import { host, ensure, held } from "../state/host.svelte.js";
   import { forms } from "../state/forms.svelte.js";
   import { detail } from "../state/prefs.svelte.js";
   import { rankedFindings, findingWords } from "../lib/findings.js";
-  import { adminGate, adminVersion, daemonState, dockerCondition, groupByTrack, indexAgeWords, latestVerdict, osTiles, securityUpdatesOffered, systemVerdict, updatesInDoubt } from "../lib/host.js";
-  import { MANAGER_OUTCOMES, MANAGER_VERDICTS, applianceNow, latestStableVersion, managerActions, managerOptions, riskyDirection } from "../lib/manager.js";
+  import { adminGate, adminTransitionUntil, adminVersion, daemonState, dockerCondition, groupByTrack, indexAgeWords, latestVerdict, osTiles, securityUpdatesOffered, systemVerdict, updatesInDoubt } from "../lib/host.js";
+  import { MANAGER_OUTCOMES, MANAGER_VERDICTS, applianceNow, managerRecovery, latestStableVersion, managerActions, managerOptions, riskyDirection } from "../lib/manager.js";
   import { RECOVERY_ACTIONS, adminInstallPlan, allUpdatesPlan, managerInstallPlan, managerRevertPlan, refreshIndexPlan, repairPlan, securityUpdatesPlan } from "../lib/plans.js";
 
   /**
@@ -52,7 +55,10 @@
       : !sources
         ? { key: "updates.checking", tone: "c-idle" }
         : sources.error
-          ? { key: "updates.manager.indexUnreadable", tone: "c-fault" }
+          ? {
+              key: sources.error === "release_source_insecure" ? "updates.manager.indexInsecure" : "updates.manager.indexUnreadable",
+              tone: "c-fault",
+            }
           : !sources.configured
             ? { key: "updates.manager.noIndex", tone: "c-idle" }
             : !managerLatest
@@ -87,6 +93,7 @@
   const kept = $derived(manager?.retention?.previous || {});
   const verify = $derived(manager?.verify || {});
   const verdict = $derived(manager?.verdict || {});
+  const recovery = $derived(managerRecovery(manager));
   const lastInstall = $derived(
     rights.inFlight
       ? { key: "manager.last.waiting", tone: "c-warn" }
@@ -102,7 +109,7 @@
   );
 
   const offered = $derived(managerOptions(sources?.releases || []));
-  const offeredGroups = $derived(groupByTrack(offered.map((item) => ({ ...item, track: item.entry.track }))));
+  const offeredGroups = $derived(groupByTrack(offered.map((item) => ({ ...item, track: item.entry.track })), detail.expert));
   const chosen = $derived(
     offered.find((item) => item.id === forms.managerVersion)
       || offered.find((item) => item.id === managerLatest?.release_id)
@@ -118,6 +125,13 @@
     return parts.join(" · ");
   }
 
+  /** The summary is where each part starts; its detail card is one press away, also on a phone. */
+  function toDetail(id) {
+    const target = document.getElementById(id);
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    target.focus({ preventScroll: true });
+  }
   const yesNo = (value) => (value === true ? t("common.yes") : value === false ? t("common.no") : null);
 </script>
 
@@ -126,6 +140,7 @@
     <div class="summary-body" data-testid="update-summary-manager">
       <span data-testid="update-summary-manager-state"><Status tone={managerSummary.tone} text={t(managerSummary.key)} /></span>
       <KeyValues rows={[{ label: t("updates.installed"), value: manager?.installed_version }, { label: t("updates.latestStable"), value: managerLatestVersion }]} />
+      <button class="link-btn" type="button" onclick={() => toDetail("updates-manager")} data-testid="update-summary-manager-details">{t("updates.details")}</button>
       {#if managerLatest?.direction === "upgrade"}
         <PlanButton plan={managerInstallPlan(managerLatest, false, "update-manager-latest")} label={t("updates.updateTo", { version: managerLatestVersion || "" })} icon="download" disabled={!managerKnown || !rights.canUpdate || unconfirmed} testid="update-manager-latest" />
         <UnconfirmedNote testid="update-manager-latest-unconfirmed" />
@@ -136,6 +151,7 @@
     <div class="summary-body" data-testid="update-summary-admin">
       <span data-testid="update-summary-admin-state"><Status tone={adminSummary.tone} text={t(adminSummary.key)} /></span>
       <KeyValues rows={[{ label: t("updates.installed"), value: version.key ? t(version.key) : version.text }, { label: t("updates.latestStable"), value: adminLatest?.tag }]} />
+      <button class="link-btn" type="button" onclick={() => toDetail("updates-admin")} data-testid="update-summary-admin-details">{t("updates.details")}</button>
       {#if gate === "bootstrap"}
         <a class="btn small" href={href("admin")} data-testid="update-admin-install"><Icon name="download" />{t("install.installAdmin")}</a>
       {:else if gate === "missing"}
@@ -155,6 +171,7 @@
           { label: t("updates.os.restart"), value: yesNo(updates.reboot_required) },
         ]}
       />
+      <button class="link-btn" type="button" onclick={() => toDetail("updates-os")} data-testid="update-summary-os-details">{t("updates.details")}</button>
       {#if securityUpdatesOffered(updates)}
         <PlanButton plan={securityUpdatesPlan("update-os-security")} label={t("overview.installSecurity")} icon="shield-check" testid="update-os-security" />
       {/if}
@@ -163,11 +180,11 @@
 </section>
 
 <Card icon="package" tone="c-out" title={t("manager.title")} subtitle={t("manager.sub")} span="span-12">
-  <div data-testid="manager-section">
+  <div data-testid="manager-section" id="updates-manager" class="anchor" tabindex="-1">
     {#if manager === undefined || manager === null}
       <p class="muted"><Icon name="loader" size="sm" /> {t("manager.reading")}</p>
     {:else if manager.error}
-      <div class="empty error" data-testid="manager-unavailable"><Icon name="triangle-alert" /><span>{t("manager.unavailable", { code: manager.error })}</span></div>
+      <div data-testid="manager-unavailable"><Empty error text={t("manager.unavailable", { code: manager.error })} /></div>
     {:else}
       <div class="tiles">
         <div class="tile" data-testid="manager-installed">
@@ -200,6 +217,9 @@
       {:else if verdict.settled && verdict.verdict !== "confirmed"}
         <p class="callout {MANAGER_VERDICTS[verdict.verdict] || 'c-warn'}" data-testid="manager-verdict"><Icon name="info" /><span>{MANAGER_VERDICTS[verdict.verdict] ? t(`manager.verdict.${verdict.verdict}`) : t("manager.verdict.other", { verdict: String(verdict.verdict || "—") })}</span></p>
       {/if}
+      {#if recovery && !rights.inFlight}
+        <p class="note" data-testid="manager-dpkg"><Icon name="info" /><span>{t("manager.dpkgHolds", { version: recovery.version, status: recovery.status })}{#if recovery.revertTo}{" "}{t("manager.revertWould", { version: recovery.revertTo })}{/if}{" "}{t("manager.consoleCommand")} <code lang="en">{recovery.command}</code></span></p>
+      {/if}
 
       <div class="split">
         <div class="pane" data-testid="manager-stage-update">
@@ -208,12 +228,13 @@
           {#if sources === undefined || sources === null}
             <p class="muted"><Icon name="loader" size="sm" /> {t("manager.readingIndex")}</p>
           {:else if sources.error}
-            <p class="note warn" data-testid="manager-sources-error"><Icon name="triangle-alert" />{t("manager.indexError", { code: sources.error })}</p>
+            <p class="note warn" data-testid="manager-sources-error"><Icon name="triangle-alert" />{t("manager.indexError", { code: say(errorWords({ code: sources.error, status: 200, payload: { message: sources.error_message } })) })}{#if sources.error_message}{" "}<span class="muted" lang="en">({sources.error_message})</span>{/if}{#if sources.clock_synchronised === false}{" "}{t("manager.clockNotSynchronised")}{/if}</p>
           {:else if !sources.configured}
             <p class="note" data-testid="manager-sources-unconfigured"><Icon name="info" />{t("manager.indexUnconfigured")}</p>
           {:else if !offered.length}
             <p class="note" data-testid="manager-sources-empty"><Icon name="info" />{t("manager.indexEmpty")}</p>
           {:else}
+            {#if sources.index_behind_installed}<p class="note warn" data-testid="manager-index-behind"><Icon name="triangle-alert" />{t("manager.indexBehind")}</p>{/if}
             <label class="field">
               <span>{t("install.version")}</span>
               <select class="input" value={chosen?.id || ""} onchange={(event) => (forms.managerVersion = event.currentTarget.value)} data-testid="manager-version">
@@ -247,19 +268,19 @@
 </Card>
 
 <Card icon="server" tone="c-inv" title={t("adminVersions.title")} subtitle={t("adminVersions.sub")} span="span-12">
-  <div data-testid="admin-versions">
+  <div data-testid="admin-versions" id="updates-admin" class="anchor" tabindex="-1">
     {#if gate === "unread"}
-      <div class="empty" data-testid="admin-versions-unavailable"><Icon name="info" /><span><strong>{t("adminVersions.unread")}</strong> {t("adminVersions.unreadText")}</span></div>
+      <div data-testid="admin-versions-unavailable"><Empty><strong>{t("adminVersions.unread")}</strong> {t("adminVersions.unreadText")}</Empty></div>
     {:else if gate === "bootstrap"}
-      <div class="empty" data-testid="admin-versions-bootstrap"><Icon name="info" /><span><strong>{t("adminVersions.bootstrap")}</strong> {t("adminVersions.bootstrapText")}</span><a class="btn small" href={href("admin")}>{t("updates.openAdmin")}</a></div>
+      <div data-testid="admin-versions-bootstrap"><Empty><strong>{t("adminVersions.bootstrap")}</strong> {t("adminVersions.bootstrapText")}{#snippet action()}<a class="btn small" href={href("admin")}>{t("updates.openAdmin")}</a>{/snippet}</Empty></div>
     {:else if gate === "docker"}
-      <div class="empty error" data-testid="admin-versions-docker"><Icon name="triangle-alert" /><span><strong>{docker === "unavailable" ? t("docker.notInstalled") : t("docker.notRunning")}.</strong> {docker === "unavailable" ? t("adminVersions.noDocker") : t("adminVersions.dockerDown")}</span></div>
+      <div data-testid="admin-versions-docker"><Empty error><strong>{docker === "unavailable" ? t("docker.notInstalled") : t("docker.notRunning")}.</strong> {docker === "unavailable" ? t("adminVersions.noDocker") : t("adminVersions.dockerDown")}</Empty></div>
     {:else}
       {#if gate === "missing"}
         <p class="callout c-fault" data-testid="admin-versions-container-missing"><Icon name="triangle-alert" /><span><strong>{t("adminVersions.missing")}</strong> {t("adminVersions.missingText")}</span></p>
       {/if}
       {#if gate === "live"}
-        <p class="callout c-warn" data-testid="admin-versions-transition-live"><Icon name="loader" /><span><strong>{t("admin.transition.title")}</strong> {t("admin.transition.text", { stage: status?.admin?.transition?.stage || t("admin.transition.unnamed") })}</span></p>
+        <p class="callout c-warn" data-testid="admin-versions-transition-live"><Icon name="loader" /><span><strong>{t("admin.transition.title")}</strong> {t("admin.transition.text", { stage: status?.admin?.transition?.stage || t("admin.transition.unnamed") })}{#if adminTransitionUntil(status)}{" "}{t("admin.transition.until", { time: adminTransitionUntil(status) })}{/if}</span></p>
       {/if}
       <div class="split">
         <div class="pane" data-testid="admin-install-version">
@@ -278,12 +299,13 @@
 </Card>
 
 <Card icon="hard-drive" tone="c-pv" title={t("os.title")} subtitle={t("os.sub")} span="span-12">
-  <div data-testid="os-section">
+  <div data-testid="os-section" id="updates-os" class="anchor" tabindex="-1">
     <div class="tiles">
       <div class="tile" data-testid="updates-security">
         <div class="tile-label">{t("overview.securityUpdates")}</div>
         <div class="tile-value num">{tiles.securityCount ?? "—"}</div>
         <Status tone={tiles.security.tone} text={t(tiles.security.key)} />
+        <div class="tile-sub" data-testid="updates-security-scope">{t("os.securityScope")}</div>
       </div>
       <div class="tile" data-testid="updates-normal">
         <div class="tile-label">{t("overview.otherUpdates")}</div>
@@ -304,13 +326,16 @@
       <div class="tile" data-testid="updates-manager">
         <div class="tile-label">{t("os.packageManager")}</div>
         <div class="tile-value"><Status tone={tiles.manager.tone} text={t(tiles.manager.key)} /></div>
-        <KeyValues rows={[{ label: t("os.lock"), value: updates.package_manager?.lock_state, lang: "en" }, { label: t("overview.index"), value: say(indexAgeWords(updates)), testid: "updates-index-age" }, detail.expert && { label: t("os.dpkgIssues"), value: (updates.package_manager?.dpkg_issues || []).length }]} />
+        <KeyValues rows={[{ label: t("os.lock"), value: say(word("lock", LOCK_STATES, updates.package_manager?.lock_state)), lang: langOf(word("lock", LOCK_STATES, updates.package_manager?.lock_state)) }, { label: t("overview.index"), value: say(indexAgeWords(updates)), testid: "updates-index-age" }, detail.expert && { label: t("os.dpkgIssues"), value: (updates.package_manager?.dpkg_issues || []).length }]} />
       </div>
     </div>
 
+    {#if (updates.manual_updates || []).length}
+      <p class="callout c-warn" data-testid="updates-manual"><Icon name="triangle-alert" /><span><strong>{t("os.manualTitle")}</strong>{" "}{t("os.manualText", { packages: updates.manual_updates.map((item) => item.name).join(", ") })}</span></p>
+    {/if}
     <div class="row-wrap actions">
       <PlanButton plan={securityUpdatesPlan("updates-install-security")} label={t("os.planSecurity")} icon="shield-check" small={false} disabled={!securityUpdatesOffered(updates)} testid="updates-install-security" />
-      {#if detail.expert}
+      {#if detail.expert || (updates.manual_updates || []).length}
         <PlanButton plan={allUpdatesPlan()} label={t("os.planAll")} icon="package" variant="secondary" small={false} testid="updates-install-all" />
       {/if}
       <PlanButton plan={refreshIndexPlan()} label={t("repair.refresh_index")} icon="refresh-cw" variant="secondary" small={false} testid="updates-refresh-index" />
@@ -340,6 +365,9 @@
 </Card>
 
 <style>
+  .anchor { scroll-margin-top: 72px; }
+  .anchor:focus { outline: none; }
+  .link-btn { background: none; border: 0; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; font-size: 13px; justify-self: start; }
   .summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s5); }
   .summary-body { display: flex; flex-direction: column; gap: var(--s3); align-items: flex-start; }
   .summary-body :global(.kv) { align-self: stretch; }

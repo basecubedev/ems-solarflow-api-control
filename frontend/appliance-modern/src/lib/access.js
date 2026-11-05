@@ -30,6 +30,9 @@ export function rescueSsh(ssh) {
 export const EXPORT_ACCESS_STATUSES = Object.freeze(["configured", "pending", "degraded", "unknown"]);
 
 /** A mount is a read-only export only when the kernel says it publishes the configured EMS directory. */
+/** The SFTP examples the backup card translates, by the ids appliance/backup_access.py gives them. */
+export const SFTP_EXAMPLES = Object.freeze(["copy_all", "browse"]);
+
 export const EXPORT_STATES = Object.freeze(["mounted", "foreign", "writable", "not_mounted", "missing"]);
 
 export function exportPathTone(item) {

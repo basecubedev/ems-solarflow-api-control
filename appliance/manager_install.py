@@ -28,6 +28,22 @@ RESULT_NAME = "install-result.json"
 OUTCOME_INSTALLED = "installed"
 OUTCOME_REVERTED = "reverted"
 OUTCOME_PENDING = "pending"
+# What install-manager.sh records besides those, every one of them named so the
+# console can say each in words; a test walks the script against this list.
+OUTCOME_NOT_STARTED = "not_started"
+OUTCOME_REVERT_FAILED = "revert_failed"
+OUTCOME_INSTALL_FAILED = "install_failed"
+OUTCOME_NO_REQUEST = "no_request"
+OUTCOME_REQUEST_INVALID = "request_invalid"
+INSTALLER_OUTCOMES = (
+    OUTCOME_INSTALLED,
+    OUTCOME_REVERTED,
+    OUTCOME_NOT_STARTED,
+    OUTCOME_REVERT_FAILED,
+    OUTCOME_INSTALL_FAILED,
+    OUTCOME_NO_REQUEST,
+    OUTCOME_REQUEST_INVALID,
+)
 
 STOPPED_UNIT_STATES = frozenset({"inactive", "failed"})
 
@@ -105,23 +121,27 @@ def read_outcome(paths):
     )
 
 
-def stage(paths, *, archive, version, build_id, sha256, requested_at=""):
+def stage(paths, *, archive, version, build_id, sha256, requested_at="", fallback=None):
     """Name the archive the install unit is to unpack, and clear the last answer.
 
     Separate from ``prepare`` because a revert has no manifest to prove anything
     against: the archive it names was verified when it arrived and kept since.
+
+    ``fallback`` is what the installer puts on if dpkg refuses ``archive``; an
+    empty string says there is none. Left out, the installer falls back to
+    ``previous.deb``, as it did before requests named one.
     """
 
-    _write(
-        request_path(paths),
-        {
-            "archive": str(archive),
-            "version": version,
-            "build_id": build_id,
-            "sha256": sha256,
-            "requested_at": requested_at,
-        },
-    )
+    request = {
+        "archive": str(archive),
+        "version": version,
+        "build_id": build_id,
+        "sha256": sha256,
+        "requested_at": requested_at,
+    }
+    if fallback is not None:
+        request["fallback"] = str(fallback)
+    _write(request_path(paths), request)
     try:
         result_path(paths).unlink()
     except FileNotFoundError:
@@ -276,6 +296,12 @@ def prepare(paths, *, release, archive, state_schemas, verifier=None, manifest_p
     if before_commit is not None:
         before_commit()
 
+    # The package running now is the way back -- unless it is this very
+    # archive. Then retain() keeps the record as it is, previous.deb stays the
+    # release before the running one, and falling back to it put an older
+    # Manager on, silently, when a reinstall of the running one failed.
+    reinstall = same_archive(manager_retention.read(paths), release.artifact_digest)
+
     # Retained before the request exists, so the archive to go back to is on
     # disk before anything can start replacing what is running.
     retention = manager_retention.retain(
@@ -297,8 +323,15 @@ def prepare(paths, *, release, archive, state_schemas, verifier=None, manifest_p
         build_id=release.build_id,
         sha256=release.artifact_digest,
         requested_at=retained_at,
+        fallback="" if reinstall else retention.previous.path,
     )
     return retention
+
+
+def same_archive(retention, sha256):
+    """Whether ``sha256`` is the package kept as running, so there is nothing to fall back to."""
+
+    return bool(sha256) and retention.current.sha256 == sha256
 
 
 def withdraw(paths):

@@ -6,7 +6,7 @@ network with a shell:
 | Account | Over SSH | Reaches root |
 | --- | --- | --- |
 | `ems-backup` | SFTP only — chroot into the export root, forced command, no TTY | no |
-| `ems-rescue` | refused: the shipped policy denies it password and keyboard-interactive, and the Overview reports whether the running sshd applies that | yes, at a keyboard or serial console |
+| `ems-rescue` | refused: the shipped policy denies it password and keyboard-interactive, and the Overview reports whether sshd's configuration applies that | yes, at a keyboard or serial console |
 | `ems-shell` | key only, once enabled | yes, through `sudo` |
 
 `ems-shell` exists for the case the other two do not cover: the box is up, the
@@ -120,6 +120,22 @@ ems-appliance shell-access disable
 Both go through the same transaction: the flag and the sshd policy move
 together, or neither moves. If sshd refuses the candidate policy, the files and
 the flag are put back and the failure says which half of the rollback succeeded.
+
+The transaction ends by starting the backup export, which a switch of this
+account does not depend on: a failing export — a degraded backup state — no
+longer rolls the switch back. It did, and on a Pi whose export failed for twelve
+days, **Disable shell access** answered `export_setup_failed` and the account
+kept accepting keys. The export unit's own failure handler withdraws the backup
+account's access in that case.
+
+## Checking the host key
+
+The SSH card on **Access** lists this appliance's own host keys by their
+SHA256 fingerprints. A first connection, or one after a reflash or an address
+change, makes ssh show a fingerprint or warn that the key changed; compare it
+with the card, which is reached over the same LAN, before you accept it. A
+warning with a fingerprint the card shows is a stale `known_hosts` line
+(`ssh-keygen -R <address>` removes it); any other is not this appliance.
 
 ## Where the account lives, and why it is not /home
 

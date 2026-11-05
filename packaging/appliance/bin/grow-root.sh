@@ -28,9 +28,9 @@ APPLIANCE=${EMS_GROW_APPLIANCE_BIN:-/usr/bin/ems-appliance}
 STATE=${EMS_GROW_ROOT_STATE:-/var/lib/ems-appliance-manager}
 MARKER="$STATE/.root-grown"
 
-# resize2fs can only use whole blocks, so a filled filesystem is short by less
-# than one block group.
-FILESYSTEM_SLACK=$((1024 * 1024))
+# `ems-appliance image-check` answers 3 for "not written from an appliance
+# image"; any other refusal means the check itself could not run.
+IMAGE_CHECK_NOT_OURS=3
 
 say() { echo "grow-root: $1"; }
 fail() { echo "grow-root: $1" >&2; echo "RESULT: FAIL ($2)" >&2; exit 1; }
@@ -40,10 +40,16 @@ fail() { echo "grow-root: $1" >&2; echo "RESULT: FAIL ($2)" >&2; exit 1; }
 # The one gate that keeps this off media this project did not write. Only a
 # positive answer counts: no marker, an unreadable one, or one naming any other
 # image all leave the medium alone.
-"$APPLIANCE" image-check >/dev/null 2>&1 || {
+set +e
+"$APPLIANCE" image-check >/dev/null 2>&1
+image_check_status=$?
+set -e
+if [ "$image_check_status" -eq "$IMAGE_CHECK_NOT_OURS" ]; then
     say "this medium was not written from an appliance image"
     exit 0
-}
+fi
+[ "$image_check_status" -eq 0 ] \
+    || fail "ems-appliance image-check could not run (exit $image_check_status)" image_check_failed
 
 GEOMETRY=""
 GEOMETRY_FILE="${TMPDIR:-/tmp}/ems-grow-root-geometry.$$"
@@ -75,16 +81,43 @@ FILLS_DISK=$(geometry_field fills_disk)
 
 [ -b "$DEVICE" ] || fail "$DEVICE is not a block device" root_device_unknown
 
-filesystem_bytes() {
+# The filesystem's size, and how far short of its partition a filled one may
+# still end. resize2fs drops a trailing piece of a group too small to carry the
+# group's own metadata (resize2fs's adjust_fs_info: less than its overhead plus
+# 50 blocks), so a grown filesystem can end a few mebibytes short, and more
+# with the Pi 5's 16 KiB blocks. Without the fields that bound it, only the
+# alignment grain counts.
+measure_filesystem() {
     dumpe2fs -h "$1" 2>/dev/null | awk '
-        /^Block count:/ { count = $3 }
-        /^Block size:/  { size = $3 }
-        END { if (count && size) print count * size; else print 0 }'
+        /^Block count:/            { count = $3 }
+        /^Block size:/             { size = $3 }
+        /^Blocks per group:/       { per_group = $4 }
+        /^Inode blocks per group:/ { inode_blocks = $5 }
+        /^Reserved GDT blocks:/    { reserved = $4 }
+        /^Group descriptor size:/  { descriptor = $4 }
+        END {
+            if (!(count && size)) { print "0 0"; exit }
+            slack = 1024 * 1024
+            if (per_group && inode_blocks) {
+                if (!descriptor) descriptor = 32
+                groups = int((count + per_group - 1) / per_group)
+                descriptor_blocks = int((groups * descriptor + size - 1) / size)
+                overhead = 3 + inode_blocks + descriptor_blocks + reserved + 50
+                if ((overhead + 1) * size > slack) slack = (overhead + 1) * size
+            }
+            printf "%.0f %.0f\n", count * size, slack
+        }'
 }
 
-FILESYSTEM_BYTES=$(filesystem_bytes "$DEVICE")
-[ "$FILESYSTEM_BYTES" -gt 0 ] \
-    || fail "the filesystem on $DEVICE could not be measured" filesystem_size_unknown
+read_filesystem() {
+    measured=$(measure_filesystem "$DEVICE")
+    FILESYSTEM_BYTES=${measured% *}
+    FILESYSTEM_SLACK=${measured#* }
+    [ "$FILESYSTEM_BYTES" -gt 0 ] \
+        || fail "the filesystem on $DEVICE could not be measured" filesystem_size_unknown
+}
+
+read_filesystem
 
 say "disk=${DISK_BYTES} partition=${PARTITION_BYTES} tail=${TAIL_BYTES} filesystem=${FILESYSTEM_BYTES}"
 
@@ -121,15 +154,18 @@ if [ "$FILLS_DISK" != yes ]; then
     command -v growpart >/dev/null 2>&1 \
         || fail "growpart is not installed" growpart_unavailable
     set +e
-    growpart "$DISK" "$NUMBER" >/dev/null 2>&1
+    grow_output=$(growpart "$DISK" "$NUMBER" 2>&1)
     grow_status=$?
     set -e
-    # growpart exits 2 for "no change necessary". Reached from here it is a
-    # disagreement, not agreement: the geometry above already established that
-    # the tail is larger than alignment slack. Marking would hand the operator a
-    # root partition the size of the image on a medium several times larger,
-    # silently, which is the whole defect class this helper exists for.
-    [ "$grow_status" -eq 2 ] \
+    # growpart's own NOCHANGE/FAILED line is the only account of why.
+    printf '%s\n' "$grow_output" | sed '/^$/d; s/^/grow-root: growpart: /'
+    # growpart exits 1 for NOCHANGE and 2 for FAILED. NOCHANGE reached from
+    # here is a disagreement, not agreement: the geometry above already
+    # established that the tail is larger than alignment slack. Marking would
+    # hand the operator a root partition the size of the image on a medium
+    # several times larger, silently, which is the whole defect class this
+    # helper exists for.
+    [ "$grow_status" -eq 1 ] \
         && fail "growpart refuses to grow partition $NUMBER of $DISK into ${TAIL_BYTES} unused bytes" \
                 growpart_refused
     [ "$grow_status" -eq 0 ] \
@@ -159,9 +195,7 @@ if ! filesystem_fills_partition; then
     resize2fs "$DEVICE" >/dev/null 2>&1 \
         || fail "resize2fs could not grow the filesystem on $DEVICE" resize2fs_failed
 
-    FILESYSTEM_BYTES=$(filesystem_bytes "$DEVICE")
-    [ "$FILESYSTEM_BYTES" -gt 0 ] \
-        || fail "the grown filesystem could not be measured" filesystem_size_unknown
+    read_filesystem
     filesystem_fills_partition \
         || fail "the filesystem is ${FILESYSTEM_BYTES} bytes of a ${PARTITION_BYTES}-byte partition" \
                 filesystem_not_grown

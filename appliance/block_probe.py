@@ -16,9 +16,14 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from appliance.image_shape import OS_BUILD_MARKER
+from appliance.image_shape import OS_BUILD_MARKER, marker_is_ours
 
 LSBLK_COLUMNS = "PATH,TYPE,SIZE,PARTUUID,PARTLABEL,FSTYPE,MOUNTPOINT,PKNAME,PARTN"
+
+# The record packaging/appliance/bin/grow-root.sh publishes in the state
+# directory once the root fills its medium.
+GROW_MARKER_NAME = ".root-grown"
+MIB = 1024 * 1024
 
 
 class BlockProbeError(Exception):
@@ -130,3 +135,47 @@ class BlockProbe:
         """
 
         return next((item for item in self.block_partitions() if item.mountpoint == "/"), None)
+
+    def root_medium(self, *, state_dir, opener=None):
+        """The medium the root lives on, and what the first boot grew of it.
+
+        Only a host flashed from an appliance image grows its root, so any
+        other host is answered without being measured. On an image, a
+        question the block layer cannot answer raises rather than reading as
+        a filled medium.
+        """
+
+        from appliance import media_sizing, partition_geometry
+
+        if not marker_is_ours(self.os_build()):
+            return {"appliance_image": False}
+        root = self.root_partition()
+        if root is None:
+            raise BlockProbeError("root_partition_unknown", "no partition is mounted at /")
+        try:
+            geometry = partition_geometry.read_geometry(
+                root.path, sysfs=str(self.root / "sys"), opener=opener
+            )
+        except partition_geometry.GeometryError as error:
+            raise BlockProbeError(error.code, error.message)
+        return {
+            "appliance_image": True,
+            "available": True,
+            "medium_mb": geometry.disk_bytes // MIB,
+            "root_mb": geometry.size_bytes // MIB,
+            "unused_mb": geometry.tail_bytes // MIB,
+            "fills_medium": geometry.fills_disk,
+            "medium_supported": media_sizing.media_is_supported(geometry.disk_bytes),
+            "grown": _grow_record(Path(state_dir) / GROW_MARKER_NAME),
+        }
+
+
+def _grow_record(path):
+    """The outcome and time grow-root.sh recorded, or ``None`` before it has."""
+
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    fields = dict(line.split("=", 1) for line in text.splitlines() if "=" in line)
+    return {"outcome": fields.get("outcome", ""), "grown_at": fields.get("grown_at", "")}

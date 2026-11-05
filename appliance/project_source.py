@@ -36,6 +36,11 @@ CHANGED_DURING_BUILD = "build_source_changed_during_build"
 # them is a build input nobody declared.
 BUILD_CRITICAL_ROOTS = ("appliance", "packaging", "scripts", "config", ".github")
 
+# Trees a build takes whole rather than file by file: build-deb.sh packages
+# every file under appliance/static, and the image layer copies its overlays.
+# An ignored file there reaches the artefact while the tree hash leaves it out.
+PACKAGED_WHOLE = ("appliance/static", "packaging/appliance/image")
+
 
 class ProjectSourceError(Exception):
     def __init__(self, code, message):
@@ -102,16 +107,23 @@ def tree_sha256(root, ref="HEAD"):
 
 
 def untracked_build_inputs(root):
-    """Untracked files under a root a build reads. Ignored files do not count."""
+    """Untracked files under a root a build reads.
+
+    An ignored file counts only in a tree the build takes whole; elsewhere it is
+    a cache or a local secret no build step names.
+    """
 
     stdout = _require(root, "ls-files", "--others", "--exclude-standard", "-z")
-    found = []
+    ignored = _require(
+        root, "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--",
+        *PACKAGED_WHOLE,
+    )
+    found = set()
     for entry in stdout.split("\0"):
         path = entry.strip()
-        if not path:
-            continue
-        if path.split("/", 1)[0] in BUILD_CRITICAL_ROOTS:
-            found.append(path)
+        if path and path.split("/", 1)[0] in BUILD_CRITICAL_ROOTS:
+            found.add(path)
+    found.update(entry.strip() for entry in ignored.split("\0") if entry.strip())
     return tuple(sorted(found))
 
 

@@ -380,3 +380,65 @@ def test_a_writable_home_is_not_refused(tmp_path):
     store = service_for("/var/lib/ems-shell").keystore(shell_access.ACCOUNT)
 
     assert store is not None
+
+
+# --- switching the account off never waits on the backup export ------------------
+
+
+def _host_with_shell_enabled(tmp_path, monkeypatch):
+    from appliance import host_config
+    from appliance.host_config import live_activation
+    from tests.helpers.appliance_host_runtime import FakeHost
+
+    paths = paths_at(tmp_path)
+    paths.config_dir.mkdir(parents=True)
+    paths.install_root.mkdir(parents=True)
+    systemd_dir = tmp_path / "etc" / "systemd" / "system"
+    sshd_dir = tmp_path / "etc" / "ssh" / "sshd_config.d"
+    host = FakeHost(systemd_dir=systemd_dir, sshd_dir=sshd_dir)
+    real = host_config.apply_host_config
+    monkeypatch.setattr(
+        host_config,
+        "apply_host_config",
+        lambda p, c, *, activation=None: real(
+            p, c, systemd_dir=str(systemd_dir), sshd_dir=str(sshd_dir), activation=activation
+        ),
+    )
+    shell_access.apply(
+        paths, ApplianceConfig(), value=True,
+        activation=live_activation(runner=host, marker=str(tmp_path), export_required=False),
+    )
+    return paths, host, sshd_dir
+
+
+def test_switching_shell_access_off_does_not_depend_on_the_backup_export(tmp_path, monkeypatch):
+    """The last step of the host configuration starts the export unit, which
+    fails on any degraded backup state; the whole change was rolled back, and
+    the root-capable account kept accepting keys -- on the live Pi, for twelve
+    days."""
+
+    from appliance.host_config import live_activation
+
+    paths, host, sshd_dir = _host_with_shell_enabled(tmp_path, monkeypatch)
+    host.fail("systemctl", "start", "ems-appliance-export.service")
+
+    shell_access.apply(
+        paths, ApplianceConfig(), value=False,
+        activation=live_activation(runner=host, marker=str(tmp_path), export_required=False),
+    )
+
+    assert shell_access.enabled(paths) is False
+    on_disk = (sshd_dir / "ems-appliance-backup.conf").read_text(encoding="utf-8")
+    assert "PubkeyAuthentication no" in block_for(on_disk, shell_access.ACCOUNT)
+
+
+def test_every_shell_access_change_is_made_without_the_export(monkeypatch):
+    """Both doors -- the console operation and the console command -- pass the
+    activation that does not wait on the export."""
+
+    import inspect
+
+    from appliance import cli, ssh_service
+
+    assert "export_required=False" in inspect.getsource(ssh_service.SshService._execute_shell_access)
+    assert "export_required=False" in inspect.getsource(cli.command_shell_access)

@@ -73,15 +73,22 @@ container EMS deploys is published for both, so there is no emulation and no
 ## Storage
 
 Use something you would trust with a database that writes continuously. A decent
-SD card is workable; a good USB SSD or NVMe is noticeably better and lasts
-longer, especially with InfluxDB enabled.
+SD card is workable; a good SSD is noticeably better and lasts longer,
+especially with InfluxDB enabled.
+
+**The appliance image boots from an SD card on every board, and from an NVMe
+drive on a Pi 5 — not from a USB SSD.** It finds its root through a boot-device
+tag that the Raspberry Pi image tooling sets only when the firmware booted from
+SD or NVMe; booted from USB, the image stops in its initramfs before it reaches
+the network, and nothing on the screen says why. A USB SSD is fine for EMS
+installed on a machine you already run.
 
 How much you need depends on which shape you run:
 
 | Shape | Minimum | Why |
 |---|---|---|
 | Docker deployment | A few GB plus your history | The OS is already there; EMS adds containers and a database |
-| Appliance image | **16 GB** | The image is about 8.25 GiB and grows into whatever is left on the card. The supported floor is 14.5 GB, and **nothing on the appliance enforces it** — a smaller card flashes and then runs out of room later |
+| Appliance image | **16 GB** | The image is about 8.25 GiB and grows into whatever is left on the card. The supported floor is 14.5 GB. Nothing refuses a smaller card: it flashes, the Overview then warns "The card is smaller than 16 GB", and it runs out of room later. Above 2 TiB the root grows to 2 TiB only, the most the image's MBR partition table addresses |
 
 ## Raspberry Pi compatibility
 
@@ -111,8 +118,8 @@ has run EMS on one.
 
 **The appliance image is built for it.** It uses an MBR, and its boot partition
 is the ordinary firmware directory a Pi 3 boot ROM knows how to read. It boots
-from the SD card and only from there: the advice above about a USB SSD or an
-NVMe drive belongs to the Pi 4 and Pi 5.
+from the SD card and only from there: the NVMe drive above belongs to the
+Pi 5.
 
 **One Pi 3B+ has booted it, and it is not listed as supported.** That board has
 run the image since 2026-08-29, grown its root and taken Manager updates in

@@ -372,3 +372,314 @@ def test_a_note_replaces_the_detail_of_the_stage_under_way_until_it_ends(tmp_pat
 
     assert store.note(operation.operation_id, "image, 2 min so far") is False
     assert store.get(operation.operation_id).progress[-1]["stage"] == "cancelled"
+
+
+# --- a card with no room left -----------------------------------------------------
+
+
+def _interrupted(tmp_path):
+    store = OperationStore(tmp_path)
+    operation = store.create("system.timezone")
+    store.await_confirmation(operation.operation_id, {})
+    store.confirm(operation.operation_id, store.get(operation.operation_id, include_token=True).confirmation_token)
+    return store, operation.operation_id
+
+
+def test_an_agent_starts_although_the_card_has_no_room_to_record_a_recovery(tmp_path, monkeypatch):
+    """recover_interrupted runs before the socket is bound: an OSError there
+    ended every start, and systemd restarted the agent for ever -- no sign-in,
+    no logs, no support archive."""
+
+    import errno
+
+    from appliance import operations as operations_module
+
+    store, operation_id = _interrupted(tmp_path)
+
+    def full(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(operations_module, "atomic_write", full)
+    restarted = OperationStore(tmp_path)
+
+    assert restarted.recover_interrupted() == []
+    assert list(restarted.unrecorded) == [operation_id]
+    assert restarted.get(operation_id).state == STATE_RUNNING
+
+
+def test_the_next_plan_closes_what_a_full_card_left_open(tmp_path, monkeypatch):
+    import errno
+
+    from appliance import operations as operations_module
+
+    store, operation_id = _interrupted(tmp_path)
+    real = operations_module.atomic_write
+    monkeypatch.setattr(
+        operations_module, "atomic_write", lambda *a, **k: (_ for _ in ()).throw(OSError(errno.ENOSPC, "full"))
+    )
+    restarted = OperationStore(tmp_path)
+    restarted.recover_interrupted()
+    monkeypatch.setattr(operations_module, "atomic_write", real)
+
+    planned = restarted.create("system.timezone")
+
+    assert restarted.get(operation_id).state == STATE_FAILED_RECOVERABLE
+    assert not restarted.unrecorded
+    assert planned.state == STATE_PLANNED
+
+
+# --- a host that went down before its agent could say so ------------------------------
+
+
+def _asked_the_host_down(tmp_path, monkeypatch):
+    from appliance import operations as operations_module
+
+    boot = tmp_path / "boot_id"
+    boot.write_text("1f0c8d2e-first-boot\n", encoding="utf-8")
+    monkeypatch.setattr(operations_module, "BOOT_ID_FILE", boot)
+    store = OperationStore(tmp_path / "operations")
+    operation = store.create("system.reboot")
+    store.await_confirmation(operation.operation_id, {})
+    store.confirm(operation.operation_id, store.get(operation.operation_id, include_token=True).confirmation_token)
+    store.advance(operation.operation_id, "reboot_requested", host_down=True)
+    return boot, operation.operation_id
+
+
+def test_a_reboot_its_agent_did_not_live_to_record_is_recovered_as_done(tmp_path, monkeypatch):
+    """systemd stops the agent on the way down, often before finish() reached
+    the card. Recovered as interrupted, a normal reboot came back as a red
+    banner, and its Retry rebooted the appliance a second time."""
+
+    boot, operation_id = _asked_the_host_down(tmp_path, monkeypatch)
+    boot.write_text("7a2e40b1-next-boot\n", encoding="utf-8")
+
+    restarted = OperationStore(tmp_path / "operations")
+    restarted.recover_interrupted()
+    operation = restarted.get(operation_id)
+
+    assert operation.state == STATE_SUCCEEDED, operation.to_dict()
+    assert operation.error is None
+
+
+def test_a_retry_does_not_inherit_the_boot_an_earlier_attempt_went_down_from(tmp_path, monkeypatch):
+    boot, operation_id = _asked_the_host_down(tmp_path, monkeypatch)
+    store = OperationStore(tmp_path / "operations")
+    store.recover_interrupted()
+    assert store.get(operation_id).state == STATE_FAILED_RECOVERABLE
+    boot.write_text("7a2e40b1-next-boot\n", encoding="utf-8")
+    store.retry(operation_id, store.get(operation_id, include_token=True).confirmation_token)
+    boot.write_text("c04d11e9-third-boot\n", encoding="utf-8")
+
+    restarted = OperationStore(tmp_path / "operations")
+    restarted.recover_interrupted()
+
+    assert restarted.get(operation_id).state == STATE_FAILED_RECOVERABLE
+
+
+def test_an_agent_restart_in_the_same_boot_leaves_a_reboot_retryable(tmp_path, monkeypatch):
+    _, operation_id = _asked_the_host_down(tmp_path, monkeypatch)
+
+    restarted = OperationStore(tmp_path / "operations")
+    restarted.recover_interrupted()
+
+    assert restarted.get(operation_id).state == STATE_FAILED_RECOVERABLE
+
+
+def test_an_end_the_card_had_no_room_for_is_written_when_the_next_plan_comes(tmp_path, monkeypatch):
+    """A finish() that raised left the record running for good: Cancel was an
+    invalid transition and every plan, reboot included, a conflict -- even
+    after the operator had made room."""
+
+    import errno
+
+    from appliance import operations as operations_module
+
+    store, operation_id = _interrupted(tmp_path)
+    real = operations_module.atomic_write
+    monkeypatch.setattr(
+        operations_module, "atomic_write", lambda *a, **k: (_ for _ in ()).throw(OSError(errno.ENOSPC, "full"))
+    )
+    with pytest.raises(OSError):
+        store.finish(operation_id, STATE_SUCCEEDED, result={"applied": True})
+    with pytest.raises(OSError):
+        store.finish(operation_id, STATE_FAILED_TERMINAL, error={"code": "operation_failed", "message": "full"})
+    monkeypatch.setattr(operations_module, "atomic_write", real)
+
+    planned = store.create("system.timezone")
+
+    ended = store.get(operation_id)
+    assert ended.state == STATE_SUCCEEDED, ended.to_dict()
+    assert ended.result == {"applied": True}
+    assert store.unfinished == {}
+    assert planned.state == STATE_PLANNED
+
+
+# --- a record this version cannot judge -------------------------------------------
+
+
+def test_a_state_another_manager_version_wrote_does_not_hold_the_lock_for_good(tmp_path):
+    """After a step back to an older Manager, the newer one's in-flight record
+    blocked every operation: cancel failed with a bare KeyError, and the
+    recovery at start passed it over."""
+
+    store = OperationStore(tmp_path)
+    operation = store.create("system.timezone")
+    path = tmp_path / f"{operation.operation_id}.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["state"] = "draining"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(OperationError):
+        store.cancel(operation.operation_id)
+    OperationStore(tmp_path).recover_interrupted()
+
+    recovered = OperationStore(tmp_path).get(operation.operation_id)
+    assert recovered.state == STATE_FAILED_TERMINAL, recovered.to_dict()
+    assert recovered.error["code"] == "operation_state_unknown"
+    assert OperationStore(tmp_path).active() is None
+
+
+def test_a_record_that_cannot_be_read_is_moved_aside_and_named(tmp_path):
+    """Skipped silently, a record corrupted on the card opened the lock and its
+    operation vanished from the console."""
+
+    store = OperationStore(tmp_path)
+    (tmp_path / ("ab" * 16 + ".json")).write_text('{"operation_id": "ab', encoding="utf-8")
+
+    store.recover_interrupted()
+
+    assert store.unreadable == ["ab" * 16]
+    assert not (tmp_path / ("ab" * 16 + ".json")).exists()
+    assert (tmp_path / ("ab" * 16 + ".json.unreadable")).exists()
+
+
+@pytest.mark.parametrize("content", ["null", "[]", "7"])
+def test_a_record_that_is_json_but_no_record_is_moved_aside_too(tmp_path, content):
+    store = OperationStore(tmp_path)
+    (tmp_path / ("cd" * 16 + ".json")).write_text(content, encoding="utf-8")
+
+    store.recover_interrupted()
+
+    assert store.unreadable == ["cd" * 16]
+
+
+def test_closing_what_a_full_card_left_open_never_touches_an_operation_since_confirmed(tmp_path, monkeypatch):
+    """The close re-ran the whole start-of-agent recovery: a plan confirmed once
+    there was room again was running and live, and the next plan recovered it
+    as interrupted and started beside it -- two host mutations at once."""
+
+    import errno
+
+    from appliance import operations as operations_module
+
+    store = OperationStore(tmp_path)
+    operation = store.create("system.timezone")
+    store.await_confirmation(operation.operation_id, {})
+    token = store.get(operation.operation_id, include_token=True).confirmation_token
+    real = operations_module.atomic_write
+    monkeypatch.setattr(
+        operations_module, "atomic_write", lambda *a, **k: (_ for _ in ()).throw(OSError(errno.ENOSPC, "full"))
+    )
+    restarted = OperationStore(tmp_path)
+    restarted.recover_interrupted()
+    monkeypatch.setattr(operations_module, "atomic_write", real)
+    assert list(restarted.unrecorded) == [operation.operation_id]
+
+    restarted.confirm(operation.operation_id, token)
+
+    assert not restarted.unrecorded, "the finding still says nothing can start"
+    with pytest.raises(OperationConflictError):
+        restarted.create("system.timezone")
+    assert restarted.get(operation.operation_id).state == STATE_RUNNING
+
+
+def test_a_later_end_writes_the_one_the_card_had_no_room_for(tmp_path, monkeypatch):
+    import errno
+
+    from appliance import operations as operations_module
+
+    store, operation_id = _interrupted(tmp_path)
+    real = operations_module.atomic_write
+    monkeypatch.setattr(
+        operations_module, "atomic_write", lambda *a, **k: (_ for _ in ()).throw(OSError(errno.ENOSPC, "full"))
+    )
+    with pytest.raises(OSError):
+        store.finish(operation_id, STATE_SUCCEEDED, result={"applied": True})
+    monkeypatch.setattr(operations_module, "atomic_write", real)
+
+    store.finish(operation_id, STATE_FAILED_TERMINAL, error={"code": "operation_failed", "message": "full"})
+
+    assert store.get(operation_id).state == STATE_SUCCEEDED
+    assert store.unfinished == {}
+
+
+def test_a_plan_cancelled_while_its_planner_runs_keeps_the_slot_until_the_planner_returns(tmp_path):
+    """Only the Admin pull noticed a cancel. apt-get update, the Manager index
+    fetch and the support archive ran on beside the next operation the freed
+    slot let in."""
+
+    store = OperationStore(tmp_path)
+    first = store.create("updates.install", planning=True)
+    store.cancel(first.operation_id)
+
+    with pytest.raises(OperationConflictError):
+        store.create("updates.repair")
+    store.planning_ended(first.operation_id)
+
+    assert store.create("updates.repair").state == STATE_PLANNED
+
+
+@pytest.mark.parametrize("stage", ["stopping_admin", "recreating_admin", "installing", "applying_wifi"])
+def test_an_operation_interrupted_after_it_changed_the_appliance_is_not_offered_again(tmp_path, stage):
+    """A retry ran the operation again from the top: an Admin install stopped
+    half way failed its own precondition and then reported the Admin as
+    untouched, with "stopping_admin" in its progress."""
+
+    from appliance.operations import STATE_MANUAL_ACTION_REQUIRED
+
+    store = store_at(tmp_path)
+    record = planned(store)
+    store.confirm(record.operation_id, record.confirmation_token)
+    store.advance(record.operation_id, stage)
+
+    reopened = store_at(tmp_path)
+    reopened.recover_interrupted()
+
+    recovered = reopened.get(record.operation_id)
+    assert recovered.state == STATE_MANUAL_ACTION_REQUIRED, recovered.to_dict()
+    assert recovered.error["code"] == "operation_interrupted_after_change"
+    assert stage in recovered.error["message"]
+
+
+@pytest.mark.parametrize("state", ["verifying", "rolling_back"])
+def test_an_operation_interrupted_while_checking_or_undoing_is_not_retried_as_new(tmp_path, state):
+    from appliance.operations import STATE_MANUAL_ACTION_REQUIRED
+
+    store = store_at(tmp_path)
+    record = planned(store)
+    store.confirm(record.operation_id, record.confirmation_token)
+    store.advance(record.operation_id, "waiting_for_health", state=state if state == "verifying" else None)
+    if state == "rolling_back":
+        store.advance(record.operation_id, "restoring_admin", state="rolling_back")
+
+    reopened = store_at(tmp_path)
+    reopened.recover_interrupted()
+
+    assert reopened.get(record.operation_id).state == STATE_MANUAL_ACTION_REQUIRED
+
+
+def test_every_stage_a_retry_may_start_over_from_is_one_an_executor_names():
+    """The list and the executors are two registries: a stage renamed in one
+    would turn its interruption from retryable into manual, or the reverse."""
+
+    import re
+    from pathlib import Path
+
+    from appliance.operations import UNTOUCHED_STAGES
+
+    source = "\n".join(path.read_text(encoding="utf-8") for path in Path("appliance").glob("*.py"))
+    named = set(re.findall(r'_advance\(\s*operation,\s*"([a-z_]+)"', source))
+    named |= set(re.findall(r'stage = "([a-z_]+)" if action == "reboot" else "([a-z_]+)"', source)[0])
+    named |= {"running"}
+
+    assert UNTOUCHED_STAGES <= named, UNTOUCHED_STAGES - named

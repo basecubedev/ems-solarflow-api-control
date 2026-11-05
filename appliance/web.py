@@ -8,6 +8,7 @@ cannot escalate beyond the agent's fixed allowlist.
 """
 
 import base64
+import errno
 import hashlib
 import ipaddress
 import json
@@ -16,9 +17,9 @@ import posixpath
 import re
 import socket
 import secrets
+import select
 import threading
 import time
-from http import cookies
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from appliance import validation
@@ -31,10 +32,16 @@ from appliance.auth import (
     LoginRateLimiter,
     SessionStore,
     record_generation,
+    session_binding,
 )
 from appliance.audit import RESULT_DENIED, RESULT_FAILURE, RESULT_SUCCESS, WebLog
 from appliance.config import load_config
-from appliance.protocol import PLAN_REQUEST_FIELD, ROOT_ACCESS_PLANS, SESSION_GENERATION_FIELD
+from appliance.protocol import (
+    PLAN_REQUEST_FIELD,
+    ROOT_ACCESS_PLANS,
+    SESSION_GENERATION_FIELD,
+    WEB_SESSION_ACTOR,
+)
 from appliance.paths import ensure_directories, resolve_paths
 from appliance.version import installed_version
 from appliance.web_audit import WebAuditReporter
@@ -67,6 +74,16 @@ HOSTNAME_FILE = "/etc/hostname"
 # a worker thread for ever, and the appliance UI is the only recovery path
 # there is when an Admin install or a rollback has gone wrong.
 CONNECTION_TIMEOUT_SECONDS = 15
+# The timeout above is per recv, so a client trickling a byte at a time held a
+# thread for ever. Reading one request -- line, headers and body -- has to
+# finish within this, however it is paced.
+MDNS_CACHE_SECONDS = 60
+REQUEST_DEADLINE_SECONDS = 30
+# Every connection is a thread. Without a bound one host could take them all,
+# and at the descriptor limit accept() failed in a hot loop.
+MAX_CONNECTIONS = 64
+MAX_CONNECTIONS_PER_SOURCE = 16
+ACCEPT_BACKOFF_SECONDS = 0.5
 
 TEST_MODE_ENV = "EMS_APPLIANCE_TEST_MODE"
 TEST_RESET_PATH = "/api/test/reset"
@@ -166,8 +183,13 @@ class AgentAuth:
 
         try:
             answer = self.agent.call("auth.verify", password=password)
-        except AgentCallError:
-            return ""
+        except AgentCallError as exc:
+            # A password the protocol refuses is one no record can match; any
+            # other refusal -- a peer not allowed, an exception in the agent,
+            # an answer that was not one -- has not checked the password.
+            if exc.code == "invalid_password":
+                return ""
+            raise AuthError("agent_unavailable", str(getattr(exc, "message", exc)))
         except AgentUnavailableError as exc:
             raise AuthError("agent_unavailable", str(getattr(exc, "message", exc)))
         return str(answer.get("generation") or "") if answer.get("ok") else ""
@@ -315,6 +337,7 @@ class ApplianceWebApp:
             name = name.partition("]")[0].lstrip("[")
         elif name.count(":") == 1:
             name = name.partition(":")[0]
+        name = name.rstrip(".")
         if name in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
             return True
         try:
@@ -322,6 +345,14 @@ class ApplianceWebApp:
         except Exception:
             configured = ""
         if configured and name in (configured, f"{configured}.local"):
+            return True
+        if (
+            configured
+            and re.fullmatch(re.escape(configured) + r"-[0-9]{1,4}\.local", name)
+            and name == self.published_mdns()
+        ):
+            return True
+        if name in tuple(getattr(self.config, "extra_host_names", ()) or ()):
             return True
         # An address literal is the appliance's own LAN address as typed by the
         # operator; a name we cannot resolve to ourselves is not. Parsed as an
@@ -333,6 +364,47 @@ class ApplianceWebApp:
         except ValueError:
             return False
         return True
+
+    def host_refusal_message(self):
+        """Which names this appliance answers to, for a refused Host."""
+
+        try:
+            configured = str(self.probe_hostname() or "").strip().lower()
+        except Exception:
+            configured = ""
+        names = [configured, f"{configured}.local"] if configured else []
+        names.extend(getattr(self.config, "extra_host_names", ()) or ())
+        accepted = ", ".join(names) if names else "its hostname"
+        message = (
+            f"this appliance answers to {accepted} and its IP addresses, not to the name in "
+            "the request; open it by one of those, or add the name to extra_host_names in "
+            "/etc/ems-appliance-manager/appliance.conf"
+        )
+        ignored = getattr(self.config, "ignored_host_names", ()) or ()
+        if ignored:
+            message += (
+                "; these extra_host_names entries are not whole DNS names and are ignored: "
+                + ", ".join(ignored)
+            )
+        return message
+
+    def published_mdns(self):
+        """The .local name avahi publishes, asked of the agent at most once a minute.
+
+        ``<hostname>-N.local`` is this appliance only while avahi publishes it:
+        any other device may claim that name while this one holds its own.
+        """
+
+        now = time.monotonic()
+        cached = getattr(self, "_published_mdns", None)
+        if cached is not None and now - cached[0] < MDNS_CACHE_SECONDS:
+            return cached[1]
+        try:
+            name = str((self.agent.call("network.get") or {}).get("mdns") or "").lower()
+        except Exception:
+            name = ""
+        self._published_mdns = (now, name)
+        return name
 
     def probe_hostname(self):
         """The host's static hostname, read on every call.
@@ -362,8 +434,9 @@ class ApplianceWebApp:
 
     # --- session ---------------------------------------------------------
 
-    def session_for(self, session_id):
-        return self.sessions.get(session_id, self.auth.generation())
+    def session_for(self, session_id, client_ip=None):
+        binding = None if client_ip is None else session_binding(client_ip)
+        return self.sessions.get(session_id, self.auth.generation(), binding=binding)
 
     def login(self, password, *, source_ip):
         """The lock serialises the rate limiter and the session store, nothing else.
@@ -412,7 +485,7 @@ class ApplianceWebApp:
 
         with self._lock:
             self._clear(source_ip, attempt)
-            session = self.sessions.create(generation)
+            session = self.sessions.create(generation, binding=session_binding(source_ip))
         self.audit.record("login.success", source_ip=source_ip, result=RESULT_SUCCESS)
         return session
 
@@ -434,10 +507,14 @@ class ApplianceWebApp:
                         "login_rate_limited",
                         "too many failed attempts from this IPv6 network; try again in "
                         f"{retry_after} seconds, or sign in over the appliance's IPv4 address",
+                        retry_after=retry_after,
+                        scope="network",
                     )
                 raise AuthError(
                     "login_rate_limited",
                     f"too many failed attempts; try again in {retry_after} seconds",
+                    retry_after=retry_after,
+                    scope="address",
                 )
             return self.rate_limiter.record_failure(source_ip)
 
@@ -494,7 +571,7 @@ class ApplianceWebApp:
             raise
         generation = created.get("generation") or record_generation(created)
         self.audit.record("password.change", source_ip=source_ip, reason="first_password")
-        return self.sessions.create(generation)
+        return self.sessions.create(generation, binding=session_binding(source_ip))
 
     def change_password(self, current, new_password, confirmation, *, source_ip):
         """The current password is checked the way a sign-in is: against the
@@ -596,8 +673,76 @@ class ApplianceWebApp:
 
     def call(self, operation, *, session=None, source_ip="", **fields):
         return self.agent.call(
-            operation, actor="appliance-admin" if session else "", source_ip=source_ip, **fields
+            operation, actor=WEB_SESSION_ACTOR if session else "", source_ip=source_ip, **fields
         )
+
+
+def _fields(exc):
+    """The facts an error carries beside its sentence, never ones that name a key."""
+
+    return {
+        key: value
+        for key, value in (getattr(exc, "fields", None) or {}).items()
+        if key not in ("error", "message")
+    }
+
+
+def session_cookie_value(headers):
+    """The Manager's session cookie out of the Cookie header(s), parsed by hand.
+
+    SimpleCookie drops the whole header for one cookie it dislikes -- a JSON
+    value, a cookie named ``path`` -- and any service on the same host name may
+    set one, which signed the operator out. Only this cookie's name is looked
+    for; the first occurrence counts.
+    """
+
+    for header in headers:
+        for part in str(header).split(";"):
+            name, separator, value = part.strip().partition("=")
+            if separator and name == SESSION_COOKIE_NAME:
+                return value.strip().strip('"')
+    return ""
+
+
+class RequestDeadline:
+    """A deadline on reading a request that cannot fire after it was stopped.
+
+    ``Timer.cancel`` does not stop a callback that has already started, so
+    running out and being stopped are decided under one lock: whichever comes
+    first holds, and ``stop`` says which it was.
+    """
+
+    def __init__(self, on_expiry):
+        self._on_expiry = on_expiry
+        self._lock = threading.Lock()
+        self._timer = None
+        self._expired = False
+
+    def arm(self, seconds):
+        self.stop()
+        with self._lock:
+            self._expired = False
+            timer = threading.Timer(seconds, lambda: self._expire(timer))
+            timer.daemon = True
+            self._timer = timer
+        timer.start()
+
+    def stop(self):
+        """Stop the clock; whether it had already run out."""
+
+        with self._lock:
+            timer, self._timer = self._timer, None
+            if timer is not None:
+                timer.cancel()
+            return self._expired
+
+    def _expire(self, timer):
+        with self._lock:
+            if self._timer is not timer:
+                return
+            self._timer = None
+            self._expired = True
+            self._on_expiry()
 
 
 class ApplianceRequestHandler(BaseHTTPRequestHandler):
@@ -605,11 +750,45 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     timeout = CONNECTION_TIMEOUT_SECONDS
 
+    def setup(self):
+        super().setup()
+        self._deadline = RequestDeadline(self._cut_off)
+        self._last_request = False
+
     def handle_one_request(self):
+        self._deadline.arm(REQUEST_DEADLINE_SECONDS)
         try:
             super().handle_one_request()
         except TimeoutError:
             self.close_connection = True
+        finally:
+            self._deadline.stop()
+            if not self.close_connection:
+                self.server.connection_idle(self.connection, self._client_ip())
+
+    def parse_request(self):
+        held = self.server.connection_busy(self.connection)
+        parsed = super().parse_request()
+        if not held:
+            self._last_request = True
+            self.close_connection = True
+        # The line and the headers are in; the body is read under its own
+        # deadline in _body, and nothing after that is the client's pacing.
+        if self._deadline.stop():
+            return False
+        return parsed
+
+    def end_headers(self):
+        if self._last_request:
+            self.send_header("Connection", "close")
+        super().end_headers()
+
+    def _cut_off(self):
+        self.close_connection = True
+        try:
+            self.connection.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
 
     @property
     def app(self):
@@ -624,18 +803,10 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         return self.client_address[0] if self.client_address else ""
 
     def _session(self):
-        raw = self.headers.get("Cookie")
-        if not raw:
+        value = session_cookie_value(self.headers.get_all("Cookie") or ())
+        if not value:
             return None
-        jar = cookies.SimpleCookie()
-        try:
-            jar.load(raw)
-        except cookies.CookieError:
-            return None
-        morsel = jar.get(SESSION_COOKIE_NAME)
-        if morsel is None:
-            return None
-        return self.app.session_for(morsel.value)
+        return self.app.session_for(value, self._client_ip())
 
     def _body(self):
         try:
@@ -646,10 +817,16 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             return {}
         if length > MAX_BODY_BYTES:
             raise ValueError("request body too large")
-        raw = self.rfile.read(length)
+        self._deadline.arm(REQUEST_DEADLINE_SECONDS)
+        try:
+            raw = self.rfile.read(length)
+        finally:
+            expired = self._deadline.stop()
+        if expired:
+            raise TimeoutError("the request body did not arrive in time")
         try:
             payload = json.loads(raw.decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError, RecursionError):
             raise ValueError("malformed JSON body")
         if not isinstance(payload, dict):
             raise ValueError("body must be a JSON object")
@@ -693,13 +870,21 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             parts.append("Secure")
         return ("Set-Cookie", "; ".join(parts))
 
-    def _require_session(self):
+    def _require_session(self, *, touch=True):
         session = self._session()
         if session is None:
             self._error(401, "authentication_required", "sign in to use the Appliance Manager")
             return None
-        self.app.sessions.touch(session.session_id, self.app.auth.generation())
+        if touch:
+            self._touch(session)
         return session
+
+    def _touch(self, session):
+        self.app.sessions.touch(
+            session.session_id,
+            self.app.auth.generation(),
+            binding=session_binding(self._client_ip()),
+        )
 
     def _require_same_origin(self):
         """The half of the CSRF gate that needs no session to apply.
@@ -716,12 +901,7 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         if not self.app.names_this_appliance(host):
             # Under DNS rebinding the browser makes Origin and Host agree on the
             # attacker's name, so comparing them proves nothing on its own.
-            self._error(
-                403,
-                "csrf_host_rejected",
-                "this appliance does not answer to the name in the request; after a "
-                "rename use the new name, or open the Appliance Manager by its IP address",
-            )
+            self._error(403, "csrf_host_rejected", self.app.host_refusal_message())
             return False
         origin = self.headers.get("Origin")
         if origin:
@@ -827,12 +1007,15 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         payload = {
             "authenticated": session is not None,
             "password_configured": bool(password.get("configured")),
+            # Unknown is not "configured": the agent could not be asked, which
+            # also looks like a first password somebody else set.
+            "password_state_known": not password.get("_unreachable"),
             "password_file_missing": bool(password.get("file_missing")),
             "appliance_version": installed_version(),
         }
         if session is not None:
             payload["csrf_token"] = session.csrf_token
-            payload["expires_at"] = session.expires_at
+            payload["expires_at"] = self.app.sessions.expires_at_wall(session)
             payload["password_confirmed"] = password.get("confirmed")
             # Only an authenticated caller learns anything about the host.
             payload["security_audit"] = self.app.audit_status()
@@ -872,7 +1055,9 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
                 body.get("password"), body.get("confirmation"), source_ip=self._client_ip()
             )
         except AuthError as exc:
-            return self._error(STATUS_FOR_CODE.get(exc.code, 400), exc.code, exc.message)
+            return self._error(
+                STATUS_FOR_CODE.get(exc.code, 400), exc.code, exc.message, **_fields(exc)
+            )
         return self._send(
             200,
             {
@@ -889,7 +1074,9 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
         try:
             session = self.app.login(body.get("password"), source_ip=self._client_ip())
         except AuthError as exc:
-            return self._error(STATUS_FOR_CODE.get(exc.code, 401), exc.code, exc.message)
+            return self._error(
+                STATUS_FOR_CODE.get(exc.code, 401), exc.code, exc.message, **_fields(exc)
+            )
         return self._send(
             200,
             {
@@ -991,11 +1178,14 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
     # --- mutating API ----------------------------------------------------
 
     def _api_post(self, path, body):
-        session = self._require_session()
+        # Touched only once the request has proved it is the page's own: a
+        # refused one must not keep a copied cookie alive.
+        session = self._require_session(touch=False)
         if session is None:
             return None
         if not self._require_csrf(session):
             return None
+        self._touch(session)
 
         if path == "/api/settings/password/confirm":
             try:
@@ -1003,7 +1193,9 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
                     body.get("password"), session, source_ip=self._client_ip()
                 )
             except AuthError as exc:
-                return self._error(STATUS_FOR_CODE.get(exc.code, 400), exc.code, exc.message)
+                return self._error(
+                    STATUS_FOR_CODE.get(exc.code, 400), exc.code, exc.message, **_fields(exc)
+                )
             return self._send(
                 200, {"confirmed": True, "security_audit": self.app.audit_status()}
             )
@@ -1017,7 +1209,9 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
                     source_ip=self._client_ip(),
                 )
             except AuthError as exc:
-                return self._error(STATUS_FOR_CODE.get(exc.code, 400), exc.code, exc.message)
+                return self._error(
+                    STATUS_FOR_CODE.get(exc.code, 400), exc.code, exc.message, **_fields(exc)
+                )
             return self._send(
                 200,
                 {
@@ -1051,6 +1245,12 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             ),
             "/api/ssh/shell-access/disable": (
                 "ssh.plan_shell_access", lambda _: {"enabled": False},
+            ),
+            "/api/backup/access/disable": (
+                "ssh.plan_backup_access", lambda _: {"enabled": False},
+            ),
+            "/api/backup/access/enable": (
+                "ssh.plan_backup_access", lambda _: {"enabled": True},
             ),
             "/api/ssh/keys": ("ssh.plan_key_add", self._key_fields),
             "/api/ssh/keys/remove-plan": ("ssh.plan_key_remove", self._fingerprint_fields),
@@ -1268,6 +1468,15 @@ class ApplianceRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
 
+def _nothing_pending(connection):
+    poller = select.poll()
+    try:
+        poller.register(connection, select.POLLIN)
+        return not poller.poll(0)
+    except (OSError, TypeError, ValueError):
+        return False
+
+
 class ApplianceWebServer(ThreadingHTTPServer):
     """Dual-stack when asked to listen everywhere.
 
@@ -1282,6 +1491,10 @@ class ApplianceWebServer(ThreadingHTTPServer):
 
     def __init__(self, app, address):
         self.app = app
+        self._connections = {}
+        self._idle = {}
+        self._reclaimed = set()
+        self._connections_lock = threading.Lock()
         host = str(address[0])
         if host in ("0.0.0.0", "::"):
             self.address_family = socket.AF_INET6
@@ -1289,6 +1502,98 @@ class ApplianceWebServer(ThreadingHTTPServer):
         elif ":" in host:
             self.address_family = socket.AF_INET6
         super().__init__(address, ApplianceRequestHandler)
+
+    def get_request(self):
+        try:
+            return super().get_request()
+        except OSError as exc:
+            # Out of descriptors the listening socket stays readable, so the
+            # loop would call accept() again at once, for ever. A short pause
+            # lets the connections that are finishing give theirs back.
+            if exc.errno in (errno.EMFILE, errno.ENFILE, errno.ENOBUFS, errno.ENOMEM):
+                time.sleep(ACCEPT_BACKOFF_SECONDS)
+            raise
+
+    def process_request(self, request, client_address):
+        source = client_address[0] if client_address else ""
+        with self._connections_lock:
+            if not self._has_room(source):
+                self._reclaim_idle(source)
+            admitted = self._has_room(source)
+            if admitted:
+                self._connections[source] = self._connections.get(source, 0) + 1
+        if not admitted:
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._release(request, source)
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._release(request, client_address[0] if client_address else "")
+
+    def connection_idle(self, connection, source):
+        """A kept-alive connection has answered and waits for the next request."""
+
+        with self._connections_lock:
+            if connection not in self._reclaimed:
+                self._idle[connection] = source
+
+    def connection_busy(self, connection):
+        """A request line arrived; whether the connection may stay open after it."""
+
+        with self._connections_lock:
+            self._idle.pop(connection, None)
+            return connection not in self._reclaimed
+
+    def _has_room(self, source):
+        total = sum(self._connections.values())
+        return total < MAX_CONNECTIONS and self._connections.get(source, 0) < MAX_CONNECTIONS_PER_SOURCE
+
+    def _reclaim_idle(self, source):
+        """Close the oldest kept-alive connection that waits for nothing.
+
+        A browser keeps its connections open after each answer and opens new
+        ones beside them, so a limit that counted the waiting ones refused
+        Firefox's next page with a reset. A source makes room among its own
+        first; a full server then takes the oldest of any other source. A
+        connection whose next request has already arrived is not waiting, and
+        only the reading side is closed: a request line its handler had just
+        read is still answered.
+        """
+
+        at_limit = self._connections.get(source, 0) >= MAX_CONNECTIONS_PER_SOURCE
+        own = [connection for connection, owner in self._idle.items() if owner == source]
+        others = [] if at_limit else [connection for connection, owner in self._idle.items() if owner != source]
+        connection = next((candidate for candidate in own + others if _nothing_pending(candidate)), None)
+        if connection is None:
+            return
+        self._decrement(self._idle.pop(connection))
+        self._reclaimed.add(connection)
+        try:
+            connection.shutdown(socket.SHUT_RD)
+        except OSError:
+            pass
+
+    def _release(self, connection, source):
+        with self._connections_lock:
+            self._idle.pop(connection, None)
+            if connection in self._reclaimed:
+                self._reclaimed.discard(connection)
+            else:
+                self._decrement(source)
+
+    def _decrement(self, source):
+        remaining = self._connections.get(source, 0) - 1
+        if remaining > 0:
+            self._connections[source] = remaining
+        else:
+            self._connections.pop(source, None)
 
     def server_bind(self):
         if self.address_family == socket.AF_INET6:

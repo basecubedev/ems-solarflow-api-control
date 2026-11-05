@@ -14,6 +14,8 @@ import subprocess
 import time
 from dataclasses import dataclass
 
+from appliance.redaction import bounded_redacted_log
+
 DEFAULT_TIMEOUT = 60
 
 # Linux MAX_ARG_STRLEN. A longer member cannot reach execve at all, so refusing
@@ -23,6 +25,7 @@ MAX_ARGUMENT_BYTES = 128 * 1024
 EXECUTABLES = {
     "docker": ("/usr/bin/docker", "/usr/local/bin/docker"),
     "systemctl": ("/usr/bin/systemctl", "/bin/systemctl"),
+    "systemd-run": ("/usr/bin/systemd-run", "/bin/systemd-run"),
     "journalctl": ("/usr/bin/journalctl", "/bin/journalctl"),
     "apt-get": ("/usr/bin/apt-get",),
     "apt": ("/usr/bin/apt",),
@@ -34,11 +37,15 @@ EXECUTABLES = {
     "dpkg-deb": ("/usr/bin/dpkg-deb",),
     "nmcli": ("/usr/bin/nmcli",),
     "hostnamectl": ("/usr/bin/hostnamectl", "/bin/hostnamectl"),
+    "busctl": ("/usr/bin/busctl", "/bin/busctl"),
     "timedatectl": ("/usr/bin/timedatectl", "/bin/timedatectl"),
     "ssh-keygen": ("/usr/bin/ssh-keygen",),
     "sshd": ("/usr/sbin/sshd",),
     "getent": ("/usr/bin/getent", "/bin/getent"),
     "chage": ("/usr/bin/chage",),
+    # Ending an account's open sessions once its access is withdrawn: sshd
+    # checks a key only when a session starts.
+    "loginctl": ("/usr/bin/loginctl", "/bin/loginctl"),
     "ss": ("/usr/bin/ss", "/bin/ss"),
     "avahi-resolve": ("/usr/bin/avahi-resolve",),
     # Finding the partition mounted at /, so the first boot can grow it. The
@@ -111,6 +118,18 @@ def validated_arguments(args):
             )
         argv.append(arg)
     return argv
+
+
+def command_failure_detail(result):
+    """What the failed command said, bounded and redacted.
+
+    An operator has no shell on the appliance, so a refusal that drops the
+    tool's own output leaves nobody able to find out what went wrong.
+    """
+
+    bounded = bounded_redacted_log((result.stderr or "") + (result.stdout or ""))
+    lines = [line.strip() for line in bounded["text"].splitlines() if line.strip()]
+    return lines[-1] if lines else "no output"
 
 
 def _captured(value):
@@ -189,7 +208,8 @@ class CommandRunner:
             completed = subprocess.run(
                 argv,
                 capture_output=True,
-                text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=timeout or self.default_timeout,
                 input=input_text,
                 env=self.env,
@@ -243,7 +263,8 @@ class CommandRunner:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
+                encoding="utf-8",
+                errors="replace",
                 env=self.env,
                 shell=False,
                 start_new_session=True,

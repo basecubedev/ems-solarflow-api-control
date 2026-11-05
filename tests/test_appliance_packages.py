@@ -5,7 +5,11 @@ The package manager is driven through a controlled fake backend: no apt process
 runs, and the check path must never modify a package or an index.
 """
 
+import contextlib
+import fcntl
 import os
+import subprocess
+import sys
 
 import pytest
 
@@ -32,6 +36,42 @@ Inst openssl [3.0.11-1] (3.0.14-1 Debian-Security:12/stable-security [arm64])
 WITH_KERNEL = """Inst linux-image-arm64 [6.1.0-17] (6.1.0-18 Debian-Security:12/stable-security [arm64])
 Inst raspi-firmware [1.20240101] (1.20240601 Raspberry Pi Foundation:12/stable [arm64])
 """
+
+
+# The holder takes the lock the way apt's GetLock and dpkg's file_lock do: a
+# POSIX record lock (fcntl), from a process of its own, because a process never
+# conflicts with its own record locks.
+_APT_STYLE_HOLDER = (
+    "import fcntl, os, sys\n"
+    "fd = os.open(sys.argv[1], os.O_RDWR)\n"
+    "fcntl.lockf(fd, fcntl.LOCK_EX)\n"
+    "sys.stdout.write('held\\n')\n"
+    "sys.stdout.flush()\n"
+    "sys.stdin.read()\n"
+)
+
+
+@contextlib.contextmanager
+def held_like_apt(path):
+    """Hold ``path`` as a running apt-get or dpkg does, until the block ends.
+
+    Interleaving: the probe under test runs only after the holder has written
+    "held", which it does after the lock is taken, and the holder lets go only
+    when its stdin closes after the block.
+    """
+
+    holder = subprocess.Popen(
+        [sys.executable, "-I", "-c", _APT_STYLE_HOLDER, str(path)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout.readline() == "held\n"
+        yield
+    finally:
+        holder.stdin.close()
+        holder.wait(timeout=30)
 
 
 def appliance(tmp_path, **kwargs):
@@ -122,6 +162,51 @@ def test_kernel_and_firmware_updates_are_flagged(tmp_path):
     assert state["firmware_update"] is True
 
 
+# A Raspberry Pi kernel bump, as `apt-get -s --with-new-pkgs upgrade` prints it: the
+# metapackage is an upgrade, the versioned image it now depends on is new.
+KERNEL_BUMP = """Inst linux-image-6.18.52+rpt-rpi-v8 (1:6.18.52-1+rpt1 Raspberry Pi Foundation:stable [arm64])
+Inst linux-image-rpi-v8 [1:6.18.50-1+rpt1] (1:6.18.52-1+rpt1 Raspberry Pi Foundation:stable [arm64])
+"""
+
+
+def _apt_calls(services):
+    return [list(args) for tool, args, _ in services.host.calls if tool == "apt-get"]
+
+
+def test_the_check_asks_for_updates_that_need_a_new_package(tmp_path):
+    """Plain `upgrade` keeps such an update back, and every kernel bump is one."""
+
+    services = appliance(tmp_path)
+    services.host.calls.clear()
+    services.packages.check()
+
+    simulations = [args for args in _apt_calls(services) if "-s" in args]
+    assert simulations and all("--with-new-pkgs" in args for args in simulations)
+
+
+def test_a_kernel_bump_that_needs_a_new_package_is_a_kernel_update(tmp_path):
+    services = appliance(tmp_path)
+    services.host.apt_simulation = KERNEL_BUMP
+
+    state = services.packages.check().to_dict()
+
+    assert state["kernel_update"] is True
+    assert state["normal_count"] == 2
+    new = [item for item in state["normal_updates"] if item["name"].startswith("linux-image-6.18.52")]
+    assert new and new[0]["current_version"] == ""
+
+
+def test_installing_every_update_installs_the_new_packages_they_need(tmp_path):
+    services = appliance(tmp_path)
+    services.host.apt_simulation = KERNEL_BUMP
+    services.host.calls.clear()
+
+    plan_and_execute(services, "updates.plan", scope="all")
+
+    installs = [args for args in _apt_calls(services) if "upgrade" in args and "-s" not in args]
+    assert installs and all("--with-new-pkgs" in args and "--no-remove" in args for args in installs)
+
+
 def test_held_packages_are_reported(tmp_path):
     services = appliance(tmp_path)
     assert services.packages.check().to_dict()["held"] == ["held-package"]
@@ -168,20 +253,40 @@ def test_missing_lock_file_is_unknown_not_free(tmp_path):
     assert services.packages.lock_state() == LOCK_UNKNOWN
 
 
-def test_a_held_lock_is_detected(tmp_path):
-    import fcntl
-    import os
-
+def test_a_lock_apt_holds_is_detected(tmp_path):
     services = appliance(tmp_path)
     lock = tmp_path / "var" / "lib" / "dpkg" / "lock-frontend"
-    handle = os.open(str(lock), os.O_RDWR)
-    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    try:
+    with held_like_apt(lock):
         assert services.packages.lock_state() == LOCK_HELD
-    finally:
-        fcntl.flock(handle, fcntl.LOCK_UN)
-        os.close(handle)
+    assert services.packages.lock_state() == LOCK_FREE
     assert lock.is_file()
+
+
+def test_a_lock_dpkg_holds_without_the_frontend_is_detected(tmp_path):
+    services = appliance(tmp_path)
+    lock = tmp_path / "var" / "lib" / "dpkg" / "lock"
+    lock.write_text("", encoding="utf-8")
+    with held_like_apt(lock):
+        assert services.packages.lock_state() == LOCK_HELD
+    assert services.packages.lock_state() == LOCK_FREE
+
+
+def test_the_probe_takes_no_lock_apt_could_trip_over(tmp_path, monkeypatch):
+    services = appliance(tmp_path)
+    (tmp_path / "var" / "lib" / "dpkg" / "lock").write_text("", encoding="utf-8")
+    taken = []
+    monkeypatch.setattr(fcntl, "flock", lambda *args: taken.append(("flock", args)))
+    monkeypatch.setattr(fcntl, "lockf", lambda *args: taken.append(("lockf", args)))
+    real_fcntl = fcntl.fcntl
+
+    def only_queries(fd, cmd, arg=0):
+        if cmd not in (fcntl.F_GETLK, getattr(fcntl, "F_OFD_GETLK", fcntl.F_GETLK)):
+            taken.append(("fcntl", cmd))
+        return real_fcntl(fd, cmd, arg)
+
+    monkeypatch.setattr(fcntl, "fcntl", only_queries)
+    assert services.packages.lock_state() == LOCK_FREE
+    assert taken == []
 
 
 # --- planning --------------------------------------------------------------
@@ -291,17 +396,13 @@ def test_failed_package_install_is_reported_with_bounded_output(tmp_path):
 
 
 def test_install_is_blocked_when_the_lock_is_taken_before_execution(tmp_path):
-    import fcntl
-    import os
 
     services = appliance(tmp_path)
     handlers = handlers_for(services)
     planned = handlers.dispatch({"operation": "updates.plan", "scope": "security"})
 
     lock = tmp_path / "var" / "lib" / "dpkg" / "lock-frontend"
-    handle = os.open(str(lock), os.O_RDWR)
-    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    try:
+    with held_like_apt(lock):
         handlers.dispatch(
             {
                 "operation": "operations.execute",
@@ -309,9 +410,6 @@ def test_install_is_blocked_when_the_lock_is_taken_before_execution(tmp_path):
                 "confirmation_token": planned["confirmation_token"],
             }
         )
-    finally:
-        fcntl.flock(handle, fcntl.LOCK_UN)
-        os.close(handle)
 
     operation = services.operations.get(planned["operation"]["operation_id"])
     assert operation.state == STATE_FAILED_TERMINAL
@@ -346,7 +444,7 @@ def test_pending_configuration_repair_runs_dpkg_configure(tmp_path):
     operation, _ = plan_and_execute(services, "updates.plan_repair", action="configure_pending")
 
     assert operation.state == STATE_SUCCEEDED
-    assert ("dpkg", ("--configure", "-a"), None) in services.host.calls
+    assert ("dpkg", ("--force-confold", "--configure", "-a"), None) in services.host.calls
     assert operation.result["package_manager"]["healthy"] is True
 
 
@@ -369,8 +467,6 @@ def test_index_refresh_runs_apt_update(tmp_path):
 
 
 def test_repair_never_removes_an_active_lock(tmp_path):
-    import fcntl
-    import os
 
     services = appliance(tmp_path)
     handlers = handlers_for(services)
@@ -378,9 +474,7 @@ def test_repair_never_removes_an_active_lock(tmp_path):
         {"operation": "updates.plan_repair", "action": "configure_pending"}
     )
     lock = tmp_path / "var" / "lib" / "dpkg" / "lock-frontend"
-    handle = os.open(str(lock), os.O_RDWR)
-    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    try:
+    with held_like_apt(lock):
         handlers.dispatch(
             {
                 "operation": "operations.execute",
@@ -388,9 +482,6 @@ def test_repair_never_removes_an_active_lock(tmp_path):
                 "confirmation_token": planned["confirmation_token"],
             }
         )
-    finally:
-        fcntl.flock(handle, fcntl.LOCK_UN)
-        os.close(handle)
 
     operation = services.operations.get(planned["operation"]["operation_id"])
     assert operation.error["code"] == "package_lock_held"
@@ -653,6 +744,31 @@ def test_the_schedule_says_so_when_there_is_nothing_to_install(tmp_path):
     assert result["reason"] == "nothing_to_install", result
 
 
+def test_a_week_with_nothing_to_install_leaves_no_banner_and_no_failure(tmp_path):
+    """Each quiet day left a cancelled record to click away, logged a failure,
+    and pushed a real operation out of the 50 the store keeps."""
+
+    services = config_with(appliance(tmp_path), automatic_security_updates=True)
+    services.host.apt_simulation = NO_UPDATES
+
+    for _ in range(7):
+        auto_update(services)
+
+    assert services.operations.list() == []
+    results = [entry["result"] for entry in services.audit.tail() if entry["action"] == "updates.install"]
+    assert results and "failure" not in results, results
+
+
+def test_a_blocked_schedule_does_not_leave_a_banner_a_day(tmp_path):
+    services = config_with(appliance(tmp_path), automatic_security_updates=True)
+    services.host.dpkg_audit = "libbroken\n"
+
+    auto_update(services)
+    auto_update(services)
+
+    assert services.operations.unacknowledged() == []
+
+
 def test_the_schedule_never_reboots_on_its_own(tmp_path):
     """A reboot is visible to whoever is relying on the battery right now."""
 
@@ -751,19 +867,232 @@ def test_a_refresh_from_an_unreachable_mirror_leaves_the_index_old(tmp_path):
     assert services.packages.check().index_age_seconds >= 10 * 24 * 60 * 60
 
 
+def test_a_plan_cancelled_while_apt_refreshes_keeps_a_second_operation_out(tmp_path, monkeypatch):
+    from appliance.agent import AgentError
+
+    services = appliance(tmp_path)
+    handlers = handlers_for(services)
+    refused = []
+    real = services.packages.plan_install
+
+    def cancelled_while_it_runs(operation, scope):
+        handlers.dispatch({"operation": "operations.cancel", "operation_id": operation.operation_id})
+        try:
+            handlers.dispatch({"operation": "updates.plan_repair", "action": "refresh_index"})
+        except AgentError as exc:
+            refused.append(exc.code)
+        return real(operation, scope)
+
+    monkeypatch.setattr(services.packages, "plan_install", cancelled_while_it_runs)
+    with pytest.raises(AgentError):
+        handlers.dispatch({"operation": "updates.plan", "scope": "security"})
+    monkeypatch.setattr(services.packages, "plan_install", real)
+
+    assert refused == ["operation_conflict"], refused
+    assert handlers.dispatch({"operation": "updates.plan_repair", "action": "refresh_index"})["plan"]
+
+
+@pytest.mark.parametrize("scope", ["security", "all"])
+def test_an_install_does_not_put_on_what_the_plan_never_showed(tmp_path, scope):
+    """The plan showed three packages; apt-daily refreshed the index before
+    Confirm, and the install put on forty, a kernel among them."""
+
+    services = appliance(tmp_path)
+    services.host.apt_simulation = SECURITY_ONLY
+    handlers = handlers_for(services)
+    planned = handlers.dispatch({"operation": "updates.plan", "scope": scope})
+    services.host.apt_simulation = SECURITY_ONLY + WITH_KERNEL
+    services.host.calls.clear()
+
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+
+    operation = services.operations.get(planned["operation"]["operation_id"])
+    assert operation.state == STATE_FAILED_TERMINAL, operation.to_dict()
+    assert operation.error["code"] == "updates_changed_since_plan"
+    installs = [args for tool, args, _ in services.host.calls if tool == "apt-get" and "-s" not in args]
+    assert installs == [], installs
+
+
+UNMET = "E: Unmet dependencies. Try 'apt --fix-broken install' with no packages (or specify a solution).\n"
+
+
+def test_a_check_apt_could_not_finish_is_refused_with_its_reason_not_planned_as_nothing(tmp_path):
+    """apt-get -s asks no mirror; its failures are local. The planner turned
+    one into "nothing to install", every day, with apt's reason dropped."""
+
+    from appliance.agent import AgentError
+
+    services = appliance(tmp_path)
+    services.host.apt_simulation_error = "W: Some index files failed to download.\n" + UNMET
+
+    with pytest.raises(AgentError) as excinfo:
+        handlers_for(services).dispatch({"operation": "updates.plan", "scope": "security"})
+
+    assert excinfo.value.code == "update_check_failed"
+    assert "Unmet dependencies" in excinfo.value.message
+
+
+def test_unmet_dependencies_leave_the_package_manager_needing_recovery(tmp_path):
+    services = appliance(tmp_path)
+    services.host.apt_simulation_error = UNMET
+
+    state = services.packages.check()
+
+    assert state.error == "update_check_failed"
+    assert "Unmet dependencies" in state.error_detail
+    assert state.healthy is False
+
+
+def test_any_other_failed_check_is_not_held_against_the_package_manager(tmp_path):
+    services = appliance(tmp_path)
+    services.host.apt_simulation_error = "E: Malformed entry 3 in list file /etc/apt/sources.list.d/x.list (Component)\n"
+
+    state = services.packages.check()
+
+    assert "Malformed entry" in state.error_detail
+    assert state.healthy is True
+
+
+DPKG_AUDIT_TWO_PACKAGES = """The following packages are only half configured, probably due to problems
+configuring them the first time.  The configuration should be retried using
+dpkg --configure <package> or the configure menu option in dselect:
+ libfoo               a library
+
+The following packages have been unpacked but not yet configured.
+They must be configured using dpkg --configure or the configure
+menu option in dselect for them to work:
+ libbar               another library
+"""
+
+
+def test_dpkg_audit_counts_the_packages_it_names_not_its_sentences():
+    """Only the first line of each paragraph was skipped: two broken packages
+    read as twelve dpkg issues."""
+
+    assert parse_dpkg_audit(DPKG_AUDIT_TWO_PACKAGES) == ["libfoo               a library", "libbar               another library"]
+
+
+def test_a_reboot_is_not_planned_while_apt_installs(tmp_path):
+    services = appliance(tmp_path)
+    lock = tmp_path / "var" / "lib" / "dpkg" / "lock-frontend"
+    with held_like_apt(lock):
+        planned = handlers_for(services).dispatch({"operation": "system.plan_reboot"})
+    assert [b["code"] for b in planned["plan"]["blockers"]] == ["package_operation_active"]
+
+
+@pytest.mark.parametrize(("plan", "call"), [("system.plan_reboot", "reboot"), ("system.plan_shutdown", "poweroff")])
+def test_a_power_action_confirmed_while_apt_installs_does_not_go_down(tmp_path, plan, call):
+    """dpkg can take the lock between the plan and Confirm -- an `apt upgrade`
+    over SSH. Going down then breaks a half-unpacked system, which the docs say
+    is recovered by re-flashing the card."""
+
+    services = appliance(tmp_path)
+    handlers = handlers_for(services)
+    planned = handlers.dispatch({"operation": plan})
+    assert planned["plan"]["blockers"] == []
+    services.host.calls.clear()
+
+    with held_like_apt(tmp_path / "var" / "lib" / "dpkg" / "lock-frontend"):
+        handlers.dispatch(
+            {
+                "operation": "operations.execute",
+                "operation_id": planned["operation"]["operation_id"],
+                "confirmation_token": planned["confirmation_token"],
+            }
+        )
+
+    operation = services.operations.get(planned["operation"]["operation_id"])
+    assert operation.state == STATE_FAILED_TERMINAL, operation.to_dict()
+    assert operation.error["code"] == "package_operation_active"
+    assert not [c for c in services.host.calls if c[0] == "systemctl" and call in c[1]], services.host.calls
+
+
+def test_a_reboot_systemctl_refused_is_audited_as_failed(tmp_path):
+    """The audit followed exceptions, and the power executor finishes a refused
+    reboot and returns: two success lines for a reboot that never happened."""
+
+    services = appliance(tmp_path)
+    services.host.failing_tools = {"systemctl"}
+
+    operation, _ = plan_and_execute(services, "system.plan_reboot")
+
+    assert operation.state == STATE_FAILED_TERMINAL
+    results = [entry["result"] for entry in services.audit.tail() if entry["action"] == "system.reboot"]
+    assert results == ["confirmed", "failure"], results
+
+
+def test_an_operation_whose_end_could_not_be_written_does_not_take_the_agent_down(tmp_path, monkeypatch):
+    import errno
+
+    from appliance import operations as operations_module
+
+    services = appliance(tmp_path)
+    real = operations_module.atomic_write
+    finished = services.operations.finish
+
+    def full_at_the_end(*args, **kwargs):
+        monkeypatch.setattr(
+            operations_module, "atomic_write", lambda *a, **k: (_ for _ in ()).throw(OSError(errno.ENOSPC, "full"))
+        )
+        return finished(*args, **kwargs)
+
+    monkeypatch.setattr(services.operations, "finish", full_at_the_end)
+    operation, _ = plan_and_execute(services, "updates.plan", scope="security")
+    monkeypatch.setattr(services.operations, "finish", finished)
+    monkeypatch.setattr(operations_module, "atomic_write", real)
+
+    assert services.operations.unfinished, "nothing kept the end to write later"
+    planned = handlers_for(services).dispatch({"operation": "system.plan_reboot"})
+
+    assert planned["plan"]["blockers"] == []
+    assert services.operations.get(operation.operation_id).state == STATE_SUCCEEDED
+
+
+class AgentStopped(BaseException):
+    """What systemd's SIGTERM is to an agent on its way down: nothing after it runs."""
+
+
+@pytest.mark.parametrize(("plan", "call"), [("system.plan_reboot", "reboot"), ("system.plan_shutdown", "poweroff")])
+def test_a_power_action_the_host_carried_out_is_not_offered_again(tmp_path, monkeypatch, plan, call):
+    from appliance import operations as operations_module
+    from appliance.operations import OperationStore
+
+    boot = tmp_path / "boot_id"
+    boot.write_text("1f0c8d2e-first-boot\n", encoding="utf-8")
+    monkeypatch.setattr(operations_module, "BOOT_ID_FILE", boot)
+    services = appliance(tmp_path)
+    systemctl = services.host._systemctl
+
+    def going_down(args):
+        answer = systemctl(args)
+        if args[:1] == [call]:
+            raise AgentStopped()
+        return answer
+
+    monkeypatch.setattr(services.host, "_systemctl", going_down)
+    with pytest.raises(AgentStopped):
+        plan_and_execute(services, plan)
+    boot.write_text("7a2e40b1-next-boot\n", encoding="utf-8")
+
+    restarted = OperationStore(services.operations.directory)
+    restarted.recover_interrupted()
+
+    assert [op.state for op in restarted.list() if op.type.startswith("system.")] == [STATE_SUCCEEDED]
+
+
 def test_a_plan_the_blockers_refuse_does_not_refresh_the_index(tmp_path):
-    import fcntl
 
     services = appliance(tmp_path)
     _index_aged(services, tmp_path, 25 * 60 * 60)
     lock = tmp_path / "var" / "lib" / "dpkg" / "lock-frontend"
-    handle = os.open(str(lock), os.O_RDWR)
-    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    try:
+    with held_like_apt(lock):
         planned = handlers_for(services).dispatch({"operation": "updates.plan", "scope": "security"})
-    finally:
-        fcntl.flock(handle, fcntl.LOCK_UN)
-        os.close(handle)
 
     assert _apt_updates(services) == []
     assert [b["code"] for b in planned["plan"]["blockers"]] == ["package_lock_held"]
@@ -972,3 +1301,278 @@ def test_a_plan_after_apts_daily_refresh_does_not_refresh_again(tmp_path):
     handlers_for(services).dispatch({"operation": "updates.plan", "scope": "security"})
 
     assert _apt_updates(services) == []
+
+
+# --- repairs that never remove and never prompt --------------------------------
+
+
+def _repair_calls(services):
+    return [(tool, list(args)) for tool, args, _ in services.host.calls if tool in ("apt-get", "dpkg")]
+
+
+def test_a_dependency_repair_that_would_remove_packages_is_refused_in_the_plan(tmp_path):
+    """apt resolves an unpacked Manager with an unmet Depends by removing it,
+    and its prerm stops the agent that is running apt."""
+
+    services = appliance(tmp_path)
+    services.host.apt_simulation = (
+        "Remv ems-appliance-manager [0.4.1]\nInst libfoo [1.0-1] (1.0-2 Debian:13/stable [arm64])\n"
+    )
+
+    planned = handlers_for(services).dispatch({"operation": "updates.plan_repair", "action": "fix_broken"})
+
+    assert planned["plan"]["removals"] == ["ems-appliance-manager"]
+    assert [b["code"] for b in planned["plan"]["blockers"]] == ["repair_would_remove_packages"]
+
+
+def test_the_dependency_repair_never_removes_and_never_prompts(tmp_path):
+    services = appliance(tmp_path)
+    services.host.calls.clear()
+
+    plan_and_execute(services, "updates.plan_repair", action="fix_broken")
+
+    runs = [args for tool, args in _repair_calls(services) if tool == "apt-get" and "-s" not in args]
+    assert runs and all("--no-remove" in args and "Dpkg::Options::=--force-confold" in args for args in runs)
+
+
+def test_configuring_pending_packages_keeps_an_edited_conffile(tmp_path):
+    services = appliance(tmp_path)
+    services.host.calls.clear()
+
+    plan_and_execute(services, "updates.plan_repair", action="configure_pending")
+
+    runs = [args for tool, args in _repair_calls(services) if tool == "dpkg" and "--configure" in args]
+    assert runs and all("--force-confold" in args for args in runs)
+
+
+# --- what a scheduled or console command says it did -----------------------------
+
+
+def test_a_scheduled_install_says_what_apt_did_not_what_it_was_asked(tmp_path):
+    """execute returns once the executor has started; the timer used to report
+    "installed N" for an install apt then failed.
+
+    Interleaving: the agent's thread waits on ``started`` before it runs the
+    install, and the scheduler's first sleep is what releases it, so the result
+    is read only after the install it describes has ended.
+    """
+
+    import threading
+
+    from appliance.agent import AgentHandlers
+    from appliance.agent_client import InProcessAgentClient
+    from appliance.packages import run_scheduled_security_updates
+
+    services = config_with(appliance(tmp_path), automatic_security_updates=True)
+    services.host.apt_exit_code = 100
+    started = threading.Event()
+    threads = []
+
+    def deferred(target):
+        def run():
+            started.wait(timeout=30)
+            target()
+
+        thread = threading.Thread(target=run)
+        threads.append(thread)
+        thread.start()
+
+    def sleep(seconds):
+        started.set()
+        threads[0].join(timeout=30)
+
+    client = InProcessAgentClient(AgentHandlers(services, executor=deferred))
+    result = run_scheduled_security_updates(client, services.config, sleep=sleep)
+
+    assert result["ran"] is False, result
+    assert result["reason"] == "install_failed"
+    assert services.operations.list()[0].state == STATE_FAILED_TERMINAL
+
+
+def test_waiting_for_an_operation_gives_up_with_what_it_last_read():
+    from appliance.agent_client import wait_until_settled
+
+    class Client:
+        def call(self, operation, **fields):
+            return {"operation": {"operation_id": fields["operation_id"], "state": "running", "settled": False}}
+
+    ticks = iter(range(0, 100, 10))
+    record = wait_until_settled(
+        Client(), "abc", timeout=30, sleep=lambda seconds: None, clock=lambda: next(ticks)
+    )
+
+    assert record["state"] == "running" and record["settled"] is False
+
+
+def test_the_auto_update_unit_outlasts_the_wait_for_the_install():
+    from appliance.packages import SCHEDULED_INSTALL_WAIT_SECONDS
+    from appliance.protocol import DEFAULT_OPERATION_TIMEOUT, UPDATE_PLAN_TIMEOUT
+
+    from pathlib import Path
+
+    unit = (
+        Path(__file__).resolve().parents[1]
+        / "packaging" / "appliance" / "systemd" / "ems-appliance-auto-update.service"
+    ).read_text(encoding="utf-8")
+    timeout = next(
+        int(line.partition("=")[2]) for line in unit.splitlines() if line.startswith("TimeoutStartSec=")
+    )
+
+    assert timeout >= (
+        UPDATE_PLAN_TIMEOUT + DEFAULT_OPERATION_TIMEOUT + SCHEDULED_INSTALL_WAIT_SECONDS + 120
+    )
+
+
+def test_a_reboot_plan_does_not_name_itself_as_the_operation_running(tmp_path):
+    """Read after its own record existed, the plan's "running operation" was
+    always the reboot plan itself."""
+
+    services = appliance(tmp_path)
+    services.host.calls.clear()
+
+    planned = handlers_for(services).dispatch({"operation": "system.plan_reboot"})
+
+    assert "running_operation" not in planned["plan"]
+    assert not [args for tool, args, _ in services.host.calls if tool == "apt-get"], services.host.calls
+
+
+# --- what automatic security updates never install --------------------------
+
+RUNTIME_AND_KERNEL = """Inst openssl [3.0.11-1] (3.0.14-1 Debian-Security:13/stable-security [arm64])
+Inst linux-image-rpi-v8 [1:6.12.1-1+rpt1] (1:6.12.2-1+rpt1 Raspberry Pi Foundation:stable [arm64])
+Inst rpi-eeprom [28.1-1] (28.2-1 Raspberry Pi Foundation:stable [arm64])
+Inst docker-ce [5:28.1.0-1~debian.13~trixie] (5:28.2.0-1~debian.13~trixie Docker CE:trixie [arm64])
+Inst containerd.io [1.7.26-1] (1.7.27-1 Docker CE:trixie [arm64])
+Inst libfoo [1.0-1] (1.0-2 Debian:13/stable [arm64])
+"""
+
+
+def test_kernel_firmware_and_runtime_updates_are_named_as_important_and_manual(tmp_path):
+    """Their origins carry no "security", so the security set and automatic
+    security updates never include them: a runc or kernel CVE went unpatched
+    while everything read as up to date."""
+
+    services = appliance(tmp_path)
+    services.host.apt_simulation = RUNTIME_AND_KERNEL
+
+    state = services.packages.check().to_dict()
+
+    assert [item["name"] for item in state["manual_updates"]] == [
+        "linux-image-rpi-v8",
+        "rpi-eeprom",
+        "docker-ce",
+        "containerd.io",
+    ]
+    assert state["manual_count"] == 4
+
+
+def test_an_upgrade_that_restarts_the_container_engine_says_so(tmp_path):
+    services = appliance(tmp_path)
+    services.host.apt_simulation = RUNTIME_AND_KERNEL
+    handlers = handlers_for(services)
+
+    plan = handlers.dispatch({"operation": "updates.plan", "scope": "all"})["plan"]
+
+    assert "Docker" in plan["note"] and "restarts" in plan["note"], plan.get("note")
+
+
+def test_status_flags_important_manual_updates(tmp_path):
+    services = appliance(tmp_path)
+    services.host.apt_simulation = RUNTIME_AND_KERNEL
+
+    status = services.status.overview()
+    codes = {item["code"] for item in status["health"]["warnings"]}
+
+    assert "manual_updates_pending" in codes, codes
+
+
+# --- apt-daily's refresh holds only the lists lock ----------------------------
+
+
+def test_apt_daily_refreshing_the_lists_is_another_package_manager_at_work(tmp_path):
+    """apt-daily's refresh takes apt's lists lock and not dpkg's: the console
+    called the package manager free, and a refresh planned then was refused by
+    apt with its own lock message."""
+
+    services = appliance(tmp_path)
+    lists_lock = tmp_path / "var" / "lib" / "apt" / "lists" / "lock"
+    lists_lock.write_text("", encoding="utf-8")
+
+    with held_like_apt(lists_lock):
+        state = services.packages.check()
+        plan = handlers_for(services).dispatch({"operation": "updates.plan", "scope": "all"})["plan"]
+
+    assert state.to_dict()["package_manager"]["lock_state"] == LOCK_HELD
+    assert "package_lock_held" in [item["code"] for item in plan["blockers"]]
+
+
+def test_half_configured_packages_while_dpkg_holds_its_lock_are_its_work(tmp_path):
+    """The audit lists packages half-configured while dpkg is configuring
+    them; that is the run under way, not one in need of recovery."""
+
+    services = appliance(tmp_path)
+    services.host.dpkg_audit = "The following packages are only half configured:\n libfoo\n"
+    lock = tmp_path / "var" / "lib" / "dpkg" / "lock-frontend"
+
+    with held_like_apt(lock):
+        state = services.packages.check()
+        blockers = [item["code"] for item in services.packages._blockers(state)]
+
+    assert state.healthy is True
+    assert "dpkg_incomplete" not in blockers
+    assert "package_lock_held" in blockers
+
+
+# --- dpkg outlives the agent ---------------------------------------------------
+
+
+def test_an_install_runs_apt_in_a_unit_of_its_own(tmp_path):
+    """apt and dpkg ran as children of the agent, whose unit stops its whole
+    control group: an OOM kill or a restart of the agent killed dpkg in the
+    middle of a transaction."""
+
+    services = appliance(tmp_path)
+
+    operation, _ = plan_and_execute(services, "updates.plan", scope="security")
+
+    assert operation.state == STATE_SUCCEEDED, operation.to_dict()
+    assert len(services.host.units_run) == 1
+    assert services.host.units_run[0].startswith(f"ems-appliance-packages-{operation.operation_id[:12]}-")
+    assert "Setting up libfoo" in operation.result["output"]["text"]
+    run = next(args for tool, args, _ in services.host.calls if tool == "systemd-run")
+    assert not any(arg.startswith("--property=RuntimeMaxSec") for arg in run)
+    calls = [(tool, args) for tool, args, _ in services.host.calls if tool == "journalctl"]
+    assert calls.index(("journalctl", ("--sync",))) < len(calls) - 1
+
+
+def test_a_dpkg_repair_runs_in_a_unit_of_its_own(tmp_path):
+    services = appliance(tmp_path)
+    services.host.dpkg_audit = "The following packages are only half configured:\n libfoo\n"
+
+    operation, _ = plan_and_execute(services, "updates.plan_repair", action="configure_pending")
+
+    assert services.host.units_run, operation.to_dict()
+    assert any(tool == "dpkg" and "--configure" in args for tool, args, _ in services.host.calls)
+
+
+def test_an_install_that_outlasts_its_wait_is_left_running_and_said_so(tmp_path, monkeypatch):
+    """Stopping the unit at its deadline would kill dpkg mid-transaction, the
+    state the unit exists to avoid."""
+
+    from appliance.commands import CommandResult
+    from appliance.operations import STATE_FAILED_RECOVERABLE
+
+    services = appliance(tmp_path)
+    original = services.packages.runner.run
+
+    def outlasting(tool, args=(), **kwargs):
+        if tool == "systemd-run":
+            return CommandResult(tool, tuple(args), 124, "", "", timed_out=True)
+        return original(tool, args, **kwargs)
+
+    monkeypatch.setattr(services.packages.runner, "run", outlasting)
+    operation, _ = plan_and_execute(services, "updates.plan", scope="security")
+
+    assert operation.state == STATE_FAILED_RECOVERABLE, operation.to_dict()
+    assert operation.error["code"] == "package_unit_still_running"
+    assert "is still running in ems-appliance-packages-" in operation.error["message"]
