@@ -8,7 +8,7 @@
 | What does the EMS Admin Console manage? | EMS configuration, device discovery, grid meter and inverters, control parameters, EMS runtime state, EMS diagnostics, EMS backup/restore, Guided Setup and Guided Upgrade. |
 | How do I recover a failed Admin update? | [admin-recovery.md](admin-recovery.md) — the appliance rolls back automatically; otherwise use **Preview repair** on the **EMS Admin** page, or **Updates → Choose an EMS Admin version → Previous known-good**. |
 | The appliance will not come up at all | [console-recovery.md](console-recovery.md) — log in as `ems-rescue` at a keyboard, then work down the list. |
-| How do I install a specific Admin version? | [admin-recovery.md](admin-recovery.md) — pick it from the **Stable** or **Unstable** group in **Updates → Choose an EMS Admin version**. |
+| How do I install a specific Admin version? | [admin-recovery.md](admin-recovery.md) — pick it from the **Stable** or **Release candidate** group in **Updates → Choose an EMS Admin version**. |
 | How do I add an SSH key? | [ssh-backup-access.md](ssh-backup-access.md) |
 | How do I back up files with rsync? | rsync is not available: the backup account is SFTP-only by design. Use the `sftp` commands in [ssh-backup-access.md](ssh-backup-access.md). |
 | How do I install OS updates? | [os-updates.md](os-updates.md) |
@@ -326,13 +326,13 @@ reported as a success.
 The chosen channel names no version: the list carries no stable release, or
 *Current version (reinstall)* was chosen with nothing installed, or *Previous
 known-good* with no history recorded yet. Pick a version from the **Stable**
-group, or from **Unstable** if this host accepts candidates, or use Expert mode
+group, or from **Release candidate** if this host accepts candidates, or use Expert mode
 and enter an exact release tag.
 
 ## "prerelease_not_allowed"
 
 The chosen version is a release candidate and this host does not accept them.
-Candidates are still listed under **Unstable**, greyed out, and the same refusal
+Candidates are still listed under **Release candidate**, greyed out, and the same refusal
 applies to a candidate tag typed by hand in Expert mode. A version a configured
 release index marks as a pre-release counts as a candidate even when its tag
 carries no pre-release suffix. Set

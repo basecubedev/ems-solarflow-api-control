@@ -27,13 +27,14 @@ from appliance.validation import (
     CHANNEL_EXACT,
     CHANNEL_LATEST_STABLE,
     CHANNEL_PREVIOUS_KNOWN_GOOD,
+    ROLLING_TAGS,
     ValidationError,
     is_prerelease_tag,
     validate_release_tag,
 )
 from appliance.version import (
     TRACK_STABLE,
-    TRACK_UNSTABLE,
+    TRACK_RC,
     newest_stable,
     release_track,
     version_key,
@@ -64,7 +65,7 @@ class ReleaseTarget:
         """``release_track`` of the tag; an index's own prerelease flag may only demote."""
 
         track = release_track(self.tag)
-        return TRACK_UNSTABLE if self.prerelease and track == TRACK_STABLE else track
+        return TRACK_RC if self.prerelease and track == TRACK_STABLE else track
 
     def to_dict(self):
         return {
@@ -230,6 +231,22 @@ def _refuse_what_the_list_refuses(catalogue, tag):
             )
 
 
+def _fixed_tag(tag, instead):
+    """A tag that still names the image it named when it was recorded.
+
+    A rolling tag does not: pulling ``latest`` again for a reinstall or a way
+    back installs today's build, possibly the very one being escaped.
+    """
+
+    tag = validate_release_tag(tag)
+    if tag in ROLLING_TAGS:
+        raise ReleaseResolutionError(
+            "rolling_tag_not_by_name",
+            f"{tag} names whatever was built last, not the image that ran; {instead}",
+        )
+    return tag
+
+
 def resolve_channel(channel, *, catalogue, current_tag, previous_known_good, requested_tag=None):
     """Turn a channel name into one concrete, validated release tag."""
 
@@ -245,7 +262,10 @@ def resolve_channel(channel, *, catalogue, current_tag, previous_known_good, req
             raise ReleaseResolutionError(
                 "release_channel_unresolved", "no Admin version is currently installed"
             )
-        return ReleaseTarget(tag=validate_release_tag(current_tag), channel=CHANNEL_CURRENT)
+        return ReleaseTarget(
+            tag=_fixed_tag(current_tag, "reinstall it with Repair, which recreates the running image"),
+            channel=CHANNEL_CURRENT,
+        )
 
     if channel == CHANNEL_PREVIOUS_KNOWN_GOOD:
         if not previous_known_good:
@@ -254,7 +274,8 @@ def resolve_channel(channel, *, catalogue, current_tag, previous_known_good, req
             )
         tag = previous_known_good.get("admin_version") or ""
         return ReleaseTarget(
-            tag=validate_release_tag(tag), channel=CHANNEL_PREVIOUS_KNOWN_GOOD
+            tag=_fixed_tag(tag, "go back to it with Roll back, which deploys its recorded digest"),
+            channel=CHANNEL_PREVIOUS_KNOWN_GOOD,
         )
 
     if channel == CHANNEL_LATEST_STABLE:

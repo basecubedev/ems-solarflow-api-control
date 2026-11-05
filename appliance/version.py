@@ -105,8 +105,9 @@ def is_stable(text):
 
 
 TRACK_STABLE = "stable"
-TRACK_UNSTABLE = "unstable"
-TRACK_EXPERIMENTAL = "experimental"
+TRACK_RC = "rc"
+TRACK_LATEST = "latest"
+TRACK_DEVELOPMENT = "development"
 # The Admin console's three groups and its rule for them: a release is stable,
 # every prerelease is a candidate, and experimental is a development build --
 # here the untagged 0.0.0~dev builds -- or anything nobody can read.
@@ -150,18 +151,21 @@ def is_comparable(text, *, package=False):
 
 
 def release_track(text, *, package=False):
-    """Stable, unstable or experimental, by the Admin console's rule.
+    """Stable, RC, latest or development: the Admin console's channel names.
 
-    That rule is the one its version list is grouped by,
-    ``admin/releases.py::_is_release_candidate``: every prerelease is a
-    candidate. ``admin/system_build.classify_channel`` names build identities
-    and is not what the list shows.
+    ``admin/system_build.py`` names them, and the console's version list is
+    filtered by them; the Manager's lists and its own package use the same
+    words. Every prerelease is a candidate, as in
+    ``admin/releases.py::_is_release_candidate``, and anything no version
+    order can place is a development build.
     """
 
     raw = str(text or "").strip()
+    if not package and raw == "latest":
+        return TRACK_LATEST
     if not is_comparable(raw, package=package):
-        return TRACK_EXPERIMENTAL
-    return TRACK_STABLE if is_stable(raw) else TRACK_UNSTABLE
+        return TRACK_DEVELOPMENT
+    return TRACK_STABLE if is_stable(raw) else TRACK_RC
 
 
 def same_version(left, right, *, package=False):

@@ -108,7 +108,7 @@
   );
 
   const offered = $derived(managerOptions(sources?.releases || []));
-  const offeredGroups = $derived(groupByTrack(offered.map((item) => ({ ...item, track: item.entry.track }))));
+  const offeredGroups = $derived(groupByTrack(offered.map((item) => ({ ...item, track: item.entry.track })), detail.expert));
   const chosen = $derived(
     offered.find((item) => item.id === forms.managerVersion)
       || offered.find((item) => item.id === managerLatest?.release_id)

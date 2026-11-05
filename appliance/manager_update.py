@@ -572,6 +572,7 @@ class ManagerUpdateService:
             "build_id": release.build_id,
             "installed_version": self.installed_version,
             "direction": moving,
+            "track": release_track(release.version, package=True),
             "size_bytes": release.artifact_size,
             "digest": release.artifact_digest,
             "blockers": blockers,

@@ -109,7 +109,7 @@ Overview's quick actions. Both open the **EMS Admin** page.
 review the plan before anything is written* — and what installing does: it
 creates the deployment under `/opt/ems-solarflow` and starts the version you
 choose. **Version** offers **Latest stable** and every published version,
-grouped as **Stable**, **Unstable** and **Experimental**; a version this
+grouped as **Stable**, **Release candidate**, **Rolling** and **Development**; a version this
 appliance will not install is listed greyed out, with the reason. In Expert,
 **Exact release tag** takes a tag you type.
 

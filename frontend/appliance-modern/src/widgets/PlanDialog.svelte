@@ -7,7 +7,7 @@
   import { t, tn, say, langOf, fmt } from "../i18n/i18n.svelte.js";
   import { detail } from "../state/prefs.svelte.js";
   import { actions as flow, confirmPlan, dismissPlan } from "../state/actions.svelte.js";
-  import { planBlocked, planBlocks, planDanger, planFields, vocabularyWords } from "../lib/plan.js";
+  import { planBlocked, planBlocks, planDanger, planFields, planNeedsPrereleaseAck, vocabularyWords } from "../lib/plan.js";
   import { operationTitleKey } from "../lib/operations.js";
   import { exactDuration, gigabytes } from "../lib/host.js";
 
@@ -50,6 +50,11 @@
     })),
   );
   const created = $derived(plan.creates_deployment || null);
+  const needsAck = $derived(planNeedsPrereleaseAck(plan));
+  let acknowledged = $state(false);
+  $effect(() => {
+    if (pending) acknowledged = false;
+  });
   const blocks = $derived(planBlocks(plan, detail.expert));
 
   /**
@@ -131,6 +136,9 @@
         </div>
       {/if}
 
+      {#if needsAck}
+        <label class="check prerelease" data-testid="plan-prerelease-ack"><input type="checkbox" bind:checked={acknowledged} />{t("plan.prereleaseAck", { track: t(`track.${plan.track}`) })}</label>
+      {/if}
       {#if plan.warning}<p class="warning" lang="en"><Icon name="triangle-alert" size="sm" />{plan.warning}</p>{/if}
       {#if (plan.preserves || []).length}<p class="note"><Icon name="shield-check" /><span>{t("plan.preserves")} <span lang="en">{plan.preserves.join(", ")}</span></span></p>{/if}
       {#if flow.dialogError}<p class="form-error" role="alert" lang={langOf(flow.dialogError)} data-testid="plan-error">{say(flow.dialogError)}</p>{/if}
@@ -143,7 +151,7 @@
       class:danger={planDanger(plan, options)}
       type="button"
       onclick={confirmPlan}
-      disabled={blocked || flow.confirming}
+      disabled={blocked || flow.confirming || (needsAck && !acknowledged)}
       aria-busy={flow.confirming ? "true" : undefined}
       data-testid="plan-confirm"
     >

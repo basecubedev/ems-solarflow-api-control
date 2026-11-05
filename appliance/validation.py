@@ -8,7 +8,7 @@ line has been checked at least twice and always against the same rule.
 
 import re
 
-MAX_TAG_LENGTH = 64
+MAX_TAG_LENGTH = 128
 MAX_HOSTNAME_LENGTH = 63
 MAX_SSID_LENGTH = 32
 MAX_PUBLIC_KEY_LENGTH = 8192
@@ -18,6 +18,10 @@ MAX_LOG_LINES = 2000
 DEFAULT_LOG_LINES = 200
 
 RELEASE_TAG_RE = re.compile(r"^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z][0-9A-Za-z.]{0,31})?$")
+ROLLING_TAGS = frozenset({"latest"})
+DEVELOPMENT_TAG_RE = re.compile(
+    r"^dev[-_][0-9A-Za-z][0-9A-Za-z._-]*-[0-9a-f]{7,40}-[1-9][0-9]*-[1-9][0-9]*$"
+)
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 IMAGE_REPOSITORY_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)+$")
 TIMEZONE_RE = re.compile(r"\A[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+){0,2}\Z")
@@ -169,16 +173,29 @@ def _require_text(value, code, *, max_length, allow_empty=False):
 
 
 def validate_release_tag(value):
-    """Accept a concrete release tag only; mutable channel names are rejected."""
+    """A versioned release tag, the rolling ``latest``, or a development build's tag.
+
+    The Admin console offers all three, and so does this appliance; a
+    development build only by its immutable ``-<sha>-<run>-<attempt>`` tag,
+    the one its version label names. Each is
+    resolved to a digest when it is pulled, pinned by that digest from then on,
+    and proven by the version label its image carries. Any other channel name
+    is refused.
+    """
 
     text = _require_text(value, "invalid_release_tag", max_length=MAX_TAG_LENGTH)
-    if not RELEASE_TAG_RE.match(text):
+    if not (
+        RELEASE_TAG_RE.match(text) or text in ROLLING_TAGS or DEVELOPMENT_TAG_RE.match(text)
+    ):
         raise ValidationError("invalid_release_tag", f"{text!r} is not a supported release tag")
     return text
 
 
 def is_prerelease_tag(tag):
-    return "-" in validate_release_tag(tag)
+    """A release candidate, the rolling ``latest`` or a development build."""
+
+    tag = validate_release_tag(tag)
+    return "-" in tag or tag in ROLLING_TAGS or bool(DEVELOPMENT_TAG_RE.match(tag))
 
 
 def validate_installable_tag(value, *, allow_prerelease):

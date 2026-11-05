@@ -43,7 +43,7 @@ def test_valid_release_tags(tag):
 @pytest.mark.parametrize(
     "tag",
     [
-        "latest",
+        "latest_stable",
         "main",
         "v0.8",
         "v0.8.0; rm -rf /",

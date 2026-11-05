@@ -80,22 +80,36 @@ confirm; see [Changing something](overview.md#changing-something).
 Below the cards, the Appliance Manager and EMS Admin each have a version list,
 **Choose a Manager version** and **Choose an EMS Admin version**. Both use the
 group names and explanations of the EMS Admin console's version list, and
-**What do Stable, Unstable and Experimental mean?** opens them:
+**What do Stable, Release candidate, Rolling and Development mean?** opens
+them:
 
 | Group | What it holds |
 | --- | --- |
 | **Stable** | Recommended versioned releases for normal use. |
-| **Unstable** | Release candidates for early testing. Mostly complete, but they may still contain issues. |
-| **Experimental** | Feature builds with unfinished changes. Intended for testing only. |
+| **Release candidate** | Release candidates for early testing. Mostly complete, but they may still contain issues. |
+| **Rolling** | The current build from the main branch (`latest`). Updated automatically and not a versioned release. |
+| **Development** | Feature builds with unfinished changes. Intended for testing only. Shown in Expert only. |
 
 The appliance decides the group from the version itself, never from the
 browser, and by the EMS Admin console's rule for both lists: a release is
-Stable, every pre-release (`-rc1`, `~rc2`, `-beta`, `~test1`, …) is Unstable,
-and Experimental is a development build — for the Appliance Manager the
-untagged `0.0.0~dev…` builds. A version the appliance cannot read in full is
-Experimental, never Stable. A group with nothing in it is left out, and a
+Stable, every pre-release (`-rc1`, `~rc2`, `-beta`, `~test1`, …) is a release
+candidate, `latest` is Rolling, and Development is a development build — the
+EMS Admin's `dev-…-<commit>-<run>-<attempt>` images (a development build
+is offered only by that immutable tag, the one its version label names), and
+for the Appliance Manager the untagged
+`0.0.0~dev…` builds. A version the appliance cannot read in full is
+Development, never Stable. A group with nothing in it is left out, and a
 version this appliance will not install stays listed, greyed out with the
 reason.
+
+Anything but a stable release is confirmed for each install on its own: the
+plan names its group, and **Install** stays disabled until you tick that you
+install it knowingly. Whether this appliance installs such builds of the EMS
+Admin at all is still `allow_prerelease` in
+`/etc/ems-appliance-manager/allowed-images.conf`; Rolling and Development count
+as pre-releases there. A Rolling or Development image is proven like any
+release: its version label has to name the tag, and it is pinned by the digest
+that was pulled.
 
 **What you select:** a version, then **Install selected version**.
 

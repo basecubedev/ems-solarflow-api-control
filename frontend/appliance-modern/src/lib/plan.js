@@ -2,6 +2,7 @@
 import { CONTAINER_STATES } from "./words.js";
 import { MANAGER_DIRECTIONS } from "./manager.js";
 import { INSTALL_CHANNELS, LIFECYCLE_ACTIONS, REPAIR_ACTIONS } from "./plans.js";
+import { RELEASE_TRACKS } from "./host.js";
 
 /**
  * The plan an owner agrees to before this appliance is changed, read as named
@@ -54,6 +55,7 @@ export const PLAN_FIELD_ORDER = Object.freeze([
  * this list, so a new field is named before an owner meets it.
  */
 export const PLAN_EXTRA_FIELDS = Object.freeze([
+  "track",
   "currently_revoked",
   "unparsed_lines",
   "free_space_known",
@@ -114,6 +116,7 @@ const VOCABULARY = Object.freeze({
   direction: (value) => (MANAGER_DIRECTIONS.includes(value) ? `manager.direction.${value}` : null),
   current_state: (value) => (CONTAINER_STATES.includes(value) ? `container.${value}` : null),
   target_channel: (value) => (INSTALL_CHANNELS.includes(value) ? `install.channel.${value}` : null),
+  track: (value) => (RELEASE_TRACKS.includes(value) ? `track.${value}` : null),
   lock_state: () => null,
   security: () => null,
   note: () => null,
@@ -223,4 +226,10 @@ export function planBlocks(plan, expert) {
       else lines = value.map((item) => (scalar(item) ? String(item) : Object.values(item).filter(scalar).join(" · ")));
       return { key, known, label: key.replace(/_/g, " "), lines, mono: !Array.isArray(value) };
     });
+}
+
+/** A plan for anything but a stable release is confirmed for this install on its own, in the dialog. */
+export function planNeedsPrereleaseAck(plan) {
+  const track = (plan || {}).track;
+  return Boolean(track) && track !== "stable";
 }

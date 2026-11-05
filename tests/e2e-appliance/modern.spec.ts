@@ -523,7 +523,7 @@ test.describe("updates", () => {
     await page.getByTestId("action-notice").getByRole("button").click();
 
     await expect(page.getByTestId("manager-version")).toHaveValue("ems-appliance-manager-0.2.0-arm64");
-    await expect(page.getByTestId("manager-version").locator("optgroup")).toHaveCount(3);
+    await expect(page.getByTestId("manager-version").locator("optgroup")).toHaveCount(2);
     await page.getByTestId("manager-version").selectOption("ems-appliance-manager-0.1.0-arm64");
     const plan = page.waitForRequest((request) => request.url().includes("/api/manager/plan-update"));
     await page.getByTestId("manager-plan-update").click();
@@ -580,6 +580,19 @@ test.describe("updates", () => {
     const plan = page.waitForRequest((request) => request.url().includes("/api/admin/plan-install"));
     await page.getByTestId("install-plan").click();
     expect((await plan).postDataJSON()).toMatchObject({ channel: "exact", tag: "v1.2.0-rc1", reinstall: false });
+  });
+
+  test("a release candidate is installed only after it is confirmed for this install", async ({ page }) => {
+    await createPassword(page);
+    await open(page, "updates");
+    await expect(page.getByTestId("install-channel").locator("optgroup")).toHaveCount(3);
+    await page.getByTestId("install-channel").selectOption("tag:v1.2.0-rc1");
+    await page.getByTestId("install-plan").click();
+    await expect(page.getByTestId("plan-dialog")).toContainText("Release candidate");
+    await expect(page.getByTestId("plan-confirm")).toBeDisabled();
+    await page.getByTestId("plan-prerelease-ack").locator("input").check();
+    await expect(page.getByTestId("plan-confirm")).toBeEnabled();
+    await page.getByTestId("plan-cancel").click();
   });
 
   test("the kept Manager package is offered as the way back", async ({ page, request }) => {

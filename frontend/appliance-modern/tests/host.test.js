@@ -34,8 +34,10 @@ test("the installed version never reads as missing while Docker is down", () => 
 });
 
 test("releases group by track in the trusted order, an unknown track with the least trusted", () => {
-  const groups = groupByTrack([{ tag: "a", track: "unstable" }, { tag: "b", track: "stable" }, { tag: "c", track: "odd" }]);
-  assert.deepEqual(groups.map((group) => [group.track, group.items.map((item) => item.tag)]), [["stable", ["b"]], ["unstable", ["a"]], ["experimental", ["c"]]]);
+  const items = [{ tag: "a", track: "rc" }, { tag: "b", track: "stable" }, { tag: "c", track: "odd" }, { tag: "latest", track: "latest" }];
+  const groups = groupByTrack(items);
+  assert.deepEqual(groups.map((group) => [group.track, group.items.map((item) => item.tag)]), [["stable", ["b"]], ["rc", ["a"]], ["latest", ["latest"]], ["development", ["c"]]]);
+  assert.deepEqual(groupByTrack(items, false).map((group) => group.track), ["stable", "rc", "latest"]);
 });
 
 test("only an upgrade is an update; an unknown direction may be the same image", () => {

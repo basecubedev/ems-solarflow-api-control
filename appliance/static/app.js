@@ -1894,8 +1894,9 @@
      an entry without one is shown with the least trusted group. */
   var RELEASE_TRACKS = [
     { id: "stable", label: "Stable", help: "Recommended versioned releases for normal use." },
-    { id: "unstable", label: "Unstable", help: "Release candidates for early testing. Mostly complete, but they may still contain issues." },
-    { id: "experimental", label: "Experimental", help: "Feature builds with unfinished changes. Intended for testing only." }
+    { id: "rc", label: "Release candidate", help: "Release candidates for early testing. Mostly complete, but they may still contain issues." },
+    { id: "latest", label: "Rolling", help: "The current build from the main branch. Updated automatically and not a versioned release." },
+    { id: "development", label: "Development", help: "Feature builds with unfinished changes. Intended for testing only." }
   ];
 
   function groupByTrack(items) {
@@ -1904,7 +1905,7 @@
       return {
         track: track,
         items: (items || []).filter(function (item) {
-          var id = known.indexOf(item.track) === -1 ? "experimental" : item.track;
+          var id = known.indexOf(item.track) === -1 ? "development" : item.track;
           return id === track.id;
         })
       };

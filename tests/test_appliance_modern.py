@@ -271,6 +271,12 @@ def test_the_archives_the_console_lists_are_the_ones_the_agent_keeps():
     assert f"export const KEPT_ARCHIVES = {KEEP_ARCHIVES};" in source
 
 
+def test_the_release_tracks_are_the_backends():
+    from appliance.version import TRACK_DEVELOPMENT, TRACK_LATEST, TRACK_RC, TRACK_STABLE
+
+    assert js_list("lib/host.js", "RELEASE_TRACKS") == [TRACK_STABLE, TRACK_RC, TRACK_LATEST, TRACK_DEVELOPMENT]
+
+
 def test_every_operation_state_has_words():
     assert keys("lib/operations.js", "OPERATION_STATES") == constants(operations, "STATE_")
 

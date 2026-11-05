@@ -63,7 +63,7 @@ actions.
    this appliance*.
 2. Choose the **Version**. Under **Channels** only *Latest stable* is offered —
    there is no current version and no known-good history to fall back on — but
-   the **Stable** and **Unstable** groups below it list every version the
+   the **Stable** and **Release candidate** groups below it list every version the
    registry publishes, so a first installation can pin an older release just as
    readily as the newest one. A candidate this host will not accept is listed
    greyed out with the reason. Expert mode adds *Exact release tag* for a
@@ -128,8 +128,15 @@ leaving an Admin that cannot update itself.
    - **Channels**: *Latest stable*, *Current version (reinstall)*, *Previous
      known-good*.
    - **Stable**: every release the registry publishes, newest first.
-   - **Unstable**: every pre-release tag (`-rc1`, `-beta`, `-dev.3`, …),
-     newest first — the Admin console's own grouping. Whether a candidate can be chosen is `allow_prerelease` in
+   - **Release candidate**: every pre-release tag (`-rc1`, `-beta`, `-dev.3`, …),
+     newest first — the Admin console's own grouping.
+   - **Rolling**: `latest`, the build of the main branch the Admin console can
+     move itself to; it is pulled, proven by its version label and pinned by
+     its digest like any release.
+   - **Development** (Expert only): the `dev-…` feature builds.
+
+   Anything but a stable release needs its own confirmation in the plan. Whether
+     such a build can be chosen is `allow_prerelease` in
      `/etc/ems-appliance-manager/allowed-images.conf`: a host that sets it to
      false shows every candidate greyed out with the reason, and the agent
      refuses the tag with `prerelease_not_allowed` even when it is typed by

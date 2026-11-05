@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { planBlocks, planDanger } from "../src/lib/plan.js";
+import { planBlocks, planDanger, planNeedsPrereleaseAck } from "../src/lib/plan.js";
 
 test("the confirm button is red for what the plan itself says is risky", () => {
   assert.equal(planDanger({ type: "admin.rollback" }, {}), true);
@@ -28,4 +28,11 @@ test("a list or object the dialog has no block for is spelled out, not hidden", 
   assert.deepEqual(basic[0].lines, ["libfoo half-configured, bar unpacked"]);
   assert.deepEqual(basic[1].lines, ["SHA256:abc · laptop"]);
   assert.deepEqual(planBlocks(plan, true).map((block) => block.key), ["dpkg_issues", "keys", "docker"]);
+});
+
+test("anything but a stable release is confirmed for this install on its own", () => {
+  assert.equal(planNeedsPrereleaseAck({ track: "stable" }), false);
+  assert.equal(planNeedsPrereleaseAck({ track: "rc" }), true);
+  assert.equal(planNeedsPrereleaseAck({ track: "latest" }), true);
+  assert.equal(planNeedsPrereleaseAck({ type: "admin.lifecycle" }), false);
 });

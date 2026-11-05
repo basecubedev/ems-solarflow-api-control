@@ -94,14 +94,19 @@ export function emsContainer(status) {
 }
 
 /** The words and their order are the Admin console's, so a version reads the same on both surfaces. */
-export const RELEASE_TRACKS = Object.freeze(["stable", "unstable", "experimental"]);
+export const RELEASE_TRACKS = Object.freeze(["stable", "rc", "latest", "development"]);
 
-/** An entry without a known track is shown with the least trusted group. */
-export function groupByTrack(items) {
-  return RELEASE_TRACKS.map((track) => ({
-    track,
-    items: (items || []).filter((item) => (RELEASE_TRACKS.includes(item.track) ? item.track : "experimental") === track),
-  })).filter((group) => group.items.length > 0);
+/** Development builds are offered in Expert only, as the owner decided for the Manager. */
+export const EXPERT_TRACKS = Object.freeze(["development"]);
+
+/** An entry without a known track is shown with the least trusted group; Basic leaves the Expert tracks out. */
+export function groupByTrack(items, expert = true) {
+  return RELEASE_TRACKS.filter((track) => expert || !EXPERT_TRACKS.includes(track))
+    .map((track) => ({
+      track,
+      items: (items || []).filter((item) => (RELEASE_TRACKS.includes(item.track) ? item.track : "development") === track),
+    }))
+    .filter((group) => group.items.length > 0);
 }
 
 /** Only an upgrade gets a button: an unknown direction may be the same image. */

@@ -23,7 +23,7 @@
   const channels = $derived(
     INSTALL_CHANNELS.filter((channel) => (channel === "exact" ? detail.expert : !bootstrap || channel === "latest_stable")),
   );
-  const groups = $derived(groupByTrack((releases && releases.available) || []));
+  const groups = $derived(groupByTrack((releases && releases.available) || [], detail.expert));
   const offered = $derived([
     ...channels,
     ...groups.flatMap((group) => group.items.filter((item) => item.installable !== false).map((item) => `tag:${item.tag}`)),

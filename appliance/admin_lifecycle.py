@@ -70,7 +70,7 @@ from appliance.releases import (
     resolve_channel,
 )
 from appliance.systemd import UNIT_DOCKER
-from appliance.version import DIRECTION_DOWNGRADE, DIRECTION_UNKNOWN, direction
+from appliance.version import DIRECTION_DOWNGRADE, DIRECTION_UNKNOWN, direction, release_track
 from appliance.validation import (
     ValidationError,
     build_digest_ref,
@@ -629,6 +629,7 @@ class AdminLifecycleService:
             "repository": repository,
             "target_tag": target.tag,
             "target_channel": target.channel,
+            "track": release_track(target.tag),
             "target_digest": image.digest,
             "target_reference": build_digest_ref(repository, image.digest),
             "target_revision": str(image.labels.get(LABEL_REVISION) or ""),
