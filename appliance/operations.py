@@ -502,17 +502,19 @@ class OperationStore:
             self._path(operation_id).unlink()
             return True
 
-    def abandon(self, operation_id, *, error=None):
+    def abandon(self, operation_id, *, error=None, acknowledge=False):
         """Cancel a plan that could not be made, and keep why.
 
         An operator may have cancelled it while it was being made; that record
         stays as it is, so the planner giving up is no second transition.
+        ``acknowledge`` is for a refusal already answered to whoever asked.
         """
 
         with self._lock:
             operation = self._load(operation_id)
             if operation.terminal:
                 return operation
+            operation.acknowledged = bool(acknowledge)
             return self._finish(operation, STATE_CANCELLED, error=error, stage="cancelled")
 
     def note(self, operation_id, detail):

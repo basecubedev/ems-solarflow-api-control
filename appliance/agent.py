@@ -376,6 +376,8 @@ class AgentHandlers:
             FetchError,
             ValidationError,
             OperationError,
+            timezone_config.TimezoneError,
+            support_archive.SupportArchiveError,
         ) as exc:
             code = getattr(exc, "code", "plan_failed")
             message = str(getattr(exc, "message", exc))
@@ -451,7 +453,9 @@ class AgentHandlers:
 
         self.services.network.discard_secret(operation.operation_id)
         try:
-            self.services.operations.abandon(operation.operation_id, error=error)
+            self.services.operations.abandon(
+                operation.operation_id, error=error, acknowledge=error is not None
+            )
         finally:
             self._audit(operation_type, actor, source_ip, RESULT_FAILURE, operation.operation_id)
 

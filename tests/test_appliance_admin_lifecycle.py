@@ -1559,3 +1559,36 @@ def test_the_repository_the_manager_installs_is_the_one_the_admin_updates_itself
     assert DEFAULT_ADMIN_REPOSITORY == ADMIN_IMAGE_REPO
     assert update_apply.ADMIN_IMAGE_RE.fullmatch(f"{DEFAULT_ADMIN_REPOSITORY}:v1.0.0")
     assert update_apply.ADMIN_DIGEST_RE.fullmatch(f"{DEFAULT_ADMIN_REPOSITORY}@sha256:{'a' * 64}")
+
+
+def test_a_refused_plan_leaves_no_banner_to_acknowledge(tmp_path):
+    """The refusal is reported to the page that asked; the cancelled record
+    also became a banner titled as if the operation ran, with Acknowledge."""
+
+    services = healthy_appliance(tmp_path)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    with pytest.raises(AgentError):
+        handlers.dispatch({"operation": "admin.plan_install", "channel": "exact", "tag": "v9.9.9"})
+
+    assert services.operations.unacknowledged() == []
+    refused = services.operations.list(limit=1)[0]
+    assert refused.state == "cancelled" and refused.error, refused.to_dict()
+
+
+def test_a_refused_time_zone_or_support_archive_plan_keeps_its_reason(tmp_path, monkeypatch):
+    from appliance.support_archive import SupportArchiveError
+
+    services = healthy_appliance(tmp_path)
+
+    def refuse(*args, **kwargs):
+        raise SupportArchiveError("support_archive_too_large", "too large")
+
+    monkeypatch.setattr(services.support, "plan", refuse)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    with pytest.raises(AgentError) as excinfo:
+        handlers.dispatch({"operation": "support.plan_archive"})
+
+    assert excinfo.value.code == "support_archive_too_large"
+    assert services.operations.list(limit=1)[0].error["code"] == "support_archive_too_large"
