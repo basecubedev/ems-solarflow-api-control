@@ -618,7 +618,7 @@ class AgentHandlers:
         except Exception as exc:
             try:
                 current = store.get(operation.operation_id)
-                if not current.terminal:
+                if not current.settled:
                     store.finish(
                         operation.operation_id,
                         STATE_FAILED_TERMINAL,
