@@ -407,6 +407,14 @@ goes looking for an outage that did not happen:
 A mutable tag is never a fallback: if the immutable reference cannot be
 prepared, the operation ends and the current Admin keeps running.
 
+The stored image may be gone: Admin keeps the five newest images of its
+repository plus those its own records name, and it cannot read this
+appliance's history, so a few Admin updates can remove the image a rollback
+returns to. It is then pulled by its digest while the current Admin still runs,
+watched like an install's pull and with the same 30-minute limit a slow card
+needs; the stage shows how long it has been running, and cancelling the
+operation stops it. Offline, such a rollback is not possible.
+
 Once step 07 has run, a failure is no longer free. The appliance then puts the
 snapshot back and recreates the Admin that was running before, and the result
 carries a `recovery` block saying whether that worked — it never claims a

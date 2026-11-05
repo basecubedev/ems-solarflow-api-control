@@ -785,3 +785,25 @@ def test_a_recovery_hash_that_is_not_a_digest_does_not_execute(tmp_path, field):
 
     assert operation.state == STATE_FAILED_TERMINAL, operation.to_dict()
     assert operation.result["admin_untouched"] is True, operation.result
+
+
+def test_a_rollback_whose_image_was_pruned_pulls_it_watched_while_the_admin_runs(tmp_path):
+    """Admin's own retention can remove the image the Manager rolls back to.
+    The pull then ran unwatched with the ten-minute limit a Pi 3B+ outlasts,
+    although the Admin was still running and the pull could be watched."""
+
+    services = rollback_appliance(tmp_path)
+    previous = services.known_good.previous()
+    services.host.images.pop(previous["admin_reference"], None)
+    services.host.images.pop(previous["admin_image"], None)
+    services.host.watch_ticks = 2
+    ticks = []
+    services.host.on_watch_tick = ticks.append
+    planned = handlers(services).dispatch({"operation": "admin.plan_rollback"})
+
+    operation = run_rollback(services, planned)
+
+    assert ticks == [1, 2], ticks
+    assert "pulling_image" in [entry["stage"] for entry in operation.progress]
+    assert previous["admin_reference"] in services.host.images
+    assert (operation.error or {}).get("code") != "known_good_image_unavailable"

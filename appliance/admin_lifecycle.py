@@ -1513,7 +1513,9 @@ class AdminLifecycleService:
             # installed it or recorded it running; its labels belong to that
             # older release, so the digest and the architecture are what have to
             # still hold.
-            self._require_planned_image(target, reference, require_labels=False)
+            self._require_planned_image(
+                target, reference, require_labels=False, operation=operation
+            )
         except AdminLifecycleError as exc:
             return self._preflight_failure(
                 operation, STATE_FAILED_TERMINAL, exc.code, exc.message
@@ -2300,7 +2302,7 @@ class AdminLifecycleService:
             )
         return True
 
-    def _require_planned_image(self, target, reference, *, require_labels):
+    def _require_planned_image(self, target, reference, *, require_labels, operation=None):
         """Prove the image is still exactly the one the plan described.
 
         ``architecture``, ``source`` and ``revision`` are strings in a record; a
@@ -2309,7 +2311,7 @@ class AdminLifecycleService:
         again while the healthy Admin is still running.
         """
 
-        self._require_local_image(reference)
+        self._require_local_image(reference, operation=operation)
         image = self.docker.inspect_image(reference)
         if not image.exists:
             raise AdminLifecycleError("image_inspect_failed", f"{reference} cannot be inspected")
@@ -2351,14 +2353,29 @@ class AdminLifecycleService:
                 raise AdminLifecycleError(exc.code, exc.message)
         return True
 
-    def _require_local_image(self, reference):
-        """Make sure the immutable reference is present before deploying it."""
+    def _require_local_image(self, reference, *, operation=None):
+        """Make sure the immutable reference is present before deploying it.
+
+        With ``operation``, the Admin still runs and the pull is watched, so it
+        gets the long limit a slow card needs; the Admin's own image retention
+        can have removed the image a rollback returns to. Without, a recovery
+        waits on it while the Admin is down, and it keeps the short one.
+        """
 
         image = self.docker.inspect_image(reference)
         if image.exists:
             return True
+        keep_going = None
+        if operation is not None:
+            self._advance(operation, "pulling_image", detail=reference)
+
+            def keep_going(elapsed):
+                return self.operations.note(
+                    operation.operation_id, pull_progress_note(reference, elapsed)
+                )
+
         try:
-            self.docker.pull_image(reference)
+            self.docker.pull_image(reference, keep_going=keep_going)
         except DockerError as exc:
             raise AdminLifecycleError(
                 "known_good_image_unavailable",
