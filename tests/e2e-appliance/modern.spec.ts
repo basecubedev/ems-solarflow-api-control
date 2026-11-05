@@ -872,6 +872,18 @@ test.describe("access, network and diagnostics", () => {
     await expect(page.getByTestId("network-radio")).toContainText("On");
   });
 
+  test.describe("in a browser in another zone", () => {
+    test.use({ timezoneId: "Asia/Tokyo" });
+
+    test("the time zone is picked from a list, and the browser's own zone is offered", async ({ page }) => {
+      await createPassword(page);
+      await open(page, "network");
+      expect(await page.locator("#timezone-options option").count()).toBeGreaterThan(100);
+      await page.getByTestId("timezone-browser").click();
+      await expect(page.getByTestId("timezone-input")).toHaveValue("Asia/Tokyo");
+    });
+  });
+
   test("a hostname change is planned with the new name", async ({ page }) => {
     await createPassword(page);
     await open(page, "network");

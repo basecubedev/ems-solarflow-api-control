@@ -780,6 +780,7 @@ export const STRINGS = {
   "network.ethernet": s("Ethernet", "Ethernet", "Ethernet", "Ethernet"),
   "network.addresses": s("Addresses", "Adressen", "Adressen", "Adresses"),
   "network.ssid": s("Network name (SSID)", "Netzwerkname (SSID)", "Netwerknaam (SSID)", "Nom du réseau (SSID)"),
+  "network.timezoneBrowser": s("Use this browser's zone, {zone}", "Zeitzone dieses Browsers verwenden: {zone}", "De tijdzone van deze browser gebruiken: {zone}", "Utiliser le fuseau de ce navigateur : {zone}"),
   "network.mac": s("MAC address", "MAC-Adresse", "MAC-adres", "Adresse MAC"),
   "network.radio": s("WLAN radio", "WLAN-Funk", "WLAN-radio", "Radio WLAN"),
   "network.radioOn": s("On", "An", "Aan", "Activée"),

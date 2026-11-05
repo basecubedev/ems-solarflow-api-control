@@ -23,6 +23,9 @@
   const scan = $derived(host.wifi);
   const networks = $derived((scan && scan.networks) || []);
   const timezone = $derived(forms.timezone ?? currentZone);
+  /** The zones this browser knows, to pick from rather than type; the agent still decides what it accepts. */
+  const zones = typeof Intl.supportedValuesOf === "function" ? Intl.supportedValuesOf("timeZone") : [];
+  const browserZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
 
   let passphrase = $state("");
 
@@ -123,7 +126,11 @@
   <Card icon="clock" tone="c-pv" title={t("network.timezoneChange")} subtitle={t("network.timezoneChangeSub")}>
     <div class="form" data-testid="network-timezone-stage">
       <p class="muted small" data-testid="timezone-current">{t("network.timezoneCurrent", { zone: currentZone || t("common.unknown") })}</p>
-      <label class="field"><span>{t("network.timezone")}</span><input class="input mono" type="text" value={timezone} oninput={(event) => (forms.timezone = event.currentTarget.value)} autocomplete="off" data-testid="timezone-input" /></label>
+      <label class="field"><span>{t("network.timezone")}</span><input class="input mono" type="text" list="timezone-options" value={timezone} oninput={(event) => (forms.timezone = event.currentTarget.value)} autocomplete="off" data-testid="timezone-input" /></label>
+      <datalist id="timezone-options">{#each zones as zone (zone)}<option value={zone}></option>{/each}</datalist>
+      {#if browserZone && browserZone !== currentZone && browserZone !== timezone}
+        <p class="muted small"><button class="btn secondary small" type="button" onclick={() => (forms.timezone = browserZone)} data-testid="timezone-browser">{t("network.timezoneBrowser", { zone: browserZone })}</button></p>
+      {/if}
       <div class="row-wrap">
         <PlanButton
           plan={{ key: "timezone-plan", endpoint: "/api/system/timezone", body: { timezone: String(timezone).trim() }, title: { key: "plan.title.timezone" }, confirm: "plan.apply", forget: ["timezone"] }}
