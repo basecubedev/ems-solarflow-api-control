@@ -582,6 +582,15 @@ test.describe("updates", () => {
     expect((await plan).postDataJSON()).toMatchObject({ channel: "exact", tag: "v1.2.0-rc1", reinstall: false });
   });
 
+  test("the version list names the latest stable tag and which way each version goes", async ({ page }) => {
+    await createPassword(page);
+    await open(page, "updates");
+    const select = page.getByTestId("install-channel");
+    await expect(select.locator('option[value="latest_stable"]')).toHaveText("Latest stable (v1.1.0)");
+    await expect(select.locator('option[value="tag:v1.1.0"]')).toHaveText("v1.1.0 · newer");
+    await expect(select.locator('option[value="tag:v1.0.0"]')).toHaveText("v1.0.0 · installed");
+  });
+
   test("a release candidate is installed only after it is confirmed for this install", async ({ page }) => {
     await createPassword(page);
     await open(page, "updates");

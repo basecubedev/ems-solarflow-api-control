@@ -37,11 +37,16 @@
         : { channel: selected, tag: "" },
   );
   const plan = $derived(adminInstallPlan(target.channel, target.tag, bootstrap ? false : forms.adminReinstall, bootstrap ? "admin-bootstrap-plan" : "install-plan"));
+  const DIRECTION_LABELS = Object.freeze({ reinstall: "install.installed", upgrade: "install.newer", downgrade: "install.older" });
   const label = (item) => {
-    let text = item.direction === "reinstall" ? t("install.installed", { tag: item.tag }) : item.tag;
+    let text = DIRECTION_LABELS[item.direction] ? t(DIRECTION_LABELS[item.direction], { tag: item.tag }) : item.tag;
     if (item.installable === false && item.reason) text += ` — ${item.reason}`;
     return text;
   };
+  const channelLabel = (channel) =>
+    channel === "latest_stable" && releases?.latest_stable?.tag
+      ? t("install.channel.latestStableTag", { tag: releases.latest_stable.tag })
+      : t(`install.channel.${channel}`);
 </script>
 
 <div class="form">
@@ -49,7 +54,7 @@
     <span>{t("install.version")}</span>
     <select class="input" value={selected} onchange={(event) => (forms[versionKey] = event.currentTarget.value)} data-testid="install-channel">
       <optgroup label={t("install.channels")}>
-        {#each channels as channel (channel)}<option value={channel}>{t(`install.channel.${channel}`)}</option>{/each}
+        {#each channels as channel (channel)}<option value={channel}>{channelLabel(channel)}</option>{/each}
       </optgroup>
       {#each groups as group (group.track)}
         <optgroup label={t(`track.${group.track}`)}>
