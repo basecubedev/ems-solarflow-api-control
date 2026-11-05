@@ -141,6 +141,44 @@ def test_a_development_tag_is_immutable_by_the_admin_consoles_rule(tag):
     accepted = bool(validation.DEVELOPMENT_TAG_RE.match(tag))
 
     assert accepted == (system_build.is_development_build_tag(tag) and system_build.is_immutable_dev_tag(tag))
+
+
+# --- one grammar and one order with the Admin console --------------------------
+
+PUBLISHED_SHAPES = [
+    "v0.8.0", "v0.8.1-rc1", "v0.8.1-rc2", "v0.8.1-rc6", "v0.8.1", "v0.9.0-RC", "v0.9.0-rc1",
+    "v0.9.0-RC2", "v0.9.0", "v1.0.0-rc-1", "v1.0.0-beta.2", "v1.0.0",
+]
+
+
+def test_the_tags_the_admin_console_reads_are_the_ones_this_appliance_reads():
+    """The console accepts -rc-1; the Manager dropped it from its list."""
+
+    from admin.releases import _version
+
+    for tag in PUBLISHED_SHAPES:
+        assert bool(_version(tag)) == bool(validation.RELEASE_TAG_RE.match(tag)), tag
+
+
+def test_the_admin_console_and_this_appliance_order_published_tags_alike():
+    """Case did not matter to the console and did here: -RC1 sorted below -rc1."""
+
+    from admin.releases import _version
+
+    from appliance.version import version_key
+
+    assert sorted(PUBLISHED_SHAPES, key=version_key) == sorted(PUBLISHED_SHAPES, key=_version)
+
+
+def test_the_one_known_difference_is_the_tenth_candidate():
+    """The console compares rc10 and rc2 as text; here the number counts, so
+    the tenth candidate is never read as older than the second."""
+
+    from appliance.version import version_key
+
+    assert version_key("v1.0.0-rc10") > version_key("v1.0.0-rc2")
+
+
 @pytest.mark.parametrize("channel", ["current", "previous_known_good"])
 def test_a_rolling_tag_is_never_reinstalled_or_returned_to_by_its_name(channel):
     """latest moves: pulling it again for "current" or "previous known-good"

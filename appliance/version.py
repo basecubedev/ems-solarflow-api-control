@@ -84,9 +84,9 @@ def version_key(text):
         # read the newest candidate as the oldest.
         match = _TRAILING_NUMBER.match(chunk)
         if match:
-            identifiers.append((1, match.group(1), int(match.group(2))))
+            identifiers.append((1, match.group(1).lower(), int(match.group(2))))
         else:
-            identifiers.append((1, chunk, 0))
+            identifiers.append((1, chunk.lower(), 0))
     return (*release, 0, tuple(identifiers))
 
 

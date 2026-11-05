@@ -17,7 +17,7 @@ MAX_WIFI_PASSPHRASE_LENGTH = 63
 MAX_LOG_LINES = 2000
 DEFAULT_LOG_LINES = 200
 
-RELEASE_TAG_RE = re.compile(r"^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z][0-9A-Za-z.]{0,31})?$")
+RELEASE_TAG_RE = re.compile(r"^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z][0-9A-Za-z.-]{0,31})?$")
 ROLLING_TAGS = frozenset({"latest"})
 DEVELOPMENT_TAG_RE = re.compile(
     r"^dev[-_][0-9A-Za-z][0-9A-Za-z._-]*-[0-9a-f]{7,40}-[1-9][0-9]*-[1-9][0-9]*$"
