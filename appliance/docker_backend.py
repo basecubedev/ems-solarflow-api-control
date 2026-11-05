@@ -130,9 +130,12 @@ class DockerBackend:
         "No such container" and "the daemon did not answer" are the same exit
         status. Only the first is a state a plan may be made against, so a
         caller that has to tell them apart asks for ``strict`` and gets an
-        error instead of a container that looks absent.
+        error instead of a container that looks absent. A host without Docker
+        has no container at all, which is no unknown state.
         """
 
+        if not self.runner.available("docker"):
+            return ContainerState(name=name)
         result = self.runner.run(
             "docker", ["inspect", "--type", "container", "--format", "{{json .}}", name], timeout=30
         )

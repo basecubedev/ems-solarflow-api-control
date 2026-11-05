@@ -1113,7 +1113,7 @@ test.describe("what an outcome says", () => {
     await createPassword(page);
     await expect(page.getByTestId("card-docker")).toContainText("Docker is not installed, so containers cannot be managed here.");
     await open(page, "updates");
-    await expect(page.getByTestId("admin-versions-unavailable")).toBeVisible();
+    await expect(page.getByTestId("admin-versions-docker")).toContainText("Docker is not installed");
     await expect(page.getByTestId("install-plan")).toHaveCount(0);
   });
 
