@@ -27,7 +27,7 @@
 </script>
 
 {#if operation}
-  <section class="card span-12 operation" data-testid="operation-banner" data-state={operation.state} aria-labelledby="operation-title">
+  <section class="card span-12 operation" tabindex="-1" data-testid="operation-banner" data-state={operation.state} aria-labelledby="operation-title">
     <div class="head">
       <span class="icon-tile sm {state.tone}"><Icon name={icon} /></span>
       <div class="titles">

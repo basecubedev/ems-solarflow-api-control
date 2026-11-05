@@ -699,6 +699,18 @@ test.describe("EMS Admin", () => {
     await settled(page);
   });
 
+  test("focus returns to the control that asked, and to the banner after a confirm", async ({ page }) => {
+    await createPassword(page);
+    await open(page, "admin");
+    await page.getByTestId("admin-stop").click();
+    await page.getByTestId("plan-cancel").click();
+    await expect(page.getByTestId("plan-dialog")).toBeHidden();
+    await expect(page.getByTestId("admin-stop")).toBeFocused();
+    await page.getByTestId("admin-stop").click();
+    await confirmPlan(page);
+    await expect(page.getByTestId("operation-banner")).toBeFocused();
+  });
+
   test("a plan cancelled in another tab closes its dialog here", async ({ page, context }) => {
     await createPassword(page);
     await open(page, "admin");

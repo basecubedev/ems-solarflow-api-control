@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { tick } from "svelte";
 import { getJson } from "../../../shared/lib/api.js";
 import { applianceGet, applianceSend, loadSession, rememberNotice, session } from "./session.svelte.js";
 import { host, refresh, stopPolling, watchOperations } from "./host.svelte.js";
@@ -32,6 +33,7 @@ class Actions {
 export const actions = new Actions();
 
 let lostPlan = null;
+let opener = null;
 let resuming = false;
 let reconnectTimer = null;
 let waiting = { before: "", outage: false, since: 0, operationId: "" };
@@ -40,6 +42,22 @@ function showPlan(payload, options) {
   actions.notice = null;
   actions.dialogError = null;
   actions.pending = { payload, options, shownAt: Date.now() };
+}
+
+/**
+ * The control that asked for a plan is disabled while the plan is made, so the
+ * native dialog would hand focus back to <body>. It goes back to that control,
+ * or to the banner once the operation it planned has started.
+ */
+function restoreFocus(toBanner = false) {
+  const target = opener;
+  opener = null;
+  if (typeof document === "undefined") return;
+  tick().then(() => {
+    const banner = toBanner ? document.querySelector("[data-testid=operation-banner]") : null;
+    const element = banner || (target && target.isConnected ? target : null);
+    if (element && typeof element.focus === "function") element.focus();
+  });
 }
 
 /**
@@ -59,6 +77,7 @@ function followPending(active, payload, startedAt) {
   actions.pending = null;
   actions.dialogError = null;
   actions.notice = { key: "plan.gone", tone: "c-warn" };
+  restoreFocus();
 }
 
 watchOperations(followPending);
@@ -110,6 +129,7 @@ watchOperations(resumeLostPlan);
  */
 export async function planOperation(options) {
   if (actions.planning || actions.pending) return;
+  opener = typeof document === "undefined" ? null : document.activeElement;
   actions.planning = options.key || options.endpoint;
   actions.notice = null;
   const request = planRequestId();
@@ -147,6 +167,7 @@ export async function confirmPlan() {
     host.operation = payload.operation || host.operation;
     if (pending.options.forget) forget(...pending.options.forget);
     actions.pending = null;
+    restoreFocus(true);
     const type = (pending.payload.plan || {}).type || "";
     if (POWER_OPERATIONS.includes(type) || MANAGER_OPERATIONS.includes(type)) {
       startReconnect(type, pending.payload.operation.operation_id);
@@ -162,6 +183,7 @@ export async function confirmPlan() {
         host.operation = record;
         if (pending.options.forget) forget(...pending.options.forget);
         actions.pending = null;
+        restoreFocus(true);
         return;
       }
     }
@@ -177,6 +199,7 @@ export function dismissPlan() {
   const pending = actions.pending;
   actions.pending = null;
   actions.dialogError = null;
+  restoreFocus();
   const operationId = pending && pending.payload && pending.payload.operation && pending.payload.operation.operation_id;
   if (!operationId) return;
   applianceSend("/api/operations/cancel", { body: { operation_id: operationId } })
