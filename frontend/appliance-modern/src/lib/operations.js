@@ -125,11 +125,23 @@ export function currentOperation(payload) {
 }
 
 /** A refresh runs as one of the package manager's repairs, but nothing about it is a repair. */
-const ACTION_TITLES = Object.freeze({ "updates.repair": Object.freeze({ [REFRESH_INDEX_ACTION]: "op.updates.refresh_index" }) });
+const ACTION_TITLES = Object.freeze({
+  "updates.repair": Object.freeze({ [REFRESH_INDEX_ACTION]: "op.updates.refresh_index" }),
+  "admin.lifecycle": Object.freeze({ start: "op.admin.lifecycle.start", stop: "op.admin.lifecycle.stop", restart: "op.admin.lifecycle.restart" }),
+});
+
+/** A switch says which way it goes; its target names it by "enabled" (appliance/ssh_service.py). */
+const SWITCH_TITLES = Object.freeze({
+  "ssh.service": Object.freeze({ on: "op.ssh.service.on", off: "op.ssh.service.off" }),
+  "ssh.shell_access": Object.freeze({ on: "op.ssh.shell_access.on", off: "op.ssh.shell_access.off" }),
+  "ssh.backup_access": Object.freeze({ on: "op.ssh.backup_access.on", off: "op.ssh.backup_access.off" }),
+});
 
 export function operationTitleKey(operation, action = ((operation || {}).requested_target || {}).action) {
   const type = String((operation || {}).type || "");
   if (!OPERATION_TYPES.includes(type)) return null;
+  const enabled = ((operation || {}).requested_target || {}).enabled;
+  if (SWITCH_TITLES[type] && typeof enabled === "boolean") return SWITCH_TITLES[type][enabled ? "on" : "off"];
   return (ACTION_TITLES[type] || {})[action] || `op.${type}`;
 }
 

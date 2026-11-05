@@ -127,3 +127,10 @@ test("the waited-on operation is found wherever the answer lists it", () => {
   assert.equal(findOperation({ active: null, unacknowledged: [], recent: [] }, "b"), null);
   assert.equal(findOperation(null, "b"), null);
 });
+
+test("the banner title names the action or the way a switch goes", () => {
+  assert.equal(operationTitleKey({ type: "admin.lifecycle", requested_target: { action: "restart" } }), "op.admin.lifecycle.restart");
+  assert.equal(operationTitleKey({ type: "ssh.service", requested_target: { enabled: false } }), "op.ssh.service.off");
+  assert.equal(operationTitleKey({ type: "ssh.shell_access", requested_target: { enabled: true } }), "op.ssh.shell_access.on");
+  assert.equal(operationTitleKey({ type: "ssh.service", requested_target: {} }), "op.ssh.service");
+});
