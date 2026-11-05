@@ -540,8 +540,10 @@ and `<install root>/data/admin` when neither names one.
 | Finding | Suggestion |
 |---|---|
 | Docker is stopped | Start Docker |
-| Admin container is missing | Reinstall the selected Admin version |
+| Admin container is missing | Reinstall the recorded Admin version |
 | Container exists but is stopped | Start Admin |
+| The container runs neither the recorded known-good Admin nor what the deployment names (`admin_identity`) | Reinstall the recorded Admin version |
+| The deployment names a digest this appliance never verified and nothing runs it (`admin_deployment`) — what an install cut off between pinning and starting leaves | Reinstall the recorded Admin version; Start is not offered, because it would be held to the unverified digest |
 | Container restarts repeatedly | Review the logs, then reinstall |
 | Compose file is missing | Manual: recreate it with `TZ=<the zone shown under Network → Change the time zone> /usr/lib/ems-appliance-manager/install-admin-console.sh …`, so the Admin keeps the appliance's zone (the host itself runs on UTC). With no Admin container either, the EMS Admin page offers **Install EMS Admin** instead |
 | Admin service is not defined | Manual: add the service with `install-admin-console.sh` |
@@ -552,6 +554,11 @@ and `<install root>/data/admin` when neither names one.
 
 Repair also reports image availability, container state, health-check state and
 file permissions.
+
+**Reinstall the recorded Admin version** pins the deployment to the known-good
+record's `repository@sha256:…` reference, pulling it by digest when it is not
+local, and recreates the Admin from that. It is verified against the same
+digest. Without a known-good record it recreates what the deployment names.
 
 ### What the repair result means
 

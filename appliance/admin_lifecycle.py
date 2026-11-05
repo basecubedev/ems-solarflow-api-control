@@ -860,20 +860,25 @@ class AdminLifecycleService:
                         check="admin_container",
                         ok=False,
                         detail="The Admin container does not exist",
-                        suggestion="Reinstall the selected Admin version",
+                        suggestion=self._reinstall_suggestion(),
                         action="recreate_admin",
                     )
                 )
             elif container.state != CONTAINER_RUNNING:
+                unverified = self._deployment_finding(container)
                 findings.append(
                     RepairFinding(
                         check="admin_container",
                         ok=False,
                         detail=f"The Admin container is {container.state}",
-                        suggestion="Start the Admin container",
-                        action="start_admin",
+                        suggestion="Reinstalling the recorded Admin version starts it"
+                        if unverified
+                        else "Start the Admin container",
+                        action="" if unverified else "start_admin",
                     )
                 )
+                if unverified:
+                    findings.append(unverified)
             elif container.restart_count > 3:
                 findings.append(
                     RepairFinding(
@@ -935,6 +940,34 @@ class AdminLifecycleService:
             return ""
         return str(image.digest or "") if image.exists else ""
 
+    def _reinstall_suggestion(self):
+        version = str((self.known_good.current() or {}).get("admin_version") or "")
+        return f"Reinstall the recorded Admin version {version}".rstrip()
+
+    def _deployment_finding(self, container):
+        """A deployment pinned to a digest neither verified nor running here.
+
+        An install cut off between pinning the deployment and starting the new
+        Admin leaves exactly that: the old container stopped, the deployment
+        naming an image nothing verified, and a Start held to it.
+        """
+
+        expected = str((self.known_good.current() or {}).get("admin_digest") or "")
+        deployed = self._deployed_digest()
+        if not (expected and deployed) or deployed == expected:
+            return None
+        active, _ = self._active_digest(container)
+        if active == deployed:
+            return None
+        return RepairFinding(
+            check="admin_deployment",
+            ok=False,
+            detail=f"The Admin deployment names {deployed}, which this appliance never "
+            f"verified; it last verified {expected}",
+            suggestion=self._reinstall_suggestion(),
+            action="recreate_admin",
+        )
+
     def _identity_finding(self, container):
         """Is the container running the Admin the appliance last verified?"""
 
@@ -962,7 +995,7 @@ class AdminLifecycleService:
             ok=False,
             detail=f"The container runs {active or 'an unidentifiable image'}, "
             f"not the known-good {expected}",
-            suggestion="Reinstall the recorded Admin version",
+            suggestion=self._reinstall_suggestion(),
             action="recreate_admin",
         )
 
@@ -1819,11 +1852,7 @@ class AdminLifecycleService:
             return self._verified_or_reason(as_deployed=True)
 
         if action == "recreate_admin":
-            try:
-                self._compose_up(self.deployment())
-            except AdminLifecycleError:
-                return "recreate_failed"
-            return self._verified_or_reason()
+            return self._recreate_admin()
 
         if action == ACTION_SET_RESTART_POLICY:
             return self._apply_restart_policy()
@@ -1897,6 +1926,33 @@ class AdminLifecycleService:
         if restart_policy_state(deployment, container)["update_due"]:
             return "restart_policy_not_applied"
         return "verified"
+
+    def _recreate_admin(self):
+        """Bring up the recorded known-good Admin by its digest; else the deployment.
+
+        Composing up whatever the deployment names could never clear a finding
+        about a deployment off the known-good image, and would start an image
+        an interrupted install pinned without verifying it.
+        """
+
+        record = self.known_good.current()
+        try:
+            if record:
+                try:
+                    repository, digest, reference = self._validated_rollback_target(record)
+                except ValidationError:
+                    return "invalid_known_good_record"
+                self._require_local_image(reference)
+                apply_digest(
+                    self.deployment(),
+                    repository,
+                    digest,
+                    tag=str(record.get("admin_version") or ""),
+                )
+            self._compose_up(self.deployment())
+        except (AdminLifecycleError, DockerError, DeploymentError, OSError):
+            return "recreate_failed"
+        return self._verified_or_reason()
 
     def _verified_or_reason(self, *, as_deployed=False):
         """A repair action reports the failing fact, never a bare "unhealthy".

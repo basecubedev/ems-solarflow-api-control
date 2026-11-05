@@ -1454,3 +1454,77 @@ def test_a_failed_install_with_nothing_to_restore_leaves_the_admin_stopped(tmp_p
     running = host.containers.get(ADMIN_CONTAINER)
     assert running is None or not running["State"]["Running"], running
     assert services.admin.deployment().compose_file.read_text(encoding="utf-8") == compose_before
+
+
+def test_a_repair_reinstall_brings_back_the_recorded_admin_not_the_deployment(tmp_path):
+    """recreate_admin ran compose-up on whatever the deployment named, so a
+    deployment off the known-good image could never clear the finding."""
+
+    services = admin_replaced_itself(healthy_appliance(tmp_path))
+    services.host.publish_image("v9.9.9")
+    services.host.pull_local(f"{ADMIN_REPOSITORY}:v9.9.9")
+    services.host.run_container(ADMIN_CONTAINER, f"{ADMIN_REPOSITORY}:v9.9.9")
+    recorded = services.known_good.current()
+
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    planned = handlers.dispatch({"operation": "admin.plan_repair"})
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+    record = services.operations.get(planned["operation"]["operation_id"])
+
+    assert record.state == STATE_SUCCEEDED, (record.state, record.error, record.result)
+    assert services.admin.detect()["digest"] == recorded["admin_digest"]
+
+
+def test_an_install_cut_off_after_pinning_is_offered_the_recorded_admin_back(tmp_path):
+    """A power cut between stopping the old Admin and starting the new one left
+    the deployment pinned to a digest nothing verified. Start then held the old
+    Admin to that digest, and Repair saw nothing wrong."""
+
+    services = healthy_appliance(tmp_path)
+    services.host.publish_image("v1.1.0")
+    running = services.admin.detect()["digest"]
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    planned = handlers.dispatch(
+        {"operation": "admin.plan_install", "channel": "exact", "tag": "v1.1.0"}
+    )
+
+    def killed(deployment):
+        raise SystemExit("agent killed")
+
+    services.admin._compose_up = killed
+    with pytest.raises(SystemExit):
+        handlers.dispatch(
+            {
+                "operation": "operations.execute",
+                "operation_id": planned["operation"]["operation_id"],
+                "confirmation_token": planned["confirmation_token"],
+            }
+        )
+    del services.admin._compose_up
+    services.operations.recover_interrupted()
+    services.operations.acknowledge(planned["operation"]["operation_id"])
+
+    findings = {item.check: item for item in services.admin.inspect_repair()}
+
+    assert findings["admin_deployment"].ok is False, findings["admin_deployment"].detail
+    assert findings["admin_deployment"].action == "recreate_admin"
+    assert findings["admin_container"].action == "", findings["admin_container"]
+
+    planned = handlers.dispatch({"operation": "admin.plan_repair"})
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+    record = services.operations.get(planned["operation"]["operation_id"])
+
+    assert record.state == STATE_SUCCEEDED, (record.state, record.error, record.result)
+    assert services.admin.detect()["digest"] == running
