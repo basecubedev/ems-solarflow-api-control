@@ -108,6 +108,17 @@ export async function login(password) {
   session.notice = "";
 }
 
+/**
+ * What the session says about the appliance's security, re-read with every
+ * host read: the audit and the password confirmation change during a session,
+ * and one source keeps the verdict, the pill and Settings in agreement.
+ */
+export function adoptSecurityFacts(payload) {
+  if (!payload || !payload.authenticated || !session.authenticated) return;
+  session.audit = payload.security_audit || null;
+  session.confirmed = confirmedOf(payload);
+}
+
 /** The session is gone: the sign-in shows again, with the reason when there is one to give. */
 export function sessionEnded(noticeKey = "") {
   request += 1;

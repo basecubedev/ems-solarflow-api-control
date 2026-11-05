@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { applianceGet } from "./session.svelte.js";
+import { adoptSecurityFacts, applianceGet } from "./session.svelte.js";
 import { currentOperation, settledSince } from "../lib/operations.js";
 import { logPath } from "../lib/logs.js";
 import { ADMIN_CHOICES, MANAGER_CHOICES, forget } from "./forms.svelte.js";
@@ -193,11 +193,13 @@ export function readHostState() {
   const read = Promise.all([
     applianceGet("/api/status").catch(failure),
     applianceGet("/api/manager").catch(failure),
-  ]).then(([status, manager]) => {
+    applianceGet("/api/session").catch(() => null),
+  ]).then(([status, manager, facts]) => {
     if (hostRead === read) hostRead = null;
     if (mine !== sessionEpoch) return;
     host.status = status;
     host.manager = manager;
+    adoptSecurityFacts(facts);
     host.readAt = Date.now();
     reconcile("releases", ADMIN_CHOICES);
     reconcile("managerSources", MANAGER_CHOICES);

@@ -16,7 +16,7 @@
    * and are read-only here.
    */
   const settings = $derived(held("settings") && !held("settings").error ? held("settings") : {});
-  const audit = $derived(settings.security_audit || session.audit || {});
+  const audit = $derived(session.audit || settings.security_audit || {});
   const yesNo = (value) => (value === true ? t("common.yes") : value === false ? t("common.no") : null);
   const duration = (seconds) => {
     const value = exactDuration(seconds);

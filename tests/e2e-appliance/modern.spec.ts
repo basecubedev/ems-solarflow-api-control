@@ -229,9 +229,10 @@ test.describe("the overview", () => {
 
   test("a page that waited at the sign-in reloads when another Manager answers the sign-in", async ({ page }) => {
     await page.route("**/api/session", async (route) => {
-      const response = await route.fetch();
-      const body = await response.json();
-      await route.fulfill({ response, json: { ...body, appliance_version: "0.1.0" } });
+      const response = await route.fetch().catch(() => null);
+      const body = response && (await response.json().catch(() => null));
+      if (!body) return;
+      await route.fulfill({ response, json: { ...body, appliance_version: "0.1.0" } }).catch(() => undefined);
     });
     await createPassword(page);
     await page.getByTestId("sign-out").click();
