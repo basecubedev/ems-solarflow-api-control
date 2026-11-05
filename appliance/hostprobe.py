@@ -329,14 +329,40 @@ class HostProbe:
         return False
 
     def hostname(self):
-        record = {"hostname": platform.node(), "mdns": ""}
+        """The hostname, and the .local name avahi actually publishes.
+
+        After a name conflict avahi publishes ``<name>-2.local``; the name
+        derived from the hostname may then belong to another appliance.
+        ``mdns_expected`` is the derived one, ``mdns`` the published one when
+        avahi answers.
+        """
+
+        record = {"hostname": platform.node(), "mdns": "", "mdns_expected": ""}
         if self.runner is not None and self.runner.available("hostnamectl"):
             result = self.runner.run("hostnamectl", ["--static"], timeout=15)
             if result.ok and result.stdout.strip():
                 record["hostname"] = result.stdout.strip()
         if record["hostname"]:
-            record["mdns"] = f"{record['hostname']}.local"
+            record["mdns_expected"] = f"{record['hostname']}.local"
+            record["mdns"] = self._published_mdns() or record["mdns_expected"]
         return record
+
+    def _published_mdns(self):
+        if self.runner is None or not self.runner.available("busctl"):
+            return ""
+        result = self.runner.run(
+            "busctl",
+            [
+                "call",
+                "org.freedesktop.Avahi",
+                "/",
+                "org.freedesktop.Avahi.Server",
+                "GetHostNameFqdn",
+            ],
+            timeout=5,
+        )
+        match = re.fullmatch(r's "([A-Za-z0-9.-]{1,253})"', (result.stdout or "").strip())
+        return match.group(1).lower() if result.ok and match else ""
 
 
 def _kernel_key(release):

@@ -139,6 +139,7 @@ class FakeHost:
                 "dpkg",
                 "nmcli",
                 "hostnamectl",
+                "busctl",
                 "timedatectl",
                 "getent",
                 "sshd",
@@ -170,6 +171,8 @@ class FakeHost:
         # that wants Trixie's socket activation removes it from here.
         self.absent_units = {"ssh.socket"}
         self.hostname = "ems-solarflow"
+        # What avahi publishes; None answers with this host's own name.
+        self.mdns_published = None
         self.apt_simulation = APT_SIMULATION
         # What apt-get -s writes to stderr when it fails; it then exits 100.
         self.apt_simulation_error = ""
@@ -732,6 +735,12 @@ class FakeHost:
             self.hostname = args[1]
             return self._result("hostnamectl", args, 0)
         return self._result("hostnamectl", args, 0, f"{self.hostname}\n")
+
+    def _busctl(self, args):
+        if "GetHostNameFqdn" not in args:
+            return self._result("busctl", args, 1, "", "unknown method")
+        name = self.mdns_published or f"{self.hostname}.local"
+        return self._result("busctl", args, 0, f's "{name}"\n')
 
     def _timedatectl(self, args):
         return self._result(

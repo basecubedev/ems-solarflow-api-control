@@ -235,6 +235,7 @@ class NetworkService:
         record = {
             "hostname": hostname["hostname"],
             "mdns": hostname["mdns"],
+            "mdns_expected": hostname.get("mdns_expected", ""),
             "manager": "NetworkManager" if self.available else "unavailable",
             "connectivity": "unknown",
             "interfaces": [],
@@ -682,7 +683,9 @@ class NetworkService:
         self._advance(operation, "updating_hosts", detail=hosts)
 
         self._advance(operation, "updating_mdns", state=STATE_VERIFYING)
-        self.runner.run("systemctl", ["try-restart", "avahi-daemon.service"], timeout=60)
+        restarted = self.runner.run(
+            "systemctl", ["try-restart", "avahi-daemon.service"], timeout=60
+        ).ok
 
         payload = {
             "hostname": hostname,
@@ -690,7 +693,13 @@ class NetworkService:
             "hosts": hosts,
             "new_url": f"http://{hostname}.local:{self.config.web_port}",
             "admin_url": f"http://{hostname}.local:{self.config.admin_port}",
+            "mdns_restarted": restarted,
         }
+        if not restarted:
+            payload["note"] = (
+                "avahi-daemon did not restart, so the network may still know this "
+                "appliance by its old .local name until it does; the IP address works"
+            )
         self.operations.finish(operation.operation_id, STATE_SUCCEEDED, result=payload)
         return payload
 

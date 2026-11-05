@@ -2239,3 +2239,27 @@ def test_a_deadline_that_ran_out_first_is_reported_when_stopped(monkeypatch):
     assert deadline.stop() is True
     deadline.arm(30)
     assert deadline.stop() is False
+
+
+def test_the_name_avahi_falls_back_to_after_a_conflict_is_this_appliance(appliance):
+    """A second appliance on the LAN is published as ems-solarflow-2.local;
+    sign-in there was refused with csrf_host_rejected."""
+
+    services, app, _ = appliance
+    configured = app.probe_hostname()
+    services.host.mdns_published = f"{configured}-2.local"
+
+    assert app.names_this_appliance(f"{configured}-2.local:8088") is True
+    assert app.names_this_appliance(f"{configured}-12.local") is False
+    assert app.names_this_appliance(f"{configured}-x.local") is False
+    assert app.names_this_appliance(f"{configured}-2.example") is False
+
+
+def test_a_numbered_local_name_avahi_does_not_publish_is_not_this_appliance(appliance):
+    """While this appliance holds its own name, any device may claim the -2
+    name, and the Host check is the DNS-rebinding defence."""
+
+    _, app, _ = appliance
+    configured = app.probe_hostname()
+
+    assert app.names_this_appliance(f"{configured}-2.local") is False

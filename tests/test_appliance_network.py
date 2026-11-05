@@ -785,3 +785,24 @@ def test_a_wifi_join_nmcli_refused_is_reverted_at_once(tmp_path, monkeypatch):
 
     assert waited == [], "it waited for a link nmcli had already refused"
     assert operation.state == STATE_FAILED_TERMINAL, operation.to_dict()
+
+
+def test_a_rename_whose_mdns_restart_failed_says_so(tmp_path):
+    """The try-restart result was ignored: the console announced the new
+    .local address while avahi still published the old one."""
+
+    services = build_test_services(tmp_path)
+    original = services.host.handle
+
+    def systemctl_fails(tool, args, input_text=None):
+        if tool == "systemctl" and "avahi-daemon.service" in args:
+            services.host.calls.append((tool, tuple(args), input_text))
+            return services.host._result("systemctl", args, 1, "", "Failed to restart")
+        return original(tool, args, input_text)
+
+    services.host.handle = systemctl_fails
+    operation, _ = plan_and_execute(services, "network.hostname.plan", hostname="ems-pi5")
+
+    assert operation.state == STATE_SUCCEEDED
+    assert operation.result["mdns_restarted"] is False
+    assert "avahi" in operation.result["note"]

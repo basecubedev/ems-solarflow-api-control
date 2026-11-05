@@ -55,6 +55,7 @@ VIEW_OVERVIEW = "overview"
 VIEW_ADMIN = "admin"
 VIEW_UPDATES = "updates"
 VIEW_ACCESS = "access"
+VIEW_NETWORK = "network"
 
 # An update check here is deliberately read-only: it never runs apt-get update,
 # which is what keeps a status poll from changing the machine it reports on.
@@ -566,6 +567,24 @@ class StatusService:
                         facts={"problem": problem},
                     )
                 )
+
+        network = sections.get("network", {})
+        published = str(network.get("mdns") or "")
+        expected = str(network.get("mdns_expected") or "")
+        if network.get("status") == SECTION_OK and expected and published != expected:
+            findings.append(
+                finding(
+                    "mdns_name_taken",
+                    FINDING_WARNING,
+                    VIEW_NETWORK,
+                    "Another device uses this appliance's name",
+                    f"The network knows this appliance as {published}, because {expected} "
+                    "was already taken, possibly by another appliance.",
+                    f"Open it as {published}, or give one of the devices another name "
+                    "under Network.",
+                    facts={"published": published, "expected": expected},
+                )
+            )
 
         updates = sections.get("updates", {})
         if updates.get("status") == SECTION_OK:

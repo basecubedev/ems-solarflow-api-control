@@ -1063,3 +1063,27 @@ def test_a_section_that_failed_says_why_and_logs_it(capsys):
     assert "status section system failed" in logged
     assert "Traceback" in logged
     assert "hunter2-s3cret" not in logged
+
+
+def test_the_mdns_name_avahi_publishes_is_the_one_shown(tmp_path):
+    """After a name conflict avahi publishes ems-solarflow-2.local; the console
+    kept showing ems-solarflow.local, which may be another appliance."""
+
+    services = appliance(tmp_path)
+    services.host.mdns_published = "ems-solarflow-2.local"
+
+    status = services.status.overview()
+    codes = {item["code"] for item in status["health"]["warnings"]}
+
+    assert status["network"]["mdns"] == "ems-solarflow-2.local", status["network"]
+    assert "mdns_name_taken" in codes, codes
+
+
+def test_the_expected_mdns_name_raises_nothing(tmp_path):
+    services = appliance(tmp_path)
+
+    status = services.status.overview()
+    codes = {item["code"] for item in status["health"]["warnings"]}
+
+    assert status["network"]["mdns"] == "ems-solarflow.local"
+    assert "mdns_name_taken" not in codes

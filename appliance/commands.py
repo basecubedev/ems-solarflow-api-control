@@ -36,6 +36,7 @@ EXECUTABLES = {
     "dpkg-deb": ("/usr/bin/dpkg-deb",),
     "nmcli": ("/usr/bin/nmcli",),
     "hostnamectl": ("/usr/bin/hostnamectl", "/bin/hostnamectl"),
+    "busctl": ("/usr/bin/busctl", "/bin/busctl"),
     "timedatectl": ("/usr/bin/timedatectl", "/bin/timedatectl"),
     "ssh-keygen": ("/usr/bin/ssh-keygen",),
     "sshd": ("/usr/sbin/sshd",),

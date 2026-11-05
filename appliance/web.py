@@ -72,6 +72,7 @@ CONNECTION_TIMEOUT_SECONDS = 15
 # The timeout above is per recv, so a client trickling a byte at a time held a
 # thread for ever. Reading one request -- line, headers and body -- has to
 # finish within this, however it is paced.
+MDNS_CACHE_SECONDS = 60
 REQUEST_DEADLINE_SECONDS = 30
 # Every connection is a thread. Without a bound one host could take them all,
 # and at the descriptor limit accept() failed in a hot loop.
@@ -340,6 +341,12 @@ class ApplianceWebApp:
             configured = ""
         if configured and name in (configured, f"{configured}.local"):
             return True
+        if (
+            configured
+            and re.fullmatch(re.escape(configured) + r"-[0-9]{1,4}\.local", name)
+            and name == self.published_mdns()
+        ):
+            return True
         if name in tuple(getattr(self.config, "extra_host_names", ()) or ()):
             return True
         # An address literal is the appliance's own LAN address as typed by the
@@ -375,6 +382,24 @@ class ApplianceWebApp:
                 + ", ".join(ignored)
             )
         return message
+
+    def published_mdns(self):
+        """The .local name avahi publishes, asked of the agent at most once a minute.
+
+        ``<hostname>-N.local`` is this appliance only while avahi publishes it:
+        any other device may claim that name while this one holds its own.
+        """
+
+        now = time.monotonic()
+        cached = getattr(self, "_published_mdns", None)
+        if cached is not None and now - cached[0] < MDNS_CACHE_SECONDS:
+            return cached[1]
+        try:
+            name = str((self.agent.call("network.get") or {}).get("mdns") or "").lower()
+        except Exception:
+            name = ""
+        self._published_mdns = (now, name)
+        return name
 
     def probe_hostname(self):
         """The host's static hostname, read on every call.

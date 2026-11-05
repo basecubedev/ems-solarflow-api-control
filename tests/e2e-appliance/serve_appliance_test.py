@@ -254,6 +254,7 @@ def main():
     seed_backup_account(services, home=backup_home)
 
     live = {"app": None, "agent": None, "auth": None}
+    hostname = host.hostname
     unconfigured_fetcher = services.manager.fetcher
 
     def seed_appliance_state(options=None):
@@ -278,6 +279,7 @@ def main():
         )
         host.write_deployment(tag="v1.0.0")
         host.run_container(ADMIN_CONTAINER, f"{ADMIN_REPOSITORY}:v1.0.0")
+        host.hostname, host.mdns_published = hostname, None
         host.apt_simulation = APT_SIMULATION
         if options.get("manual_updates"):
             host.apt_simulation = APT_SIMULATION + (

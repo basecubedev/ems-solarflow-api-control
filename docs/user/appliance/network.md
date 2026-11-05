@@ -83,7 +83,15 @@ appliance and the EMS Admin console*.
 without a restart, and so does EMS Admin on port 8090. The old `.local` name
 stops resolving, so update your bookmarks. A tab still open under the old name
 stops accepting changes — *The appliance does not answer to this address* —
-so open the new address, or the IP address from your router.
+so open the new address, or the IP address from your router. If the avahi
+service does not restart, the result says so: the old `.local` name may then
+stay until it does, and the IP address works either way.
+
+**Two appliances with one name.** When a name is already taken on the
+network, avahi publishes the appliance as `<name>-2.local` instead. The
+Network page and the Overview show the name that is actually published, the
+Overview reports *Another device uses this appliance's name*, and the console
+accepts sign-ins under the `-2` name. Renaming one of the two ends it.
 
 ### 4 — Set the time zone
 
