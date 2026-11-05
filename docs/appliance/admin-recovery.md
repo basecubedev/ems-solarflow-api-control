@@ -266,6 +266,12 @@ success it did not achieve.
 so a tag that moved in the registry cannot change what a rollback installs. The
 button is disabled when no previous known-good version exists.
 
+A known-good history that cannot be read is not taken for an empty one. The
+EMS Admin page reports `known_good_history_unreadable`, a rollback is refused
+with the same code, and a status read does not record the running Admin over
+it. The next install starts a new history and keeps the unreadable file beside
+it as `history.json.unreadable-<time>`.
+
 When the rolled-back version does not come up healthy, the appliance puts the
 Admin that was running before the rollback back, by the digest it recorded.
 If that Admin verifies again, the operation ends as `rolled_back`: the

@@ -63,6 +63,11 @@ export const FINDINGS = Object.freeze({
     message: words("finding.container_state_unknown.message", { name: (finding && finding.facts && finding.facts.name) || "—" }),
     next: words("finding.container_state_unknown.next"),
   }),
+  known_good_history_unreadable: (status, finding) => ({
+    title: words("finding.known_good_history_unreadable.title"),
+    message: words("finding.known_good_history_unreadable.message", { problem: (finding && finding.facts && finding.facts.problem) || "—" }),
+    next: words("finding.known_good_history_unreadable.next"),
+  }),
   docker_not_running: (status) => ({
     title: words("finding.docker_not_running.title"),
     message: words("finding.docker_not_running.message", { state: daemonWords(status) }),

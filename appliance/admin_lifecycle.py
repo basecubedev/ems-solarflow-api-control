@@ -428,6 +428,7 @@ class AdminLifecycleService:
         record["known_good"] = {
             "current": self.known_good.current(),
             "previous": self.known_good.previous(),
+            "problem": self.known_good.problem(),
         }
         return record
 
@@ -449,6 +450,8 @@ class AdminLifecycleService:
 
         digest = str(state.get("digest") or "")
         if not (digest and state.get("healthy")):
+            return None
+        if self.known_good.problem():
             return None
         if not self._admin_mutation.acquire(blocking=False):
             return None
@@ -683,6 +686,14 @@ class AdminLifecycleService:
         self._require_no_admin_transition()
         self._require_deployment(state)
 
+        problem = self.known_good.problem()
+        if problem:
+            raise AdminLifecycleError(
+                "known_good_history_unreadable",
+                f"the known-good Admin history cannot be read ({problem}), so there is no "
+                "verified version to roll back to; installing a version starts a new "
+                "history and keeps the unreadable file beside it",
+            )
         previous = self.known_good.previous()
         if not previous:
             raise AdminLifecycleError(

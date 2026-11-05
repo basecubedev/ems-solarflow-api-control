@@ -552,6 +552,20 @@ class StatusService:
                         "restart does not bring it back.",
                     )
                 )
+            problem = (admin.get("known_good") or {}).get("problem")
+            if problem:
+                findings.append(
+                    finding(
+                        "known_good_history_unreadable",
+                        FINDING_WARNING,
+                        VIEW_ADMIN,
+                        "The known-good Admin history cannot be read",
+                        f"{problem}, so there is no verified version to roll back to.",
+                        "Installing a version on Updates starts a new history and keeps the "
+                        "unreadable file beside it.",
+                        facts={"problem": problem},
+                    )
+                )
 
         updates = sections.get("updates", {})
         if updates.get("status") == SECTION_OK:
