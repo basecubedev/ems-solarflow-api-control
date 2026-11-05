@@ -84,6 +84,11 @@
     <p class="note"><Icon name="shield-check" />{t("diag.archiveRedacted")}</p>
     <PlanButton plan={{ key: "support-archive", endpoint: "/api/support/archive", title: { key: "plan.title.archive" }, confirm: "plan.create" }} label={t("diag.createArchive")} icon="file-archive" small={false} testid="support-archive" />
     <p class="muted small">{t("diag.archiveDownload")}</p>
+    {#if host.archives.length}
+      <ul class="archives" data-testid="diag-archives">
+        {#each host.archives as item (item.id)}<li><a href={item.href} download><Icon name="download" size="sm" />{item.at ? fmt().dateTime(item.at * 1000) : item.id.slice(0, 8)}</a></li>{/each}
+      </ul>
+    {/if}
   </div>
 </Card>
 
@@ -96,6 +101,8 @@
 {/if}
 
 <style>
+  .archives { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+  .archives a { display: inline-flex; gap: 6px; align-items: center; }
   .big { font-size: 22px; font-weight: 650; margin: 0 0 var(--s3); overflow-wrap: anywhere; }
   .big.mono { font-size: 15px; }
   .units { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s2); }

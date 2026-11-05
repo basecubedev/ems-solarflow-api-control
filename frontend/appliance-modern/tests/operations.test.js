@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { nextStep, acknowledgeable, findOperation, archiveHref, cancellable, currentOperation, operationDetails, operationStage, operationTitleKey, planRequestId, managerReconnectState, recentProgress, settledSince, stateOf } from "../src/lib/operations.js";
+import { keptArchives, nextStep, acknowledgeable, findOperation, archiveHref, cancellable, currentOperation, operationDetails, operationStage, operationTitleKey, planRequestId, managerReconnectState, recentProgress, settledSince, stateOf } from "../src/lib/operations.js";
 
 const ID = "0123456789abcdef0123456789abcdef";
 
@@ -140,4 +140,10 @@ test("an operation that did not finish names where it is taken up again", () => 
   assert.deepEqual(nextStep({ type: "admin.lifecycle", state: "manual_action_required" }), { key: "op.next.admin", page: "admin" });
   assert.deepEqual(nextStep({ type: "ssh.service", state: "failed_terminal" }), { key: "op.next.diagnostics", page: "diagnostics" });
   assert.equal(nextStep({ type: "updates.install", state: "succeeded" }), null);
+});
+
+test("the support archives still kept are listed, newest first, by record", () => {
+  const archive = (n, state) => ({ type: "support.archive", operation_id: String(n).repeat(32).slice(0, 32), state, started_at: n, finished_at: n });
+  const payload = { recent: [archive(1, "succeeded"), archive(5, "succeeded"), archive(4, "failed_terminal"), archive(3, "succeeded"), { type: "updates.install", operation_id: "9".repeat(32), state: "succeeded", started_at: 9 }] };
+  assert.deepEqual(keptArchives(payload).map((item) => item.at), [5, 3]);
 });

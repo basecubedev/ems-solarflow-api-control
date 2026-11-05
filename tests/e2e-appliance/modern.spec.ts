@@ -977,6 +977,11 @@ test.describe("access, network and diagnostics", () => {
     const download = page.waitForEvent("download");
     await page.getByTestId("download-support-archive").click();
     expect((await download).suggestedFilename()).toMatch(/\.tar\.gz$/);
+    await page.getByTestId("acknowledge-operation").click();
+    await expect(page.getByTestId("operation-banner")).toHaveCount(0);
+    const again = page.waitForEvent("download");
+    await page.getByTestId("diag-archives").locator("a").first().click();
+    expect((await again).suggestedFilename()).toMatch(/\.tar\.gz$/);
   });
 
   test("a slow earlier log answer does not replace the log asked for last", async ({ page }) => {

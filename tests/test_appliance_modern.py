@@ -263,6 +263,14 @@ def test_the_plans_painted_red_name_types_and_the_account_the_agent_has():
     assert f'export const SHELL_ACCOUNT = "{shell_access.ACCOUNT}";' in source
 
 
+def test_the_archives_the_console_lists_are_the_ones_the_agent_keeps():
+    from appliance.support_archive import KEEP_ARCHIVES
+
+    source = (SOURCE / "src" / "lib" / "operations.js").read_text(encoding="utf-8")
+
+    assert f"export const KEPT_ARCHIVES = {KEEP_ARCHIVES};" in source
+
+
 def test_every_operation_state_has_words():
     assert keys("lib/operations.js", "OPERATION_STATES") == constants(operations, "STATE_")
 

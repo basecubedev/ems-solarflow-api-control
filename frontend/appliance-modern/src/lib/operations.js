@@ -191,6 +191,24 @@ export function nextStep(operation) {
   return NEXT_STEPS[String(operation.type || "")] || FALLBACK_STEP;
 }
 
+/** How many support archives the agent keeps, counted by record (appliance/support_archive.py). */
+export const KEPT_ARCHIVES = 3;
+
+/**
+ * The support archives still kept, newest first, from an operations listing:
+ * the agent keeps the files of its newest archive records, failed ones
+ * included, so only those of them that succeeded can still be fetched.
+ */
+export function keptArchives(payload) {
+  const seen = new Set();
+  return [...((payload && payload.recent) || []), ...((payload && payload.unacknowledged) || [])]
+    .filter((item) => item && item.type === "support.archive" && !seen.has(item.operation_id) && seen.add(item.operation_id))
+    .sort((left, right) => (Number(right.started_at) || 0) - (Number(left.started_at) || 0))
+    .slice(0, KEPT_ARCHIVES)
+    .map((item) => ({ id: item.operation_id, href: archiveHref(item), at: Number(item.finished_at) || 0 }))
+    .filter((item) => item.href);
+}
+
 /** The archive lives in root-owned agent state; without this link it could be created and never retrieved. */
 export function archiveHref(operation) {
   if (!operation || operation.type !== "support.archive" || operation.state !== "succeeded") return null;

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { adoptSecurityFacts, applianceGet } from "./session.svelte.js";
-import { currentOperation, settledSince } from "../lib/operations.js";
+import { currentOperation, keptArchives, settledSince } from "../lib/operations.js";
 import { logPath } from "../lib/logs.js";
 import { ADMIN_CHOICES, MANAGER_CHOICES, forget } from "./forms.svelte.js";
 
@@ -21,6 +21,8 @@ class Host {
   operation = $state.raw(null);
   /** The last read of the operations failed, so what the banner shows may no longer be so. */
   operationUnknown = $state(false);
+  /** The support archives the agent still keeps, from the operations listing. */
+  archives = $state.raw([]);
   readAt = $state(0);
   releases = $state.raw(undefined);
   managerSources = $state.raw(undefined);
@@ -240,6 +242,7 @@ export async function pollOperations() {
   if (mine !== sessionEpoch) return null;
   host.operationUnknown = false;
   host.operation = currentOperation(payload);
+  host.archives = keptArchives(payload);
   const next = settledSince(payload, seen);
   seen = { count: next.count, finishedAt: next.finishedAt };
   if (next.settled) {
