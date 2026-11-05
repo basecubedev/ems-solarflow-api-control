@@ -1269,6 +1269,10 @@ class AdminLifecycleService:
                 "digest_pin_failed", "the immutable image reference could not be written"
             )
 
+        refused = self._transition_started(operation, saved)
+        if refused is not None:
+            return refused
+
         try:
             self._advance(operation, "stopping_admin")
             self._stop_admin(deployment)
@@ -1381,6 +1385,21 @@ class AdminLifecycleService:
     def _rollback_after_failure(self, operation, saved, before, exc):
         """Restore the previous deployment bytes and the captured recovery digest."""
 
+        try:
+            self._require_no_admin_transition()
+        except AdminLifecycleError as live:
+            message = (
+                f"{getattr(exc, 'message', exc)}; {live.message}, so nothing was restored "
+                "and the Admin is left to finish"
+            )
+            self.operations.finish(
+                operation.operation_id,
+                STATE_MANUAL_ACTION_REQUIRED,
+                stage="admin_transition_in_flight",
+                result={"admin_untouched": False, "restored": False},
+                error={"code": getattr(exc, "code", "install_failed"), "message": message},
+            )
+            raise AdminLifecycleError(live.code, message)
         target = self._recovery_target(operation)
         if not target["digest"]:
             return self._nothing_to_restore(operation, saved, exc)
@@ -1519,6 +1538,10 @@ class AdminLifecycleService:
                 "the rollback image reference could not be written",
             )
 
+        refused = self._transition_started(operation, saved)
+        if refused is not None:
+            return refused
+
         # Everything reversible is done; from here the Admin is interrupted.
         self._advance(operation, "stopping_admin")
         self._stop_admin(deployment)
@@ -1589,6 +1612,23 @@ class AdminLifecycleService:
             },
         )
         return payload
+
+    def _transition_started(self, operation, saved):
+        """A transition that went live since the preflight: files back, stop here.
+
+        The preflight read the record once, and verifying the target takes
+        time in which the Admin can start replacing itself. Nothing is stopped
+        yet, so standing back costs only the pinned deployment, written back.
+        """
+
+        try:
+            self._require_no_admin_transition()
+        except AdminLifecycleError as exc:
+            self._safe_restore(saved)
+            return self._preflight_failure(
+                operation, STATE_FAILED_TERMINAL, exc.code, exc.message
+            )
+        return None
 
     def _nothing_to_restore(self, operation, saved, exc):
         """No Admin ran before and none was recorded: stop, and put the files back.

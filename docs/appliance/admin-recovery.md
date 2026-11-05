@@ -491,6 +491,19 @@ Restart are refused** with `admin_transition_in_flight`. The message names the
 stage Admin reached and the file holding it. Reading still works: status,
 version, health and logs are unaffected.
 
+The record is read again right before an Install or Roll back stops the
+running Admin, because verifying the target takes time in which Admin can start
+replacing itself; the pinned deployment is then written back and the Admin is
+left running. A failed install does not start its recovery over a live record
+either: it ends `manual_action_required` and leaves Admin to finish.
+
+The yielding goes one way. Admin does not consult the appliance's operation
+lock, and its older per-release update path
+(`/api/admin/maintenance/admin-update/execute`, which no page calls) records
+only `pending-admin-update.json`, which carries no expiry and which the
+appliance does not read. Do not start that path while an appliance operation
+runs.
+
 The appliance never edits or deletes that record. It belongs to Admin.
 
 ### It yields to a live transition, not to a stuck one

@@ -555,3 +555,64 @@ def test_the_refusal_says_when_the_transition_stops_blocking(monkeypatch):
 
     assert "14:45" in message, message
     assert "at the latest" in message, message
+
+
+def _execute_with_transition_starting(services, planned, when):
+    """Execute ``planned``, letting Admin start replacing itself at ``when``."""
+
+    original = getattr(services.admin, when)
+
+    def starting(*args, **kwargs):
+        write_transition(services, live_transition())
+        return original(*args, **kwargs)
+
+    setattr(services.admin, when, starting)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    try:
+        handlers.dispatch(
+            {
+                "operation": "operations.execute",
+                "operation_id": planned["operation"]["operation_id"],
+                "confirmation_token": planned["confirmation_token"],
+            }
+        )
+    except Exception:  # noqa: BLE001 - the record is what is under test
+        pass
+    finally:
+        delattr(services.admin, when)
+    return services.operations.get(planned["operation"]["operation_id"])
+
+
+def test_an_install_stands_back_from_a_transition_that_started_after_its_preflight(tmp_path):
+    """The record was read once when execution began; one that went live while
+    the target was verified was then fought: the Admin stopped and recreated."""
+
+    services = healthy_appliance(tmp_path)
+    services.host.publish_image("v1.1.0")
+    compose_before = services.admin.deployment().compose_file.read_text(encoding="utf-8")
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    planned = handlers.dispatch(
+        {"operation": "admin.plan_install", "channel": "exact", "tag": "v1.1.0"}
+    )
+
+    operation = _execute_with_transition_starting(services, planned, "_record_running_admin")
+
+    assert operation.error["code"] == "admin_transition_in_flight", operation.to_dict()
+    assert operation.result["admin_untouched"] is True
+    assert services.admin.deployment().compose_file.read_text(encoding="utf-8") == compose_before
+    assert services.admin.detect()["container"]["state"] == "running"
+
+
+def test_a_failed_install_does_not_recover_over_a_transition_the_new_admin_started(tmp_path):
+    services = healthy_appliance(tmp_path)
+    services.host.publish_image("v1.1.0", healthy=False)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    planned = handlers.dispatch(
+        {"operation": "admin.plan_install", "channel": "exact", "tag": "v1.1.0"}
+    )
+
+    operation = _execute_with_transition_starting(services, planned, "_verify_admin")
+
+    assert operation.state == "manual_action_required", operation.to_dict()
+    assert operation.stage == "admin_transition_in_flight"
+    assert "nothing was restored" in operation.error["message"]
