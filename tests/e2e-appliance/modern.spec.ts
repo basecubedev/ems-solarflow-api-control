@@ -709,6 +709,16 @@ test.describe("updates", () => {
 });
 
 test.describe("EMS Admin", () => {
+  test("another EMS Admin version is chosen on the EMS Admin page itself", async ({ page }) => {
+    await createPassword(page);
+    await open(page, "admin");
+    await page.getByTestId("admin-install").getByTestId("install-channel").selectOption("tag:v1.1.0");
+    const plan = page.waitForRequest((request) => request.url().includes("/api/admin/plan-install"));
+    await page.getByTestId("admin-install").getByTestId("install-plan").click();
+    expect((await plan).postDataJSON()).toMatchObject({ channel: "exact", tag: "v1.1.0" });
+    await page.getByTestId("plan-cancel").click();
+  });
+
   test("the container is stopped and started through its plans", async ({ page }) => {
     await createPassword(page);
     await open(page, "admin");

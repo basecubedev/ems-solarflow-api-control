@@ -30,7 +30,7 @@
   const LIFECYCLE_ICONS = { start: "play", stop: "square", restart: "rotate-cw" };
 
   $effect(() => {
-    if (bootstrap && host.releases === undefined) ensure("releases");
+    if (host.releases === undefined) ensure("releases");
   });
 </script>
 
@@ -89,8 +89,7 @@
   {:else}
     <Card icon="circle-arrow-up" tone="c-out" title={t("admin.version")} subtitle={t("admin.versionSub")} span="span-4">
       <div class="stack-sm" data-testid="admin-install">
-        <p class="muted small">{t("admin.versionText")}</p>
-        <a class="btn small" href={href("updates")} data-testid="admin-open-updates"><Icon name="circle-arrow-up" />{t("overview.openUpdates")}</a>
+        <InstallForm releases={held("releases")} blocked={live} />
       </div>
     </Card>
   {/if}
