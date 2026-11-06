@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { BUILTIN_BROKER, MAPPING_STEPS, emsPlace, withMappedDevice, withRenamedDevice, UNITS, brokerAddress, deviceFromAnswers, emsDeviceName, freshGroup, groupValues, idFromName, isChangeOnly, likelyValue, mappedProposal, mappingStep, mapsTo, maxAgeFor, signPreset, sourceFromValue, uniqueId, preferredBroker, unitFactor, unitOf } from "../src/lib/mqtt.js";
+import { BUILTIN_BROKER, MAPPING_STEPS, emsPlace, mappedIndex, withMappedDevice, withRenamedDevice, UNITS, brokerAddress, deviceFromAnswers, emsDeviceName, freshGroup, groupValues, idFromName, isChangeOnly, likelyValue, mappedProposal, mappingStep, mapsTo, maxAgeFor, EMS_REPORT_GRACE_MS, emsReads, emsSilence, emsWaiting, savedKind, signPreset, sourceFromValue, uniqueId, preferredBroker, unitFactor, unitOf } from "../src/lib/mqtt.js";
 
 test("each unit is the factor the catalog needs", () => {
   assert.deepEqual(UNITS, { W: 1, kW: 1000, fraction: 100, percent: 1 });
@@ -70,6 +70,19 @@ test("a mapped device's EMS place: missing, on its mapping's connection, or the 
   assert.equal(emsPlace(saved, "balkon", undefined), "there");
 });
 
+test("of EMS devices sharing a mapping's id, the one switched on is the mapping's, as EMS reads only that one", () => {
+  const entry = (name, enabled, connection) => ({ kind: "external_mqtt", name, enabled, catalog_connection_id: connection, entry: { type: "external_mqtt", enabled, mqtt: { device_id: "balkon" } } });
+  const devices = [entry("Balkon Alt", false, "conn-b"), entry("Balkon", true, "conn-a")];
+  assert.equal(mappedIndex(devices, "balkon"), 1);
+  assert.equal(mappedIndex([devices[0]], "balkon"), 0);
+  assert.equal(mappedIndex(devices, "terrasse"), -1);
+  assert.equal(emsPlace(devices, "balkon", "conn-a"), "there");
+  assert.deepEqual(withRenamedDevice(devices, "balkon", "Balkon Nord").map((device) => device.name), ["Balkon Alt", "Balkon Nord"]);
+  const toggled = [{ ...devices[1], enabled: false }, { ...devices[0], enabled: true }];
+  assert.equal(mappedIndex(toggled, "balkon"), 1);
+  assert.equal(mappedIndex([devices[0], { ...devices[1], enabled: undefined, entry: { ...devices[1].entry, enabled: undefined } }], "balkon"), 1);
+});
+
 test("saving a mapping adds its EMS device once, and moves one the EMS reads elsewhere", () => {
   const proposal = (connection) => ({
     id: `p-${connection}`,
@@ -104,6 +117,63 @@ test("an EMS device is named after its mapping's label unless another device has
   assert.equal(emsDeviceName("garage", devices), "INV_3");
   assert.equal(emsDeviceName("", devices), "INV_3");
   assert.equal(emsDeviceName(undefined, []), "INV_1");
+});
+
+test("the devices that wait for a restart are the server's waiting and leaving ones, none while it cannot tell", () => {
+  const devices = {
+    balkon: { state: "running", change: null, name: "Balkon", ran: "Balkon" },
+    garage: { state: "waiting", change: "renamed", name: "Garage Nord", ran: "Garage" },
+    alt: { state: "leaving", change: "removed", name: "Alt", ran: "Alt" },
+    aus: { state: "off", change: null, name: "Aus", ran: "Aus" },
+  };
+  assert.deepEqual(emsWaiting({ known: true, devices }).map((item) => [item.id, item.change]), [["garage", "renamed"], ["alt", "removed"]]);
+  assert.deepEqual(emsWaiting({ known: false, devices }), []);
+  assert.deepEqual(emsWaiting(undefined), []);
+});
+
+test("the running EMS reads a saved device once the server says it runs it, and a removed one once it has none or reads what is left under its id as saved", () => {
+  const known = { known: true, devices: { balkon: { state: "running" }, aus: { state: "off" }, garage: { state: "waiting" }, alt: { state: "leaving" } } };
+  assert.equal(emsReads(known, "balkon"), true);
+  assert.equal(emsReads(known, "aus"), true);
+  assert.equal(emsReads(known, "garage"), false);
+  assert.equal(emsReads(known, "neu"), false);
+  assert.equal(emsReads(known, "alt", true), false);
+  assert.equal(emsReads(known, "neu", true), true);
+  assert.equal(emsReads(known, "balkon", true), true);
+  assert.equal(emsReads(known, "garage", true), false);
+  assert.equal(emsReads({ known: false, devices: {} }, "balkon"), null);
+});
+
+test("an added device the running EMS still has from before it was removed is added again", () => {
+  assert.equal(savedKind("added", { change: "changed", ran: "Balkon" }), "again");
+  assert.equal(savedKind("added", { change: "added", ran: null }), "added");
+  assert.equal(savedKind("added", undefined), "added");
+  assert.equal(savedKind("moved", { change: "changed", ran: "Balkon" }), "moved");
+  assert.equal(savedKind("removed", { change: "removed", ran: "Balkon" }), "removed");
+});
+
+test("a device the running EMS never had stays added, whatever was done to it since", () => {
+  assert.equal(savedKind("renamed", { change: "added", ran: null }), "added");
+  assert.equal(savedKind("moved", { change: "added", ran: null }), "added");
+  assert.equal(savedKind("renamed", { change: "renamed", ran: "Garage" }), "renamed");
+});
+
+test("a name set back to the one the running EMS shows, on a device changed otherwise meanwhile, is said as a change rather than a move", () => {
+  assert.equal(savedKind("renamed", { change: "changed", name: "Garage", ran: "Garage" }), "changed");
+});
+
+test("after a restart, a new EMS of another release is said at once, and no new EMS once the grace is over", () => {
+  const before = "2026-11-06T06:00:00+00:00";
+  const fresh = "2026-11-06T06:05:00+00:00";
+  assert.equal(emsSilence({ at: 200, known: false, reason: "unnamed", startedAt: fresh }, 100, 150, before), "unnamed");
+  assert.equal(emsSilence({ at: 200, known: true, reason: null, startedAt: fresh }, 100, 150, before), null);
+  assert.equal(emsSilence({ at: 200, known: false, reason: "unnamed", startedAt: before }, 100, 150, before), null);
+  assert.equal(emsSilence({ at: 200, known: true, reason: null, startedAt: before }, 100, 100 + EMS_REPORT_GRACE_MS, before), null);
+  assert.equal(emsSilence({ at: 200, known: true, reason: null, startedAt: before }, 100, 101 + EMS_REPORT_GRACE_MS, before), "stopped");
+  assert.equal(emsSilence({ at: 200, known: false, reason: "stopped", startedAt: null }, 100, 101 + EMS_REPORT_GRACE_MS, before), "stopped");
+  assert.equal(emsSilence({ at: 200, known: false, reason: "unnamed", startedAt: null }, 100, 101 + EMS_REPORT_GRACE_MS, before), "unnamed");
+  assert.equal(emsSilence({ at: 50, known: false, reason: "stopped", startedAt: null }, 100, 1e12, before), null);
+  assert.equal(emsSilence({ at: 200, known: false, reason: "stopped", startedAt: null }, 0, 1e12, before), null);
 });
 
 test("the step band names the next step, and all four are done once every mapped device is in the EMS", () => {

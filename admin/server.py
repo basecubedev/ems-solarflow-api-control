@@ -96,6 +96,7 @@ from admin.setup_planner import (
     submitted_selection_projections,
 )
 from admin.ems_cli import EmsCliDiagnostics
+from admin.ems_device_states import ems_device_states
 from admin.embedded_resources import (
     EmbeddedReleaseResources,
     ReleaseArchiveResources,
@@ -1714,7 +1715,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._handle_mqtt_broker_view()
             return
         if path == "/api/discovery/mqtt-mapping":
-            self._send_json({**self._mapping_editor().view(), "ems_connections": self._mapped_connections()})
+            self._send_json({**self._mapping_editor().view(), "ems_connections": self._mapped_connections(), "ems_devices": ems_device_states(self.server.config_apply.install_context_provider())})
             return
         if path == MQTT_MAPPING_BROKERS_PATH:
             self._send_json(

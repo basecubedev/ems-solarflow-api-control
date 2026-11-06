@@ -86,6 +86,11 @@ async function visible(locator) {
   await locator.first().waitFor({ state: "visible", timeout: 15000 });
 }
 
+/** The demo's mapped device says what the running EMS does with it once the mapping view has answered, so every capture shows the same row. */
+async function mappedActive(page) {
+  await visible(page.getByTestId("mqtt-mapped-devices").getByText("Active in the EMS"));
+}
+
 async function appReady(page) {
   await page.locator(".app[data-landed]").waitFor({ timeout: 15000 });
   await visible(page.locator('[data-testid="health-state"]'));
@@ -391,14 +396,14 @@ const SHOTS = [
       await appReady(page);
       const mapping = page.getByTestId("mqtt-mapping");
       await visible(mapping);
+      await mappedActive(page);
       await mapping.getByTestId("mqtt-topics-start").click();
       await visible(page.getByTestId("mqtt-topic-groups"));
-      await mapping.locator('li[data-label="shelly_gen2"]').getByTestId("mqtt-map-group").click();
-      const wizard = page.getByTestId("mqtt-wizard");
+      await mapping.locator('li[data-key="shellyplusplugs-south"]').getByTestId("mqtt-map-group").click();
+      const wizard = page.getByRole("dialog").getByTestId("mqtt-wizard");
       await wizard.getByTestId("mqtt-kind-balcony").check();
       await wizard.getByTestId("mqtt-wizard-name").fill("Balcony South");
       await visible(wizard.getByTestId("mqtt-wizard-turned"));
-      await scrollTo(page, wizard, 16);
     },
   },
   {
@@ -408,6 +413,7 @@ const SHOTS = [
       await appReady(page);
       const chooser = page.getByTestId("mqtt-broker-chooser");
       await visible(chooser);
+      await mappedActive(page);
       const row = chooser.locator('[data-testid="mqtt-broker-choice"][data-ref="broker-192-168-178-30-1883"]');
       await row.getByTestId("mqtt-chooser-account").click();
       await visible(row.getByTestId("mqtt-chooser-user"));
@@ -421,8 +427,10 @@ const SHOTS = [
       await appReady(page);
       const mapping = page.getByTestId("mqtt-mapping");
       await visible(mapping);
+      await mappedActive(page);
       await mapping.getByTestId("mqtt-topics-start").click();
       await visible(page.getByTestId("mqtt-topic-groups"));
+      await mapping.locator('li[data-key="shellyplusplugs-balcony"] button[aria-expanded]').click();
       await scrollTo(page, page.getByTestId("mqtt-topics-stop"), 16);
     },
   },
@@ -433,14 +441,14 @@ const SHOTS = [
       await appReady(page);
       const mapping = page.getByTestId("mqtt-mapping");
       await visible(mapping);
+      await mappedActive(page);
       await mapping.getByTestId("mqtt-topics-start").click();
       await visible(page.getByTestId("mqtt-topic-groups"));
       await mapping.getByTestId("mqtt-mapped-devices").getByRole("button", { name: "Edit" }).first().click();
-      const editor = page.getByTestId("mqtt-mapping-editor");
-      await visible(editor);
-      await editor.getByTestId("mqtt-device-preview").click();
-      await visible(page.getByTestId("mqtt-preview-state"));
-      await scrollTo(page, editor, 16);
+      const dialog = page.getByRole("dialog");
+      await visible(dialog.getByTestId("mqtt-mapping-editor"));
+      await dialog.getByTestId("mqtt-device-preview").click();
+      await visible(dialog.getByTestId("mqtt-preview-state"));
     },
   },
   {

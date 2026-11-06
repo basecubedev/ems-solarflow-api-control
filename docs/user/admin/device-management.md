@@ -164,7 +164,11 @@ current settings.
 generally needs EMS to read the new settings: the result says *Some changes
 take effect once EMS restarts.* and offers **Restart EMS now**, which asks
 first, restarts right there and then says how it went; **Follow it in
-Services** opens the details.
+Services** opens the details. A device the MQTT mapping dialog adds at once,
+with no other changes waiting, ends in the dialog's own restart step first;
+**Add to the EMS**, **Move to this broker** and **Try again** on a mapped
+device's row save at once too and bring the restart offer below the mapped
+devices into view, see [MQTT mapping](mqtt-mapping.md).
 
 **If it differs:**
 

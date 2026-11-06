@@ -100,12 +100,17 @@ export function reload(...names) {
 }
 
 /**
- * Reloads once this browser's clock has moved past ``since``, so each answer
- * counts as asked for after it; a clock that does not move within a few ticks
- * is not waited for.
+ * Settles once this browser's clock has moved past ``since``, so a request made
+ * then counts as asked for after it; a clock that does not move within a few
+ * ticks is not waited for.
  */
-export async function reloadAfter(since, ...names) {
+export async function clockPast(since) {
   for (let ticks = 0; Date.now() <= since && ticks < 50; ticks += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+}
+
+/** Reloads once this browser's clock has moved past ``since`` (clockPast). */
+export async function reloadAfter(since, ...names) {
+  await clockPast(since);
   return reload(...names);
 }
 

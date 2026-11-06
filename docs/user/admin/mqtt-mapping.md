@@ -51,7 +51,9 @@ above the broker list and marks the next one:
    the device's own MQTT settings.
 3. **Map its values**: pick them from the live topics. The mapping publishes
    them as `ems-solarflow/<id>/state` on the same broker, where EMS reads them.
-4. **In the EMS**: the save that writes the mapping adds its device to EMS.
+4. **In the EMS**: the save that writes the mapping adds its device to EMS,
+   which reads it once EMS restarts; under Settings, with no other changes
+   waiting, the dialog offers that restart next.
 
 ## Prerequisites
 
@@ -157,17 +159,28 @@ A broker your mappings read can be checked again with **Check**: when its
 account changed or got lost, it says *Needs an account* and takes a new one
 the same way.
 
-Choose a broker that can be read, then **Show live topics**. Saving the first
-mapping on a found broker remembers it, so the mapping keeps reading it after
-a restart; its account is kept with the search's broker accounts. The device
-the mapping adds gets a connection of its own to that broker, the same one Find
-devices would give a device it found there; on a broker EMS already reads, it
-uses that connection.
+Choose a broker that can be read, then **Show live topics**. They list one
+folded row per device, as the devices further down the page are listed: its
+name, its kind, how many topics it sends on and the value that is likely its
+power, and whether a mapping reads it — **Not mapped** with **Map as external
+device**, or **Mapped:** and the mapping's id with **Edit**, with *· Waits for
+an EMS restart* added while the running EMS has not read that device as saved.
+A click on the row opens it to every topic and value, **Expand all** and
+**Collapse all** open or fold every row at once, and **Find a device or topic**
+narrows the list to the devices whose name, kind, topic or value path contains
+what you type. Saving the first mapping on a found broker remembers it, so the
+mapping keeps reading it after a restart; its account is kept with the search's
+broker accounts. The device the mapping adds gets a connection of its own to
+that broker, the same one Find devices would give a device it found there; on a
+broker EMS already reads, it uses that connection.
 
 ## Map it
 
-**Set it up now**, or **Map as external device** on a group under **Settings →
-Devices → MQTT mapping** (in Guided Setup, step 02), asks one question first:
+**Set it up now**, or **Map as external device** on a device in the live topics
+under **Settings → Devices → MQTT mapping** (in Guided Setup, step 02), opens a
+dialog named after the device, wherever on the page the button was. The dialog
+keeps **Cancel**, **Preview** and **Save** at its foot, with the preview's answer
+above them, and asks one question first:
 
 1. **What does this device measure?**
    - *Balcony plant or inverter without battery*: one power value, counted as
@@ -198,21 +211,64 @@ Devices → MQTT mapping** (in Guided Setup, step 02), asks one question first:
    why not; a refused negative value has a **Correct** button in the free
    editor. **Save and add to the EMS** writes the mapping and adds its device
    to EMS, after one confirmation that names both: the settings are saved at
-   once, with a backup first. EMS reads a newly added device after a restart,
-   which the settings page offers next with **Restart EMS now**, as for any
-   device added there. Under Settings the device is named after the mapping's
-   name, unless another device has it; with other changes waiting there, it
-   joins them and is saved with them. In Guided Setup it joins the setup's
-   devices under the setup's next free name.
+   once, with a backup first. EMS reads a newly added device only after a
+   restart, so under Settings the dialog stays open for that last step: it
+   says *Saved and added to the EMS* and *… becomes active once EMS
+   restarts.*, what a restart does, and offers **Restart EMS now** and **Map
+   another device**:
+   - **Restart EMS now** restarts EMS right there; the button is the
+     confirmation. The dialog then says how it went, waits for the restarted
+     EMS to report what it reads, and says *EMS has restarted and reads …
+     now.*; **Done** closes it onto the device's row. When the restarted EMS
+     does not tell this console what it reads, the dialog says so: at once for
+     an EMS of a later release that cannot tell it, and after two minutes
+     otherwise, for one of an earlier release, which does not say when it
+     started, or when no restarted EMS has reported. A restart that fails says why and can be tried again.
+   - **Map another device** closes it onto the live topics' search, or, with no
+     live topics listed, opens the dialog for a new device, so you can map
+     several devices and restart once at the end; the step then names every
+     device that waits, *Waiting for an EMS restart: …*.
+   - Closing the dialog leaves the restart for later. Right below the mapped
+     devices the panel keeps offering it, and names the devices that wait,
+     until the running EMS reads them as saved, in any tab and after the page
+     is opened again, while the running EMS says what it reads; otherwise the
+     overview's *Saved settings are newer than the running EMS* offers it.
 
-   **Edit** on a mapped device opens the free editor with every source's
-   factor, sign, negative rule and maximum age:
+   The same step follows a rename, and a removal that took the EMS device with
+   it, where **Restart later** closes it. A device removed and mapped again
+   before EMS restarted is *added again*: EMS reads it as it was until the
+   restart. A save the running EMS already reads as saved, such as a name set
+   back or a device mapped again unchanged, ends no step. Where the Admin
+   cannot restart EMS, for instance without the container setup, **Restart EMS
+   now** stays off and says why. In Guided Setup the setup's own deployment
+   starts EMS with the device. Under Settings the device is named after the
+   mapping's name, unless another device has it; with other changes waiting
+   there, it joins them, is saved with them, and the dialog closes at once. In
+   Guided Setup it joins the setup's devices under the setup's next free name.
 
-   ![Editing the mapped balcony inverter: the Shelly's apower as inverter power with the sign inverted, negative as 0 and a maximum age of 600 s, and the preview that would publish 612.3 W as inverter and solar power](../../assets/screenshots/admin/admin-mqtt-mapping-editor.png)
-4. Its row says **In the EMS** and, once the mapping service has sent the
-   first value, **Published**; until then it says **Waiting for the first
-   value**. When the device could not be added, for instance while the broker
-   was off, the row says why and **Add to the EMS** tries again.
+   **Edit** on a mapped device opens the free editor in the same dialog, with
+   every source's factor, sign, negative rule and maximum age. Below them the
+   live topics list the device's own topics first and open; **Use as …** beside
+   a value adds it as a source of the value chosen above. Once saved, the dialog
+   closes and the device's row is marked and brought into view; when the save
+   added, moved or renamed the EMS device, the restart step comes first, and
+   **Done** or closing it leads to the row:
+
+   ![The dialog editing the mapped balcony inverter: the Shelly's apower as inverter power with the sign inverted, negative as 0 and a maximum age of 600 s, the Shelly's own live topics open below, and the preview that would publish 612.3 W as inverter and solar power](../../assets/screenshots/admin/admin-mqtt-mapping-editor.png)
+4. Its row says **Waits for an EMS restart** while the running EMS has not read
+   what is saved for it, and **Active in the EMS** once it runs the device as
+   saved, switched on. Switching a mapped device on or off waits for a restart
+   too, as EMS reads it from the settings file only when it starts. It asks the
+   running EMS itself, which names the devices it read when it started, so this
+   holds in any tab, after a reload and after a restart from the command line.
+   Otherwise it says **In the EMS**: for a
+   device switched off, and while no running EMS says what it read, because
+   none runs or it is of another release. An EMS that has just stopped still
+   counts as running for a while, at least a minute, as on the Diagnose page.
+   Once the mapping service has sent the first value it also says
+   **Published**; until then **Waiting for the first value**. When the device
+   could not be added, for instance while the broker was off, the row says why
+   and **Add to the EMS** tries again.
 
 A mapped device and its EMS device stay one thing. A new name in **Edit**
 renames the EMS device too, when no other device has that name, and the
@@ -241,9 +297,9 @@ questions stand above **Apply**, which waits for an answer to each. The answer
 is written as the consumer's `history_id` (see
 [Configuration](../../technical/configuration.md)).
 
-![Settings, Devices, MQTT mapping: the question what the device measures, with Balcony plant chosen, the name, the power value from the Shelly and Save and add to the EMS](../../assets/screenshots/admin/admin-mqtt-question.png)
+![Settings, Devices, MQTT mapping: the dialog for the second Shelly asks what the device measures, with Balcony plant chosen, the name, the power value from the Shelly and Save and add to the EMS at its foot](../../assets/screenshots/admin/admin-mqtt-question.png)
 
-![Settings, Devices, MQTT mapping: the mapped balcony inverter published and in the EMS, and the live topics with a Shelly (Gen2+) group, the EMS output and an unknown heating topic](../../assets/screenshots/admin/admin-mqtt-mapping.png)
+![Settings, Devices, MQTT mapping: the mapped balcony inverter published and active in the EMS, and the live topics with the filter: the balcony Shelly opened to its values, Mapped: balcony with Edit, a second Shelly and an unknown heating topic Not mapped with Map as external device, and the EMS output, all folded but the first](../../assets/screenshots/admin/admin-mqtt-mapping.png)
 
 ## Expected result
 

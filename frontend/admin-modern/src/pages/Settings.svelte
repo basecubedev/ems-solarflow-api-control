@@ -21,7 +21,7 @@
   import RestartEms from "../widgets/RestartEms.svelte";
   import { findProposal } from "../state/mqtt.svelte.js";
   import { removeDevice } from "../lib/devices.js";
-  import { emsPlace, mapsTo, withMappedDevice, withRenamedDevice } from "../lib/mqtt.js";
+  import { emsPlace, mappedIndex, withMappedDevice, withRenamedDevice } from "../lib/mqtt.js";
   import { t, tn, catalogText } from "../i18n/i18n.svelte.js";
   import { system, ensure, reload } from "../state/system.svelte.js";
   import { inEffectAfter } from "../lib/services.js";
@@ -57,11 +57,17 @@
    * A mapped device and its EMS device are one thing: saving the mapping adds
    * the device, or moves it to the mapping's broker, a new label renames it and
    * removing the mapping can remove it. Each change is written to the config at
-   * once; with other changes waiting it joins them, and the bar below saves all.
+   * once; with other changes waiting it joins them, and the bar below saves
+   * all. This page can restart EMS, so the panel offers the restart a change
+   * waits for.
    */
   const mqttAdoption = {
+    restartable: true,
     get direct() {
       return !settings.changes;
+    },
+    get restart() {
+      return applied ? { needed: restartWaits, since: applied.at } : null;
     },
     get busy() {
       return settings.applying;
@@ -74,7 +80,7 @@
       return saved || waiting ? "elsewhere" : null;
     },
     name(device) {
-      return (current().devices || []).find(mapsTo(device.id))?.name || "";
+      return (current().devices || [])[mappedIndex(current().devices, device.id)]?.name || "";
     },
     renamable(device, label) {
       return Boolean(withRenamedDevice(current().devices, device.id, label));
@@ -89,7 +95,7 @@
     },
     remove(device) {
       return write((draft) => {
-        const index = (draft.devices || []).findIndex(mapsTo(device.id));
+        const index = mappedIndex(draft.devices, device.id);
         return index < 0 ? null : removeDevice(draft, index);
       });
     },
@@ -142,7 +148,7 @@
       return { state: "draft" };
     }
     const result = await applyNow(build, { decide: askHistory });
-    if (result.ok) return { state: "saved" };
+    if (result.ok) return { state: result.applied ? "saved" : "unchanged" };
     return result.reason ? { state: result.reason } : { state: "failed", error: result.error };
   }
 

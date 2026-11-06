@@ -42,6 +42,7 @@ from admin.development_catalogue import development_catalogue_source
 from admin.discovery import iter_scan_hosts, validate_cidr
 from admin.models import DiscoveredDevice, utc_now_iso
 from admin.setup_workflow import SETUP_TRANSITION_MODES, SetupWorkflowArtifacts
+from admin.ems_device_states import control_status_path, saved_config
 from admin.embedded_resources import (
     EmbeddedReleaseResources,
     ReleaseArchiveResources,
@@ -59,6 +60,8 @@ from admin.workflow_lifecycle import (
     ReplacementActivity,
     admin_replacement_activity,
 )
+from ems.control_status import CONTROL_STATUS_SCHEMA_VERSION
+from ems.device_fingerprints import FINGERPRINT_VERSION, device_fingerprints, loaded_devices_record
 from ems.zendure_mqtt.builtin_broker import mapping_status_path
 
 TEST_MODE_ENV = "EMS_ADMIN_TEST_MODE"
@@ -614,6 +617,32 @@ def _build_test_mdns_provider():
         browser_factory=lambda service_type, handler: object(),
     )
     return provider, seeded
+
+
+def write_started_ems_snapshot(context=None, *, release="this"):
+    """Writes the snapshot of an EMS that has just read the config as saved now, fresh for half an hour.
+
+    ``release`` says which EMS writes it: ``this`` one, one of an ``earlier``
+    release, which says neither when it started nor what it read, or one of a
+    ``later`` release, which names what it read by a rule this one cannot
+    compare.
+    """
+
+    context = context or detect_install_context()
+    config = saved_config(context) or {}
+    path = Path(control_status_path(context, config))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    status = {
+        "schema_version": CONTROL_STATUS_SCHEMA_VERSION,
+        "written_at": utc_now_iso(),
+        "loop_interval_s": 600,
+    }
+    if release != "earlier":
+        status["started_at"] = utc_now_iso()
+        status["loaded_devices"] = loaded_devices_record(device_fingerprints(config))
+    if release == "later":
+        status["loaded_devices"]["version"] = FINGERPRINT_VERSION + 1
+    path.write_text(json.dumps(status), encoding="utf-8")
 
 
 def _seed_local_api_device(provider, seeded, spec):
@@ -1921,6 +1950,12 @@ def build_test_runtime(*, data_dir):
                     if manifest.is_file():
                         manifests.append(json.loads(manifest.read_text("utf-8")))
             return {"ok": True, "scenario": scenario, "manifests": manifests}
+        elif scenario == "ems_started":
+            write_started_ems_snapshot()
+        elif scenario == "older_ems_started":
+            write_started_ems_snapshot(release="earlier")
+        elif scenario == "later_ems_started":
+            write_started_ems_snapshot(release="later")
         elif scenario == "guided_upgrade_target_moved":
             # The verified upgrade target (v9.9.10) is re-pushed to a new EMS
             # digest, so a re-resolve at execute time yields a different pair.
@@ -1981,6 +2016,8 @@ def build_test_runtime(*, data_dir):
         docker.restore_images()
         _BROKEN_RESOURCE_TAGS.clear()
         _BROKEN_RESOURCE_TAGS.add(_BROKEN_RESOURCE_TAG)
+        context = detect_install_context()
+        Path(control_status_path(context, saved_config(context) or {})).unlink(missing_ok=True)
         try:
             detect_install_context().config_path.unlink()
         except FileNotFoundError:

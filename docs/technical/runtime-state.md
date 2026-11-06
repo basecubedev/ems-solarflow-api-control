@@ -319,8 +319,10 @@ preflight runs do not write it.
 
 `emsctl diagnose --control`, `--control-quality` and the dashboard's **Diagnose**
 page read it as their only source of cycle values (see [cli.md](../cli.md#diagnose)).
-A snapshot older than three loop intervals, and at least 60 s, is reported as
-stale, and its values are not used.
+The Admin console reads `loaded_devices` from it to say, for each mapped device,
+whether the running EMS reads it as saved or waits for a restart. A snapshot
+older than three loop intervals, and at least 60 s, is reported as stale, and
+its values are not used.
 
 Shape (`schema_version: 1`):
 
@@ -328,12 +330,14 @@ Shape (`schema_version: 1`):
 |---|---|
 | `written_at` | When the EMS wrote the snapshot (ISO-8601, UTC) |
 | `loop_interval_s` | Loop interval the EMS applied |
+| `started_at` | When the EMS process that wrote the snapshot started (ISO-8601, UTC); a restarted EMS writes another one |
 | `cycle.fetched_at`, `cycle.failed_cycles`, `cycle.mode` | When device telemetry was read, consecutive failed cycles, the controller's allocation mode |
 | `control.grid_power_w`, `control.filtered_load_w` | Grid meter reading the cycle used and its filtered value (positive is import) |
 | `control.commanded_total_w`, `control.allocated_target_total_w`, `control.effective_target_total_w` | The cycle's totals; `effective_target_total_w` is what the EMS commands |
 | `grid_meter.consecutive_read_failures`, `grid_meter.measured_at` | From the meter's health record; `null` for a meter without one |
 | `devices.<name>` | `online`, `last_seen_at`, `max_power_w`, `soc`, `min_soc`, `pv_input_w`, `output_w`, `output_limit_w`, `battery_charge_w`, `battery_discharge_w`, `battery`, `allocated_target_w`, `effective_target_w`, `limiting_reason`; telemetry fields are `null` for a device that never answered. `battery` is `yes`, `no` or `unknown` from the pack count the device reports; `diagnose --control` and `--control-quality` leave a `no` device out of their SOC analysis. `settings` holds each [device setting](#device-settings) the device has or that is set, as `{offered, reported, desired}` |
 | `grid_samples` | The last 30 cycles' `{cycle_at, grid_power_w, measured_at}` |
+| `loaded_devices` | `{version, devices}`: one `{name, device_id, enabled, digest}` per device entry `config.json` held when this EMS started, after the startup upgrade; `device_id` is the id an MQTT mapping publishes an external device as (`null` otherwise), and `digest` covers the whole entry, `enabled` included. `ems/device_fingerprints.py` makes them, for the EMS and for the Admin console, which compares them with the file as saved now; `version` names the rule, so an Admin of another release does not compare. Left out by an EMS that was not given the devices it read |
 
 When a cycle fails before it decides, the `control` values are `null` rather
 than carried over; device telemetry is the last reading the EMS holds, dated by

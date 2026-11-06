@@ -1,11 +1,12 @@
 <script>
+  import { untrack } from "svelte";
   import Icon from "../../../shared/ui/Icon.svelte";
   import Status from "../../../shared/ui/Status.svelte";
   import { t } from "../i18n/i18n.svelte.js";
 
-  let { id, title, model = "", modelLang = undefined, meta = "", enabled = true, status = "", connection = "", onremove = null, open = false, icon = "", tone = "", children } = $props();
+  /** side replaces the connection, state and remove button on the right; open is the first fold, expanded binds it to an owner. */
+  let { id, title, model = "", modelLang = undefined, meta = "", enabled = true, status = "", connection = "", onremove = null, open = false, expanded = $bindable(untrack(() => open)), icon = "", tone = "", side, children } = $props();
 
-  let expanded = $state(open);
   const bodyId = $derived(`device-${String(id).replace(/[^a-z0-9]/gi, "-")}`);
 </script>
 
@@ -21,9 +22,13 @@
       <Icon name={expanded ? "chevron-up" : "chevron-down"} size="sm" />
     </button>
     <div class="side">
-      {#if connection}<span class="badge">{connection}</span>{/if}
-      <Status tone={enabled ? "c-ok" : "c-idle"} text={status || (enabled ? t("devices.on") : t("devices.off"))} />
-      {#if onremove}<button class="btn secondary small" type="button" onclick={onremove} data-testid="device-remove"><Icon name="trash-2" size="sm" />{t("devices.remove")}</button>{/if}
+      {#if side}
+        {@render side()}
+      {:else}
+        {#if connection}<span class="badge">{connection}</span>{/if}
+        <Status tone={enabled ? "c-ok" : "c-idle"} text={status || (enabled ? t("devices.on") : t("devices.off"))} />
+        {#if onremove}<button class="btn secondary small" type="button" onclick={onremove} data-testid="device-remove"><Icon name="trash-2" size="sm" />{t("devices.remove")}</button>{/if}
+      {/if}
     </div>
   </div>
   <div class="body" id={bodyId} hidden={!expanded}>{@render children?.()}</div>

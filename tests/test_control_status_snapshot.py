@@ -51,6 +51,7 @@ SNAPSHOT_KEYS = {
     "grid_meter",
     "devices",
     "grid_samples",
+    "started_at",
 }
 DEVICE_KEYS = {
     "online",
@@ -218,6 +219,17 @@ def test_the_live_loop_publishes_the_snapshot_after_every_cycle():
 
     assert ("control_status", "write") in calls
     assert calls.index(("control_status", "write")) > calls.index(("ems", "run_guarded"))
+
+
+def test_the_live_loop_writes_the_device_entries_this_ems_read_into_the_snapshot():
+    tree = ast.parse(ENTRYPOINT.read_text())
+    writers = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "ControlStatusWriter"
+    ]
+
+    assert [ast.unparse(keyword.value) for writer in writers for keyword in writer.keywords if keyword.arg == "loaded_devices"] == ["cfg.LOADED_DEVICES"]
+    assert len(writers) == 1
 
 
 def test_a_failed_cycle_is_published_as_failing_without_values(tmp_path, monkeypatch):

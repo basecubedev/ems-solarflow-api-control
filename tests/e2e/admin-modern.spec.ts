@@ -386,6 +386,19 @@ test.describe("Modern Admin: overview and status", { tag: ["@smoke"] }, () => {
     await page.unrouteAll({ behavior: "ignoreErrors" });
   });
 
+  test("an inverter just added stays open when the next one is added", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings/devices");
+    const inverters = page.locator('section.device[data-device^="inverter-"]');
+    await page.getByTestId("add-inverter").click();
+    const first = inverters.last();
+    const firstId = await first.getAttribute("data-device");
+    await expect(first.locator("button.summary")).toHaveAttribute("aria-expanded", "true");
+
+    await page.getByTestId("add-inverter").click();
+    await expect(inverters.last()).not.toHaveAttribute("data-device", firstId as string);
+    await expect(page.locator(`section.device[data-device="${firstId}"] button.summary`)).toHaveAttribute("aria-expanded", "true");
+  });
+
   test("services show what should run and refuse a restart they cannot do", async ({ page, seedAdminScenario }) => {
     await seededAt(page, seedAdminScenario, "#/services");
     await expect(page.locator('[data-service="ems"]')).toContainText("Not set up");
