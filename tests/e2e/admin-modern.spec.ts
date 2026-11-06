@@ -8,6 +8,7 @@ import type { Page, Route } from "@playwright/test";
 import { post } from "./helpers/setup-authority";
 import { SetupPage } from "./pages/setup-page";
 import { E3DC_SYSTEM, apiInverter } from "./helpers/discovery-state";
+import { routeRunnablePlan } from "./helpers/container-plan";
 
 async function signIn(page: Page, password = ADMIN_PASSWORD) {
   await expect(page.getByTestId("sign-in-screen")).toBeVisible();
@@ -334,6 +335,55 @@ test.describe("Modern Admin: overview and status", { tag: ["@smoke"] }, () => {
     await expect(finding.getByRole("link", { name: "Set up a new system" })).toHaveAttribute("href", "#/setup");
     await expect(page.getByTestId("health-state")).toHaveText("Needs attention");
     await expect(page.getByTestId("tile-control")).toContainText("Calculates only");
+  });
+
+  test("the restart saved settings wait for runs in place from the overview's finding: a failure says why and offers it again, a success ends the finding, and a later save raises it afresh", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/overview");
+    await expect(page.getByTestId("overview-hero")).toHaveAttribute("data-level", "error");
+    let restarted = false;
+    let rewritten = false;
+    let attempts = 0;
+    await routeRunnablePlan(page, () => ({ state: restarted && !rewritten ? "current" : "pending" }));
+    await page.route("**/api/admin/maintenance/overview", async (route) => {
+      const response = await route.fetch();
+      const overview = await response.json();
+      if (!restarted || rewritten) {
+        const waiting = { code: "settings_await_restart", severity: "info", title: "Saved settings are newer than the running EMS", message: "", next: "" };
+        overview.health = { ...overview.health, findings: [...(overview.health?.findings || []), waiting] };
+      }
+      await route.fulfill({ response, json: overview });
+    });
+    await page.route("**/api/admin/maintenance/containers/sync", (route) => {
+      attempts += 1;
+      if (attempts === 1) return route.fulfill({ status: 500, json: { ok: false, status: "error", error: "sync_failed", message: "docker compose up failed" } });
+      restarted = true;
+      return route.fulfill({ json: { ok: true, status: "completed", steps: [{ service: "ems", action: "recreate", status: "ok" }], warnings: [] } });
+    });
+    await page.getByTestId("refresh").click();
+
+    const finding = page.locator('[data-code="settings_await_restart"]');
+    await expect(finding).toBeInViewport();
+    await expect(finding).toContainText("Restart EMS to apply the saved settings.");
+    const confirmation = page.getByRole("dialog", { name: "Restart EMS now?" });
+    await finding.getByTestId("restart-ems").click();
+    await confirmation.getByTestId("confirm").click();
+    await expect(finding.getByTestId("services-result")).toHaveClass(/fault/);
+    await expect(finding.getByTestId("restart-ems")).toBeEnabled();
+
+    const reread = page.waitForResponse("**/api/admin/maintenance/overview");
+    await finding.getByTestId("restart-ems").click();
+    await confirmation.getByTestId("confirm").click();
+    await reread;
+    await expect(finding).toHaveCount(0);
+    await expect(page).toHaveURL(/#\/overview$/);
+    expect(attempts).toBe(2);
+
+    rewritten = true;
+    await page.getByTestId("refresh").click();
+    await expect(finding).toBeVisible();
+    await expect(finding.getByTestId("services-result")).toHaveCount(0);
+    await expect(finding.getByTestId("restart-ems")).toBeEnabled();
+    await page.unrouteAll({ behavior: "ignoreErrors" });
   });
 
   test("services show what should run and refuse a restart they cannot do", async ({ page, seedAdminScenario }) => {

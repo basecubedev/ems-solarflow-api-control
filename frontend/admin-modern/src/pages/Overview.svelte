@@ -30,6 +30,7 @@
   };
 
   const f = $derived(fmt());
+  const shownAt = Date.now();
   const overview = $derived(system.overview.data);
   const verdict = $derived(healthVerdict(overview, Boolean(system.overview.error)));
   const ems = $derived(emsFact(overview));
@@ -95,7 +96,7 @@
     {/if}
   {/if}
   {#if verdict.findings.length}
-    <FindingList findings={verdict.findings} onrefresh={refresh} />
+    <FindingList findings={verdict.findings} onrefresh={refresh} shown={shownAt} />
   {/if}
 </section>
 

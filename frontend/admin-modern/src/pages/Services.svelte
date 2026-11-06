@@ -6,10 +6,11 @@
   import ConfirmDialog from "../../../shared/ui/ConfirmDialog.svelte";
   import StaleNote from "../widgets/StaleNote.svelte";
   import ServiceOutcome from "../widgets/ServiceOutcome.svelte";
+  import PlanRefusal from "../widgets/PlanRefusal.svelte";
   import { t, fmt, say } from "../i18n/i18n.svelte.js";
   import { system, ensure, keepWithOverview, reload } from "../state/system.svelte.js";
   import { serviceAction, runServiceAction } from "../state/services.svelte.js";
-  import { serviceView, plannedChanges, canSync, planMessage, serviceOutcome, SERVICES } from "../lib/services.js";
+  import { serviceView, plannedChanges, canSync, serviceOutcome, SERVICES } from "../lib/services.js";
   import { errorView } from "../lib/errors.js";
   import { href } from "../app/router.svelte.js";
 
@@ -102,8 +103,7 @@
     </div>
     <h3 class="sub">{t("services.whatHappens")}</h3>
     {#if !plan.available}
-      {@const why = planMessage(plan.message)}
-      <p class="note warn" data-testid="plan-unavailable"><Icon name="triangle-alert" />{#if why && !why.key}<span lang="en">{why.text}</span>{:else}{t("services.unavailable")}{/if}</p>
+      <PlanRefusal {plan} />
     {:else if changes.length}
       <ul class="changes">
         {#each changes as change, index (index)}<li>{say(change)}</li>{/each}
@@ -143,7 +143,7 @@
 <ConfirmDialog
   open={confirming === "sync"}
   title={t("services.confirmSyncTitle")}
-  lines={[t("services.confirmSync"), t("services.confirmSyncSafe")]}
+  lines={[t("services.confirmSync")]}
   confirmLabel={t("services.sync")}
   onconfirm={() => run("sync")}
   oncancel={() => (confirming = "")}

@@ -18,13 +18,14 @@
   import MqttBrokerCard from "../widgets/MqttBrokerCard.svelte";
   import MqttMappingPanel from "../widgets/MqttMappingPanel.svelte";
   import ConsumerHistoryQuestions from "../widgets/ConsumerHistoryQuestions.svelte";
+  import RestartEms from "../widgets/RestartEms.svelte";
   import { findProposal } from "../state/mqtt.svelte.js";
   import { removeDevice } from "../lib/devices.js";
   import { emsPlace, mapsTo, withMappedDevice, withRenamedDevice } from "../lib/mqtt.js";
   import { t, tn, catalogText } from "../i18n/i18n.svelte.js";
   import { system, ensure, reload } from "../state/system.svelte.js";
+  import { inEffectAfter } from "../lib/services.js";
   import { settings, setValue, setHardwareValues, discard, discardHardware, previewDraft, applyDraft, applyNow, resetOverrides } from "../state/settings.svelte.js";
-  import { serviceAction, runServiceAction } from "../state/services.svelte.js";
   import { EDIT_TABS, changeGroups, restartNeeded, fieldMatches, levelled, liveOverride, openHistory, previewValue, safetyBlocks, sharedRisk, tabSections } from "../lib/settings.js";
   import { errorView } from "../lib/errors.js";
   import { href } from "../app/router.svelte.js";
@@ -45,7 +46,6 @@
   let backup = $state(true);
   let confirmApply = $state(false);
   let confirmReset = $state(false);
-  let confirmRestart = $state(false);
 
   const config = $derived(system.config.data);
   const ok = $derived(config?.status === "ok");
@@ -175,17 +175,12 @@
   const canApply = $derived(settings.reviewed && preview?.changed === true && !settings.applying && !openHistory(preview).length);
   const applied = $derived(settings.applied);
   const needsRestart = $derived(restartNeeded(applied?.diff, applied?.result));
+  const restartWaits = $derived(needsRestart && inEffectAfter(system.plan.data, system.plan.askedAt, applied?.at ?? 0) !== true);
   const rollback = $derived(settings.applyError?.payload?.credential_rollback || settings.applyError?.credential_rollback || null);
 
   function choose(value) {
     tab = value;
     globalThis.history?.replaceState(null, "", `${href("settings")}/${value}`);
-  }
-
-  function restart() {
-    confirmRestart = false;
-    runServiceAction("sync");
-    globalThis.location.hash = href("services");
   }
 
   $effect(() => {
@@ -347,11 +342,7 @@
           <p><Icon name="circle-check" size="sm" /> {applied.result?.backup_path ? t("settings.edit.appliedBackup") : t("settings.edit.appliedNoBackup")}</p>
           {#if applied.result?.backup_path}<p class="muted small num" lang="en">{applied.result.backup_path}</p>{/if}
           {#if needsRestart}
-            <p>{t("settings.edit.restartNeeded")}</p>
-            <div class="row-wrap">
-              <button class="btn" type="button" onclick={() => (confirmRestart = true)} disabled={Boolean(serviceAction.busy)} data-testid="restart-ems"><Icon name="rotate-cw" size="sm" />{serviceAction.busy === "sync" ? t("settings.edit.restarting") : t("settings.edit.restart")}</button>
-              <a class="btn secondary small" href={href("services")}>{t("settings.edit.openServices")}</a>
-            </div>
+            <RestartEms needed={restartWaits} since={applied.at} settled={t("settings.edit.inEffect")} />
           {:else}
             <p class="muted">{t("settings.edit.liveNow")}</p>
           {/if}
@@ -378,14 +369,6 @@
   danger={!backup}
   onconfirm={() => { confirmApply = false; applyDraft({ backup }); }}
   oncancel={() => (confirmApply = false)}
-/>
-<ConfirmDialog
-  open={confirmRestart}
-  title={t("services.confirmSyncTitle")}
-  lines={[t("services.confirmSync"), t("services.confirmSyncSafe")]}
-  confirmLabel={t("services.sync")}
-  onconfirm={restart}
-  oncancel={() => (confirmRestart = false)}
 />
 <ConfirmDialog
   open={confirmReset}

@@ -162,7 +162,9 @@ current settings.
 
 **Expected result:** **Settings saved**. Adding, removing or moving a device
 generally needs EMS to read the new settings: the result says *Some changes
-take effect once EMS restarts.* and offers **Restart EMS now**.
+take effect once EMS restarts.* and offers **Restart EMS now**, which asks
+first, restarts right there and then says how it went; **Follow it in
+Services** opens the details.
 
 **If it differs:**
 
