@@ -54,7 +54,7 @@ def _device_defaults(config):
 _DEVICE_LEAF_RE = re.compile(r"^devices\[\d+\]\.([A-Za-z0-9_]+)$")
 
 
-def applies_live(path, config=None):
+def applies_live(path, config=None, runtime_devices=None):
     """Does changing this config path take effect without an EMS restart?
 
     Only the whitelisted overlap keys are mirrored into runtime-state when the
@@ -62,6 +62,10 @@ def applies_live(path, config=None):
     Everything else — every write gate, ``dry_run`` and ``simulation_mode``
     included — stays inert until the container is recreated. A read-only
     device has no runtime-state entry at all, so nothing about it is live.
+    ``runtime_devices``, the names runtime-state holds an entry for
+    (runtime_device_names), narrows a device key further, when given, to a
+    device the mirror can write: EMS seeds an entry only for a device it built
+    to control when it started, and keeps it until it starts again.
     """
 
     text = str(path or "")
@@ -69,9 +73,10 @@ def applies_live(path, config=None):
         return text[len("system.") :] in SYSTEM_FIELDS
     device = _DEVICE_LEAF_RE.match(text)
     if device is not None:
-        if config is not None and is_read_only_device_config(
-            _device_at_path(config, text)
-        ):
+        entry = _device_at_path(config, text) if config is not None else None
+        if config is not None and is_read_only_device_config(entry):
+            return False
+        if runtime_devices is not None and _device_name(entry) not in runtime_devices:
             return False
         return device.group(1) in DEVICE_FIELDS
     section, _, key = text.partition(".")
@@ -79,6 +84,26 @@ def applies_live(path, config=None):
 
 
 _DEVICE_INDEX_RE = re.compile(r"^devices\[(\d+)\]\.")
+
+
+def _device_name(entry):
+    return str(entry.get("name") or "").strip() if isinstance(entry, dict) else ""
+
+
+def runtime_device_names(context, config):
+    """The device names the runtime-state file of this install holds an entry for now; none when it cannot be read.
+
+    EMS seeds one for each device it builds to control when it starts, over
+    HTTP or MQTT, and prunes the rest then: a device switched off, a read-only
+    one, and one read over MQTT without control, which it builds from
+    ``config.json`` alone. These are the devices the mirror can write.
+    """
+
+    try:
+        devices = read_runtime_state(resolve_runtime_state_path(context, config)).get("devices")
+    except (OSError, TypeError, ValueError):
+        return frozenset()
+    return frozenset(devices) if isinstance(devices, dict) else frozenset()
 
 
 def _device_at_path(config, path):

@@ -284,7 +284,16 @@ Dashboard runtime-write whitelist:
   `system.min_output_limit`
 - `winter.enabled`, `ac_charge_control.enabled`
 - per device: `enabled`, `max_power`, `pv_priority_factor`,
-  `offgrid_socket_mode`, `ac_charge_enabled`
+  `offgrid_socket_mode`, `ac_charge_enabled`, for a device runtime-state holds
+  an entry for. EMS seeds one for each device it builds to control when it
+  starts, over HTTP or MQTT, keeps it until it starts again, switched off
+  meanwhile or not, and prunes the rest then: a device switched off, a
+  read-only one, and one read over MQTT without control (`external_mqtt`, or
+  `zendure_mqtt` without `write_output_limit`), which it builds from
+  `config.json` alone. The change summary marks a device key live only for a
+  device the file holds an entry for (`admin/config_runtime_overlap.py`
+  `runtime_device_names`), the ones the mirror can write; it skips any other as
+  an unknown device. A removed key is never mirrored, so never live
 
 Every key on this list is seeded from `config.json` by the EMS when it loads
 runtime-state, so the Dashboard's runtime controls always show the value the

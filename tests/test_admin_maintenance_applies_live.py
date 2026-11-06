@@ -12,10 +12,15 @@ admin.config_runtime_overlap). This asks that question of the owner rather than
 keeping a second copy of the answer.
 """
 
+import json
+import os
+from types import SimpleNamespace
+
 import pytest
 
-from admin.config_runtime_overlap import applies_live
-from admin.maintenance_config import summarize_config_changes
+from admin.config_runtime_overlap import applies_live, resolve_runtime_state_path, runtime_device_names
+from admin.install_context import detect_install_context
+from admin.maintenance_config import load_maintenance_config, preview_maintenance_config, summarize_config_changes
 
 pytestmark = [
     pytest.mark.admin,
@@ -70,6 +75,53 @@ def test_everything_else_waits_for_a_restart(path):
     """dry_run and the write gates are the ones this must never get wrong."""
 
     assert applies_live(path) is False
+
+
+def test_a_device_key_is_live_only_for_a_device_runtime_state_holds_an_entry_for():
+    """runtime-state holds what the mirror can write: a device EMS built to control, switched off since or not."""
+
+    config = {"devices": [
+        {"name": "WR1", "ip": "192.0.2.1"},
+        {"name": "Balkon", "type": "external_mqtt", "mqtt": {"broker_ref": "ems-mqtt", "device_id": "balkon"}},
+        {"name": "WR2", "ip": "192.0.2.2", "enabled": True},
+        {"name": "WR1 Nord", "ip": "192.0.2.3"},
+    ]}
+    runtime = frozenset({"WR1", "WR2"})
+
+    assert [applies_live(f"devices[{index}].enabled", config, runtime) for index in range(4)] == [True, False, True, False]
+    assert applies_live("devices[0].enabled", config) is True
+    assert applies_live("system.loop_interval", config, frozenset()) is True
+
+
+def test_the_change_preview_asks_the_runtime_state_file_of_the_install(tmp_path):
+    current = {
+        "system": {"max_total_power": 800},
+        "grid_meter": {"type": "shelly", "ip": "192.0.2.9"},
+        "devices": [
+            {"name": "WR1", "ip": "192.0.2.1", "sn": "AAA", "enabled": False},
+            {"name": "WR2", "ip": "192.0.2.2", "sn": "BBB", "enabled": False},
+            {"name": "WR3", "ip": "192.0.2.3", "sn": "CCC", "pv_priority_factor": 2.0},
+        ],
+    }
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.json").write_text(json.dumps(current), encoding="utf-8")
+    context = detect_install_context(base_dir=str(tmp_path))
+    runtime_path = resolve_runtime_state_path(context, current)
+    os.makedirs(os.path.dirname(runtime_path), exist_ok=True)
+    with open(runtime_path, "w", encoding="utf-8") as handle:
+        json.dump({"devices": {"WR1": {"enabled": False}, "WR3": {"enabled": True}}}, handle)
+    draft = load_maintenance_config(base_dir=str(tmp_path))["draft"]
+    for device in draft["devices"]:
+        device["enabled"] = True
+    draft["devices"][2]["removed"] = True
+
+    diff = preview_maintenance_config(draft, base_dir=str(tmp_path))["diff"]
+    marked = {entry["path"]: entry["applies_live"] for bucket in ("changes", "added", "removed") for entry in diff[bucket]}
+
+    assert runtime_device_names(context, current) == frozenset({"WR1", "WR3"})
+    assert (marked["devices[0].enabled"], marked["devices[1].enabled"]) == (True, False)
+    assert marked["devices[2].pv_priority_factor"] is False
+    assert runtime_device_names(SimpleNamespace(install_root=tmp_path / "elsewhere"), current) == frozenset()
 
 
 def test_the_answer_comes_from_the_whitelist_and_not_from_a_copy():

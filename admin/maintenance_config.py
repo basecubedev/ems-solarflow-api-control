@@ -14,7 +14,7 @@ import json
 
 from admin import consumer_history
 from admin.config_preview import _GRID_TYPE_CHOICES, _valid_host
-from admin.config_runtime_overlap import applies_live, overlap_provenance_for_context
+from admin.config_runtime_overlap import applies_live, overlap_provenance_for_context, runtime_device_names
 from admin.connection_planner import (
     INTENT_SWITCH_CONNECTION,
     plan_connection_change,
@@ -1142,7 +1142,7 @@ def preview_maintenance_config(draft, base_dir=None, *, identity_token_key=None)
     # credential-staging layer, which rejects the same references with a stable
     # structured code and a byte-exact rollback.
     _append_mqtt_credential_consumer_issues(validation, merged)
-    diff = summarize_config_changes(current, merged)
+    diff = summarize_config_changes(current, merged, runtime_device_names(context, merged))
     response = {
         "status": "ok",
         "config_path": config_path,
@@ -1201,7 +1201,7 @@ def prepare_maintenance_config_apply(
     )
     history = _consumer_history(current, merged, draft, context)
     validation = _validate(merged, merge_issues)
-    diff = summarize_config_changes(current, merged)
+    diff = summarize_config_changes(current, merged, runtime_device_names(context, merged))
     result = sanitize_external_mqtt_status(
         {
             "status": "ok",
@@ -2576,12 +2576,14 @@ def _append_mqtt_credential_consumer_issues(validation, config):
 # --- diff ----------------------------------------------------------------
 
 
-def summarize_config_changes(before, after):
+def summarize_config_changes(before, after, runtime_devices=None):
     """Return a compact, bounded diff of leaf-value changes between two configs.
 
     The flattening, ordering and secret suppression are the canonical ones; the
     Admin half is which keys count as secret and how far a value is bounded for
-    UI rendering.
+    UI rendering. A row is live as the apply's mirror makes it: never a removed
+    one, as the mirror writes only changed and added keys, and a device key
+    only for a device ``runtime_devices`` (runtime_device_names) names.
     """
 
     diff = mutation_diff(
@@ -2595,7 +2597,7 @@ def summarize_config_changes(before, after):
     for bucket in ("changes", "added", "removed"):
         source = before if bucket == "removed" else after
         for entry in diff.get(bucket) or []:
-            entry["applies_live"] = applies_live(entry["path"], source)
+            entry["applies_live"] = bucket != "removed" and applies_live(entry["path"], source, runtime_devices)
     return diff
 
 
