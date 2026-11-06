@@ -262,7 +262,7 @@
       {#each warnings as warning, index (index)}<p class="note warn"><Icon name="triangle-alert" /><span lang="en">{warning}</span></p>{/each}
       <div class="row-wrap actions">
         {#if dashboard}<a class="btn" href={dashboard} data-testid="upgrade-open-dashboard"><Icon name="layout-dashboard" size="sm" />{t("upgrade.openDashboard")}</a>{/if}
-        <button class="btn secondary" type="button" onclick={closeUpgrade} data-testid="upgrade-finish">{t("upgrade.finish")}</button>
+        <button class="btn secondary" type="button" onclick={closeUpgrade} data-testid="upgrade-finish">{t("common.done")}</button>
       </div>
     {:else if upgrade.stage === "returned"}
       <div class="outcome" data-testid="upgrade-returned">
@@ -274,7 +274,7 @@
       </div>
       {#if upgrade.slow}<p class="note warn"><Icon name="clock" />{t("upgrade.slow")}</p>{/if}
       <div class="row-wrap actions">
-        <button class="btn secondary" type="button" onclick={closeUpgrade}>{t("upgrade.finish")}</button>
+        <button class="btn secondary" type="button" onclick={closeUpgrade}>{t("common.done")}</button>
       </div>
     {:else}
       <div class="outcome fault" data-testid="upgrade-failed">

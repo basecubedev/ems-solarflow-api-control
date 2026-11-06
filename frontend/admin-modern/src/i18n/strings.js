@@ -1882,7 +1882,6 @@ export const STRINGS = {
   "upgrade.took": s("Took", "Dauer", "Duur", "Durée"),
   "upgrade.backupMade": s("Backup made first", "Vorher angelegte Sicherung", "Vooraf gemaakte back-up", "Sauvegarde faite avant"),
   "upgrade.openDashboard": s("Open the dashboard", "Dashboard öffnen", "Dashboard openen", "Ouvrir le tableau de bord"),
-  "upgrade.finish": s("Done", "Fertig", "Klaar", "Terminé"),
   "upgrade.stoppedAt": s("Stopped at: {phase}", "Angehalten bei: {phase}", "Gestopt bij: {phase}", "Arrêtée à : {phase}"),
   "upgrade.rateLimited": s("The GitHub Container Registry limits downloads just now. Wait a while, then try again.", "Die GitHub Container Registry begrenzt gerade die Downloads. Warte eine Weile und versuche es dann erneut.", "De GitHub Container Registry beperkt nu de downloads. Wacht even en probeer het dan opnieuw.", "Le GitHub Container Registry limite actuellement les téléchargements. Patientez un moment, puis réessayez."),
   "upgrade.nothingChanged": s("It stopped before anything was changed. EMS runs as before.", "Es hat angehalten, bevor etwas geändert wurde. Das EMS läuft wie vorher.", "Het is gestopt voordat er iets veranderde. EMS draait zoals voorheen.", "Elle s’est arrêtée avant toute modification. EMS fonctionne comme avant."),

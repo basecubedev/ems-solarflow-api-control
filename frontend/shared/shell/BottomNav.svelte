@@ -162,7 +162,7 @@
         {#if customized}
           <button class="btn secondary" type="button" onclick={resetBar} data-testid="reset-bar"><Icon name="rotate-ccw" />{t("nav.resetBar")}</button>
         {/if}
-        <button class="btn" type="button" onclick={stopEditing} data-testid="customize-done">{t("nav.customizeDone")}</button>
+        <button class="btn" type="button" onclick={stopEditing} data-testid="customize-done">{t("common.done")}</button>
       </div>
     {:else}
       <h2 class="sheet-title">{t("nav.morePages")}</h2>

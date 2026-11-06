@@ -4,6 +4,7 @@
  * Every state and action is a code the plan names; the server's English
  * labels are only the fallback for a code this build does not know.
  */
+import { errorView, noAnswer } from "./errors.js";
 
 export const SERVICES = Object.freeze(["ems", "influxdb"]);
 export const DISPLAY_STATES = Object.freeze(["running", "stopped", "missing", "not_configured", "disabled", "external"]);
@@ -78,4 +79,26 @@ export function stepView(step) {
     ok,
     detail: ok ? "" : String(step?.detail || ""),
   };
+}
+
+export const SERVICE_REFUSALS = Object.freeze(["busy", "unavailable", "analytics_disabled", "influx_not_running"]);
+export const RESULT_ICONS = Object.freeze({ ok: "circle-check", partial: "triangle-alert", unknown: "circle-help", fault: "circle-x" });
+
+/** A finished restart or repair as the reader sees it, said with ``t``: its tone, message, steps and warnings. */
+export function serviceOutcome(raw, t) {
+  if (!raw) return null;
+  const { kind, result, error } = raw;
+  const steps = (Array.isArray(result?.steps) ? result.steps : []).map(stepView);
+  const warnings = Array.isArray(result?.warnings) ? result.warnings.map(String) : [];
+  const base = { steps, warnings, at: raw.at };
+  if (!error && partlyDone(result)) return { ...base, tone: "partial", message: t("services.partlyDone") };
+  if (!error) return { ...base, tone: "ok", message: kind === "sync" ? t("services.synced") : t("services.repaired") };
+  if (noAnswer(error)) return { ...base, tone: "unknown", message: t("error.noAnswer") };
+  if (result?.status === "unavailable") {
+    const why = planMessage(result.message);
+    if (why && !why.key) return { ...base, tone: "fault", message: why.text, lang: "en" };
+  }
+  if (SERVICE_REFUSALS.includes(result?.status)) return { ...base, tone: "fault", message: t(`services.status.${result.status}`) };
+  const view = errorView(error, t, kind === "sync" ? t("services.syncFailed") : t("services.repairFailed"));
+  return { ...base, tone: "fault", message: view.text, lang: view.lang };
 }

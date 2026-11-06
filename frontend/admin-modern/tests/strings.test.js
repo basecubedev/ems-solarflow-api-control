@@ -10,7 +10,7 @@ import { PAGES } from "../src/app/pages.js";
 import { KNOWN_ERRORS, KNOWN_SENTENCES } from "../src/lib/errors.js";
 import { FINDINGS, INSTALL_STATES, CONTAINER_STATUSES } from "../src/lib/health.js";
 import { CONTROL_STATUSES, CONTROL_TRANSPORTS } from "../src/lib/control.js";
-import { DISPLAY_STATES, SERVICES, SYNC_ACTIONS, CONFIG_STATES, PLAN_MESSAGES } from "../src/lib/services.js";
+import { DISPLAY_STATES, SERVICES, SYNC_ACTIONS, CONFIG_STATES, PLAN_MESSAGES, SERVICE_REFUSALS } from "../src/lib/services.js";
 import { BACKUP_PURPOSES, BACKUP_TYPES, CREATE_SCOPES, CREATE_STEPS, RESTORE_STEPS, FILE_ACTIONS, INFLUX_REASONS, LIST_WARNINGS, STEP_STATES } from "../src/lib/backups.js";
 import { ALIGNMENT_STAGES, WORKFLOW_OWNERS, WORKFLOW_STATES, STALE_REASONS } from "../src/lib/workflow.js";
 import { CHECK_IDS, CHECK_STATUSES, RUN_MODES, UNAVAILABLE_MESSAGES } from "../src/lib/diagnostics.js";
@@ -108,7 +108,7 @@ test("every generated key family is complete", () => {
     ...CONFIG_STATES.map((state) => `services.config.${state}`),
     ...SYNC_ACTIONS.map((id) => `services.step.${id}`),
     ...["running", "stopped", "unavailable"].map((state) => `services.desired.${state}`),
-    ...["busy", "unavailable", "analytics_disabled", "influx_not_running"].map((status) => `services.status.${status}`),
+    ...SERVICE_REFUSALS.map((status) => `services.status.${status}`),
     ...BACKUP_TYPES.map((type) => `backup.type.${type}`),
     ...CREATE_SCOPES.flatMap((scope) => [`backups.scope.${scope}`, `backups.scope.${scope}.desc`]),
     ...CREATE_STEPS.map((step) => `backup.step.${step}`),

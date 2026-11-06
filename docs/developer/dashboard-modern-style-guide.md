@@ -31,7 +31,7 @@ app adds only what is its own:
 | Shared (`frontend/shared/`) | Per app |
 | --- | --- |
 | `styles/tokens.css`, `styles/base.css`: every colour, distance and the base classes | its pages and widgets |
-| `ui/`: Card, Segmented, Fact, Status, Bar, ConfirmDialog, Dialog, Sheet, Empty, Icon, BrandMark | its own `src/icons.json` beside `shared/icons.json` |
+| `ui/`: Card, Segmented, Fact, Status, Bar, ConfirmDialog, Dialog, Sheet, Empty, SearchField, Icon, BrandMark | its own `src/icons.json` beside `shared/icons.json` |
 | `shell/`: side menu, top bar, phone bar, Appearance, the router and the page set | `app/pages.js` (the pages and the four of the phone bar) |
 | `widgets/DiagnosisReport.svelte`: one EMS diagnosis, drawn once | its own `src/i18n/strings.js` |
 | `i18n/`: `t`, `tn` (plural forms), `fmt` and the shell's own strings | the auth model of its server |
@@ -160,6 +160,7 @@ the product name ("Admin console") is what tells the two apart.
 | `ui/Sheet` | a panel from the bottom edge on a phone (the bar's **More**); a native modal `<dialog>` that Esc, the scrim and a tap or a swipe down on its handle close; the element marked `data-focus` takes the focus |
 | `ui/OperatorGate` | a page or a panel that needs the operator to be signed in |
 | `ui/Empty` | why there is nothing to show, and what would change that |
+| `ui/SearchField` | a search box that narrows a list as you type: the settings, the live MQTT topics |
 
 A page is a twelve-column grid of cards (`.content`, with `span-12`,
 `span-8`, `span-6` and `span-4`). A card that only

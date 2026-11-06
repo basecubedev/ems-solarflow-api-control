@@ -4,6 +4,7 @@
   import Empty from "../../../shared/ui/Empty.svelte";
   import Status from "../../../shared/ui/Status.svelte";
   import Segmented from "../../../shared/ui/Segmented.svelte";
+  import SearchField from "../../../shared/ui/SearchField.svelte";
   import ConfirmDialog from "../../../shared/ui/ConfirmDialog.svelte";
   import Dialog from "../../../shared/ui/Dialog.svelte";
   import ControlState from "../widgets/ControlState.svelte";
@@ -227,10 +228,7 @@
 {:else if ok}
   <div class="toolbar span-12">
     <Segmented large options={tabOptions} value={tab} label={t("settings.tabs")} onchange={choose} />
-    <label class="search">
-      <Icon name="search" size="sm" />
-      <input class="input" type="search" placeholder={t("settings.edit.search")} aria-label={t("settings.edit.search")} bind:value={query} data-testid="settings-search" />
-    </label>
+    <SearchField bind:value={query} label={t("settings.edit.search")} testid="settings-search" />
     <button class="icon-btn" type="button" onclick={() => reload("config")} disabled={system.config.loading} aria-label={t("common.refresh")} title={t("common.refresh")}><Icon name="refresh-cw" /></button>
   </div>
 
@@ -400,7 +398,6 @@
 
 <style>
   .toolbar { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
-  .search { display: flex; align-items: center; gap: var(--s2); flex: 1 1 220px; min-width: 0; color: var(--m-muted); }
   .live-note { align-items: center; flex-wrap: wrap; }
   .live-note span { flex: 1 1 240px; }
   .sections, .blocks { display: flex; flex-direction: column; gap: var(--s3); }

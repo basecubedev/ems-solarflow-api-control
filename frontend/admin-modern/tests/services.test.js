@@ -2,7 +2,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { DISPLAY_STATES, SYNC_ACTIONS, CONFIG_STATES, serviceView, plannedChanges, canSync, partlyDone, planMessage, stepView } from "../src/lib/services.js";
+import { ApiError } from "../../shared/lib/api.js";
+import { DISPLAY_STATES, SYNC_ACTIONS, CONFIG_STATES, serviceView, plannedChanges, canSync, partlyDone, planMessage, stepView, serviceOutcome } from "../src/lib/services.js";
 
 const SERVER = readFileSync(new URL("../../../admin/container_actions.py", import.meta.url), "utf8");
 
@@ -63,4 +64,15 @@ test("why a plan cannot run: the Docker sentence in words, any other cause as th
   const broken = "config/config.json cannot be read: Expecting value. Fix the file or restore a backup; containers are left as they are.";
   assert.deepEqual(planMessage(broken), { key: null, text: broken });
   assert.equal(planMessage(undefined), null);
+});
+
+test("a finished restart is said by its tone: done, partly done, refused or without an answer", () => {
+  const t = (key) => key;
+  assert.equal(serviceOutcome(null, t), null);
+  const done = serviceOutcome({ kind: "sync", result: { status: "completed", steps: [{ service: "ems", action: "recreate", status: "ok" }] }, error: null, at: 5 }, t);
+  assert.deepEqual([done.tone, done.message, done.at, done.steps.length], ["ok", "services.synced", 5, 1]);
+  assert.equal(serviceOutcome({ kind: "sync", result: { status: "completed", warnings: ["late"] }, error: null }, t).tone, "partial");
+  const refused = serviceOutcome({ kind: "sync", result: { status: "busy" }, error: new ApiError(409, { status: "busy" }) }, t);
+  assert.deepEqual([refused.tone, refused.message], ["fault", "services.status.busy"]);
+  assert.equal(serviceOutcome({ kind: "repair", result: null, error: new TypeError("Failed to fetch") }, t).message, "error.noAnswer");
 });

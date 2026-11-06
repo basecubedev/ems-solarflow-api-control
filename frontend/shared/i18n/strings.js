@@ -22,7 +22,6 @@ export const SHARED_STRINGS = {
   "nav.morePages": s("More pages", "Weitere Seiten", "Meer pagina’s", "Autres pages"),
   "nav.quickSettings": s("Quick settings", "Schnelleinstellungen", "Snelle instellingen", "Réglages rapides"),
   "nav.customize": s("Choose the pages in the bar", "Seiten der Leiste wählen", "Pagina’s in de balk kiezen", "Choisir les pages de la barre"),
-  "nav.customizeDone": s("Done", "Fertig", "Klaar", "Terminé"),
   "nav.inBar": s("In the bar", "In der Leiste", "In de balk", "Dans la barre"),
   "nav.inMore": s("Under More", "Unter Mehr", "Onder Meer", "Sous Plus"),
   "nav.swapHint": s("Tap two pages to swap them.", "Tippe zwei Seiten an, um sie zu tauschen.", "Tik op twee pagina’s om ze te wisselen.", "Touchez deux pages pour les échanger."),
@@ -73,6 +72,7 @@ export const SHARED_STRINGS = {
 
   "common.refresh": s("Refresh", "Aktualisieren", "Vernieuwen", "Actualiser"),
   "common.close": s("Close", "Schließen", "Sluiten", "Fermer"),
+  "common.done": s("Done", "Fertig", "Klaar", "Terminé"),
   "common.retry": s("Try again", "Erneut versuchen", "Opnieuw proberen", "Réessayer"),
   "common.loading": s("Loading", "Lädt", "Laden", "Chargement"),
   "common.save": s("Save", "Speichern", "Opslaan", "Enregistrer"),
