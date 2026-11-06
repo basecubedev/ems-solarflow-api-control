@@ -43,7 +43,7 @@ def free_port():
 
 
 def wait_for_broker(port, deadline):
-    """Until Mosquitto answers a CONNECT; Docker's port proxy accepts before it listens."""
+    """Until Mosquitto answers a CONNECT, which a port merely accepting does not."""
 
     from admin.mqtt_broker import mqtt_answers
 
@@ -103,14 +103,21 @@ def build_install(tmp, broker_port, dashboard_port):
 
 
 def start_broker(tmp):
+    """Mosquitto in Docker on the host's network, on a free port of 127.0.0.1.
+
+    A container on a bridge network brings a new interface up on the host just
+    as the browser loads its first page, and Chromium aborts loads on a network
+    change (net::ERR_NETWORK_CHANGED); on the host's network none comes up.
+    """
+
     from admin.mqtt_broker import MOSQUITTO_IMAGE
 
-    conf = tmp / "mosquitto.conf"
-    conf.write_text("listener 1883\nallow_anonymous true\npersistence false\n", encoding="utf-8")
     port = free_port()
+    conf = tmp / "mosquitto.conf"
+    conf.write_text(f"listener {port} 127.0.0.1\nallow_anonymous true\npersistence false\n", encoding="utf-8")
     name = f"ems-mqtt-e2e-{uuid.uuid4().hex[:8]}"
     subprocess.run(
-        ["docker", "run", "-d", "--rm", "--name", name, "-p", f"127.0.0.1:{port}:1883",
+        ["docker", "run", "-d", "--rm", "--name", name, "--network", "host",
          "-v", f"{conf}:/mosquitto/config/mosquitto.conf:ro", MOSQUITTO_IMAGE],
         check=True, capture_output=True, text=True,
     )
