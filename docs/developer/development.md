@@ -138,6 +138,13 @@ Update the inventory in the same commit as the dependency change:
 4. For a vendored asset, record its origin, upstream version and SHA-256, and
    add the upstream license text next to the files when the license requires the
    notice to travel with the code (as `dashboard/static/uPlot.LICENSE` does).
+   A prebuilt binary an image ships keeps its upstream license texts in
+   `third_party/<name>/`, which the final stage of its Dockerfile copies to
+   `/usr/share/doc/<name>/`. Its row names the Dockerfile (`Image`), the path
+   it installs (`Installed as`) and every file of that directory (`Notices`).
+   When a Dockerfile moves to another upstream version, refresh those files
+   from that version and their SHA-256 in the provenance table; the tests
+   fail until the recorded version matches the Dockerfile.
 5. Runtime dependencies also need a `Runtime`/`Distributed` review of the
    transitive closure: everything pip installs into the images belongs in the
    transitive table.
