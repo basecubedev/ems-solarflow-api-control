@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The Modern dashboard at the root, against the same preview server and the
 // same API as the deprecated Classic at /classic/. Never `waitUntil: "networkidle"`: /api/events stays open.

@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Fetch the pinned rpi-image-gen source tree. Source only — nothing is installed.
 #
@@ -23,7 +24,7 @@ INTO="$ROOT/../rpi-image-gen"
 FORM=auto
 
 usage() {
-    sed -n '3,17p' "$0"
+    awk 'NR == 1 { next } /^#/ { if ($0 !~ /SPDX-/) print; next } { exit }' "$0"
 }
 
 not_run() {

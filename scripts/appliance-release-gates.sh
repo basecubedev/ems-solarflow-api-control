@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # The gates a real image release has to pass, in order. Nothing is published.
 #
@@ -55,7 +56,7 @@ REQUIRED_SKIPPED=0
 NOT_RUN_NAMES=""
 
 usage() {
-    sed -n '3,42p' "$0"
+    awk 'NR == 1 { next } /^#/ { if ($0 !~ /SPDX-/) print; next } { exit }' "$0"
 }
 
 # A gate that could not be asked has not failed: 3 is the header's "a required

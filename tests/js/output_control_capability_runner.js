@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Runs the real admin.js output-control capability chain so the write-eligibility
 // contract is exercised against the shipped predicates instead of a rebuilt copy.

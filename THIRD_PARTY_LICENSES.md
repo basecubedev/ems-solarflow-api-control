@@ -9,6 +9,14 @@ repository. `tools/check_third_party_licenses.py` and
 `tests/test_third_party_licenses.py` verify it against the actual manifests, so
 a new dependency fails CI until it is documented here.
 
+Per file, the repository follows the [REUSE specification](https://reuse.software/):
+every source, script and configuration file the project writes names its
+copyright holder and license in its first lines, and [`REUSE.toml`](REUSE.toml)
+declares the rest: files that cannot carry a comment, fixtures and release
+evidence whose bytes are the point, and every third-party file below with its
+upstream holder. The license texts are in
+[`LICENSES/`](LICENSES/), and `reuse lint` checks that nothing is left out.
+
 ## How To Read This Inventory
 
 | Column | Meaning |
@@ -64,13 +72,39 @@ into the published images.
 ### Distributed Third-Party Binaries
 
 Prebuilt upstream binaries copied into the published images. They are not
-Python packages and do not appear in any requirements file.
+Python packages and do not appear in any requirements file. None of the three
+arrives with its license text: `influx` is copied out of an image build stage,
+the Docker CLI and the Compose plugin are downloaded as bare binaries. The texts
+are therefore kept in `third_party/`, and the final stage of the Dockerfile
+named in `Image` copies the directory to `/usr/share/doc/<name>/` beside the
+binary. The checker reads the final stage of each Dockerfile and requires a row
+for every file it places under `/usr`, `/opt`, `/bin`, `/sbin` or `/lib`
+(except `/usr/share` and Python package directories) through `COPY --from` or
+`ADD`, or in a `RUN` step through `install`, `cp`, `mv`, `curl -o`, `wget -O`,
+`tar -x -C` or `unzip -d`, also behind `if`/`for`/`while`, in `case` branches
+and in `sh -c`. A binary a `RUN` step compiles, writes from a heredoc or places
+with another command is not seen and needs its row by hand.
 
-| Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream |
-|---|---|---|---|:---:|:---:|---|
-| `influx` | 2.9 (from the `influxdb:2.9` build stage) | MIT | InfluxDB backup/restore from inside the EMS container without a Docker socket | ✅ | ✅ | https://github.com/influxdata/influx-cli |
-| `docker/cli` | 27.5.1 | Apache-2.0 | Admin Console controls the host Docker engine through the mounted socket; client only, never a daemon | ✅ | ✅ | https://github.com/docker/cli |
-| `docker/compose` | 2.32.4 | Apache-2.0 | Compose plugin for the Admin Console's container lifecycle operations | ✅ | ✅ | https://github.com/docker/compose |
+| Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream | Image | Installed as | Notices |
+|---|---|---|---|:---:|:---:|---|---|---|---|
+| `influx` | 2.8.0, commit `8cdf401` (from the `influxdb:2.9` build stage) | MIT | InfluxDB backup/restore from inside the EMS container without a Docker socket | ✅ | ✅ | https://github.com/influxdata/influx-cli | `Dockerfile` | `/usr/local/bin/influx` | `third_party/influx-cli/LICENSE` |
+| `docker/cli` | 27.5.1 | Apache-2.0 | Admin Console controls the host Docker engine through the mounted socket; client only, never a daemon | ✅ | ✅ | https://github.com/docker/cli | `deploy/admin/Dockerfile` | `/usr/local/bin/docker` | `third_party/docker-cli/LICENSE`, `third_party/docker-cli/NOTICE` |
+| `docker/compose` | 2.32.4 | Apache-2.0 | Compose plugin for the Admin Console's container lifecycle operations | ✅ | ✅ | https://github.com/docker/compose | `deploy/admin/Dockerfile` | `/usr/local/lib/docker/cli-plugins/docker-compose` | `third_party/docker-compose/LICENSE`, `third_party/docker-compose/NOTICE` |
+
+Provenance, verified on 2026-11-07: each file is byte-identical to the file of
+the same name at the upstream revision in the Version column.
+
+| File | SHA-256 |
+|---|---|
+| `third_party/influx-cli/LICENSE` | `4dca58790e62edef3456a30fd971e32df1b890ac5341524813c02adbbbb1289a` |
+| `third_party/docker-cli/LICENSE` | `2d81ea060825006fc8f3fe28aa5dc0ffeb80faf325b612c955229157b8c10dc0` |
+| `third_party/docker-cli/NOTICE` | `a8c869fbda819afb8d80e0ac19bac52e766bc6c19cb38cf94f52d64c4be2aab6` |
+| `third_party/docker-compose/LICENSE` | `58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd` |
+| `third_party/docker-compose/NOTICE` | `b7dca0a6b01fa7365e4892877a6321179ee343d72ee87a96cfc222141b99a1e6` |
+
+The binaries are statically linked Go programs. The modules compiled into them
+are listed in each binary's Go build information (`go version -m`); their own
+license texts are not yet shipped.
 
 ## Development Dependencies
 
@@ -87,9 +121,10 @@ documentation website only in [`requirements-docs.txt`](requirements-docs.txt).
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream |
 |---|---|---|---|:---:|:---:|---|
 | `pytest` | unpinned (verified 9.1.0) | MIT | Test framework for the whole Python suite | ❌ | ❌ | https://github.com/pytest-dev/pytest |
-| `ruff` | `==0.15.22` | MIT | Lint and static checks (`ruff check .`) | ❌ | ❌ | https://github.com/astral-sh/ruff |
+| `ruff` | `==0.17.3` | MIT | Lint and static checks (`ruff check .`) | ❌ | ❌ | https://github.com/astral-sh/ruff |
 | `PyYAML` | `>=6.0` (verified 6.0.3) | MIT | Parsing CI workflow and compose YAML inside contract tests | ❌ | ❌ | https://github.com/yaml/pyyaml |
-| `zensical` | `==0.0.71` | MIT | Builds the documentation website from `docs/` ([docs-site.md](docs/developer/docs-site.md)) | ❌ | ❌ | https://github.com/zensical/zensical |
+| `reuse` | `==6.2.0` | GPL-3.0-or-later AND Apache-2.0 AND CC0-1.0 AND CC-BY-SA-4.0 | Checks that every file names its copyright holder and license (`reuse lint`, [REUSE](https://reuse.software/)) | ❌ | ❌ | https://github.com/fsfe/reuse-tool |
+| `zensical` | `==0.0.73` | MIT | Builds the documentation website from `docs/` ([docs-site.md](docs/developer/docs-site.md)) | ❌ | ❌ | https://github.com/zensical/zensical |
 
 ### Node Development Dependencies
 
@@ -175,7 +210,8 @@ output, with the material it bundles or copies, is described below the table.
 |---|---|---|---|:---:|:---:|---|---|
 | `uPlot` | 1.6.31 | MIT | Canvas charts on the Dashboard History and Analytics tabs | ✅ | ✅ | https://github.com/leeoniya/uPlot | `dashboard/static/uPlot.iife.min.js`, `dashboard/static/uPlot.min.css`, `dashboard/static/uPlot.LICENSE` |
 | `svelte` | 5.57.3 (runtime) | MIT | Component runtime bundled into the Modern dashboard, Admin console and Appliance Manager | ✅ | ✅ | https://github.com/sveltejs/svelte | `dashboard/static/modern/assets/modern.js`, `admin/static/modern/assets/vendor.js`, `appliance/static/modern/assets/appliance.js`, notices in `dashboard/static/modern/licenses.json`, `admin/static/modern/licenses.json` and `appliance/static/modern/licenses.json` |
-| `clsx` | 2.1.1 | MIT | Class-name helper the Svelte runtime bundles | ✅ | ✅ | https://github.com/lukeed/clsx | `dashboard/static/modern/assets/modern.js`, `admin/static/modern/assets/vendor.js`, notices in `dashboard/static/modern/licenses.json` and `admin/static/modern/licenses.json` |
+| `clsx` | 2.1.1 | MIT | Class-name helper the Svelte runtime bundles | ✅ | ✅ | https://github.com/lukeed/clsx | `dashboard/static/modern/assets/modern.js`, `admin/static/modern/assets/vendor.js`, `appliance/static/modern/assets/appliance.js`, notices in `dashboard/static/modern/licenses.json`, `admin/static/modern/licenses.json` and `appliance/static/modern/licenses.json` |
+| `vite` (module-preload helper) | 8.3.5 | MIT | The few lines Vite writes into the Admin console's entry chunk to preload the page chunks it imports | ✅ | ✅ | https://github.com/vitejs/vite | `admin/static/modern/assets/admin.js` (Copyright (c) 2019-present, VoidZero Inc. and Vite contributors) |
 | `Inter` (`@fontsource-variable/inter`) | 4.1 via 5.3.0 | OFL-1.1 | The Modern front ends' typeface, latin subset | ✅ | ✅ | https://github.com/rsms/inter | `dashboard/static/modern/assets/inter-latin-wght-normal.woff2`, `dashboard/static/modern/assets/modern.css` (`@font-face`), `dashboard/static/modern/Inter.LICENSE`, `admin/static/modern/assets/inter-latin-wght-normal.woff2`, `admin/static/modern/assets/admin.css` (`@font-face`), `admin/static/modern/Inter.LICENSE`, `appliance/static/modern/assets/inter-latin-wght-normal.woff2`, `appliance/static/modern/assets/appliance.css` (`@font-face`), `appliance/static/modern/Inter.LICENSE` |
 | `Lucide` (`lucide-static`) | 1.64.0 | ISC AND MIT (Feather-derived icons) | Icon paths of the Modern front ends' inline sprites | ✅ | ✅ | https://github.com/lucide-icons/lucide | `dashboard/static/modern/index.html`, `admin/static/modern/index.html` and `appliance/static/modern/index.html` (the `<svg class="icon-sprite">` block), `dashboard/static/modern/Lucide.LICENSE`, `admin/static/modern/Lucide.LICENSE`, `appliance/static/modern/Lucide.LICENSE` |
 | `rpi-image-gen` | v2.7.0 | BSD-3-Clause | Upstream files copied verbatim as the image contract the appliance is built against (`image-rpios`) | ❌ | ❌ | https://github.com/raspberrypi/rpi-image-gen | `tests/fixtures/rpi_image_gen/` (seventeen files, listed with their SHA-256 in `source-manifest.json`), `tests/fixtures/rpi_image_gen/UPSTREAM.LICENSE` |
@@ -211,10 +247,12 @@ project's own AGPL-3.0-or-later code (in `frontend/shared/`,
 `frontend/dashboard-modern/`, `frontend/admin-modern/` and
 `frontend/appliance-modern/`) with the Svelte runtime and `clsx`; the
 Appliance Manager's bundle (`appliance/static/modern/assets/appliance.js`)
-carries the Svelte runtime only, as its `licenses.json` says. The Admin console loads its pages as separate chunks: the
+carries the Svelte runtime and `clsx`, as its `licenses.json` says. The Admin console loads its pages as separate chunks: the
 Svelte runtime and `clsx` are all in `admin/static/modern/assets/vendor.js`
 (`admin/static/modern/assets/admin.js` loads it), and every other chunk is the
-project's own code and carries its licence header. Vite writes the MIT notices of every
+project's own code and carries its licence header. The entry chunk `admin.js`
+also holds Vite's module-preload helper (MIT, row above); `licenses.json`
+does not list it, because Vite injects it rather than bundling a package. Vite writes the MIT notices of every
 bundled package into a `licenses.json` that ships beside each bundle, and
 `tests/test_dashboard_modern.py`, `tests/test_admin_modern.py` and
 `tests/test_appliance_modern.py` fail when a
@@ -386,7 +424,10 @@ Source distributions and release packages include:
 
 `Dockerfile` copies `LICENSE`, `THIRD_PARTY_LICENSES.md` and the whole
 `dashboard/` tree into the EMS image, so all three travel with every published
-image.
+image. `deploy/admin/Dockerfile` copies `LICENSE` and `THIRD_PARTY_LICENSES.md`
+into the Admin image beside the `admin/` tree, which carries the Modern
+console's notices. Both copy the `third_party/` notices of the binaries they
+ship to `/usr/share/doc/`.
 
 ## Maintaining This Inventory
 
@@ -397,7 +438,11 @@ python tools/check_third_party_licenses.py
 ```
 
 It fails when a direct dependency, an optional lockfile package, a GitHub Action a
-workflow uses or a vendored static asset is missing, when a documented entry no longer exists in any
+workflow uses or a vendored static asset is missing, when a binary the final
+stage of a Dockerfile installs has no row, when a row's `third_party/` files are
+missing, incomplete (an Apache-2.0 component needs its `NOTICE`, unless its `Notices` cell says
+`no NOTICE upstream`) or not copied
+by the final stage of the Dockerfile in its `Image` cell, when a documented entry no longer exists in any
 manifest, when a component is listed twice in one section, or when a table is
 missing a required column. `tests/test_third_party_licenses.py` runs the same
 checks under `pytest -m documentation`.

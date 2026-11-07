@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * What both Modern front ends do to their page at build time: the tab icon,
@@ -102,7 +103,9 @@ export function modernPage({ name, icons, vendored = "" }) {
   };
 }
 
-const PROJECT_BANNER = "/* SPDX-License-Identifier: AGPL-3.0-or-later */";
+// REUSE-IgnoreStart
+const PROJECT_BANNER = "/* SPDX-FileCopyrightText: 2026 basecubedev */\n/* SPDX-License-Identifier: AGPL-3.0-or-later */";
+// REUSE-IgnoreEnd
 
 /**
  * The build both apps share: fixed file names, one stylesheet, a licence list.
@@ -110,7 +113,8 @@ const PROJECT_BANNER = "/* SPDX-License-Identifier: AGPL-3.0-or-later */";
  * bundled package in one ``vendor.js``, which THIRD_PARTY_LICENSES.md names,
  * and its string tables in one ``strings.js``, which would otherwise make the
  * chunk shared by every page larger than a file the repository takes; every
- * other chunk is the project's own code and says so in its first line, and
+ * other chunk is the project's own code (the entry chunk also holds Vite's
+ * preload helper) and says so in its banner, and
  * chunk names follow the pages, so a list of them would drift.
  */
 export function modernBuild({ outDir, entry, split = false }) {

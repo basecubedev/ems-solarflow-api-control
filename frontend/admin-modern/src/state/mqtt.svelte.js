@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { SETTLE_MS, freshGroup, groupKey, mappedProposal } from "../lib/mqtt.js";
 import { adminGet, adminSend } from "./auth.svelte.js";

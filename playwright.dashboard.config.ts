@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { defineConfig, devices } from "@playwright/test";
 import { DOCS_SHOT_TIME, DOCS_ZONE } from "./tests/e2e-dashboard/pin-the-day";
 

@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The dashboard shows each device setting as the inverter reports it, and
 offers one only for a device that has it."""

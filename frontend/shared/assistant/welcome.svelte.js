@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { readStored, writeStored } from "../state/prefs.svelte.js";
 import { WELCOME_CHOICES, WELCOME_KEY } from "./assistant.js";

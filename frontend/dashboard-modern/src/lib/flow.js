@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Energy-flow semantics shared with Classic: the 8 W / 3 W activity hysteresis,

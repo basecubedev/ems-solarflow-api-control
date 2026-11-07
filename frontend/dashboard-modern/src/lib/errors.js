@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /** Server error codes that have their own sentence; everything else names its code. */
 export const KNOWN_ERRORS = Object.freeze([

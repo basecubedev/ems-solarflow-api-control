@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 basecubedev -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script module>
   export const manifest = { id: "active-rules", data: ["live.rules"], refresh: "sse", minWidth: 260, states: ["none-active"] };
 </script>

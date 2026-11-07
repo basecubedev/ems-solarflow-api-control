@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:net";
 import { mkdtempSync, mkdirSync, existsSync, rmSync } from "node:fs";

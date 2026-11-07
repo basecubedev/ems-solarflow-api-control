@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """A missing ``acMode`` is unknown, not 0 (K10, owner decision 2026-10-12).
 

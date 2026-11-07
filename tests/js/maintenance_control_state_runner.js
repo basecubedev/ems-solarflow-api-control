@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Runs the real admin.js control-and-safety view against a control summary and
 // prints what it resolved to, so the Maintenance safety statement is tested

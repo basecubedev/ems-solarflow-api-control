@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Guard the audience-split documentation structure.
 
@@ -20,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # One ceiling for the root README, asserted from three directions below. Three
 # separate literals had already drifted apart (110, 110, 130), which means the
 # loosest one was the only rule actually in force.
-README_MAX_LINES = 161
+README_MAX_LINES = 164
 
 
 def read(path):
@@ -69,6 +70,9 @@ def test_readme_is_router_sized():
     # Docker is routed to a copy/paste command that cannot work. It became 161
     # when external devices read over MQTT got their row in the hardware
     # summary: which hardware fits at all is the reader's first routing question.
+    # It became 164 when the README said who stands behind the software: that
+    # Zendure does not, and that help comes from this project's issues, routes a
+    # reader before they install anything.
     lines = read(ROOT / "README.md").splitlines()
     assert len(lines) <= README_MAX_LINES, len(lines)
 

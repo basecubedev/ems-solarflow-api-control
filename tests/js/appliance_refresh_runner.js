@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Drives the real appliance app.js refresh and polling functions, so what the
 // console re-reads after an operation is tested against the shipped code

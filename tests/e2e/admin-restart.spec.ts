@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { test, expect, request, type APIRequestContext } from "@playwright/test";
 import { AdminProcess, authenticate } from "./helpers/admin-process";
 

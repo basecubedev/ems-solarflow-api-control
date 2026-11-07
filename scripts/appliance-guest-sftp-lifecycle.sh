@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # The SSH confinement of the backup account, asked of a real sshd.
 #

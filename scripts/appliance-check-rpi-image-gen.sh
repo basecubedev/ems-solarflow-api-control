@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Check an rpi-image-gen checkout against the pinned contract. Read-only.
 #
@@ -23,7 +24,7 @@ FORMAT=text
 GENERATOR=${EMS_RPI_IMAGE_GEN:-}
 
 usage() {
-    sed -n '3,18p' "$0"
+    awk 'NR == 1 { next } /^#/ { if ($0 !~ /SPDX-/) print; next } { exit }' "$0"
 }
 
 while [ $# -gt 0 ]; do

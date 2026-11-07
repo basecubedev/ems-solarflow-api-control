@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """A device's ``min_soc``/``max_soc`` are validated once, when it is built (K14).
 

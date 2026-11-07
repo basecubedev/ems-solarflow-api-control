@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 basecubedev -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import Icon from "./Icon.svelte";
   /** lang: set when the text is a server sentence in another language than the page. */

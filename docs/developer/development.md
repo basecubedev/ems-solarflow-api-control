@@ -57,10 +57,11 @@ Offline power-control regression tests:
 pytest tests/ -m "simulation and power_control"
 ```
 
-Third-party license inventory:
+Third-party license inventory and per-file licensing:
 
 ```bash
 python tools/check_third_party_licenses.py
+reuse lint
 ```
 
 These tests are deterministic simulated checks for pull requests. They do not
@@ -138,6 +139,13 @@ Update the inventory in the same commit as the dependency change:
 4. For a vendored asset, record its origin, upstream version and SHA-256, and
    add the upstream license text next to the files when the license requires the
    notice to travel with the code (as `dashboard/static/uPlot.LICENSE` does).
+   A prebuilt binary an image ships keeps its upstream license texts in
+   `third_party/<name>/`, which the final stage of its Dockerfile copies to
+   `/usr/share/doc/<name>/`. Its row names the Dockerfile (`Image`), the path
+   it installs (`Installed as`) and every file of that directory (`Notices`).
+   When a Dockerfile moves to another upstream version, refresh those files
+   from that version and their SHA-256 in the provenance table; the tests
+   fail until the recorded version matches the Dockerfile.
 5. Runtime dependencies also need a `Runtime`/`Distributed` review of the
    transitive closure: everything pip installs into the images belongs in the
    transitive table.
@@ -158,6 +166,29 @@ component appears twice in one section, or when a table is missing a required
 column. It runs in the `Repo static checks` job and through
 `tests/test_third_party_licenses.py`. Transitive resolution is deliberately out
 of scope — that table is maintained by hand.
+
+### Copyright and license of every file
+
+The repository follows the [REUSE specification](https://reuse.software/spec-3.3/).
+Every source, script and configuration file the project writes begins with two
+lines in its own comment syntax, after a shebang if it has one:
+
+```python
+# SPDX-FileCopyrightText: 2026 basecubedev
+# SPDX-License-Identifier: AGPL-3.0-or-later
+```
+
+[`REUSE.toml`](../../REUSE.toml) declares the rest instead: files that cannot
+carry a comment (Markdown, JSON, images, the Debian `control` and `conffiles`,
+the release keyring and the rescue password hash), files whose exact bytes are
+the point (`tests/fixtures/`, the signed release evidence in `reports/`), and
+every third-party file, with its upstream holder and license. When a build
+bundles a new package, its holder and license go into the bundle's entry there;
+a test compares those entries with the `licenses.json` the build writes.
+The license texts themselves live in [`LICENSES/`](../../LICENSES/);
+`LICENSES/AGPL-3.0-or-later.txt` is the same text as [`LICENSE`](../../LICENSE).
+A new source file outside those paths without the two lines fails `reuse lint`, which runs in the
+`Repo static checks` job and through `tests/test_reuse_compliance.py`.
 
 Log event checks:
 

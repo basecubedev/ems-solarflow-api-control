@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """A login that cannot load the runtime state says so and tries again instead
 of leaving the tiles locked while the header reads "Write mode"."""

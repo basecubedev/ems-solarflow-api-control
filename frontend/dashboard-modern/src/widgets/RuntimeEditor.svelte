@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 basecubedev -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script module>
   export const manifest = { id: "runtime-editor", data: ["runtime", "auth"], refresh: "on-save", minWidth: 320, states: ["auth-not-configured", "signed-out", "editing"] };
 </script>

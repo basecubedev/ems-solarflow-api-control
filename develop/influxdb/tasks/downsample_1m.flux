@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
+// SPDX-License-Identifier: AGPL-3.0-or-later
 option task = {name: "zendure-downsample-1m", every: 1m}
 
 numeric_fields = [

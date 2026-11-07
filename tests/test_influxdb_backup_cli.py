@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """CLI tests for bundled InfluxDB backup/restore (emsctl wiring).
 

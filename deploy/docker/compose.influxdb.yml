@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Official optional InfluxDB 2.x backend for the EMS Analytics/History feature.
 #
 # InfluxDB is optional: the EMS controller and dashboard run fine without it

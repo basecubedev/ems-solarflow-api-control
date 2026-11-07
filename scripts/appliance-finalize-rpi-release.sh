@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Turn artefacts a builder qualified into a signed release, in a trusted place.
 #
@@ -63,7 +64,7 @@ BUILD_KIT=yes
 # of unreachable urls is worse than none: the appliance would refuse each entry
 # one at a time instead of reporting that no index is configured.
 
-usage() { sed -n '3,40p' "$0"; }
+usage() { awk 'NR == 1 { next } /^#/ { if ($0 !~ /SPDX-/) print; next } { exit }' "$0"; }
 
 fail() {
     echo "appliance-finalize-rpi-release: $1" >&2

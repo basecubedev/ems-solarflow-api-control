@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // One run from a device in an unknown format to the EMS reading it, on a real
 // Mosquitto (tests/e2e-mqtt/harness.py plays a Shelly Gen2 plug on it), taken

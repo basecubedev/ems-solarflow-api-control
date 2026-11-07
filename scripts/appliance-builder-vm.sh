@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Provision a disposable builder VM and build the real appliance images in it.
 #
@@ -41,7 +42,7 @@ BUILD_ID=""
 RELEASE_GATE=0
 PROFILES=()
 
-usage() { sed -n '3,20p' "$0"; }
+usage() { awk 'NR == 1 { next } /^#/ { if ($0 !~ /SPDX-/) print; next } { exit }' "$0"; }
 
 not_run() {
     echo "appliance-builder-vm: $1" >&2

@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # A backup written after the last export run is not readable for the backup
 # account until the recursive ACL pass runs again: a named-user entry on a file

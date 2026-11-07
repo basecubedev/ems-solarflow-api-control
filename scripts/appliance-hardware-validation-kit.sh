@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Assemble the one directory an operator carries to the Raspberry Pi.
 #
@@ -36,7 +37,7 @@ OUTPUT="$ROOT/dist/hardware-validation"
 CHECKLIST="$ROOT/docs/appliance/hardware-validation.md"
 ARGS=""
 
-usage() { sed -n '3,31p' "$0"; }
+usage() { awk 'NR == 1 { next } /^#/ { if ($0 !~ /SPDX-/) print; next } { exit }' "$0"; }
 
 while [ $# -gt 0 ]; do
     case "$1" in

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Light and fan on the inverter that has them, and on no other: the preview
 // scenario's WR1 reports both, WR2 neither. What is checked here is what only a
