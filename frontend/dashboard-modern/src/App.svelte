@@ -18,6 +18,7 @@
   import Logs from "./pages/Logs.svelte";
   import Maintenance from "./pages/Maintenance.svelte";
   import Schedule from "./pages/Schedule.svelte";
+  import About from "../../shared/widgets/About.svelte";
   import { pageSet, pageById } from "./app/pages.js";
   import { nav, router } from "./app/router.svelte.js";
   import { t } from "./i18n/i18n.svelte.js";
@@ -25,7 +26,7 @@
   import { auth, logout } from "./state/auth.svelte.js";
   import { live } from "./state/live.svelte.js";
 
-  const COMPONENTS = { overview: Overview, devices: Devices, consumers: Consumers, energy: Energy, analytics: Analytics, control: Control, schedule: Schedule, diagnose: Diagnose, logs: Logs, maintenance: Maintenance };
+  const COMPONENTS = { overview: Overview, devices: Devices, consumers: Consumers, energy: Energy, analytics: Analytics, control: Control, schedule: Schedule, diagnose: Diagnose, logs: Logs, maintenance: Maintenance, about: About };
   const Page = $derived(COMPONENTS[router.page] || Overview);
 
   provideShell({
@@ -49,6 +50,7 @@
     },
     classic: (pageId) => chooseClassic(pageId ? pageById(pageId).classicView : undefined),
     links: [],
+    about: { notices: [{ name: "uPlot", license: "MIT", file: "/uPlot.LICENSE" }] },
   });
 </script>
 

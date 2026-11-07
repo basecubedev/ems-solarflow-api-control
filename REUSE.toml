@@ -56,6 +56,12 @@ SPDX-FileCopyrightText = "2016 The Inter Project Authors"
 SPDX-License-Identifier = "OFL-1.1"
 
 [[annotations]]
+path = "*/static/modern/Vite.LICENSE"
+precedence = "override"
+SPDX-FileCopyrightText = "2019-present VoidZero Inc. and Vite contributors"
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
 path = "*/static/modern/Lucide.LICENSE"
 precedence = "override"
 SPDX-FileCopyrightText = ["2026 Lucide Icons and Contributors", "2013-present Cole Bemis"]

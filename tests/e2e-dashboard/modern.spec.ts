@@ -1105,3 +1105,23 @@ test.describe("Modern dashboard writes @smoke", () => {
     await expect(page.getByRole("combobox", { name: "Set to", exact: true })).toHaveValue("false");
   });
 });
+
+test.describe("Modern dashboard: About & licenses", () => {
+  test("the page names the license, the community notice and every component it is built from", async ({ page }) => {
+    await openModern(page);
+    await page.getByTestId("nav-about").click();
+    await expect(page).toHaveURL(/#\/about$/);
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("About & licenses");
+    await expect(page.getByTestId("about-license")).toContainText("GNU Affero General Public License");
+    await expect(page.getByTestId("about-license")).toContainText("WITHOUT ANY WARRANTY");
+    await expect(page.getByTestId("about-community")).toContainText("it is not a Zendure product");
+    await expect(page.getByTestId("about-source")).toHaveAttribute("href", /^https:\/\/github\.com\/basecubedev\/ems-solarflow-api-control\/tree\/\S+$/);
+    const notices = page.getByTestId("about-notices");
+    for (const name of ["clsx", "svelte", "Inter", "Lucide", "uPlot"]) {
+      await expect(notices.getByTestId("about-notice").filter({ hasText: name })).toHaveCount(1);
+    }
+    await expect(page.getByText("could not be read")).toHaveCount(0);
+    await notices.getByTestId("about-notice").filter({ hasText: "uPlot" }).click();
+    await expect(notices.locator("details[open] pre")).toContainText("Leon Sorokin");
+  });
+});

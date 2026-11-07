@@ -77,6 +77,7 @@ svg.i.lg { width: 22px; height: 22px; }
   font-size: 13px; background: none; cursor: pointer; width: 100%; text-align: left;
 }
 .ghost-link:hover { color: var(--m-text); border-color: var(--m-line-strong); }
+.ghost-link[aria-current="page"] { color: var(--m-text); border-color: var(--m-line-strong); }
 .version { font-size: 11.5px; color: var(--m-muted-2); padding: 0 2px; }
 
 .main { min-width: 0; display: flex; flex-direction: column; }

@@ -40,6 +40,7 @@
     diagnostics: () => import("./pages/Diagnostics.svelte"),
     system: () => import("./pages/System.svelte"),
     setup: () => import("./pages/Setup.svelte"),
+    about: () => import("../../shared/widgets/About.svelte"),
   };
   const loaded = $state({ overview: Overview });
   const Page = $derived(loaded[router.page] || null);
@@ -145,6 +146,7 @@
     get links() {
       return dashboard ? [{ href: dashboard, icon: "layout-dashboard", label: "nav.dashboard", testid: "open-dashboard" }] : [];
     },
+    about: { notices: [{ name: "Vite", license: "MIT", file: "/Vite.LICENSE" }] },
   });
 </script>
 

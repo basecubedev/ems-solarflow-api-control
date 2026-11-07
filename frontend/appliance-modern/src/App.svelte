@@ -29,11 +29,13 @@
   import { host, ensure, pollWhile, refresh, resetHost, stopPolling } from "./state/host.svelte.js";
   import { actions, forgetPlan } from "./state/actions.svelte.js";
   import { adminLink } from "./lib/links.js";
+  import About from "../../shared/widgets/About.svelte";
+  import { REPOSITORY } from "../../shared/lib/about.js";
   import { attentionBySection, sessionFindings } from "./lib/findings.js";
   import { URGENT_STEPS, assistantMark, assistantSteps, bareAddress, installationRead, markedSteps, opensOnAssistant } from "./lib/assistant.js";
 
   /** The whole console is one bundle: a Manager update replaces every file at once, and a page split across two versions is worse than one more kilobyte. */
-  const PAGES = { overview: Overview, assistant: Assistant, updates: Updates, admin: Admin, network: Network, access: Access, diagnostics: Diagnostics, settings: Settings };
+  const PAGES = { overview: Overview, assistant: Assistant, updates: Updates, admin: Admin, network: Network, access: Access, diagnostics: Diagnostics, settings: Settings, about: About };
   const Page = $derived(PAGES[router.page] || Overview);
 
   let signedIn = false;
@@ -172,6 +174,13 @@
     },
     get links() {
       return admin ? [{ href: admin, icon: "external-link", label: "nav.openAdmin", testid: "open-admin", external: true }] : [];
+    },
+    about: {
+      get version() {
+        return version;
+      },
+      tagPrefix: "appliance-manager-v",
+      links: [{ href: `${REPOSITORY}/releases`, label: "about.imageSources", testid: "about-image-sources" }],
     },
   });
 </script>

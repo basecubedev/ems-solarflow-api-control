@@ -19,6 +19,14 @@ const NOTICES = {
   "Inter.LICENSE": resolve(ROOT, "node_modules/@fontsource-variable/inter/LICENSE"),
   "Lucide.LICENSE": resolve(ROOT, "node_modules/lucide-static/LICENSE"),
 };
+const VITE_LICENSE = resolve(ROOT, "node_modules/vite/LICENSE.md");
+const VITE_HELPER = "vite:preloadError";
+
+/** Vite's own MIT notice, the part of its LICENSE.md that covers Vite rather than what Vite bundles. */
+export function viteNotice(text) {
+  const core = text.split("\n# Licenses of bundled dependencies", 1)[0];
+  return core.replace(/^# Vite core license\n/, "").trim() + "\n";
+}
 
 /**
  * The browser tab's icon: the side menu's mark in the default scheme's
@@ -81,14 +89,18 @@ function iconSprite(appIcons) {
  * The page plugin: fills <!--favicon--> and <!--icons-->, and <!--vendored-->
  * with what the app passes. The font and the icon paths are copied, not
  * bundled, so their licence texts ship beside them as files; Vite's
- * licenses.json covers bundled packages only.
+ * licenses.json covers bundled packages only, and neither the preload helper
+ * Vite writes into a build with page chunks, whose notice ships as Vite.LICENSE.
  */
 export function modernPage({ name, icons, vendored = "" }) {
   return {
     name,
-    generateBundle() {
+    generateBundle(_options, bundle) {
       for (const [fileName, path] of Object.entries(NOTICES)) {
         this.emitFile({ type: "asset", fileName, source: readFileSync(path, "utf8") });
+      }
+      if (Object.values(bundle).some((chunk) => chunk.type === "chunk" && chunk.code.includes(VITE_HELPER))) {
+        this.emitFile({ type: "asset", fileName: "Vite.LICENSE", source: viteNotice(readFileSync(VITE_LICENSE, "utf8")) });
       }
     },
     transformIndexHtml: {

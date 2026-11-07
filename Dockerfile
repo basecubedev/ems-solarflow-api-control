@@ -72,6 +72,7 @@ ENV EMS_GIT_DIRTY=$EMS_GIT_DIRTY
 ENV EMS_BUILD_ID=$EMS_BUILD_ID
 ENV EMS_BUILD_SERIAL=$EMS_BUILD_SERIAL
 ENV EMS_CHANNEL=$EMS_CHANNEL
+RUN python3 -c 'import json, os; json.dump({"version": os.environ["EMS_RELEASE_TAG"], "revision": os.environ["EMS_GIT_COMMIT"], "build_id": os.environ["EMS_BUILD_ID"], "channel": os.environ["EMS_CHANNEL"]}, open("/app/dashboard/static/modern/build.json", "w"))'
 
 # The same OCI identity contract as the paired Admin image. CI and the local
 # Docker contract pass one revision/build/channel/release tuple to both images.

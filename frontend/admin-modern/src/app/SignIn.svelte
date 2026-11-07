@@ -4,6 +4,7 @@
   import BrandMark from "../../../shared/ui/BrandMark.svelte";
   import Icon from "../../../shared/ui/Icon.svelte";
   import Segmented from "../../../shared/ui/Segmented.svelte";
+  import AboutDialog from "../../../shared/widgets/AboutDialog.svelte";
   import { t } from "../i18n/i18n.svelte.js";
   import { prefs, setPref, LANGUAGES, chooseClassic } from "../state/prefs.svelte.js";
   import { auth, createPassword, loadAuth, login, SESSION_ERRORS } from "../state/auth.svelte.js";
@@ -12,6 +13,7 @@
   const languages = LANGUAGES.map((value) => ({ value, label: value.toUpperCase() }));
 
   let password = $state("");
+  let aboutOpen = $state(false);
   let confirm = $state("");
   let error = $state.raw(null);
   let busy = $state(false);
@@ -89,9 +91,12 @@
     <div class="foot">
       <Segmented options={languages} value={prefs.lang} label={t("appearance.language")} onchange={(value) => setPref("lang", value)} />
       <button class="link" type="button" onclick={() => chooseClassic()}><Icon name="arrow-left-right" size="sm" />{t("nav.classic")}</button>
+      <button class="link" type="button" onclick={() => (aboutOpen = true)} data-testid="sign-in-about"><Icon name="info" size="sm" />{t("nav.about")}</button>
     </div>
   </div>
 </main>
+
+<AboutDialog open={aboutOpen} onclose={() => (aboutOpen = false)} />
 
 <style>
   .sign-in { min-height: 100vh; display: grid; place-items: center; padding: var(--s4); }

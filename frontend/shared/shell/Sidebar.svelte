@@ -10,6 +10,7 @@
   let { version = "" } = $props();
   const shell = useShell();
   const { router, href } = shell.nav;
+  const hasAbout = shell.pageSet.pages.some((page) => page.id === "about");
   const groups = shell.pageSet.groups.map((group) => ({
     ...group,
     pages: shell.pageSet.listed.filter((page) => page.group === group.id),
@@ -62,6 +63,11 @@
     <button class="ghost-link" type="button" onclick={() => shell.classic(router.page)} title={t("nav.classicSwitch")} data-testid="switch-classic">
       <Icon name="arrow-left-right" /><span>{t("nav.classic")}</span>
     </button>
+    {#if hasAbout}
+      <a class="ghost-link" href={href("about")} aria-current={router.page === "about" ? "page" : undefined} title={t("nav.about")} data-testid="nav-about">
+        <Icon name="info" /><span>{t("nav.about")}</span>
+      </a>
+    {/if}
     {#if version}<div class="version">{version}</div>{/if}
   </div>
 </aside>

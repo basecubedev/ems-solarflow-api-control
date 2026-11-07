@@ -25,6 +25,7 @@ export const PAGES = Object.freeze([
   { id: "diagnostics", icon: "stethoscope", group: "system", classic: "maintenance-status" },
   { id: "system", icon: "hard-drive", group: "system", classic: "maintenance-status" },
   { id: "setup", icon: "package-plus", group: "system", classic: "setup", hidden: true },
+  { id: "about", icon: "info", group: "system", classic: "maintenance", shortLabel: "nav.about.short", hidden: true },
 ]);
 
 /** The four pages a phone's bar holds until the reader picks their own. */
