@@ -19,6 +19,9 @@ The dashboard, the Admin Console and the Appliance Manager speak
 **English, Deutsch, Nederlands and Français** — pick yours under Appearance at
 the top right, or below the sign-in form.
 
+> [!NOTE]
+> **An independent community project.** EMS SolarFlow is not developed, endorsed or supported by Zendure, and it is not a Zendure product. Zendure, SolarFlow and the other product names mentioned here are trademarks of their respective owners; this project uses them only to say which hardware it works with. For help with this software, open a [GitHub issue](https://github.com/basecubedev/ems-solarflow-api-control/issues), not a ticket with Zendure support.
+
 > [!TIP]
 > **New to EMS SolarFlow?** Start with the [Project Overview](docs/user/project-overview.md), read the docs online at <https://basecubedev.github.io/ems-solarflow-api-control/>, or watch the [videos](docs/user/videos.md) on [YouTube](https://www.youtube.com/channel/UCk7i1JfCVML8hqlvzenCJBg).
 
