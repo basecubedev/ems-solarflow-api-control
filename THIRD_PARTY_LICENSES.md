@@ -307,6 +307,25 @@ image's complete package manifest into the image itself and its digest into the
 build marker, so the exact set of any published image is recoverable from the
 artefact rather than from this table.
 
+Their source is published with the image. After the release gates pass, the
+image workflow reads every installed package and its source package straight
+out of the built image's dpkg database
+(`scripts/appliance_image_sources.py list`). The publish job then fetches each
+source package in exactly that version, verifies every file and packs them
+beside the images into the same release, as
+`ems-solarflow-appliance-<version>-sources-<n>-of-<N>.tar` with a
+`-sources.json` manifest (`collect`). It reads the archive's current index,
+then the `.dsc` in its pool, then snapshot.debian.org, and checks every file
+against the index, the `.dsc` that lists it or snapshot's SHA-1; a `.dsc`
+taken from a pool is trusted as the archive serves it over HTTPS. The sources a
+package was built with (`Built-Using`, `Static-Built-Using`) are collected
+like its own. Two kinds of package have nothing to fetch: Docker's
+(Apache-2.0, whose repository publishes no source), which the manifest names
+with their upstream, and the Appliance Manager, whose source is this
+repository at its release tag. A source that cannot be fetched and verified,
+one without a `.dsc` and a tarball, and a package dpkg holds in a state that is
+neither installed nor removed fail the publish job.
+
 The generator that assembles that root filesystem, `rpi-image-gen`, is listed
 under Vendored Components above.
 

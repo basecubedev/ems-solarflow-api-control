@@ -556,3 +556,43 @@ def test_a_tagged_image_never_carries_a_development_manager(workflow):
 
     assert 'if [ "${GITHUB_REF_TYPE}" = tag ]' in fallback
     assert "exit 1" in fallback
+
+
+def _step_index(workflow, job, name):
+    names = [str(step.get("name", "")) for step in steps(workflow, job)]
+    matches = [index for index, value in enumerate(names) if name in value]
+    assert len(matches) == 1, (job, name, names)
+    return matches[0]
+
+
+def test_each_board_records_the_source_packages_of_its_own_image(workflow):
+    """Read off the built image after the gates passed, and carried to the publish job."""
+
+    record = _step_index(workflow, "image", "Record the source packages")
+    assert record > _step_index(workflow, "image", "Run the release gates")
+    run = steps(workflow, "image")[record]["run"]
+    assert "scripts/appliance_image_sources.py list" in run
+    assert '--output "${APPLIANCE_OUTPUT}/os-sources-${PROFILE}.json"' in run
+    upload = steps(workflow, "image")[_step_index(workflow, "image", "Upload the image")]
+    assert "${{ env.APPLIANCE_OUTPUT }}/os-sources-*.json" in upload["with"]["path"]
+
+
+def test_the_release_carries_the_source_of_every_package_its_images_hold(workflow):
+    """Collected into the release directory before SHA256SUMS is written over it."""
+
+    collect = _step_index(workflow, "publish", "Collect the source code")
+    layout = _step_index(workflow, "publish", "Lay out the files")
+    assert collect < layout
+    assert "sha256sum -- *" in steps(workflow, "publish")[layout]["run"]
+    run = steps(workflow, "publish")[collect]["run"]
+    assert "scripts/appliance_image_sources.py collect" in run
+    assert 'release="${RUNNER_TEMP}/release"' in run and '--output "${release}"' in run
+    assert "${PROFILES}" in run and 'os-sources-${board}.json' in run
+    assert "recorded no source request" in run
+    assert workflow["jobs"]["publish"]["timeout-minutes"] >= 60
+
+
+def test_the_release_notes_say_where_the_source_is(workflow):
+    run = run_blocks(workflow, "publish")
+    assert "-sources-<n>-of-<N>.tar" in run
+    assert "-sources.json" in run

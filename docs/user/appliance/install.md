@@ -90,6 +90,12 @@ one is how you check the first arrived intact. The download is about 240 MB and
 expands to 8.3 GiB on the card. Both Imager and balenaEtcher expand it while
 they write, so **do not unpack it yourself.**
 
+The same release also carries the source code of every package in the images,
+as `ems-solarflow-appliance-<version>-sources-<n>-of-<N>.tar` with a
+`-sources.json` that lists what is in which part. You do not need them to
+install anything; they are there because the images contain open-source
+software whose licenses require its source to be offered beside it.
+
 Not sure which board you have? The Pi 5 has a fan connector next to the USB-C
 socket and two camera ports; a Pi 3 has a full-size HDMI socket and is powered
 over micro-USB rather than USB-C. If in doubt, the model is printed on the board
