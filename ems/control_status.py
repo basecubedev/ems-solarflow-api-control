@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from ems import config as cfg
+from ems.device_fingerprints import loaded_devices_record
 from ems import device_settings
 from ems.models import battery_presence
 from ems.logging_utils import log_event
@@ -108,7 +109,8 @@ def _device_entry(controller, dev, explanation):
 def build_control_status(controller, *, now, now_monotonic):
     """Project what the controller holds after a cycle into the snapshot shape.
 
-    ``grid_samples`` is left empty; the writer that keeps them fills it in.
+    ``grid_samples`` is left empty, and ``started_at`` and ``loaded_devices``
+    out; the writer that keeps them fills them in.
     """
 
     explanation = controller.last_control_explanation
@@ -144,11 +146,21 @@ def _write_atomically(path, payload):
 
 
 class ControlStatusWriter:
-    """Keeps the recent grid samples and writes the snapshot after each cycle."""
+    """Keeps the recent grid samples and writes the snapshot after each cycle.
 
-    def __init__(self, path, *, window=GRID_SAMPLE_WINDOW):
+    ``started_at`` is when this writer, made once per process, began, so a
+    reader tells one EMS process from the next. ``loaded_devices`` are the
+    fingerprints of the device entries this EMS read when it started
+    (config.LOADED_DEVICES), written with every snapshot as
+    ems/device_fingerprints.py records them, so a reader can tell which saved
+    entries are in effect; without them the snapshot names none.
+    """
+
+    def __init__(self, path, *, window=GRID_SAMPLE_WINDOW, loaded_devices=None, started_at=None):
         self.path = Path(path)
         self.grid_samples = deque(maxlen=window)
+        self.started_at = _iso(time.time() if started_at is None else started_at)
+        self.loaded_devices = None if loaded_devices is None else loaded_devices_record(loaded_devices)
         self.failing = False
 
     def _record_sample(self, status):
@@ -178,6 +190,9 @@ class ControlStatusWriter:
                 status["schedule"] = scheduler.status(datetime.fromtimestamp(now, timezone.utc))
             self._record_sample(status)
             status["grid_samples"] = list(self.grid_samples)
+            status["started_at"] = self.started_at
+            if self.loaded_devices is not None:
+                status["loaded_devices"] = self.loaded_devices
             _write_atomically(self.path, status)
         except Exception as exc:
             # A projection for diagnostics must never stop the loop that

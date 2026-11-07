@@ -1164,6 +1164,7 @@ _SECTIONS = [
                 "number",
                 level="advanced",
                 minimum=0,
+                maximum=100,
                 risk="control_stability",
             ),
             _field(

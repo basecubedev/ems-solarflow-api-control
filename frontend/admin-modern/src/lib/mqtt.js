@@ -216,7 +216,7 @@ export const SETTLE_MS = 3000;
 export function freshGroup(groups, { before = [], since = 0, polledAt = 0 } = {}) {
   return (
     (groups || []).find((group) => {
-      if (!group.mappable || before.includes(`${group.label}/${group.key}`)) return false;
+      if (!group.mappable || before.includes(groupKey(group))) return false;
       const seen = (group.topics || []).map((topic) => polledAt - 1000 * Number(topic.first_seen_seconds));
       return seen.length > 0 && seen.every((at) => Number.isFinite(at) && at >= since);
     }) || null
@@ -243,6 +243,17 @@ export function mapsTo(id) {
     (deviceKind(device) === "external_mqtt" || device?.type === "external_mqtt") && (device?.mqtt?.device_id ?? device?.entry?.mqtt?.device_id) === id;
 }
 
+/**
+ * Where in ``devices`` the EMS device a mapping publishes as ``id`` is, -1 for
+ * none: of entries sharing the id, the first switched on, as EMS reads one
+ * switched off not at all; a draft's own switch counts before its saved one.
+ */
+export function mappedIndex(devices, id) {
+  const list = devices || [];
+  const switchedOn = list.findIndex((device) => mapsTo(id)(device) && (device?.enabled ?? device?.entry?.enabled ?? true) === true);
+  return switchedOn >= 0 ? switchedOn : list.findIndex(mapsTo(id));
+}
+
 /** The EMS name a mapped device gets: its label where no other device has it, else ``fallback``, by default the next free INV_ name. */
 export function emsDeviceName(label, devices, fallback = nextInverterName(devices)) {
   const name = String(label ?? "").trim();
@@ -251,12 +262,82 @@ export function emsDeviceName(label, devices, fallback = nextInverterName(device
 }
 
 /**
+ * What a saved mapping change did to its EMS device, each said by
+ * mqtt.saved.*.<kind>: ``again`` maps one again that the running EMS still
+ * has, and ``changed`` gives one back the name the running EMS reads it under
+ * while other saved changes to it wait.
+ */
+export const SAVED_KINDS = Object.freeze(["added", "moved", "renamed", "removed", "again", "changed"]);
+
+/**
+ * Whether the running EMS reads a mapped device as saved, and how a saved
+ * entry differs from what it read, as the server tells them in the mapping
+ * view's ``ems_devices`` (admin/ems_device_states.py); each change is said by
+ * mqtt.restart.item.<change>.
+ */
+export const EMS_DEVICE_STATES = Object.freeze(["running", "off", "waiting", "leaving"]);
+export const EMS_CHANGES = Object.freeze(["added", "renamed", "changed", "removed"]);
+
+/** Why the server cannot tell what the running EMS reads, each said by mqtt.saved.silent.<reason>: none runs, or it is of another release. */
+export const EMS_UNKNOWN_REASONS = Object.freeze(["stopped", "unnamed"]);
+
+/** How long after a restart a new EMS may take to report what it reads before its silence is said. */
+export const EMS_REPORT_GRACE_MS = 120_000;
+
+/** The mapped devices the running EMS has yet to read as saved: ``[{ id, state, change, name, ran }]``, none while that cannot be told. */
+export function emsWaiting(emsDevices) {
+  if (!emsDevices?.known) return [];
+  return Object.entries(emsDevices.devices || {})
+    .filter(([, item]) => item?.state === "waiting" || item?.state === "leaving")
+    .map(([id, item]) => ({ id, ...item }));
+}
+
+/**
+ * Whether the running EMS reads mapped device ``id`` as saved, or, ``removing``,
+ * no longer has it or reads what is left under its id as saved; ``null`` while
+ * that cannot be told.
+ */
+export function emsReads(emsDevices, id, removing = false) {
+  if (!emsDevices?.known) return null;
+  const item = emsDevices.devices?.[id];
+  const asSaved = item?.state === "running" || item?.state === "off";
+  return removing ? !item || asSaved : asSaved;
+}
+
+/**
+ * What a saved step says the change did, as the running EMS will see it: as
+ * asked, ``added`` for any change to a device that EMS never had, ``again``
+ * for an added device it still has from before it was removed, or ``changed``
+ * for a new name that is the one EMS reads it under, other changes waiting.
+ */
+export function savedKind(kind, item) {
+  if (item?.change === "added" && kind !== "removed") return "added";
+  if (kind === "renamed" && item?.change === "changed") return "changed";
+  return kind === "added" && item?.ran ? "again" : kind;
+}
+
+/**
+ * Why a restart that ended at ``restartedAt`` is not followed by the restarted
+ * EMS saying what it reads, as a server answer ``seen`` asked for after it says
+ * at ``now``; ``before`` is the start of the EMS that ran when the restart
+ * began. A new EMS that cannot tell this console is ``unnamed`` at once; when
+ * no new one has reported by EMS_REPORT_GRACE_MS, the answer's own reason, or
+ * ``stopped``. Else null.
+ */
+export function emsSilence(seen, restartedAt, now, before = null) {
+  if (!restartedAt || !(seen?.at > restartedAt)) return null;
+  if (seen.startedAt && seen.startedAt !== before) return seen.known ? null : "unnamed";
+  if (now - restartedAt <= EMS_REPORT_GRACE_MS) return null;
+  return seen.reason === "unnamed" ? "unnamed" : "stopped";
+}
+
+/**
  * Where a mapped device stands in an EMS device list: ``null`` when it is not
  * there, ``"there"`` on its mapping's connection, ``"elsewhere"`` when the EMS
  * reads the same id from another broker.
  */
 export function emsPlace(devices, id, connection) {
-  const device = (devices || []).find(mapsTo(id));
+  const device = (devices || [])[mappedIndex(devices, id)];
   if (!device) return null;
   return connection && device.catalog_connection_id && device.catalog_connection_id !== connection ? "elsewhere" : "there";
 }
@@ -278,7 +359,7 @@ export function withMappedDevice(devices, proposal, label) {
 /** The device list with mapped device ``id`` named ``label``; ``null`` when that changes nothing or another device has the name. */
 export function withRenamedDevice(devices, id, label) {
   const list = devices || [];
-  const index = list.findIndex(mapsTo(id));
+  const index = mappedIndex(list, id);
   const name = String(label ?? "").trim();
   if (index < 0 || !name || list[index].name === name) return null;
   const taken = list.some((device, position) => position !== index && String(device?.name ?? "").trim().toLowerCase() === name.toLowerCase());
@@ -362,6 +443,11 @@ export function deviceFromAnswers({ kind, name, brokerRef, power, solar = null, 
   if (kind === "hybrid" || kind === "ac_battery") add("batteryPower", battery);
   if (kind === "hybrid" || kind === "ac_battery") add("batterySoc", soc);
   return entry;
+}
+
+/** A live-topic group's identity: one key under two labels is two devices. */
+export function groupKey(group) {
+  return `${group.label}/${group.key}`;
 }
 
 /** Every number a live-topic group carries, with what the mapping helpers need to know about it. */

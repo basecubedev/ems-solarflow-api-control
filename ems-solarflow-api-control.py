@@ -539,7 +539,8 @@ def main():
         scheduler=scheduler,
     )
     control_status = ControlStatusWriter(
-        paths.resolve_control_status_path(cfg.runtime_state_path())
+        paths.resolve_control_status_path(cfg.runtime_state_path()),
+        loaded_devices=cfg.LOADED_DEVICES,
     )
 
     stopped_by = install_stop_signal_handlers()

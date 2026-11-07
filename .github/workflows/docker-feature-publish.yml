@@ -169,7 +169,7 @@ jobs:
       - name: Install packaged browser dependencies
         run: |
           npm ci
-          npx playwright install --with-deps chromium
+          scripts/ci-install-playwright-browsers.sh chromium
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
       # Prebuild with the Admin feature cache, then let run-packaged-admin.sh
@@ -765,7 +765,7 @@ jobs:
       - name: Install remote browser dependencies
         run: |
           npm ci
-          npx playwright install --with-deps chromium
+          scripts/ci-install-playwright-browsers.sh chromium
       - name: Write production-format canary catalogue
         env:
           TAG: ${{ needs.publish-feature-ghcr.outputs.immutable_tag }}
@@ -932,7 +932,7 @@ jobs:
           PUBLIC_CATALOGUE_READ_ONLY: "1"
         run: |
           npm ci
-          npx playwright install --with-deps chromium
+          scripts/ci-install-playwright-browsers.sh chromium
           npm run test:e2e:system-build-remote
       - name: Remove failed public catalogue entry
         if: ${{ failure() }}

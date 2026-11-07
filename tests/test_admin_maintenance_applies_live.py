@@ -12,10 +12,15 @@ admin.config_runtime_overlap). This asks that question of the owner rather than
 keeping a second copy of the answer.
 """
 
+import json
+import os
+from types import SimpleNamespace
+
 import pytest
 
-from admin.config_runtime_overlap import applies_live
-from admin.maintenance_config import summarize_config_changes
+from admin.config_runtime_overlap import applies_live, live_device_paths, resolve_runtime_state_path, runtime_device_entries
+from admin.install_context import detect_install_context
+from admin.maintenance_config import load_maintenance_config, preview_maintenance_config, summarize_config_changes
 
 pytestmark = [
     pytest.mark.admin,
@@ -70,6 +75,133 @@ def test_everything_else_waits_for_a_restart(path):
     """dry_run and the write gates are the ones this must never get wrong."""
 
     assert applies_live(path) is False
+
+
+def _raised(config, **values):
+    import copy
+
+    merged = copy.deepcopy(config)
+    for device in merged["devices"]:
+        device.update(values)
+    return merged
+
+
+def test_a_device_key_is_live_only_for_a_device_that_owns_a_runtime_state_entry():
+    """runtime-state holds what the mirror can write: a device EMS built to control, switched off since or not."""
+
+    config = {"devices": [
+        {"name": "WR1", "ip": "192.0.2.1", "max_power": 800},
+        {"name": "Balkon", "type": "external_mqtt", "max_power": 800, "mqtt": {"broker_ref": "ems-mqtt", "device_id": "balkon"}},
+        {"name": "WR2", "ip": "192.0.2.2", "enabled": True, "max_power": 800},
+        {"name": "WR1 Nord", "ip": "192.0.2.3", "max_power": 800},
+    ]}
+    runtime = {"WR1": {"enabled": True}, "WR2": {"enabled": False}}
+
+    assert live_device_paths(config, _raised(config, max_power=600), runtime) == {"devices[0].max_power", "devices[2].max_power"}
+    assert live_device_paths(config, _raised(config, max_power=600), {}) == frozenset()
+    assert applies_live("devices[0].enabled", config) is True
+
+
+def test_a_device_key_is_live_for_the_entry_its_serial_owns_under_any_name():
+    """The running EMS reads a renamed device under its old name, and a device that took another's name not under that name."""
+
+    previous = {"devices": [
+        {"name": "WR1", "ip": "192.0.2.1", "sn": "AAA", "max_power": 800},
+        {"name": "WR2", "ip": "192.0.2.2", "sn": "BBB", "max_power": 800},
+        {"name": "WR3", "ip": "192.0.2.3", "sn": "CCC", "max_power": 800},
+    ]}
+    merged = _raised(previous, max_power=600)
+    merged["devices"][0]["name"], merged["devices"][1]["name"] = "WR2", "WRX"
+    runtime = {"WR1": {"identity": "AAA"}, "WR2": {"identity": "BBB"}, "WR3": {"identity": "ZZZ"}}
+
+    assert live_device_paths(previous, merged, runtime) == {"devices[0].max_power", "devices[1].max_power"}
+
+
+def test_only_the_entry_that_speaks_for_a_device_is_live():
+    """Never a switched-off duplicate or an entry with two serials; of two switched-off entries, the first."""
+
+    config = {"devices": [
+        {"name": "WR1", "ip": "192.0.2.1", "sn": "AAA", "max_power": 800},
+        {"name": "WR1 spare", "ip": "192.0.2.2", "sn": "AAA", "enabled": False, "max_power": 800},
+        {"name": "WR2", "ip": "192.0.2.3", "sn": "BBB", "serial_number": "CCC", "max_power": 800},
+        {"name": "WR3", "ip": "192.0.2.4", "sn": "DDD", "enabled": False, "max_power": 800},
+        {"name": "WR3 spare", "ip": "192.0.2.5", "sn": "DDD", "enabled": False, "max_power": 800},
+        {"name": "WR4", "ip": "192.0.2.6", "sn": "EEE", "enabled": False, "max_power": 800},
+    ]}
+    runtime = {"WR1": {"identity": "AAA"}, "WR2": {"identity": "BBB"}, "WR3": {"identity": "DDD"}, "WR4": {"identity": "EEE"}}
+
+    assert live_device_paths(config, _raised(config, max_power=600), runtime) == {"devices[0].max_power", "devices[3].max_power", "devices[5].max_power"}
+
+
+def test_a_key_removed_from_a_device_is_live_as_its_default():
+    before = {"devices": [{"name": "WR1", "ip": "192.0.2.1", "sn": "AAA", "max_power": 1200}]}
+    after = {"devices": [{"name": "WR1", "ip": "192.0.2.1", "sn": "AAA"}]}
+
+    diff = summarize_config_changes(before, after, {"WR1": {"identity": "AAA"}})
+
+    assert [(entry["path"], entry["applies_live"]) for entry in diff["removed"]] == [("devices[0].max_power", True)]
+
+
+def test_a_device_row_is_live_exactly_when_the_mirror_writes_it(tmp_path):
+    """Swap two names, switch one off, add a duplicate, and give the other a factor of 0, which the EMS reads as 1."""
+
+    from admin.runtime_convergence import mirror_changed_keys_to_runtime
+
+    before = {"devices": [
+        {"name": "WR1", "ip": "192.0.2.1", "sn": "AAA", "enabled": True, "pv_priority_factor": 1.0},
+        {"name": "WR2", "ip": "192.0.2.2", "sn": "BBB", "enabled": True, "pv_priority_factor": 1.0},
+    ]}
+    after = _raised(before)
+    after["devices"][0]["name"], after["devices"][1]["name"] = "WR2", "WR1"
+    after["devices"][0]["enabled"] = False
+    after["devices"][1]["pv_priority_factor"] = 0
+    after["devices"].append({"name": "WR1 spare", "ip": "192.0.2.3", "sn": "AAA", "enabled": False})
+    context = detect_install_context(base_dir=str(tmp_path))
+    runtime_path = resolve_runtime_state_path(context, after)
+    os.makedirs(os.path.dirname(runtime_path), exist_ok=True)
+    with open(runtime_path, "w", encoding="utf-8") as handle:
+        json.dump({"devices": {
+            "WR1": {"identity": "AAA", "enabled": True, "pv_priority_factor": 1.0},
+            "WR2": {"identity": "BBB", "enabled": True, "pv_priority_factor": 1.0},
+        }}, handle)
+
+    diff = summarize_config_changes(before, after, runtime_device_entries(context, after))
+    written = mirror_changed_keys_to_runtime(context, previous=before, merged=after)
+
+    marked = {entry["path"] for bucket in ("changes", "added") for entry in diff[bucket] if entry["applies_live"]}
+    assert marked == set(written["applied"]) == {"devices[0].enabled"}
+    assert written["skipped"] == []
+
+
+def test_the_change_preview_asks_the_runtime_state_file_of_the_install(tmp_path):
+    current = {
+        "system": {"max_total_power": 800},
+        "grid_meter": {"type": "shelly", "ip": "192.0.2.9"},
+        "devices": [
+            {"name": "WR1", "ip": "192.0.2.1", "sn": "AAA", "enabled": False},
+            {"name": "WR2", "ip": "192.0.2.2", "sn": "BBB", "enabled": False},
+            {"name": "WR3", "ip": "192.0.2.3", "sn": "CCC", "pv_priority_factor": 2.0},
+        ],
+    }
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.json").write_text(json.dumps(current), encoding="utf-8")
+    context = detect_install_context(base_dir=str(tmp_path))
+    runtime_path = resolve_runtime_state_path(context, current)
+    os.makedirs(os.path.dirname(runtime_path), exist_ok=True)
+    with open(runtime_path, "w", encoding="utf-8") as handle:
+        json.dump({"devices": {"WR1": {"enabled": False}, "WR3": {"enabled": True}}}, handle)
+    draft = load_maintenance_config(base_dir=str(tmp_path))["draft"]
+    for device in draft["devices"]:
+        device["enabled"] = True
+    draft["devices"][2]["removed"] = True
+
+    diff = preview_maintenance_config(draft, base_dir=str(tmp_path))["diff"]
+    marked = {entry["path"]: entry["applies_live"] for bucket in ("changes", "added", "removed") for entry in diff[bucket]}
+
+    assert set(runtime_device_entries(context, current)) == {"WR1", "WR3"}
+    assert (marked["devices[0].enabled"], marked["devices[1].enabled"]) == (True, False)
+    assert marked["devices[2].pv_priority_factor"] is False
+    assert runtime_device_entries(SimpleNamespace(install_root=tmp_path / "elsewhere"), current) == {}
 
 
 def test_the_answer_comes_from_the_whitelist_and_not_from_a_copy():

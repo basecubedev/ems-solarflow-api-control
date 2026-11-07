@@ -18,6 +18,7 @@ from admin.mqtt_broker import BuiltinBroker
 from admin.mqtt_live_topics import LiveTopicSessions
 from admin.mqtt_mapping_brokers import MappingBrokers
 from admin.server import ScanRegistry, create_server
+from admin.test_support import write_started_ems_snapshot
 from ems import paths
 from tests.admin_auth_helpers import authenticate, raw_request, request
 from tests.test_admin_mqtt_broker import FakeCompose
@@ -546,6 +547,26 @@ def test_the_mapping_view_names_the_connection_its_device_is_read_on(server):
 
     assert connections == {"balkon": proposal["catalog_connection_id"]}
     assert entry["catalog_connection_id"] == connections["balkon"]
+
+
+def test_the_mapping_view_says_whether_the_running_ems_reads_each_mapped_device(server):
+    base, _compose, root = server
+    _write_config(root)
+    _post(base, "/api/discovery/mqtt-broker/enable", {"confirm": True})
+    _map(base, "ems-mqtt")
+    (proposal,) = _mapped_proposals(base)
+    view = functools.partial(request, f"{base}/api/discovery/mqtt-mapping")
+
+    assert view()[2]["ems_devices"] == {"known": False, "reason": "stopped", "started_at": None, "devices": {}}
+    write_started_ems_snapshot()
+    _adopt(base, proposal)
+    waiting = view()[2]["ems_devices"]
+    write_started_ems_snapshot()
+    running = view()[2]["ems_devices"]
+
+    assert waiting["known"] is True
+    assert (waiting["devices"]["balkon"]["state"], waiting["devices"]["balkon"]["change"]) == ("waiting", "added")
+    assert (running["devices"]["balkon"]["state"], running["devices"]["balkon"]["change"]) == ("running", None)
 
 
 @pytest.mark.parametrize("name", ["localhost", "host.docker.internal", "ems-mqtt-broker"])

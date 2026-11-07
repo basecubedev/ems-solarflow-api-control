@@ -81,6 +81,13 @@ def test_dockerfile_copies_shared_device_identity_and_status_sanitizer():
 
 
 
+def test_dockerfile_copies_the_device_fingerprints_the_ems_and_the_admin_share():
+    """The Admin compares the saved devices with the ones the running EMS read, by the EMS's own fingerprints."""
+
+    copies = dict((dest, src) for src, dest in _dockerfile_app_copies())
+    assert "ems/device_fingerprints.py" in copies
+
+
 def test_dockerfile_copies_the_e3dc_modbus_reader():
     """The network scan reads an E3/DC's magic word with the EMS's own client."""
 

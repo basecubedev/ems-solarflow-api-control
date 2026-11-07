@@ -212,6 +212,7 @@ details.more > .body { margin-top: var(--s3); }
 .note { display: flex; gap: 8px; align-items: flex-start; color: var(--m-muted); font-size: 12px; margin-top: var(--s3); }
 .note svg.i { width: 14px; height: 14px; margin-top: 1px; }
 .note.warn svg.i { color: var(--m-warn); }
+.note.ok svg.i { color: var(--m-ok); }
 .empty { display: flex; gap: var(--s3); align-items: center; color: var(--m-muted); padding: var(--s4); border: 1px dashed var(--m-line-strong); border-radius: var(--m-radius-inner); }
 .empty.error { color: var(--m-text); border-color: color-mix(in srgb, var(--m-fault) 45%, transparent); }
 .skeleton { border-radius: var(--m-radius-inner); background: linear-gradient(90deg, var(--m-surface-2), var(--m-surface-3), var(--m-surface-2)); background-size: 200% 100%; min-height: 80px; }

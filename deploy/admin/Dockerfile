@@ -87,6 +87,7 @@ COPY ems/build_info.py ./ems/build_info.py
 COPY ems/diagnostics.py ./ems/diagnostics.py
 # The schema of the live control snapshot diagnose reads; it imports no controller.
 COPY ems/control_status.py ./ems/control_status.py
+COPY ems/device_fingerprints.py ./ems/device_fingerprints.py
 COPY ems/health.py ./ems/health.py
 COPY ems/clients.py ./ems/clients.py
 COPY ems/models.py ./ems/models.py

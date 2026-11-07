@@ -243,6 +243,30 @@ def apply_device_update(
     return {"device": device_name, "state": device}
 
 
+def apply_configured_device_update(
+    runtime_state, name, identity, payload, validation_context=None, *, source
+):
+    """apply_device_update for a device as config names it, by name and serial.
+
+    The runtime entry is the one the device owns by the EMS's start rule, found
+    under the file lock, so a rename or a name swap that the running EMS has not
+    loaded yet still reaches the device it means. The values are validated
+    against the config's device, whose name the validation context carries.
+    """
+
+    values = validate_device_values(name, payload, validation_context)
+    if "runtime_role" in values:
+        values["runtime_role_reason"] = source
+    try:
+        entry_name, device = runtime_state.update_configured_device(name, identity, values)
+    except KeyError as exc:
+        raise RuntimeWriteError(str(exc).strip("'")) from exc
+    except ValueError as exc:
+        raise RuntimeWriteError(str(exc)) from exc
+    _log_update(source, "device", values, device=entry_name)
+    return {"device": entry_name, "state": device}
+
+
 def _log_update(source, scope, values, device=None):
     where = {"device": device} if device else {}
     log_event(
@@ -328,6 +352,7 @@ def ac_role_supported(device_name, validation_context=None):
 
 
 def build_validation_context(config=None, runtime_state=None):
+    from ems.config import default_runtime_config, device_power_ceiling
     from ems.zendure_mqtt.config_entries import is_mqtt_telemetry_device_config
 
     config = config if isinstance(config, dict) else {}
@@ -364,7 +389,7 @@ def build_validation_context(config=None, runtime_state=None):
 
     max_device_fallback = _safe_int(
         system.get("max_device_power"),
-        GENERIC_MAX_POWER_W,
+        default_runtime_config()["system"]["max_device_power"],
         minimum=0,
     )
     for device in devices:
@@ -372,7 +397,7 @@ def build_validation_context(config=None, runtime_state=None):
             continue
         name = device["name"]
         device_limits[name] = _safe_int(
-            device.get("max_power", max_device_fallback),
+            device_power_ceiling(device.get("max_power", max_device_fallback), max_device_fallback),
             max_device_fallback,
             minimum=0,
         )

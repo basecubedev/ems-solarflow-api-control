@@ -80,7 +80,12 @@ is in order**, *One thing needs your attention*, *2 things to note* — with the
 EMS line under it (*EMS is running · v0.8.15 · started 6 hours ago*), the
 refresh button and **Open the dashboard**. Below the verdict, when there is
 something to report, the findings, worst first, each with what to do and the
-button that leads there. Then:
+button that leads there. *Saved settings are newer than the running EMS*
+carries **Restart EMS now** itself: it asks first and restarts EMS right there,
+with **Follow it in Services** for the details. While the container setup
+cannot restart anything, the button stays off and says why, as on Services. A
+restart that fails says why and is offered again; once EMS has read the file,
+the finding goes. Then:
 
 - four tiles — **EMS**, **Analytics database**, **Control** and **Last backup**
   — each leading to its page;

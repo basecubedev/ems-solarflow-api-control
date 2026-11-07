@@ -31,7 +31,8 @@ export const SEVERITY_ICONS = Object.freeze({ error: "circle-x", warning: "trian
 
 /**
  * What the reader can do about each finding. "page" opens a page of this
- * console, "refresh" reads the overview again.
+ * console, "refresh" reads the overview again, "restart" restarts EMS where
+ * the finding stands, after asking.
  */
 export const FINDINGS = Object.freeze({
   docker_unavailable: [{ kind: "refresh", label: "health.action.recheck" }],
@@ -43,7 +44,7 @@ export const FINDINGS = Object.freeze({
   ems_missing: [{ kind: "page", target: "updates", label: "health.action.updates" }],
   ems_stopped: [{ kind: "page", target: "services", label: "health.action.services" }],
   installation_warning: [{ kind: "page", target: "diagnostics", label: "health.action.diagnostics" }],
-  settings_await_restart: [{ kind: "page", target: "services", label: "health.action.restart" }],
+  settings_await_restart: [{ kind: "restart", label: "settings.edit.restart" }],
   config_unreadable: [{ kind: "page", target: "settings", label: "health.action.settings" }],
   ems_safe_mode: [{ kind: "page", target: "settings", label: "health.action.settings" }],
   ems_image_unverifiable: [{ kind: "page", target: "updates", label: "health.action.updates" }],

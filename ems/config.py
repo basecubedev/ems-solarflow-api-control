@@ -11,6 +11,7 @@ import stat
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from ems.device_fingerprints import device_fingerprints
 from ems.logging_utils import log_event
 from ems.paths import resolve_config_path, resolve_template_path
 from ems.read_only_devices import E3DC_MODBUS_DEVICE_TYPE, is_read_only_device_config
@@ -1767,6 +1768,7 @@ def perform_startup_config_upgrade(
 ARGS = None
 BASE_DIR = None
 CONFIG = None
+LOADED_DEVICES = []
 SYSTEM_ENABLED = True
 MAX_TOTAL_POWER = 0
 MAX_DEVICE_POWER = 0
@@ -1839,6 +1841,15 @@ GRID_METER_CONFIG = {
 
 
 def load_config(args=None, base_dir=None):
+    """Read config.json once for this process and keep what it held for each device.
+
+    ``LOADED_DEVICES`` keeps the fingerprints (ems/device_fingerprints.py) of
+    the device entries as the file holds them after the startup upgrade, so the
+    control snapshot can say which entries this EMS runs.
+    """
+
+    global LOADED_DEVICES
+    LOADED_DEVICES = []
     args = args or ARGS
     base_dir = base_dir or BASE_DIR or os.getcwd()
     path = str(resolve_config_path(args.config, base_dir=base_dir))
@@ -1854,6 +1865,7 @@ def load_config(args=None, base_dir=None):
         sys.exit(1)
 
     raw_config = perform_startup_config_upgrade(raw_config, path, base_dir)
+    LOADED_DEVICES = device_fingerprints(raw_config)
     runtime_config = apply_runtime_config_defaults(raw_config)
     return apply_template_placeholder_safety(
         runtime_config,
@@ -2952,21 +2964,22 @@ def safe_bool(value, default=False):
     return default
 
 
-def device_power_ceiling(value):
-    """A device's own watt ceiling, or ``MAX_DEVICE_POWER`` when it has none.
+def device_power_ceiling(value, fallback=None):
+    """A device's own watt ceiling, or ``fallback`` (``MAX_DEVICE_POWER``) when it has none.
 
     Only a finite positive number is a ceiling; anything else would disable
     the per-device backstop instead of setting one.
     """
 
+    fallback = MAX_DEVICE_POWER if fallback is None else fallback
     if isinstance(value, bool):
-        return MAX_DEVICE_POWER
+        return fallback
     try:
         number = float(value)
     except (TypeError, ValueError, OverflowError):
-        return MAX_DEVICE_POWER
+        return fallback
     if not math.isfinite(number) or number <= 0:
-        return MAX_DEVICE_POWER
+        return fallback
     return int(number) if number.is_integer() else number
 
 

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from admin.ems_device_states import EMS_DEVICE_CHANGES, EMS_DEVICE_STATES, EMS_UNKNOWN_REASONS
 from admin.mqtt_broker import ISSUE_CODES as BROKER_CODES
 from admin.mqtt_live_topics import LABELS
 from admin.mqtt_mapping_brokers import ACCESS_STATES
@@ -51,6 +52,9 @@ def _list(name):
         ("BROKER_ACCESS", ACCESS_STATES),
         ("BROKER_CHOICE_ERRORS", BROKER_CHOICE_CODES),
         ("MAPPING_EDITOR_ISSUES", MAPPING_EDITOR_CODES),
+        ("EMS_DEVICE_STATES", EMS_DEVICE_STATES),
+        ("EMS_CHANGES", EMS_DEVICE_CHANGES),
+        ("EMS_UNKNOWN_REASONS", EMS_UNKNOWN_REASONS),
     ],
 )
 def test_each_list_is_the_servers(name, server):

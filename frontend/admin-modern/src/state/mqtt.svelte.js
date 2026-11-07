@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { SETTLE_MS, freshGroup, mappedProposal } from "../lib/mqtt.js";
+import { SETTLE_MS, freshGroup, groupKey, mappedProposal } from "../lib/mqtt.js";
 import { adminGet, adminSend } from "./auth.svelte.js";
+import { clockPast } from "./system.svelte.js";
 
 const BROKER = "/api/discovery/mqtt-broker";
 const MAPPING = "/api/discovery/mqtt-mapping";
@@ -25,6 +26,7 @@ class Mqtt {
   waiting = $state.raw(null);
   topicsAt = $state(0);
   setup = $state.raw(null);
+  mappingAt = $state(0);
 }
 
 export const mqtt = new Mqtt();
@@ -67,14 +69,26 @@ export async function loadBroker() {
 
 let mappingReads = 0;
 
-/** The mapping and its service's status. Only the newest read lands, so a slow poll never puts back a document an apply replaced. */
-export async function loadMapping() {
+/**
+ * The mapping and its service's status, read once this browser's clock has
+ * moved past ``since``. Only the newest read lands, so a slow poll never puts
+ * back a document an apply replaced; ``mqtt.mappingAt`` is when the view kept
+ * was asked for. Answers what this read got, or null.
+ */
+export async function loadMapping(since = 0) {
+  await clockPast(since);
   const read = ++mappingReads;
+  const asked = Date.now();
   try {
     const answer = await adminGet(MAPPING);
-    if (read === mappingReads) mqtt.mapping = answer;
+    if (read === mappingReads) {
+      mqtt.mapping = answer;
+      mqtt.mappingAt = asked;
+    }
+    return answer;
   } catch (error) {
     if (read === mappingReads) mqtt.error = { name: "load", error };
+    return null;
   }
 }
 
@@ -156,7 +170,7 @@ export function watchTopics() {
 /** Starts the live topics on ``brokerRef`` and remembers what was there, so only a new device stands out. */
 export async function waitForDevice(brokerRef) {
   const opening = !mqtt.session;
-  const before = (mqtt.topics?.groups || []).map((group) => `${group.label}/${group.key}`);
+  const before = (mqtt.topics?.groups || []).map(groupKey);
   mqtt.waiting = { brokerRef, before, since: Date.now() + (opening ? SETTLE_MS : 0) };
   if (opening) await startTopics(brokerRef);
 }

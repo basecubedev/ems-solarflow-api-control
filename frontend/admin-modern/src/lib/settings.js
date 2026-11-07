@@ -210,12 +210,11 @@ export function changeGroups(diff) {
 }
 
 /**
- * Whether EMS needs a restart after this save. A removed key is mirrored to
- * the running EMS by nothing, and the server names any value it could not
- * hand over at once in ``runtime_sync``; either leaves the old value running.
+ * Whether EMS needs a restart after this save: a row the server did not mark
+ * live, removed ones included, or a value it names in ``runtime_sync`` as not
+ * handed over at once; either leaves the old value running.
  */
 export function restartNeeded(diff, result) {
-  if ((diff?.removed || []).length) return true;
   if (changeGroups(diff).some((group) => group.when === "restart")) return true;
   const sync = mapping(result?.runtime_sync);
   return (sync.skipped || []).length > 0 || (sync.warnings || []).length > 0;

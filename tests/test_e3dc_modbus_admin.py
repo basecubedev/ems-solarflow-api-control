@@ -597,7 +597,13 @@ def test_nothing_about_an_e3dc_device_is_mirrored_into_runtime_state(tmp_path):
     assert _classify("devices[0].enabled", config) == ("device", "WR1", "enabled")
     assert _classify("devices[1].enabled", config) is None
 
+    from admin.config_runtime_overlap import resolve_runtime_state_path
+    from admin.install_context import detect_install_context
+
     _write_devices(tmp_path, [dict(_ZENDURE), dict(_DEVICE)])
+    runtime_path = Path(resolve_runtime_state_path(detect_install_context(base_dir=str(tmp_path)), config))
+    runtime_path.parent.mkdir(parents=True, exist_ok=True)
+    runtime_path.write_text(json.dumps({"devices": {_ZENDURE["name"]: {"enabled": True}, _DEVICE["name"]: {"enabled": True}}}), encoding="utf-8")
     loaded = load_maintenance_config(base_dir=str(tmp_path))
     draft = loaded["draft"]
     draft["devices"][1]["enabled"] = False

@@ -19,6 +19,7 @@ class Resource {
   error = $state.raw(null);
   loading = $state(false);
   loadedAt = $state(0);
+  askedAt = $state(0);
   #path;
   #request = 0;
   #pending = null;
@@ -35,6 +36,7 @@ class Resource {
   async #read() {
     this.#request += 1;
     const request = this.#request;
+    const asked = Date.now();
     this.loading = true;
     try {
       const data = await adminGet(this.#path);
@@ -42,6 +44,7 @@ class Resource {
       this.data = data;
       this.error = null;
       this.loadedAt = Date.now();
+      this.askedAt = asked;
     } catch (error) {
       if (request !== this.#request) return this.#pending;
       if (!(sessionLost(error) && !auth.authenticated)) this.error = error;
@@ -94,6 +97,21 @@ export function ensure(...names) {
 
 export function reload(...names) {
   return Promise.all(names.map((name) => system[name].load()));
+}
+
+/**
+ * Settles once this browser's clock has moved past ``since``, so a request made
+ * then counts as asked for after it; a clock that does not move within a few
+ * ticks is not waited for.
+ */
+export async function clockPast(since) {
+  for (let ticks = 0; Date.now() <= since && ticks < 50; ticks += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+}
+
+/** Reloads once this browser's clock has moved past ``since`` (clockPast). */
+export async function reloadAfter(since, ...names) {
+  await clockPast(since);
+  return reload(...names);
 }
 
 /** Once signed in again, a read that failed only because the session had ended is not an error any more. */

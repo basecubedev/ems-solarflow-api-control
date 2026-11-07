@@ -1284,7 +1284,21 @@ saved; [MQTT mapping](../user/admin/mqtt-mapping.md) describes it from the
 operator's side. The mapping view (`GET /api/discovery/mqtt-mapping`) names
 each mapped device's connection id under `ems_connections`, so the panel tells
 an EMS device read on that connection from the same id read from another broker
-and offers to move it. Find devices also listens on the built-in broker again
+and offers to move it. Under `ems_devices` it says, for each external MQTT
+device by the id it is published as, whether the running EMS reads it as saved
+(`admin/ems_device_states.py`): `known` is false while no fresh control
+snapshot names the devices the running EMS read, `reason` then saying why
+(`stopped`: no readable `config.json`, or no fresh snapshot this Admin can
+read; `unnamed`: a fresh one that names no devices this Admin can compare, from
+an EMS of another release), `started_at` says when the EMS that wrote the
+snapshot started (so a console can tell a restarted EMS from the one that ran
+before), and each device is `running` (read as saved, switched on), `off`
+(read as saved, switched off), `waiting` (with `change` `added`, `renamed` or
+`changed`, a switch on or off included, as EMS keeps no runtime-state entry for
+an external device) or `leaving` (`removed`), with the saved `name` and the
+name the running EMS reads it under (`ran`). Of entries sharing an id, the
+first switched on names it, and the id is in effect only when EMS read each of
+them as saved. Find devices also listens on the built-in broker again
 after the Admin restarts, while the broker is switched on, not only after it was
 switched on in the same process.
 

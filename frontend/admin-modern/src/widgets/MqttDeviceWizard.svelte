@@ -5,11 +5,11 @@
 
   /**
    * group: the live-topic group the device publishes on; brokerRef: where it does.
-   * onsave(device) reviews and applies the device; onfree(device) hands it to the
-   * free editor; oncancel() closes. The result is an ordinary mapping entry the
-   * server validates and calculates like any other.
+   * onanswer(device) hears the device the answers make, null until a kind and a
+   * power value are chosen; onfree(device) hands it to the free editor. The device is an
+   * ordinary mapping entry the server validates and calculates like any other.
    */
-  let { group, brokerRef, takenIds = [], busy = false, saveLabel = "", onsave, onfree, oncancel, onpreview } = $props();
+  let { group, brokerRef, takenIds = [], onanswer, onfree } = $props();
 
   const values = $derived(groupValues(group));
   const keyOf = (value) => (value ? `${value.topic}|${value.path ?? ""}` : "");
@@ -27,7 +27,6 @@
   let socUnit = $state("percent");
   let advanced = $state(false);
   let factor = $state("");
-  let evaluation = $state.raw(null);
 
   $effect(() => {
     if (!powerKey) powerKey = keyOf(likelyValue(values, "power") || values[0]);
@@ -63,14 +62,11 @@
 
   const turned = $derived(Boolean((device?.values?.inverterPower || device?.values?.power)?.sources?.[0]?.invert));
 
+  $effect(() => onanswer?.(device));
+
   function choose(next) {
     kind = next;
-    evaluation = null;
     if (next === "other") onfree?.({ id: id || idFromName(group?.key || ""), label: name, enabled: true, broker_ref: brokerRef, values: { inverterPower: { sources: [] } } });
-  }
-
-  async function preview() {
-    evaluation = device ? await onpreview?.(device) : null;
   }
 
   function display(value) {
@@ -78,7 +74,7 @@
   }
 </script>
 
-<section class="wizard inner" data-testid="mqtt-wizard">
+<section class="wizard" data-testid="mqtt-wizard">
   <h3 class="sub">{t("mqtt.wizard.question")}</h3>
   <div class="kinds" role="radiogroup" aria-label={t("mqtt.wizard.question")}>
     {#each DEVICE_KINDS as option (option)}
@@ -161,16 +157,6 @@
         </div>
       </details>
 
-      <div class="row-wrap">
-        <button class="btn secondary small" type="button" onclick={preview} disabled={busy || !device} data-testid="mqtt-wizard-preview"><Icon name="eye" size="sm" />{t("mqtt.mapping.preview")}</button>
-        <button class="btn small" type="button" onclick={() => device && onsave?.(device)} disabled={busy || !device || !name.trim()} data-testid="mqtt-wizard-save"><Icon name="save" size="sm" />{saveLabel || t("mqtt.mapping.save")}</button>
-        <button class="btn secondary small" type="button" onclick={oncancel}>{t("mqtt.mapping.cancel")}</button>
-      </div>
-      {#if evaluation?.state}
-        <p class="note ok" data-testid="mqtt-preview-state"><Icon name="circle-check" />{t("mqtt.mapping.wouldPublish")} <code>{JSON.stringify(evaluation.state)}</code></p>
-      {:else if evaluation}
-        <p class="note warn" data-testid="mqtt-preview-silent"><Icon name="triangle-alert" />{t("mqtt.mapping.wouldNotPublish", { reason: evaluation.reasonText || evaluation.reason })}</p>
-      {/if}
     {/if}
   {/if}
 </section>

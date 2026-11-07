@@ -4,6 +4,7 @@
   import Empty from "../../../shared/ui/Empty.svelte";
   import Status from "../../../shared/ui/Status.svelte";
   import Segmented from "../../../shared/ui/Segmented.svelte";
+  import SearchField from "../../../shared/ui/SearchField.svelte";
   import ConfirmDialog from "../../../shared/ui/ConfirmDialog.svelte";
   import Dialog from "../../../shared/ui/Dialog.svelte";
   import ControlState from "../widgets/ControlState.svelte";
@@ -17,13 +18,14 @@
   import MqttBrokerCard from "../widgets/MqttBrokerCard.svelte";
   import MqttMappingPanel from "../widgets/MqttMappingPanel.svelte";
   import ConsumerHistoryQuestions from "../widgets/ConsumerHistoryQuestions.svelte";
+  import RestartEms from "../widgets/RestartEms.svelte";
   import { findProposal } from "../state/mqtt.svelte.js";
   import { removeDevice } from "../lib/devices.js";
-  import { emsPlace, mapsTo, withMappedDevice, withRenamedDevice } from "../lib/mqtt.js";
+  import { emsPlace, mappedIndex, withMappedDevice, withRenamedDevice } from "../lib/mqtt.js";
   import { t, tn, catalogText } from "../i18n/i18n.svelte.js";
   import { system, ensure, reload } from "../state/system.svelte.js";
+  import { inEffectAfter } from "../lib/services.js";
   import { settings, setValue, setHardwareValues, discard, discardHardware, previewDraft, applyDraft, applyNow, resetOverrides } from "../state/settings.svelte.js";
-  import { serviceAction, runServiceAction } from "../state/services.svelte.js";
   import { EDIT_TABS, changeGroups, restartNeeded, fieldMatches, levelled, liveOverride, openHistory, previewValue, safetyBlocks, sharedRisk, tabSections } from "../lib/settings.js";
   import { errorView } from "../lib/errors.js";
   import { href } from "../app/router.svelte.js";
@@ -44,7 +46,6 @@
   let backup = $state(true);
   let confirmApply = $state(false);
   let confirmReset = $state(false);
-  let confirmRestart = $state(false);
 
   const config = $derived(system.config.data);
   const ok = $derived(config?.status === "ok");
@@ -56,11 +57,17 @@
    * A mapped device and its EMS device are one thing: saving the mapping adds
    * the device, or moves it to the mapping's broker, a new label renames it and
    * removing the mapping can remove it. Each change is written to the config at
-   * once; with other changes waiting it joins them, and the bar below saves all.
+   * once; with other changes waiting it joins them, and the bar below saves
+   * all. This page can restart EMS, so the panel offers the restart a change
+   * waits for.
    */
   const mqttAdoption = {
+    restartable: true,
     get direct() {
       return !settings.changes;
+    },
+    get restart() {
+      return applied ? { needed: restartWaits, since: applied.at } : null;
     },
     get busy() {
       return settings.applying;
@@ -73,7 +80,7 @@
       return saved || waiting ? "elsewhere" : null;
     },
     name(device) {
-      return (current().devices || []).find(mapsTo(device.id))?.name || "";
+      return (current().devices || [])[mappedIndex(current().devices, device.id)]?.name || "";
     },
     renamable(device, label) {
       return Boolean(withRenamedDevice(current().devices, device.id, label));
@@ -88,7 +95,7 @@
     },
     remove(device) {
       return write((draft) => {
-        const index = (draft.devices || []).findIndex(mapsTo(device.id));
+        const index = mappedIndex(draft.devices, device.id);
         return index < 0 ? null : removeDevice(draft, index);
       });
     },
@@ -141,7 +148,7 @@
       return { state: "draft" };
     }
     const result = await applyNow(build, { decide: askHistory });
-    if (result.ok) return { state: "saved" };
+    if (result.ok) return { state: result.applied ? "saved" : "unchanged" };
     return result.reason ? { state: result.reason } : { state: "failed", error: result.error };
   }
 
@@ -174,17 +181,12 @@
   const canApply = $derived(settings.reviewed && preview?.changed === true && !settings.applying && !openHistory(preview).length);
   const applied = $derived(settings.applied);
   const needsRestart = $derived(restartNeeded(applied?.diff, applied?.result));
+  const restartWaits = $derived(needsRestart && inEffectAfter(system.plan.data, system.plan.askedAt, applied?.at ?? 0) !== true);
   const rollback = $derived(settings.applyError?.payload?.credential_rollback || settings.applyError?.credential_rollback || null);
 
   function choose(value) {
     tab = value;
     globalThis.history?.replaceState(null, "", `${href("settings")}/${value}`);
-  }
-
-  function restart() {
-    confirmRestart = false;
-    runServiceAction("sync");
-    globalThis.location.hash = href("services");
   }
 
   $effect(() => {
@@ -227,10 +229,7 @@
 {:else if ok}
   <div class="toolbar span-12">
     <Segmented large options={tabOptions} value={tab} label={t("settings.tabs")} onchange={choose} />
-    <label class="search">
-      <Icon name="search" size="sm" />
-      <input class="input" type="search" placeholder={t("settings.edit.search")} aria-label={t("settings.edit.search")} bind:value={query} data-testid="settings-search" />
-    </label>
+    <SearchField bind:value={query} label={t("settings.edit.search")} testid="settings-search" />
     <button class="icon-btn" type="button" onclick={() => reload("config")} disabled={system.config.loading} aria-label={t("common.refresh")} title={t("common.refresh")}><Icon name="refresh-cw" /></button>
   </div>
 
@@ -349,11 +348,7 @@
           <p><Icon name="circle-check" size="sm" /> {applied.result?.backup_path ? t("settings.edit.appliedBackup") : t("settings.edit.appliedNoBackup")}</p>
           {#if applied.result?.backup_path}<p class="muted small num" lang="en">{applied.result.backup_path}</p>{/if}
           {#if needsRestart}
-            <p>{t("settings.edit.restartNeeded")}</p>
-            <div class="row-wrap">
-              <button class="btn" type="button" onclick={() => (confirmRestart = true)} disabled={Boolean(serviceAction.busy)} data-testid="restart-ems"><Icon name="rotate-cw" size="sm" />{serviceAction.busy === "sync" ? t("settings.edit.restarting") : t("settings.edit.restart")}</button>
-              <a class="btn secondary small" href={href("services")}>{t("settings.edit.openServices")}</a>
-            </div>
+            <RestartEms needed={restartWaits} since={applied.at} settled={t("settings.edit.inEffect")} />
           {:else}
             <p class="muted">{t("settings.edit.liveNow")}</p>
           {/if}
@@ -382,14 +377,6 @@
   oncancel={() => (confirmApply = false)}
 />
 <ConfirmDialog
-  open={confirmRestart}
-  title={t("services.confirmSyncTitle")}
-  lines={[t("services.confirmSync"), t("services.confirmSyncSafe")]}
-  confirmLabel={t("services.sync")}
-  onconfirm={restart}
-  oncancel={() => (confirmRestart = false)}
-/>
-<ConfirmDialog
   open={confirmReset}
   title={t("settings.edit.resetTitle")}
   lines={[tn("settings.edit.resetLine", settings.overrides.length)]}
@@ -400,7 +387,6 @@
 
 <style>
   .toolbar { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
-  .search { display: flex; align-items: center; gap: var(--s2); flex: 1 1 220px; min-width: 0; color: var(--m-muted); }
   .live-note { align-items: center; flex-wrap: wrap; }
   .live-note span { flex: 1 1 240px; }
   .sections, .blocks { display: flex; flex-direction: column; gap: var(--s3); }

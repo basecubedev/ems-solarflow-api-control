@@ -14,7 +14,7 @@ import json
 
 from admin import consumer_history
 from admin.config_preview import _GRID_TYPE_CHOICES, _valid_host
-from admin.config_runtime_overlap import applies_live, overlap_provenance_for_context
+from admin.config_runtime_overlap import applies_live, live_device_paths, overlap_provenance_for_context, runtime_device_entries
 from admin.connection_planner import (
     INTENT_SWITCH_CONNECTION,
     plan_connection_change,
@@ -1142,7 +1142,7 @@ def preview_maintenance_config(draft, base_dir=None, *, identity_token_key=None)
     # credential-staging layer, which rejects the same references with a stable
     # structured code and a byte-exact rollback.
     _append_mqtt_credential_consumer_issues(validation, merged)
-    diff = summarize_config_changes(current, merged)
+    diff = summarize_config_changes(current, merged, runtime_device_entries(context, merged))
     response = {
         "status": "ok",
         "config_path": config_path,
@@ -1184,8 +1184,9 @@ def prepare_maintenance_config_apply(
 ):
     """Validate a reviewed draft and serialize it without writing anything.
 
-    The serialized ``payload`` carries the true merged config (secrets intact);
-    only the browser-facing ``preview``/``diff`` are redacted.
+    The serialized ``payload`` carries the true merged config (secrets intact)
+    and ``replaced`` the config it replaces, which the runtime mirror compares
+    it with; only the browser-facing ``preview``/``diff`` are redacted.
     """
 
     error, raw, current = _load_current(base_dir)
@@ -1201,7 +1202,7 @@ def prepare_maintenance_config_apply(
     )
     history = _consumer_history(current, merged, draft, context)
     validation = _validate(merged, merge_issues)
-    diff = summarize_config_changes(current, merged)
+    diff = summarize_config_changes(current, merged, runtime_device_entries(context, merged))
     result = sanitize_external_mqtt_status(
         {
             "status": "ok",
@@ -1240,6 +1241,7 @@ def prepare_maintenance_config_apply(
     result["payload"] = (
         json.dumps(merged, indent=2, ensure_ascii=False) + "\n"
     ).encode("utf-8")
+    result["replaced"] = current
     return result
 
 
@@ -2576,12 +2578,23 @@ def _append_mqtt_credential_consumer_issues(validation, config):
 # --- diff ----------------------------------------------------------------
 
 
-def summarize_config_changes(before, after):
+def summarize_config_changes(before, after, runtime_devices=None):
     """Return a compact, bounded diff of leaf-value changes between two configs.
 
     The flattening, ordering and secret suppression are the canonical ones; the
     Admin half is which keys count as secret and how far a value is bounded for
-    UI rendering.
+    UI rendering. A row is live as the apply's mirror makes it: a device key
+    only where the mirror writes it into an entry ``runtime_devices``
+    (runtime_device_entries) holds (live_device_paths), which for a key removed
+    from a device is the default the EMS falls back to, and never another
+    removed row. The rows compare
+    devices by list position while the mirror compares each device with
+    itself, so after a removal a row can show a neighbour's values under the
+    removed device's position or miss a change of the neighbour the mirror
+    writes; a device the EMS no longer builds is switched off, and a device
+    whose default a system setting changed gets it, without a row of their own;
+    and where several entries stand for one device, the write names the entry
+    that speaks for it, which need not be the row that was changed.
     """
 
     diff = mutation_diff(
@@ -2592,10 +2605,14 @@ def summarize_config_changes(before, after):
     )
     # Which rows are live at once is Admin's half of the answer, and it comes
     # from the one module that owns the config/runtime overlap.
+    live_devices = None if runtime_devices is None else live_device_paths(before, after, runtime_devices)
     for bucket in ("changes", "added", "removed"):
         source = before if bucket == "removed" else after
         for entry in diff.get(bucket) or []:
-            entry["applies_live"] = applies_live(entry["path"], source)
+            if bucket == "removed":
+                entry["applies_live"] = live_devices is not None and entry["path"] in live_devices
+            else:
+                entry["applies_live"] = applies_live(entry["path"], source, live_devices)
     return diff
 
 

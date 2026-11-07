@@ -128,6 +128,17 @@
       "devices": 32,
       "sources": 8,
       "publish_interval_seconds": 15
+    },
+    "ems_devices": {
+      "known": true,
+      "devices": {
+        "balcony": {
+          "state": "running",
+          "change": null,
+          "name": "Balcony",
+          "ran": "Balcony"
+        }
+      }
     }
   },
   "topics": {
@@ -161,6 +172,36 @@
               {
                 "path": "voltage",
                 "value": 231.4,
+                "likely": null,
+                "mapped_to": []
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "key": "shellyplusplugs-south",
+        "label": "shelly_gen2",
+        "mappable": true,
+        "topics": [
+          {
+            "topic": "shellyplusplugs-south/status/switch:0",
+            "format": "json",
+            "retained": false,
+            "messages_per_minute": 4.0,
+            "changing": true,
+            "last_seen_seconds": 3.0,
+            "payload_preview": "{\"id\":0,\"apower\":-487.6,\"voltage\":230.9}",
+            "values": [
+              {
+                "path": "apower",
+                "value": -487.6,
+                "likely": "power",
+                "mapped_to": []
+              },
+              {
+                "path": "voltage",
+                "value": 230.9,
                 "likely": null,
                 "mapped_to": []
               }

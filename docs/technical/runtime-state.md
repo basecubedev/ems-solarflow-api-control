@@ -284,7 +284,72 @@ Dashboard runtime-write whitelist:
   `system.min_output_limit`
 - `winter.enabled`, `ac_charge_control.enabled`
 - per device: `enabled`, `max_power`, `pv_priority_factor`,
-  `offgrid_socket_mode`, `ac_charge_enabled`
+  `offgrid_socket_mode`, `ac_charge_enabled`, for a device runtime-state holds
+  an entry for. EMS seeds one for each device it builds to control when it
+  starts, over HTTP or MQTT, keeps it until it starts again, switched off
+  meanwhile or not, and prunes the rest then: a device switched off, a
+  read-only one, and one read over MQTT without control (`external_mqtt`, or
+  `zendure_mqtt` without `write_output_limit`), which it builds from
+  `config.json` alone. The mirror works per device, not per config entry: the
+  entries that name one serial (or, without a serial, one name) are one device,
+  and its runtime entry is the one the EMS starts with
+  (`ems.runtime_state.runtime_device_for`): the entry stamped with that serial,
+  else the one under the name that carries no other serial. A device renamed
+  since the EMS started, or two devices that swapped names, so reach the entry
+  the running EMS reads for them, and the EMS carries that entry, values
+  included, over to the new name at its next start. The serial is read as the
+  EMS stamps it (`sn`, else `serial_number`, else `mqtt.device_id`, as text).
+  One config entry speaks for the device: the one the EMS builds to control
+  (switched on, over HTTP or MQTT), else the first one it would build if it
+  were switched on, else the first; a telemetry-only or external entry never
+  speaks for a device another entry controls. The mirror keeps one rule: the
+  runtime entry holds the effective values of the speaking entry, the ones the
+  EMS seeds at its start (the configured one, else the EMS default, coerced as
+  the EMS does: a `max_power` of 0 is the installation's ceiling, a fraction of
+  a watt is dropped, a priority of 0 is 1; a test pairs
+  `admin/config_runtime_overlap.py` `_effective_values` with
+  `build_runtime_defaults`), except where the Dashboard set a value the config
+  has not changed since. Each save writes the effective values that
+  differ from the speaking entry of the replaced config, a key removed from
+  the entry (the default it falls back to) and a changed system default such
+  as `max_device_power` included, and `enabled` when whether the EMS builds the
+  device changed (`admin/config_runtime_overlap.py` `device_runtime_plan`). So
+  a device is compared with itself, never by list position: removing a device
+  neither replays its neighbour's unchanged values over a live override nor
+  hides the neighbour's real change; a switched-off duplicate never writes into
+  the running device; switching a device off or turning it telemetry-only takes
+  it out of control at once and a telemetry entry never switches control on;
+  switching a device back on leaves its live overrides alone, while a value
+  saved meanwhile is already there; and when another entry for the device
+  takes over, its values arrive with it. A device switched on under another
+  entry than the one the running EMS drives it as is switched on, and the save
+  reports that the EMS keeps that entry until it restarts, so the console
+  offers the restart. A switch-off is written before the
+  values that come with it and a switch-on after them. A device the replaced
+  config did not hold brings its effective values to a runtime entry its serial
+  still owns, as one removed and added again without a restart in between,
+  because the EMS would keep that entry's values at its next start; it never
+  switches the device on, and a new device has no entry and starts from config.
+  One that only gained its serial in this save, at the same address, is the
+  entry of its name. Left
+  alone are a device either config holds several buildable entries for, one
+  whose runtime serial several entries carry, an entry whose `sn` and
+  `serial_number` disagree, and an entry that changed or lost its serial in
+  this save, a transport switch to a route without that serial included: none
+  of these is tied to a running device by its name. One limit remains: when a
+  serial moves to an entry that named another one (crosswise serials corrected
+  in two saves), the EMS's next start hands that entry the runtime values the
+  serial carried. Its fields then read **Running: …**, and **Put saved values
+  back** applies the saved ones. The change summary marks a device row live
+  exactly when the mirror writes that key (`live_device_paths`, validated as
+  the mirror validates), a removed key included. Its rows still compare devices
+  by list position, so after a removal a row can show a neighbour's values
+  under the removed device's position or miss a change of the neighbour that
+  the mirror writes; a device taken out of control because no entry is built
+  for it any more, and a device whose default a system setting changed, get no
+  row of their own; and where several entries stand for one device, the write
+  names the entry that speaks for it, which need not be the row that was
+  changed. A removed device is never mirrored, so never live.
 
 Every key on this list is seeded from `config.json` by the EMS when it loads
 runtime-state, so the Dashboard's runtime controls always show the value the
@@ -296,13 +361,18 @@ whitelist against the seeded defaults.
 The mirror reuses the same validated whitelist writers the Dashboard uses (so the
 safety property — only whitelisted keys ever reach runtime-state — is preserved)
 and is **best-effort**: `config.json` is already written when it runs, so a value
-above the runtime power ceiling, a device not yet present in runtime (newly added
-or renamed), or a read-only/absent runtime file is reported as a per-key skip and
-never fails the save. New devices are seeded from config by the EMS on its next
-start. **Settings & devices** also marks a field whose live Dashboard override
+above the runtime power ceiling, a device that owns no runtime entry (renamed
+while its entry carried no serial yet), or a read-only/absent runtime file is
+reported as a per-key skip and never fails the save. New devices are seeded from
+config by the EMS on its next start. The entry a write goes to is
+looked up again under the runtime-state file lock, so an EMS start that re-keys
+the entries in between cannot turn it onto another device, and the mirror runs
+inside the Admin's apply transaction, so an earlier save cannot mirror its
+values over a later one's. **Settings & devices** also marks a field whose live Dashboard override
 differs from the installed config value with **Running: …**, and its **Put saved
-values back** action writes the installed config values back into runtime-state
-(it always writes the value; it never just clears the override, because the EMS loads
+values back** action writes the installed config values back into runtime-state,
+into the entry of the device the field's entry speaks for, and only for that entry;
+`enabled` is written as whether the EMS builds the device (it always writes the value; it never just clears the override, because the EMS loads
 `config.json` once per process).
 
 ## Live control snapshot
@@ -319,8 +389,10 @@ preflight runs do not write it.
 
 `emsctl diagnose --control`, `--control-quality` and the dashboard's **Diagnose**
 page read it as their only source of cycle values (see [cli.md](../cli.md#diagnose)).
-A snapshot older than three loop intervals, and at least 60 s, is reported as
-stale, and its values are not used.
+The Admin console reads `loaded_devices` from it to say, for each mapped device,
+whether the running EMS reads it as saved or waits for a restart. A snapshot
+older than three loop intervals, and at least 60 s, is reported as stale, and
+its values are not used.
 
 Shape (`schema_version: 1`):
 
@@ -328,12 +400,14 @@ Shape (`schema_version: 1`):
 |---|---|
 | `written_at` | When the EMS wrote the snapshot (ISO-8601, UTC) |
 | `loop_interval_s` | Loop interval the EMS applied |
+| `started_at` | When the EMS process that wrote the snapshot started (ISO-8601, UTC); a restarted EMS writes another one |
 | `cycle.fetched_at`, `cycle.failed_cycles`, `cycle.mode` | When device telemetry was read, consecutive failed cycles, the controller's allocation mode |
 | `control.grid_power_w`, `control.filtered_load_w` | Grid meter reading the cycle used and its filtered value (positive is import) |
 | `control.commanded_total_w`, `control.allocated_target_total_w`, `control.effective_target_total_w` | The cycle's totals; `effective_target_total_w` is what the EMS commands |
 | `grid_meter.consecutive_read_failures`, `grid_meter.measured_at` | From the meter's health record; `null` for a meter without one |
 | `devices.<name>` | `online`, `last_seen_at`, `max_power_w`, `soc`, `min_soc`, `pv_input_w`, `output_w`, `output_limit_w`, `battery_charge_w`, `battery_discharge_w`, `battery`, `allocated_target_w`, `effective_target_w`, `limiting_reason`; telemetry fields are `null` for a device that never answered. `battery` is `yes`, `no` or `unknown` from the pack count the device reports; `diagnose --control` and `--control-quality` leave a `no` device out of their SOC analysis. `settings` holds each [device setting](#device-settings) the device has or that is set, as `{offered, reported, desired}` |
 | `grid_samples` | The last 30 cycles' `{cycle_at, grid_power_w, measured_at}` |
+| `loaded_devices` | `{version, devices}`: one `{name, device_id, enabled, digest}` per device entry `config.json` held when this EMS started, after the startup upgrade; `device_id` is the id an MQTT mapping publishes an external device as (`null` otherwise), and `digest` covers the whole entry, `enabled` included. `ems/device_fingerprints.py` makes them, for the EMS and for the Admin console, which compares them with the file as saved now; `version` names the rule, so an Admin of another release does not compare. Left out by an EMS that was not given the devices it read |
 
 When a cycle fails before it decides, the `control` values are `null` rather
 than carried over; device telemetry is the last reading the EMS holds, dated by

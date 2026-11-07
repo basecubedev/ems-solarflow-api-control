@@ -4,6 +4,7 @@
  * Every state and action is a code the plan names; the server's English
  * labels are only the fallback for a code this build does not know.
  */
+import { errorView, noAnswer } from "./errors.js";
 
 export const SERVICES = Object.freeze(["ems", "influxdb"]);
 export const DISPLAY_STATES = Object.freeze(["running", "stopped", "missing", "not_configured", "disabled", "external"]);
@@ -27,6 +28,27 @@ export function serviceView(plan, service) {
     startedAt: current.running ? current.started_at || null : null,
     configured: display.configured !== false,
   };
+}
+
+/**
+ * What a plan asked for after ``since`` says of the saved settings: in effect
+ * (true, EMS started after the file was last written) or not (false); null
+ * while no such plan is here, as one asked for earlier cannot know of a save
+ * or a restart that came later, and while the server cannot tell
+ * (``unknown``, e.g. EMS not running).
+ */
+export function inEffectAfter(plan, askedAt, since) {
+  if (!(askedAt > since)) return null;
+  const state = plan?.config_state?.state;
+  if (state === "current") return true;
+  return state === "pending" ? false : null;
+}
+
+/** Why the plan cannot restart anything, said with ``t`` as ``{ text, lang }``; null while it can or is not read yet. */
+export function planRefusal(plan, t) {
+  if (!plan || plan.available) return null;
+  const why = planMessage(plan.message);
+  return why && !why.key ? { text: why.text, lang: "en" } : { text: t("services.unavailable") };
 }
 
 /** The changes a sync would make, in the order the server runs them. */
@@ -78,4 +100,45 @@ export function stepView(step) {
     ok,
     detail: ok ? "" : String(step?.detail || ""),
   };
+}
+
+export const SERVICE_REFUSALS = Object.freeze(["busy", "unavailable", "analytics_disabled", "influx_not_running"]);
+export const RESULT_ICONS = Object.freeze({ ok: "circle-check", partial: "triangle-alert", unknown: "circle-help", fault: "circle-x" });
+
+/** Whether a finished restart or repair went well: no error, and no step that failed or warned. */
+export function wentWell(raw) {
+  return Boolean(raw) && !raw.error && !partlyDone(raw.result);
+}
+
+/**
+ * The finished restart, as serviceOutcome says it, that an offer counts as its
+ * own: with ``since``, when a change began to wait, one started after it, as a
+ * restart running before cannot have read that change; without, one that ended
+ * after ``shown``, when the offer appeared. Never a success a plan asked for
+ * after it says left the settings out of effect again.
+ */
+export function restartAfter(raw, { since, shown }, plan, askedAt, t) {
+  const counts = since === undefined ? raw?.at > shown : raw?.startedAt > since;
+  if (raw?.kind !== "sync" || !counts) return null;
+  const view = serviceOutcome(raw, t);
+  return view.tone === "ok" && inEffectAfter(plan, askedAt, raw.at) === false ? null : view;
+}
+
+/** A finished restart or repair as the reader sees it, said with ``t``: its tone, message, steps and warnings. */
+export function serviceOutcome(raw, t) {
+  if (!raw) return null;
+  const { kind, result, error } = raw;
+  const steps = (Array.isArray(result?.steps) ? result.steps : []).map(stepView);
+  const warnings = Array.isArray(result?.warnings) ? result.warnings.map(String) : [];
+  const base = { steps, warnings, at: raw.at };
+  if (wentWell(raw)) return { ...base, tone: "ok", message: kind === "sync" ? t("services.synced") : t("services.repaired") };
+  if (!error) return { ...base, tone: "partial", message: t("services.partlyDone") };
+  if (noAnswer(error)) return { ...base, tone: "unknown", message: t("error.noAnswer") };
+  if (result?.status === "unavailable") {
+    const why = planMessage(result.message);
+    if (why && !why.key) return { ...base, tone: "fault", message: why.text, lang: "en" };
+  }
+  if (SERVICE_REFUSALS.includes(result?.status)) return { ...base, tone: "fault", message: t(`services.status.${result.status}`) };
+  const view = errorView(error, t, kind === "sync" ? t("services.syncFailed") : t("services.repairFailed"));
+  return { ...base, tone: "fault", message: view.text, lang: view.lang };
 }

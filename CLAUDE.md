@@ -147,6 +147,7 @@ construction, controller startup, main loop. All real implementation lives in `e
 - `simulation.py` — simulation, replay, preflight, self-test helpers
 - `diagnostics.py` — read-only `diagnose` service layer (versioned contract); imported by both `emsctl.py` and the dashboard
 - `control_status.py` — per-cycle live control snapshot (`control-status.json` beside runtime-state) that `diagnose --control` reads; non-authoritative, never raises into the loop
+- `device_fingerprints.py` — one fingerprint per device entry of `config.json`; the EMS writes those it read at start into the control snapshot, the Admin compares them with the file as saved (`admin/ems_device_states.py`); import-side-effect-free
 - `paths.py` — shared project-path resolvers (`BASE_DIR`, `resolve_*_path`); import-side-effect-free
 - `runtime_commands.py` — the one command path for runtime-state edits (whitelist, validators, emsctl-named commands); emsctl, the dashboard, the Admin mirror and the scheduler all write through it
 - `device_settings.py` — light, fan, buzzer and battery heating: the settings the operator can hand to the EMS and the one reconciler that keeps them (state gates, off is off, local API only)

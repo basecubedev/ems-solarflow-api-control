@@ -5,11 +5,13 @@
   import Status from "../../../shared/ui/Status.svelte";
   import ConfirmDialog from "../../../shared/ui/ConfirmDialog.svelte";
   import StaleNote from "../widgets/StaleNote.svelte";
+  import ServiceOutcome from "../widgets/ServiceOutcome.svelte";
+  import PlanRefusal from "../widgets/PlanRefusal.svelte";
   import { t, fmt, say } from "../i18n/i18n.svelte.js";
   import { system, ensure, keepWithOverview, reload } from "../state/system.svelte.js";
   import { serviceAction, runServiceAction } from "../state/services.svelte.js";
-  import { serviceView, plannedChanges, canSync, partlyDone, planMessage, stepView, SERVICES } from "../lib/services.js";
-  import { errorView, noAnswer } from "../lib/errors.js";
+  import { serviceView, plannedChanges, canSync, serviceOutcome, SERVICES } from "../lib/services.js";
+  import { errorView } from "../lib/errors.js";
   import { href } from "../app/router.svelte.js";
 
   ensure("overview", "plan");
@@ -17,8 +19,6 @@
 
   const ICONS = { ems: "cpu", influxdb: "database" };
   const DESIRED = ["running", "stopped", "unavailable"];
-  const REFUSALS = ["busy", "unavailable", "analytics_disabled", "influx_not_running"];
-  const RESULT_ICONS = { ok: "circle-check", partial: "triangle-alert", unknown: "circle-help", fault: "circle-x" };
 
   const f = $derived(fmt());
   const plan = $derived(system.plan.data);
@@ -30,7 +30,7 @@
   let confirming = $state("");
   let asking = $state(false);
   const busy = $derived(serviceAction.busy);
-  const outcome = $derived(settled(serviceAction.outcome));
+  const outcome = $derived(serviceOutcome(serviceAction.outcome, t));
 
   function desiredText(service) {
     const desired = plan?.desired?.[service]?.desired;
@@ -39,24 +39,6 @@
 
   function version(service) {
     return overview?.containers?.[service]?.tag || null;
-  }
-
-  function settled(raw) {
-    if (!raw) return null;
-    const { kind, result, error } = raw;
-    const steps = (Array.isArray(result?.steps) ? result.steps : []).map(stepView);
-    const warnings = Array.isArray(result?.warnings) ? result.warnings.map(String) : [];
-    const base = { steps, warnings, at: raw.at };
-    if (!error && partlyDone(result)) return { ...base, tone: "partial", message: t("services.partlyDone") };
-    if (!error) return { ...base, tone: "ok", message: kind === "sync" ? t("services.synced") : t("services.repaired") };
-    if (noAnswer(error)) return { ...base, tone: "unknown", message: t("error.noAnswer") };
-    if (result?.status === "unavailable") {
-      const why = planMessage(result.message);
-      if (why && !why.key) return { ...base, tone: "fault", message: why.text, lang: "en" };
-    }
-    if (REFUSALS.includes(result?.status)) return { ...base, tone: "fault", message: t(`services.status.${result.status}`) };
-    const view = errorView(error, t, kind === "sync" ? t("services.syncFailed") : t("services.repairFailed"));
-    return { ...base, tone: "fault", message: view.text, lang: view.lang };
   }
 
   /**
@@ -121,8 +103,7 @@
     </div>
     <h3 class="sub">{t("services.whatHappens")}</h3>
     {#if !plan.available}
-      {@const why = planMessage(plan.message)}
-      <p class="note warn" data-testid="plan-unavailable"><Icon name="triangle-alert" />{#if why && !why.key}<span lang="en">{why.text}</span>{:else}{t("services.unavailable")}{/if}</p>
+      <PlanRefusal {plan} />
     {:else if changes.length}
       <ul class="changes">
         {#each changes as change, index (index)}<li>{say(change)}</li>{/each}
@@ -144,20 +125,8 @@
     </div>
     {/if}
     <div role="status" aria-live="polite">
-      {#if outcome}<p class="result {outcome.tone}" data-testid="services-result"><Icon name={RESULT_ICONS[outcome.tone] || "circle-x"} /><span><span lang={outcome.lang}>{outcome.message}</span>{#if outcome.at}<span class="muted when num">{" "}· {f.when(outcome.at)}</span>{/if}</span></p>{/if}
+      {#if outcome}<div class="said"><ServiceOutcome {outcome} /></div>{/if}
     </div>
-    {#if outcome}
-      <div class="outcome" data-testid="services-outcome">
-        {#if outcome.steps.length}
-          <ol class="sync-steps">
-            {#each outcome.steps as step, index (index)}
-              <li class:failed={!step.ok}><Icon name={step.ok ? "circle-check" : "circle-x"} size="sm" /><span class="sr-only">{step.ok ? t("step.state.done") : t("step.state.failed")}{" "}</span>{#if step.key}{t(step.key)}{:else}<span lang="en">{step.text}</span>{/if}{#if step.detail}<span class="muted">{" "}· <span lang="en">{step.detail}</span></span>{/if}</li>
-            {/each}
-          </ol>
-        {/if}
-        {#each outcome.warnings as warning, index (index)}<p class="note warn"><Icon name="triangle-alert" /><span lang="en">{warning}</span></p>{/each}
-      </div>
-    {/if}
   </Card>
 {/if}
 
@@ -174,7 +143,7 @@
 <ConfirmDialog
   open={confirming === "sync"}
   title={t("services.confirmSyncTitle")}
-  lines={[t("services.confirmSync"), t("services.confirmSyncSafe")]}
+  lines={[t("services.confirmSync")]}
   confirmLabel={t("services.sync")}
   onconfirm={() => run("sync")}
   oncancel={() => (confirming = "")}
@@ -197,14 +166,6 @@
   .sub { font-size: 13px; font-weight: 620; margin: var(--s4) 0 var(--s2); }
   .changes { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; }
   .actions { margin-top: var(--s4); gap: var(--s2); }
-  .outcome { margin-top: var(--s2); display: flex; flex-direction: column; gap: var(--s2); align-items: flex-start; }
-  .result { display: flex; gap: 8px; align-items: flex-start; margin: var(--s4) 0 0; font-weight: 560; }
-  .result :global(svg.i) { color: var(--m-ok); margin-top: 1px; }
-  .result.fault :global(svg.i) { color: var(--m-fault); }
-  .result.unknown :global(svg.i), .result.partial :global(svg.i) { color: var(--m-warn); }
-  .sync-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
-  .sync-steps li { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-  .sync-steps li :global(svg.i) { color: var(--m-ok); }
-  .sync-steps li.failed :global(svg.i) { color: var(--m-fault); }
+  .said { margin-top: var(--s4); }
   @container content (max-width: 640px) { .services { grid-template-columns: minmax(0, 1fr); } }
 </style>

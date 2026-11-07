@@ -315,8 +315,12 @@ This page edits an existing installation.
   writes `config.json` and additionally mirrors the whitelisted overlapping
   values it changed (system power/loop limits, winter enable, and per-device
   enabled/max power/PV priority) into `data/runtime-state.json` so the change
-  goes live immediately instead of waiting for an EMS restart; it still never
-  moves `data/` history, `docker-compose.yml`, or databases. Fields that also
+  goes live immediately instead of waiting for an EMS restart. A device you
+  switch off, or turn telemetry-only while it keeps its serial number, is taken
+  out of control at once; one you switch back on keeps the values set for it on
+  the Dashboard, except those you changed here. Saving still never moves
+  `data/` history,
+  `docker-compose.yml`, or databases. Fields that also
   carry a live override set from the Dashboard show **Running: …** with the
   effective value, and **Put saved values back** makes the live EMS use the
   saved values again.
