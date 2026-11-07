@@ -82,6 +82,13 @@ The former `playwright-chromium-smoke` job is now
 `playwright-chromium-critical`; branch protection referring to the old name has
 to be repointed.
 
+Every CI job installs its browsers with
+`scripts/ci-install-playwright-browsers.sh <browser>...`, never with
+`npx playwright install` directly (`tests/test_ci_playwright_install.py`). The
+system packages come from the runner's apt mirror, which stalls now and then:
+the script makes apt give up on a stalled transfer and wait for the dpkg lock,
+and before a retry it ends the apt-get a killed attempt left holding that lock.
+
 ## Groups
 
 Specs carry Playwright tags, so one configuration serves every group:

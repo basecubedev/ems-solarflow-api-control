@@ -156,7 +156,7 @@ def test_every_project_the_job_runs_is_a_browser_it_installed():
     config = (ROOT / CONFIG).read_text(encoding="utf-8")
     declared = set(re.findall(r'name:\s*"(\w+)"', config))
     run = [line for line in job.splitlines() if "playwright test" in line][0]
-    install = [line for line in job.splitlines() if "playwright install" in line][0]
+    install = [line for line in job.splitlines() if "ci-install-playwright-browsers.sh" in line][0]
 
     selected = set(re.findall(r"--project=(\w+)", run)) or declared
 

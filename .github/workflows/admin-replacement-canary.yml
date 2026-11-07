@@ -49,7 +49,7 @@ jobs:
       - name: Install Chromium dependencies
         run: |
           npm ci
-          npx playwright install --with-deps chromium
+          scripts/ci-install-playwright-browsers.sh chromium
       - name: Run real Docker replacement and reconnect
         env:
           ADMIN_REPLACEMENT_RUNTIME: ${{ runner.temp }}/ems-admin-replacement-${{ github.run_id }}-${{ github.run_attempt }}

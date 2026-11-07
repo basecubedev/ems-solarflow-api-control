@@ -318,15 +318,7 @@ jobs:
 
       - name: Install Playwright browsers
         timeout-minutes: 18
-        run: |
-          for attempt in 1 2 3; do
-            if timeout --kill-after=30 300 npx playwright install --with-deps chromium firefox; then
-              exit 0
-            fi
-            echo "Playwright install attempt ${attempt} failed or stalled." >&2
-            sleep $((attempt * 10))
-          done
-          exit 1
+        run: scripts/ci-install-playwright-browsers.sh chromium firefox
 
       - name: Pull the broker image before the tests need it
         run: |

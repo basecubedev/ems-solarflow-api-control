@@ -66,7 +66,7 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browser
-        run: npx playwright install --with-deps chromium
+        run: scripts/ci-install-playwright-browsers.sh chromium
 
       - name: Run the Chromium critical group
         env:
@@ -110,7 +110,7 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browser
-        run: npx playwright install --with-deps firefox
+        run: scripts/ci-install-playwright-browsers.sh firefox
 
       - name: Run the Firefox smoke group
         env:
@@ -156,7 +156,7 @@ jobs:
         run: npm ci
 
       - name: Install Playwright WebKit
-        run: npx playwright install --with-deps webkit
+        run: scripts/ci-install-playwright-browsers.sh webkit
 
       - name: Run Playwright tests (WebKit)
         env:
@@ -200,7 +200,7 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium firefox
+        run: scripts/ci-install-playwright-browsers.sh chromium firefox
 
       - name: Run the appliance manager suite
         env:
@@ -262,7 +262,7 @@ jobs:
           git diff --exit-code -- dashboard/static/modern admin/static/modern appliance/static/modern
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium firefox
+        run: scripts/ci-install-playwright-browsers.sh chromium firefox
 
       - name: Run the dashboard cockpit suite
         env:
@@ -320,7 +320,7 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browser
-        run: npx playwright install --with-deps ${{ matrix.browser }}
+        run: scripts/ci-install-playwright-browsers.sh ${{ matrix.browser }}
 
       - name: Run the full Admin suite
         env:
