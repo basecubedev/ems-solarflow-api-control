@@ -87,12 +87,13 @@ with another command is not seen and needs its row by hand.
 
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream | Image | Installed as | Notices |
 |---|---|---|---|:---:|:---:|---|---|---|---|
-| `influx` | 2.8.0, commit `8cdf401` (from the `influxdb:2.9` build stage) | MIT | InfluxDB backup/restore from inside the EMS container without a Docker socket | ✅ | ✅ | https://github.com/influxdata/influx-cli | `Dockerfile` | `/usr/local/bin/influx` | `third_party/influx-cli/LICENSE` |
-| `docker/cli` | 27.5.1 | Apache-2.0 | Admin Console controls the host Docker engine through the mounted socket; client only, never a daemon | ✅ | ✅ | https://github.com/docker/cli | `deploy/admin/Dockerfile` | `/usr/local/bin/docker` | `third_party/docker-cli/LICENSE`, `third_party/docker-cli/NOTICE` |
-| `docker/compose` | 2.32.4 | Apache-2.0 | Compose plugin for the Admin Console's container lifecycle operations | ✅ | ✅ | https://github.com/docker/compose | `deploy/admin/Dockerfile` | `/usr/local/lib/docker/cli-plugins/docker-compose` | `third_party/docker-compose/LICENSE`, `third_party/docker-compose/NOTICE` |
+| `influx` | 2.8.0, commit `8cdf401` (from the `influxdb:2.9` build stage) | MIT | InfluxDB backup/restore from inside the EMS container without a Docker socket | ✅ | ✅ | https://github.com/influxdata/influx-cli | `Dockerfile` | `/usr/local/bin/influx` | `third_party/influx-cli/LICENSE`, `third_party/influx-cli/THIRD_PARTY_NOTICES` |
+| `docker/cli` | 27.5.1 | Apache-2.0 | Admin Console controls the host Docker engine through the mounted socket; client only, never a daemon | ✅ | ✅ | https://github.com/docker/cli | `deploy/admin/Dockerfile` | `/usr/local/bin/docker` | `third_party/docker-cli/LICENSE`, `third_party/docker-cli/NOTICE`, `third_party/docker-cli/THIRD_PARTY_NOTICES` |
+| `docker/compose` | 2.32.4 | Apache-2.0 | Compose plugin for the Admin Console's container lifecycle operations | ✅ | ✅ | https://github.com/docker/compose | `deploy/admin/Dockerfile` | `/usr/local/lib/docker/cli-plugins/docker-compose` | `third_party/docker-compose/LICENSE`, `third_party/docker-compose/NOTICE`, `third_party/docker-compose/THIRD_PARTY_NOTICES` |
 
-Provenance, verified on 2026-11-07: each file is byte-identical to the file of
-the same name at the upstream revision in the Version column.
+Provenance, verified on 2026-11-07: each `LICENSE` and `NOTICE` is
+byte-identical to the file of the same name at the upstream revision in the
+Version column.
 
 | File | SHA-256 |
 |---|---|
@@ -102,9 +103,21 @@ the same name at the upstream revision in the Version column.
 | `third_party/docker-compose/LICENSE` | `58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd` |
 | `third_party/docker-compose/NOTICE` | `b7dca0a6b01fa7365e4892877a6321179ee343d72ee87a96cfc222141b99a1e6` |
 
-The binaries are statically linked Go programs. The modules compiled into them
-are listed in each binary's Go build information (`go version -m`); their own
-license texts are not yet shipped.
+The binaries are statically linked Go programs, and the modules compiled into
+them travel with them too. `THIRD_PARTY_NOTICES` in each directory is generated
+by `scripts/binary_notices.py generate` from the upstream source of the pinned
+version: the module list of its `go.mod` (`vendor/modules.txt` for the Docker
+CLI, which is built vendored), every module's license files from the Go module
+proxy or the vendor tree, and the Go standard library's license, each distinct
+text once with the modules that use it; the list may include modules only
+the upstream's tests use, which costs a few notices and omits none. The
+arrangement is the project's and is given away under CC0-1.0; every text in it
+stays under the terms it states. Both image builds run
+`scripts/binary_notices.py check` on the binary they ship and fail when it was
+built from another revision than its notices name, or holds a module they do
+not list. The Docker CLI is built vendored and records no modules, so for it
+the check compares the version alone. A moved `influxdb:2.9` tag or a version
+bump therefore stops the build with the command that regenerates the file.
 
 ## Development Dependencies
 

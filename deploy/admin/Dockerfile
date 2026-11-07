@@ -48,6 +48,13 @@ RUN set -eux; \
     docker --version; docker compose version
 COPY third_party/docker-cli/ /usr/share/doc/docker-cli/
 COPY third_party/docker-compose/ /usr/share/doc/docker-compose/
+COPY scripts/binary_notices.py /tmp/binary_notices.py
+RUN python3 /tmp/binary_notices.py check --component docker-cli \
+      --binary /usr/local/bin/docker --notices /usr/share/doc/docker-cli/THIRD_PARTY_NOTICES \
+    && python3 /tmp/binary_notices.py check --component docker-compose \
+      --binary /usr/local/lib/docker/cli-plugins/docker-compose \
+      --notices /usr/share/doc/docker-compose/THIRD_PARTY_NOTICES \
+    && rm /tmp/binary_notices.py
 
 COPY deploy/admin/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir --no-compile -r requirements.txt \

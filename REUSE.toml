@@ -108,3 +108,9 @@ path = "third_party/docker-compose/**"
 precedence = "override"
 SPDX-FileCopyrightText = "2020 Docker Compose authors"
 SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = "third_party/*/THIRD_PARTY_NOTICES"
+precedence = "override"
+SPDX-FileCopyrightText = ["2026 basecubedev (the compilation)", "the authors of the modules it names (each text in it)"]
+SPDX-License-Identifier = "CC0-1.0"

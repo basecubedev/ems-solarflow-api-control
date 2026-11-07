@@ -10,6 +10,7 @@ the negative cases run against a mutated copy in ``tmp_path`` so the repository
 is never touched.
 """
 import hashlib
+import importlib.util
 import json
 import re
 import shutil
@@ -32,6 +33,7 @@ from tools.check_third_party_licenses import (
     normalize_python_name,
     DOCKERFILES,
     dockerfile_binaries,
+    final_stage,
     parse_inventory,
     read_package_json,
     read_python_manifest,
@@ -42,6 +44,10 @@ pytestmark = [
     pytest.mark.contract,
     pytest.mark.documentation,
 ]
+
+_SPEC = importlib.util.spec_from_file_location("binary_notices", Path(__file__).resolve().parents[1] / "scripts" / "binary_notices.py")
+binary_notices = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(binary_notices)
 
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY = ROOT / "THIRD_PARTY_LICENSES.md"
@@ -206,7 +212,11 @@ def test_the_vendored_uplot_license_file_carries_the_upstream_notice():
 
 def test_every_vendored_file_matches_its_recorded_hash():
     recorded = dict(_HASH_ROW.findall(INVENTORY.read_text(encoding="utf-8")))
-    notices = {path.relative_to(ROOT).as_posix() for path in (ROOT / "third_party").rglob("*") if path.is_file()}
+    notices = {
+        path.relative_to(ROOT).as_posix()
+        for path in (ROOT / "third_party").rglob("*")
+        if path.is_file() and path.name != "THIRD_PARTY_NOTICES"
+    }
     assert set(recorded) == {"dashboard/static/uPlot.iife.min.js", "dashboard/static/uPlot.min.css"} | notices
     for relative, digest in recorded.items():
         actual = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
@@ -319,8 +329,51 @@ def test_a_notice_file_no_row_names_is_rejected(repo_copy):
 
 
 def test_a_row_without_notice_files_is_rejected(repo_copy):
-    mutate(repo_copy / "THIRD_PARTY_LICENSES.md", "`/usr/local/bin/influx` | `third_party/influx-cli/LICENSE` |", "`/usr/local/bin/influx` | none |")
+    mutate(
+        repo_copy / "THIRD_PARTY_LICENSES.md",
+        "`/usr/local/bin/influx` | `third_party/influx-cli/LICENSE`, `third_party/influx-cli/THIRD_PARTY_NOTICES` |",
+        "`/usr/local/bin/influx` | none |",
+    )
     assert problems_about(repo_copy, "row `influx` must name files of one third_party/ directory")
+
+
+def _binary_rows():
+    return [
+        row
+        for table in sections()["Distributed Third-Party Binaries"].tables
+        if "Component" in table["columns"]
+        for row in table["rows"]
+    ]
+
+
+def test_the_generated_notices_are_for_the_versions_the_dockerfiles_pin():
+    """A pin that moves without its notices fails here, before an image build does."""
+
+    admin = (ROOT / "deploy" / "admin" / "Dockerfile").read_text(encoding="utf-8")
+    header = {
+        name: binary_notices.parse_notices((ROOT / "third_party" / name / "THIRD_PARTY_NOTICES").read_text(encoding="utf-8"))[0]
+        for name in ("influx-cli", "docker-cli", "docker-compose")
+    }
+    for name, argument in (("docker-cli", "DOCKER_CLI_VERSION"), ("docker-compose", "DOCKER_COMPOSE_VERSION")):
+        pinned = re.search(rf"^ARG {argument}=(\S+)$", admin, re.MULTILINE).group(1)
+        assert header[name]["version"] == pinned, f"regenerate: scripts/binary_notices.py generate --component {name}"
+    influx = next(row for row in _binary_rows() if row["Component"] == "`influx`")
+    assert f"`{header['influx-cli']['identity'][:7]}`" in influx["Version"]
+
+
+def test_each_image_build_checks_the_binaries_it_ships_against_their_notices():
+    for row in _binary_rows():
+        image = row["Image"].strip("`")
+        installed = row["Installed as"].strip("`")
+        name = re.search(r"third_party/([\w.-]+)/", row["Notices"]).group(1)
+        stage = " ".join(
+            arguments for keyword, arguments in final_stage((ROOT / image).read_text(encoding="utf-8")) if keyword == "RUN"
+        )
+        expected = (
+            f"python3 /tmp/binary_notices.py check --component {name} --binary {installed} "
+            f"--notices /usr/share/doc/{name}/THIRD_PARTY_NOTICES"
+        )
+        assert expected in " ".join(stage.split()), (image, name)
 
 
 def test_the_checker_reads_every_dockerfile_this_repository_builds():

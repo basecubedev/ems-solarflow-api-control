@@ -145,7 +145,11 @@ Update the inventory in the same commit as the dependency change:
    it installs (`Installed as`) and every file of that directory (`Notices`).
    When a Dockerfile moves to another upstream version, refresh those files
    from that version and their SHA-256 in the provenance table; the tests
-   fail until the recorded version matches the Dockerfile.
+   fail until the recorded version matches the Dockerfile. Then regenerate
+   the notices of the modules compiled into it with
+   `python3 scripts/binary_notices.py generate --component <name>` (for
+   `influx-cli`, add the `--revision` the failing image build names); the
+   image build refuses the binary until they match.
 5. Runtime dependencies also need a `Runtime`/`Distributed` review of the
    transitive closure: everything pip installs into the images belongs in the
    transitive table.

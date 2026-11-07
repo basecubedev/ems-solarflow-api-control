@@ -11,6 +11,10 @@ ENV PYTHONUNBUFFERED=1
 
 COPY --from=influxdb-cli /usr/local/bin/influx /usr/local/bin/influx
 COPY third_party/influx-cli/ /usr/share/doc/influx-cli/
+COPY scripts/binary_notices.py /tmp/binary_notices.py
+RUN python3 /tmp/binary_notices.py check --component influx-cli \
+      --binary /usr/local/bin/influx --notices /usr/share/doc/influx-cli/THIRD_PARTY_NOTICES \
+    && rm /tmp/binary_notices.py
 
 # Mark the image as a container runtime so existing users get persistent
 # backups under /app/data/backups after a plain image pull, without editing
