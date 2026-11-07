@@ -45,6 +45,8 @@ RUN set -eux; \
     apt-get purge -y curl; apt-get autoremove -y; \
     rm -rf /tmp/docker.tgz /tmp/docker /var/lib/apt/lists/*; \
     docker --version; docker compose version
+COPY third_party/docker-cli/ /usr/share/doc/docker-cli/
+COPY third_party/docker-compose/ /usr/share/doc/docker-compose/
 
 COPY deploy/admin/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir --no-compile -r requirements.txt \
@@ -149,6 +151,7 @@ COPY dashboard/https.py ./dashboard/https.py
 # (admin.consumer_history); it reads them, never writes, through the store
 # that owns them, which imports nothing beyond the standard library at load.
 COPY dashboard/sqlite_store.py ./dashboard/sqlite_store.py
+COPY LICENSE THIRD_PARTY_LICENSES.md ./
 
 # --- Paired system-build identity + embedded Setup resources -------------
 # CI passes the SAME values as build args to the Admin AND EMS image builds, so

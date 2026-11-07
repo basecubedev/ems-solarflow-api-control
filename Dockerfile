@@ -9,6 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 COPY --from=influxdb-cli /usr/local/bin/influx /usr/local/bin/influx
+COPY third_party/influx-cli/ /usr/share/doc/influx-cli/
 
 # Mark the image as a container runtime so existing users get persistent
 # backups under /app/data/backups after a plain image pull, without editing
