@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The Energy board's detail switch: Basic is the board as it was, Expert adds
 // the channel rows to the same cards. The part that cannot be checked by

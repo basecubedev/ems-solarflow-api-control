@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Zooming a chart, and the part of it that only a browser can answer: that the
 // wheel reaches the chart at all, that it cancels the scroll it would otherwise

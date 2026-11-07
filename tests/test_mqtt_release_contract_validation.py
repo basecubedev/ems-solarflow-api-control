@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Strict input and trust-boundary contract for the MQTT release.
 

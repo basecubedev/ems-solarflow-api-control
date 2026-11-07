@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 basecubedev -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import Icon from "../../../shared/ui/Icon.svelte";
   import { t } from "../i18n/i18n.svelte.js";

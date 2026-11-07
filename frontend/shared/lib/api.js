@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * HTTP helpers for the EMS and Admin APIs. Writes carry the session's CSRF token;

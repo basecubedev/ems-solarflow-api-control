@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The dashboard shows and edits a device setting only where the device has it."""
 

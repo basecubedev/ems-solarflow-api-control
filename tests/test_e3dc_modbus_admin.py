@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Admin Setup and Maintenance carry the E3/DC through the Core paths.
 

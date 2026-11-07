@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Operations through the *running* Agent service, under its full sandbox.
 

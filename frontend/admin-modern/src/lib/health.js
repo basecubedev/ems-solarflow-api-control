@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * The Maintenance overview's ranked findings, in the reader's language.

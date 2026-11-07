@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Renders the real admin.js Maintenance MQTT device card against a minimal DOM
 // shim and reports the device object before/after, so renderer purity is proven

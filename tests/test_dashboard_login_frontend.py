@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The login dialog behaves as a dialog: it is announced as one, takes the
 focus, keeps it while open, closes on Escape and gives the focus back."""

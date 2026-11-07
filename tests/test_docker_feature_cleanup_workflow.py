@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Static contract for the feature-image cleanup workflow.
 
 Deleting a feature branch must remove only that branch's `dev-<safe-ref>` image

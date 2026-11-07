@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for the manual config backup/restore MVP (ems.backup / backup_crypto)."""
 

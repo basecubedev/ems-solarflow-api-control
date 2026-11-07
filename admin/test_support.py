@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Deterministic Admin runtime for browser (Playwright) end-to-end tests.
 

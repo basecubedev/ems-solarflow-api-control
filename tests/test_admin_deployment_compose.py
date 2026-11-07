@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Contract checks for the Admin deployment-capable default (Docker-out-of-Docker).
 

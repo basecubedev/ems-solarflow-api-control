@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 basecubedev -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script module>
   export const manifest = { id: "control-pipeline", data: ["live.control_explain"], refresh: "sse", minWidth: 320, states: ["no-explain", "blocked", "skip"] };
 </script>

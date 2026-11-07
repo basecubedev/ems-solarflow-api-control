@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Executes the real admin.js `serializeMqttProposalSelection` against a proposal
 // read as JSON from stdin, and prints the serialized selection JSON to stdout.

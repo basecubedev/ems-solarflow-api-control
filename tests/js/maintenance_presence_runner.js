@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Evaluates the real admin.js card-presence predicates for the manual panel, so
 // "a card disappears only on a proven negative answer" is tested against the

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Evaluates the real admin.js landing verdict and draws its findings list, so
 // "the landing never claims more than install-state proves" is tested against

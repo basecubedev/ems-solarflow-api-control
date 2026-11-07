@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Compare a source bundle against the tracked tree. Read-only.
 #
@@ -26,7 +27,7 @@ FORMAT=text
 EXCLUDES=""
 
 usage() {
-    sed -n '3,19p' "$0"
+    awk 'NR == 1 { next } /^#/ { if ($0 !~ /SPDX-/) print; next } { exit }' "$0"
 }
 
 not_run() {

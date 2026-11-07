@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
+# SPDX-License-Identifier: AGPL-3.0-or-later
 name: Appliance image build
 
 # Build the flashable Raspberry Pi appliance image on a GitHub-hosted runner.

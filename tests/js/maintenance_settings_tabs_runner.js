@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Evaluates the real admin.js routing that decides which settings tab a catalog
 // section and a catalog field belong to, so "every setting has exactly one

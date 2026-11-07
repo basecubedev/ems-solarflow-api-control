@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # EMS SolarFlow Admin device-discovery container. Stdlib http.server,
 # requests, and zeroconf: no Node, no build toolchain, no database.

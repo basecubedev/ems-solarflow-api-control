@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The Admin side of the MQTT mapping: read, check, preview and apply the mapping file.
 

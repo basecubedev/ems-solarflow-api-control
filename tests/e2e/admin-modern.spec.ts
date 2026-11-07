@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The Modern Admin console at the root, beside the deprecated Classic at /classic/. It
 // is driven here against the deterministic test-mode Admin: the switch between

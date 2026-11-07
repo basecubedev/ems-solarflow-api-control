@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Start the EMS SolarFlow Admin Console from a source checkout (build from
 # source). For normal users, use install-admin-console.sh instead — it runs the
@@ -35,7 +36,7 @@ for arg in "$@"; do
     --discovery-only) mode="discovery" ;;
     --hostnet) hostnet="1" ;;
     -h | --help)
-      sed -n '3,19p' "$0"
+      awk 'NR == 1 { next } /^#/ { if ($0 !~ /SPDX-/) print; next } { exit }' "$0"
       exit 0
       ;;
     *)

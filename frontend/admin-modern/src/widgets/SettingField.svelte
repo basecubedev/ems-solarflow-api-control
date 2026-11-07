@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 basecubedev -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import { t, catalogText, optionText } from "../i18n/i18n.svelte.js";
   import { RISKS, choices, defaultHint, previewValue, shownValue } from "../lib/settings.js";

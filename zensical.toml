@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
+# SPDX-License-Identifier: AGPL-3.0-or-later
 [project]
 site_name = "EMS SolarFlow"
 site_description = "Local-first energy management for Zendure SolarFlow batteries and inverters"

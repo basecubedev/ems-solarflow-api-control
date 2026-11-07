@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # The image sizes its root at build time; the medium an operator flashed it
 # onto is whatever they had. This happens on a freshly imaged appliance before

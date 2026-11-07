@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Evaluates the real admin.js Guided Setup progress sentence, so "the verdict
 // line and the stepper chip cannot disagree" is tested against shipped code.

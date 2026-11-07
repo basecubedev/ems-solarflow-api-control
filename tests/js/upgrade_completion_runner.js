@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Drives the real admin.js pollUpgradeJob to its terminal status, so what the
 // Guided Upgrade panel re-reads once the job is over is tested against the

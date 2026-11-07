@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Evaluates the real admin.js decision that decides whether a config reload may
 // replace the settings draft, so "a reload never discards unsaved edits" is

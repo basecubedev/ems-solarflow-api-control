@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 basecubedev -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import Empty from "../../../shared/ui/Empty.svelte";
   import { t } from "../i18n/i18n.svelte.js";

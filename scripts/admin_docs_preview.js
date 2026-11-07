@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Docs-preview driver of the deprecated Classic Admin Console for the demo
 // videos (scripts/render_admin_docs_video.py); the screenshots are taken from

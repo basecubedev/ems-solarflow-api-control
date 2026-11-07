@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 basecubedev -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script module>
   export const manifest = { id: "device-decisions", data: ["live.control_explain.devices"], refresh: "sse", minWidth: 320, states: ["offline", "blocked", "skip", "send"] };
 </script>

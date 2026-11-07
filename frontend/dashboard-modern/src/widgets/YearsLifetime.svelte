@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 basecubedev -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script module>
   export const manifest = { id: "years-lifetime", data: ["energy.yearly", "energy.lifetime"], refresh: "sse", minWidth: 260, states: ["single-year", "since-date"] };
 </script>

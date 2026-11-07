@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The day the clocks go back in Germany, 2026-10-25, has 25 hours. Every test
 // in this file runs in that zone, so the calendar is the one an owner sees.

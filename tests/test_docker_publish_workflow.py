@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Static contract: published Docker images carry a monotonic build identity.
 
 `latest` is a channel, not a version. Guided Upgrade must be able to compare

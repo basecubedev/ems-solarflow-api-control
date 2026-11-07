@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Build an appliance image with Raspberry Pi's rpi-image-gen.
 #
@@ -43,7 +44,7 @@ ENVIRONMENT=""
 SUPPLIED=${EMS_APPLIANCE_MANAGER_PACKAGE:-}
 
 usage() {
-    sed -n '3,28p' "$0"
+    awk 'NR == 1 { next } /^#/ { if ($0 !~ /SPDX-/) print; next } { exit }' "$0"
 }
 
 not_run() {

@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Collect the evidence a hardware case produced, and diff it against a baseline.
 #
@@ -26,7 +27,7 @@ while [ $# -gt 0 ]; do
         --baseline=*) BASELINE=${1#*=}; shift ;;
         --output) OUTPUT=${2:?--output needs a directory}; shift 2 ;;
         --output=*) OUTPUT=${1#*=}; shift ;;
-        -h|--help) sed -n '3,20p' "$0"; exit 0 ;;
+        -h|--help) awk 'NR == 1 { next } /^#/ { if ($0 !~ /SPDX-/) print; next } { exit }' "$0"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done

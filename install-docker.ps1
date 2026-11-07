@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Docker-first installer for EMS SolarFlow API control (Windows PowerShell).

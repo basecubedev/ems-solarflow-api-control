@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
+# SPDX-License-Identifier: AGPL-3.0-or-later
 name: Appliance Manager release
 
 # Cut a signed Appliance Manager package and publish the index an appliance
