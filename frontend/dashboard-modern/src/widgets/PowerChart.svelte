@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 basecubedev -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script module>
   export const manifest = { id: "power-chart", data: ["history:range:pv,home,battery,grid"], refresh: "60s", minWidth: 320, states: ["empty", "gaps", "retention", "error"] };
 </script>

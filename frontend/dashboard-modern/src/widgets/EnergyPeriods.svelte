@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 basecubedev -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script module>
   export const manifest = { id: "energy-periods", data: ["energy"], refresh: "sse", minWidth: 280, states: ["partial", "unmeasured", "disabled", "waiting"] };
 </script>

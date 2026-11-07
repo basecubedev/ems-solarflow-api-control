@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Vanilla admin discovery UI for retained Setup and Maintenance scan sessions.
 // Every server-provided value passes through escapeHtml or text-only DOM APIs.

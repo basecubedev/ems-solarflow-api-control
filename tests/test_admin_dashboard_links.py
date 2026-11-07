@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Classic's dashboard links and the early view switch: every link goes to the
 dashboard where this browser reaches it, and a stored ?ui= choice leaves the

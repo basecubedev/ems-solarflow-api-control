@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { expect, type Page } from "@playwright/test";
 
 // Guided Setup mutations are bound to one server-owned workflow identity and to

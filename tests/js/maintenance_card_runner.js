@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Renders real admin.js Maintenance hardware cards against a minimal DOM shim
 // and prints what the card resolved to, so the hardware-role/transport contract

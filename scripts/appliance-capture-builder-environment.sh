@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Record which machine is about to assemble a release image.
 #
@@ -28,7 +29,7 @@ BASE_SHA512=""
 DEPENDS=""
 CAPTURED_AT=""
 
-usage() { sed -n '3,20p' "$0"; }
+usage() { awk 'NR == 1 { next } /^#/ { if ($0 !~ /SPDX-/) print; next } { exit }' "$0"; }
 
 fail() {
     echo "appliance-capture-builder-environment: $1" >&2

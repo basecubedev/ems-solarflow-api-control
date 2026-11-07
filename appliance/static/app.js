@@ -1,3 +1,4 @@
+/* SPDX-FileCopyrightText: 2026 basecubedev */
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* Appliance Manager UI.
    Every dynamic value is written with textContent or a created node; nothing

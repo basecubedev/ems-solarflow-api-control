@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Provides the official ``influx`` CLI so bundled InfluxDB backup/restore works
 # from inside this container without the Docker CLI or socket.

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # GitNexus reads .gitignore but not .git/info/exclude, and develop/ is where
 # this repo keeps reference checkouts of *other* projects (see the exclude file)
 # alongside local InfluxDB and Grafana state. Indexing it puts foreign symbols

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
+# SPDX-License-Identifier: AGPL-3.0-or-later
 name: EMS release catalogue
 
 # The file every installation reads for its release list (docs/developer/

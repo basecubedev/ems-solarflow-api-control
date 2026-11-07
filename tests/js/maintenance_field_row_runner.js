@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Renders one real admin.js settings row for a catalog field and prints what it
 // carried, so the risk/level markers are tested against the shipped renderer.

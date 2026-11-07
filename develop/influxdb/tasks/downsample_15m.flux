@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
+// SPDX-License-Identifier: AGPL-3.0-or-later
 option task = {name: "zendure-downsample-15m", every: 15m}
 
 tracked_fields = [

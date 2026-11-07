@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Verify ``THIRD_PARTY_LICENSES.md`` against the repository's own manifests.
 
@@ -92,7 +93,9 @@ DOCKERFILES = ("Dockerfile", "deploy/admin/Dockerfile")
 NOTICE_DESTINATION = "/usr/share/doc"
 
 STATIC_DIRS = ("dashboard/static", "admin/static", "appliance/static")
+# REUSE-IgnoreStart
 PROJECT_LICENSE_HEADER = "SPDX-License-Identifier: AGPL-3.0-or-later"
+# REUSE-IgnoreEnd
 
 _HEADING = re.compile(r"^(#{2,3})\s+(.+?)\s*$")
 _SEPARATOR = re.compile(r"^\|[\s:|-]+\|$")

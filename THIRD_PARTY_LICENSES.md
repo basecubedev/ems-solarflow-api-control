@@ -9,6 +9,14 @@ repository. `tools/check_third_party_licenses.py` and
 `tests/test_third_party_licenses.py` verify it against the actual manifests, so
 a new dependency fails CI until it is documented here.
 
+Per file, the repository follows the [REUSE specification](https://reuse.software/):
+every source, script and configuration file the project writes names its
+copyright holder and license in its first lines, and [`REUSE.toml`](REUSE.toml)
+declares the rest: files that cannot carry a comment, fixtures and release
+evidence whose bytes are the point, and every third-party file below with its
+upstream holder. The license texts are in
+[`LICENSES/`](LICENSES/), and `reuse lint` checks that nothing is left out.
+
 ## How To Read This Inventory
 
 | Column | Meaning |
@@ -115,6 +123,7 @@ documentation website only in [`requirements-docs.txt`](requirements-docs.txt).
 | `pytest` | unpinned (verified 9.1.0) | MIT | Test framework for the whole Python suite | ❌ | ❌ | https://github.com/pytest-dev/pytest |
 | `ruff` | `==0.17.3` | MIT | Lint and static checks (`ruff check .`) | ❌ | ❌ | https://github.com/astral-sh/ruff |
 | `PyYAML` | `>=6.0` (verified 6.0.3) | MIT | Parsing CI workflow and compose YAML inside contract tests | ❌ | ❌ | https://github.com/yaml/pyyaml |
+| `reuse` | `==6.2.0` | GPL-3.0-or-later AND Apache-2.0 AND CC0-1.0 AND CC-BY-SA-4.0 | Checks that every file names its copyright holder and license (`reuse lint`, [REUSE](https://reuse.software/)) | ❌ | ❌ | https://github.com/fsfe/reuse-tool |
 | `zensical` | `==0.0.73` | MIT | Builds the documentation website from `docs/` ([docs-site.md](docs/developer/docs-site.md)) | ❌ | ❌ | https://github.com/zensical/zensical |
 
 ### Node Development Dependencies
@@ -202,6 +211,7 @@ output, with the material it bundles or copies, is described below the table.
 | `uPlot` | 1.6.31 | MIT | Canvas charts on the Dashboard History and Analytics tabs | ✅ | ✅ | https://github.com/leeoniya/uPlot | `dashboard/static/uPlot.iife.min.js`, `dashboard/static/uPlot.min.css`, `dashboard/static/uPlot.LICENSE` |
 | `svelte` | 5.57.3 (runtime) | MIT | Component runtime bundled into the Modern dashboard, Admin console and Appliance Manager | ✅ | ✅ | https://github.com/sveltejs/svelte | `dashboard/static/modern/assets/modern.js`, `admin/static/modern/assets/vendor.js`, `appliance/static/modern/assets/appliance.js`, notices in `dashboard/static/modern/licenses.json`, `admin/static/modern/licenses.json` and `appliance/static/modern/licenses.json` |
 | `clsx` | 2.1.1 | MIT | Class-name helper the Svelte runtime bundles | ✅ | ✅ | https://github.com/lukeed/clsx | `dashboard/static/modern/assets/modern.js`, `admin/static/modern/assets/vendor.js`, `appliance/static/modern/assets/appliance.js`, notices in `dashboard/static/modern/licenses.json`, `admin/static/modern/licenses.json` and `appliance/static/modern/licenses.json` |
+| `vite` (module-preload helper) | 8.3.5 | MIT | The few lines Vite writes into the Admin console's entry chunk to preload the page chunks it imports | ✅ | ✅ | https://github.com/vitejs/vite | `admin/static/modern/assets/admin.js` (Copyright (c) 2019-present, VoidZero Inc. and Vite contributors) |
 | `Inter` (`@fontsource-variable/inter`) | 4.1 via 5.3.0 | OFL-1.1 | The Modern front ends' typeface, latin subset | ✅ | ✅ | https://github.com/rsms/inter | `dashboard/static/modern/assets/inter-latin-wght-normal.woff2`, `dashboard/static/modern/assets/modern.css` (`@font-face`), `dashboard/static/modern/Inter.LICENSE`, `admin/static/modern/assets/inter-latin-wght-normal.woff2`, `admin/static/modern/assets/admin.css` (`@font-face`), `admin/static/modern/Inter.LICENSE`, `appliance/static/modern/assets/inter-latin-wght-normal.woff2`, `appliance/static/modern/assets/appliance.css` (`@font-face`), `appliance/static/modern/Inter.LICENSE` |
 | `Lucide` (`lucide-static`) | 1.64.0 | ISC AND MIT (Feather-derived icons) | Icon paths of the Modern front ends' inline sprites | ✅ | ✅ | https://github.com/lucide-icons/lucide | `dashboard/static/modern/index.html`, `admin/static/modern/index.html` and `appliance/static/modern/index.html` (the `<svg class="icon-sprite">` block), `dashboard/static/modern/Lucide.LICENSE`, `admin/static/modern/Lucide.LICENSE`, `appliance/static/modern/Lucide.LICENSE` |
 | `rpi-image-gen` | v2.7.0 | BSD-3-Clause | Upstream files copied verbatim as the image contract the appliance is built against (`image-rpios`) | ❌ | ❌ | https://github.com/raspberrypi/rpi-image-gen | `tests/fixtures/rpi_image_gen/` (seventeen files, listed with their SHA-256 in `source-manifest.json`), `tests/fixtures/rpi_image_gen/UPSTREAM.LICENSE` |
@@ -240,7 +250,9 @@ Appliance Manager's bundle (`appliance/static/modern/assets/appliance.js`)
 carries the Svelte runtime and `clsx`, as its `licenses.json` says. The Admin console loads its pages as separate chunks: the
 Svelte runtime and `clsx` are all in `admin/static/modern/assets/vendor.js`
 (`admin/static/modern/assets/admin.js` loads it), and every other chunk is the
-project's own code and carries its licence header. Vite writes the MIT notices of every
+project's own code and carries its licence header. The entry chunk `admin.js`
+also holds Vite's module-preload helper (MIT, row above); `licenses.json`
+does not list it, because Vite injects it rather than bundling a package. Vite writes the MIT notices of every
 bundled package into a `licenses.json` that ships beside each bundle, and
 `tests/test_dashboard_modern.py`, `tests/test_admin_modern.py` and
 `tests/test_appliance_modern.py` fail when a

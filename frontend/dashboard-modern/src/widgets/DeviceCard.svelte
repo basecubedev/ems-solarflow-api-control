@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 basecubedev -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script module>
   export const manifest = { id: "device-card", data: ["live.devices[name]"], refresh: "sse", minWidth: 320, states: ["online", "offline", "disabled", "telemetry-only", "no-battery", "e3dc-tile"] };
 </script>

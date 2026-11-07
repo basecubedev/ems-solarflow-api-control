@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // The preview's synthetic day is the last 24 hours, whatever the clock says, so

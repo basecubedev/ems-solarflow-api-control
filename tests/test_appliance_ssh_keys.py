@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """SSH public-key parsing, fingerprints and atomic ``authorized_keys`` writes.
 

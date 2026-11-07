@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { defineConfig, devices } from "@playwright/test";
 
 // The deterministic test-mode Admin server (EMS_ADMIN_TEST_MODE) runs on an

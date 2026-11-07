@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { expect, type Page, type TestInfo } from "@playwright/test";
 import { SetupPage } from "../pages/setup-page";
 

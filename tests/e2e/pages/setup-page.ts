@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { type Page, type Locator, expect } from "@playwright/test";
 
 // Guided Setup Step 1 (System Build selection). Drives the real browser controls

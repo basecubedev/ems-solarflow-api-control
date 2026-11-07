@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Playwright may stop the harness with SIGKILL, before it can remove the broker
 // it started; the container it named in the state file is removed here.

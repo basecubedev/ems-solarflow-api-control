@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { adminGet, adminSend, loadAuth, replacingPage } from "./auth.svelte.js";
 import { ApiError } from "../../../shared/lib/api.js";

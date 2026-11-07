@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Check a built appliance image against its declared layout, without booting.
 #
@@ -39,7 +40,7 @@ PROFILE=""
 ARCHITECTURE=arm64
 
 usage() {
-    sed -n '3,26p' "$0"
+    awk 'NR == 1 { next } /^#/ { if ($0 !~ /SPDX-/) print; next } { exit }' "$0"
 }
 
 while [ $# -gt 0 ]; do

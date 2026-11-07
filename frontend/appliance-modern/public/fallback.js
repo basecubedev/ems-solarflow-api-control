@@ -1,3 +1,4 @@
+/* SPDX-FileCopyrightText: 2026 basecubedev */
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* The deprecated Classic Appliance Manager answers under /classic/. This page
    sends a reader there before its first paint in the two cases Modern does not

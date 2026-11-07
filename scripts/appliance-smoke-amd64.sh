@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Build the amd64 package and smoke-test it in a clean Debian 13 systemd guest.
 #
@@ -22,7 +23,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --keep) KEEP=1; shift ;;
         --image) IMAGE=$2; shift 2 ;;
-        -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
+        -h|--help) awk 'NR == 1 { next } /^#/ { if ($0 !~ /SPDX-/) print; next } { exit }' "$0"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done

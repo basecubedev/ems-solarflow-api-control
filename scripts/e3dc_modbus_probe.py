@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Read-only Modbus/TCP probe for an E3/DC (HagerEnergy) energy storage system.
 

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Static contract: real-Docker e2e tests run in their own CI job, and the
 pull-request workflow runs partitioned functional groups instead of one
 monolithic suite. This guards against Docker-marked tests either running twice

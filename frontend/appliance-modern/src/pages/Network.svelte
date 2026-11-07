@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 basecubedev -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import Card from "../../../shared/ui/Card.svelte";
   import Icon from "../../../shared/ui/Icon.svelte";

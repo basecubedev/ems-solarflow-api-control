@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 basecubedev -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script module>
   export const manifest = { id: "control-summary", data: ["live.control_explain", "live.controller"], refresh: "sse", minWidth: 300, states: ["off", "no-explain", "limits"] };
 </script>

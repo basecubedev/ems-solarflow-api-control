@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Admin/live-config contract: two Zendure Cloud MQTT control devices survive
 preview, apply, reload and runtime construction intact.

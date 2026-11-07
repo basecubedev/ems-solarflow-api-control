@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { CONTAINER_STATES } from "./words.js";
 import { MANAGER_DIRECTIONS } from "./manager.js";

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Choosing a palette, an object style and a density on the cockpit, and the
 // part of it that cannot be checked by reading files: that the stored choice is

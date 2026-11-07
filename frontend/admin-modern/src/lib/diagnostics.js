@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * The Admin's EMS CLI checks (admin/ems_cli.py): read-only emsctl commands

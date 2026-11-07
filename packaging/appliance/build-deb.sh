@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Build ems-appliance-manager_<version>_arm64.deb plus its SHA-256 checksum.
 #
@@ -34,7 +35,7 @@ while [ $# -gt 0 ]; do
         --version) VERSION=$2; shift 2 ;;
         --version=*) VERSION=${1#*=}; shift ;;
         --allow-tarball) ALLOW_TARBALL=yes; shift ;;
-        -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+        -h|--help) awk 'NR == 1 { next } /^#/ { if ($0 !~ /SPDX-/) print; next } { exit }' "$0"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done

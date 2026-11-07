@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 basecubedev
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # Launch the deterministic browser-test Admin server on an isolated state root.
 # Never touches the developer's real config/ or data/.
 set -euo pipefail
