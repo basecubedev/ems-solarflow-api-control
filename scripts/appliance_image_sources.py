@@ -29,7 +29,14 @@ pool is trusted as the archive serves it over HTTPS. The sources a package was
 built with (``Built-Using``, ``Static-Built-Using``) are collected like its
 own. Two kinds of package have no source to fetch: this project's own (its
 source is this repository at the Manager's release tag), and Docker's, whose
-repository publishes none and whose license (Apache-2.0) asks for none.
+repository publishes none and whose own license (Apache-2.0) asks for none;
+the copyleft Go modules and the GNU C Library in their programs are the
+exceptions, which THIRD_PARTY_LICENSES.md describes.
+Docker's packages ship no notices for what their programs are built from
+either, so ``list`` also records what
+each of their programs says it is (its Go build information, or the banner of
+``docker-init``), and ``scripts/binary_notices.py appliance`` writes their
+license notices beside the image from that.
 Anything else that cannot be fetched and verified, a source without a ``.dsc``
 and a tarball, and a package dpkg holds in a state that is neither installed nor
 removed fail the run.
@@ -41,6 +48,7 @@ be read, fetched or verified, 2 the command line is wrong.
 import argparse
 import gzip
 import hashlib
+import http.client
 import json
 import lzma
 import re
@@ -53,10 +61,12 @@ import urllib.parse
 import urllib.request
 from pathlib import Path, PurePosixPath
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 ROOT = Path(__file__).resolve().parents[1]
 
 DPKG_STATUS = "/var/lib/dpkg/status"
+DPKG_INFO = "/var/lib/dpkg/info"
+ELF = b"\x7fELF"
 APT_SOURCES_LIST = "/etc/apt/sources.list"
 APT_SOURCES_DIR = "/etc/apt/sources.list.d"
 BUILD_MARKER = "/etc/ems-appliance-os-build"
@@ -175,6 +185,37 @@ def apt_archives(files):
     return sorted(archives)
 
 
+def programs_of(reader, packages):
+    """Every ELF program of the packages whose source nobody publishes, with what it says it is."""
+
+    sys.path.insert(0, str(ROOT))
+    from scripts import binary_notices
+
+    found = []
+    for item in packages:
+        if item["source"] not in NO_SOURCE_DUTY:
+            continue
+        names = (f"{DPKG_INFO}/{item['package']}:{item['architecture']}.list", f"{DPKG_INFO}/{item['package']}.list")
+        listing = next((name for name in names if reader.exists(name)), None)
+        if listing is None:
+            raise SourceError(f"{item['package']}: the image's dpkg database lists none of its files")
+        for path in reader.read_text(listing).splitlines():
+            if not path.strip() or not reader.is_file(path):
+                continue
+            data = reader.read_bytes(path)
+            if not data.startswith(ELF):
+                continue
+            found.append({
+                "package": item["package"],
+                "version": item["version"],
+                "path": path,
+                "size": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+                **binary_notices.describe_program(data),
+            })
+    return sorted(found, key=lambda program: program["path"])
+
+
 def request_from_root(reader, board):
     """The source request of one board, read from its root filesystem."""
 
@@ -199,6 +240,7 @@ def request_from_root(reader, board):
         "build_id": marker.get("build_id", ""),
         "archives": [{"uri": uri, "suite": suite, "component": component} for uri, suite, component in archives],
         "packages": packages,
+        "programs": programs_of(reader, packages),
     }
 
 
@@ -236,7 +278,7 @@ class Fetcher:
                 if error.code == 404:
                     return None
                 failure = error
-            except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
+            except (http.client.HTTPException, OSError) as error:
                 failure = error
             time.sleep(self.pause * (attempt + 1))
         raise SourceError(f"{url}: {failure}")
@@ -251,7 +293,7 @@ class Fetcher:
                 if error.code == 404:
                     raise SourceError(f"{url}: not found") from error
                 failure = error
-            except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
+            except (http.client.HTTPException, OSError) as error:
                 failure = error
             time.sleep(self.pause * (attempt + 1))
         raise SourceError(f"{url}: {failure}")
@@ -561,7 +603,10 @@ def main(argv=None):
         if args.command == "list":
             request = request_from_root(open_root(args.image), args.board)
             Path(args.output).write_text(json.dumps(request, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-            print(f"{args.board}: {len(request['packages'])} packages from {len(request['archives'])} archive(s)")
+            print(
+                f"{args.board}: {len(request['packages'])} packages from {len(request['archives'])} archive(s), "
+                f"{len(request['programs'])} Docker programs"
+            )
         else:
             requests = [json.loads(Path(path).read_text(encoding="utf-8")) for path in args.request]
             manifest = collect(

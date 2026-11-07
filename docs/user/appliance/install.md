@@ -92,9 +92,13 @@ they write, so **do not unpack it yourself.**
 
 The same release also carries the source code of every package in the images,
 as `ems-solarflow-appliance-<version>-sources-<n>-of-<N>.tar` with a
-`-sources.json` that lists what is in which part. You do not need them to
+`-sources.json` that lists what is in which part, and the license texts of the
+Docker programs in the images, whose packages ship none, as
+`ems-solarflow-appliance-<version>-docker-notices.txt`, with the source of the
+Go modules among them whose license asks for it in
+`ems-solarflow-appliance-<version>-docker-module-sources.tar`. You do not need them to
 install anything; they are there because the images contain open-source
-software whose licenses require its source to be offered beside it.
+software whose licenses require its source and notices to be offered beside it.
 
 Not sure which board you have? The Pi 5 has a fan connector next to the USB-C
 socket and two camera ports; a Pi 3 has a full-size HDMI socket and is powered

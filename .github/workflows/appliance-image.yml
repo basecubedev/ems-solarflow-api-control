@@ -534,7 +534,7 @@ jobs:
           path: ${{ runner.temp }}/collected
           pattern: appliance-*
 
-      - name: Collect the source code the images are built from
+      - name: Collect Docker's notices and the source code the images are built from
         env:
           PROFILES: ${{ needs.plan.outputs.profiles }}
         run: |
@@ -551,6 +551,8 @@ jobs:
             [ -r "${request}" ] || { echo "::error::${board} recorded no source request"; exit 1; }
             requests+=(--request "${request}")
           done
+          python3 scripts/binary_notices.py appliance "${requests[@]}" \
+            --output "${release}"
           python3 scripts/appliance_image_sources.py collect "${requests[@]}" \
             --revision "${GITHUB_SHA}" \
             --repository-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
@@ -698,10 +700,18 @@ jobs:
             echo "\`ems-solarflow-appliance-${version}-sources-<n>-of-<N>.tar\`."
             echo "\`ems-solarflow-appliance-${version}-sources.json\` says which package is in"
             echo "which part, where it came from and how each file was verified. Docker's"
-            echo "packages publish no source and their license (Apache-2.0) asks for none,"
-            echo "so it names their upstream instead; the Appliance Manager's source is this"
+            echo "packages publish no source and their own license (Apache-2.0) asks for"
+            echo "none, so it names their upstream instead (the copyleft Go modules and the"
+            echo "GNU C Library in their programs are the exceptions, see below and"
+            echo "THIRD_PARTY_LICENSES.md); the Appliance Manager's source is this"
             echo "repository at the Manager's release tag, or at \`${GITHUB_SHA}\` when this"
             echo "build made the package itself."
+            echo
+            echo "Nor do Docker's packages ship notices for what their programs are built"
+            echo "from: \`ems-solarflow-appliance-${version}-docker-notices.txt\` carries the"
+            echo "license texts of their programs and of every Go module compiled into them,"
+            echo "and \`ems-solarflow-appliance-${version}-docker-module-sources.tar\` the source"
+            echo "of the modules among them whose license asks for it, such as MPL-2.0."
             echo
             echo "The gate runner's own verdict, per board, read back from the log"
             echo "each \`gate-evidence-<board>.zip\` carries rather than asserted here:"

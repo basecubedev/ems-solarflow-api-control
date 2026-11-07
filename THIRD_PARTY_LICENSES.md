@@ -108,8 +108,10 @@ them travel with them too. `THIRD_PARTY_NOTICES` in each directory is generated
 by `scripts/binary_notices.py generate` from the upstream source of the pinned
 version: the module list of its `go.mod` (`vendor/modules.txt` for the Docker
 CLI, which is built vendored), every module's license files from the Go module
-proxy or the vendor tree, and the Go standard library's license, each distinct
-text once with the modules that use it; the list may include modules only
+proxy or the vendor tree, those of its packages as well as its root's (each
+named by its package path; `testdata`, `vendor` and directories Go ignores
+left out), and the Go standard library's license, each distinct text once
+with the modules that use it; the list may include modules only
 the upstream's tests use, which costs a few notices and omits none. The
 arrangement is the project's and is given away under CC0-1.0; every text in it
 stays under the terms it states. Both image builds run
@@ -332,12 +334,61 @@ then the `.dsc` in its pool, then snapshot.debian.org, and checks every file
 against the index, the `.dsc` that lists it or snapshot's SHA-1; a `.dsc`
 taken from a pool is trusted as the archive serves it over HTTPS. The sources a
 package was built with (`Built-Using`, `Static-Built-Using`) are collected
-like its own. Two kinds of package have nothing to fetch: Docker's
-(Apache-2.0, whose repository publishes no source), which the manifest names
-with their upstream, and the Appliance Manager, whose source is this
+like its own. Two kinds of package have nothing to fetch: Docker's, whose own
+code is Apache-2.0 and whose repository publishes no source (the copyleft
+modules and the GNU C Library compiled or linked into their programs are the
+exceptions, see below), which the manifest names with their upstream, and the
+Appliance Manager, whose source is this
 repository at its release tag. A source that cannot be fetched and verified,
 one without a `.dsc` and a tarball, and a package dpkg holds in a state that is
 neither installed nor removed fail the publish job.
+
+Docker's packages (`docker-ce`, `docker-ce-cli`, `containerd.io`, the Buildx
+and Compose plugins) ship no notices for what their programs are built from:
+four have no copyright file at all, and `containerd.io`'s names only
+Apache-2.0. Their programs are Go builds with some four hundred modules
+compiled in. Their notices go beside the image, not into it, as
+`ems-solarflow-appliance-<version>-docker-notices.txt`.
+`list` records what every ELF program of those packages says it is: its Go
+build information, or for `docker-init` the banner of tini, which is statically
+linked with the GNU C Library. The publish job then writes the file with
+`scripts/binary_notices.py appliance`: every license file of each module (a
+file whose name says license, copying, copyright, notice, patents or legal and
+that is neither code nor data), its packages' as well as its root's, from the
+Go module proxy (read with range requests, without downloading the module), a
+program's own license from its module, or from the tagged GitHub tree of a
+build without one (Moby's `dockerd`, the vendored Docker CLI, tini; the tree's
+nested modules left to their own versions), the Go
+standard library's license of each Go version, and glibc's `COPYING.LIB` and
+`LICENSES` for tini, pinned by their SHA-256 for the Debian release Docker
+built the package for. These fail the publish job: a tree that is not the
+commit the program names, a main module whose commit at the module proxy is
+not the build's `vcs.revision`, a build that reports modified sources
+(`vcs.modified`, a `-dirty` banner), a Go experiment or a sanitizer, a module
+without a license file at its root, a vendor tree that replaces a module with
+a local directory, C code linked in statically as the program shows it (no
+loader; static archives and flags in `-ldflags` or `CGO_LDFLAGS` with cgo on;
+the libseccomp binding compiled in without `libseccomp.so` among the libraries
+it loads), a glibc whose texts are not pinned, and a program no rule
+describes. What the program does not record cannot be checked: `dockerd`,
+`docker` and `docker-proxy` carry no `vcs` settings, a build with `-trimpath`
+(runc is one) records no linker flags, and a static library named only in a
+package's `#cgo` directives appears nowhere.
+
+Two parts of Docker's programs carry a source duty. The first are the Go
+modules with a copyleft license text, such as HashiCorp's MPL-2.0 modules, the
+HCL parser Buildx carries, and the MPL-2.0 part of `filepath-securejoin`: the
+publish job puts each one's zip beside the image as
+`ems-solarflow-appliance-<version>-docker-module-sources.tar`, exactly as the Go
+module proxy serves it and refused unless it hashes to what sum.golang.org
+records, and the notices file lists them. A license text counts as copyleft
+when it names the MPL, GPL, LGPL, AGPL, EPL, CDDL, EUPL, CPL, OSL or MS-RL, by
+name or SPDX identifier; a copyleft text in a program's own tree stops the
+run. The second is glibc, LGPL-2.1-or-later, linked statically
+into `docker-init`. The source archive holds the glibc source of the image's
+own `libc6`, a Raspberry Pi build of Debian's. Which Debian 13 glibc Docker's
+build linked is not recorded in the binary, so the archive does not claim to
+hold that exact source.
 
 The generator that assembles that root filesystem, `rpi-image-gen`, is listed
 under Vendored Components above.

@@ -580,7 +580,7 @@ def test_each_board_records_the_source_packages_of_its_own_image(workflow):
 def test_the_release_carries_the_source_of_every_package_its_images_hold(workflow):
     """Collected into the release directory before SHA256SUMS is written over it."""
 
-    collect = _step_index(workflow, "publish", "Collect the source code")
+    collect = _step_index(workflow, "publish", "the source code the images are built from")
     layout = _step_index(workflow, "publish", "Lay out the files")
     assert collect < layout
     assert "sha256sum -- *" in steps(workflow, "publish")[layout]["run"]
@@ -596,3 +596,22 @@ def test_the_release_notes_say_where_the_source_is(workflow):
     run = run_blocks(workflow, "publish")
     assert "-sources-<n>-of-<N>.tar" in run
     assert "-sources.json" in run
+    assert "-docker-notices.txt" in run
+    assert "-docker-module-sources.tar" in run
+
+
+def test_the_release_carries_the_notices_of_the_docker_programs(workflow):
+    """Written from the same requests into the release directory, so SHA256SUMS covers them.
+
+    Before the source archive: it takes seconds where the archive takes minutes,
+    so a program no rule describes fails the job before the long part.
+    """
+
+    collect = _step_index(workflow, "publish", "the source code the images are built from")
+    assert collect < _step_index(workflow, "publish", "Lay out the files")
+    run = steps(workflow, "publish")[collect]["run"]
+    notices = run.index("scripts/binary_notices.py appliance")
+    sources = run.index("scripts/appliance_image_sources.py collect")
+    assert notices < sources
+    assert run[notices:sources].count('"${requests[@]}"') == 1
+    assert '--output "${release}"' in run[notices:sources]

@@ -72,6 +72,13 @@ class FakeRoot:
     def listdir(self, path):
         return sorted({name[len(path) + 1:].split("/")[0] for name in self.files if name.startswith(path + "/")})
 
+    def is_file(self, path):
+        return path in self.files
+
+    def read_bytes(self, path):
+        data = self.files[path]
+        return data if isinstance(data, bytes) else data.encode()
+
     def read_text(self, path):
         return self.files[path]
 
@@ -188,6 +195,73 @@ def test_the_request_is_read_off_the_image_root():
     assert (made["board"], made["release_version"], made["build_id"]) == ("rpi5", "0.5.0", "20261107")
     assert made["archives"] == [{"uri": "http://deb.debian.org/debian", "suite": "trixie", "component": "main"}]
     assert [(item["source"], item["source_version"]) for item in made["packages"]] == [("acl", "2.3.2-2")]
+    assert made["programs"] == []
+
+
+TINI_BINARY = b"\x7fELF\0tini version 0.19.0 - git.de40ad0\0Fatal glibc error\0"
+
+
+def docker_root(**extra):
+    return FakeRoot({
+        sources.DPKG_STATUS: (
+            "Package: acl\nStatus: install ok installed\nVersion: 2.3.2-2\nArchitecture: arm64\n\n"
+            "Package: docker-ce\nStatus: install ok installed\nVersion: 5:29.9.2-1\nArchitecture: arm64\nMaintainer: Docker <support@docker.com>\n"
+        ),
+        f"{sources.APT_SOURCES_DIR}/debian.sources": "Types: deb\nURIs: http://deb.debian.org/debian\nSuites: trixie\nComponents: main\n",
+        f"{sources.DPKG_INFO}/acl.list": "/usr/bin/getfacl\n",
+        "/usr/bin/getfacl": b"\x7fELF acl",
+        f"{sources.DPKG_INFO}/docker-ce.list": "/.\n/usr\n/usr/libexec/docker/docker-init\n/usr/share/doc/docker-ce/README.md\n/usr/bin/unread\n",
+        "/usr/libexec/docker/docker-init": TINI_BINARY,
+        "/usr/share/doc/docker-ce/README.md": "not a program",
+        **extra,
+    })
+
+
+def test_the_request_records_what_each_docker_program_says_it_is():
+    programs = sources.request_from_root(docker_root(), "rpi4")["programs"]
+    assert programs == [{
+        "package": "docker-ce", "version": "5:29.9.2-1", "path": "/usr/libexec/docker/docker-init",
+        "size": len(TINI_BINARY), "sha256": digest(TINI_BINARY),
+        "kind": "tini", "tini_version": "0.19.0", "commit": "de40ad0", "modified": "", "static_glibc": True, "interpreter": False, "needed": [],
+    }]
+
+
+def varint(value):
+    out = bytearray()
+    while True:
+        out.append((value & 0x7F) | (0x80 if value >> 7 else 0))
+        value >>= 7
+        if not value:
+            return bytes(out)
+
+
+def go_binary(lines):
+    modinfo = ("x" * 16 + "\n".join(lines) + "\n" + "y" * 16).encode()
+    go = b"go1.26.10"
+    return b"\x7fELF\x02\x01" + b"\0" * 58 + b"\xff Go buildinf:" + bytes([8, 2]) + b"\0" * 16 + varint(len(go)) + go + varint(len(modinfo)) + modinfo
+
+
+def test_a_go_program_of_a_docker_package_is_recorded_with_its_modules():
+    binary = go_binary(["path\tgithub.com/moby/moby/v2/cmd/dockerd", "mod\tgithub.com/moby/moby/v2\t(devel)\t", "dep\tgithub.com/a/one\tv1.0.0\t", "build\tCGO_ENABLED=1"])
+    root = docker_root(**{"/usr/bin/dockerd": binary})
+    root.files[f"{sources.DPKG_INFO}/docker-ce.list"] += "/usr/bin/dockerd\n"
+    dockerd = next(item for item in sources.request_from_root(root, "rpi4")["programs"] if item["path"] == "/usr/bin/dockerd")
+    assert (dockerd["kind"], dockerd["go"], dockerd["package_path"]) == ("go", "go1.26.10", "github.com/moby/moby/v2/cmd/dockerd")
+    assert dockerd["main"] == ["github.com/moby/moby/v2", "(devel)"] and dockerd["deps"] == [["github.com/a/one", "v1.0.0"]]
+    assert dockerd["settings"] == {"CGO_ENABLED": "1"} and dockerd["sha256"] == digest(binary)
+
+
+def test_a_docker_package_whose_files_dpkg_does_not_list_is_refused():
+    root = docker_root()
+    del root.files[f"{sources.DPKG_INFO}/docker-ce.list"]
+    with pytest.raises(sources.SourceError, match="docker-ce: the image's dpkg database lists none of its files"):
+        sources.request_from_root(root, "rpi4")
+
+
+def test_a_multi_arch_list_file_is_read_too():
+    root = docker_root()
+    root.files[f"{sources.DPKG_INFO}/docker-ce:arm64.list"] = root.files.pop(f"{sources.DPKG_INFO}/docker-ce.list")
+    assert [item["path"] for item in sources.request_from_root(root, "rpi4")["programs"]] == ["/usr/libexec/docker/docker-init"]
 
 
 def test_an_image_without_an_archive_or_a_package_is_refused():
@@ -386,3 +460,25 @@ def test_the_manager_tag_is_asked_for_before_anything_is_downloaded(tmp_path):
     tag = next(index for index, url in enumerate(fetcher.asked) if "/releases/tag/" in url)
     first_tarball = next(index for index, url in enumerate(fetcher.asked) if ".orig.tar" in url)
     assert tag < first_tarball
+
+
+def test_a_download_broken_off_midway_is_fetched_again(tmp_path, monkeypatch):
+    answers = [sources.http.client.IncompleteRead(b"par"), b"whole file"]
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            answer = answers.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+    fetcher = sources.Fetcher(attempts=2, pause=0)
+    monkeypatch.setattr(fetcher, "_open", lambda url: Response())
+    assert fetcher.get("https://example.org/x") == b"whole file"
+    assert answers == []

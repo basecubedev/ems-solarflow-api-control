@@ -150,6 +150,11 @@ Update the inventory in the same commit as the dependency change:
    `python3 scripts/binary_notices.py generate --component <name>` (for
    `influx-cli`, add the `--revision` the failing image build names); the
    image build refuses the binary until they match.
+   The Docker programs of the appliance image need no step: the publish job
+   writes their notices from the image itself
+   (`scripts/binary_notices.py appliance`). It stops at a program no rule in
+   `SOURCE_TREES` or no known banner describes, which is where a new one is
+   added.
 5. Runtime dependencies also need a `Runtime`/`Distributed` review of the
    transitive closure: everything pip installs into the images belongs in the
    transitive table.
