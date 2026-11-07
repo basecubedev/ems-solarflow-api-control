@@ -8,7 +8,7 @@ edit_uri = "edit/main/docs/"
 docs_dir = "build/docs-site-src"
 site_dir = "build/docs-site"
 use_directory_urls = false
-copyright = "EMS SolarFlow · AGPL-3.0-or-later"
+copyright = "EMS SolarFlow · AGPL-3.0-or-later · An independent community project, not developed, endorsed or supported by Zendure. Zendure and SolarFlow are trademarks of their respective owners."
 
 nav = [
   { "Home" = "README.md" },
