@@ -163,6 +163,52 @@ def test_failed_apply_cannot_roll_back_over_parallel_success(monkeypatch, tmp_pa
         srv.server_close()
 
 
+def test_the_runtime_mirror_runs_inside_the_apply_transaction(monkeypatch, tmp_path):
+    """Interleaving: Apply A writes its config and leaves the transaction, Apply
+    B writes and mirrors, and A mirrors its older values over B's last. Inside
+    the transaction A's mirror is done before B can write."""
+
+    import admin.server as server
+
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    _write_config(tmp_path, _existing_config())
+    srv, base = _serve(tmp_path, _CloudFetch())
+    inside = []
+    transaction = srv.config_apply.apply_transaction
+
+    @contextmanager
+    def observed():
+        with transaction():
+            inside.append(True)
+            try:
+                yield
+            finally:
+                inside.pop()
+
+    srv.config_apply.apply_transaction = observed
+    seen = []
+    mirror = server.mirror_changed_keys_to_runtime
+
+    def recording(context, *, previous, merged):
+        seen.append(bool(inside))
+        return mirror(context, previous=previous, merged=merged)
+
+    monkeypatch.setattr(server, "mirror_changed_keys_to_runtime", recording)
+    try:
+        status, loaded = _request(f"{base}/api/admin/maintenance/config")
+        assert status == 200 and loaded["status"] == "ok", loaded
+        loaded["draft"]["devices"][0]["max_power"] = 600
+        body = {"draft": loaded["draft"], "revision": loaded["revision"], "confirm": True}
+
+        status, payload = _request(f"{base}/api/admin/maintenance/config/apply", "POST", body)
+
+        assert status == 200 and payload.get("ok") is True, payload
+        assert seen == [True]
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
 def test_parallel_setup_credential_creation_cannot_overlap(tmp_path):
     """Two Setup Applies for one workflow no longer meet inside the transaction.
 

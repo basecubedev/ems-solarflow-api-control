@@ -271,9 +271,13 @@ def test_explicit_runtime_hard_limit_can_exceed_configured_system_max(tmp_path):
 
 
 def test_runtime_write_limit_fallback_is_conservative():
+    """Without a configured device ceiling a device gets the one the EMS applies, not the generic total."""
+
+    from ems.config import default_runtime_config
+
     limits = effective_limits(build_validation_context())
     assert limits["system"]["max_total_power"] == 5000
-    assert limits["fallback_device_max_power"] == 5000
+    assert limits["fallback_device_max_power"] == default_runtime_config()["system"]["max_device_power"]
 
 
 def test_runtime_state_dashboard_updates_are_thread_safe(tmp_path):

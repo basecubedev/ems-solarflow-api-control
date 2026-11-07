@@ -77,6 +77,92 @@ def test_missing_device_in_runtime_is_config():
     assert prov["devices"]["WR1"]["enabled"]["source"] == "config"
 
 
+def test_a_device_is_compared_with_the_entry_its_serial_owns():
+    """Two devices swapped names since the EMS started: each still shows its own live values."""
+
+    config = _config()
+    config["devices"] = [
+        {"name": "WR2", "sn": "AAA", "max_power": 800, "pv_priority_factor": 1.0, "enabled": True},
+        {"name": "WR1", "sn": "BBB", "max_power": 600, "pv_priority_factor": 1.0, "enabled": True},
+    ]
+    runtime = {"devices": {
+        "WR1": {"identity": "AAA", "max_power": 400},
+        "WR2": {"identity": "BBB", "max_power": 600},
+    }}
+
+    prov = compute_overlap_provenance(config, runtime)
+
+    assert prov["devices"]["WR2"]["max_power"]["effective_value"] == 400
+    assert prov["devices"]["WR2"]["max_power"]["source"] == "dashboard_override"
+    assert prov["devices"]["WR1"]["max_power"]["source"] == "config"
+
+
+def test_a_switched_off_duplicate_shows_no_live_value_of_the_running_device():
+    config = _config()
+    config["devices"] = [
+        {"name": "WR1", "sn": "AAA", "max_power": 800, "pv_priority_factor": 1.0, "enabled": True},
+        {"name": "WR1 spare", "sn": "AAA", "max_power": 1200, "pv_priority_factor": 1.0, "enabled": False},
+    ]
+
+    prov = compute_overlap_provenance(config, {"devices": {"WR1": {"identity": "AAA", "max_power": 400}}})
+
+    assert prov["devices"]["WR1"]["max_power"]["effective_value"] == 400
+    assert prov["devices"]["WR1 spare"]["max_power"]["source"] == "config"
+
+
+def test_a_device_turned_telemetry_only_shows_no_override_for_being_out_of_control():
+    """The mirror took it out of control; that is what the saved config asks for, not a Dashboard override."""
+
+    config = _config()
+    config["devices"] = [
+        {"name": "WR1", "type": "zendure_mqtt", "serial_number": "AAA", "enabled": True, "mqtt": {"broker_ref": "default", "device_id": "dev-aaa"}},
+    ]
+
+    prov = compute_overlap_provenance(config, {"devices": {"WR1": {"identity": "AAA", "enabled": False}}})
+
+    assert prov["devices"]["WR1"]["enabled"]["source"] == "config"
+    assert prov["devices"]["WR1"]["enabled"]["config_value"] is False
+
+
+def test_a_legacy_grid_off_mode_is_the_off_grid_mode_the_device_was_seeded_with():
+    config = _config()
+    config["devices"][0]["grid_off_mode"] = 1
+
+    prov = compute_overlap_provenance(config, {"devices": {"WR1": {"offgrid_socket_mode": "eco"}}})
+
+    assert (prov["devices"]["WR1"]["offgrid_socket_mode"]["config_value"], prov["devices"]["WR1"]["offgrid_socket_mode"]["source"]) == ("eco", "config")
+
+
+def test_the_admin_seeds_a_device_as_the_ems_does(monkeypatch):
+    """Paired with ems.runtime_state.build_runtime_defaults: the client's coercion, then the seed's."""
+
+    from admin.config_runtime_overlap import _effective_values
+    from ems import config as cfg
+    from ems.clients import ZendureClient
+    from ems.runtime_state import build_runtime_defaults
+
+    monkeypatch.setattr(cfg, "MAX_DEVICE_POWER", 800)
+    config = {"system": {"max_device_power": 800}}
+    entries = [
+        {"name": "A", "ip": "192.0.2.1", "sn": "S1"},
+        {"name": "B", "ip": "192.0.2.2", "sn": "S2", "max_power": 0, "pv_priority_factor": 0, "ac_charge_enabled": False, "grid_off_mode": 1},
+        {"name": "C", "ip": "192.0.2.3", "sn": "S3", "max_power": 599.5, "pv_priority_factor": 2.5, "grid_off_mode": 2},
+        {"name": "D", "ip": "192.0.2.4", "sn": "S4", "max_power": "x", "pv_priority_factor": None, "ac_charge_enabled": None},
+        {"name": "E", "ip": "192.0.2.5", "sn": "S5", "max_power": True, "pv_priority_factor": 0.001},
+    ]
+    for entry in entries:
+        client = ZendureClient(
+            entry["name"], entry["ip"], entry["sn"], None,
+            entry.get("min_soc", 0), entry.get("max_soc", 0), entry.get("smart_mode", 1),
+            entry.get("grid_off_mode"), entry.get("max_power", cfg.MAX_DEVICE_POWER),
+            entry.get("pv_kwp", 1.0), entry.get("battery_kwh", 1.0), entry.get("pv_priority_factor", 1.0),
+            ac_charge_enabled=entry.get("ac_charge_enabled", True),
+        )
+        seeded = build_runtime_defaults([client])["devices"][entry["name"]]
+
+        assert _effective_values(entry, config) == {key: seeded[key] for key in _effective_values(entry, config)}, entry["name"]
+
+
 def test_resolve_path_honors_configured_relative_path(tmp_path):
     context = SimpleNamespace(install_root=tmp_path)
     path = resolve_runtime_state_path(

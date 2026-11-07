@@ -3509,9 +3509,10 @@ class AdminHandler(BaseHTTPRequestHandler):
         Staging happens before the config write, exactly like the setup apply:
         the EMS config must never become active referencing a credential record
         that does not resolve, and a staging failure must leave config.json
-        untouched. The whole unit — staging, write, rollback — runs inside the
-        shared apply transaction so a parallel Apply can neither interleave nor
-        roll back over this request's result.
+        untouched. The whole unit — staging, write, rollback and the runtime
+        mirror — runs inside the shared apply transaction so a parallel Apply
+        can neither interleave nor roll back over this request's result, nor
+        mirror its older values over this request's.
         """
 
         with self.server.config_apply.apply_transaction():
@@ -3557,9 +3558,9 @@ class AdminHandler(BaseHTTPRequestHandler):
                     ),
                     500,
                 )
+            result["runtime_sync"] = self._mirror_runtime_after_apply(prepared)
         result["validation"] = prepared["validation"]
         result["diff"] = prepared["diff"]
-        result["runtime_sync"] = self._mirror_runtime_after_apply(prepared)
         return result, 200
 
     def _handle_maintenance_reset_runtime(self):
@@ -3674,15 +3675,10 @@ class AdminHandler(BaseHTTPRequestHandler):
 
         try:
             merged = json.loads(prepared["payload"])
-            diff = prepared.get("diff") or {}
-            changed_paths = [
-                entry["path"]
-                for group in ("changes", "added")
-                for entry in diff.get(group, [])
-                if isinstance(entry, dict) and "path" in entry
-            ]
             context = self.server.config_apply.install_context_provider()
-            return mirror_changed_keys_to_runtime(context, merged, changed_paths)
+            return mirror_changed_keys_to_runtime(
+                context, previous=prepared["replaced"], merged=merged
+            )
         except Exception as exc:
             return {"applied": [], "skipped": [], "warnings": [f"runtime sync skipped: {exc}"]}
 

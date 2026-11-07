@@ -42,6 +42,38 @@ def _sanitized_device(state):
     return entry
 
 
+def runtime_device_for(devices, name, identity):
+    """The runtime-state entry a configured device owns, by the rule the EMS starts with.
+
+    That is the entry stamped with the device's serial, else the entry under its
+    name unless that one carries another serial; None when there is neither.
+    Every caller that joins a config device to its runtime entry asks this, so
+    the EMS and the Admin cannot disagree about which device an entry is.
+    """
+
+    ident = _clean_identity(identity)
+    if ident is not None:
+        for entry_name, state in devices.items():
+            if isinstance(state, dict) and _clean_identity(state.get("identity")) == ident:
+                return entry_name
+    state = devices.get(name)
+    if isinstance(state, dict) and _clean_identity(state.get("identity")) in (None, ident):
+        return name
+    return None
+
+
+def owned_runtime_device(devices, name, identity):
+    """runtime_device_for for a writer: None also where several entries carry the serial.
+
+    The EMS's own matching cannot tell such devices apart, so a writer that
+    followed the first of them could reach the wrong one.
+    """
+
+    ident = _clean_identity(identity)
+    carriers = [state for state in devices.values() if isinstance(state, dict) and ident is not None and _clean_identity(state.get("identity")) == ident]
+    return None if len(carriers) > 1 else runtime_device_for(devices, name, identity)
+
+
 def reconcile_runtime_devices(loaded_devices, default_devices, *, prune):
     """Reconcile loaded runtime device state against the configured devices.
 
@@ -66,13 +98,6 @@ def reconcile_runtime_devices(loaded_devices, default_devices, *, prune):
     if not default_devices:
         return {name: _sanitized_device(state) for name, state in loaded_devices.items()}, changes
 
-    loaded_by_identity = {}
-    for name, state in loaded_devices.items():
-        if isinstance(state, dict):
-            ident = _clean_identity(state.get("identity"))
-            if ident is not None:
-                loaded_by_identity.setdefault(ident, name)
-
     merged = {}
     consumed = set()
 
@@ -81,14 +106,7 @@ def reconcile_runtime_devices(loaded_devices, default_devices, *, prune):
         if isinstance(device_defaults, dict):
             ident = _clean_identity(device_defaults.get("identity"))
 
-        match_name = None
-        if ident is not None and ident in loaded_by_identity:
-            match_name = loaded_by_identity[ident]
-        elif isinstance(loaded_devices.get(cfg_name), dict):
-            candidate_ident = _clean_identity(loaded_devices[cfg_name].get("identity"))
-            if candidate_ident is None or candidate_ident == ident:
-                match_name = cfg_name
-
+        match_name = runtime_device_for(loaded_devices, cfg_name, ident)
         if match_name is not None and match_name not in consumed:
             operator_state = dict(loaded_devices[match_name])
             prior_identity = _clean_identity(operator_state.pop("identity", None))
@@ -640,17 +658,38 @@ class RuntimeState:
     def update_device(self, device_name, values):
         with self._file_lock(strict=True):
             self._refresh_from_disk(force=True)
+            return self._write_device(device_name, values)
+
+    def update_configured_device(self, name, identity, values):
+        """Update the entry a device as config names it owns; returns its name and new state.
+
+        The entry is found under the file lock, by the rule the EMS starts
+        with (owned_runtime_device), so an EMS start that re-keys the entries
+        between a caller's read and this write cannot turn it onto another
+        device.
+        """
+
+        with self._file_lock(strict=True):
+            self._refresh_from_disk(force=True)
             devices = self.data.setdefault("devices", {})
-            if device_name not in devices:
-                known = ", ".join(sorted(devices)) or "(none)"
-                raise KeyError(f"unknown device {device_name}; known devices: {known}")
-            device = devices[device_name]
-            if not isinstance(device, dict):
-                raise ValueError(f"device {device_name} runtime state must be an object")
-            device.update(values)
-            result = copy.deepcopy(device)
-            self.save_atomic()
-            return result
+            entry_name = owned_runtime_device(devices, name, identity) if isinstance(devices, dict) else None
+            if entry_name is None:
+                known = ", ".join(sorted(devices)) if isinstance(devices, dict) and devices else "(none)"
+                raise KeyError(f"no runtime entry for device {name}; known devices: {known}")
+            return entry_name, self._write_device(entry_name, values)
+
+    def _write_device(self, device_name, values):
+        devices = self.data.setdefault("devices", {})
+        if device_name not in devices:
+            known = ", ".join(sorted(devices)) or "(none)"
+            raise KeyError(f"unknown device {device_name}; known devices: {known}")
+        device = devices[device_name]
+        if not isinstance(device, dict):
+            raise ValueError(f"device {device_name} runtime state must be an object")
+        device.update(values)
+        result = copy.deepcopy(device)
+        self.save_atomic()
+        return result
 
     def get_system(self, key, default=None):
         with self.lock:

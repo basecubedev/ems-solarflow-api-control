@@ -1018,7 +1018,10 @@ accept exactly the same values:
 - a watt value that is not a whole number, is negative, or exceeds its limit:
   `system max-power` up to `system.max_total_power_limit` (else
   `system.max_total_power`), `device ... max-power` up to the device's
-  configured `max_power`, `ac-charge-power` up to 5000 W
+  configured `max_power` (where that is missing or not a positive number,
+  `system.max_device_power`, else the EMS default of 800 W, as the EMS caps
+  such a device),
+  `ac-charge-power` up to 5000 W
 - `loop-interval` outside 1–3600 seconds
 - `pv-priority-factor` outside 0.01–100
 - invalid offgrid value; allowed values are `off`, `eco`, and `standard`

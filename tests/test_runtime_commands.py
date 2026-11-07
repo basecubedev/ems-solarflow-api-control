@@ -18,6 +18,7 @@ import emsctl
 from ems import runtime_commands
 from ems.runtime_commands import (
     DEVICE_COMMANDS,
+    DEVICE_FIELDS,
     SECTION_COMMANDS,
     SYSTEM_COMMANDS,
     RuntimeWriteError,
@@ -255,6 +256,7 @@ def _production_modules():
 
 WRITERS = {
     "update_device": {"ems/runtime_state.py", "ems/runtime_commands.py"},
+    "update_configured_device": {"ems/runtime_commands.py"},
     "update_section": {"ems/runtime_state.py", "ems/runtime_commands.py"},
     "set_device": {"ems/runtime_state.py", "ems/simulation.py"},
 }
@@ -285,3 +287,31 @@ def test_nothing_outside_the_command_path_changes_runtime_values():
 )
 def test_emsctl_keeps_no_runtime_reader_or_writer_of_its_own(name):
     assert not hasattr(emsctl, name)
+
+
+@pytest.mark.parametrize("configured", [0, -5, True, "x", None])
+def test_a_device_without_an_own_ceiling_is_limited_by_the_installations(configured):
+    """The EMS caps such a device at system.max_device_power (device_power_ceiling); the runtime writer takes the same limit."""
+
+    context = build_validation_context({"system": {"max_device_power": 800}, "devices": [{"name": "WR1", "max_power": configured}]})
+
+    assert context["device_max_power"]["WR1"] == 800
+
+
+def test_the_catalogue_bounds_the_pv_priority_as_the_runtime_writer_does():
+    from ems.config_catalog import get_config_feature_field_index
+
+    field = get_config_feature_field_index()["devices[].pv_priority_factor"]
+
+    assert field["max"] == DEVICE_FIELDS["pv_priority_factor"][1][1]
+
+
+@pytest.mark.parametrize("configured", [0, None])
+def test_a_config_without_a_device_ceiling_takes_the_ems_default(configured):
+    """emsctl validates against config.json as saved, where an old one may lack system.max_device_power."""
+
+    from ems.config import default_runtime_config
+
+    context = build_validation_context({"devices": [{"name": "WR1", "max_power": configured}]})
+
+    assert context["device_max_power"]["WR1"] == default_runtime_config()["system"]["max_device_power"]

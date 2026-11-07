@@ -174,7 +174,8 @@ test("a restart is offered unless every change reached the running EMS", () => {
   const live = { changes: [{ path: "a", applies_live: true }] };
   assert.equal(restartNeeded(live, { runtime_sync: { applied: ["a"], skipped: [], warnings: [] } }), false);
   assert.equal(restartNeeded({ changes: [{ path: "a", applies_live: false }] }, {}), true);
-  assert.equal(restartNeeded({ removed: [{ path: "a", applies_live: true }] }, {}), true);
+  assert.equal(restartNeeded({ removed: [{ path: "a", applies_live: false }] }, {}), true);
+  assert.equal(restartNeeded({ removed: [{ path: "a", applies_live: true }] }, {}), false);
   assert.equal(restartNeeded(live, { runtime_sync: { skipped: ["a"] } }), true);
   assert.equal(restartNeeded(live, { runtime_sync: { warnings: ["runtime sync skipped"] } }), true);
 });

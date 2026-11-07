@@ -17,7 +17,9 @@ import pytest
 from ems.runtime_state import (
     RuntimeState,
     merge_runtime_defaults,
+    owned_runtime_device,
     reconcile_runtime_devices,
+    runtime_device_for,
 )
 
 pytestmark = [
@@ -129,6 +131,64 @@ def test_reconcile_fail_closed_when_no_configured_devices():
 
     assert set(merged) == {"WR1", "WR2"}
     assert not changes["pruned"] and not changes["added"] and not changes["renamed"]
+
+
+@pytest.mark.parametrize(
+    ("devices", "name", "identity", "expected"),
+    [
+        ({"WR1": {"identity": "AAA"}, "WR2": {"identity": "BBB"}}, "WR2", "AAA", "WR1"),
+        ({"WR1": {"identity": " AAA "}}, "WRX", "AAA", "WR1"),
+        ({"WR1": {"max_power": 650}}, "WR1", "AAA", "WR1"),
+        ({"WR1": {"max_power": 650}}, "WR1", None, "WR1"),
+        ({"WR1": {"identity": "ZZZ"}}, "WR1", "AAA", None),
+        ({"WR1": {"identity": "ZZZ"}}, "WR1", None, None),
+        ({"WR1": {"identity": "AAA"}}, "WRX", None, None),
+        ({}, "WR1", "AAA", None),
+    ],
+)
+def test_a_configured_device_owns_the_entry_its_serial_stamps_else_its_name(devices, name, identity, expected):
+    assert runtime_device_for(devices, name, identity) == expected
+
+
+def test_a_writer_follows_no_serial_that_several_entries_carry():
+    devices = {"WR1": {"identity": "AAA"}, "WR2": {"identity": "AAA"}, "WR3": {"identity": "CCC"}}
+
+    assert runtime_device_for(devices, "WR2", "AAA") == "WR1"
+    assert owned_runtime_device(devices, "WR2", "AAA") is None
+    assert owned_runtime_device(devices, "WRX", "CCC") == "WR3"
+
+
+def _write_runtime(path, devices):
+    path.write_text(json.dumps({"devices": devices}), encoding="utf-8")
+
+
+def test_a_configured_device_update_finds_its_entry_under_the_file_lock(tmp_path):
+    """Interleaving: an EMS start swaps the entries' names after the writer loaded the file and before it writes."""
+
+    path = tmp_path / "runtime-state.json"
+    _write_runtime(path, {"WR1": {"identity": "AAA", "enabled": True}, "WR2": {"identity": "BBB", "enabled": True}})
+    state = RuntimeState(str(path), {"devices": {}})
+    state.load_if_changed(force=True)
+    _write_runtime(path, {"WR2": {"identity": "AAA", "enabled": True}, "WR1": {"identity": "BBB", "enabled": True}})
+
+    entry_name, entry = state.update_configured_device("WR1", "AAA", {"enabled": False})
+
+    stored = json.loads(path.read_text(encoding="utf-8"))["devices"]
+    assert (entry_name, entry["enabled"]) == ("WR2", False)
+    assert (stored["WR2"]["enabled"], stored["WR1"]["enabled"]) == (False, True)
+
+
+def test_a_configured_device_without_an_entry_is_refused_and_nothing_is_written(tmp_path):
+    path = tmp_path / "runtime-state.json"
+    _write_runtime(path, {"WR1": {"identity": "ZZZ", "enabled": True}})
+    before = path.read_bytes()
+    state = RuntimeState(str(path), {"devices": {}})
+    state.load_if_changed(force=True)
+
+    with pytest.raises(KeyError, match="no runtime entry for device WR1"):
+        state.update_configured_device("WR1", "AAA", {"enabled": False})
+
+    assert path.read_bytes() == before
 
 
 def test_merge_runtime_defaults_migrates_rename_without_duplicating():

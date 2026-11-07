@@ -2964,21 +2964,22 @@ def safe_bool(value, default=False):
     return default
 
 
-def device_power_ceiling(value):
-    """A device's own watt ceiling, or ``MAX_DEVICE_POWER`` when it has none.
+def device_power_ceiling(value, fallback=None):
+    """A device's own watt ceiling, or ``fallback`` (``MAX_DEVICE_POWER``) when it has none.
 
     Only a finite positive number is a ceiling; anything else would disable
     the per-device backstop instead of setting one.
     """
 
+    fallback = MAX_DEVICE_POWER if fallback is None else fallback
     if isinstance(value, bool):
-        return MAX_DEVICE_POWER
+        return fallback
     try:
         number = float(value)
     except (TypeError, ValueError, OverflowError):
-        return MAX_DEVICE_POWER
+        return fallback
     if not math.isfinite(number) or number <= 0:
-        return MAX_DEVICE_POWER
+        return fallback
     return int(number) if number.is_integer() else number
 
 
