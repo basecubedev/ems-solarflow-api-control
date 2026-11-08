@@ -164,9 +164,9 @@ Inter and Lucide are copied into the output.
 | `@playwright/test` | `^1.64.1` (locked 1.64.1) | Apache-2.0 | Admin Console end-to-end test runner | ❌ | ❌ | https://github.com/microsoft/playwright |
 | `@fontsource-variable/inter` | `5.3.0` | OFL-1.1 | Source of the Inter variable font copied into the Modern builds | ❌ | ❌ | https://github.com/fontsource/font-files |
 | `@sveltejs/vite-plugin-svelte` | `7.3.1` | MIT | Compiles the Modern front ends' Svelte components during the Vite build | ❌ | ❌ | https://github.com/sveltejs/vite-plugin-svelte |
-| `lucide-static` | `1.64.0` | ISC | Source of the icon paths copied into the Modern sprites | ❌ | ❌ | https://github.com/lucide-icons/lucide |
+| `lucide-static` | `1.69.0` | ISC | Source of the icon paths copied into the Modern sprites | ❌ | ❌ | https://github.com/lucide-icons/lucide |
 | `svelte` | `5.57.3` | MIT | Component compiler of the Modern front ends; its runtime is bundled (Vendored Components) | ❌ | ❌ | https://github.com/sveltejs/svelte |
-| `vite` | `8.3.5` | MIT | Builds the Modern front ends into `dashboard/static/modern/`, `admin/static/modern/` and `appliance/static/modern/` | ❌ | ❌ | https://github.com/vitejs/vite |
+| `vite` | `8.3.6` | MIT | Builds the Modern front ends into `dashboard/static/modern/`, `admin/static/modern/` and `appliance/static/modern/` | ❌ | ❌ | https://github.com/vitejs/vite |
 | `playwright` | 1.64.1 | Apache-2.0 | Browser automation library behind the test runner | ❌ | ❌ | https://github.com/microsoft/playwright |
 | `playwright-core` | 1.64.1 | Apache-2.0 | Browser protocol driver used by `playwright` | ❌ | ❌ | https://github.com/microsoft/playwright |
 
@@ -229,9 +229,9 @@ output, with the material it bundles or copies, is described below the table.
 | `uPlot` | 1.6.31 | MIT | Canvas charts on the Dashboard History and Analytics tabs | ✅ | ✅ | https://github.com/leeoniya/uPlot | `dashboard/static/uPlot.iife.min.js`, `dashboard/static/uPlot.min.css`, `dashboard/static/uPlot.LICENSE` |
 | `svelte` | 5.57.3 (runtime) | MIT | Component runtime bundled into the Modern dashboard, Admin console and Appliance Manager | ✅ | ✅ | https://github.com/sveltejs/svelte | `dashboard/static/modern/assets/modern.js`, `admin/static/modern/assets/vendor.js`, `appliance/static/modern/assets/appliance.js`, notices in `dashboard/static/modern/licenses.json`, `admin/static/modern/licenses.json` and `appliance/static/modern/licenses.json` |
 | `clsx` | 2.1.1 | MIT | Class-name helper the Svelte runtime bundles | ✅ | ✅ | https://github.com/lukeed/clsx | `dashboard/static/modern/assets/modern.js`, `admin/static/modern/assets/vendor.js`, `appliance/static/modern/assets/appliance.js`, notices in `dashboard/static/modern/licenses.json`, `admin/static/modern/licenses.json` and `appliance/static/modern/licenses.json` |
-| `vite` (module-preload helper) | 8.3.5 | MIT | The few lines Vite writes into the Admin console's entry chunk to preload the page chunks it imports | ✅ | ✅ | https://github.com/vitejs/vite | `admin/static/modern/assets/admin.js` (Copyright (c) 2019-present, VoidZero Inc. and Vite contributors), notice in `admin/static/modern/Vite.LICENSE` |
+| `vite` (module-preload helper) | 8.3.6 | MIT | The few lines Vite writes into the Admin console's entry chunk to preload the page chunks it imports | ✅ | ✅ | https://github.com/vitejs/vite | `admin/static/modern/assets/admin.js` (Copyright (c) 2019-present, VoidZero Inc. and Vite contributors), notice in `admin/static/modern/Vite.LICENSE` |
 | `Inter` (`@fontsource-variable/inter`) | 4.1 via 5.3.0 | OFL-1.1 | The Modern front ends' typeface, latin subset | ✅ | ✅ | https://github.com/rsms/inter | `dashboard/static/modern/assets/inter-latin-wght-normal.woff2`, `dashboard/static/modern/assets/modern.css` (`@font-face`), `dashboard/static/modern/Inter.LICENSE`, `admin/static/modern/assets/inter-latin-wght-normal.woff2`, `admin/static/modern/assets/admin.css` (`@font-face`), `admin/static/modern/Inter.LICENSE`, `appliance/static/modern/assets/inter-latin-wght-normal.woff2`, `appliance/static/modern/assets/appliance.css` (`@font-face`), `appliance/static/modern/Inter.LICENSE` |
-| `Lucide` (`lucide-static`) | 1.64.0 | ISC AND MIT (Feather-derived icons) | Icon paths of the Modern front ends' inline sprites | ✅ | ✅ | https://github.com/lucide-icons/lucide | `dashboard/static/modern/index.html`, `admin/static/modern/index.html` and `appliance/static/modern/index.html` (the `<svg class="icon-sprite">` block), `dashboard/static/modern/Lucide.LICENSE`, `admin/static/modern/Lucide.LICENSE`, `appliance/static/modern/Lucide.LICENSE` |
+| `Lucide` (`lucide-static`) | 1.69.0 | ISC AND MIT (Feather-derived icons) | Icon paths of the Modern front ends' inline sprites | ✅ | ✅ | https://github.com/lucide-icons/lucide | `dashboard/static/modern/index.html`, `admin/static/modern/index.html` and `appliance/static/modern/index.html` (the `<svg class="icon-sprite">` block), `dashboard/static/modern/Lucide.LICENSE`, `admin/static/modern/Lucide.LICENSE`, `appliance/static/modern/Lucide.LICENSE` |
 | `rpi-image-gen` | v2.7.0 | BSD-3-Clause | Upstream files copied verbatim as the image contract the appliance is built against (`image-rpios`) | ❌ | ❌ | https://github.com/raspberrypi/rpi-image-gen | `tests/fixtures/rpi_image_gen/` (seventeen files, listed with their SHA-256 in `source-manifest.json`), `tests/fixtures/rpi_image_gen/UPSTREAM.LICENSE` |
 
 Provenance, verified on 2026-08-04 against the upstream `1.6.31` tag:
@@ -455,21 +455,21 @@ Modern dashboard's build tools and stay on the build machine.
 
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream |
 |---|---|---|---|:---:|:---:|---|
-| `@rolldown/binding-android-arm-eabi` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
-| `@rolldown/binding-android-arm64` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
-| `@rolldown/binding-darwin-arm64` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
-| `@rolldown/binding-darwin-x64` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
-| `@rolldown/binding-freebsd-x64` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
-| `@rolldown/binding-linux-arm-gnueabihf` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
-| `@rolldown/binding-linux-arm64-gnu` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
-| `@rolldown/binding-linux-arm64-musl` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
-| `@rolldown/binding-linux-ppc64-gnu` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
-| `@rolldown/binding-linux-s390x-gnu` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
-| `@rolldown/binding-linux-x64-gnu` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
-| `@rolldown/binding-linux-x64-musl` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
-| `@rolldown/binding-openharmony-arm64` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
-| `@rolldown/binding-win32-arm64-msvc` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
-| `@rolldown/binding-win32-x64-msvc` | 1.2.14 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-android-arm-eabi` | 1.2.16 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-android-arm64` | 1.2.16 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-darwin-arm64` | 1.2.16 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-darwin-x64` | 1.2.16 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-freebsd-x64` | 1.2.16 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-linux-arm-gnueabihf` | 1.2.16 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-linux-arm64-gnu` | 1.2.16 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-linux-arm64-musl` | 1.2.16 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-linux-ppc64-gnu` | 1.2.16 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-linux-s390x-gnu` | 1.2.16 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-linux-x64-gnu` | 1.2.16 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-linux-x64-musl` | 1.2.16 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-openharmony-arm64` | 1.2.16 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-win32-arm64-msvc` | 1.2.16 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-win32-x64-msvc` | 1.2.16 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
 | `fsevents` | 2.3.3 | MIT | macOS file watcher, used by Vite's development server | ❌ | ❌ | https://github.com/fsevents/fsevents |
 | `lightningcss-android-arm64` | 1.33.0 | MPL-2.0 | Native CSS minifier for this platform, used by Vite at build time; never modified or shipped | ❌ | ❌ | https://github.com/parcel-bundler/lightningcss |
 | `lightningcss-darwin-arm64` | 1.33.0 | MPL-2.0 | Native CSS minifier for this platform, used by Vite at build time; never modified or shipped | ❌ | ❌ | https://github.com/parcel-bundler/lightningcss |
