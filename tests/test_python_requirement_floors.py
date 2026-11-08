@@ -62,3 +62,26 @@ def test_dependabot_keeps_every_directory_that_holds_a_python_manifest():
         needed.add("/" if str(parent) == "." else f"/{parent}")
 
     assert needed <= kept, sorted(needed - kept)
+
+
+def test_dependabot_moves_a_shared_package_in_both_manifests_in_one_pull_request():
+    """One pull request per manifest moved the EMS floor first and failed the test above.
+
+    Only the shared packages are grouped: Dependabot cannot rebase or recreate
+    a pull request that ``group-by`` made (dependabot-core#14780). It matches a
+    pattern against the normalised name as written, so the list holds
+    canonical names.
+    """
+
+    config = yaml.safe_load((ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8"))
+    blocks = [update for update in config["updates"] if update["package-ecosystem"] == "pip"]
+    assert len(blocks) == 1
+
+    by_name = [group for group in (blocks[0].get("groups") or {}).values() if group.get("group-by") == "dependency-name"]
+    assert len(by_name) == 1
+    group = by_name[0]
+    assert not {"update-types", "exclude-patterns", "dependency-type"} & set(group)
+    assert group.get("applies-to", "version-updates") == "version-updates"
+
+    shared = set(_floors(ROOT / "requirements.txt")) & set(_floors(ROOT / "deploy" / "admin" / "requirements.txt"))
+    assert set(group["patterns"]) == shared

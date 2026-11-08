@@ -18,6 +18,14 @@ updates:
       - "python"
     commit-message:
       prefix: "deps(python)"
+    groups:
+      shared:
+        group-by: "dependency-name"
+        patterns:
+          - "cryptography"
+          - "paho-mqtt"
+          - "requests"
+          - "zeroconf"
 
   - package-ecosystem: "npm"
     directory: "/"

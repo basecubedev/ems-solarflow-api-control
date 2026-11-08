@@ -482,9 +482,23 @@ Dependabot tracks Python, npm, Docker and GitHub Actions updates
 (`.github/dependabot.yml`). npm comes once a month in two groups:
 `frontend-build` (Vite, Svelte, the Svelte plugin, Lucide, Inter), whose update
 changes the committed Modern builds, and `test-tools` (Playwright), which does
-not. CodeQL security scanning is enabled through GitHub default setup for this
-repository; it is not a checked-in workflow file. Updates still require passing
-tests and review.
+not. Python comes once a week. A package that both `requirements.txt` and
+`deploy/admin/requirements.txt` name is in the `shared` group, grouped by
+dependency name, so it gets one pull request for both manifests; one that
+raised the EMS floor alone would fail `tests/test_python_requirement_floors.py`,
+which also keeps the group's list equal to the packages the two manifests
+share. Dependabot still splits a package whose constraints in the two manifests
+admit no common version, and it cannot rebase or recreate a pull request of
+this group
+([dependabot-core#14780](https://github.com/dependabot/dependabot-core/issues/14780)),
+which is why the group holds no other package: a conflict in one is resolved
+by hand, the inventory row with `python tools/check_third_party_licenses.py
+--fix-versions`. Its title names only `/`
+([dependabot-core#15892](https://github.com/dependabot/dependabot-core/issues/15892))
+although it changes both manifests. Security updates are not grouped and come
+per manifest. CodeQL security
+scanning is enabled through GitHub default setup for this repository; it is not
+a checked-in workflow file. Updates still require passing tests and review.
 
 ### Dependency refresh
 
@@ -532,7 +546,8 @@ reads a secret today.
 
 Dependabot does not rebase a pull request that carries someone else's commit.
 When one goes stale or conflicts, comment `@dependabot recreate`; the refresh
-runs again on the new commit.
+runs again on the new commit. A pull request of the Python `shared` group
+refuses that command (see above) and is resolved by hand.
 
 One-time setup, by the repository owner:
 
