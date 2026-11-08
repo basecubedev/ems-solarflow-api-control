@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The Schedule tab against the real schedule routes: the preview server mounts
 // them over a scratch copy of the scenario's runtime state. What is checked

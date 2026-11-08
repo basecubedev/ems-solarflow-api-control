@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Create the release identity the Appliance Manager is signed with.
 #
@@ -38,7 +39,7 @@ SECRET_OUT=""
 FORCE=no
 
 usage() {
-    sed -n '3,30p' "$0"
+    awk 'NR == 1 { next } /^#/ { if ($0 !~ /SPDX-/) print; next } { exit }' "$0"
 }
 
 fail() {

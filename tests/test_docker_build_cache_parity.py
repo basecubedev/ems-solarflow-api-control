@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Caching must not let a local validation image diverge from the published one.
 
@@ -27,7 +28,7 @@ PACKAGED_SCRIPT = ROOT / "tests" / "e2e" / "run-packaged-admin.sh"
 
 # Inputs that legitimately differ between a loaded single-platform validation
 # build and the pushed multi-platform build. Everything else is image identity.
-NON_IDENTITY_KEYS = {"platforms", "load", "push", "tags", "cache-from", "cache-to", "labels", "annotations"}
+NON_IDENTITY_KEYS = {"platforms", "load", "push", "outputs", "tags", "cache-from", "cache-to", "labels", "annotations"}
 
 IDENTITY_LABELS = (
     "org.opencontainers.image.version",

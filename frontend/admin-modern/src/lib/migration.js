@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * The review of an older Zendure MQTT setup (admin/zendure_mqtt_migration_review.py)

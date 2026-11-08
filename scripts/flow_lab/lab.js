@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Flow rendering lab. One synthetic scene -- a grid of energy pipes with the

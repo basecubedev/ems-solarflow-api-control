@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { createPageSet } from "../../../shared/shell/pages.js";
 
@@ -18,6 +19,7 @@ export const PAGES = Object.freeze([
   { id: "access", icon: "key-round", group: "main", shortLabel: "nav.access.short" },
   { id: "diagnostics", icon: "stethoscope", group: "system" },
   { id: "settings", icon: "sliders-horizontal", group: "system" },
+  { id: "about", icon: "info", group: "system", shortLabel: "nav.about.short", hidden: true },
 ]);
 
 export const PAGE_IDS = Object.freeze(PAGES.map((page) => page.id));

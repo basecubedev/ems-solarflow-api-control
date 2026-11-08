@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Provides the official ``influx`` CLI so bundled InfluxDB backup/restore works
 # from inside this container without the Docker CLI or socket.
@@ -9,6 +10,11 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 COPY --from=influxdb-cli /usr/local/bin/influx /usr/local/bin/influx
+COPY third_party/influx-cli/ /usr/share/doc/influx-cli/
+COPY scripts/binary_notices.py /tmp/binary_notices.py
+RUN python3 /tmp/binary_notices.py check --component influx-cli \
+      --binary /usr/local/bin/influx --notices /usr/share/doc/influx-cli/THIRD_PARTY_NOTICES \
+    && rm /tmp/binary_notices.py
 
 # Mark the image as a container runtime so existing users get persistent
 # backups under /app/data/backups after a plain image pull, without editing
@@ -66,6 +72,7 @@ ENV EMS_GIT_DIRTY=$EMS_GIT_DIRTY
 ENV EMS_BUILD_ID=$EMS_BUILD_ID
 ENV EMS_BUILD_SERIAL=$EMS_BUILD_SERIAL
 ENV EMS_CHANNEL=$EMS_CHANNEL
+RUN python3 -c 'import json, os; json.dump({"version": os.environ["EMS_RELEASE_TAG"], "revision": os.environ["EMS_GIT_COMMIT"], "build_id": os.environ["EMS_BUILD_ID"], "channel": os.environ["EMS_CHANNEL"]}, open("/app/dashboard/static/modern/build.json", "w"))'
 
 # The same OCI identity contract as the paired Admin image. CI and the local
 # Docker contract pass one revision/build/channel/release tuple to both images.

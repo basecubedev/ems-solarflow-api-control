@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
+# SPDX-License-Identifier: AGPL-3.0-or-later
 .git
 .github
 .pytest_cache
@@ -25,6 +27,8 @@ scripts/
 !scripts/generate_release_resources.py
 # On-hardware MQTT write-latency probe (developer tool; see docs/developer).
 !scripts/mqtt_write_latency_probe.py
+# Both image builds refuse a shipped binary its notices were not written for.
+!scripts/binary_notices.py
 tasks/
 docs/develop/
 # Source of the Modern dashboard; the image carries its committed build output

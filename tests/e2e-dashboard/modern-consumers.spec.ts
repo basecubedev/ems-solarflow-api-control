@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Consumers in the Modern dashboard, against the preview's "consumers" scenario:
 // a washing machine at 420 W, a fridge at 85 W, an office at 60 W and an idle

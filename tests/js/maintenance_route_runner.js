@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Evaluates the real admin.js hash-routing helpers for the Maintenance view, so
 // the permanent #maintenance-manual alias and the settings tab deep link are

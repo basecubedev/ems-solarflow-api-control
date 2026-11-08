@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Telemetry-only Zendure MQTT devices are visible read-only in the dashboard.
 

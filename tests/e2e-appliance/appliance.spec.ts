@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Appliance Manager UI journeys against the deterministic test server.
 // Every assertion waits on a locator or a response, never on a fixed timeout.

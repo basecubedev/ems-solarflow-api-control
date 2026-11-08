@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Build the amd64 package and prove it in a Debian guest that really booted.
 #
@@ -30,7 +31,7 @@ MEMORY=2560
 KEEP=0
 EVIDENCE=
 
-usage() { sed -n '3,26p' "$0"; }
+usage() { awk 'NR == 1 { next } /^#/ { if ($0 !~ /SPDX-/) print; next } { exit }' "$0"; }
 
 not_run() {
     echo "appliance-smoke-vm-amd64: $1" >&2

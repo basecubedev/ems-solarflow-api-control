@@ -4,7 +4,7 @@
 [![Repo browser e2e](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/playwright-e2e.yml/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/playwright-e2e.yml)
 [![CodeQL](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/github-code-scanning/codeql)
 [![Dependabot](https://img.shields.io/badge/Dependabot-enabled-brightgreen?logo=dependabot)](.github/dependabot.yml)
-![automated tests](https://img.shields.io/badge/automated%20tests-19000%2B-blue)
+![automated tests](https://img.shields.io/badge/automated%20tests-19300%2B-blue)
 [![Test-Driven Development](https://img.shields.io/badge/Test--Driven%20Development-contract--first-blue)](docs/developer/testing.md#development-approach)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.14-blue)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue)](LICENSE)
@@ -18,6 +18,9 @@ every consumer a plug or meter measures over MQTT.
 The dashboard, the Admin Console and the Appliance Manager speak
 **English, Deutsch, Nederlands and Français** — pick yours under Appearance at
 the top right, or below the sign-in form.
+
+> [!NOTE]
+> **An independent community project.** EMS SolarFlow is not developed, endorsed or supported by Zendure, and it is not a Zendure product. Zendure, SolarFlow and the other product names mentioned here are trademarks of their respective owners; this project uses them only to say which hardware it works with. For help with this software, open a [GitHub issue](https://github.com/basecubedev/ems-solarflow-api-control/issues), not a ticket with Zendure support.
 
 > [!TIP]
 > **New to EMS SolarFlow?** Start with the [Project Overview](docs/user/project-overview.md), read the docs online at <https://basecubedev.github.io/ems-solarflow-api-control/>, or watch the [videos](docs/user/videos.md) on [YouTube](https://www.youtube.com/channel/UCk7i1JfCVML8hqlvzenCJBg).

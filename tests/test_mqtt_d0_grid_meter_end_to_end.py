@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """End-to-end: a D0 observed on a local broker becomes the EMS grid meter.
 

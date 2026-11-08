@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
+# SPDX-License-Identifier: AGPL-3.0-or-later
 name: Appliance image build
 
 # Build the flashable Raspberry Pi appliance image on a GitHub-hosted runner.
@@ -414,6 +416,19 @@ jobs:
           set -e
           exit "${status}"
 
+      - name: Record the source packages the image is made of
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          set -euo pipefail
+          images=("${APPLIANCE_OUTPUT}"/*.img)
+          [ "${#images[@]}" -eq 1 ] && [ -r "${images[0]}" ] \
+            || { echo "::error::expected one raw image in ${APPLIANCE_OUTPUT}"; exit 1; }
+          python3 scripts/appliance_image_sources.py list \
+            --image "${images[0]}" \
+            --board "${PROFILE}" \
+            --output "${APPLIANCE_OUTPUT}/os-sources-${PROFILE}.json"
+
       - name: Summarise the verdict
         if: always()
         env:
@@ -451,6 +466,7 @@ jobs:
             ${{ env.APPLIANCE_OUTPUT }}/*.build-authority.json
             ${{ env.APPLIANCE_OUTPUT }}/*.build.json
             ${{ env.APPLIANCE_OUTPUT }}/builder-environment.json
+            ${{ env.APPLIANCE_OUTPUT }}/os-sources-*.json
           if-no-files-found: warn
           retention-days: 30
           overwrite: true
@@ -491,7 +507,7 @@ jobs:
       && needs.image.result == 'success'
       && needs['manager-package'].result == 'success' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     permissions:
       # The only job in this workflow that may write anything, and all it writes
       # is a release of files the jobs above already built. No secret is read
@@ -517,6 +533,30 @@ jobs:
         with:
           path: ${{ runner.temp }}/collected
           pattern: appliance-*
+
+      - name: Collect Docker's notices and the source code the images are built from
+        env:
+          PROFILES: ${{ needs.plan.outputs.profiles }}
+        run: |
+          set -euo pipefail
+          collected="${RUNNER_TEMP}/collected"
+          release="${RUNNER_TEMP}/release"
+          mkdir -p "${release}"
+          boards="$(printf '%s' "${PROFILES}" \
+            | python3 -c 'import json,sys; print(" ".join(json.load(sys.stdin)))')"
+          [ -n "${boards}" ] || { echo "::error::the plan job named no board"; exit 1; }
+          requests=()
+          for board in ${boards}; do
+            request="${collected}/appliance-image-${board}/os-sources-${board}.json"
+            [ -r "${request}" ] || { echo "::error::${board} recorded no source request"; exit 1; }
+            requests+=(--request "${request}")
+          done
+          python3 scripts/binary_notices.py appliance "${requests[@]}" \
+            --output "${release}"
+          python3 scripts/appliance_image_sources.py collect "${requests[@]}" \
+            --revision "${GITHUB_SHA}" \
+            --repository-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --output "${release}"
 
       - name: Lay out the files a download page needs
         env:
@@ -655,6 +695,23 @@ jobs:
             echo
             echo "Also here: each image's build record and build authority, the builder"
             echo "environment each was recorded with, and the gate logs."
+            echo
+            echo "And the source code of every package in the images, in"
+            echo "\`ems-solarflow-appliance-${version}-sources-<n>-of-<N>.tar\`."
+            echo "\`ems-solarflow-appliance-${version}-sources.json\` says which package is in"
+            echo "which part, where it came from and how each file was verified. Docker's"
+            echo "packages publish no source and their own license (Apache-2.0) asks for"
+            echo "none, so it names their upstream instead (the copyleft Go modules and the"
+            echo "GNU C Library in their programs are the exceptions, see below and"
+            echo "THIRD_PARTY_LICENSES.md); the Appliance Manager's source is this"
+            echo "repository at the Manager's release tag, or at \`${GITHUB_SHA}\` when this"
+            echo "build made the package itself."
+            echo
+            echo "Nor do Docker's packages ship notices for what their programs are built"
+            echo "from: \`ems-solarflow-appliance-${version}-docker-notices.txt\` carries the"
+            echo "license texts of their programs and of every Go module compiled into them,"
+            echo "and \`ems-solarflow-appliance-${version}-docker-module-sources.tar\` the source"
+            echo "of the modules among them whose license asks for it, such as MPL-2.0."
             echo
             echo "The gate runner's own verdict, per board, read back from the log"
             echo "each \`gate-evidence-<board>.zip\` carries rather than asserted here:"

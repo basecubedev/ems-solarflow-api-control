@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 basecubedev -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script module>
   export const manifest = { id: "month-bars", data: ["energy.monthly_current_year", "energy.lifetime.since_date"], refresh: "sse", minWidth: 320, states: ["running", "future", "unmeasured", "missing"] };
 </script>

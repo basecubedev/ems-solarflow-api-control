@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 basecubedev -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   let { value = null, label = "", max = 100 } = $props();
   const share = $derived(value === null || value === undefined ? null : Math.max(0, Math.min(1, Number(value) / max)));

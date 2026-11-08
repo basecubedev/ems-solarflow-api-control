@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Every text the Modern Appliance Manager shows beside the shared parts' own
@@ -15,6 +16,7 @@ export const STRINGS = {
   "app.name": s("EMS SolarFlow", "EMS SolarFlow", "EMS SolarFlow", "EMS SolarFlow"),
   "app.sub": s("Appliance Manager", "Appliance Manager", "Appliance Manager", "Appliance Manager"),
   "app.version": s("Manager {version}", "Manager {version}", "Manager {version}", "Manager {version}"),
+  "about.imageSources": s("Source code of the appliance image", "Quellcode des Appliance-Images", "Broncode van het appliance-image", "Code source de l’image de l’appliance"),
 
   "nav.overview": s("Overview", "Übersicht", "Overzicht", "Aperçu"),
   "nav.assistant": s("Assistant", "Assistent", "Assistent", "Assistant"),

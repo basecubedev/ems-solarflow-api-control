@@ -1,3 +1,5 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { type Page, type Locator, expect } from "@playwright/test";
 
 // The Maintenance "Your system" panel. Five specs carried a private copy of the

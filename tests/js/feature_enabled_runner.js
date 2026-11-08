@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Evaluates the real admin.js feature-enabled resolver, so a missing value is
 // tested against the shipped code rather than against a copy of it.

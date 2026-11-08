@@ -9,6 +9,14 @@ repository. `tools/check_third_party_licenses.py` and
 `tests/test_third_party_licenses.py` verify it against the actual manifests, so
 a new dependency fails CI until it is documented here.
 
+Per file, the repository follows the [REUSE specification](https://reuse.software/):
+every source, script and configuration file the project writes names its
+copyright holder and license in its first lines, and [`REUSE.toml`](REUSE.toml)
+declares the rest: files that cannot carry a comment, fixtures and release
+evidence whose bytes are the point, and every third-party file below with its
+upstream holder. The license texts are in
+[`LICENSES/`](LICENSES/), and `reuse lint` checks that nothing is left out.
+
 ## How To Read This Inventory
 
 | Column | Meaning |
@@ -64,13 +72,57 @@ into the published images.
 ### Distributed Third-Party Binaries
 
 Prebuilt upstream binaries copied into the published images. They are not
-Python packages and do not appear in any requirements file.
+Python packages and do not appear in any requirements file. None of the three
+arrives with its license text: `influx` is copied out of an image build stage,
+the Docker CLI and the Compose plugin are downloaded as bare binaries. The texts
+are therefore kept in `third_party/`, and the final stage of the Dockerfile
+named in `Image` copies the directory to `/usr/share/doc/<name>/` beside the
+binary. The checker reads the final stage of each Dockerfile and requires a row
+for every file it places under `/usr`, `/opt`, `/bin`, `/sbin` or `/lib`
+(except `/usr/share` and Python package directories) through `COPY --from` or
+`ADD`, or in a `RUN` step through `install`, `cp`, `mv`, `curl -o`, `wget -O`,
+`tar -x -C` or `unzip -d`, also behind `if`/`for`/`while`, in `case` branches
+and in `sh -c`. A binary a `RUN` step compiles, writes from a heredoc or places
+with another command is not seen and needs its row by hand.
 
-| Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream |
-|---|---|---|---|:---:|:---:|---|
-| `influx` | 2.9 (from the `influxdb:2.9` build stage) | MIT | InfluxDB backup/restore from inside the EMS container without a Docker socket | ✅ | ✅ | https://github.com/influxdata/influx-cli |
-| `docker/cli` | 27.5.1 | Apache-2.0 | Admin Console controls the host Docker engine through the mounted socket; client only, never a daemon | ✅ | ✅ | https://github.com/docker/cli |
-| `docker/compose` | 2.32.4 | Apache-2.0 | Compose plugin for the Admin Console's container lifecycle operations | ✅ | ✅ | https://github.com/docker/compose |
+| Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream | Image | Installed as | Notices |
+|---|---|---|---|:---:|:---:|---|---|---|---|
+| `influx` | 2.8.0, commit `8cdf401` (from the `influxdb:2.9` build stage) | MIT | InfluxDB backup/restore from inside the EMS container without a Docker socket | ✅ | ✅ | https://github.com/influxdata/influx-cli | `Dockerfile` | `/usr/local/bin/influx` | `third_party/influx-cli/LICENSE`, `third_party/influx-cli/THIRD_PARTY_NOTICES` |
+| `docker/cli` | 27.5.1 | Apache-2.0 AND MIT | Admin Console controls the host Docker engine through the mounted socket; client only, never a daemon. The static build links musl (MIT) in | ✅ | ✅ | https://github.com/docker/cli | `deploy/admin/Dockerfile` | `/usr/local/bin/docker` | `third_party/docker-cli/LICENSE`, `third_party/docker-cli/NOTICE`, `third_party/docker-cli/THIRD_PARTY_NOTICES`, `third_party/docker-cli/MUSL.COPYRIGHT` |
+| `docker/compose` | 2.32.4 | Apache-2.0 | Compose plugin for the Admin Console's container lifecycle operations | ✅ | ✅ | https://github.com/docker/compose | `deploy/admin/Dockerfile` | `/usr/local/lib/docker/cli-plugins/docker-compose` | `third_party/docker-compose/LICENSE`, `third_party/docker-compose/NOTICE`, `third_party/docker-compose/THIRD_PARTY_NOTICES` |
+
+Provenance, verified on 2026-11-07: each `LICENSE` and `NOTICE` is
+byte-identical to the file of the same name at the upstream revision in the
+Version column. `MUSL.COPYRIGHT` is musl's `COPYRIGHT` at v1.2.5, the musl of
+the Alpine 3.20 toolchain (GCC 13.2.1_git20240309, as the binary's `.comment`
+names it) that Docker's static CLI is built and statically linked with.
+
+| File | SHA-256 |
+|---|---|
+| `third_party/influx-cli/LICENSE` | `4dca58790e62edef3456a30fd971e32df1b890ac5341524813c02adbbbb1289a` |
+| `third_party/docker-cli/LICENSE` | `2d81ea060825006fc8f3fe28aa5dc0ffeb80faf325b612c955229157b8c10dc0` |
+| `third_party/docker-cli/NOTICE` | `a8c869fbda819afb8d80e0ac19bac52e766bc6c19cb38cf94f52d64c4be2aab6` |
+| `third_party/docker-cli/MUSL.COPYRIGHT` | `f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af` |
+| `third_party/docker-compose/LICENSE` | `58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd` |
+| `third_party/docker-compose/NOTICE` | `b7dca0a6b01fa7365e4892877a6321179ee343d72ee87a96cfc222141b99a1e6` |
+
+The binaries are statically linked Go programs, and the modules compiled into
+them travel with them too. `THIRD_PARTY_NOTICES` in each directory is generated
+by `scripts/binary_notices.py generate` from the upstream source of the pinned
+version: the module list of its `go.mod` (`vendor/modules.txt` for the Docker
+CLI, which is built vendored), every module's license files from the Go module
+proxy or the vendor tree, those of its packages as well as its root's (each
+named by its package path; `testdata`, `vendor` and directories Go ignores
+left out), and the Go standard library's license, each distinct text once
+with the modules that use it; the list may include modules only
+the upstream's tests use, which costs a few notices and omits none. The
+arrangement is the project's and is given away under CC0-1.0; every text in it
+stays under the terms it states. Both image builds run
+`scripts/binary_notices.py check` on the binary they ship and fail when it was
+built from another revision than its notices name, or holds a module they do
+not list. The Docker CLI is built vendored and records no modules, so for it
+the check compares the version alone. A moved `influxdb:2.9` tag or a version
+bump therefore stops the build with the command that regenerates the file.
 
 ## Development Dependencies
 
@@ -87,9 +139,10 @@ documentation website only in [`requirements-docs.txt`](requirements-docs.txt).
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream |
 |---|---|---|---|:---:|:---:|---|
 | `pytest` | unpinned (verified 9.1.0) | MIT | Test framework for the whole Python suite | ❌ | ❌ | https://github.com/pytest-dev/pytest |
-| `ruff` | `==0.15.22` | MIT | Lint and static checks (`ruff check .`) | ❌ | ❌ | https://github.com/astral-sh/ruff |
+| `ruff` | `==0.17.3` | MIT | Lint and static checks (`ruff check .`) | ❌ | ❌ | https://github.com/astral-sh/ruff |
 | `PyYAML` | `>=6.0` (verified 6.0.3) | MIT | Parsing CI workflow and compose YAML inside contract tests | ❌ | ❌ | https://github.com/yaml/pyyaml |
-| `zensical` | `==0.0.71` | MIT | Builds the documentation website from `docs/` ([docs-site.md](docs/developer/docs-site.md)) | ❌ | ❌ | https://github.com/zensical/zensical |
+| `reuse` | `==6.2.0` | GPL-3.0-or-later AND Apache-2.0 AND CC0-1.0 AND CC-BY-SA-4.0 | Checks that every file names its copyright holder and license (`reuse lint`, [REUSE](https://reuse.software/)) | ❌ | ❌ | https://github.com/fsfe/reuse-tool |
+| `zensical` | `==0.0.73` | MIT | Builds the documentation website from `docs/` ([docs-site.md](docs/developer/docs-site.md)) | ❌ | ❌ | https://github.com/zensical/zensical |
 
 ### Node Development Dependencies
 
@@ -175,7 +228,8 @@ output, with the material it bundles or copies, is described below the table.
 |---|---|---|---|:---:|:---:|---|---|
 | `uPlot` | 1.6.31 | MIT | Canvas charts on the Dashboard History and Analytics tabs | ✅ | ✅ | https://github.com/leeoniya/uPlot | `dashboard/static/uPlot.iife.min.js`, `dashboard/static/uPlot.min.css`, `dashboard/static/uPlot.LICENSE` |
 | `svelte` | 5.57.3 (runtime) | MIT | Component runtime bundled into the Modern dashboard, Admin console and Appliance Manager | ✅ | ✅ | https://github.com/sveltejs/svelte | `dashboard/static/modern/assets/modern.js`, `admin/static/modern/assets/vendor.js`, `appliance/static/modern/assets/appliance.js`, notices in `dashboard/static/modern/licenses.json`, `admin/static/modern/licenses.json` and `appliance/static/modern/licenses.json` |
-| `clsx` | 2.1.1 | MIT | Class-name helper the Svelte runtime bundles | ✅ | ✅ | https://github.com/lukeed/clsx | `dashboard/static/modern/assets/modern.js`, `admin/static/modern/assets/vendor.js`, notices in `dashboard/static/modern/licenses.json` and `admin/static/modern/licenses.json` |
+| `clsx` | 2.1.1 | MIT | Class-name helper the Svelte runtime bundles | ✅ | ✅ | https://github.com/lukeed/clsx | `dashboard/static/modern/assets/modern.js`, `admin/static/modern/assets/vendor.js`, `appliance/static/modern/assets/appliance.js`, notices in `dashboard/static/modern/licenses.json`, `admin/static/modern/licenses.json` and `appliance/static/modern/licenses.json` |
+| `vite` (module-preload helper) | 8.3.5 | MIT | The few lines Vite writes into the Admin console's entry chunk to preload the page chunks it imports | ✅ | ✅ | https://github.com/vitejs/vite | `admin/static/modern/assets/admin.js` (Copyright (c) 2019-present, VoidZero Inc. and Vite contributors), notice in `admin/static/modern/Vite.LICENSE` |
 | `Inter` (`@fontsource-variable/inter`) | 4.1 via 5.3.0 | OFL-1.1 | The Modern front ends' typeface, latin subset | ✅ | ✅ | https://github.com/rsms/inter | `dashboard/static/modern/assets/inter-latin-wght-normal.woff2`, `dashboard/static/modern/assets/modern.css` (`@font-face`), `dashboard/static/modern/Inter.LICENSE`, `admin/static/modern/assets/inter-latin-wght-normal.woff2`, `admin/static/modern/assets/admin.css` (`@font-face`), `admin/static/modern/Inter.LICENSE`, `appliance/static/modern/assets/inter-latin-wght-normal.woff2`, `appliance/static/modern/assets/appliance.css` (`@font-face`), `appliance/static/modern/Inter.LICENSE` |
 | `Lucide` (`lucide-static`) | 1.64.0 | ISC AND MIT (Feather-derived icons) | Icon paths of the Modern front ends' inline sprites | ✅ | ✅ | https://github.com/lucide-icons/lucide | `dashboard/static/modern/index.html`, `admin/static/modern/index.html` and `appliance/static/modern/index.html` (the `<svg class="icon-sprite">` block), `dashboard/static/modern/Lucide.LICENSE`, `admin/static/modern/Lucide.LICENSE`, `appliance/static/modern/Lucide.LICENSE` |
 | `rpi-image-gen` | v2.7.0 | BSD-3-Clause | Upstream files copied verbatim as the image contract the appliance is built against (`image-rpios`) | ❌ | ❌ | https://github.com/raspberrypi/rpi-image-gen | `tests/fixtures/rpi_image_gen/` (seventeen files, listed with their SHA-256 in `source-manifest.json`), `tests/fixtures/rpi_image_gen/UPSTREAM.LICENSE` |
@@ -211,10 +265,12 @@ project's own AGPL-3.0-or-later code (in `frontend/shared/`,
 `frontend/dashboard-modern/`, `frontend/admin-modern/` and
 `frontend/appliance-modern/`) with the Svelte runtime and `clsx`; the
 Appliance Manager's bundle (`appliance/static/modern/assets/appliance.js`)
-carries the Svelte runtime only, as its `licenses.json` says. The Admin console loads its pages as separate chunks: the
+carries the Svelte runtime and `clsx`, as its `licenses.json` says. The Admin console loads its pages as separate chunks: the
 Svelte runtime and `clsx` are all in `admin/static/modern/assets/vendor.js`
 (`admin/static/modern/assets/admin.js` loads it), and every other chunk is the
-project's own code and carries its licence header. Vite writes the MIT notices of every
+project's own code and carries its licence header. The entry chunk `admin.js`
+also holds Vite's module-preload helper (MIT, row above); `licenses.json`
+does not list it, because Vite injects it rather than bundling a package. Vite writes the MIT notices of every
 bundled package into a `licenses.json` that ships beside each bundle, and
 `tests/test_dashboard_modern.py`, `tests/test_admin_modern.py` and
 `tests/test_appliance_modern.py` fail when a
@@ -243,6 +299,40 @@ The images published by this project — `ghcr.io/basecubedev/ems-solarflow-api-
 and `ghcr.io/basecubedev/ems-solarflow-admin` — are project artifacts under
 AGPL-3.0-or-later and are not third-party components.
 
+What they carry from others is offered in source beside them. Every workflow
+that pushes the two images (a release tag, `latest`, the weekly rebuild, a
+development build) then runs `scripts/image_sources.py collect` against the
+images as pushed, every platform of both, and pushes
+`ghcr.io/basecubedev/ems-solarflow-sources` under the same tags and the build
+id. It holds every Debian source package of the installed versions with the
+sources they were built with (as the appliance image's archive collects them),
+the sdist PyPI publishes of every Python distribution installed or lying in
+the image as a wheel, checked against PyPI's SHA-256 (one without an sdist
+stops the run unless the script names it with the reason none is owed), the
+CPython release the interpreter was built from (its `readline` and `gdbm`
+modules link GPL libraries), as the base image's `PYTHON_VERSION` and
+`PYTHON_SHA256` name it and checked against that hash, and the zip of every
+Go module the bundled notices list whose own license files at the module proxy
+are copyleft, checked against sum.golang.org, with a manifest naming each
+image, platform and digest and the URL every file came from. Every program in
+an image has to be accounted for: owned by dpkg with the checksum the package
+that lists it recorded (diversions followed), part of CPython's standard
+library, one of a wheel's Python extension modules, or a Go program one of the
+image's notices files passes `binary_notices.py check` for. A Go program that
+links a C library in statically needs that library known and its notice beside
+its own (musl's `MUSL.COPYRIGHT` for the Docker CLI); any other program or
+library a wheel carries (a `*.libs` folder, a bundled executable) has to be
+named in the script; an image that installs Docker's
+Debian packages, whose module sources only the appliance path collects, stops
+the run. `docker pull` it and copy `/sources/` out of a
+container created from it. All three images are pushed by digest and tagged
+only once the source is pushed and verified, the source first, so no public
+tag names an image whose source is not beside it. An image of another
+revision or naming no CPython build, a program nothing accounts for, a Python
+distribution in a place the script does not read, a distribution without an
+sdist, anything unverifiable, and a source image that cannot be pulled without
+credentials fail the workflow before any tag moves.
+
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream |
 |---|---|---|---|:---:|:---:|---|
 | `python:3.14-slim` | 3.14-slim | PSF-2.0 (CPython) AND mixed (Debian base) | Base layer of the EMS image and the Admin image | ✅ | ✅ | https://hub.docker.com/_/python |
@@ -268,6 +358,74 @@ and not the thousands of packages a Debian root pulls in. Each build writes the
 image's complete package manifest into the image itself and its digest into the
 build marker, so the exact set of any published image is recoverable from the
 artefact rather than from this table.
+
+Their source is published with the image. After the release gates pass, the
+image workflow reads every installed package and its source package straight
+out of the built image's dpkg database
+(`scripts/appliance_image_sources.py list`). The publish job then fetches each
+source package in exactly that version, verifies every file and packs them
+beside the images into the same release, as
+`ems-solarflow-appliance-<version>-sources-<n>-of-<N>.tar` with a
+`-sources.json` manifest (`collect`). It reads the archive's current index,
+then the `.dsc` in its pool, then snapshot.debian.org, and checks every file
+against the index, the `.dsc` that lists it or snapshot's SHA-1; a `.dsc`
+taken from a pool is trusted as the archive serves it over HTTPS. The sources a
+package was built with (`Built-Using`, `Static-Built-Using`) are collected
+like its own. Two kinds of package have nothing to fetch: Docker's, whose own
+code is Apache-2.0 and whose repository publishes no source (the copyleft
+modules and the GNU C Library compiled or linked into their programs are the
+exceptions, see below), which the manifest names with their upstream, and the
+Appliance Manager, whose source is this
+repository at its release tag. A source that cannot be fetched and verified,
+one without a `.dsc` and a tarball, and a package dpkg holds in a state that is
+neither installed nor removed fail the publish job.
+
+Docker's packages (`docker-ce`, `docker-ce-cli`, `containerd.io`, the Buildx
+and Compose plugins) ship no notices for what their programs are built from:
+four have no copyright file at all, and `containerd.io`'s names only
+Apache-2.0. Their programs are Go builds with some four hundred modules
+compiled in. Their notices go beside the image, not into it, as
+`ems-solarflow-appliance-<version>-docker-notices.txt`.
+`list` records what every ELF program of those packages says it is: its Go
+build information, or for `docker-init` the banner of tini, which is statically
+linked with the GNU C Library. The publish job then writes the file with
+`scripts/binary_notices.py appliance`: every license file of each module (a
+file whose name says license, copying, copyright, notice, patents or legal and
+that is neither code nor data), its packages' as well as its root's, from the
+Go module proxy (read with range requests, without downloading the module), a
+program's own license from its module, or from the tagged GitHub tree of a
+build without one (Moby's `dockerd`, the vendored Docker CLI, tini; the tree's
+nested modules left to their own versions), the Go
+standard library's license of each Go version, and glibc's `COPYING.LIB` and
+`LICENSES` for tini, pinned by their SHA-256 for the Debian release Docker
+built the package for. These fail the publish job: a tree that is not the
+commit the program names, a main module whose commit at the module proxy is
+not the build's `vcs.revision`, a build that reports modified sources
+(`vcs.modified`, a `-dirty` banner), a Go experiment or a sanitizer, a module
+without a license file at its root, a vendor tree that replaces a module with
+a local directory, C code linked in statically as the program shows it (no
+loader; static archives and flags in `-ldflags` or `CGO_LDFLAGS` with cgo on;
+the libseccomp binding compiled in without `libseccomp.so` among the libraries
+it loads), a glibc whose texts are not pinned, and a program no rule
+describes. What the program does not record cannot be checked: `dockerd`,
+`docker` and `docker-proxy` carry no `vcs` settings, a build with `-trimpath`
+(runc is one) records no linker flags, and a static library named only in a
+package's `#cgo` directives appears nowhere.
+
+Two parts of Docker's programs carry a source duty. The first are the Go
+modules with a copyleft license text, such as HashiCorp's MPL-2.0 modules, the
+HCL parser Buildx carries, and the MPL-2.0 part of `filepath-securejoin`: the
+publish job puts each one's zip beside the image as
+`ems-solarflow-appliance-<version>-docker-module-sources.tar`, exactly as the Go
+module proxy serves it and refused unless it hashes to what sum.golang.org
+records, and the notices file lists them. A license text counts as copyleft
+when it names the MPL, GPL, LGPL, AGPL, EPL, CDDL, EUPL, CPL, OSL or MS-RL, by
+name or SPDX identifier; a copyleft text in a program's own tree stops the
+run. The second is glibc, LGPL-2.1-or-later, linked statically
+into `docker-init`. The source archive holds the glibc source of the image's
+own `libc6`, a Raspberry Pi build of Debian's. Which Debian 13 glibc Docker's
+build linked is not recorded in the binary, so the archive does not claim to
+hold that exact source.
 
 The generator that assembles that root filesystem, `rpi-image-gen`, is listed
 under Vendored Components above.
@@ -386,7 +544,10 @@ Source distributions and release packages include:
 
 `Dockerfile` copies `LICENSE`, `THIRD_PARTY_LICENSES.md` and the whole
 `dashboard/` tree into the EMS image, so all three travel with every published
-image.
+image. `deploy/admin/Dockerfile` copies `LICENSE` and `THIRD_PARTY_LICENSES.md`
+into the Admin image beside the `admin/` tree, which carries the Modern
+console's notices. Both copy the `third_party/` notices of the binaries they
+ship to `/usr/share/doc/`.
 
 ## Maintaining This Inventory
 
@@ -397,7 +558,11 @@ python tools/check_third_party_licenses.py
 ```
 
 It fails when a direct dependency, an optional lockfile package, a GitHub Action a
-workflow uses or a vendored static asset is missing, when a documented entry no longer exists in any
+workflow uses or a vendored static asset is missing, when a binary the final
+stage of a Dockerfile installs has no row, when a row's `third_party/` files are
+missing, incomplete (an Apache-2.0 component needs its `NOTICE`, unless its `Notices` cell says
+`no NOTICE upstream`) or not copied
+by the final stage of the Dockerfile in its `Image` cell, when a documented entry no longer exists in any
 manifest, when a component is listed twice in one section, or when a table is
 missing a required column. `tests/test_third_party_licenses.py` runs the same
 checks under `pytest -m documentation`.

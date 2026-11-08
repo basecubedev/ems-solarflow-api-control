@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 basecubedev -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import { tick } from "svelte";
   import Icon from "../ui/Icon.svelte";
@@ -11,6 +13,7 @@
   const shell = useShell();
   const { pageSet, session } = shell;
   const { router, href, setPinned } = shell.nav;
+  const hasAbout = pageSet.pages.some((page) => page.id === "about");
   const themes = THEMES.map((value) => ({ value, label: THEME_NAMES[value] }));
   const languages = LANGUAGES.map((value) => ({ value, label: value.toUpperCase() }));
 
@@ -205,6 +208,7 @@
         {#each shell.links as link (link.href)}
           <a class="ghost-link" href={link.href} target={link.external ? "_blank" : undefined} rel={link.external ? "noopener" : undefined} data-testid={link.testid ? `sheet-${link.testid}` : undefined}><Icon name={link.icon} /><span>{t(link.label)}</span></a>
         {/each}
+        {#if hasAbout}<a class="ghost-link" href={href("about")} onclick={() => (open = false)} data-testid="sheet-about"><Icon name="info" /><span>{t("nav.about")}</span></a>{/if}
         <button class="ghost-link" type="button" onclick={startEditing} data-testid="customize-bar"><Icon name="pencil" /><span>{t("nav.customize")}</span></button>
         <button class="ghost-link" type="button" onclick={() => shell.classic(router.page)}><Icon name="arrow-left-right" /><span>{t("nav.classicSwitch")}</span></button>
       </div>

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The built-in MQTT broker and the MQTT mapping in the Modern Admin console,
 // against the deterministic test-mode Admin: the add-ons tab, the switch's

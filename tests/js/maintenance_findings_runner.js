@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Renders the real admin.js findings list against a minimal DOM, so the status
 // page's leading answer is tested against the shipped code rather than a copy.

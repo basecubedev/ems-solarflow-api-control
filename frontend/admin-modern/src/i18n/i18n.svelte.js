@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { STRINGS } from "./strings.js";
 import { CATALOG_NAMES, CATALOG_OPTIONS, CATALOG_WORDS } from "./catalog.js";

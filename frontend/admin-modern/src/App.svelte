@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 basecubedev -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import { untrack } from "svelte";
   import Sidebar from "../../shared/shell/Sidebar.svelte";
@@ -38,6 +40,7 @@
     diagnostics: () => import("./pages/Diagnostics.svelte"),
     system: () => import("./pages/System.svelte"),
     setup: () => import("./pages/Setup.svelte"),
+    about: () => import("../../shared/widgets/About.svelte"),
   };
   const loaded = $state({ overview: Overview });
   const Page = $derived(loaded[router.page] || null);
@@ -143,6 +146,7 @@
     get links() {
       return dashboard ? [{ href: dashboard, icon: "layout-dashboard", label: "nav.dashboard", testid: "open-dashboard" }] : [];
     },
+    about: { notices: [{ name: "Vite", license: "MIT", file: "/Vite.LICENSE" }] },
   });
 </script>
 

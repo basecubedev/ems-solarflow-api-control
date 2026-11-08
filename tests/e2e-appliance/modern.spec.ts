@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The Modern Appliance Manager at the root, against the deterministic test
 // server. Every assertion waits on a locator or a response, never on a fixed
@@ -1266,5 +1267,38 @@ test.describe("on a phone", () => {
     expect(mark && chevron).toBeTruthy();
     const apart = mark!.x + mark!.width <= chevron!.x || chevron!.x + chevron!.width <= mark!.x || mark!.y + mark!.height <= chevron!.y || chevron!.y + chevron!.height <= mark!.y;
     expect(apart).toBe(true);
+  });
+});
+
+test.describe("About & licenses", () => {
+  test("the sign-in screen opens the same page before a password exists", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.getByTestId("sign-in-screen")).toHaveAttribute("data-mode", "create");
+    await page.getByTestId("sign-in-about").click();
+    const dialog = page.getByTestId("about-dialog");
+    await expect(dialog.getByTestId("about-community")).toContainText("it is not a Zendure product");
+    await expect(dialog.getByTestId("about-notice").filter({ hasText: "Lucide" })).toHaveCount(1);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+  });
+
+  test("the page links the source of the running Manager and of the image, and every component it is built from", async ({ page }) => {
+    await createPassword(page);
+    await page.getByTestId("nav-about").click();
+    await expect(page).toHaveURL(/#\/about$/);
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("About & licenses");
+    await expect(page.getByTestId("about-community")).toContainText("it is not a Zendure product");
+    const version = (await page.locator(".sidebar .version").textContent())?.replace("Manager ", "").trim();
+    expect(version).toMatch(/^\d+\.\d+\.\d+/);
+    await expect(page.getByTestId("about-source")).toHaveAttribute(
+      "href",
+      `https://github.com/basecubedev/ems-solarflow-api-control/tree/appliance-manager-v${version}`,
+    );
+    await expect(page.getByTestId("about-image-sources")).toHaveAttribute("href", "https://github.com/basecubedev/ems-solarflow-api-control/releases");
+    const notices = page.getByTestId("about-notices");
+    for (const name of ["svelte", "Inter", "Lucide"]) {
+      await expect(notices.getByTestId("about-notice").filter({ hasText: name })).toHaveCount(1);
+    }
+    await expect(page.getByText("could not be read")).toHaveCount(0);
   });
 });

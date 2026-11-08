@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { createPageSet } from "../../../shared/shell/pages.js";
 
@@ -19,6 +20,7 @@ export const PAGES = Object.freeze([
   { id: "diagnose", icon: "stethoscope", group: "system", operator: true, classicView: "diagnose" },
   { id: "logs", icon: "scroll-text", group: "system", operator: true, classicView: "logs" },
   { id: "maintenance", icon: "wrench", group: "system", operator: true, classicView: "maintenance" },
+  { id: "about", icon: "info", group: "system", shortLabel: "nav.about.short", hidden: true },
 ]);
 
 /** The four pages a phone's bar holds until the reader picks their own. */

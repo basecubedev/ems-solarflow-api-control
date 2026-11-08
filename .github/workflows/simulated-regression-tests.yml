@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
+# SPDX-License-Identifier: AGPL-3.0-or-later
 name: Repo PR gate
 
 on:
@@ -51,6 +53,10 @@ jobs:
       - name: Check the third-party license inventory
         run: |
           python tools/check_third_party_licenses.py
+
+      - name: Check every file names its copyright holder and license
+        run: |
+          reuse lint
 
       - name: Check the admin.js frontend parses
         run: |

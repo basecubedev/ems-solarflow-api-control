@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // A live snapshot arrives every couple of seconds, for as long as the cockpit
 // is open. What it costs the browser depends entirely on whether it replaces

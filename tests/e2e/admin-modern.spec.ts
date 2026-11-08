@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The Modern Admin console at the root, beside the deprecated Classic at /classic/. It
 // is driven here against the deterministic test-mode Admin: the switch between
@@ -978,5 +979,35 @@ test.describe("Modern Admin: settings in the old place", { tag: ["@smoke"] }, ()
     await expect(legacy).not.toContainText("still in the old place");
     await expect(legacy.getByTestId("legacy-move")).toHaveCount(0);
     expect(asked).toEqual([{}, { overwrite: true }]);
+  });
+});
+
+test.describe("Modern Admin: About & licenses", () => {
+  test("the sign-in screen opens the same page without a password", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.getByTestId("sign-in-screen")).toBeVisible();
+    await page.getByTestId("sign-in-about").click();
+    const dialog = page.getByTestId("about-dialog");
+    await expect(dialog.getByTestId("about-community")).toContainText("it is not a Zendure product");
+    await expect(dialog.getByTestId("about-notice").filter({ hasText: "svelte" })).toHaveCount(1);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
+    await expect(page.getByTestId("sign-in-screen")).toBeVisible();
+  });
+
+  test("the page names the license, the community notice and every component it is built from", async ({ page }) => {
+    await openModern(page);
+    await page.getByTestId("nav-about").click();
+    await expect(page).toHaveURL(/#\/about$/);
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("About & licenses");
+    await expect(page.getByTestId("about-license")).toContainText("WITHOUT ANY WARRANTY");
+    await expect(page.getByTestId("about-community")).toContainText("it is not a Zendure product");
+    const notices = page.getByTestId("about-notices");
+    for (const name of ["clsx", "svelte", "Inter", "Lucide", "Vite"]) {
+      await expect(notices.getByTestId("about-notice").filter({ hasText: name })).toHaveCount(1);
+    }
+    await expect(page.getByText("could not be read")).toHaveCount(0);
+    await notices.getByTestId("about-notice").filter({ hasText: "Vite" }).click();
+    await expect(notices.locator("details[open] pre")).toContainText("VoidZero Inc. and Vite contributors");
   });
 });

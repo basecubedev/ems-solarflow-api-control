@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The one writer of ``schedules.json``: the rules, their order, the pause
 switch, and which switch point was last applied to each runtime key.

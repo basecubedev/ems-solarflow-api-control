@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Tests for EMS-side Zendure MQTT config-entry helpers (no broker, no paho)."""
 

@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Capture what this appliance looks like before a destructive hardware case.
 #
@@ -22,7 +23,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --output) OUTPUT=${2:?--output needs a directory}; shift 2 ;;
         --output=*) OUTPUT=${1#*=}; shift ;;
-        -h|--help) sed -n '3,17p' "$0"; exit 0 ;;
+        -h|--help) awk 'NR == 1 { next } /^#/ { if ($0 !~ /SPDX-/) print; next } { exit }' "$0"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done

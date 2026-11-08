@@ -47,6 +47,12 @@ be signed in. Signed out, they show *"Sign in to see this page."* with a
 **Sign in** button instead of empty panels. On a phone the menu becomes a bar
 at the bottom, see [Overview and navigation](overview.md#on-a-phone).
 
+The foot of the side menu, and **More** on a phone, hold **About & licenses**.
+It shows the version and commit, the source code of exactly
+that version, the project's license (GNU AGPL v3 or later, without any
+warranty), the note that this is an independent community project and not a
+Zendure product, and the license of every component the page is built from.
+
 ## Read-only by default
 
 The dashboard is a view onto the EMS, not a second controller.

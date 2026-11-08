@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Runs the real appliance app.js overview view functions and prints what they
 // resolved to, so the verdict, the ranked findings and the nav attention marks

@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Delete GHCR container versions of a feature-tag prefix beyond the newest N.
 
 Development builds accumulate one image version per publish. This keeps only the
 newest ``--keep`` builds of a feature branch (matched by its ``dev-<ref>-<hash>``
 tag prefix) and deletes the older ones. Versions that also carry a tag outside
-the prefix (e.g. a release tag) or a protected tag are never deleted.
+the prefix (e.g. a release tag) or a protected tag are never deleted, and
+neither is a version one of whose tags another package still keeps: the EMS
+image, the Admin image and their source of one build go together.
+
+With ``--digest`` it deletes instead the versions a failed run pushed, named by
+their digests, as long as they carry no tag but the run's own (``--own-tag``).
 """
 
 import argparse
@@ -53,6 +59,52 @@ def select_deletions(versions, prefix, keep, protect_tags=()):
     return deletions
 
 
+def keep_builds_together(versions, deletions):
+    """Drop from each package's deletions a version sharing a tag with a version another package keeps."""
+
+    kept = {
+        package: {
+            tag
+            for version in package_versions
+            if version.get("id") not in set(deletions[package])
+            for tag in (version.get("tags") or [])
+        }
+        for package, package_versions in versions.items()
+    }
+    together = {}
+    for package, ids in deletions.items():
+        elsewhere = set().union(*(tags for other, tags in kept.items() if other != package))
+        by_id = {version.get("id"): version for version in versions[package]}
+        together[package] = [
+            version_id for version_id in ids
+            if not set(by_id[version_id].get("tags") or []) & elsewhere
+        ]
+    return together
+
+
+def select_digest_deletions(versions, digests, prefix, own_tags=()):
+    """The ids of the versions named by ``digests`` that carry no tag but the run's own.
+
+    A version that already carries one of the branch's shared tags is left
+    alone, since deleting it would take that tag from the branch too; one
+    carrying a tag outside the prefix is refused.
+    """
+
+    wanted, own = set(digests), set(own_tags)
+    deletions = []
+    for version in versions:
+        if version.get("name") not in wanted:
+            continue
+        tags = version.get("tags") or []
+        foreign = [tag for tag in tags if not _under_prefix(tag, prefix)]
+        if foreign:
+            raise SystemExit(f"refusing to delete {version.get('name')}: it carries {', '.join(foreign)}")
+        if set(tags) - own:
+            continue
+        deletions.append(version.get("id"))
+    return deletions
+
+
 def _owner_path(owner, owner_type):
     if owner_type == "user":
         return f"/users/{owner}"
@@ -75,7 +127,7 @@ def _list_versions(owner_path, package):
             "--paginate",
             endpoint,
             "--jq",
-            ".[] | {id: .id, created_at: .created_at, "
+            ".[] | {id: .id, name: .name, created_at: .created_at, "
             "tags: .metadata.container.tags}",
         ]
     )
@@ -91,6 +143,9 @@ def _list_versions(owner_path, package):
 def _delete_version(owner_path, package, version_id):
     endpoint = f"{owner_path}/packages/container/{package}/versions/{version_id}"
     result = _gh_json(["--method", "DELETE", endpoint])
+    if result.returncode != 0 and "last tagged version" in result.stderr.lower():
+        print(f"  keeping version {version_id}: GHCR keeps the last tagged version of {package}")
+        return
     if result.returncode != 0 and "HTTP 404" not in result.stderr:
         sys.stderr.write(result.stderr)
         raise SystemExit(f"Failed to delete version {version_id} from {package}")
@@ -104,6 +159,8 @@ def main(argv=None):
     parser.add_argument("--prefix", required=True)
     parser.add_argument("--keep", type=int, default=2)
     parser.add_argument("--protect-tag", action="append", default=[], dest="protect_tags")
+    parser.add_argument("--digest", action="append", default=[], dest="digests")
+    parser.add_argument("--own-tag", action="append", default=[], dest="own_tags")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
@@ -111,23 +168,18 @@ def main(argv=None):
         raise SystemExit("refusing to prune a non-development tag prefix")
 
     owner_path = _owner_path(args.owner, args.owner_type)
+    versions = {package: _list_versions(owner_path, package) for package in args.packages}
+    if args.digests:
+        deletions = {package: select_digest_deletions(found, args.digests, args.prefix, args.own_tags)
+                     for package, found in versions.items()}
+    else:
+        deletions = keep_builds_together(versions, {
+            package: select_deletions(found, args.prefix, args.keep, args.protect_tags)
+            for package, found in versions.items()
+        })
     for package in args.packages:
-        versions = _list_versions(owner_path, package)
-        deletions = select_deletions(
-            versions, args.prefix, args.keep, args.protect_tags
-        )
-        kept = len(
-            [
-                v
-                for v in versions
-                if any(_under_prefix(t, args.prefix) for t in (v.get("tags") or []))
-            ]
-        ) - len(deletions)
-        print(
-            f"{package}: keeping {kept} newest, deleting {len(deletions)} "
-            f"older '{args.prefix}' version(s)"
-        )
-        for version_id in deletions:
+        print(f"{package}: deleting {len(deletions[package])} '{args.prefix}' version(s)")
+        for version_id in deletions[package]:
             print(f"  {'would delete' if args.dry_run else 'deleting'} version {version_id}")
             if not args.dry_run:
                 _delete_version(owner_path, package, version_id)

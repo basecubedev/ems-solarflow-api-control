@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
+# SPDX-License-Identifier: AGPL-3.0-or-later
 name: EMS release
 
 on:
@@ -24,6 +26,9 @@ jobs:
   publish-ghcr:
     name: EMS release publish
     runs-on: ubuntu-latest
+    concurrency:
+      group: ems-release-publish-${{ github.ref }}
+      cancel-in-progress: false
     if: >-
       github.event_name == 'schedule' ||
       (github.event_name == 'push' &&
@@ -217,13 +222,13 @@ jobs:
 
       # Authoritative EMS release cache exporter.
       - name: Build and push Docker image
+        id: push_ems
         uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          outputs: type=image,name=ghcr.io/basecubedev/ems-solarflow-api-control,push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             EMS_RELEASE_TAG=${{ steps.build_identity.outputs.ems_release_tag }}
@@ -410,13 +415,13 @@ jobs:
 
       # Authoritative Admin release cache exporter (separate scope from EMS).
       - name: Build and push Admin Docker image
+        id: push_admin
         uses: docker/build-push-action@v7
         with:
           context: .
           file: ./deploy/admin/Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta_admin.outputs.tags }}
+          outputs: type=image,name=ghcr.io/basecubedev/ems-solarflow-admin,push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta_admin.outputs.labels }}
           build-args: |
             EMS_REVISION=${{ steps.build_identity.outputs.git_commit }}
@@ -428,6 +433,96 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ env.ADMIN_RELEASE_CACHE_SCOPE }}
           annotations: |
             index:org.opencontainers.image.description=Browser-based Admin Console for EMS SolarFlow setup, maintenance, updates and backups.
+
+      - name: Collect the source of the images' third-party components
+        env:
+          EMS_DIGEST: ${{ steps.push_ems.outputs.digest }}
+          ADMIN_DIGEST: ${{ steps.push_admin.outputs.digest }}
+          BUILD_ID: ${{ steps.build_identity.outputs.build_id }}
+          REVISION: ${{ steps.build_identity.outputs.git_commit }}
+        run: |
+          set -euo pipefail
+          python3 scripts/image_sources.py collect \
+            --image "ghcr.io/basecubedev/ems-solarflow-api-control@${EMS_DIGEST}" \
+            --image "ghcr.io/basecubedev/ems-solarflow-admin@${ADMIN_DIGEST}" \
+            --name "${BUILD_ID}" \
+            --revision "${REVISION}" \
+            --repository-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --output "${RUNNER_TEMP}/image-sources"
+          printf 'FROM scratch\nCOPY . /sources/\n' > "${RUNNER_TEMP}/image-sources.Dockerfile"
+
+      - name: Generate source image metadata
+        id: meta_sources
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/basecubedev/ems-solarflow-sources
+          flavor: |
+            latest=false
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=${{ steps.build_identity.outputs.build_id }}
+          labels: |
+            org.opencontainers.image.title=ems-solarflow-sources
+            org.opencontainers.image.description=Source code of the third-party components in the ems-solarflow-api-control and ems-solarflow-admin images of the same tag.
+            org.opencontainers.image.source=https://github.com/basecubedev/ems-solarflow-api-control
+            org.opencontainers.image.version=${{ steps.build_identity.outputs.release_tag }}
+            org.opencontainers.image.revision=${{ steps.build_identity.outputs.git_commit }}
+            de.basecubedev.ems.build_id=${{ steps.build_identity.outputs.build_id }}
+
+      - name: Push the source image beside the images
+        id: push_sources
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ runner.temp }}/image-sources
+          file: ${{ runner.temp }}/image-sources.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          outputs: type=image,name=ghcr.io/basecubedev/ems-solarflow-sources,push-by-digest=true,name-canonical=true,push=true
+          labels: ${{ steps.meta_sources.outputs.labels }}
+
+      - name: Verify anyone can pull the source image
+        env:
+          SOURCES_DIGEST: ${{ steps.push_sources.outputs.digest }}
+        run: python3 scripts/image_sources.py verify --image "ghcr.io/basecubedev/ems-solarflow-sources@${SOURCES_DIGEST}"
+
+      - name: Tag the images and their source
+        env:
+          EMS_DIGEST: ${{ steps.push_ems.outputs.digest }}
+          ADMIN_DIGEST: ${{ steps.push_admin.outputs.digest }}
+          SOURCES_DIGEST: ${{ steps.push_sources.outputs.digest }}
+          EMS_TAGS: ${{ steps.meta.outputs.tags }}
+          ADMIN_TAGS: ${{ steps.meta_admin.outputs.tags }}
+          SOURCES_TAGS: ${{ steps.meta_sources.outputs.tags }}
+          OWN_TAG: ${{ steps.build_identity.outputs.build_id }}
+        run: |
+          set -euo pipefail
+          tag() {
+            local digest="$1" tags="$2" which="$3" image="" line kind
+            local args=() chosen=()
+            while IFS= read -r line; do
+              [ -n "${line}" ] || continue
+              image="${line%:*}"
+              kind=shared
+              if [ "${line##*:}" = "${OWN_TAG}" ]; then
+                kind=own
+              fi
+              if [ "${kind}" = "${which}" ]; then
+                chosen+=("${line}")
+              fi
+            done <<< "${tags}"
+            [ -n "${image}" ] || { echo "::error::no tag to give ${digest}"; exit 1; }
+            [ "${#chosen[@]}" -gt 0 ] || return 0
+            for line in "${chosen[@]}"; do args+=(-t "${line}"); done
+            docker buildx imagetools create "${args[@]}" "${image}@${digest}"
+            for line in "${chosen[@]}"; do
+              python3 scripts/image_sources.py verify --image "${line}" --digest "${digest}"
+            done
+          }
+          for which in own shared; do
+            tag "${SOURCES_DIGEST}" "${SOURCES_TAGS}" "${which}"
+            tag "${EMS_DIGEST}" "${EMS_TAGS}" "${which}"
+            tag "${ADMIN_DIGEST}" "${ADMIN_TAGS}" "${which}"
+          done
 
   publish-release-catalogue:
     name: EMS release catalogue publish

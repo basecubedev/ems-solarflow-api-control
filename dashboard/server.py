@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import hashlib
 import json
@@ -84,6 +85,7 @@ _EXTERNAL_NAMED_ROUTE_CONTAINERS = frozenset(
 )
 _EXTERNAL_CONTEXT_HISTORY_LIMIT = 4
 _EXTERNAL_ALIAS_CACHE_LIMIT = 512
+_EXTERNAL_IDENTITY_LOCK = threading.RLock()
 
 
 def analytics_schema_gap_payload(provider, start, end):
@@ -216,37 +218,38 @@ def _usable_external_mqtt_context(value):
 def _external_mqtt_config_context(server):
     """Return active or last-known-good MQTT redaction context."""
 
-    history = getattr(server, "_external_mqtt_config_history", None)
-    if not isinstance(history, list):
-        history = []
-        server._external_mqtt_config_history = history
+    with _EXTERNAL_IDENTITY_LOCK:
+        history = getattr(server, "_external_mqtt_config_history", None)
+        if not isinstance(history, list):
+            history = []
+            server._external_mqtt_config_history = history
 
-    def combined_context():
-        if not history:
-            return None
-        if len(history) == 1:
-            return history[0]
-        return {"redaction_contexts": list(history)}
+        def combined_context():
+            if not history:
+                return None
+            if len(history) == 1:
+                return history[0]
+            return {"redaction_contexts": list(history)}
 
-    config_path = getattr(server, "config_path", None)
-    if config_path and os.path.exists(config_path):
-        try:
-            with open(config_path, encoding="utf-8") as handle:
-                loaded = json.load(handle)
-            if isinstance(loaded, dict) and _usable_external_mqtt_context(loaded):
-                if not history or history[-1] != loaded:
-                    history.append(loaded)
-                    del history[:-_EXTERNAL_CONTEXT_HISTORY_LIMIT]
-                server._external_mqtt_context_fail_closed = False
+        config_path = getattr(server, "config_path", None)
+        if config_path and os.path.exists(config_path):
+            try:
+                with open(config_path, encoding="utf-8") as handle:
+                    loaded = json.load(handle)
+                if isinstance(loaded, dict) and _usable_external_mqtt_context(loaded):
+                    if not history or history[-1] != loaded:
+                        history.append(loaded)
+                        del history[:-_EXTERNAL_CONTEXT_HISTORY_LIMIT]
+                    server._external_mqtt_context_fail_closed = False
+                    return combined_context()
+                # A parsed but incomplete replacement is not trustworthy enough to
+                # disable payload-derived masking. Retain any older context too.
+                server._external_mqtt_context_fail_closed = True
                 return combined_context()
-            # A parsed but incomplete replacement is not trustworthy enough to
-            # disable payload-derived masking. Retain any older context too.
-            server._external_mqtt_context_fail_closed = True
-            return combined_context()
-        except (OSError, ValueError, TypeError):
-            pass
-    server._external_mqtt_context_fail_closed = not bool(history)
-    return combined_context()
+            except (OSError, ValueError, TypeError):
+                pass
+        server._external_mqtt_context_fail_closed = not bool(history)
+        return combined_context()
 
 
 def _plausibly_sensitive_external_identifier(value):
@@ -341,104 +344,105 @@ def _external_context_device_names(context):
 def _external_device_aliases(server, config_context=None, payload=None):
     """Return collision-free browser aliases for configured device names."""
 
-    from ems.external_status import sanitize_external_mqtt_status
+    with _EXTERNAL_IDENTITY_LOCK:
+        from ems.external_status import sanitize_external_mqtt_status
 
-    context = (
-        config_context
-        if isinstance(config_context, dict)
-        else _external_mqtt_config_context(server)
-    )
-    trusted_names = _external_context_device_names(context)
-    names = list(trusted_names)
-    uncertain_names = set()
-    forced_names = set()
-    validation = getattr(server, "runtime_validation", None)
-    validation_names = (
-        validation.get("device_max_power")
-        if isinstance(validation, dict)
-        else None
-    )
-    if isinstance(validation_names, dict):
-        for name in validation_names:
-            if (
-                isinstance(name, str)
-                and name
-                and name not in names
-                and _plausibly_sensitive_external_identifier(name)
-            ):
-                names.append(name)
-                uncertain_names.add(name)
-    fail_closed = bool(
-        getattr(server, "_external_mqtt_context_fail_closed", context is None)
-    )
-    for identifier, forced in _fail_closed_external_identifiers(
-        payload, trusted_device_names=trusted_names
-    ).items():
-        if identifier in trusted_names:
-            continue
-        if not forced and not _plausibly_sensitive_external_identifier(identifier):
-            continue
-        if identifier not in names:
-            names.append(identifier)
-        uncertain_names.add(identifier)
-        if forced:
-            forced_names.add(identifier)
-
-    alias_cache = getattr(server, "_external_device_alias_cache", None)
-    if not isinstance(alias_cache, dict):
-        alias_cache = {}
-        server._external_device_alias_cache = alias_cache
-    for name in alias_cache:
-        if name not in names:
-            names.append(name)
-
-    groups = {}
-    for name in names:
-        if name in alias_cache:
-            continue
-        masked = sanitize_external_mqtt_status(
-            name,
-            sensitive_context=context,
-            drop_secrets=False,
+        context = (
+            config_context
+            if isinstance(config_context, dict)
+            else _external_mqtt_config_context(server)
         )
-        if (
-            name in uncertain_names
-            and masked == name
-            and (
-                fail_closed
-                or name in forced_names
+        trusted_names = _external_context_device_names(context)
+        names = list(trusted_names)
+        uncertain_names = set()
+        forced_names = set()
+        validation = getattr(server, "runtime_validation", None)
+        validation_names = (
+            validation.get("device_max_power")
+            if isinstance(validation, dict)
+            else None
+        )
+        if isinstance(validation_names, dict):
+            for name in validation_names:
+                if (
+                    isinstance(name, str)
+                    and name
+                    and name not in names
+                    and _plausibly_sensitive_external_identifier(name)
+                ):
+                    names.append(name)
+                    uncertain_names.add(name)
+        fail_closed = bool(
+            getattr(server, "_external_mqtt_context_fail_closed", context is None)
+        )
+        for identifier, forced in _fail_closed_external_identifiers(
+            payload, trusted_device_names=trusted_names
+        ).items():
+            if identifier in trusted_names:
+                continue
+            if not forced and not _plausibly_sensitive_external_identifier(identifier):
+                continue
+            if identifier not in names:
+                names.append(identifier)
+            uncertain_names.add(identifier)
+            if forced:
+                forced_names.add(identifier)
+
+        alias_cache = getattr(server, "_external_device_alias_cache", None)
+        if not isinstance(alias_cache, dict):
+            alias_cache = {}
+            server._external_device_alias_cache = alias_cache
+        for name in alias_cache:
+            if name not in names:
+                names.append(name)
+
+        groups = {}
+        for name in names:
+            if name in alias_cache:
+                continue
+            masked = sanitize_external_mqtt_status(
+                name,
+                sensitive_context=context,
+                drop_secrets=False,
             )
-        ):
-            from ems.external_status import mask_route_identifier
+            if (
+                name in uncertain_names
+                and masked == name
+                and (
+                    fail_closed
+                    or name in forced_names
+                )
+            ):
+                from ems.external_status import mask_route_identifier
 
-            masked = mask_route_identifier(name)
-        base = masked if isinstance(masked, str) and masked else "Device"
-        groups.setdefault(base, []).append(name)
+                masked = mask_route_identifier(name)
+            base = masked if isinstance(masked, str) and masked else "Device"
+            groups.setdefault(base, []).append(name)
 
-    reserved = set(groups) | set(names)
-    raw_name_set = set(names)
-    used = set(alias_cache.values())
-    for base, raw_names in groups.items():
-        if (
-            len(raw_names) == 1
-            and base not in used
-            and (base == raw_names[0] or base not in raw_name_set)
-        ):
-            alias_cache[raw_names[0]] = base
-            used.add(base)
-            continue
-        suffix = 1
-        for raw_name in raw_names:
-            candidate = f"{base} [{suffix}]"
-            while candidate in reserved or candidate in used:
-                suffix += 1
+        reserved = set(groups) | set(names)
+        raw_name_set = set(names)
+        used = set(alias_cache.values())
+        for base, raw_names in groups.items():
+            if (
+                len(raw_names) == 1
+                and base not in used
+                and (base == raw_names[0] or base not in raw_name_set)
+            ):
+                alias_cache[raw_names[0]] = base
+                used.add(base)
+                continue
+            suffix = 1
+            for raw_name in raw_names:
                 candidate = f"{base} [{suffix}]"
-            alias_cache[raw_name] = candidate
-            used.add(candidate)
-            suffix += 1
-    while len(alias_cache) > _EXTERNAL_ALIAS_CACHE_LIMIT:
-        alias_cache.pop(next(iter(alias_cache)))
-    return dict(alias_cache)
+                while candidate in reserved or candidate in used:
+                    suffix += 1
+                    candidate = f"{base} [{suffix}]"
+                alias_cache[raw_name] = candidate
+                used.add(candidate)
+                suffix += 1
+        while len(alias_cache) > _EXTERNAL_ALIAS_CACHE_LIMIT:
+            alias_cache.pop(next(iter(alias_cache)))
+        return dict(alias_cache)
 
 
 def _replace_external_device_names(value, aliases):
@@ -503,8 +507,9 @@ def _resolve_external_device_name(server, browser_name):
 def _external_mqtt_status_payload(server, payload, *, drop_secrets=True):
     """Sanitize one browser response with the active MQTT config as context."""
 
-    config_context = _external_mqtt_config_context(server)
-    aliases = _external_device_aliases(server, config_context, payload)
+    with _EXTERNAL_IDENTITY_LOCK:
+        config_context = _external_mqtt_config_context(server)
+        aliases = _external_device_aliases(server, config_context, payload)
     aliased_payload = _replace_external_device_names(payload, aliases)
 
     from ems.external_status import sanitize_external_mqtt_status

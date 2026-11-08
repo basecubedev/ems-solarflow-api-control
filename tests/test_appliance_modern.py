@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Contracts of the Modern Appliance Manager, at ``/`` beside the deprecated Classic at ``/classic/``.
 
@@ -415,12 +416,12 @@ def test_every_field_of_an_agent_plan_has_a_name_or_a_block_of_its_own():
     assert set(js_list("lib/plan.js", "PLAN_EXTRA_EXPERT_FIELDS")) <= named
 
 
-def test_every_page_is_a_section_the_backend_names_the_settings_or_the_assistant():
+def test_every_page_is_a_section_the_backend_names_the_settings_the_assistant_or_about():
     source = (ROOT / "appliance" / "status.py").read_text(encoding="utf-8")
     sections = set(re.findall(r'^VIEW_[A-Z_]+ = "([a-z_]+)"', source, re.M))
     pages = set(re.findall(r'\{ id: "([a-z]+)", icon:', (SOURCE / "src" / "app" / "pages.js").read_text(encoding="utf-8")))
     assert sections <= pages
-    assert pages - sections <= {"network", "settings", "assistant"}
+    assert pages - sections <= {"network", "settings", "assistant", "about"}
 
 
 # --- the source ----------------------------------------------------------------

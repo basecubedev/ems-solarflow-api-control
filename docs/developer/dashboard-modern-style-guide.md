@@ -33,9 +33,9 @@ app adds only what is its own:
 | `styles/tokens.css`, `styles/base.css`: every colour, distance and the base classes | its pages and widgets |
 | `ui/`: Card, Segmented, Fact, Status, Bar, ConfirmDialog, Dialog, Sheet, Empty, SearchField, Icon, BrandMark | its own `src/icons.json` beside `shared/icons.json` |
 | `shell/`: side menu, top bar, phone bar, Appearance, the router and the page set | `app/pages.js` (the pages and the four of the phone bar) |
-| `widgets/DiagnosisReport.svelte`: one EMS diagnosis, drawn once | its own `src/i18n/strings.js` |
+| `widgets/DiagnosisReport.svelte`: one EMS diagnosis, drawn once; `widgets/About.svelte`: the About & licenses page every app registers as its hidden `about` page | its own `src/i18n/strings.js` |
 | `i18n/`: `t`, `tn` (plural forms), `fmt` and the shell's own strings | the auth model of its server |
-| `lib/`: `format.js`, `api.js`, `download.js` | |
+| `lib/`: `format.js`, `api.js`, `download.js`, `about.js` (the source links and notice list of the About page) | |
 | `vite/page.js`: the tab icon, the icon sprite, the licence notices and the build settings | |
 
 - **The shell** gets what it needs from the app through one context

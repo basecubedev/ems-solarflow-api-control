@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Evaluates the real admin.js hub verdict, so "the hub never claims more than
 // the overview proves" is tested against the shipped code.

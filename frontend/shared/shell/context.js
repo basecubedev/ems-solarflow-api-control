@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { getContext, setContext } from "svelte";
 
@@ -19,6 +20,10 @@ const SHELL = Symbol("shell");
  *   classic   (pageId) => void, the switch to the Classic view
  *   links     [{ href, icon, label, testid, external }], opened in place, or in
  *             a new tab when external is true
+ *   about     optional { notices, version, tagPrefix, links } for the About page:
+ *             notice files beside the bundle beyond the shared ones, the version
+ *             when the app knows it better than build.json, the prefix of its
+ *             release tags, and extra source links
  */
 export function provideShell(shell) {
   setContext(SHELL, shell);

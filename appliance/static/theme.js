@@ -1,3 +1,4 @@
+/* SPDX-FileCopyrightText: 2026 basecubedev */
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
 /* Applies the stored palette, object style and density before the stylesheet
    paints, so the console does not show the defaults first and visibly change a

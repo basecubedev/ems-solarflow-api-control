@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Static contract: release and feature image builds reuse isolated BuildKit caches.
 
@@ -98,6 +99,16 @@ def _with(step: dict) -> dict:
     return step.get("with") or {}
 
 
+def _pushes(with_: dict) -> bool:
+    """A build pushes with ``push: true`` or with an image output that pushes (by digest, tagged later)."""
+
+    return with_.get("push") is True or "push=true" in str(with_.get("outputs", ""))
+
+
+def _builds_the_source_image(with_: dict) -> bool:
+    return "name=ghcr.io/basecubedev/ems-solarflow-sources," in str(with_.get("outputs", ""))
+
+
 def _cache_from(step: dict) -> str:
     return str(_with(step).get("cache-from", ""))
 
@@ -171,7 +182,7 @@ def test_release_ems_local_validation_imports_release_scope_only():
 def test_release_ems_publish_imports_and_exports_release_scope_max():
     step = _named(RELEASE, RELEASE_JOB, "Build and push Docker image")
     with_ = _with(step)
-    assert with_.get("push") is True
+    assert _pushes(with_)
     assert with_.get("platforms") == "linux/amd64,linux/arm64"
     assert "scope=${{ env.EMS_RELEASE_CACHE_SCOPE }}" in _cache_from(step)
     assert "scope=${{ env.EMS_RELEASE_CACHE_SCOPE }}" in _cache_to(step)
@@ -192,7 +203,7 @@ def test_release_admin_local_validation_imports_release_scope_only():
 def test_release_admin_publish_imports_and_exports_release_scope_max():
     step = _named(RELEASE, RELEASE_JOB, "Build and push Admin Docker image")
     with_ = _with(step)
-    assert with_.get("push") is True
+    assert _pushes(with_)
     assert with_.get("platforms") == "linux/amd64,linux/arm64"
     assert "scope=${{ env.ADMIN_RELEASE_CACHE_SCOPE }}" in _cache_from(step)
     assert "scope=${{ env.ADMIN_RELEASE_CACHE_SCOPE }}" in _cache_to(step)
@@ -264,7 +275,7 @@ def test_feature_ems_local_validation_imports_feature_scope_only():
 def test_feature_ems_publish_imports_and_exports_feature_scope_max():
     step = _named(FEATURE, PUBLISH_JOB, "Build and push EMS Docker image")
     with_ = _with(step)
-    assert with_.get("push") is True
+    assert _pushes(with_)
     assert with_.get("platforms") == "linux/amd64,linux/arm64"
     assert "scope=${{ env.EMS_FEATURE_CACHE_SCOPE }}" in _cache_from(step)
     assert "scope=${{ env.EMS_FEATURE_CACHE_SCOPE }}" in _cache_to(step)
@@ -285,7 +296,7 @@ def test_feature_admin_local_validation_imports_feature_scope_only():
 def test_feature_admin_publish_imports_and_exports_feature_scope_max():
     step = _named(FEATURE, PUBLISH_JOB, "Build and push Admin Docker image")
     with_ = _with(step)
-    assert with_.get("push") is True
+    assert _pushes(with_)
     assert with_.get("platforms") == "linux/amd64,linux/arm64"
     assert "scope=${{ env.ADMIN_FEATURE_CACHE_SCOPE }}" in _cache_from(step)
     assert "scope=${{ env.ADMIN_FEATURE_CACHE_SCOPE }}" in _cache_to(step)
@@ -313,9 +324,14 @@ def test_no_docker_layer_directory_is_cached_with_actions_cache(workflow):
 
 @pytest.mark.parametrize("workflow", (RELEASE, FEATURE))
 def test_every_build_push_action_step_uses_the_gha_backend(workflow):
+    """Every build of an image from the checkout; the source image is built from collected files and caches nothing."""
+
     for job, steps in _iter_jobs(workflow):
         for step in steps:
             if not str(step.get("uses", "")).startswith(BUILD_PUSH_ACTION):
+                continue
+            if _builds_the_source_image(_with(step)):
+                assert not _cache_from(step) and not _cache_to(step), f"{workflow.name}:{job} source image build touches a cache"
                 continue
             cache_from = _cache_from(step)
             assert cache_from, f"{workflow.name}:{job} build has no cache-from"
@@ -331,7 +347,7 @@ def test_pushed_builds_are_multiplatform_and_local_builds_single_platform(workfl
             if not str(step.get("uses", "")).startswith(BUILD_PUSH_ACTION):
                 continue
             with_ = _with(step)
-            if with_.get("push") is True:
+            if _pushes(with_):
                 assert with_.get("platforms") == "linux/amd64,linux/arm64", (
                     f"{workflow.name}:{job} pushed build must stay multi-platform"
                 )
@@ -354,7 +370,7 @@ def test_only_final_multiplatform_builds_export_cache(workflow):
                 continue
             # A cache exporter is either a pushed multi-platform build or the
             # package-smoke warmers that deliberately seed the feature caches.
-            is_publish = with_.get("push") is True
+            is_publish = _pushes(with_)
             is_smoke_warmer = job == PACKAGE_SMOKE_JOB
             assert is_publish or is_smoke_warmer, (
                 f"{workflow.name}:{job} local validation build must not export cache"

@@ -1,3 +1,4 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The Guided Upgrade as the Modern Admin console runs it: choosing a version,
 // the server's verification, the run with its progress, the Admin console

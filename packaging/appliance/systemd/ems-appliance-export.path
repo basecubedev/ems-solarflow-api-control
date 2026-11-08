@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # An EMS directory created after the appliance was installed must still become
 # an export without waiting for a reboot.

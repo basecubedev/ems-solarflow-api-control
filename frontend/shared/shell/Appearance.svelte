@@ -1,3 +1,5 @@
+<!-- SPDX-FileCopyrightText: 2026 basecubedev -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import Segmented from "../ui/Segmented.svelte";
   import Icon from "../ui/Icon.svelte";

@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Dashboard maintenance service layer for backup, restore and config upgrade."""
 import hashlib

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Build the arm64 package and smoke-test it in a booted Debian 13 ARM64 VM.
 #
@@ -89,7 +90,7 @@ BOOT_TIMEOUT=${EMS_ARM64_BOOT_TIMEOUT:-1800}
 DISK_GB=${EMS_ARM64_DISK_GB:-12}
 
 usage() {
-    sed -n '3,36p' "$0"
+    awk 'NR == 1 { next } /^#/ { if ($0 !~ /SPDX-/) print; next } { exit }' "$0"
 }
 
 usage_error() {

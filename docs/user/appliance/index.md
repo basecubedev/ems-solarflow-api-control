@@ -68,10 +68,17 @@ pill that leads to the Overview — and carries **Basic** / **Expert**, the
 refresh button, **Sign out** and the **Appearance** button. A dot beside a menu
 entry marks a page with something waiting. The foot of the side menu holds
 **Open EMS Admin** (the EMS Admin console in a new tab, once it is
-installed), **Hide menu text**, **Classic view**
+installed), **Hide menu text**, **Classic view**, **About & licenses**
 and the Appliance Manager's version. On a phone the menu becomes a bar at the
 bottom with four pages and **More**; see
 [Appearance, language and phone](appearance.md#on-a-phone).
+
+**About & licenses**, also on the sign-in screen, shows the Manager's version,
+the source code of exactly that version, the project's license (GNU AGPL v3 or later, without any
+warranty), the note that this is an independent community project and not a
+Zendure product, and the license of every component the page is built from.
+It also links the Releases page, where every appliance image release carries
+the source code of the image.
 
 An operation that changes the appliance shows at the top of every page until
 you acknowledge its result; see

@@ -1,3 +1,4 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The EMS keeps the analytics schema in place itself (ems.history.schema_keeper).
 
