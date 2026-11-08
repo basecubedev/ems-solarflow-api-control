@@ -30,6 +30,13 @@ no other job declares ``needs``
     jobs exclude each other. That is only sound while a skip can come from a
     condition and nothing else: the moment one job waits on another, a skip can
     also mean "the job before me failed", and the gate would wave it through.
+
+``CHAINED`` is the exception, one entry per chain, and each is a statement:
+the dependent job consumes what the job before it made, so it cannot run
+without it. Its gate then has to tell the two skips apart itself, so it must
+name both jobs in the check it runs. ``dependency-refresh.yml``: the push job
+takes the build job's output and holds a deploy key the build job must never
+see, so the two cannot be one job.
 """
 
 import pytest
@@ -44,6 +51,9 @@ WORKFLOWS = sorted((ROOT / ".github" / "workflows").glob("*.yml"))
 
 GATE = "gate"
 PASSING_RESULTS = ("success", "skipped")
+CHAINED = {
+    "dependency-refresh.yml": {"push": ["build"]},
+}
 
 
 def triggers(document):
@@ -105,16 +115,28 @@ def test_a_skip_can_only_come_from_a_condition(path, document):
     the workflow can be skipped for having lost its predecessor."""
 
     chained = {
-        name: job.get("needs")
+        name: [job["needs"]] if isinstance(job["needs"], str) else list(job["needs"])
         for name, job in document["jobs"].items()
         if name != GATE and job.get("needs")
     }
 
-    assert chained == {}, (
+    assert chained == CHAINED.get(path.name, {}), (
         f"{path.name}: {sorted(chained)} now wait on other jobs, so a skip can mean "
         "an upstream failure. The gate treats a skip as a pass and would let that "
         "through -- teach it the difference before adding the dependency"
     )
+
+
+@pytest.mark.parametrize("path,document", gated_workflows(), ids=lambda v: getattr(v, "name", ""))
+def test_a_gate_over_a_chain_tells_the_two_skips_apart(path, document):
+    scripts = " ".join(step.get("run", "") for step in document["jobs"][GATE]["steps"])
+
+    for dependent, upstreams in CHAINED.get(path.name, {}).items():
+        for name in (dependent, *upstreams):
+            assert f'results["{name}"]' in scripts, (
+                f"{path.name}: the gate never looks at {name!r} on its own, so it cannot "
+                f"tell a skipped {dependent!r} from one whose predecessor did not run"
+            )
 
 
 @pytest.mark.parametrize("path,document", gated_workflows(), ids=lambda v: getattr(v, "name", ""))

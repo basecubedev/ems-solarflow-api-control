@@ -258,9 +258,7 @@ jobs:
           npm run test:dashboard-modern
           npm run test:admin-modern
           npm run test:appliance-modern
-          npm run build:dashboard-modern
-          npm run build:admin-modern
-          npm run build:appliance-modern
+          npm run build:modern
           git diff --exit-code -- dashboard/static/modern admin/static/modern appliance/static/modern
 
       - name: Install Playwright browsers

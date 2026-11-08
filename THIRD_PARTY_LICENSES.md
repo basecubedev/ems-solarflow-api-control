@@ -22,7 +22,7 @@ upstream holder. The license texts are in
 | Column | Meaning |
 |---|---|
 | Component | The package, image or asset name exactly as the manifest declares it |
-| Version | The declared constraint, and the version this inventory was verified against |
+| Version | What the manifest declares: a requirement's constraint, an npm package's specifier and locked version, the major version a workflow uses an action at. Where no manifest decides it, the version this inventory was verified against |
 | License (SPDX) | SPDX identifier or expression; `mixed` when a component aggregates many licenses |
 | Used for | Why this project needs it |
 | Runtime | Executed by the EMS controller, the Dashboard or the Admin Console in normal operation |
@@ -48,10 +48,10 @@ compatible ranges.
 
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream |
 |---|---|---|---|:---:|:---:|---|
-| `requests` | `>=2.34.2` (verified 2.34.2) | Apache-2.0 | HTTP client for Zendure local/cloud APIs, Shelly / EcoTracker / Tasmota grid meters and InfluxDB | ✅ | ✅ | https://github.com/psf/requests |
+| `requests` | `>=2.34.2` in requirements.txt, `>=2.34.2,<3` in deploy/admin/requirements.txt | Apache-2.0 | HTTP client for Zendure local/cloud APIs, Shelly / EcoTracker / Tasmota grid meters and InfluxDB | ✅ | ✅ | https://github.com/psf/requests |
 | `paho-mqtt` | `>=2.1.0` (verified 2.1.0) | EPL-2.0 OR BSD-3-Clause | MQTT client for local brokers and Zendure cloud MQTT telemetry and control | ✅ | ✅ | https://github.com/eclipse-paho/paho.mqtt.python |
 | `cryptography` | unpinned (verified 49.0.0) | Apache-2.0 OR BSD-3-Clause | AEAD backup archives, Admin secret/credential store, self-signed HTTPS certificates | ✅ | ✅ | https://github.com/pyca/cryptography |
-| `zeroconf` | `>=0.150.0` (verified 0.150.0) | LGPL-2.1-or-later | Optional live mDNS device discovery in the Admin Console; absence degrades gracefully | ✅ | ✅ | https://github.com/python-zeroconf/python-zeroconf |
+| `zeroconf` | `>=0.153.0` in requirements.txt, `>=0.153.0,<1` in deploy/admin/requirements.txt | LGPL-2.1-or-later | Optional live mDNS device discovery in the Admin Console; absence degrades gracefully | ✅ | ✅ | https://github.com/python-zeroconf/python-zeroconf |
 
 ### Python Runtime Dependencies (Transitive)
 
@@ -140,9 +140,9 @@ documentation website only in [`requirements-docs.txt`](requirements-docs.txt).
 |---|---|---|---|:---:|:---:|---|
 | `pytest` | unpinned (verified 9.1.0) | MIT | Test framework for the whole Python suite | ❌ | ❌ | https://github.com/pytest-dev/pytest |
 | `ruff` | `==0.17.3` | MIT | Lint and static checks (`ruff check .`) | ❌ | ❌ | https://github.com/astral-sh/ruff |
-| `PyYAML` | `>=6.0` (verified 6.0.3) | MIT | Parsing CI workflow and compose YAML inside contract tests | ❌ | ❌ | https://github.com/yaml/pyyaml |
+| `PyYAML` | `>=6.0.3` | MIT | Parsing CI workflow and compose YAML inside contract tests | ❌ | ❌ | https://github.com/yaml/pyyaml |
 | `reuse` | `==6.2.0` | GPL-3.0-or-later AND Apache-2.0 AND CC0-1.0 AND CC-BY-SA-4.0 | Checks that every file names its copyright holder and license (`reuse lint`, [REUSE](https://reuse.software/)) | ❌ | ❌ | https://github.com/fsfe/reuse-tool |
-| `zensical` | `==0.0.73` | MIT | Builds the documentation website from `docs/` ([docs-site.md](docs/developer/docs-site.md)) | ❌ | ❌ | https://github.com/zensical/zensical |
+| `zensical` | `==0.0.74` | MIT | Builds the documentation website from `docs/` ([docs-site.md](docs/developer/docs-site.md)) | ❌ | ❌ | https://github.com/zensical/zensical |
 
 ### Node Development Dependencies
 
@@ -161,14 +161,14 @@ Inter and Lucide are copied into the output.
 
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream |
 |---|---|---|---|:---:|:---:|---|
-| `@playwright/test` | `^1.61.1` (locked 1.61.1) | Apache-2.0 | Admin Console end-to-end test runner | ❌ | ❌ | https://github.com/microsoft/playwright |
+| `@playwright/test` | `^1.64.1` (locked 1.64.1) | Apache-2.0 | Admin Console end-to-end test runner | ❌ | ❌ | https://github.com/microsoft/playwright |
 | `@fontsource-variable/inter` | `5.3.0` | OFL-1.1 | Source of the Inter variable font copied into the Modern builds | ❌ | ❌ | https://github.com/fontsource/font-files |
 | `@sveltejs/vite-plugin-svelte` | `7.3.1` | MIT | Compiles the Modern front ends' Svelte components during the Vite build | ❌ | ❌ | https://github.com/sveltejs/vite-plugin-svelte |
 | `lucide-static` | `1.64.0` | ISC | Source of the icon paths copied into the Modern sprites | ❌ | ❌ | https://github.com/lucide-icons/lucide |
 | `svelte` | `5.57.3` | MIT | Component compiler of the Modern front ends; its runtime is bundled (Vendored Components) | ❌ | ❌ | https://github.com/sveltejs/svelte |
 | `vite` | `8.3.5` | MIT | Builds the Modern front ends into `dashboard/static/modern/`, `admin/static/modern/` and `appliance/static/modern/` | ❌ | ❌ | https://github.com/vitejs/vite |
-| `playwright` | 1.61.1 | Apache-2.0 | Browser automation library behind the test runner | ❌ | ❌ | https://github.com/microsoft/playwright |
-| `playwright-core` | 1.61.1 | Apache-2.0 | Browser protocol driver used by `playwright` | ❌ | ❌ | https://github.com/microsoft/playwright |
+| `playwright` | 1.64.1 | Apache-2.0 | Browser automation library behind the test runner | ❌ | ❌ | https://github.com/microsoft/playwright |
+| `playwright-core` | 1.64.1 | Apache-2.0 | Browser protocol driver used by `playwright` | ❌ | ❌ | https://github.com/microsoft/playwright |
 
 ### Browser Runtimes
 
@@ -178,9 +178,9 @@ committed to this repository and never shipped in an image.
 
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream |
 |---|---|---|---|:---:|:---:|---|
-| `Chromium` | Playwright build for 1.61.1 | BSD-3-Clause AND mixed | `chromium` Playwright project | ❌ | ❌ | https://www.chromium.org/Home |
-| `Firefox` | Playwright build for 1.61.1, plus the host Firefox | MPL-2.0 | `firefox` Playwright project, and headless screenshot/video capture for the documentation | ❌ | ❌ | https://hg.mozilla.org/mozilla-central |
-| `WebKit` | Playwright build for 1.61.1 | LGPL-2.1-or-later AND BSD-2-Clause | Optional `webkit` Playwright project | ❌ | ❌ | https://github.com/WebKit/WebKit |
+| `Chromium` | Playwright build for 1.64.1 | BSD-3-Clause AND mixed | `chromium` Playwright project | ❌ | ❌ | https://www.chromium.org/Home |
+| `Firefox` | Playwright build for 1.64.1, plus the host Firefox | MPL-2.0 | `firefox` Playwright project, and headless screenshot/video capture for the documentation | ❌ | ❌ | https://hg.mozilla.org/mozilla-central |
+| `WebKit` | Playwright build for 1.64.1 | LGPL-2.1-or-later AND BSD-2-Clause | Optional `webkit` Playwright project | ❌ | ❌ | https://github.com/WebKit/WebKit |
 
 ### External Developer Tools
 
@@ -566,6 +566,15 @@ by the final stage of the Dockerfile in its `Image` cell, when a documented entr
 manifest, when a component is listed twice in one section, or when a table is
 missing a required column. `tests/test_third_party_licenses.py` runs the same
 checks under `pytest -m documentation`.
+
+It also fails when a Version cell disagrees with the manifest that decides it,
+and `--fix-versions` rewrites exactly those cells before it checks. A Python
+row may keep a `(verified …)` note behind its constraint until the constraint
+changes. The license of a package `package-lock.json` locks is compared with the
+lockfile's and is never rewritten: a changed license is a person's decision.
+On a Dependabot pull request the **Repo dependency refresh** workflow runs the
+rewrite and the Modern builds for you (see
+[`docs/developer/ci-release.md`](docs/developer/ci-release.md#dependencies-and-security-scanning)).
 
 See [`docs/developer/development.md`](docs/developer/development.md) for the
 full update workflow.

@@ -30,6 +30,9 @@ from tools.check_third_party_licenses import (
     VENDORED,
     collect_problems,
     component_keys,
+    fix_versions,
+    python_version_cell,
+    workflow_action_versions,
     normalize_python_name,
     DOCKERFILES,
     dockerfile_binaries,
@@ -562,3 +565,174 @@ def test_a_github_action_no_workflow_uses_is_rejected(repo_copy):
     inventory.write_text(text.replace(row, row + "\n" + row.replace("actions/checkout", "example/unused-action")), encoding="utf-8")
 
     assert any("example/unused-action" in problem for problem in collect_problems(repo_copy))
+
+
+# --- the Version cells the manifests decide ----------------------------------
+
+
+def row_of(root, component):
+    """The inventory rows whose Component cell starts with ``component``, as cell lists."""
+
+    lines = (root / "THIRD_PARTY_LICENSES.md").read_text(encoding="utf-8").splitlines()
+    return [[cell.strip() for cell in line.strip().strip("|").split("|")] for line in lines if line.startswith(f"| {component}")]
+
+
+def lock_package(root, name, **changes):
+    lock = root / "package-lock.json"
+    data = json.loads(lock.read_text(encoding="utf-8"))
+    data["packages"][f"node_modules/{name}"].update(changes)
+    lock.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def declare_node(root, name, specifier):
+    package = root / "package.json"
+    manifest = json.loads(package.read_text(encoding="utf-8"))
+    manifest["devDependencies"][name] = specifier
+    package.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+
+def version_problems(root):
+    return [problem for problem in collect_problems(root) if "has Version" in problem]
+
+
+def test_a_requirement_bump_is_rejected_until_the_rewrite_takes_it(repo_copy):
+    manifest = repo_copy / "requirements-docs.txt"
+    manifest.write_text(re.sub(r"zensical==\S+", "zensical==9.9.9", manifest.read_text(encoding="utf-8")), encoding="utf-8")
+
+    assert [problem for problem in version_problems(repo_copy) if "zensical" in problem]
+    assert fix_versions(repo_copy) == 1
+    assert collect_problems(repo_copy) == []
+    assert row_of(repo_copy, "`zensical`")[0][1] == "`==9.9.9`"
+
+
+def test_a_verified_note_stays_until_the_constraint_it_was_verified_against_changes(repo_copy):
+    assert row_of(repo_copy, "`pytest`")[0][1].startswith("unpinned (verified ")
+
+    manifest = repo_copy / "requirements-dev.txt"
+    manifest.write_text(manifest.read_text(encoding="utf-8").replace("pytest\n", "pytest>=99\n"), encoding="utf-8")
+    fix_versions(repo_copy)
+
+    assert row_of(repo_copy, "`pytest`")[0][1] == "`>=99`"
+    assert collect_problems(repo_copy) == []
+
+
+def test_a_package_two_manifests_declare_differently_names_each_constraint():
+    assert python_version_cell([("requirements.txt", ">=1"), ("deploy/admin/requirements.txt", ">=1")]) == "`>=1`"
+    assert python_version_cell([("requirements.txt", "")]) == "unpinned"
+    assert (
+        python_version_cell([("requirements.txt", ">=1"), ("deploy/admin/requirements.txt", ">=1,<2")])
+        == "`>=1` in requirements.txt, `>=1,<2` in deploy/admin/requirements.txt"
+    )
+
+
+def test_an_npm_bump_rewrites_every_row_that_names_the_package_and_nothing_else(repo_copy):
+    inventory = repo_copy / "THIRD_PARTY_LICENSES.md"
+    before = inventory.read_text(encoding="utf-8").splitlines(keepends=True)
+    declare_node(repo_copy, "lucide-static", "9.8.7")
+    lock_package(repo_copy, "lucide-static", version="9.8.7")
+
+    assert len([problem for problem in version_problems(repo_copy) if "lucide" in problem.lower()]) == 2
+    assert fix_versions(repo_copy) == 2
+
+    after = inventory.read_text(encoding="utf-8").splitlines(keepends=True)
+    changed = [index for index, (old, new) in enumerate(zip(before, after)) if old != new]
+    assert len(before) == len(after) and len(changed) == 2
+    for index in changed:
+        old, new = before[index].split("|"), after[index].split("|")
+        assert [cell for position, cell in enumerate(old) if position != 2] == [
+            cell for position, cell in enumerate(new) if position != 2
+        ]
+    assert row_of(repo_copy, "`lucide-static`")[0][1] == "`9.8.7`"
+    assert row_of(repo_copy, "`Lucide` (`lucide-static`)")[0][1] == "9.8.7"
+    assert collect_problems(repo_copy) == []
+
+
+def test_a_range_shows_the_version_the_lockfile_holds(repo_copy):
+    declare_node(repo_copy, "vite", "^8.0.0")
+    lock_package(repo_copy, "vite", version="8.9.1")
+    fix_versions(repo_copy)
+
+    assert row_of(repo_copy, "`vite` |")[0][1] == "`^8.0.0` (locked 8.9.1)"
+    assert row_of(repo_copy, "`vite` (module-preload helper)")[0][1] == "8.9.1"
+    assert collect_problems(repo_copy) == []
+
+
+def test_the_browser_builds_follow_the_locked_playwright_driver(repo_copy):
+    lock_package(repo_copy, "playwright-core", version="1.99.0")
+    fix_versions(repo_copy)
+
+    assert row_of(repo_copy, "`Chromium`")[0][1] == "Playwright build for 1.99.0"
+    assert row_of(repo_copy, "`Firefox`")[0][1] == "Playwright build for 1.99.0, plus the host Firefox"
+    assert row_of(repo_copy, "`playwright-core`")[0][1] == "1.99.0"
+
+
+def test_a_font_package_bump_keeps_the_typeface_version_beside_it(repo_copy):
+    declare_node(repo_copy, "@fontsource-variable/inter", "5.4.0")
+    lock_package(repo_copy, "@fontsource-variable/inter", version="5.4.0")
+    fix_versions(repo_copy)
+
+    assert row_of(repo_copy, "`Inter` (`@fontsource-variable/inter`)")[0][1].endswith(" via 5.4.0")
+    assert collect_problems(repo_copy) == []
+
+
+def test_a_changed_npm_license_is_rejected_and_never_rewritten(repo_copy):
+    lock_package(repo_copy, "svelte", license="GPL-3.0-only")
+    fix_versions(repo_copy)
+
+    assert row_of(repo_copy, "`svelte`")[0][2] == "MIT"
+    assert any("svelte" in problem and "GPL-3.0-only" in problem for problem in collect_problems(repo_copy))
+
+
+def test_an_action_bump_rewrites_the_major_versions_the_workflows_use(repo_copy):
+    workflows = sorted((repo_copy / ".github" / "workflows").glob("*.yml"))
+    for path in workflows:
+        path.write_text(path.read_text(encoding="utf-8").replace("actions/setup-node@v7", "actions/setup-node@v8"), encoding="utf-8")
+    fix_versions(repo_copy)
+    assert row_of(repo_copy, "`actions/setup-node`")[0][1] == "v8"
+
+    append(workflows[0], "\n      - uses: actions/setup-node@" + "0" * 40 + "  # v9.1.0\n")
+    fix_versions(repo_copy)
+    assert row_of(repo_copy, "`actions/setup-node`")[0][1] == "v8, v9"
+    assert collect_problems(repo_copy) == []
+
+
+@pytest.mark.parametrize(
+    ("reference", "major"),
+    [
+        ("example/tool@v7", "v7"),
+        ("example/tool@v7.1.2", "v7"),
+        ("example/tool@2.0.1", "2"),
+        ("example/tool@main", "main"),
+        ("example/tool@" + "a" * 40 + "  # v8.0.1", "v8"),
+        ("example/tool@" + "a" * 40 + "  # pin@v9.2.0", "v9"),
+        ("example/tool/sub@" + "a" * 40 + " # tag=v10", "v10"),
+    ],
+)
+def test_the_major_version_is_read_from_every_form_a_workflow_writes(tmp_path, reference, major):
+    workflows = tmp_path / ".github" / "workflows"
+    workflows.mkdir(parents=True)
+    (workflows / "ci.yml").write_text(f"jobs:\n  a:\n    steps:\n      - uses: {reference}\n", encoding="utf-8")
+
+    assert workflow_action_versions(tmp_path) == {"example/tool": {major}}
+
+
+def test_the_rewrite_settles_in_one_pass(repo_copy):
+    lock_package(repo_copy, "playwright", version="1.99.0")
+    fix_versions(repo_copy)
+    settled = (repo_copy / "THIRD_PARTY_LICENSES.md").read_bytes()
+
+    assert fix_versions(repo_copy) == 0
+    assert (repo_copy / "THIRD_PARTY_LICENSES.md").read_bytes() == settled
+
+
+def test_the_checker_command_rewrites_versions_before_it_checks(repo_copy):
+    lock_package(repo_copy, "playwright", version="1.99.0")
+    result = subprocess.run(
+        [sys.executable, str(CHECKER), "--root", str(repo_copy), "--fix-versions"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "rewrote 1 Version cells" in result.stdout

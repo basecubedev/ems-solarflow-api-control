@@ -40,7 +40,7 @@ Before live operation, users should configure their real meter, Zendure devices,
 
 ## Kept Up to Date
 
-Dependabot tracks dependency updates for Python, Docker, and GitHub Actions. Ruff keeps code style and common issues visible.
+Dependabot tracks dependency updates for Python, npm, Docker, and GitHub Actions. Ruff keeps code style and common issues visible.
 
 CodeQL security scanning is enabled through GitHub default setup for this repository.
 It is not maintained as a checked-in workflow file.

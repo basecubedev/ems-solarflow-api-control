@@ -176,6 +176,11 @@ column. It runs in the `Repo static checks` job and through
 `tests/test_third_party_licenses.py`. Transitive resolution is deliberately out
 of scope — that table is maintained by hand.
 
+A Version cell that a manifest decides is not written by hand:
+`python tools/check_third_party_licenses.py --fix-versions` rewrites it, and the
+check fails until it matches (see *Maintaining This Inventory* in the
+inventory).
+
 ### Copyright and license of every file
 
 The repository follows the [REUSE specification](https://reuse.software/spec-3.3/).
