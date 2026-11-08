@@ -3,4 +3,4 @@
 pytest
 ruff==0.17.3
 PyYAML>=6.0.3
-reuse==6.2.0
+reuse==6.3.0
