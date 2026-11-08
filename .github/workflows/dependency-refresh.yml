@@ -1,0 +1,214 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: Repo dependency refresh
+
+# Dependabot changes manifests and nothing else, while two committed things
+# follow from them: the Modern builds and the inventory's Version cells. This
+# workflow makes both and pushes them onto the Dependabot branch.
+#
+# The build runs the freshly updated packages' code, so it holds no secret and
+# no write permission, and only its build output is taken from it. The push job
+# holds the deploy key and therefore runs no action at all: a Dependabot update
+# of an action would otherwise hand the key to the new version. It rewrites the
+# inventory itself, with the standard-library checker from the Dependabot
+# commit. It pushes with a deploy key because a push made with GITHUB_TOKEN
+# starts no workflow and the pull request's checks would never report.
+"on":
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions: {}
+
+concurrency:
+  group: dependency-refresh-${{ github.event.pull_request.number }}-${{ github.actor }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Repo dependency refresh build
+    if: >-
+      github.actor == 'dependabot[bot]'
+      && github.event.pull_request.user.login == 'dependabot[bot]'
+      && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.collect.outputs.changed }}
+
+    steps:
+      - name: Check out the Dependabot commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build the Modern front ends
+        run: npm run build:modern
+
+      - name: Collect the build output
+        id: collect
+        env:
+          PATCH: ${{ runner.temp }}/dependency-refresh.patch
+        run: |
+          set -euo pipefail
+          git add --all -- dashboard/static/modern admin/static/modern appliance/static/modern
+          git diff --cached --stat
+          git diff --cached --binary --full-index > "$PATCH"
+          if [ -s "$PATCH" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Hand the patch to the push job
+        if: steps.collect.outputs.changed == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: dependency-refresh
+          path: ${{ runner.temp }}/dependency-refresh.patch
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
+
+  push:
+    name: Repo dependency refresh push
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+
+    steps:
+      - name: Take the patch from the build job
+        if: needs.build.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          API: ${{ github.api_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          listing="$API/repos/$REPOSITORY/actions/runs/$RUN_ID/artifacts?name=dependency-refresh"
+          archive=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$listing" \
+            | jq -r '[.artifacts[] | select(.expired | not)] | sort_by(.created_at) | last | .archive_download_url')
+          curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -o "$RUNNER_TEMP/dependency-refresh.zip" "$archive"
+          unzip -p "$RUNNER_TEMP/dependency-refresh.zip" dependency-refresh.patch > "$RUNNER_TEMP/dependency-refresh.patch"
+
+      - name: Check out the Dependabot commit with the deploy key
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPENDENCY_REFRESH_KEY }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DEPLOY_KEY" ]; then
+            echo "::error::The Dependabot secret DEPENDENCY_REFRESH_KEY is missing; docs/developer/ci-release.md says how to add it."
+            exit 1
+          fi
+          umask 077
+          printf '%s\n' "$DEPLOY_KEY" > "$RUNNER_TEMP/deploy-key"
+          printf '%s\n' "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > "$RUNNER_TEMP/known_hosts"
+          git init -q dependabot
+          cd dependabot
+          git config core.sshCommand "ssh -i $RUNNER_TEMP/deploy-key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts"
+          git remote add origin "git@github.com:${REPOSITORY}.git"
+          git fetch -q --depth=1 origin "$HEAD_SHA"
+          git -c advice.detachedHead=false checkout -q --detach FETCH_HEAD
+
+      - name: Stage only the build output
+        working-directory: dependabot
+        env:
+          PATCH: ${{ runner.temp }}/dependency-refresh.patch
+        run: |
+          set -euo pipefail
+          if [ ! -s "$PATCH" ]; then
+            exit 0
+          fi
+          git apply --cached "$PATCH"
+          git diff --cached --name-only --no-renames -z | while IFS= read -r -d '' path; do
+            case "$path" in
+              *[!A-Za-z0-9._/-]* | */.* | .*)
+                echo "::error::The patch names $path, which is no plain build file name."
+                exit 1
+                ;;
+              dashboard/static/modern/* | admin/static/modern/* | appliance/static/modern/*) ;;
+              *)
+                echo "::error::The patch changes $path, which this workflow never pushes."
+                exit 1
+                ;;
+            esac
+          done
+          if git diff --cached --raw --no-renames | awk '$2 != "100644" && $2 != "000000" { found = 1 } END { exit !found }'; then
+            echo "::error::The patch sets a file mode other than a regular file's."
+            exit 1
+          fi
+          git diff --cached --stat
+
+      - name: Rewrite the inventory's Version cells
+        working-directory: dependabot
+        run: |
+          if ! python3 -I tools/check_third_party_licenses.py --fix-versions; then
+            echo "::warning::The inventory has problems a rewrite cannot settle; Repo static checks names them."
+          fi
+          git add -- THIRD_PARTY_LICENSES.md
+
+      - name: Commit and push onto the Dependabot branch
+        working-directory: dependabot
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          case "$HEAD_REF" in
+            dependabot/*) ;;
+            *)
+              echo "::error::$HEAD_REF is not a Dependabot branch."
+              exit 1
+              ;;
+          esac
+          if git diff --cached --quiet; then
+            echo "Nothing to refresh."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -q -m "build(deps): rebuild the Modern front ends and the inventory for this update"
+          git push origin "HEAD:refs/heads/${HEAD_REF}"
+
+  gate:
+    name: Repo dependency refresh gate
+    # The push job waits on the build, the one chain a gated workflow has
+    # (tests/test_ci_gate_covers_every_job.py lists it). A skipped push is a
+    # pass only while the build was skipped too; after a build that ran, it
+    # means the push never happened.
+    needs:
+      - build
+      - push
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Refuse a run in which anything did not succeed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          python3 -c 'import json, os, sys
+          results = {name: outcome["result"] for name, outcome in json.loads(os.environ["RESULTS"]).items()}
+          bad = sorted((name, result) for name, result in results.items() if result not in ("success", "skipped"))
+          if results["push"] == "skipped" and results["build"] != "skipped":
+              bad.append(("push", "skipped after a build that ran"))
+          for name, result in bad:
+              print(f"::error::{name} concluded {result}")
+          print(f"{len(results) - len(bad)} of {len(results)} jobs succeeded or were skipped")
+          sys.exit(1 if bad else 0)'

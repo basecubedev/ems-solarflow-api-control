@@ -572,6 +572,9 @@ and `--fix-versions` rewrites exactly those cells before it checks. A Python
 row may keep a `(verified …)` note behind its constraint until the constraint
 changes. The license of a package `package-lock.json` locks is compared with the
 lockfile's and is never rewritten: a changed license is a person's decision.
+On a Dependabot pull request the **Repo dependency refresh** workflow runs the
+rewrite and the Modern builds for you (see
+[`docs/developer/ci-release.md`](docs/developer/ci-release.md#dependencies-and-security-scanning)).
 
 See [`docs/developer/development.md`](docs/developer/development.md) for the
 full update workflow.

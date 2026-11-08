@@ -12,7 +12,7 @@ carries that product as its first word. Three prefixes, and the set is closed:
 |---|---|---|
 | `Appliance ` | the Raspberry Pi product — Manager `.deb`, OS image, fleet index | `appliance-image.yml`, `appliance-manager-release.yml` |
 | `EMS ` | the paired EMS controller and Admin console | `docker-publish.yml`, `release-catalogue.yml`, `docker-feature-publish.yml`, `docker-feature-cleanup.yml`, `admin-replacement-canary.yml`, `generated-config-template.yml` |
-| `Repo ` | ships no product, gates both; publishes the documentation website | `simulated-regression-tests.yml`, `playwright-e2e.yml`, `docs-site.yml`, `docs-site-publish.yml` |
+| `Repo ` | ships no product, gates both; publishes the documentation website | `simulated-regression-tests.yml`, `playwright-e2e.yml`, `docs-site.yml`, `docs-site-publish.yml`, `dependency-refresh.yml` |
 
 There is deliberately no `Admin ` prefix: the two container images ship as one
 `build_id`/`channel` identity and `admin/releases.py` treats them as a single
@@ -478,6 +478,81 @@ Pages. See [docs-site.md](docs-site.md).
 
 ## Dependencies and security scanning
 
-Dependabot tracks Python, Docker and GitHub Actions updates. CodeQL security
-scanning is enabled through GitHub default setup for this repository; it is not
-a checked-in workflow file. Updates still require passing tests and review.
+Dependabot tracks Python, npm, Docker and GitHub Actions updates
+(`.github/dependabot.yml`). npm comes once a month in two groups:
+`frontend-build` (Vite, Svelte, the Svelte plugin, Lucide, Inter), whose update
+changes the committed Modern builds, and `test-tools` (Playwright), which does
+not. CodeQL security scanning is enabled through GitHub default setup for this
+repository; it is not a checked-in workflow file. Updates still require passing
+tests and review.
+
+### Dependency refresh
+
+A Dependabot pull request changes manifests and nothing else, while two
+committed things follow from them: the Modern builds under
+`dashboard/static/modern/`, `admin/static/modern/` and
+`appliance/static/modern/`, which **Repo browser dashboard** rebuilds and
+compares, and the inventory's Version cells, which
+`tools/check_third_party_licenses.py` compares. Workflow
+`.github/workflows/dependency-refresh.yml`, named **Repo dependency refresh**,
+makes both on every Dependabot push and pushes them as one commit onto the
+Dependabot branch; the pull request's checks then run on that commit.
+
+- `Repo dependency refresh build` checks out the Dependabot commit, runs
+  `npm ci` and `npm run build:modern`, and hands the build output on as a
+  patch. It runs the updated packages' code and therefore holds no secret and
+  no write permission.
+- `Repo dependency refresh push` holds the deploy key and runs no action at
+  all, so a Dependabot update of an action never reaches the key; it fetches
+  the patch through the REST API and the commit with plain `git`. It stages
+  from the patch only regular files with plain names inside the three build
+  directories, rewrites the inventory itself with
+  `python3 -I tools/check_third_party_licenses.py --fix-versions` from the
+  Dependabot commit, and pushes. A push made with `GITHUB_TOKEN` would start
+  no workflow, so the checks would never report on it. The push is a
+  fast-forward onto the commit the build saw, so a newer Dependabot push is
+  never overwritten; its own run takes over.
+- `Repo dependency refresh gate` waits on both, like every pull-request
+  workflow's gate. The push waits on the build, the one chain a gated workflow
+  has, so the gate also fails a push that was skipped after a build that ran.
+
+What the rewrite cannot settle stays red for a person: a changed license of a
+locked npm package and a Docker base image (a new Python or InfluxDB changes
+what the images ship). The hand-kept tables (Python transitive, distributed
+binaries) are not checked against the update and need a person's look when it
+matters.
+
+The checks that run on the refresh commit run as a push by the deploy key, not
+as Dependabot: they get the repository's Actions secrets and a `GITHUB_TOKEN`
+with every permission their workflow declares, as they would after pushing the
+same commit by hand. The updated actions run in them before anyone has reviewed
+the pull request; `EMS config template update`, which writes to the branch,
+runs on an update of its own workflow file. No workflow a pull request starts
+reads a secret today.
+
+Dependabot does not rebase a pull request that carries someone else's commit.
+When one goes stale or conflicts, comment `@dependabot recreate`; the refresh
+runs again on the new commit.
+
+One-time setup, by the repository owner:
+
+1. Make a key pair without a passphrase on a trusted machine:
+   `ssh-keygen -t ed25519 -N "" -C dependency-refresh -f dependency-refresh`.
+2. *Settings → Deploy keys → Add deploy key*: paste `dependency-refresh.pub`
+   and tick *Allow write access*.
+3. *Settings → Secrets and variables → Dependabot → New repository secret*:
+   name `DEPENDENCY_REFRESH_KEY`, value the content of `dependency-refresh`.
+   It has to be a Dependabot secret: a workflow that Dependabot starts gets no
+   Actions secrets.
+4. Delete both files from the machine.
+
+The key is as strong as a collaborator: it can push any branch, any tag and any
+workflow, and a workflow it pushes runs with write access to the GHCR images.
+It is therefore kept as a Dependabot secret only, which no workflow except this
+one reads, and only the push job sees it. If it may have leaked, delete it
+under *Settings → Deploy keys* together with the Dependabot secret; the push
+job then fails until a new pair is set up. A tag ruleset that restricts creating `v*`,
+`appliance-manager-v*` and `appliance-image-v*` to the owner additionally keeps
+it from starting a release; it leaves the tags the workflows keep themselves
+(`appliance-image-latest`, `appliance-manager-index`, `appliance-image-ci-*`)
+alone.
