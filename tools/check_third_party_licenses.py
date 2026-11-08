@@ -6,9 +6,14 @@
 Direct declarations only: every entry in the requirements files and in
 ``package.json``, every optional platform package in ``package-lock.json``,
 every GitHub Action a workflow uses, and every static asset that does not carry
-the project license header must have a row in the inventory. Every prebuilt
-binary the final stage of a Dockerfile places under a system binary tree has a
-row that names its ``third_party/`` license files, and that same stage copies
+the project license header must have a row in the inventory. Every Version
+cell a manifest decides -- a requirement's constraint, a package's locked
+version, the major version a workflow uses an action at -- reads what the
+manifest says, and ``--fix-versions`` rewrites the ones that do not; a locked
+npm package's license is checked against the lockfile and never rewritten.
+Every prebuilt binary the final stage of a Dockerfile places under a system
+binary tree has a row that names its ``third_party/`` license files, and that
+same stage copies
 them beside it. A binary a ``RUN`` step compiles, writes from a heredoc or
 places with a command not listed in ``stage_contents`` is not seen and needs
 its row by hand. Transitive
@@ -25,6 +30,7 @@ import re
 import shlex
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY = "THIRD_PARTY_LICENSES.md"
@@ -113,6 +119,18 @@ NOT_BINARIES = re.compile(r"^/usr/share/|/(?:site|dist)-packages(?:/|$)")
 SHELL_WORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "("}
 SHELLS = {"sh", "bash", "dash"}
 NO_UPSTREAM_NOTICE = "no NOTICE upstream"
+VERIFIED_NOTE = " (verified "
+PLAYWRIGHT_DRIVER = "playwright-core"
+_ACTION_VERSION = re.compile(
+    r"^\s*(?:-\s+)?uses:\s*[\"']?([^\s\"'#@]+)@([^\s\"'#]+)[\"']?(?:[ \t]+#[ \t]*(\S+))?",
+    re.MULTILINE,
+)
+_COMMIT = re.compile(r"^[0-9a-f]{40}$")
+_MAJOR = re.compile(r"(?<![\w.])(v?\d+)(?:\.\d+)*(?![\w.])")
+_VERSION_TOKEN = r"[0-9][\w.+-]*"
+_PLAYWRIGHT_BUILD = re.compile(rf"(Playwright build for )({_VERSION_TOKEN})")
+_VIA_VERSION = re.compile(rf"( via )({_VERSION_TOKEN})")
+_LEADING_VERSION = re.compile(rf"^()({_VERSION_TOKEN})")
 _OUTPUT_OPTION = {
     "curl": ("o", "--output"),
     "wget": ("O", "--output-document"),
@@ -151,7 +169,7 @@ def parse_inventory(text):
     open_table = None
     in_fence = False
 
-    for line in text.splitlines():
+    for number, line in enumerate(text.splitlines()):
         if _FENCE.match(line):
             in_fence = not in_fence
             continue
@@ -172,11 +190,12 @@ def parse_inventory(text):
             pending, open_table = None, None
             continue
         if _SEPARATOR.match(stripped) and pending is not None:
-            open_table = {"columns": pending, "rows": []}
+            open_table = {"columns": pending, "rows": [], "lines": []}
             current.tables.append(open_table)
             pending = None
             continue
         if open_table is not None:
+            open_table["lines"].append(number)
             cells = _split_row(line)
             if len(cells) == len(open_table["columns"]):
                 open_table["rows"].append(dict(zip(open_table["columns"], cells)))
@@ -208,18 +227,24 @@ def component_keys(section):
     return keys
 
 
-def read_python_manifest(path):
-    names = []
+def read_python_requirements(path):
+    """``(name, specifier)`` per requirement; the specifier is empty when unpinned."""
+
+    requirements = []
     if not path.is_file():
-        return names
+        return requirements
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.split("#", 1)[0].strip()
         if not line or line.startswith("-"):
             continue
         name = re.split(r"[<>=!~\[;]", line, maxsplit=1)[0].strip()
         if name:
-            names.append(name)
-    return names
+            requirements.append((name, line[len(name):].strip()))
+    return requirements
+
+
+def read_python_manifest(path):
+    return [name for name, _specifier in read_python_requirements(path)]
 
 
 def read_package_json(path):
@@ -250,6 +275,20 @@ def read_package_lock(path):
     for name in (data.get("dependencies") or {}):
         names.add(name)
     return names, optional
+
+
+def read_locked_packages(path):
+    """Lockfile entries of the top-level ``node_modules/<name>`` packages, by name."""
+
+    if not path.is_file():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    locked = {}
+    for location, entry in (data.get("packages") or {}).items():
+        name = location.removeprefix("node_modules/")
+        if name != location and "node_modules/" not in name:
+            locked[name] = entry
+    return locked
 
 
 def vendored_static_files(root):
@@ -706,6 +745,198 @@ def _check_github_actions(root, sections, problems):
         problems.append(f"{GITHUB_ACTIONS!r} lists {stale!r}, which no workflow uses")
 
 
+def workflow_action_versions(root):
+    """The major versions each third-party action is used at, as ``{owner/repository: {"v7"}}``.
+
+    A commit pin is read by the tag its trailing comment names, the form
+    Dependabot keeps up to date beside it."""
+
+    workflows = Path(root) / WORKFLOW_DIR
+    versions = {}
+    for pattern in _WORKFLOW_FILES:
+        for path in sorted(workflows.glob(pattern)):
+            for name, ref, comment in _ACTION_VERSION.findall(path.read_text(encoding="utf-8")):
+                if name.startswith(("./", "docker:")):
+                    continue
+                tag = comment if _COMMIT.match(ref) and comment else ref
+                major = _MAJOR.search(tag)
+                action = "/".join(name.split("/")[:2])
+                versions.setdefault(action, set()).add(major.group(1) if major else tag)
+    return versions
+
+
+def _version_order(version):
+    return [int(part) for part in re.findall(r"\d+", version)], version
+
+
+class VersionClaim(NamedTuple):
+    """One Version cell a manifest decides, and the text it has to read."""
+
+    section: str
+    component: str
+    line: int
+    column: int
+    current: str
+    expected: str
+
+
+def python_version_cell(declarations):
+    """The Version cell for ``(manifest, specifier)`` pairs of one package."""
+
+    manifests = {}
+    for manifest, specifier in declarations:
+        manifests.setdefault(specifier, []).append(manifest)
+
+    def shown(specifier):
+        return f"`{specifier}`" if specifier else "unpinned"
+
+    if len(manifests) == 1:
+        return shown(next(iter(manifests)))
+    return ", ".join(f"{shown(specifier)} in {' and '.join(names)}" for specifier, names in manifests.items())
+
+
+def node_version_cell(specifier, locked):
+    if locked is None or specifier == locked:
+        return f"`{specifier}`"
+    return f"`{specifier}` (locked {locked})"
+
+
+def _with_version(pattern, cell, version):
+    """``cell`` with the version ``pattern`` finds replaced, or ``None`` when it finds none."""
+
+    if version is None or not pattern.search(cell):
+        return None
+    return pattern.sub(lambda match: match.group(1) + version, cell, count=1)
+
+
+def _python_declarations(root, manifests):
+    declared = {}
+    for manifest in manifests:
+        for name, specifier in read_python_requirements(root / manifest):
+            declared.setdefault(normalize_python_name(name), []).append((manifest, specifier))
+    return declared
+
+
+def _python_expectation(declared):
+    def expected(key, cell, _row):
+        declarations = declared.get(normalize_python_name(key))
+        if not declarations:
+            return None
+        rendered = python_version_cell(declarations)
+        if cell.startswith(rendered + VERIFIED_NOTE) and cell.endswith(")"):
+            return cell
+        return rendered
+
+    return expected
+
+
+def _locked_version(locked, name):
+    return (locked.get(name) or {}).get("version")
+
+
+def _vendored_package(row, locked):
+    return next((span for span in _CODE_SPAN.findall(row.get("Component", "")) if span in locked), None)
+
+
+def version_claims(root, sections):
+    """Every Version cell in the inventory that a manifest decides."""
+
+    root = Path(root)
+    declared_node = read_package_json(root / "package.json")
+    locked = read_locked_packages(root / "package-lock.json")
+    actions = workflow_action_versions(root)
+
+    def node(key, _cell, _row):
+        if key in declared_node:
+            return node_version_cell(declared_node[key][1], _locked_version(locked, key))
+        return _locked_version(locked, key)
+
+    def vendored(_key, cell, row):
+        version = _locked_version(locked, _vendored_package(row, locked))
+        pattern = _VIA_VERSION if _VIA_VERSION.search(cell) else _LEADING_VERSION
+        return _with_version(pattern, cell, version)
+
+    expectations = {
+        RUNTIME_DIRECT: _python_expectation(_python_declarations(root, PYTHON_RUNTIME_MANIFESTS)),
+        PYTHON_DEV: _python_expectation(_python_declarations(root, PYTHON_DEV_MANIFESTS)),
+        NODE_DEV: node,
+        OPTIONAL_PLATFORM: lambda key, _cell, _row: _locked_version(locked, key),
+        BROWSER_RUNTIMES: lambda _key, cell, _row: _with_version(
+            _PLAYWRIGHT_BUILD, cell, _locked_version(locked, PLAYWRIGHT_DRIVER)
+        ),
+        GITHUB_ACTIONS: lambda key, _cell, _row: (
+            ", ".join(sorted(actions[key], key=_version_order)) if key in actions else None
+        ),
+        VENDORED: vendored,
+    }
+
+    claims = []
+    for title, expected_for in expectations.items():
+        section = sections.get(title)
+        if section is None:
+            continue
+        for table in component_tables(section):
+            if "Version" not in table["columns"]:
+                continue
+            column = table["columns"].index("Version")
+            for row, line in zip(table["rows"], table["lines"]):
+                cell = row.get("Version")
+                if cell is None:
+                    continue
+                span = _CODE_SPAN.search(row["Component"])
+                key = span.group(1) if span else row["Component"]
+                expected = expected_for(key, cell, row)
+                if expected is not None:
+                    claims.append(VersionClaim(title, key, line, column, cell, expected))
+    return claims
+
+
+def _check_versions(root, sections, problems):
+    for claim in version_claims(root, sections):
+        if claim.current != claim.expected:
+            problems.append(
+                f"section {claim.section!r} row {claim.component} has Version {claim.current!r}; "
+                f"the manifests say {claim.expected!r} (python tools/check_third_party_licenses.py --fix-versions)"
+            )
+
+
+def _check_node_licenses(root, sections, problems):
+    locked = read_locked_packages(Path(root) / "package-lock.json")
+    for title in (NODE_DEV, OPTIONAL_PLATFORM):
+        section = sections.get(title)
+        if section is None:
+            continue
+        for table in component_tables(section):
+            for row in table["rows"]:
+                if "__malformed__" in row:
+                    continue
+                span = _CODE_SPAN.search(row["Component"])
+                key = span.group(1) if span else row["Component"]
+                license_ = (locked.get(key) or {}).get("license")
+                if license_ and row.get("License (SPDX)") != license_:
+                    problems.append(
+                        f"section {title!r} row {key} has License {row.get('License (SPDX)')!r}; "
+                        f"package-lock.json says {license_!r}, which a person has to review"
+                    )
+
+
+def fix_versions(root=ROOT):
+    """Rewrite every Version cell that disagrees with its manifest; return how many."""
+
+    path = Path(root) / INVENTORY
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines(keepends=True)
+    stale = [claim for claim in version_claims(root, parse_inventory(text)) if claim.current != claim.expected]
+    for claim in stale:
+        body = lines[claim.line].rstrip("\r\n")
+        cells = body.split("|")
+        cells[claim.column + 1] = f" {claim.expected} "
+        lines[claim.line] = "|".join(cells) + lines[claim.line][len(body):]
+    if stale:
+        path.write_text("".join(lines), encoding="utf-8")
+    return len(stale)
+
+
 def collect_problems(root=ROOT):
     """Return every inventory problem as a human-readable line."""
 
@@ -723,6 +954,8 @@ def collect_problems(root=ROOT):
     _check_distributed_binaries(root, sections, problems)
     _check_appliance(root, sections, problems)
     _check_github_actions(root, sections, problems)
+    _check_versions(root, sections, problems)
+    _check_node_licenses(root, sections, problems)
     return problems
 
 
@@ -730,8 +963,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=f"Verify {INVENTORY} against the manifests.")
     parser.add_argument("--root", default=str(ROOT), help="repository root to check")
     parser.add_argument("--quiet", action="store_true", help="only report problems")
+    parser.add_argument(
+        "--fix-versions", action="store_true", help="rewrite the Version cells the manifests decide, then check"
+    )
     args = parser.parse_args(argv)
 
+    if args.fix_versions:
+        print(f"{INVENTORY}: rewrote {fix_versions(Path(args.root))} Version cells.")
     problems = collect_problems(Path(args.root))
     if problems:
         print(f"{INVENTORY} is out of date:", file=sys.stderr)
@@ -741,7 +979,7 @@ def main(argv=None):
     if not args.quiet:
         print(
             f"{INVENTORY}: every direct dependency, optional package, GitHub Action, "
-            "vendored asset and shipped binary's notices are documented."
+            "vendored asset and shipped binary's notices are documented, at the versions the manifests declare."
         )
     return 0
 
