@@ -5,7 +5,7 @@ requests>=2.34.2,<3
 zeroconf>=0.153.0,<1
 # Read-only local MQTT topic discovery (Admin only; never publishes). Discovery
 # degrades to broker-endpoint-only when this import is unavailable.
-paho-mqtt>=2.1.0
+paho-mqtt>=2.2.0
 # Backup / restore reuses the EMS backup core, which reads/writes encrypted
 # (AEAD) archives; cryptography is required for inspect/restore of those.
 cryptography
