@@ -110,6 +110,12 @@ SPDX-FileCopyrightText = "2012-2017 Docker, Inc."
 SPDX-License-Identifier = "Apache-2.0"
 
 [[annotations]]
+path = "third_party/docker-cli/MUSL.COPYRIGHT"
+precedence = "override"
+SPDX-FileCopyrightText = "2005-2020 Rich Felker, et al."
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
 path = "third_party/docker-compose/**"
 precedence = "override"
 SPDX-FileCopyrightText = "2020 Docker Compose authors"

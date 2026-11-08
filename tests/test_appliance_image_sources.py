@@ -58,7 +58,7 @@ class FakeFetcher:
     def download(self, url, target):
         self.asked.append(url)
         if url not in self.files:
-            raise sources.SourceError(f"{url}: not found")
+            raise sources.MissingFile(f"{url}: not found")
         target.write_bytes(self.files[url])
 
 
@@ -482,3 +482,46 @@ def test_a_download_broken_off_midway_is_fetched_again(tmp_path, monkeypatch):
     monkeypatch.setattr(fetcher, "_open", lambda url: Response())
     assert fetcher.get("https://example.org/x") == b"whole file"
     assert answers == []
+
+
+def test_a_file_the_archive_no_longer_serves_takes_the_source_from_snapshot(tmp_path):
+    files = archive_files()
+    del files[f"{DEBIAN}/pool/main/a/acl/acl_2.3.2.orig.tar.xz"]
+    files[f"{sources.SNAPSHOT}/mr/package/acl/2.3.2-2/srcfiles?fileinfo=1"] = json.dumps({
+        "fileinfo": {sha1(data): [{"archive_name": "debian", "name": name, "size": len(data)}] for name, data in ACL.items()}
+    }).encode()
+    files.update({f"{sources.SNAPSHOT}/file/{sha1(data)}": data for data in ACL.values()})
+    manifest, output, _ = run(tmp_path, [request()], files=files)
+    acl = next(record for record in manifest["sources"] if record["source"] == "acl")
+    assert (acl["verified_by"], acl["origin"]) == ("snapshot", sources.SNAPSHOT)
+    packed = members(output / manifest["parts"][0]["name"])
+    assert packed["snapshot.debian.org/acl_2.3.2-2/acl_2.3.2.orig.tar.xz"] == ACL["acl_2.3.2.orig.tar.xz"]
+
+
+def test_a_missing_file_with_no_snapshot_to_fall_back_on_stops_the_run(tmp_path):
+    files = archive_files()
+    del files[f"{DEBIAN}/pool/main/a/acl/acl_2.3.2.orig.tar.xz"]
+    with pytest.raises(sources.MissingFile, match="acl_2.3.2.orig.tar.xz: not found"):
+        run(tmp_path, [request()], files=files)
+
+
+@pytest.mark.parametrize("snapshot_files", [
+    {name: data for name, data in ACL.items() if name != "acl_2.3.2-2.debian.tar.xz"},
+    {**ACL, "acl_2.3.2-2.debian.tar.xz": b"another debian tree"},
+])
+def test_a_snapshot_that_does_not_hold_what_the_archive_listed_is_refused(tmp_path, snapshot_files):
+    files = archive_files()
+    del files[f"{DEBIAN}/pool/main/a/acl/acl_2.3.2.orig.tar.xz"]
+    files[f"{sources.SNAPSHOT}/mr/package/acl/2.3.2-2/srcfiles?fileinfo=1"] = json.dumps({
+        "fileinfo": {sha1(data): [{"archive_name": "debian", "name": name, "size": len(data)}] for name, data in snapshot_files.items()}
+    }).encode()
+    files.update({f"{sources.SNAPSHOT}/file/{sha1(data)}": data for data in snapshot_files.values()})
+    with pytest.raises(sources.SourceError, match="snapshot.debian.org does not hold the acl_2.3.2-2.debian.tar.xz the archive listed"):
+        run(tmp_path, [request()], files=files)
+
+
+def test_every_file_names_the_url_it_was_fetched_from(tmp_path):
+    manifest, _, _ = run(tmp_path, [request()])
+    by_source = {item["source"]: item for item in manifest["sources"]}
+    assert {entry["url"] for entry in by_source["acl"]["files"]} == {f"{DEBIAN}/pool/main/a/acl/{name}" for name in ACL}
+    assert {entry["url"] for entry in by_source["oldpkg"]["files"]} == {f"{sources.SNAPSHOT}/file/{sha1(data)}" for data in OLD.values()}

@@ -11,6 +11,22 @@ troubleshooting details.
 If Docker is not installed yet, see [install-docker.md](install-docker.md).
 For daily copy/paste commands, see [common-commands.md](common-commands.md).
 
+The source code of the third-party software in each published image (the
+Debian packages, CPython, the Python packages, the copyleft Go modules) is published
+beside it as `ghcr.io/basecubedev/ems-solarflow-sources` under the same tag,
+for every image published since the source image was introduced (after
+v0.9.0; older tags have none). You do not need it to run anything. To copy it
+out:
+
+```bash
+docker create --name ems-sources ghcr.io/basecubedev/ems-solarflow-sources:latest none
+docker cp ems-sources:/sources ./ems-sources
+docker rm ems-sources
+```
+
+`ems-solarflow-images-<build>-sources.json` in it names every image and
+platform the set belongs to and where each source came from.
+
 ## Prerequisites
 
 Required: Docker with Docker Compose v2.24.0 or newer (`docker compose`, not the

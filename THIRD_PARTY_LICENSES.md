@@ -88,18 +88,21 @@ with another command is not seen and needs its row by hand.
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream | Image | Installed as | Notices |
 |---|---|---|---|:---:|:---:|---|---|---|---|
 | `influx` | 2.8.0, commit `8cdf401` (from the `influxdb:2.9` build stage) | MIT | InfluxDB backup/restore from inside the EMS container without a Docker socket | ✅ | ✅ | https://github.com/influxdata/influx-cli | `Dockerfile` | `/usr/local/bin/influx` | `third_party/influx-cli/LICENSE`, `third_party/influx-cli/THIRD_PARTY_NOTICES` |
-| `docker/cli` | 27.5.1 | Apache-2.0 | Admin Console controls the host Docker engine through the mounted socket; client only, never a daemon | ✅ | ✅ | https://github.com/docker/cli | `deploy/admin/Dockerfile` | `/usr/local/bin/docker` | `third_party/docker-cli/LICENSE`, `third_party/docker-cli/NOTICE`, `third_party/docker-cli/THIRD_PARTY_NOTICES` |
+| `docker/cli` | 27.5.1 | Apache-2.0 AND MIT | Admin Console controls the host Docker engine through the mounted socket; client only, never a daemon. The static build links musl (MIT) in | ✅ | ✅ | https://github.com/docker/cli | `deploy/admin/Dockerfile` | `/usr/local/bin/docker` | `third_party/docker-cli/LICENSE`, `third_party/docker-cli/NOTICE`, `third_party/docker-cli/THIRD_PARTY_NOTICES`, `third_party/docker-cli/MUSL.COPYRIGHT` |
 | `docker/compose` | 2.32.4 | Apache-2.0 | Compose plugin for the Admin Console's container lifecycle operations | ✅ | ✅ | https://github.com/docker/compose | `deploy/admin/Dockerfile` | `/usr/local/lib/docker/cli-plugins/docker-compose` | `third_party/docker-compose/LICENSE`, `third_party/docker-compose/NOTICE`, `third_party/docker-compose/THIRD_PARTY_NOTICES` |
 
 Provenance, verified on 2026-11-07: each `LICENSE` and `NOTICE` is
 byte-identical to the file of the same name at the upstream revision in the
-Version column.
+Version column. `MUSL.COPYRIGHT` is musl's `COPYRIGHT` at v1.2.5, the musl of
+the Alpine 3.20 toolchain (GCC 13.2.1_git20240309, as the binary's `.comment`
+names it) that Docker's static CLI is built and statically linked with.
 
 | File | SHA-256 |
 |---|---|
 | `third_party/influx-cli/LICENSE` | `4dca58790e62edef3456a30fd971e32df1b890ac5341524813c02adbbbb1289a` |
 | `third_party/docker-cli/LICENSE` | `2d81ea060825006fc8f3fe28aa5dc0ffeb80faf325b612c955229157b8c10dc0` |
 | `third_party/docker-cli/NOTICE` | `a8c869fbda819afb8d80e0ac19bac52e766bc6c19cb38cf94f52d64c4be2aab6` |
+| `third_party/docker-cli/MUSL.COPYRIGHT` | `f9bc4423732350eb0b3f7ed7e91d530298476f8fec0c6c427a1c04ade22655af` |
 | `third_party/docker-compose/LICENSE` | `58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd` |
 | `third_party/docker-compose/NOTICE` | `b7dca0a6b01fa7365e4892877a6321179ee343d72ee87a96cfc222141b99a1e6` |
 
@@ -295,6 +298,40 @@ upstream image documentation for a package-level breakdown.
 The images published by this project — `ghcr.io/basecubedev/ems-solarflow-api-control`
 and `ghcr.io/basecubedev/ems-solarflow-admin` — are project artifacts under
 AGPL-3.0-or-later and are not third-party components.
+
+What they carry from others is offered in source beside them. Every workflow
+that pushes the two images (a release tag, `latest`, the weekly rebuild, a
+development build) then runs `scripts/image_sources.py collect` against the
+images as pushed, every platform of both, and pushes
+`ghcr.io/basecubedev/ems-solarflow-sources` under the same tags and the build
+id. It holds every Debian source package of the installed versions with the
+sources they were built with (as the appliance image's archive collects them),
+the sdist PyPI publishes of every Python distribution installed or lying in
+the image as a wheel, checked against PyPI's SHA-256 (one without an sdist
+stops the run unless the script names it with the reason none is owed), the
+CPython release the interpreter was built from (its `readline` and `gdbm`
+modules link GPL libraries), as the base image's `PYTHON_VERSION` and
+`PYTHON_SHA256` name it and checked against that hash, and the zip of every
+Go module the bundled notices list whose own license files at the module proxy
+are copyleft, checked against sum.golang.org, with a manifest naming each
+image, platform and digest and the URL every file came from. Every program in
+an image has to be accounted for: owned by dpkg with the checksum the package
+that lists it recorded (diversions followed), part of CPython's standard
+library, one of a wheel's Python extension modules, or a Go program one of the
+image's notices files passes `binary_notices.py check` for. A Go program that
+links a C library in statically needs that library known and its notice beside
+its own (musl's `MUSL.COPYRIGHT` for the Docker CLI); any other program or
+library a wheel carries (a `*.libs` folder, a bundled executable) has to be
+named in the script; an image that installs Docker's
+Debian packages, whose module sources only the appliance path collects, stops
+the run. `docker pull` it and copy `/sources/` out of a
+container created from it. All three images are pushed by digest and tagged
+only once the source is pushed and verified, the source first, so no public
+tag names an image whose source is not beside it. An image of another
+revision or naming no CPython build, a program nothing accounts for, a Python
+distribution in a place the script does not read, a distribution without an
+sdist, anything unverifiable, and a source image that cannot be pulled without
+credentials fail the workflow before any tag moves.
 
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream |
 |---|---|---|---|:---:|:---:|---|

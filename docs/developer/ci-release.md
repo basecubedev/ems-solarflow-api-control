@@ -224,6 +224,32 @@ from this build identity. The Admin Console image is published as
 For stable installations, pin a release tag in `docker-compose.yml` rather than
 `latest`.
 
+Both images are pushed by digest, without a tag. The job then collects the
+source of their third-party components from the images as pushed
+(`scripts/image_sources.py collect`: Debian source packages, the CPython
+release, Python sdists, copyleft Go modules; every program dpkg does not own with its
+recorded checksum has to be CPython's or a Go program the image's notices
+match), pushes it by digest as
+`ghcr.io/basecubedev/ems-solarflow-sources` and checks that the registry serves
+it without credentials. Only then does the last step tag the source and then
+both images (`docker buildx imagetools create`, which keeps each digest) and
+check every tag anonymously against its digest. It tags in two passes: first
+each image's own tag (the source's build id; in a development build the
+immutable tag of all three), then the shared ones (`vX.Y.Z`, `latest`, the
+branch tags), the source first each time. A run that fails before that step
+moves no public tag; it leaves untagged images, which a development build
+deletes again by their digests (only versions that carry no tag but the run's
+own) and a release run leaves for its next run to supersede. A failure while
+the shared tags move can leave them on different builds of the three images;
+each build's source stays under its own tag, and a re-run moves them together.
+Runs of one ref queue rather than overlap, so tags move in run order. A new GHCR
+package starts private: the first run creates `ems-solarflow-sources` and then
+fails the check, so set the package's visibility to public once in its settings
+and re-run; until then no run moves a tag. The development build does the same under its feature tags, its
+pruning keeps or deletes the images and the source of one build together, and
+the branch cleanup deletes them with the images; a package's last tagged
+version, which GHCR refuses to delete, is kept.
+
 ## Release catalogue
 
 Workflow `release-catalogue.yml`, jobs `publish-release-catalogue` and

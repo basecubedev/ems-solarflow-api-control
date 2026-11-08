@@ -156,9 +156,28 @@ def test_no_build_takes_its_context_from_somewhere_else():
         for step in job.get("steps", ())
         if "build-push-action" in str(step.get("uses", ""))
         and not str((step.get("with") or {}).get("context", ".")).startswith(".")
+        and not _builds_the_source_image(step)
     }
 
     assert remote == {}, f"{remote} build a context that is not this checkout"
+
+
+def _builds_the_source_image(step):
+    """The source image is built from the files ``image_sources.py collect`` wrote, and caches nothing."""
+
+    with_ = step.get("with") or {}
+    return (
+        "name=ghcr.io/basecubedev/ems-solarflow-sources," in str(with_.get("outputs", ""))
+        and with_.get("context") == "${{ runner.temp }}/image-sources"
+        and "cache-from" not in with_
+        and "cache-to" not in with_
+    )
+
+
+def test_the_source_image_build_reads_and_writes_no_cache():
+    builds = [step for job in jobs().values() for step in job.get("steps", ())
+              if "build-push-action" in str(step.get("uses", "")) and "ems-solarflow-sources" in str((step.get("with") or {}).get("outputs", ""))]
+    assert len(builds) == 1 and _builds_the_source_image(builds[0])
 
 
 def test_every_job_checks_out_something():

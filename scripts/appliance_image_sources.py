@@ -99,6 +99,10 @@ class SourceError(Exception):
     """A source that cannot be read, fetched or verified."""
 
 
+class MissingFile(SourceError):
+    """A file an index or a ``.dsc`` lists that the archive no longer serves."""
+
+
 def stanzas(text):
     """deb822 paragraphs as dicts; a field's continuation lines stay in its value."""
 
@@ -291,7 +295,7 @@ class Fetcher:
                 return
             except urllib.error.HTTPError as error:
                 if error.code == 404:
-                    raise SourceError(f"{url}: not found") from error
+                    raise MissingFile(f"{url}: not found") from error
                 failure = error
             except (http.client.HTTPException, OSError) as error:
                 failure = error
@@ -431,27 +435,54 @@ def origin_label(base):
 
 
 def fetch_files(found, cache, fetcher):
-    """Download every file into ``cache`` and verify it; returns the verified records."""
+    """Download every file into ``cache`` and verify it; returns the verified records.
+
+    A Debian archive drops a superseded version from its pool while a mirror
+    may still serve the index or ``.dsc`` that listed it, so a file that has
+    gone takes the whole source from snapshot.debian.org instead, and every
+    file the index or ``.dsc`` listed has to be among snapshot's with the same
+    size and SHA-256.
+    """
 
     for record in found:
-        folder = cache / origin_label(record["base"]) / f"{record['source']}_{_upstream_version(record['version'])}"
-        folder.mkdir(parents=True, exist_ok=True)
-        record["folder"] = folder
-        for entry in record["files"]:
-            target = folder / PurePosixPath(entry["name"]).name
-            url = entry.pop("url", None) or f"{record['base']}/{record['directory']}/{entry['name']}"
-            fetcher.download(url, target)
-            data_size = target.stat().st_size
-            sha256 = file_digest(target, "sha256")
-            if data_size != entry["size"]:
-                raise SourceError(f"{url}: {data_size} bytes, the {record['verified_by']} says {entry['size']}")
-            expected = entry.get("sha256")
-            if expected and sha256 != expected:
-                raise SourceError(f"{url}: SHA-256 {sha256} does not match {expected}")
-            if "sha1" in entry and file_digest(target, "sha1") != entry.pop("sha1"):
-                raise SourceError(f"{url}: SHA-1 does not match snapshot.debian.org")
-            entry["sha256"] = sha256
+        listed = {entry["name"]: dict(entry) for entry in record["files"]}
+        try:
+            _fetch_record(record, cache, fetcher)
+        except MissingFile:
+            if record["verified_by"] == "snapshot" or record["base"].split("/")[2] not in DEBIAN_HOSTS:
+                raise
+            candidate = _from_snapshot(record["source"], record["version"], fetcher)
+            if candidate is None:
+                raise
+            record.update(complete({**record, **candidate}))
+            _fetch_record(record, cache, fetcher)
+            fetched = {entry["name"]: entry for entry in record["files"]}
+            for name, entry in listed.items():
+                other = fetched.get(name)
+                if other is None or other["size"] != entry["size"] or entry.get("sha256", other["sha256"]) != other["sha256"]:
+                    raise SourceError(f"{record['source']} {record['version']}: snapshot.debian.org does not hold the {name} the archive listed")
     return found
+
+
+def _fetch_record(record, cache, fetcher):
+    folder = cache / origin_label(record["base"]) / f"{record['source']}_{_upstream_version(record['version'])}"
+    folder.mkdir(parents=True, exist_ok=True)
+    record["folder"] = folder
+    for entry in record["files"]:
+        target = folder / PurePosixPath(entry["name"]).name
+        url = entry.pop("url", None) or f"{record['base']}/{record['directory']}/{entry['name']}"
+        fetcher.download(url, target)
+        data_size = target.stat().st_size
+        sha256 = file_digest(target, "sha256")
+        if data_size != entry["size"]:
+            raise SourceError(f"{url}: {data_size} bytes, the {record['verified_by']} says {entry['size']}")
+        expected = entry.get("sha256")
+        if expected and sha256 != expected:
+            raise SourceError(f"{url}: SHA-256 {sha256} does not match {expected}")
+        if "sha1" in entry and file_digest(target, "sha1") != entry.pop("sha1"):
+            raise SourceError(f"{url}: SHA-1 does not match snapshot.debian.org")
+        entry["sha256"] = sha256
+        entry["url"] = url
 
 
 def file_digest(path, algorithm, chunk=1024 * 1024):
@@ -527,8 +558,12 @@ def project_where(record, repository_url, revision, tag_prefix, fetcher):
 
 
 def collect(requests, *, revision, repository_url, output, fetcher, part_limit=PART_LIMIT, cache=None,
-            project_tag_prefix=PROJECT_TAG_PREFIX):
-    """Fetch, verify and pack the source of every request; returns the manifest."""
+            project_tag_prefix=PROJECT_TAG_PREFIX, name="ems-solarflow-appliance"):
+    """Fetch, verify and pack the source of every request; returns the manifest.
+
+    ``name`` and the requests' release version name the files, so the container
+    images can collect into files of their own with the same machinery.
+    """
 
     versions = {request.get("release_version", "") for request in requests}
     if len(versions) != 1 or not next(iter(versions)):
@@ -558,7 +593,7 @@ def collect(requests, *, revision, repository_url, output, fetcher, part_limit=P
     cache = cache or output / ".sources-cache"
     try:
         fetch_files(found, cache, fetcher)
-        prefix = f"ems-solarflow-appliance-{release_version}"
+        prefix = f"{name}-{release_version}"
         parts = write_parts(plan_parts(found, part_limit), output, prefix)
     finally:
         shutil.rmtree(cache, ignore_errors=True)

@@ -336,8 +336,14 @@ def parse_notices(text):
 def check(component, binary, notices):
     """Problems that keep this binary from shipping with these notices."""
 
-    info = read_buildinfo(Path(binary).read_bytes())
-    header, modules = parse_notices(Path(notices).read_text(encoding="utf-8"))
+    return check_data(component, Path(binary).read_bytes(), Path(notices).read_text(encoding="utf-8"), binary, notices)
+
+
+def check_data(component, data, text, binary="the binary", notices="its notices"):
+    """``check`` on a binary's bytes and a notices file's text, as an image holds them."""
+
+    info = read_buildinfo(data)
+    header, modules = parse_notices(text)
     identity = binary_identity(info, COMPONENTS[component]["identity"])
     problems = []
     if header.get("component") != component:

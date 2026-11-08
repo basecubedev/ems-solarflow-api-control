@@ -224,8 +224,10 @@ def _image_builds(path):
         if "docker/build-push-action" not in str(step.get("uses", "")):
             continue
         with_ = step.get("with", {})
-        pushed = bool(with_.get("push", False))
+        pushed = bool(with_.get("push", False)) or "push=true" in str(with_.get("outputs", ""))
         if not pushed and not str(with_.get("tags", "")).strip().endswith(":ci"):
+            continue
+        if "name=ghcr.io/basecubedev/ems-solarflow-sources," in str(with_.get("outputs", "")):
             continue
         raw = str(with_.get("labels", ""))
         labels = raw

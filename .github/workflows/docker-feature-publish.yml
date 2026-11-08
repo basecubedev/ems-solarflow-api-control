@@ -473,13 +473,13 @@ jobs:
           docker run --rm ems-solarflow-api-control:ci test -f /app/config.template.json
 
       - name: Build and push EMS Docker image
+        id: push_ems
         uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          outputs: type=image,name=ghcr.io/basecubedev/ems-solarflow-api-control,push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             EMS_RELEASE_TAG=${{ steps.build_identity.outputs.immutable_tag }}
@@ -650,13 +650,13 @@ jobs:
           echo "Admin/EMS feature-build pair verified for $expected_system_tag"
 
       - name: Build and push Admin Docker image
+        id: push_admin
         uses: docker/build-push-action@v7
         with:
           context: .
           file: ./deploy/admin/Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta_admin.outputs.tags }}
+          outputs: type=image,name=ghcr.io/basecubedev/ems-solarflow-admin,push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta_admin.outputs.labels }}
           build-args: |
             EMS_REVISION=${{ steps.build_identity.outputs.git_commit }}
@@ -670,8 +670,8 @@ jobs:
       - name: Verify published Admin/EMS image pair
         id: published_pair
         env:
-          ADMIN_IMAGE: ghcr.io/basecubedev/ems-solarflow-admin:${{ steps.build_identity.outputs.immutable_tag }}
-          EMS_IMAGE: ghcr.io/basecubedev/ems-solarflow-api-control:${{ steps.build_identity.outputs.immutable_tag }}
+          ADMIN_IMAGE: ghcr.io/basecubedev/ems-solarflow-admin@${{ steps.push_admin.outputs.digest }}
+          EMS_IMAGE: ghcr.io/basecubedev/ems-solarflow-api-control@${{ steps.push_ems.outputs.digest }}
           EXPECTED_REVISION: ${{ steps.build_identity.outputs.git_commit }}
           EXPECTED_BUILD_ID: ${{ steps.build_identity.outputs.build_id }}
         run: |
@@ -720,6 +720,120 @@ jobs:
             echo "admin_digest=$admin_digest"
             echo "ems_digest=$ems_digest"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Collect the source of the images' third-party components
+        env:
+          EMS_DIGEST: ${{ steps.push_ems.outputs.digest }}
+          ADMIN_DIGEST: ${{ steps.push_admin.outputs.digest }}
+          BUILD_ID: ${{ steps.build_identity.outputs.immutable_tag }}
+          REVISION: ${{ steps.build_identity.outputs.git_commit }}
+        run: |
+          set -euo pipefail
+          python3 scripts/image_sources.py collect \
+            --image "ghcr.io/basecubedev/ems-solarflow-api-control@${EMS_DIGEST}" \
+            --image "ghcr.io/basecubedev/ems-solarflow-admin@${ADMIN_DIGEST}" \
+            --name "${BUILD_ID}" \
+            --revision "${REVISION}" \
+            --repository-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --output "${RUNNER_TEMP}/image-sources"
+          printf 'FROM scratch\nCOPY . /sources/\n' > "${RUNNER_TEMP}/image-sources.Dockerfile"
+
+      - name: Generate source image metadata
+        id: meta_sources
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/basecubedev/ems-solarflow-sources
+          tags: |
+            type=raw,value=${{ steps.build_identity.outputs.feature_tag_prefix }}
+            type=raw,value=${{ steps.build_identity.outputs.feature_tag_prefix }}-${{ steps.build_identity.outputs.git_commit_short }}
+            type=raw,value=${{ steps.build_identity.outputs.immutable_tag }}
+          labels: |
+            org.opencontainers.image.title=ems-solarflow-sources
+            org.opencontainers.image.description=Source code of the third-party components in the ems-solarflow-api-control and ems-solarflow-admin feature test images of the same tag. Not a release.
+            org.opencontainers.image.source=https://github.com/basecubedev/ems-solarflow-api-control
+            org.opencontainers.image.version=${{ steps.build_identity.outputs.immutable_tag }}
+            org.opencontainers.image.revision=${{ steps.build_identity.outputs.git_commit }}
+            de.basecubedev.ems.build_id=${{ steps.build_identity.outputs.build_id }}
+
+      - name: Push the source image beside the images
+        id: push_sources
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ runner.temp }}/image-sources
+          file: ${{ runner.temp }}/image-sources.Dockerfile
+          platforms: linux/amd64,linux/arm64
+          outputs: type=image,name=ghcr.io/basecubedev/ems-solarflow-sources,push-by-digest=true,name-canonical=true,push=true
+          labels: ${{ steps.meta_sources.outputs.labels }}
+
+      - name: Verify anyone can pull the source image
+        env:
+          SOURCES_DIGEST: ${{ steps.push_sources.outputs.digest }}
+        run: python3 scripts/image_sources.py verify --image "ghcr.io/basecubedev/ems-solarflow-sources@${SOURCES_DIGEST}"
+
+      - name: Tag the images and their source
+        env:
+          EMS_DIGEST: ${{ steps.push_ems.outputs.digest }}
+          ADMIN_DIGEST: ${{ steps.push_admin.outputs.digest }}
+          SOURCES_DIGEST: ${{ steps.push_sources.outputs.digest }}
+          EMS_TAGS: ${{ steps.meta.outputs.tags }}
+          ADMIN_TAGS: ${{ steps.meta_admin.outputs.tags }}
+          SOURCES_TAGS: ${{ steps.meta_sources.outputs.tags }}
+          OWN_TAG: ${{ steps.build_identity.outputs.immutable_tag }}
+        run: |
+          set -euo pipefail
+          tag() {
+            local digest="$1" tags="$2" which="$3" image="" line kind
+            local args=() chosen=()
+            while IFS= read -r line; do
+              [ -n "${line}" ] || continue
+              image="${line%:*}"
+              kind=shared
+              if [ "${line##*:}" = "${OWN_TAG}" ]; then
+                kind=own
+              fi
+              if [ "${kind}" = "${which}" ]; then
+                chosen+=("${line}")
+              fi
+            done <<< "${tags}"
+            [ -n "${image}" ] || { echo "::error::no tag to give ${digest}"; exit 1; }
+            [ "${#chosen[@]}" -gt 0 ] || return 0
+            for line in "${chosen[@]}"; do args+=(-t "${line}"); done
+            docker buildx imagetools create "${args[@]}" "${image}@${digest}"
+            for line in "${chosen[@]}"; do
+              python3 scripts/image_sources.py verify --image "${line}" --digest "${digest}"
+            done
+          }
+          for which in own shared; do
+            tag "${SOURCES_DIGEST}" "${SOURCES_TAGS}" "${which}"
+            tag "${EMS_DIGEST}" "${EMS_TAGS}" "${which}"
+            tag "${ADMIN_DIGEST}" "${ADMIN_TAGS}" "${which}"
+          done
+
+      - name: Remove what a failed run pushed
+        if: failure() || cancelled()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EMS_DIGEST: ${{ steps.push_ems.outputs.digest }}
+          ADMIN_DIGEST: ${{ steps.push_admin.outputs.digest }}
+          SOURCES_DIGEST: ${{ steps.push_sources.outputs.digest }}
+          FEATURE_TAG_PREFIX: ${{ steps.build_identity.outputs.feature_tag_prefix }}
+          IMMUTABLE_TAG: ${{ steps.build_identity.outputs.immutable_tag }}
+        run: |
+          set -euo pipefail
+          digests=()
+          for digest in "${EMS_DIGEST}" "${ADMIN_DIGEST}" "${SOURCES_DIGEST}"; do
+            [ -n "${digest}" ] && digests+=(--digest "${digest}")
+          done
+          [ "${#digests[@]}" -gt 0 ] || exit 0
+          python3 scripts/prune_development_builds.py \
+            --owner "${{ github.repository_owner }}" \
+            --owner-type user \
+            --package ems-solarflow-admin \
+            --package ems-solarflow-api-control \
+            --package ems-solarflow-sources \
+            --prefix "${FEATURE_TAG_PREFIX}" \
+            --own-tag "${IMMUTABLE_TAG}" \
+            "${digests[@]}"
 
   remote-image-pullback:
     name: EMS remote image pullback
@@ -982,6 +1096,7 @@ jobs:
             --owner-type user \
             --package ems-solarflow-admin \
             --package ems-solarflow-api-control \
+            --package ems-solarflow-sources \
             --prefix "${{ needs.publish-feature-ghcr.outputs.feature_tag_prefix }}" \
             --keep 2 \
             --protect-tag "${{ needs.publish-feature-ghcr.outputs.immutable_tag }}"

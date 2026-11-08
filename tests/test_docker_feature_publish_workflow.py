@@ -327,9 +327,11 @@ def test_publish_identity_verifies_the_dispatched_revision():
 
 
 def test_oci_and_system_build_metadata_use_the_resolved_commit():
+    """The EMS image, the Admin image and the source image beside them name the same commit."""
+
     text = _text()
     git_commit = "${{ steps.build_identity.outputs.git_commit }}"
-    assert text.count(f"org.opencontainers.image.revision={git_commit}") == 2
+    assert text.count(f"org.opencontainers.image.revision={git_commit}") == 3
     ems_local = _build_args(_step_with("publish-feature-ghcr", "Build local EMS image for content validation"))
     ems_pushed = _build_args(_step_with("publish-feature-ghcr", "Build and push EMS Docker image"))
     assert ems_local.get("EMS_GIT_COMMIT") == git_commit
@@ -616,13 +618,15 @@ def test_very_long_branch_keeps_unique_suffix_within_docker_tag_limit(tmp_path):
 
 
 def test_both_images_publish_the_same_canonical_development_metadata():
+    """Both images carry the same identity, and so does the source image published beside them."""
+
     text = _text()
     immutable = "${{ steps.build_identity.outputs.immutable_tag }}"
     build_id = "${{ steps.build_identity.outputs.build_id }}"
-    assert text.count(f"type=raw,value={immutable}") == 2
-    assert text.count(f"org.opencontainers.image.version={immutable}") == 2
+    assert text.count(f"type=raw,value={immutable}") == 3
+    assert text.count(f"org.opencontainers.image.version={immutable}") == 3
     assert text.count(f"de.basecubedev.ems.release_tag={immutable}") == 2
-    assert text.count(f"de.basecubedev.ems.build_id={build_id}") == 2
+    assert text.count(f"de.basecubedev.ems.build_id={build_id}") == 3
     assert f"EMS_SYSTEM_TAG={immutable}" in text
     assert "${{ steps.build_identity.outputs.git_commit }}" in text
     # `github.sha` reaches the identity step only as the value it is checked

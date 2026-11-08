@@ -123,6 +123,11 @@ jobs:
                     echo "Version ${id} in ${package} is already absent (HTTP 404)."
                     continue
                   fi
+                  if grep -qi 'last tagged version' "${error_file}"; then
+                    echo "Keeping version ${id} in ${package}: GHCR keeps a package's last tagged version."
+                    echo "${id}" >> "${package}-kept.txt"
+                    continue
+                  fi
                   report_api_failure "${package}" "deleting version ${id} from" "${error_file}"
                   return 1
                 fi
@@ -134,8 +139,10 @@ jobs:
             package="$1"
             versions_file="${package}-verification.jsonl"
             list_versions "${package}" "${versions_file}"
-            if jq -e --arg p "${FEATURE_TAG_PREFIX}" \
-              'select(any(.tags[]; . == $p or startswith($p + "-")))' \
+            touch "${package}-kept.txt"
+            kept="$(jq -R -s 'split("\n") | map(select(length > 0) | tonumber)' < "${package}-kept.txt")"
+            if jq -e --arg p "${FEATURE_TAG_PREFIX}" --argjson kept "${kept}" \
+              'select((.id as $id | $kept | index($id)) == null) | select(any(.tags[]; . == $p or startswith($p + "-")))' \
               "${versions_file}" >/dev/null; then
               echo "Feature package versions still exist in ${package} after cleanup." >&2
               return 1
@@ -144,8 +151,10 @@ jobs:
 
           delete_matching_versions "ems-solarflow-admin"
           delete_matching_versions "ems-solarflow-api-control"
+          delete_matching_versions "ems-solarflow-sources"
           verify_no_matching_versions "ems-solarflow-admin"
           verify_no_matching_versions "ems-solarflow-api-control"
+          verify_no_matching_versions "ems-solarflow-sources"
 
       - name: Remove branch from development build catalogue
         env:
