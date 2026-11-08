@@ -141,7 +141,7 @@ documentation website only in [`requirements-docs.txt`](requirements-docs.txt).
 | `pytest` | unpinned (verified 9.1.0) | MIT | Test framework for the whole Python suite | ❌ | ❌ | https://github.com/pytest-dev/pytest |
 | `ruff` | `==0.17.3` | MIT | Lint and static checks (`ruff check .`) | ❌ | ❌ | https://github.com/astral-sh/ruff |
 | `PyYAML` | `>=6.0.3` | MIT | Parsing CI workflow and compose YAML inside contract tests | ❌ | ❌ | https://github.com/yaml/pyyaml |
-| `reuse` | `==6.2.0` | GPL-3.0-or-later AND Apache-2.0 AND CC0-1.0 AND CC-BY-SA-4.0 | Checks that every file names its copyright holder and license (`reuse lint`, [REUSE](https://reuse.software/)) | ❌ | ❌ | https://github.com/fsfe/reuse-tool |
+| `reuse` | `==6.3.0` | GPL-3.0-or-later AND Apache-2.0 AND CC0-1.0 AND CC-BY-SA-4.0 | Checks that every file names its copyright holder and license (`reuse lint`, [REUSE](https://reuse.software/)) | ❌ | ❌ | https://github.com/fsfe/reuse-tool |
 | `zensical` | `==0.0.74` | MIT | Builds the documentation website from `docs/` ([docs-site.md](docs/developer/docs-site.md)) | ❌ | ❌ | https://github.com/zensical/zensical |
 
 ### Node Development Dependencies
