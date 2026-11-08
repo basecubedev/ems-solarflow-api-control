@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import json
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -1101,6 +1102,83 @@ def test_fail_closed_diagnostic_device_field_masks_matching_free_text(tmp_path):
 
     assert raw_name not in json.dumps(safe)
     assert "read failed" in safe["checks"][0]["message"]
+
+
+def test_two_requests_meeting_a_device_name_together_give_it_one_alias(tmp_path, monkeypatch):
+    """A restarted dashboard keeps the name of a device it meets in two requests at once.
+
+    Protected interleaving: request B has collected the configured names and is
+    masking them when request A arrives. A must not settle the device's alias
+    while B is between collecting and assigning; unserialised, A caches the name
+    first and B, finding it taken, renames it "Waschmaschine [1]" for good.
+    """
+
+    import dashboard.server as dashboard_server
+    import ems.external_status as external_status
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "zendure_mqtt": {"brokers": {"local": {"source": "local_mqtt"}}},
+                "devices": [
+                    {
+                        "name": "Waschmaschine",
+                        "type": "external_mqtt",
+                        "mqtt": {"broker_ref": "local", "device_id": "washer"},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    server = SimpleNamespace(config_path=str(config_path), runtime_validation={})
+    payload = {"consumers": {"washer": {"name": "Waschmaschine"}}}
+    b_masking = threading.Event()
+    a_progressed = threading.Event()
+    sanitize = external_status.sanitize_external_mqtt_status
+
+    def masking(value, **kwargs):
+        if threading.current_thread().name == "B" and not b_masking.is_set():
+            b_masking.set()
+            assert a_progressed.wait(timeout=30)
+        return sanitize(value, **kwargs)
+
+    class SignallingLock:
+        def __init__(self):
+            self._lock = threading.RLock()
+
+        def __enter__(self):
+            if threading.current_thread().name == "A":
+                a_progressed.set()
+            self._lock.acquire()
+            return self
+
+        def __exit__(self, *exc):
+            self._lock.release()
+            return False
+
+    monkeypatch.setattr(external_status, "sanitize_external_mqtt_status", masking)
+    monkeypatch.setattr(dashboard_server, "_EXTERNAL_IDENTITY_LOCK", SignallingLock())
+    results = {}
+
+    def request(name):
+        results[name] = _external_mqtt_status_payload(server, payload)
+        if name == "A":
+            a_progressed.set()
+
+    b = threading.Thread(target=request, args=("B",), name="B")
+    a = threading.Thread(target=request, args=("A",), name="A")
+    b.start()
+    assert b_masking.wait(timeout=30)
+    a.start()
+    a.join(timeout=30)
+    b.join(timeout=30)
+
+    assert not a.is_alive() and not b.is_alive()
+    assert results["A"]["consumers"]["washer"]["name"] == "Waschmaschine"
+    assert results["B"]["consumers"]["washer"]["name"] == "Waschmaschine"
+    assert server._external_device_alias_cache == {"Waschmaschine": "Waschmaschine"}
 
 
 def test_analytics_unavailable_without_influx(tmp_path):
