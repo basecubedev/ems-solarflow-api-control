@@ -49,7 +49,7 @@ compatible ranges.
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream |
 |---|---|---|---|:---:|:---:|---|
 | `requests` | `>=2.34.2` in requirements.txt, `>=2.34.2,<3` in deploy/admin/requirements.txt | Apache-2.0 | HTTP client for Zendure local/cloud APIs, Shelly / EcoTracker / Tasmota grid meters and InfluxDB | ✅ | ✅ | https://github.com/psf/requests |
-| `paho-mqtt` | `>=2.1.0` (verified 2.1.0) | EPL-2.0 OR BSD-3-Clause | MQTT client for local brokers and Zendure cloud MQTT telemetry and control | ✅ | ✅ | https://github.com/eclipse-paho/paho.mqtt.python |
+| `paho-mqtt` | `>=2.2.0` | EPL-2.0 OR BSD-3-Clause | MQTT client for local brokers and Zendure cloud MQTT telemetry and control | ✅ | ✅ | https://github.com/eclipse-paho/paho.mqtt.python |
 | `cryptography` | unpinned (verified 49.0.0) | Apache-2.0 OR BSD-3-Clause | AEAD backup archives, Admin secret/credential store, self-signed HTTPS certificates | ✅ | ✅ | https://github.com/pyca/cryptography |
 | `zeroconf` | `>=0.153.0` in requirements.txt, `>=0.153.0,<1` in deploy/admin/requirements.txt | LGPL-2.1-or-later | Optional live mDNS device discovery in the Admin Console; absence degrades gracefully | ✅ | ✅ | https://github.com/python-zeroconf/python-zeroconf |
 
