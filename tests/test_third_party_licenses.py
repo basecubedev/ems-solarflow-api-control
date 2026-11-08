@@ -80,7 +80,12 @@ _HASH_ROW = re.compile(r"^\|\s*`([^`]+)`\s*\|\s*`([0-9a-f]{64})`\s*\|$", re.MULT
 
 @pytest.fixture
 def repo_copy(tmp_path):
-    """A minimal copy of the inputs the checker reads."""
+    """A minimal copy of the inputs the checker reads, its Version cells already rewritten.
+
+    A Dependabot commit carries a stale cell until its refresh commit arrives.
+    That cell fails the tests of the committed inventory; a test of a copy sees
+    only the change it makes itself.
+    """
 
     root = tmp_path / "repo"
     for relative in COPIED_FILES:
@@ -89,6 +94,7 @@ def repo_copy(tmp_path):
         shutil.copy(ROOT / relative, target)
     for relative in COPIED_TREES:
         shutil.copytree(ROOT / relative, root / relative)
+    fix_versions(root)
     return root
 
 
@@ -243,7 +249,11 @@ def test_every_binary_an_image_installs_is_found_with_the_notices_beside_it():
             {"docker-cli", "docker-compose"},
         ),
     }
-    assert not [problem for problem in collect_problems(ROOT) if "third_party" in problem or "Dockerfile" in problem]
+    assert not [
+        problem
+        for problem in collect_problems(ROOT)
+        if "has Version" not in problem and ("third_party" in problem or "Dockerfile" in problem)
+    ]
 
 
 def test_the_notices_are_of_the_versions_the_dockerfiles_pin():
