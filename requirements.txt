@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 requests>=2.34.2
-paho-mqtt>=2.1.0
+paho-mqtt>=2.2.0
 cryptography
 # Optional: live mDNS discovery in the admin UI. Absence degrades gracefully.
 zeroconf>=0.153.0
