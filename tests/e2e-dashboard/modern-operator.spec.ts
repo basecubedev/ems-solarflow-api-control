@@ -701,15 +701,15 @@ test.describe("Modern dashboard operator: diagnose @smoke", () => {
 
     const sections = report.locator("details.section");
     await expect(sections.locator("> summary .ellipsis")).toHaveText(["Environment", "Config", "Hardware", "Dashboard"]);
-    await expect(sections.nth(0)).toHaveJSProperty("open", false);
+    await expect(sections.nth(0)).not.toHaveAttribute("open");
     await expect(sections.nth(0)).toContainText("No findings.");
-    await expect(sections.nth(1)).toHaveJSProperty("open", false);
-    await expect(sections.nth(2)).toHaveJSProperty("open", true);
+    await expect(sections.nth(1)).not.toHaveAttribute("open");
+    await expect(sections.nth(2)).toHaveAttribute("open");
     await expect(sections.nth(2).locator("li")).toHaveText([
       "Error · Zendure device WR2 is offline (no telemetry).",
       "Warning · Zendure device WR2 read-only probe failed: TimeoutError",
     ]);
-    await expect(sections.nth(3)).toHaveJSProperty("open", true);
+    await expect(sections.nth(3)).toHaveAttribute("open");
   });
 
   test("a diagnosis the EMS refuses because another runs says so and shows no report", async ({ page }) => {
