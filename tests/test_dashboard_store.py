@@ -81,15 +81,6 @@ def daily_row(path, date_key):
         ).fetchone()
 
 
-def _local_date(store, timestamp):
-    return (
-        datetime.fromisoformat(timestamp)
-        .astimezone(store.energy_timezone)
-        .date()
-        .isoformat()
-    )
-
-
 def daily_channels(path, date_key):
     columns = ", ".join(channel.column for channel in ENERGY_CHANNELS)
     with sqlite3.connect(path) as con:
@@ -984,7 +975,7 @@ def test_a_restored_database_is_brought_forward_before_the_next_write(tmp_path):
 
     A backup written by an older version has no channel columns, and the store
     survives the swap: without a schema pass on the way out, every later
-    record() raises on a missing column until someone restarts the EMS.
+    record() raises on a missing table or column until someone restarts the EMS.
     """
 
     path = tmp_path / "dashboard.sqlite"
@@ -1017,11 +1008,11 @@ def test_a_restored_database_is_brought_forward_before_the_next_write(tmp_path):
                 sidecar.unlink()
         shutil.copyfile(legacy, path)
 
-    now = datetime.now(timezone.utc)
-    store.record(snapshot(now.isoformat(), output=400))
-    store.record(snapshot((now + timedelta(seconds=6)).isoformat(), output=400))
+    first = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+    store.record(snapshot(first.isoformat(), output=400))
+    store.record(snapshot((first + timedelta(seconds=6)).isoformat(), output=400))
 
-    assert daily_channels(path, _local_date(store, now.isoformat())) is not None
+    assert daily_channels(path, "2026-06-01") is not None
     assert store.latest()["energy_stats"]["enabled"] is True
 
 
@@ -1258,17 +1249,27 @@ def test_a_period_missing_a_whole_day_still_withholds_the_ratio(tmp_path):
     assert summary["last_7_days"]["ratios"]["self_sufficiency"] is None
 
 
-def test_the_summary_is_reused_until_a_sample_changes_it(tmp_path):
-    """The live snapshot rebuilds the rollup on every read, once per second."""
+def test_the_summary_is_reused_until_a_sample_changes_it(tmp_path, monkeypatch):
+    """The live snapshot rebuilds the rollup on every read, once per second.
 
+    The cache is kept per day of the wall clock, so the clock is pinned: a
+    midnight between two reads would start a new summary.
+    """
+
+    class Midday(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+
+    monkeypatch.setattr("dashboard.sqlite_store.datetime", Midday)
     path = tmp_path / "dashboard.sqlite"
     store = DashboardStore(path, energy_savings={"enabled": True, "timezone": "UTC"})
-    store.record(snapshot(datetime.now(timezone.utc).isoformat()))
+    store.record(snapshot("2026-06-01T12:00:00+00:00"))
 
     first = store.energy_summary()
     assert store.energy_summary() is first
 
-    store.record(snapshot(datetime.now(timezone.utc).isoformat()))
+    store.record(snapshot("2026-06-01T12:00:06+00:00"))
     assert store.energy_summary() is not first
 
     # An explicit timestamp is a question about another moment, never cached.
