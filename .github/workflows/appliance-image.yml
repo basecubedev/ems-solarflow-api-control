@@ -180,7 +180,7 @@ jobs:
   image:
     name: Appliance image build ${{ matrix.profile }}
     needs: plan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # About 28 minutes per image on the maintainer's machine. A 4-CPU hosted
     # runner running the foreign-architecture stages under emulation is several
     # times that, and the xz of an 8.25 GiB image is single-file work.
