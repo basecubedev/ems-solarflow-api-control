@@ -161,14 +161,14 @@ Inter and Lucide are copied into the output.
 
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream |
 |---|---|---|---|:---:|:---:|---|
-| `@playwright/test` | `^1.64.1` (locked 1.64.1) | Apache-2.0 | Admin Console end-to-end test runner | ❌ | ❌ | https://github.com/microsoft/playwright |
+| `@playwright/test` | `^1.65.0` (locked 1.65.0) | Apache-2.0 | Admin Console end-to-end test runner | ❌ | ❌ | https://github.com/microsoft/playwright |
 | `@fontsource-variable/inter` | `5.3.0` | OFL-1.1 | Source of the Inter variable font copied into the Modern builds | ❌ | ❌ | https://github.com/fontsource/font-files |
 | `@sveltejs/vite-plugin-svelte` | `7.3.1` | MIT | Compiles the Modern front ends' Svelte components during the Vite build | ❌ | ❌ | https://github.com/sveltejs/vite-plugin-svelte |
 | `lucide-static` | `1.69.0` | ISC | Source of the icon paths copied into the Modern sprites | ❌ | ❌ | https://github.com/lucide-icons/lucide |
 | `svelte` | `5.57.3` | MIT | Component compiler of the Modern front ends; its runtime is bundled (Vendored Components) | ❌ | ❌ | https://github.com/sveltejs/svelte |
 | `vite` | `8.3.6` | MIT | Builds the Modern front ends into `dashboard/static/modern/`, `admin/static/modern/` and `appliance/static/modern/` | ❌ | ❌ | https://github.com/vitejs/vite |
-| `playwright` | 1.64.1 | Apache-2.0 | Browser automation library behind the test runner | ❌ | ❌ | https://github.com/microsoft/playwright |
-| `playwright-core` | 1.64.1 | Apache-2.0 | Browser protocol driver used by `playwright` | ❌ | ❌ | https://github.com/microsoft/playwright |
+| `playwright` | 1.65.0 | Apache-2.0 | Browser automation library behind the test runner | ❌ | ❌ | https://github.com/microsoft/playwright |
+| `playwright-core` | 1.65.0 | Apache-2.0 | Browser protocol driver used by `playwright` | ❌ | ❌ | https://github.com/microsoft/playwright |
 
 ### Browser Runtimes
 
@@ -178,9 +178,9 @@ committed to this repository and never shipped in an image.
 
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream |
 |---|---|---|---|:---:|:---:|---|
-| `Chromium` | Playwright build for 1.64.1 | BSD-3-Clause AND mixed | `chromium` Playwright project | ❌ | ❌ | https://www.chromium.org/Home |
-| `Firefox` | Playwright build for 1.64.1, plus the host Firefox | MPL-2.0 | `firefox` Playwright project, and headless screenshot/video capture for the documentation | ❌ | ❌ | https://hg.mozilla.org/mozilla-central |
-| `WebKit` | Playwright build for 1.64.1 | LGPL-2.1-or-later AND BSD-2-Clause | Optional `webkit` Playwright project | ❌ | ❌ | https://github.com/WebKit/WebKit |
+| `Chromium` | Playwright build for 1.65.0 | BSD-3-Clause AND mixed | `chromium` Playwright project | ❌ | ❌ | https://www.chromium.org/Home |
+| `Firefox` | Playwright build for 1.65.0, plus the host Firefox | MPL-2.0 | `firefox` Playwright project, and headless screenshot/video capture for the documentation | ❌ | ❌ | https://hg.mozilla.org/mozilla-central |
+| `WebKit` | Playwright build for 1.65.0 | LGPL-2.1-or-later AND BSD-2-Clause | Optional `webkit` Playwright project | ❌ | ❌ | https://github.com/WebKit/WebKit |
 
 ### External Developer Tools
 
