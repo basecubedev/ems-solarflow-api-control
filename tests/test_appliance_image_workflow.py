@@ -124,6 +124,17 @@ def test_the_builder_environment_is_recorded(workflow):
     assert "--builder-environment" in blocks
 
 
+def test_the_image_is_built_on_the_runner_release_it_was_proven_on(workflow):
+    """``ubuntu-latest`` moved to Ubuntu 26.04, and the build stopped at its
+    first package: 26.04 has no ``qemu-user-static``, and its sudo ignores
+    ``-E``. Image 0.4.1 built on 24.04; every scheduled build from 2026-11-02
+    and the tagged 0.5.0 failed on 26.04. A moving label lets the platform swap
+    the builder under a release, a named one changes only in a tested commit.
+    """
+
+    assert workflow["jobs"]["image"]["runs-on"] == "ubuntu-24.04"
+
+
 def test_the_workflow_does_not_claim_a_base_image_it_does_not_have(workflow):
     """A hosted runner boots no approved builder image. Passing a digest for
     something that is not one would make the refusal at signing time a lie about
