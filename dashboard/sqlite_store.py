@@ -170,74 +170,85 @@ class DashboardStore:
 
     def _init_db(self):
         with self._lock, self._connect() as con:
-            con.execute("PRAGMA journal_mode=WAL")
-            con.execute("""
-                CREATE TABLE IF NOT EXISTS snapshots (
-                    timestamp TEXT PRIMARY KEY,
-                    payload TEXT NOT NULL
-                )
-            """)
-            con.execute("""
-                CREATE TABLE IF NOT EXISTS telemetry (
-                    timestamp TEXT NOT NULL,
-                    device TEXT NOT NULL,
-                    field TEXT NOT NULL,
-                    value REAL NOT NULL
-                )
-            """)
-            con.execute("""
-                CREATE INDEX IF NOT EXISTS idx_telemetry_time
-                ON telemetry(timestamp)
-            """)
-            con.execute("""
-                CREATE TABLE IF NOT EXISTS device_state (
-                    device TEXT PRIMARY KEY,
-                    soc REAL,
-                    pv_power REAL,
-                    output_power REAL,
-                    battery_power REAL,
-                    updated_at TEXT NOT NULL
-                )
-            """)
-            con.execute("""
-                CREATE TABLE IF NOT EXISTS rule_state (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-            """)
-            con.execute("""
-                CREATE TABLE IF NOT EXISTS daily_energy_stats (
-                    date TEXT PRIMARY KEY,
-                    inverter_output_wh REAL NOT NULL DEFAULT 0,
-                    ac_charge_wh REAL NOT NULL DEFAULT 0,
-                    savings_value REAL NOT NULL DEFAULT 0,
-                    price_per_kwh REAL NOT NULL DEFAULT 0,
-                    currency TEXT NOT NULL DEFAULT 'EUR',
-                    peak_output_w REAL NOT NULL DEFAULT 0,
-                    sample_count INTEGER NOT NULL DEFAULT 0,
-                    updated_at TEXT NOT NULL
-                )
-            """)
-            existing = {
-                row[1]
-                for row in con.execute(
-                    "PRAGMA table_info(daily_energy_stats)"
-                ).fetchall()
-            }
-            if "ac_charge_wh" not in existing:
-                con.execute(
-                    "ALTER TABLE daily_energy_stats "
-                    "ADD COLUMN ac_charge_wh REAL NOT NULL DEFAULT 0"
-                )
-            con.execute("""
-                CREATE TABLE IF NOT EXISTS energy_integration_state (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )
-            """)
-            self._init_energy_channels(con)
+            self._init_schema(con)
+
+    def _init_schema(self, con):
+        """Create every table and column this version reads or writes.
+
+        The start, the pass after a restore and its retry all run the whole of
+        it: a retry that added only the channel columns left an older restored
+        backup without the rest -- the ac_charge_wh column, or the daily table
+        itself -- and every later record() failed on it.
+        """
+
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS snapshots (
+                timestamp TEXT PRIMARY KEY,
+                payload TEXT NOT NULL
+            )
+        """)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS telemetry (
+                timestamp TEXT NOT NULL,
+                device TEXT NOT NULL,
+                field TEXT NOT NULL,
+                value REAL NOT NULL
+            )
+        """)
+        con.execute("""
+            CREATE INDEX IF NOT EXISTS idx_telemetry_time
+            ON telemetry(timestamp)
+        """)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS device_state (
+                device TEXT PRIMARY KEY,
+                soc REAL,
+                pv_power REAL,
+                output_power REAL,
+                battery_power REAL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS rule_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS daily_energy_stats (
+                date TEXT PRIMARY KEY,
+                inverter_output_wh REAL NOT NULL DEFAULT 0,
+                ac_charge_wh REAL NOT NULL DEFAULT 0,
+                savings_value REAL NOT NULL DEFAULT 0,
+                price_per_kwh REAL NOT NULL DEFAULT 0,
+                currency TEXT NOT NULL DEFAULT 'EUR',
+                peak_output_w REAL NOT NULL DEFAULT 0,
+                sample_count INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        existing = {
+            row[1]
+            for row in con.execute(
+                "PRAGMA table_info(daily_energy_stats)"
+            ).fetchall()
+        }
+        if "ac_charge_wh" not in existing:
+            con.execute(
+                "ALTER TABLE daily_energy_stats "
+                "ADD COLUMN ac_charge_wh REAL NOT NULL DEFAULT 0"
+            )
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS energy_integration_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        self._init_energy_channels(con)
 
     def _ensure_schema(self, con):
         """Re-run the schema pass if a restore left it unfinished.
@@ -250,7 +261,7 @@ class DashboardStore:
         if self._schema_ready:
             return
 
-        self._init_energy_channels(con)
+        self._init_schema(con)
         self._schema_ready = True
 
     def _init_energy_channels(self, con):

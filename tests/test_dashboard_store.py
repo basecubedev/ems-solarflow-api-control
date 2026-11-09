@@ -970,16 +970,13 @@ def test_energy_summary_month_and_year_entries_carry_channels(tmp_path):
     assert summary["lifetime"]["channels"]["grid_import"]["wh"] == 2500.0
 
 
-def test_a_restored_database_is_brought_forward_before_the_next_write(tmp_path):
-    """The Admin restore swaps the file under a live store.
+def restore_legacy_database(store, path, tmp_path):
+    """Swap in a minimal backup that lacks every later table and column.
 
-    A backup written by an older version has no channel columns, and the store
-    survives the swap: without a schema pass on the way out, every later
-    record() raises on a missing table or column until someone restarts the EMS.
+    No release wrote this layout: it has a daily table but neither the
+    integration state that came with it nor anything added since.
     """
 
-    path = tmp_path / "dashboard.sqlite"
-    store = DashboardStore(path, energy_savings={"enabled": True})
     legacy = tmp_path / "legacy.sqlite"
     with sqlite3.connect(legacy) as con:
         con.execute("""
@@ -1008,12 +1005,59 @@ def test_a_restored_database_is_brought_forward_before_the_next_write(tmp_path):
                 sidecar.unlink()
         shutil.copyfile(legacy, path)
 
+
+def test_a_restored_database_is_brought_forward_before_the_next_write(tmp_path):
+    """The Admin restore swaps the file under a live store.
+
+    A backup written by an older version has no channel columns, and the store
+    survives the swap: without a schema pass on the way out, every later
+    record() raises on a missing table or column until someone restarts the EMS.
+    """
+
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": True})
+    restore_legacy_database(store, path, tmp_path)
+
     first = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
     store.record(snapshot(first.isoformat(), output=400))
     store.record(snapshot((first + timedelta(seconds=6)).isoformat(), output=400))
 
     assert daily_channels(path, "2026-06-01") is not None
     assert store.latest()["energy_stats"]["enabled"] is True
+
+
+def test_a_schema_pass_that_failed_after_a_restore_is_finished_by_the_next_write(
+    tmp_path, monkeypatch
+):
+    """The pass on the way out of the swap may fail, and the next write retries it.
+
+    The retry only added the channel columns, so an older backup kept failing
+    every later record() on the rest of the schema -- one from v0.8.12 or
+    earlier on the ac_charge_wh column -- until someone restarted the EMS.
+    """
+
+    path = tmp_path / "dashboard.sqlite"
+    store = DashboardStore(path, energy_savings={"enabled": True})
+    pass_after_restore = store._init_db
+    failures = [sqlite3.OperationalError("database is locked")]
+
+    def init_db():
+        if failures:
+            raise failures.pop()
+        pass_after_restore()
+
+    monkeypatch.setattr(store, "_init_db", init_db)
+    restore_legacy_database(store, path, tmp_path)
+    assert failures == []
+
+    first = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
+    store.record(snapshot(first.isoformat(), output=400))
+    store.record(snapshot((first + timedelta(seconds=6)).isoformat(), output=400))
+
+    assert daily_channels(path, "2026-06-01") is not None
+    assert store.latest()["energy_stats"]["enabled"] is True
+    with sqlite3.connect(path) as con:
+        assert con.execute("PRAGMA journal_mode").fetchone() == ("wal",)
 
 
 def test_the_current_month_and_year_are_covered_up_to_today(tmp_path):
