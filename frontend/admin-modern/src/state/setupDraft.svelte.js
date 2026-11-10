@@ -6,6 +6,7 @@ import { moveSource, setupDiscovery, toggleSource } from "./setupDiscovery.svelt
 import { saveBlob } from "../../../shared/lib/download.js";
 import { observationKey } from "../lib/discovery.js";
 import {
+  BRIDGE_KEYS,
   STORE,
   applyOperations,
   adoptDismissals,
@@ -584,6 +585,8 @@ export function setGridEndpoint(key, value) {
 export function setGridFeature(path, value) {
   const grid = setupDraft.grid;
   if (grid && path === "grid_meter.mqtt.topic") updateItem(grid.source_id, (item) => ({ ...item, d0_topic_mode: "manual" }));
+  const bridgeKey = path.slice("grid_meter.".length);
+  if (grid && path.startsWith("grid_meter.") && BRIDGE_KEYS.includes(bridgeKey)) updateItem(grid.source_id, (item) => ({ ...item, [bridgeKey]: value }));
   setFeature(path, value);
 }
 

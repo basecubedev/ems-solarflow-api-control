@@ -37,7 +37,7 @@
     {#if field.options?.length}
       <select {id} class="input" value={shown} {disabled} onchange={(event) => onchange(event.currentTarget.value)}>
         {#if !shown}<option value="">{hint ? t("settings.edit.default", { value: hintText }) : "—"}</option>{/if}
-        {#each choices(field, value) as option (option)}<option value={option}>{optionText(option)}</option>{/each}
+        {#each choices(field, value) as option (option)}<option value={option}>{field.optionLabels?.[option] ?? optionText(option)}</option>{/each}
       </select>
     {:else}
       <input

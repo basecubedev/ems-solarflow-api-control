@@ -34,8 +34,9 @@ a device** tile and **Open the devices** lead straight here.
 
 - **Find devices** — **Search my network**, a field to **Scan** one address or
   range, and what the search looks at.
-- **What the search may use** — the credentials for your own MQTT brokers and
-  the Zendure cloud API key; see [MQTT](mqtt.md).
+- **What the search may use** — the credentials for your own MQTT brokers, the
+  passwords of Tibber Pulse bridges and the Zendure cloud API key; see
+  [MQTT](mqtt.md) and [Tibber Pulse IR](../tibber-pulse.md).
 - **Devices** — one card per device: the **Grid meter**, the **Zendure MQTT
   broker**, and each inverter (*Inverter 1*, *Inverter 2*, …) with its model,
   EMS name, address, serial and power, its connection (**Local connection**,
@@ -128,7 +129,10 @@ read-only device**); one set to another unit ID is added by hand.
 
 **The grid meter:** open its card and choose the **Meter type** (Shelly,
 everHome EcoTracker, Tasmota, Zendure D0 / Smart Meter 3CT over HTTP, an E3/DC
-over Modbus TCP, or an MQTT meter), then its address or topic. Changing the
+over Modbus TCP, a Tibber Pulse IR bridge, or an MQTT meter), then its address
+or topic. A Tibber bridge also needs its password, picked from the bridge
+passwords saved under *What the search may use*; it is an experimental meter
+([Tibber Pulse IR](../tibber-pulse.md)). Changing the
 type removes the fields the new type cannot use — an HTTP meter's address does
 not linger on an MQTT meter — while keys you added by hand stay. A port belongs
 to its protocol: switching between two HTTP meters keeps it, switching to an

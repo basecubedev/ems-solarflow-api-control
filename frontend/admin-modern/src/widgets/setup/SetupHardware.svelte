@@ -11,6 +11,7 @@
   import { isExternalProposal, observationKey, sourcesOf } from "../../lib/discovery.js";
   import { CONTINUITY, D0_TYPE, DEFAULT_GRID_METER, DEFAULT_INVERTER, SWITCH_REASONS, candidateState, catalogSection, deviceFieldKey, deviceValue, featureValue, formGeneration, gridFields, gridMeterType, hasSource, inverterCards, isReady, manualControl, meterIsMqtt, modelsForGeneration, pendingConfirmations, selectionControllable, topicMode, unselectedProposals } from "../../lib/setupDraft.js";
   import { setup } from "../../state/setup.svelte.js";
+  import BridgePasswordField from "../BridgePasswordField.svelte";
   import { setupDiscovery } from "../../state/setupDiscovery.svelte.js";
   import {
     setupDraft,
@@ -163,6 +164,14 @@
   </div>
 {/snippet}
 
+{#snippet meterField(field)}
+  {#if field.path === "grid_meter.credentials_ref"}
+    <BridgePasswordField {field} value={featureValue(draft.features, field)} onchange={(value) => setGridFeature(field.path, value)} />
+  {:else}
+    <SettingField {field} value={featureValue(draft.features, field)} onchange={(value) => setGridFeature(field.path, value)} type={field.secret ? "password" : ""} />
+  {/if}
+{/snippet}
+
 {#snippet enabledRow(checked, onchange, hint)}
   <label class="check"><input type="checkbox" {checked} onchange={(event) => onchange(event.currentTarget.checked)} /><span>{t("setup.hardware.enabled")}</span></label>
   <p class="muted small">{hint}</p>
@@ -194,14 +203,14 @@
           <p class="muted small">{#if variants[gridType]?.port_description}<CatalogText text={variants[gridType].port_description} />{:else}{t("setup.hardware.httpPort")}{/if}</p>
         {/if}
         <div class="fields">
-          {#each meterFields.normal as field (field.path)}<SettingField {field} value={featureValue(draft.features, field)} onchange={(value) => setGridFeature(field.path, value)} type={field.secret ? "password" : ""} />{/each}
+          {#each meterFields.normal as field (field.path)}{@render meterField(field)}{/each}
         </div>
         {#each ["advanced", "expert"] as level (level)}
           {#if meterFields[level].length}
             <details>
               <summary>{t(`settings.edit.level.${level}`)}</summary>
               <div class="fields">
-                {#each meterFields[level] as field (field.path)}<SettingField {field} value={featureValue(draft.features, field)} onchange={(value) => setGridFeature(field.path, value)} type={field.secret ? "password" : ""} />{/each}
+                {#each meterFields[level] as field (field.path)}{@render meterField(field)}{/each}
               </div>
             </details>
           {/if}

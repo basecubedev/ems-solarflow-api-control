@@ -172,8 +172,18 @@ const FAMILY_TYPES = {
   zendure_smartmeter_3ct_http: "zendure_grid_meter_http",
   tasmota_http: "tasmota_http",
   e3dc_modbus: "e3dc_modbus",
+  tibber_pulse_bridge: "tibber_pulse_bridge",
 };
-const METER_TYPES = new Set(["shelly", "shelly_3em_gen1", "ecotracker", "zendure_grid_meter_http", "zendure_smartmeter_3ct_http", "zendure_smartmeter_d0_http", "tasmota_http", "e3dc_modbus", "zendure_smartmeter_d0", "mqtt"]);
+const METER_TYPES = new Set(["shelly", "shelly_3em_gen1", "ecotracker", "zendure_grid_meter_http", "zendure_smartmeter_3ct_http", "zendure_smartmeter_d0_http", "tasmota_http", "e3dc_modbus", "tibber_pulse_bridge", "zendure_smartmeter_d0", "mqtt"]);
+
+/** What a found Tibber bridge brings beyond its address: the saved password that opened it and its reading head. */
+export function bridgeValues(found) {
+  const values = {};
+  if (text(found?.credentials_ref)) values.credentials_ref = text(found.credentials_ref);
+  const node = Number(text(found?.node_id) || NaN);
+  if (Number.isInteger(node)) values.node_id = node;
+  return values;
+}
 
 /** The meter type a found grid meter is: chosen, then by its API family, then by its description. */
 export function meterTypeOf(found) {
@@ -654,7 +664,7 @@ export function addFound(draft, item, catalog) {
   if (item.role === "grid_meter") {
     const meter = { present: true, type: meterTypeOf({ device_type: found.device_type || "", api_family: found.api_family || "" }), ip: found.ip || "" };
     if (found.port != null && found.port !== "") meter.port = found.port;
-    return { grid_meter: meter };
+    return { grid_meter: { ...meter, ...bridgeValues(found) } };
   }
   const device = withDefaults({ original_name: null, name: nextInverterName(devices), ip: found.ip || "", sn: found.serial_number || "", enabled: true }, catalog);
   const identity = issuedPhysicalIdentity(found);

@@ -143,6 +143,16 @@ export function defaultHint(field, value) {
   return Array.isArray(field.default) ? field.default.join(", ") : String(field.default);
 }
 
+/** The grid meter's bridge password reference as a choice of the saved bridge passwords, shown by name. */
+export function bridgePasswordField(field, passwords) {
+  const entries = passwords || [];
+  return {
+    ...field,
+    options: entries.map((entry) => String(entry.id)),
+    optionLabels: Object.fromEntries(entries.map((entry) => [String(entry.id), String(entry.label || entry.id)])),
+  };
+}
+
 /** A field's choices: the catalogue's options, with the saved value kept when it is none of them. */
 export function choices(field, value) {
   const options = (field?.options || []).map(String);

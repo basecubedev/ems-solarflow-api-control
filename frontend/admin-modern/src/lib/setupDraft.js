@@ -12,7 +12,7 @@
  */
 
 import { D0_TOPIC_PREFIX, D0_TOPIC_SUFFIX, generations, hardwareModels, modelsForGeneration } from "./devices.js";
-import { aliasTokens, isConsumerProposal, isExternalProposal, isGridMeterProposal, issuedPhysicalIdentity, meterTypeOf, observationKey, proposalTopic, sourcesOf } from "./discovery.js";
+import { aliasTokens, bridgeValues, isConsumerProposal, isExternalProposal, isGridMeterProposal, issuedPhysicalIdentity, meterTypeOf, observationKey, proposalTopic, sourcesOf } from "./discovery.js";
 
 /** Classic's localStorage keys; the workflow identity and the step live in state/setup.svelte.js. */
 export const STORE = Object.freeze({
@@ -348,7 +348,7 @@ export function itemFromDevice(device, role, { id, items, configName }) {
   const sources = sourcesOf(device);
   const common = { source_id: observationKey(device), draft_item_id: id, role, enabled: true, ip: device.ip || "", port: device.port || "", serial_number: device.serial_number || "" };
   if (role === "grid_meter") {
-    return { ...common, config_name: "grid_meter", display_name: uniqueDisplayName(items, device.display_name || device.model || DEFAULT_GRID_METER, "grid_meter"), grid_meter_type: "", device_type: device.device_type || "", api_family: device.api_family || "", discovery_source: sources[0] || "" };
+    return { ...common, config_name: "grid_meter", display_name: uniqueDisplayName(items, device.display_name || device.model || DEFAULT_GRID_METER, "grid_meter"), grid_meter_type: "", device_type: device.device_type || "", api_family: device.api_family || "", discovery_source: sources[0] || "", ...bridgeValues(device) };
   }
   return { ...common, config_name: configName, display_name: uniqueDisplayName(items, device.display_name || device.model || DEFAULT_INVERTER, "inverter"), physical_identity_token: issuedPhysicalIdentity(device), device_type: device.device_type || "", api_family: device.api_family || "", discovery_source: sources[0] || "" };
 }
@@ -491,6 +491,9 @@ export function setDeviceField(item, field, value) {
 // --- grid meter ----------------------------------------------------------------
 
 export const D0_TYPE = "zendure_smartmeter_d0";
+export const BRIDGE_TYPE = "tibber_pulse_bridge";
+/** What a bridge meter row carries for its own: the features follow the row, so another bridge brings its own. */
+export const BRIDGE_KEYS = Object.freeze(["credentials_ref", "node_id"]);
 const MQTT_METERS = new Set(["mqtt", D0_TYPE]);
 export const meterIsMqtt = (type) => MQTT_METERS.has(type);
 
@@ -525,6 +528,11 @@ export function syncGridFeatures(features, item) {
     if (mode === "auto" && serial) next["grid_meter.mqtt.topic"] = d0Topic(serial);
   } else {
     next["grid_meter.ip"] = meter.ip || "";
+  }
+  const bridge = type === BRIDGE_TYPE ? bridgeValues(meter) : {};
+  for (const key of BRIDGE_KEYS) {
+    if (key in bridge) next[`grid_meter.${key}`] = bridge[key];
+    else delete next[`grid_meter.${key}`];
   }
   return { features: next, item: meter };
 }
