@@ -32,6 +32,10 @@ GRID_METER_CHOICES = (
         config_mod.E3DC_MODBUS_GRID_METER_TYPE,
         "E3/DC storage system via Modbus TCP (read-only)",
     ),
+    (
+        config_mod.TIBBER_PULSE_GRID_METER_TYPE,
+        "Tibber Pulse IR bridge (experimental; save its password in the Admin Console)",
+    ),
 )
 # Backward-compatible grid-meter types accepted from an existing config but not
 # offered as a new interactive menu choice. The 3CT and D0 HTTP types share the
@@ -430,6 +434,7 @@ def ask_grid_meter(
             "value_path",
             "max_age_seconds",
             "unit_id",
+            *config_mod.TIBBER_PULSE_BRIDGE_KEYS,
         ):
             result.pop(key, None)
     elif meter_type == config_mod.E3DC_MODBUS_GRID_METER_TYPE:
@@ -466,10 +471,52 @@ def ask_grid_meter(
             "value_path",
             "max_age_seconds",
             "mqtt",
+            *config_mod.TIBBER_PULSE_BRIDGE_KEYS,
         ):
             result.pop(key, None)
         try:
             config_mod.e3dc_modbus_grid_meter_settings(result)
+        except ValueError as exc:
+            raise ConfigInitError(str(exc)) from exc
+    elif meter_type == config_mod.TIBBER_PULSE_GRID_METER_TYPE:
+        result["ip"] = ask_text(
+            "Tibber bridge IP address",
+            result.get("ip") or "",
+            required=True,
+            noninteractive=noninteractive,
+            allow_placeholder_default=allow_placeholder_defaults,
+        )
+        result["credentials_ref"] = ask_text(
+            "Bridge password reference (the id under its name in the Admin Console)",
+            result.get("credentials_ref") or "",
+            required=True,
+            noninteractive=noninteractive,
+            allow_placeholder_default=allow_placeholder_defaults,
+        )
+        result["node_id"] = ask_int(
+            "Pulse node (reading head) on the bridge",
+            _whole_number_text(result.get("node_id"), config_mod.TIBBER_PULSE_DEFAULT_NODE_ID),
+            minimum=1,
+            maximum=255,
+            noninteractive=noninteractive,
+        )
+        for key in (
+            "url",
+            "power_path",
+            "channels",
+            "host",
+            "username",
+            "password",
+            "topic",
+            "payload_format",
+            "value_path",
+            "max_age_seconds",
+            "mqtt",
+            "unit_id",
+        ):
+            result.pop(key, None)
+        try:
+            config_mod.tibber_pulse_grid_meter_settings(result)
         except ValueError as exc:
             raise ConfigInitError(str(exc)) from exc
     elif meter_type == "tasmota_http":
@@ -506,6 +553,7 @@ def ask_grid_meter(
             "unit_id",
             "channels",
             "mqtt",
+            *config_mod.TIBBER_PULSE_BRIDGE_KEYS,
         ):
             result.pop(key, None)
     else:
@@ -529,6 +577,7 @@ def ask_grid_meter(
             "max_age_seconds",
             "unit_id",
             "mqtt",
+            *config_mod.TIBBER_PULSE_BRIDGE_KEYS,
         ):
             result.pop(key, None)
     return result
@@ -800,6 +849,12 @@ def _meter_summary(grid_meter):
     if meter_type == "tasmota_http":
         target = grid_meter.get("url") or grid_meter.get("ip") or "(not set)"
         return f"Tasmota HTTP at {target}"
+    if meter_type == config_mod.TIBBER_PULSE_GRID_METER_TYPE:
+        return (
+            f"Tibber Pulse bridge at {grid_meter.get('ip') or '(not set)'} "
+            f"node {grid_meter.get('node_id', config_mod.TIBBER_PULSE_DEFAULT_NODE_ID)}, "
+            f"password {grid_meter.get('credentials_ref') or '(not set)'}"
+        )
     if meter_type == config_mod.E3DC_MODBUS_GRID_METER_TYPE:
         port = grid_meter.get("port") or config_mod.E3DC_MODBUS_DEFAULT_PORT
         unit_id = grid_meter.get("unit_id", config_mod.E3DC_MODBUS_DEFAULT_UNIT_ID)

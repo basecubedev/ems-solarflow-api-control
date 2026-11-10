@@ -650,10 +650,14 @@ def test_config_init_refuses_an_out_of_range_unit_id():
         )
 
 
+def _e3dc_menu_number(config_init):
+    return str([choice for choice, _ in config_init.GRID_METER_CHOICES].index("e3dc_modbus") + 1)
+
+
 def test_config_init_asks_again_for_an_out_of_range_unit_id(monkeypatch):
     from ems import config_init
 
-    answers = iter([str(len(config_init.GRID_METER_CHOICES)), "192.0.2.10", "", "300", "7"])
+    answers = iter([_e3dc_menu_number(config_init), "192.0.2.10", "", "300", "7"])
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
 
     result = config_init.ask_grid_meter({"type": "shelly", "ip": "192.0.2.10"})
@@ -673,7 +677,7 @@ def test_config_init_accepts_a_stored_whole_number_float_port():
 def test_config_init_does_not_carry_an_http_port_to_the_e3dc(monkeypatch):
     from ems import config_init
 
-    answers = iter([str(len(config_init.GRID_METER_CHOICES)), "", "", ""])
+    answers = iter([_e3dc_menu_number(config_init), "", "", ""])
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
     result = config_init.ask_grid_meter(
         {"type": "zendure_grid_meter_http", "ip": "192.0.2.10", "port": 80}

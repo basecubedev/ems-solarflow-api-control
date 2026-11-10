@@ -1135,7 +1135,7 @@ Common causes:
 | Event | Meaning |
 |---|---|
 | `preflight_device_unreachable` | Zendure device cannot be reached |
-| `preflight_abort` | required preflight input is missing or invalid |
+| `preflight_abort` | required preflight input is missing or invalid; `reason=grid_meter_unreadable` when a grid meter that reads in the background (Tibber Pulse) has no good reading within 15 s |
 | `preflight_failed` | at least one required check failed |
 
 ## Backup and restore diagnostics

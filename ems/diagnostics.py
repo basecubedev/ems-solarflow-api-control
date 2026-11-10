@@ -1689,6 +1689,19 @@ def diagnose_grid_meter_config(checks, config_data):
                 config_mod.e3dc_modbus_grid_meter_settings(grid_meter)
             except ValueError as exc:
                 diagnose_add(checks, "config", "error", "grid_meter_e3dc_modbus_invalid", f"E3/DC Modbus grid meter settings are invalid: {exc}")
+    elif meter_type == config_mod.TIBBER_PULSE_GRID_METER_TYPE:
+        try:
+            config_mod.tibber_pulse_grid_meter_settings(grid_meter)
+        except ValueError as exc:
+            diagnose_add(checks, "config", "error", "grid_meter_tibber_pulse_invalid", f"Tibber Pulse grid meter settings are invalid: {exc}")
+        else:
+            diagnose_add(checks, "config", "ok", "grid_meter_tibber_pulse_configured", "Tibber Pulse bridge address and password reference are configured")
+        diagnose_add(
+            checks, "config", "info", "grid_meter_tibber_pulse_experimental",
+            "The Tibber Pulse bridge is an experimental grid meter: it answers slowly, "
+            "new values arrive only every 2-3 s, and Tibber can change its local "
+            "interface with any firmware update",
+        )
     else:
         diagnose_add(checks, "config", "warning", "grid_meter_type_unknown", f"Unknown grid meter type: {meter_type}", type=meter_type)
 
@@ -2127,6 +2140,7 @@ GRID_METER_PROVIDERS = {
     "mqtt": "MQTT",
     "zendure_smartmeter_d0": "Zendure SmartMeter D0",
     config_mod.E3DC_MODBUS_GRID_METER_TYPE: "E3/DC",
+    config_mod.TIBBER_PULSE_GRID_METER_TYPE: "Tibber Pulse",
 }
 
 
@@ -2160,6 +2174,45 @@ def _diagnose_e3dc_modbus_read(settings, *, read_inverter):
     finally:
         session.close()
     return session, reading, error, address_offset
+
+
+def _diagnose_tibber_pulse(checks, grid_meter, grid_tracker):
+    import requests
+
+    from ems import sml
+    from ems.mqtt_credentials import FileBridgePasswordResolver
+    from ems.tibber_pulse import BridgeError, TibberPulseBridge, grid_power_from_telegram
+
+    try:
+        settings = config_mod.tibber_pulse_grid_meter_settings(grid_meter)
+        password = FileBridgePasswordResolver().resolve(settings["credentials_ref"])
+    except ValueError as exc:
+        grid_tracker.record_failure(error=exc, latency_ms=0.0)
+        diagnose_add(checks, "hardware", "warning", "grid_meter_tibber_pulse_invalid", f"Tibber Pulse read-only probe skipped: {exc}")
+        return grid_tracker
+    bridge = TibberPulseBridge(settings["host"], password, port=settings["port"], node_id=settings["node_id"])
+
+    def read_power():
+        try:
+            return grid_power_from_telegram(bridge.read_telegram())[0]
+        except sml.SmlError as exc:
+            if exc.reason not in sml.FRAME_DAMAGE:
+                raise
+            return grid_power_from_telegram(bridge.read_telegram())[0]
+
+    start = time.monotonic()
+    try:
+        power = read_power()
+    except (requests.RequestException, BridgeError, sml.SmlError) as exc:
+        _diagnose_record_probe(grid_tracker, start, exc)
+        reason = getattr(exc, "reason", exc.__class__.__name__)
+        diagnose_add(checks, "hardware", "warning", "tibber_pulse_read_failed", f"Tibber Pulse read-only probe failed: {reason}", reason=reason)
+    else:
+        _diagnose_record_probe(grid_tracker, start)
+        diagnose_add(checks, "hardware", "ok", "tibber_pulse_read_ok", "The Tibber Pulse bridge returned a valid SML telegram with the grid power", power_w=round(power, 1))
+    finally:
+        bridge.close()
+    return grid_tracker
 
 
 def _diagnose_e3dc_modbus(checks, grid_meter, grid_tracker):
@@ -2348,6 +2401,8 @@ def diagnose_hardware(checks, config_data):
                 )
     elif meter_type == config_mod.E3DC_MODBUS_GRID_METER_TYPE and grid_meter.get("ip"):
         grid_tracker = _diagnose_e3dc_modbus(checks, grid_meter, grid_tracker)
+    elif meter_type == config_mod.TIBBER_PULSE_GRID_METER_TYPE and grid_meter.get("ip"):
+        grid_tracker = _diagnose_tibber_pulse(checks, grid_meter, grid_tracker)
     else:
         diagnose_add(checks, "hardware", "warning", "grid_meter_probe_skipped", f"No read-only grid meter probe implemented for type: {meter_type}", type=meter_type)
 

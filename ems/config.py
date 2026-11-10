@@ -212,6 +212,7 @@ ZENDURE_HTTP_GRID_METER_TYPES = frozenset(
 )
 MQTT_GRID_METER_TYPES = ("mqtt", ZENDURE_SMARTMETER_D0_GRID_METER_TYPE)
 E3DC_MODBUS_GRID_METER_TYPE = E3DC_MODBUS_DEVICE_TYPE
+TIBBER_PULSE_GRID_METER_TYPE = "tibber_pulse_bridge"
 
 # Single source of truth mapping a grid-meter ``type`` to a user-facing hardware
 # model name and a transport label. Diagnostics and status surfaces read this so
@@ -237,6 +238,7 @@ GRID_METER_MODEL_TRANSPORTS = {
     ZENDURE_SMARTMETER_D0_GRID_METER_TYPE: ("Zendure Smart Meter D0", _LOCAL_MQTT_TRANSPORT),
     "mqtt": ("Generic MQTT meter", "MQTT"),
     E3DC_MODBUS_GRID_METER_TYPE: ("E3/DC energy storage system", _MODBUS_TCP_TRANSPORT),
+    TIBBER_PULSE_GRID_METER_TYPE: ("Tibber Pulse IR bridge", _LOCAL_HTTP_TRANSPORT),
 }
 
 
@@ -308,6 +310,62 @@ def e3dc_modbus_grid_meter_settings(grid_meter):
 
     grid_meter = grid_meter if isinstance(grid_meter, dict) else {}
     return _e3dc_modbus_connection(grid_meter, "grid_meter.", "E3/DC Modbus grid meter")
+
+
+TIBBER_PULSE_DEFAULT_PORT = 80
+TIBBER_PULSE_DEFAULT_NODE_ID = 1
+TIBBER_PULSE_BRIDGE_KEYS = ("credentials_ref", "node_id")
+
+
+def tibber_pulse_grid_meter_settings(grid_meter, *, require_password=True):
+    """Validate a ``tibber_pulse_bridge`` grid-meter block into connection settings.
+
+    The one validator for this meter type, shared by the client factory, config
+    validation and the Admin. The password itself never sits in the config: the
+    block names it by ``credentials_ref`` in the EMS secret store. The factory
+    passes ``require_password=False``: a meter whose password is missing still
+    starts and reports every read as failed, so the EMS stays up and says why.
+    """
+
+    from ems.mqtt_credentials import MqttCredentialError, validate_mqtt_credentials_ref
+
+    grid_meter = grid_meter if isinstance(grid_meter, dict) else {}
+    host = str(grid_meter.get("ip") or "").strip()
+    if not host:
+        raise ValueError("Tibber Pulse grid meter requires grid_meter.ip")
+    if not re.fullmatch(r"[A-Za-z0-9.-]+", host):
+        raise ValueError("grid_meter.ip must be a host name or IPv4 address, without scheme or port")
+    ref = grid_meter.get("credentials_ref")
+    if not (isinstance(ref, str) and ref.strip()):
+        if require_password:
+            raise ValueError(
+                "Tibber Pulse grid meter requires grid_meter.credentials_ref, "
+                "the bridge password saved in the Admin Console"
+            )
+        ref = None
+    else:
+        try:
+            validate_mqtt_credentials_ref(ref)
+        except MqttCredentialError as exc:
+            raise ValueError("grid_meter.credentials_ref is not a canonical reference") from exc
+    return {
+        "host": host,
+        "port": _strict_number(
+            grid_meter.get("port"),
+            "grid_meter.port",
+            default=TIBBER_PULSE_DEFAULT_PORT,
+            minimum=1,
+            maximum=65535,
+        ),
+        "node_id": _strict_number(
+            grid_meter.get("node_id"),
+            "grid_meter.node_id",
+            default=TIBBER_PULSE_DEFAULT_NODE_ID,
+            minimum=1,
+            maximum=255,
+        ),
+        "credentials_ref": ref,
+    }
 
 
 def e3dc_modbus_device_settings(device):
@@ -1316,8 +1374,13 @@ def template_placeholder_paths(config):
                 paths.append("grid_meter.ip" if by_ip else "grid_meter.url")
             if _missing_or_placeholder(grid_meter.get("power_path")):
                 paths.append("grid_meter.power_path")
-        elif _missing_or_placeholder(grid_meter.get("ip"), address=True):
-            paths.append("grid_meter.ip")
+        else:
+            if _missing_or_placeholder(grid_meter.get("ip"), address=True):
+                paths.append("grid_meter.ip")
+            if meter_type == TIBBER_PULSE_GRID_METER_TYPE and _missing_or_placeholder(
+                grid_meter.get("credentials_ref")
+            ):
+                paths.append("grid_meter.credentials_ref")
 
     return paths
 

@@ -74,6 +74,7 @@ def test_catalog_contains_all_supported_grid_meter_variants():
         "zendure_smartmeter_d0_http",
         "tasmota_http",
         "e3dc_modbus",
+        "tibber_pulse_bridge",
         "zendure_smartmeter_d0",
         "mqtt",
     }
@@ -156,6 +157,9 @@ def test_grid_meter_variant_field_spec_matches_v070_catalog():
     assert grid_meter_variant_field_spec("e3dc_modbus")["keys"] == frozenset(
         {"type", "ip", "port", "unit_id"}
     )
+    assert grid_meter_variant_field_spec("tibber_pulse_bridge")["keys"] == frozenset(
+        {"type", "ip", "port", "node_id", "credentials_ref"}
+    )
     # MQTT variants carry only the mqtt block; D0 excludes value_path.
     d0 = grid_meter_variant_field_spec("zendure_smartmeter_d0")
     assert d0["keys"] == frozenset({"type", "mqtt"})
@@ -174,6 +178,8 @@ def test_grid_meter_variant_field_spec_matches_v070_catalog():
             "power_path",
             "mqtt",
             "unit_id",
+            "node_id",
+            "credentials_ref",
         }
     )
     assert "value_path" in GRID_METER_KNOWN_MQTT_KEYS

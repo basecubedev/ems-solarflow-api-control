@@ -83,10 +83,12 @@ class CommHealth:
         self.stale_used = False
         self._latency_samples = deque(maxlen=max_samples)
 
-    def record_success(self, latency_ms=None, field=None):
+    def record_success(self, latency_ms=None, field=None, age_seconds=0.0):
+        """Count a good read; ``age_seconds`` dates it back for a cached value."""
+
         self.success_count += 1
         self.consecutive_failures = 0
-        self.last_success_monotonic = time.monotonic()
+        self.last_success_monotonic = time.monotonic() - max(0.0, float(age_seconds))
         self.stale_used = False
         self.last_error = None
         if latency_ms is not None:

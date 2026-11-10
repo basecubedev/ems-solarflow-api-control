@@ -89,7 +89,9 @@
       "Zendure SmartMeter D0 and MQTT use grid_meter.mqtt with topic and",
       "either mqtt.broker_ref or host/port; payload_format and max_age_seconds.",
       "e3dc_modbus reads an E3/DC over Modbus TCP (read-only) and needs",
-      "grid_meter.ip; port 502 and unit_id 1 are the defaults."
+      "grid_meter.ip; port 502 and unit_id 1 are the defaults.",
+      "tibber_pulse_bridge (experimental) reads a Tibber Pulse bridge over its",
+      "local web server; it needs grid_meter.ip and grid_meter.credentials_ref."
     ],
     "type": "shelly",
     "ip": "198.51.100.50"
