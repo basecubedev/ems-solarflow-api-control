@@ -27,6 +27,7 @@ from pathlib import Path
 from admin.models import utc_now_iso
 from ems.mqtt_credentials import (
     MQTT_CREDENTIAL_REQUIRED_FIELDS,
+    bridge_password_record_name,
     missing_mqtt_credential_fields,
 )
 from ems.mqtt_credentials import CREDENTIAL_KEY_FILENAME as KEY_FILENAME
@@ -767,6 +768,55 @@ class CredentialStore:
             "credentials_encrypted": bool(
                 record.get("username_encrypted") or record.get("password_encrypted")
             ),
+        }
+
+    def _bridge_filename(self, ref):
+        return bridge_password_record_name(self._validated_ref(ref))
+
+    def save_bridge_password(self, ref, password, label=None):
+        """Save the password printed on a meter bridge (Tibber Pulse).
+
+        One record serves the network scan and the runtime: the grid meter
+        names it by ``credentials_ref`` and the EMS reads it through
+        ``ems.mqtt_credentials.FileBridgePasswordResolver``.
+        """
+
+        ref = self._validated_ref(ref)
+        if not isinstance(password, str) or not password:
+            raise CredentialStoreError("The bridge password must not be empty.")
+        blob, encrypted = self._files.encrypt(password)
+        record = {
+            "version": 1,
+            "ref": ref,
+            "label": str(label or ref),
+            "password": blob,
+            "password_encrypted": encrypted,
+            "saved_at": utc_now_iso(),
+        }
+        self._files.write_record(self._bridge_filename(ref), record)
+        return ref
+
+    def load_bridge_password(self, ref):
+        record = self._files.read_record(self._bridge_filename(ref))
+        if not record:
+            return None
+        return self._decrypt_field(record, "password")
+
+    def forget_bridge_password(self, ref):
+        self._files.delete_file(self._bridge_filename(ref))
+
+    def bridge_password_status(self, ref):
+        """Redaction-safe status for an API/UI response (never the secret)."""
+
+        ref = self._validated_ref(ref)
+        record = self._files.read_record(self._bridge_filename(ref))
+        if not record:
+            return {"id": ref, "label": ref, "saved": False, "encrypted": False}
+        return {
+            "id": ref,
+            "label": record.get("label") or ref,
+            "saved": bool(record.get("password")),
+            "encrypted": record.get("password_encrypted") is True,
         }
 
     def credential_exists(self, ref):

@@ -33,6 +33,8 @@ from admin.zendure_mqtt_config_draft import (
 )
 from ems.config import (
     E3DC_MODBUS_GRID_METER_TYPE,
+    TIBBER_PULSE_BRIDGE_KEYS,
+    TIBBER_PULSE_GRID_METER_TYPE,
     MQTT_GRID_METER_TYPES,
     ZENDURE_SMARTMETER_D0_GRID_METER_TYPE,
     MqttBrokerReferenceAmbiguousError,
@@ -41,6 +43,7 @@ from ems.config import (
     e3dc_modbus_grid_meter_settings,
     normalize_mqtt_grid_meter_settings,
     optional_json_bool,
+    tibber_pulse_grid_meter_settings,
     parse_mqtt_port,
     resolve_grid_meter_mqtt_settings,
     zendure_smartmeter_d0_serial_from_topic,
@@ -86,6 +89,7 @@ _GRID_TYPES = {
     "zendure_smartmeter_3ct_http": "zendure_grid_meter_http",
     "tasmota_http": "tasmota_http",
     E3DC_MODBUS_GRID_METER_TYPE: E3DC_MODBUS_GRID_METER_TYPE,
+    TIBBER_PULSE_GRID_METER_TYPE: TIBBER_PULSE_GRID_METER_TYPE,
 }
 # Explicit meter types a manual (non-discovered) grid meter may declare. A manual
 # entry has no api_family/device_type, so its type must be chosen, not inferred.
@@ -546,6 +550,49 @@ def _validate_e3dc_grid_meter_via_core(preview, validation):
         validation["errors"].append(_issue("grid_meter_e3dc_modbus_invalid", str(exc)))
 
 
+def tibber_grid_meter_issues(grid_meter, credential_store=None):
+    """Why a Tibber Pulse grid meter block would fail the EMS, as issues.
+
+    Runs the factory's own validator, then checks that the named bridge
+    password is saved and decrypts, so a config the EMS cannot read is never
+    written.
+    """
+
+    try:
+        settings = tibber_pulse_grid_meter_settings(grid_meter)
+    except ValueError as exc:
+        return [_issue("grid_meter_tibber_pulse_invalid", str(exc))]
+    from admin.credential_store import CredentialStore
+
+    store = credential_store or CredentialStore()
+    ref = settings["credentials_ref"]
+    if store.load_bridge_password(ref):
+        return []
+    if store.bridge_password_status(ref)["saved"]:
+        return [
+            _issue(
+                "grid_meter_bridge_password_unreadable",
+                f"The bridge password '{ref}' is saved but cannot be decrypted. Save it again.",
+            )
+        ]
+    return [
+        _issue(
+            "grid_meter_bridge_password_missing",
+            f"The bridge password '{ref}' is not saved. "
+            "Save it under the network search sources first.",
+        )
+    ]
+
+
+def _validate_tibber_grid_meter_via_core(preview, validation):
+    grid = preview.get("grid_meter")
+    if not isinstance(grid, dict):
+        return
+    if str(grid.get("type") or "").strip().lower() != TIBBER_PULSE_GRID_METER_TYPE:
+        return
+    validation["errors"].extend(tibber_grid_meter_issues(grid))
+
+
 def _add_e3dc_meter_as_read_only_device(preview, names, validation):
     """Show an E3/DC grid meter as its own read-only device, once.
 
@@ -927,6 +974,10 @@ def _build_grid_meter(meter, defaults, validation, features):
                 grid["port"] = int(meter["port"])
             except (TypeError, ValueError):
                 grid.pop("port", None)
+    if grid_type == TIBBER_PULSE_GRID_METER_TYPE:
+        for key in TIBBER_PULSE_BRIDGE_KEYS:
+            if meter.get(key) not in (None, ""):
+                grid[key] = meter[key]
     return grid
 
 
@@ -1206,6 +1257,7 @@ class ConfigPreviewGenerator:
         # preview can never fail at runtime.
         _validate_mqtt_grid_meter_via_core(preview, validation)
         _validate_e3dc_grid_meter_via_core(preview, validation)
+        _validate_tibber_grid_meter_via_core(preview, validation)
         _add_e3dc_meter_as_read_only_device(preview, names, validation)
 
         _normalize_bundled_influx_secret(preview)

@@ -185,6 +185,7 @@ def test_default_connections_shape():
         "local_api",
         "local_mqtt",
         "zendure_mqtt",
+        "tibber_bridge",
     }
 
 
