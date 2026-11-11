@@ -55,7 +55,7 @@ body:
         - powerfox poweropti (local API)
         - DSMR P1 over TCP (P1 bridge)
         - SunSpec meter over Modbus TCP
-        - Huawei, Sungrow, Carlo Gavazzi EM24, Victron GX or Wibeee over Modbus TCP
+        - Huawei, Sungrow, Carlo Gavazzi EM24, Victron GX, smart-me, IAMMETER or Wibeee over Modbus TCP
         - Tasmota HTTP
         - Other
     validations:

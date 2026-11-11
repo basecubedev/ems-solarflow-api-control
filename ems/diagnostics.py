@@ -1667,6 +1667,11 @@ def diagnose_grid_meter_config(checks, config_data):
             diagnose_add(checks, "config", "error", "grid_meter_mqtt_payload_format_invalid", "Zendure SmartMeter D0 requires payload_format number", payload_format=payload_format)
         if payload_format == "json" and not mqtt_settings.get("value_path"):
             diagnose_add(checks, "config", "error", "grid_meter_mqtt_value_path_missing", "MQTT JSON grid meter requires grid_meter.mqtt.value_path")
+        if meter_type == "mqtt":
+            try:
+                config_mod.mqtt_grid_meter_value_scale(mqtt_settings)
+            except ValueError as exc:
+                diagnose_add(checks, "config", "error", "grid_meter_mqtt_value_scale_invalid", str(exc))
         tls_enabled = config_mod.safe_bool(mqtt_settings.get("tls"), False)
         tls_insecure = config_mod.safe_bool(mqtt_settings.get("tls_insecure"), False)
         if tls_enabled and tls_insecure:
@@ -2480,7 +2485,9 @@ def diagnose_hardware(checks, config_data, runtime_data=None):
         try:
             status, payload = diagnose_http_json(url)
             from ems.clients import _parse_tasmota_http_power
-            power = _parse_tasmota_http_power(payload, str(grid_meter.get("power_path") or ""))
+            power = _parse_tasmota_http_power(
+                payload, str(grid_meter.get("power_path") or ""), str(grid_meter.get("export_path") or "")
+            )
             _diagnose_record_probe(grid_tracker, start)
             diagnose_add(checks, "hardware", "ok", "tasmota_read_ok", "Tasmota read-only status endpoint returned parseable power", status_code=status, power_w=power)
         except Exception as exc:

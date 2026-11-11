@@ -102,7 +102,7 @@ def test_config_init_asks_for_an_optional_export_path(monkeypatch):
     from ems import config_init
 
     menu = str([choice for choice, _ in config_init.GRID_METER_CHOICES].index("mqtt") + 1)
-    answers = iter([menu, "192.0.2.70", "", "", "zigbee2mqtt/linky", "json", "apparent_power", "injected_v_a", ""])
+    answers = iter([menu, "192.0.2.70", "", "", "zigbee2mqtt/linky", "json", "apparent_power", "injected_v_a", "", ""])
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
     monkeypatch.setattr(config_init.getpass, "getpass", lambda _prompt="": "")
 

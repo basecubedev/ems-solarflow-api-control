@@ -145,6 +145,8 @@ def test_grid_meter_variants_are_exposed_for_setup():
         "sungrow_sh_modbus",
         "carlo_gavazzi_em24_modbus",
         "victron_gx_modbus",
+        "smart_me_modbus",
+        "iammeter_wem3080t_modbus",
         "wibeee_modbus",
         "tibber_pulse_bridge",
         "zendure_smartmeter_d0",
@@ -183,6 +185,8 @@ def test_manual_hardware_variants_are_role_specific():
         "sungrow_sh_modbus",
         "carlo_gavazzi_em24_modbus",
         "victron_gx_modbus",
+        "smart_me_modbus",
+        "iammeter_wem3080t_modbus",
         "wibeee_modbus",
         "tibber_pulse_bridge",
     }

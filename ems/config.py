@@ -609,6 +609,7 @@ MQTT_GRID_METER_KEYS = (
     "payload_format",
     "value_path",
     "export_value_path",
+    "value_scale",
     "max_age_seconds",
     "_mqtt_client_factory",
 )
@@ -1382,6 +1383,17 @@ def resolve_grid_meter_mqtt_settings(config):
     return resolved
 
 
+def mqtt_grid_meter_value_scale(settings):
+    """The factor that turns an MQTT meter's values into W: 1, 1000 for kW, -1 to turn the sign."""
+
+    scale = _strict_number(
+        settings.get("value_scale"), "grid_meter.mqtt.value_scale", default=1.0, minimum=-1e6, maximum=1e6, integer=False
+    )
+    if scale == 0:
+        raise ValueError("grid_meter.mqtt.value_scale must not be 0")
+    return scale
+
+
 def normalize_mqtt_grid_meter_settings(grid_meter, *, meter_type=None):
     meter_type = str(
         meter_type
@@ -1454,6 +1466,10 @@ def normalize_mqtt_grid_meter_settings(grid_meter, *, meter_type=None):
         1,
         safe_int(settings.get("max_age_seconds", 15), 15, minimum=1),
     )
+    if meter_type == ZENDURE_SMARTMETER_D0_GRID_METER_TYPE:
+        settings.pop("value_scale", None)
+    elif "value_scale" in settings:
+        settings["value_scale"] = mqtt_grid_meter_value_scale(settings)
     # TLS mirrors the Zendure MQTT read client: plain by default, insecure only
     # when explicitly enabled.
     settings["tls"] = tls

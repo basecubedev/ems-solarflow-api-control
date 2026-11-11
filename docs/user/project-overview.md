@@ -118,7 +118,8 @@ Supported options include:
 - Tasmota-based meters
 - E3/DC storage systems, read-only over Modbus TCP
 - SunSpec meters over Modbus TCP, such as a Fronius Smart Meter through the inverter or a Kostal Smart Energy Meter
-- Huawei SUN2000 with DTSU666, Sungrow SH, Carlo Gavazzi EM24, Victron GX and Circutor Wibeee, read-only over Modbus TCP
+- Huawei SUN2000 with DTSU666, Sungrow SH, Carlo Gavazzi EM24, Victron GX, smart-me Telstar, IAMMETER WEM3080T and Circutor Wibeee, read-only over Modbus TCP
+- Swiss CH-SMR readers and Austrian or Swiss readers of the encrypted customer interface, over MQTT or Tasmota
 - generic MQTT power meters, among them a Linky through a ZLinky_TIC and Zigbee2MQTT
 
 Support differs by model and connection type. The current compatibility overview is available in [Supported Setups](supported-setups.md).

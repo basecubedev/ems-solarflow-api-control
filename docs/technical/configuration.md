@@ -761,11 +761,11 @@ the physical device is installed or reports values differently. Run
 | Zendure Grid Meter via local HTTP | `zendure_grid_meter_http` | `ip` (opt. `port`) | Internal/discovery generic type. Local REST `/properties/report`, reads `total_power`. Works for both D0 and Smart Meter 3CT. Manual setup offers the concrete 3CT/D0 local-API types below. |
 | Zendure Smart Meter 3CT — Local API | `zendure_smartmeter_3ct_http` | `ip` (opt. `port`) | Local REST `/properties/report`, reads `total_power`. Shares the Zendure local-HTTP reader with the D0 local-API meter. |
 | Zendure Smart Meter D0 — Local API | `zendure_smartmeter_d0_http` | `ip` (opt. `port`) | Local REST `/properties/report`, reads `total_power`. Same shared reader as the 3CT; a distinct type so a D0 is never stored as a 3CT. |
-| Tasmota HTTP / SmartMeter | `tasmota_http` | `ip` or `url`, `power_path` | Uses `Status 10` JSON |
+| Tasmota HTTP / SmartMeter | `tasmota_http` | `ip` or `url`, `power_path` (opt. `export_path`) | Uses `Status 10` JSON; also the decrypting readers for Austrian and Swiss meters |
 | Zendure Smart Meter D0 — Local MQTT | `zendure_smartmeter_d0` | `mqtt.topic` + (`mqtt.broker_ref` or `mqtt.host`) | Optional alternative; D0 preset, numeric payload |
-| Generic MQTT grid meter | `mqtt` | `mqtt.host`, `mqtt.topic`, `mqtt.payload_format` | Numeric or JSON payload; JSON may name a separate export value (`mqtt.export_value_path`), as for a Linky through a ZLinky_TIC. |
+| Generic MQTT grid meter | `mqtt` | `mqtt.host`, `mqtt.topic`, `mqtt.payload_format` | Numeric or JSON payload; JSON may name a separate export value (`mqtt.export_value_path`), as for a Linky through a ZLinky_TIC; `mqtt.value_scale` turns kW into W, as for a Swiss CH-SMR reader. |
 | SunSpec meter via Modbus TCP | `sunspec_modbus` | `ip`, `unit_id` (opt. `port`) | Read-only; the first SunSpec meter model (201 to 204, 211 to 214) at that unit, read once per control cycle. See below. |
-| Huawei, Sungrow, Carlo Gavazzi EM24, Victron GX, Circutor Wibeee | `huawei_sun2000_modbus`, `sungrow_sh_modbus`, `carlo_gavazzi_em24_modbus`, `victron_gx_modbus`, `wibeee_modbus` | `ip` (opt. `port`, `unit_id`) | Read-only; the device's own published register map. See below. |
+| Huawei, Sungrow, Carlo Gavazzi EM24, Victron GX, smart-me, IAMMETER, Circutor Wibeee | `huawei_sun2000_modbus`, `sungrow_sh_modbus`, `carlo_gavazzi_em24_modbus`, `victron_gx_modbus`, `smart_me_modbus`, `iammeter_wem3080t_modbus`, `wibeee_modbus` | `ip` (opt. `port`, `unit_id`) | Read-only; the device's own published register map. See below. |
 | E3/DC storage system via Modbus TCP | `e3dc_modbus` | `ip` (opt. `port`, `unit_id`) | Read-only; grid power at the E3/DC root power meter, read once per control cycle. See below. |
 | Tibber Pulse IR — local bridge (experimental) | `tibber_pulse_bridge` | `ip`, `credentials_ref` (opt. `port`, `node_id`) | The meter's SML telegram from the bridge's local web server; the password stays in the secret store. See below. |
 
@@ -867,6 +867,9 @@ Example: everHome EcoTracker:
 The EMS reads `https://<ip>/api/measurement`, HomeWizard's documented local API
 v2, and uses `power_w`: the sum of all phases, positive while importing and
 negative while exporting. API v1 is not used; HomeWizard is phasing it out.
+The P1 Meter also reads the P1 or customer interface of meters in Austria,
+Switzerland, Sweden and Luxembourg; where the grid operator encrypts it, the
+operator's key goes into the HomeWizard app, never into the EMS.
 
 **Pairing.** API v2 answers only with a token the meter hands out after its
 button was pressed. Pair the meter once: in the Admin Console, choose the meter
@@ -1054,8 +1057,22 @@ selected transport.
 With `grid_meter.ip`, the default endpoint is
 `http://<ip>/cm?cmnd=Status%2010`. Alternatively, set `grid_meter.url` to an
 explicit endpoint. `grid_meter.power_path` is always required and must contain
-the dot-separated path to the current power value. The keys depend on the
-active Tasmota meter script, so the EMS does not guess them.
+the dot-separated path to the current power value, or a JSON Pointer starting
+with `/` for a key that contains dots. The keys depend on the active Tasmota
+meter script, so the EMS does not guess them. A script that reports import and
+export apart names the export with `grid_meter.export_path`; the EMS subtracts
+it, so export reads negative. Both values must be in W: Tasmota's meter script
+scales a value in kW by its divisor.
+
+**Austria and Switzerland.** Smart meters there have a customer interface.
+Austrian grid operators encrypt it and hand the customer the key on request
+(for example in the Wiener Netze Smart Meter portal or by form from Netz NÖ);
+Swiss ones may run it encrypted or not. A Tasmota reader with the SML driver decrypts it when the key is in its
+meter script (`=so4,<key>`); Tasmota's documentation ships scripts for the
+Iskra AM550 and Siemens IM350/IM351 (Wiener Netze, Wels Strom) and the
+Landis+Gyr E450 (Switzerland), and the gPlugM for the E450/E570 runs Tasmota.
+The key stays in the reader; the EMS reads its Status 10 JSON as from any
+Tasmota reader. Nothing here is confirmed on hardware.
 
 Example: Tasmota SML using the default endpoint:
 
@@ -1077,6 +1094,20 @@ Example: Tasmota with an explicit URL and OBIS-style key:
     "type": "tasmota_http",
     "url": "http://192.0.2.70/cm?cmnd=Status%2010",
     "power_path": "StatusSNS.SM.16_7_0"
+  }
+}
+```
+
+Example: an Austrian Tasmota reader that reports import (`1_7_0`) and export
+(`2_7_0`) apart, in W:
+
+```json
+{
+  "grid_meter": {
+    "type": "tasmota_http",
+    "ip": "192.0.2.71",
+    "power_path": "StatusSNS.SM.1_7_0",
+    "export_path": "StatusSNS.SM.2_7_0"
   }
 }
 ```
@@ -1210,16 +1241,52 @@ Example: Generic MQTT JSON payload:
 
 For a numeric payload, use `"payload_format": "number"` and omit `value_path`.
 
+A path can also be a JSON Pointer starting with `/`, for a key that contains
+dots, such as `/meter/1.7.0`; in a pointer a number indexes into a list. `grid_meter.mqtt.value_scale` multiplies the
+values into W: 1 (the default) for W, 1000 for kW, -1 for a meter that counts
+export as positive.
+
 A JSON payload that carries export as a positive value of its own takes
 `grid_meter.mqtt.export_value_path` as well: the EMS subtracts that value from
 the `value_path` one. Until a message has carried the export value once, a
 message without it fails the reading, so a mistyped path shows up at once;
 after that, a message without it counts as no export.
 
-#### An ESPHome P1 reader such as a SlimmeLezer
+#### A Swiss smart meter reader in the CH-SMR format
 
-An ESPHome node with the `dsmr` component reports power drawn and power fed in
-as two sensors in kW. Add a template sensor on the node that publishes the grid
+Swiss smart meter readers that follow the VSE recommendation *CH-SMR* (chapter
+6, approved June 2025) publish the meter's values as one JSON message on
+`dt/<group>/<id_ims>/ds`, with power drawn (`1.7.0`) and fed in (`2.7.0`) in
+kW. The keys contain dots, so the paths are JSON Pointers; the scale turns kW
+into W. A reader can report no faster than the meter's interface, which the
+recommendation asks for at least every 10 s and every 5 s where possible, the
+slow end for regulation. Which readers already send CH-SMR is not confirmed.
+
+```json
+{
+  "grid_meter": {
+    "type": "mqtt",
+    "mqtt": {
+      "host": "192.0.2.10",
+      "topic": "dt/home/12345678/ds",
+      "payload_format": "json",
+      "value_path": "/meter/1.7.0",
+      "export_value_path": "/meter/2.7.0",
+      "value_scale": 1000,
+      "max_age_seconds": 30
+    }
+  }
+}
+```
+
+#### An ESPHome P1 or DLMS reader
+
+An ESPHome node with the `dsmr` component (a P1 reader such as a SlimmeLezer)
+reports power drawn and power fed in as two sensors in kW. For the encrypted
+customer interface of Austrian and Swiss meters, ESPHome's `dlms_meter`
+component decrypts with the grid operator's key on the node and reports the
+OBIS codes `1.0.1.7.0.255` and `1.0.2.7.0.255` in W; build the same template
+sensor from those (without the `* 1000`). Add a template sensor on the node that publishes the grid
 power in W, and read its MQTT state topic as a plain number:
 
 ```yaml
@@ -1326,7 +1393,7 @@ Example: Fronius Smart Meter through the Fronius inverter (`port` defaults to
 
 ### Modbus TCP meters with a published register map
 
-Five devices publish where they keep the grid power in a Modbus document of
+Seven devices publish where they keep the grid power in a Modbus document of
 their own. The EMS reads each by a fixed profile, once per control cycle and in
 one request, over one connection that it opens again after a failure. It only
 ever reads. Each needs `grid_meter.ip`; `port` and `unit_id` default to the
@@ -1338,6 +1405,8 @@ device's own values.
 | `sungrow_sh_modbus` | Sungrow SH hybrid inverter with the smart meter wired to it | port 502, unit 1 | Input register 5601 (S32, W, low word first), positive when buying from the grid. |
 | `carlo_gavazzi_em24_modbus` | Carlo Gavazzi EM24 with Ethernet (EM24-E1) | port 502, unit 1 | Register 0x0028 (INT32, W×10, low word first), imported power positive. |
 | `victron_gx_modbus` | Victron GX device (Cerbo GX, Venus OS) | port 502, unit 100 | Registers 820 to 822 (int16, W), the grid power of each phase, added up. |
+| `smart_me_modbus` | smart-me Telstar or Telstar CT | port 502, unit 1 | Register 0x2004 *Active Power Total* at Modbus address 0x2003 (int32 big-endian, mW). |
+| `iammeter_wem3080t_modbus` | IAMMETER WEM3080T three-phase meter | port 502, unit 1 | Address 32 (int32, high word first, W), the total active power. |
 | `wibeee_modbus` | Circutor Wibeee | port 502, unit 1 | Register 6 (S32, W, low word first), the total active power. |
 
 What each device needs first:
@@ -1346,12 +1415,18 @@ What each device needs first:
   SDongle the port is 502; on the inverter's own access point it is 6607. The
   SDongle is known to serve one Modbus client at a time.
 - **Sungrow:** the value is valid only when the meter is wired to the
-  inverter. Sungrow asks for at least one second between requests, which the
-  control loop's interval keeps.
+  inverter. Sungrow asks for at least one second between requests; the EMS asks
+  no sooner than 0.75 s, allowing for the control loop's jitter.
 - **Victron:** switch Modbus TCP on in the GX settings. Only useful where the GX
   already reads the grid meter.
 - **Wibeee:** set *Data Refresh Time* to `-1` in the device's web settings;
   Wibeee's document does not say which direction its sign counts, so check it.
+- **smart-me:** smart-me asks for at most one request every 2 seconds; the EMS
+  asks about that often, no sooner than 1.75 s to allow for the control loop's
+  jitter, and a control cycle in between gets the last reading. Its
+  sheet does not say which direction counts positive, so check it.
+- **IAMMETER:** it measures with current clamps; the sign follows how they
+  face, so check it. Only the three-phase WEM3080T has a documented total.
 
 None of these is confirmed on hardware. Check the sign once while the PV
 exports, in the dashboard or with `python3 emsctl.py diagnose --hardware`,

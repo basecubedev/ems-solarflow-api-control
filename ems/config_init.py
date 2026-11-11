@@ -404,7 +404,8 @@ def ask_grid_meter(
                 )
             mqtt_settings["topic"] = topic
             payload_format = "number"
-            mqtt_settings.pop("value_path", None)
+            for key in ("value_path", "export_value_path", "value_scale"):
+                mqtt_settings.pop(key, None)
         else:
             mqtt_settings["topic"] = ask_text(
                 "MQTT power topic",
@@ -446,6 +447,22 @@ def ask_grid_meter(
             else:
                 mqtt_settings.pop("value_path", None)
                 mqtt_settings.pop("export_value_path", None)
+            while True:
+                scale = ask_text(
+                    "MQTT value scale to W (1 for W, 1000 for kW, -1 to turn the sign)",
+                    str(mqtt_settings.get("value_scale") or 1),
+                    required=True,
+                    noninteractive=noninteractive,
+                )
+                try:
+                    mqtt_settings["value_scale"] = config_mod.mqtt_grid_meter_value_scale({"value_scale": scale})
+                    break
+                except ValueError as exc:
+                    if noninteractive:
+                        raise ConfigInitError(str(exc)) from exc
+                    print(f"{exc}; please enter another value.")
+            if mqtt_settings["value_scale"] == 1:
+                mqtt_settings.pop("value_scale")
         mqtt_settings["payload_format"] = payload_format
         mqtt_settings["max_age_seconds"] = ask_int(
             "MQTT max value age in seconds",
@@ -458,6 +475,7 @@ def ask_grid_meter(
             "ip",
             "url",
             "power_path",
+            "export_path",
             "channels",
             "host",
             "port",
@@ -497,6 +515,7 @@ def ask_grid_meter(
         for key in (
             "url",
             "power_path",
+            "export_path",
             "channels",
             "host",
             "username",
@@ -552,6 +571,7 @@ def ask_grid_meter(
         for key in (
             "url",
             "power_path",
+            "export_path",
             "channels",
             "host",
             "username",
@@ -696,6 +716,16 @@ def ask_grid_meter(
             noninteractive=noninteractive,
             allow_placeholder_default=allow_placeholder_defaults,
         )
+        export_path = ask_text(
+            "Tasmota export power path (optional, subtracted)",
+            result.get("export_path") or "",
+            noninteractive=noninteractive,
+            allow_placeholder_default=allow_placeholder_defaults,
+        )
+        if export_path:
+            result["export_path"] = export_path
+        else:
+            result.pop("export_path", None)
         for key in (
             "host",
             "port",
@@ -722,6 +752,7 @@ def ask_grid_meter(
         )
         result.pop("url", None)
         result.pop("power_path", None)
+        result.pop("export_path", None)
         for key in (
             "host",
             "port",

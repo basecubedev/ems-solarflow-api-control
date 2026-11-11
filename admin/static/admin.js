@@ -7199,6 +7199,8 @@ const GRID_METER_TYPE_CHOICES = new Set([
   "sungrow_sh_modbus",
   "carlo_gavazzi_em24_modbus",
   "victron_gx_modbus",
+  "smart_me_modbus",
+  "iammeter_wem3080t_modbus",
   "wibeee_modbus",
   "tibber_pulse_bridge",
   "zendure_smartmeter_d0",

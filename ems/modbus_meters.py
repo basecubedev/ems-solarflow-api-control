@@ -5,16 +5,21 @@
 A profile names where one device keeps its grid power: the function code, the
 registers (added up where a device gives the phases only), their type and word
 order, a scale, and whether the device counts export as positive. A profile
-with a status register is refused while the device reports its meter offline.
+with a status register is refused while the device reports its meter offline,
+and one with a minimum interval is not asked again sooner than its device
+allows, give or take the control loop's own jitter; a cycle in between gets
+the last reading, as an MQTT meter's cycles do.
 The register maps are those of the manufacturers' Modbus documents; every
 request is a read, and the client underneath cannot send anything else.
 """
 
+import time
 from dataclasses import dataclass
 
 from ems.e3dc_modbus import READ_HOLDING_REGISTERS, READ_INPUT_REGISTERS, ReadOnlyModbusTcpClient
 
 MODBUS_TCP_PORT = 502
+MIN_INTERVAL_SLACK_S = 0.25
 
 
 class ModbusMeterError(ValueError):
@@ -34,6 +39,7 @@ class MeterProfile:
     export_positive: bool = False
     status: tuple | None = None
     port: int = MODBUS_TCP_PORT
+    min_interval_s: float = 0.0
 
 
 PROFILES = (
@@ -55,6 +61,7 @@ PROFILES = (
         registers=(5600,),
         datatype="int32",
         low_word_first=True,
+        min_interval_s=1.0,
     ),
     MeterProfile(
         "carlo_gavazzi_em24_modbus",
@@ -73,6 +80,24 @@ PROFILES = (
         function_code=READ_HOLDING_REGISTERS,
         registers=(820, 821, 822),
         datatype="int16",
+    ),
+    MeterProfile(
+        "smart_me_modbus",
+        "smart-me Telstar",
+        unit_id=1,
+        function_code=READ_HOLDING_REGISTERS,
+        registers=(0x2003,),
+        datatype="int32",
+        scale=0.001,
+        min_interval_s=2.0,
+    ),
+    MeterProfile(
+        "iammeter_wem3080t_modbus",
+        "IAMMETER WEM3080T",
+        unit_id=1,
+        function_code=READ_HOLDING_REGISTERS,
+        registers=(32,),
+        datatype="int32",
     ),
     MeterProfile(
         "wibeee_modbus",
@@ -151,7 +176,7 @@ class ModbusTcpMeter:
 class ProfileMeter(ModbusTcpMeter):
     """A meter read by its device's profile."""
 
-    def __init__(self, host, profile, port=None, unit_id=None, **kwargs):
+    def __init__(self, host, profile, port=None, unit_id=None, *, clock=time.monotonic, **kwargs):
         super().__init__(
             host,
             profile.port if port is None else port,
@@ -159,6 +184,16 @@ class ProfileMeter(ModbusTcpMeter):
             **kwargs,
         )
         self.profile = profile
+        self._clock = clock
+        self._last = None
+
+    def read_power(self):
+        now = self._clock()
+        if self._last is not None and now - self._last[0] < self.profile.min_interval_s - MIN_INTERVAL_SLACK_S:
+            return self._last[1]
+        power = super().read_power()
+        self._last = (now, power)
+        return power
 
     def _read(self, client):
         return read_profile_power(client, self.profile)

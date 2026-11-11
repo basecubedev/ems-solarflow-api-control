@@ -3,6 +3,7 @@
 import logging
 import json
 import math
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -968,9 +969,10 @@ class TasmotaHttpClient:
 
     provider = "Tasmota"
 
-    def __init__(self, url, power_path, session):
+    def __init__(self, url, power_path, session, export_path=""):
         self.url = url
         self.power_path = power_path
+        self.export_path = export_path
         self.session = session
         self.last_value = 0
         self.health = CommHealth(self.provider, kind="read")
@@ -986,7 +988,7 @@ class TasmotaHttpClient:
             )
 
             self.last_value = round(
-                _parse_tasmota_http_power(r.json(), self.power_path),
+                _parse_tasmota_http_power(r.json(), self.power_path, self.export_path),
                 1
             )
             self.health.record_success((time.monotonic() - start) * 1000.0)
@@ -1083,6 +1085,7 @@ class MqttGridMeterClient:
         payload_format="number",
         value_path="",
         export_value_path="",
+        value_scale=1.0,
         max_age_seconds=15,
         tls=False,
         tls_insecure=False,
@@ -1098,6 +1101,7 @@ class MqttGridMeterClient:
         self.payload_format = str(payload_format or "number").strip().lower()
         self.value_path = str(value_path or "").strip()
         self.export_value_path = str(export_value_path or "").strip()
+        self.value_scale = float(value_scale)
         self._export_seen = False
         self.max_age_seconds = max(1, int(max_age_seconds))
         self.tls = bool(tls)
@@ -1203,6 +1207,7 @@ class MqttGridMeterClient:
                 value_path=self.value_path,
                 export_value_path=self.export_value_path,
                 missing_export_is_zero=self._export_seen,
+                value_scale=self.value_scale,
             )
             self._export_seen = bool(self.export_value_path)
         except Exception as exc:
@@ -1556,7 +1561,9 @@ def create_grid_meter_client(
                 raise ValueError("Tasmota HTTP grid meter requires url or ip")
             url = f"http://{ip}/cm?cmnd=Status%2010"
 
-        return TasmotaHttpClient(url, power_path.strip(), session)
+        export_path = config.get("export_path")
+        export_path = export_path.strip() if isinstance(export_path, str) else ""
+        return TasmotaHttpClient(url, power_path.strip(), session, export_path=export_path)
 
     if meter_type in cfg.MQTT_GRID_METER_TYPES:
         mqtt_config = cfg.grid_meter_mqtt_settings(config)
@@ -1601,6 +1608,11 @@ def create_grid_meter_client(
             payload_format=mqtt_config.get("payload_format") or "number",
             value_path=mqtt_config.get("value_path") or "",
             export_value_path=mqtt_config.get("export_value_path") or "",
+            value_scale=(
+                1.0
+                if meter_type == cfg.ZENDURE_SMARTMETER_D0_GRID_METER_TYPE
+                else cfg.mqtt_grid_meter_value_scale(mqtt_config)
+            ),
             max_age_seconds=mqtt_config.get("max_age_seconds") or 15,
             tls=tls,
             tls_insecure=tls_insecure,
@@ -1847,14 +1859,29 @@ def _parse_powerfox_value(data):
     return power, timestamp if _is_numeric(timestamp) else None
 
 
+_POINTER_INDEX = re.compile(r"0|[1-9][0-9]*")
+
+
 def _get_json_path(data, path):
-    """Return nested JSON value from a dot-separated object path."""
+    """Return a nested JSON value from a dot-separated object path.
+
+    A path that starts with ``/`` is a JSON Pointer (RFC 6901) instead, for a
+    key that itself contains dots, such as the OBIS code ``1.7.0``; a number
+    in it indexes into a list.
+    """
 
     if not isinstance(path, str) or not path.strip():
         raise ValueError("JSON path must be a non-empty string")
 
+    if path.startswith("/"):
+        parts = [part.replace("~1", "/").replace("~0", "~") for part in path[1:].split("/")]
+    else:
+        parts = path.split(".")
     value = data
-    for part in path.split("."):
+    for part in parts:
+        if isinstance(value, list) and path.startswith("/") and _POINTER_INDEX.fullmatch(part) and int(part) < len(value):
+            value = value[int(part)]
+            continue
         if not isinstance(value, dict) or part not in value:
             raise ValueError(f"Missing JSON path: {path}")
         value = value[part]
@@ -1862,17 +1889,25 @@ def _get_json_path(data, path):
     return value
 
 
-def _parse_tasmota_http_power(data, power_path):
-    """Extract grid power from a Tasmota HTTP JSON payload."""
+def _parse_tasmota_http_power(data, power_path, export_path=""):
+    """Extract grid power from a Tasmota HTTP JSON payload.
+
+    A reader that reports import and export apart names the export with
+    ``export_path``; its value is subtracted.
+    """
 
     if not isinstance(data, dict):
         raise ValueError("Unsupported Tasmota payload: expected object")
 
-    value = _get_json_path(data, power_path)
-    if _is_numeric(value):
-        return float(value)
-
-    raise ValueError(f"Tasmota power path is not numeric: {power_path}")
+    power = 0.0
+    for path, sign in ((power_path, 1.0), (export_path, -1.0)):
+        if sign < 0 and not path:
+            continue
+        value = _get_json_path(data, path)
+        if not _is_numeric(value):
+            raise ValueError(f"Tasmota power path is not numeric: {path}")
+        power += sign * float(value)
+    return power
 
 
 def _parse_zendure_grid_meter_http_power(data):
@@ -1927,12 +1962,14 @@ def _parse_mqtt_grid_power_payload(
     value_path="",
     export_value_path="",
     missing_export_is_zero=False,
+    value_scale=1.0,
 ):
     """Extract grid power from an MQTT payload.
 
     A JSON payload may carry export as a separate, positive value, which is
     then subtracted. A payload without it is refused, unless the caller has
-    seen it before and lets it count as zero.
+    seen it before and lets it count as zero. The result is multiplied by
+    ``value_scale``, 1000 for a meter that reports kW.
     """
 
     if isinstance(payload, bytes):
@@ -1942,7 +1979,7 @@ def _parse_mqtt_grid_power_payload(
 
     payload_format = str(payload_format or "number").strip().lower()
     if payload_format in ("number", "numeric", "plain", "text"):
-        return _parse_mqtt_number_value(text)
+        return _parse_mqtt_number_value(text) * value_scale
 
     if payload_format == "json":
         data = json.loads(text)
@@ -1956,7 +1993,7 @@ def _parse_mqtt_grid_power_payload(
                     raise ValueError(f"the message has carried no export value at {export_value_path} yet") from None
                 exported = 0
             power -= _parse_mqtt_number_value(exported)
-        return power
+        return power * value_scale
 
     raise ValueError(f"Unsupported MQTT payload_format: {payload_format}")
 

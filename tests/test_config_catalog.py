@@ -82,6 +82,8 @@ def test_catalog_contains_all_supported_grid_meter_variants():
         "sungrow_sh_modbus",
         "carlo_gavazzi_em24_modbus",
         "victron_gx_modbus",
+        "smart_me_modbus",
+        "iammeter_wem3080t_modbus",
         "wibeee_modbus",
         "tibber_pulse_bridge",
         "zendure_smartmeter_d0",
@@ -167,7 +169,7 @@ def test_grid_meter_variant_field_spec_matches_v070_catalog():
         frozenset({"type", "ip", "port"})
     )
     assert grid_meter_variant_field_spec("tasmota_http")["keys"] == frozenset(
-        {"type", "ip", "port", "url", "power_path"}
+        {"type", "ip", "port", "url", "power_path", "export_path"}
     )
     assert grid_meter_variant_field_spec("shelly")["keys"] == frozenset(
         {"type", "ip", "port", "channels"}
@@ -202,6 +204,7 @@ def test_grid_meter_variant_field_spec_matches_v070_catalog():
             "channels",
             "url",
             "power_path",
+            "export_path",
             "mqtt",
             "unit_id",
             "serial",

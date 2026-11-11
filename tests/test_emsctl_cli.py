@@ -999,6 +999,8 @@ def test_config_init_grid_meter_choices_are_runtime_supported():
         "sungrow_sh_modbus",
         "carlo_gavazzi_em24_modbus",
         "victron_gx_modbus",
+        "smart_me_modbus",
+        "iammeter_wem3080t_modbus",
         "wibeee_modbus",
         "tibber_pulse_bridge",
         # Backward-compatible local-HTTP aliases accepted from existing configs;
@@ -1051,6 +1053,7 @@ def test_config_init_generic_mqtt_keeps_advanced_payload_flow(monkeypatch):
         "json",
         "power.total",
         "",
+        "",
         "10",
     ])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
@@ -1078,7 +1081,7 @@ def test_config_init_mqtt_password_prompt_keeps_default_without_exposing_it(
     capsys,
 ):
     password = "super-secret-mqtt-password"
-    responses = iter(["", "", "", "", "", "", ""])
+    responses = iter(["", "", "", "", "", "", "", ""])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
 
     def press_enter(prompt):
@@ -1110,7 +1113,7 @@ def test_config_init_mqtt_new_password_is_stored_without_being_printed(
     capsys,
 ):
     password = "new-super-secret-mqtt-password"
-    responses = iter([_menu_number("mqtt"), "mqtt.local", "", "", "meter/grid", "", ""])
+    responses = iter([_menu_number("mqtt"), "mqtt.local", "", "", "meter/grid", "", "", ""])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
     monkeypatch.setattr(
         config_init_mod.getpass,

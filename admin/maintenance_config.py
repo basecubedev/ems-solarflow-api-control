@@ -900,6 +900,8 @@ def _grid_meter_draft(grid_meter):
         draft["url"] = str(grid_meter.get("url")).strip()
     if grid_meter.get("power_path"):
         draft["power_path"] = str(grid_meter.get("power_path")).strip()
+    if grid_meter.get("export_path"):
+        draft["export_path"] = str(grid_meter.get("export_path")).strip()
     channels = grid_meter.get("channels")
     if isinstance(channels, list):
         draft["channels"] = [str(item) for item in channels]
@@ -2215,7 +2217,7 @@ def _coerce_number(value):
 _GRID_METER_MODBUS_KEYS = ("unit_id",)
 _GRID_METER_BRIDGE_KEYS = TIBBER_PULSE_BRIDGE_KEYS
 _GRID_METER_DRAFT_KEYS = (
-    "type", "ip", "port", "url", "power_path", "channels", *_GRID_METER_MODBUS_KEYS,
+    "type", "ip", "port", "url", "power_path", "export_path", "channels", *_GRID_METER_MODBUS_KEYS,
     *HOMEWIZARD_P1_PAIRING_KEYS, *_GRID_METER_BRIDGE_KEYS,
 )
 _GRID_METER_OPTIONAL_NUMBER_KEYS = frozenset({"port", "node_id", *_GRID_METER_MODBUS_KEYS})
