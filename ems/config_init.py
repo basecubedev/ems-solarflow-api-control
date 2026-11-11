@@ -44,6 +44,10 @@ GRID_METER_CHOICES = (
         config_mod.E3DC_MODBUS_GRID_METER_TYPE,
         "E3/DC storage system via Modbus TCP (read-only)",
     ),
+    (
+        config_mod.SUNSPEC_MODBUS_GRID_METER_TYPE,
+        "SunSpec meter via Modbus TCP (Fronius, Kostal; read-only)",
+    ),
 )
 # Backward-compatible grid-meter types accepted from an existing config but not
 # offered as a new interactive menu choice. The 3CT and D0 HTTP types share the
@@ -557,6 +561,33 @@ def ask_grid_meter(
             config_mod.powerfox_grid_meter_settings(result)
         except ValueError as exc:
             raise ConfigInitError(str(exc)) from exc
+    elif meter_type == config_mod.SUNSPEC_MODBUS_GRID_METER_TYPE:
+        result["ip"] = ask_text(
+            "SunSpec device IP address",
+            result.get("ip") or "",
+            required=True,
+            noninteractive=noninteractive,
+            allow_placeholder_default=allow_placeholder_defaults,
+        )
+        result["port"] = ask_int(
+            "SunSpec Modbus TCP port",
+            _whole_number_text(result.get("port"), config_mod.E3DC_MODBUS_DEFAULT_PORT),
+            minimum=1,
+            maximum=65535,
+            noninteractive=noninteractive,
+        )
+        result["unit_id"] = ask_int(
+            "SunSpec meter unit ID (Fronius inverter: 200)",
+            _whole_number_text(result.get("unit_id"), config_mod.E3DC_MODBUS_DEFAULT_UNIT_ID),
+            minimum=0,
+            maximum=255,
+            noninteractive=noninteractive,
+        )
+        _keep_variant_keys(result, meter_type)
+        try:
+            config_mod.sunspec_modbus_grid_meter_settings(result)
+        except ValueError as exc:
+            raise ConfigInitError(str(exc)) from exc
     elif meter_type == config_mod.DSMR_P1_TCP_GRID_METER_TYPE:
         result["ip"] = ask_text(
             "P1 bridge IP address",
@@ -947,11 +978,12 @@ def _meter_summary(grid_meter):
         return f"powerfox poweropti at {grid_meter.get('ip') or '(not set)'}, {key}"
     if meter_type == config_mod.DSMR_P1_TCP_GRID_METER_TYPE:
         return f"DSMR P1 bridge at {grid_meter.get('ip') or '(not set)'}:{grid_meter.get('port') or '(no port)'}"
-    if meter_type == config_mod.E3DC_MODBUS_GRID_METER_TYPE:
+    if meter_type in (config_mod.E3DC_MODBUS_GRID_METER_TYPE, config_mod.SUNSPEC_MODBUS_GRID_METER_TYPE):
         port = grid_meter.get("port") or config_mod.E3DC_MODBUS_DEFAULT_PORT
         unit_id = grid_meter.get("unit_id", config_mod.E3DC_MODBUS_DEFAULT_UNIT_ID)
+        label = "E3/DC" if meter_type == config_mod.E3DC_MODBUS_GRID_METER_TYPE else "SunSpec meter"
         return (
-            f"E3/DC Modbus TCP at {grid_meter.get('ip') or '(not set)'}:{port} "
+            f"{label} Modbus TCP at {grid_meter.get('ip') or '(not set)'}:{port} "
             f"unit {unit_id}"
         )
     label = {

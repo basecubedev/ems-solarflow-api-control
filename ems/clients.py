@@ -1329,6 +1329,51 @@ class E3dcModbusGridMeterClient:
             self.session.close()
 
 
+class SunSpecMeterClient:
+    """Grid power from a SunSpec meter model over Modbus TCP, read once per control cycle.
+
+    The power is taken as the meter reports it, positive when drawn from the
+    grid. There is deliberately no write method.
+    """
+
+    provider = "SunSpec meter"
+    transport = "modbus_tcp"
+
+    def __init__(self, meter):
+        self.meter = meter
+        self.last_value = 0
+        self.health = CommHealth(self.provider, kind="read")
+
+    @property
+    def endpoint(self):
+        return self.meter.endpoint
+
+    def get_power(self):
+        """Return this cycle's grid power, or the last good value on failure."""
+
+        start = time.monotonic()
+        try:
+            self.last_value = self.meter.read_power()
+            self.health.record_success((time.monotonic() - start) * 1000.0)
+        except Exception as e:
+            self.health.record_failure(
+                error=e,
+                latency_ms=(time.monotonic() - start) * 1000.0,
+                stale_used=True,
+            )
+            log_event(
+                logging.WARNING,
+                "sunspec_meter_read_error",
+                endpoint=self.endpoint,
+                error=e,
+                stale_value=self.last_value,
+            )
+        return self.last_value
+
+    def close(self):
+        self.meter.close()
+
+
 def close_grid_meter_client(client):
     """Idempotently release a grid-meter client's runtime resources.
 
@@ -1396,6 +1441,14 @@ def create_grid_meter_client(
     if meter_type == cfg.POWERFOX_GRID_METER_TYPE:
         settings = cfg.powerfox_grid_meter_settings(config)
         return PowerfoxClient(settings["host"], session, settings["token"], port=settings["port"])
+
+    if meter_type == cfg.SUNSPEC_MODBUS_GRID_METER_TYPE:
+        from ems.sunspec import SunSpecMeter
+
+        settings = cfg.sunspec_modbus_grid_meter_settings(config)
+        return SunSpecMeterClient(
+            SunSpecMeter(settings["host"], port=settings["port"], unit_id=settings["unit_id"])
+        )
 
     if meter_type == cfg.DSMR_P1_TCP_GRID_METER_TYPE:
         from ems.dsmr import DsmrTcpReader

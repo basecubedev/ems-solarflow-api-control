@@ -215,6 +215,7 @@ E3DC_MODBUS_GRID_METER_TYPE = E3DC_MODBUS_DEVICE_TYPE
 HOMEWIZARD_P1_GRID_METER_TYPE = "homewizard_p1"
 POWERFOX_GRID_METER_TYPE = "powerfox_poweropti"
 DSMR_P1_TCP_GRID_METER_TYPE = "dsmr_p1_tcp"
+SUNSPEC_MODBUS_GRID_METER_TYPE = "sunspec_modbus"
 
 # Single source of truth mapping a grid-meter ``type`` to a user-facing hardware
 # model name and a transport label. Diagnostics and status surfaces read this so
@@ -230,6 +231,7 @@ GRID_METER_MODEL_TRANSPORTS = {
     HOMEWIZARD_P1_GRID_METER_TYPE: ("HomeWizard P1 Meter", _LOCAL_HTTP_TRANSPORT),
     POWERFOX_GRID_METER_TYPE: ("powerfox poweropti", _LOCAL_HTTP_TRANSPORT),
     DSMR_P1_TCP_GRID_METER_TYPE: ("DSMR P1 meter via a TCP bridge", "TCP"),
+    SUNSPEC_MODBUS_GRID_METER_TYPE: ("SunSpec meter", _MODBUS_TCP_TRANSPORT),
     "tasmota_http": ("Tasmota HTTP reader", _LOCAL_HTTP_TRANSPORT),
     ZENDURE_GRID_METER_HTTP_GRID_METER_TYPE: ("Zendure grid meter", _LOCAL_HTTP_TRANSPORT),
     ZENDURE_SMARTMETER_3CT_HTTP_GRID_METER_TYPE: (
@@ -281,7 +283,7 @@ def _strict_number(value, field, *, default, minimum, maximum=None, integer=True
     return number
 
 
-def _e3dc_modbus_connection(entry, prefix, owner):
+def _modbus_tcp_connection(entry, prefix, owner):
     host = str(entry.get("ip") or "").strip()
     if not host:
         raise ValueError(f"{owner} requires {prefix}ip")
@@ -313,7 +315,7 @@ def e3dc_modbus_grid_meter_settings(grid_meter):
     """
 
     grid_meter = grid_meter if isinstance(grid_meter, dict) else {}
-    return _e3dc_modbus_connection(grid_meter, "grid_meter.", "E3/DC Modbus grid meter")
+    return _modbus_tcp_connection(grid_meter, "grid_meter.", "E3/DC Modbus grid meter")
 
 
 def e3dc_modbus_device_settings(device):
@@ -323,7 +325,7 @@ def e3dc_modbus_device_settings(device):
     name = str(device.get("name") or "").strip()
     if not name:
         raise ValueError("E3/DC Modbus device requires a name")
-    settings = _e3dc_modbus_connection(device, "", f"E3/DC Modbus device {name}")
+    settings = _modbus_tcp_connection(device, "", f"E3/DC Modbus device {name}")
     settings["name"] = name
     return settings
 
@@ -434,9 +436,17 @@ def dsmr_p1_tcp_grid_meter_settings(grid_meter):
     return {"host": host, "port": port}
 
 
+def sunspec_modbus_grid_meter_settings(grid_meter):
+    """Validate a ``sunspec_modbus`` grid-meter block into connection settings."""
+
+    grid_meter = grid_meter if isinstance(grid_meter, dict) else {}
+    return _modbus_tcp_connection(grid_meter, "grid_meter.", "SunSpec Modbus grid meter")
+
+
 GRID_METER_READER_SETTINGS = {
     POWERFOX_GRID_METER_TYPE: powerfox_grid_meter_settings,
     DSMR_P1_TCP_GRID_METER_TYPE: dsmr_p1_tcp_grid_meter_settings,
+    SUNSPEC_MODBUS_GRID_METER_TYPE: sunspec_modbus_grid_meter_settings,
 }
 
 

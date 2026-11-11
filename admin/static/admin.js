@@ -7194,6 +7194,7 @@ const GRID_METER_TYPE_CHOICES = new Set([
   "zendure_smartmeter_d0_http",
   "tasmota_http",
   "e3dc_modbus",
+  "sunspec_modbus",
   "zendure_smartmeter_d0",
   "mqtt",
 ]);

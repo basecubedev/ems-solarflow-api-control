@@ -151,3 +151,15 @@ def test_the_setup_preview_keeps_the_port_typed_for_a_p1_bridge(port):
     assert result["ready"] is True, result["validation"]
     assert result["config"]["grid_meter"] == {"type": "dsmr_p1_tcp", "ip": "192.168.1.80", "port": 23}
 
+
+# --- SunSpec over Modbus TCP ---------------------------------------------------------
+
+
+def test_maintenance_saves_a_sunspec_meter_and_refuses_a_unit_id_modbus_cannot_address(tmp_path):
+    _write_config(tmp_path, {"type": "e3dc_modbus", "ip": "192.168.1.90", "unit_id": 1})
+
+    saved = _saved_meter(_apply(tmp_path, lambda grid: grid.update(type="sunspec_modbus", unit_id=200)))
+    assert saved == {"type": "sunspec_modbus", "ip": "192.168.1.90", "unit_id": 200}
+
+    refused = _apply(tmp_path, lambda grid: grid.update(type="sunspec_modbus", unit_id=300))
+    assert refused["status"] != "ok"

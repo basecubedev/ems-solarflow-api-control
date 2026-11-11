@@ -54,6 +54,7 @@ body:
         - HomeWizard P1 (local API v2)
         - powerfox poweropti (local API)
         - DSMR P1 over TCP (P1 bridge)
+        - SunSpec meter over Modbus TCP
         - Tasmota HTTP
         - Other
     validations:

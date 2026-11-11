@@ -77,6 +77,7 @@ def test_catalog_contains_all_supported_grid_meter_variants():
         "zendure_smartmeter_d0_http",
         "tasmota_http",
         "e3dc_modbus",
+        "sunspec_modbus",
         "zendure_smartmeter_d0",
         "mqtt",
     }
@@ -175,6 +176,7 @@ def test_grid_meter_variant_field_spec_matches_v070_catalog():
         {"type", "ip", "port", "token"}
     )
     assert grid_meter_variant_field_spec("dsmr_p1_tcp")["keys"] == frozenset({"type", "ip", "port"})
+    assert grid_meter_variant_field_spec("sunspec_modbus")["keys"] == frozenset({"type", "ip", "port", "unit_id"})
     # MQTT variants carry only the mqtt block; D0 excludes value_path.
     d0 = grid_meter_variant_field_spec("zendure_smartmeter_d0")
     assert d0["keys"] == frozenset({"type", "mqtt"})

@@ -174,7 +174,7 @@ const FAMILY_TYPES = {
   tasmota_http: "tasmota_http",
   e3dc_modbus: "e3dc_modbus",
 };
-const METER_TYPES = new Set(["shelly", "shelly_3em_gen1", "ecotracker", "homewizard_p1", "powerfox_poweropti", "dsmr_p1_tcp", "zendure_grid_meter_http", "zendure_smartmeter_3ct_http", "zendure_smartmeter_d0_http", "tasmota_http", "e3dc_modbus", "zendure_smartmeter_d0", "mqtt"]);
+const METER_TYPES = new Set(["shelly", "shelly_3em_gen1", "ecotracker", "homewizard_p1", "powerfox_poweropti", "dsmr_p1_tcp", "zendure_grid_meter_http", "zendure_smartmeter_3ct_http", "zendure_smartmeter_d0_http", "tasmota_http", "e3dc_modbus", "sunspec_modbus", "zendure_smartmeter_d0", "mqtt"]);
 
 /** The meter type a found grid meter is: chosen, then by its API family, then by its description. */
 export function meterTypeOf(found) {

@@ -764,6 +764,7 @@ the physical device is installed or reports values differently. Run
 | Tasmota HTTP / SmartMeter | `tasmota_http` | `ip` or `url`, `power_path` | Uses `Status 10` JSON |
 | Zendure Smart Meter D0 — Local MQTT | `zendure_smartmeter_d0` | `mqtt.topic` + (`mqtt.broker_ref` or `mqtt.host`) | Optional alternative; D0 preset, numeric payload |
 | Generic MQTT grid meter | `mqtt` | `mqtt.host`, `mqtt.topic`, `mqtt.payload_format` | Numeric or JSON payload; JSON may name a separate export value (`mqtt.export_value_path`), as for a Linky through a ZLinky_TIC. |
+| SunSpec meter via Modbus TCP | `sunspec_modbus` | `ip`, `unit_id` (opt. `port`) | Read-only; the first SunSpec meter model (201 to 204, 211 to 214) at that unit, read once per control cycle. See below. |
 | E3/DC storage system via Modbus TCP | `e3dc_modbus` | `ip` (opt. `port`, `unit_id`) | Read-only; grid power at the E3/DC root power meter, read once per control cycle. See below. |
 
 ### Shelly Pro/Plus Gen2/Gen3 (`shelly`)
@@ -1248,6 +1249,40 @@ Example: Linky through a ZLinky_TIC and Zigbee2MQTT:
       "export_value_path": "injected_v_a",
       "max_age_seconds": 30
     }
+  }
+}
+```
+
+### SunSpec meter via Modbus TCP (`sunspec_modbus`)
+
+Many inverters and meters serve their measurements as SunSpec models over
+Modbus TCP. The EMS finds the `SunS` marker at register 40000, 0 or 50000,
+follows the model chain at `grid_meter.unit_id` to the first meter model
+(201 to 204, which carry the total real power `W` with a scale factor, or 211
+to 214, which carry it as a float), and then reads `W` once per control cycle,
+over one connection that it opens again after a failure. It only ever reads.
+
+SunSpec meters report `W` positive when power is drawn from the grid, which is
+what the EMS expects of a meter at the grid connection point. A meter
+installed elsewhere, or the wrong way round, reads with another meaning or
+sign; check the value once while the PV exports, in the dashboard or with
+`python3 emsctl.py diagnose --hardware`, before you switch off `dry_run`.
+
+The unit ID depends on the device. A Fronius inverter serves its primary
+Smart Meter at unit ID 200 once Modbus TCP is switched on in its web
+interface (*SunSpec Model Type* int + SF or float, both are read). A Kostal
+Smart Energy Meter serves its own measurements; its Modbus TCP settings name
+the unit ID to use.
+
+Example: Fronius Smart Meter through the Fronius inverter (`port` defaults to
+502):
+
+```json
+{
+  "grid_meter": {
+    "type": "sunspec_modbus",
+    "ip": "192.0.2.64",
+    "unit_id": 200
   }
 }
 ```

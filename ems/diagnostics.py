@@ -2135,6 +2135,7 @@ GRID_METER_PROVIDERS = {
     config_mod.HOMEWIZARD_P1_GRID_METER_TYPE: "HomeWizard P1",
     config_mod.POWERFOX_GRID_METER_TYPE: "powerfox poweropti",
     config_mod.DSMR_P1_TCP_GRID_METER_TYPE: "DSMR P1",
+    config_mod.SUNSPEC_MODBUS_GRID_METER_TYPE: "SunSpec meter",
     "tasmota_http": "Tasmota",
     "mqtt": "MQTT",
     "zendure_smartmeter_d0": "Zendure SmartMeter D0",

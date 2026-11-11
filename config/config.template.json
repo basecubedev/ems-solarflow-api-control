@@ -95,7 +95,9 @@
       "powerfox_poweropti reads a powerfox poweropti over its local API; it needs",
       "grid_meter.ip, and in grid_meter.token the device ID from its label.",
       "dsmr_p1_tcp reads raw DSMR P1 telegrams that a bridge passes on over TCP;",
-      "it needs grid_meter.ip and grid_meter.port as set on the bridge."
+      "it needs grid_meter.ip and grid_meter.port as set on the bridge.",
+      "sunspec_modbus reads a SunSpec meter model over Modbus TCP (read-only); it",
+      "needs grid_meter.ip and the unit_id that serves the meter (Fronius: 200)."
     ],
     "type": "shelly",
     "ip": "198.51.100.50"

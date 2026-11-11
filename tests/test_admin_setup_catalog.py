@@ -140,6 +140,7 @@ def test_grid_meter_variants_are_exposed_for_setup():
         "zendure_smartmeter_d0_http",
         "tasmota_http",
         "e3dc_modbus",
+        "sunspec_modbus",
         "zendure_smartmeter_d0",
         "mqtt",
     } == set(variants)
@@ -171,6 +172,7 @@ def test_manual_hardware_variants_are_role_specific():
         "zendure_smartmeter_d0_http",
         "tasmota_http",
         "e3dc_modbus",
+        "sunspec_modbus",
     }
     e3dc = next(item for item in variants["grid_meter"] if item["id"] == "e3dc_modbus")
     assert e3dc["default_port"] == 502

@@ -673,7 +673,8 @@ def test_config_init_accepts_a_stored_whole_number_float_port():
 def test_config_init_does_not_carry_an_http_port_to_the_e3dc(monkeypatch):
     from ems import config_init
 
-    answers = iter([str(len(config_init.GRID_METER_CHOICES)), "", "", ""])
+    menu = [choice for choice, _ in config_init.GRID_METER_CHOICES].index("e3dc_modbus") + 1
+    answers = iter([str(menu), "", "", ""])
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
     result = config_init.ask_grid_meter(
         {"type": "zendure_grid_meter_http", "ip": "192.0.2.10", "port": 80}

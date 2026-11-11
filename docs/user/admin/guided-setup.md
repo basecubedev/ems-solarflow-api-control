@@ -22,8 +22,8 @@ everything first.
 - Your inverters powered on and on the same LAN (or reachable through a broker,
   for MQTT).
 - A grid meter (Shelly, everHome EcoTracker, HomeWizard P1 Meter, powerfox
-  poweropti, a DSMR P1 bridge, Tasmota, a Zendure meter, or an E3/DC read over
-  Modbus TCP). See
+  poweropti, a DSMR P1 bridge, Tasmota, a Zendure meter, an E3/DC or a SunSpec
+  meter read over Modbus TCP). See
   [Supported setups](../supported-setups.md).
 - Internet access once, to download the images.
 

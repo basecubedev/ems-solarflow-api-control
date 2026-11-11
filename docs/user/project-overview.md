@@ -117,6 +117,7 @@ Supported options include:
 - DSMR P1 smart meters (Netherlands, Belgium) through a bridge that passes the P1 port on over TCP
 - Tasmota-based meters
 - E3/DC storage systems, read-only over Modbus TCP
+- SunSpec meters over Modbus TCP, such as a Fronius Smart Meter through the inverter or a Kostal Smart Energy Meter
 - generic MQTT power meters, among them a Linky through a ZLinky_TIC and Zigbee2MQTT
 
 Support differs by model and connection type. The current compatibility overview is available in [Supported Setups](supported-setups.md).
