@@ -112,6 +112,12 @@ from admin.backup_restore import (
     RESTORE_SCOPES,
 )
 from admin.gateway_probe import probe_gateway_candidates
+from admin.homewizard_pairing import (
+    PairingRequestError,
+    pair_homewizard_p1,
+    pairing_target,
+    stored_pairing_name,
+)
 from admin.guided_upgrade import (
     GuidedUpgradeExecutor,
     UpgradeJob,
@@ -783,6 +789,7 @@ class AdminRuntime:
     # per-request transport is reported separately via AdminServer.https_active).
     https_configured: bool = False
     https_port: int = 8091
+    homewizard_pairer: object = pair_homewizard_p1
 
 
 def _running_admin_identity(docker):
@@ -1468,6 +1475,7 @@ class AdminServer(ThreadingHTTPServer):
         self.registry = runtime.registry
         self.network_detector = runtime.network_detector
         self.gateway_prober = runtime.gateway_prober
+        self.homewizard_pairer = runtime.homewizard_pairer
         self.mqtt_discovery = runtime.mqtt_discovery
         self.zendure_cloud_discovery = runtime.zendure_cloud_discovery
         self.discovery_preparation = runtime.discovery_preparation
@@ -1981,6 +1989,9 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/discovery/gateway-probe":
             self._handle_gateway_probe()
+            return
+        if path == "/api/grid-meter/homewizard-p1/pair":
+            self._handle_homewizard_pair()
             return
         if path == "/api/discovery/mdns/enable":
             self._drain_body()
@@ -7261,6 +7272,17 @@ class AdminHandler(BaseHTTPRequestHandler):
             max_workers=body.get("max_workers"),
         )
         self._send_json(result)
+
+    def _handle_homewizard_pair(self):
+        body = self._read_json_body()
+        if body is None:
+            return
+        try:
+            ip, port, name = pairing_target(body, stored_pairing_name())
+        except PairingRequestError as exc:
+            self._send_json({"error": str(exc)}, status=400)
+            return
+        self._send_json(self.server.homewizard_pairer(ip, port, name))
 
     def _handle_mqtt_probe(self):
         body = self._read_json_body()

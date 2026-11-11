@@ -33,12 +33,15 @@ from admin.zendure_mqtt_config_draft import (
 )
 from ems.config import (
     E3DC_MODBUS_GRID_METER_TYPE,
+    HOMEWIZARD_P1_GRID_METER_TYPE,
     MQTT_GRID_METER_TYPES,
     ZENDURE_SMARTMETER_D0_GRID_METER_TYPE,
     MqttBrokerReferenceAmbiguousError,
+    check_homewizard_p1_pairing_name,
     default_mqtt_port,
     e3dc_modbus_device_settings,
     e3dc_modbus_grid_meter_settings,
+    homewizard_p1_grid_meter_settings,
     normalize_mqtt_grid_meter_settings,
     optional_json_bool,
     parse_mqtt_port,
@@ -81,6 +84,7 @@ _GRID_TYPES = {
     "shelly_gen2": "shelly",
     "shelly_3em_gen1": "shelly_3em_gen1",
     "ecotracker": "ecotracker",
+    HOMEWIZARD_P1_GRID_METER_TYPE: HOMEWIZARD_P1_GRID_METER_TYPE,
     # Both D0 and Smart Meter 3CT are discovered as the generic local-HTTP family.
     "zendure_grid_meter_http": "zendure_grid_meter_http",
     "zendure_smartmeter_3ct_http": "zendure_grid_meter_http",
@@ -544,6 +548,21 @@ def _validate_e3dc_grid_meter_via_core(preview, validation):
         e3dc_modbus_grid_meter_settings(grid)
     except ValueError as exc:
         validation["errors"].append(_issue("grid_meter_e3dc_modbus_invalid", str(exc)))
+
+
+def _validate_homewizard_grid_meter_via_core(preview, validation):
+    """A HomeWizard P1 Meter is ready only once it is paired; the EMS cannot read it otherwise."""
+
+    grid = preview.get("grid_meter")
+    if not isinstance(grid, dict):
+        return
+    if str(grid.get("type") or "").strip().lower() != HOMEWIZARD_P1_GRID_METER_TYPE:
+        return
+    try:
+        homewizard_p1_grid_meter_settings(grid)
+        check_homewizard_p1_pairing_name(grid)
+    except ValueError as exc:
+        validation["errors"].append(_issue("grid_meter_homewizard_p1_unpaired", str(exc)))
 
 
 def _add_e3dc_meter_as_read_only_device(preview, names, validation):
@@ -1206,6 +1225,7 @@ class ConfigPreviewGenerator:
         # preview can never fail at runtime.
         _validate_mqtt_grid_meter_via_core(preview, validation)
         _validate_e3dc_grid_meter_via_core(preview, validation)
+        _validate_homewizard_grid_meter_via_core(preview, validation)
         _add_e3dc_meter_as_read_only_device(preview, names, validation)
 
         _normalize_bundled_influx_secret(preview)

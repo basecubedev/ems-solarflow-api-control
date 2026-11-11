@@ -4,8 +4,9 @@
 
 Discovery is manual, bounded, and probe-based: for each host in a validated
 local CIDR it issues a few short-timeout HTTP GETs to known local device APIs
-and classifies the JSON response, then reads the E3/DC magic word over Modbus
-TCP. No daemon, no shell-out, no ping/nmap/arp, no public ranges. Concurrency
+and classifies the JSON response, checks for a HomeWizard P1 Meter's
+certificate over HTTPS, then reads the E3/DC magic word over Modbus TCP. No
+daemon, no shell-out, no ping/nmap/arp, no public ranges. Concurrency
 and timeouts are clamped to keep a scan cheap enough for a small Raspberry Pi.
 """
 
@@ -26,7 +27,10 @@ from ems.config import (
     E3DC_MODBUS_DEFAULT_PORT,
     E3DC_MODBUS_DEFAULT_UNIT_ID,
     E3DC_MODBUS_GRID_METER_TYPE,
+    HOMEWIZARD_P1_DEFAULT_PORT,
+    HOMEWIZARD_P1_GRID_METER_TYPE,
 )
+from ems.homewizard import HomeWizardError, HomeWizardP1Api
 
 logger = logging.getLogger("admin.discovery")
 
@@ -42,6 +46,7 @@ MAX_WORKERS_DEFAULT = 32
 MAX_HOSTS = 256
 DEFAULT_PORTS = (80,)
 E3DC_SCAN_PORT = E3DC_MODBUS_DEFAULT_PORT
+HOMEWIZARD_P1_PRODUCT_TYPE = "HWE-P1"
 
 
 class CidrValidationError(ValueError):
@@ -468,6 +473,38 @@ def probe_ecotracker(session, ip, timeout_s):
     )
 
 
+def probe_homewizard_p1(session, ip, timeout_s, port=HOMEWIZARD_P1_DEFAULT_PORT, context=None):
+    """Offer a host whose HTTPS certificate HomeWizard issued for a P1 Meter.
+
+    ``session`` is unused: the probe is one TLS handshake, which needs neither
+    the meter's token nor its pairing. The token is not a discovery field: the
+    operator pairs the chosen meter in the hardware step, and the setup preview
+    stays not ready until then.
+    """
+
+    api = HomeWizardP1Api(ip, port=port, timeout=timeout_s, context=context)
+    try:
+        serial = api.identify()
+    except HomeWizardError:
+        return None
+    finally:
+        api.close()
+    return DiscoveredDevice(
+        ip=ip,
+        api_family=HOMEWIZARD_P1_GRID_METER_TYPE,
+        device_type=HOMEWIZARD_P1_GRID_METER_TYPE,
+        role_suggestion=ROLE_GRID_METER,
+        port=port,
+        protocol="https",
+        display_name="HomeWizard P1 Meter",
+        serial_number=serial,
+        model=HOMEWIZARD_P1_PRODUCT_TYPE,
+        confidence=0.95,
+        config_ready=True,
+        missing_config_fields=[],
+    )
+
+
 def probe_e3dc_modbus(session, ip, timeout_s, port=None):
     """Read the E3/DC magic word over Modbus TCP; only ``0xE3DC`` is a candidate.
 
@@ -516,6 +553,7 @@ PROBES = (
     probe_shelly_gen2,
     probe_shelly_3em_gen1,
     probe_ecotracker,
+    probe_homewizard_p1,
     probe_e3dc_modbus,
 )
 

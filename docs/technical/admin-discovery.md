@@ -300,6 +300,13 @@ placeholder for a later phase.
   - Shelly Pro / Gen2 meter — `GET /rpc/Shelly.GetStatus` → role `grid_meter`
   - Shelly 3EM Gen1 meter — `GET /status` → role `grid_meter`
   - everHome EcoTracker — `GET /v1/json` → role `grid_meter`
+  - HomeWizard P1 Meter — one TLS handshake on port 443, no HTTP request: a
+    certificate HomeWizard's Appliance Access CA issued for
+    `appliance/p1dongle/<serial>` → role `grid_meter`, family `homewizard_p1`,
+    with that serial; another HomeWizard product or any other certificate is
+    no candidate. The meter still has to be paired (its button pressed) in the
+    hardware step: the setup preview stays not ready until it is, see
+    [HomeWizard pairing](#homewizard-p1-meter-pairing)
 - Reads the E3/DC magic word over Modbus TCP (port 502, unit ID 1, register
   40001) and offers a host that answers `0xE3DC` as an E3/DC storage system →
   role `grid_meter`, family `e3dc_modbus`, with its model, serial and firmware
@@ -453,6 +460,38 @@ API:
   entry did not create, or one the installed config uses, is refused with
   `409 credentials_ref_in_use`, and a delete keeps a record the config still
   uses (an unreadable config counts as using it).
+
+## HomeWizard P1 Meter pairing
+
+A HomeWizard P1 Meter answers its local API v2 only with a token it hands out
+after its button was pressed. `POST /api/grid-meter/homewizard-p1/pair` with
+`{"ip": "<address>", "port": <optional, 443>, "pairing_name": <optional>}`
+makes one attempt, behind the signed-in session and its CSRF token like every
+other write. The name comes from the installation's `config.json`
+(`grid_meter.pairing_name`), not from the browser, so pairing again replaces
+only this installation's own pairing. Before the config holds one, a name of
+this project's own form (`local/ems_solarflow#` and six hex digits) that the
+console made up earlier in the same draft is reused; anything else gets a new
+name, so the browser can never pair under another application's name:
+
+| Answer | Meaning |
+| --- | --- |
+| `{"state": "waiting"}` | the button was not pressed yet; ask again |
+| `{"state": "paired", "serial": "…", "token": "…", "pairing_name": "…"}` | the meter granted a token to that name |
+| `{"state": "failed", "reason": "…", "message": "…"}` | `unreachable`, `not_a_p1_meter`, `no_room`, `http_status` or `invalid_answer` |
+| HTTP 400 `{"error": "…"}` | no IP address, or one outside the private, link-local and loopback ranges the scan may reach |
+
+The connection trusts HomeWizard's Appliance Access CA alone. The route stores
+nothing: the Modern console asks every two seconds for up to a minute and puts
+serial, token and name into the editor's draft (the device editor in Settings, the
+grid meter card in Guided Setup). They reach `config.json` only through a
+checked and saved preview, and both workflows refuse a `homewizard_p1` meter
+without them (`grid_meter_homewizard_p1_unpaired`), as the EMS would. Every
+browser view shows `has_token`, never the token; the tab's storage keeps a new
+pairing in memory only. Pairing again asks first, because the meter refuses the
+stored token as soon as it hands out a new one, and setup drops a pairing when
+the grid meter's type or address changes. The Classic console offers no
+pairing; it shows the token as a write-only secret field.
 
 ## Maintenance discovery sources
 

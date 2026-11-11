@@ -211,6 +211,45 @@ def test_explicit_grid_meter_type_wins_over_conflicting_discovery():
     assert result["config"]["grid_meter"]["type"] == "ecotracker"
 
 
+def _homewizard_meter():
+    return _meter(
+        api_family="homewizard_p1",
+        device_type="homewizard_p1",
+        ip="192.168.1.40",
+        port=443,
+        serial_number="0a1b2c3d4e5f",
+    )
+
+
+def test_a_discovered_homewizard_p1_is_not_ready_before_it_is_paired():
+    result = ConfigPreviewGenerator(_ReleaseManager()).generate([_device(), _homewizard_meter()], 1)
+
+    assert result["config"]["grid_meter"] == {"type": "homewizard_p1", "ip": "192.168.1.40", "port": 443}
+    assert result["ready"] is False
+    codes = {issue["code"] for issue in result["validation"]["errors"]}
+    assert "grid_meter_homewizard_p1_unpaired" in codes
+
+
+def test_a_paired_homewizard_p1_is_written_with_serial_and_token_and_shown_without_the_token():
+    from admin.maintenance_config import redact_config_for_browser
+
+    token = "0123456789ABCDEF0123456789ABCDEF"
+    pairing = {"grid_meter.type": "homewizard_p1", "grid_meter.serial": "0a1b2c3d4e5f", "grid_meter.token": token}
+    result = ConfigPreviewGenerator(_ReleaseManager()).generate([_device(), _homewizard_meter()], 1, pairing)
+
+    assert result["ready"] is True
+    assert result["config"]["grid_meter"] == {
+        "type": "homewizard_p1",
+        "ip": "192.168.1.40",
+        "port": 443,
+        "serial": "0a1b2c3d4e5f",
+        "token": token,
+    }
+    shown = redact_config_for_browser(copy.deepcopy(result))
+    assert token not in json.dumps(shown)
+    assert shown["config"]["grid_meter"]["serial"] == "0a1b2c3d4e5f"
+
+
 def test_grid_meter_type_from_zendure_http_discovery_metadata():
     # A discovered Zendure HTTP grid meter (D0 or 3CT) normalizes to the generic
     # local-HTTP type and is config-ready on its IP alone.

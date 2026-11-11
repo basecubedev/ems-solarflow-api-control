@@ -791,6 +791,28 @@ class ProcessMappingCompose:
         return [{"service": MAPPING_SERVICE, "state": "running" if self._running() else "exited"}]
 
 
+class _TestHomeWizardPairer:
+    """Pairing without a meter: an address waits for its button once, then pairs."""
+
+    SERIAL = "0a1b2c3d4e5f"
+    TOKEN = "0123456789ABCDEF0123456789ABCDEF"
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._waited = set()
+
+    def __call__(self, ip, port, name):
+        with self._lock:
+            if ip not in self._waited:
+                self._waited.add(ip)
+                return {"state": "waiting"}
+        return {"state": "paired", "serial": self.SERIAL, "token": self.TOKEN, "pairing_name": name}
+
+    def reset(self):
+        with self._lock:
+            self._waited.clear()
+
+
 def build_test_runtime(*, data_dir):
     """Compose the deterministic Admin runtime for ``EMS_ADMIN_TEST_MODE``."""
 
@@ -842,6 +864,8 @@ def build_test_runtime(*, data_dir):
         return original_instance_id
 
     runtime.test_admin_instance_id = test_admin_instance_id
+    homewizard_pairer = _TestHomeWizardPairer()
+    runtime.homewizard_pairer = homewizard_pairer
     backup_failure_state = {"enabled": False}
     original_backup = runtime.config_apply._backup
 
@@ -2027,6 +2051,7 @@ def build_test_runtime(*, data_dir):
         runtime.zendure_cloud_discovery._candidates = []
         _reset_test_mdns_provider(mdns_provider, seeded_mdns_devices)
         clear_local_mqtt_candidates()
+        homewizard_pairer.reset()
         _restore_initial_bundle(
             Path(data_dir) / "embedded-bundle", initial_running_tag
         )

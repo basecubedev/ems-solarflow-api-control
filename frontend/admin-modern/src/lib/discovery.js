@@ -168,6 +168,7 @@ const FAMILY_TYPES = {
   shelly_gen2: "shelly",
   shelly_3em_gen1: "shelly_3em_gen1",
   ecotracker: "ecotracker",
+  homewizard_p1: "homewizard_p1",
   zendure_grid_meter_http: "zendure_grid_meter_http",
   zendure_smartmeter_3ct_http: "zendure_grid_meter_http",
   tasmota_http: "tasmota_http",

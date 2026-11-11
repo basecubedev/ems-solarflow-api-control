@@ -79,7 +79,7 @@ _FINGERPRINT_MARKERS = _SECRET_MARKERS + ("api_key",)
 # Keys that merely *name* or *describe* a credential. They match a secret marker
 # by substring but carry no credential value, so a browser view keeps them.
 CREDENTIAL_REFERENCE_KEYS = ("credentials_ref",)
-PRESENCE_FLAG_KEYS = ("has_password",)
+PRESENCE_FLAG_KEYS = ("has_password", "has_token")
 PUBLIC_IDENTITY_TOKEN_KEYS = (
     PHYSICAL_IDENTITY_TOKEN_FIELD,
     PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
