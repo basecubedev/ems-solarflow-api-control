@@ -163,3 +163,28 @@ def test_maintenance_saves_a_sunspec_meter_and_refuses_a_unit_id_modbus_cannot_a
 
     refused = _apply(tmp_path, lambda grid: grid.update(type="sunspec_modbus", unit_id=300))
     assert refused["status"] != "ok"
+
+
+# --- Modbus profiles -----------------------------------------------------------------
+
+
+def test_maintenance_saves_a_profile_meter_and_refuses_a_unit_id_modbus_cannot_address(tmp_path):
+    _write_config(tmp_path, {"type": "shelly", "ip": "192.168.1.95"})
+
+    saved = _saved_meter(_apply(tmp_path, lambda grid: grid.update(type="victron_gx_modbus", unit_id=100)))
+    assert saved == {"type": "victron_gx_modbus", "ip": "192.168.1.95", "unit_id": 100}
+
+    refused = _apply(tmp_path, lambda grid: grid.update(type="victron_gx_modbus", unit_id=300))
+    assert refused["status"] != "ok"
+
+
+def test_a_unit_id_belongs_to_its_device_and_does_not_follow_a_type_change(tmp_path):
+    _write_config(tmp_path, {"type": "sunspec_modbus", "ip": "192.168.1.64", "unit_id": 200})
+
+    def switch(grid):
+        grid.update(type="victron_gx_modbus")
+        grid.pop("unit_id")
+
+    saved = _saved_meter(_apply(tmp_path, switch))
+
+    assert saved == {"type": "victron_gx_modbus", "ip": "192.168.1.64"}

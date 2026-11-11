@@ -1018,7 +1018,7 @@ def _build_grid_meter(meter, defaults, validation, features):
             except (TypeError, ValueError):
                 grid.pop("port", None)
         unit_id = meter.get("unit_id")
-        if "unit_id" in spec["keys"] and type(unit_id) is int:
+        if "unit_id" in spec["keys"] and type(unit_id) is int and _inferred_grid_type(meter) == grid_type:
             grid["unit_id"] = unit_id
     if grid_type == TIBBER_PULSE_GRID_METER_TYPE:
         for key in TIBBER_PULSE_BRIDGE_KEYS:

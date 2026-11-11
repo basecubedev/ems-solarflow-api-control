@@ -48,6 +48,10 @@ GRID_METER_CHOICES = (
         config_mod.SUNSPEC_MODBUS_GRID_METER_TYPE,
         "SunSpec meter via Modbus TCP (Fronius, Kostal; read-only)",
     ),
+    *(
+        (profile.meter_type, f"{profile.label} via Modbus TCP (read-only)")
+        for profile in config_mod.MODBUS_METER_PROFILES.values()
+    ),
     (
         config_mod.TIBBER_PULSE_GRID_METER_TYPE,
         "Tibber Pulse IR bridge (experimental; save its password in the Admin Console)",
@@ -337,7 +341,7 @@ def ask_grid_meter(
     ):
         result.pop("port", None)
     if meter_type != current_type:
-        for key in config_mod.HOMEWIZARD_P1_PAIRING_KEYS:
+        for key in (*config_mod.HOMEWIZARD_P1_PAIRING_KEYS, "unit_id"):
             result.pop(key, None)
     if meter_type in config_mod.MQTT_GRID_METER_TYPES:
         mqtt_settings = config_mod.grid_meter_mqtt_settings(result)
@@ -593,6 +597,34 @@ def ask_grid_meter(
         _keep_variant_keys(result, meter_type)
         try:
             config_mod.powerfox_grid_meter_settings(result)
+        except ValueError as exc:
+            raise ConfigInitError(str(exc)) from exc
+    elif meter_type in config_mod.MODBUS_METER_PROFILES:
+        profile = config_mod.MODBUS_METER_PROFILES[meter_type]
+        result["ip"] = ask_text(
+            f"{profile.label} IP address",
+            result.get("ip") or "",
+            required=True,
+            noninteractive=noninteractive,
+            allow_placeholder_default=allow_placeholder_defaults,
+        )
+        result["port"] = ask_int(
+            "Modbus TCP port",
+            _whole_number_text(result.get("port"), profile.port),
+            minimum=1,
+            maximum=65535,
+            noninteractive=noninteractive,
+        )
+        result["unit_id"] = ask_int(
+            "Modbus unit ID",
+            _whole_number_text(result.get("unit_id"), profile.unit_id),
+            minimum=0,
+            maximum=255,
+            noninteractive=noninteractive,
+        )
+        _keep_variant_keys(result, meter_type)
+        try:
+            config_mod.modbus_profile_grid_meter_settings(result, meter_type)
         except ValueError as exc:
             raise ConfigInitError(str(exc)) from exc
     elif meter_type == config_mod.SUNSPEC_MODBUS_GRID_METER_TYPE:
@@ -1020,6 +1052,12 @@ def _meter_summary(grid_meter):
         )
     if meter_type == config_mod.DSMR_P1_TCP_GRID_METER_TYPE:
         return f"DSMR P1 bridge at {grid_meter.get('ip') or '(not set)'}:{grid_meter.get('port') or '(no port)'}"
+    if meter_type in config_mod.MODBUS_METER_PROFILES:
+        profile = config_mod.MODBUS_METER_PROFILES[meter_type]
+        return (
+            f"{profile.label} Modbus TCP at {grid_meter.get('ip') or '(not set)'}:"
+            f"{grid_meter.get('port') or profile.port} unit {grid_meter.get('unit_id', profile.unit_id)}"
+        )
     if meter_type in (config_mod.E3DC_MODBUS_GRID_METER_TYPE, config_mod.SUNSPEC_MODBUS_GRID_METER_TYPE):
         port = grid_meter.get("port") or config_mod.E3DC_MODBUS_DEFAULT_PORT
         unit_id = grid_meter.get("unit_id", config_mod.E3DC_MODBUS_DEFAULT_UNIT_ID)

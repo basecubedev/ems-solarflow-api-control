@@ -255,3 +255,15 @@ def test_every_console_turns_a_found_meter_into_the_same_type():
     source = (Path(__file__).parents[1] / "admin" / "static" / "admin.js").read_text(encoding="utf-8")
     classic = re.search(r"const GRID_METER_FAMILY_TYPES = \{(.*?)\};", source, re.S).group(1)
     assert dict(re.findall(r'([a-z0-9_]+): "([a-z0-9_]+)"', classic)) == _GRID_TYPES
+
+
+def test_a_scanned_unit_id_does_not_follow_the_meter_to_another_type():
+    found = DiscoveredDevice(
+        ip="192.168.1.64", api_family="sunspec_modbus", device_type="sunspec_modbus",
+        role_suggestion=ROLE_GRID_METER, port=502, protocol="modbus_tcp", config_ready=True, unit_id=200,
+    ).to_dict()
+    meter = {**found, "config_name": "grid_meter", "role": "grid_meter", "enabled": True, "grid_meter_type": "victron_gx_modbus"}
+
+    result = ConfigPreviewGenerator(_ReleaseManager()).generate([_device(), meter], 1)
+
+    assert result["config"]["grid_meter"] == {"type": "victron_gx_modbus", "ip": "192.168.1.64", "port": 502}

@@ -535,7 +535,8 @@ export function syncGridFeatures(features, item) {
     if (key in bridge) next[`grid_meter.${key}`] = bridge[key];
     else delete next[`grid_meter.${key}`];
   }
-  const unit = unitValues(meter);
+  const scannedType = meterTypeOf({ device_type: meter.device_type || "", api_family: meter.api_family || "" });
+  const unit = scannedType === type ? unitValues(meter) : {};
   if ("unit_id" in unit) next["grid_meter.unit_id"] = unit.unit_id;
   else delete next["grid_meter.unit_id"];
   return { features: keepPairing(features, next), item: meter };

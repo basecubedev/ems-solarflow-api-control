@@ -14,7 +14,8 @@ import math
 import struct
 from dataclasses import dataclass
 
-from ems.e3dc_modbus import ModbusExceptionResponse, ReadOnlyModbusTcpClient, decode_string
+from ems.e3dc_modbus import ModbusExceptionResponse, decode_string
+from ems.modbus_meters import ModbusTcpMeter
 
 SUNSPEC_BASES = (40000, 0, 50000)
 SUNSPEC_MARKER = (0x5375, 0x6E53)
@@ -99,36 +100,18 @@ def read_meter_power(client, model):
     return power
 
 
-class SunSpecMeter:
-    """One Modbus TCP connection to a SunSpec meter; a failure drops it for the next read."""
+class SunSpecMeter(ModbusTcpMeter):
+    """A SunSpec meter; its meter model is looked up again on each new connection."""
 
-    def __init__(self, host, port=502, unit_id=1, *, timeout=3.0, client_factory=ReadOnlyModbusTcpClient):
-        self.host = host
-        self.port = port
-        self.unit_id = unit_id
-        self.timeout = timeout
-        self._client_factory = client_factory
-        self._client = None
+    def __init__(self, host, port=502, unit_id=1, **kwargs):
+        super().__init__(host, port, unit_id, **kwargs)
         self.model = None
 
-    @property
-    def endpoint(self):
-        return f"{self.host}:{self.port} unit {self.unit_id}"
-
-    def read_power(self):
-        try:
-            if self._client is None:
-                client = self._client_factory(self.host, port=self.port, unit_id=self.unit_id, timeout=self.timeout)
-                client.connect()
-                self._client = client
-            if self.model is None:
-                self.model = locate_meter(self._client)
-            return round(read_meter_power(self._client, self.model), 1)
-        except Exception:
-            self.close()
-            raise
+    def _read(self, client):
+        if self.model is None:
+            self.model = locate_meter(client)
+        return read_meter_power(client, self.model)
 
     def close(self):
-        client, self._client, self.model = self._client, None, None
-        if client is not None:
-            client.close()
+        self.model = None
+        super().close()

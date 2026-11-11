@@ -423,10 +423,11 @@ Shelly Pro 3EM and Gen2/Gen3, Shelly 3EM Gen1, everHome EcoTracker, the
 HomeWizard P1 Meter, the powerfox poweropti, a DSMR P1 meter through a bridge
 that passes its P1 port on over TCP, Tasmota HTTP readers, the Zendure Smart
 Meter 3CT and D0 (local HTTP, or the D0 over MQTT), a SunSpec meter such as a
-Fronius Smart Meter or a Kostal Smart Energy Meter, an E3/DC over Modbus
-TCP (read only), and any meter that publishes its power to an MQTT topic, such
-as a French Linky read by a ZLinky_TIC through Zigbee2MQTT. Their support status
-is listed in [supported-setups.md](supported-setups.md).
+Fronius Smart Meter or a Kostal Smart Energy Meter, the meter of a Huawei
+SUN2000 or Sungrow SH inverter, a Carlo Gavazzi EM24, a Victron GX, a Circutor
+Wibeee, an E3/DC over Modbus TCP (all read only), and any meter that publishes
+its power to an MQTT topic, such as a French Linky read by a ZLinky_TIC through
+Zigbee2MQTT. Their support status is listed in [supported-setups.md](supported-setups.md).
 
 ### How does EMS reach my Zendure devices?
 

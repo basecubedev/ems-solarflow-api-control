@@ -203,3 +203,9 @@ test("a found SunSpec meter sets its unit ID, and the next meter found without o
   const e3dc = syncGridFeatures(sunspec, { api_family: "e3dc_modbus", ip: "192.168.1.65" }).features;
   assert.equal("grid_meter.unit_id" in e3dc, false);
 });
+
+test("a scanned unit ID stays with the type the scan found it as", () => {
+  const found = { ip: "192.168.1.64", api_family: "sunspec_modbus", device_type: "sunspec_modbus", port: 502, unit_id: 200, sources: ["http_probe"] };
+  const item = { ...itemFromDevice(found, "grid_meter", { id: "sunspec_modbus:192.168.1.64", items: [] }), grid_meter_type: "victron_gx_modbus" };
+  assert.equal("grid_meter.unit_id" in syncGridFeatures({ "grid_meter.unit_id": 200 }, item).features, false);
+});

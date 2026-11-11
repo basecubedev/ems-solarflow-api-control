@@ -1329,18 +1329,21 @@ class E3dcModbusGridMeterClient:
             self.session.close()
 
 
-class SunSpecMeterClient:
-    """Grid power from a SunSpec meter model over Modbus TCP, read once per control cycle.
+class ModbusMeterClient:
+    """Grid power from a meter read over Modbus TCP, once per control cycle.
 
-    The power is taken as the meter reports it, positive when drawn from the
-    grid. There is deliberately no write method.
+    The meter object turns the device's registers into grid power, positive
+    when drawn from the grid. There is deliberately no write method.
     """
 
-    provider = "SunSpec meter"
+    provider = "Modbus meter"
     transport = "modbus_tcp"
+    read_error_event = "modbus_meter_read_error"
 
-    def __init__(self, meter):
+    def __init__(self, meter, *, provider=None):
         self.meter = meter
+        if provider:
+            self.provider = provider
         self.last_value = 0
         self.health = CommHealth(self.provider, kind="read")
 
@@ -1363,7 +1366,7 @@ class SunSpecMeterClient:
             )
             log_event(
                 logging.WARNING,
-                "sunspec_meter_read_error",
+                self.read_error_event,
                 endpoint=self.endpoint,
                 error=e,
                 stale_value=self.last_value,
@@ -1372,6 +1375,13 @@ class SunSpecMeterClient:
 
     def close(self):
         self.meter.close()
+
+
+class SunSpecMeterClient(ModbusMeterClient):
+    """Grid power from a SunSpec meter model over Modbus TCP."""
+
+    provider = "SunSpec meter"
+    read_error_event = "sunspec_meter_read_error"
 
 
 GRID_METER_READY_SECONDS = 15
@@ -1462,6 +1472,16 @@ def create_grid_meter_client(
     if meter_type == cfg.POWERFOX_GRID_METER_TYPE:
         settings = cfg.powerfox_grid_meter_settings(config)
         return PowerfoxClient(settings["host"], session, settings["token"], port=settings["port"])
+
+    if meter_type in cfg.MODBUS_METER_PROFILES:
+        from ems.modbus_meters import ProfileMeter
+
+        profile = cfg.MODBUS_METER_PROFILES[meter_type]
+        settings = cfg.modbus_profile_grid_meter_settings(config, meter_type)
+        return ModbusMeterClient(
+            ProfileMeter(settings["host"], profile, port=settings["port"], unit_id=settings["unit_id"]),
+            provider=profile.label,
+        )
 
     if meter_type == cfg.SUNSPEC_MODBUS_GRID_METER_TYPE:
         from ems.sunspec import SunSpecMeter

@@ -12,7 +12,7 @@
 export const E3DC_DEFAULTS = Object.freeze({ port: 502, unit_id: 1 });
 export const D0_TOPIC_PREFIX = "Zendure/sensor/";
 export const D0_TOPIC_SUFFIX = "/totalPower";
-const METER_SECRET_KEYS = Object.freeze(["token", "has_token", "serial", "pairing_name"]);
+const METER_BOUND_KEYS = Object.freeze(["token", "has_token", "serial", "pairing_name", "unit_id"]);
 const GRID_MQTT_PREFIX = "grid_meter.mqtt.";
 /** Connection values a named broker profile owns; never edited beside the reference. */
 const GRID_MQTT_CONNECTION = new Set(["grid_meter.mqtt.host", "grid_meter.mqtt.port", "grid_meter.mqtt.username", "grid_meter.mqtt.password"]);
@@ -284,7 +284,8 @@ export function setGridPort(meter, value) {
 /**
  * Another meter type. The port follows the type unless both share a default
  * port; a port the reader set for a type comes back with it (``ports``, held
- * by the page). A pairing or API key belongs to its meter and stays behind.
+ * by the page). A pairing, an API key or a Modbus unit ID belongs to its
+ * meter and stays behind.
  * A D0 meter reads plain numbers unless told otherwise.
  */
 export function switchGridType(meter, type, catalog, ports = {}) {
@@ -301,7 +302,7 @@ export function switchGridType(meter, type, catalog, ports = {}) {
   }
   if (port == null) delete next.port;
   else next.port = port;
-  if (from !== type) for (const key of METER_SECRET_KEYS) delete next[key];
+  if (from !== type) for (const key of METER_BOUND_KEYS) delete next[key];
   next.type = type;
   next.present = Boolean(type);
   if (type === "zendure_smartmeter_d0") next.mqtt = { payload_format: "number", ...(next.mqtt || {}) };

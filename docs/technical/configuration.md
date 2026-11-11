@@ -765,6 +765,7 @@ the physical device is installed or reports values differently. Run
 | Zendure Smart Meter D0 — Local MQTT | `zendure_smartmeter_d0` | `mqtt.topic` + (`mqtt.broker_ref` or `mqtt.host`) | Optional alternative; D0 preset, numeric payload |
 | Generic MQTT grid meter | `mqtt` | `mqtt.host`, `mqtt.topic`, `mqtt.payload_format` | Numeric or JSON payload; JSON may name a separate export value (`mqtt.export_value_path`), as for a Linky through a ZLinky_TIC. |
 | SunSpec meter via Modbus TCP | `sunspec_modbus` | `ip`, `unit_id` (opt. `port`) | Read-only; the first SunSpec meter model (201 to 204, 211 to 214) at that unit, read once per control cycle. See below. |
+| Huawei, Sungrow, Carlo Gavazzi EM24, Victron GX, Circutor Wibeee | `huawei_sun2000_modbus`, `sungrow_sh_modbus`, `carlo_gavazzi_em24_modbus`, `victron_gx_modbus`, `wibeee_modbus` | `ip` (opt. `port`, `unit_id`) | Read-only; the device's own published register map. See below. |
 | E3/DC storage system via Modbus TCP | `e3dc_modbus` | `ip` (opt. `port`, `unit_id`) | Read-only; grid power at the E3/DC root power meter, read once per control cycle. See below. |
 | Tibber Pulse IR — local bridge (experimental) | `tibber_pulse_bridge` | `ip`, `credentials_ref` (opt. `port`, `node_id`) | The meter's SML telegram from the bridge's local web server; the password stays in the secret store. See below. |
 
@@ -968,7 +969,8 @@ P1-to-WiFi gateway, or ser2net on a small computer with a P1 cable, passes the
 raw telegrams on over TCP; the EMS connects to it and never sends anything.
 Use this type only for a bridge that hands out the telegrams unchanged and
 unencrypted, which rules out the encrypted P1 port of Luxembourg's meters; a
-HomeWizard P1 Meter has its own type.
+HomeWizard P1 Meter has its own type. A Belgian Fluvius meter sends DSMR 5
+telegrams once its P1 port is opened in the Fluvius customer portal.
 
 The EMS keeps one connection and takes, once per control cycle, the newest
 whole telegram that arrived since the last cycle, without waiting for one.
@@ -1214,6 +1216,31 @@ the `value_path` one. Until a message has carried the export value once, a
 message without it fails the reading, so a mistyped path shows up at once;
 after that, a message without it counts as no export.
 
+#### An ESPHome P1 reader such as a SlimmeLezer
+
+An ESPHome node with the `dsmr` component reports power drawn and power fed in
+as two sensors in kW. Add a template sensor on the node that publishes the grid
+power in W, and read its MQTT state topic as a plain number:
+
+```yaml
+sensor:
+  - platform: dsmr
+    power_delivered:
+      id: power_delivered
+    power_returned:
+      id: power_returned
+  - platform: template
+    name: "Grid power"
+    unit_of_measurement: W
+    update_interval: 1s
+    lambda: return (id(power_delivered).state - id(power_returned).state) * 1000;
+```
+
+The node needs an `mqtt:` block with your broker: many P1 readers ship with
+ESPHome's native API only, which publishes nothing to MQTT. ESPHome then
+publishes the sensor on `<topic prefix>/sensor/grid_power/state`; use that
+topic with `"payload_format": "number"`.
+
 #### Linky (France) through a ZLinky_TIC and Zigbee2MQTT
 
 A LiXee ZLinky_TIC on the Linky's TIC port, paired with Zigbee2MQTT, publishes
@@ -1269,11 +1296,20 @@ installed elsewhere, or the wrong way round, reads with another meaning or
 sign; check the value once while the PV exports, in the dashboard or with
 `python3 emsctl.py diagnose --hardware`, before you switch off `dry_run`.
 
-The unit ID depends on the device. A Fronius inverter serves its primary
-Smart Meter at unit ID 200 once Modbus TCP is switched on in its web
-interface (*SunSpec Model Type* int + SF or float, both are read). A Kostal
-Smart Energy Meter serves its own measurements; its Modbus TCP settings name
-the unit ID to use.
+The unit ID depends on the device:
+
+- **Fronius:** the inverter serves its primary Smart Meter at unit ID 200 once
+  Modbus TCP is switched on in its web interface (*SunSpec Model Type* int + SF
+  or float, both are read).
+- **Kostal Smart Energy Meter:** serves its own measurements; its Modbus TCP
+  settings name the unit ID to use.
+- **Kostal Plenticore G2 (software 02.12 or later), G3 (3.04.01 or later)
+  and MP G3 (3.05.00 or later):** serves the meter connected to it as model 203 on **port 1502** at
+  unit ID 71. Set *Settings › Modbus/Sunspec (TCP)* to *big-endian (ABCD)
+  Sunspec*; the default little-endian setting is not SunSpec.
+- **SolarEdge:** an inverter with a SolarEdge meter serves the meter model
+  after its own models, usually at unit ID 1. Whether its meter counts export
+  as negative depends on how the meter is set up, so check the sign as above.
 
 Example: Fronius Smart Meter through the Fronius inverter (`port` defaults to
 502):
@@ -1284,6 +1320,51 @@ Example: Fronius Smart Meter through the Fronius inverter (`port` defaults to
     "type": "sunspec_modbus",
     "ip": "192.0.2.64",
     "unit_id": 200
+  }
+}
+```
+
+### Modbus TCP meters with a published register map
+
+Five devices publish where they keep the grid power in a Modbus document of
+their own. The EMS reads each by a fixed profile, once per control cycle and in
+one request, over one connection that it opens again after a failure. It only
+ever reads. Each needs `grid_meter.ip`; `port` and `unit_id` default to the
+device's own values.
+
+| `grid_meter.type` | Device | Defaults | What is read |
+| --- | --- | --- | --- |
+| `huawei_sun2000_modbus` | Huawei SUN2000 inverter with a DTSU666 power meter | port 502, unit 1 | Register 37113 (I32, W), which Huawei counts positive when feeding into the grid, so the EMS turns the sign; register 37100 must report the meter online. |
+| `sungrow_sh_modbus` | Sungrow SH hybrid inverter with the smart meter wired to it | port 502, unit 1 | Input register 5601 (S32, W, low word first), positive when buying from the grid. |
+| `carlo_gavazzi_em24_modbus` | Carlo Gavazzi EM24 with Ethernet (EM24-E1) | port 502, unit 1 | Register 0x0028 (INT32, W×10, low word first), imported power positive. |
+| `victron_gx_modbus` | Victron GX device (Cerbo GX, Venus OS) | port 502, unit 100 | Registers 820 to 822 (int16, W), the grid power of each phase, added up. |
+| `wibeee_modbus` | Circutor Wibeee | port 502, unit 1 | Register 6 (S32, W, low word first), the total active power. |
+
+What each device needs first:
+
+- **Huawei:** an installer enables Modbus TCP in FusionSolar. Through the
+  SDongle the port is 502; on the inverter's own access point it is 6607. The
+  SDongle is known to serve one Modbus client at a time.
+- **Sungrow:** the value is valid only when the meter is wired to the
+  inverter. Sungrow asks for at least one second between requests, which the
+  control loop's interval keeps.
+- **Victron:** switch Modbus TCP on in the GX settings. Only useful where the GX
+  already reads the grid meter.
+- **Wibeee:** set *Data Refresh Time* to `-1` in the device's web settings;
+  Wibeee's document does not say which direction its sign counts, so check it.
+
+None of these is confirmed on hardware. Check the sign once while the PV
+exports, in the dashboard or with `python3 emsctl.py diagnose --hardware`,
+before you switch off `dry_run`. The network scan does not find these devices;
+add them by hand.
+
+Example: Victron GX (`port` 502 and `unit_id` 100 are the defaults):
+
+```json
+{
+  "grid_meter": {
+    "type": "victron_gx_modbus",
+    "ip": "192.0.2.65"
   }
 }
 ```

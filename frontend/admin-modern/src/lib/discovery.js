@@ -177,7 +177,7 @@ const FAMILY_TYPES = {
   sunspec_modbus: "sunspec_modbus",
   tibber_pulse_bridge: "tibber_pulse_bridge",
 };
-const METER_TYPES = new Set(["shelly", "shelly_3em_gen1", "ecotracker", "homewizard_p1", "powerfox_poweropti", "dsmr_p1_tcp", "zendure_grid_meter_http", "zendure_smartmeter_3ct_http", "zendure_smartmeter_d0_http", "tasmota_http", "e3dc_modbus", "sunspec_modbus", "tibber_pulse_bridge", "zendure_smartmeter_d0", "mqtt"]);
+const METER_TYPES = new Set(["shelly", "shelly_3em_gen1", "ecotracker", "homewizard_p1", "powerfox_poweropti", "dsmr_p1_tcp", "zendure_grid_meter_http", "zendure_smartmeter_3ct_http", "zendure_smartmeter_d0_http", "tasmota_http", "e3dc_modbus", "sunspec_modbus", "huawei_sun2000_modbus", "sungrow_sh_modbus", "carlo_gavazzi_em24_modbus", "victron_gx_modbus", "wibeee_modbus", "tibber_pulse_bridge", "zendure_smartmeter_d0", "mqtt"]);
 
 /** The unit ID a found Modbus meter answered at. */
 export function unitValues(found) {

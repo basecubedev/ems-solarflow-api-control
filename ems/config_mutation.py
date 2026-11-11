@@ -598,6 +598,8 @@ def apply_grid_meter_changes(grid, changes, policy, *, credential=None, field_in
             for change in top_changes
         ):
             grid.pop("token", None)
+        if not any(change.path == "unit_id" for change in top_changes):
+            grid.pop("unit_id", None)
         strip_stale_grid_meter_keys(grid)
         applied = [
             entry

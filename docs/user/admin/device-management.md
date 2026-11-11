@@ -129,8 +129,9 @@ read-only device**); one set to another unit ID is added by hand.
 
 **The grid meter:** open its card and choose the **Meter type** (Shelly,
 everHome EcoTracker, HomeWizard P1 Meter, powerfox poweropti, a DSMR P1 bridge,
-Tasmota, Zendure D0 / Smart Meter 3CT over HTTP, an E3/DC or a SunSpec meter
-over Modbus TCP, a Tibber Pulse IR bridge, or an MQTT meter), then its address
+Tasmota, Zendure D0 / Smart Meter 3CT over HTTP, a meter over Modbus TCP
+(E3/DC, SunSpec, Huawei, Sungrow, Carlo Gavazzi EM24, Victron GX, Wibeee), a
+Tibber Pulse IR bridge, or an MQTT meter), then its address
 or topic. A HomeWizard P1 Meter is also paired once: click **Pair with the
 meter** and press the button on the meter within a minute, then save. A Tibber
 bridge also needs its password, picked from the bridge passwords saved under

@@ -995,6 +995,11 @@ def test_config_init_grid_meter_choices_are_runtime_supported():
         "mqtt",
         "e3dc_modbus",
         "sunspec_modbus",
+        "huawei_sun2000_modbus",
+        "sungrow_sh_modbus",
+        "carlo_gavazzi_em24_modbus",
+        "victron_gx_modbus",
+        "wibeee_modbus",
         "tibber_pulse_bridge",
         # Backward-compatible local-HTTP aliases accepted from existing configs;
         # both share the generic Zendure local-HTTP reader.

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import copy
+import functools
 import json
 import logging
 import math
@@ -14,6 +15,7 @@ from urllib.parse import urlparse
 
 from ems.device_fingerprints import device_fingerprints
 from ems.logging_utils import log_event
+from ems.modbus_meters import PROFILES_BY_TYPE as MODBUS_METER_PROFILES
 from ems.paths import resolve_config_path, resolve_template_path
 from ems.read_only_devices import E3DC_MODBUS_DEVICE_TYPE, is_read_only_device_config
 from ems.template_addresses import is_template_address
@@ -233,6 +235,7 @@ GRID_METER_MODEL_TRANSPORTS = {
     POWERFOX_GRID_METER_TYPE: ("powerfox poweropti", _LOCAL_HTTP_TRANSPORT),
     DSMR_P1_TCP_GRID_METER_TYPE: ("DSMR P1 meter via a TCP bridge", "TCP"),
     SUNSPEC_MODBUS_GRID_METER_TYPE: ("SunSpec meter", _MODBUS_TCP_TRANSPORT),
+    **{meter_type: (profile.label, _MODBUS_TCP_TRANSPORT) for meter_type, profile in MODBUS_METER_PROFILES.items()},
     "tasmota_http": ("Tasmota HTTP reader", _LOCAL_HTTP_TRANSPORT),
     ZENDURE_GRID_METER_HTTP_GRID_METER_TYPE: ("Zendure grid meter", _LOCAL_HTTP_TRANSPORT),
     ZENDURE_SMARTMETER_3CT_HTTP_GRID_METER_TYPE: (
@@ -285,7 +288,14 @@ def _strict_number(value, field, *, default, minimum, maximum=None, integer=True
     return number
 
 
-def _modbus_tcp_connection(entry, prefix, owner):
+def _modbus_tcp_connection(
+    entry,
+    prefix,
+    owner,
+    *,
+    default_port=E3DC_MODBUS_DEFAULT_PORT,
+    default_unit_id=E3DC_MODBUS_DEFAULT_UNIT_ID,
+):
     host = str(entry.get("ip") or "").strip()
     if not host:
         raise ValueError(f"{owner} requires {prefix}ip")
@@ -294,14 +304,14 @@ def _modbus_tcp_connection(entry, prefix, owner):
         "port": _strict_number(
             entry.get("port"),
             f"{prefix}port",
-            default=E3DC_MODBUS_DEFAULT_PORT,
+            default=default_port,
             minimum=1,
             maximum=65535,
         ),
         "unit_id": _strict_number(
             entry.get("unit_id"),
             f"{prefix}unit_id",
-            default=E3DC_MODBUS_DEFAULT_UNIT_ID,
+            default=default_unit_id,
             minimum=0,
             maximum=255,
         ),
@@ -501,10 +511,28 @@ def sunspec_modbus_grid_meter_settings(grid_meter):
     return _modbus_tcp_connection(grid_meter, "grid_meter.", "SunSpec Modbus grid meter")
 
 
+def modbus_profile_grid_meter_settings(grid_meter, meter_type):
+    """Validate a grid-meter block read by a device's Modbus profile into connection settings."""
+
+    profile = MODBUS_METER_PROFILES[meter_type]
+    grid_meter = grid_meter if isinstance(grid_meter, dict) else {}
+    return _modbus_tcp_connection(
+        grid_meter,
+        "grid_meter.",
+        f"{profile.label} grid meter",
+        default_port=profile.port,
+        default_unit_id=profile.unit_id,
+    )
+
+
 GRID_METER_READER_SETTINGS = {
     POWERFOX_GRID_METER_TYPE: powerfox_grid_meter_settings,
     DSMR_P1_TCP_GRID_METER_TYPE: dsmr_p1_tcp_grid_meter_settings,
     SUNSPEC_MODBUS_GRID_METER_TYPE: sunspec_modbus_grid_meter_settings,
+    **{
+        meter_type: functools.partial(modbus_profile_grid_meter_settings, meter_type=meter_type)
+        for meter_type in MODBUS_METER_PROFILES
+    },
 }
 
 

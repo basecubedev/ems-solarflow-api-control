@@ -82,6 +82,7 @@ COPY ems/config.py ./ems/config.py
 COPY ems/read_only_devices.py ./ems/read_only_devices.py
 COPY ems/e3dc_modbus.py ./ems/e3dc_modbus.py
 COPY ems/sunspec.py ./ems/sunspec.py
+COPY ems/modbus_meters.py ./ems/modbus_meters.py
 COPY ems/homewizard.py ./ems/homewizard.py
 COPY ems/template_addresses.py ./ems/template_addresses.py
 # The canonical config mutation semantics both Admin workflows apply changes
