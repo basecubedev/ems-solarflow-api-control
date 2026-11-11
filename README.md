@@ -32,34 +32,33 @@ the top right, or below the sign-in form.
 
 ## Supported hardware at a glance
 
-Each device carries one status — **Validated**, **Family-supported**, **Reverse-engineered**
-or **User-reported**. The maintainer validates on a SolarFlow 800 Pro 2 and a Shelly Pro;
-wider coverage needs community reports. Definitions and the full matrix live in
-[docs/user/supported-setups.md](docs/user/supported-setups.md).
+Each device has one status — **Validated** (on the maintainer's 800 Pro 2 and Shelly Pro), **Family-supported**,
+**Reverse-engineered** or **User-reported** — explained with the full list in the [supported setups](docs/user/supported-setups.md).
 
-| Hardware / integration | Connection | Status |
-| --- | --- | --- |
-| SolarFlow ZenSDK inverters — 800 Pro 2, plus 800 / 800 Plus / 800 Pro / 1600 AC+ / 2400 AC / 2400 AC+ / SolarFlow 2400 Pro / 4000 AC+ | Local API (ZenSDK) + Zendure cloud MQTT | 800 Pro 2 Validated; rest Family-supported |
-| Older Hub / Hyper / AIO / Ace MQTT devices — Hub 1200/2000, Hyper 2000, AIO 2400, Ace 1500 | Local or Zendure cloud MQTT | Reverse-engineered |
-| Any Zendure device via API key | Zendure cloud MQTT | Telemetry for any device; control needs an exact supported model |
-| E3/DC storage system (S10 family) — read-only inverter (PV, battery, grid shown, never controlled) and grid meter | Modbus TCP | Reverse-engineered, read-only (not yet validated on hardware) |
-| Zendure & Shelly grid meters — Shelly Pro, Zendure Smart Meter 3CT / Smart Meter D0 (Local API) | HTTP | Shelly Pro Validated; Zendure meters Reverse-engineered |
-| Other HTTP / MQTT grid meters — Shelly Plus/Gen2/Gen3, Shelly 3EM Gen1, everHome EcoTracker, HomeWizard P1 Meter, powerfox poweropti, Tasmota, generic MQTT (a Linky through a ZLinky_TIC and Swiss CH-SMR readers among them), D0 over local MQTT | HTTP / MQTT | Family-supported / Reverse-engineered |
-| Grid meters over TCP — DSMR P1 telegrams from a P1 bridge, SunSpec meters (Fronius Smart Meter through the inverter, Kostal Smart Energy Meter and Plenticore, SolarEdge), Huawei SUN2000 with DTSU666, Sungrow SH, Carlo Gavazzi EM24, Victron GX, smart-me, IAMMETER, Circutor Wibeee | TCP / Modbus TCP, read only | Reverse-engineered (not yet validated on hardware) |
-| External inverters and batteries — whatever FHEM, ioBroker, Node-RED or a script publishes into `ems-solarflow/<id>/…` ([guide](docs/user/external-devices.md)) | Local MQTT, read only | Reverse-engineered |
-| Household consumers — a washing machine, heat pump or dishwasher behind a Shelly plug, a Tasmota plug or any meter that publishes its power, into `ems-consumer/<id>/…` or through the MQTT mapping ([guide](docs/user/dashboard/consumers.md)) | Local MQTT, read only — shown with energy, cost and share of the house, never controlled | Reverse-engineered |
-| Devices that publish over MQTT in their own format — Shelly plugs and meters, Tasmota, OpenDTU, AhoyDTU or anything else measuring an inverter, a battery or a consumer — through the built-in MQTT mapping and the optional built-in broker ([guide](docs/user/admin/mqtt-mapping.md)) | Local MQTT, read only | Reverse-engineered |
+<table><thead><tr><th align="left">Device</th><th align="left">Connection</th><th align="left">Status</th></tr>
+<tr><td colspan="3"><strong>Inverters and batteries the EMS controls</strong></td></tr></thead>
+<tbody><tr><td>Zendure SolarFlow 800 Pro 2</td><td>Local API or Zendure cloud MQTT</td><td>Validated</td></tr></tbody>
+<tbody><tr><td>Zendure SolarFlow 800, 800 Plus, 800 Pro, 1600 AC+, 2400 AC, 2400 AC+, SolarFlow 2400 Pro, 3000 Mix AC+, 4000 Mix AC+</td><td>Local API or Zendure cloud MQTT</td><td>Family-supported</td></tr></tbody>
+<tbody><tr><td>Zendure Hub 1200/2000, Hyper 2000, AIO 2400</td><td>Local broker or Zendure cloud MQTT</td><td>Reverse-engineered</td></tr>
+<tr><td colspan="3"><strong>Grid meters, only read</strong> (<a href="docs/user/supported-setups.md#grid-meters-by-country">which fits in which country</a>)</td></tr></tbody>
+<tbody><tr><td>Shelly Pro (current clamps)</td><td>HTTP</td><td>Validated</td></tr></tbody>
+<tbody><tr><td>Shelly Plus / Gen2 / Gen3, Shelly 3EM Gen1, Zendure Smart Meter 3CT (current clamps)</td><td>HTTP</td><td>Family-supported (3EM Gen1, 3CT: Reverse-engineered)</td></tr></tbody>
+<tbody><tr><td>Readers on the electricity meter's P1 or infrared port: HomeWizard P1 Meter, powerfox poweropti, everHome EcoTracker, Zendure Smart Meter D0, Tasmota readers (Hichi, bitShake, …), DSMR P1 bridges, Tibber Pulse IR (experimental, <a href="docs/user/tibber-pulse.md">better pick another</a>)</td><td>HTTP or TCP</td><td>Reverse-engineered</td></tr></tbody>
+<tbody><tr><td>Meters read over Modbus, through the inverter or their own interface: SunSpec (Fronius, Kostal, SolarEdge), Huawei, Sungrow, E3/DC, Victron GX, Carlo Gavazzi EM24, smart-me, IAMMETER, Circutor Wibeee</td><td>Modbus TCP</td><td>Reverse-engineered</td></tr></tbody>
+<tbody><tr><td>Meters that publish over MQTT: Linky through a ZLinky_TIC, Swiss CH-SMR readers, ESPHome readers, Zendure D0, any meter that publishes its power</td><td>MQTT</td><td>Reverse-engineered</td></tr>
+<tr><td colspan="3"><strong>Devices the EMS shows but never controls</strong></td></tr></tbody>
+<tbody><tr><td>Zendure Ace 1500, SuperBase V, and any other Zendure device reached with an API key</td><td>Local broker or Zendure cloud MQTT</td><td>Telemetry only</td></tr></tbody>
+<tbody><tr><td>E3/DC storage system (S10 family): its PV, battery and grid</td><td>Modbus TCP</td><td>Reverse-engineered</td></tr></tbody>
+<tbody><tr><td>Inverters and batteries of other makers, as FHEM, ioBroker, Node-RED or a script publishes them (<a href="docs/user/external-devices.md">guide</a>)</td><td>Local MQTT</td><td>Reverse-engineered</td></tr></tbody>
+<tbody><tr><td>Devices that publish in a format of their own, such as OpenDTU or AhoyDTU, through the <a href="docs/user/admin/mqtt-mapping.md">MQTT mapping</a> and its optional built-in broker, and household consumers behind a Shelly or Tasmota plug (<a href="docs/user/dashboard/consumers.md">guide</a>)</td><td>Local MQTT</td><td>Reverse-engineered</td></tr></tbody></table>
 
-**MQTT control is an implemented EMS transport**, not a future feature: a
-supported inverter joins the same control loop, target calculation and safety
-gates as the Local API, over a local broker or Zendure cloud MQTT. ZenSDK cloud
-control is **Validated** on the SolarFlow 800 Pro 2; the older legacy-JSON write
-path is **Reverse-engineered** and still needs broader hardware validation — the
-**Roadmap** is confirming it on more device generations, not building the
-feature. Every write still requires an exact supported model, a verified write
-protocol, the per-device control capability and the transport write gate.
-[Device compatibility reports](https://github.com/basecubedev/ems-solarflow-api-control/issues/new?template=device_compatibility_report.yml)
-(working *or* broken) are very welcome.
+**MQTT control is an implemented EMS transport** with the Local API's control
+loop and safety gates: Validated on the 800 Pro 2 over ZenSDK cloud MQTT,
+Family-supported on the other ZenSDK models, Reverse-engineered on the older
+devices' legacy JSON. A write needs an exact supported model, a verified write
+protocol, the device's control capability, a broker carrying its write route
+and the transport's write gate. Most devices wait for a hardware confirmation:
+[reports](https://github.com/basecubedev/ems-solarflow-api-control/issues/new?template=device_compatibility_report.yml) (working *or* broken) are welcome.
 
 ## Hardware requirements
 

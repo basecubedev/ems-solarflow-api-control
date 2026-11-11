@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.test_docs_user_structure import _readme_hardware_table
+
 pytestmark = [
     pytest.mark.mqtt,
     pytest.mark.contract,
@@ -244,8 +246,13 @@ def test_connection_types_documents_automatic_cloud_provisioning():
 def test_readme_does_not_label_cloud_transport_experimental():
     # A specific unvalidated hardware generation may be flagged, but the cloud
     # MQTT transport as a whole is a supported control transport.
-    text = _normalized("README.md")
-    assert "zendure cloud mqtt | experimental" not in text
+    statuses = [
+        cells[2][2].lower()
+        for _, _, cells in _readme_hardware_table().rows
+        if len(cells) == 3 and "zendure cloud mqtt" in cells[1][2].lower()
+    ]
+    assert statuses
+    assert not any("experimental" in status for status in statuses)
 
 
 def test_configuration_documents_apply_time_cloud_provisioning():
