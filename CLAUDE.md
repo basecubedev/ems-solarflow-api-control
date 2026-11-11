@@ -137,6 +137,7 @@ construction, controller startup, main loop. All real implementation lives in `e
 - `logging_utils.py` — structured `event=...` logging setup
 - `models.py` — telemetry/capability dataclasses
 - `clients.py` — HTTP, Zendure and grid-meter clients
+- `sml.py` — SML 1.04 telegram decoder (frame CRC, list entries, signed grid power) for meters read over their IR port; import-side-effect-free
 - `runtime_state.py` — mutable runtime-state read/write
 - `runtime_intents.py` — runtime AC mode intent (`ac_output`/`ac_input`) reconciliation
 - `target_control.py` — capability detection and target/output calculation (core control math)
