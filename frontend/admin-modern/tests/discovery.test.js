@@ -4,6 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   addFound,
+  bridgeValues,
   buildReview,
   configuredNetworks,
   identitiesMatch,
@@ -119,6 +120,14 @@ test("a found HomeWizard P1 Meter becomes the meter of its own type", () => {
   const found = { ip: "192.168.1.40", api_family: "homewizard_p1", device_type: "homewizard_p1", port: 443 };
   assert.deepEqual(addFound({}, { role: "grid_meter", discovered: found }, catalog).grid_meter, { present: true, type: "homewizard_p1", ip: "192.168.1.40", port: 443 });
   assert.equal(meterTypeOf({ grid_meter_type: "homewizard_p1", api_family: "shelly_gen2" }), "homewizard_p1");
+});
+
+test("a found Tibber bridge becomes the meter with the password that opened it and its reading head", () => {
+  const found = { ip: "192.168.1.70", api_family: "tibber_pulse_bridge", port: 80, credentials_ref: "basement", node_id: 2 };
+  assert.deepEqual(addFound({}, { role: "grid_meter", discovered: found }, catalog).grid_meter, { present: true, type: "tibber_pulse_bridge", ip: "192.168.1.70", port: 80, credentials_ref: "basement", node_id: 2 });
+  assert.deepEqual(bridgeValues({ credentials_ref: " ", node_id: "x" }), {});
+  assert.deepEqual(bridgeValues({ node_id: "2" }), { node_id: 2 });
+  assert.equal(meterTypeOf({ api_family: "tibber_pulse_bridge" }), "tibber_pulse_bridge");
 });
 
 test("an external device moves to the connection a proposal offers, by the catalogue id the server issued", () => {

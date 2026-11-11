@@ -3,6 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  bridgePasswordField,
   changeCount,
   changeGroups,
   choices,
@@ -288,4 +289,12 @@ test("a change written at once that changes nothing sends nothing, and a refused
   assert.deepEqual([unchanged.ok, sent], [true, []]);
   assert.deepEqual([invalid.ok, invalid.error.message], [false, "Config names must be unique: Balkon."]);
   assert.deepEqual([unreadable.ok, unreadable.error.message], [false, "gone"]);
+});
+
+test("the bridge password is a choice of the saved ones by name, and a stored one stays shown", () => {
+  const field = bridgePasswordField({ path: "grid_meter.credentials_ref", type: "text" }, [{ id: "basement", label: "Basement meter" }, { id: "garage" }]);
+  assert.deepEqual(field.options, ["basement", "garage"]);
+  assert.deepEqual(field.optionLabels, { basement: "Basement meter", garage: "garage" });
+  assert.deepEqual(choices(field, "attic"), ["attic", "basement", "garage"]);
+  assert.deepEqual(bridgePasswordField({ path: "grid_meter.credentials_ref" }, null).options, []);
 });

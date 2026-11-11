@@ -10,6 +10,7 @@
   import { t, say, catalogText } from "../i18n/i18n.svelte.js";
   import { settings, setHardwareValues } from "../state/settings.svelte.js";
   import { sources, saveCredential } from "../state/sources.svelte.js";
+  import BridgePasswordField from "./BridgePasswordField.svelte";
   import {
     NO_GRID_METER,
     commonDefaults,
@@ -228,6 +229,8 @@
     {#if meter.mqtt?.has_password}
       <SettingField field={{ path: "grid_meter.mqtt.clear_password", type: "boolean", label: t("devices.field.clearPassword"), description: t("devices.field.clearPassword.hint") }} lang={null} value={meter.mqtt?.clear_password === true} onchange={(value) => setHardwareValues({ grid_meter: setGridPassword(meter, { clear: value }) })} />
     {/if}
+  {:else if field.path === "grid_meter.credentials_ref"}
+    <BridgePasswordField {field} value={gridValue(meter, field.path)} onchange={(value) => setHardwareValues({ grid_meter: setGridValue(meter, field.path, value) })} />
   {:else}
     <SettingField {field} value={gridValue(meter, field.path)} onchange={(value) => setHardwareValues({ grid_meter: setGridValue(meter, field.path, value) })} />
     {#if field.path === "grid_meter.ip"}

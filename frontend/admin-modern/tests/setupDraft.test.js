@@ -116,6 +116,18 @@ test("a grid meter row sets its type and address; a D0 topic follows its serial 
   assert.deepEqual([typed.features["grid_meter.mqtt.topic"], typed.item.d0_topic_mode], ["custom/topic", "manual"]);
 });
 
+test("a bridge row's password reference and node are the features: another bridge brings its own, another type none", () => {
+  const first = syncGridFeatures({}, { api_family: "tibber_pulse_bridge", ip: "10.0.0.7", credentials_ref: "basement", node_id: 2 }).features;
+  assert.equal(first["grid_meter.type"], "tibber_pulse_bridge");
+  assert.equal(first["grid_meter.credentials_ref"], "basement");
+  assert.equal(first["grid_meter.node_id"], 2);
+  const second = syncGridFeatures(first, { api_family: "tibber_pulse_bridge", ip: "10.0.0.8", credentials_ref: "garage" }).features;
+  assert.equal(second["grid_meter.credentials_ref"], "garage");
+  assert.equal("grid_meter.node_id" in second, false);
+  const shelly = syncGridFeatures(first, { api_family: "shelly_gen2", ip: "10.0.0.9" }).features;
+  assert.equal("grid_meter.credentials_ref" in shelly, false);
+});
+
 test("the browser's own checks name empty and doubled names and the grid meter's state", () => {
   const hints = (draft, extra = {}) => clientHints(draft, { supportedMeters: 0, gridStale: false, ...extra }).map((hint) => hint.key);
   assert.deepEqual(hints(draftWith({ items: [{ role: "inverter", config_name: "INV_1" }, { role: "inverter", config_name: "INV_1" }] })), ["duplicateName", "noGridMeter"]);

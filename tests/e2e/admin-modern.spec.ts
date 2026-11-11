@@ -710,6 +710,36 @@ test.describe("Modern Admin: what the search may use", { tag: ["@smoke"] }, () =
     await expect(page.getByTestId("search-sources")).not.toContainText("garage broker");
   });
 
+  test("a Tibber bridge password is saved by name, the grid meter picks it, and the password in use stays", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings/devices");
+    const bridges = page.getByTestId("bridge-passwords");
+    await page.getByTestId("bridge-label").fill("basement bridge");
+    await page.getByTestId("bridge-password").fill("E2E1-TIBR");
+    await page.getByTestId("bridge-save").click();
+    await expect(bridges).toContainText("basement bridge");
+    await expect(page.getByTestId("bridge-password")).toHaveValue("");
+    await expect(page.locator("body")).not.toContainText("E2E1-TIBR");
+
+    const meter = page.getByTestId("devices-editor").locator('[data-device="grid-meter"]');
+    await meter.locator(".summary").click();
+    await page.getByTestId("grid-type").selectOption("tibber_pulse_bridge");
+    await meter.locator('[data-path="grid_meter.ip"] input').fill("192.168.50.70");
+    await meter.locator('[data-path="grid_meter.credentials_ref"] select').selectOption({ label: "basement bridge" });
+    await page.getByTestId("review").click();
+    await expect(page.getByTestId("settings-review")).toContainText("Settings are valid");
+    await page.getByTestId("apply").click();
+    await page.getByRole("dialog", { name: "Save the checked changes?" }).getByTestId("confirm").click();
+    await expect(page.getByTestId("settings-applied")).toBeVisible();
+
+    await page.reload();
+    await meter.locator(".summary").click();
+    await expect(meter.locator('[data-path="grid_meter.credentials_ref"] select')).toHaveValue("basement-bridge");
+    await bridges.locator("li").filter({ hasText: "basement bridge" }).getByRole("button", { name: "Remove" }).click();
+    await page.getByRole("dialog", { name: "Remove this bridge password?" }).getByTestId("confirm").click();
+    await expect(page.getByTestId("sources-message")).toContainText("The bridge password could not be removed.");
+    await expect(bridges).toContainText("basement bridge");
+  });
+
   test("the Zendure cloud key is saved, tested, used and forgotten", async ({ page, seedAdminScenario }) => {
     let saved = false;
     const sent: string[] = [];

@@ -1302,6 +1302,9 @@ without guaranteed support:**
 - Tibber updates the bridge over the air and has changed the unofficial local
   interface before (September 2026: `/data.json` became `/node_data.json`).
 
+Background, measurements and sources:
+[docs/user/tibber-pulse.md](../user/tibber-pulse.md).
+
 **Reading.** A background worker asks the bridge for the raw SML telegram at
 most every 3 seconds (`/node_data.json?node_id=N`, falling back to `/data.json`
 on firmware before 1794), with HTTP Basic login `admin` and the bridge
@@ -1370,7 +1373,7 @@ differs from it, so a head that stopped before the start never looks fresh. Whil
 | `node_id` | `1` | Which reading head on the bridge, `1`–`255`; the bridge's Pulse page lists them. |
 
 The bridge's web server is off in normal operation and has to be switched on
-once, permanently.
+once, permanently: see [docs/user/tibber-pulse.md](../user/tibber-pulse.md).
 
 Example:
 
