@@ -187,6 +187,14 @@ test("a typed broker or grid meter password never reaches the tab's storage", ()
   assert.deepEqual([stored.values.zendure_mqtt.host, stored.values.grid_meter.mqtt.topic, stored.base], ["h", "t", "b"]);
 });
 
+test("a new meter pairing stays in memory, token and serial together, until it is saved; its name is no secret", () => {
+  const meter = { present: true, type: "homewizard_p1", ip: "192.168.1.40", has_token: true };
+  const fresh = storable({ base: "b", values: { grid_meter: { ...meter, serial: "0a1b2c3d4e5f", token: "0123456789ABCDEF0123456789ABCDEF", pairing_name: "local/ems_solarflow#3f9a1c" } } });
+  assert.deepEqual(fresh.values.grid_meter, { ...meter, pairing_name: "local/ems_solarflow#3f9a1c" });
+  const kept = storable({ base: "b", values: { grid_meter: { ...meter, serial: "0a1b2c3d4e5f" } } });
+  assert.equal(kept.values.grid_meter.serial, "0a1b2c3d4e5f");
+});
+
 test("every feature has its mark, in a tone class", async () => {
   const { FEATURE_IDS, FEATURE_LOOKS, SECTION_LOOK } = await import("../src/lib/settings.js");
   assert.deepEqual(Object.keys(FEATURE_LOOKS).sort(), [...FEATURE_IDS].sort());

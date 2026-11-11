@@ -127,8 +127,10 @@ read-only device**); one set to another unit ID is added by hand.
 ### 5 — Change the grid meter, or an inverter's connection
 
 **The grid meter:** open its card and choose the **Meter type** (Shelly,
-everHome EcoTracker, Tasmota, Zendure D0 / Smart Meter 3CT over HTTP, an E3/DC
-over Modbus TCP, or an MQTT meter), then its address or topic. Changing the
+everHome EcoTracker, HomeWizard P1 Meter, Tasmota, Zendure D0 / Smart Meter 3CT
+over HTTP, an E3/DC over Modbus TCP, or an MQTT meter), then its address or
+topic. A HomeWizard P1 Meter is also paired once: click **Pair with the meter**
+and press the button on the meter within a minute, then save. Changing the
 type removes the fields the new type cannot use — an HTTP meter's address does
 not linger on an MQTT meter — while keys you added by hand stay. A port belongs
 to its protocol: switching between two HTTP meters keeps it, switching to an

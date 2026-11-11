@@ -6,6 +6,8 @@
   import DeviceCard from "../DeviceCard.svelte";
   import SettingField from "../SettingField.svelte";
   import CatalogText from "../CatalogText.svelte";
+  import HomeWizardPairing from "../HomeWizardPairing.svelte";
+  import { HOMEWIZARD_TYPE, PAIRING_NAME_FIELD, SERIAL_FIELD, TOKEN_FIELD } from "../../lib/homewizard.js";
   import { t, tn, say, catalogText } from "../../i18n/i18n.svelte.js";
   import { generations, hardwareModels, maturityWords, operationWords, reasonKey } from "../../lib/devices.js";
   import { isExternalProposal, observationKey, sourcesOf } from "../../lib/discovery.js";
@@ -192,6 +194,9 @@
             <label class="field"><span>{t("setup.hardware.port")}</span><input class="input num" type="number" value={grid.port ?? ""} oninput={(event) => setGridEndpoint("port", event.currentTarget.value)} /></label>
           </div>
           <p class="muted small">{#if variants[gridType]?.port_description}<CatalogText text={variants[gridType].port_description} />{:else}{t("setup.hardware.httpPort")}{/if}</p>
+        {/if}
+        {#if gridType === HOMEWIZARD_TYPE}
+          <HomeWizardPairing ip={grid.ip} port={grid.port} paired={Boolean(draft.features[TOKEN_FIELD])} serial={draft.features[SERIAL_FIELD] || ""} pairingName={draft.features[PAIRING_NAME_FIELD] || ""} onpaired={({ serial, token, pairingName }) => { setGridFeature(SERIAL_FIELD, serial); setGridFeature(TOKEN_FIELD, token); setGridFeature(PAIRING_NAME_FIELD, pairingName); }} />
         {/if}
         <div class="fields">
           {#each meterFields.normal as field (field.path)}<SettingField {field} value={featureValue(draft.features, field)} onchange={(value) => setGridFeature(field.path, value)} type={field.secret ? "password" : ""} />{/each}

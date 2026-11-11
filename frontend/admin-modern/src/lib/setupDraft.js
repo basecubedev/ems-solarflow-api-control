@@ -13,6 +13,7 @@
 
 import { D0_TOPIC_PREFIX, D0_TOPIC_SUFFIX, generations, hardwareModels, modelsForGeneration } from "./devices.js";
 import { aliasTokens, isConsumerProposal, isExternalProposal, isGridMeterProposal, issuedPhysicalIdentity, meterTypeOf, observationKey, proposalTopic, sourcesOf } from "./discovery.js";
+import { HOMEWIZARD_TYPE, PAIRING_FIELDS } from "./homewizard.js";
 
 /** Classic's localStorage keys; the workflow identity and the step live in state/setup.svelte.js. */
 export const STORE = Object.freeze({
@@ -526,7 +527,15 @@ export function syncGridFeatures(features, item) {
   } else {
     next["grid_meter.ip"] = meter.ip || "";
   }
-  return { features: next, item: meter };
+  return { features: keepPairing(features, next), item: meter };
+}
+
+/** A pairing belongs to the meter it was made with: another type or address leaves it behind. */
+export function keepPairing(previous, next) {
+  if (next["grid_meter.type"] === HOMEWIZARD_TYPE && text(previous?.["grid_meter.ip"]) === text(next["grid_meter.ip"])) return next;
+  const out = { ...next };
+  for (const path of PAIRING_FIELDS) delete out[path];
+  return out;
 }
 
 /** A port belongs to its protocol: a meter with another default starts from that default. */
@@ -537,14 +546,14 @@ export function portAfterSwitch(port, previous, next) {
   return to;
 }
 
-/** The grid meter section's fields for this type, without type and address, the D0 topic as an advanced read-back. */
+/** The grid meter section's fields for this type, without type, address and what pairing fills in, the D0 topic as an advanced read-back. */
 export function gridFields(catalog, type) {
   const section = catalogSection(catalog, "grid_meter");
   const variant = catalog?.grid_meter_variants?.[type];
   const allowed = new Set(variant ? variant.fields : []);
   const out = { normal: [], advanced: [], expert: [] };
   for (const field of section?.fields || []) {
-    if (field.path === "grid_meter.type" || field.path === "grid_meter.ip" || !allowed.has(field.path)) continue;
+    if (field.path === "grid_meter.type" || field.path === "grid_meter.ip" || !allowed.has(field.path) || PAIRING_FIELDS.includes(field.path)) continue;
     if (["deprecated", "internal"].includes(field.level) || ["safety_gates", "safety_holds", "limits"].includes(field.group)) continue;
     const level = type === D0_TYPE && field.path === "grid_meter.mqtt.topic" ? "advanced" : ["advanced", "expert"].includes(field.level) ? field.level : "normal";
     out[level].push(field);

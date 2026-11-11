@@ -272,7 +272,7 @@ export function fieldMatches(field, query, shown = (text) => text) {
   return texts.some((text) => String(text || "").toLowerCase().includes(needle));
 }
 
-/** A typed password stays in memory: it is never written to the tab's storage. */
+/** A typed password stays in memory, and so does a new pairing's token with its serial: neither is written to the tab's storage. */
 export function storable(hardware) {
   const values = { ...hardware.values };
   if (values.zendure_mqtt && "password" in values.zendure_mqtt) {
@@ -282,6 +282,10 @@ export function storable(hardware) {
   if (values.grid_meter?.mqtt && "password" in values.grid_meter.mqtt) {
     const { password, ...mqtt } = values.grid_meter.mqtt;
     values.grid_meter = { ...values.grid_meter, mqtt };
+  }
+  if (values.grid_meter && "token" in values.grid_meter) {
+    const { token, serial, ...meter } = values.grid_meter;
+    values.grid_meter = meter;
   }
   return { ...hardware, values };
 }

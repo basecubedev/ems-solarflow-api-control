@@ -27,6 +27,7 @@ import {
   isGridMeterProposal,
   issuedFor,
   itemFromDevice,
+  keepPairing,
   keptValues,
   manualDevice,
   manualItem,
@@ -574,7 +575,7 @@ export function setGridEndpoint(key, value) {
   if (!grid) return;
   let meter = { ...grid, [key]: value };
   let features = setupDraft.draft.features;
-  if (key === "ip") features = { ...features, "grid_meter.ip": value };
+  if (key === "ip") features = keepPairing(features, { ...features, "grid_meter.ip": value });
   if (key === "serial_number") ({ features, item: meter } = syncGridFeatures(features, meter));
   setupDraft.draft = { ...setupDraft.draft, items: setupDraft.draft.items.map((item) => (item.source_id === grid.source_id ? meter : item)), features };
   replanSoon();
