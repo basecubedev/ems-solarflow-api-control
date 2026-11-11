@@ -1,3 +1,19 @@
 {
-  "builds": []
+  "builds": [
+    {
+      "admin_digest": "sha256:2e778e3f04b1d6410f07c2f4726cc8885033837b4e8b9a3920969cd42483e8f4",
+      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-more-grid-meters-9192ebc0f4-94c6188-43118443481-1",
+      "build_id": "dev-feat-more-grid-meters-9192ebc0f4-94c6188-43118443481-1",
+      "channel": "development",
+      "created_at": "2026-11-11T23:27:09Z",
+      "display_name": "Feature feat-more-grid-meters",
+      "ems_digest": "sha256:a8663ce35c079ba2653729489f26989cb7426c70375c2e3a800216f486d99231",
+      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-feat-more-grid-meters-9192ebc0f4-94c6188-43118443481-1",
+      "installable": true,
+      "revision": "94c61888edd5a160a79294585efdfc651f0878df",
+      "run_attempt": 1,
+      "run_id": "43118443481",
+      "tag": "dev-feat-more-grid-meters-9192ebc0f4-94c6188-43118443481-1"
+    }
+  ]
 }
