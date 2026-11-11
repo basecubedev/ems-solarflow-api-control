@@ -1,9 +1,20 @@
 # Tibber Pulse IR as grid meter (experimental)
 
-EMS can read a Tibber Pulse IR as its grid meter, locally over the bridge's own
-web server and without the Tibber cloud. It is an **experimental grid meter
-without guaranteed support**. EMS regulates your battery against the grid
-meter every few seconds, and the bridge was not built for that.
+**Short version: if you can, use a different grid meter.**
+
+The Pulse IR is a fine companion for the Tibber app. As a grid meter for EMS it
+is the colleague who always turns up a little late: its bridge takes about
+1.5 s to answer, has new values only every 2–3 s, and, when asked too often,
+can hang until it is unplugged. EMS works around all of that and does support
+the Pulse IR, but only as an **experimental grid meter without guaranteed
+support**. If it is what you have, it will get you started. If you are still
+choosing, a reader with a stable local interface regulates better and spares
+you the unplugging: a Tasmota IR reader (Hichi, bitShake), an everHome
+EcoTracker or a powerfox poweropti on the same optical port of your meter, or a
+Shelly Pro 3EM in the distribution board.
+
+EMS reads the Pulse IR locally over the bridge's own web server, without the
+Tibber cloud.
 
 ## Before you choose it
 
@@ -18,8 +29,8 @@ does about it:
 | Tibber updates the bridge over the air and has changed its unofficial local interface before (September 2026). | EMS tries the current and the older data path. A future change can still break the reading until EMS is updated. |
 | An empty battery in the reading head stops the data; the bridge keeps answering. | A reading that does not change ages out instead of looking fresh. |
 
-If you have the choice, a meter with a stable local interface such as a Shelly
-Pro 3EM is the better grid meter ([supported setups](supported-setups.md)).
+Still keen? Then read on. Otherwise the [supported setups](supported-setups.md)
+list the meters that answer faster.
 
 ## 1. Switch on the bridge's web server permanently
 

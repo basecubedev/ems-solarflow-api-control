@@ -236,7 +236,7 @@ validated for everyone else.
 | Circutor Wibeee | `wibeee_modbus` | Reverse-engineered | **Read-only** over Modbus TCP: register 6 from the Wibeee Modbus TCP specification, which does not state the sign's direction; check it once. Not confirmed on hardware. |
 | smart-me Telstar | `smart_me_modbus` | Reverse-engineered | **Read-only** over Modbus TCP: register 0x2004 (mW) from smart-me's register sheet. smart-me asks for at most one request every 2 s; the EMS asks no sooner than 1.75 s, allowing for the control loop's jitter; the sheet does not state the sign's direction, so check it once. Not confirmed on hardware. |
 | IAMMETER WEM3080T | `iammeter_wem3080t_modbus` | Reverse-engineered | **Read-only** over Modbus TCP: total active power at address 32 from IAMMETER's register map; it measures with clamps, so the sign follows how they face. Not confirmed on hardware. |
-| Tibber Pulse IR — local bridge | `tibber_pulse_bridge` | Reverse-engineered, **experimental** | Reads the meter's SML telegram from the bridge's local web server, which has to be switched on permanently. No guaranteed support: the bridge answers slowly, delivers new values only every 2–3 s, now and then serves damaged telegrams, and Tibber can change its unofficial local interface with any firmware update. The SML decoding is tested against real telegrams of several meters; the bridge reader has not run against a real bridge. See [Tibber Pulse](tibber-pulse.md). |
+| Tibber Pulse IR — local bridge | `tibber_pulse_bridge` | Reverse-engineered, **experimental** | Reads the meter's SML telegram from the bridge's local web server, which has to be switched on permanently. No guaranteed support: the bridge answers slowly, delivers new values only every 2–3 s, now and then serves damaged telegrams, and Tibber can change its unofficial local interface with any firmware update. The SML decoding is tested against real telegrams of several meters; the bridge reader has not run against a real bridge. See [Tibber Pulse](tibber-pulse.md). If you can, choose another grid meter. |
 
 ### Grid meters by country
 
@@ -246,7 +246,7 @@ cloud account to regulate. None is confirmed on hardware except the Shelly Pro
 
 | Country | Grid meters that fit |
 | --- | --- |
-| Germany | Shelly, everHome EcoTracker, powerfox poweropti, a Tasmota IR reader (Hichi, bitShake), Zendure Smart Meter 3CT/D0, Tibber Pulse IR (experimental), SunSpec (Fronius, Kostal, SolarEdge), Huawei, Sungrow, E3/DC, Victron GX, Carlo Gavazzi EM24, IAMMETER |
+| Germany | Shelly, everHome EcoTracker, powerfox poweropti, a Tasmota IR reader (Hichi, bitShake), Zendure Smart Meter 3CT/D0, Tibber Pulse IR (experimental; another meter is the better choice), SunSpec (Fronius, Kostal, SolarEdge), Huawei, Sungrow, E3/DC, Victron GX, Carlo Gavazzi EM24, IAMMETER |
 | Netherlands | HomeWizard P1 Meter, a DSMR P1 bridge over TCP, an ESPHome P1 reader (SlimmeLezer), Shelly, SunSpec, Huawei, Sungrow |
 | Belgium | HomeWizard P1 Meter, a DSMR P1 bridge over TCP (Fluvius meters, P1 port opened in the Fluvius portal), an ESPHome P1 reader, Shelly, SunSpec, Huawei, Sungrow |
 | Luxembourg | HomeWizard P1 Meter with the grid operator's key (the P1 port is encrypted, so a plain P1 bridge does not work), Shelly, SunSpec, Huawei, Sungrow |

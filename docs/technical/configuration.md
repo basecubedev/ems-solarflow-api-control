@@ -1448,8 +1448,9 @@ Example: Victron GX (`port` 502 and `unit_id` 100 are the defaults):
 
 The Tibber Pulse IR is a battery-powered reading head on the meter's infrared
 port and a bridge in a wall socket that it radios to. The EMS reads the bridge's
-local web server, never the Tibber cloud. **This meter is experimental and comes
-without guaranteed support:**
+local web server, never the Tibber cloud. If you can, use another grid meter;
+the [Tibber Pulse IR guide](../user/tibber-pulse.md) says why. **This meter is
+experimental and comes without guaranteed support:**
 
 - the bridge's web server was built for setting it up, not for continuous
   polling, and often takes about 1.5 s to answer;
