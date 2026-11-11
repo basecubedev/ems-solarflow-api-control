@@ -13,6 +13,7 @@ and timeouts are clamped to keep a scan cheap enough for a small Raspberry Pi.
 import ipaddress
 import logging
 import re
+import socket
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -23,13 +24,14 @@ from admin.models import (
     ROLE_INVERTER,
     DiscoveredDevice,
 )
-from ems import e3dc_modbus
+from ems import e3dc_modbus, sunspec
 from ems.config import (
     E3DC_MODBUS_DEFAULT_PORT,
     E3DC_MODBUS_DEFAULT_UNIT_ID,
     E3DC_MODBUS_GRID_METER_TYPE,
     HOMEWIZARD_P1_DEFAULT_PORT,
     HOMEWIZARD_P1_GRID_METER_TYPE,
+    SUNSPEC_MODBUS_GRID_METER_TYPE,
     TIBBER_PULSE_GRID_METER_TYPE,
 )
 from ems.homewizard import HomeWizardError, HomeWizardP1Api
@@ -476,16 +478,27 @@ def probe_ecotracker(session, ip, timeout_s):
     )
 
 
+HOMEWIZARD_HANDSHAKE_TIMEOUT_S = 3.0
+
+
 def probe_homewizard_p1(session, ip, timeout_s, port=HOMEWIZARD_P1_DEFAULT_PORT, context=None):
     """Offer a host whose HTTPS certificate HomeWizard issued for a P1 Meter.
 
     ``session`` is unused: the probe is one TLS handshake, which needs neither
-    the meter's token nor its pairing. The token is not a discovery field: the
+    the meter's token nor its pairing. The connect waits the scan's timeout, so
+    a host without the port costs no more than for any other probe; the
+    handshake on a port that answered may take up to
+    :data:`HOMEWIZARD_HANDSHAKE_TIMEOUT_S`, since a small device's TLS
+    handshake can take longer than the scan's timeout. The token is not a discovery field: the
     operator pairs the chosen meter in the hardware step, and the setup preview
     stays not ready until then.
     """
 
-    api = HomeWizardP1Api(ip, port=port, timeout=timeout_s, context=context)
+    try:
+        socket.create_connection((ip, port), timeout_s).close()
+    except OSError:
+        return None
+    api = HomeWizardP1Api(ip, port=port, timeout=max(timeout_s, HOMEWIZARD_HANDSHAKE_TIMEOUT_S), context=context)
     try:
         serial = api.identify()
     except HomeWizardError:
@@ -655,6 +668,58 @@ def probe_e3dc_modbus(session, ip, timeout_s, port=None):
     )
 
 
+SUNSPEC_SCAN_PORT = 502
+SUNSPEC_SCAN_UNIT_IDS = (1, 200, 71)
+
+
+def probe_sunspec_modbus(session, ip, timeout_s, port=SUNSPEC_SCAN_PORT):
+    """Offer a device that serves a SunSpec meter model over Modbus TCP.
+
+    ``session`` is unused. One connection per host tries the unit IDs meters
+    are commonly served at: 1, 200 (a Fronius inverter's primary meter) and 71
+    (a Kostal Smart Energy Meter). A unit that answers with a Modbus exception
+    or without a meter model is skipped; a transport error, a unit that stays
+    silent among them, ends the probe, so a closed port costs one timeout. Only reads are sent. The candidate carries the unit ID.
+    """
+
+    client = e3dc_modbus.ReadOnlyModbusTcpClient(ip, port, unit_id=SUNSPEC_SCAN_UNIT_IDS[0], timeout=timeout_s)
+    try:
+        client.connect()
+        for unit_id in SUNSPEC_SCAN_UNIT_IDS:
+            client.unit_id = unit_id
+            try:
+                meter = sunspec.locate_meter(client)
+            except (sunspec.SunSpecError, e3dc_modbus.ModbusExceptionResponse):
+                continue
+            try:
+                manufacturer, model, serial = sunspec.read_common(client)
+            except (sunspec.SunSpecError, e3dc_modbus.ModbusExceptionResponse):
+                manufacturer, model, serial = "", "", ""
+            break
+        else:
+            return None
+    except (e3dc_modbus.ModbusError, OSError, ValueError):
+        return None
+    finally:
+        client.close()
+    name = " ".join(part for part in (manufacturer, model) if part)
+    return DiscoveredDevice(
+        ip=ip,
+        api_family=SUNSPEC_MODBUS_GRID_METER_TYPE,
+        device_type=SUNSPEC_MODBUS_GRID_METER_TYPE,
+        role_suggestion=ROLE_GRID_METER,
+        port=port,
+        protocol="modbus_tcp",
+        display_name=name or "SunSpec meter",
+        serial_number=_first_str(serial),
+        model=model or f"SunSpec model {meter.model_id}",
+        confidence=0.85,
+        config_ready=True,
+        missing_config_fields=[],
+        unit_id=unit_id,
+    )
+
+
 PROBES = (
     probe_zendure,
     probe_zendure_grid_meter,
@@ -664,6 +729,7 @@ PROBES = (
     probe_homewizard_p1,
     probe_tibber_bridge,
     probe_e3dc_modbus,
+    probe_sunspec_modbus,
 )
 
 

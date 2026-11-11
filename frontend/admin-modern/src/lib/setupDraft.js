@@ -12,7 +12,7 @@
  */
 
 import { D0_TOPIC_PREFIX, D0_TOPIC_SUFFIX, generations, hardwareModels, modelsForGeneration } from "./devices.js";
-import { aliasTokens, bridgeValues, isConsumerProposal, isExternalProposal, isGridMeterProposal, issuedPhysicalIdentity, meterTypeOf, observationKey, proposalTopic, sourcesOf } from "./discovery.js";
+import { aliasTokens, bridgeValues, isConsumerProposal, isExternalProposal, isGridMeterProposal, issuedPhysicalIdentity, meterTypeOf, observationKey, proposalTopic, sourcesOf, unitValues } from "./discovery.js";
 import { HOMEWIZARD_TYPE, PAIRING_FIELDS, TOKEN_FIELD } from "./homewizard.js";
 
 /** Classic's localStorage keys; the workflow identity and the step live in state/setup.svelte.js. */
@@ -349,7 +349,7 @@ export function itemFromDevice(device, role, { id, items, configName }) {
   const sources = sourcesOf(device);
   const common = { source_id: observationKey(device), draft_item_id: id, role, enabled: true, ip: device.ip || "", port: device.port || "", serial_number: device.serial_number || "" };
   if (role === "grid_meter") {
-    return { ...common, config_name: "grid_meter", display_name: uniqueDisplayName(items, device.display_name || device.model || DEFAULT_GRID_METER, "grid_meter"), grid_meter_type: "", device_type: device.device_type || "", api_family: device.api_family || "", discovery_source: sources[0] || "", ...bridgeValues(device) };
+    return { ...common, config_name: "grid_meter", display_name: uniqueDisplayName(items, device.display_name || device.model || DEFAULT_GRID_METER, "grid_meter"), grid_meter_type: "", device_type: device.device_type || "", api_family: device.api_family || "", discovery_source: sources[0] || "", ...bridgeValues(device), ...unitValues(device) };
   }
   return { ...common, config_name: configName, display_name: uniqueDisplayName(items, device.display_name || device.model || DEFAULT_INVERTER, "inverter"), physical_identity_token: issuedPhysicalIdentity(device), device_type: device.device_type || "", api_family: device.api_family || "", discovery_source: sources[0] || "" };
 }
@@ -535,6 +535,9 @@ export function syncGridFeatures(features, item) {
     if (key in bridge) next[`grid_meter.${key}`] = bridge[key];
     else delete next[`grid_meter.${key}`];
   }
+  const unit = unitValues(meter);
+  if ("unit_id" in unit) next["grid_meter.unit_id"] = unit.unit_id;
+  else delete next["grid_meter.unit_id"];
   return { features: keepPairing(features, next), item: meter };
 }
 

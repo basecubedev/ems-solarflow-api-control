@@ -14,7 +14,7 @@ import math
 import struct
 from dataclasses import dataclass
 
-from ems.e3dc_modbus import ModbusExceptionResponse, ReadOnlyModbusTcpClient
+from ems.e3dc_modbus import ModbusExceptionResponse, ReadOnlyModbusTcpClient, decode_string
 
 SUNSPEC_BASES = (40000, 0, 50000)
 SUNSPEC_MARKER = (0x5375, 0x6E53)
@@ -26,6 +26,8 @@ INT_W_SF_OFFSET = 22
 FLOAT_W_OFFSET = 28
 NOT_IMPLEMENTED_INT16 = 0x8000
 MAX_MODELS = 64
+COMMON_MODEL_ID = 1
+COMMON_MODEL_REGISTERS = 68
 
 
 class SunSpecError(ValueError):
@@ -42,28 +44,40 @@ def _signed(register):
     return register - 0x10000 if register & 0x8000 else register
 
 
-def locate_meter(client):
-    """The first meter model in the device's SunSpec chain."""
-
+def _marker_base(client):
     for base in SUNSPEC_BASES:
         try:
             marker = tuple(client.read_registers(base, 2))
         except ModbusExceptionResponse:
             continue
-        if marker != SUNSPEC_MARKER:
-            continue
-        address = base + 2
-        for _ in range(MAX_MODELS):
-            model_id, length = client.read_registers(address, 2)
-            if model_id == END_OF_MODELS:
-                break
-            if model_id in INT_METER_MODELS or model_id in FLOAT_METER_MODELS:
-                return MeterModel(model_id, address)
-            address += 2 + length
-            if address > 0xFFFF - 1:
-                break
-        raise SunSpecError("this SunSpec device carries no meter model (201 to 204, 211 to 214) at this unit ID")
+        if marker == SUNSPEC_MARKER:
+            return base
     raise SunSpecError("no SunSpec device answers at this unit ID: no 'SunS' at register 40000, 0 or 50000")
+
+
+def locate_meter(client):
+    """The first meter model in the device's SunSpec chain."""
+
+    address = _marker_base(client) + 2
+    for _ in range(MAX_MODELS):
+        model_id, length = client.read_registers(address, 2)
+        if model_id == END_OF_MODELS:
+            break
+        if model_id in INT_METER_MODELS or model_id in FLOAT_METER_MODELS:
+            return MeterModel(model_id, address)
+        address += 2 + length
+        if address > 0xFFFF - 1:
+            break
+    raise SunSpecError("this SunSpec device carries no meter model (201 to 204, 211 to 214) at this unit ID")
+
+
+def read_common(client):
+    """Manufacturer, model and serial number the device's SunSpec common model names."""
+
+    registers = client.read_registers(_marker_base(client) + 2, COMMON_MODEL_REGISTERS)
+    if registers[0] != COMMON_MODEL_ID:
+        raise SunSpecError("the SunSpec chain does not start with the common model")
+    return decode_string(registers[2:18]), decode_string(registers[18:34]), decode_string(registers[50:66])
 
 
 def read_meter_power(client, model):

@@ -35,6 +35,8 @@ from ems.config import (
     E3DC_MODBUS_GRID_METER_TYPE,
     GRID_METER_READER_SETTINGS,
     HOMEWIZARD_P1_GRID_METER_TYPE,
+    POWERFOX_GRID_METER_TYPE,
+    SUNSPEC_MODBUS_GRID_METER_TYPE,
     TIBBER_PULSE_BRIDGE_KEYS,
     TIBBER_PULSE_GRID_METER_TYPE,
     MQTT_GRID_METER_TYPES,
@@ -89,6 +91,8 @@ _GRID_TYPES = {
     "shelly_3em_gen1": "shelly_3em_gen1",
     "ecotracker": "ecotracker",
     HOMEWIZARD_P1_GRID_METER_TYPE: HOMEWIZARD_P1_GRID_METER_TYPE,
+    POWERFOX_GRID_METER_TYPE: POWERFOX_GRID_METER_TYPE,
+    SUNSPEC_MODBUS_GRID_METER_TYPE: SUNSPEC_MODBUS_GRID_METER_TYPE,
     # Both D0 and Smart Meter 3CT are discovered as the generic local-HTTP family.
     "zendure_grid_meter_http": "zendure_grid_meter_http",
     "zendure_smartmeter_3ct_http": "zendure_grid_meter_http",
@@ -1013,6 +1017,9 @@ def _build_grid_meter(meter, defaults, validation, features):
                 grid["port"] = int(meter["port"])
             except (TypeError, ValueError):
                 grid.pop("port", None)
+        unit_id = meter.get("unit_id")
+        if "unit_id" in spec["keys"] and type(unit_id) is int:
+            grid["unit_id"] = unit_id
     if grid_type == TIBBER_PULSE_GRID_METER_TYPE:
         for key in TIBBER_PULSE_BRIDGE_KEYS:
             if meter.get(key) not in (None, ""):

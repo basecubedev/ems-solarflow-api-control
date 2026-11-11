@@ -105,6 +105,8 @@ def test_mdns_service_types_are_hardcoded():
         "_http._tcp.local.",
         "_zendure._tcp.local.",
         "_shelly._tcp.local.",
+        "_homewizard._tcp.local.",
+        "_hwenergy._tcp.local.",
     )
     assert "service_type" not in MdnsProvider.__init__.__code__.co_varnames
 

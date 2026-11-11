@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import {
   addFound,
   bridgeValues,
+  unitValues,
   buildReview,
   configuredNetworks,
   identitiesMatch,
@@ -214,4 +215,11 @@ test("a device found again on a second broker names the entry it already is and 
   assert.equal(proposalBroker(proposal), "192.168.1.7:1883");
   assert.equal(isControlDowngrade(item, draft), false);
   assert.equal(configuredFor({ state: "transport", proposal: { ...proposal, catalog_device_id: "catalog:v1:other" } }, draft), null);
+});
+
+test("a found SunSpec meter brings the unit ID it answered at", () => {
+  const found = { ip: "192.168.1.64", api_family: "sunspec_modbus", device_type: "sunspec_modbus", port: 502, unit_id: 200 };
+  assert.deepEqual(addFound({}, { role: "grid_meter", discovered: found }, catalog).grid_meter, { present: true, type: "sunspec_modbus", ip: "192.168.1.64", port: 502, unit_id: 200 });
+  assert.deepEqual(unitValues({ unit_id: "x" }), {});
+  assert.equal(meterTypeOf({ api_family: "powerfox_poweropti" }), "powerfox_poweropti");
 });

@@ -52,6 +52,7 @@ class DiscoveredDevice:
     last_seen: str = field(default_factory=utc_now_iso)
     credentials_ref: str | None = None
     node_id: int | None = None
+    unit_id: int | None = None
 
     @property
     def id(self):

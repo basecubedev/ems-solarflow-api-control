@@ -21,6 +21,7 @@ import {
   reassertPriority,
   serializeSelection,
   storeEnvelope,
+  itemFromDevice,
   syncGridFeatures,
   unselectedProposals,
   withItemIds,
@@ -192,4 +193,13 @@ test("a consumer chosen in Setup keeps the name it is offered under, an inverter
   assert.equal(proposalName(emptyDraft(), inverter), "INV_1");
   const { config_name: _unnamed, ...stored } = serializeSelection(consumer, { target: "device" });
   assert.equal(withNames(draftWith({ selections: [stored] })).selections[0].config_name, "External consumer washer");
+});
+
+test("a found SunSpec meter sets its unit ID, and the next meter found without one clears it", () => {
+  const found = { ip: "192.168.1.64", api_family: "sunspec_modbus", device_type: "sunspec_modbus", port: 502, unit_id: 200, sources: ["http_probe"] };
+  const item = itemFromDevice(found, "grid_meter", { id: "sunspec_modbus:192.168.1.64", items: [] });
+  const sunspec = syncGridFeatures({}, item).features;
+  assert.equal(sunspec["grid_meter.unit_id"], 200);
+  const e3dc = syncGridFeatures(sunspec, { api_family: "e3dc_modbus", ip: "192.168.1.65" }).features;
+  assert.equal("grid_meter.unit_id" in e3dc, false);
 });

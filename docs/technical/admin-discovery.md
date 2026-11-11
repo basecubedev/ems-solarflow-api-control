@@ -304,9 +304,11 @@ placeholder for a later phase.
     certificate HomeWizard's Appliance Access CA issued for
     `appliance/p1dongle/<serial>` → role `grid_meter`, family `homewizard_p1`,
     with that serial; another HomeWizard product or any other certificate is
-    no candidate. The meter still has to be paired (its button pressed) in the
-    hardware step: the setup preview stays not ready until it is, see
-    [HomeWizard pairing](#homewizard-p1-meter-pairing)
+    no candidate. The connect waits the scan's timeout; the handshake on a port
+    that answered may take up to 3 s, because a small device's TLS handshake
+    can take longer than the scan's timeout. The meter still has to be paired
+    (its button pressed) in the hardware step: the setup preview stays not
+    ready until it is, see [HomeWizard pairing](#homewizard-p1-meter-pairing).
   - Tibber Pulse bridge (experimental) — `GET /` without a login → role
     `grid_meter`, family `tibber_pulse_bridge`. Only a `401` whose body carries
     the bridge's refusal text (`Username/Password Authentication Failed.`) or
@@ -344,6 +346,22 @@ placeholder for a later phase.
   (*Add as grid meter*, *Add as read-only device*) and reports a saved
   read-only E3/DC on the probed endpoint (port 502, unit ID 1) that the scan
   did not find as *Not found*.
+- Looks for a SunSpec meter over Modbus TCP (port 502), after the E3/DC probe:
+  one connection tries the unit IDs meters are commonly served at, 1, 200 (a
+  Fronius inverter's primary Smart Meter) and 71 (a Kostal Smart Energy
+  Meter), finds the `SunS`
+  marker at register 40000, 0 or 50000 and follows the model chain to a meter
+  model (201 to 204, 211 to 214) → role `grid_meter`, family `sunspec_modbus`,
+  named by the device's SunSpec common model (for example *Fronius Smart Meter
+  63A*) and carrying the unit ID it answered at, which Setup and Maintenance
+  take into `grid_meter.unit_id`. A unit that answers with a Modbus exception
+  or without a meter model is skipped; a transport error, a unit that stays
+  silent among them, ends the probe, so a closed port costs one timeout. Only
+  reads are sent. A Kostal Plenticore, which serves SunSpec on port 1502 at
+  unit ID 71, is added by hand.
+- A DSMR P1 bridge and a Linky read through Zigbee2MQTT are not found by the
+  scan: P1 bridges share no port and only send when connected, and the Linky
+  is a JSON message on an MQTT topic. Both are added by hand.
 - Shows each device with IP, API family/type, suggested role, serial (or
   `missing`), confidence, and config readiness.
 
@@ -813,13 +831,21 @@ networking (below) gives the most realistic LAN/VLAN view.
 ## Live mDNS discovery
 
 The page runs mDNS discovery in the background while it is open and merges
-discovered Zendure devices into the same **Discovered devices** list.
+discovered Zendure devices, Shelly meters, HomeWizard P1 Meters and powerfox
+poweroptis into the same **Discovered devices** list.
 
-- **Service types:** `_http._tcp` and `_zendure._tcp`. General HTTP services are
-  ignored unless their instance name starts with `Zendure-`.
-- **Verified, not assumed:** an mDNS hit is only a candidate. It is HTTP-verified
-  the same way a network scan is (`GET /properties/report`) before it is shown as
-  a real, config-ready device. Unverified candidates are not promoted.
+- **Service types:** `_http._tcp`, `_zendure._tcp`, `_shelly._tcp`,
+  `_homewizard._tcp` and `_hwenergy._tcp`. General HTTP services are ignored
+  unless their instance name starts with `Zendure-`, `shelly` or `powerfox`.
+- **HomeWizard:** a `_homewizard._tcp` or `_hwenergy._tcp` service is verified
+  by the same TLS handshake on port 443 as the scan, whatever port it
+  advertises, so only a P1 Meter whose certificate HomeWizard issued is shown.
+- **powerfox:** a poweropti's local API answers nothing without its API key, so
+  an `_http._tcp` service named `powerfox…` is offered as an unverified grid
+  meter that still needs `grid_meter.token`, the device ID on its label.
+- **Verified, not assumed:** an mDNS hit is only a candidate. It is verified the
+  same way a network scan is (`GET /properties/report` for Zendure) before it is
+  shown as a real, config-ready device. Unverified candidates are not promoted.
 - **Own discovery source:** mDNS **always merges** and **never clears** manual
   scan results. It does not depend on the **Keep previous results** toggle (that
   toggle only controls manual-scan replace-vs-keep behavior).

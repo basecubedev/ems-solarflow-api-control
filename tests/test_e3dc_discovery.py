@@ -168,7 +168,7 @@ def test_an_unusable_address_is_no_candidate_and_no_error(ip):
 
 
 def test_the_network_scan_runs_the_e3dc_probe_after_the_http_probes():
-    assert discovery.PROBES[-1] is discovery.probe_e3dc_modbus
+    assert discovery.PROBES[-2:] == (discovery.probe_e3dc_modbus, discovery.probe_sunspec_modbus)
     assert discovery.E3DC_SCAN_PORT == 502
 
 

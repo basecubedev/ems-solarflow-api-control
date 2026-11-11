@@ -20,20 +20,25 @@ from datetime import datetime, timezone
 
 from admin.discovery import (
     is_scannable_address,
+    probe_homewizard_p1,
     verify_shelly_meter_endpoint,
     verify_zendure_endpoint,
 )
-from admin.models import utc_now_iso
+from admin.models import ROLE_GRID_METER, DiscoveredDevice, utc_now_iso
+from ems.config import HOMEWIZARD_P1_DEFAULT_PORT, POWERFOX_DEFAULT_PORT, POWERFOX_GRID_METER_TYPE
 from admin.mqtt_discovery import MQTT_MDNS_SERVICE_TYPE, build_mqtt_mdns_candidate
 
 HTTP_MDNS_SERVICE_TYPE = "_http._tcp.local."
 ZENDURE_MDNS_SERVICE_TYPE = "_zendure._tcp.local."
 SHELLY_MDNS_SERVICE_TYPE = "_shelly._tcp.local."
+HOMEWIZARD_MDNS_SERVICE_TYPES = ("_homewizard._tcp.local.", "_hwenergy._tcp.local.")
 MDNS_SERVICE_TYPES = (
     HTTP_MDNS_SERVICE_TYPE,
     ZENDURE_MDNS_SERVICE_TYPE,
     SHELLY_MDNS_SERVICE_TYPE,
+    *HOMEWIZARD_MDNS_SERVICE_TYPES,
 )
+SUPPORTED_VENDORS = ("Zendure", "Shelly", "HomeWizard", "powerfox")
 
 # Stale thresholds (seconds). A device stays visible until the user clears
 # results; these only drive the recent/stale/old marker.
@@ -120,6 +125,10 @@ def classify_mdns_service(service_name, service_type):
         if model_hint:
             hints["model_hint"] = model_hint
         return hints
+    if service_type in HOMEWIZARD_MDNS_SERVICE_TYPES:
+        return {"vendor": "HomeWizard", "port": HOMEWIZARD_P1_DEFAULT_PORT}
+    if service_type == HTTP_MDNS_SERVICE_TYPE and instance_name.lower().startswith("powerfox"):
+        return {"vendor": "powerfox"}
     return {}
 
 
@@ -190,8 +199,9 @@ def _verified_entry(candidate, device):
     entry = device.to_dict()
     entry.update(_base_entry(candidate))
     entry.update({
-        "verified": True,
+        "verified": device.verified,
         "usable_for_config": device.config_ready,
+        "protocol": device.protocol,
         # Prefer the mDNS-advertised port; fall back to the verified device port.
         "port": candidate.get("port") or device.port,
     })
@@ -213,7 +223,33 @@ def _default_verifier(candidate):
             timeout_ms=VERIFY_TIMEOUT_MS, failure_details=failures,
         )
         return device, failures[-1] if failures else None
+    if candidate.get("vendor") == "HomeWizard":
+        return probe_homewizard_p1(None, candidate["ip"], VERIFY_TIMEOUT_MS / 1000, port=candidate["port"]), None
+    if candidate.get("vendor") == "powerfox":
+        return _powerfox_candidate(candidate), None
     return None, None
+
+
+def _powerfox_candidate(candidate):
+    """A poweropti by its advertised name; its API key, the label's device ID, is still missing.
+
+    The local API answers nothing useful without the key, so the name is all
+    there is to go by, and the candidate stays unverified.
+    """
+
+    return DiscoveredDevice(
+        ip=candidate["ip"],
+        api_family=POWERFOX_GRID_METER_TYPE,
+        device_type=POWERFOX_GRID_METER_TYPE,
+        role_suggestion=ROLE_GRID_METER,
+        port=POWERFOX_DEFAULT_PORT,
+        display_name="powerfox poweropti",
+        confidence=0.6,
+        config_ready=False,
+        missing_config_fields=["grid_meter.token"],
+        source="mdns",
+        verified=False,
+    )
 
 
 def verify_candidate(candidate, verifier=None):
@@ -223,7 +259,7 @@ def verify_candidate(candidate, verifier=None):
     if not ip:
         return _unverified_entry(candidate, NO_ADDRESS_REASON)
     vendor = candidate.get("vendor")
-    if vendor not in ("Zendure", "Shelly"):
+    if vendor not in SUPPORTED_VENDORS:
         return _unverified_entry(candidate, UNKNOWN_SERVICE_REASON)
     result = (
         verifier(ip, candidate.get("port", 80))

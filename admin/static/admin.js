@@ -7209,10 +7209,12 @@ const GRID_METER_FAMILY_TYPES = {
   shelly_3em_gen1: "shelly_3em_gen1",
   ecotracker: "ecotracker",
   homewizard_p1: "homewizard_p1",
+  powerfox_poweropti: "powerfox_poweropti",
   zendure_grid_meter_http: "zendure_grid_meter_http",
   zendure_smartmeter_3ct_http: "zendure_grid_meter_http",
   tasmota_http: "tasmota_http",
   e3dc_modbus: "e3dc_modbus",
+  sunspec_modbus: "sunspec_modbus",
   tibber_pulse_bridge: "tibber_pulse_bridge",
 };
 
