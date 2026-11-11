@@ -33,6 +33,7 @@ from admin.zendure_mqtt_config_draft import (
 )
 from ems.config import (
     E3DC_MODBUS_GRID_METER_TYPE,
+    GRID_METER_READER_SETTINGS,
     HOMEWIZARD_P1_GRID_METER_TYPE,
     MQTT_GRID_METER_TYPES,
     ZENDURE_SMARTMETER_D0_GRID_METER_TYPE,
@@ -548,6 +549,21 @@ def _validate_e3dc_grid_meter_via_core(preview, validation):
         e3dc_modbus_grid_meter_settings(grid)
     except ValueError as exc:
         validation["errors"].append(_issue("grid_meter_e3dc_modbus_invalid", str(exc)))
+
+
+def _validate_reader_grid_meter_via_core(preview, validation):
+    """A meter the EMS reads with settings of its own is checked by the EMS's own validator."""
+
+    grid = preview.get("grid_meter")
+    if not isinstance(grid, dict):
+        return
+    settings = GRID_METER_READER_SETTINGS.get(str(grid.get("type") or "").strip().lower())
+    if settings is None:
+        return
+    try:
+        settings(grid)
+    except ValueError as exc:
+        validation["errors"].append(_issue("grid_meter_settings_invalid", str(exc)))
 
 
 def _validate_homewizard_grid_meter_via_core(preview, validation):
@@ -1226,6 +1242,7 @@ class ConfigPreviewGenerator:
         _validate_mqtt_grid_meter_via_core(preview, validation)
         _validate_e3dc_grid_meter_via_core(preview, validation)
         _validate_homewizard_grid_meter_via_core(preview, validation)
+        _validate_reader_grid_meter_via_core(preview, validation)
         _add_e3dc_meter_as_read_only_device(preview, names, validation)
 
         _normalize_bundled_influx_secret(preview)

@@ -987,6 +987,7 @@ def test_config_init_grid_meter_choices_are_runtime_supported():
         "shelly_3em_gen1",
         "ecotracker",
         "homewizard_p1",
+        "powerfox_poweropti",
         "zendure_grid_meter_http",
         "tasmota_http",
         "zendure_smartmeter_d0",

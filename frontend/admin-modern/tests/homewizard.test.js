@@ -41,3 +41,17 @@ test("a setup pairing belongs to the meter it was made with: another address or 
   const shelly = syncGridFeatures(paired, { role: "grid_meter", ip: "192.168.1.40", api_family: "shelly_gen2", grid_meter_type: "shelly" }).features;
   assert.ok(!("grid_meter.token" in shelly));
 });
+
+test("an API key stays with its meter type and shows as a field, a pairing token does not", () => {
+  const catalog = {
+    sections: [{ id: "grid_meter", fields: [{ path: "grid_meter.ip" }, { path: "grid_meter.token", type: "password", secret: true }] }],
+    grid_meter_variants: { powerfox_poweropti: { fields: ["grid_meter.ip", "grid_meter.token"] } },
+  };
+  assert.deepEqual(gridFields(catalog, "powerfox_poweropti").normal.map((field) => field.path), ["grid_meter.token"]);
+  const keyed = { "grid_meter.type": "powerfox_poweropti", "grid_meter.ip": "192.168.1.50", "grid_meter.token": "K" };
+  assert.deepEqual(keepPairing(keyed, { ...keyed, "grid_meter.ip": "192.168.1.51" }), { ...keyed, "grid_meter.ip": "192.168.1.51" });
+  assert.deepEqual(keepPairing(keyed, { ...keyed, "grid_meter.type": "shelly" }), { "grid_meter.type": "shelly", "grid_meter.ip": "192.168.1.50" });
+  const paired = { "grid_meter.type": "homewizard_p1", "grid_meter.ip": "192.168.1.50", "grid_meter.token": "T", "grid_meter.serial": "0a1b2c3d4e5f" };
+  assert.deepEqual(keepPairing(paired, { ...paired, "grid_meter.type": "powerfox_poweropti" }), { "grid_meter.type": "powerfox_poweropti", "grid_meter.ip": "192.168.1.50" });
+  assert.deepEqual(keepPairing(keyed, { ...keyed, "grid_meter.type": "homewizard_p1" }), { "grid_meter.type": "homewizard_p1", "grid_meter.ip": "192.168.1.50" });
+});

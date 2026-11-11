@@ -113,6 +113,7 @@ Supported options include:
 - Zendure Smart Meter D0
 - everHome EcoTracker
 - HomeWizard P1 Meter
+- powerfox poweropti (local API, powerfox PRO)
 - Tasmota-based meters
 - E3/DC storage systems, read-only over Modbus TCP
 - generic MQTT power meters

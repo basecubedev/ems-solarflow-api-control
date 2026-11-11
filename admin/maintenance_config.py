@@ -63,6 +63,7 @@ from admin.zendure_mqtt_config_draft import (
 from ems.config import (
     DASHBOARD_DEFAULTS,
     E3DC_MODBUS_GRID_METER_TYPE,
+    GRID_METER_READER_SETTINGS,
     HOMEWIZARD_P1_GRID_METER_TYPE,
     HOMEWIZARD_P1_PAIRING_KEYS,
     MQTT_DEFAULT_PORT,
@@ -91,6 +92,7 @@ from ems.config_catalog import (
     device_common_defaults,
     device_common_field_keys,
     get_config_feature_sections,
+    grid_meter_variant_field_spec,
     is_editable_catalog_field,
     http_grid_meter_types,
 )
@@ -905,6 +907,7 @@ def _grid_meter_draft(grid_meter):
     if draft["type"] == HOMEWIZARD_P1_GRID_METER_TYPE:
         draft["serial"] = str(grid_meter.get("serial") or "").strip()
         draft["pairing_name"] = str(grid_meter.get("pairing_name") or "").strip()
+    if "token" in (grid_meter_variant_field_spec(draft["type"]) or {}).get("keys", ()):
         draft["has_token"] = bool(grid_meter.get("token"))
     if draft["type"] in _MQTT_GRID_METER_TYPES:
         draft["mqtt"] = _grid_meter_mqtt_draft(grid_meter)
@@ -2537,6 +2540,13 @@ def _validate(config, merge_issues=()):
             except ValueError as exc:
                 validation["errors"].append(
                     _issue("grid_meter_homewizard_p1_unpaired", str(exc))
+                )
+        if meter_type in GRID_METER_READER_SETTINGS:
+            try:
+                GRID_METER_READER_SETTINGS[meter_type](grid_meter)
+            except ValueError as exc:
+                validation["errors"].append(
+                    _issue("grid_meter_settings_invalid", str(exc))
                 )
         # Parity with the Core resolver EMS runs at startup: an MQTT grid meter
         # that Core rejects (missing host/topic, unknown/disabled broker ref,

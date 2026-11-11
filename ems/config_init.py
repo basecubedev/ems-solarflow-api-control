@@ -8,7 +8,7 @@ import json
 import os
 
 from ems import config as config_mod
-from ems.config_catalog import grid_meter_port_carries_over
+from ems.config_catalog import grid_meter_port_carries_over, grid_meter_variant_field_spec
 from ems.read_only_devices import E3DC_MODBUS_DEVICE_TYPE, is_read_only_device_config
 from ems.influx_setup import DOCKER_FIRST_SECRET_FILE
 from ems.paths import resolve_template_path
@@ -21,6 +21,10 @@ GRID_METER_CHOICES = (
     (
         config_mod.HOMEWIZARD_P1_GRID_METER_TYPE,
         "HomeWizard P1 Meter (paired by pressing its button)",
+    ),
+    (
+        config_mod.POWERFOX_GRID_METER_TYPE,
+        "powerfox poweropti (local API, needs powerfox PRO)",
     ),
     (
         config_mod.ZENDURE_GRID_METER_HTTP_GRID_METER_TYPE,
@@ -320,6 +324,9 @@ def ask_grid_meter(
         current_type, meter_type
     ):
         result.pop("port", None)
+    if meter_type != current_type:
+        for key in config_mod.HOMEWIZARD_P1_PAIRING_KEYS:
+            result.pop(key, None)
     if meter_type in config_mod.MQTT_GRID_METER_TYPES:
         mqtt_settings = config_mod.grid_meter_mqtt_settings(result)
         existing_password = mqtt_settings.pop("password", None)
@@ -516,6 +523,25 @@ def ask_grid_meter(
             result.update(
                 pair_homewizard_p1(result["ip"], port=result.get("port"), name=result.get("pairing_name"))
             )
+    elif meter_type == config_mod.POWERFOX_GRID_METER_TYPE:
+        result["ip"] = ask_text(
+            "powerfox poweropti IP address",
+            result.get("ip") or "",
+            required=True,
+            noninteractive=noninteractive,
+            allow_placeholder_default=allow_placeholder_defaults,
+        )
+        result["token"] = ask_secret_text(
+            "poweropti API key (the device ID on its label)",
+            result.get("token") or "",
+            required=True,
+            noninteractive=noninteractive,
+        )
+        _keep_variant_keys(result, meter_type)
+        try:
+            config_mod.powerfox_grid_meter_settings(result)
+        except ValueError as exc:
+            raise ConfigInitError(str(exc)) from exc
     elif meter_type == "tasmota_http":
         current_url = result.get("url") or result.get("ip") or ""
         value = ask_text(
@@ -578,6 +604,12 @@ def ask_grid_meter(
         ):
             result.pop(key, None)
     return result
+
+
+def _keep_variant_keys(result, meter_type):
+    keys = grid_meter_variant_field_spec(meter_type)["keys"]
+    for key in [key for key in result if key not in keys]:
+        result.pop(key)
 
 
 def pair_homewizard_p1(host, *, port=None, name=None):
@@ -875,6 +907,9 @@ def _meter_summary(grid_meter):
         serial = grid_meter.get("serial") or ""
         pairing = f"serial {serial}" if serial and grid_meter.get("token") else "not paired"
         return f"HomeWizard P1 Meter at {grid_meter.get('ip') or '(not set)'}, {pairing}"
+    if meter_type == config_mod.POWERFOX_GRID_METER_TYPE:
+        key = "API key set" if grid_meter.get("token") else "no API key"
+        return f"powerfox poweropti at {grid_meter.get('ip') or '(not set)'}, {key}"
     if meter_type == config_mod.E3DC_MODBUS_GRID_METER_TYPE:
         port = grid_meter.get("port") or config_mod.E3DC_MODBUS_DEFAULT_PORT
         unit_id = grid_meter.get("unit_id", config_mod.E3DC_MODBUS_DEFAULT_UNIT_ID)

@@ -52,6 +52,7 @@ body:
         - Shelly
         - EcoTracker HTTP
         - HomeWizard P1 (local API v2)
+        - powerfox poweropti (local API)
         - Tasmota HTTP
         - Other
     validations:

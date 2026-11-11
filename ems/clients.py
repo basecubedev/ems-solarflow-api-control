@@ -745,14 +745,40 @@ class EcoTrackerClient:
         return self.last_value
 
 
-HOMEWIZARD_FROZEN_AFTER_S = 30.0
+METER_FROZEN_AFTER_S = 30.0
+
+
+class FrozenTimestampGuard:
+    """Fails a reading whose meter time stamp has not moved for too long.
+
+    A reader in front of a smart meter keeps answering with the last telegram
+    when the meter stops sending; its time stamp is the only sign of that. A
+    reading without a time stamp passes, since there is nothing to compare.
+    """
+
+    def __init__(self, clock=time.monotonic, frozen_after_s=METER_FROZEN_AFTER_S):
+        self._clock = clock
+        self._frozen_after_s = frozen_after_s
+        self._timestamp = None
+        self._since = None
+
+    def check(self, timestamp):
+        now = self._clock()
+        if timestamp is None or timestamp != self._timestamp:
+            self._timestamp, self._since = timestamp, now
+            return
+        frozen_s = now - self._since
+        if frozen_s > self._frozen_after_s:
+            raise ValueError(
+                f"the smart meter has sent no new reading for {frozen_s:.0f} s (time stamp {timestamp})"
+            )
 
 
 class HomeWizardP1Client:
     """Client for the HomeWizard P1 Meter local API v2.
 
     The meter's own time stamp tells a new reading from an old one; when it has
-    not moved for :data:`HOMEWIZARD_FROZEN_AFTER_S` the smart meter has stopped
+    not moved for :data:`METER_FROZEN_AFTER_S` the smart meter has stopped
     sending, and the reading counts as failed instead of being regulated on.
     """
 
@@ -763,9 +789,7 @@ class HomeWizardP1Client:
         self.ip = api.host
         self.last_value = 0
         self.health = CommHealth(self.provider, kind="read")
-        self._clock = clock
-        self._timestamp = None
-        self._timestamp_since = None
+        self._frozen = FrozenTimestampGuard(clock)
 
     def get_power(self):
         """Return current grid power: positive import, negative export."""
@@ -773,7 +797,7 @@ class HomeWizardP1Client:
         start = time.monotonic()
         try:
             power, timestamp = _parse_homewizard_p1_measurement(self.api.measurement())
-            self._check_fresh(timestamp)
+            self._frozen.check(timestamp)
             self.last_value = round(power, 1)
             self.health.record_success((time.monotonic() - start) * 1000.0)
 
@@ -797,16 +821,54 @@ class HomeWizardP1Client:
     def close(self):
         self.api.close()
 
-    def _check_fresh(self, timestamp):
-        now = self._clock()
-        if timestamp is None or timestamp != self._timestamp:
-            self._timestamp, self._timestamp_since = timestamp, now
-            return
-        frozen_s = now - self._timestamp_since
-        if frozen_s > HOMEWIZARD_FROZEN_AFTER_S:
-            raise ValueError(
-                f"the smart meter has sent no new reading for {frozen_s:.0f} s (time stamp {timestamp})"
+
+class PowerfoxClient:
+    """Client for the local API of a powerfox poweropti.
+
+    The poweropti answers at ``/value`` with its meter's OBIS values and its own
+    time stamp, which stops moving when the optical head loses the meter.
+    """
+
+    provider = "powerfox poweropti"
+
+    def __init__(self, ip, session, api_key, *, port=80, clock=time.monotonic):
+        self.ip = ip
+        self.session = session
+        self._url = f"http://{ip}/value" if port == 80 else f"http://{ip}:{port}/value"
+        self._api_key = api_key
+        self.last_value = 0
+        self.health = CommHealth(self.provider, kind="read")
+        self._frozen = FrozenTimestampGuard(clock)
+
+    def get_power(self):
+        """Return current grid power: positive import, negative export."""
+
+        start = time.monotonic()
+        try:
+            r = self.session.get(self._url, headers={"X-API-KEY": self._api_key}, timeout=3)
+            if r.status_code == 401:
+                raise ValueError("the poweropti refused the API key, or its PRO service is not active")
+            r.raise_for_status()
+            power, timestamp = _parse_powerfox_value(r.json())
+            self._frozen.check(timestamp)
+            self.last_value = round(power, 1)
+            self.health.record_success((time.monotonic() - start) * 1000.0)
+
+        except Exception as e:
+            self.health.record_failure(
+                error=e,
+                latency_ms=(time.monotonic() - start) * 1000.0,
+                stale_used=True,
             )
+            log_event(
+                logging.WARNING,
+                "powerfox_read_error",
+                ip=self.ip,
+                error=e,
+                stale_value=self.last_value
+            )
+
+        return self.last_value
 
 
 class TasmotaHttpClient:
@@ -1233,6 +1295,10 @@ def create_grid_meter_client(
             )
         )
 
+    if meter_type == cfg.POWERFOX_GRID_METER_TYPE:
+        settings = cfg.powerfox_grid_meter_settings(config)
+        return PowerfoxClient(settings["host"], session, settings["token"], port=settings["port"])
+
     if meter_type in cfg.ZENDURE_HTTP_GRID_METER_TYPES:
         if not ip:
             raise ValueError(
@@ -1537,6 +1603,26 @@ def _parse_homewizard_p1_measurement(data):
         raise ValueError("Unsupported HomeWizard payload: missing numeric power_w")
     timestamp = data.get("timestamp")
     return float(value), timestamp if isinstance(timestamp, str) and timestamp else None
+
+
+def _parse_powerfox_value(data):
+    """Grid power and meter time stamp from a poweropti ``/value`` answer.
+
+    ``1.7.0`` is the power the meter reports. A poweropti that reports import
+    and export apart also sends ``2.7.0``, which then counts as export.
+    """
+
+    values = data.get("values") if isinstance(data, dict) else None
+    if not isinstance(values, list):
+        raise ValueError("Unsupported powerfox payload: expected a values list")
+    by_obis = {item.get("obis"): item.get("value") for item in values if isinstance(item, dict)}
+    if not _is_numeric(by_obis.get("1.7.0")):
+        raise ValueError("Unsupported powerfox payload: missing numeric 1.7.0")
+    power = float(by_obis["1.7.0"])
+    if power >= 0 and _is_numeric(by_obis.get("2.7.0")):
+        power -= float(by_obis["2.7.0"])
+    timestamp = data.get("timestamp")
+    return power, timestamp if _is_numeric(timestamp) else None
 
 
 def _get_json_path(data, path):

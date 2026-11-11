@@ -756,6 +756,7 @@ the physical device is installed or reports values differently. Run
 | Shelly 3EM Gen1 | `shelly_3em_gen1` | `ip` | Uses `/status` |
 | everHome EcoTracker | `ecotracker` | `ip` | Uses `/v1/json` |
 | HomeWizard P1 Meter | `homewizard_p1` | `ip`, `serial` and `token` from pairing (opt. `port`) | Local API v2 over HTTPS, `/api/measurement`; pair once by pressing the meter's button. See below. |
+| powerfox poweropti | `powerfox_poweropti` | `ip`, `token` (the API key) | Local API `/value`, OBIS `1.7.0`; needs powerfox PRO. See below. |
 | Zendure Grid Meter via local HTTP | `zendure_grid_meter_http` | `ip` (opt. `port`) | Internal/discovery generic type. Local REST `/properties/report`, reads `total_power`. Works for both D0 and Smart Meter 3CT. Manual setup offers the concrete 3CT/D0 local-API types below. |
 | Zendure Smart Meter 3CT — Local API | `zendure_smartmeter_3ct_http` | `ip` (opt. `port`) | Local REST `/properties/report`, reads `total_power`. Shares the Zendure local-HTTP reader with the D0 local-API meter. |
 | Zendure Smart Meter D0 — Local API | `zendure_smartmeter_d0_http` | `ip` (opt. `port`) | Local REST `/properties/report`, reads `total_power`. Same shared reader as the 3CT; a distinct type so a D0 is never stored as a 3CT. |
@@ -920,6 +921,38 @@ Example: HomeWizard P1 Meter, as pairing leaves it (`port` defaults to 443):
     "serial": "0a1b2c3d4e5f",
     "token": "<set by pairing>",
     "pairing_name": "local/ems_solarflow#3f9a1c"
+  }
+}
+```
+
+### powerfox poweropti (`powerfox_poweropti`)
+
+The EMS reads `http://<ip>/value` with the API key in the `X-API-KEY` header,
+once per control cycle, and uses the OBIS value `1.7.0` in watts. The local API
+needs the powerfox PRO service and poweropti firmware 2.02.07 or later; without
+them the poweropti answers 401, which the EMS logs as `powerfox_read_error`.
+The API key is the device ID printed on the poweropti's label. It lives in
+`grid_meter.token`, a secret like an MQTT password: the Admin Console shows only
+that one is stored, and saving without typing it again keeps it.
+
+How the poweropti reports export has not been confirmed on hardware. The EMS
+reads a negative `1.7.0` as export, and when the poweropti also sends the export
+power `2.7.0`, it subtracts that from a non-negative `1.7.0`. Check the sign
+once while the PV exports, in the dashboard or with
+`python3 emsctl.py diagnose --hardware`, before you switch off `dry_run`.
+
+The answer carries the poweropti's own time stamp. When it has not moved for
+30 s, the optical head has lost the meter, and the reading counts as failed
+instead of being regulated on.
+
+Example: powerfox poweropti (`port` defaults to 80):
+
+```json
+{
+  "grid_meter": {
+    "type": "powerfox_poweropti",
+    "ip": "192.0.2.62",
+    "token": "<device ID from the label>"
   }
 }
 ```

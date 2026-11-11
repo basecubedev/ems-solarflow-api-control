@@ -1681,6 +1681,14 @@ def diagnose_grid_meter_config(checks, config_data):
                 f"{label} TLS: {'enabled' if tls_enabled else 'disabled'}",
                 tls=tls_enabled, tls_insecure=False,
             )
+    elif meter_type in config_mod.GRID_METER_READER_SETTINGS:
+        label = GRID_METER_PROVIDERS[meter_type]
+        try:
+            config_mod.GRID_METER_READER_SETTINGS[meter_type](grid_meter)
+        except ValueError as exc:
+            diagnose_add(checks, "config", "error", "grid_meter_settings_invalid", f"{label} settings are invalid: {exc}", type=meter_type)
+        else:
+            diagnose_add(checks, "config", "ok", "grid_meter_settings_complete", f"{label} settings are complete", type=meter_type)
     elif meter_type == config_mod.E3DC_MODBUS_GRID_METER_TYPE:
         if not str(grid_meter.get("ip") or "").strip():
             diagnose_add(checks, "config", "error", "grid_meter_ip_missing", f"{meter_type} grid meter requires grid_meter.ip")
@@ -2125,6 +2133,7 @@ GRID_METER_PROVIDERS = {
     "shelly_3em_gen1": "Shelly 3EM Gen1",
     "ecotracker": "EcoTracker",
     config_mod.HOMEWIZARD_P1_GRID_METER_TYPE: "HomeWizard P1",
+    config_mod.POWERFOX_GRID_METER_TYPE: "powerfox poweropti",
     "tasmota_http": "Tasmota",
     "mqtt": "MQTT",
     "zendure_smartmeter_d0": "Zendure SmartMeter D0",
@@ -2203,6 +2212,31 @@ def _diagnose_homewizard_p1(checks, grid_meter, grid_tracker, loop_interval, tel
             loop_interval=loop_interval,
             telemetry_max_age_seconds=telemetry_window,
         )
+
+
+def _diagnose_by_one_reading(checks, meter_type, grid_meter, grid_tracker):
+    """Read the meter once with the EMS's own reader, which never writes to it."""
+
+    from ems.clients import close_grid_meter_client, create_grid_meter_client, create_session
+
+    label = GRID_METER_PROVIDERS[meter_type]
+    session = create_session()
+    try:
+        client = create_grid_meter_client(grid_meter, session)
+    except ValueError as exc:
+        session.close()
+        diagnose_add(checks, "hardware", "warning", "grid_meter_probe_skipped", f"{label} read-only probe skipped: {exc}", type=meter_type)
+        return grid_tracker
+    try:
+        power = client.get_power()
+    finally:
+        close_grid_meter_client(client)
+        session.close()
+    if client.health.consecutive_failures:
+        diagnose_add(checks, "hardware", "warning", "grid_meter_read_failed", f"{label} read-only probe failed: {client.health.last_error}", type=meter_type)
+    else:
+        diagnose_add(checks, "hardware", "ok", "grid_meter_read_ok", f"{label} returned parseable power", type=meter_type, power_w=power)
+    return client.health
 
 
 def _diagnose_record_probe(tracker, start, error=None):
@@ -2427,6 +2461,8 @@ def diagnose_hardware(checks, config_data, runtime_data=None):
                 )
     elif meter_type == config_mod.E3DC_MODBUS_GRID_METER_TYPE and grid_meter.get("ip"):
         grid_tracker = _diagnose_e3dc_modbus(checks, grid_meter, grid_tracker)
+    elif meter_type in config_mod.GRID_METER_READER_SETTINGS and grid_meter.get("ip"):
+        grid_tracker = _diagnose_by_one_reading(checks, meter_type, grid_meter, grid_tracker)
     else:
         diagnose_add(checks, "hardware", "warning", "grid_meter_probe_skipped", f"No read-only grid meter probe implemented for type: {meter_type}", type=meter_type)
 

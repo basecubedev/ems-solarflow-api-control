@@ -213,6 +213,7 @@ ZENDURE_HTTP_GRID_METER_TYPES = frozenset(
 MQTT_GRID_METER_TYPES = ("mqtt", ZENDURE_SMARTMETER_D0_GRID_METER_TYPE)
 E3DC_MODBUS_GRID_METER_TYPE = E3DC_MODBUS_DEVICE_TYPE
 HOMEWIZARD_P1_GRID_METER_TYPE = "homewizard_p1"
+POWERFOX_GRID_METER_TYPE = "powerfox_poweropti"
 
 # Single source of truth mapping a grid-meter ``type`` to a user-facing hardware
 # model name and a transport label. Diagnostics and status surfaces read this so
@@ -226,6 +227,7 @@ GRID_METER_MODEL_TRANSPORTS = {
     "shelly_3em_gen1": ("Shelly 3EM Gen1", _LOCAL_HTTP_TRANSPORT),
     "ecotracker": ("everHome EcoTracker", _LOCAL_HTTP_TRANSPORT),
     HOMEWIZARD_P1_GRID_METER_TYPE: ("HomeWizard P1 Meter", _LOCAL_HTTP_TRANSPORT),
+    POWERFOX_GRID_METER_TYPE: ("powerfox poweropti", _LOCAL_HTTP_TRANSPORT),
     "tasmota_http": ("Tasmota HTTP reader", _LOCAL_HTTP_TRANSPORT),
     ZENDURE_GRID_METER_HTTP_GRID_METER_TYPE: ("Zendure grid meter", _LOCAL_HTTP_TRANSPORT),
     ZENDURE_SMARTMETER_3CT_HTTP_GRID_METER_TYPE: (
@@ -378,6 +380,45 @@ def check_homewizard_p1_pairing_name(grid_meter):
             "grid_meter.pairing_name must be the name pairing stored: local/ and up to "
             "40 letters, digits, spaces or -_\\/#"
         )
+
+
+POWERFOX_DEFAULT_PORT = 80
+POWERFOX_API_KEY_PATTERN = re.compile(r"[\x21-\x7e]{1,128}")
+
+
+def powerfox_grid_meter_settings(grid_meter):
+    """Validate a ``powerfox_poweropti`` grid-meter block into connection settings.
+
+    The poweropti's local API answers only with its API key, which is the
+    device ID on its label; ``grid_meter.token`` holds it like any secret.
+    """
+
+    grid_meter = grid_meter if isinstance(grid_meter, dict) else {}
+    host = str(grid_meter.get("ip") or "").strip()
+    if not host:
+        raise ValueError("powerfox poweropti requires grid_meter.ip")
+    token = str(grid_meter.get("token") or "").strip()
+    if not POWERFOX_API_KEY_PATTERN.fullmatch(token):
+        raise ValueError(
+            "powerfox poweropti requires grid_meter.token: the API key, which is the "
+            "device ID on the poweropti's label"
+        )
+    return {
+        "host": host,
+        "port": _strict_number(
+            grid_meter.get("port"),
+            "grid_meter.port",
+            default=POWERFOX_DEFAULT_PORT,
+            minimum=1,
+            maximum=65535,
+        ),
+        "token": token,
+    }
+
+
+GRID_METER_READER_SETTINGS = {
+    POWERFOX_GRID_METER_TYPE: powerfox_grid_meter_settings,
+}
 
 
 _ZENDURE_D0_TOPIC_PREFIX = "Zendure/sensor/"

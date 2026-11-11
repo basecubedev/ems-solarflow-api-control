@@ -17,7 +17,7 @@ from ems import config as cfg
 from ems import diagnostics
 from ems import homewizard
 from ems.clients import (
-    HOMEWIZARD_FROZEN_AFTER_S,
+    METER_FROZEN_AFTER_S,
     HomeWizardP1Client,
     _parse_homewizard_p1_measurement,
     create_grid_meter_client,
@@ -152,7 +152,7 @@ def test_a_time_stamp_that_stops_moving_makes_the_reading_fail():
     client = HomeWizardP1Client(FakeApi(still, still, still, {**still, "timestamp": "2026-11-12T03:15:00"}), clock=clock)
 
     assert client.get_power() == 300.0
-    clock.now += HOMEWIZARD_FROZEN_AFTER_S
+    clock.now += METER_FROZEN_AFTER_S
     assert client.get_power() == 300.0
     assert client.health.snapshot()["failure_count"] == 0
 
@@ -172,7 +172,7 @@ def test_a_meter_without_a_time_stamp_is_never_called_frozen():
     client = HomeWizardP1Client(FakeApi(answer, answer), clock=clock)
 
     client.get_power()
-    clock.now += 10 * HOMEWIZARD_FROZEN_AFTER_S
+    clock.now += 10 * METER_FROZEN_AFTER_S
     client.get_power()
 
     assert client.health.snapshot()["failure_count"] == 0

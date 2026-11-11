@@ -91,7 +91,9 @@
       "e3dc_modbus reads an E3/DC over Modbus TCP (read-only) and needs",
       "grid_meter.ip; port 502 and unit_id 1 are the defaults.",
       "homewizard_p1 reads a HomeWizard P1 Meter over its local API v2 (HTTPS);",
-      "it needs grid_meter.ip, and serial, token and pairing_name from pairing."
+      "it needs grid_meter.ip, and serial, token and pairing_name from pairing.",
+      "powerfox_poweropti reads a powerfox poweropti over its local API; it needs",
+      "grid_meter.ip, and in grid_meter.token the device ID from its label."
     ],
     "type": "shelly",
     "ip": "198.51.100.50"

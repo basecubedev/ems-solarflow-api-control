@@ -7187,6 +7187,7 @@ const GRID_METER_TYPE_CHOICES = new Set([
   "shelly_3em_gen1",
   "ecotracker",
   "homewizard_p1",
+  "powerfox_poweropti",
   "zendure_grid_meter_http",
   "zendure_smartmeter_3ct_http",
   "zendure_smartmeter_d0_http",

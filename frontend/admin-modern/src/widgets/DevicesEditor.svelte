@@ -6,7 +6,7 @@
   import SettingField from "./SettingField.svelte";
   import CatalogText from "./CatalogText.svelte";
   import HomeWizardPairing from "./HomeWizardPairing.svelte";
-  import { PAIRING_NAME_FIELD, SERIAL_FIELD, TOKEN_FIELD } from "../lib/homewizard.js";
+  import { HOMEWIZARD_TYPE, PAIRING_NAME_FIELD, SERIAL_FIELD, TOKEN_FIELD } from "../lib/homewizard.js";
   import { t, say, catalogText } from "../i18n/i18n.svelte.js";
   import { settings, setHardwareValues } from "../state/settings.svelte.js";
   import { sources, saveCredential } from "../state/sources.svelte.js";
@@ -219,8 +219,10 @@
 {/snippet}
 
 {#snippet gridField(field)}
-  {#if field.path === TOKEN_FIELD}
+  {#if field.path === TOKEN_FIELD && meterType === HOMEWIZARD_TYPE}
     <HomeWizardPairing ip={meter.ip} port={meter.port} paired={Boolean(meter.token || meter.has_token)} serial={meter.serial || ""} pairingName={meter.pairing_name || ""} onpaired={({ serial, token, pairingName }) => setHardwareValues({ grid_meter: { ...meter, serial, token, pairing_name: pairingName } })} />
+  {:else if field.path === TOKEN_FIELD}
+    <SettingField {field} type="password" value={meter.token || ""} placeholder={meter.has_token ? t("devices.passwordKeep") : ""} onchange={(value) => setHardwareValues({ grid_meter: { ...meter, token: value } })} />
   {:else if field.path === "grid_meter.mqtt.password"}
     <SettingField field={{ path: field.path, label: t("devices.field.password"), description: t("devices.field.password.hint") }} lang={null} type="password" value={meter.mqtt?.password || ""} disabled={meter.mqtt?.clear_password === true} placeholder={meter.mqtt?.has_password ? t("devices.passwordKeep") : t("devices.passwordOptional")} onchange={(value) => setHardwareValues({ grid_meter: setGridPassword(meter, { password: value }) })} />
     {#if meter.mqtt?.has_password}
