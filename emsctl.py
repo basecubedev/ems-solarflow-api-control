@@ -1113,7 +1113,12 @@ def handle_grid_meter_command(args, config):
 
     import time as _time
 
-    from ems.clients import create_grid_meter_client, create_session
+    from ems.clients import (
+        GRID_METER_READY_SECONDS,
+        create_grid_meter_client,
+        create_session,
+        wait_for_grid_meter,
+    )
     from ems.health import percentile
 
     import ems.config as cfg
@@ -1134,7 +1139,12 @@ def handle_grid_meter_command(args, config):
             return fail(f"cannot resolve grid meter broker: {exc}", code=2)
 
     try:
-        client = create_grid_meter_client(effective, create_session())
+        output_control = (config.get("system") or {}).get("output_control") or {}
+        client = create_grid_meter_client(
+            effective,
+            create_session(),
+            max_age_seconds=output_control.get("telemetry_max_age_seconds"),
+        )
     except Exception as exc:
         return fail(f"cannot create grid meter client: {exc}", code=2)
 
@@ -1153,9 +1163,9 @@ def handle_grid_meter_command(args, config):
     latencies = []
     reads = ok = failed = 0
     latest_power = None
-    deadline = _time.monotonic() + duration
-
     try:
+        wait_for_grid_meter(client, min(duration, GRID_METER_READY_SECONDS))
+        deadline = _time.monotonic() + duration
         while _time.monotonic() < deadline:
             prev_success = client.health.success_count
             latest_power = client.get_power()

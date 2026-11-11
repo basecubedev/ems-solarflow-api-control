@@ -766,6 +766,7 @@ the physical device is installed or reports values differently. Run
 | Generic MQTT grid meter | `mqtt` | `mqtt.host`, `mqtt.topic`, `mqtt.payload_format` | Numeric or JSON payload; JSON may name a separate export value (`mqtt.export_value_path`), as for a Linky through a ZLinky_TIC. |
 | SunSpec meter via Modbus TCP | `sunspec_modbus` | `ip`, `unit_id` (opt. `port`) | Read-only; the first SunSpec meter model (201 to 204, 211 to 214) at that unit, read once per control cycle. See below. |
 | E3/DC storage system via Modbus TCP | `e3dc_modbus` | `ip` (opt. `port`, `unit_id`) | Read-only; grid power at the E3/DC root power meter, read once per control cycle. See below. |
+| Tibber Pulse IR — local bridge (experimental) | `tibber_pulse_bridge` | `ip`, `credentials_ref` (opt. `port`, `node_id`) | The meter's SML telegram from the bridge's local web server; the password stays in the secret store. See below. |
 
 ### Shelly Pro/Plus Gen2/Gen3 (`shelly`)
 
@@ -1283,6 +1284,102 @@ Example: Fronius Smart Meter through the Fronius inverter (`port` defaults to
     "type": "sunspec_modbus",
     "ip": "192.0.2.64",
     "unit_id": 200
+  }
+}
+```
+
+### Tibber Pulse IR — local bridge (`tibber_pulse_bridge`, experimental)
+
+The Tibber Pulse IR is a battery-powered reading head on the meter's infrared
+port and a bridge in a wall socket that it radios to. The EMS reads the bridge's
+local web server, never the Tibber cloud. **This meter is experimental and comes
+without guaranteed support:**
+
+- the bridge's web server was built for setting it up, not for continuous
+  polling, and often takes about 1.5 s to answer;
+- new values arrive only every 2–3 s;
+- the bridge now and then serves a damaged telegram;
+- Tibber updates the bridge over the air and has changed the unofficial local
+  interface before (September 2026: `/data.json` became `/node_data.json`).
+
+**Reading.** A background worker asks the bridge for the raw SML telegram at
+most every 3 seconds (`/node_data.json?node_id=N`, falling back to `/data.json`
+on firmware before 1794), with HTTP Basic login `admin` and the bridge
+password. The control loop never waits on the bridge: each cycle takes the
+last good reading the worker holds. Like the MQTT grid meter, that reading
+serves every cycle while it is young enough, so when the bridge is slower than
+the loop a cycle can get the reading the previous cycle already used. At
+start, before `--preflight` and before `emsctl grid-meter test`, the EMS waits
+up to 15 seconds for the first good reading; without one it logs
+`grid_meter_not_ready` at start, and the preflight fails. A login that cannot
+work is retried every 30 seconds, and a bridge that does not answer, or
+answers with a server error, waits twice as long before each next try, up to
+the same 30 seconds.
+
+A reading older than `system.output_control.telemetry_max_age_seconds`
+(default 10 seconds) counts as a failed meter read, the same age the device
+telemetry is held to, and the meter's health counts its age from when
+the telegram arrived. A reading is new only when the meter's frame changed;
+a bridge whose reading head stopped keeps serving its last telegram, which
+therefore ages out instead of looking fresh. The first telegram after the
+start is only the baseline: the first reading is the next telegram that
+differs from it, so a head that stopped before the start never looks fresh. While reads fail, the log warns
+`tibber_pulse_read_error` when the reason changes and then once a minute.
+
+**Decoding** ([`ems/sml.py`](../../ems/sml.py)):
+
+- the frame CRC is checked, and a damaged telegram is dropped, never used.
+  Meters send X.25 or Kermit in either byte order; once three different
+  intact telegrams agree on one variant, only that one is accepted, and ten
+  telegrams in a row that miss it release it again
+  (`tibber_pulse_crc_released`), for a head moved to another meter;
+- the scaler is applied and the unit must be watts;
+- the grid power is the signed total 16.7.0, or else import 1.7.0 minus export
+  2.7.0, which also stands in for a signed total with an unusable unit or
+  scaler;
+- a reading without a sign is refused, because it cannot tell import from
+  export;
+- the sign bug of DZG DVS74 meters is corrected only where libsml corrects it:
+  serials 42000000–48999999 and 55000000–58999999, a payload of one or two
+  bytes. Every other meter keeps the sign it sends;
+- a scaler outside −128…127 (SML's Integer8) makes that value unreadable; an
+  odd entry the EMS does not need does not cost the telegram;
+- a value beyond ±50 kW is rejected as implausible.
+
+**The password.** It is printed on the bridge. It is never written to
+`config.json`: the Admin Console saves it, encrypted, in `config/secrets/` (a
+`bridge-<ref>.json` record), and `credentials_ref` names it.
+
+- Without `credentials_ref` the install stays in no-write mode, as with any
+  missing setup field.
+- A reference whose password is missing or cannot be decrypted does not stop
+  the EMS: the meter starts, sends no request, reports every read as failed
+  (`no_password`), and `diagnose` says why.
+- The worker reads the password from the store again while it has none and
+  after the bridge refused one, so a password saved or corrected in the Admin
+  Console takes effect within half a minute, without restarting the EMS.
+- A block the EMS cannot use at all (no `ip`, a non-canonical reference, a
+  port or node out of range) ends the start with `startup_abort`
+  `reason=grid_meter_invalid`.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `ip` | required | Address of the bridge in the local network: an IPv4 address or host name, without scheme, port or path. |
+| `credentials_ref` | required | Name of the saved bridge password (Admin Console › Settings › Devices › *What the search may use*). |
+| `port` | `80` | Port of the bridge's web server. |
+| `node_id` | `1` | Which reading head on the bridge, `1`–`255`; the bridge's Pulse page lists them. |
+
+The bridge's web server is off in normal operation and has to be switched on
+once, permanently.
+
+Example:
+
+```json
+{
+  "grid_meter": {
+    "type": "tibber_pulse_bridge",
+    "ip": "192.0.2.70",
+    "credentials_ref": "tibber-bridge"
   }
 }
 ```

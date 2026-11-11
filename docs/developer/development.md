@@ -9,6 +9,7 @@ The code is split by responsibility:
 - `ems/models.py`: telemetry and capability dataclasses
 - `ems/clients.py`: HTTP, Zendure and grid-meter clients
 - `ems/sml.py`: SML 1.04 telegram decoder for meters read over their IR port
+- `ems/tibber_pulse.py`: Tibber Pulse IR bridge reader with a cached background poller (experimental grid meter)
 - `ems/runtime_state.py`: mutable runtime-state handling
 - `ems/target_control.py`: capability detection and target calculation
 - `ems/controller.py`: EMS control loop

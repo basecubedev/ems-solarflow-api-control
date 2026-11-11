@@ -1374,6 +1374,19 @@ class SunSpecMeterClient:
         self.meter.close()
 
 
+GRID_METER_READY_SECONDS = 15
+
+
+def wait_for_grid_meter(client, timeout=GRID_METER_READY_SECONDS):
+    """Wait for a grid meter that reads in the background to hold a good reading.
+
+    Answers whether it does; a meter that reads on demand is always ready.
+    """
+
+    wait_until_ready = getattr(client, "wait_until_ready", None)
+    return bool(wait_until_ready(timeout)) if callable(wait_until_ready) else True
+
+
 def close_grid_meter_client(client):
     """Idempotently release a grid-meter client's runtime resources.
 
@@ -1396,12 +1409,20 @@ def close_grid_meter_client(client):
 
 
 def create_grid_meter_client(
-    config, session, *, mqtt_credential_resolver=None, e3dc_sessions=None
+    config,
+    session,
+    *,
+    mqtt_credential_resolver=None,
+    e3dc_sessions=None,
+    bridge_password_resolver=None,
+    max_age_seconds=None,
 ):
     """Create the configured household/grid power meter client.
 
     ``e3dc_sessions`` lets an E3/DC meter share its connection with an E3/DC
     device read in the same process; without it the meter owns its own.
+    ``max_age_seconds`` bounds a cached reading's age, by default the loaded
+    config's ``telemetry_max_age_seconds``.
     """
 
     config = config if isinstance(config, dict) else {}
@@ -1480,6 +1501,29 @@ def create_grid_meter_client(
             settings["host"], port=settings["port"], unit_id=settings["unit_id"]
         )
         return E3dcModbusGridMeterClient(session)
+
+    if meter_type == cfg.TIBBER_PULSE_GRID_METER_TYPE:
+        from ems.mqtt_credentials import FileBridgePasswordResolver
+        from ems.tibber_pulse import MAX_AGE_SECONDS, TibberPulseBridge, TibberPulseGridMeterClient
+
+        settings = cfg.tibber_pulse_grid_meter_settings(config, require_password=False)
+        resolver = bridge_password_resolver or FileBridgePasswordResolver()
+
+        def password():
+            if settings["credentials_ref"] is None:
+                raise ValueError("grid_meter.credentials_ref is not set")
+            return resolver.resolve(settings["credentials_ref"])
+
+        bridge = TibberPulseBridge(
+            settings["host"],
+            port=settings["port"],
+            node_id=settings["node_id"],
+            password_provider=password,
+        )
+        if max_age_seconds is None:
+            max_age_seconds = cfg.OUTPUT_CONTROL_CONFIG.get("telemetry_max_age_seconds", MAX_AGE_SECONDS)
+        max_age = cfg.safe_float(max_age_seconds, MAX_AGE_SECONDS, minimum=1.0)
+        return TibberPulseGridMeterClient(bridge, max_age_seconds=max_age)
 
     if meter_type == "tasmota_http":
         power_path = config.get("power_path")

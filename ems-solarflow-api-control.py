@@ -11,10 +11,12 @@ from datetime import datetime, timezone
 from ems import config as cfg
 from ems import paths
 from ems.clients import (
+    GRID_METER_READY_SECONDS,
     ZendureClient,
     close_grid_meter_client,
     create_grid_meter_client,
     create_session,
+    wait_for_grid_meter,
 )
 from ems.control_status import ControlStatusWriter
 from ems.controller import EMSController
@@ -331,11 +333,18 @@ def main():
         sys.exit(1)
 
     e3dc_sessions = E3dcSessions()
-    shelly = create_grid_meter_client(
-        cfg.GRID_METER_CONFIG,
-        session,
-        e3dc_sessions=e3dc_sessions,
-    )
+    try:
+        shelly = create_grid_meter_client(
+            cfg.GRID_METER_CONFIG,
+            session,
+            e3dc_sessions=e3dc_sessions,
+        )
+    except ValueError as exc:
+        log_event(logging.ERROR, "startup_abort", reason="grid_meter_invalid", error=exc)
+        e3dc_sessions.close()
+        if zendure_mqtt_control_runtime is not None:
+            zendure_mqtt_control_runtime.stop()
+        sys.exit(1)
     e3dc_devices = build_e3dc_device_runtime(cfg.CONFIG.get("devices"), e3dc_sessions)
 
     if args.preflight:
@@ -343,6 +352,14 @@ def main():
         close_grid_meter_client(shelly)
         e3dc_sessions.close()
         sys.exit(0 if ok else 2)
+
+    if not wait_for_grid_meter(shelly):
+        log_event(
+            logging.WARNING,
+            "grid_meter_not_ready",
+            provider=getattr(shelly, "provider", None),
+            waited_seconds=GRID_METER_READY_SECONDS,
+        )
 
     runtime_state = start_runtime_state(
         cfg.runtime_state_path(),

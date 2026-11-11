@@ -7195,6 +7195,7 @@ const GRID_METER_TYPE_CHOICES = new Set([
   "tasmota_http",
   "e3dc_modbus",
   "sunspec_modbus",
+  "tibber_pulse_bridge",
   "zendure_smartmeter_d0",
   "mqtt",
 ]);
@@ -7212,6 +7213,7 @@ const GRID_METER_FAMILY_TYPES = {
   zendure_smartmeter_3ct_http: "zendure_grid_meter_http",
   tasmota_http: "tasmota_http",
   e3dc_modbus: "e3dc_modbus",
+  tibber_pulse_bridge: "tibber_pulse_bridge",
 };
 
 // An explicit meter type (chosen manually) wins over discovery inference so a

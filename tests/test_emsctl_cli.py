@@ -995,6 +995,7 @@ def test_config_init_grid_meter_choices_are_runtime_supported():
         "mqtt",
         "e3dc_modbus",
         "sunspec_modbus",
+        "tibber_pulse_bridge",
         # Backward-compatible local-HTTP aliases accepted from existing configs;
         # both share the generic Zendure local-HTTP reader.
         "zendure_smartmeter_3ct_http",

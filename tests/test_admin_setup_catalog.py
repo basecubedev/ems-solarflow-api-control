@@ -141,6 +141,7 @@ def test_grid_meter_variants_are_exposed_for_setup():
         "tasmota_http",
         "e3dc_modbus",
         "sunspec_modbus",
+        "tibber_pulse_bridge",
         "zendure_smartmeter_d0",
         "mqtt",
     } == set(variants)
@@ -173,6 +174,7 @@ def test_manual_hardware_variants_are_role_specific():
         "tasmota_http",
         "e3dc_modbus",
         "sunspec_modbus",
+        "tibber_pulse_bridge",
     }
     e3dc = next(item for item in variants["grid_meter"] if item["id"] == "e3dc_modbus")
     assert e3dc["default_port"] == 502

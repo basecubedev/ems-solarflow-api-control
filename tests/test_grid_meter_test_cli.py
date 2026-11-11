@@ -38,7 +38,7 @@ class FakeMeterClient:
 def test_grid_meter_test_reports_latency_summary(monkeypatch, capsys):
     fake = FakeMeterClient()
     monkeypatch.setattr(
-        clients_mod, "create_grid_meter_client", lambda config, session: fake
+        clients_mod, "create_grid_meter_client", lambda config, session, **_options: fake
     )
     monkeypatch.setattr(clients_mod, "create_session", lambda: object())
 
@@ -69,7 +69,7 @@ def test_grid_meter_test_reports_missing_mqtt_value(monkeypatch, capsys):
         stale_used=True,
     ) or 0
     monkeypatch.setattr(
-        clients_mod, "create_grid_meter_client", lambda config, session: fake
+        clients_mod, "create_grid_meter_client", lambda config, session, **_options: fake
     )
     monkeypatch.setattr(clients_mod, "create_session", lambda: object())
 
@@ -96,7 +96,7 @@ def test_grid_meter_test_displays_zendure_smartmeter_d0(monkeypatch, capsys):
         stale_used=True,
     ) or 0
     monkeypatch.setattr(
-        clients_mod, "create_grid_meter_client", lambda config, session: fake
+        clients_mod, "create_grid_meter_client", lambda config, session, **_options: fake
     )
     monkeypatch.setattr(clients_mod, "create_session", lambda: object())
 
@@ -150,7 +150,7 @@ class RecordingMeterClient:
 def test_grid_meter_test_resolves_broker_ref_config(monkeypatch, capsys):
     captured = {}
 
-    def _capture(config, session):
+    def _capture(config, session, **_options):
         captured["config"] = config
         return RecordingMeterClient()
 

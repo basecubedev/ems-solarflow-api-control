@@ -9,7 +9,7 @@ from copy import deepcopy
 from dataclasses import replace
 
 from ems import config as cfg
-from ems.clients import fetch_all_devices, zero_device_state
+from ems.clients import fetch_all_devices, wait_for_grid_meter, zero_device_state
 from ems.controller import EMSController
 from ems.logging_utils import log_event
 from ems.models import parse_pack_count
@@ -413,7 +413,16 @@ def run_live_preflight(devices, shelly):
         )
         return False
 
+    ready = wait_for_grid_meter(shelly)
     load = shelly.get_power()
+    if not ready:
+        log_event(
+            logging.ERROR,
+            "preflight_abort",
+            reason="grid_meter_unreadable",
+            error=getattr(getattr(shelly, "health", None), "last_error", None),
+        )
+        return False
     log_event(logging.INFO, "preflight_shelly_ok", load=load)
 
     states = fetch_all_devices(devices)

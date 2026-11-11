@@ -157,15 +157,7 @@ class FileMqttCredentialResolver:
         # (lowercasing/stripping) would silently resolve a different identifier
         # than the config declares.
         ref = validate_mqtt_credentials_ref(credentials_ref)
-        path = self.secrets_dir / f"mqtt-{ref}.json"
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except FileNotFoundError as exc:
-            raise MqttCredentialError(f"MQTT credential reference '{ref}' was not found") from exc
-        except (OSError, ValueError) as exc:
-            raise MqttCredentialError(f"MQTT credential reference '{ref}' is unavailable or malformed") from exc
-        if not isinstance(record, dict) or record.get("ref") not in (None, ref):
-            raise MqttCredentialError(f"MQTT credential reference '{ref}' is malformed")
+        record = _read_record(self.secrets_dir / f"mqtt-{ref}.json", ref, f"MQTT credential reference '{ref}'")
         username = self._field(record, "username", ref)
         password = self._field(record, "password", ref)
         if username == "":
@@ -183,22 +175,69 @@ class FileMqttCredentialResolver:
         return MqttCredentials(username, password, client_id, app_key)
 
     def _field(self, record, field, ref):
-        blob = record.get(field)
-        if blob is None:
-            return None
-        if not isinstance(blob, str) or not blob:
-            raise MqttCredentialError(f"MQTT credential reference '{ref}' is malformed")
-        try:
-            if record.get(f"{field}_encrypted") is True:
-                from cryptography.fernet import Fernet
+        return _record_field(self.secrets_dir, record, field, f"MQTT credential reference '{ref}'")
 
-                key = (self.secrets_dir / CREDENTIAL_KEY_FILENAME).read_bytes()
-                return Fernet(key).decrypt(blob.encode("ascii")).decode("utf-8")
-            if record.get(f"{field}_encrypted") is False:
-                return base64.b64decode(blob.encode("ascii"), validate=True).decode("utf-8")
-        except Exception as exc:
-            raise MqttCredentialError(f"MQTT credential reference '{ref}' could not be decrypted") from exc
-        raise MqttCredentialError(f"MQTT credential reference '{ref}' is malformed")
+
+def _read_record(path, ref, subject):
+    """One secret record as a dict that names ``ref`` or no reference at all."""
+
+    try:
+        record = json.loads(Path(path).read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise MqttCredentialError(f"{subject} was not found") from exc
+    except (OSError, ValueError) as exc:
+        raise MqttCredentialError(f"{subject} is unavailable or malformed") from exc
+    if not isinstance(record, dict) or record.get("ref") not in (None, ref):
+        raise MqttCredentialError(f"{subject} is malformed")
+    return record
+
+
+def _record_field(secrets_dir, record, field, subject):
+    blob = record.get(field)
+    if blob is None:
+        return None
+    if not isinstance(blob, str) or not blob:
+        raise MqttCredentialError(f"{subject} is malformed")
+    try:
+        if record.get(f"{field}_encrypted") is True:
+            from cryptography.fernet import Fernet
+
+            key = (Path(secrets_dir) / CREDENTIAL_KEY_FILENAME).read_bytes()
+            return Fernet(key).decrypt(blob.encode("ascii")).decode("utf-8")
+        if record.get(f"{field}_encrypted") is False:
+            return base64.b64decode(blob.encode("ascii"), validate=True).decode("utf-8")
+    except Exception as exc:
+        raise MqttCredentialError(f"{subject} could not be decrypted") from exc
+    raise MqttCredentialError(f"{subject} is malformed")
+
+
+BRIDGE_PASSWORD_RECORD_PREFIX = "bridge-"
+
+
+def bridge_password_record_name(credentials_ref):
+    """The secrets-dir file holding a meter bridge's password for ``credentials_ref``."""
+
+    return f"{BRIDGE_PASSWORD_RECORD_PREFIX}{validate_mqtt_credentials_ref(credentials_ref)}.json"
+
+
+class FileBridgePasswordResolver:
+    """Reads a meter bridge password the Admin saved in the EMS secret store.
+
+    Same store, key and reference syntax as the MQTT credentials; a separate
+    record kind so a bridge password can never be mistaken for a broker login.
+    """
+
+    def __init__(self, secrets_dir=None):
+        self.secrets_dir = Path(secrets_dir) if secrets_dir else default_mqtt_secrets_dir()
+
+    def resolve(self, credentials_ref: str) -> str:
+        name = bridge_password_record_name(credentials_ref)
+        subject = f"Bridge password reference '{credentials_ref}'"
+        record = _read_record(self.secrets_dir / name, credentials_ref, subject)
+        password = _record_field(self.secrets_dir, record, "password", subject)
+        if not password:
+            raise MqttCredentialError(f"{subject} has no password")
+        return password
 
 
 def resolve_mqtt_profile_credentials(profile, resolver=None):
