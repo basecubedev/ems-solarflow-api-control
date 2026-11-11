@@ -417,8 +417,19 @@ def ask_grid_meter(
                     noninteractive=noninteractive,
                     allow_placeholder_default=allow_placeholder_defaults,
                 )
+                export_value_path = ask_text(
+                    "MQTT JSON export value path (optional, subtracted)",
+                    mqtt_settings.get("export_value_path") or "",
+                    noninteractive=noninteractive,
+                    allow_placeholder_default=allow_placeholder_defaults,
+                )
+                if export_value_path:
+                    mqtt_settings["export_value_path"] = export_value_path
+                else:
+                    mqtt_settings.pop("export_value_path", None)
             else:
                 mqtt_settings.pop("value_path", None)
+                mqtt_settings.pop("export_value_path", None)
         mqtt_settings["payload_format"] = payload_format
         mqtt_settings["max_age_seconds"] = ask_int(
             "MQTT max value age in seconds",

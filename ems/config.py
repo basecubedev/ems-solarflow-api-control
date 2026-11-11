@@ -493,6 +493,7 @@ MQTT_GRID_METER_KEYS = (
     "topic",
     "payload_format",
     "value_path",
+    "export_value_path",
     "max_age_seconds",
     "_mqtt_client_factory",
 )
@@ -1296,6 +1297,7 @@ def normalize_mqtt_grid_meter_settings(grid_meter, *, meter_type=None):
         "topic",
         "payload_format",
         "value_path",
+        "export_value_path",
     ):
         if key in settings and settings[key] is not None:
             settings[key] = str(settings[key])
@@ -1332,6 +1334,7 @@ def normalize_mqtt_grid_meter_settings(grid_meter, *, meter_type=None):
     settings["payload_format"] = payload_format
     if payload_format != "json":
         settings.pop("value_path", None)
+        settings.pop("export_value_path", None)
     settings["max_age_seconds"] = max(
         1,
         safe_int(settings.get("max_age_seconds", 15), 15, minimum=1),

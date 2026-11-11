@@ -762,7 +762,7 @@ the physical device is installed or reports values differently. Run
 | Zendure Smart Meter D0 — Local API | `zendure_smartmeter_d0_http` | `ip` (opt. `port`) | Local REST `/properties/report`, reads `total_power`. Same shared reader as the 3CT; a distinct type so a D0 is never stored as a 3CT. |
 | Tasmota HTTP / SmartMeter | `tasmota_http` | `ip` or `url`, `power_path` | Uses `Status 10` JSON |
 | Zendure Smart Meter D0 — Local MQTT | `zendure_smartmeter_d0` | `mqtt.topic` + (`mqtt.broker_ref` or `mqtt.host`) | Optional alternative; D0 preset, numeric payload |
-| Generic MQTT grid meter | `mqtt` | `mqtt.host`, `mqtt.topic`, `mqtt.payload_format` | Numeric or JSON payload |
+| Generic MQTT grid meter | `mqtt` | `mqtt.host`, `mqtt.topic`, `mqtt.payload_format` | Numeric or JSON payload; JSON may name a separate export value (`mqtt.export_value_path`), as for a Linky through a ZLinky_TIC. |
 | E3/DC storage system via Modbus TCP | `e3dc_modbus` | `ip` (opt. `port`, `unit_id`) | Read-only; grid power at the E3/DC root power meter, read once per control cycle. See below. |
 
 ### Shelly Pro/Plus Gen2/Gen3 (`shelly`)
@@ -1170,6 +1170,52 @@ Example: Generic MQTT JSON payload:
 ```
 
 For a numeric payload, use `"payload_format": "number"` and omit `value_path`.
+
+A JSON payload that carries export as a positive value of its own takes
+`grid_meter.mqtt.export_value_path` as well: the EMS subtracts that value from
+the `value_path` one. Until a message has carried the export value once, a
+message without it fails the reading, so a mistyped path shows up at once;
+after that, a message without it counts as no export.
+
+#### Linky (France) through a ZLinky_TIC and Zigbee2MQTT
+
+A LiXee ZLinky_TIC on the Linky's TIC port, paired with Zigbee2MQTT, publishes
+the meter's values as one JSON message on `zigbee2mqtt/<friendly name>`. The
+Linky reports apparent power only, in VA: `apparent_power` is the power drawn
+(`SINSTS` in standard mode, `PAPP` in historic mode) and `injected_v_a` the
+power fed in (`SINSTI`, only in standard mode with production on, which
+Zigbee2MQTT's `production` option controls). Leave `export_value_path` out on a
+Linky that does not report `injected_v_a`; with it set, the meter reads nothing
+until the first `injected_v_a` arrives. The active-power fields
+`active_power` (`CCASN`) are points of the meter's load curve, not live values,
+and must not be used.
+
+Apparent power is at least the active power, so the EMS sees a little more
+import than flows while the power factor is below one, and may leave a small
+export where a meter in watts would regulate to zero. Zigbee2MQTT publishes
+only when the ZLinky reports; watch how often messages arrive (for example with
+`mosquitto_sub -v -t zigbee2mqtt/linky`) and set `max_age_seconds` above that
+interval, or the EMS holds as if the meter were stale. Nothing here is
+confirmed on hardware.
+
+Example: Linky through a ZLinky_TIC and Zigbee2MQTT:
+
+```json
+{
+  "grid_meter": {
+    "type": "mqtt",
+    "mqtt": {
+      "host": "192.0.2.10",
+      "port": 1883,
+      "topic": "zigbee2mqtt/linky",
+      "payload_format": "json",
+      "value_path": "apparent_power",
+      "export_value_path": "injected_v_a",
+      "max_age_seconds": 30
+    }
+  }
+}
+```
 
 ### E3/DC storage system via Modbus TCP (`e3dc_modbus`)
 

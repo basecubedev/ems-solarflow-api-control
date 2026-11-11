@@ -1042,6 +1042,7 @@ def test_config_init_generic_mqtt_keeps_advanced_payload_flow(monkeypatch):
         "meter/grid",
         "json",
         "power.total",
+        "",
         "10",
     ])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))

@@ -1005,6 +1005,7 @@ def _apply_d0_defaults(grid, meter, validation):
         mqtt["topic"] = existing_topic
     mqtt["payload_format"] = "number"
     mqtt.pop("value_path", None)
+    mqtt.pop("export_value_path", None)
 
 
 def _normalize_bundled_influx_secret(config):

@@ -304,6 +304,7 @@ GRID_METER_VARIANTS = {
             "grid_meter.mqtt.topic",
             "grid_meter.mqtt.payload_format",
             "grid_meter.mqtt.value_path",
+            "grid_meter.mqtt.export_value_path",
             "grid_meter.mqtt.max_age_seconds",
         ),
     },
@@ -1127,6 +1128,15 @@ _SECTIONS = [
                 "grid_meter.mqtt.value_path",
                 "MQTT value path",
                 "Dot-separated JSON path to the power value. Required for JSON payloads.",
+                "text",
+                level="advanced",
+            ),
+            _field(
+                "grid_meter.mqtt.export_value_path",
+                "MQTT export value path",
+                "Optional dot-separated JSON path to a separate export power in the same "
+                "payload, subtracted from the power value. Zigbee2MQTT with a ZLinky_TIC: "
+                "injected_v_a.",
                 "text",
                 level="advanced",
             ),

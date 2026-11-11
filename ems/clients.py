@@ -990,6 +990,7 @@ class MqttGridMeterClient:
         password="",
         payload_format="number",
         value_path="",
+        export_value_path="",
         max_age_seconds=15,
         tls=False,
         tls_insecure=False,
@@ -1004,6 +1005,8 @@ class MqttGridMeterClient:
         self.username = str(username or "")
         self.payload_format = str(payload_format or "number").strip().lower()
         self.value_path = str(value_path or "").strip()
+        self.export_value_path = str(export_value_path or "").strip()
+        self._export_seen = False
         self.max_age_seconds = max(1, int(max_age_seconds))
         self.tls = bool(tls)
         self.tls_insecure = bool(tls_insecure)
@@ -1106,7 +1109,10 @@ class MqttGridMeterClient:
                 message.payload,
                 payload_format=self.payload_format,
                 value_path=self.value_path,
+                export_value_path=self.export_value_path,
+                missing_export_is_zero=self._export_seen,
             )
+            self._export_seen = bool(self.export_value_path)
         except Exception as exc:
             self.health.record_failure(error=exc, latency_ms=0.0, stale_used=True)
             log_event(
@@ -1379,6 +1385,7 @@ def create_grid_meter_client(
             password=mqtt_config.get("password") or "",
             payload_format=mqtt_config.get("payload_format") or "number",
             value_path=mqtt_config.get("value_path") or "",
+            export_value_path=mqtt_config.get("export_value_path") or "",
             max_age_seconds=mqtt_config.get("max_age_seconds") or 15,
             tls=tls,
             tls_insecure=tls_insecure,
@@ -1703,8 +1710,15 @@ def _parse_mqtt_grid_power_payload(
     *,
     payload_format="number",
     value_path="",
+    export_value_path="",
+    missing_export_is_zero=False,
 ):
-    """Extract grid power from an MQTT payload."""
+    """Extract grid power from an MQTT payload.
+
+    A JSON payload may carry export as a separate, positive value, which is
+    then subtracted. A payload without it is refused, unless the caller has
+    seen it before and lets it count as zero.
+    """
 
     if isinstance(payload, bytes):
         text = payload.decode("utf-8").strip()
@@ -1718,7 +1732,16 @@ def _parse_mqtt_grid_power_payload(
     if payload_format == "json":
         data = json.loads(text)
         value = _get_json_path(data, value_path) if value_path else data
-        return _parse_mqtt_number_value(value)
+        power = _parse_mqtt_number_value(value)
+        if export_value_path:
+            try:
+                exported = _get_json_path(data, export_value_path)
+            except ValueError:
+                if not missing_export_is_zero:
+                    raise ValueError(f"the message has carried no export value at {export_value_path} yet") from None
+                exported = 0
+            power -= _parse_mqtt_number_value(exported)
+        return power
 
     raise ValueError(f"Unsupported MQTT payload_format: {payload_format}")
 

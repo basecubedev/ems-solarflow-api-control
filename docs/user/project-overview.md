@@ -116,7 +116,7 @@ Supported options include:
 - powerfox poweropti (local API, powerfox PRO)
 - Tasmota-based meters
 - E3/DC storage systems, read-only over Modbus TCP
-- generic MQTT power meters
+- generic MQTT power meters, among them a Linky through a ZLinky_TIC and Zigbee2MQTT
 
 Support differs by model and connection type. The current compatibility overview is available in [Supported Setups](supported-setups.md).
 
