@@ -212,6 +212,7 @@ ZENDURE_HTTP_GRID_METER_TYPES = frozenset(
 )
 MQTT_GRID_METER_TYPES = ("mqtt", ZENDURE_SMARTMETER_D0_GRID_METER_TYPE)
 E3DC_MODBUS_GRID_METER_TYPE = E3DC_MODBUS_DEVICE_TYPE
+HOMEWIZARD_P1_GRID_METER_TYPE = "homewizard_p1"
 
 # Single source of truth mapping a grid-meter ``type`` to a user-facing hardware
 # model name and a transport label. Diagnostics and status surfaces read this so
@@ -224,6 +225,7 @@ GRID_METER_MODEL_TRANSPORTS = {
     "shelly": ("Shelly Pro/Plus", _LOCAL_HTTP_TRANSPORT),
     "shelly_3em_gen1": ("Shelly 3EM Gen1", _LOCAL_HTTP_TRANSPORT),
     "ecotracker": ("everHome EcoTracker", _LOCAL_HTTP_TRANSPORT),
+    HOMEWIZARD_P1_GRID_METER_TYPE: ("HomeWizard P1 Meter", _LOCAL_HTTP_TRANSPORT),
     "tasmota_http": ("Tasmota HTTP reader", _LOCAL_HTTP_TRANSPORT),
     ZENDURE_GRID_METER_HTTP_GRID_METER_TYPE: ("Zendure grid meter", _LOCAL_HTTP_TRANSPORT),
     ZENDURE_SMARTMETER_3CT_HTTP_GRID_METER_TYPE: (
@@ -320,6 +322,62 @@ def e3dc_modbus_device_settings(device):
     settings = _e3dc_modbus_connection(device, "", f"E3/DC Modbus device {name}")
     settings["name"] = name
     return settings
+
+
+HOMEWIZARD_P1_DEFAULT_PORT = 443
+HOMEWIZARD_P1_PAIRING_KEYS = ("serial", "token", "pairing_name")
+HOMEWIZARD_P1_SERIAL_PATTERN = re.compile(r"[0-9a-f]{12}")
+HOMEWIZARD_P1_TOKEN_PATTERN = re.compile(r"[0-9A-Fa-f]{32}")
+HOMEWIZARD_P1_PAIRING_NAME_PATTERN = re.compile(r"local/[A-Za-z0-9_\\/# -]{1,40}")
+
+
+def homewizard_p1_grid_meter_settings(grid_meter):
+    """Validate a ``homewizard_p1`` grid-meter block into connection settings.
+
+    The serial and the token come from pairing; without both the meter cannot
+    be read, so a missing one is refused rather than defaulted.
+    """
+
+    grid_meter = grid_meter if isinstance(grid_meter, dict) else {}
+    host = str(grid_meter.get("ip") or "").strip()
+    if not host:
+        raise ValueError("HomeWizard P1 Meter requires grid_meter.ip")
+    serial = str(grid_meter.get("serial") or "").strip().lower()
+    token = str(grid_meter.get("token") or "").strip()
+    if not HOMEWIZARD_P1_SERIAL_PATTERN.fullmatch(serial) or not HOMEWIZARD_P1_TOKEN_PATTERN.fullmatch(token):
+        raise ValueError(
+            "HomeWizard P1 Meter is not paired: grid_meter.serial and grid_meter.token "
+            "come from pairing in the Admin Console or 'emsctl config init'"
+        )
+    return {
+        "host": host,
+        "port": _strict_number(
+            grid_meter.get("port"),
+            "grid_meter.port",
+            default=HOMEWIZARD_P1_DEFAULT_PORT,
+            minimum=1,
+            maximum=65535,
+        ),
+        "serial": serial,
+        "token": token,
+    }
+
+
+def check_homewizard_p1_pairing_name(grid_meter):
+    """Refuse a stored pairing name the meter would not accept for pairing again.
+
+    Reading needs no name, so the EMS and ``config init`` treat a malformed one
+    as absent and pairing makes up a new one; only the editors refuse it, so a
+    name of another form is never written in the first place.
+    """
+
+    grid_meter = grid_meter if isinstance(grid_meter, dict) else {}
+    name = str(grid_meter.get("pairing_name") or "").strip()
+    if name and not HOMEWIZARD_P1_PAIRING_NAME_PATTERN.fullmatch(name):
+        raise ValueError(
+            "grid_meter.pairing_name must be the name pairing stored: local/ and up to "
+            "40 letters, digits, spaces or -_\\/#"
+        )
 
 
 _ZENDURE_D0_TOPIC_PREFIX = "Zendure/sensor/"

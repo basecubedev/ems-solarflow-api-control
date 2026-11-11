@@ -419,10 +419,10 @@ same containers, without asking you to manage Docker yourself.
 
 ### Which grid meters are supported?
 
-Shelly Pro 3EM and Gen2/Gen3, Shelly 3EM Gen1, everHome EcoTracker, Tasmota
-HTTP readers, the Zendure Smart Meter 3CT and D0 (local HTTP, or the D0 over
-MQTT), an E3/DC over Modbus TCP (read only), and any meter that publishes its
-power to an MQTT topic. Their support status is listed in
+Shelly Pro 3EM and Gen2/Gen3, Shelly 3EM Gen1, everHome EcoTracker, the
+HomeWizard P1 Meter, Tasmota HTTP readers, the Zendure Smart Meter 3CT and D0
+(local HTTP, or the D0 over MQTT), an E3/DC over Modbus TCP (read only), and any
+meter that publishes its power to an MQTT topic. Their support status is listed in
 [supported-setups.md](supported-setups.md).
 
 ### How does EMS reach my Zendure devices?

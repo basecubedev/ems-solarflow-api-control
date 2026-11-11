@@ -69,6 +69,7 @@ def test_catalog_contains_all_supported_grid_meter_variants():
         "shelly",
         "shelly_3em_gen1",
         "ecotracker",
+        "homewizard_p1",
         "zendure_grid_meter_http",
         "zendure_smartmeter_3ct_http",
         "zendure_smartmeter_d0_http",
@@ -131,6 +132,15 @@ def test_grid_meter_type_sets_are_derived_from_the_catalog():
     assert not (http & {"zendure_smartmeter_d0", "mqtt"})
 
 
+@pytest.mark.parametrize("grid_type", sorted(get_config_catalog()["grid_meter_variants"]))
+def test_every_grid_meter_variant_has_a_model_name_and_a_setup_assistant_entry(grid_type):
+    from ems.config import grid_meter_model_transport
+    from ems.config_init import SUPPORTED_GRID_METER_TYPES
+
+    assert grid_meter_model_transport(grid_type) != (None, None)
+    assert grid_type in SUPPORTED_GRID_METER_TYPES
+
+
 def test_grid_meter_variant_field_spec_zendure_d0_http():
     # The HTTP D0 shares the flat http ip/port key surface (no mqtt block),
     # exactly like the 3CT and generic Zendure local-HTTP meters.
@@ -156,6 +166,9 @@ def test_grid_meter_variant_field_spec_matches_v070_catalog():
     assert grid_meter_variant_field_spec("e3dc_modbus")["keys"] == frozenset(
         {"type", "ip", "port", "unit_id"}
     )
+    assert grid_meter_variant_field_spec("homewizard_p1")["keys"] == frozenset(
+        {"type", "ip", "port", "serial", "token", "pairing_name"}
+    )
     # MQTT variants carry only the mqtt block; D0 excludes value_path.
     d0 = grid_meter_variant_field_spec("zendure_smartmeter_d0")
     assert d0["keys"] == frozenset({"type", "mqtt"})
@@ -174,6 +187,9 @@ def test_grid_meter_variant_field_spec_matches_v070_catalog():
             "power_path",
             "mqtt",
             "unit_id",
+            "serial",
+            "token",
+            "pairing_name",
         }
     )
     assert "value_path" in GRID_METER_KNOWN_MQTT_KEYS

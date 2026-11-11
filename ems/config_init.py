@@ -19,6 +19,10 @@ GRID_METER_CHOICES = (
     ("shelly_3em_gen1", "Shelly 3EM Gen1"),
     ("ecotracker", "EcoTracker"),
     (
+        config_mod.HOMEWIZARD_P1_GRID_METER_TYPE,
+        "HomeWizard P1 Meter (paired by pressing its button)",
+    ),
+    (
         config_mod.ZENDURE_GRID_METER_HTTP_GRID_METER_TYPE,
         "Zendure Grid Meter via local HTTP (D0 / Smart Meter 3CT)",
     ),
@@ -430,6 +434,7 @@ def ask_grid_meter(
             "value_path",
             "max_age_seconds",
             "unit_id",
+            *config_mod.HOMEWIZARD_P1_PAIRING_KEYS,
         ):
             result.pop(key, None)
     elif meter_type == config_mod.E3DC_MODBUS_GRID_METER_TYPE:
@@ -466,12 +471,51 @@ def ask_grid_meter(
             "value_path",
             "max_age_seconds",
             "mqtt",
+            *config_mod.HOMEWIZARD_P1_PAIRING_KEYS,
         ):
             result.pop(key, None)
         try:
             config_mod.e3dc_modbus_grid_meter_settings(result)
         except ValueError as exc:
             raise ConfigInitError(str(exc)) from exc
+    elif meter_type == config_mod.HOMEWIZARD_P1_GRID_METER_TYPE:
+        result["ip"] = ask_text(
+            "HomeWizard P1 Meter IP address",
+            result.get("ip") or "",
+            required=True,
+            noninteractive=noninteractive,
+            allow_placeholder_default=allow_placeholder_defaults,
+        )
+        for key in (
+            "url",
+            "power_path",
+            "channels",
+            "host",
+            "username",
+            "password",
+            "topic",
+            "payload_format",
+            "value_path",
+            "max_age_seconds",
+            "unit_id",
+            "mqtt",
+        ):
+            result.pop(key, None)
+        try:
+            config_mod.homewizard_p1_grid_meter_settings(result)
+            paired = True
+        except ValueError:
+            paired = False
+        if noninteractive:
+            if not paired:
+                raise ConfigInitError(
+                    "HomeWizard P1 Meter is not paired; run 'emsctl config init' "
+                    "interactively and press the meter's button when asked"
+                )
+        elif not paired or ask_confirm("Pair the P1 Meter again? Its current token stops working at once", False):
+            result.update(
+                pair_homewizard_p1(result["ip"], port=result.get("port"), name=result.get("pairing_name"))
+            )
     elif meter_type == "tasmota_http":
         current_url = result.get("url") or result.get("ip") or ""
         value = ask_text(
@@ -506,6 +550,7 @@ def ask_grid_meter(
             "unit_id",
             "channels",
             "mqtt",
+            *config_mod.HOMEWIZARD_P1_PAIRING_KEYS,
         ):
             result.pop(key, None)
     else:
@@ -529,9 +574,35 @@ def ask_grid_meter(
             "max_age_seconds",
             "unit_id",
             "mqtt",
+            *config_mod.HOMEWIZARD_P1_PAIRING_KEYS,
         ):
             result.pop(key, None)
     return result
+
+
+def pair_homewizard_p1(host, *, port=None, name=None):
+    """Pair the P1 Meter at ``host`` by its button under this installation's name.
+
+    Returns the serial, the token and the name; a stored name is kept, so
+    pairing again replaces only this installation's own pairing.
+    """
+
+    from ems import homewizard
+
+    port = _whole_number_text(port, config_mod.HOMEWIZARD_P1_DEFAULT_PORT)
+    if not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ConfigInitError(f"HomeWizard P1 Meter port must be 1..65535, got {port!r}")
+    name = homewizard.pairing_name(name)
+    api = homewizard.HomeWizardP1Api(host, port=port, timeout=5.0)
+    print("Press the button on the HomeWizard P1 Meter now; waiting up to 60 s.")
+    try:
+        token = homewizard.pair_until_pressed(api, name)
+    except homewizard.HomeWizardError as exc:
+        raise ConfigInitError(f"HomeWizard P1 Meter pairing failed: {exc}") from exc
+    finally:
+        api.close()
+    print(f"Paired with P1 Meter {api.connected_serial}.")
+    return {"serial": api.connected_serial, "token": token, "pairing_name": name}
 
 
 def _device_defaults(template_config):
@@ -800,6 +871,10 @@ def _meter_summary(grid_meter):
     if meter_type == "tasmota_http":
         target = grid_meter.get("url") or grid_meter.get("ip") or "(not set)"
         return f"Tasmota HTTP at {target}"
+    if meter_type == config_mod.HOMEWIZARD_P1_GRID_METER_TYPE:
+        serial = grid_meter.get("serial") or ""
+        pairing = f"serial {serial}" if serial and grid_meter.get("token") else "not paired"
+        return f"HomeWizard P1 Meter at {grid_meter.get('ip') or '(not set)'}, {pairing}"
     if meter_type == config_mod.E3DC_MODBUS_GRID_METER_TYPE:
         port = grid_meter.get("port") or config_mod.E3DC_MODBUS_DEFAULT_PORT
         unit_id = grid_meter.get("unit_id", config_mod.E3DC_MODBUS_DEFAULT_UNIT_ID)

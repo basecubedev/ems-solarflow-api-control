@@ -112,6 +112,7 @@ Supported options include:
 - Zendure Smart Meter 3CT
 - Zendure Smart Meter D0
 - everHome EcoTracker
+- HomeWizard P1 Meter
 - Tasmota-based meters
 - E3/DC storage systems, read-only over Modbus TCP
 - generic MQTT power meters

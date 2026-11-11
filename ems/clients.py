@@ -745,6 +745,70 @@ class EcoTrackerClient:
         return self.last_value
 
 
+HOMEWIZARD_FROZEN_AFTER_S = 30.0
+
+
+class HomeWizardP1Client:
+    """Client for the HomeWizard P1 Meter local API v2.
+
+    The meter's own time stamp tells a new reading from an old one; when it has
+    not moved for :data:`HOMEWIZARD_FROZEN_AFTER_S` the smart meter has stopped
+    sending, and the reading counts as failed instead of being regulated on.
+    """
+
+    provider = "HomeWizard P1"
+
+    def __init__(self, api, *, clock=time.monotonic):
+        self.api = api
+        self.ip = api.host
+        self.last_value = 0
+        self.health = CommHealth(self.provider, kind="read")
+        self._clock = clock
+        self._timestamp = None
+        self._timestamp_since = None
+
+    def get_power(self):
+        """Return current grid power: positive import, negative export."""
+
+        start = time.monotonic()
+        try:
+            power, timestamp = _parse_homewizard_p1_measurement(self.api.measurement())
+            self._check_fresh(timestamp)
+            self.last_value = round(power, 1)
+            self.health.record_success((time.monotonic() - start) * 1000.0)
+
+        except Exception as e:
+            self.health.record_failure(
+                error=e,
+                latency_ms=(time.monotonic() - start) * 1000.0,
+                stale_used=True,
+            )
+            log_event(
+                logging.WARNING,
+                "homewizard_p1_read_error",
+                ip=self.ip,
+                reason=getattr(e, "reason", None),
+                error=e,
+                stale_value=self.last_value
+            )
+
+        return self.last_value
+
+    def close(self):
+        self.api.close()
+
+    def _check_fresh(self, timestamp):
+        now = self._clock()
+        if timestamp is None or timestamp != self._timestamp:
+            self._timestamp, self._timestamp_since = timestamp, now
+            return
+        frozen_s = now - self._timestamp_since
+        if frozen_s > HOMEWIZARD_FROZEN_AFTER_S:
+            raise ValueError(
+                f"the smart meter has sent no new reading for {frozen_s:.0f} s (time stamp {timestamp})"
+            )
+
+
 class TasmotaHttpClient:
     """Client for Tasmota HTTP JSON smart meter payloads."""
 
@@ -1156,6 +1220,19 @@ def create_grid_meter_client(
     if meter_type == "ecotracker":
         return EcoTrackerClient(ip, session)
 
+    if meter_type == cfg.HOMEWIZARD_P1_GRID_METER_TYPE:
+        from ems.homewizard import HomeWizardP1Api
+
+        settings = cfg.homewizard_p1_grid_meter_settings(config)
+        return HomeWizardP1Client(
+            HomeWizardP1Api(
+                settings["host"],
+                serial=settings["serial"],
+                token=settings["token"],
+                port=settings["port"],
+            )
+        )
+
     if meter_type in cfg.ZENDURE_HTTP_GRID_METER_TYPES:
         if not ip:
             raise ValueError(
@@ -1442,6 +1519,24 @@ def _parse_ecotracker_power(data):
         return float(value)
 
     raise ValueError("Unsupported EcoTracker payload: missing numeric power")
+
+
+def _parse_homewizard_p1_measurement(data):
+    """Grid power and meter time stamp from a HomeWizard ``/api/measurement`` answer.
+
+    ``power_w`` is the sum of all phases, negative while exporting. The time
+    stamp is when the smart meter sent the reading, or ``None`` when the meter
+    reports none.
+    """
+
+    if not isinstance(data, dict):
+        raise ValueError("Unsupported HomeWizard payload: expected object")
+
+    value = data.get("power_w")
+    if not _is_numeric(value):
+        raise ValueError("Unsupported HomeWizard payload: missing numeric power_w")
+    timestamp = data.get("timestamp")
+    return float(value), timestamp if isinstance(timestamp, str) and timestamp else None
 
 
 def _get_json_path(data, path):

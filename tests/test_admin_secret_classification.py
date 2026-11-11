@@ -123,6 +123,7 @@ def test_the_mutation_fingerprint_never_returns_a_raw_value():
 
 CATALOGUED_SECRETS = frozenset({
     "grid_meter.mqtt.password",
+    "grid_meter.token",
     "influxdb.token",
     "zendure_mqtt.app_key",
     "zendure_mqtt.password",

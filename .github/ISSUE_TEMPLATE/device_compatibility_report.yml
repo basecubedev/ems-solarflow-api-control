@@ -51,6 +51,7 @@ body:
         - Zendure Smart Meter HTTP
         - Shelly
         - EcoTracker HTTP
+        - HomeWizard P1 (local API v2)
         - Tasmota HTTP
         - Other
     validations:

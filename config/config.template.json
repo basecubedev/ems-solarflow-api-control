@@ -77,8 +77,8 @@
   "grid_meter": {
     "_comment": [
       "Household or grid power meter used as the EMS load signal.",
-      "Supported types: shelly, shelly_3em_gen1, ecotracker, tasmota_http,",
-      "zendure_grid_meter_http, zendure_smartmeter_d0, mqtt.",
+      "Supported types: shelly, shelly_3em_gen1, ecotracker, homewizard_p1,",
+      "tasmota_http, zendure_grid_meter_http, zendure_smartmeter_d0, mqtt.",
       "Shelly reads total power by default.",
       "Use channels like [c] or [a,c] for selected clamps or phases.",
       "Tasmota needs url or ip plus power_path.",
@@ -89,7 +89,9 @@
       "Zendure SmartMeter D0 and MQTT use grid_meter.mqtt with topic and",
       "either mqtt.broker_ref or host/port; payload_format and max_age_seconds.",
       "e3dc_modbus reads an E3/DC over Modbus TCP (read-only) and needs",
-      "grid_meter.ip; port 502 and unit_id 1 are the defaults."
+      "grid_meter.ip; port 502 and unit_id 1 are the defaults.",
+      "homewizard_p1 reads a HomeWizard P1 Meter over its local API v2 (HTTPS);",
+      "it needs grid_meter.ip, and serial, token and pairing_name from pairing."
     ],
     "type": "shelly",
     "ip": "198.51.100.50"

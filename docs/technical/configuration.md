@@ -755,6 +755,7 @@ the physical device is installed or reports values differently. Run
 | Shelly Pro/Plus Gen2/Gen3 | `shelly` | `ip` | Uses `/rpc/Shelly.GetStatus` |
 | Shelly 3EM Gen1 | `shelly_3em_gen1` | `ip` | Uses `/status` |
 | everHome EcoTracker | `ecotracker` | `ip` | Uses `/v1/json` |
+| HomeWizard P1 Meter | `homewizard_p1` | `ip`, `serial` and `token` from pairing (opt. `port`) | Local API v2 over HTTPS, `/api/measurement`; pair once by pressing the meter's button. See below. |
 | Zendure Grid Meter via local HTTP | `zendure_grid_meter_http` | `ip` (opt. `port`) | Internal/discovery generic type. Local REST `/properties/report`, reads `total_power`. Works for both D0 and Smart Meter 3CT. Manual setup offers the concrete 3CT/D0 local-API types below. |
 | Zendure Smart Meter 3CT — Local API | `zendure_smartmeter_3ct_http` | `ip` (opt. `port`) | Local REST `/properties/report`, reads `total_power`. Shares the Zendure local-HTTP reader with the D0 local-API meter. |
 | Zendure Smart Meter D0 — Local API | `zendure_smartmeter_d0_http` | `ip` (opt. `port`) | Local REST `/properties/report`, reads `total_power`. Same shared reader as the 3CT; a distinct type so a D0 is never stored as a 3CT. |
@@ -852,6 +853,73 @@ Example: everHome EcoTracker:
   "grid_meter": {
     "type": "ecotracker",
     "ip": "192.0.2.60"
+  }
+}
+```
+
+### HomeWizard P1 Meter (`homewizard_p1`)
+
+The EMS reads `https://<ip>/api/measurement`, HomeWizard's documented local API
+v2, and uses `power_w`: the sum of all phases, positive while importing and
+negative while exporting. API v1 is not used; HomeWizard is phasing it out.
+
+**Pairing.** API v2 answers only with a token the meter hands out after its
+button was pressed. Pair the meter once: in the Admin Console, choose the meter
+type, enter the address and click **Pair with the meter**, then press the button
+on the P1 Meter within a minute; or answer the HomeWizard questions of
+`python3 emsctl.py config init`, which waits for the button the same way.
+Pairing stores three keys: `serial`, the meter's serial number; `token`, a
+secret the Admin Console never shows; and `pairing_name`, the name this
+installation paired under (`local/ems_solarflow#` and six hex digits, made up at
+the first pairing). The meter revokes a name's token when that name pairs again,
+so every installation keeps its own name: several installations, a second one
+in dry-run for example, can pair and read the same meter, and pairing again only
+ever replaces the installation's own pairing. That replacement takes effect
+at once, before anything is saved: until the new pairing is saved, this
+installation cannot read the meter. Both the console and `config init` say so
+before they pair again. A meter that keeps no further pairing answers
+`reason=no_room`. An installation set up from another one's backup carries
+that installation's name and token: both read the meter, but pairing again on
+either revokes the other's token, so delete `grid_meter.pairing_name` there
+before pairing it on its own. The Admin Console and `emsctl diagnose` refuse a
+name that is not of the documented form (`local/` and up to 40 letters, digits,
+spaces or `-_\/#`); reading the meter does not need the name, so the EMS keeps
+reading, and the next pairing makes up a new one.
+
+**Identity.** The meter answers HTTPS only, with a certificate HomeWizard's
+Appliance Access CA issued for `appliance/p1dongle/<serial>`. The EMS trusts that
+CA alone, which it ships, and reads only the meter whose certificate names the
+paired serial: if the address now belongs to another meter, every read fails
+with `reason=other_meter` instead of reading the wrong meter. A refused token
+fails with `reason=unauthorized`; pair the meter again.
+
+**Freshness.** When the meter reports the time the smart meter sent a
+measurement (HomeWizard marks every data point optional), a time stamp that has
+not moved for 30 s means the smart meter has stopped sending: the read counts as
+failed, so the EMS holds instead of regulating on a frozen value. Without a time
+stamp this check cannot run. A DSMR 5 meter sends a new reading every second, an older DSMR 4 meter
+only every 10 seconds, and the P1 Meter answers with the last one in between.
+The EMS adds each reading's correction to its target, so on a DSMR 4 meter with
+the default loop interval of 5 s one reading reaches two control cycles and its
+correction counts twice. For such a meter set the loop interval to 11 s or more,
+in the Admin Console or with `python3 emsctl.py system loop-interval 11` (the
+value in `runtime-state.json` overrides a hand edit of `config.json`), and
+`system.output_control.telemetry_max_age_seconds` to at least twice that, for
+example 22, so a single missed read does not already count as stale.
+`emsctl diagnose --hardware` reads the meter once, names the DSMR version and
+warns when the loop interval the EMS uses, or the telemetry window for that
+loop, is too short for it (`homewizard_p1_slow_meter`).
+
+Example: HomeWizard P1 Meter, as pairing leaves it (`port` defaults to 443):
+
+```json
+{
+  "grid_meter": {
+    "type": "homewizard_p1",
+    "ip": "192.0.2.61",
+    "serial": "0a1b2c3d4e5f",
+    "token": "<set by pairing>",
+    "pairing_name": "local/ems_solarflow#3f9a1c"
   }
 }
 ```
