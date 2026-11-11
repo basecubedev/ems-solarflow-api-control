@@ -261,7 +261,7 @@ def test_a_https_host_with_a_foreign_certificate_is_no_homewizard(tmp_path):
 
 
 def test_the_scan_runs_the_homewizard_probe_before_the_modbus_probe():
-    assert discovery.PROBES.index(discovery.probe_homewizard_p1) == len(discovery.PROBES) - 2
+    assert discovery.PROBES.index(discovery.probe_homewizard_p1) < discovery.PROBES.index(discovery.probe_e3dc_modbus)
     assert discovery.PROBES[-1] is discovery.probe_e3dc_modbus
 
 

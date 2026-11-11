@@ -13,6 +13,7 @@ and timeouts are clamped to keep a scan cheap enough for a small Raspberry Pi.
 import ipaddress
 import logging
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
@@ -29,8 +30,10 @@ from ems.config import (
     E3DC_MODBUS_GRID_METER_TYPE,
     HOMEWIZARD_P1_DEFAULT_PORT,
     HOMEWIZARD_P1_GRID_METER_TYPE,
+    TIBBER_PULSE_GRID_METER_TYPE,
 )
 from ems.homewizard import HomeWizardError, HomeWizardP1Api
+from ems.tibber_pulse import REQUEST_TIMEOUT_SECONDS, BridgeError, TibberPulseBridge
 
 logger = logging.getLogger("admin.discovery")
 
@@ -505,6 +508,111 @@ def probe_homewizard_p1(session, ip, timeout_s, port=HOMEWIZARD_P1_DEFAULT_PORT,
     )
 
 
+# The refusal text a Tibber Pulse bridge sends without a login (one capture,
+# marq24/ha-tibber-pulse-local#111). Only this, or a challenge naming Tibber,
+# makes a candidate: a saved bridge password is sent to nothing else.
+TIBBER_BRIDGE_REFUSAL = "username/password authentication failed"
+TIBBER_BRIDGE_READ_TIMEOUT_S = 2.5
+
+
+def _is_tibber_bridge_refusal(response):
+    """A 401 carrying the bridge's refusal text or a challenge naming Tibber.
+
+    Only the first 2 KiB of a 401 are read; any other answer is not read at all.
+    """
+    if response.status_code != 401:
+        return False
+    challenge = str(response.headers.get("WWW-Authenticate") or "").lower()
+    head = next(response.iter_content(2048), b"")
+    body = head.decode("utf-8", "replace").lower() if isinstance(head, bytes) else str(head).lower()
+    return TIBBER_BRIDGE_REFUSAL in body or (challenge.startswith("basic") and "tibber" in challenge)
+
+
+def probe_tibber_bridge(session, ip, timeout_s):
+    """A Tibber Pulse bridge whose web server answers an anonymous request."""
+
+    # A dead host fails at the connect timeout; a bridge that accepted the
+    # connection often needs more than a second to answer.
+    response = session.get(
+        f"http://{ip}/",
+        timeout=(timeout_s, max(timeout_s, TIBBER_BRIDGE_READ_TIMEOUT_S)),
+        allow_redirects=False,
+        stream=True,
+    )
+    try:
+        if not _is_tibber_bridge_refusal(response):
+            return None
+    finally:
+        response.close()
+    return DiscoveredDevice(
+        ip=ip,
+        api_family=TIBBER_PULSE_GRID_METER_TYPE,
+        device_type=TIBBER_PULSE_GRID_METER_TYPE,
+        role_suggestion=ROLE_GRID_METER,
+        display_name="Tibber Pulse bridge",
+        confidence=0.6,
+        config_ready=False,
+        missing_config_fields=["grid_meter.credentials_ref"],
+        verified=False,
+    )
+
+
+def unlock_tibber_bridge(session, device, passwords, timeout=None):
+    """Try the saved bridge passwords on a found bridge, and only on one.
+
+    ``passwords`` yields ``(credentials_ref, password)``. The first password
+    the bridge accepts names the grid meter's ``credentials_ref``; its node list
+    gives the reading head. The head's EUI is not the bridge's serial, so the
+    found device stays keyed by its address across scans. A bridge no saved password opens stays a candidate
+    that still needs one. Only a 200 proves the bridge took the password: one
+    whose node list is no JSON keeps the password and still needs its node. A
+    server error ends the attempt, since the bridge answers a wrong login with
+    401 and hangs under load; any other answer, a 404 among them, tries the next
+    password. The requests go through the EMS's own bridge reader.
+    """
+
+    if device.api_family != TIBBER_PULSE_GRID_METER_TYPE:
+        return device
+    for ref, password in passwords:
+        bridge = TibberPulseBridge(device.ip, password, session=session, timeout=timeout or REQUEST_TIMEOUT_SECONDS)
+        try:
+            nodes = bridge.read_json("/nodes.json")
+        except BridgeError as exc:
+            if exc.status is not None and exc.status >= 500:
+                return device
+            if exc.reason != "bad_json":
+                continue
+            nodes = []
+        except requests.RequestException:
+            return device
+        nodes = [
+            node for node in (nodes if isinstance(nodes, list) else [])
+            if isinstance(node, dict) and str(node.get("node_id", "")).isdecimal()
+            and 1 <= int(node["node_id"]) <= 255
+        ]
+        device.credentials_ref = ref
+        device.verified = True
+        device.firmware = _bridge_firmware(bridge)
+        if nodes:
+            first = min(nodes, key=lambda node: int(node["node_id"]))
+            device.node_id = int(first["node_id"])
+            device.config_ready = True
+            device.missing_config_fields = []
+            device.confidence = 0.95
+        else:
+            device.missing_config_fields = ["grid_meter.node_id"]
+        return device
+    return device
+
+
+def _bridge_firmware(bridge):
+    try:
+        data = bridge.read_json("/test.json")
+    except (BridgeError, requests.RequestException):
+        return None
+    return _first_str(data.get("esp32_fw_v")) if isinstance(data, dict) else None
+
+
 def probe_e3dc_modbus(session, ip, timeout_s, port=None):
     """Read the E3/DC magic word over Modbus TCP; only ``0xE3DC`` is a candidate.
 
@@ -554,6 +662,7 @@ PROBES = (
     probe_shelly_3em_gen1,
     probe_ecotracker,
     probe_homewizard_p1,
+    probe_tibber_bridge,
     probe_e3dc_modbus,
 )
 
@@ -646,8 +755,27 @@ def probe_host(session, ip, timeout_s):
     return None
 
 
+class _SavedBridgePasswords:
+    """The saved bridge passwords, read once and only when a bridge is found."""
+
+    def __init__(self, provider):
+        self._provider = provider
+        self._lock = threading.Lock()
+        self._passwords = None
+
+    def get(self):
+        with self._lock:
+            if self._passwords is None:
+                try:
+                    self._passwords = list(self._provider()) if self._provider else []
+                except Exception as exc:
+                    logger.warning("saved bridge passwords unreadable: %s", type(exc).__name__)
+                    self._passwords = []
+            return self._passwords
+
+
 def scan_network(cidr, timeout_ms=TIMEOUT_MS_DEFAULT, max_workers=MAX_WORKERS_DEFAULT,
-                 session=None, progress_callback=None):
+                 session=None, progress_callback=None, bridge_passwords=None):
     """Scan a validated CIDR and return ``(devices, errors)``.
 
     Runs bounded-parallel HTTP probes with a shared session, plus the Modbus
@@ -669,11 +797,19 @@ def scan_network(cidr, timeout_ms=TIMEOUT_MS_DEFAULT, max_workers=MAX_WORKERS_DE
     devices = []
     errors = []
     checked = 0
+    saved = _SavedBridgePasswords(bridge_passwords)
+
+    def probe_and_unlock(ip):
+        device = probe_host(session, ip, timeout_s)
+        if device is not None and device.api_family == TIBBER_PULSE_GRID_METER_TYPE:
+            device = unlock_tibber_bridge(
+                session, device, saved.get(), (timeout_s, max(timeout_s, TIBBER_BRIDGE_READ_TIMEOUT_S))
+            )
+        return device
+
     try:
         with ThreadPoolExecutor(max_workers=min(workers, len(hosts))) as pool:
-            futures = {
-                pool.submit(probe_host, session, ip, timeout_s): ip for ip in hosts
-            }
+            futures = {pool.submit(probe_and_unlock, ip): ip for ip in hosts}
             for future in as_completed(futures):
                 ip = futures[future]
                 try:

@@ -181,6 +181,18 @@ def _normalize_string_list(raw):
     return items
 
 
+def _canonical_ref(ref):
+    """Whether ``ref`` names one secrets record; any other value could not resolve."""
+
+    from ems.mqtt_credentials import MqttCredentialError, validate_mqtt_credentials_ref
+
+    try:
+        validate_mqtt_credentials_ref(ref)
+    except MqttCredentialError:
+        return False
+    return True
+
+
 def default_connections():
     return {
         "discovery_priority": list(DEFAULT_PRIORITY),
@@ -188,6 +200,7 @@ def default_connections():
         "local_api": {"enabled": True, "scan_ranges": [], "manual_hosts": []},
         "local_mqtt": {"enabled": True, "credential_refs": [], "brokers": []},
         "zendure_mqtt": {"enabled": True, "token_ref": None},
+        "tibber_bridge": {"credential_refs": []},
     }
 
 
@@ -224,6 +237,9 @@ def normalize_connections(raw):
     )
     zendure_raw = (
         raw.get("zendure_mqtt") if isinstance(raw.get("zendure_mqtt"), dict) else {}
+    )
+    tibber_raw = (
+        raw.get("tibber_bridge") if isinstance(raw.get("tibber_bridge"), dict) else {}
     )
 
     used_ids = set()
@@ -264,6 +280,12 @@ def normalize_connections(raw):
             "brokers": [broker.to_dict() for broker in brokers],
         },
         "zendure_mqtt": {"enabled": zendure_enabled, "token_ref": token_ref},
+        "tibber_bridge": {
+            "credential_refs": [
+                ref for ref in _normalize_string_list(tibber_raw.get("credential_refs"))
+                if _canonical_ref(ref)
+            ],
+        },
     }
 
 
@@ -276,6 +298,7 @@ def _persisted_shape(normalized):
         "local_api": dict(normalized["local_api"]),
         "local_mqtt": dict(normalized["local_mqtt"]),
         "zendure_mqtt": dict(normalized["zendure_mqtt"]),
+        "tibber_bridge": dict(normalized["tibber_bridge"]),
     }
 
 
@@ -372,26 +395,38 @@ class DiscoveryConnectionsStore:
             return removed
 
     def add_credential_ref(self, ref):
+        return self._add_ref("local_mqtt", ref)
+
+    def remove_credential_ref(self, ref):
+        return self._remove_ref("local_mqtt", ref)
+
+    def add_bridge_password_ref(self, ref):
+        return self._add_ref("tibber_bridge", ref)
+
+    def remove_bridge_password_ref(self, ref):
+        return self._remove_ref("tibber_bridge", ref)
+
+    def _add_ref(self, section, ref):
         with self._lock:
             ref = str(ref or "").strip()
             if not ref:
                 return self.load()
             current = self.load()
-            refs = list(current["local_mqtt"]["credential_refs"])
+            refs = list(current[section]["credential_refs"])
             if ref not in refs:
                 refs.append(ref)
-            current["local_mqtt"]["credential_refs"] = refs
+            current[section]["credential_refs"] = refs
             normalized = normalize_connections(current)
             self._write_block(normalized)
             return normalized
 
-    def remove_credential_ref(self, ref):
+    def _remove_ref(self, section, ref):
         with self._lock:
             ref = str(ref or "").strip()
             current = self.load()
-            refs = [r for r in current["local_mqtt"]["credential_refs"] if r != ref]
-            removed = len(refs) != len(current["local_mqtt"]["credential_refs"])
-            current["local_mqtt"]["credential_refs"] = refs
+            refs = [r for r in current[section]["credential_refs"] if r != ref]
+            removed = len(refs) != len(current[section]["credential_refs"])
+            current[section]["credential_refs"] = refs
             self._write_block(normalize_connections(current))
             return removed
 

@@ -19,6 +19,7 @@ from admin.discovery_preparation import (
 from admin.models import SOURCE_LOCAL_MQTT as CANDIDATE_LOCAL_MQTT
 from admin.models import SOURCE_ZENDURE_CLOUD_MQTT as CANDIDATE_ZENDURE_CLOUD
 from admin.observation_identity import stamp_observations
+from ems.config import TIBBER_PULSE_BRIDGE_KEYS, TIBBER_PULSE_GRID_METER_TYPE
 from ems.device_identity import normalize_physical_serial
 from ems.zendure_mqtt.external_catalog import external_topic_family
 
@@ -40,6 +41,12 @@ CANDIDATE_SOURCE_TO_KEY = {
 }
 
 
+# Config values a probe established and the grid meter needs as they are: the
+# saved password that opened a found bridge, and its reading head. A device
+# carries them only when its probe set them.
+CONFIG_HINT_KEYS = {TIBBER_PULSE_GRID_METER_TYPE: TIBBER_PULSE_BRIDGE_KEYS}
+
+
 @dataclass
 class UnifiedDiscoveryDevice:
     id: str
@@ -57,9 +64,11 @@ class UnifiedDiscoveryDevice:
     confidence: str = CONFIDENCE_LOW
     read_only: bool = False
     candidates: list = field(default_factory=list)
+    config_hints: dict = field(default_factory=dict)
 
     def to_dict(self):
         return {
+            **self.config_hints,
             "id": self.id,
             "serial_number": self.serial_number,
             "device_id": self.device_id,
@@ -114,6 +123,11 @@ def _candidate_view(source, raw):
         "device_type": _clean(raw.get("device_type")),
         "stable_id": stable_id,
         "read_only": catalog is not None,
+        "config_hints": {
+            key: raw[key]
+            for key in CONFIG_HINT_KEYS.get(_clean(raw.get("api_family")), ())
+            if raw.get(key) not in (None, "")
+        },
         "raw": raw,
     }
 
@@ -228,6 +242,7 @@ def build_unified_devices(
             selected_reason=REASON_PRIORITY if len(sources) > 1 else REASON_ONLY_SOURCE,
             confidence=CONFIDENCE_HIGH if serial else CONFIDENCE_LOW,
             read_only=selected_view["read_only"],
+            config_hints=dict(selected_view["config_hints"]),
             candidates=[
                 {
                     "source": v["source"],

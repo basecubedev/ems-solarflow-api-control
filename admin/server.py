@@ -12,6 +12,7 @@ offers a backup by default and requires explicit confirmation before apply.
 
 import contextlib
 import copy
+import functools
 import hashlib
 import hmac
 import json
@@ -64,7 +65,7 @@ from admin.discovery_connections import (
     DiscoveryConnectionsError,
     DiscoveryConnectionsStore,
 )
-from admin.credential_store import CredentialStore, CredentialStoreError
+from admin.credential_store import CredentialStore, CredentialStoreError, MqttCredentialsRefInvalidError
 from admin.discovery_run import run_discovery
 from admin.observation_identity import stamp_observations
 from admin.connection_capability import (
@@ -287,6 +288,8 @@ from ems.external_status import (
     mask_route_identifier,
     sanitize_external_mqtt_status,
 )
+from ems.config import TIBBER_PULSE_GRID_METER_TYPE
+from ems.tibber_pulse import login_can_carry
 from ems.zendure_mqtt.config_entries import EXTERNAL_MQTT_TYPE
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -998,7 +1001,6 @@ def create_admin_runtime(
     """
 
     operation_coordinator = operation_coordinator or OperationCoordinator()
-    registry = registry or ScanRegistry()
     network_detector = network_detector or detect_network_suggestions
     gateway_prober = gateway_prober or probe_gateway_candidates
     # Give the release manager a read-only Docker inspector so it can compare a
@@ -1028,6 +1030,19 @@ def create_admin_runtime(
     # area. Migrates the legacy Admin-local preparation file in on first read.
     discovery_preparation = discovery_preparation or DiscoveryConnectionsStore(
         legacy_preparation_store=DiscoveryPreparationStore(admin_data_dir)
+    )
+
+    def saved_bridge_passwords():
+        for ref in discovery_preparation.load()["tibber_bridge"]["credential_refs"]:
+            try:
+                password = credential_store.load_bridge_password(ref)
+            except CredentialStoreError:
+                continue
+            if password:
+                yield ref, password
+
+    registry = registry or ScanRegistry(
+        scan_runner=functools.partial(scan_network, bridge_passwords=saved_bridge_passwords)
     )
     mqtt_discovery = mqtt_discovery or MqttBrokerDiscovery(
         topic_discoverer=default_topic_discoverer,
@@ -1710,6 +1725,9 @@ class AdminHandler(BaseHTTPRequestHandler):
         if path == "/api/discovery/connections/mqtt-credentials":
             self._handle_mqtt_credentials_list()
             return
+        if path == "/api/discovery/connections/bridge-passwords":
+            self._handle_bridge_passwords_list()
+            return
         if path == "/api/discovery/mqtt-brokers":
             self._send_json({
                 "candidates": self.server.mqtt_discovery.candidates(),
@@ -1977,6 +1995,9 @@ class AdminHandler(BaseHTTPRequestHandler):
         if path == "/api/discovery/connections/mqtt-credentials":
             self._handle_mqtt_credential_save()
             return
+        if path == "/api/discovery/connections/bridge-passwords":
+            self._handle_bridge_password_save()
+            return
         if path == "/api/discovery/connections/mqtt-brokers":
             self._handle_connections_broker_save()
             return
@@ -2061,6 +2082,10 @@ class AdminHandler(BaseHTTPRequestHandler):
         if path.startswith("/api/discovery/connections/mqtt-brokers/"):
             broker_id = path[len("/api/discovery/connections/mqtt-brokers/"):]
             self._handle_connections_broker_delete(broker_id)
+            return
+        if path.startswith("/api/discovery/connections/bridge-passwords/"):
+            ref = path[len("/api/discovery/connections/bridge-passwords/"):]
+            self._handle_bridge_password_delete(ref)
             return
         self._send_json({"error": "not found"}, status=404)
 
@@ -7535,7 +7560,112 @@ class AdminHandler(BaseHTTPRequestHandler):
                 "token_ref": connections["zendure_mqtt"]["token_ref"],
                 "token_saved": bool(zendure.get("token_saved")),
             },
+            "tibber_bridge": {
+                "credential_refs": connections["tibber_bridge"]["credential_refs"],
+                "passwords": self._bridge_passwords_view(connections),
+            },
         }
+
+    def _bridge_passwords_view(self, connections):
+        """Saved meter bridge passwords by name only (never the password)."""
+
+        return [
+            self.server.credential_store.bridge_password_status(ref)
+            for ref in connections["tibber_bridge"]["credential_refs"]
+        ]
+
+    @staticmethod
+    def _bridge_password_in_use(ref):
+        """True when the installed config's Tibber meter names ``ref``, or it cannot be read."""
+
+        config = AdminHandler._installed_config()
+        if config is None:
+            return True
+        grid_meter = config.get("grid_meter") if isinstance(config, dict) else None
+        if not isinstance(grid_meter, dict):
+            return False
+        if str(grid_meter.get("type") or "").strip().lower() != TIBBER_PULSE_GRID_METER_TYPE:
+            return False
+        return grid_meter.get("credentials_ref") == ref
+
+    def _handle_bridge_passwords_list(self):
+        connections = self.server.discovery_preparation.load()
+        self._send_json({"passwords": self._bridge_passwords_view(connections)})
+
+    def _handle_bridge_password_save(self):
+        body = self._read_json_body()
+        if body is None:
+            return
+        if not isinstance(body, dict):
+            self._send_json({"error": "expected a JSON object"}, status=400)
+            return
+        label = str(body.get("label") or "").strip()
+        password = body.get("password")
+        if not label:
+            self._send_json({"error": "label is required"}, status=400)
+            return
+        if not isinstance(password, str) or not password.strip():
+            self._send_json({"error": "password is required"}, status=400)
+            return
+        if not login_can_carry(password):
+            self._send_json({"ok": False, "error": "bridge_password_invalid", "message": "The password has characters a bridge login cannot carry."}, status=400)
+            return
+        if not any(ch.isascii() and ch.isalnum() for ch in label):
+            self._send_json({"ok": False, "error": "bridge_password_name_invalid", "message": "The name needs a letter or digit."}, status=400)
+            return
+        ref = CredentialStore.normalize_ref(label)
+        try:
+            existing = self.server.credential_store.bridge_password_status(ref)
+        except MqttCredentialsRefInvalidError:
+            self._send_json({"ok": False, "error": "bridge_password_name_invalid", "message": "The name is too long."}, status=400)
+            return
+        except CredentialStoreError as exc:
+            self._send_json({"ok": False, "error": "store_failed", "message": str(exc)}, status=500)
+            return
+        if existing["saved"] and str(existing["label"]).strip().casefold() != label.casefold():
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "bridge_password_name_taken",
+                    "message": f"The saved password '{existing['label']}' already uses this name. Choose another name.",
+                },
+                status=409,
+            )
+            return
+        try:
+            self.server.credential_store.save_bridge_password(ref, password.strip(), label=label)
+            self.server.discovery_preparation.add_bridge_password_ref(ref)
+        except (DiscoveryConnectionsError, CredentialStoreError) as exc:
+            self._send_json(
+                {"ok": False, "error": "store_failed", "message": str(exc)},
+                status=500,
+            )
+            return
+        self._send_json(self._connections_view())
+
+    def _handle_bridge_password_delete(self, ref):
+        self._drain_body()
+        if not ref or CredentialStore.normalize_ref(ref) != ref:
+            self._send_json({"error": "not found"}, status=404)
+            return
+        if self._bridge_password_in_use(ref):
+            self._send_json(
+                {
+                    "ok": False,
+                    "error": "bridge_password_in_use",
+                    "message": "The grid meter in the saved configuration uses this password, "
+                    "or the configuration cannot be read. Choose another password or meter first.",
+                },
+                status=409,
+            )
+            return
+        try:
+            self.server.credential_store.forget_bridge_password(ref)
+            removed = self.server.discovery_preparation.remove_bridge_password_ref(ref)
+        except (CredentialStoreError, DiscoveryConnectionsError) as exc:
+            self._send_json({"ok": False, "error": "store_failed", "message": str(exc)}, status=500)
+            return
+        self._send_json({"ok": True, "removed": bool(removed)})
 
     def _mqtt_credentials_view(self, connections):
         """Redacted discovery credential pool entries (never a raw secret)."""
@@ -7735,17 +7865,25 @@ class AdminHandler(BaseHTTPRequestHandler):
             return False
 
     @staticmethod
+    def _installed_config():
+        """The installed config: ``{}`` when there is none, ``None`` when unreadable."""
+
+        context = detect_install_context()
+        if not context.config_exists:
+            return {}
+        try:
+            return json.loads(context.config_path.read_bytes().decode("utf-8"))
+        except (OSError, UnicodeError, ValueError):
+            return None
+
+    @staticmethod
     def _runtime_credential_ref_consumed(ref):
         """True when the installed config uses ``ref``, or cannot be read."""
 
         from ems.mqtt_credentials import collect_mqtt_credential_consumers
 
-        context = detect_install_context()
-        if not context.config_exists:
-            return False
-        try:
-            config = json.loads(context.config_path.read_bytes().decode("utf-8"))
-        except (OSError, UnicodeError, ValueError):
+        config = AdminHandler._installed_config()
+        if config is None:
             return True
         try:
             consumers = collect_mqtt_credential_consumers(config)

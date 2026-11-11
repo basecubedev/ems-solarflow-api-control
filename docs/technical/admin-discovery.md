@@ -307,6 +307,30 @@ placeholder for a later phase.
     no candidate. The meter still has to be paired (its button pressed) in the
     hardware step: the setup preview stays not ready until it is, see
     [HomeWizard pairing](#homewizard-p1-meter-pairing)
+  - Tibber Pulse bridge (experimental) — `GET /` without a login → role
+    `grid_meter`, family `tibber_pulse_bridge`. Only a `401` whose body carries
+    the bridge's refusal text (`Username/Password Authentication Failed.`) or
+    whose Basic challenge names Tibber makes a candidate; any other login page
+    is no candidate. Only the first 2 KiB of a 401 are read, and nothing of any
+    other answer. The connect timeout is the scan's; the read timeout is at
+    least 2.5 s, because a bridge often needs more than a second to answer.
+    On a candidate, and only there, the scan worker that found it tries the
+    saved bridge passwords (below) against `/nodes.json` with HTTP Basic user
+    `admin`, through the EMS's own bridge reader
+    (`ems.tibber_pulse.TibberPulseBridge`); they are read once per scan, and
+    only when a bridge is found. The first one the bridge accepts becomes the
+    candidate's `credentials_ref`, its lowest reading head numbered 1–255 the
+    `node_id` (the head's EUI is not the bridge's serial, so the candidate
+    stays keyed by its address across scans), and
+    `/test.json` names the firmware. A bridge no saved password opens stays a
+    candidate that still needs one (`missing_config_fields`
+    `grid_meter.credentials_ref`). Only a 200 proves the bridge took a
+    password: one whose `/nodes.json` is no JSON keeps it and still needs its
+    node (`grid_meter.node_id`). A server error (5xx) ends the attempt without
+    a password, since the bridge answers a wrong login with 401 and hangs under
+    load; any other answer, a 404 among them, tries the next password. The refusal text comes from one published
+    capture; a bridge whose firmware answers differently is not found and is
+    added by hand.
 - Reads the E3/DC magic word over Modbus TCP (port 502, unit ID 1, register
   40001) and offers a host that answers `0xE3DC` as an E3/DC storage system →
   role `grid_meter`, family `e3dc_modbus`, with its model, serial and firmware
@@ -347,9 +371,24 @@ first read.
     "enabled": true,
     "credential_refs": ["home-broker", "mosquitto"]
   },
-  "zendure_mqtt": {"enabled": true, "token_ref": "zendure-cloud"}
+  "zendure_mqtt": {"enabled": true, "token_ref": "zendure-cloud"},
+  "tibber_bridge": {"credential_refs": ["basement"]}
 }
 ```
+
+The unified search result carries a found bridge's `credentials_ref` and
+`node_id` (`CONFIG_HINT_KEYS` in `admin/discovery_unify.py`); no other device
+gets those keys.
+
+`tibber_bridge.credential_refs` names the saved Tibber bridge passwords, each a
+`bridge-<ref>.json` record in `config/secrets/`. One record serves the scan and
+the runtime: a Tibber grid meter names it by `grid_meter.credentials_ref`, and
+the EMS reads it itself (`ems.mqtt_credentials.FileBridgePasswordResolver`).
+Only the bridge-password routes change that list; the general connections save
+leaves it as it is. Setup and Maintenance refuse a Tibber meter whose password is not saved
+(`grid_meter_bridge_password_missing`) or no longer decrypts
+(`grid_meter_bridge_password_unreadable`). A label that differs from the
+saved one only in letter case replaces that password.
 
 Discovery holds no broker-specific connection config (host/port/TLS/user): it
 scans for endpoints and tries anonymous plus every pooled credential against
@@ -450,6 +489,21 @@ API:
   discovery credential (`{id?, label, username, password}`); the `username`/
   `password` is stored in `config/secrets/` and only its `credential_ref` is
   persisted. `label` is required (or derived from `id`).
+- `GET /api/discovery/connections/bridge-passwords` — the saved Tibber bridge
+  passwords by name (`id`, `label`, `saved`, `encrypted`), never a password.
+- `POST /api/discovery/connections/bridge-passwords` — save one from
+  `{"label", "password"}`; the reference is derived from the label. Saving
+  under the same label replaces that password; a label that maps to another
+  saved password's reference is refused (`409 bridge_password_name_taken`), one
+  without a letter or digit or too long for a reference too
+  (`400 bridge_password_name_invalid`), and a password with characters an HTTP
+  login cannot carry (outside Latin-1) as well (`400 bridge_password_invalid`).
+- `DELETE /api/discovery/connections/bridge-passwords/<id>` — remove one;
+  `<id>` must be a reference exactly as listed, anything else answers 404;
+  `409 bridge_password_in_use` while the saved config's grid meter is a Tibber
+  meter that names it, or while the saved config cannot be read;
+  `500 store_failed`, with the password still listed, when its file cannot be
+  removed.
 - `DELETE /api/discovery/connections/mqtt-credentials/<id>` — remove one credential
   ref and forget its stored secret; other credentials are untouched.
 - `POST /api/discovery/connections/mqtt-brokers` /
