@@ -27,6 +27,10 @@ GRID_METER_CHOICES = (
         "powerfox poweropti (local API, needs powerfox PRO)",
     ),
     (
+        config_mod.DSMR_P1_TCP_GRID_METER_TYPE,
+        "DSMR P1 telegrams over TCP (P1-to-WiFi gateway, ser2net)",
+    ),
+    (
         config_mod.ZENDURE_GRID_METER_HTTP_GRID_METER_TYPE,
         "Zendure Grid Meter via local HTTP (D0 / Smart Meter 3CT)",
     ),
@@ -553,6 +557,26 @@ def ask_grid_meter(
             config_mod.powerfox_grid_meter_settings(result)
         except ValueError as exc:
             raise ConfigInitError(str(exc)) from exc
+    elif meter_type == config_mod.DSMR_P1_TCP_GRID_METER_TYPE:
+        result["ip"] = ask_text(
+            "P1 bridge IP address",
+            result.get("ip") or "",
+            required=True,
+            noninteractive=noninteractive,
+            allow_placeholder_default=allow_placeholder_defaults,
+        )
+        result["port"] = ask_int(
+            "P1 bridge TCP port",
+            _whole_number_text(result.get("port"), None),
+            minimum=1,
+            maximum=65535,
+            noninteractive=noninteractive,
+        )
+        _keep_variant_keys(result, meter_type)
+        try:
+            config_mod.dsmr_p1_tcp_grid_meter_settings(result)
+        except ValueError as exc:
+            raise ConfigInitError(str(exc)) from exc
     elif meter_type == "tasmota_http":
         current_url = result.get("url") or result.get("ip") or ""
         value = ask_text(
@@ -921,6 +945,8 @@ def _meter_summary(grid_meter):
     if meter_type == config_mod.POWERFOX_GRID_METER_TYPE:
         key = "API key set" if grid_meter.get("token") else "no API key"
         return f"powerfox poweropti at {grid_meter.get('ip') or '(not set)'}, {key}"
+    if meter_type == config_mod.DSMR_P1_TCP_GRID_METER_TYPE:
+        return f"DSMR P1 bridge at {grid_meter.get('ip') or '(not set)'}:{grid_meter.get('port') or '(no port)'}"
     if meter_type == config_mod.E3DC_MODBUS_GRID_METER_TYPE:
         port = grid_meter.get("port") or config_mod.E3DC_MODBUS_DEFAULT_PORT
         unit_id = grid_meter.get("unit_id", config_mod.E3DC_MODBUS_DEFAULT_UNIT_ID)

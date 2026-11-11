@@ -126,3 +126,28 @@ def test_the_setup_preview_needs_the_api_key_and_hides_it():
     assert result["ready"] is True
     assert result["config"]["grid_meter"] == POWERFOX
     assert KEY not in json.dumps(redact_config_for_browser(copy.deepcopy(result)))
+
+
+# --- DSMR P1 over TCP ----------------------------------------------------------------
+
+
+def test_maintenance_refuses_a_p1_bridge_without_its_port_as_the_ems_would(tmp_path):
+    _write_config(tmp_path, {"type": "shelly", "ip": "192.168.1.40"})
+
+    refused = _apply(tmp_path, lambda grid: grid.update(type="dsmr_p1_tcp", ip="192.168.1.80", port=None))
+    assert refused["status"] != "ok"
+    assert "grid_meter.port" in json.dumps(refused)
+
+    saved = _saved_meter(_apply(tmp_path, lambda grid: grid.update(type="dsmr_p1_tcp", ip="192.168.1.80", port=23)))
+    assert saved == {"type": "dsmr_p1_tcp", "ip": "192.168.1.80", "port": 23}
+
+
+@pytest.mark.parametrize("port", [23, "23"])
+def test_the_setup_preview_keeps_the_port_typed_for_a_p1_bridge(port):
+    meter = _meter(api_family="", device_type="", grid_meter_type="dsmr_p1_tcp", ip="192.168.1.80", port=port)
+
+    result = ConfigPreviewGenerator(_ReleaseManager()).generate([_device(), meter], 1)
+
+    assert result["ready"] is True, result["validation"]
+    assert result["config"]["grid_meter"] == {"type": "dsmr_p1_tcp", "ip": "192.168.1.80", "port": 23}
+

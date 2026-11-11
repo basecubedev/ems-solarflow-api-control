@@ -314,7 +314,7 @@ docker compose exec ems python3 emsctl.py diagnose --hardware
 ```
 
 This runs short-timeout read-only checks for configured Shelly, EcoTracker,
-HomeWizard P1, powerfox poweropti, E3/DC (one Modbus poll cycle through the EMS client) and Zendure endpoints. It does not write to devices. Use it when telemetry is
+HomeWizard P1, powerfox poweropti, a DSMR P1 bridge (waits up to 11 s for one telegram), E3/DC (one Modbus poll cycle through the EMS client) and Zendure endpoints. It does not write to devices. Use it when telemetry is
 missing, a grid meter cannot be parsed, or configured devices appear
 unreachable.
 

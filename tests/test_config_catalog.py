@@ -71,6 +71,7 @@ def test_catalog_contains_all_supported_grid_meter_variants():
         "ecotracker",
         "homewizard_p1",
         "powerfox_poweropti",
+        "dsmr_p1_tcp",
         "zendure_grid_meter_http",
         "zendure_smartmeter_3ct_http",
         "zendure_smartmeter_d0_http",
@@ -173,6 +174,7 @@ def test_grid_meter_variant_field_spec_matches_v070_catalog():
     assert grid_meter_variant_field_spec("powerfox_poweropti")["keys"] == frozenset(
         {"type", "ip", "port", "token"}
     )
+    assert grid_meter_variant_field_spec("dsmr_p1_tcp")["keys"] == frozenset({"type", "ip", "port"})
     # MQTT variants carry only the mqtt block; D0 excludes value_path.
     d0 = grid_meter_variant_field_spec("zendure_smartmeter_d0")
     assert d0["keys"] == frozenset({"type", "mqtt"})

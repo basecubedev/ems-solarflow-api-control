@@ -420,8 +420,9 @@ same containers, without asking you to manage Docker yourself.
 ### Which grid meters are supported?
 
 Shelly Pro 3EM and Gen2/Gen3, Shelly 3EM Gen1, everHome EcoTracker, the
-HomeWizard P1 Meter, the powerfox poweropti, Tasmota HTTP readers, the Zendure
-Smart Meter 3CT and D0 (local HTTP, or the D0 over MQTT), an E3/DC over Modbus
+HomeWizard P1 Meter, the powerfox poweropti, a DSMR P1 meter through a bridge
+that passes its P1 port on over TCP, Tasmota HTTP readers, the Zendure Smart
+Meter 3CT and D0 (local HTTP, or the D0 over MQTT), an E3/DC over Modbus
 TCP (read only), and any meter that publishes its power to an MQTT topic, such
 as a French Linky read by a ZLinky_TIC through Zigbee2MQTT. Their support status
 is listed in [supported-setups.md](supported-setups.md).

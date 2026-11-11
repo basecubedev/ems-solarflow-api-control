@@ -871,6 +871,98 @@ class PowerfoxClient:
         return self.last_value
 
 
+DSMR_MAX_AGE_S = 15.0
+
+
+class DsmrTcpClient:
+    """Grid power from DSMR P1 telegrams that a bridge passes on over TCP.
+
+    A telegram counts once it arrives; between two telegrams the last one
+    stands, and when none has arrived for :data:`DSMR_MAX_AGE_S` the reading
+    counts as failed and the connection is opened again, since a bridge that
+    restarted never says so on a connection that only receives.
+    """
+
+    provider = "DSMR P1"
+    transport = "tcp"
+
+    def __init__(self, reader, *, clock=time.monotonic):
+        self.reader = reader
+        self.last_value = 0
+        self.health = CommHealth(self.provider, kind="read")
+        self._clock = clock
+        self._received_at = None
+        self._quiet_since = None
+
+    @property
+    def endpoint(self):
+        return self.reader.endpoint
+
+    def get_power(self):
+        """Return current grid power: positive import, negative export."""
+
+        start = time.monotonic()
+        try:
+            try:
+                telegrams = self.reader.poll()
+            except OSError:
+                self._quiet_since = None
+                raise
+            reading = _newest_dsmr_reading(telegrams)
+            now = self._clock()
+            if reading is not None:
+                self.last_value = reading.power_w
+                self._received_at = self._quiet_since = now
+            else:
+                self._check_quiet(now)
+            self.health.record_success((time.monotonic() - start) * 1000.0)
+
+        except Exception as e:
+            self.health.record_failure(
+                error=e,
+                latency_ms=(time.monotonic() - start) * 1000.0,
+                stale_used=True,
+            )
+            log_event(
+                logging.WARNING,
+                "dsmr_p1_tcp_read_error",
+                endpoint=self.endpoint,
+                error=e,
+                stale_value=self.last_value
+            )
+
+        return self.last_value
+
+    def close(self):
+        self.reader.close()
+
+    def _check_quiet(self, now):
+        if self._quiet_since is None:
+            self._quiet_since = now
+        if now - self._quiet_since > DSMR_MAX_AGE_S:
+            self.reader.close()
+            self._quiet_since = now
+        if self._received_at is None:
+            raise ValueError("no telegram from the P1 bridge yet")
+        age = now - self._received_at
+        if age > DSMR_MAX_AGE_S:
+            raise ValueError(f"no telegram from the P1 bridge for {age:.0f} s")
+
+
+def _newest_dsmr_reading(telegrams):
+    from ems.dsmr import DsmrError, parse_telegram
+
+    error = None
+    for raw in reversed(telegrams):
+        try:
+            return parse_telegram(raw)
+        except DsmrError as exc:
+            error = error or exc
+    if error is not None:
+        raise error
+    return None
+
+
 class TasmotaHttpClient:
     """Client for Tasmota HTTP JSON smart meter payloads."""
 
@@ -1304,6 +1396,12 @@ def create_grid_meter_client(
     if meter_type == cfg.POWERFOX_GRID_METER_TYPE:
         settings = cfg.powerfox_grid_meter_settings(config)
         return PowerfoxClient(settings["host"], session, settings["token"], port=settings["port"])
+
+    if meter_type == cfg.DSMR_P1_TCP_GRID_METER_TYPE:
+        from ems.dsmr import DsmrTcpReader
+
+        settings = cfg.dsmr_p1_tcp_grid_meter_settings(config)
+        return DsmrTcpClient(DsmrTcpReader(settings["host"], settings["port"]))
 
     if meter_type in cfg.ZENDURE_HTTP_GRID_METER_TYPES:
         if not ip:

@@ -2134,6 +2134,7 @@ GRID_METER_PROVIDERS = {
     "ecotracker": "EcoTracker",
     config_mod.HOMEWIZARD_P1_GRID_METER_TYPE: "HomeWizard P1",
     config_mod.POWERFOX_GRID_METER_TYPE: "powerfox poweropti",
+    config_mod.DSMR_P1_TCP_GRID_METER_TYPE: "DSMR P1",
     "tasmota_http": "Tasmota",
     "mqtt": "MQTT",
     "zendure_smartmeter_d0": "Zendure SmartMeter D0",
@@ -2214,6 +2215,9 @@ def _diagnose_homewizard_p1(checks, grid_meter, grid_tracker, loop_interval, tel
         )
 
 
+_DSMR_PROBE_WAIT_S = 11.0
+
+
 def _diagnose_by_one_reading(checks, meter_type, grid_meter, grid_tracker):
     """Read the meter once with the EMS's own reader, which never writes to it."""
 
@@ -2227,6 +2231,8 @@ def _diagnose_by_one_reading(checks, meter_type, grid_meter, grid_tracker):
         session.close()
         diagnose_add(checks, "hardware", "warning", "grid_meter_probe_skipped", f"{label} read-only probe skipped: {exc}", type=meter_type)
         return grid_tracker
+    if meter_type == config_mod.DSMR_P1_TCP_GRID_METER_TYPE:
+        client.reader.timeout = _DSMR_PROBE_WAIT_S
     try:
         power = client.get_power()
     finally:

@@ -53,6 +53,7 @@ body:
         - EcoTracker HTTP
         - HomeWizard P1 (local API v2)
         - powerfox poweropti (local API)
+        - DSMR P1 over TCP (P1 bridge)
         - Tasmota HTTP
         - Other
     validations:

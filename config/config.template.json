@@ -93,7 +93,9 @@
       "homewizard_p1 reads a HomeWizard P1 Meter over its local API v2 (HTTPS);",
       "it needs grid_meter.ip, and serial, token and pairing_name from pairing.",
       "powerfox_poweropti reads a powerfox poweropti over its local API; it needs",
-      "grid_meter.ip, and in grid_meter.token the device ID from its label."
+      "grid_meter.ip, and in grid_meter.token the device ID from its label.",
+      "dsmr_p1_tcp reads raw DSMR P1 telegrams that a bridge passes on over TCP;",
+      "it needs grid_meter.ip and grid_meter.port as set on the bridge."
     ],
     "type": "shelly",
     "ip": "198.51.100.50"

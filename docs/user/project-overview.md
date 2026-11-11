@@ -114,6 +114,7 @@ Supported options include:
 - everHome EcoTracker
 - HomeWizard P1 Meter
 - powerfox poweropti (local API, powerfox PRO)
+- DSMR P1 smart meters (Netherlands, Belgium) through a bridge that passes the P1 port on over TCP
 - Tasmota-based meters
 - E3/DC storage systems, read-only over Modbus TCP
 - generic MQTT power meters, among them a Linky through a ZLinky_TIC and Zigbee2MQTT

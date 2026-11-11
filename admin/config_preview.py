@@ -956,7 +956,11 @@ def _build_grid_meter(meter, defaults, validation, features):
         source_type = str(meter.get("grid_meter_type") or "").strip().lower() or (
             _inferred_grid_type(meter)
         )
-        port_carries = not source_type or grid_meter_port_carries_over(source_type, grid_type)
+        port_carries = (
+            not source_type
+            or source_type == grid_type
+            or grid_meter_port_carries_over(source_type, grid_type)
+        )
         if "port" in spec["keys"] and meter.get("port") and port_carries:
             try:
                 grid["port"] = int(meter["port"])

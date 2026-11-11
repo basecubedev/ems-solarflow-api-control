@@ -757,6 +757,7 @@ the physical device is installed or reports values differently. Run
 | everHome EcoTracker | `ecotracker` | `ip` | Uses `/v1/json` |
 | HomeWizard P1 Meter | `homewizard_p1` | `ip`, `serial` and `token` from pairing (opt. `port`) | Local API v2 over HTTPS, `/api/measurement`; pair once by pressing the meter's button. See below. |
 | powerfox poweropti | `powerfox_poweropti` | `ip`, `token` (the API key) | Local API `/value`, OBIS `1.7.0`; needs powerfox PRO. See below. |
+| DSMR P1 meter through a TCP bridge | `dsmr_p1_tcp` | `ip`, `port` | Raw P1 telegrams over TCP, read-only. See below. |
 | Zendure Grid Meter via local HTTP | `zendure_grid_meter_http` | `ip` (opt. `port`) | Internal/discovery generic type. Local REST `/properties/report`, reads `total_power`. Works for both D0 and Smart Meter 3CT. Manual setup offers the concrete 3CT/D0 local-API types below. |
 | Zendure Smart Meter 3CT — Local API | `zendure_smartmeter_3ct_http` | `ip` (opt. `port`) | Local REST `/properties/report`, reads `total_power`. Shares the Zendure local-HTTP reader with the D0 local-API meter. |
 | Zendure Smart Meter D0 — Local API | `zendure_smartmeter_d0_http` | `ip` (opt. `port`) | Local REST `/properties/report`, reads `total_power`. Same shared reader as the 3CT; a distinct type so a D0 is never stored as a 3CT. |
@@ -953,6 +954,40 @@ Example: powerfox poweropti (`port` defaults to 80):
     "type": "powerfox_poweropti",
     "ip": "192.0.2.62",
     "token": "<device ID from the label>"
+  }
+}
+```
+
+### DSMR P1 meter through a TCP bridge (`dsmr_p1_tcp`)
+
+A Dutch or Belgian smart meter sends a telegram on its P1 port every second
+(DSMR 5) or every ten seconds (older meters). A bridge such as a
+P1-to-WiFi gateway, or ser2net on a small computer with a P1 cable, passes the
+raw telegrams on over TCP; the EMS connects to it and never sends anything.
+Use this type only for a bridge that hands out the telegrams unchanged and
+unencrypted, which rules out the encrypted P1 port of Luxembourg's meters; a
+HomeWizard P1 Meter has its own type.
+
+The EMS keeps one connection and takes, once per control cycle, the newest
+whole telegram that arrived since the last cycle, without waiting for one.
+Grid power is `1-0:1.7.0` (drawn) minus `1-0:2.7.0` (fed in), both in kW. A
+telegram that carries a checksum must match it. Between two telegrams the last
+one stands; when none has arrived for 15 s the reading counts as failed and the
+EMS opens the connection again, because a bridge that restarted never says so
+on a connection that only receives. P1 bridges use no common port, so
+`grid_meter.port` is required: set what the bridge is configured for.
+`python3 emsctl.py diagnose --hardware` opens a second connection and waits up
+to 11 s for one telegram; a bridge that serves one client at a time, as ser2net
+does by default, refuses it while the EMS is connected.
+
+Example: DSMR P1 meter through a TCP bridge:
+
+```json
+{
+  "grid_meter": {
+    "type": "dsmr_p1_tcp",
+    "ip": "192.0.2.63",
+    "port": 23
   }
 }
 ```
