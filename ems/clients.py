@@ -157,6 +157,32 @@ def _observed_pack_count(data, props):
     return packs
 
 
+ZENDURE_TENTHS_KELVIN_AT_ZERO_C = 2731
+PLAUSIBLE_DEVICE_TEMPERATURE_C = (-60.0, 120.0)
+
+
+def zendure_temperature_c(value):
+    """A Zendure temperature in °C, ``None`` when the device reports none.
+
+    The devices report tenths of a kelvin (``hyperTmp``, ``packData[].maxTemp``),
+    as Zendure's own Home Assistant integration reads them; a missing value
+    would otherwise come out as −273 °C. A reading no device can have is no
+    reading either.
+    """
+
+    if isinstance(value, bool):
+        return None
+    try:
+        tenths = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(tenths):
+        return None
+    celsius = round((tenths - ZENDURE_TENTHS_KELVIN_AT_ZERO_C) / 10, 1)
+    low, high = PLAUSIBLE_DEVICE_TEMPERATURE_C
+    return celsius if low <= celsius <= high else None
+
+
 def parse_device(data):
     """Extract relevant values from Zendure API response."""
 
@@ -174,7 +200,7 @@ def parse_device(data):
         pack_in=props.get("packInputPower") or 0,
         pack_out=props.get("outputPackPower") or 0,
 
-        temp=round(((props.get("hyperTmp") or 0) / 100), 2),
+        temp=zendure_temperature_c(props.get("hyperTmp")),
         voltage=round(((props.get("BatVolt") or 0) / 100), 2),
         rssi=props.get("rssi") or 0,
 
@@ -238,7 +264,7 @@ def zero_device_state():
         output=0,
         pack_in=0,
         pack_out=0,
-        temp=0,
+        temp=None,
         voltage=0,
         rssi=0,
         remain_minutes=0,

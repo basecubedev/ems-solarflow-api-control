@@ -184,7 +184,7 @@ def test_soc_beyond_float_range_keeps_the_status_file_writable(network, tmp_path
         runtime.stop()
 
 
-NUMERIC_FIELDS = ("soc", "min_soc", "max_soc", "solar", "output", "output_limit", "temp", "voltage")
+NUMERIC_FIELDS = ("soc", "min_soc", "max_soc", "solar", "output", "output_limit", "voltage")
 
 
 @pytest.mark.parametrize("payload", [BEYOND_FLOAT, "abc", "1e400", "nan"])
@@ -221,6 +221,7 @@ def test_scalar_text_reaches_the_controller_as_a_missing_value(service, network,
         isinstance(getattr(state, field), (int, float)) and not isinstance(getattr(state, field), bool)
         for field in NUMERIC_FIELDS
     )
+    assert state.temp is None
     detect_capabilities(state)
 
 
