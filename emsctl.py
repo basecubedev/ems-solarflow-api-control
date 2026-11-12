@@ -55,7 +55,6 @@ from ems import config_init as config_init_mod
 from ems.cli_privilege import PrivilegeDropError, maybe_drop_privileges
 
 DEFAULT_RUNTIME_STATE_PATH = os.path.join(BASE_DIR, "runtime-state.json")
-OFFGRID_SOCKET_MODES = ("off", "eco", "standard")
 TOP_LEVEL_COMMANDS = (
     "status",
     "system",
@@ -116,7 +115,6 @@ RUNTIME_EDIT_COMMANDS = frozenset(
         "menu",
     }
 )
-DEVICE_AC_MODE_VALUES = tuple(word for word, _ in runtime_commands.DEVICE_COMMANDS["ac-mode"].choices)
 DEVICE_AC_MODE_ROLE_ALIASES = {
     "normal_output": "ac_output",
     "ac_output": "ac_output",
@@ -124,13 +122,8 @@ DEVICE_AC_MODE_ROLE_ALIASES = {
     "reserved": "ac_input",
     "ac_input": "ac_input",
 }
-DASHBOARD_ACTIONS = (
-    "set-password",
-    "change-password",
-    "disable-auth",
-    "auth-status",
-)
 COMPLETION_SHELLS = ("bash", "zsh")
+GLOBAL_VALUE_OPTIONS = ("--config", "--runtime-state", "--dashboard-auth")
 
 TOP_LEVEL_EPILOG = """\
 Command overview:
@@ -1347,7 +1340,7 @@ def config_device_names(config):
 
 
 def safe_completion_words(words):
-    safe_word = re.compile(r"^[A-Za-z0-9._@%+=:,/-]+$")
+    safe_word = re.compile(r"^[A-Za-z0-9._@%+,/-]+$")
     return [str(word) for word in words if safe_word.fullmatch(str(word))]
 
 
@@ -1355,21 +1348,57 @@ def completion_word_list(words):
     return " ".join(safe_completion_words(words))
 
 
+def command_completion_words(parser):
+    """Each command's first words as its parser accepts them: its subcommands, or its first positional's choices."""
+
+    commands = next(
+        action for action in parser._actions if isinstance(action, argparse._SubParsersAction)
+    )
+    words = {}
+    for name, command in commands.choices.items():
+        positionals = [action for action in command._actions if not action.option_strings]
+        if positionals and positionals[0].choices:
+            words[name] = safe_completion_words(positionals[0].choices)
+    return words
+
+
+def device_value_words():
+    """The words each device action takes as its value, where it takes one of a fixed set."""
+
+    words = {}
+    for action, command in runtime_commands.DEVICE_COMMANDS.items():
+        if command.choices:
+            words[action] = safe_completion_words(word for word, _ in command.choices)
+            continue
+        if command.value is not None:
+            continue
+        value_type, rule = runtime_commands.WRITABLE_DEVICE_FIELDS.get(command.key, (None, None))
+        if value_type == "enum":
+            words[action] = safe_completion_words(rule)
+        elif value_type == "setting":
+            words[action] = safe_completion_words((*rule, device_settings.UNMANAGED))
+    return words
+
+
 def completion_script_bash(config):
+    value_options = "|".join(GLOBAL_VALUE_OPTIONS)
     commands = completion_word_list(TOP_LEVEL_COMMANDS)
     command_case = "|".join(safe_completion_words(TOP_LEVEL_COMMANDS))
-    system_actions = completion_word_list(SYSTEM_ACTIONS)
     device_actions = completion_word_list(DEVICE_ACTIONS)
-    winter_actions = "enable disable status"
-    dashboard_actions = completion_word_list(DASHBOARD_ACTIONS)
-    completion_shells = completion_word_list(COMPLETION_SHELLS)
-    offgrid_modes = completion_word_list(OFFGRID_SOCKET_MODES)
-    ac_modes = completion_word_list(DEVICE_AC_MODE_VALUES)
     devices = completion_word_list(config_device_names(config))
-    setting_values = "".join(
-        f'        elif [[ "$prev" == "{setting.command}" ]]; then\n'
-        f'          COMPREPLY=( $(compgen -W "{completion_word_list(setting_words(setting))}" -- "$cur") )\n'
-        for setting in device_settings.SETTINGS
+    device_values = "".join(
+        f"          {action})\n"
+        f'            COMPREPLY=( $(compgen -W "{" ".join(words)}" -- "$cur") )\n'
+        "            ;;\n"
+        for action, words in device_value_words().items()
+    )
+    command_arms = "".join(
+        f"    {name})\n"
+        "      if ((position == 1)); then\n"
+        f'        COMPREPLY=( $(compgen -W "{" ".join(words)}" -- "$cur") )\n'
+        "      fi\n"
+        "      ;;\n"
+        for name, words in command_completion_words(build_parser()).items()
     )
 
     return f"""\
@@ -1381,71 +1410,59 @@ def completion_script_bash(config):
 
 _emsctl_py_completion()
 {{
-  local cur prev command action
+  local cur command command_index position i
   COMPREPLY=()
   cur="${{COMP_WORDS[COMP_CWORD]}}"
-  prev="${{COMP_WORDS[COMP_CWORD-1]}}"
 
   local commands="{commands}"
-  local system_actions="{system_actions}"
   local device_actions="{device_actions}"
-  local winter_actions="{winter_actions}"
-  local dashboard_actions="{dashboard_actions}"
-  local completion_shells="{completion_shells}"
-  local offgrid_modes="{offgrid_modes}"
-  local ac_modes="{ac_modes}"
   local devices="{devices}"
 
   if [[ "$cur" == --* ]]; then
-    COMPREPLY=( $(compgen -W "--config --runtime-state --dashboard-auth --help" -- "$cur") )
+    COMPREPLY=( $(compgen -W "{" ".join(GLOBAL_VALUE_OPTIONS)} --help" -- "$cur") )
     return 0
   fi
+
+  case "${{COMP_WORDS[COMP_CWORD-1]}}" in
+    {value_options})
+      compopt -o filenames 2>/dev/null
+      mapfile -t COMPREPLY < <(compgen -f -- "$cur")
+      return 0
+      ;;
+  esac
 
   command=""
   for ((i = 1; i < COMP_CWORD; i++)); do
     case "${{COMP_WORDS[i]}}" in
+      {value_options})
+        ((i++))
+        ;;
       {command_case})
         command="${{COMP_WORDS[i]}}"
+        command_index=$i
         break
         ;;
     esac
   done
 
   if [[ -z "$command" ]]; then
-    COMPREPLY=( $(compgen -W "$commands --config --runtime-state --dashboard-auth" -- "$cur") )
+    COMPREPLY=( $(compgen -W "$commands {" ".join(GLOBAL_VALUE_OPTIONS)}" -- "$cur") )
     return 0
   fi
+  position=$((COMP_CWORD - command_index))
 
   case "$command" in
-    system)
-      COMPREPLY=( $(compgen -W "$system_actions" -- "$cur") )
-      ;;
-    grid-meter)
-      COMPREPLY=( $(compgen -W "test" -- "$cur") )
-      ;;
     device)
-      if [[ "$prev" == "device" ]]; then
+      if ((position == 1)); then
         COMPREPLY=( $(compgen -W "$devices" -- "$cur") )
-      elif [[ " $device_actions " == *" $prev "* ]]; then
-        if [[ "$prev" == "offgrid" ]]; then
-          COMPREPLY=( $(compgen -W "$offgrid_modes" -- "$cur") )
-        elif [[ "$prev" == "ac-mode" ]]; then
-          COMPREPLY=( $(compgen -W "$ac_modes" -- "$cur") )
-{setting_values}        fi
-      else
+      elif ((position == 2)); then
         COMPREPLY=( $(compgen -W "$device_actions" -- "$cur") )
+      elif ((position == 3)); then
+        case "${{COMP_WORDS[command_index + 2]}}" in
+{device_values}        esac
       fi
       ;;
-    winter)
-      COMPREPLY=( $(compgen -W "$winter_actions" -- "$cur") )
-      ;;
-    dashboard)
-      COMPREPLY=( $(compgen -W "$dashboard_actions" -- "$cur") )
-      ;;
-    completion)
-      COMPREPLY=( $(compgen -W "$completion_shells" -- "$cur") )
-      ;;
-  esac
+{command_arms}  esac
 }}
 
 complete -F _emsctl_py_completion emsctl.py
@@ -1453,28 +1470,29 @@ complete -F _emsctl_py_completion emsctl
 """
 
 
-def setting_words(setting):
-    return (*setting.words, device_settings.UNMANAGED)
-
-
 def zsh_array(words):
     return " ".join(safe_completion_words(words))
 
 
 def completion_script_zsh(config):
+    value_options = "|".join(GLOBAL_VALUE_OPTIONS)
     commands = zsh_array(TOP_LEVEL_COMMANDS)
-    system_actions = zsh_array(SYSTEM_ACTIONS)
+    command_case = "|".join(safe_completion_words(TOP_LEVEL_COMMANDS))
     device_actions = zsh_array(DEVICE_ACTIONS)
-    winter_actions = "enable disable status"
-    dashboard_actions = zsh_array(DASHBOARD_ACTIONS)
-    completion_shells = zsh_array(COMPLETION_SHELLS)
-    offgrid_modes = zsh_array(OFFGRID_SOCKET_MODES)
-    ac_modes = zsh_array(DEVICE_AC_MODE_VALUES)
     devices = zsh_array(config_device_names(config))
-    setting_values = "".join(
-        f'      elif [[ "$words[4]" == "{setting.command}" ]]; then\n'
-        f"        _values '{setting.command}' {zsh_array(setting_words(setting))}\n"
-        for setting in device_settings.SETTINGS
+    device_values = "".join(
+        f"          {action})\n"
+        f"            _values '{action}' {' '.join(words)}\n"
+        "            ;;\n"
+        for action, words in device_value_words().items()
+    )
+    command_arms = "".join(
+        f"    {name})\n"
+        "      if (( position == 1 )); then\n"
+        f"        _values '{name} action' {' '.join(words)}\n"
+        "      fi\n"
+        "      ;;\n"
+        for name, words in command_completion_words(build_parser()).items()
     )
 
     return f"""\
@@ -1485,53 +1503,56 @@ def completion_script_zsh(config):
 
 _emsctl_py()
 {{
-  local -a commands system_actions device_actions winter_actions dashboard_actions completion_shells offgrid_modes ac_modes devices
+  local -a commands device_actions devices
+  local -i i command_index=0 position
   commands=({commands})
-  system_actions=({system_actions})
   device_actions=({device_actions})
-  winter_actions=({winter_actions})
-  dashboard_actions=({dashboard_actions})
-  completion_shells=({completion_shells})
-  offgrid_modes=({offgrid_modes})
-  ac_modes=({ac_modes})
   devices=({devices})
 
-  if (( CURRENT == 2 )); then
+  case "${{words[CURRENT - 1]}}" in
+    {value_options})
+      _files
+      return
+      ;;
+  esac
+
+  for (( i = 2; i < CURRENT; i++ )); do
+    case "${{words[i]}}" in
+      {value_options})
+        (( i++ ))
+        ;;
+      {command_case})
+        command_index=$i
+        break
+        ;;
+    esac
+  done
+
+  if (( command_index == 0 )); then
     _describe 'command' commands
     return
   fi
+  position=$(( CURRENT - command_index ))
 
-  case "$words[2]" in
-    system)
-      _describe 'system action' system_actions
-      ;;
-    grid-meter)
-      _values 'grid-meter action' test
-      ;;
+  case "${{words[command_index]}}" in
     device)
-      if (( CURRENT == 3 )); then
+      if (( position == 1 )); then
         _describe 'device' devices
-      elif (( CURRENT == 4 )); then
+      elif (( position == 2 )); then
         _describe 'device action' device_actions
-      elif [[ "$words[4]" == "offgrid" ]]; then
-        _describe 'offgrid mode' offgrid_modes
-      elif [[ "$words[4]" == "ac-mode" ]]; then
-        _describe 'AC mode' ac_modes
-{setting_values}      fi
+      elif (( position == 3 )); then
+        case "${{words[command_index + 2]}}" in
+{device_values}        esac
+      fi
       ;;
-    winter)
-      _describe 'winter action' winter_actions
-      ;;
-    dashboard)
-      _describe 'dashboard command' dashboard_actions
-      ;;
-    completion)
-      _describe 'shell' completion_shells
-      ;;
-  esac
+{command_arms}  esac
 }}
 
-_emsctl_py "$@"
+if [[ "${{zsh_eval_context[-1]}}" == loadautofunc ]]; then
+  _emsctl_py "$@"
+else
+  compdef _emsctl_py emsctl.py emsctl
+fi
 """
 
 

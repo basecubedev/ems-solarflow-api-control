@@ -10,6 +10,12 @@
 export const REPOSITORY = "https://github.com/basecubedev/ems-solarflow-api-control";
 export const COPYRIGHT = "© 2026 basecubedev";
 export const PROJECT_LICENSE = "AGPL-3.0-or-later";
+/** The published documentation, the address zensical.toml's site_url names. */
+export const DOCS_SITE = "https://basecubedev.github.io/ems-solarflow-api-control";
+/** The issue form for a device that works, or does not. */
+export const DEVICE_REPORT = `${REPOSITORY}/issues/new?template=device_compatibility_report.yml`;
+/** The devices and setups the EMS supports, with what has been confirmed on real hardware. */
+export const SUPPORTED_SETUPS = `${DOCS_SITE}/user/supported-setups.html`;
 
 /**
  * The notice files every Modern build copies beside its bundle; an app adds

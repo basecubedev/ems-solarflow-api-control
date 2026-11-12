@@ -106,6 +106,9 @@ jobs:
       - name: Install the filesystem tools the fixtures build with
         run: sudo apt-get install -y --no-install-recommends mtools e2fsprogs
 
+      - name: Install zsh for the shell completion tests
+        run: sudo apt-get install -y --no-install-recommends zsh
+
       - name: Verify dependency imports
         run: |
           python - <<'PY'
@@ -448,6 +451,9 @@ jobs:
 
       - name: Install the filesystem tools the fixtures build with
         run: sudo apt-get install -y --no-install-recommends mtools e2fsprogs
+
+      - name: Install zsh for the shell completion tests
+        run: sudo apt-get install -y --no-install-recommends zsh
 
       - name: Report the selected marker expression
         run: printf 'pytest -q -m "not docker" tests/\n'

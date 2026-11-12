@@ -81,6 +81,9 @@ jobs:
       - name: Install the filesystem tools the fixtures build with
         run: sudo apt-get install -y --no-install-recommends mtools e2fsprogs
 
+      - name: Install zsh for the shell completion tests
+        run: sudo apt-get install -y --no-install-recommends zsh
+
       - name: Run full test suite (excludes real-Docker e2e, covered by CI workflow)
         run: |
           pytest -q -m "not docker" tests/

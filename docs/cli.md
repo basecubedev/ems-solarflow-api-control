@@ -540,10 +540,23 @@ Zsh, current shell:
 source <(python3 emsctl.py completion zsh)
 ```
 
-The generated completion covers top-level commands, command actions, dashboard
-subcommands, offgrid modes (`off`, `eco`, `standard`), the values of the
-device settings, and configured device names when `config.json` is readable. Completion generation does not create or
+The generated completion covers top-level commands, the word each command takes
+first (its action or subcommand, read from the same parser that runs the
+command), the values of the device actions that take one of a fixed set
+(`offgrid`, `ac-mode`, `ac-charge` and the device settings), and configured
+device names when `config.json` is readable. Where a number or a name is
+typed, it offers nothing, and after `--config`, `--runtime-state` or
+`--dashboard-auth` given as a word of its own (`--config FILE`) it offers file
+names. A device name with a space or a character outside ASCII letters, digits
+and `. _ @ % + , / -` is left out. Completion generation does not create or
 modify `runtime-state.json`.
+
+The completion is registered for the command names `emsctl` and `emsctl.py`,
+so it applies when emsctl is called by one of those names, for example through
+a wrapper script named `emsctl` on the `PATH` that runs
+`python3 /path/to/emsctl.py "$@"`. Typed as `python3 emsctl.py`, the shell
+completes Python's arguments instead. Zsh needs its completion system loaded
+(`autoload -Uz compinit && compinit`) before the script is sourced.
 
 Use explicit config paths when generating completion for a non-default
 installation:
