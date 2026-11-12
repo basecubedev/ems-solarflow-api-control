@@ -229,6 +229,19 @@
     }
   },
 
+  "battery_care": {
+    "_comment": [
+      "Gentle discharge close to minSoc, enabled by default.",
+      "From pv_only_points above minSoc a battery discharges a share that grows",
+      "with the square of the distance; full power from summer_full_points",
+      "(outside winter mode) or winter_full_points (in winter mode). 0 = off."
+    ],
+    "enabled": true,
+    "summer_full_points": 5,
+    "winter_full_points": 10,
+    "pv_only_points": 0
+  },
+
   "battery_full_charge_assist": {
     "_comment": [
       "Full-charge assist for battery-backed devices, enabled by default.",

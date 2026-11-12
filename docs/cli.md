@@ -594,6 +594,22 @@ python3 emsctl.py system loop-interval 5
 python3 emsctl.py system min-output-limit 30
 ```
 
+## Battery Care Commands
+
+```bash
+python3 emsctl.py battery-care status
+python3 emsctl.py battery-care enable
+python3 emsctl.py battery-care disable
+python3 emsctl.py battery-care summer-full 5
+python3 emsctl.py battery-care winter-full 10
+python3 emsctl.py battery-care pv-only 0
+```
+
+The values are SoC points above minSoc for
+[battery care](technical/control-logic.md#battery-care): full power from
+`summer-full` outside winter mode and from `winter-full` in it (`0` switches it
+off for that season), PV only up to `pv-only`.
+
 ## Removed HA Commands
 
 The Home Assistant integration is removed, and with it `ha` and `ha-control`.

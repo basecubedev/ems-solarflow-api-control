@@ -8,6 +8,7 @@ from ems import config as cfg
 from ems.logging_utils import log_event
 from ems.models import (
     BATTERY_ABSENT,
+    BATTERY_PRESENT,
     DeviceCapabilities,
     battery_presence,
 )
@@ -330,6 +331,81 @@ def cannot_absorb_pv(state):
     return battery_presence(state) == BATTERY_ABSENT or is_full_soc_device(state)
 
 
+MIN_SOC_RAMP_PV_SHARE = 0.9
+
+
+@dataclass(frozen=True)
+class MinSocRamp:
+    """How far above its minSoc a battery discharges at full power (battery care).
+
+    Up to ``pv_only_points`` above minSoc a device passes its PV through and
+    its battery rests; from there the battery share grows with the square of
+    the distance until ``full_points``, so the points just above the floor,
+    where a high current makes the cell voltage sag the most, give only a
+    trickle. ``full_points`` 0 switches the ramp off.
+    """
+
+    pv_only_points: int
+    full_points: int
+
+
+def min_soc_ramp_share(points_above_min, ramp, window=None):
+    """The share of its battery power a device may discharge, 0.0 to 1.0.
+
+    A battery whose minSoc to Max-SoC window is narrow reaches full power by
+    the middle of that window, so the ramp never takes the whole of it, but
+    never before two points past the PV-only point: the first point keeps a
+    share below full.
+    """
+
+    full = ramp.full_points
+    if full <= 0:
+        return 1.0
+    if window is not None and window > 0:
+        full = min(full, max(ramp.pv_only_points + 2, window // 2))
+    if points_above_min <= ramp.pv_only_points:
+        return 0.0
+    if points_above_min >= full:
+        return 1.0
+    return ((points_above_min - ramp.pv_only_points) / (full - ramp.pv_only_points)) ** 2
+
+
+def min_soc_ramp_cap_w(state, device_config, ramp):
+    """Most a device may deliver while its battery is close to its minSoc.
+
+    ``None`` when the ramp does not hold it back. The firmware lifts its
+    discharge floor one point above minSoc; full power there makes the cell
+    voltage sag, the SoC estimate drops a point after a few watt-hours, the
+    device re-enters the floor, and the 800 Pro 2 draws about 1.2 kW from the
+    grid. PV passes through slightly below what the device produces, so a
+    passing cloud charges the pack a little instead of draining it.
+    """
+
+    if ramp is None or ramp.full_points <= 0:
+        return None
+    presence = battery_presence(state)
+    if presence == BATTERY_ABSENT or state.max_soc <= 0:
+        return None
+    if presence != BATTERY_PRESENT and state.soc <= 0:
+        return None
+    share = min_soc_ramp_share(
+        state.soc - state.min_soc, ramp, state.max_soc - state.min_soc
+    )
+    if share >= 1.0:
+        return None
+    max_power = get_device_max_power(device_config)
+    cap = round(MIN_SOC_RAMP_PV_SHARE * pv_power(state) + share * max_power)
+    return cap if cap < max_power else None
+
+
+def _held_by_ramp(state, capability, cap, target):
+    """Whether battery care, not the floor or a missing path, holds a device."""
+
+    if cap is None or target < cap or state.soc <= state.min_soc:
+        return False
+    return capability is None or (capability.can_export and capability.can_discharge)
+
+
 def pv_charge_balance_context(states):
     """Return SOC spread data used for PV-first charge balancing."""
 
@@ -543,7 +619,8 @@ def apply_battery_topup_after_pv_first(
     device_configs,
     capabilities,
     requested_total,
-    commandable=None
+    commandable=None,
+    caps=None
 ):
     """Top up PV-first targets with battery power where safely available.
 
@@ -584,6 +661,8 @@ def apply_battery_topup_after_pv_first(
         cap = capabilities[i] if capabilities else None
         device_name = dev_config.name if dev_config else i
         max_power = get_device_max_power(dev_config)
+        if caps and caps[i] is not None:
+            max_power = min(max_power, caps[i])
         headroom = max(0, max_power - targets[i])
 
         if commandable is not None and not commandable[i]:
@@ -769,7 +848,8 @@ def calculate_targets(
     requested_total=None,
     explain=False,
     online_devices=None,
-    commandable=None
+    commandable=None,
+    discharge_caps=None
 ):
     """
     Intelligent EMS target calculation.
@@ -781,6 +861,7 @@ def calculate_targets(
 
     Battery discharge:
     - allocate only confirmed usable battery energy
+    - never above a device's ``discharge_caps`` entry (battery care)
 
     This avoids:
     - cross-device battery charge/discharge churn
@@ -838,6 +919,8 @@ def calculate_targets(
             min(max_power, requested_total)
         )
 
+    caps = list(discharge_caps) if discharge_caps else [None] * len(devices)
+    ramp_active = any(cap is not None for cap in caps)
     targets = [0] * len(devices)
     final_target_limits = None
     battery_topup_used = False
@@ -1085,7 +1168,8 @@ def calculate_targets(
                 device_configs,
                 capabilities,
                 new_total,
-                commandable=commandable
+                commandable=commandable,
+                caps=caps
             )
             if explain:
                 topup_w = sum(targets) - sum(before_topup_targets)
@@ -1143,7 +1227,8 @@ def calculate_targets(
                     device_configs,
                     capabilities,
                     new_total,
-                    commandable=commandable
+                    commandable=commandable,
+                    caps=caps
                 )
                 if explain:
                     topup_w = sum(targets) - sum(before_topup_targets)
@@ -1244,7 +1329,14 @@ def calculate_targets(
 
         weight_total = sum(weights)
 
-        if weight_total > 0:
+        if weight_total > 0 and ramp_active:
+            headroom = [
+                remaining if cap is None else max(0, cap - target)
+                for cap, target in zip(caps, targets)
+            ]
+            shares = weighted_limited_allocation(remaining, weights, headroom)
+            targets = [target + share for target, share in zip(targets, shares)]
+        elif weight_total > 0:
             for i, d in enumerate(devices):
 
                 share = weights[i] / weight_total
@@ -1290,11 +1382,20 @@ def calculate_targets(
                 "final constraints preserve PV-only target limits"
             )
 
+    constraint_limits = final_target_limits
+    if ramp_active:
+        constraint_limits = [
+            limit if cap is None else min(limit, cap)
+            for limit, cap in zip(
+                final_target_limits or [float("inf")] * len(devices), caps
+            )
+        ]
+
     targets, undistributed = apply_constraints_and_redistribute(
         targets,
         device_configs=device_configs,
         capabilities=capabilities,
-        target_limits=final_target_limits
+        target_limits=constraint_limits
     )
     if explain:
         rounded_raw_targets = [round(target) for target in raw_targets]
@@ -1315,6 +1416,9 @@ def calculate_targets(
             if cap and not cap.can_export:
                 _set_limiting_reason(entry, "cannot_export")
 
+            if new_total > 0 and _held_by_ramp(devices[i], cap, caps[i], target):
+                entry.limiting_reason = "battery_care"
+
             if rounded_raw_targets[i] > target:
                 device_limit_active = True
                 if final_target_limits and target <= round(final_limit):
@@ -1325,6 +1429,19 @@ def calculate_targets(
             if new_total > 0 and target <= 0 and not entry.limiting_reason:
                 _set_limiting_reason(entry, "no_allocation")
 
+        held = [
+            _held_by_ramp(
+                devices[i], capabilities[i] if capabilities else None, caps[i], target
+            )
+            for i, target in enumerate(targets)
+        ]
+        if new_total > 0 and any(held):
+            add_limit(
+                "battery_care",
+                True,
+                json.dumps([cap if is_held else None for cap, is_held in zip(caps, held)]),
+                "batteries close to minSoc pass their PV through and discharge part of their power"
+            )
         add_limit(
             "device_output_limits",
             device_limit_active,

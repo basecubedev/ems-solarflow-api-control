@@ -10,6 +10,7 @@
 export const SYSTEM_ENDPOINT = "/api/runtime/system";
 export const WINTER_ENDPOINT = "/api/runtime/winter";
 export const AC_CHARGE_ENDPOINT = "/api/runtime/ac_charge_control";
+export const BATTERY_CARE_ENDPOINT = "/api/runtime/battery_care";
 export const DEVICE_PREFIX = "/api/runtime/device/";
 const AC_INPUT_ROLES = new Set(["ac_input", "ac_input_charge", "reserved"]);
 

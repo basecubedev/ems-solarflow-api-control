@@ -31,6 +31,18 @@ EXCLUDED_KEYS = {
     "system.loop_interval": (
         "a tuning value every ramp and filter is defined against, not a control target"
     ),
+    "battery_care.enabled": (
+        "battery protection, not a target to switch by the hour"
+    ),
+    "battery_care.summer_full_points": (
+        "battery protection tuned to the firmware's floor; it follows winter mode by itself"
+    ),
+    "battery_care.winter_full_points": (
+        "battery protection tuned to the firmware's floor; it follows winter mode by itself"
+    ),
+    "battery_care.pv_only_points": (
+        "battery protection tuned to the firmware's floor, not a target to move by the hour"
+    ),
 }
 
 SWITCH = "switch"

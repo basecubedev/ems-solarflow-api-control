@@ -556,7 +556,8 @@ def test_dashboard_rules_contract_includes_expected_keys():
     controller = _multi_controller({"WR1": _idle_assist_record()})
     snapshot = _full_snapshot(controller, [_state()])
 
-    # These keys back the fixed label list rendered by renderRules() in app.js.
+    # These keys back the fixed rule lists the dashboards render (renderRules()
+    # in app.js, RULES in the Modern status.js).
     # A backend rename/removal would silently degrade the GUI to "inactive",
     # so keep the contract explicit here.
     expected = {
@@ -564,6 +565,7 @@ def test_dashboard_rules_contract_includes_expected_keys():
         "soc_limit_active",
         "output_limit_active",
         "winter_soc_mode",
+        "battery_care_active",
         "full_charge_assist_active",
         "pv_priority_balancing",
         "battery_balancing",

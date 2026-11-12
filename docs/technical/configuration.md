@@ -269,7 +269,17 @@ manually.
 is enabled. It also defines the standby total used when positive house load is
 present but no active online device has export capacity, and the standby/wakeup
 value used by strict night/minSoc idle. Use `0` to disable this floor and the
-idle parking behavior.
+idle parking behavior. [Battery care](control-logic.md#battery-care) can hold
+a battery below this floor.
+
+`battery_care` (Admin: **Battery care**, on by default) discharges a battery
+gently close to its minSoc: from `pv_only_points` (default `0`) above its minSoc
+its battery share grows with the square of the distance until the full point,
+`summer_full_points` (default `5`) outside winter mode and `winter_full_points`
+(default `10`) while winter mode is in effect; `0` switches it off for that
+season. With minSoc 40 an 800 W device delivers full power from 45 % in summer
+and from 50 % in winter, and one point above minSoc 32 W or 8 W. See
+[control-logic.md](control-logic.md#battery-care).
 
 `system.loop_interval` is the control loop interval in seconds (Admin label:
 **Loop interval**). New configurations default to 5 seconds. Keep that default

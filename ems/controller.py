@@ -74,12 +74,14 @@ from ems.target_control import (
     ControlExplanation,
     ControlLimitExplanation,
     DeviceControlExplanation,
+    MinSocRamp,
     apply_min_output_limit,
     battery_presence,
     calculate_targets,
     detect_capabilities,
     derive_soc_runtime_state,
     firmware_recovery_or_ac_charge_active,
+    min_soc_ramp_cap_w,
     pv_power,
 )
 
@@ -912,8 +914,11 @@ class EMSController:
         self.commanded_total_w = ramped
         return ramped
 
-    def apply_device_ramp(self, targets, raw_load):
+    def apply_device_ramp(self, targets, raw_load, discharge_caps=None):
         """Limit how far each device's target moves in one cycle.
+
+        Never above a device's battery care ceiling: a protective ceiling is
+        not walked down to at the ramp's pace.
 
         Out of the charge direction a device's discharge ramps from zero, not
         from the charge it left: the exit itself is immediate (see
@@ -958,8 +963,9 @@ class EMSController:
             * multiplier
         )
         ramped_targets = []
+        caps = discharge_caps or [None] * len(self.devices)
 
-        for dev, target in zip(self.devices, targets):
+        for dev, target, cap in zip(self.devices, targets, caps):
             if not self.device_output_control_allowed(dev):
                 self.commanded_device_targets[dev.name] = 0
                 ramped_targets.append(0)
@@ -994,6 +1000,8 @@ class EMSController:
             ramped = max(
                 self.device_charge_floor_w(dev), min(dev.max_power, ramped)
             )
+            if cap is not None:
+                ramped = min(ramped, cap)
             self.commanded_device_targets[dev.name] = ramped
             ramped_targets.append(ramped)
 
@@ -1451,12 +1459,98 @@ class EMSController:
             undistributed_target_w=0,
         )
 
-    def effective_control_targets(self, targets, enabled, min_output_limit):
+    def min_soc_ramp_caps(self, states, now=None):
+        """Each device's battery care ceiling this cycle; ``None`` where it does not hold.
+
+        The full point is the winter one while winter mode is in effect, else
+        the summer one; 0 switches the ramp off for that season.
+        """
+
+        care = cfg.battery_care_settings(self.runtime_state)
+        if not care["enabled"]:
+            return [None] * len(self.devices)
+        winter = cfg.winter_mode_active(now or datetime.now(), self.runtime_state)
+        ramp = MinSocRamp(
+            care["pv_only_points"],
+            care["winter_full_points" if winter else "summer_full_points"],
+        )
+        return [
+            min_soc_ramp_cap_w(state, dev, ramp)
+            for dev, state in zip(self.devices, states)
+        ]
+
+    def standby_floor_caps(self, discharge_caps, states):
+        """The ramp ceilings the standby floor honours, taken before a target moves.
+
+        A device this EMS was charging when the cycle began keeps the full floor:
+        a zero is measured against telemetry that does not show the charge yet,
+        falls inside the deadband and is never written, and the charge goes on.
+        So does a battery at or below its minSoc, which the firmware floor already
+        holds, as the night idle that parks it on the floor does.
+        """
+
+        return [
+            None
+            if self.charge_commanded_by_ems(dev) or state.soc <= state.min_soc
+            else cap
+            for dev, cap, state in zip(self.devices, discharge_caps, states)
+        ]
+
+    def discharge_ceiling_w(self, max_power, discharge_caps, states, capabilities):
+        """The most the plant may be asked for while the battery care holds devices back.
+
+        Against a held device the integrator would wind up to ``max_power``, and
+        the next step of its ceiling would hand the whole wound-up total to it,
+        exporting battery energy until the integrator unwound. So while a
+        battery above its minSoc is held, the total is held to what the
+        allocation can hand out this cycle: nothing to a device that may not
+        export, a held one its ceiling, PV to one that cannot discharge, the
+        rating to the rest, offline and switched-off devices included, whose
+        share the allocation keeps and only they deliver. No device counts
+        below what it delivers now, so the ceiling never takes away output
+        that is there.
+        """
+
+        held = [
+            cap is not None and state.soc > state.min_soc
+            for cap, state in zip(discharge_caps, states)
+        ]
+        if not any(held):
+            return max_power
+        deliverable = 0
+        for index, dev in enumerate(self.devices):
+            state = states[index]
+            capability = capabilities[index] if capabilities else None
+            if capability is not None and not capability.can_export:
+                continue
+            if held[index]:
+                share = discharge_caps[index]
+            elif battery_presence(state) == BATTERY_ABSENT or (
+                capability is not None and not capability.can_discharge
+            ):
+                share = pv_power(state)
+            else:
+                share = dev.max_power
+            deliverable += max(share, state.output)
+        return min(max_power, deliverable)
+
+    @staticmethod
+    def output_floor_w(min_output_limit, discharge_cap):
+        """The standby floor, never above what battery care allows."""
+
+        if discharge_cap is None:
+            return min_output_limit
+        return min(min_output_limit, discharge_cap)
+
+    def effective_control_targets(
+        self, targets, enabled, min_output_limit, discharge_caps=None
+    ):
         """Return the per-device output command intent after control gates."""
 
         effective_targets = []
+        caps = discharge_caps or [None] * len(self.devices)
 
-        for dev, target in zip(self.devices, targets):
+        for dev, target, discharge_cap in zip(self.devices, targets, caps):
             if not enabled or not self.device_commandable(dev):
                 effective_targets.append(0)
                 continue
@@ -1473,7 +1567,7 @@ class EMSController:
                 continue
 
             if min_output_limit > 0:
-                target = max(target, min_output_limit)
+                target = max(target, self.output_floor_w(min_output_limit, discharge_cap))
 
             effective_targets.append(
                 max(
@@ -5293,6 +5387,11 @@ class EMSController:
         # CALCULATE TARGETS
         # =====================
 
+        discharge_caps = self.min_soc_ramp_caps(states)
+        floor_caps = self.standby_floor_caps(discharge_caps, states)
+        discharge_ceiling = self.discharge_ceiling_w(
+            max_power, discharge_caps, states, capabilities
+        )
         has_export_capacity = self.has_output_control_export_capacity(
             states,
             capabilities,
@@ -5302,13 +5401,13 @@ class EMSController:
 
         if self.grid_meter_holding:
             if self.commanded_total_w is None:
-                self.initialize_commanded_total(states, max_power)
-            stabilized_total = min(self.commanded_total_w, max_power)
+                self.initialize_commanded_total(states, discharge_ceiling)
+            stabilized_total = min(self.commanded_total_w, discharge_ceiling)
         else:
             stabilized_total = self.stabilized_total_target(
                 load,
                 states,
-                max_power,
+                discharge_ceiling,
                 has_export_capacity=has_export_capacity,
                 standby_total_w=standby_total_w,
                 active_device_count=len(active_indexes)
@@ -5332,7 +5431,7 @@ class EMSController:
                 load,
                 states,
                 stabilized_total,
-                max_power,
+                discharge_ceiling,
                 has_export_capacity=has_export_capacity,
                 standby_total_w=standby_total_w,
             )
@@ -5349,7 +5448,8 @@ class EMSController:
             requested_total=max(0, stabilized_total),
             explain=True,
             online_devices=self.device_online,
-            commandable=self.claim_eligible_devices()
+            commandable=self.claim_eligible_devices(),
+            discharge_caps=discharge_caps
         )
 
         self.log_pv_priority_change(control_explanation)
@@ -5376,12 +5476,14 @@ class EMSController:
 
         targets = self.apply_device_ramp(
             targets,
-            load
+            load,
+            discharge_caps
         )
         effective_targets = self.effective_control_targets(
             targets,
             enabled,
-            min_output_limit
+            min_output_limit,
+            floor_caps
         )
         control_explanation.allocated_target_total_w = sum(targets)
         control_explanation.effective_target_total_w = sum(effective_targets)
@@ -5525,7 +5627,7 @@ class EMSController:
                 apply_min_output_limit(
                     targets[i],
                     dev,
-                    min_output_limit
+                    self.output_floor_w(min_output_limit, floor_caps[i])
                 )
 
             # What the device is doing now, on the same signed axis as the

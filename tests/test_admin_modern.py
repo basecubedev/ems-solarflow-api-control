@@ -311,11 +311,11 @@ def test_every_restore_step_has_words_here():
     assert keys == set(js_list("lib/backups.js", "RESTORE_STEPS"))
 
 
-def test_feature_sections_with_words_here_are_catalogue_features():
+def test_every_catalogue_feature_has_its_words_here_in_the_catalogues_order():
     from ems.config_catalog import get_config_feature_sections
 
-    features = {section["id"] for section in get_config_feature_sections(mode="maintenance") if section.get("kind") == "feature"}
-    assert set(js_list("lib/settings.js", "FEATURE_IDS")) <= features
+    features = [section["id"] for section in get_config_feature_sections(mode="maintenance") if section.get("kind") == "feature"]
+    assert js_list("lib/settings.js", "FEATURE_IDS") == features
 
 
 def test_device_kinds_are_the_ones_the_settings_view_draws():

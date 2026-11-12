@@ -164,6 +164,12 @@ Winter mode can gradually raise the minimum battery reserve during selected mont
 
 This protects a larger reserve during low-production months without changing the normal household power-control logic.
 
+### Battery care
+
+Battery care lets a battery close to its minimum level discharge gently: just above the reserve it gives only a trickle, and its share grows until a few points higher it may deliver its full power again. This keeps the battery from dropping back onto its reserve within seconds, which can make a device draw a burst from the grid.
+
+It is on by default, uses a longer ramp while winter mode is in effect, and can be switched off or tuned in the dashboard, in the Admin console and with `emsctl battery-care`. The dashboard's Overview names the batteries it is holding back. See [Battery care](../technical/control-logic.md#battery-care).
+
 ### Battery full-charge assist
 
 The optional full-charge assistant helps battery-backed devices periodically reach the full state reported by their firmware.

@@ -7,7 +7,11 @@ import sys
 
 import pytest
 
-from ems.config import BATTERY_FULL_CHARGE_ASSIST_DEFAULTS, WINTER_DEFAULTS
+from ems.config import (
+    BATTERY_CARE_DEFAULTS,
+    BATTERY_FULL_CHARGE_ASSIST_DEFAULTS,
+    WINTER_DEFAULTS,
+)
 from ems.config_catalog import (
     GRID_METER_KNOWN_MQTT_KEYS,
     GRID_METER_KNOWN_TOP_KEYS,
@@ -238,6 +242,7 @@ def test_default_template_order_and_legacy_ha_defaults():
         "devices",
         "zendure_mqtt",
         "winter",
+        "battery_care",
         "battery_full_charge_assist",
         "ac_charge_control",
         "energy_savings",
@@ -303,6 +308,7 @@ def test_control_tuning_is_expert_and_ha_is_deprecated():
     ("block", "defaults"),
     [
         ("winter", WINTER_DEFAULTS),
+        ("battery_care", BATTERY_CARE_DEFAULTS),
         ("battery_full_charge_assist", BATTERY_FULL_CHARGE_ASSIST_DEFAULTS),
     ],
 )

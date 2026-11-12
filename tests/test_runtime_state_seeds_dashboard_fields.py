@@ -54,6 +54,22 @@ def test_every_dashboard_runtime_field_is_seeded_from_config():
         assert set(DEVICE_FIELDS) <= set(entry), name
 
 
+def test_every_dashboard_runtime_section_reaches_the_runtime_state():
+    """Seeded defaults are only half: the merge kept two sections by name and
+    dropped battery_care, so both dashboards showed it off while it ran."""
+
+    defaults = build_runtime_defaults([_device("WR1")])
+    fresh = merge_runtime_defaults({}, defaults)
+    legacy = merge_runtime_defaults({"system": {"enabled": True}, "winter": {"enabled": True}}, defaults)
+    edited = merge_runtime_defaults({"battery_care": {"winter_full_points": 12}}, defaults)
+
+    for section, fields in SECTION_FIELDS.items():
+        assert set(fields) <= set(fresh[section]), section
+        assert set(fields) <= set(legacy[section]), section
+    assert edited["battery_care"]["winter_full_points"] == 12
+    assert set(SECTION_FIELDS["battery_care"]) <= set(edited["battery_care"])
+
+
 def test_ac_charge_control_is_seeded_with_the_configured_value(monkeypatch):
     monkeypatch.setattr(cfg, "AC_CHARGE_CONTROL_CONFIG", {"enabled": False})
     assert build_runtime_defaults([_device()])["ac_charge_control"] == {"enabled": False}

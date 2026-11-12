@@ -159,6 +159,9 @@ test.describe("Modern dashboard @smoke", () => {
   test("the rules say why they are on, and a chart zooms and resets", async ({ page }) => {
     await openModern(page);
     await expect(page.getByTestId("active-rules")).toContainText("preview control loop active");
+    const inactive = page.locator("details.more").filter({ hasText: /rules inactive/ });
+    await inactive.locator("summary").click();
+    await expect(inactive.locator(".rule").filter({ hasText: "Battery care" }).locator("use")).toHaveAttribute("href", "#i-battery-low");
     await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
     const plot = page.locator(".chart .u-over").first();
     await expect(plot).toBeVisible();

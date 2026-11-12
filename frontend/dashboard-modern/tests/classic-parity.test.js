@@ -47,10 +47,10 @@ test("every Classic tab has a Modern page", () => {
   assert.deepEqual(tabs.filter((tab) => !covered.has(tab)), []);
 });
 
-test("the rule list is Classic's, in Classic's order", () => {
+test("every Classic rule is in the rule list, in Classic's order", () => {
   const match = source.match(/function renderRules\(rules\) \{[\s\S]*?const labels = \[([\s\S]*?)\];/);
   const keys = [...match[1].matchAll(/\["([a-z_]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(RULES.map((rule) => rule.key), keys);
+  assert.deepEqual(RULES.map((rule) => rule.key).filter((key) => keys.includes(key)), keys);
 });
 
 test("firmware enum tables cover exactly Classic's values", () => {

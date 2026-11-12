@@ -3206,6 +3206,7 @@ const CONTROL_CODE_LABELS = {
   pv_only_limit: "PV-only limit",
   max_output_limit: "Device output limit",
   no_allocation: "No share of the target",
+  battery_care: "Battery care",
   no_battery: "Device reports no battery pack",
   below_min_soc: "Battery at or below minimum SoC",
   soc_protection: "SoC protection",
@@ -5892,6 +5893,7 @@ function runtimeControlPanel() {
   const system = runtime.system || {};
   const winter = runtime.winter || {};
   const acCharge = runtime.ac_charge_control || {};
+  const batteryCare = runtime.battery_care || {};
   const devices = Object.entries(runtime.devices || {});
   const limits = runtime._limits || {};
   const systemLimits = limits.system || {};
@@ -5910,6 +5912,7 @@ function runtimeControlPanel() {
   )).join("");
   const winterStep = devices.length + 2;
   const acChargeStep = devices.length + 3;
+  const batteryCareStep = devices.length + 4;
 
   return `
     <section class="runtime-editor-panel control-stage-row" aria-label="Runtime write controls">
@@ -5954,6 +5957,20 @@ function runtimeControlPanel() {
           submitLabel: "Save AC charging",
           fields: `
           ${runtimeToggle("enabled", "AC charging", acCharge.enabled)}
+        `})}
+        ${runtimeStageCard({
+          endpoint: "/api/runtime/battery_care",
+          title: "Battery care",
+          subtitle: "Gentle discharge close to minSoc",
+          step: batteryCareStep,
+          kind: "target",
+          iconName: "battery",
+          submitLabel: "Save battery care",
+          fields: `
+          ${runtimeToggle("enabled", "Battery care", batteryCare.enabled)}
+          ${runtimeNumber("summer_full_points", "Full power from (summer)", batteryCare.summer_full_points, 0, 50, "%", "1")}
+          ${runtimeNumber("winter_full_points", "Full power from (winter)", batteryCare.winter_full_points, 0, 50, "%", "1")}
+          ${runtimeNumber("pv_only_points", "PV only up to", batteryCare.pv_only_points, 0, 50, "%", "1")}
         `})}
       </div>
     </section>

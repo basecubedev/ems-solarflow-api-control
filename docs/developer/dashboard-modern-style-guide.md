@@ -72,6 +72,12 @@ The vocabulary is copied, not imported, because Classic is not a module.
 lists out of `dashboard/static/app.js` and fails when the two drift -- the
 paired-registry rule in `agent-rules.md` applied to a second front end.
 
+Classic is deprecated and gets no new entries. A list that grows on in Modern
+is paired with its source instead, and Classic's list stays a subset of it:
+the rule list with `rule_states` in `dashboard/telemetry.py`
+(`tests/test_dashboard_modern.py`), which since battery care has one rule
+Classic does not show.
+
 ## Colour
 
 `frontend/shared/styles/tokens.css` is the only file that writes a colour value. A rule
