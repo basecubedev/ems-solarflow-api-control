@@ -395,6 +395,7 @@ console.log(JSON.stringify({{ html, endpoints }}));
         "/api/runtime/device/WR1",
         "/api/runtime/winter",
         "/api/runtime/ac_charge_control",
+        "/api/runtime/battery_care",
     ]
     assert "Home Assistant" not in output["html"]
     assert "HA " not in output["html"]

@@ -13,6 +13,7 @@ import math
 from dataclasses import dataclass
 
 from ems import device_settings
+from ems.config import BATTERY_CARE_MAX_POINTS
 from ems.logging_utils import log_event
 
 
@@ -52,6 +53,12 @@ SECTION_FIELDS = {
     },
     "ac_charge_control": {
         "enabled": ("bool", None),
+    },
+    "battery_care": {
+        "enabled": ("bool", None),
+        "summer_full_points": ("int", (0, BATTERY_CARE_MAX_POINTS)),
+        "winter_full_points": ("int", (0, BATTERY_CARE_MAX_POINTS)),
+        "pv_only_points": ("int", (0, BATTERY_CARE_MAX_POINTS)),
     },
 }
 
@@ -99,11 +106,21 @@ SECTION_COMMANDS = {
     "disable": RuntimeCommand("enabled", False),
 }
 
+SECTION_COMMAND_TABLES = {
+    "battery_care": {
+        **SECTION_COMMANDS,
+        "summer-full": RuntimeCommand("summer_full_points"),
+        "winter-full": RuntimeCommand("winter_full_points"),
+        "pv-only": RuntimeCommand("pv_only_points"),
+    },
+}
+
 EMSCTL_SCOPES = {
     "system": "system",
     "device": "device",
     "winter": "winter",
     "ac-charge": "ac_charge_control",
+    "battery-care": "battery_care",
 }
 
 
@@ -127,7 +144,7 @@ def runtime_command(scope, action):
     elif scope == "device":
         table = DEVICE_COMMANDS
     elif scope in SECTION_FIELDS:
-        table = SECTION_COMMANDS
+        table = SECTION_COMMAND_TABLES.get(scope, SECTION_COMMANDS)
     else:
         raise RuntimeWriteError(f"unsupported runtime scope {scope}")
     if action not in table:

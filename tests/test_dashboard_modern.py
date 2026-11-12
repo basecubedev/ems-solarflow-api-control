@@ -215,6 +215,40 @@ def test_every_device_setting_and_value_has_its_words_in_every_language():
             assert strings[f"settingValue.{value.word}"]["en"] == value.label
 
 
+def test_the_overview_lists_every_rule_the_dashboard_reports_in_its_order():
+    import ast
+
+    from dashboard import telemetry
+
+    tree = ast.parse(Path(telemetry.__file__).read_text(encoding="utf-8"))
+    reported = next(
+        [key.value for key in node.value.keys]
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(getattr(target, "id", None) == "rule_states" for target in node.targets)
+    )
+    rules = js_export(SOURCE / "src" / "lib" / "status.js", "RULES")
+    if rules is None:
+        pytest.skip("Node is required to read the Modern rule list")
+    assert [rule["key"] for rule in rules] == reported
+
+
+def test_battery_care_wears_one_name_and_mark_on_every_page():
+    admin = ROOT / "frontend" / "admin-modern" / "src"
+    looks = js_export(admin / "lib" / "settings.js", "FEATURE_LOOKS")
+    admin_strings = js_export(admin / "i18n" / "strings.js", "STRINGS")
+    rules = js_export(SOURCE / "src" / "lib" / "status.js", "RULES")
+    if None in (looks, admin_strings, rules):
+        pytest.skip("Node is required to read the Modern tables")
+    mark = looks["battery_care"]
+    strings = _strings()
+    card = (SOURCE / "src" / "widgets" / "RuntimeEditor.svelte").read_text(encoding="utf-8")
+
+    assert next(rule["icon"] for rule in rules if rule["key"] == "battery_care_active") == mark["icon"]
+    assert re.search(rf'endpoint={{BATTERY_CARE_ENDPOINT}}[^>]*\bicon="{mark["icon"]}" tone="{mark["tone"]}"', card)
+    assert admin_strings["feature.battery_care"] == strings["rule.battery_care_active"] == strings["runtime.batteryCare"]
+
+
 def test_the_rule_reasons_modern_translates_are_the_dashboards_own():
     from dashboard.telemetry import RULE_REASONS
 

@@ -184,7 +184,7 @@ at the same time.
 
 | Tab | Holds |
 | --- | --- |
-| **Features** | Winter mode, full-charge assist, AC charging, energy savings, the dashboard, analytics — each switched on or off, opened to set how it works |
+| **Features** | Winter mode, battery care, full-charge assist, AC charging, energy savings, the dashboard, analytics — each switched on or off, opened to set how it works |
 | **Safety** | What EMS may write to your devices, dry run and simulation, and the output limits |
 | **Expert** | The system basics and the control tuning; change them in small steps |
 | **Devices** | The grid meter, the Zendure MQTT broker and every device, the network search — see [Device management](device-management.md) |

@@ -13,6 +13,7 @@ export const CONTROL_CODES = Object.freeze([
   "battery_discharge_required", "discharge_capacity", "pv_only_final_limits", "device_output_limits",
   "undistributed_target", "min_output_limit", "cannot_export", "no_pv_only_available", "cannot_discharge",
   "no_battery_available", "no_usable_battery", "pv_only_limit", "max_output_limit", "no_allocation", "no_battery",
+  "battery_care",
   "below_min_soc", "soc_protection", "offline", "device_disabled", "control_disabled", "not_controllable",
   "runtime_role_ac_input", "runtime_role_ac_output", "runtime_role_blocked", "ac_discharge_disabled",
   "winter_solar_charge", "already_parked", "already_at_min_output_limit", "park_at_min_output_limit", "deadband",
@@ -199,6 +200,7 @@ export const LIMIT_REASONS = Object.freeze({
   "no device states were available": "noDevices",
   "battery/SOC protection idle mode is active": "nightIdle",
   "devices are parked at the configured minimum output floor": "parkedAtFloor",
+  "batteries close to minSoc pass their PV through and discharge part of their power": "batteryCare",
 });
 
 /** The notes the EMS adds to its explanation, keyed by their English; the one with a number is matched by UNDISTRIBUTED_NOTE. */

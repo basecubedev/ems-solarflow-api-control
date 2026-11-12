@@ -349,6 +349,14 @@ def _coerce(value, value_type):
     return "" if value is None else str(value).strip().lower()
 
 
+_EMS_SECTION_READS = {
+    ("battery_care", key): (
+        lambda value, key=key: cfg.battery_care_points(value, cfg.BATTERY_CARE_DEFAULTS[key])
+    )
+    for key in cfg.BATTERY_CARE_POINT_KEYS
+}
+
+
 def _entry(config_value, runtime_section, key, value_type, default):
     config_effective = config_value if config_value is not None else default
     coerced_config = _coerce(config_effective, value_type)
@@ -397,8 +405,11 @@ def compute_overlap_provenance(config, runtime_data):
         runtime_section = runtime_data.get(section)
         config_section = config.get(section) if isinstance(config.get(section), dict) else {}
         for key, (value_type, _rule) in fields.items():
+            config_value = config_section.get(key)
+            if config_value is not None and (section, key) in _EMS_SECTION_READS:
+                config_value = _EMS_SECTION_READS[(section, key)](config_value)
             result[section + "." + key] = _entry(
-                config_section.get(key), runtime_section, key, value_type,
+                config_value, runtime_section, key, value_type,
                 _SECTION_DEFAULTS.get(section, {}).get(key),
             )
 
@@ -473,6 +484,8 @@ def config_effective_value(config, kind, holder, key):
         value_type = DEVICE_FIELDS[key][0]
     else:
         return None
+    if kind == "section" and raw is not None and (holder, key) in _EMS_SECTION_READS:
+        raw = _EMS_SECTION_READS[(holder, key)](raw)
     effective = raw if raw is not None else default
     return _coerce(effective, value_type)
 

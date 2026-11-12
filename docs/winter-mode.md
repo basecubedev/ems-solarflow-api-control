@@ -267,7 +267,17 @@ moved. A device that reports a `minSoc` of 0 is raised only to a value below
 what the battery holds.
 
 What this does not prevent: a battery that discharges down to its `minSoc`
-draws the same burst. After a follow that is one point of discharge away.
+at full power draws the same burst; after a follow that is one point of
+discharge away. [Battery care](technical/control-logic.md#battery-care) keeps
+that discharge to a trickle close to the floor.
+
+## Battery Care in Winter
+
+While winter mode is in effect, [battery care](technical/control-logic.md#battery-care)
+uses its winter full point (`battery_care.winter_full_points`, default 10
+points above minSoc) instead of the summer one (5): a battery that spends long
+hours in the middle of its range, where its charge is hardest to estimate,
+discharges more gently close to the minSoc winter mode raised.
 
 ## No AC Charge Limit
 

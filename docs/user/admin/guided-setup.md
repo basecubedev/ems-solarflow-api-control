@@ -157,7 +157,8 @@ and **Generated settings**.
   short EMS name (`INV_1`, `INV_2`, …): the name used in `config.json`, logs and
   the dashboard. Change it now if you want another. **Add more devices** lists
   the other finds and **Add a device by hand** what the search could not reach.
-- **Features** — winter mode, energy savings, full-charge assist and so on.
+- **Features** — winter mode, battery care, energy savings, full-charge assist
+  and so on.
 - **Control and safety** — what EMS may do once it starts, and the limits it
   stays inside.
 

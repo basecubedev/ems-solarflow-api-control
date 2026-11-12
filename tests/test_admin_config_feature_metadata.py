@@ -94,13 +94,14 @@ def test_sections_have_stable_required_metadata():
         "devices",
         "zendure_mqtt",
         "winter",
+        "battery_care",
         "battery_full_charge_assist",
         "ac_charge_control",
         "energy_savings",
         "dashboard",
         "influxdb",
     ]
-    assert [section["order"] for section in sections] == list(range(1, 12))
+    assert [section["order"] for section in sections] == list(range(1, 13))
     for section in sections:
         assert SECTION_KEYS <= section.keys()
         assert section["level"] in LEVELS

@@ -13,17 +13,19 @@ export const MQTT_SOURCES = Object.freeze(["local_mqtt", "zendure_cloud_mqtt"]);
 /** The Classic editor's tabs, which #maintenance-settings-<tab> opens. */
 export const SETTINGS_TABS = Object.freeze(["devices", "features", "safety", "expert"]);
 /** Feature sections with words in every language; another section keeps the catalogue's own title. */
-export const FEATURE_IDS = Object.freeze(["zendure_mqtt", "winter", "battery_full_charge_assist", "ac_charge_control", "energy_savings", "dashboard", "influxdb"]);
+export const FEATURE_IDS = Object.freeze(["zendure_mqtt", "winter", "battery_care", "battery_full_charge_assist", "ac_charge_control", "energy_savings", "dashboard", "influxdb"]);
 
 /**
  * Each feature's mark, in the tone the dashboard gives the same thing: the
- * broker violet, winter cyan as on the Control page, the battery green, AC
- * charging the grid's, savings the money tone, analytics violet. A section
- * of the catalogue that is not a feature wears the settings mark.
+ * broker violet, winter cyan as on the Control page, battery care as its
+ * runtime card, the battery green, AC charging the grid's, savings the money
+ * tone, analytics violet. A section of the catalogue that is not a feature
+ * wears the settings mark.
  */
 export const FEATURE_LOOKS = Object.freeze({
   zendure_mqtt: { icon: "radio-tower", tone: "c-soc" },
   winter: { icon: "snowflake", tone: "c-out" },
+  battery_care: { icon: "battery-low", tone: "c-soc" },
   battery_full_charge_assist: { icon: "battery", tone: "c-bat" },
   ac_charge_control: { icon: "plug-zap", tone: "c-grid" },
   energy_savings: { icon: "piggy-bank", tone: "c-money" },

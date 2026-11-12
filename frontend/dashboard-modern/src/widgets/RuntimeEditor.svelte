@@ -11,7 +11,7 @@
   import { t, translatedOr } from "../i18n/i18n.svelte.js";
   import { auth } from "../state/auth.svelte.js";
   import { live, loadRuntime } from "../state/live.svelte.js";
-  import { SYSTEM_ENDPOINT, WINTER_ENDPOINT, AC_CHARGE_ENDPOINT, deviceEndpoint, acRole, settingWord, deviceSettings } from "../lib/runtime.js";
+  import { SYSTEM_ENDPOINT, WINTER_ENDPOINT, AC_CHARGE_ENDPOINT, BATTERY_CARE_ENDPOINT, deviceEndpoint, acRole, settingWord, deviceSettings } from "../lib/runtime.js";
 
   const runtime = $derived(live.runtime || {});
   const limits = $derived(runtime._limits || {});
@@ -30,6 +30,13 @@
   function valueLabel(value) {
     return translatedOr(`settingValue.${value.value}`, value.label || value.value);
   }
+
+  const batteryCareFields = $derived([
+    { name: "enabled", type: "toggle", label: t("runtime.batteryCare") },
+    { name: "summer_full_points", type: "number", label: t("runtime.batteryCareSummer"), min: 0, max: 50, unit: "%" },
+    { name: "winter_full_points", type: "number", label: t("runtime.batteryCareWinter"), min: 0, max: 50, unit: "%" },
+    { name: "pv_only_points", type: "number", label: t("runtime.batteryCarePvOnly"), min: 0, max: 50, unit: "%" },
+  ]);
 
   const systemFields = $derived([
     { name: "enabled", type: "toggle", label: t("runtime.emsEnabled") },
@@ -115,6 +122,7 @@
       {/each}
       <RuntimeForm endpoint={WINTER_ENDPOINT} title={t("runtime.winter")} subtitle={t("runtime.winterSub")} icon="snowflake" tone="c-out" step={devices.length + 2} fields={[{ name: "enabled", type: "toggle", label: t("runtime.winter") }]} initial={runtime.winter || {}} {settingLabel} />
       <RuntimeForm endpoint={AC_CHARGE_ENDPOINT} title={t("runtime.acChargeTitle")} subtitle={t("runtime.acChargeSub")} icon="plug-zap" tone="c-grid" step={devices.length + 3} fields={[{ name: "enabled", type: "toggle", label: t("runtime.acCharging") }]} initial={runtime.ac_charge_control || {}} {settingLabel} />
+      <RuntimeForm endpoint={BATTERY_CARE_ENDPOINT} title={t("runtime.batteryCare")} subtitle={t("runtime.batteryCareSub")} icon="battery-low" tone="c-soc" step={devices.length + 4} fields={batteryCareFields} initial={runtime.battery_care || {}} {settingLabel} />
     </div>
   {/if}
 </Card>

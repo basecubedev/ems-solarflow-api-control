@@ -24,6 +24,15 @@ from ems.winter_policies import MAX_RAISE_ABOVE_SOC, configurable_class_defaults
 LATEST_CONFIG_SCHEMA_VERSION = 3
 CURRENT_CONFIG_SCHEMA_VERSION = LATEST_CONFIG_SCHEMA_VERSION
 
+BATTERY_CARE_MAX_POINTS = 50
+BATTERY_CARE_DEFAULTS = {
+    "enabled": True,
+    "summer_full_points": 5,
+    "winter_full_points": 10,
+    "pv_only_points": 0,
+}
+BATTERY_CARE_POINT_KEYS = ("summer_full_points", "winter_full_points", "pv_only_points")
+
 OUTPUT_CONTROL_DEFAULTS = {
     "load_deadband_w": 5,
     "target_deadband_w": 5,
@@ -939,6 +948,7 @@ def default_safe_config():
             BATTERY_FULL_CHARGE_ASSIST_DEFAULTS
         ),
         "ac_charge_control": copy.deepcopy(AC_CHARGE_CONTROL_DEFAULTS),
+        "battery_care": copy.deepcopy(BATTERY_CARE_DEFAULTS),
         "config_upgrade": copy.deepcopy(CONFIG_UPGRADE_DEFAULTS),
         "influxdb": copy.deepcopy(INFLUXDB_DEFAULTS),
         "devices": [],
@@ -2056,6 +2066,7 @@ INFLUXDB_CONFIG = None
 ENERGY_SAVINGS_CONFIG = ENERGY_SAVINGS_DEFAULTS.copy()
 BATTERY_FULL_CHARGE_ASSIST_CONFIG = BATTERY_FULL_CHARGE_ASSIST_DEFAULTS.copy()
 AC_CHARGE_CONTROL_CONFIG = AC_CHARGE_CONTROL_DEFAULTS.copy()
+BATTERY_CARE_CONFIG = BATTERY_CARE_DEFAULTS.copy()
 OFFGRID_SOCKET_MODES = {
     "standard": 0,
     "eco": 1,
@@ -2127,7 +2138,7 @@ def initialize(args, base_dir):
     global SOC_RECONCILE_INTERVAL, WINTER_CONFIG, DASHBOARD_CONFIG
     global INFLUXDB_CONFIG
     global ENERGY_SAVINGS_CONFIG, BATTERY_FULL_CHARGE_ASSIST_CONFIG
-    global AC_CHARGE_CONTROL_CONFIG
+    global AC_CHARGE_CONTROL_CONFIG, BATTERY_CARE_CONFIG
     global ZENDURE_CONFIG, ZENDURE_MQTT_CONFIG, SHELLY_IP, GRID_METER_CONFIG
 
     ARGS = args
@@ -2238,6 +2249,7 @@ def initialize(args, base_dir):
     AC_CHARGE_CONTROL_CONFIG = normalize_ac_charge_control_config(
         CONFIG.get("ac_charge_control")
     )
+    BATTERY_CARE_CONFIG = normalize_battery_care_config(CONFIG.get("battery_care"))
     ZENDURE_CONFIG = CONFIG["devices"]
     zendure_mqtt_config = CONFIG.get("zendure_mqtt", {})
     ZENDURE_MQTT_CONFIG = zendure_mqtt_config if isinstance(zendure_mqtt_config, dict) else {}
@@ -3714,8 +3726,9 @@ def winter_month_active(now):
 def winter_feature_enabled(runtime_state=None):
     """Return whether winter mode is enabled: the runtime toggle, else the config."""
 
-    if runtime_state:
-        winter = runtime_state.data.get("winter", {})
+    data = getattr(runtime_state, "data", None)
+    if isinstance(data, dict):
+        winter = data.get("winter", {})
         if isinstance(winter, dict) and "enabled" in winter:
             return safe_bool(winter.get("enabled"), False)
 
@@ -3724,6 +3737,38 @@ def winter_feature_enabled(runtime_state=None):
 
 def winter_mode_active(now, runtime_state=None):
     return winter_feature_enabled(runtime_state) and winter_month_active(now)
+
+
+def battery_care_points(value, default):
+    """A battery care distance in SoC points, within what the runtime accepts."""
+
+    return min(BATTERY_CARE_MAX_POINTS, safe_int(value, default, minimum=0))
+
+
+def normalize_battery_care_config(config):
+    """The ``battery_care`` block with its defaults, every distance within 0-50 points."""
+
+    config = config if isinstance(config, dict) else {}
+    normalized = {
+        "enabled": safe_bool(config.get("enabled"), BATTERY_CARE_DEFAULTS["enabled"]),
+    }
+    for key in BATTERY_CARE_POINT_KEYS:
+        normalized[key] = battery_care_points(config.get(key), BATTERY_CARE_DEFAULTS[key])
+    return normalized
+
+
+def battery_care_settings(runtime_state=None):
+    """Battery care as it holds now: the runtime section over the config.
+
+    Read defensively, like the AC charging switch: this runs every control
+    cycle against whatever runtime state the controller was handed.
+    """
+
+    settings = dict(BATTERY_CARE_CONFIG)
+    data = getattr(runtime_state, "data", None)
+    if isinstance(data, dict) and isinstance(data.get("battery_care"), dict):
+        settings.update(data["battery_care"])
+    return normalize_battery_care_config(settings)
 
 
 def winter_soc_reading(soc):

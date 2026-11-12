@@ -165,13 +165,15 @@ def merge_runtime_defaults(data, defaults):
         **system
     }
 
-    for section_name in ("winter", "ac_charge_control"):
+    for section_name, default_section in defaults.items():
+        if section_name in ("system", "devices") or not isinstance(default_section, dict):
+            continue
         section = merged.get(section_name)
         if not isinstance(section, dict):
             section = {}
 
         merged[section_name] = {
-            **defaults.get(section_name, {}),
+            **default_section,
             **section
         }
 
@@ -761,5 +763,6 @@ def build_runtime_defaults(devices):
         "ac_charge_control": {
             "enabled": cfg.ac_charge_control_enabled()
         },
+        "battery_care": dict(cfg.BATTERY_CARE_CONFIG),
         "devices": device_defaults
     }

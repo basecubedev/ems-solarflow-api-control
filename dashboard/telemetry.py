@@ -32,6 +32,7 @@ RULE_REASONS = {
     "soc_limit_active": "one or more devices report a SOC limit",
     "output_limit_active": "device outputLimit is present",
     "winter_soc_mode": "configured winter month and runtime winter toggle",
+    "battery_care_active": "no battery close to its minSoc is held back",
     "full_charge_assist_active": "no device currently in full-charge assist",
     "pv_priority_balancing": "per-device PV priority factor differs from 1.0",
     "battery_balancing": "effective device target differs from allocated target",
@@ -113,6 +114,24 @@ def _control_explain_payload(controller):
 
     devices = getattr(controller, "devices", None) or []
     return {**payload, "device_order": [getattr(dev, "name", None) for dev in devices]}
+
+
+def _battery_care_held_devices(control_explain):
+    """The devices battery care holds back in the last cycle, in the controller's order.
+
+    The split keeps a share for a device control is off for or that is offline,
+    and may cap it, but nothing is written to it, so nothing holds it back.
+    """
+
+    if not control_explain:
+        return []
+    devices = control_explain.get("devices") or {}
+    held = []
+    for name in control_explain.get("device_order") or list(devices):
+        device = devices.get(name) or {}
+        if device.get("limiting_reason") == "battery_care" and device.get("write_decision") != "blocked":
+            held.append(name)
+    return held
 
 
 def _unknown_assist_payload(message="Full-charge assist state unavailable"):
@@ -591,6 +610,9 @@ def build_dashboard_snapshot(
     except Exception:
         winter_active = False
 
+    control_explain = _control_explain_payload(controller)
+    battery_care_devices = _battery_care_held_devices(control_explain)
+
     full_charge_assist_active_devices = [
         name
         for name, device in devices.items()
@@ -610,6 +632,12 @@ def build_dashboard_snapshot(
         "winter_soc_mode": _bool_rule(
             winter_active,
             RULE_REASONS["winter_soc_mode"]
+        ),
+        "battery_care_active": _bool_rule(
+            bool(battery_care_devices),
+            ", ".join(battery_care_devices)
+            if battery_care_devices
+            else RULE_REASONS["battery_care_active"]
         ),
         "full_charge_assist_active": _bool_rule(
             bool(full_charge_assist_active_devices),
@@ -684,5 +712,5 @@ def build_dashboard_snapshot(
             ),
         },
         "rules": rule_states,
-        "control_explain": _control_explain_payload(controller),
+        "control_explain": control_explain,
     }

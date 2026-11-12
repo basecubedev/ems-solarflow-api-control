@@ -1825,6 +1825,8 @@ export const STRINGS = {
   "feature.zendure_mqtt.sub": s("Reads Zendure devices over MQTT", "Liest Zendure-Geräte über MQTT", "Leest Zendure-apparaten via MQTT", "Lit les appareils Zendure via MQTT"),
   "feature.winter": s("Winter mode", "Wintermodus", "Wintermodus", "Mode hiver"),
   "feature.winter.sub": s("Keeps a reserve in the battery through the cold months", "Hält in den kalten Monaten eine Reserve im Akku", "Houdt in de koude maanden een reserve in de batterij", "Garde une réserve dans la batterie pendant les mois froids"),
+  "feature.battery_care": s("Battery care", "Akkuschonung", "Accuzorg", "Préservation de la batterie"),
+  "feature.battery_care.sub": s("Discharges a battery gently close to its minSoc", "Entlädt einen Akku nahe seinem minSoc sanft", "Ontlaadt een batterij zacht dicht bij haar minSoc", "Décharge doucement une batterie proche de son minSoc"),
   "feature.battery_full_charge_assist": s("Full-charge assist", "Vollladehilfe", "Volladhulp", "Aide à la charge complète"),
   "feature.battery_full_charge_assist.sub": s("Charges the battery to full now and then", "Lädt den Akku ab und zu ganz voll", "Laadt de batterij af en toe helemaal vol", "Charge complètement la batterie de temps en temps"),
   "feature.ac_charge_control": s("AC charging", "Laden aus dem Netz", "Laden uit het net", "Charge sur le réseau"),

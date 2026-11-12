@@ -486,6 +486,16 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
     await expect(page.getByTestId("settings-changes")).toHaveCount(0);
   });
 
+  test("battery care is a feature right after winter mode, with its own name, mark and switch", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings");
+    const sections = await page.locator("[data-section]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-section")));
+    expect(sections.indexOf("battery_care")).toBe(sections.indexOf("winter") + 1);
+    const care = page.locator('[data-section="battery_care"]');
+    await expect(care.getByRole("checkbox", { name: "Battery care on or off" })).toBeVisible();
+    await expect(care.locator(".summary .name")).toHaveText("Battery care");
+    await expect(care.locator(".summary .icon-tile use")).toHaveAttribute("href", "#i-battery-low");
+  });
+
   test("the overview's Control & safety card opens the safety settings", async ({ page, seedAdminScenario }) => {
     await seededAt(page, seedAdminScenario, "#/overview");
     await page.getByRole("link", { name: "Change", exact: true }).click();

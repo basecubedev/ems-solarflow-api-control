@@ -62,6 +62,7 @@ TOP_LEVEL_COMMANDS = (
     "device",
     "winter",
     "ac-charge",
+    "battery-care",
     "schedule",
     "dashboard",
     "influx",
@@ -109,6 +110,7 @@ RUNTIME_EDIT_COMMANDS = frozenset(
         "device",
         "winter",
         "ac-charge",
+        "battery-care",
         "schedule",
         "interactive",
         "menu",
@@ -461,6 +463,35 @@ Examples:
     )
     winter.add_argument("action", choices=["enable", "disable", "status"], help="One of: enable, disable, status.")
     winter.add_argument("value", nargs="?", help=argparse.SUPPRESS)
+
+    battery_care = subparsers.add_parser(
+        "battery-care",
+        help="Edit battery care runtime state.",
+        description=(
+            "Enable, disable, tune or inspect battery care: close to its minSoc a "
+            "battery passes its PV through and discharges a share that grows with "
+            "the square of the distance until the full point."
+        ),
+        epilog="""\
+Actions:
+  enable, disable, status
+  summer-full N   Points above minSoc for full power outside winter mode (0 = off)
+  winter-full N   Points above minSoc for full power while winter mode is in effect (0 = off)
+  pv-only N       Points above minSoc up to which a battery only passes its PV through
+
+Examples:
+  python3 emsctl.py battery-care status
+  python3 emsctl.py battery-care winter-full 10
+  python3 emsctl.py battery-care disable
+""",
+        formatter_class=EMSHelpFormatter,
+    )
+    battery_care.add_argument(
+        "action",
+        choices=list(runtime_commands.SECTION_COMMAND_TABLES["battery_care"]) + ["status"],
+        help="One of: enable, disable, summer-full, winter-full, pv-only, status.",
+    )
+    battery_care.add_argument("value", nargs="?", help="Required for summer-full, winter-full and pv-only.")
 
     dashboard = subparsers.add_parser(
         "dashboard",
@@ -1554,7 +1585,7 @@ def runtime_defaults(config, existing=None):
                 system.get("min_output_limit", 0),
                 "system.min_output_limit",
                 minimum=0
-            )
+            ),
         },
         "winter": {
             "enabled": config_section(config, "winter").get("enabled", False)
@@ -1564,6 +1595,9 @@ def runtime_defaults(config, existing=None):
                 config.get("ac_charge_control", {})
             )["enabled"]
         },
+        "battery_care": config_mod.normalize_battery_care_config(
+            config.get("battery_care")
+        ),
         "devices": devices
     }
 
@@ -2759,7 +2793,11 @@ def run_interactive(args, config):
             if choice.startswith("system-"):
                 action = choice.removeprefix("system-")
                 value = None
-                if action in ("max-power", "loop-interval", "min-output-limit"):
+                if action in (
+                    "max-power",
+                    "loop-interval",
+                    "min-output-limit",
+                ):
                     value = prompt_text(f"system {action}")
                     if value is None:
                         continue
@@ -4444,6 +4482,15 @@ def main(argv=None):
                 runtime_state.save_atomic()
             print_status(runtime_path, {
                 "ac_charge_control": state.get("ac_charge_control", {})
+            })
+            return 0
+
+        if args.command == "battery-care" and args.action == "status":
+            ensure_no_value(args)
+            if created:
+                runtime_state.save_atomic()
+            print_status(runtime_path, {
+                "battery_care": state.get("battery_care", {})
             })
             return 0
 

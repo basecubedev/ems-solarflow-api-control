@@ -94,7 +94,7 @@ whether it is charging, discharging or idle.
 
 **Active rules** lists the EMS behaviours that shape the control right now,
 each with a one-line reason. The rules that are off fold away under
-*"6 rules inactive"*; open it to see them with their reasons.
+*"7 rules inactive"*; open it to see them with their reasons.
 
 | Rule | Active means |
 | --- | --- |
@@ -102,6 +102,7 @@ each with a one-line reason. The rules that are off fold away under
 | SoC limit | A device reports a SoC limit that constrains it |
 | Output limit | A device output limit is present |
 | Winter mode | The configured winter month and the runtime winter switch are both on |
+| Battery care | Battery care is holding back a battery close to its minSoc — it names which |
 | Full-charge assist | A device is in full-charge assist |
 | PV priority | A per-device PV priority factor differs from 1.0 |
 | Battery balance | A device's effective target differs from its allocated share |

@@ -6,6 +6,7 @@
   "battery",
   "battery-charging",
   "battery-full",
+  "battery-low",
   "battery-medium",
   "calendar",
   "calendar-clock",
