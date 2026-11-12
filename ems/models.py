@@ -83,7 +83,7 @@ class DeviceState:
     pack_in: float
     pack_out: float
 
-    temp: float
+    temp: float | None
     voltage: float
     rssi: int
 

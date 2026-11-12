@@ -2405,6 +2405,10 @@ def diagnose_reported_property_names(payload):
     day while four surfaces showed a charging device as idle. An inventory from
     an unfamiliar model is the cheapest way to find the next one, and it is what
     ``tests/test_declared_config_reaches_the_device.py`` grows from.
+
+    A number is probed with several values, one of them a plausible device
+    temperature: a reader that discards a value no device can report would
+    otherwise look as though it read nothing.
     """
 
     properties = payload.get("properties") if isinstance(payload, dict) else None
@@ -2426,12 +2430,13 @@ def diagnose_reported_property_names(payload):
     unmapped = []
     for name in names:
         current = properties[name]
-        probe = 987654 if isinstance(current, (int, float)) and not isinstance(current, bool) else "?"
-        if probe == current:
-            probe = 123456
-        perturbed = dict(properties)
-        perturbed[name] = probe
-        if parse_device({"properties": perturbed}) == baseline:
+        numeric = isinstance(current, (int, float)) and not isinstance(current, bool)
+        probes = (987654, 123456, 2981) if numeric else ("?", 987654, 2981)
+        if not any(
+            parse_device({"properties": {**properties, name: probe}}) != baseline
+            for probe in probes
+            if probe != current
+        ):
             unmapped.append(name)
     return {"reported": names, "unmapped": unmapped}
 

@@ -612,6 +612,24 @@ publishes its port to the host loopback (`host_url`, default
 `http://127.0.0.1:8086`) and that the EMS is not unexpectedly detected as
 running inside a container (it honors an `EMS_IN_CONTAINER` override).
 
+### The device temperature up to v0.10.0
+
+The raw `temp` field holds the device temperature in °C. Zendure devices report
+it in tenths of a kelvin (`hyperTmp`, `(value - 2731) / 10`); releases up to
+v0.10.0 divided by 100, so 13.0 °C was stored as 28.61 and 0 °C as 27.31. A
+device that reports no temperature now writes no `temp` point, where up to
+v0.10.0 it, and every E3/DC (`source=e3dc`), wrote `0`; nor does one that
+reports a value outside -60 to 120 °C, which up to v0.10.0 was stored divided
+by 100 like any other.
+
+To convert history written before the upgrade, take the `source=zendure` points
+from before the upgrade time whose value lies between 21.31 and 39.31 (-60 to
+120 °C in the old scale) and apply `°C = (stored - 27.31) * 10`; the others,
+the `0` placeholders among them, are not readings and are best dropped. The
+same holds for the `1m`, `5m` and `1h` buckets, except for windows that contain
+such a value or straddle the upgrade, where old and new scales are averaged
+together; recompute those from the converted raw points or leave them out.
+
 ## Migration from `develop/influxdb/`
 
 Earlier versions only shipped a development compose file under

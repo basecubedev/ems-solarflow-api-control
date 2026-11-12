@@ -306,7 +306,7 @@ def e3dc_device_state(reading):
         output=(reading.inverter_w or 0) if reading else 0,
         pack_in=max(0.0, -battery_w),
         pack_out=max(0.0, battery_w),
-        temp=0,
+        temp=None,
         voltage=0,
         rssi=0,
         remain_minutes=0,

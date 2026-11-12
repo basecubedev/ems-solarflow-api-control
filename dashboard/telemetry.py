@@ -22,6 +22,12 @@ def _rounded(value, digits=1):
         return 0
 
 
+def _rounded_or_none(value, digits=1):
+    """A reading that may be missing; a missing one stays missing, not 0."""
+
+    return None if value is None else _rounded(value, digits)
+
+
 RULE_REASONS = {
     "soc_limit_active": "one or more devices report a SOC limit",
     "output_limit_active": "device outputLimit is present",
@@ -205,7 +211,7 @@ def _state_telemetry_fields(state):
         "soc_limit": int(getattr(state, "soc_limit", 0) or 0),
         "pack_state": int(getattr(state, "pack_state", 0) or 0),
         "fault_level": int(getattr(state, "fault_level", 0) or 0),
-        "temperature_c": _rounded(getattr(state, "temp", 0)),
+        "temperature_c": _rounded_or_none(getattr(state, "temp", None)),
         "voltage_v": _rounded(getattr(state, "voltage", 0)),
         "rssi": int(getattr(state, "rssi", 0) or 0),
         "remain_minutes": _rounded(getattr(state, "remain_minutes", 0)),
