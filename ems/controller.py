@@ -1714,12 +1714,15 @@ class EMSController:
         return -self.usable_charge_capacity_w()
 
     def usable_charge_capacity_w(self):
-        """What the chargeable devices can take, held to the installation cap."""
+        """What the chargeable devices can take, held to the installation cap.
 
-        configured = cfg.ac_charge_control_int(
-            "max_total_charge_power_w", 1200, minimum=0
-        )
-        return min(configured, max(0, self.charge_capacity_w))
+        :func:`ems.config.installation_charge_limit_w` reads the cap: 0 is
+        none, a value that is no whole watt from 1 charges nothing.
+        """
+
+        capacity = max(0, self.charge_capacity_w)
+        limit = cfg.ac_charge_installation_limit_w()
+        return capacity if limit is None else min(limit, capacity)
 
     def release_charging_devices(self, failed_cycles=None):
         """Return every device this EMS put into charge, before shutting down or after failed cycles.
@@ -2759,9 +2762,10 @@ class EMSController:
                 "ac_charge_capacity_below_stop",
                 usable_charge_w=usable,
                 charge_capacity_w=self.charge_capacity_w,
-                max_total_charge_power_w=cfg.ac_charge_control_int(
-                    "max_total_charge_power_w", 1200, minimum=0
+                max_total_charge_power_w=cfg.AC_CHARGE_CONTROL_CONFIG.get(
+                    "max_total_charge_power_w"
                 ),
+                installation_limit_w=cfg.ac_charge_installation_limit_w(),
                 stop_w=stop_w,
             )
         return False

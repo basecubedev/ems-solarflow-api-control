@@ -277,25 +277,43 @@ def test_hostile_settings_fall_back_instead_of_reaching_the_loop(label, override
         assert getattr(settings, field) == value, (label, field)
 
 
-def test_a_negative_system_maximum_charges_nothing():
-    """Fail-closed: a nonsense ceiling must not become an unbounded one."""
+def charge_floor_with_system_maximum(maximum, capacity_w=2000):
+    """The charge floor while charging, with ``maximum`` as the installation's limit."""
 
     from ems.ac_charge_control import ChargeDirectionState
     from ems.controller import EMSController
 
-    merged = {
-        **AC_CHARGE_CONTROL_DEFAULTS,
-        "enabled": True,
-        "max_total_charge_power_w": -1200,
-    }
+    merged = {**AC_CHARGE_CONTROL_DEFAULTS, "enabled": True}
+    if maximum is not None:
+        merged["max_total_charge_power_w"] = maximum
     previous = cfg.AC_CHARGE_CONTROL_CONFIG
     cfg.AC_CHARGE_CONTROL_CONFIG = merged
     try:
         controller = EMSController.__new__(EMSController)
         controller.runtime_state = None
         controller.charge_direction = ChargeDirectionState(charging=True)
-        controller.charge_capacity_w = 2000
-        controller.device_charge_limits = {"WR1": 1000}
-        assert controller.commanded_total_floor_w() == 0
+        controller.charge_capacity_w = capacity_w
+        controller.device_charge_limits = {"WR1": 1000, "WR2": 1000}
+        return controller.commanded_total_floor_w()
     finally:
         cfg.AC_CHARGE_CONTROL_CONFIG = previous
+
+
+@pytest.mark.parametrize("maximum", [-1200, "lots", 0.5, "0.9", True])
+def test_a_negative_system_maximum_charges_nothing(maximum):
+    """Fail-closed: a nonsense ceiling must not become an unbounded one."""
+
+    assert charge_floor_with_system_maximum(maximum) == 0
+
+
+def test_the_system_maximum_defaults_to_none_and_the_devices_bound_the_charge():
+    """Owner 2026-11-13: a charge is drawn through the fuse that protects the circuit."""
+
+    assert AC_CHARGE_CONTROL_DEFAULTS["max_total_charge_power_w"] == 0
+    assert charge_floor_with_system_maximum(0) == -2000
+    assert cfg.installation_charge_limit_w(None) is None, "the Admin's cleared field"
+
+
+def test_a_system_maximum_holds_the_devices_below_it():
+    assert charge_floor_with_system_maximum(1200) == -1200
+    assert charge_floor_with_system_maximum(2400) == -2000

@@ -38,6 +38,9 @@ def ac_device(name="AC2400", **kwargs):
     return charging_device(name, hardware_profile="solarflow_2400_ac", **kwargs)
 
 
+CIRCUIT_LIMIT_1200 = {"max_total_charge_power_w": 1200}
+
+
 def no_pv_state(soc, output=0, pack_in=0, charge_max_limit_w=2400):
     return state(
         soc=soc,
@@ -653,7 +656,9 @@ def test_a_used_up_entry_limit_does_not_hold_the_idle_off():
     harness = Harness(
         [ac_device()], load=-900, min_output_limit=ADMIN_STANDBY_FLOOR_W
     )
-    harness.feature = {**harness.feature, "max_charge_entries_per_hour": 1}
+    harness.feature = {
+        **harness.feature, "max_charge_entries_per_hour": 1, **CIRCUIT_LIMIT_1200
+    }
     empty = [no_pv_state(soc=15)]
     harness.run(cycles=10, states=empty)
     assert harness.controller.charge_direction.charging is True
@@ -726,7 +731,9 @@ def test_the_rate_limit_warning_is_not_rearmed_by_a_flickering_surplus(caplog):
     harness = Harness(
         [ac_device()], load=-900, min_output_limit=ADMIN_STANDBY_FLOOR_W
     )
-    harness.feature = {**harness.feature, "max_charge_entries_per_hour": 1}
+    harness.feature = {
+        **harness.feature, "max_charge_entries_per_hour": 1, **CIRCUIT_LIMIT_1200
+    }
     empty = [no_pv_state(soc=15)]
     harness.run(cycles=10, states=empty)
     harness.run(cycles=3, states=empty, load=400)

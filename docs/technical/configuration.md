@@ -552,7 +552,7 @@ config upgrade does enable it for an installation that predates the feature, and
   "entry_confirm_cycles": 5,
   "entry_window_cycles": 7,
   "max_charge_entries_per_hour": 12,
-  "max_total_charge_power_w": 1200
+  "max_total_charge_power_w": 0
 }
 ```
 
@@ -564,7 +564,7 @@ config upgrade does enable it for an installation that predates the feature, and
 | `entry_confirm_cycles` | Observations that must show surplus before charging starts |
 | `entry_window_cycles` | How many recent loops those observations are counted within |
 | `max_charge_entries_per_hour` | Safety limit on how often a device may enter charging; it also bounds how often the full-charge assist takes its AC input back after failed cycles returned it |
-| `max_total_charge_power_w` | Highest combined charging power across all devices |
+| `max_total_charge_power_w` | Highest combined charging power across all devices; `0` (the default) sets none beyond the devices' own |
 
 The lower edge of the charge band is **derived**, not configured:
 
@@ -628,7 +628,9 @@ MQTT client refuses any command above it before publishing, charge included.
 
 `ac_charge_control.max_total_charge_power_w` is a different question again: it is
 the **installation's** limit — your circuit and your fuse — not the devices'.
-Nothing in the EMS can measure that, so it stays a number you set.
+Nothing in the EMS can measure that, so it stays a number you set; `0`, the
+default, sets none, as the fuse protects a circuit against what is drawn
+through it.
 
 Charging additionally requires the device's resolved hardware model to carry an
 AC charge path in the hardware catalogue. That is a property of the model, not

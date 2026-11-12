@@ -130,7 +130,7 @@ rather than place it, so know what that means before you run it:
   device catalogue's word, and the EMS logs `ac_charge_not_delivered` if a
   commanded charge never draws any current.
 - **Check `max_total_charge_power_w`** for your installation — your circuit and
-  your fuse, which nothing in the EMS can measure. The default is 1200 W.
+  your fuse, which nothing in the EMS can measure. The default 0 sets no limit.
   `max_charge_power_w` per device at 0 means "ask the device for its own
   ceiling" — or its model's rated charge power when it reports none.
 

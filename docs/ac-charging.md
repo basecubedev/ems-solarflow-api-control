@@ -22,7 +22,7 @@ note that a config upgrade turns it on for an installation that predates it.
     "entry_confirm_cycles": 5,
     "entry_window_cycles": 7,
     "max_charge_entries_per_hour": 12,
-    "max_total_charge_power_w": 1200
+    "max_total_charge_power_w": 0
   }
 }
 ```
@@ -129,10 +129,12 @@ are read-only:
    model's rated charge power — and it is how fields the EMS was never taught
    get found.
 
-Note that `max_total_charge_power_w` defaults to **1200 W** for the whole
-installation, which is below what a 2400-class device could draw. That is the
-protective default, not a property of your hardware; raise it only for a circuit
-you know carries it.
+Note that `max_total_charge_power_w` defaults to **0**, no installation limit:
+each device charges up to its own ceiling. A charge is drawn through the fuse
+that protects the circuit, unlike feed-in, which adds to the current on it. Set
+a limit where several devices on one circuit should not charge at their full
+power together. Until 2026-11-13 a 0 here meant no charging from surplus at
+all; to keep it off, switch `ac_charge_control.enabled` off instead.
 
 ## Behavior
 
