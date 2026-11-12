@@ -1,6 +1,9 @@
 # SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
+import argparse
 import json
+import os
+import shlex
 import shutil
 import stat
 import subprocess
@@ -11,6 +14,8 @@ import pytest
 
 from ems import config as cfg
 from ems import config_init as config_init_mod
+from ems import device_settings
+from ems import runtime_commands
 
 from _emsctl_test_helpers import (
     EMSCTL,
@@ -375,8 +380,6 @@ def test_emsctl_completion_bash_contains_commands_and_configured_device(tmp_path
 
 
 def test_completion_offers_every_top_level_command_the_parser_has():
-    import argparse
-
     parser = emsctl.build_parser()
     subcommands = next(
         action.choices
@@ -388,14 +391,208 @@ def test_completion_offers_every_top_level_command_the_parser_has():
     assert "|grid-meter|" in script
 
 
+COMMAND_FIRST_WORDS = emsctl.command_completion_words(emsctl.build_parser())
+DEVICE_VALUE_WORDS = emsctl.device_value_words()
+SHELLS = ("bash", "zsh")
+ZSH_STUBS = """\
+_values() { print -rl -- "${@[2,-1]}" }
+_describe() { print -rl -- "${(@P)2}" }
+_files() { print -rl -- ${words[CURRENT]}*(N) }
+compdef() { : }
+"""
+
+
+def require_shell(shell):
+    """Skip without ``shell`` on a developer's machine; CI installs every shell the completion supports."""
+
+    if shutil.which(shell) is None:
+        if os.environ.get("CI"):
+            pytest.fail(f"{shell} is not installed; CI must run the {shell} completion tests")
+        pytest.skip(f"{shell} is not installed")
+
+
+def offered(shell, *words, config=None, cwd=None):
+    """The words ``shell`` offers for ``emsctl <words>``, the last of them the one being typed."""
+
+    require_shell(shell)
+    line = " ".join(shlex.quote(word) for word in ("emsctl", *words))
+    if shell == "bash":
+        program = "\n".join(
+            (
+                emsctl.completion_script_bash(config or {}),
+                f"COMP_WORDS=({line})",
+                f"COMP_CWORD={len(words)}",
+                "_emsctl_py_completion",
+                'printf "%s\\n" "${COMPREPLY[@]}"',
+            )
+        )
+    else:
+        program = "\n".join(
+            (
+                ZSH_STUBS,
+                emsctl.completion_script_zsh(config or {}),
+                f"words=({line})",
+                f"CURRENT={len(words) + 1}",
+                "_emsctl_py",
+            )
+        )
+    result = subprocess.run(
+        [shell, "-f" if shell == "zsh" else "--norc", "-c", program],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=cwd,
+    )
+    return {word for word in result.stdout.splitlines() if word}
+
+
+def test_the_completion_reads_the_first_word_of_each_command_from_its_parser():
+    assert COMMAND_FIRST_WORDS["system"] == list(emsctl.SYSTEM_ACTIONS)
+    assert COMMAND_FIRST_WORDS["backup"] == list(emsctl.BACKUP_ACTIONS)
+    assert COMMAND_FIRST_WORDS["ac-charge"] == ["enable", "disable", "status"]
+    assert COMMAND_FIRST_WORDS["battery-care"] == ["enable", "disable", "summer-full", "winter-full", "pv-only", "status"]
+    assert COMMAND_FIRST_WORDS["winter"] == ["enable", "disable", "status"]
+    assert COMMAND_FIRST_WORDS["dashboard"] == ["set-password", "change-password", "disable-auth", "auth-status"]
+    assert COMMAND_FIRST_WORDS["config"] == ["init", "upgrade", "migrate-zendure-mqtt"]
+    assert COMMAND_FIRST_WORDS["completion"] == ["bash", "zsh"]
+    assert {"list", "status", "pause", "resume", "add", "move", "skip"} <= set(COMMAND_FIRST_WORDS["schedule"])
+    assert {"influx", "stack", "grid-meter"} <= set(COMMAND_FIRST_WORDS)
+    assert not {"device", "status", "diagnose", "help"} & set(COMMAND_FIRST_WORDS)
+
+
+def test_the_completion_reads_the_values_of_each_device_action_from_its_command():
+    assert DEVICE_VALUE_WORDS["offgrid"] == ["off", "eco", "standard"]
+    assert DEVICE_VALUE_WORDS["ac-mode"] == ["output", "input"]
+    assert DEVICE_VALUE_WORDS["ac-charge"] == ["on", "off"]
+    assert DEVICE_VALUE_WORDS["fan"] == ["auto", "1", "2", "off", "unmanaged"]
+    assert set(DEVICE_VALUE_WORDS) == {"offgrid", "ac-mode", "ac-charge", *(s.command for s in device_settings.SETTINGS)}
+
+
+@pytest.mark.parametrize("action", sorted(DEVICE_VALUE_WORDS))
+def test_every_device_value_the_completion_offers_is_one_the_command_accepts(action):
+    for word in DEVICE_VALUE_WORDS[action]:
+        runtime_commands.validate_command("device", action, word, device="WR1")
+
+
+def test_the_global_options_the_completion_skips_are_the_ones_that_take_a_value():
+    parser = emsctl.build_parser()
+    taking_a_value = {
+        option
+        for action in parser._actions
+        if action.option_strings and action.nargs != 0
+        for option in action.option_strings
+    }
+
+    assert taking_a_value == set(emsctl.GLOBAL_VALUE_OPTIONS)
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_the_first_word_offers_the_commands(shell):
+    assert set(emsctl.TOP_LEVEL_COMMANDS) <= offered(shell, "")
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("command", sorted(COMMAND_FIRST_WORDS))
+def test_each_command_completes_what_it_takes_first(shell, command):
+    assert offered(shell, command, "") == set(COMMAND_FIRST_WORDS[command])
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_the_command_is_found_after_the_global_options_and_their_values(shell):
+    assert offered(shell, "--config", "config", "ac-charge", "") == {"enable", "disable", "status"}
+    assert offered(shell, "--runtime-state", "state.json", "--config", "c.json", "") >= set(emsctl.TOP_LEVEL_COMMANDS)
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_a_global_option_s_value_completes_file_names(shell, tmp_path):
+    (tmp_path / "config.json").write_text("{}")
+    (tmp_path / "my config.json").write_text("{}")
+    (tmp_path / "x[1].json").write_text("{}")
+
+    assert offered(shell, "--config", "con", cwd=tmp_path) == {"config.json"}
+    assert offered(shell, "--config", "c.json", "--runtime-state", "", cwd=tmp_path) == {
+        "config.json",
+        "my config.json",
+        "x[1].json",
+    }
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_nothing_is_offered_where_a_value_is_typed(shell):
+    assert offered(shell, "system", "max-power", "") == set()
+    assert offered(shell, "winter", "enable", "") == set()
+    assert offered(shell, "device", "WR1", "max-power", "600", "") == set()
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+def test_device_completes_configured_names_then_their_actions(shell):
+    config = {"devices": [{"name": "WR1"}, {"name": "light"}, {"name": "WR:2"}, {"name": "a=b"}, {"name": "Süd"}]}
+
+    assert offered(shell, "device", "", config=config) == {"WR1", "light"}
+    assert offered(shell, "device", "light", "", config=config) == set(emsctl.DEVICE_ACTIONS)
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("action", sorted(DEVICE_VALUE_WORDS))
+def test_a_device_action_completes_the_values_it_takes(shell, action):
+    assert offered(shell, "device", "WR1", action, "") == set(DEVICE_VALUE_WORDS[action])
+
+
+@pytest.mark.parametrize("shell", SHELLS)
+@pytest.mark.parametrize("action", sorted(set(emsctl.DEVICE_ACTIONS) - set(DEVICE_VALUE_WORDS)))
+def test_a_device_action_with_a_free_value_or_none_completes_nothing(shell, action):
+    assert offered(shell, "device", "WR1", action, "") == set()
+
+
+def test_bash_completion_keeps_the_shell_s_variables():
+    program = "\n".join(
+        (
+            emsctl.completion_script_bash({}),
+            "i=KEEP",
+            "COMP_WORDS=(emsctl system '')",
+            "COMP_CWORD=2",
+            "_emsctl_py_completion",
+            'printf "%s" "$i"',
+        )
+    )
+    result = subprocess.run(["bash", "--norc", "-c", program], capture_output=True, text=True, check=True)
+
+    assert result.stdout == "KEEP"
+
+
+def test_the_sourced_zsh_completion_registers_itself(tmp_path):
+    require_shell("zsh")
+    script = tmp_path / "emsctl.zsh"
+    script.write_text(emsctl.completion_script_zsh({}))
+    program = f"compdef() {{ print -r -- \"compdef $*\" }}\nsource {shlex.quote(str(script))}\n"
+    result = subprocess.run(["zsh", "-f", "-c", program], capture_output=True, text=True, check=True)
+
+    assert result.stdout.strip() == "compdef _emsctl_py emsctl.py emsctl"
+
+
+def test_the_zsh_completion_installed_as_a_function_file_completes_on_its_first_call(tmp_path):
+    require_shell("zsh")
+    (tmp_path / "_emsctl").write_text(emsctl.completion_script_zsh({}))
+    program = "\n".join(
+        (
+            ZSH_STUBS.replace("compdef() { : }", "compdef() { print -r -- registered }"),
+            f"fpath=({shlex.quote(str(tmp_path))} $fpath)",
+            "autoload -Uz _emsctl",
+            "words=(emsctl ac-charge '')",
+            "CURRENT=3",
+            "_emsctl",
+        )
+    )
+    result = subprocess.run(["zsh", "-f", "-c", program], capture_output=True, text=True, check=True)
+
+    assert set(result.stdout.split()) == {"enable", "disable", "status"}
+
+
 def test_emsctl_completion_zsh_contains_commands_and_configured_device(tmp_path):
     result = run_emsctl(tmp_path, "completion", "zsh")
 
     assert result.returncode == 0, result.stderr
     assert "commands=(status system device winter ac-charge battery-care schedule dashboard influx stack diagnose grid-meter backup config interactive menu examples completion help)" in result.stdout
-    assert "dashboard_actions=(set-password change-password disable-auth auth-status)" in result.stdout
-    assert "offgrid_modes=(off eco standard)" in result.stdout
-    assert "ac_modes=(output input)" in result.stdout
     assert "devices=(WR1)" in result.stdout
     assert not (tmp_path / "runtime-state.json").exists()
 
