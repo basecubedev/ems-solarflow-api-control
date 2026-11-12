@@ -8,7 +8,17 @@ feature.
 > targets to hardware regardless, and the dashboard keeps a built-in SQLite
 > history when InfluxDB is disabled. `influxdb.enabled` defaults to `true` for
 > new configs so long-term analytics support is available out of the box; set it
-> to `false` in `config.json` to opt out. Enabling the flag does not start
+> to `false` in `config.json` to opt out. A config without the key counts as on
+> everywhere: the EMS, the Admin's container plan and status, the dashboard and
+> the backups read it the same way. Without a config.json the Admin and the
+> dashboard configure no analytics; every `emsctl` command treats a missing file
+> as an empty config, so its explicit `influx init`, `stack up` and
+> `backup create --type influxdb` still count analytics as on. The Admin sets
+> the bundled InfluxDB up only while `influxdb.secret_file` is
+> `config/influxdb.env`, the file the Docker containers read; with any other
+> path, the release default included, it shows "Configured · not set up", since
+> the setup would write the secret into a container that is thrown away.
+> Enabling the flag does not start
 > anything by itself — bundled InfluxDB still needs the normal Docker/Admin/`emsctl`
 > setup flow (secrets, schema, container startup), and the EMS control loop never
 > starts Docker on its own.

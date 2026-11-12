@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from ems import backup as backup_mod
+from ems.config import resolve_influxdb_config
 
 from admin.install_context import detect_install_context
 from admin.models import utc_now_iso
@@ -183,6 +184,28 @@ class BackupEnv:
         return backup
 
 
+class _InfluxStopped(BackupRestoreError):
+    """The EMS found the switched-off InfluxDB not answering and wrote nothing."""
+
+
+def _influx_container_running(base_dir):
+    """Docker's word on whether the bundled InfluxDB container runs, asked when needed."""
+
+    def running(_influx):
+        from admin.maintenance import run_maintenance_overview
+
+        try:
+            overview = run_maintenance_overview(base_dir=base_dir)
+        except Exception:
+            return False
+        container = (overview.get("containers") or {}).get(
+            backup_mod.influx_setup.INFLUX_SERVICE
+        )
+        return isinstance(container, dict) and bool(container.get("running"))
+
+    return running
+
+
 def resolve_env(context):
     """Build a :class:`BackupEnv` from an Admin install context."""
 
@@ -196,7 +219,11 @@ def resolve_env(context):
         backup_dir=os.path.join(data_dir, "backups"),
         sets_dir=os.path.join(data_dir, "admin", "backups", "sets"),
         config=config,
-        influx=backup_mod.evaluate_influxdb_backup(config),
+        influx=backup_mod.evaluate_influxdb_backup(
+            config if os.path.isfile(config_path) else None,
+            base_dir=base_dir,
+            influx_running=_influx_container_running(base_dir),
+        ),
     )
 
 
@@ -1005,13 +1032,13 @@ class BackupRestoreService:
         archives.append(self._create_one(env, steps, "config", password))
         archives.append(self._create_one(env, steps, "databases", password))
 
-        influx_record = self._create_influx_member(env, steps, password, warnings)
+        influx_record, influx_skipped = self._create_influx_member(
+            env, steps, password, warnings
+        )
         if influx_record is not None:
             archives.append(influx_record)
 
-        set_status = "complete" if influx_record is not None or env.influx.get(
-            "reason"
-        ) else "partial"
+        set_status = "complete" if influx_record is not None or influx_skipped else "partial"
         set_record = self._write_set(env, archives, warnings, set_status)
         steps.append(_step("write_set", "ok", "Write backup set metadata",
                            detail=set_record["id"]))
@@ -1020,23 +1047,34 @@ class BackupRestoreService:
                 "archives": archives, "backup_set": set_record, "warnings": warnings}
 
     def _create_influx_member(self, env, steps, password, warnings):
+        """The InfluxDB archive of a system set and whether it was skipped on purpose."""
+
         evaluation = env.influx
         if not evaluation.get("supported"):
-            message = evaluation.get("message") or "InfluxDB backup is not available."
-            steps.append(_step("create_influxdb", "skipped",
-                               "Create InfluxDB backup", detail=message))
-            steps.append(_step("verify_influxdb", "skipped",
-                               "Verify InfluxDB backup", detail="Skipped."))
-            warnings.append(message)
-            return None
+            self._skip_influx_member(
+                steps, warnings,
+                evaluation.get("message") or "InfluxDB backup is not available.",
+            )
+            return None, True
         try:
             record = self._create_one(env, steps, "influxdb", password)
+        except _InfluxStopped:
+            self._skip_influx_member(steps, warnings, backup_mod.INFLUX_STOPPED_MESSAGE)
+            return None, True
         except BackupRestoreError as exc:
             steps.append(_step("verify_influxdb", "warning",
                                "Verify InfluxDB backup", detail=str(exc)))
             warnings.append(f"InfluxDB backup could not be created: {exc}")
-            return None
-        return record
+            return None, False
+        return record, False
+
+    @staticmethod
+    def _skip_influx_member(steps, warnings, message):
+        steps.append(_step("create_influxdb", "skipped",
+                           "Create InfluxDB backup", detail=message))
+        steps.append(_step("verify_influxdb", "skipped",
+                           "Verify InfluxDB backup", detail="Skipped."))
+        warnings.append(message)
 
     def _create_one(self, env, steps, scope, password):
         create_key = f"create_{scope}"
@@ -1083,6 +1121,8 @@ class BackupRestoreService:
             name for name in after - before
             if name.startswith("ems-influxdb-")
         )
+        if not new and not resolve_influxdb_config(env.config)["enabled"]:
+            raise _InfluxStopped(backup_mod.INFLUX_STOPPED_MESSAGE)
         if not new:
             raise BackupRestoreError(
                 "InfluxDB backup produced no archive in the backup directory"

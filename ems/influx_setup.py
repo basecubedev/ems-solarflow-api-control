@@ -8,6 +8,9 @@ import secrets
 import shlex
 import stat
 import tempfile
+import threading
+import urllib.request
+from http.client import HTTPException
 from collections import OrderedDict
 
 from ems.paths import BASE_DIR
@@ -449,11 +452,39 @@ def compose_files(influx_config):
     other configuration (disabled, or external mode) uses only the base EMS
     compose file so the default ``docker compose up -d`` path is unchanged.
     """
-    files = [BASE_COMPOSE_FILE]
     if influx_config.get("enabled") and influx_config.get("mode") == "bundled":
-        files.append(INFLUX_COMPOSE_FILE)
-        files.append(EMS_INFLUX_ENV_COMPOSE_FILE)
-    return files
+        return bundled_compose_files()
+    return [BASE_COMPOSE_FILE]
+
+
+def bundled_compose_files():
+    """The compose files that describe the bundled InfluxDB service."""
+    return [BASE_COMPOSE_FILE, INFLUX_COMPOSE_FILE, EMS_INFLUX_ENV_COMPOSE_FILE]
+
+
+def bundled_influxdb_answers(influx_config, timeout_s=2):
+    """Whether the bundled InfluxDB answers its /health now, without waiting for a start.
+
+    The name lookup has no timeout of its own, and Docker hands the name of a
+    stopped service to the upstream resolver, so the question runs in a thread
+    that is given up on after the same time.
+    """
+    url = runtime_influx_url(influx_config)
+    if not url:
+        return False
+    answer = []
+
+    def ask():
+        try:
+            with urllib.request.urlopen(f"{url.rstrip('/')}/health", timeout=timeout_s) as response:
+                answer.append(200 <= response.status < 300)
+        except (OSError, ValueError, HTTPException):
+            answer.append(False)
+
+    worker = threading.Thread(target=ask, daemon=True)
+    worker.start()
+    worker.join(timeout_s)
+    return bool(answer) and answer[0]
 
 
 def build_compose_command(files, action=("up", "-d"), binary=("docker", "compose")):

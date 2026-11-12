@@ -72,6 +72,7 @@ def influx_config(enabled=True, mode="bundled", auto_init=True, auto_sync=True):
             "mode": mode,
             "auto_init": auto_init,
             "auto_sync": auto_sync,
+            "secret_file": "config/influxdb.env",
         }
     }
 
@@ -118,9 +119,9 @@ def test_influx_external_desired_stopped():
     assert plan["desired"]["influxdb"]["desired"] == "stopped"
 
 
-def test_influx_missing_section_desired_stopped():
+def test_influx_missing_section_desired_running_as_the_ems_runs_it():
     plan = build_container_sync_plan({}, make_overview())
-    assert plan["desired"]["influxdb"]["desired"] == "stopped"
+    assert plan["desired"]["influxdb"]["desired"] == "running"
 
 
 # --- display state --------------------------------------------------------

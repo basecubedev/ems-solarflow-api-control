@@ -8,8 +8,8 @@
 import { errorView, noAnswer } from "./errors.js";
 
 export const SERVICES = Object.freeze(["ems", "influxdb"]);
-export const DISPLAY_STATES = Object.freeze(["running", "stopped", "missing", "not_configured", "disabled", "external"]);
-export const DISPLAY_TONES = Object.freeze({ running: "c-ok", stopped: "c-warn", missing: "c-warn", not_configured: "c-idle", disabled: "c-idle", external: "c-acc" });
+export const DISPLAY_STATES = Object.freeze(["running", "stopped", "missing", "not_configured", "disabled", "external", "secret_misplaced"]);
+export const DISPLAY_TONES = Object.freeze({ running: "c-ok", stopped: "c-warn", missing: "c-warn", not_configured: "c-idle", disabled: "c-idle", external: "c-acc", secret_misplaced: "c-warn" });
 export const SYNC_ACTIONS = Object.freeze(["ems:recreate", "influxdb:start", "influxdb:stop", "influxdb:sync", "influxdb:init", "influxdb:repair"]);
 export const CONFIG_STATES = Object.freeze(["pending", "current", "unknown"]);
 
@@ -103,7 +103,7 @@ export function stepView(step) {
   };
 }
 
-export const SERVICE_REFUSALS = Object.freeze(["busy", "unavailable", "analytics_disabled", "influx_not_running"]);
+export const SERVICE_REFUSALS = Object.freeze(["busy", "unavailable", "analytics_disabled", "influx_not_running", "influx_secret_misplaced"]);
 export const RESULT_ICONS = Object.freeze({ ok: "circle-check", partial: "triangle-alert", unknown: "circle-help", fault: "circle-x" });
 
 /** Whether a finished restart or repair went well: no error, and no step that failed or warned. */

@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from ems import backup_crypto
 from ems import influx_setup
 from ems.build_info import collect_build_info
-from ems.config import normalize_influxdb_config, safe_bool
+from ems.config import resolve_influxdb_config, safe_bool
 from ems.diagnostics import DIAGNOSE_SCHEMA_VERSION, SUPPORT_BUNDLE_VERSION
 from ems.file_io import STARTUP_LOCK_TIMEOUT_SECONDS, FileLockTimeout, exclusive_file_lock
 from ems.mqtt_credentials import (
@@ -53,6 +53,14 @@ BACKUP_PURPOSES = ("manual", "auto", "rollback")
 
 # Bundled InfluxDB data backup.
 INFLUX_DISABLED_MESSAGE = "InfluxDB analytics is disabled. Nothing to back up."
+INFLUX_STOPPED_MESSAGE = (
+    "InfluxDB analytics is switched off and the bundled InfluxDB is not running, "
+    "so the analytics data in data/influxdb is not in this backup. Start the "
+    "bundled InfluxDB to include it."
+)
+INFLUX_RESTORE_DISABLED_MESSAGE = (
+    "InfluxDB analytics is disabled. Enable it before restoring InfluxDB data."
+)
 INFLUX_EXTERNAL_MESSAGE = (
     "External InfluxDB detected.\n"
     "Automatic InfluxDB backup/restore is not supported for external mode.\n"
@@ -305,9 +313,8 @@ def collect_config_backup_files(
                 "sensitive": sensitive,
             })
 
-    # Bundled InfluxDB secret — only when bundled analytics is enabled.
-    influx = normalize_influxdb_config(config.get("influxdb"))
-    if influx.get("enabled") and influx.get("mode") == "bundled":
+    influx = resolve_influxdb_config(config)
+    if bundled_influxdb_kept(influx, base_dir):
         secret_path = _resolve(
             influx.get("secret_file", DEFAULT_INFLUX_SECRET_PATH),
             base_dir,
@@ -415,7 +422,7 @@ def detect_influxdb_status(config):
     """
 
     config = config if isinstance(config, dict) else {}
-    influx = normalize_influxdb_config(config.get("influxdb"))
+    influx = resolve_influxdb_config(config)
     enabled = bool(influx.get("enabled"))
     if not enabled:
         return {
@@ -1056,37 +1063,91 @@ def create_database_rollback_backup(
 # Bundled InfluxDB backup / restore
 # ---------------------------------------------------------------------------
 
-def evaluate_influxdb_backup(config):
-    """Decide whether bundled InfluxDB backup/restore applies to ``config``.
+def influxdb_data_present(base_dir=None):
+    """Whether the bundled InfluxDB has left data in its data directory.
 
-    Returns ``{supported, reason, mode, message}``. ``reason`` is ``None`` when
-    supported, otherwise ``"disabled"`` or ``"external"`` with a user-facing
-    ``message``.
+    A directory the reader may not list belongs to an InfluxDB that ran, so
+    it counts as holding data.
     """
 
-    influx = normalize_influxdb_config(
-        config.get("influxdb") if isinstance(config, dict) else None
+    data_dir = influx_setup.resolve_data_dir_path(base_dir)
+    try:
+        with os.scandir(data_dir) as entries:
+            return any(True for _ in entries)
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def bundled_influxdb_kept(influx, base_dir=None):
+    """Whether a backup keeps the bundled InfluxDB: enabled, or off with its data still there.
+
+    Analytics may be switched off only for a while, so its data and secret
+    stay in the backups until the data directory is gone.
+    """
+
+    return influx["mode"] == "bundled" and (
+        influx["enabled"] or influxdb_data_present(base_dir)
     )
-    if not influx.get("enabled"):
+
+
+def _influxdb_supported():
+    return {"supported": True, "reason": None, "mode": "bundled", "message": None}
+
+
+def _influxdb_unsupported(influx, disabled_message):
+    if not influx["enabled"]:
         return {
             "supported": False,
             "reason": "disabled",
-            "mode": influx.get("mode"),
-            "message": INFLUX_DISABLED_MESSAGE,
-        }
-    if influx.get("mode") != "bundled":
-        return {
-            "supported": False,
-            "reason": "external",
-            "mode": influx.get("mode"),
-            "message": INFLUX_EXTERNAL_MESSAGE,
+            "mode": influx["mode"],
+            "message": disabled_message,
         }
     return {
-        "supported": True,
-        "reason": None,
-        "mode": "bundled",
-        "message": None,
+        "supported": False,
+        "reason": "external",
+        "mode": influx["mode"],
+        "message": INFLUX_EXTERNAL_MESSAGE,
     }
+
+
+def evaluate_influxdb_backup(config, *, base_dir=None, influx_running=None):
+    """Decide whether a bundled InfluxDB backup applies to ``config``.
+
+    Returns ``{supported, reason, mode, message}``. ``reason`` is ``None`` when
+    supported, otherwise ``"disabled"``, ``"external"`` or ``"stopped"`` with a
+    user-facing ``message``. A switched-off bundled InfluxDB whose data is
+    still there (:func:`bundled_influxdb_kept`) is backed up while it runs:
+    ``influx_running(influx)`` says whether it does, by default its /health.
+    The backup reads through the running InfluxDB, and nothing here starts it.
+    """
+
+    influx = resolve_influxdb_config(config)
+    if not bundled_influxdb_kept(influx, base_dir):
+        return _influxdb_unsupported(influx, INFLUX_DISABLED_MESSAGE)
+    running = influx_running or influx_setup.bundled_influxdb_answers
+    if influx["enabled"] or running(influx):
+        return _influxdb_supported()
+    return {
+        "supported": False,
+        "reason": "stopped",
+        "mode": "bundled",
+        "message": INFLUX_STOPPED_MESSAGE,
+    }
+
+
+def evaluate_influxdb_restore(config):
+    """Decide whether a bundled InfluxDB restore applies to ``config``.
+
+    Same shape as :func:`evaluate_influxdb_backup`; a restore replaces the
+    data, so it needs analytics switched on.
+    """
+
+    influx = resolve_influxdb_config(config)
+    if influx["enabled"] and influx["mode"] == "bundled":
+        return _influxdb_supported()
+    return _influxdb_unsupported(influx, INFLUX_RESTORE_DISABLED_MESSAGE)
 
 
 def influxdb_manifest_block(influx, *, included=True):
@@ -1135,13 +1196,14 @@ def create_influxdb_backup(
     compression_level=DEFAULT_COMPRESSION_LEVEL,
     now=None,
     backup_runner=None,
+    influx_running=None,
 ):
     """Create a bundled InfluxDB data backup; return the created archive path.
 
     ``backup_runner(influx_out_dir)`` must populate ``influx_out_dir`` with the
     output of the official ``influx backup`` command (the Docker orchestration
     lives in the caller so this stays testable). Raises :class:`BackupError`
-    when InfluxDB is disabled or in external mode.
+    when :func:`evaluate_influxdb_backup` turns the config down.
     """
 
     if backup_purpose not in BACKUP_PURPOSES:
@@ -1149,15 +1211,17 @@ def create_influxdb_backup(
     if backup_runner is None:
         raise BackupError("InfluxDB backup requires a backup_runner")
 
-    evaluation = evaluate_influxdb_backup(config)
+    base_dir = base_dir or BASE_DIR
+    evaluation = evaluate_influxdb_backup(
+        config, base_dir=base_dir, influx_running=influx_running
+    )
     if not evaluation["supported"]:
         raise BackupError(evaluation["message"])
 
-    base_dir = base_dir or BASE_DIR
     backup_dir = backup_dir or default_backup_dir(base_dir)
     encrypted = bool(password)
     encryption_options = encryption_options if encrypted else None
-    influx = normalize_influxdb_config(config.get("influxdb"))
+    influx = resolve_influxdb_config(config)
 
     os.makedirs(backup_dir, exist_ok=True)
     staging = tempfile.mkdtemp(prefix="ems-influx-backup-")
@@ -1281,7 +1345,7 @@ def restore_influxdb_backup(
     if not dry_run and restore_runner is None:
         raise BackupError("InfluxDB restore requires a restore_runner")
 
-    evaluation = evaluate_influxdb_backup(config)
+    evaluation = evaluate_influxdb_restore(config)
     if not evaluation["supported"]:
         raise BackupError(evaluation["message"])
 

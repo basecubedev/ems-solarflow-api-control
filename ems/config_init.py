@@ -1000,7 +1000,7 @@ def apply_system_basics(config, *, noninteractive=False):
     )
     influxdb["enabled"] = ask_confirm(
         "InfluxDB analytics enabled?",
-        bool(influxdb.get("enabled", False)),
+        config_mod.resolve_influxdb_config({"influxdb": influxdb})["enabled"],
         noninteractive=noninteractive,
     )
 
@@ -1136,7 +1136,7 @@ def print_summary(config, config_path):
     dashboard = config.get("dashboard", {})
     winter = config.get("winter", {})
     assist = config.get("battery_full_charge_assist", {})
-    influxdb = config.get("influxdb", {})
+    influxdb = config_mod.resolve_influxdb_config(config)
     print(f"  max total power: {system.get('max_total_power', 0)} W")
     print(f"  dashboard: {'enabled' if dashboard.get('enabled') else 'disabled'}")
     print(f"  winter mode: {'enabled' if winter.get('enabled') else 'disabled'}")

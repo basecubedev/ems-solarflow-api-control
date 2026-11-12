@@ -14,7 +14,12 @@ import hmac
 import json
 
 from admin import consumer_history
-from admin.config_preview import _GRID_TYPE_CHOICES, _valid_host, tibber_grid_meter_issues
+from admin.config_preview import (
+    _GRID_TYPE_CHOICES,
+    _normalize_bundled_influx_secret,
+    _valid_host,
+    tibber_grid_meter_issues,
+)
 from admin.config_runtime_overlap import applies_live, live_device_paths, overlap_provenance_for_context, runtime_device_entries
 from admin.connection_planner import (
     INTENT_SWITCH_CONNECTION,
@@ -82,6 +87,7 @@ from ems.config import (
     parse_mqtt_port,
     resolve_config_write_gate,
     resolve_grid_meter_mqtt_settings,
+    resolve_influxdb_config,
     resolve_mqtt_tls_metadata,
     safe_bool,
     stored_config_placeholder_fields,
@@ -936,11 +942,27 @@ def _grid_meter_mqtt_draft(grid_meter):
 
 
 def _feature_draft(config):
+    """The editable values, the analytics switch as the EMS reads it.
+
+    A missing switch stays missing, so an unchanged apply writes nothing; the
+    editors show the catalogue default for it, which is what the EMS runs. A
+    switch the file spells as text or null, or a block that is no object, would
+    be read by the editors differently from the EMS, so it gets its resolved
+    value.
+    """
+
     draft = {}
-    for path in _maintenance_field_index():
+    index = _maintenance_field_index()
+    for path in index:
         value = _get_path(config, path)
         if value is not None:
             draft[path] = value
+    influx = config.get("influxdb", {}) if isinstance(config, dict) else {}
+    misread = not isinstance(influx, dict) or (
+        "enabled" in influx and not isinstance(influx["enabled"], bool)
+    )
+    if "influxdb.enabled" in index and misread:
+        draft["influxdb.enabled"] = resolve_influxdb_config(config)["enabled"]
     return draft
 
 
@@ -1033,7 +1055,7 @@ def _summary(config, draft):
     devices = draft["devices"]
     grid_meter = config.get("grid_meter") if isinstance(config.get("grid_meter"), dict) else {}
     dashboard = config.get("dashboard") if isinstance(config.get("dashboard"), dict) else {}
-    influx = config.get("influxdb") if isinstance(config.get("influxdb"), dict) else {}
+    influx = resolve_influxdb_config(config)
     read_only = [device for device in devices if _is_e3dc_draft_item(device)]
     controlled = [device for device in devices if not _is_e3dc_draft_item(device)]
     return {
@@ -1042,8 +1064,8 @@ def _summary(config, draft):
         "read_only_device_count": len(read_only),
         "grid_meter_type": str(grid_meter.get("type") or "").strip() or None,
         "dashboard_enabled": safe_bool(dashboard.get("enabled", DASHBOARD_DEFAULTS["enabled"]), False),
-        "influx_enabled": bool(influx.get("enabled", False)),
-        "influx_mode": str(influx.get("mode") or "").strip() or None,
+        "influx_enabled": influx["enabled"],
+        "influx_mode": influx["mode"],
         "control": _control_state(config),
     }
 
@@ -2300,8 +2322,17 @@ def _grid_meter_mqtt_container(target):
 
 
 def _merge_features(merged, features, issues):
+    """The settings draft onto ``merged``.
+
+    Switching analytics on here puts the bundled InfluxDB secret where Docker
+    reads it, as Setup does: a config that ran Setup with analytics off still
+    holds the template's path in the image, and nothing else in the Admin
+    could move it. An apply that switches nothing leaves the file as it is.
+    """
+
     if not isinstance(features, dict):
         return
+    analytics_was_on = resolve_influxdb_config(merged)["enabled"]
     result = apply_config_changes(
         merged,
         [ConfigChange(path, value) for path, value in features.items()],
@@ -2309,6 +2340,8 @@ def _merge_features(merged, features, issues):
         field_index=_maintenance_field_index(),
     )
     _refused_values(issues, result.errors)
+    if not analytics_was_on and resolve_influxdb_config(merged)["enabled"]:
+        _normalize_bundled_influx_secret(merged)
 
 
 # --- validation ----------------------------------------------------------

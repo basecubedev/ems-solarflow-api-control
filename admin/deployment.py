@@ -34,6 +34,7 @@ from admin.install_context import detect_install_context
 from admin.models import utc_now_iso
 from admin.releases import DOCKER_IMAGE_REPOSITORY, ReleaseError, default_admin_data_dir
 from admin.setup_workflow import GENERATED_CONFIG_OWNER, read_generated_metadata
+from ems.config import resolve_influxdb_config
 from ems.influx_setup import DEFAULT_DATA_DIR as INFLUX_DATA_DIR
 from ems.runtime_state import (
     config_digest,
@@ -3088,9 +3089,9 @@ class DeploymentService:
 
     def _influx_plan(self, release, config):
         generated = config.get("config") if config else None
-        influx = generated.get("influxdb") if isinstance(generated, dict) else None
-        enabled = isinstance(influx, dict) and influx.get("enabled") is True
-        bundled = enabled and influx.get("mode") == "bundled"
+        influx = resolve_influxdb_config(generated) if isinstance(generated, dict) else None
+        enabled = bool(influx and influx["enabled"])
+        bundled = enabled and influx["mode"] == "bundled"
         image = self._influx_image(release) if bundled and release else None
         if not config or not config.get("ready"):
             reason = "Save a generated config to plan Analytics."

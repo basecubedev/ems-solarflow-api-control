@@ -22,9 +22,10 @@ InfluxDB when supported) — it is not a new artifact.
   InfluxDB secret when applicable). Devices on the built-in broker keep their
   password across a restore, also onto a re-flashed card.
 - **Local databases** — consistent snapshots of the local SQLite databases.
-- **Analytics data** (InfluxDB) — bundled InfluxDB data, offered only when
-  bundled InfluxDB is enabled. Disabled or external InfluxDB is greyed out with
-  a clear note, not an error.
+- **Analytics data** (InfluxDB) — bundled InfluxDB data, offered when bundled
+  InfluxDB is enabled, and also when it is switched off but still running with
+  its data. Disabled InfluxDB that is stopped or has no data, or external
+  InfluxDB, is greyed out with a clear note, not an error.
 - **Everything** (system set) — a grouped backup that contains config +
   databases (+ bundled InfluxDB when supported). The set is Admin metadata that
   references the normal EMS archives; the list shows it as **System backup**

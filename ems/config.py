@@ -2227,7 +2227,7 @@ def initialize(args, base_dir):
         **CONFIG.get("winter", {})
     }
     DASHBOARD_CONFIG = normalize_dashboard_config(CONFIG.get("dashboard", {}))
-    INFLUXDB_CONFIG = normalize_influxdb_config(CONFIG.get("influxdb"))
+    INFLUXDB_CONFIG = resolve_influxdb_config(CONFIG)
     ENERGY_SAVINGS_CONFIG = {
         **ENERGY_SAVINGS_DEFAULTS,
         **CONFIG.get("energy_savings", {})
@@ -3592,6 +3592,22 @@ def normalize_influxdb_config(config):
         "downsampling": downsampling,
         "query_profiles": query_profiles,
     }
+
+
+def resolve_influxdb_config(config):
+    """The ``influxdb`` block of a whole config as the EMS runs it.
+
+    The release defaults go under what the file sets, the way ``load_config``
+    merges them, so a missing key means the same to every reader as to the EMS.
+    ``None`` stands for no config.json at all, which configures nothing.
+    """
+    if config is None:
+        return normalize_influxdb_config(None)
+    present = isinstance(config, dict) and "influxdb" in config
+    block = config["influxdb"] if present else {}
+    if isinstance(block, dict):
+        block = _deep_merge_defaults(INFLUXDB_DEFAULTS, block)
+    return normalize_influxdb_config(block)
 
 
 def influx_duration_seconds(value):

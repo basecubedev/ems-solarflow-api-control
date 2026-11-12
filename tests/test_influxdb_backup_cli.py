@@ -63,12 +63,35 @@ def _args(**overrides):
 # create
 # ---------------------------------------------------------------------------
 
-def test_cli_create_influxdb_skips_when_disabled(monkeypatch, capsys):
+def test_cli_create_influxdb_skips_when_disabled(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(emsctl, "BASE_DIR", str(tmp_path))
     config = {"influxdb": {"enabled": False}}
     rc = emsctl.handle_backup_create_influxdb(_args(), config)
     out = capsys.readouterr().out
     assert rc == 0
     assert "disabled" in out.lower()
+
+
+def test_cli_create_influxdb_skips_a_stopped_disabled_influxdb(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(emsctl, "BASE_DIR", str(tmp_path))
+    (tmp_path / "data" / "influxdb").mkdir(parents=True)
+    (tmp_path / "data" / "influxdb" / "influxd.bolt").write_bytes(b"bolt")
+    monkeypatch.setattr(influx_setup, "bundled_influxdb_answers", lambda influx: False)
+    rc = emsctl.handle_backup_create_influxdb(_args(), {"influxdb": {"enabled": False}})
+    assert rc == 0
+    assert "not running" in capsys.readouterr().out
+
+
+def test_the_host_backup_runner_addresses_the_bundled_service(monkeypatch, tmp_path):
+    commands = []
+    monkeypatch.setattr(emsctl, "run_docker_compose", lambda command, **kw: commands.append(command) or 0)
+    monkeypatch.setattr(influx_setup, "ensure_data_dir", lambda base_dir=None: "data/influxdb")
+    influx = emsctl._influx_normalized(bundled_config(enabled=False))
+    runner = emsctl._make_influx_backup_runner_host(influx)
+    runner(str(tmp_path))
+    for command in commands:
+        files = [command[i + 1] for i, word in enumerate(command) if word == "-f"]
+        assert files == influx_setup.bundled_compose_files()
 
 
 def test_cli_create_influxdb_rejects_external(monkeypatch, capsys):

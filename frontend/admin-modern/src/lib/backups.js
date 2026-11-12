@@ -39,7 +39,7 @@ export const STEP_STATES = Object.freeze({ done: "c-ok", running: "c-acc", pendi
 export const STEP_ICONS = Object.freeze({ done: "circle-check", running: "loader", pending: "circle", skipped: "circle-minus", failed: "circle-x" });
 
 /** Why the analytics data cannot be backed up here (ems/backup.py, the influxdb block's "reason"). */
-export const INFLUX_REASONS = Object.freeze(["disabled", "external"]);
+export const INFLUX_REASONS = Object.freeze(["disabled", "external", "stopped"]);
 
 export function scopeAvailable(scope, listing) {
   return scope !== "influxdb" || Boolean(listing?.influxdb?.supported);

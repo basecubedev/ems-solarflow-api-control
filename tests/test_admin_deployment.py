@@ -631,7 +631,7 @@ def test_plan_shows_ems_image_for_selected_release(tmp_path):
     assert plan["release"] == "v0.6.0"
     services = {image["service"]: image["image"] for image in plan["images"]}
     assert services["ems"] == "ghcr.io/basecubedev/ems-solarflow-api-control:v0.6.0"
-    assert "influxdb" not in services
+    assert services["influxdb"] == "influxdb:2.7"
 
 
 def test_plan_includes_influxdb_only_when_bundled_enabled(tmp_path):

@@ -216,11 +216,29 @@ def test_the_release_notes_this_console_translates_are_still_the_servers():
 
 
 def test_the_analytics_backup_reasons_are_the_ones_the_backup_gives():
+    import ast
+
     from ems import backup
 
-    source = Path(backup.__file__).read_text(encoding="utf-8")
-    for reason in js_list("lib/backups.js", "INFLUX_REASONS"):
-        assert f'"reason": "{reason}"' in source
+    tree = ast.parse(Path(backup.__file__).read_text(encoding="utf-8"))
+    given = set()
+    for function in ast.walk(tree):
+        if not isinstance(function, ast.FunctionDef) or function.name not in (
+            "evaluate_influxdb_backup", "_influxdb_unsupported",
+        ):
+            continue
+        for node in ast.walk(function):
+            if isinstance(node, ast.Dict):
+                for key, value in zip(node.keys, node.values):
+                    if isinstance(key, ast.Constant) and key.value == "reason" and isinstance(value, ast.Constant) and value.value:
+                        given.add(value.value)
+    assert given == set(js_list("lib/backups.js", "INFLUX_REASONS"))
+
+
+def test_the_repair_refusals_modern_names_are_the_ones_the_server_refuses():
+    from admin.container_actions import REPAIR_REFUSALS
+
+    assert set(js_list("lib/services.js", "SERVICE_REFUSALS")) == set(REPAIR_REFUSALS)
 
 
 def test_automatic_features_are_catalogue_features_without_a_switch():
