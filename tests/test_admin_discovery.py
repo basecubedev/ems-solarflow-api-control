@@ -223,6 +223,47 @@ def test_ecotracker_detected_as_grid_meter():
     assert device.role_suggestion == "grid_meter"
 
 
+def _probe_homewizard(tmp_path, common_name="appliance/p1dongle/0a1b2c3d4e5f"):
+    from ems.homewizard import tls_context
+    from tests.homewizard_meter import serving
+
+    with serving(tmp_path, common_name) as (meter, port, ca_pem):
+        device = discovery.probe_homewizard_p1(
+            None, "127.0.0.1", 1.0, port=port, context=tls_context(ca_pem)
+        )
+    return device, meter, port
+
+
+def test_homewizard_p1_is_found_by_its_certificate_without_a_request(tmp_path):
+    device, meter, port = _probe_homewizard(tmp_path)
+
+    assert device is not None
+    assert device.api_family == "homewizard_p1"
+    assert device.role_suggestion == "grid_meter"
+    assert device.serial_number == "0a1b2c3d4e5f"
+    assert (device.port, device.protocol) == (port, "https")
+    assert device.config_ready is True
+    assert meter.requests == []
+
+
+@pytest.mark.parametrize("common_name", ["appliance/energysocket/0a1b2c3d4e5f", "nas.local"])
+def test_a_homewizard_certificate_for_another_product_is_no_candidate(tmp_path, common_name):
+    device, _meter, _port = _probe_homewizard(tmp_path, common_name)
+
+    assert device is None
+
+
+def test_a_https_host_with_a_foreign_certificate_is_no_homewizard(tmp_path):
+    from tests.homewizard_meter import serving
+
+    with serving(tmp_path) as (_meter, port, _ca_pem):
+        assert discovery.probe_homewizard_p1(None, "127.0.0.1", 1.0, port=port) is None
+
+
+def test_the_scan_runs_the_homewizard_probe_before_the_modbus_probe():
+    assert discovery.PROBES.index(discovery.probe_homewizard_p1) < discovery.PROBES.index(discovery.probe_e3dc_modbus)
+
+
 def test_zendure_3ct_report_detected_as_generic_http_grid_meter():
     # The real 3CT sample carries the per-clamp apparent powers, but a D0 exposes
     # the same fields, so they are NOT model proof. Numeric total_power alone

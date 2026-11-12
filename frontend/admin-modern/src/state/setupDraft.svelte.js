@@ -6,6 +6,7 @@ import { moveSource, setupDiscovery, toggleSource } from "./setupDiscovery.svelt
 import { saveBlob } from "../../../shared/lib/download.js";
 import { observationKey } from "../lib/discovery.js";
 import {
+  BRIDGE_KEYS,
   STORE,
   applyOperations,
   adoptDismissals,
@@ -27,6 +28,7 @@ import {
   isGridMeterProposal,
   issuedFor,
   itemFromDevice,
+  keepPairing,
   keptValues,
   manualDevice,
   manualItem,
@@ -574,7 +576,7 @@ export function setGridEndpoint(key, value) {
   if (!grid) return;
   let meter = { ...grid, [key]: value };
   let features = setupDraft.draft.features;
-  if (key === "ip") features = { ...features, "grid_meter.ip": value };
+  if (key === "ip") features = keepPairing(features, { ...features, "grid_meter.ip": value });
   if (key === "serial_number") ({ features, item: meter } = syncGridFeatures(features, meter));
   setupDraft.draft = { ...setupDraft.draft, items: setupDraft.draft.items.map((item) => (item.source_id === grid.source_id ? meter : item)), features };
   replanSoon();
@@ -584,6 +586,8 @@ export function setGridEndpoint(key, value) {
 export function setGridFeature(path, value) {
   const grid = setupDraft.grid;
   if (grid && path === "grid_meter.mqtt.topic") updateItem(grid.source_id, (item) => ({ ...item, d0_topic_mode: "manual" }));
+  const bridgeKey = path.slice("grid_meter.".length);
+  if (grid && path.startsWith("grid_meter.") && BRIDGE_KEYS.includes(bridgeKey)) updateItem(grid.source_id, (item) => ({ ...item, [bridgeKey]: value }));
   setFeature(path, value);
 }
 

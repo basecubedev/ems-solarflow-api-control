@@ -593,6 +593,13 @@ def apply_grid_meter_changes(grid, changes, policy, *, credential=None, field_in
         sends_port = any(change.path == "port" for change in top_changes)
         if not sends_port and not grid_meter_port_carries_over(original_type, new_type):
             grid.pop("port", None)
+        if not any(
+            change.path == "token" and isinstance(change.value, str) and change.value.strip()
+            for change in top_changes
+        ):
+            grid.pop("token", None)
+        if not any(change.path == "unit_id" for change in top_changes):
+            grid.pop("unit_id", None)
         strip_stale_grid_meter_keys(grid)
         applied = [
             entry

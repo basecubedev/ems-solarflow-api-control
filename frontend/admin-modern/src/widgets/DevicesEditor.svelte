@@ -5,9 +5,12 @@
   import DeviceCard from "./DeviceCard.svelte";
   import SettingField from "./SettingField.svelte";
   import CatalogText from "./CatalogText.svelte";
+  import HomeWizardPairing from "./HomeWizardPairing.svelte";
+  import { HOMEWIZARD_TYPE, PAIRING_NAME_FIELD, SERIAL_FIELD, TOKEN_FIELD } from "../lib/homewizard.js";
   import { t, say, catalogText } from "../i18n/i18n.svelte.js";
   import { settings, setHardwareValues } from "../state/settings.svelte.js";
   import { sources, saveCredential } from "../state/sources.svelte.js";
+  import BridgePasswordField from "./BridgePasswordField.svelte";
   import {
     NO_GRID_METER,
     commonDefaults,
@@ -60,7 +63,7 @@
   const meterModel = $derived(gridVariant(catalog, meterType)?.label ? catalogText(gridVariant(catalog, meterType).label) : { text: t("devices.grid.none") });
   const portHelp = $derived(gridVariant(catalog, meterType)?.port_description ? catalogText(gridVariant(catalog, meterType).port_description) : { text: t("devices.field.port.hint") });
   const meterIsMqtt = $derived(gridIsMqtt(catalog, meterType));
-  const meterFields = $derived(gridFields(catalog, meter));
+  const meterFields = $derived(gridFields(catalog, meter).filter((field) => field.path !== SERIAL_FIELD && field.path !== PAIRING_NAME_FIELD));
   const named = $derived(broker.managed === "named");
   let ports = {};
   let added = $state(-1);
@@ -217,11 +220,17 @@
 {/snippet}
 
 {#snippet gridField(field)}
-  {#if field.path === "grid_meter.mqtt.password"}
+  {#if field.path === TOKEN_FIELD && meterType === HOMEWIZARD_TYPE}
+    <HomeWizardPairing ip={meter.ip} port={meter.port} paired={Boolean(meter.token || meter.has_token)} serial={meter.serial || ""} pairingName={meter.pairing_name || ""} onpaired={({ serial, token, pairingName }) => setHardwareValues({ grid_meter: { ...meter, serial, token, pairing_name: pairingName } })} />
+  {:else if field.path === TOKEN_FIELD}
+    <SettingField {field} type="password" value={meter.token || ""} placeholder={meter.has_token ? t("devices.passwordKeep") : ""} onchange={(value) => setHardwareValues({ grid_meter: { ...meter, token: value } })} />
+  {:else if field.path === "grid_meter.mqtt.password"}
     <SettingField field={{ path: field.path, label: t("devices.field.password"), description: t("devices.field.password.hint") }} lang={null} type="password" value={meter.mqtt?.password || ""} disabled={meter.mqtt?.clear_password === true} placeholder={meter.mqtt?.has_password ? t("devices.passwordKeep") : t("devices.passwordOptional")} onchange={(value) => setHardwareValues({ grid_meter: setGridPassword(meter, { password: value }) })} />
     {#if meter.mqtt?.has_password}
       <SettingField field={{ path: "grid_meter.mqtt.clear_password", type: "boolean", label: t("devices.field.clearPassword"), description: t("devices.field.clearPassword.hint") }} lang={null} value={meter.mqtt?.clear_password === true} onchange={(value) => setHardwareValues({ grid_meter: setGridPassword(meter, { clear: value }) })} />
     {/if}
+  {:else if field.path === "grid_meter.credentials_ref"}
+    <BridgePasswordField {field} value={gridValue(meter, field.path)} onchange={(value) => setHardwareValues({ grid_meter: setGridValue(meter, field.path, value) })} />
   {:else}
     <SettingField {field} value={gridValue(meter, field.path)} onchange={(value) => setHardwareValues({ grid_meter: setGridValue(meter, field.path, value) })} />
     {#if field.path === "grid_meter.ip"}

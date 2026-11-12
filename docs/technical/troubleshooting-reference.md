@@ -314,7 +314,7 @@ docker compose exec ems python3 emsctl.py diagnose --hardware
 ```
 
 This runs short-timeout read-only checks for configured Shelly, EcoTracker,
-E3/DC (one Modbus poll cycle through the EMS client) and Zendure endpoints. It does not write to devices. Use it when telemetry is
+HomeWizard P1, powerfox poweropti, a DSMR P1 bridge (waits up to 11 s for one telegram), a SunSpec meter, a Modbus meter read by its device profile, E3/DC (one Modbus poll cycle through the EMS client) and Zendure endpoints. It does not write to devices. Use it when telemetry is
 missing, a grid meter cannot be parsed, or configured devices appear
 unreachable.
 
@@ -1135,7 +1135,7 @@ Common causes:
 | Event | Meaning |
 |---|---|
 | `preflight_device_unreachable` | Zendure device cannot be reached |
-| `preflight_abort` | required preflight input is missing or invalid |
+| `preflight_abort` | required preflight input is missing or invalid; `reason=grid_meter_unreadable` when a grid meter that reads in the background (Tibber Pulse) has no good reading within 15 s |
 | `preflight_failed` | at least one required check failed |
 
 ## Backup and restore diagnostics

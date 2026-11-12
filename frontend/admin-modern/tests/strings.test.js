@@ -19,6 +19,7 @@ import { CHANNELS, UPGRADE_STATES, PAIR_STATES, RELEASE_NOTES, RELEASE_GROUPS } 
 import { PHASES, OPTION_GROUPS, UPGRADE_STAGES } from "../src/lib/upgrade.js";
 import { RUNTIME_STATES, STATUS_SOURCES, BROKER_ISSUES, DEVICE_STATES } from "../src/lib/telemetry.js";
 import { REASON_WORDS } from "../src/lib/devices.js";
+import { SAID_REASONS } from "../src/lib/homewizard.js";
 import { SETUP_STEPS, DOCKER_MODES, DOCKER_STATES, RECOVERY_REASONS } from "../src/lib/setup.js";
 import { BUSY_OPERATIONS, CONFIG_CONFLICTS, CONTINUITY, SWITCH_REASONS } from "../src/lib/setupDraft.js";
 import { AUTOMATIC_FEATURES, DEVICE_KINDS, EDIT_TABS, FEATURE_IDS, HISTORY_KINDS, MQTT_SOURCES, RISKS } from "../src/lib/settings.js";
@@ -96,6 +97,7 @@ test("every generated key family is complete", () => {
     ...Object.values(FINDINGS).flat().map((action) => action.label),
     ...INSTALL_STATES.flatMap((state) => [`install.state.${state}`, `install.message.${state}`]),
     ...CONTAINER_STATUSES.map((status) => `container.status.${status}`),
+    ...SAID_REASONS.map((reason) => `devices.homewizard.reason.${reason}`),
     ...["config", "compose", "data"].map((name) => `health.path.${name}`),
     ...["loading", "ok", "info", "warning", "error", "none", "unreadable"].map((level) => `health.pill.${level}`),
     ...["loading", "ok", "none", "unreadable"].map((level) => `overview.verdict.${level}`),
@@ -212,7 +214,7 @@ test("no orphan keys: each key is used literally or belongs to a generated famil
     "system.migrationLosesControl.", "settings.kind.", "settings.source.", "settings.config.", "settings.devicesSub.", "recovery.reference.",
     "settings.tab.", "settings.edit.when.", "settings.edit.level.", "settings.risk.", "settings.edit.unsaved.", "settings.edit.overrides.",
     "settings.edit.invalid.", "settings.edit.resetLine.", "system.migrationConfirmDevices.", "alignment.stage.",
-    "devices.field.", "devices.enabledHint.", "devices.maturity.", "devices.operation.", "devices.mqtt.state.", "devices.reason.", "devices.mqtt.note.", "devices.external.model.",
+    "devices.field.", "devices.homewizard.reason.", "devices.enabledHint.", "devices.maturity.", "devices.operation.", "devices.mqtt.state.", "devices.reason.", "devices.mqtt.note.", "devices.external.model.",
     "devices.external.state.", "devices.external.note.", "discovery.target.", "discovery.outcome.", "discovery.title.", "discovery.status.", "discovery.note.", "discovery.action.", "sources.message.", "devices.mqttForm.error.", "setup.step.", "setup.channel.", "setup.build.", "setup.action.", "setup.check.", "setup.pipeline.",
     "setup.title.", "setup.chip.", "setup.source.", "setup.mdns.", "setup.gateway.", "setup.attempt.", "setup.brokers.", "setup.hint.",
     "setup.config.verdict.", "setup.config.status.", "setup.operation.", "setup.continuity.", "setup.switchReason.", "setup.manualError.",

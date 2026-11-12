@@ -755,13 +755,19 @@ the physical device is installed or reports values differently. Run
 | Shelly Pro/Plus Gen2/Gen3 | `shelly` | `ip` | Uses `/rpc/Shelly.GetStatus` |
 | Shelly 3EM Gen1 | `shelly_3em_gen1` | `ip` | Uses `/status` |
 | everHome EcoTracker | `ecotracker` | `ip` | Uses `/v1/json` |
+| HomeWizard P1 Meter | `homewizard_p1` | `ip`, `serial` and `token` from pairing (opt. `port`) | Local API v2 over HTTPS, `/api/measurement`; pair once by pressing the meter's button. See below. |
+| powerfox poweropti | `powerfox_poweropti` | `ip`, `token` (the API key) | Local API `/value`, OBIS `1.7.0`; needs powerfox PRO. See below. |
+| DSMR P1 meter through a TCP bridge | `dsmr_p1_tcp` | `ip`, `port` | Raw P1 telegrams over TCP, read-only. See below. |
 | Zendure Grid Meter via local HTTP | `zendure_grid_meter_http` | `ip` (opt. `port`) | Internal/discovery generic type. Local REST `/properties/report`, reads `total_power`. Works for both D0 and Smart Meter 3CT. Manual setup offers the concrete 3CT/D0 local-API types below. |
 | Zendure Smart Meter 3CT — Local API | `zendure_smartmeter_3ct_http` | `ip` (opt. `port`) | Local REST `/properties/report`, reads `total_power`. Shares the Zendure local-HTTP reader with the D0 local-API meter. |
 | Zendure Smart Meter D0 — Local API | `zendure_smartmeter_d0_http` | `ip` (opt. `port`) | Local REST `/properties/report`, reads `total_power`. Same shared reader as the 3CT; a distinct type so a D0 is never stored as a 3CT. |
-| Tasmota HTTP / SmartMeter | `tasmota_http` | `ip` or `url`, `power_path` | Uses `Status 10` JSON |
+| Tasmota HTTP / SmartMeter | `tasmota_http` | `ip` or `url`, `power_path` (opt. `export_path`) | Uses `Status 10` JSON; also the decrypting readers for Austrian and Swiss meters |
 | Zendure Smart Meter D0 — Local MQTT | `zendure_smartmeter_d0` | `mqtt.topic` + (`mqtt.broker_ref` or `mqtt.host`) | Optional alternative; D0 preset, numeric payload |
-| Generic MQTT grid meter | `mqtt` | `mqtt.host`, `mqtt.topic`, `mqtt.payload_format` | Numeric or JSON payload |
+| Generic MQTT grid meter | `mqtt` | `mqtt.host`, `mqtt.topic`, `mqtt.payload_format` | Numeric or JSON payload; JSON may name a separate export value (`mqtt.export_value_path`), as for a Linky through a ZLinky_TIC; `mqtt.value_scale` turns kW into W, as for a Swiss CH-SMR reader. |
+| SunSpec meter via Modbus TCP | `sunspec_modbus` | `ip`, `unit_id` (opt. `port`) | Read-only; the first SunSpec meter model (201 to 204, 211 to 214) at that unit, read once per control cycle. See below. |
+| Huawei, Sungrow, Carlo Gavazzi EM24, Victron GX, smart-me, IAMMETER, Circutor Wibeee | `huawei_sun2000_modbus`, `sungrow_sh_modbus`, `carlo_gavazzi_em24_modbus`, `victron_gx_modbus`, `smart_me_modbus`, `iammeter_wem3080t_modbus`, `wibeee_modbus` | `ip` (opt. `port`, `unit_id`) | Read-only; the device's own published register map. See below. |
 | E3/DC storage system via Modbus TCP | `e3dc_modbus` | `ip` (opt. `port`, `unit_id`) | Read-only; grid power at the E3/DC root power meter, read once per control cycle. See below. |
+| Tibber Pulse IR — local bridge (experimental) | `tibber_pulse_bridge` | `ip`, `credentials_ref` (opt. `port`, `node_id`) | The meter's SML telegram from the bridge's local web server; the password stays in the secret store. See below. |
 
 ### Shelly Pro/Plus Gen2/Gen3 (`shelly`)
 
@@ -856,6 +862,143 @@ Example: everHome EcoTracker:
 }
 ```
 
+### HomeWizard P1 Meter (`homewizard_p1`)
+
+The EMS reads `https://<ip>/api/measurement`, HomeWizard's documented local API
+v2, and uses `power_w`: the sum of all phases, positive while importing and
+negative while exporting. API v1 is not used; HomeWizard is phasing it out.
+The P1 Meter also reads the P1 or customer interface of meters in Austria,
+Switzerland, Sweden and Luxembourg; where the grid operator encrypts it, the
+operator's key goes into the HomeWizard app, never into the EMS.
+
+**Pairing.** API v2 answers only with a token the meter hands out after its
+button was pressed. Pair the meter once: in the Admin Console, choose the meter
+type, enter the address and click **Pair with the meter**, then press the button
+on the P1 Meter within a minute; or answer the HomeWizard questions of
+`python3 emsctl.py config init`, which waits for the button the same way.
+Pairing stores three keys: `serial`, the meter's serial number; `token`, a
+secret the Admin Console never shows; and `pairing_name`, the name this
+installation paired under (`local/ems_solarflow#` and six hex digits, made up at
+the first pairing). The meter revokes a name's token when that name pairs again,
+so every installation keeps its own name: several installations, a second one
+in dry-run for example, can pair and read the same meter, and pairing again only
+ever replaces the installation's own pairing. That replacement takes effect
+at once, before anything is saved: until the new pairing is saved, this
+installation cannot read the meter. Both the console and `config init` say so
+before they pair again. A meter that keeps no further pairing answers
+`reason=no_room`. An installation set up from another one's backup carries
+that installation's name and token: both read the meter, but pairing again on
+either revokes the other's token, so delete `grid_meter.pairing_name` there
+before pairing it on its own. The Admin Console and `emsctl diagnose` refuse a
+name that is not of the documented form (`local/` and up to 40 letters, digits,
+spaces or `-_\/#`); reading the meter does not need the name, so the EMS keeps
+reading, and the next pairing makes up a new one.
+
+**Identity.** The meter answers HTTPS only, with a certificate HomeWizard's
+Appliance Access CA issued for `appliance/p1dongle/<serial>`. The EMS trusts that
+CA alone, which it ships, and reads only the meter whose certificate names the
+paired serial: if the address now belongs to another meter, every read fails
+with `reason=other_meter` instead of reading the wrong meter. A refused token
+fails with `reason=unauthorized`; pair the meter again.
+
+**Freshness.** When the meter reports the time the smart meter sent a
+measurement (HomeWizard marks every data point optional), a time stamp that has
+not moved for 30 s means the smart meter has stopped sending: the read counts as
+failed, so the EMS holds instead of regulating on a frozen value. Without a time
+stamp this check cannot run. A DSMR 5 meter sends a new reading every second, an older DSMR 4 meter
+only every 10 seconds, and the P1 Meter answers with the last one in between.
+The EMS adds each reading's correction to its target, so on a DSMR 4 meter with
+the default loop interval of 5 s one reading reaches two control cycles and its
+correction counts twice. For such a meter set the loop interval to 11 s or more,
+in the Admin Console or with `python3 emsctl.py system loop-interval 11` (the
+value in `runtime-state.json` overrides a hand edit of `config.json`), and
+`system.output_control.telemetry_max_age_seconds` to at least twice that, for
+example 22, so a single missed read does not already count as stale.
+`emsctl diagnose --hardware` reads the meter once, names the DSMR version and
+warns when the loop interval the EMS uses, or the telemetry window for that
+loop, is too short for it (`homewizard_p1_slow_meter`).
+
+Example: HomeWizard P1 Meter, as pairing leaves it (`port` defaults to 443):
+
+```json
+{
+  "grid_meter": {
+    "type": "homewizard_p1",
+    "ip": "192.0.2.61",
+    "serial": "0a1b2c3d4e5f",
+    "token": "<set by pairing>",
+    "pairing_name": "local/ems_solarflow#3f9a1c"
+  }
+}
+```
+
+### powerfox poweropti (`powerfox_poweropti`)
+
+The EMS reads `http://<ip>/value` with the API key in the `X-API-KEY` header,
+once per control cycle, and uses the OBIS value `1.7.0` in watts. The local API
+needs the powerfox PRO service and poweropti firmware 2.02.07 or later; without
+them the poweropti answers 401, which the EMS logs as `powerfox_read_error`.
+The API key is the device ID printed on the poweropti's label. It lives in
+`grid_meter.token`, a secret like an MQTT password: the Admin Console shows only
+that one is stored, and saving without typing it again keeps it.
+
+How the poweropti reports export has not been confirmed on hardware. The EMS
+reads a negative `1.7.0` as export, and when the poweropti also sends the export
+power `2.7.0`, it subtracts that from a non-negative `1.7.0`. Check the sign
+once while the PV exports, in the dashboard or with
+`python3 emsctl.py diagnose --hardware`, before you switch off `dry_run`.
+
+The answer carries the poweropti's own time stamp. When it has not moved for
+30 s, the optical head has lost the meter, and the reading counts as failed
+instead of being regulated on.
+
+Example: powerfox poweropti (`port` defaults to 80):
+
+```json
+{
+  "grid_meter": {
+    "type": "powerfox_poweropti",
+    "ip": "192.0.2.62",
+    "token": "<device ID from the label>"
+  }
+}
+```
+
+### DSMR P1 meter through a TCP bridge (`dsmr_p1_tcp`)
+
+A Dutch or Belgian smart meter sends a telegram on its P1 port every second
+(DSMR 5) or every ten seconds (older meters). A bridge such as a
+P1-to-WiFi gateway, or ser2net on a small computer with a P1 cable, passes the
+raw telegrams on over TCP; the EMS connects to it and never sends anything.
+Use this type only for a bridge that hands out the telegrams unchanged and
+unencrypted, which rules out the encrypted P1 port of Luxembourg's meters; a
+HomeWizard P1 Meter has its own type. A Belgian Fluvius meter sends DSMR 5
+telegrams once its P1 port is opened in the Fluvius customer portal.
+
+The EMS keeps one connection and takes, once per control cycle, the newest
+whole telegram that arrived since the last cycle, without waiting for one.
+Grid power is `1-0:1.7.0` (drawn) minus `1-0:2.7.0` (fed in), both in kW. A
+telegram that carries a checksum must match it. Between two telegrams the last
+one stands; when none has arrived for 15 s the reading counts as failed and the
+EMS opens the connection again, because a bridge that restarted never says so
+on a connection that only receives. P1 bridges use no common port, so
+`grid_meter.port` is required: set what the bridge is configured for.
+`python3 emsctl.py diagnose --hardware` opens a second connection and waits up
+to 11 s for one telegram; a bridge that serves one client at a time, as ser2net
+does by default, refuses it while the EMS is connected.
+
+Example: DSMR P1 meter through a TCP bridge:
+
+```json
+{
+  "grid_meter": {
+    "type": "dsmr_p1_tcp",
+    "ip": "192.0.2.63",
+    "port": 23
+  }
+}
+```
+
 ### Zendure Grid Meter via local HTTP (`zendure_grid_meter_http`)
 
 The **recommended** Zendure grid-meter connection. The EMS reads
@@ -914,8 +1057,22 @@ selected transport.
 With `grid_meter.ip`, the default endpoint is
 `http://<ip>/cm?cmnd=Status%2010`. Alternatively, set `grid_meter.url` to an
 explicit endpoint. `grid_meter.power_path` is always required and must contain
-the dot-separated path to the current power value. The keys depend on the
-active Tasmota meter script, so the EMS does not guess them.
+the dot-separated path to the current power value, or a JSON Pointer starting
+with `/` for a key that contains dots. The keys depend on the active Tasmota
+meter script, so the EMS does not guess them. A script that reports import and
+export apart names the export with `grid_meter.export_path`; the EMS subtracts
+it, so export reads negative. Both values must be in W: Tasmota's meter script
+scales a value in kW by its divisor.
+
+**Austria and Switzerland.** Smart meters there have a customer interface.
+Austrian grid operators encrypt it and hand the customer the key on request
+(for example in the Wiener Netze Smart Meter portal or by form from Netz NÖ);
+Swiss ones may run it encrypted or not. A Tasmota reader with the SML driver decrypts it when the key is in its
+meter script (`=so4,<key>`); Tasmota's documentation ships scripts for the
+Iskra AM550 and Siemens IM350/IM351 (Wiener Netze, Wels Strom) and the
+Landis+Gyr E450 (Switzerland), and the gPlugM for the E450/E570 runs Tasmota.
+The key stays in the reader; the EMS reads its Status 10 JSON as from any
+Tasmota reader. Nothing here is confirmed on hardware.
 
 Example: Tasmota SML using the default endpoint:
 
@@ -937,6 +1094,20 @@ Example: Tasmota with an explicit URL and OBIS-style key:
     "type": "tasmota_http",
     "url": "http://192.0.2.70/cm?cmnd=Status%2010",
     "power_path": "StatusSNS.SM.16_7_0"
+  }
+}
+```
+
+Example: an Austrian Tasmota reader that reports import (`1_7_0`) and export
+(`2_7_0`) apart, in W:
+
+```json
+{
+  "grid_meter": {
+    "type": "tasmota_http",
+    "ip": "192.0.2.71",
+    "power_path": "StatusSNS.SM.1_7_0",
+    "export_path": "StatusSNS.SM.2_7_0"
   }
 }
 ```
@@ -1069,6 +1240,309 @@ Example: Generic MQTT JSON payload:
 ```
 
 For a numeric payload, use `"payload_format": "number"` and omit `value_path`.
+
+A path can also be a JSON Pointer starting with `/`, for a key that contains
+dots, such as `/meter/1.7.0`; in a pointer a number indexes into a list. `grid_meter.mqtt.value_scale` multiplies the
+values into W: 1 (the default) for W, 1000 for kW, -1 for a meter that counts
+export as positive.
+
+A JSON payload that carries export as a positive value of its own takes
+`grid_meter.mqtt.export_value_path` as well: the EMS subtracts that value from
+the `value_path` one. Until a message has carried the export value once, a
+message without it fails the reading, so a mistyped path shows up at once;
+after that, a message without it counts as no export.
+
+#### A Swiss smart meter reader in the CH-SMR format
+
+Swiss smart meter readers that follow the VSE recommendation *CH-SMR* (chapter
+6, approved June 2025) publish the meter's values as one JSON message on
+`dt/<group>/<id_ims>/ds`, with power drawn (`1.7.0`) and fed in (`2.7.0`) in
+kW. The keys contain dots, so the paths are JSON Pointers; the scale turns kW
+into W. A reader can report no faster than the meter's interface, which the
+recommendation asks for at least every 10 s and every 5 s where possible, the
+slow end for regulation. Which readers already send CH-SMR is not confirmed.
+
+```json
+{
+  "grid_meter": {
+    "type": "mqtt",
+    "mqtt": {
+      "host": "192.0.2.10",
+      "topic": "dt/home/12345678/ds",
+      "payload_format": "json",
+      "value_path": "/meter/1.7.0",
+      "export_value_path": "/meter/2.7.0",
+      "value_scale": 1000,
+      "max_age_seconds": 30
+    }
+  }
+}
+```
+
+#### An ESPHome P1 or DLMS reader
+
+An ESPHome node with the `dsmr` component (a P1 reader such as a SlimmeLezer)
+reports power drawn and power fed in as two sensors in kW. For the encrypted
+customer interface of Austrian and Swiss meters, ESPHome's `dlms_meter`
+component decrypts with the grid operator's key on the node and reports the
+OBIS codes `1.0.1.7.0.255` and `1.0.2.7.0.255` in W; build the same template
+sensor from those (without the `* 1000`). Add a template sensor on the node that publishes the grid
+power in W, and read its MQTT state topic as a plain number:
+
+```yaml
+sensor:
+  - platform: dsmr
+    power_delivered:
+      id: power_delivered
+    power_returned:
+      id: power_returned
+  - platform: template
+    name: "Grid power"
+    unit_of_measurement: W
+    update_interval: 1s
+    lambda: return (id(power_delivered).state - id(power_returned).state) * 1000;
+```
+
+The node needs an `mqtt:` block with your broker: many P1 readers ship with
+ESPHome's native API only, which publishes nothing to MQTT. ESPHome then
+publishes the sensor on `<topic prefix>/sensor/grid_power/state`; use that
+topic with `"payload_format": "number"`.
+
+#### Linky (France) through a ZLinky_TIC and Zigbee2MQTT
+
+A LiXee ZLinky_TIC on the Linky's TIC port, paired with Zigbee2MQTT, publishes
+the meter's values as one JSON message on `zigbee2mqtt/<friendly name>`. The
+Linky reports apparent power only, in VA: `apparent_power` is the power drawn
+(`SINSTS` in standard mode, `PAPP` in historic mode) and `injected_v_a` the
+power fed in (`SINSTI`, only in standard mode with production on, which
+Zigbee2MQTT's `production` option controls). Leave `export_value_path` out on a
+Linky that does not report `injected_v_a`; with it set, the meter reads nothing
+until the first `injected_v_a` arrives. The active-power fields
+`active_power` (`CCASN`) are points of the meter's load curve, not live values,
+and must not be used.
+
+Apparent power is at least the active power, so the EMS sees a little more
+import than flows while the power factor is below one, and may leave a small
+export where a meter in watts would regulate to zero. Zigbee2MQTT publishes
+only when the ZLinky reports; watch how often messages arrive (for example with
+`mosquitto_sub -v -t zigbee2mqtt/linky`) and set `max_age_seconds` above that
+interval, or the EMS holds as if the meter were stale. Nothing here is
+confirmed on hardware.
+
+Example: Linky through a ZLinky_TIC and Zigbee2MQTT:
+
+```json
+{
+  "grid_meter": {
+    "type": "mqtt",
+    "mqtt": {
+      "host": "192.0.2.10",
+      "port": 1883,
+      "topic": "zigbee2mqtt/linky",
+      "payload_format": "json",
+      "value_path": "apparent_power",
+      "export_value_path": "injected_v_a",
+      "max_age_seconds": 30
+    }
+  }
+}
+```
+
+### SunSpec meter via Modbus TCP (`sunspec_modbus`)
+
+Many inverters and meters serve their measurements as SunSpec models over
+Modbus TCP. The EMS finds the `SunS` marker at register 40000, 0 or 50000,
+follows the model chain at `grid_meter.unit_id` to the first meter model
+(201 to 204, which carry the total real power `W` with a scale factor, or 211
+to 214, which carry it as a float), and then reads `W` once per control cycle,
+over one connection that it opens again after a failure. It only ever reads.
+
+SunSpec meters report `W` positive when power is drawn from the grid, which is
+what the EMS expects of a meter at the grid connection point. A meter
+installed elsewhere, or the wrong way round, reads with another meaning or
+sign; check the value once while the PV exports, in the dashboard or with
+`python3 emsctl.py diagnose --hardware`, before you switch off `dry_run`.
+
+The unit ID depends on the device:
+
+- **Fronius:** the inverter serves its primary Smart Meter at unit ID 200 once
+  Modbus TCP is switched on in its web interface (*SunSpec Model Type* int + SF
+  or float, both are read).
+- **Kostal Smart Energy Meter:** serves its own measurements; its Modbus TCP
+  settings name the unit ID to use.
+- **Kostal Plenticore G2 (software 02.12 or later), G3 (3.04.01 or later)
+  and MP G3 (3.05.00 or later):** serves the meter connected to it as model 203 on **port 1502** at
+  unit ID 71. Set *Settings › Modbus/Sunspec (TCP)* to *big-endian (ABCD)
+  Sunspec*; the default little-endian setting is not SunSpec.
+- **SolarEdge:** an inverter with a SolarEdge meter serves the meter model
+  after its own models, usually at unit ID 1. Whether its meter counts export
+  as negative depends on how the meter is set up, so check the sign as above.
+
+Example: Fronius Smart Meter through the Fronius inverter (`port` defaults to
+502):
+
+```json
+{
+  "grid_meter": {
+    "type": "sunspec_modbus",
+    "ip": "192.0.2.64",
+    "unit_id": 200
+  }
+}
+```
+
+### Modbus TCP meters with a published register map
+
+Seven devices publish where they keep the grid power in a Modbus document of
+their own. The EMS reads each by a fixed profile, once per control cycle and in
+one request, over one connection that it opens again after a failure. It only
+ever reads. Each needs `grid_meter.ip`; `port` and `unit_id` default to the
+device's own values.
+
+| `grid_meter.type` | Device | Defaults | What is read |
+| --- | --- | --- | --- |
+| `huawei_sun2000_modbus` | Huawei SUN2000 inverter with a DTSU666 power meter | port 502, unit 1 | Register 37113 (I32, W), which Huawei counts positive when feeding into the grid, so the EMS turns the sign; register 37100 must report the meter online. |
+| `sungrow_sh_modbus` | Sungrow SH hybrid inverter with the smart meter wired to it | port 502, unit 1 | Input register 5601 (S32, W, low word first), positive when buying from the grid. |
+| `carlo_gavazzi_em24_modbus` | Carlo Gavazzi EM24 with Ethernet (EM24-E1) | port 502, unit 1 | Register 0x0028 (INT32, W×10, low word first), imported power positive. |
+| `victron_gx_modbus` | Victron GX device (Cerbo GX, Venus OS) | port 502, unit 100 | Registers 820 to 822 (int16, W), the grid power of each phase, added up. |
+| `smart_me_modbus` | smart-me Telstar or Telstar CT | port 502, unit 1 | Register 0x2004 *Active Power Total* at Modbus address 0x2003 (int32 big-endian, mW). |
+| `iammeter_wem3080t_modbus` | IAMMETER WEM3080T three-phase meter | port 502, unit 1 | Address 32 (int32, high word first, W), the total active power. |
+| `wibeee_modbus` | Circutor Wibeee | port 502, unit 1 | Register 6 (S32, W, low word first), the total active power. |
+
+What each device needs first:
+
+- **Huawei:** an installer enables Modbus TCP in FusionSolar. Through the
+  SDongle the port is 502; on the inverter's own access point it is 6607. The
+  SDongle is known to serve one Modbus client at a time.
+- **Sungrow:** the value is valid only when the meter is wired to the
+  inverter. Sungrow asks for at least one second between requests; the EMS asks
+  no sooner than 0.75 s, allowing for the control loop's jitter.
+- **Victron:** switch Modbus TCP on in the GX settings. Only useful where the GX
+  already reads the grid meter.
+- **Wibeee:** set *Data Refresh Time* to `-1` in the device's web settings;
+  Wibeee's document does not say which direction its sign counts, so check it.
+- **smart-me:** smart-me asks for at most one request every 2 seconds; the EMS
+  asks about that often, no sooner than 1.75 s to allow for the control loop's
+  jitter, and a control cycle in between gets the last reading. Its
+  sheet does not say which direction counts positive, so check it.
+- **IAMMETER:** it measures with current clamps; the sign follows how they
+  face, so check it. Only the three-phase WEM3080T has a documented total.
+
+None of these is confirmed on hardware. Check the sign once while the PV
+exports, in the dashboard or with `python3 emsctl.py diagnose --hardware`,
+before you switch off `dry_run`. The network scan does not find these devices;
+add them by hand.
+
+Example: Victron GX (`port` 502 and `unit_id` 100 are the defaults):
+
+```json
+{
+  "grid_meter": {
+    "type": "victron_gx_modbus",
+    "ip": "192.0.2.65"
+  }
+}
+```
+
+### Tibber Pulse IR — local bridge (`tibber_pulse_bridge`, experimental)
+
+The Tibber Pulse IR is a battery-powered reading head on the meter's infrared
+port and a bridge in a wall socket that it radios to. The EMS reads the bridge's
+local web server, never the Tibber cloud. If you can, use another grid meter;
+the [Tibber Pulse IR guide](../user/tibber-pulse.md) says why. **This meter is
+experimental and comes without guaranteed support:**
+
+- the bridge's web server was built for setting it up, not for continuous
+  polling, and often takes about 1.5 s to answer;
+- new values arrive only every 2–3 s;
+- the bridge now and then serves a damaged telegram;
+- Tibber updates the bridge over the air and has changed the unofficial local
+  interface before (September 2026: `/data.json` became `/node_data.json`).
+
+Background, measurements and sources:
+[docs/user/tibber-pulse.md](../user/tibber-pulse.md).
+
+**Reading.** A background worker asks the bridge for the raw SML telegram at
+most every 3 seconds (`/node_data.json?node_id=N`, falling back to `/data.json`
+on firmware before 1794), with HTTP Basic login `admin` and the bridge
+password. The control loop never waits on the bridge: each cycle takes the
+last good reading the worker holds. Like the MQTT grid meter, that reading
+serves every cycle while it is young enough, so when the bridge is slower than
+the loop a cycle can get the reading the previous cycle already used. At
+start, before `--preflight` and before `emsctl grid-meter test`, the EMS waits
+up to 15 seconds for the first good reading; without one it logs
+`grid_meter_not_ready` at start, and the preflight fails. A login that cannot
+work is retried every 30 seconds, and a bridge that does not answer, or
+answers with a server error, waits twice as long before each next try, up to
+the same 30 seconds.
+
+A reading older than `system.output_control.telemetry_max_age_seconds`
+(default 10 seconds) counts as a failed meter read, the same age the device
+telemetry is held to, and the meter's health counts its age from when
+the telegram arrived. A reading is new only when the meter's frame changed;
+a bridge whose reading head stopped keeps serving its last telegram, which
+therefore ages out instead of looking fresh. The first telegram after the
+start is only the baseline: the first reading is the next telegram that
+differs from it, so a head that stopped before the start never looks fresh. While reads fail, the log warns
+`tibber_pulse_read_error` when the reason changes and then once a minute.
+
+**Decoding** ([`ems/sml.py`](../../ems/sml.py)):
+
+- the frame CRC is checked, and a damaged telegram is dropped, never used.
+  Meters send X.25 or Kermit in either byte order; once three different
+  intact telegrams agree on one variant, only that one is accepted, and ten
+  telegrams in a row that miss it release it again
+  (`tibber_pulse_crc_released`), for a head moved to another meter;
+- the scaler is applied and the unit must be watts;
+- the grid power is the signed total 16.7.0, or else import 1.7.0 minus export
+  2.7.0, which also stands in for a signed total with an unusable unit or
+  scaler;
+- a reading without a sign is refused, because it cannot tell import from
+  export;
+- the sign bug of DZG DVS74 meters is corrected only where libsml corrects it:
+  serials 42000000–48999999 and 55000000–58999999, a payload of one or two
+  bytes. Every other meter keeps the sign it sends;
+- a scaler outside −128…127 (SML's Integer8) makes that value unreadable; an
+  odd entry the EMS does not need does not cost the telegram;
+- a value beyond ±50 kW is rejected as implausible.
+
+**The password.** It is printed on the bridge. It is never written to
+`config.json`: the Admin Console saves it, encrypted, in `config/secrets/` (a
+`bridge-<ref>.json` record), and `credentials_ref` names it.
+
+- Without `credentials_ref` the install stays in no-write mode, as with any
+  missing setup field.
+- A reference whose password is missing or cannot be decrypted does not stop
+  the EMS: the meter starts, sends no request, reports every read as failed
+  (`no_password`), and `diagnose` says why.
+- The worker reads the password from the store again while it has none and
+  after the bridge refused one, so a password saved or corrected in the Admin
+  Console takes effect within half a minute, without restarting the EMS.
+- A block the EMS cannot use at all (no `ip`, a non-canonical reference, a
+  port or node out of range) ends the start with `startup_abort`
+  `reason=grid_meter_invalid`.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `ip` | required | Address of the bridge in the local network: an IPv4 address or host name, without scheme, port or path. |
+| `credentials_ref` | required | Name of the saved bridge password (Admin Console › Settings › Devices › *What the search may use*). |
+| `port` | `80` | Port of the bridge's web server. |
+| `node_id` | `1` | Which reading head on the bridge, `1`–`255`; the bridge's Pulse page lists them. |
+
+The bridge's web server is off in normal operation and has to be switched on
+once, permanently: see [docs/user/tibber-pulse.md](../user/tibber-pulse.md).
+
+Example:
+
+```json
+{
+  "grid_meter": {
+    "type": "tibber_pulse_bridge",
+    "ip": "192.0.2.70",
+    "credentials_ref": "tibber-bridge"
+  }
+}
+```
 
 ### E3/DC storage system via Modbus TCP (`e3dc_modbus`)
 

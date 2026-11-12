@@ -4,14 +4,17 @@
 
 Discovery is manual, bounded, and probe-based: for each host in a validated
 local CIDR it issues a few short-timeout HTTP GETs to known local device APIs
-and classifies the JSON response, then reads the E3/DC magic word over Modbus
-TCP. No daemon, no shell-out, no ping/nmap/arp, no public ranges. Concurrency
+and classifies the JSON response, checks for a HomeWizard P1 Meter's
+certificate over HTTPS, then reads the E3/DC magic word over Modbus TCP. No
+daemon, no shell-out, no ping/nmap/arp, no public ranges. Concurrency
 and timeouts are clamped to keep a scan cheap enough for a small Raspberry Pi.
 """
 
 import ipaddress
 import logging
 import re
+import socket
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
@@ -21,12 +24,18 @@ from admin.models import (
     ROLE_INVERTER,
     DiscoveredDevice,
 )
-from ems import e3dc_modbus
+from ems import e3dc_modbus, sunspec
 from ems.config import (
     E3DC_MODBUS_DEFAULT_PORT,
     E3DC_MODBUS_DEFAULT_UNIT_ID,
     E3DC_MODBUS_GRID_METER_TYPE,
+    HOMEWIZARD_P1_DEFAULT_PORT,
+    HOMEWIZARD_P1_GRID_METER_TYPE,
+    SUNSPEC_MODBUS_GRID_METER_TYPE,
+    TIBBER_PULSE_GRID_METER_TYPE,
 )
+from ems.homewizard import HomeWizardError, HomeWizardP1Api
+from ems.tibber_pulse import REQUEST_TIMEOUT_SECONDS, BridgeError, TibberPulseBridge
 
 logger = logging.getLogger("admin.discovery")
 
@@ -42,6 +51,7 @@ MAX_WORKERS_DEFAULT = 32
 MAX_HOSTS = 256
 DEFAULT_PORTS = (80,)
 E3DC_SCAN_PORT = E3DC_MODBUS_DEFAULT_PORT
+HOMEWIZARD_P1_PRODUCT_TYPE = "HWE-P1"
 
 
 class CidrValidationError(ValueError):
@@ -468,6 +478,154 @@ def probe_ecotracker(session, ip, timeout_s):
     )
 
 
+HOMEWIZARD_HANDSHAKE_TIMEOUT_S = 3.0
+
+
+def probe_homewizard_p1(session, ip, timeout_s, port=HOMEWIZARD_P1_DEFAULT_PORT, context=None):
+    """Offer a host whose HTTPS certificate HomeWizard issued for a P1 Meter.
+
+    ``session`` is unused: the probe is one TLS handshake, which needs neither
+    the meter's token nor its pairing. The connect waits the scan's timeout, so
+    a host without the port costs no more than for any other probe; the
+    handshake on a port that answered may take up to
+    :data:`HOMEWIZARD_HANDSHAKE_TIMEOUT_S`, since a small device's TLS
+    handshake can take longer than the scan's timeout. The token is not a discovery field: the
+    operator pairs the chosen meter in the hardware step, and the setup preview
+    stays not ready until then.
+    """
+
+    try:
+        socket.create_connection((ip, port), timeout_s).close()
+    except OSError:
+        return None
+    api = HomeWizardP1Api(ip, port=port, timeout=max(timeout_s, HOMEWIZARD_HANDSHAKE_TIMEOUT_S), context=context)
+    try:
+        serial = api.identify()
+    except HomeWizardError:
+        return None
+    finally:
+        api.close()
+    return DiscoveredDevice(
+        ip=ip,
+        api_family=HOMEWIZARD_P1_GRID_METER_TYPE,
+        device_type=HOMEWIZARD_P1_GRID_METER_TYPE,
+        role_suggestion=ROLE_GRID_METER,
+        port=port,
+        protocol="https",
+        display_name="HomeWizard P1 Meter",
+        serial_number=serial,
+        model=HOMEWIZARD_P1_PRODUCT_TYPE,
+        confidence=0.95,
+        config_ready=True,
+        missing_config_fields=[],
+    )
+
+
+# The refusal text a Tibber Pulse bridge sends without a login (one capture,
+# marq24/ha-tibber-pulse-local#111). Only this, or a challenge naming Tibber,
+# makes a candidate: a saved bridge password is sent to nothing else.
+TIBBER_BRIDGE_REFUSAL = "username/password authentication failed"
+TIBBER_BRIDGE_READ_TIMEOUT_S = 2.5
+
+
+def _is_tibber_bridge_refusal(response):
+    """A 401 carrying the bridge's refusal text or a challenge naming Tibber.
+
+    Only the first 2 KiB of a 401 are read; any other answer is not read at all.
+    """
+    if response.status_code != 401:
+        return False
+    challenge = str(response.headers.get("WWW-Authenticate") or "").lower()
+    head = next(response.iter_content(2048), b"")
+    body = head.decode("utf-8", "replace").lower() if isinstance(head, bytes) else str(head).lower()
+    return TIBBER_BRIDGE_REFUSAL in body or (challenge.startswith("basic") and "tibber" in challenge)
+
+
+def probe_tibber_bridge(session, ip, timeout_s):
+    """A Tibber Pulse bridge whose web server answers an anonymous request."""
+
+    # A dead host fails at the connect timeout; a bridge that accepted the
+    # connection often needs more than a second to answer.
+    response = session.get(
+        f"http://{ip}/",
+        timeout=(timeout_s, max(timeout_s, TIBBER_BRIDGE_READ_TIMEOUT_S)),
+        allow_redirects=False,
+        stream=True,
+    )
+    try:
+        if not _is_tibber_bridge_refusal(response):
+            return None
+    finally:
+        response.close()
+    return DiscoveredDevice(
+        ip=ip,
+        api_family=TIBBER_PULSE_GRID_METER_TYPE,
+        device_type=TIBBER_PULSE_GRID_METER_TYPE,
+        role_suggestion=ROLE_GRID_METER,
+        display_name="Tibber Pulse bridge",
+        confidence=0.6,
+        config_ready=False,
+        missing_config_fields=["grid_meter.credentials_ref"],
+        verified=False,
+    )
+
+
+def unlock_tibber_bridge(session, device, passwords, timeout=None):
+    """Try the saved bridge passwords on a found bridge, and only on one.
+
+    ``passwords`` yields ``(credentials_ref, password)``. The first password
+    the bridge accepts names the grid meter's ``credentials_ref``; its node list
+    gives the reading head. The head's EUI is not the bridge's serial, so the
+    found device stays keyed by its address across scans. A bridge no saved password opens stays a candidate
+    that still needs one. Only a 200 proves the bridge took the password: one
+    whose node list is no JSON keeps the password and still needs its node. A
+    server error ends the attempt, since the bridge answers a wrong login with
+    401 and hangs under load; any other answer, a 404 among them, tries the next
+    password. The requests go through the EMS's own bridge reader.
+    """
+
+    if device.api_family != TIBBER_PULSE_GRID_METER_TYPE:
+        return device
+    for ref, password in passwords:
+        bridge = TibberPulseBridge(device.ip, password, session=session, timeout=timeout or REQUEST_TIMEOUT_SECONDS)
+        try:
+            nodes = bridge.read_json("/nodes.json")
+        except BridgeError as exc:
+            if exc.status is not None and exc.status >= 500:
+                return device
+            if exc.reason != "bad_json":
+                continue
+            nodes = []
+        except requests.RequestException:
+            return device
+        nodes = [
+            node for node in (nodes if isinstance(nodes, list) else [])
+            if isinstance(node, dict) and str(node.get("node_id", "")).isdecimal()
+            and 1 <= int(node["node_id"]) <= 255
+        ]
+        device.credentials_ref = ref
+        device.verified = True
+        device.firmware = _bridge_firmware(bridge)
+        if nodes:
+            first = min(nodes, key=lambda node: int(node["node_id"]))
+            device.node_id = int(first["node_id"])
+            device.config_ready = True
+            device.missing_config_fields = []
+            device.confidence = 0.95
+        else:
+            device.missing_config_fields = ["grid_meter.node_id"]
+        return device
+    return device
+
+
+def _bridge_firmware(bridge):
+    try:
+        data = bridge.read_json("/test.json")
+    except (BridgeError, requests.RequestException):
+        return None
+    return _first_str(data.get("esp32_fw_v")) if isinstance(data, dict) else None
+
+
 def probe_e3dc_modbus(session, ip, timeout_s, port=None):
     """Read the E3/DC magic word over Modbus TCP; only ``0xE3DC`` is a candidate.
 
@@ -510,13 +668,68 @@ def probe_e3dc_modbus(session, ip, timeout_s, port=None):
     )
 
 
+SUNSPEC_SCAN_PORT = 502
+SUNSPEC_SCAN_UNIT_IDS = (1, 200, 71)
+
+
+def probe_sunspec_modbus(session, ip, timeout_s, port=SUNSPEC_SCAN_PORT):
+    """Offer a device that serves a SunSpec meter model over Modbus TCP.
+
+    ``session`` is unused. One connection per host tries the unit IDs meters
+    are commonly served at: 1, 200 (a Fronius inverter's primary meter) and 71
+    (a Kostal Smart Energy Meter). A unit that answers with a Modbus exception
+    or without a meter model is skipped; a transport error, a unit that stays
+    silent among them, ends the probe, so a closed port costs one timeout. Only reads are sent. The candidate carries the unit ID.
+    """
+
+    client = e3dc_modbus.ReadOnlyModbusTcpClient(ip, port, unit_id=SUNSPEC_SCAN_UNIT_IDS[0], timeout=timeout_s)
+    try:
+        client.connect()
+        for unit_id in SUNSPEC_SCAN_UNIT_IDS:
+            client.unit_id = unit_id
+            try:
+                meter = sunspec.locate_meter(client)
+            except (sunspec.SunSpecError, e3dc_modbus.ModbusExceptionResponse):
+                continue
+            try:
+                manufacturer, model, serial = sunspec.read_common(client)
+            except (sunspec.SunSpecError, e3dc_modbus.ModbusExceptionResponse):
+                manufacturer, model, serial = "", "", ""
+            break
+        else:
+            return None
+    except (e3dc_modbus.ModbusError, OSError, ValueError):
+        return None
+    finally:
+        client.close()
+    name = " ".join(part for part in (manufacturer, model) if part)
+    return DiscoveredDevice(
+        ip=ip,
+        api_family=SUNSPEC_MODBUS_GRID_METER_TYPE,
+        device_type=SUNSPEC_MODBUS_GRID_METER_TYPE,
+        role_suggestion=ROLE_GRID_METER,
+        port=port,
+        protocol="modbus_tcp",
+        display_name=name or "SunSpec meter",
+        serial_number=_first_str(serial),
+        model=model or f"SunSpec model {meter.model_id}",
+        confidence=0.85,
+        config_ready=True,
+        missing_config_fields=[],
+        unit_id=unit_id,
+    )
+
+
 PROBES = (
     probe_zendure,
     probe_zendure_grid_meter,
     probe_shelly_gen2,
     probe_shelly_3em_gen1,
     probe_ecotracker,
+    probe_homewizard_p1,
+    probe_tibber_bridge,
     probe_e3dc_modbus,
+    probe_sunspec_modbus,
 )
 
 
@@ -608,8 +821,27 @@ def probe_host(session, ip, timeout_s):
     return None
 
 
+class _SavedBridgePasswords:
+    """The saved bridge passwords, read once and only when a bridge is found."""
+
+    def __init__(self, provider):
+        self._provider = provider
+        self._lock = threading.Lock()
+        self._passwords = None
+
+    def get(self):
+        with self._lock:
+            if self._passwords is None:
+                try:
+                    self._passwords = list(self._provider()) if self._provider else []
+                except Exception as exc:
+                    logger.warning("saved bridge passwords unreadable: %s", type(exc).__name__)
+                    self._passwords = []
+            return self._passwords
+
+
 def scan_network(cidr, timeout_ms=TIMEOUT_MS_DEFAULT, max_workers=MAX_WORKERS_DEFAULT,
-                 session=None, progress_callback=None):
+                 session=None, progress_callback=None, bridge_passwords=None):
     """Scan a validated CIDR and return ``(devices, errors)``.
 
     Runs bounded-parallel HTTP probes with a shared session, plus the Modbus
@@ -631,11 +863,19 @@ def scan_network(cidr, timeout_ms=TIMEOUT_MS_DEFAULT, max_workers=MAX_WORKERS_DE
     devices = []
     errors = []
     checked = 0
+    saved = _SavedBridgePasswords(bridge_passwords)
+
+    def probe_and_unlock(ip):
+        device = probe_host(session, ip, timeout_s)
+        if device is not None and device.api_family == TIBBER_PULSE_GRID_METER_TYPE:
+            device = unlock_tibber_bridge(
+                session, device, saved.get(), (timeout_s, max(timeout_s, TIBBER_BRIDGE_READ_TIMEOUT_S))
+            )
+        return device
+
     try:
         with ThreadPoolExecutor(max_workers=min(workers, len(hosts))) as pool:
-            futures = {
-                pool.submit(probe_host, session, ip, timeout_s): ip for ip in hosts
-            }
+            futures = {pool.submit(probe_and_unlock, ip): ip for ip in hosts}
             for future in as_completed(futures):
                 ip = futures[future]
                 try:

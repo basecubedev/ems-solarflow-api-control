@@ -7,9 +7,12 @@ compact-router shape of the root README, the Admin Console user-facing naming,
 FAQ coverage, and the preservation of technical knowledge after the move. They
 check for headings/links and short copy snippets, not exact long paragraphs.
 """
+from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
+
+from tests.test_docs_local_links import _EXTERNAL, _heading_anchors
 
 pytestmark = [
     pytest.mark.contract,
@@ -159,8 +162,99 @@ def test_readme_does_not_call_mqtt_control_a_future_feature():
     flowed = " ".join(section.split())
 
     assert "MQTT control is an implemented EMS transport" in flowed
-    assert "not a future feature" in flowed
-    assert "not building the feature" in flowed
+    assert "Validated on the 800 Pro 2" in flowed
+    assert "future" not in flowed.lower()
+    assert "planned" not in flowed.lower()
+
+
+class _TableRows(HTMLParser):
+    """Each row of an HTML table as (parent, position in parent, cells), each
+    cell as [tag, colspan, text], plus every link the table carries."""
+
+    def __init__(self):
+        super().__init__()
+        self.rows = []
+        self.links = []
+        self._parent = None
+        self._position = 0
+        self._cell = None
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag in ("thead", "tbody"):
+            self._parent, self._position = tag, 0
+        elif tag == "tr":
+            self._position += 1
+            self.rows.append((self._parent, self._position, []))
+        elif tag in ("th", "td"):
+            self._cell = [tag, attrs.get("colspan"), ""]
+            self.rows[-1][2].append(self._cell)
+        elif tag == "a":
+            self.links.append(attrs["href"])
+
+    def handle_endtag(self, tag):
+        if tag in ("th", "td"):
+            self._cell = None
+
+    def handle_data(self, data):
+        if self._cell is not None:
+            self._cell[2] += data
+
+
+def _readme_hardware_table():
+    text = read(ROOT / "README.md")
+    assert "## Supported hardware at a glance" in text
+    section = text.split("## Supported hardware at a glance", 1)[1].split("\n## ", 1)[0]
+    assert "<table" in section, "the hardware table is no longer an HTML table"
+    table = _TableRows()
+    table.feed(section[section.index("<table"):section.index("</table>")])
+    return table
+
+
+def _is_group_heading(row):
+    return [(tag, span) for tag, span, _ in row[2]] == [("td", "3")]
+
+
+def _is_device_row(row):
+    return [(tag, span) for tag, span, _ in row[2]] == [("td", None)] * 3
+
+
+def test_readme_hardware_table_shades_only_its_group_headings():
+    """GitHub shades every second table row (``tr:nth-child(2n)``), and a README
+    cannot restyle it. As a Markdown table the device rows alternated, which
+    read as noise. Each device row is therefore the first row of its own
+    ``tbody`` and stays plain, and each group heading is the second row of its
+    parent and is the only row shaded. A Markdown table, or a row moved into the
+    wrong group element, brings the stripes back."""
+
+    rows = _readme_hardware_table().rows
+    headings = [row for row in rows if _is_group_heading(row)]
+    devices = [row for row in rows if _is_device_row(row)]
+
+    assert rows[0][:2] == ("thead", 1)
+    assert [tag for tag, _, _ in rows[0][2]] == ["th"] * 3
+    assert len(headings) >= 3
+    assert all(position % 2 == 0 for _, position, _ in headings)
+    assert len(devices) >= 10
+    assert all((parent, position) == ("tbody", 1) for parent, position, _ in devices)
+    assert 1 + len(headings) + len(devices) == len(rows)
+
+
+def test_readme_hardware_table_links_resolve():
+    """The table is HTML, so the Markdown link check in test_docs_local_links
+    does not see its links."""
+
+    links = _readme_hardware_table().links
+
+    assert links
+    for href in links:
+        if href.startswith(_EXTERNAL):
+            continue
+        path, _, anchor = href.partition("#")
+        target = ROOT / (path or "README.md")
+        assert target.is_file(), href
+        if anchor:
+            assert anchor in _heading_anchors(target), href
 
 
 def test_supported_setups_page_lives_under_user_docs():

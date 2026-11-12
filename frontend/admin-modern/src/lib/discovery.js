@@ -168,12 +168,31 @@ const FAMILY_TYPES = {
   shelly_gen2: "shelly",
   shelly_3em_gen1: "shelly_3em_gen1",
   ecotracker: "ecotracker",
+  homewizard_p1: "homewizard_p1",
+  powerfox_poweropti: "powerfox_poweropti",
   zendure_grid_meter_http: "zendure_grid_meter_http",
   zendure_smartmeter_3ct_http: "zendure_grid_meter_http",
   tasmota_http: "tasmota_http",
   e3dc_modbus: "e3dc_modbus",
+  sunspec_modbus: "sunspec_modbus",
+  tibber_pulse_bridge: "tibber_pulse_bridge",
 };
-const METER_TYPES = new Set(["shelly", "shelly_3em_gen1", "ecotracker", "zendure_grid_meter_http", "zendure_smartmeter_3ct_http", "zendure_smartmeter_d0_http", "tasmota_http", "e3dc_modbus", "zendure_smartmeter_d0", "mqtt"]);
+const METER_TYPES = new Set(["shelly", "shelly_3em_gen1", "ecotracker", "homewizard_p1", "powerfox_poweropti", "dsmr_p1_tcp", "zendure_grid_meter_http", "zendure_smartmeter_3ct_http", "zendure_smartmeter_d0_http", "tasmota_http", "e3dc_modbus", "sunspec_modbus", "huawei_sun2000_modbus", "sungrow_sh_modbus", "carlo_gavazzi_em24_modbus", "victron_gx_modbus", "smart_me_modbus", "iammeter_wem3080t_modbus", "wibeee_modbus", "tibber_pulse_bridge", "zendure_smartmeter_d0", "mqtt"]);
+
+/** The unit ID a found Modbus meter answered at. */
+export function unitValues(found) {
+  const unit = Number(text(found?.unit_id) || NaN);
+  return Number.isInteger(unit) ? { unit_id: unit } : {};
+}
+
+/** What a found Tibber bridge brings beyond its address: the saved password that opened it and its reading head. */
+export function bridgeValues(found) {
+  const values = {};
+  if (text(found?.credentials_ref)) values.credentials_ref = text(found.credentials_ref);
+  const node = Number(text(found?.node_id) || NaN);
+  if (Number.isInteger(node)) values.node_id = node;
+  return values;
+}
 
 /** The meter type a found grid meter is: chosen, then by its API family, then by its description. */
 export function meterTypeOf(found) {
@@ -654,7 +673,7 @@ export function addFound(draft, item, catalog) {
   if (item.role === "grid_meter") {
     const meter = { present: true, type: meterTypeOf({ device_type: found.device_type || "", api_family: found.api_family || "" }), ip: found.ip || "" };
     if (found.port != null && found.port !== "") meter.port = found.port;
-    return { grid_meter: meter };
+    return { grid_meter: { ...meter, ...bridgeValues(found), ...unitValues(found) } };
   }
   const device = withDefaults({ original_name: null, name: nextInverterName(devices), ip: found.ip || "", sn: found.serial_number || "", enabled: true }, catalog);
   const identity = issuedPhysicalIdentity(found);

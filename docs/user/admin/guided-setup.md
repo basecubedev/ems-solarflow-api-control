@@ -21,8 +21,10 @@ everything first.
 - Docker available to the Admin container.
 - Your inverters powered on and on the same LAN (or reachable through a broker,
   for MQTT).
-- A grid meter (Shelly, everHome EcoTracker, Tasmota, a Zendure meter, or an
-  E3/DC read over Modbus TCP). See
+- A grid meter (Shelly, everHome EcoTracker, HomeWizard P1 Meter, powerfox
+  poweropti, a DSMR P1 bridge, Tasmota, a Zendure meter, or a meter read over
+  Modbus TCP: E3/DC, SunSpec, Huawei, Sungrow, Carlo Gavazzi EM24, Victron GX,
+  smart-me, IAMMETER or Wibeee). See
   [Supported setups](../supported-setups.md).
 - Internet access once, to download the images.
 

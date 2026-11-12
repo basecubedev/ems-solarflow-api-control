@@ -6,11 +6,14 @@
   import DeviceCard from "../DeviceCard.svelte";
   import SettingField from "../SettingField.svelte";
   import CatalogText from "../CatalogText.svelte";
+  import HomeWizardPairing from "../HomeWizardPairing.svelte";
+  import { HOMEWIZARD_TYPE, PAIRING_NAME_FIELD, SERIAL_FIELD, TOKEN_FIELD } from "../../lib/homewizard.js";
   import { t, tn, say, catalogText } from "../../i18n/i18n.svelte.js";
   import { generations, hardwareModels, maturityWords, operationWords, reasonKey } from "../../lib/devices.js";
   import { isExternalProposal, observationKey, sourcesOf } from "../../lib/discovery.js";
   import { CONTINUITY, D0_TYPE, DEFAULT_GRID_METER, DEFAULT_INVERTER, SWITCH_REASONS, candidateState, catalogSection, deviceFieldKey, deviceValue, featureValue, formGeneration, gridFields, gridMeterType, hasSource, inverterCards, isReady, manualControl, meterIsMqtt, modelsForGeneration, pendingConfirmations, selectionControllable, topicMode, unselectedProposals } from "../../lib/setupDraft.js";
   import { setup } from "../../state/setup.svelte.js";
+  import BridgePasswordField from "../BridgePasswordField.svelte";
   import { setupDiscovery } from "../../state/setupDiscovery.svelte.js";
   import {
     setupDraft,
@@ -163,6 +166,14 @@
   </div>
 {/snippet}
 
+{#snippet meterField(field)}
+  {#if field.path === "grid_meter.credentials_ref"}
+    <BridgePasswordField {field} value={featureValue(draft.features, field)} onchange={(value) => setGridFeature(field.path, value)} />
+  {:else}
+    <SettingField {field} value={featureValue(draft.features, field)} onchange={(value) => setGridFeature(field.path, value)} type={field.secret ? "password" : ""} />
+  {/if}
+{/snippet}
+
 {#snippet enabledRow(checked, onchange, hint)}
   <label class="check"><input type="checkbox" {checked} onchange={(event) => onchange(event.currentTarget.checked)} /><span>{t("setup.hardware.enabled")}</span></label>
   <p class="muted small">{hint}</p>
@@ -193,15 +204,18 @@
           </div>
           <p class="muted small">{#if variants[gridType]?.port_description}<CatalogText text={variants[gridType].port_description} />{:else}{t("setup.hardware.httpPort")}{/if}</p>
         {/if}
+        {#if gridType === HOMEWIZARD_TYPE}
+          <HomeWizardPairing ip={grid.ip} port={grid.port} paired={Boolean(draft.features[TOKEN_FIELD])} serial={draft.features[SERIAL_FIELD] || ""} pairingName={draft.features[PAIRING_NAME_FIELD] || ""} onpaired={({ serial, token, pairingName }) => { setGridFeature(SERIAL_FIELD, serial); setGridFeature(TOKEN_FIELD, token); setGridFeature(PAIRING_NAME_FIELD, pairingName); }} />
+        {/if}
         <div class="fields">
-          {#each meterFields.normal as field (field.path)}<SettingField {field} value={featureValue(draft.features, field)} onchange={(value) => setGridFeature(field.path, value)} type={field.secret ? "password" : ""} />{/each}
+          {#each meterFields.normal as field (field.path)}{@render meterField(field)}{/each}
         </div>
         {#each ["advanced", "expert"] as level (level)}
           {#if meterFields[level].length}
             <details>
               <summary>{t(`settings.edit.level.${level}`)}</summary>
               <div class="fields">
-                {#each meterFields[level] as field (field.path)}<SettingField {field} value={featureValue(draft.features, field)} onchange={(value) => setGridFeature(field.path, value)} type={field.secret ? "password" : ""} />{/each}
+                {#each meterFields[level] as field (field.path)}{@render meterField(field)}{/each}
               </div>
             </details>
           {/if}

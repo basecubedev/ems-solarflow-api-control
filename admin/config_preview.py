@@ -33,14 +33,23 @@ from admin.zendure_mqtt_config_draft import (
 )
 from ems.config import (
     E3DC_MODBUS_GRID_METER_TYPE,
+    GRID_METER_READER_SETTINGS,
+    HOMEWIZARD_P1_GRID_METER_TYPE,
+    POWERFOX_GRID_METER_TYPE,
+    SUNSPEC_MODBUS_GRID_METER_TYPE,
+    TIBBER_PULSE_BRIDGE_KEYS,
+    TIBBER_PULSE_GRID_METER_TYPE,
     MQTT_GRID_METER_TYPES,
     ZENDURE_SMARTMETER_D0_GRID_METER_TYPE,
     MqttBrokerReferenceAmbiguousError,
+    check_homewizard_p1_pairing_name,
     default_mqtt_port,
     e3dc_modbus_device_settings,
     e3dc_modbus_grid_meter_settings,
+    homewizard_p1_grid_meter_settings,
     normalize_mqtt_grid_meter_settings,
     optional_json_bool,
+    tibber_pulse_grid_meter_settings,
     parse_mqtt_port,
     resolve_grid_meter_mqtt_settings,
     zendure_smartmeter_d0_serial_from_topic,
@@ -81,11 +90,15 @@ _GRID_TYPES = {
     "shelly_gen2": "shelly",
     "shelly_3em_gen1": "shelly_3em_gen1",
     "ecotracker": "ecotracker",
+    HOMEWIZARD_P1_GRID_METER_TYPE: HOMEWIZARD_P1_GRID_METER_TYPE,
+    POWERFOX_GRID_METER_TYPE: POWERFOX_GRID_METER_TYPE,
+    SUNSPEC_MODBUS_GRID_METER_TYPE: SUNSPEC_MODBUS_GRID_METER_TYPE,
     # Both D0 and Smart Meter 3CT are discovered as the generic local-HTTP family.
     "zendure_grid_meter_http": "zendure_grid_meter_http",
     "zendure_smartmeter_3ct_http": "zendure_grid_meter_http",
     "tasmota_http": "tasmota_http",
     E3DC_MODBUS_GRID_METER_TYPE: E3DC_MODBUS_GRID_METER_TYPE,
+    TIBBER_PULSE_GRID_METER_TYPE: TIBBER_PULSE_GRID_METER_TYPE,
 }
 # Explicit meter types a manual (non-discovered) grid meter may declare. A manual
 # entry has no api_family/device_type, so its type must be chosen, not inferred.
@@ -546,6 +559,79 @@ def _validate_e3dc_grid_meter_via_core(preview, validation):
         validation["errors"].append(_issue("grid_meter_e3dc_modbus_invalid", str(exc)))
 
 
+def _validate_reader_grid_meter_via_core(preview, validation):
+    """A meter the EMS reads with settings of its own is checked by the EMS's own validator."""
+
+    grid = preview.get("grid_meter")
+    if not isinstance(grid, dict):
+        return
+    settings = GRID_METER_READER_SETTINGS.get(str(grid.get("type") or "").strip().lower())
+    if settings is None:
+        return
+    try:
+        settings(grid)
+    except ValueError as exc:
+        validation["errors"].append(_issue("grid_meter_settings_invalid", str(exc)))
+
+
+def _validate_homewizard_grid_meter_via_core(preview, validation):
+    """A HomeWizard P1 Meter is ready only once it is paired; the EMS cannot read it otherwise."""
+
+    grid = preview.get("grid_meter")
+    if not isinstance(grid, dict):
+        return
+    if str(grid.get("type") or "").strip().lower() != HOMEWIZARD_P1_GRID_METER_TYPE:
+        return
+    try:
+        homewizard_p1_grid_meter_settings(grid)
+        check_homewizard_p1_pairing_name(grid)
+    except ValueError as exc:
+        validation["errors"].append(_issue("grid_meter_homewizard_p1_unpaired", str(exc)))
+
+
+def tibber_grid_meter_issues(grid_meter, credential_store=None):
+    """Why a Tibber Pulse grid meter block would fail the EMS, as issues.
+
+    Runs the factory's own validator, then checks that the named bridge
+    password is saved and decrypts, so a config the EMS cannot read is never
+    written.
+    """
+
+    try:
+        settings = tibber_pulse_grid_meter_settings(grid_meter)
+    except ValueError as exc:
+        return [_issue("grid_meter_tibber_pulse_invalid", str(exc))]
+    from admin.credential_store import CredentialStore
+
+    store = credential_store or CredentialStore()
+    ref = settings["credentials_ref"]
+    if store.load_bridge_password(ref):
+        return []
+    if store.bridge_password_status(ref)["saved"]:
+        return [
+            _issue(
+                "grid_meter_bridge_password_unreadable",
+                f"The bridge password '{ref}' is saved but cannot be decrypted. Save it again.",
+            )
+        ]
+    return [
+        _issue(
+            "grid_meter_bridge_password_missing",
+            f"The bridge password '{ref}' is not saved. "
+            "Save it under the network search sources first.",
+        )
+    ]
+
+
+def _validate_tibber_grid_meter_via_core(preview, validation):
+    grid = preview.get("grid_meter")
+    if not isinstance(grid, dict):
+        return
+    if str(grid.get("type") or "").strip().lower() != TIBBER_PULSE_GRID_METER_TYPE:
+        return
+    validation["errors"].extend(tibber_grid_meter_issues(grid))
+
+
 def _add_e3dc_meter_as_read_only_device(preview, names, validation):
     """Show an E3/DC grid meter as its own read-only device, once.
 
@@ -921,12 +1007,23 @@ def _build_grid_meter(meter, defaults, validation, features):
         source_type = str(meter.get("grid_meter_type") or "").strip().lower() or (
             _inferred_grid_type(meter)
         )
-        port_carries = not source_type or grid_meter_port_carries_over(source_type, grid_type)
+        port_carries = (
+            not source_type
+            or source_type == grid_type
+            or grid_meter_port_carries_over(source_type, grid_type)
+        )
         if "port" in spec["keys"] and meter.get("port") and port_carries:
             try:
                 grid["port"] = int(meter["port"])
             except (TypeError, ValueError):
                 grid.pop("port", None)
+        unit_id = meter.get("unit_id")
+        if "unit_id" in spec["keys"] and type(unit_id) is int and _inferred_grid_type(meter) == grid_type:
+            grid["unit_id"] = unit_id
+    if grid_type == TIBBER_PULSE_GRID_METER_TYPE:
+        for key in TIBBER_PULSE_BRIDGE_KEYS:
+            if meter.get(key) not in (None, ""):
+                grid[key] = meter[key]
     return grid
 
 
@@ -970,6 +1067,7 @@ def _apply_d0_defaults(grid, meter, validation):
         mqtt["topic"] = existing_topic
     mqtt["payload_format"] = "number"
     mqtt.pop("value_path", None)
+    mqtt.pop("export_value_path", None)
 
 
 def _normalize_bundled_influx_secret(config):
@@ -1206,6 +1304,9 @@ class ConfigPreviewGenerator:
         # preview can never fail at runtime.
         _validate_mqtt_grid_meter_via_core(preview, validation)
         _validate_e3dc_grid_meter_via_core(preview, validation)
+        _validate_homewizard_grid_meter_via_core(preview, validation)
+        _validate_reader_grid_meter_via_core(preview, validation)
+        _validate_tibber_grid_meter_via_core(preview, validation)
         _add_e3dc_meter_as_read_only_device(preview, names, validation)
 
         _normalize_bundled_influx_secret(preview)

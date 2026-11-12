@@ -300,6 +300,39 @@ placeholder for a later phase.
   - Shelly Pro / Gen2 meter — `GET /rpc/Shelly.GetStatus` → role `grid_meter`
   - Shelly 3EM Gen1 meter — `GET /status` → role `grid_meter`
   - everHome EcoTracker — `GET /v1/json` → role `grid_meter`
+  - HomeWizard P1 Meter — one TLS handshake on port 443, no HTTP request: a
+    certificate HomeWizard's Appliance Access CA issued for
+    `appliance/p1dongle/<serial>` → role `grid_meter`, family `homewizard_p1`,
+    with that serial; another HomeWizard product or any other certificate is
+    no candidate. The connect waits the scan's timeout; the handshake on a port
+    that answered may take up to 3 s, because a small device's TLS handshake
+    can take longer than the scan's timeout. The meter still has to be paired
+    (its button pressed) in the hardware step: the setup preview stays not
+    ready until it is, see [HomeWizard pairing](#homewizard-p1-meter-pairing).
+  - Tibber Pulse bridge (experimental) — `GET /` without a login → role
+    `grid_meter`, family `tibber_pulse_bridge`. Only a `401` whose body carries
+    the bridge's refusal text (`Username/Password Authentication Failed.`) or
+    whose Basic challenge names Tibber makes a candidate; any other login page
+    is no candidate. Only the first 2 KiB of a 401 are read, and nothing of any
+    other answer. The connect timeout is the scan's; the read timeout is at
+    least 2.5 s, because a bridge often needs more than a second to answer.
+    On a candidate, and only there, the scan worker that found it tries the
+    saved bridge passwords (below) against `/nodes.json` with HTTP Basic user
+    `admin`, through the EMS's own bridge reader
+    (`ems.tibber_pulse.TibberPulseBridge`); they are read once per scan, and
+    only when a bridge is found. The first one the bridge accepts becomes the
+    candidate's `credentials_ref`, its lowest reading head numbered 1–255 the
+    `node_id` (the head's EUI is not the bridge's serial, so the candidate
+    stays keyed by its address across scans), and
+    `/test.json` names the firmware. A bridge no saved password opens stays a
+    candidate that still needs one (`missing_config_fields`
+    `grid_meter.credentials_ref`). Only a 200 proves the bridge took a
+    password: one whose `/nodes.json` is no JSON keeps it and still needs its
+    node (`grid_meter.node_id`). A server error (5xx) ends the attempt without
+    a password, since the bridge answers a wrong login with 401 and hangs under
+    load; any other answer, a 404 among them, tries the next password. The refusal text comes from one published
+    capture; a bridge whose firmware answers differently is not found and is
+    added by hand.
 - Reads the E3/DC magic word over Modbus TCP (port 502, unit ID 1, register
   40001) and offers a host that answers `0xE3DC` as an E3/DC storage system →
   role `grid_meter`, family `e3dc_modbus`, with its model, serial and firmware
@@ -313,6 +346,22 @@ placeholder for a later phase.
   (*Add as grid meter*, *Add as read-only device*) and reports a saved
   read-only E3/DC on the probed endpoint (port 502, unit ID 1) that the scan
   did not find as *Not found*.
+- Looks for a SunSpec meter over Modbus TCP (port 502), after the E3/DC probe:
+  one connection tries the unit IDs meters are commonly served at, 1, 200 (a
+  Fronius inverter's primary Smart Meter) and 71 (a Kostal Smart Energy
+  Meter), finds the `SunS`
+  marker at register 40000, 0 or 50000 and follows the model chain to a meter
+  model (201 to 204, 211 to 214) → role `grid_meter`, family `sunspec_modbus`,
+  named by the device's SunSpec common model (for example *Fronius Smart Meter
+  63A*) and carrying the unit ID it answered at, which Setup and Maintenance
+  take into `grid_meter.unit_id`. A unit that answers with a Modbus exception
+  or without a meter model is skipped; a transport error, a unit that stays
+  silent among them, ends the probe, so a closed port costs one timeout. Only
+  reads are sent. A Kostal Plenticore, which serves SunSpec on port 1502 at
+  unit ID 71, is added by hand.
+- A DSMR P1 bridge and a Linky read through Zigbee2MQTT are not found by the
+  scan: P1 bridges share no port and only send when connected, and the Linky
+  is a JSON message on an MQTT topic. Both are added by hand.
 - Shows each device with IP, API family/type, suggested role, serial (or
   `missing`), confidence, and config readiness.
 
@@ -340,9 +389,24 @@ first read.
     "enabled": true,
     "credential_refs": ["home-broker", "mosquitto"]
   },
-  "zendure_mqtt": {"enabled": true, "token_ref": "zendure-cloud"}
+  "zendure_mqtt": {"enabled": true, "token_ref": "zendure-cloud"},
+  "tibber_bridge": {"credential_refs": ["basement"]}
 }
 ```
+
+The unified search result carries a found bridge's `credentials_ref` and
+`node_id` (`CONFIG_HINT_KEYS` in `admin/discovery_unify.py`); no other device
+gets those keys.
+
+`tibber_bridge.credential_refs` names the saved Tibber bridge passwords, each a
+`bridge-<ref>.json` record in `config/secrets/`. One record serves the scan and
+the runtime: a Tibber grid meter names it by `grid_meter.credentials_ref`, and
+the EMS reads it itself (`ems.mqtt_credentials.FileBridgePasswordResolver`).
+Only the bridge-password routes change that list; the general connections save
+leaves it as it is. Setup and Maintenance refuse a Tibber meter whose password is not saved
+(`grid_meter_bridge_password_missing`) or no longer decrypts
+(`grid_meter_bridge_password_unreadable`). A label that differs from the
+saved one only in letter case replaces that password.
 
 Discovery holds no broker-specific connection config (host/port/TLS/user): it
 scans for endpoints and tries anonymous plus every pooled credential against
@@ -443,6 +507,21 @@ API:
   discovery credential (`{id?, label, username, password}`); the `username`/
   `password` is stored in `config/secrets/` and only its `credential_ref` is
   persisted. `label` is required (or derived from `id`).
+- `GET /api/discovery/connections/bridge-passwords` — the saved Tibber bridge
+  passwords by name (`id`, `label`, `saved`, `encrypted`), never a password.
+- `POST /api/discovery/connections/bridge-passwords` — save one from
+  `{"label", "password"}`; the reference is derived from the label. Saving
+  under the same label replaces that password; a label that maps to another
+  saved password's reference is refused (`409 bridge_password_name_taken`), one
+  without a letter or digit or too long for a reference too
+  (`400 bridge_password_name_invalid`), and a password with characters an HTTP
+  login cannot carry (outside Latin-1) as well (`400 bridge_password_invalid`).
+- `DELETE /api/discovery/connections/bridge-passwords/<id>` — remove one;
+  `<id>` must be a reference exactly as listed, anything else answers 404;
+  `409 bridge_password_in_use` while the saved config's grid meter is a Tibber
+  meter that names it, or while the saved config cannot be read;
+  `500 store_failed`, with the password still listed, when its file cannot be
+  removed.
 - `DELETE /api/discovery/connections/mqtt-credentials/<id>` — remove one credential
   ref and forget its stored secret; other credentials are untouched.
 - `POST /api/discovery/connections/mqtt-brokers` /
@@ -453,6 +532,38 @@ API:
   entry did not create, or one the installed config uses, is refused with
   `409 credentials_ref_in_use`, and a delete keeps a record the config still
   uses (an unreadable config counts as using it).
+
+## HomeWizard P1 Meter pairing
+
+A HomeWizard P1 Meter answers its local API v2 only with a token it hands out
+after its button was pressed. `POST /api/grid-meter/homewizard-p1/pair` with
+`{"ip": "<address>", "port": <optional, 443>, "pairing_name": <optional>}`
+makes one attempt, behind the signed-in session and its CSRF token like every
+other write. The name comes from the installation's `config.json`
+(`grid_meter.pairing_name`), not from the browser, so pairing again replaces
+only this installation's own pairing. Before the config holds one, a name of
+this project's own form (`local/ems_solarflow#` and six hex digits) that the
+console made up earlier in the same draft is reused; anything else gets a new
+name, so the browser can never pair under another application's name:
+
+| Answer | Meaning |
+| --- | --- |
+| `{"state": "waiting"}` | the button was not pressed yet; ask again |
+| `{"state": "paired", "serial": "…", "token": "…", "pairing_name": "…"}` | the meter granted a token to that name |
+| `{"state": "failed", "reason": "…", "message": "…"}` | `unreachable`, `not_a_p1_meter`, `no_room`, `http_status` or `invalid_answer` |
+| HTTP 400 `{"error": "…"}` | no IP address, or one outside the private, link-local and loopback ranges the scan may reach |
+
+The connection trusts HomeWizard's Appliance Access CA alone. The route stores
+nothing: the Modern console asks every two seconds for up to a minute and puts
+serial, token and name into the editor's draft (the device editor in Settings, the
+grid meter card in Guided Setup). They reach `config.json` only through a
+checked and saved preview, and both workflows refuse a `homewizard_p1` meter
+without them (`grid_meter_homewizard_p1_unpaired`), as the EMS would. Every
+browser view shows `has_token`, never the token; the tab's storage keeps a new
+pairing in memory only. Pairing again asks first, because the meter refuses the
+stored token as soon as it hands out a new one, and setup drops a pairing when
+the grid meter's type or address changes. The Classic console offers no
+pairing; it shows the token as a write-only secret field.
 
 ## Maintenance discovery sources
 
@@ -720,13 +831,21 @@ networking (below) gives the most realistic LAN/VLAN view.
 ## Live mDNS discovery
 
 The page runs mDNS discovery in the background while it is open and merges
-discovered Zendure devices into the same **Discovered devices** list.
+discovered Zendure devices, Shelly meters, HomeWizard P1 Meters and powerfox
+poweroptis into the same **Discovered devices** list.
 
-- **Service types:** `_http._tcp` and `_zendure._tcp`. General HTTP services are
-  ignored unless their instance name starts with `Zendure-`.
-- **Verified, not assumed:** an mDNS hit is only a candidate. It is HTTP-verified
-  the same way a network scan is (`GET /properties/report`) before it is shown as
-  a real, config-ready device. Unverified candidates are not promoted.
+- **Service types:** `_http._tcp`, `_zendure._tcp`, `_shelly._tcp`,
+  `_homewizard._tcp` and `_hwenergy._tcp`. General HTTP services are ignored
+  unless their instance name starts with `Zendure-`, `shelly` or `powerfox`.
+- **HomeWizard:** a `_homewizard._tcp` or `_hwenergy._tcp` service is verified
+  by the same TLS handshake on port 443 as the scan, whatever port it
+  advertises, so only a P1 Meter whose certificate HomeWizard issued is shown.
+- **powerfox:** a poweropti's local API answers nothing without its API key, so
+  an `_http._tcp` service named `powerfox…` is offered as an unverified grid
+  meter that still needs `grid_meter.token`, the device ID on its label.
+- **Verified, not assumed:** an mDNS hit is only a candidate. It is verified the
+  same way a network scan is (`GET /properties/report` for Zendure) before it is
+  shown as a real, config-ready device. Unverified candidates are not promoted.
 - **Own discovery source:** mDNS **always merges** and **never clears** manual
   scan results. It does not depend on the **Keep previous results** toggle (that
   toggle only controls manual-scan replace-vs-keep behavior).

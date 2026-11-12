@@ -14,7 +14,7 @@ import hmac
 import json
 
 from admin import consumer_history
-from admin.config_preview import _GRID_TYPE_CHOICES, _valid_host
+from admin.config_preview import _GRID_TYPE_CHOICES, _valid_host, tibber_grid_meter_issues
 from admin.config_runtime_overlap import applies_live, live_device_paths, overlap_provenance_for_context, runtime_device_entries
 from admin.connection_planner import (
     INTENT_SWITCH_CONNECTION,
@@ -63,14 +63,21 @@ from admin.zendure_mqtt_config_draft import (
 from ems.config import (
     DASHBOARD_DEFAULTS,
     E3DC_MODBUS_GRID_METER_TYPE,
+    GRID_METER_READER_SETTINGS,
+    HOMEWIZARD_P1_GRID_METER_TYPE,
+    HOMEWIZARD_P1_PAIRING_KEYS,
+    TIBBER_PULSE_BRIDGE_KEYS,
+    TIBBER_PULSE_GRID_METER_TYPE,
     MQTT_DEFAULT_PORT,
     MQTT_GRID_METER_TYPES,
     MqttBrokerReferenceAmbiguousError,
+    check_homewizard_p1_pairing_name,
     config_control_devices_by_gate,
     config_control_flags,
     e3dc_modbus_device_settings,
     e3dc_modbus_grid_meter_settings,
     grid_meter_mqtt_settings,
+    homewizard_p1_grid_meter_settings,
     normalize_mqtt_grid_meter_settings,
     parse_mqtt_port,
     resolve_config_write_gate,
@@ -87,6 +94,7 @@ from ems.config_catalog import (
     device_common_defaults,
     device_common_field_keys,
     get_config_feature_sections,
+    grid_meter_variant_field_spec,
     is_editable_catalog_field,
     http_grid_meter_types,
 )
@@ -892,12 +900,19 @@ def _grid_meter_draft(grid_meter):
         draft["url"] = str(grid_meter.get("url")).strip()
     if grid_meter.get("power_path"):
         draft["power_path"] = str(grid_meter.get("power_path")).strip()
+    if grid_meter.get("export_path"):
+        draft["export_path"] = str(grid_meter.get("export_path")).strip()
     channels = grid_meter.get("channels")
     if isinstance(channels, list):
         draft["channels"] = [str(item) for item in channels]
-    for key in _GRID_METER_MODBUS_KEYS:
+    for key in (*_GRID_METER_MODBUS_KEYS, *_GRID_METER_BRIDGE_KEYS):
         if grid_meter.get(key) is not None:
             draft[key] = grid_meter.get(key)
+    if draft["type"] == HOMEWIZARD_P1_GRID_METER_TYPE:
+        draft["serial"] = str(grid_meter.get("serial") or "").strip()
+        draft["pairing_name"] = str(grid_meter.get("pairing_name") or "").strip()
+    if "token" in (grid_meter_variant_field_spec(draft["type"]) or {}).get("keys", ()):
+        draft["has_token"] = bool(grid_meter.get("token"))
     if draft["type"] in _MQTT_GRID_METER_TYPES:
         draft["mqtt"] = _grid_meter_mqtt_draft(grid_meter)
     return draft
@@ -2200,10 +2215,12 @@ def _coerce_number(value):
 
 
 _GRID_METER_MODBUS_KEYS = ("unit_id",)
+_GRID_METER_BRIDGE_KEYS = TIBBER_PULSE_BRIDGE_KEYS
 _GRID_METER_DRAFT_KEYS = (
-    "type", "ip", "port", "url", "power_path", "channels", *_GRID_METER_MODBUS_KEYS,
+    "type", "ip", "port", "url", "power_path", "export_path", "channels", *_GRID_METER_MODBUS_KEYS,
+    *HOMEWIZARD_P1_PAIRING_KEYS, *_GRID_METER_BRIDGE_KEYS,
 )
-_GRID_METER_OPTIONAL_NUMBER_KEYS = frozenset({"port", *_GRID_METER_MODBUS_KEYS})
+_GRID_METER_OPTIONAL_NUMBER_KEYS = frozenset({"port", "node_id", *_GRID_METER_MODBUS_KEYS})
 
 
 def _grid_meter_changes(grid_meter):
@@ -2521,6 +2538,23 @@ def _validate(config, merge_issues=()):
                 validation["errors"].append(
                     _issue("grid_meter_e3dc_modbus_invalid", str(exc))
                 )
+        if meter_type == HOMEWIZARD_P1_GRID_METER_TYPE:
+            try:
+                homewizard_p1_grid_meter_settings(grid_meter)
+                check_homewizard_p1_pairing_name(grid_meter)
+            except ValueError as exc:
+                validation["errors"].append(
+                    _issue("grid_meter_homewizard_p1_unpaired", str(exc))
+                )
+        if meter_type in GRID_METER_READER_SETTINGS:
+            try:
+                GRID_METER_READER_SETTINGS[meter_type](grid_meter)
+            except ValueError as exc:
+                validation["errors"].append(
+                    _issue("grid_meter_settings_invalid", str(exc))
+                )
+        if meter_type == TIBBER_PULSE_GRID_METER_TYPE:
+            validation["errors"].extend(tibber_grid_meter_issues(grid_meter))
         # Parity with the Core resolver EMS runs at startup: an MQTT grid meter
         # that Core rejects (missing host/topic, unknown/disabled broker ref,
         # invalid port, conflicting inline settings) must fail Maintenance before

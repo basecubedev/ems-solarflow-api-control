@@ -51,6 +51,11 @@ body:
         - Zendure Smart Meter HTTP
         - Shelly
         - EcoTracker HTTP
+        - HomeWizard P1 (local API v2)
+        - powerfox poweropti (local API)
+        - DSMR P1 over TCP (P1 bridge)
+        - SunSpec meter over Modbus TCP
+        - Huawei, Sungrow, Carlo Gavazzi EM24, Victron GX, smart-me, IAMMETER or Wibeee over Modbus TCP
         - Tasmota HTTP
         - Other
     validations:

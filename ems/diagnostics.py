@@ -1034,14 +1034,7 @@ def diagnose_config_plausibility(checks, args, config_data):
         # at all, so its degenerate settings zero -- or inflate -- the statistics
         # as quietly as the sample window does. Read it the way the controller
         # does: unparsable falls back to the default, negative clamps to zero.
-        output_control = system.get("output_control")
-        output_control = output_control if isinstance(output_control, dict) else {}
-        telemetry_window = diagnose_float(
-            output_control.get("telemetry_max_age_seconds", 10)
-        )
-        telemetry_window = max(
-            0.0, 10.0 if telemetry_window is None else telemetry_window
-        )
+        telemetry_window = diagnose_telemetry_window(system)
         plausible_window = max(
             ENERGY_TELEMETRY_WINDOW_MAX_PLAUSIBLE_SECONDS,
             (loop_tick or 0) * ENERGY_TELEMETRY_WINDOW_MAX_PLAUSIBLE_INTERVALS,
@@ -1613,6 +1606,14 @@ def diagnose_grid_meter_config(checks, config_data):
             diagnose_add(checks, "config", "ok", "grid_meter_ip_present", f"{meter_type} grid meter IP is configured")
         else:
             diagnose_add(checks, "config", "error", "grid_meter_ip_missing", f"{meter_type} grid meter requires grid_meter.ip")
+    elif meter_type == config_mod.HOMEWIZARD_P1_GRID_METER_TYPE:
+        try:
+            config_mod.homewizard_p1_grid_meter_settings(grid_meter)
+            config_mod.check_homewizard_p1_pairing_name(grid_meter)
+        except ValueError as exc:
+            diagnose_add(checks, "config", "error", "grid_meter_homewizard_p1_invalid", f"HomeWizard P1 Meter settings are invalid: {exc}", hint=_HOMEWIZARD_PAIR_HINT)
+        else:
+            diagnose_add(checks, "config", "ok", "grid_meter_homewizard_p1_paired", "HomeWizard P1 Meter address, serial and token are configured")
     elif meter_type == "tasmota_http":
         if grid_meter.get("url") or grid_meter.get("ip"):
             diagnose_add(checks, "config", "ok", "grid_meter_endpoint_present", "Tasmota HTTP grid meter endpoint is configured")
@@ -1666,6 +1667,11 @@ def diagnose_grid_meter_config(checks, config_data):
             diagnose_add(checks, "config", "error", "grid_meter_mqtt_payload_format_invalid", "Zendure SmartMeter D0 requires payload_format number", payload_format=payload_format)
         if payload_format == "json" and not mqtt_settings.get("value_path"):
             diagnose_add(checks, "config", "error", "grid_meter_mqtt_value_path_missing", "MQTT JSON grid meter requires grid_meter.mqtt.value_path")
+        if meter_type == "mqtt":
+            try:
+                config_mod.mqtt_grid_meter_value_scale(mqtt_settings)
+            except ValueError as exc:
+                diagnose_add(checks, "config", "error", "grid_meter_mqtt_value_scale_invalid", str(exc))
         tls_enabled = config_mod.safe_bool(mqtt_settings.get("tls"), False)
         tls_insecure = config_mod.safe_bool(mqtt_settings.get("tls_insecure"), False)
         if tls_enabled and tls_insecure:
@@ -1680,6 +1686,14 @@ def diagnose_grid_meter_config(checks, config_data):
                 f"{label} TLS: {'enabled' if tls_enabled else 'disabled'}",
                 tls=tls_enabled, tls_insecure=False,
             )
+    elif meter_type in config_mod.GRID_METER_READER_SETTINGS:
+        label = GRID_METER_PROVIDERS[meter_type]
+        try:
+            config_mod.GRID_METER_READER_SETTINGS[meter_type](grid_meter)
+        except ValueError as exc:
+            diagnose_add(checks, "config", "error", "grid_meter_settings_invalid", f"{label} settings are invalid: {exc}", type=meter_type)
+        else:
+            diagnose_add(checks, "config", "ok", "grid_meter_settings_complete", f"{label} settings are complete", type=meter_type)
     elif meter_type == config_mod.E3DC_MODBUS_GRID_METER_TYPE:
         if not str(grid_meter.get("ip") or "").strip():
             diagnose_add(checks, "config", "error", "grid_meter_ip_missing", f"{meter_type} grid meter requires grid_meter.ip")
@@ -1689,6 +1703,19 @@ def diagnose_grid_meter_config(checks, config_data):
                 config_mod.e3dc_modbus_grid_meter_settings(grid_meter)
             except ValueError as exc:
                 diagnose_add(checks, "config", "error", "grid_meter_e3dc_modbus_invalid", f"E3/DC Modbus grid meter settings are invalid: {exc}")
+    elif meter_type == config_mod.TIBBER_PULSE_GRID_METER_TYPE:
+        try:
+            config_mod.tibber_pulse_grid_meter_settings(grid_meter)
+        except ValueError as exc:
+            diagnose_add(checks, "config", "error", "grid_meter_tibber_pulse_invalid", f"Tibber Pulse grid meter settings are invalid: {exc}")
+        else:
+            diagnose_add(checks, "config", "ok", "grid_meter_tibber_pulse_configured", "Tibber Pulse bridge address and password reference are configured")
+        diagnose_add(
+            checks, "config", "info", "grid_meter_tibber_pulse_experimental",
+            "The Tibber Pulse bridge is an experimental grid meter: it answers slowly, "
+            "new values arrive only every 2-3 s, and Tibber can change its local "
+            "interface with any firmware update",
+        )
     else:
         diagnose_add(checks, "config", "warning", "grid_meter_type_unknown", f"Unknown grid meter type: {meter_type}", type=meter_type)
 
@@ -2123,11 +2150,120 @@ GRID_METER_PROVIDERS = {
     "shelly": "Shelly",
     "shelly_3em_gen1": "Shelly 3EM Gen1",
     "ecotracker": "EcoTracker",
+    config_mod.HOMEWIZARD_P1_GRID_METER_TYPE: "HomeWizard P1",
+    config_mod.POWERFOX_GRID_METER_TYPE: "powerfox poweropti",
+    config_mod.DSMR_P1_TCP_GRID_METER_TYPE: "DSMR P1",
+    config_mod.SUNSPEC_MODBUS_GRID_METER_TYPE: "SunSpec meter",
+    **{meter_type: profile.label for meter_type, profile in config_mod.MODBUS_METER_PROFILES.items()},
     "tasmota_http": "Tasmota",
     "mqtt": "MQTT",
     "zendure_smartmeter_d0": "Zendure SmartMeter D0",
     config_mod.E3DC_MODBUS_GRID_METER_TYPE: "E3/DC",
+    config_mod.TIBBER_PULSE_GRID_METER_TYPE: "Tibber Pulse",
 }
+
+
+_HOMEWIZARD_DSMR5_VERSION = 50
+_HOMEWIZARD_DSMR4_LOOP_INTERVAL_MIN_S = 11
+_HOMEWIZARD_DSMR4_HINT = (
+    "Set the loop interval to 11 s or more in the Admin Console or with "
+    "'python3 emsctl.py system loop-interval 11' (runtime-state overrides a hand edit of "
+    "config.json), and system.output_control.telemetry_max_age_seconds to at least twice "
+    "that, for example 22, so one missed read does not count as stale."
+)
+
+
+_HOMEWIZARD_PAIR_HINT = "Pair the meter in the Admin Console or with 'python3 emsctl.py config init'."
+_HOMEWIZARD_REASON_HINTS = {
+    "unauthorized": "The meter no longer accepts the token. " + _HOMEWIZARD_PAIR_HINT,
+    "other_meter": "Another P1 Meter now has this address: enter the address the paired meter has now, or pair the new one.",
+    "not_a_p1_meter": "The device at grid_meter.ip is not a HomeWizard P1 Meter; check the address.",
+}
+
+
+def _diagnose_homewizard_p1(checks, grid_meter, grid_tracker, loop_interval, telemetry_window):
+    from ems.clients import _parse_homewizard_p1_measurement
+    from ems.homewizard import HomeWizardError, HomeWizardP1Api
+
+    try:
+        settings = config_mod.homewizard_p1_grid_meter_settings(grid_meter)
+    except ValueError as exc:
+        grid_tracker.record_failure(error=exc, latency_ms=0.0)
+        diagnose_add(checks, "hardware", "warning", "homewizard_p1_unpaired", f"HomeWizard P1 Meter read-only probe skipped: {exc}", hint=_HOMEWIZARD_PAIR_HINT)
+        return
+    api = HomeWizardP1Api(settings["host"], serial=settings["serial"], token=settings["token"], port=settings["port"])
+    start = time.monotonic()
+    try:
+        payload = api.measurement()
+        power, timestamp = _parse_homewizard_p1_measurement(payload)
+    except (HomeWizardError, ValueError) as exc:
+        _diagnose_record_probe(grid_tracker, start, exc)
+        reason = getattr(exc, "reason", "invalid_answer")
+        diagnose_add(
+            checks, "hardware", "warning", "homewizard_p1_read_failed",
+            f"HomeWizard P1 Meter read-only probe failed: {exc}",
+            hint=_HOMEWIZARD_REASON_HINTS.get(reason),
+            reason=reason,
+        )
+        return
+    finally:
+        api.close()
+    _diagnose_record_probe(grid_tracker, start)
+    protocol_version = payload.get("protocol_version")
+    diagnose_add(checks, "hardware", "ok", "homewizard_p1_read_ok", "HomeWizard P1 Meter local API v2 returned parseable power", power_w=power, timestamp=timestamp, protocol_version=protocol_version, serial=settings["serial"])
+    if type(protocol_version) is int and protocol_version < _HOMEWIZARD_DSMR5_VERSION:
+        message = f"The smart meter speaks DSMR {protocol_version / 10:g} and sends a new reading only every 10 s"
+        if loop_interval < _HOMEWIZARD_DSMR4_LOOP_INTERVAL_MIN_S:
+            message += (
+                f", so with a loop interval of {loop_interval:g} s one reading reaches two "
+                "control cycles and its correction counts twice"
+            )
+        elif telemetry_window < 2 * loop_interval:
+            message += (
+                f"; the loop interval of {loop_interval:g} s is long enough, but "
+                f"system.output_control.telemetry_max_age_seconds at {telemetry_window:g} s is "
+                "below twice that, so one missed read already counts as stale"
+            )
+        else:
+            message += f"; the loop interval of {loop_interval:g} s reads each reading once"
+        settled = loop_interval >= _HOMEWIZARD_DSMR4_LOOP_INTERVAL_MIN_S and telemetry_window >= 2 * loop_interval
+        diagnose_add(
+            checks, "hardware", "info" if settled else "warning", "homewizard_p1_slow_meter", message,
+            hint=None if settled else _HOMEWIZARD_DSMR4_HINT,
+            protocol_version=protocol_version,
+            loop_interval=loop_interval,
+            telemetry_max_age_seconds=telemetry_window,
+        )
+
+
+_DSMR_PROBE_WAIT_S = 11.0
+
+
+def _diagnose_by_one_reading(checks, meter_type, grid_meter, grid_tracker):
+    """Read the meter once with the EMS's own reader, which never writes to it."""
+
+    from ems.clients import close_grid_meter_client, create_grid_meter_client, create_session
+
+    label = GRID_METER_PROVIDERS[meter_type]
+    session = create_session()
+    try:
+        client = create_grid_meter_client(grid_meter, session)
+    except ValueError as exc:
+        session.close()
+        diagnose_add(checks, "hardware", "warning", "grid_meter_probe_skipped", f"{label} read-only probe skipped: {exc}", type=meter_type)
+        return grid_tracker
+    if meter_type == config_mod.DSMR_P1_TCP_GRID_METER_TYPE:
+        client.reader.timeout = _DSMR_PROBE_WAIT_S
+    try:
+        power = client.get_power()
+    finally:
+        close_grid_meter_client(client)
+        session.close()
+    if client.health.consecutive_failures:
+        diagnose_add(checks, "hardware", "warning", "grid_meter_read_failed", f"{label} read-only probe failed: {client.health.last_error}", type=meter_type)
+    else:
+        diagnose_add(checks, "hardware", "ok", "grid_meter_read_ok", f"{label} returned parseable power", type=meter_type, power_w=power)
+    return client.health
 
 
 def _diagnose_record_probe(tracker, start, error=None):
@@ -2160,6 +2296,45 @@ def _diagnose_e3dc_modbus_read(settings, *, read_inverter):
     finally:
         session.close()
     return session, reading, error, address_offset
+
+
+def _diagnose_tibber_pulse(checks, grid_meter, grid_tracker):
+    import requests
+
+    from ems import sml
+    from ems.mqtt_credentials import FileBridgePasswordResolver
+    from ems.tibber_pulse import BridgeError, TibberPulseBridge, grid_power_from_telegram
+
+    try:
+        settings = config_mod.tibber_pulse_grid_meter_settings(grid_meter)
+        password = FileBridgePasswordResolver().resolve(settings["credentials_ref"])
+    except ValueError as exc:
+        grid_tracker.record_failure(error=exc, latency_ms=0.0)
+        diagnose_add(checks, "hardware", "warning", "grid_meter_tibber_pulse_invalid", f"Tibber Pulse read-only probe skipped: {exc}")
+        return grid_tracker
+    bridge = TibberPulseBridge(settings["host"], password, port=settings["port"], node_id=settings["node_id"])
+
+    def read_power():
+        try:
+            return grid_power_from_telegram(bridge.read_telegram())[0]
+        except sml.SmlError as exc:
+            if exc.reason not in sml.FRAME_DAMAGE:
+                raise
+            return grid_power_from_telegram(bridge.read_telegram())[0]
+
+    start = time.monotonic()
+    try:
+        power = read_power()
+    except (requests.RequestException, BridgeError, sml.SmlError) as exc:
+        _diagnose_record_probe(grid_tracker, start, exc)
+        reason = getattr(exc, "reason", exc.__class__.__name__)
+        diagnose_add(checks, "hardware", "warning", "tibber_pulse_read_failed", f"Tibber Pulse read-only probe failed: {reason}", reason=reason)
+    else:
+        _diagnose_record_probe(grid_tracker, start)
+        diagnose_add(checks, "hardware", "ok", "tibber_pulse_read_ok", "The Tibber Pulse bridge returned a valid SML telegram with the grid power", power_w=round(power, 1))
+    finally:
+        bridge.close()
+    return grid_tracker
 
 
 def _diagnose_e3dc_modbus(checks, grid_meter, grid_tracker):
@@ -2250,7 +2425,7 @@ def _diagnose_e3dc_modbus_device(checks, device, name):
     return read_tracker
 
 
-def diagnose_hardware(checks, config_data):
+def diagnose_hardware(checks, config_data, runtime_data=None):
     health = {"grid_meter": None, "devices": []}
     if not isinstance(config_data, dict):
         return health
@@ -2300,13 +2475,19 @@ def diagnose_hardware(checks, config_data):
         except Exception as exc:
             _diagnose_record_probe(grid_tracker, start, exc)
             diagnose_add(checks, "hardware", "warning", "ecotracker_read_failed", f"EcoTracker read-only probe failed: {exc.__class__.__name__}")
+    elif meter_type == config_mod.HOMEWIZARD_P1_GRID_METER_TYPE and grid_meter.get("ip"):
+        loop_interval = diagnose_loop_interval(config_data, runtime_data or {})
+        telemetry_window = diagnose_telemetry_window(config_data.get("system"))
+        _diagnose_homewizard_p1(checks, grid_meter, grid_tracker, loop_interval or 5, telemetry_window)
     elif meter_type == "tasmota_http" and (grid_meter.get("url") or grid_meter.get("ip")):
         url = str(grid_meter.get("url") or "").strip() or f"http://{grid_meter['ip']}/cm?cmnd=Status%2010"
         start = time.monotonic()
         try:
             status, payload = diagnose_http_json(url)
             from ems.clients import _parse_tasmota_http_power
-            power = _parse_tasmota_http_power(payload, str(grid_meter.get("power_path") or ""))
+            power = _parse_tasmota_http_power(
+                payload, str(grid_meter.get("power_path") or ""), str(grid_meter.get("export_path") or "")
+            )
             _diagnose_record_probe(grid_tracker, start)
             diagnose_add(checks, "hardware", "ok", "tasmota_read_ok", "Tasmota read-only status endpoint returned parseable power", status_code=status, power_w=power)
         except Exception as exc:
@@ -2348,6 +2529,10 @@ def diagnose_hardware(checks, config_data):
                 )
     elif meter_type == config_mod.E3DC_MODBUS_GRID_METER_TYPE and grid_meter.get("ip"):
         grid_tracker = _diagnose_e3dc_modbus(checks, grid_meter, grid_tracker)
+    elif meter_type in config_mod.GRID_METER_READER_SETTINGS and grid_meter.get("ip"):
+        grid_tracker = _diagnose_by_one_reading(checks, meter_type, grid_meter, grid_tracker)
+    elif meter_type == config_mod.TIBBER_PULSE_GRID_METER_TYPE and grid_meter.get("ip"):
+        grid_tracker = _diagnose_tibber_pulse(checks, grid_meter, grid_tracker)
     else:
         diagnose_add(checks, "hardware", "warning", "grid_meter_probe_skipped", f"No read-only grid meter probe implemented for type: {meter_type}", type=meter_type)
 
@@ -2642,6 +2827,15 @@ def diagnose_device_control_enabled(runtime_data, name):
     device = diagnose_runtime_section(runtime_data, "devices").get(name)
     device = device if isinstance(device, dict) else {}
     return config_mod.safe_bool(device.get("enabled"), True)
+
+
+def diagnose_telemetry_window(system):
+    """``telemetry_max_age_seconds`` as the controller reads it: unparsable is 10, negative is 0."""
+
+    output_control = system.get("output_control") if isinstance(system, dict) else None
+    output_control = output_control if isinstance(output_control, dict) else {}
+    window = diagnose_float(output_control.get("telemetry_max_age_seconds", 10))
+    return max(0.0, 10.0 if window is None else window)
 
 
 def diagnose_loop_interval(config_data, runtime_data):
@@ -4219,7 +4413,9 @@ def diagnose_collect(args):
 
     hardware_health = None
     if args.hardware:
-        hardware_health = diagnose_hardware(checks, config_data)
+        hardware_health = diagnose_hardware(
+            checks, config_data, diagnose_control_load_runtime(runtime_path)[0]
+        )
 
     control_report = None
     if args.control:

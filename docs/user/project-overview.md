@@ -112,9 +112,15 @@ Supported options include:
 - Zendure Smart Meter 3CT
 - Zendure Smart Meter D0
 - everHome EcoTracker
+- HomeWizard P1 Meter
+- powerfox poweropti (local API, powerfox PRO)
+- DSMR P1 smart meters (Netherlands, Belgium) through a bridge that passes the P1 port on over TCP
 - Tasmota-based meters
 - E3/DC storage systems, read-only over Modbus TCP
-- generic MQTT power meters
+- SunSpec meters over Modbus TCP, such as a Fronius Smart Meter through the inverter or a Kostal Smart Energy Meter
+- Huawei SUN2000 with DTSU666, Sungrow SH, Carlo Gavazzi EM24, Victron GX, smart-me Telstar, IAMMETER WEM3080T and Circutor Wibeee, read-only over Modbus TCP
+- Swiss CH-SMR readers and Austrian or Swiss readers of the encrypted customer interface, over MQTT or Tasmota
+- generic MQTT power meters, among them a Linky through a ZLinky_TIC and Zigbee2MQTT
 
 Support differs by model and connection type. The current compatibility overview is available in [Supported Setups](supported-setups.md).
 

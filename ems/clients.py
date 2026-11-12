@@ -3,6 +3,7 @@
 import logging
 import json
 import math
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -771,14 +772,233 @@ class EcoTrackerClient:
         return self.last_value
 
 
+METER_FROZEN_AFTER_S = 30.0
+
+
+class FrozenTimestampGuard:
+    """Fails a reading whose meter time stamp has not moved for too long.
+
+    A reader in front of a smart meter keeps answering with the last telegram
+    when the meter stops sending; its time stamp is the only sign of that. A
+    reading without a time stamp passes, since there is nothing to compare.
+    """
+
+    def __init__(self, clock=time.monotonic, frozen_after_s=METER_FROZEN_AFTER_S):
+        self._clock = clock
+        self._frozen_after_s = frozen_after_s
+        self._timestamp = None
+        self._since = None
+
+    def check(self, timestamp):
+        now = self._clock()
+        if timestamp is None or timestamp != self._timestamp:
+            self._timestamp, self._since = timestamp, now
+            return
+        frozen_s = now - self._since
+        if frozen_s > self._frozen_after_s:
+            raise ValueError(
+                f"the smart meter has sent no new reading for {frozen_s:.0f} s (time stamp {timestamp})"
+            )
+
+
+class HomeWizardP1Client:
+    """Client for the HomeWizard P1 Meter local API v2.
+
+    The meter's own time stamp tells a new reading from an old one; when it has
+    not moved for :data:`METER_FROZEN_AFTER_S` the smart meter has stopped
+    sending, and the reading counts as failed instead of being regulated on.
+    """
+
+    provider = "HomeWizard P1"
+
+    def __init__(self, api, *, clock=time.monotonic):
+        self.api = api
+        self.ip = api.host
+        self.last_value = 0
+        self.health = CommHealth(self.provider, kind="read")
+        self._frozen = FrozenTimestampGuard(clock)
+
+    def get_power(self):
+        """Return current grid power: positive import, negative export."""
+
+        start = time.monotonic()
+        try:
+            power, timestamp = _parse_homewizard_p1_measurement(self.api.measurement())
+            self._frozen.check(timestamp)
+            self.last_value = round(power, 1)
+            self.health.record_success((time.monotonic() - start) * 1000.0)
+
+        except Exception as e:
+            self.health.record_failure(
+                error=e,
+                latency_ms=(time.monotonic() - start) * 1000.0,
+                stale_used=True,
+            )
+            log_event(
+                logging.WARNING,
+                "homewizard_p1_read_error",
+                ip=self.ip,
+                reason=getattr(e, "reason", None),
+                error=e,
+                stale_value=self.last_value
+            )
+
+        return self.last_value
+
+    def close(self):
+        self.api.close()
+
+
+class PowerfoxClient:
+    """Client for the local API of a powerfox poweropti.
+
+    The poweropti answers at ``/value`` with its meter's OBIS values and its own
+    time stamp, which stops moving when the optical head loses the meter.
+    """
+
+    provider = "powerfox poweropti"
+
+    def __init__(self, ip, session, api_key, *, port=80, clock=time.monotonic):
+        self.ip = ip
+        self.session = session
+        self._url = f"http://{ip}/value" if port == 80 else f"http://{ip}:{port}/value"
+        self._api_key = api_key
+        self.last_value = 0
+        self.health = CommHealth(self.provider, kind="read")
+        self._frozen = FrozenTimestampGuard(clock)
+
+    def get_power(self):
+        """Return current grid power: positive import, negative export."""
+
+        start = time.monotonic()
+        try:
+            r = self.session.get(self._url, headers={"X-API-KEY": self._api_key}, timeout=3)
+            if r.status_code == 401:
+                raise ValueError("the poweropti refused the API key, or its PRO service is not active")
+            r.raise_for_status()
+            power, timestamp = _parse_powerfox_value(r.json())
+            self._frozen.check(timestamp)
+            self.last_value = round(power, 1)
+            self.health.record_success((time.monotonic() - start) * 1000.0)
+
+        except Exception as e:
+            self.health.record_failure(
+                error=e,
+                latency_ms=(time.monotonic() - start) * 1000.0,
+                stale_used=True,
+            )
+            log_event(
+                logging.WARNING,
+                "powerfox_read_error",
+                ip=self.ip,
+                error=e,
+                stale_value=self.last_value
+            )
+
+        return self.last_value
+
+
+DSMR_MAX_AGE_S = 15.0
+
+
+class DsmrTcpClient:
+    """Grid power from DSMR P1 telegrams that a bridge passes on over TCP.
+
+    A telegram counts once it arrives; between two telegrams the last one
+    stands, and when none has arrived for :data:`DSMR_MAX_AGE_S` the reading
+    counts as failed and the connection is opened again, since a bridge that
+    restarted never says so on a connection that only receives.
+    """
+
+    provider = "DSMR P1"
+    transport = "tcp"
+
+    def __init__(self, reader, *, clock=time.monotonic):
+        self.reader = reader
+        self.last_value = 0
+        self.health = CommHealth(self.provider, kind="read")
+        self._clock = clock
+        self._received_at = None
+        self._quiet_since = None
+
+    @property
+    def endpoint(self):
+        return self.reader.endpoint
+
+    def get_power(self):
+        """Return current grid power: positive import, negative export."""
+
+        start = time.monotonic()
+        try:
+            try:
+                telegrams = self.reader.poll()
+            except OSError:
+                self._quiet_since = None
+                raise
+            reading = _newest_dsmr_reading(telegrams)
+            now = self._clock()
+            if reading is not None:
+                self.last_value = reading.power_w
+                self._received_at = self._quiet_since = now
+            else:
+                self._check_quiet(now)
+            self.health.record_success((time.monotonic() - start) * 1000.0)
+
+        except Exception as e:
+            self.health.record_failure(
+                error=e,
+                latency_ms=(time.monotonic() - start) * 1000.0,
+                stale_used=True,
+            )
+            log_event(
+                logging.WARNING,
+                "dsmr_p1_tcp_read_error",
+                endpoint=self.endpoint,
+                error=e,
+                stale_value=self.last_value
+            )
+
+        return self.last_value
+
+    def close(self):
+        self.reader.close()
+
+    def _check_quiet(self, now):
+        if self._quiet_since is None:
+            self._quiet_since = now
+        if now - self._quiet_since > DSMR_MAX_AGE_S:
+            self.reader.close()
+            self._quiet_since = now
+        if self._received_at is None:
+            raise ValueError("no telegram from the P1 bridge yet")
+        age = now - self._received_at
+        if age > DSMR_MAX_AGE_S:
+            raise ValueError(f"no telegram from the P1 bridge for {age:.0f} s")
+
+
+def _newest_dsmr_reading(telegrams):
+    from ems.dsmr import DsmrError, parse_telegram
+
+    error = None
+    for raw in reversed(telegrams):
+        try:
+            return parse_telegram(raw)
+        except DsmrError as exc:
+            error = error or exc
+    if error is not None:
+        raise error
+    return None
+
+
 class TasmotaHttpClient:
     """Client for Tasmota HTTP JSON smart meter payloads."""
 
     provider = "Tasmota"
 
-    def __init__(self, url, power_path, session):
+    def __init__(self, url, power_path, session, export_path=""):
         self.url = url
         self.power_path = power_path
+        self.export_path = export_path
         self.session = session
         self.last_value = 0
         self.health = CommHealth(self.provider, kind="read")
@@ -794,7 +1014,7 @@ class TasmotaHttpClient:
             )
 
             self.last_value = round(
-                _parse_tasmota_http_power(r.json(), self.power_path),
+                _parse_tasmota_http_power(r.json(), self.power_path, self.export_path),
                 1
             )
             self.health.record_success((time.monotonic() - start) * 1000.0)
@@ -890,6 +1110,8 @@ class MqttGridMeterClient:
         password="",
         payload_format="number",
         value_path="",
+        export_value_path="",
+        value_scale=1.0,
         max_age_seconds=15,
         tls=False,
         tls_insecure=False,
@@ -904,6 +1126,9 @@ class MqttGridMeterClient:
         self.username = str(username or "")
         self.payload_format = str(payload_format or "number").strip().lower()
         self.value_path = str(value_path or "").strip()
+        self.export_value_path = str(export_value_path or "").strip()
+        self.value_scale = float(value_scale)
+        self._export_seen = False
         self.max_age_seconds = max(1, int(max_age_seconds))
         self.tls = bool(tls)
         self.tls_insecure = bool(tls_insecure)
@@ -1006,7 +1231,11 @@ class MqttGridMeterClient:
                 message.payload,
                 payload_format=self.payload_format,
                 value_path=self.value_path,
+                export_value_path=self.export_value_path,
+                missing_export_is_zero=self._export_seen,
+                value_scale=self.value_scale,
             )
+            self._export_seen = bool(self.export_value_path)
         except Exception as exc:
             self.health.record_failure(error=exc, latency_ms=0.0, stale_used=True)
             log_event(
@@ -1131,6 +1360,74 @@ class E3dcModbusGridMeterClient:
             self.session.close()
 
 
+class ModbusMeterClient:
+    """Grid power from a meter read over Modbus TCP, once per control cycle.
+
+    The meter object turns the device's registers into grid power, positive
+    when drawn from the grid. There is deliberately no write method.
+    """
+
+    provider = "Modbus meter"
+    transport = "modbus_tcp"
+    read_error_event = "modbus_meter_read_error"
+
+    def __init__(self, meter, *, provider=None):
+        self.meter = meter
+        if provider:
+            self.provider = provider
+        self.last_value = 0
+        self.health = CommHealth(self.provider, kind="read")
+
+    @property
+    def endpoint(self):
+        return self.meter.endpoint
+
+    def get_power(self):
+        """Return this cycle's grid power, or the last good value on failure."""
+
+        start = time.monotonic()
+        try:
+            self.last_value = self.meter.read_power()
+            self.health.record_success((time.monotonic() - start) * 1000.0)
+        except Exception as e:
+            self.health.record_failure(
+                error=e,
+                latency_ms=(time.monotonic() - start) * 1000.0,
+                stale_used=True,
+            )
+            log_event(
+                logging.WARNING,
+                self.read_error_event,
+                endpoint=self.endpoint,
+                error=e,
+                stale_value=self.last_value,
+            )
+        return self.last_value
+
+    def close(self):
+        self.meter.close()
+
+
+class SunSpecMeterClient(ModbusMeterClient):
+    """Grid power from a SunSpec meter model over Modbus TCP."""
+
+    provider = "SunSpec meter"
+    read_error_event = "sunspec_meter_read_error"
+
+
+GRID_METER_READY_SECONDS = 15
+
+
+def wait_for_grid_meter(client, timeout=GRID_METER_READY_SECONDS):
+    """Wait for a grid meter that reads in the background to hold a good reading.
+
+    Answers whether it does; a meter that reads on demand is always ready.
+    """
+
+    wait_until_ready = getattr(client, "wait_until_ready", None)
+    return bool(wait_until_ready(timeout)) if callable(wait_until_ready) else True
+
+
 def close_grid_meter_client(client):
     """Idempotently release a grid-meter client's runtime resources.
 
@@ -1153,12 +1450,20 @@ def close_grid_meter_client(client):
 
 
 def create_grid_meter_client(
-    config, session, *, mqtt_credential_resolver=None, e3dc_sessions=None
+    config,
+    session,
+    *,
+    mqtt_credential_resolver=None,
+    e3dc_sessions=None,
+    bridge_password_resolver=None,
+    max_age_seconds=None,
 ):
     """Create the configured household/grid power meter client.
 
     ``e3dc_sessions`` lets an E3/DC meter share its connection with an E3/DC
     device read in the same process; without it the meter owns its own.
+    ``max_age_seconds`` bounds a cached reading's age, by default the loaded
+    config's ``telemetry_max_age_seconds``.
     """
 
     config = config if isinstance(config, dict) else {}
@@ -1181,6 +1486,47 @@ def create_grid_meter_client(
 
     if meter_type == "ecotracker":
         return EcoTrackerClient(ip, session)
+
+    if meter_type == cfg.HOMEWIZARD_P1_GRID_METER_TYPE:
+        from ems.homewizard import HomeWizardP1Api
+
+        settings = cfg.homewizard_p1_grid_meter_settings(config)
+        return HomeWizardP1Client(
+            HomeWizardP1Api(
+                settings["host"],
+                serial=settings["serial"],
+                token=settings["token"],
+                port=settings["port"],
+            )
+        )
+
+    if meter_type == cfg.POWERFOX_GRID_METER_TYPE:
+        settings = cfg.powerfox_grid_meter_settings(config)
+        return PowerfoxClient(settings["host"], session, settings["token"], port=settings["port"])
+
+    if meter_type in cfg.MODBUS_METER_PROFILES:
+        from ems.modbus_meters import ProfileMeter
+
+        profile = cfg.MODBUS_METER_PROFILES[meter_type]
+        settings = cfg.modbus_profile_grid_meter_settings(config, meter_type)
+        return ModbusMeterClient(
+            ProfileMeter(settings["host"], profile, port=settings["port"], unit_id=settings["unit_id"]),
+            provider=profile.label,
+        )
+
+    if meter_type == cfg.SUNSPEC_MODBUS_GRID_METER_TYPE:
+        from ems.sunspec import SunSpecMeter
+
+        settings = cfg.sunspec_modbus_grid_meter_settings(config)
+        return SunSpecMeterClient(
+            SunSpecMeter(settings["host"], port=settings["port"], unit_id=settings["unit_id"])
+        )
+
+    if meter_type == cfg.DSMR_P1_TCP_GRID_METER_TYPE:
+        from ems.dsmr import DsmrTcpReader
+
+        settings = cfg.dsmr_p1_tcp_grid_meter_settings(config)
+        return DsmrTcpClient(DsmrTcpReader(settings["host"], settings["port"]))
 
     if meter_type in cfg.ZENDURE_HTTP_GRID_METER_TYPES:
         if not ip:
@@ -1207,6 +1553,29 @@ def create_grid_meter_client(
         )
         return E3dcModbusGridMeterClient(session)
 
+    if meter_type == cfg.TIBBER_PULSE_GRID_METER_TYPE:
+        from ems.mqtt_credentials import FileBridgePasswordResolver
+        from ems.tibber_pulse import MAX_AGE_SECONDS, TibberPulseBridge, TibberPulseGridMeterClient
+
+        settings = cfg.tibber_pulse_grid_meter_settings(config, require_password=False)
+        resolver = bridge_password_resolver or FileBridgePasswordResolver()
+
+        def password():
+            if settings["credentials_ref"] is None:
+                raise ValueError("grid_meter.credentials_ref is not set")
+            return resolver.resolve(settings["credentials_ref"])
+
+        bridge = TibberPulseBridge(
+            settings["host"],
+            port=settings["port"],
+            node_id=settings["node_id"],
+            password_provider=password,
+        )
+        if max_age_seconds is None:
+            max_age_seconds = cfg.OUTPUT_CONTROL_CONFIG.get("telemetry_max_age_seconds", MAX_AGE_SECONDS)
+        max_age = cfg.safe_float(max_age_seconds, MAX_AGE_SECONDS, minimum=1.0)
+        return TibberPulseGridMeterClient(bridge, max_age_seconds=max_age)
+
     if meter_type == "tasmota_http":
         power_path = config.get("power_path")
         if not isinstance(power_path, str) or not power_path.strip():
@@ -1218,7 +1587,9 @@ def create_grid_meter_client(
                 raise ValueError("Tasmota HTTP grid meter requires url or ip")
             url = f"http://{ip}/cm?cmnd=Status%2010"
 
-        return TasmotaHttpClient(url, power_path.strip(), session)
+        export_path = config.get("export_path")
+        export_path = export_path.strip() if isinstance(export_path, str) else ""
+        return TasmotaHttpClient(url, power_path.strip(), session, export_path=export_path)
 
     if meter_type in cfg.MQTT_GRID_METER_TYPES:
         mqtt_config = cfg.grid_meter_mqtt_settings(config)
@@ -1262,6 +1633,12 @@ def create_grid_meter_client(
             password=mqtt_config.get("password") or "",
             payload_format=mqtt_config.get("payload_format") or "number",
             value_path=mqtt_config.get("value_path") or "",
+            export_value_path=mqtt_config.get("export_value_path") or "",
+            value_scale=(
+                1.0
+                if meter_type == cfg.ZENDURE_SMARTMETER_D0_GRID_METER_TYPE
+                else cfg.mqtt_grid_meter_value_scale(mqtt_config)
+            ),
             max_age_seconds=mqtt_config.get("max_age_seconds") or 15,
             tls=tls,
             tls_insecure=tls_insecure,
@@ -1470,14 +1847,67 @@ def _parse_ecotracker_power(data):
     raise ValueError("Unsupported EcoTracker payload: missing numeric power")
 
 
+def _parse_homewizard_p1_measurement(data):
+    """Grid power and meter time stamp from a HomeWizard ``/api/measurement`` answer.
+
+    ``power_w`` is the sum of all phases, negative while exporting. The time
+    stamp is when the smart meter sent the reading, or ``None`` when the meter
+    reports none.
+    """
+
+    if not isinstance(data, dict):
+        raise ValueError("Unsupported HomeWizard payload: expected object")
+
+    value = data.get("power_w")
+    if not _is_numeric(value):
+        raise ValueError("Unsupported HomeWizard payload: missing numeric power_w")
+    timestamp = data.get("timestamp")
+    return float(value), timestamp if isinstance(timestamp, str) and timestamp else None
+
+
+def _parse_powerfox_value(data):
+    """Grid power and meter time stamp from a poweropti ``/value`` answer.
+
+    ``1.7.0`` is the power the meter reports. A poweropti that reports import
+    and export apart also sends ``2.7.0``, which then counts as export.
+    """
+
+    values = data.get("values") if isinstance(data, dict) else None
+    if not isinstance(values, list):
+        raise ValueError("Unsupported powerfox payload: expected a values list")
+    by_obis = {item.get("obis"): item.get("value") for item in values if isinstance(item, dict)}
+    if not _is_numeric(by_obis.get("1.7.0")):
+        raise ValueError("Unsupported powerfox payload: missing numeric 1.7.0")
+    power = float(by_obis["1.7.0"])
+    if power >= 0 and _is_numeric(by_obis.get("2.7.0")):
+        power -= float(by_obis["2.7.0"])
+    timestamp = data.get("timestamp")
+    return power, timestamp if _is_numeric(timestamp) else None
+
+
+_POINTER_INDEX = re.compile(r"0|[1-9][0-9]*")
+
+
 def _get_json_path(data, path):
-    """Return nested JSON value from a dot-separated object path."""
+    """Return a nested JSON value from a dot-separated object path.
+
+    A path that starts with ``/`` is a JSON Pointer (RFC 6901) instead, for a
+    key that itself contains dots, such as the OBIS code ``1.7.0``; a number
+    in it indexes into a list.
+    """
 
     if not isinstance(path, str) or not path.strip():
         raise ValueError("JSON path must be a non-empty string")
 
+    if path.startswith("/"):
+        parts = [part.replace("~1", "/").replace("~0", "~") for part in path[1:].split("/")]
+    else:
+        parts = path.split(".")
     value = data
-    for part in path.split("."):
+    for part in parts:
+        if isinstance(value, list) and path.startswith("/") and _POINTER_INDEX.fullmatch(part) and int(part) < len(value):
+            value = value[int(part)]
+            continue
         if not isinstance(value, dict) or part not in value:
             raise ValueError(f"Missing JSON path: {path}")
         value = value[part]
@@ -1485,17 +1915,25 @@ def _get_json_path(data, path):
     return value
 
 
-def _parse_tasmota_http_power(data, power_path):
-    """Extract grid power from a Tasmota HTTP JSON payload."""
+def _parse_tasmota_http_power(data, power_path, export_path=""):
+    """Extract grid power from a Tasmota HTTP JSON payload.
+
+    A reader that reports import and export apart names the export with
+    ``export_path``; its value is subtracted.
+    """
 
     if not isinstance(data, dict):
         raise ValueError("Unsupported Tasmota payload: expected object")
 
-    value = _get_json_path(data, power_path)
-    if _is_numeric(value):
-        return float(value)
-
-    raise ValueError(f"Tasmota power path is not numeric: {power_path}")
+    power = 0.0
+    for path, sign in ((power_path, 1.0), (export_path, -1.0)):
+        if sign < 0 and not path:
+            continue
+        value = _get_json_path(data, path)
+        if not _is_numeric(value):
+            raise ValueError(f"Tasmota power path is not numeric: {path}")
+        power += sign * float(value)
+    return power
 
 
 def _parse_zendure_grid_meter_http_power(data):
@@ -1548,8 +1986,17 @@ def _parse_mqtt_grid_power_payload(
     *,
     payload_format="number",
     value_path="",
+    export_value_path="",
+    missing_export_is_zero=False,
+    value_scale=1.0,
 ):
-    """Extract grid power from an MQTT payload."""
+    """Extract grid power from an MQTT payload.
+
+    A JSON payload may carry export as a separate, positive value, which is
+    then subtracted. A payload without it is refused, unless the caller has
+    seen it before and lets it count as zero. The result is multiplied by
+    ``value_scale``, 1000 for a meter that reports kW.
+    """
 
     if isinstance(payload, bytes):
         text = payload.decode("utf-8").strip()
@@ -1558,12 +2005,21 @@ def _parse_mqtt_grid_power_payload(
 
     payload_format = str(payload_format or "number").strip().lower()
     if payload_format in ("number", "numeric", "plain", "text"):
-        return _parse_mqtt_number_value(text)
+        return _parse_mqtt_number_value(text) * value_scale
 
     if payload_format == "json":
         data = json.loads(text)
         value = _get_json_path(data, value_path) if value_path else data
-        return _parse_mqtt_number_value(value)
+        power = _parse_mqtt_number_value(value)
+        if export_value_path:
+            try:
+                exported = _get_json_path(data, export_value_path)
+            except ValueError:
+                if not missing_export_is_zero:
+                    raise ValueError(f"the message has carried no export value at {export_value_path} yet") from None
+                exported = 0
+            power -= _parse_mqtt_number_value(exported)
+        return power * value_scale
 
     raise ValueError(f"Unsupported MQTT payload_format: {payload_format}")
 

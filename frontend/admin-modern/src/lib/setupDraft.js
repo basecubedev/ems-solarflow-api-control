@@ -12,7 +12,8 @@
  */
 
 import { D0_TOPIC_PREFIX, D0_TOPIC_SUFFIX, generations, hardwareModels, modelsForGeneration } from "./devices.js";
-import { aliasTokens, isConsumerProposal, isExternalProposal, isGridMeterProposal, issuedPhysicalIdentity, meterTypeOf, observationKey, proposalTopic, sourcesOf } from "./discovery.js";
+import { aliasTokens, bridgeValues, isConsumerProposal, isExternalProposal, isGridMeterProposal, issuedPhysicalIdentity, meterTypeOf, observationKey, proposalTopic, sourcesOf, unitValues } from "./discovery.js";
+import { HOMEWIZARD_TYPE, PAIRING_FIELDS, TOKEN_FIELD } from "./homewizard.js";
 
 /** Classic's localStorage keys; the workflow identity and the step live in state/setup.svelte.js. */
 export const STORE = Object.freeze({
@@ -348,7 +349,7 @@ export function itemFromDevice(device, role, { id, items, configName }) {
   const sources = sourcesOf(device);
   const common = { source_id: observationKey(device), draft_item_id: id, role, enabled: true, ip: device.ip || "", port: device.port || "", serial_number: device.serial_number || "" };
   if (role === "grid_meter") {
-    return { ...common, config_name: "grid_meter", display_name: uniqueDisplayName(items, device.display_name || device.model || DEFAULT_GRID_METER, "grid_meter"), grid_meter_type: "", device_type: device.device_type || "", api_family: device.api_family || "", discovery_source: sources[0] || "" };
+    return { ...common, config_name: "grid_meter", display_name: uniqueDisplayName(items, device.display_name || device.model || DEFAULT_GRID_METER, "grid_meter"), grid_meter_type: "", device_type: device.device_type || "", api_family: device.api_family || "", discovery_source: sources[0] || "", ...bridgeValues(device), ...unitValues(device) };
   }
   return { ...common, config_name: configName, display_name: uniqueDisplayName(items, device.display_name || device.model || DEFAULT_INVERTER, "inverter"), physical_identity_token: issuedPhysicalIdentity(device), device_type: device.device_type || "", api_family: device.api_family || "", discovery_source: sources[0] || "" };
 }
@@ -491,6 +492,9 @@ export function setDeviceField(item, field, value) {
 // --- grid meter ----------------------------------------------------------------
 
 export const D0_TYPE = "zendure_smartmeter_d0";
+export const BRIDGE_TYPE = "tibber_pulse_bridge";
+/** What a bridge meter row carries for its own: the features follow the row, so another bridge brings its own. */
+export const BRIDGE_KEYS = Object.freeze(["credentials_ref", "node_id"]);
 const MQTT_METERS = new Set(["mqtt", D0_TYPE]);
 export const meterIsMqtt = (type) => MQTT_METERS.has(type);
 
@@ -526,7 +530,27 @@ export function syncGridFeatures(features, item) {
   } else {
     next["grid_meter.ip"] = meter.ip || "";
   }
-  return { features: next, item: meter };
+  const bridge = type === BRIDGE_TYPE ? bridgeValues(meter) : {};
+  for (const key of BRIDGE_KEYS) {
+    if (key in bridge) next[`grid_meter.${key}`] = bridge[key];
+    else delete next[`grid_meter.${key}`];
+  }
+  const scannedType = meterTypeOf({ device_type: meter.device_type || "", api_family: meter.api_family || "" });
+  const unit = scannedType === type ? unitValues(meter) : {};
+  if ("unit_id" in unit) next["grid_meter.unit_id"] = unit.unit_id;
+  else delete next["grid_meter.unit_id"];
+  return { features: keepPairing(features, next), item: meter };
+}
+
+/** A pairing belongs to the meter it was made with: another type or address leaves it behind. An API key stays while the type does. */
+export function keepPairing(previous, next) {
+  const type = next["grid_meter.type"];
+  const sameType = previous?.["grid_meter.type"] === type;
+  if (type === HOMEWIZARD_TYPE && sameType && text(previous?.["grid_meter.ip"]) === text(next["grid_meter.ip"])) return next;
+  const keepKey = type !== HOMEWIZARD_TYPE && sameType;
+  const out = { ...next };
+  for (const path of PAIRING_FIELDS) if (!(keepKey && path === TOKEN_FIELD)) delete out[path];
+  return out;
 }
 
 /** A port belongs to its protocol: a meter with another default starts from that default. */
@@ -537,14 +561,14 @@ export function portAfterSwitch(port, previous, next) {
   return to;
 }
 
-/** The grid meter section's fields for this type, without type and address, the D0 topic as an advanced read-back. */
+/** The grid meter section's fields for this type, without type, address and what pairing fills in, the D0 topic as an advanced read-back. */
 export function gridFields(catalog, type) {
   const section = catalogSection(catalog, "grid_meter");
   const variant = catalog?.grid_meter_variants?.[type];
   const allowed = new Set(variant ? variant.fields : []);
   const out = { normal: [], advanced: [], expert: [] };
   for (const field of section?.fields || []) {
-    if (field.path === "grid_meter.type" || field.path === "grid_meter.ip" || !allowed.has(field.path)) continue;
+    if (field.path === "grid_meter.type" || field.path === "grid_meter.ip" || !allowed.has(field.path) || (type === HOMEWIZARD_TYPE && PAIRING_FIELDS.includes(field.path))) continue;
     if (["deprecated", "internal"].includes(field.level) || ["safety_gates", "safety_holds", "limits"].includes(field.group)) continue;
     const level = type === D0_TYPE && field.path === "grid_meter.mqtt.topic" ? "advanced" : ["advanced", "expert"].includes(field.level) ? field.level : "normal";
     out[level].push(field);

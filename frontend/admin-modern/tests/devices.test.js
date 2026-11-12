@@ -82,6 +82,13 @@ test("the grid meter's port follows its type unless both share one, and comes ba
   assert.equal(switchGridType({}, "zendure_smartmeter_d0", catalog, {}).meter.mqtt.payload_format, "number");
 });
 
+test("a pairing or API key stays with its meter type", () => {
+  const paired = { type: "homewizard_p1", ip: "192.168.1.40", token: "T", has_token: true, serial: "0a1b2c3d4e5f", pairing_name: "local/ems_solarflow#3f9a1c" };
+  assert.deepEqual(switchGridType(paired, "powerfox_poweropti", catalog, {}).meter, { type: "powerfox_poweropti", ip: "192.168.1.40", present: true });
+  assert.deepEqual(switchGridType(paired, "homewizard_p1", catalog, {}).meter, { ...paired, present: true });
+  assert.equal("unit_id" in switchGridType({ type: "sunspec_modbus", ip: "192.168.1.64", unit_id: 200 }, "victron_gx_modbus", catalog, {}).meter, false);
+});
+
 test("a D0 serial makes the topic, and a stored password is kept, replaced or cleared, never shown", () => {
   const meter = setD0Serial({ type: "zendure_smartmeter_d0" }, " ABC ");
   assert.deepEqual([meter.mqtt.topic, d0Serial(meter.mqtt.topic), meter.d0_topic_mode], ["Zendure/sensor/ABC/totalPower", "ABC", "auto"]);

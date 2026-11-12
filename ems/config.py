@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import copy
+import functools
 import json
 import logging
 import math
@@ -14,6 +15,7 @@ from urllib.parse import urlparse
 
 from ems.device_fingerprints import device_fingerprints
 from ems.logging_utils import log_event
+from ems.modbus_meters import PROFILES_BY_TYPE as MODBUS_METER_PROFILES
 from ems.paths import resolve_config_path, resolve_template_path
 from ems.read_only_devices import E3DC_MODBUS_DEVICE_TYPE, is_read_only_device_config
 from ems.template_addresses import is_template_address
@@ -212,6 +214,11 @@ ZENDURE_HTTP_GRID_METER_TYPES = frozenset(
 )
 MQTT_GRID_METER_TYPES = ("mqtt", ZENDURE_SMARTMETER_D0_GRID_METER_TYPE)
 E3DC_MODBUS_GRID_METER_TYPE = E3DC_MODBUS_DEVICE_TYPE
+HOMEWIZARD_P1_GRID_METER_TYPE = "homewizard_p1"
+POWERFOX_GRID_METER_TYPE = "powerfox_poweropti"
+DSMR_P1_TCP_GRID_METER_TYPE = "dsmr_p1_tcp"
+SUNSPEC_MODBUS_GRID_METER_TYPE = "sunspec_modbus"
+TIBBER_PULSE_GRID_METER_TYPE = "tibber_pulse_bridge"
 
 # Single source of truth mapping a grid-meter ``type`` to a user-facing hardware
 # model name and a transport label. Diagnostics and status surfaces read this so
@@ -224,6 +231,11 @@ GRID_METER_MODEL_TRANSPORTS = {
     "shelly": ("Shelly Pro/Plus", _LOCAL_HTTP_TRANSPORT),
     "shelly_3em_gen1": ("Shelly 3EM Gen1", _LOCAL_HTTP_TRANSPORT),
     "ecotracker": ("everHome EcoTracker", _LOCAL_HTTP_TRANSPORT),
+    HOMEWIZARD_P1_GRID_METER_TYPE: ("HomeWizard P1 Meter", _LOCAL_HTTP_TRANSPORT),
+    POWERFOX_GRID_METER_TYPE: ("powerfox poweropti", _LOCAL_HTTP_TRANSPORT),
+    DSMR_P1_TCP_GRID_METER_TYPE: ("DSMR P1 meter via a TCP bridge", "TCP"),
+    SUNSPEC_MODBUS_GRID_METER_TYPE: ("SunSpec meter", _MODBUS_TCP_TRANSPORT),
+    **{meter_type: (profile.label, _MODBUS_TCP_TRANSPORT) for meter_type, profile in MODBUS_METER_PROFILES.items()},
     "tasmota_http": ("Tasmota HTTP reader", _LOCAL_HTTP_TRANSPORT),
     ZENDURE_GRID_METER_HTTP_GRID_METER_TYPE: ("Zendure grid meter", _LOCAL_HTTP_TRANSPORT),
     ZENDURE_SMARTMETER_3CT_HTTP_GRID_METER_TYPE: (
@@ -237,6 +249,7 @@ GRID_METER_MODEL_TRANSPORTS = {
     ZENDURE_SMARTMETER_D0_GRID_METER_TYPE: ("Zendure Smart Meter D0", _LOCAL_MQTT_TRANSPORT),
     "mqtt": ("Generic MQTT meter", "MQTT"),
     E3DC_MODBUS_GRID_METER_TYPE: ("E3/DC energy storage system", _MODBUS_TCP_TRANSPORT),
+    TIBBER_PULSE_GRID_METER_TYPE: ("Tibber Pulse IR bridge", _LOCAL_HTTP_TRANSPORT),
 }
 
 
@@ -275,7 +288,14 @@ def _strict_number(value, field, *, default, minimum, maximum=None, integer=True
     return number
 
 
-def _e3dc_modbus_connection(entry, prefix, owner):
+def _modbus_tcp_connection(
+    entry,
+    prefix,
+    owner,
+    *,
+    default_port=E3DC_MODBUS_DEFAULT_PORT,
+    default_unit_id=E3DC_MODBUS_DEFAULT_UNIT_ID,
+):
     host = str(entry.get("ip") or "").strip()
     if not host:
         raise ValueError(f"{owner} requires {prefix}ip")
@@ -284,14 +304,14 @@ def _e3dc_modbus_connection(entry, prefix, owner):
         "port": _strict_number(
             entry.get("port"),
             f"{prefix}port",
-            default=E3DC_MODBUS_DEFAULT_PORT,
+            default=default_port,
             minimum=1,
             maximum=65535,
         ),
         "unit_id": _strict_number(
             entry.get("unit_id"),
             f"{prefix}unit_id",
-            default=E3DC_MODBUS_DEFAULT_UNIT_ID,
+            default=default_unit_id,
             minimum=0,
             maximum=255,
         ),
@@ -307,7 +327,63 @@ def e3dc_modbus_grid_meter_settings(grid_meter):
     """
 
     grid_meter = grid_meter if isinstance(grid_meter, dict) else {}
-    return _e3dc_modbus_connection(grid_meter, "grid_meter.", "E3/DC Modbus grid meter")
+    return _modbus_tcp_connection(grid_meter, "grid_meter.", "E3/DC Modbus grid meter")
+
+
+TIBBER_PULSE_DEFAULT_PORT = 80
+TIBBER_PULSE_DEFAULT_NODE_ID = 1
+TIBBER_PULSE_BRIDGE_KEYS = ("credentials_ref", "node_id")
+
+
+def tibber_pulse_grid_meter_settings(grid_meter, *, require_password=True):
+    """Validate a ``tibber_pulse_bridge`` grid-meter block into connection settings.
+
+    The one validator for this meter type, shared by the client factory, config
+    validation and the Admin. The password itself never sits in the config: the
+    block names it by ``credentials_ref`` in the EMS secret store. The factory
+    passes ``require_password=False``: a meter whose password is missing still
+    starts and reports every read as failed, so the EMS stays up and says why.
+    """
+
+    from ems.mqtt_credentials import MqttCredentialError, validate_mqtt_credentials_ref
+
+    grid_meter = grid_meter if isinstance(grid_meter, dict) else {}
+    host = str(grid_meter.get("ip") or "").strip()
+    if not host:
+        raise ValueError("Tibber Pulse grid meter requires grid_meter.ip")
+    if not re.fullmatch(r"[A-Za-z0-9.-]+", host):
+        raise ValueError("grid_meter.ip must be a host name or IPv4 address, without scheme or port")
+    ref = grid_meter.get("credentials_ref")
+    if not (isinstance(ref, str) and ref.strip()):
+        if require_password:
+            raise ValueError(
+                "Tibber Pulse grid meter requires grid_meter.credentials_ref, "
+                "the bridge password saved in the Admin Console"
+            )
+        ref = None
+    else:
+        try:
+            validate_mqtt_credentials_ref(ref)
+        except MqttCredentialError as exc:
+            raise ValueError("grid_meter.credentials_ref is not a canonical reference") from exc
+    return {
+        "host": host,
+        "port": _strict_number(
+            grid_meter.get("port"),
+            "grid_meter.port",
+            default=TIBBER_PULSE_DEFAULT_PORT,
+            minimum=1,
+            maximum=65535,
+        ),
+        "node_id": _strict_number(
+            grid_meter.get("node_id"),
+            "grid_meter.node_id",
+            default=TIBBER_PULSE_DEFAULT_NODE_ID,
+            minimum=1,
+            maximum=255,
+        ),
+        "credentials_ref": ref,
+    }
 
 
 def e3dc_modbus_device_settings(device):
@@ -317,9 +393,147 @@ def e3dc_modbus_device_settings(device):
     name = str(device.get("name") or "").strip()
     if not name:
         raise ValueError("E3/DC Modbus device requires a name")
-    settings = _e3dc_modbus_connection(device, "", f"E3/DC Modbus device {name}")
+    settings = _modbus_tcp_connection(device, "", f"E3/DC Modbus device {name}")
     settings["name"] = name
     return settings
+
+
+HOMEWIZARD_P1_DEFAULT_PORT = 443
+HOMEWIZARD_P1_PAIRING_KEYS = ("serial", "token", "pairing_name")
+HOMEWIZARD_P1_SERIAL_PATTERN = re.compile(r"[0-9a-f]{12}")
+HOMEWIZARD_P1_TOKEN_PATTERN = re.compile(r"[0-9A-Fa-f]{32}")
+HOMEWIZARD_P1_PAIRING_NAME_PATTERN = re.compile(r"local/[A-Za-z0-9_\\/# -]{1,40}")
+
+
+def homewizard_p1_grid_meter_settings(grid_meter):
+    """Validate a ``homewizard_p1`` grid-meter block into connection settings.
+
+    The serial and the token come from pairing; without both the meter cannot
+    be read, so a missing one is refused rather than defaulted.
+    """
+
+    grid_meter = grid_meter if isinstance(grid_meter, dict) else {}
+    host = str(grid_meter.get("ip") or "").strip()
+    if not host:
+        raise ValueError("HomeWizard P1 Meter requires grid_meter.ip")
+    serial = str(grid_meter.get("serial") or "").strip().lower()
+    token = str(grid_meter.get("token") or "").strip()
+    if not HOMEWIZARD_P1_SERIAL_PATTERN.fullmatch(serial) or not HOMEWIZARD_P1_TOKEN_PATTERN.fullmatch(token):
+        raise ValueError(
+            "HomeWizard P1 Meter is not paired: grid_meter.serial and grid_meter.token "
+            "come from pairing in the Admin Console or 'emsctl config init'"
+        )
+    return {
+        "host": host,
+        "port": _strict_number(
+            grid_meter.get("port"),
+            "grid_meter.port",
+            default=HOMEWIZARD_P1_DEFAULT_PORT,
+            minimum=1,
+            maximum=65535,
+        ),
+        "serial": serial,
+        "token": token,
+    }
+
+
+def check_homewizard_p1_pairing_name(grid_meter):
+    """Refuse a stored pairing name the meter would not accept for pairing again.
+
+    Reading needs no name, so the EMS and ``config init`` treat a malformed one
+    as absent and pairing makes up a new one; only the editors refuse it, so a
+    name of another form is never written in the first place.
+    """
+
+    grid_meter = grid_meter if isinstance(grid_meter, dict) else {}
+    name = str(grid_meter.get("pairing_name") or "").strip()
+    if name and not HOMEWIZARD_P1_PAIRING_NAME_PATTERN.fullmatch(name):
+        raise ValueError(
+            "grid_meter.pairing_name must be the name pairing stored: local/ and up to "
+            "40 letters, digits, spaces or -_\\/#"
+        )
+
+
+POWERFOX_DEFAULT_PORT = 80
+POWERFOX_API_KEY_PATTERN = re.compile(r"[\x21-\x7e]{1,128}")
+
+
+def powerfox_grid_meter_settings(grid_meter):
+    """Validate a ``powerfox_poweropti`` grid-meter block into connection settings.
+
+    The poweropti's local API answers only with its API key, which is the
+    device ID on its label; ``grid_meter.token`` holds it like any secret.
+    """
+
+    grid_meter = grid_meter if isinstance(grid_meter, dict) else {}
+    host = str(grid_meter.get("ip") or "").strip()
+    if not host:
+        raise ValueError("powerfox poweropti requires grid_meter.ip")
+    token = str(grid_meter.get("token") or "").strip()
+    if not POWERFOX_API_KEY_PATTERN.fullmatch(token):
+        raise ValueError(
+            "powerfox poweropti requires grid_meter.token: the API key, which is the "
+            "device ID on the poweropti's label"
+        )
+    return {
+        "host": host,
+        "port": _strict_number(
+            grid_meter.get("port"),
+            "grid_meter.port",
+            default=POWERFOX_DEFAULT_PORT,
+            minimum=1,
+            maximum=65535,
+        ),
+        "token": token,
+    }
+
+
+def dsmr_p1_tcp_grid_meter_settings(grid_meter):
+    """Validate a ``dsmr_p1_tcp`` grid-meter block into connection settings.
+
+    P1 bridges use no common port, so the port is required, not defaulted.
+    """
+
+    grid_meter = grid_meter if isinstance(grid_meter, dict) else {}
+    host = str(grid_meter.get("ip") or "").strip()
+    if not host:
+        raise ValueError("DSMR P1 bridge requires grid_meter.ip")
+    port = _strict_number(grid_meter.get("port"), "grid_meter.port", default=None, minimum=1, maximum=65535)
+    if port is None:
+        raise ValueError("DSMR P1 bridge requires grid_meter.port, the TCP port set on the bridge")
+    return {"host": host, "port": port}
+
+
+def sunspec_modbus_grid_meter_settings(grid_meter):
+    """Validate a ``sunspec_modbus`` grid-meter block into connection settings."""
+
+    grid_meter = grid_meter if isinstance(grid_meter, dict) else {}
+    return _modbus_tcp_connection(grid_meter, "grid_meter.", "SunSpec Modbus grid meter")
+
+
+def modbus_profile_grid_meter_settings(grid_meter, meter_type):
+    """Validate a grid-meter block read by a device's Modbus profile into connection settings."""
+
+    profile = MODBUS_METER_PROFILES[meter_type]
+    grid_meter = grid_meter if isinstance(grid_meter, dict) else {}
+    return _modbus_tcp_connection(
+        grid_meter,
+        "grid_meter.",
+        f"{profile.label} grid meter",
+        default_port=profile.port,
+        default_unit_id=profile.unit_id,
+    )
+
+
+GRID_METER_READER_SETTINGS = {
+    POWERFOX_GRID_METER_TYPE: powerfox_grid_meter_settings,
+    DSMR_P1_TCP_GRID_METER_TYPE: dsmr_p1_tcp_grid_meter_settings,
+    SUNSPEC_MODBUS_GRID_METER_TYPE: sunspec_modbus_grid_meter_settings,
+    **{
+        meter_type: functools.partial(modbus_profile_grid_meter_settings, meter_type=meter_type)
+        for meter_type in MODBUS_METER_PROFILES
+    },
+}
 
 
 _ZENDURE_D0_TOPIC_PREFIX = "Zendure/sensor/"
@@ -394,6 +608,8 @@ MQTT_GRID_METER_KEYS = (
     "topic",
     "payload_format",
     "value_path",
+    "export_value_path",
+    "value_scale",
     "max_age_seconds",
     "_mqtt_client_factory",
 )
@@ -1167,6 +1383,17 @@ def resolve_grid_meter_mqtt_settings(config):
     return resolved
 
 
+def mqtt_grid_meter_value_scale(settings):
+    """The factor that turns an MQTT meter's values into W: 1, 1000 for kW, -1 to turn the sign."""
+
+    scale = _strict_number(
+        settings.get("value_scale"), "grid_meter.mqtt.value_scale", default=1.0, minimum=-1e6, maximum=1e6, integer=False
+    )
+    if scale == 0:
+        raise ValueError("grid_meter.mqtt.value_scale must not be 0")
+    return scale
+
+
 def normalize_mqtt_grid_meter_settings(grid_meter, *, meter_type=None):
     meter_type = str(
         meter_type
@@ -1197,6 +1424,7 @@ def normalize_mqtt_grid_meter_settings(grid_meter, *, meter_type=None):
         "topic",
         "payload_format",
         "value_path",
+        "export_value_path",
     ):
         if key in settings and settings[key] is not None:
             settings[key] = str(settings[key])
@@ -1233,10 +1461,15 @@ def normalize_mqtt_grid_meter_settings(grid_meter, *, meter_type=None):
     settings["payload_format"] = payload_format
     if payload_format != "json":
         settings.pop("value_path", None)
+        settings.pop("export_value_path", None)
     settings["max_age_seconds"] = max(
         1,
         safe_int(settings.get("max_age_seconds", 15), 15, minimum=1),
     )
+    if meter_type == ZENDURE_SMARTMETER_D0_GRID_METER_TYPE:
+        settings.pop("value_scale", None)
+    elif "value_scale" in settings:
+        settings["value_scale"] = mqtt_grid_meter_value_scale(settings)
     # TLS mirrors the Zendure MQTT read client: plain by default, insecure only
     # when explicitly enabled.
     settings["tls"] = tls
@@ -1316,8 +1549,13 @@ def template_placeholder_paths(config):
                 paths.append("grid_meter.ip" if by_ip else "grid_meter.url")
             if _missing_or_placeholder(grid_meter.get("power_path")):
                 paths.append("grid_meter.power_path")
-        elif _missing_or_placeholder(grid_meter.get("ip"), address=True):
-            paths.append("grid_meter.ip")
+        else:
+            if _missing_or_placeholder(grid_meter.get("ip"), address=True):
+                paths.append("grid_meter.ip")
+            if meter_type == TIBBER_PULSE_GRID_METER_TYPE and _missing_or_placeholder(
+                grid_meter.get("credentials_ref")
+            ):
+                paths.append("grid_meter.credentials_ref")
 
     return paths
 

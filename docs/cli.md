@@ -415,6 +415,12 @@ Edited configs need an explicit backup decision for non-interactive writes:
 use `--yes --backup` to create a backup first, or `--yes --no-backup` when you
 intentionally do not want one.
 
+A HomeWizard P1 Meter is paired on the way: after its address, `config init`
+asks you to press the button on the meter and waits up to 60 s for it, then
+stores the meter's serial and token. A meter that is already paired keeps its
+pairing unless you answer yes to *Pair the P1 Meter again?*. A non-interactive
+run keeps an existing pairing and refuses a meter that has none.
+
 `config upgrade` is different from `config init`. It fills missing persisted
 keys after updates by comparing your config with `config.template.json`.
 Dry-run output includes missing keys, missing explanatory comments, and the

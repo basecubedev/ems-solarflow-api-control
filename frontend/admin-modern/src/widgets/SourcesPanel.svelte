@@ -6,7 +6,7 @@
   import ConfirmDialog from "../../../shared/ui/ConfirmDialog.svelte";
   import { t, tn } from "../i18n/i18n.svelte.js";
   import { errorView } from "../lib/errors.js";
-  import { sources, loadSources, saveCredential, removeCredential, refreshBrokers, saveCloudKey, testCloudKey, refreshCloud, forgetCloudKey } from "../state/sources.svelte.js";
+  import { sources, loadSources, saveCredential, removeCredential, saveBridgePassword, removeBridgePassword, refreshBrokers, saveCloudKey, testCloudKey, refreshCloud, forgetCloudKey } from "../state/sources.svelte.js";
 
   /** onchanged: called after an action that changes what the search can find. */
   let { onchanged = null } = $props();
@@ -18,6 +18,10 @@
   let removing = $state.raw(null);
   let forgetting = $state(false);
   let missingLabel = $state(false);
+  let bridgeLabel = $state("");
+  let bridgePassword = $state("");
+  let bridgeMissing = $state(false);
+  let removingBridge = $state.raw(null);
 
   const cloud = $derived(sources.cloud || {});
   const saved = $derived(Boolean(cloud.token_saved));
@@ -36,6 +40,17 @@
       label = "";
       username = "";
       password = "";
+      onchanged?.();
+    }
+  }
+
+  async function saveBridge(event) {
+    event.preventDefault();
+    bridgeMissing = !bridgeLabel.trim() || !bridgePassword.trim();
+    if (bridgeMissing) return;
+    if (await saveBridgePassword({ label: bridgeLabel.trim(), password: bridgePassword.trim() })) {
+      bridgeLabel = "";
+      bridgePassword = "";
       onchanged?.();
     }
   }
@@ -78,6 +93,33 @@
     </form>
     {#if missingLabel}<p class="form-error">{t("sources.local.labelRequired")}</p>{/if}
     <button class="btn secondary small" type="button" onclick={() => refreshBrokers().then(() => onchanged?.())} disabled={Boolean(sources.busy)} data-testid="brokers-refresh"><Icon name="refresh-cw" size="sm" />{t("sources.local.refresh")}</button>
+  </section>
+
+  <section class="source" data-testid="bridge-passwords">
+    <h3 class="sub">{t("sources.bridge.title")}</h3>
+    <p class="muted small">{t("sources.bridge.lead")}</p>
+    {#if sources.bridgePasswords?.length}
+      <ul class="list">
+        {#each sources.bridgePasswords as entry (entry.id)}
+          <li class="inner row">
+            <div class="words">
+              <strong>{entry.label || entry.id}</strong>
+              <span class="muted small num" lang="en">{entry.id}</span>
+            </div>
+            <Status tone={entry.encrypted ? "c-ok" : "c-warn"} text={entry.encrypted ? t("sources.local.encrypted") : t("sources.local.notEncrypted")} />
+            <button class="btn secondary small" type="button" onclick={() => (removingBridge = entry)} disabled={Boolean(sources.busy)}><Icon name="trash-2" size="sm" />{t("devices.remove")}</button>
+          </li>
+        {/each}
+      </ul>
+    {:else if sources.bridgePasswords}
+      <p class="muted small">{t("sources.bridge.none")}</p>
+    {/if}
+    <form class="form" onsubmit={saveBridge}>
+      <input class="input" type="text" placeholder={t("sources.local.label")} aria-label={t("sources.bridge.label")} bind:value={bridgeLabel} data-testid="bridge-label" />
+      <input class="input" type="password" autocomplete="new-password" placeholder={t("sources.bridge.password")} aria-label={t("sources.bridge.password")} bind:value={bridgePassword} data-testid="bridge-password" />
+      <button class="btn secondary small" type="submit" disabled={Boolean(sources.busy)} data-testid="bridge-save"><Icon name="save" size="sm" />{t("sources.bridge.save")}</button>
+    </form>
+    {#if bridgeMissing}<p class="form-error">{t("sources.bridge.required")}</p>{/if}
   </section>
 
   <section class="source">
@@ -123,6 +165,15 @@
   danger
   onconfirm={() => { const credential = removing; removing = null; if (credential) removeCredential(credential.id).then(() => onchanged?.()); }}
   oncancel={() => (removing = null)}
+/>
+<ConfirmDialog
+  open={Boolean(removingBridge)}
+  title={t("sources.bridge.removeTitle")}
+  lines={[t("sources.bridge.removeLine")]}
+  confirmLabel={t("devices.remove")}
+  danger
+  onconfirm={() => { const entry = removingBridge; removingBridge = null; if (entry) removeBridgePassword(entry.id).then(() => onchanged?.()); }}
+  oncancel={() => (removingBridge = null)}
 />
 <ConfirmDialog
   open={forgetting}

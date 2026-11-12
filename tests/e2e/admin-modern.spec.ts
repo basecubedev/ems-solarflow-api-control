@@ -530,6 +530,41 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
     await expect(meter).toContainText("No grid meter configured");
   });
 
+  test("the grid meter becomes a paired HomeWizard P1 Meter at the same address, checked and saved", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings/devices");
+    const meter = page.getByTestId("devices-editor").locator('[data-device="grid-meter"]');
+    await meter.locator(".summary").click();
+    await page.getByTestId("grid-type").selectOption("homewizard_p1");
+    await expect(meter).toContainText("HomeWizard P1 Meter");
+    await expect(meter.locator('[data-path="grid_meter.ip"] input')).toHaveValue("192.168.50.2");
+    const pairing = meter.getByTestId("homewizard-pairing");
+    await expect(pairing.getByTestId("homewizard-state")).toHaveText("Not paired yet: the EMS reads the meter only after pairing.");
+
+    await pairing.getByTestId("homewizard-pair").click();
+    await expect(pairing).toContainText("Press the button on the P1 Meter now.");
+    await expect(pairing.getByTestId("homewizard-state")).toHaveText("Paired with P1 Meter 0a1b2c3d4e5f. Save the settings to keep the pairing.");
+
+    await page.getByTestId("review").click();
+    const review = page.getByTestId("settings-review");
+    await expect(review).toContainText("Settings are valid");
+    await expect(review).toContainText("grid_meter");
+    await expect(review).not.toContainText("0123456789ABCDEF0123456789ABCDEF");
+    await page.getByTestId("apply").click();
+    await page.getByRole("dialog", { name: "Save the checked changes?" }).getByTestId("confirm").click();
+    await expect(page.getByTestId("settings-applied")).toBeVisible();
+
+    await page.reload();
+    await expect(page.getByTestId("grid-type")).toHaveValue("homewizard_p1");
+    await expect(page.getByTestId("homewizard-state")).toHaveText("Paired with P1 Meter 0a1b2c3d4e5f.");
+    await expect(page.getByTestId("settings-changes")).toHaveCount(0);
+
+    await meter.locator(".summary").click();
+    await page.getByTestId("homewizard-pair").click();
+    await expect(page.getByTestId("homewizard-pairing")).toContainText("Pairing again ends the current pairing at once");
+    await page.getByTestId("homewizard-pairing").getByRole("button", { name: "Cancel" }).click();
+    await expect(page.getByTestId("homewizard-state")).toHaveText("Paired with P1 Meter 0a1b2c3d4e5f.");
+  });
+
   test("an edit survives a reload, the search finds it, and discard leaves the file alone", async ({ page, seedAdminScenario }) => {
     await seededAt(page, seedAdminScenario, "#/settings");
     await page.getByRole("button", { name: "Expert", exact: true }).click();
@@ -673,6 +708,36 @@ test.describe("Modern Admin: what the search may use", { tag: ["@smoke"] }, () =
     await page.getByRole("dialog", { name: "Remove this credential?" }).getByTestId("confirm").click();
     await expect(page.getByTestId("sources-message")).toContainText("Credential removed.");
     await expect(page.getByTestId("search-sources")).not.toContainText("garage broker");
+  });
+
+  test("a Tibber bridge password is saved by name, the grid meter picks it, and the password in use stays", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings/devices");
+    const bridges = page.getByTestId("bridge-passwords");
+    await page.getByTestId("bridge-label").fill("basement bridge");
+    await page.getByTestId("bridge-password").fill("E2E1-TIBR");
+    await page.getByTestId("bridge-save").click();
+    await expect(bridges).toContainText("basement bridge");
+    await expect(page.getByTestId("bridge-password")).toHaveValue("");
+    await expect(page.locator("body")).not.toContainText("E2E1-TIBR");
+
+    const meter = page.getByTestId("devices-editor").locator('[data-device="grid-meter"]');
+    await meter.locator(".summary").click();
+    await page.getByTestId("grid-type").selectOption("tibber_pulse_bridge");
+    await meter.locator('[data-path="grid_meter.ip"] input').fill("192.168.50.70");
+    await meter.locator('[data-path="grid_meter.credentials_ref"] select').selectOption({ label: "basement bridge" });
+    await page.getByTestId("review").click();
+    await expect(page.getByTestId("settings-review")).toContainText("Settings are valid");
+    await page.getByTestId("apply").click();
+    await page.getByRole("dialog", { name: "Save the checked changes?" }).getByTestId("confirm").click();
+    await expect(page.getByTestId("settings-applied")).toBeVisible();
+
+    await page.reload();
+    await meter.locator(".summary").click();
+    await expect(meter.locator('[data-path="grid_meter.credentials_ref"] select')).toHaveValue("basement-bridge");
+    await bridges.locator("li").filter({ hasText: "basement bridge" }).getByRole("button", { name: "Remove" }).click();
+    await page.getByRole("dialog", { name: "Remove this bridge password?" }).getByTestId("confirm").click();
+    await expect(page.getByTestId("sources-message")).toContainText("The bridge password could not be removed.");
+    await expect(bridges).toContainText("basement bridge");
   });
 
   test("the Zendure cloud key is saved, tested, used and forgotten", async ({ page, seedAdminScenario }) => {

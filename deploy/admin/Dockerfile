@@ -81,6 +81,9 @@ COPY ems/winter_policies.py ./ems/winter_policies.py
 COPY ems/config.py ./ems/config.py
 COPY ems/read_only_devices.py ./ems/read_only_devices.py
 COPY ems/e3dc_modbus.py ./ems/e3dc_modbus.py
+COPY ems/sunspec.py ./ems/sunspec.py
+COPY ems/modbus_meters.py ./ems/modbus_meters.py
+COPY ems/homewizard.py ./ems/homewizard.py
 COPY ems/template_addresses.py ./ems/template_addresses.py
 # The canonical config mutation semantics both Admin workflows apply changes
 # through; Core-owned and client-free.
@@ -100,6 +103,9 @@ COPY ems/control_status.py ./ems/control_status.py
 COPY ems/device_fingerprints.py ./ems/device_fingerprints.py
 COPY ems/health.py ./ems/health.py
 COPY ems/clients.py ./ems/clients.py
+# The network scan opens a found Tibber Pulse bridge through the EMS's bridge reader.
+COPY ems/sml.py ./ems/sml.py
+COPY ems/tibber_pulse.py ./ems/tibber_pulse.py
 COPY ems/models.py ./ems/models.py
 COPY ems/device_settings.py ./ems/device_settings.py
 COPY ems/logging_utils.py ./ems/logging_utils.py

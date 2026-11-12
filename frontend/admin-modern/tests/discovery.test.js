@@ -4,6 +4,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   addFound,
+  bridgeValues,
+  unitValues,
   buildReview,
   configuredNetworks,
   identitiesMatch,
@@ -115,6 +117,20 @@ test("a find is added once: an inverter with the defaults, a meter by its family
   assert.equal(meterTypeOf({ device_type: "EcoTracker" }), "ecotracker");
 });
 
+test("a found HomeWizard P1 Meter becomes the meter of its own type", () => {
+  const found = { ip: "192.168.1.40", api_family: "homewizard_p1", device_type: "homewizard_p1", port: 443 };
+  assert.deepEqual(addFound({}, { role: "grid_meter", discovered: found }, catalog).grid_meter, { present: true, type: "homewizard_p1", ip: "192.168.1.40", port: 443 });
+  assert.equal(meterTypeOf({ grid_meter_type: "homewizard_p1", api_family: "shelly_gen2" }), "homewizard_p1");
+});
+
+test("a found Tibber bridge becomes the meter with the password that opened it and its reading head", () => {
+  const found = { ip: "192.168.1.70", api_family: "tibber_pulse_bridge", port: 80, credentials_ref: "basement", node_id: 2 };
+  assert.deepEqual(addFound({}, { role: "grid_meter", discovered: found }, catalog).grid_meter, { present: true, type: "tibber_pulse_bridge", ip: "192.168.1.70", port: 80, credentials_ref: "basement", node_id: 2 });
+  assert.deepEqual(bridgeValues({ credentials_ref: " ", node_id: "x" }), {});
+  assert.deepEqual(bridgeValues({ node_id: "2" }), { node_id: 2 });
+  assert.equal(meterTypeOf({ api_family: "tibber_pulse_bridge" }), "tibber_pulse_bridge");
+});
+
 test("an external device moves to the connection a proposal offers, by the catalogue id the server issued", () => {
   const devices = [{ kind: "external_mqtt", name: "Kostal", catalog_device_id: "catalog:v1:k1", mqtt: { broker_ref: "old" } }];
   const proposal = { id: "p9", catalog_device_id: "catalog:v1:k1", catalog_connection_id: "catalog:v1:c2", config_fragment: { mqtt: { broker_ref: "new", device_id: "K1" } } };
@@ -199,4 +215,11 @@ test("a device found again on a second broker names the entry it already is and 
   assert.equal(proposalBroker(proposal), "192.168.1.7:1883");
   assert.equal(isControlDowngrade(item, draft), false);
   assert.equal(configuredFor({ state: "transport", proposal: { ...proposal, catalog_device_id: "catalog:v1:other" } }, draft), null);
+});
+
+test("a found SunSpec meter brings the unit ID it answered at", () => {
+  const found = { ip: "192.168.1.64", api_family: "sunspec_modbus", device_type: "sunspec_modbus", port: 502, unit_id: 200 };
+  assert.deepEqual(addFound({}, { role: "grid_meter", discovered: found }, catalog).grid_meter, { present: true, type: "sunspec_modbus", ip: "192.168.1.64", port: 502, unit_id: 200 });
+  assert.deepEqual(unitValues({ unit_id: "x" }), {});
+  assert.equal(meterTypeOf({ api_family: "powerfox_poweropti" }), "powerfox_poweropti");
 });

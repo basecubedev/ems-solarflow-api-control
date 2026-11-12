@@ -71,6 +71,7 @@ nav = [
       { "Supported setups" = "user/supported-setups.md" },
       { "Connection types" = "user/connection-types.md" },
       { "External devices" = "user/external-devices.md" },
+      { "Tibber Pulse IR (experimental)" = "user/tibber-pulse.md" },
       { "FAQ" = "user/faq.md" },
       { "Troubleshooting" = "user/troubleshooting.md" },
       { "Safety" = "user/safety.md" },

@@ -8,7 +8,7 @@ import json
 import os
 
 from ems import config as config_mod
-from ems.config_catalog import grid_meter_port_carries_over
+from ems.config_catalog import grid_meter_port_carries_over, grid_meter_variant_field_spec
 from ems.read_only_devices import E3DC_MODBUS_DEVICE_TYPE, is_read_only_device_config
 from ems.influx_setup import DOCKER_FIRST_SECRET_FILE
 from ems.paths import resolve_template_path
@@ -18,6 +18,18 @@ GRID_METER_CHOICES = (
     ("shelly", "Shelly Pro 3EM / Shelly Plus/Pro Gen2/Gen3"),
     ("shelly_3em_gen1", "Shelly 3EM Gen1"),
     ("ecotracker", "EcoTracker"),
+    (
+        config_mod.HOMEWIZARD_P1_GRID_METER_TYPE,
+        "HomeWizard P1 Meter (paired by pressing its button)",
+    ),
+    (
+        config_mod.POWERFOX_GRID_METER_TYPE,
+        "powerfox poweropti (local API, needs powerfox PRO)",
+    ),
+    (
+        config_mod.DSMR_P1_TCP_GRID_METER_TYPE,
+        "DSMR P1 telegrams over TCP (P1-to-WiFi gateway, ser2net)",
+    ),
     (
         config_mod.ZENDURE_GRID_METER_HTTP_GRID_METER_TYPE,
         "Zendure Grid Meter via local HTTP (D0 / Smart Meter 3CT)",
@@ -31,6 +43,18 @@ GRID_METER_CHOICES = (
     (
         config_mod.E3DC_MODBUS_GRID_METER_TYPE,
         "E3/DC storage system via Modbus TCP (read-only)",
+    ),
+    (
+        config_mod.SUNSPEC_MODBUS_GRID_METER_TYPE,
+        "SunSpec meter via Modbus TCP (Fronius, Kostal; read-only)",
+    ),
+    *(
+        (profile.meter_type, f"{profile.label} via Modbus TCP (read-only)")
+        for profile in config_mod.MODBUS_METER_PROFILES.values()
+    ),
+    (
+        config_mod.TIBBER_PULSE_GRID_METER_TYPE,
+        "Tibber Pulse IR bridge (experimental; save its password in the Admin Console)",
     ),
 )
 # Backward-compatible grid-meter types accepted from an existing config but not
@@ -316,6 +340,9 @@ def ask_grid_meter(
         current_type, meter_type
     ):
         result.pop("port", None)
+    if meter_type != current_type:
+        for key in (*config_mod.HOMEWIZARD_P1_PAIRING_KEYS, "unit_id"):
+            result.pop(key, None)
     if meter_type in config_mod.MQTT_GRID_METER_TYPES:
         mqtt_settings = config_mod.grid_meter_mqtt_settings(result)
         existing_password = mqtt_settings.pop("password", None)
@@ -377,7 +404,8 @@ def ask_grid_meter(
                 )
             mqtt_settings["topic"] = topic
             payload_format = "number"
-            mqtt_settings.pop("value_path", None)
+            for key in ("value_path", "export_value_path", "value_scale"):
+                mqtt_settings.pop(key, None)
         else:
             mqtt_settings["topic"] = ask_text(
                 "MQTT power topic",
@@ -406,8 +434,35 @@ def ask_grid_meter(
                     noninteractive=noninteractive,
                     allow_placeholder_default=allow_placeholder_defaults,
                 )
+                export_value_path = ask_text(
+                    "MQTT JSON export value path (optional, subtracted)",
+                    mqtt_settings.get("export_value_path") or "",
+                    noninteractive=noninteractive,
+                    allow_placeholder_default=allow_placeholder_defaults,
+                )
+                if export_value_path:
+                    mqtt_settings["export_value_path"] = export_value_path
+                else:
+                    mqtt_settings.pop("export_value_path", None)
             else:
                 mqtt_settings.pop("value_path", None)
+                mqtt_settings.pop("export_value_path", None)
+            while True:
+                scale = ask_text(
+                    "MQTT value scale to W (1 for W, 1000 for kW, -1 to turn the sign)",
+                    str(mqtt_settings.get("value_scale") or 1),
+                    required=True,
+                    noninteractive=noninteractive,
+                )
+                try:
+                    mqtt_settings["value_scale"] = config_mod.mqtt_grid_meter_value_scale({"value_scale": scale})
+                    break
+                except ValueError as exc:
+                    if noninteractive:
+                        raise ConfigInitError(str(exc)) from exc
+                    print(f"{exc}; please enter another value.")
+            if mqtt_settings["value_scale"] == 1:
+                mqtt_settings.pop("value_scale")
         mqtt_settings["payload_format"] = payload_format
         mqtt_settings["max_age_seconds"] = ask_int(
             "MQTT max value age in seconds",
@@ -420,6 +475,7 @@ def ask_grid_meter(
             "ip",
             "url",
             "power_path",
+            "export_path",
             "channels",
             "host",
             "port",
@@ -430,6 +486,8 @@ def ask_grid_meter(
             "value_path",
             "max_age_seconds",
             "unit_id",
+            *config_mod.HOMEWIZARD_P1_PAIRING_KEYS,
+            *config_mod.TIBBER_PULSE_BRIDGE_KEYS,
         ):
             result.pop(key, None)
     elif meter_type == config_mod.E3DC_MODBUS_GRID_METER_TYPE:
@@ -457,6 +515,7 @@ def ask_grid_meter(
         for key in (
             "url",
             "power_path",
+            "export_path",
             "channels",
             "host",
             "username",
@@ -466,10 +525,173 @@ def ask_grid_meter(
             "value_path",
             "max_age_seconds",
             "mqtt",
+            *config_mod.HOMEWIZARD_P1_PAIRING_KEYS,
+            *config_mod.TIBBER_PULSE_BRIDGE_KEYS,
         ):
             result.pop(key, None)
         try:
             config_mod.e3dc_modbus_grid_meter_settings(result)
+        except ValueError as exc:
+            raise ConfigInitError(str(exc)) from exc
+    elif meter_type == config_mod.TIBBER_PULSE_GRID_METER_TYPE:
+        result["ip"] = ask_text(
+            "Tibber bridge IP address",
+            result.get("ip") or "",
+            required=True,
+            noninteractive=noninteractive,
+            allow_placeholder_default=allow_placeholder_defaults,
+        )
+        result["credentials_ref"] = ask_text(
+            "Bridge password reference (the id under its name in the Admin Console)",
+            result.get("credentials_ref") or "",
+            required=True,
+            noninteractive=noninteractive,
+            allow_placeholder_default=allow_placeholder_defaults,
+        )
+        result["node_id"] = ask_int(
+            "Pulse node (reading head) on the bridge",
+            _whole_number_text(result.get("node_id"), config_mod.TIBBER_PULSE_DEFAULT_NODE_ID),
+            minimum=1,
+            maximum=255,
+            noninteractive=noninteractive,
+        )
+        _keep_variant_keys(result, meter_type)
+        try:
+            config_mod.tibber_pulse_grid_meter_settings(result)
+        except ValueError as exc:
+            raise ConfigInitError(str(exc)) from exc
+    elif meter_type == config_mod.HOMEWIZARD_P1_GRID_METER_TYPE:
+        result["ip"] = ask_text(
+            "HomeWizard P1 Meter IP address",
+            result.get("ip") or "",
+            required=True,
+            noninteractive=noninteractive,
+            allow_placeholder_default=allow_placeholder_defaults,
+        )
+        for key in (
+            "url",
+            "power_path",
+            "export_path",
+            "channels",
+            "host",
+            "username",
+            "password",
+            "topic",
+            "payload_format",
+            "value_path",
+            "max_age_seconds",
+            "unit_id",
+            "mqtt",
+            *config_mod.TIBBER_PULSE_BRIDGE_KEYS,
+        ):
+            result.pop(key, None)
+        try:
+            config_mod.homewizard_p1_grid_meter_settings(result)
+            paired = True
+        except ValueError:
+            paired = False
+        if noninteractive:
+            if not paired:
+                raise ConfigInitError(
+                    "HomeWizard P1 Meter is not paired; run 'emsctl config init' "
+                    "interactively and press the meter's button when asked"
+                )
+        elif not paired or ask_confirm("Pair the P1 Meter again? Its current token stops working at once", False):
+            result.update(
+                pair_homewizard_p1(result["ip"], port=result.get("port"), name=result.get("pairing_name"))
+            )
+    elif meter_type == config_mod.POWERFOX_GRID_METER_TYPE:
+        result["ip"] = ask_text(
+            "powerfox poweropti IP address",
+            result.get("ip") or "",
+            required=True,
+            noninteractive=noninteractive,
+            allow_placeholder_default=allow_placeholder_defaults,
+        )
+        result["token"] = ask_secret_text(
+            "poweropti API key (the device ID on its label)",
+            result.get("token") or "",
+            required=True,
+            noninteractive=noninteractive,
+        )
+        _keep_variant_keys(result, meter_type)
+        try:
+            config_mod.powerfox_grid_meter_settings(result)
+        except ValueError as exc:
+            raise ConfigInitError(str(exc)) from exc
+    elif meter_type in config_mod.MODBUS_METER_PROFILES:
+        profile = config_mod.MODBUS_METER_PROFILES[meter_type]
+        result["ip"] = ask_text(
+            f"{profile.label} IP address",
+            result.get("ip") or "",
+            required=True,
+            noninteractive=noninteractive,
+            allow_placeholder_default=allow_placeholder_defaults,
+        )
+        result["port"] = ask_int(
+            "Modbus TCP port",
+            _whole_number_text(result.get("port"), profile.port),
+            minimum=1,
+            maximum=65535,
+            noninteractive=noninteractive,
+        )
+        result["unit_id"] = ask_int(
+            "Modbus unit ID",
+            _whole_number_text(result.get("unit_id"), profile.unit_id),
+            minimum=0,
+            maximum=255,
+            noninteractive=noninteractive,
+        )
+        _keep_variant_keys(result, meter_type)
+        try:
+            config_mod.modbus_profile_grid_meter_settings(result, meter_type)
+        except ValueError as exc:
+            raise ConfigInitError(str(exc)) from exc
+    elif meter_type == config_mod.SUNSPEC_MODBUS_GRID_METER_TYPE:
+        result["ip"] = ask_text(
+            "SunSpec device IP address",
+            result.get("ip") or "",
+            required=True,
+            noninteractive=noninteractive,
+            allow_placeholder_default=allow_placeholder_defaults,
+        )
+        result["port"] = ask_int(
+            "SunSpec Modbus TCP port",
+            _whole_number_text(result.get("port"), config_mod.E3DC_MODBUS_DEFAULT_PORT),
+            minimum=1,
+            maximum=65535,
+            noninteractive=noninteractive,
+        )
+        result["unit_id"] = ask_int(
+            "SunSpec meter unit ID (Fronius inverter: 200)",
+            _whole_number_text(result.get("unit_id"), config_mod.E3DC_MODBUS_DEFAULT_UNIT_ID),
+            minimum=0,
+            maximum=255,
+            noninteractive=noninteractive,
+        )
+        _keep_variant_keys(result, meter_type)
+        try:
+            config_mod.sunspec_modbus_grid_meter_settings(result)
+        except ValueError as exc:
+            raise ConfigInitError(str(exc)) from exc
+    elif meter_type == config_mod.DSMR_P1_TCP_GRID_METER_TYPE:
+        result["ip"] = ask_text(
+            "P1 bridge IP address",
+            result.get("ip") or "",
+            required=True,
+            noninteractive=noninteractive,
+            allow_placeholder_default=allow_placeholder_defaults,
+        )
+        result["port"] = ask_int(
+            "P1 bridge TCP port",
+            _whole_number_text(result.get("port"), None),
+            minimum=1,
+            maximum=65535,
+            noninteractive=noninteractive,
+        )
+        _keep_variant_keys(result, meter_type)
+        try:
+            config_mod.dsmr_p1_tcp_grid_meter_settings(result)
         except ValueError as exc:
             raise ConfigInitError(str(exc)) from exc
     elif meter_type == "tasmota_http":
@@ -494,6 +716,16 @@ def ask_grid_meter(
             noninteractive=noninteractive,
             allow_placeholder_default=allow_placeholder_defaults,
         )
+        export_path = ask_text(
+            "Tasmota export power path (optional, subtracted)",
+            result.get("export_path") or "",
+            noninteractive=noninteractive,
+            allow_placeholder_default=allow_placeholder_defaults,
+        )
+        if export_path:
+            result["export_path"] = export_path
+        else:
+            result.pop("export_path", None)
         for key in (
             "host",
             "port",
@@ -506,6 +738,8 @@ def ask_grid_meter(
             "unit_id",
             "channels",
             "mqtt",
+            *config_mod.HOMEWIZARD_P1_PAIRING_KEYS,
+            *config_mod.TIBBER_PULSE_BRIDGE_KEYS,
         ):
             result.pop(key, None)
     else:
@@ -518,6 +752,7 @@ def ask_grid_meter(
         )
         result.pop("url", None)
         result.pop("power_path", None)
+        result.pop("export_path", None)
         for key in (
             "host",
             "port",
@@ -529,9 +764,42 @@ def ask_grid_meter(
             "max_age_seconds",
             "unit_id",
             "mqtt",
+            *config_mod.HOMEWIZARD_P1_PAIRING_KEYS,
+            *config_mod.TIBBER_PULSE_BRIDGE_KEYS,
         ):
             result.pop(key, None)
     return result
+
+
+def _keep_variant_keys(result, meter_type):
+    keys = grid_meter_variant_field_spec(meter_type)["keys"]
+    for key in [key for key in result if key not in keys]:
+        result.pop(key)
+
+
+def pair_homewizard_p1(host, *, port=None, name=None):
+    """Pair the P1 Meter at ``host`` by its button under this installation's name.
+
+    Returns the serial, the token and the name; a stored name is kept, so
+    pairing again replaces only this installation's own pairing.
+    """
+
+    from ems import homewizard
+
+    port = _whole_number_text(port, config_mod.HOMEWIZARD_P1_DEFAULT_PORT)
+    if not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ConfigInitError(f"HomeWizard P1 Meter port must be 1..65535, got {port!r}")
+    name = homewizard.pairing_name(name)
+    api = homewizard.HomeWizardP1Api(host, port=port, timeout=5.0)
+    print("Press the button on the HomeWizard P1 Meter now; waiting up to 60 s.")
+    try:
+        token = homewizard.pair_until_pressed(api, name)
+    except homewizard.HomeWizardError as exc:
+        raise ConfigInitError(f"HomeWizard P1 Meter pairing failed: {exc}") from exc
+    finally:
+        api.close()
+    print(f"Paired with P1 Meter {api.connected_serial}.")
+    return {"serial": api.connected_serial, "token": token, "pairing_name": name}
 
 
 def _device_defaults(template_config):
@@ -800,11 +1068,33 @@ def _meter_summary(grid_meter):
     if meter_type == "tasmota_http":
         target = grid_meter.get("url") or grid_meter.get("ip") or "(not set)"
         return f"Tasmota HTTP at {target}"
-    if meter_type == config_mod.E3DC_MODBUS_GRID_METER_TYPE:
+    if meter_type == config_mod.HOMEWIZARD_P1_GRID_METER_TYPE:
+        serial = grid_meter.get("serial") or ""
+        pairing = f"serial {serial}" if serial and grid_meter.get("token") else "not paired"
+        return f"HomeWizard P1 Meter at {grid_meter.get('ip') or '(not set)'}, {pairing}"
+    if meter_type == config_mod.POWERFOX_GRID_METER_TYPE:
+        key = "API key set" if grid_meter.get("token") else "no API key"
+        return f"powerfox poweropti at {grid_meter.get('ip') or '(not set)'}, {key}"
+    if meter_type == config_mod.TIBBER_PULSE_GRID_METER_TYPE:
+        return (
+            f"Tibber Pulse bridge at {grid_meter.get('ip') or '(not set)'} "
+            f"node {grid_meter.get('node_id', config_mod.TIBBER_PULSE_DEFAULT_NODE_ID)}, "
+            f"password {grid_meter.get('credentials_ref') or '(not set)'}"
+        )
+    if meter_type == config_mod.DSMR_P1_TCP_GRID_METER_TYPE:
+        return f"DSMR P1 bridge at {grid_meter.get('ip') or '(not set)'}:{grid_meter.get('port') or '(no port)'}"
+    if meter_type in config_mod.MODBUS_METER_PROFILES:
+        profile = config_mod.MODBUS_METER_PROFILES[meter_type]
+        return (
+            f"{profile.label} Modbus TCP at {grid_meter.get('ip') or '(not set)'}:"
+            f"{grid_meter.get('port') or profile.port} unit {grid_meter.get('unit_id', profile.unit_id)}"
+        )
+    if meter_type in (config_mod.E3DC_MODBUS_GRID_METER_TYPE, config_mod.SUNSPEC_MODBUS_GRID_METER_TYPE):
         port = grid_meter.get("port") or config_mod.E3DC_MODBUS_DEFAULT_PORT
         unit_id = grid_meter.get("unit_id", config_mod.E3DC_MODBUS_DEFAULT_UNIT_ID)
+        label = "E3/DC" if meter_type == config_mod.E3DC_MODBUS_GRID_METER_TYPE else "SunSpec meter"
         return (
-            f"E3/DC Modbus TCP at {grid_meter.get('ip') or '(not set)'}:{port} "
+            f"{label} Modbus TCP at {grid_meter.get('ip') or '(not set)'}:{port} "
             f"unit {unit_id}"
         )
     label = {

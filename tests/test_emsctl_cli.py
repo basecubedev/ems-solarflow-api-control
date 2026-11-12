@@ -986,11 +986,23 @@ def test_config_init_grid_meter_choices_are_runtime_supported():
         "shelly",
         "shelly_3em_gen1",
         "ecotracker",
+        "homewizard_p1",
+        "powerfox_poweropti",
+        "dsmr_p1_tcp",
         "zendure_grid_meter_http",
         "tasmota_http",
         "zendure_smartmeter_d0",
         "mqtt",
         "e3dc_modbus",
+        "sunspec_modbus",
+        "huawei_sun2000_modbus",
+        "sungrow_sh_modbus",
+        "carlo_gavazzi_em24_modbus",
+        "victron_gx_modbus",
+        "smart_me_modbus",
+        "iammeter_wem3080t_modbus",
+        "wibeee_modbus",
+        "tibber_pulse_bridge",
         # Backward-compatible local-HTTP aliases accepted from existing configs;
         # both share the generic Zendure local-HTTP reader.
         "zendure_smartmeter_3ct_http",
@@ -998,9 +1010,13 @@ def test_config_init_grid_meter_choices_are_runtime_supported():
     )
 
 
+def _menu_number(meter_type):
+    return str([choice for choice, _ in config_init_mod.GRID_METER_CHOICES].index(meter_type) + 1)
+
+
 def test_config_init_zendure_smartmeter_d0_generates_mqtt_topic(monkeypatch):
     responses = iter([
-        "6",
+        _menu_number("zendure_smartmeter_d0"),
         "mqtt.local",
         "",
         "",
@@ -1029,13 +1045,15 @@ def test_config_init_zendure_smartmeter_d0_generates_mqtt_topic(monkeypatch):
 
 def test_config_init_generic_mqtt_keeps_advanced_payload_flow(monkeypatch):
     responses = iter([
-        "7",
+        _menu_number("mqtt"),
         "mqtt.local",
         "",
         "",
         "meter/grid",
         "json",
         "power.total",
+        "",
+        "",
         "10",
     ])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
@@ -1063,7 +1081,7 @@ def test_config_init_mqtt_password_prompt_keeps_default_without_exposing_it(
     capsys,
 ):
     password = "super-secret-mqtt-password"
-    responses = iter(["", "", "", "", "", "", ""])
+    responses = iter(["", "", "", "", "", "", "", ""])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
 
     def press_enter(prompt):
@@ -1095,7 +1113,7 @@ def test_config_init_mqtt_new_password_is_stored_without_being_printed(
     capsys,
 ):
     password = "new-super-secret-mqtt-password"
-    responses = iter(["7", "mqtt.local", "", "", "meter/grid", "", ""])
+    responses = iter([_menu_number("mqtt"), "mqtt.local", "", "", "meter/grid", "", "", ""])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(responses))
     monkeypatch.setattr(
         config_init_mod.getpass,

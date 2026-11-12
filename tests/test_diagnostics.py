@@ -2143,6 +2143,41 @@ def test_diagnose_report_includes_hardware_health_section(monkeypatch, tmp_path)
     assert "Grid meter health:" in text
 
 
+def test_diagnose_hardware_hands_the_runtime_loop_interval_to_the_homewizard_check(monkeypatch, tmp_path):
+    from ems import homewizard
+
+    class Api:
+        def __init__(self, host, **_kwargs):
+            self.host = host
+
+        def measurement(self):
+            return {"protocol_version": 42, "timestamp": "2026-11-12T03:14:27", "power_w": 120}
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(homewizard, "HomeWizardP1Api", Api)
+    args = diagnose_args(tmp_path, hardware=True)
+    config = json.loads((tmp_path / "config.json").read_text())
+    config["system"]["loop_interval"] = 11
+    config["grid_meter"] = {
+        "type": "homewizard_p1",
+        "ip": "192.0.2.40",
+        "serial": "0a1b2c3d4e5f",
+        "token": "0123456789ABCDEF0123456789ABCDEF",
+    }
+    (tmp_path / "config.json").write_text(json.dumps(config))
+    runtime = json.loads((tmp_path / "runtime-state.json").read_text())
+    runtime.setdefault("system", {})["loop_interval"] = 5
+    (tmp_path / "runtime-state.json").write_text(json.dumps(runtime))
+
+    report = diagnostics.run_hardware_diagnosis(args)
+
+    slow = next(check for check in report["checks"] if check["code"] == "homewizard_p1_slow_meter")
+    assert slow["level"] == "warning"
+    assert slow["details"]["loop_interval"] == 5
+
+
 def test_diagnose_install_includes_runtime_paths(tmp_path, monkeypatch):
     monkeypatch.delenv("EMS_IN_CONTAINER", raising=False)
     report = diagnostics.run_install_diagnosis(diagnose_args(tmp_path))

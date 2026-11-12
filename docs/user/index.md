@@ -15,6 +15,7 @@ Everything a normal user needs: install, operate, diagnose. You do not need the
 | **Something is wrong** | [Troubleshooting](troubleshooting.md) → [Diagnostics and recovery](admin/diagnostics-recovery.md) |
 | **Report device compatibility** | [Supported setups](supported-setups.md#help-improve-compatibility) — positive reports are welcome too |
 | **Show an inverter or battery EMS cannot control** | [External devices over MQTT](external-devices.md) |
+| **Use a Tibber Pulse IR as grid meter** | [Tibber Pulse IR (experimental)](tibber-pulse.md) |
 
 ## Step-by-step guides
 

@@ -82,6 +82,7 @@ standard `config/config.json` layout; the third is a whole system.
 | Supported setups | [user/supported-setups.md](user/supported-setups.md) | Whether your grid meter and devices fit EMS. |
 | Connection types | [user/connection-types.md](user/connection-types.md) | Local API, Local MQTT and Zendure cloud MQTT — which hardware fits which. |
 | External devices | [user/external-devices.md](user/external-devices.md) | Show an inverter or battery EMS cannot control: what to publish over MQTT, with examples. |
+| Tibber Pulse IR | [user/tibber-pulse.md](user/tibber-pulse.md) | Read a Tibber Pulse IR bridge as an experimental grid meter: limits and setup. |
 | FAQ | [user/faq.md](user/faq.md) | Short answers for Admin, Docker, the appliance, config, dashboard, backups and updates. |
 | Troubleshooting | [user/troubleshooting.md](user/troubleshooting.md) | Short, Admin-first guide for common problems. |
 | Safety | [user/safety.md](user/safety.md) | Simple pre-live checklist for hardware writes. |

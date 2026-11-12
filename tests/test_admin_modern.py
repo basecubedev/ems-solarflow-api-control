@@ -382,6 +382,18 @@ def test_every_catalogue_text_and_option_has_its_words_in_every_language():
 
 
 
+def test_the_modern_meter_type_lists_are_the_backends():
+    from admin.config_preview import _GRID_TYPES
+    from ems.config_catalog import grid_meter_types
+
+    source = (SOURCE / "src" / "lib" / "discovery.js").read_text(encoding="utf-8")
+    families = re.search(r"const FAMILY_TYPES = \{(.*?)\};", source, re.S)
+    types = re.search(r"const METER_TYPES = new Set\(\[(.*?)\]\);", source, re.S)
+    assert families and types
+    assert dict(re.findall(r'([a-z0-9_]+): "([a-z0-9_]+)"', families.group(1))) == _GRID_TYPES
+    assert set(re.findall(r'"([a-z0-9_]+)"', types.group(1))) == set(grid_meter_types())
+
+
 def test_the_maturity_levels_and_operations_modern_names_are_the_backends():
     from ems import power_direction
     from ems.mqtt_control import zendure_profiles

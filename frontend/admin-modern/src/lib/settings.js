@@ -143,6 +143,16 @@ export function defaultHint(field, value) {
   return Array.isArray(field.default) ? field.default.join(", ") : String(field.default);
 }
 
+/** The grid meter's bridge password reference as a choice of the saved bridge passwords, shown by name. */
+export function bridgePasswordField(field, passwords) {
+  const entries = passwords || [];
+  return {
+    ...field,
+    options: entries.map((entry) => String(entry.id)),
+    optionLabels: Object.fromEntries(entries.map((entry) => [String(entry.id), String(entry.label || entry.id)])),
+  };
+}
+
 /** A field's choices: the catalogue's options, with the saved value kept when it is none of them. */
 export function choices(field, value) {
   const options = (field?.options || []).map(String);
@@ -272,7 +282,7 @@ export function fieldMatches(field, query, shown = (text) => text) {
   return texts.some((text) => String(text || "").toLowerCase().includes(needle));
 }
 
-/** A typed password stays in memory: it is never written to the tab's storage. */
+/** A typed password stays in memory, and so does a new pairing's token with its serial: neither is written to the tab's storage. */
 export function storable(hardware) {
   const values = { ...hardware.values };
   if (values.zendure_mqtt && "password" in values.zendure_mqtt) {
@@ -282,6 +292,10 @@ export function storable(hardware) {
   if (values.grid_meter?.mqtt && "password" in values.grid_meter.mqtt) {
     const { password, ...mqtt } = values.grid_meter.mqtt;
     values.grid_meter = { ...values.grid_meter, mqtt };
+  }
+  if (values.grid_meter && "token" in values.grid_meter) {
+    const { token, serial, ...meter } = values.grid_meter;
+    values.grid_meter = meter;
   }
   return { ...hardware, values };
 }

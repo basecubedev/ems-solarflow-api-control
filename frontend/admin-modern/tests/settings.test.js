@@ -3,6 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  bridgePasswordField,
   changeCount,
   changeGroups,
   choices,
@@ -187,6 +188,14 @@ test("a typed broker or grid meter password never reaches the tab's storage", ()
   assert.deepEqual([stored.values.zendure_mqtt.host, stored.values.grid_meter.mqtt.topic, stored.base], ["h", "t", "b"]);
 });
 
+test("a new meter pairing stays in memory, token and serial together, until it is saved; its name is no secret", () => {
+  const meter = { present: true, type: "homewizard_p1", ip: "192.168.1.40", has_token: true };
+  const fresh = storable({ base: "b", values: { grid_meter: { ...meter, serial: "0a1b2c3d4e5f", token: "0123456789ABCDEF0123456789ABCDEF", pairing_name: "local/ems_solarflow#3f9a1c" } } });
+  assert.deepEqual(fresh.values.grid_meter, { ...meter, pairing_name: "local/ems_solarflow#3f9a1c" });
+  const kept = storable({ base: "b", values: { grid_meter: { ...meter, serial: "0a1b2c3d4e5f" } } });
+  assert.equal(kept.values.grid_meter.serial, "0a1b2c3d4e5f");
+});
+
 test("every feature has its mark, in a tone class", async () => {
   const { FEATURE_IDS, FEATURE_LOOKS, SECTION_LOOK } = await import("../src/lib/settings.js");
   assert.deepEqual(Object.keys(FEATURE_LOOKS).sort(), [...FEATURE_IDS].sort());
@@ -280,4 +289,12 @@ test("a change written at once that changes nothing sends nothing, and a refused
   assert.deepEqual([unchanged.ok, sent], [true, []]);
   assert.deepEqual([invalid.ok, invalid.error.message], [false, "Config names must be unique: Balkon."]);
   assert.deepEqual([unreadable.ok, unreadable.error.message], [false, "gone"]);
+});
+
+test("the bridge password is a choice of the saved ones by name, and a stored one stays shown", () => {
+  const field = bridgePasswordField({ path: "grid_meter.credentials_ref", type: "text" }, [{ id: "basement", label: "Basement meter" }, { id: "garage" }]);
+  assert.deepEqual(field.options, ["basement", "garage"]);
+  assert.deepEqual(field.optionLabels, { basement: "Basement meter", garage: "garage" });
+  assert.deepEqual(choices(field, "attic"), ["attic", "basement", "garage"]);
+  assert.deepEqual(bridgePasswordField({ path: "grid_meter.credentials_ref" }, null).options, []);
 });
