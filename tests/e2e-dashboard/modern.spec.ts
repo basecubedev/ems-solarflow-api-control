@@ -1118,6 +1118,10 @@ test.describe("Modern dashboard: About & licenses", () => {
     await expect(page.getByTestId("about-license")).toContainText("GNU Affero General Public License");
     await expect(page.getByTestId("about-license")).toContainText("WITHOUT ANY WARRANTY");
     await expect(page.getByTestId("about-community")).toContainText("it is not a Zendure product");
+    await expect(page.getByTestId("about-discussions")).toHaveAttribute("href", "https://github.com/basecubedev/ems-solarflow-api-control/discussions");
+    await expect(page.getByTestId("about-issues")).toHaveAttribute("href", "https://github.com/basecubedev/ems-solarflow-api-control/issues");
+    await expect(page.getByTestId("about-device-report")).toHaveAttribute("href", "https://github.com/basecubedev/ems-solarflow-api-control/issues/new?template=device_compatibility_report.yml");
+    await expect(page.getByTestId("about-supported-setups")).toHaveAttribute("href", "https://basecubedev.github.io/ems-solarflow-api-control/user/supported-setups.html");
     await expect(page.getByTestId("about-source")).toHaveAttribute("href", /^https:\/\/github\.com\/basecubedev\/ems-solarflow-api-control\/tree\/\S+$/);
     const notices = page.getByTestId("about-notices");
     for (const name of ["clsx", "svelte", "Inter", "Lucide", "uPlot"]) {

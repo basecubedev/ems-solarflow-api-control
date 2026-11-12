@@ -1077,6 +1077,10 @@ test.describe("Modern Admin: About & licenses", () => {
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("About & licenses");
     await expect(page.getByTestId("about-license")).toContainText("WITHOUT ANY WARRANTY");
     await expect(page.getByTestId("about-community")).toContainText("it is not a Zendure product");
+    await expect(page.getByTestId("about-discussions")).toHaveAttribute("href", "https://github.com/basecubedev/ems-solarflow-api-control/discussions");
+    await expect(page.getByTestId("about-issues")).toHaveAttribute("href", "https://github.com/basecubedev/ems-solarflow-api-control/issues");
+    await expect(page.getByTestId("about-device-report")).toHaveAttribute("href", "https://github.com/basecubedev/ems-solarflow-api-control/issues/new?template=device_compatibility_report.yml");
+    await expect(page.getByTestId("about-supported-setups")).toHaveAttribute("href", "https://basecubedev.github.io/ems-solarflow-api-control/user/supported-setups.html");
     const notices = page.getByTestId("about-notices");
     for (const name of ["clsx", "svelte", "Inter", "Lucide", "Vite"]) {
       await expect(notices.getByTestId("about-notice").filter({ hasText: name })).toHaveCount(1);

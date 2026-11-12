@@ -1288,6 +1288,10 @@ test.describe("About & licenses", () => {
     await expect(page).toHaveURL(/#\/about$/);
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("About & licenses");
     await expect(page.getByTestId("about-community")).toContainText("it is not a Zendure product");
+    await expect(page.getByTestId("about-discussions")).toHaveAttribute("href", "https://github.com/basecubedev/ems-solarflow-api-control/discussions");
+    await expect(page.getByTestId("about-issues")).toHaveAttribute("href", "https://github.com/basecubedev/ems-solarflow-api-control/issues");
+    await expect(page.getByTestId("about-device-report")).toHaveAttribute("href", "https://github.com/basecubedev/ems-solarflow-api-control/issues/new?template=device_compatibility_report.yml");
+    await expect(page.getByTestId("about-supported-setups")).toHaveAttribute("href", "https://basecubedev.github.io/ems-solarflow-api-control/user/supported-setups.html");
     const version = (await page.locator(".sidebar .version").textContent())?.replace("Manager ", "").trim();
     expect(version).toMatch(/^\d+\.\d+\.\d+/);
     await expect(page.getByTestId("about-source")).toHaveAttribute(

@@ -2,7 +2,22 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { REPOSITORY, buildFacts, knownRevision, noticeEntries, sourceLinks, sourceRef } from "../lib/about.js";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  DEVICE_REPORT,
+  DOCS_SITE,
+  REPOSITORY,
+  SUPPORTED_SETUPS,
+  buildFacts,
+  knownRevision,
+  noticeEntries,
+  sourceLinks,
+  sourceRef,
+} from "../lib/about.js";
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../../..");
 
 const COMMIT = "8baa635b0123456789abcdef0123456789abcdef";
 
@@ -70,4 +85,15 @@ test("the same package listed twice is shown once", () => {
   ];
   const entries = noticeEntries(bundled, [{ name: "Inter", license: "OFL-1.1", file: "/Inter.LICENSE" }, { name: "Inter", license: "OFL-1.1", file: "/Inter.LICENSE" }]);
   assert.deepEqual(entries.map((entry) => `${entry.name}@${entry.version}`), ["svelte@5.57.3", "svelte@4.2.0", "Inter@"]);
+});
+
+test("the device report opens the repository's issue form and the setups link the published page", () => {
+  const form = new URL(DEVICE_REPORT);
+  assert.equal(`${form.origin}${form.pathname}`, `${REPOSITORY}/issues/new`);
+  assert.ok(existsSync(join(ROOT, ".github/ISSUE_TEMPLATE", form.searchParams.get("template"))));
+  const site = readFileSync(join(ROOT, "zensical.toml"), "utf8").match(/^site_url = "([^"]+)"$/m)[1];
+  assert.equal(`${DOCS_SITE}/`, site);
+  const page = SUPPORTED_SETUPS.slice(site.length);
+  assert.match(page, /\.html$/);
+  assert.ok(existsSync(join(ROOT, "docs", page.replace(/\.html$/, ".md"))));
 });

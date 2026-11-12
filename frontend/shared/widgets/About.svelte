@@ -10,9 +10,11 @@
     BUILD_FILE,
     BUNDLED_FILE,
     COPYRIGHT,
+    DEVICE_REPORT,
     PROJECT_LICENSE,
     REPOSITORY,
     SHARED_NOTICES,
+    SUPPORTED_SETUPS,
     buildFacts,
     noticeEntries,
     noticeKey,
@@ -106,9 +108,26 @@
 <Card icon="users" tone="c-idle" title={t("about.community.title")} span="span-12">
   <p class="muted small" data-testid="about-community">{t("about.community.text", { product })}</p>
   <p class="muted small">{t("about.community.help")}</p>
-  <a class="ghost-link" href={`${REPOSITORY}/issues`} target="_blank" rel="noopener">
-    <Icon name="arrow-up-right" /><span>{t("about.issues")}</span>
-  </a>
+  <div class="row-wrap">
+    <a class="ghost-link" href={`${REPOSITORY}/discussions`} target="_blank" rel="noopener" data-testid="about-discussions">
+      <Icon name="arrow-up-right" /><span>{t("about.discussions")}</span>
+    </a>
+    <a class="ghost-link" href={`${REPOSITORY}/issues`} target="_blank" rel="noopener" data-testid="about-issues">
+      <Icon name="arrow-up-right" /><span>{t("about.issues")}</span>
+    </a>
+  </div>
+</Card>
+
+<Card icon="circle-check" tone="c-grid" title={t("about.devices.title")} span="span-12">
+  <p class="muted small" data-testid="about-devices">{t("about.devices.text", { product })}</p>
+  <div class="row-wrap">
+    <a class="ghost-link" href={DEVICE_REPORT} target="_blank" rel="noopener" data-testid="about-device-report">
+      <Icon name="arrow-up-right" /><span>{t("about.devices.report")}</span>
+    </a>
+    <a class="ghost-link" href={SUPPORTED_SETUPS} target="_blank" rel="noopener" data-testid="about-supported-setups">
+      <Icon name="arrow-up-right" /><span>{t("about.devices.supported")}</span>
+    </a>
+  </div>
 </Card>
 
 <Card icon="info" tone="c-out" title={t("about.components.title")} subtitle={t("about.components.sub")} span="span-12">

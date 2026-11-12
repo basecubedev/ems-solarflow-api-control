@@ -43,8 +43,8 @@ so more devices can move to Validated.
 ## Validated devices
 
 Confirmed working on real hardware. This is the ledger the statuses above point
-at — add your device by opening a
-[device compatibility report](#help-improve-compatibility).
+at — a device you report reaches it once your report has been corroborated,
+see [Help improve compatibility](#help-improve-compatibility).
 
 Every row is backed by a concrete evidence statement. Devices tested first-hand
 by the maintainer are listed as **Maintainer hardware**; a device only earns a
@@ -198,12 +198,20 @@ without evidence. See the [appliance guides](appliance/index.md).
 
 ## Help improve compatibility
 
-The MQTT paths above need real-device reports. Please open a
+Only the maintainer's own hardware is tested first-hand, and the MQTT paths
+above need real-device reports most. Please open a
 [Device compatibility report](https://github.com/basecubedev/ems-solarflow-api-control/issues/new?template=device_compatibility_report.yml)
 for **both** working and problematic devices — include the device model,
 firmware version, connection type and sanitized logs (remove serial numbers,
-tokens, passwords and public IPs first). Positive reports let us mark a device as
-validated for everyone else.
+tokens, passwords and public IPs first).
+
+A report that a device works is what lets it be marked as working on this page:
+the first one lists it as **User-reported**, and once the maintainer can
+corroborate it, for example by a second report, it can move up to **Validated**
+and into the [validated devices](#validated-devices). The next person with the
+same device then knows it works before buying it. A report about a device that
+does not work helps just as much. The **About & licenses** page of the
+dashboard, the Admin console and the Appliance Manager links the same form.
 
 ## Supported Grid Meters
 

@@ -68,7 +68,10 @@ four pages and **More**; see
 **About & licenses**, also on the sign-in screen, shows the version and
 commit, the source code of exactly that version, the project's license (GNU AGPL v3 or later, without any
 warranty), the note that this is an independent community project and not a
-Zendure product, and the license of every component the page is built from.
+Zendure product with links to its Discussions and issues on GitHub, the
+invitation to report a device that works (or does not) with links to the
+report form and to the [supported setups](../supported-setups.md), and the
+license of every component the page is built from.
 
 While a guided setup or an update holds the console, every other page shows a
 banner that says so, with **Continue the setup** or **Show the update**.
