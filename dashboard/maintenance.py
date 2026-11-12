@@ -67,8 +67,9 @@ def load_config(config_path):
 
 def maintenance_status(config_path, base_dir):
     config = load_config(config_path)
-    evaluation = backup_mod.evaluate_influxdb_backup(config)
-    influx = config_mod.normalize_influxdb_config(config.get("influxdb"))
+    backup = backup_mod.evaluate_influxdb_backup(config, base_dir=base_dir)
+    restore = backup_mod.evaluate_influxdb_restore(config)
+    influx = config_mod.resolve_influxdb_config(config)
     return {
         "config_path": _relpath(config_path, base_dir),
         "backup_dir": _relpath(backup_mod.default_backup_dir(base_dir), base_dir),
@@ -76,8 +77,8 @@ def maintenance_status(config_path, base_dir):
         "influxdb": {
             "enabled": bool(influx.get("enabled")),
             "mode": influx.get("mode"),
-            "backup_supported": bool(evaluation["supported"]),
-            "restore_supported": bool(evaluation["supported"]),
+            "backup_supported": bool(backup["supported"]),
+            "restore_supported": bool(restore["supported"]),
         },
         "restore_available_in_dashboard": True,
         "builtin_mqtt_broker": builtin_broker_view(
@@ -387,7 +388,7 @@ def create_backup(
 
 
 def _create_influxdb_backup(config, *, base_dir):
-    evaluation = backup_mod.evaluate_influxdb_backup(config)
+    evaluation = backup_mod.evaluate_influxdb_backup(config, base_dir=base_dir)
     if not evaluation["supported"]:
         return {
             "created": False,
@@ -464,7 +465,7 @@ def _config_restore_sources(
     dashboard = (
         config.get("dashboard") if isinstance(config.get("dashboard"), dict) else {}
     )
-    influx = config_mod.normalize_influxdb_config(config.get("influxdb"))
+    influx = config_mod.resolve_influxdb_config(config)
     sources = [
         config_path or "config.json",
         runtime_state_path
@@ -474,8 +475,8 @@ def _config_restore_sources(
         dashboard.get("ssl_cert_file", backup_mod.DEFAULT_DASHBOARD_CERT_PATH),
         dashboard.get("ssl_key_file", backup_mod.DEFAULT_DASHBOARD_KEY_PATH),
     ]
-    if influx.get("enabled") and influx.get("mode") == "bundled":
-        sources.append(influx.get("secret_file", backup_mod.DEFAULT_INFLUX_SECRET_PATH))
+    if influx["mode"] == "bundled":
+        sources.append(influx["secret_file"])
     return sources
 
 
@@ -859,7 +860,7 @@ def restore(
 
 
 def _restore_influxdb(ref, file_name, password, config, base_dir):
-    evaluation = backup_mod.evaluate_influxdb_backup(config)
+    evaluation = backup_mod.evaluate_influxdb_restore(config)
     if not evaluation["supported"]:
         raise MaintenanceError(
             evaluation["message"],

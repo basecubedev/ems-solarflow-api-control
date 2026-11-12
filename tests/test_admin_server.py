@@ -3097,6 +3097,7 @@ def test_maintenance_analytics_repair_requires_confirmation(monkeypatch):
     ("result", "expected"),
     [
         ({"ok": False, "status": "influx_not_running", "message": "start it"}, 409),
+        ({"ok": False, "status": "influx_secret_misplaced", "message": "path"}, 409),
         ({"ok": False, "status": "analytics_disabled", "message": "off"}, 409),
         ({"ok": False, "status": "unavailable", "message": "no docker"}, 409),
         ({"ok": False, "status": "busy", "message": "wait"}, 409),

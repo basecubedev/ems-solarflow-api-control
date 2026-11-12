@@ -52,6 +52,7 @@ from ems.config import (
     tibber_pulse_grid_meter_settings,
     parse_mqtt_port,
     resolve_grid_meter_mqtt_settings,
+    resolve_influxdb_config,
     zendure_smartmeter_d0_serial_from_topic,
     zendure_smartmeter_d0_topic,
 )
@@ -1082,7 +1083,8 @@ def _normalize_bundled_influx_secret(config):
     influx = config.get("influxdb")
     if not isinstance(influx, dict):
         return
-    if influx.get("enabled") is True and influx.get("mode") == "bundled":
+    resolved = resolve_influxdb_config(config)
+    if resolved["enabled"] and resolved["mode"] == "bundled":
         influx["secret_file"] = DOCKER_FIRST_SECRET_FILE
 
 

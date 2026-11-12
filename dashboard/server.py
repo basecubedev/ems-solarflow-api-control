@@ -691,9 +691,9 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         try:
             with open(self.config_path, encoding="utf-8") as handle:
                 raw_config = json.load(handle)
-            from ems.config import normalize_influxdb_config
+            from ems.config import resolve_influxdb_config
 
-            return normalize_influxdb_config(raw_config.get("influxdb"))
+            return resolve_influxdb_config(raw_config)
         except Exception:
             return None
 

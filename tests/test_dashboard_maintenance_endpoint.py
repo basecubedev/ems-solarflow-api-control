@@ -437,6 +437,29 @@ def test_influxdb_disabled_is_clean_noop(tmp_path, monkeypatch):
         server.server_close()
 
 
+@pytest.mark.parametrize("running", [True, False])
+def test_status_offers_backup_not_restore_of_disabled_influxdb_with_data(
+    tmp_path, monkeypatch, running
+):
+    from ems import influx_setup
+
+    monkeypatch.setattr(influx_setup, "bundled_influxdb_answers", lambda influx: running)
+    data_dir = tmp_path / "data" / "influxdb"
+    data_dir.mkdir(parents=True)
+    (data_dir / "influxd.bolt").write_bytes(b"bolt")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"influxdb": {"enabled": False}}), encoding="utf-8")
+    influx = maintenance.maintenance_status(str(config_path), str(tmp_path))["influxdb"]
+    assert (influx["enabled"], influx["backup_supported"], influx["restore_supported"]) == (
+        False, running, False,
+    )
+
+
+def test_config_restore_takes_back_the_secret_of_disabled_bundled_influxdb(tmp_path):
+    config = {"influxdb": {"enabled": False, "secret_file": "config/influxdb.env"}}
+    assert "config/influxdb.env" in maintenance._config_restore_paths(config, str(tmp_path))
+
+
 def test_inspect_is_post_and_returns_manifest(tmp_path, monkeypatch):
     server, base_url = maint_server(tmp_path, monkeypatch)
     try:

@@ -720,7 +720,8 @@ Included files (when present and configured):
 - the runtime state (`system.runtime_state_path`)
 - dashboard auth/cert/key (`dashboard.auth_file`, `ssl_cert_file`, `ssl_key_file`)
 - the bundled InfluxDB secret (`influxdb.secret_file`) — only when
-  `influxdb.enabled` is true **and** `influxdb.mode` is `bundled`
+  `influxdb.mode` is `bundled` **and** analytics is enabled or its data is
+  still in `data/influxdb`
 - the built-in MQTT broker's and the MQTT mapping's settings
   (`config/mqtt/broker.json`, `config/mqtt/mappings.json`) and Find devices'
   broker list (`config/discovery-connections.json`)
@@ -820,7 +821,10 @@ Supported modes:
   The container is started if it is not already running.
 - **External** (`influxdb.mode: external`) — rejected with a clear message; use
   your external InfluxDB backup strategy.
-- **Disabled** — nothing to back up; the command is a no-op.
+- **Disabled** — backed up while `data/influxdb` still holds data and the
+  bundled InfluxDB still runs (analytics may be off only for a while). Stopped,
+  or without data, there is nothing to read and the command is a no-op. A
+  restore needs analytics switched on again first.
 
 > InfluxDB backups may contain historical energy and runtime data and InfluxDB
 > metadata. The CLI offers optional password protection (same `.tar.gz.enc`

@@ -44,7 +44,7 @@ def fake_backup_runner(*, files=("20260618T000000Z.bolt.gz", "data.tar.gz")):
 
 def test_influxdb_backup_skips_when_disabled(tmp_path):
     config = {"influxdb": {"enabled": False}}
-    evaluation = backup.evaluate_influxdb_backup(config)
+    evaluation = backup.evaluate_influxdb_backup(config, base_dir=str(tmp_path))
     assert evaluation["supported"] is False
     assert evaluation["reason"] == "disabled"
     assert "disabled" in evaluation["message"].lower()
@@ -68,6 +68,122 @@ def test_influxdb_backup_rejects_external_mode(tmp_path):
             backup_dir=str(tmp_path / "backup"),
             backup_runner=fake_backup_runner(),
         )
+
+
+def _leave_influx_data(base_dir):
+    data_dir = base_dir / influx_setup.DEFAULT_DATA_DIR
+    data_dir.mkdir(parents=True)
+    (data_dir / "influxd.bolt").write_bytes(b"bolt")
+
+
+def _answers(answer):
+    asked = []
+
+    def running(influx):
+        asked.append(influx["mode"])
+        return answer
+
+    return running, asked
+
+
+def test_disabled_influxdb_with_data_is_backed_up_while_it_runs(tmp_path):
+    _leave_influx_data(tmp_path)
+    config = bundled_config(enabled=False)
+    running, asked = _answers(True)
+    evaluation = backup.evaluate_influxdb_backup(
+        config, base_dir=str(tmp_path), influx_running=running
+    )
+    assert evaluation == {"supported": True, "reason": None, "mode": "bundled",
+                          "message": None}
+    path = backup.create_influxdb_backup(
+        config, base_dir=str(tmp_path),
+        backup_dir=str(tmp_path / "backup"),
+        backup_runner=fake_backup_runner(),
+        influx_running=running,
+    )
+    assert backup.inspect_backup(path)["manifest"]["backup_type"] == "influxdb"
+    assert asked == ["bundled", "bundled"]
+
+
+def test_disabled_influxdb_that_is_stopped_is_reported_not_failed(tmp_path):
+    _leave_influx_data(tmp_path)
+    running, _asked = _answers(False)
+    evaluation = backup.evaluate_influxdb_backup(
+        bundled_config(enabled=False), base_dir=str(tmp_path), influx_running=running
+    )
+    assert evaluation["supported"] is False
+    assert evaluation["reason"] == "stopped"
+    assert evaluation["message"] == backup.INFLUX_STOPPED_MESSAGE
+
+
+def test_enabled_influxdb_is_never_asked_whether_it_runs(tmp_path):
+    running, asked = _answers(False)
+    evaluation = backup.evaluate_influxdb_backup(
+        bundled_config(), base_dir=str(tmp_path), influx_running=running
+    )
+    assert evaluation["supported"] is True
+    assert asked == []
+
+
+def test_the_default_question_is_the_bundled_influxdb_health(tmp_path, monkeypatch):
+    _leave_influx_data(tmp_path)
+    asked = []
+    monkeypatch.setattr(
+        influx_setup, "bundled_influxdb_answers", lambda influx: asked.append(influx) or True
+    )
+    evaluation = backup.evaluate_influxdb_backup(
+        bundled_config(enabled=False), base_dir=str(tmp_path)
+    )
+    assert evaluation["supported"] is True
+    assert len(asked) == 1
+
+
+@pytest.mark.parametrize("leftover", ["missing", "empty"])
+def test_disabled_influxdb_without_data_is_skipped(tmp_path, leftover):
+    if leftover == "empty":
+        (tmp_path / influx_setup.DEFAULT_DATA_DIR).mkdir(parents=True)
+    evaluation = backup.evaluate_influxdb_backup(
+        bundled_config(enabled=False), base_dir=str(tmp_path)
+    )
+    assert evaluation["reason"] == "disabled"
+    assert evaluation["message"] == backup.INFLUX_DISABLED_MESSAGE
+
+
+def test_an_unlistable_influx_data_dir_counts_as_data(tmp_path, monkeypatch):
+    def refuse(path):
+        raise PermissionError(path)
+
+    monkeypatch.setattr(backup.os, "scandir", refuse)
+    assert backup.influxdb_data_present(str(tmp_path)) is True
+
+
+def test_disabled_external_influxdb_is_not_backed_up_for_bundled_data(tmp_path):
+    _leave_influx_data(tmp_path)
+    evaluation = backup.evaluate_influxdb_backup(
+        {"influxdb": {"enabled": False, "mode": "external"}}, base_dir=str(tmp_path)
+    )
+    assert evaluation["reason"] == "disabled"
+
+
+def test_disabled_influxdb_is_not_restored_even_with_data(tmp_path):
+    _leave_influx_data(tmp_path)
+    evaluation = backup.evaluate_influxdb_restore(bundled_config(enabled=False))
+    assert evaluation["supported"] is False
+    assert evaluation["reason"] == "disabled"
+    assert evaluation["message"] == backup.INFLUX_RESTORE_DISABLED_MESSAGE
+
+
+@pytest.mark.parametrize("data", [True, False])
+def test_config_backup_keeps_the_secret_of_disabled_influxdb_with_data(tmp_path, data):
+    if data:
+        _leave_influx_data(tmp_path)
+    secret = tmp_path / "config" / "influxdb.env"
+    secret.parent.mkdir()
+    secret.write_text("INFLUXDB_TOKEN=x\n", encoding="utf-8")
+    config = bundled_config(enabled=False, secret_file="config/influxdb.env")
+    included, _skipped = backup.collect_config_backup_files(config, base_dir=str(tmp_path))
+    kinds = {entry["kind"] for entry in included}
+    assert ("influxdb_secret" in kinds) is data
 
 
 # ---------------------------------------------------------------------------

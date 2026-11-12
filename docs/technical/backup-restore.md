@@ -114,7 +114,7 @@ Notes:
 
 - A **config** backup includes `config.json`, the runtime state, the dashboard
   auth/cert/key files, the bundled InfluxDB secret (only when bundled
-  InfluxDB is enabled), the built-in MQTT broker's and the MQTT mapping's
+  InfluxDB is kept, see below), the built-in MQTT broker's and the MQTT mapping's
   settings (`config/mqtt/`), Find devices' broker list
   (`config/discovery-connections.json`) and the credential store
   (`config/secrets/`: its key and every saved MQTT password and token).
@@ -124,6 +124,16 @@ Notes:
 - An **influxdb** backup covers **bundled** InfluxDB only. **External InfluxDB
   instances are not backed up by this tool** — they stay user-managed, so use
   your provider's own backup tool for those.
+- Bundled InfluxDB is **kept** while it is enabled, and also while it is
+  switched off but `data/influxdb` still holds its data: analytics may be off
+  only for a while. Its secret then stays in the config backups, and its data
+  goes into an InfluxDB backup while the bundled InfluxDB still runs (the Admin
+  asks Docker, the EMS and `emsctl` its `/health`). Nothing starts it for the
+  backup: a stopped one is reported with the reason `stopped` and a note that
+  its data is not in this backup, and the rest of the backup is written as
+  usual. Restoring InfluxDB data needs analytics switched on again first.
+- A config without `influxdb.enabled` counts as **on**, the way the EMS reads
+  it, for the backup as for every other part.
 
 ## Where are backups stored?
 

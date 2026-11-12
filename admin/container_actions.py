@@ -14,6 +14,7 @@ volume-removing command are intentionally not used.
 """
 
 import json
+import os
 import re
 import threading
 from dataclasses import asdict, dataclass
@@ -23,7 +24,12 @@ from pathlib import Path
 from admin.deployment import EMS_SERVICE, DockerCompose
 from admin.install_context import detect_install_context
 from admin.maintenance import run_maintenance_overview
-from ems.influx_setup import INFLUX_READY_TIMEOUT_SECONDS, SCHEMA_LOCK_WAIT_SECONDS
+from ems.config import resolve_influxdb_config
+from ems.influx_setup import (
+    DOCKER_FIRST_SECRET_FILE,
+    INFLUX_READY_TIMEOUT_SECONDS,
+    SCHEMA_LOCK_WAIT_SECONDS,
+)
 
 ANALYTICS_PROFILE = "with-analytics"
 INFLUX_SERVICE = "influxdb"
@@ -107,53 +113,60 @@ def _ems_desired(config_exists, compose_exists):
 
 
 def _influx_desired(config):
-    influx = config.get("influxdb") if isinstance(config, dict) else None
-    if not isinstance(influx, dict):
+    influx = resolve_influxdb_config(config)
+    if not influx["enabled"]:
         return ServiceDesiredState(
-            INFLUX_SERVICE,
-            DESIRED_STOPPED,
-            "InfluxDB analytics is not configured.",
+            INFLUX_SERVICE, DESIRED_STOPPED, "InfluxDB analytics is disabled in config."
         )
-    enabled = influx.get("enabled") is True
-    mode = influx.get("mode")
-    if enabled and mode == "bundled":
-        return ServiceDesiredState(
-            INFLUX_SERVICE, DESIRED_RUNNING, "Bundled InfluxDB is enabled in config."
-        )
-    if enabled and mode == "external":
+    if influx["mode"] == "external":
         return ServiceDesiredState(
             INFLUX_SERVICE,
             DESIRED_STOPPED,
             "InfluxDB is configured in external mode; the bundled container is not used.",
         )
-    if not enabled:
-        return ServiceDesiredState(
-            INFLUX_SERVICE, DESIRED_STOPPED, "InfluxDB analytics is disabled in config."
-        )
     return ServiceDesiredState(
-        INFLUX_SERVICE,
-        DESIRED_STOPPED,
-        "InfluxDB analytics configuration is incomplete; the bundled container is not used.",
+        INFLUX_SERVICE, DESIRED_RUNNING, "Bundled InfluxDB is enabled in config."
     )
 
 
+_SECRET_MISPLACED_MESSAGE = (
+    "Analytics is on, but influxdb.secret_file is not "
+    f"{DOCKER_FIRST_SECRET_FILE}, the file the Docker containers read, so the "
+    "bundled InfluxDB is not set up here. Switch Analytics off in the settings "
+    "and save, then switch it on and save again; that moves it there."
+)
+
+REPAIR_REFUSALS = (
+    "unavailable",
+    "busy",
+    "analytics_disabled",
+    "influx_not_running",
+    "influx_secret_misplaced",
+)
+
+
+def influx_setup_ready(config):
+    """Whether the bundled InfluxDB setup would write its secret where Docker reads it.
+
+    Any other path, the release default included, lies in the image or outside
+    the mounted config directory: the setup writes it into a container that is
+    thrown away, and the InfluxDB it then starts stays without its initial user.
+    """
+
+    secret = resolve_influxdb_config(config)["secret_file"]
+    return os.path.normpath(secret) == os.path.normpath(DOCKER_FIRST_SECRET_FILE)
+
+
 def influx_auto_init_enabled(config):
-    influx = config.get("influxdb") if isinstance(config, dict) else None
-    if not isinstance(influx, dict):
-        return False
-    return influx.get("auto_init") is not False
+    return resolve_influxdb_config(config)["auto_init"]
 
 
 def _analytics_enabled(config):
-    influx = config.get("influxdb") if isinstance(config, dict) else None
-    return isinstance(influx, dict) and bool(influx.get("enabled"))
+    return resolve_influxdb_config(config)["enabled"]
 
 
 def influx_auto_sync_enabled(config):
-    influx = config.get("influxdb") if isinstance(config, dict) else None
-    if not isinstance(influx, dict):
-        return False
-    return influx.get("auto_sync") is not False
+    return resolve_influxdb_config(config)["auto_sync"]
 
 
 def _current_state(container):
@@ -233,18 +246,18 @@ def build_influx_display_state(config, current, desired_state):
 
     A disabled feature with a missing container is healthy (``muted``); an enabled
     bundled feature with a missing/stopped container is actionable (``warn``).
+    ``config`` is ``None`` when there is no config.json.
     """
 
-    raw = config.get("influxdb") if isinstance(config, dict) else None
-    influx_cfg = raw if isinstance(raw, dict) else {}
-    enabled = influx_cfg.get("enabled") is True
-    mode = str(influx_cfg.get("mode") or "").lower()
+    influx = resolve_influxdb_config(config)
+    enabled = influx["enabled"]
+    mode = influx["mode"]
     container_state = _display_container_state(current)
 
     if not enabled:
         return {
             "feature_state": "disabled",
-            "mode": mode or "bundled",
+            "mode": mode,
             "configured": False,
             "container_present": bool(current.get("found")),
             "container_state": container_state,
@@ -269,8 +282,12 @@ def build_influx_display_state(config, current, desired_state):
             "tone": "info",
         }
 
+    display_state = container_state
     if container_state == "running":
         label, tone, detail = "Running", "ok", "Bundled Analytics is active"
+    elif not influx_setup_ready(config):
+        display_state = "secret_misplaced"
+        label, tone, detail = "Configured · not set up", "warn", _SECRET_MISPLACED_MESSAGE
     elif container_state == "stopped":
         label, tone, detail = (
             "Configured · stopped",
@@ -291,7 +308,7 @@ def build_influx_display_state(config, current, desired_state):
         "container_present": bool(current.get("found")),
         "container_state": container_state,
         "desired_state": desired_state or "running",
-        "display_state": container_state,
+        "display_state": display_state,
         "display_label": label,
         "display_detail": detail,
         "tone": tone,
@@ -310,6 +327,8 @@ def _summary_word(display):
         return "configured but missing"
     if display.get("configured") and state == "stopped":
         return "stopped"
+    if state == "secret_misplaced":
+        return "not set up"
     return state or "unknown"
 
 
@@ -395,7 +414,7 @@ def _ems_action(desired, available, config_state=CONFIG_STATE_UNKNOWN):
     )
 
 
-def _influx_action(desired, current, available):
+def _influx_action(desired, current, available, setup_ready=True):
     if not available:
         return ServiceAction(
             INFLUX_SERVICE, "unavailable", "Bundled InfluxDB", _UNAVAILABLE_MESSAGE
@@ -404,6 +423,10 @@ def _influx_action(desired, current, available):
         if current["running"]:
             return ServiceAction(
                 INFLUX_SERVICE, "none", "Bundled InfluxDB", "Bundled InfluxDB is already running."
+            )
+        if not setup_ready:
+            return ServiceAction(
+                INFLUX_SERVICE, "none", "Bundled InfluxDB", _SECRET_MISPLACED_MESSAGE
             )
         return ServiceAction(
             INFLUX_SERVICE,
@@ -423,12 +446,12 @@ def _influx_action(desired, current, available):
     )
 
 
-def _influx_sync_action(desired, available, config):
+def _influx_sync_action(desired, available, config, setup_ready=True):
     if not available:
         return ServiceAction(
             INFLUX_SERVICE, "unavailable", "InfluxDB schema", _UNAVAILABLE_MESSAGE
         )
-    if desired.desired != DESIRED_RUNNING:
+    if desired.desired != DESIRED_RUNNING or not setup_ready:
         return ServiceAction(
             INFLUX_SERVICE,
             "none",
@@ -489,7 +512,9 @@ def build_container_sync_plan(config, overview):
 
     containers = overview.get("containers", {}) if isinstance(overview, dict) else {}
     ems_desired = _ems_desired(config_exists, compose_exists)
-    influx_desired = _influx_desired(config if isinstance(config, dict) else {})
+    influx_config = (config if isinstance(config, dict) else {}) if config_exists else None
+    influx_desired = _influx_desired(influx_config)
+    setup_ready = influx_setup_ready(influx_config) or influx_desired.desired != DESIRED_RUNNING
     ems_current = _current_state(containers.get(EMS_SERVICE))
     influx_current = _current_state(containers.get(INFLUX_SERVICE))
 
@@ -497,13 +522,15 @@ def build_container_sync_plan(config, overview):
         config_exists, compose_exists, ems_current, ems_desired.desired
     )
     influx_display = build_influx_display_state(
-        config if isinstance(config, dict) else {}, influx_current, influx_desired.desired
+        influx_config, influx_current, influx_desired.desired
     )
 
     config_state = _config_state(config_info.get("modified_at"), ems_current)
     ems_action = _ems_action(ems_desired, available, config_state["state"])
-    influx_action = _influx_action(influx_desired, influx_current, available)
-    influx_sync_action = _influx_sync_action(influx_desired, available, config)
+    influx_action = _influx_action(influx_desired, influx_current, available, setup_ready)
+    influx_sync_action = _influx_sync_action(
+        influx_desired, available, influx_config, setup_ready
+    )
     actions = [
         asdict(action)
         for action in (ems_action, influx_action, influx_sync_action)
@@ -534,9 +561,10 @@ def build_container_sync_plan(config, overview):
         "summary": _summary(
             [ems_action, influx_action, influx_sync_action], config_state["state"]
         ),
-        "auto_init": influx_auto_init_enabled(config),
-        "auto_sync": influx_auto_sync_enabled(config),
-        "analytics_enabled": _analytics_enabled(config),
+        "auto_init": influx_auto_init_enabled(influx_config),
+        "auto_sync": influx_auto_sync_enabled(influx_config),
+        "analytics_enabled": _analytics_enabled(influx_config),
+        "influx_setup_ready": setup_ready,
     }
     if not available:
         plan["message"] = _UNAVAILABLE_MESSAGE
@@ -644,7 +672,7 @@ class MaintenanceContainerActions:
 
     def _load_config(self, context):
         if not context.config_exists:
-            return {}
+            return None
         try:
             parsed = json.loads(context.config_path.read_text(encoding="utf-8"))
         except (OSError, ValueError, UnicodeDecodeError):
@@ -726,8 +754,8 @@ class MaintenanceContainerActions:
 
         # 1. Bundled InfluxDB secrets before the container is started. Without
         #    them InfluxDB is neither started nor synced.
-        influx_ready = influx_desired_running
-        if influx_desired_running and plan.get("auto_init"):
+        influx_ready = influx_desired_running and plan.get("influx_setup_ready", True)
+        if influx_ready and plan.get("auto_init"):
             step, warning = self._run_analytics_step(
                 "init", lambda: self.run_influx_init(self.compose, workspace), _INIT_WARNING
             )
@@ -828,7 +856,16 @@ class MaintenanceContainerActions:
                 "message": "Analytics is switched off in the configuration; there is no schema to repair.",
                 "steps": [],
             }
-        bundled = config["influxdb"].get("mode", "bundled") == "bundled"
+        bundled = resolve_influxdb_config(config)["mode"] == "bundled"
+        if bundled and not plan["current"][INFLUX_SERVICE]["running"] and not plan.get(
+            "influx_setup_ready", True
+        ):
+            return {
+                "ok": False,
+                "status": "influx_secret_misplaced",
+                "message": _SECRET_MISPLACED_MESSAGE,
+                "steps": [],
+            }
         if bundled and not plan["current"][INFLUX_SERVICE]["running"]:
             return {
                 "ok": False,

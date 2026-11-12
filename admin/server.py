@@ -140,6 +140,7 @@ from admin.install_state import (
     select_start_path,
 )
 from admin.container_actions import (
+    REPAIR_REFUSALS,
     build_maintenance_container_plan,
     run_maintenance_analytics_repair,
     run_maintenance_container_sync,
@@ -3997,7 +3998,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             )
             return
         status = 200
-        if result.get("status") in ("unavailable", "busy", "analytics_disabled", "influx_not_running"):
+        if result.get("status") in REPAIR_REFUSALS:
             status = 409
         elif not result.get("ok"):
             status = 500

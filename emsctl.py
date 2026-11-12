@@ -2020,9 +2020,9 @@ def public_influx_env_report(report):
 
 
 def handle_influx_command(args, config):
-    from ems.config import normalize_influxdb_config
+    from ems.config import resolve_influxdb_config
 
-    influx_config = normalize_influxdb_config(config.get("influxdb"))
+    influx_config = resolve_influxdb_config(config)
 
     # Only prune reads it, and the other actions write. Accepting it there and
     # ignoring it would turn "show me first" into the real thing.
@@ -2399,11 +2399,11 @@ def print_influx_init_external(influx_config, ready, synced, do_sync):
 
 
 def handle_stack_command(args, config):
-    from ems.config import normalize_influxdb_config
+    from ems.config import resolve_influxdb_config
     from ems import influx_setup
     from ems.paths import BASE_DIR
 
-    influx_config = normalize_influxdb_config(config.get("influxdb"))
+    influx_config = resolve_influxdb_config(config)
     bundled = (
         influx_config["enabled"] and influx_config["mode"] == "bundled"
     )
@@ -3126,9 +3126,9 @@ def handle_backup_create_database(args, config):
 # ---------------------------------------------------------------------------
 
 def _influx_normalized(config):
-    from ems.config import normalize_influxdb_config
+    from ems.config import resolve_influxdb_config
 
-    return normalize_influxdb_config(config.get("influxdb"))
+    return resolve_influxdb_config(config)
 
 
 def _influx_compose_files(influx):
@@ -3207,7 +3207,7 @@ def _make_influx_backup_runner_container(influx, *, json_output=False):
 def _make_influx_backup_runner_host(influx, *, json_output=False):
     from ems import influx_setup
 
-    files = _influx_compose_files(influx)
+    files = influx_setup.bundled_compose_files()
     _influx_require_token(influx)  # validate up front; secret stays in-container
 
     def runner(host_influx_dir):
@@ -3314,12 +3314,12 @@ def _make_influx_restore_runner_host(influx, *, json_output=False):
 
 
 def handle_backup_create_influxdb(args, config):
-    evaluation = backup_mod.evaluate_influxdb_backup(config)
+    evaluation = backup_mod.evaluate_influxdb_backup(config, base_dir=BASE_DIR)
     if not evaluation["supported"]:
         print()
         print(evaluation["message"])
-        # disabled is a no-op (nothing to back up); external is a hard reject.
-        return 0 if evaluation["reason"] == "disabled" else 1
+        # disabled and stopped are no-ops (nothing to read); external is a hard reject.
+        return 0 if evaluation["reason"] in ("disabled", "stopped") else 1
 
     print()
     print(
@@ -3368,7 +3368,7 @@ def print_influx_restore_done():
 def handle_backup_restore_influxdb(
     args, config, archive_path, manifest, password, interactive
 ):
-    evaluation = backup_mod.evaluate_influxdb_backup(config)
+    evaluation = backup_mod.evaluate_influxdb_restore(config)
     if not evaluation["supported"]:
         print()
         print(evaluation["message"])

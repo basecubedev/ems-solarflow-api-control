@@ -404,6 +404,32 @@ def test_create_system_backup_set_groups_archives(tmp_path):
         assert (_backup_dir(root) / name).is_file()
 
 
+def test_a_disabled_influxdb_the_ems_finds_stopped_is_a_skip_not_a_failure(
+    tmp_path, monkeypatch
+):
+    """Docker says running, the EMS's /health says no: the EMS writes nothing and exits 0."""
+
+    from types import SimpleNamespace
+
+    import admin.backup_restore as backup_restore
+
+    root = _build_install(tmp_path)
+    (root / "data" / "influxdb").mkdir()
+    (root / "data" / "influxdb" / "influxd.bolt").write_bytes(b"bolt")
+    monkeypatch.setattr(
+        backup_restore, "_influx_container_running", lambda base_dir: lambda influx: True
+    )
+    tool = SimpleNamespace(run=lambda *args, **kwargs: SimpleNamespace(returncode=0, blocked=False))
+    result = _service(root, ems_tool=tool).create_backup({"scope": "system"})
+
+    assert result["ok"] is True
+    assert {a["type"] for a in result["archives"]} == {"config", "databases"}
+    assert backup_mod.INFLUX_STOPPED_MESSAGE in result["warnings"]
+    assert result["backup_set"]["status"] == "complete"
+    steps = {step["key"]: step["status"] for step in result["steps"]}
+    assert steps["create_influxdb"] == "skipped"
+
+
 def test_create_backup_failure_does_not_write_complete_set_metadata(tmp_path):
     root = _build_install(tmp_path)
     service = _service(root)
