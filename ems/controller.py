@@ -53,6 +53,7 @@ from ems.power_direction import (
     out_of_charge,
     settling_out_of_charge,
 )
+from ems.runtime_commands import means_device_maximum
 from ems.runtime_intents import (
     regulator_charge_intent,
     PRIORITY_MAINTENANCE,
@@ -229,6 +230,7 @@ class EMSController:
         self.silent_charge_cycles = {}
         self.charge_entry_rate_limited = False
         self.charge_ceiling_unknown = set()
+        self.ac_input_maximum_unknown = {}
         self.charge_refusals_said = {}
         self.charge_blocked_by_ceiling = set()
         self.charge_capacity_below_stop = False
@@ -1655,9 +1657,16 @@ class EMSController:
         if intent:
             intent = replace(intent, operator_role=bool(stored_role))
             if intent.role is DeviceRuntimeRole.AC_INPUT:
+                entry = (
+                    self.runtime_state.get_device(dev.name, "ac_charge_power_w", None)
+                    if self.runtime_state
+                    else None
+                )
+                if means_device_maximum(entry):
+                    return replace(intent, at_device_maximum=True)
                 return replace(
                     intent,
-                    setpoint_w=self.runtime_ac_charge_setpoint(dev.name)
+                    setpoint_w=self.runtime_ac_charge_setpoint(dev.name, entry)
                 )
             return intent
 
@@ -2469,6 +2478,7 @@ class EMSController:
             device=dev.name,
             claim=intent.reason,
             setpoint_w=intent.setpoint_w,
+            at_device_maximum=intent.at_device_maximum,
         )
 
     def claim_charge_exit(self, dev, intent):
@@ -2492,7 +2502,7 @@ class EMSController:
         """Whether the claim holding ``dev`` commands a charge power and can write it."""
 
         return (
-            intent.setpoint_w is not None
+            intent.commands_charge
             and getattr(dev, "supports_state_reconciliation", True)
             and self.device_state_writes_allowed(dev)
         )
@@ -2527,12 +2537,13 @@ class EMSController:
         )
         return hardware_profile_by_name(profile_id) if profile_id else None
 
-    def device_model_supports_charge(self, dev):
+    def device_model_supports_charge(self, dev, profile=None):
         """Whether the device's resolved model declares an AC charge path."""
 
         from ems.mqtt_control.zendure_profiles import OPERATION_CHARGE
 
-        profile = self.device_charge_profile(dev)
+        if profile is None:
+            profile = self.device_charge_profile(dev)
         return bool(profile and profile.supports_operation(OPERATION_CHARGE))
 
     def device_charge_allowed(self, dev, state, capability):
@@ -2612,15 +2623,16 @@ class EMSController:
         )
         return not feeds_own_command
 
-    def device_charge_ceiling_w(self, dev, state):
+    def device_charge_ceiling_w(self, dev, state, profile=None):
         """One device's charge ceiling, with its model's rating as fallback.
 
         Bounded by ``max_power`` where the transport enforces that bound on a
         charge too, so the regulator never allocates a share that is refused
-        at the write.
+        at the write. ``profile`` saves resolving the model a second time.
         """
 
-        profile = self.device_charge_profile(dev)
+        if profile is None:
+            profile = self.device_charge_profile(dev)
         ceiling = resolve_max_charge_power_w(
             dev,
             state,
@@ -2657,16 +2669,11 @@ class EMSController:
                 self.charge_blocked_by_ceiling.add(dev.name)
                 if dev.name not in self.charge_ceiling_unknown:
                     self.charge_ceiling_unknown.add(dev.name)
-                    reported = getattr(states[index], "charge_max_limit_w", None)
                     log_event(
                         logging.WARNING,
                         "ac_charge_ceiling_unknown",
                         device=dev.name,
-                        reason=(
-                            "no_reported_or_rated_charge_limit"
-                            if reported is None
-                            else "device_reports_zero_charge_limit"
-                        ),
+                        reason=self.charge_ceiling_unknown_reason(states[index]),
                     )
             elif allowed[index]:
                 self.charge_ceiling_unknown.discard(dev.name)
@@ -2678,6 +2685,14 @@ class EMSController:
         if any(chargeable) and not self.charge_capacity_outlasts_the_exit():
             return [False] * len(chargeable)
         return chargeable
+
+    @staticmethod
+    def charge_ceiling_unknown_reason(state):
+        """Why a device's charge ceiling resolved to 0: it reports 0, or reports none and has no rating."""
+
+        if getattr(state, "charge_max_limit_w", None) is None:
+            return "no_reported_or_rated_charge_limit"
+        return "device_reports_zero_charge_limit"
 
     def name_charge_refusals(self, states):
         """Say once why a device the operator lets charge never can.
@@ -3234,7 +3249,7 @@ class EMSController:
 
         if (
             desired_ac_mode == AC_MODE_INPUT
-            and intent.setpoint_w is not None
+            and intent.commands_charge
             and not intent.operator_role
             and not self.state_field_known(
                 dev, state, "inputLimit", "input_limit_reported"
@@ -3284,24 +3299,12 @@ class EMSController:
             )
             return True
 
-    def runtime_ac_charge_setpoint(self, device_name):
-        """Return the operator's runtime AC charge power, or None.
+    def runtime_ac_charge_setpoint(self, device_name, raw_value):
+        """Return the operator's entered AC charge power, or None.
 
-        None means no value is commanded: an unset, empty or invalid entry
-        leaves the existing inputLimit alone rather than guessing one.
+        None means no value is commanded: an invalid entry leaves the existing
+        inputLimit alone rather than guessing one.
         """
-
-        if not self.runtime_state:
-            return None
-
-        raw_value = self.runtime_state.get_device(
-            device_name,
-            "ac_charge_power_w",
-            None
-        )
-
-        if raw_value is None or raw_value == "":
-            return None
 
         if isinstance(raw_value, bool):
             log_event(
@@ -3337,21 +3340,70 @@ class EMSController:
 
         return desired
 
+    def device_maximum_charge(self, dev, state):
+        """``(watts, reason)``: the inputLimit an AC input without a power of its own holds.
+
+        The device's charge ceiling (:meth:`device_charge_ceiling_w`), so AC
+        charging runs at the device's maximum (owner 2026-11-13), and no
+        reason; 0, a park in AC input, where it is none, with the reason: a
+        model the catalogue does not identify or list as AC chargeable, whose
+        maximum the EMS does not pick, as it does not charge it from surplus,
+        and a device that refuses a charge or names no ceiling. Leaving
+        inputLimit alone kept whatever the device last held -- the full-charge
+        assist's 600 W on a 1000 W SolarFlow 800 Pro 2.
+        """
+
+        profile = self.device_charge_profile(dev)
+        if not self.device_model_supports_charge(dev, profile):
+            return 0, "model_not_ac_chargeable"
+        ceiling = self.device_charge_ceiling_w(dev, state, profile)
+        if ceiling <= 0:
+            return 0, self.charge_ceiling_unknown_reason(state)
+        return ceiling, None
+
+    def name_ac_input_maximum_unknown(self, dev, reason):
+        """Say once per device and reason why an AC input without a power is held at 0 W.
+
+        Said where the 0 W holds or goes out, not behind a shut gate, and again
+        once the device has held another claim or a maximum in between
+        (:meth:`reconcile_runtime_ac_charge_power`).
+        """
+
+        if self.ac_input_maximum_unknown.get(dev.name) == reason:
+            return
+        self.ac_input_maximum_unknown[dev.name] = reason
+        log_event(
+            logging.WARNING,
+            "ac_input_maximum_unknown",
+            device=dev.name,
+            reason=reason,
+            pinned_profile=getattr(dev, "hardware_profile", None),
+            reported_product=getattr(dev, "observed_product", None),
+            input_limit_w=0,
+        )
+
     def reconcile_runtime_ac_charge_power(self, dev, state, intent):
         """Write inputLimit when runtime AC input intent requests a new value.
 
         Over an ``inputLimit`` the report does not carry only the operator's
         charge power is written, as only the operator's role is over an
-        unknown ``acMode`` (K10, K20). Any other claim's charge power and its
-        ``acMode=1`` go out together or not at all: neither over an unknown
-        ``inputLimit``, and the power not over an unknown ``acMode``, where
-        the mode cannot be written either.
+        unknown ``acMode`` (K10, K20), and written whatever its value: a
+        missing field reads as 0, which is no sign the device holds 0. Any
+        other claim's charge power and its ``acMode=1`` go out together or not
+        at all: neither over an unknown ``inputLimit``, and the power not over
+        an unknown ``acMode``, where the mode cannot be written either.
         """
 
         if not self.state_reconciliation_supported(dev, "runtime_ac_charge_power"):
             return True
 
-        desired_input_limit = intent.setpoint_w
+        held_at_zero = None
+        if intent.at_device_maximum:
+            desired_input_limit, held_at_zero = self.device_maximum_charge(dev, state)
+        else:
+            desired_input_limit = intent.setpoint_w
+        if held_at_zero is None:
+            self.ac_input_maximum_unknown.pop(dev.name, None)
         if desired_input_limit is None:
             return True
 
@@ -3378,15 +3430,8 @@ class EMSController:
             "ac_status": state.ac_status,
         }
 
-        if current_input_limit == desired_input_limit:
-            log_event(
-                logging.DEBUG,
-                "runtime_ac_charge_power_unchanged",
-                **fields
-            )
-            return True
-
-        if not self.device_state_writes_allowed(dev):
+        unchanged = input_limit_known and current_input_limit == desired_input_limit
+        if not unchanged and not self.device_state_writes_allowed(dev):
             log_event(
                 logging.INFO,
                 "runtime_ac_charge_power_write_skipped",
@@ -3396,6 +3441,16 @@ class EMSController:
                 }
             )
             return False
+
+        if held_at_zero:
+            self.name_ac_input_maximum_unknown(dev, held_at_zero)
+        if unchanged:
+            log_event(
+                logging.DEBUG,
+                "runtime_ac_charge_power_unchanged",
+                **fields
+            )
+            return True
 
         try:
             ok = write_device_properties(

@@ -2894,6 +2894,29 @@ def test_a_claim_that_charges_on_its_own_power_keeps_it(then):
     assert harness.controller.charges_held_by_ems() == {}
 
 
+def test_an_ac_input_without_a_power_takes_the_charge_over_at_the_device_ceiling():
+    """AC input with no power of its own charges as fast as the device may.
+
+    It commands the device's ceiling, so it owns ``inputLimit`` from the cycle
+    it takes the device, as a claim with its own power does: a stop of the EMS
+    does not end it.
+    """
+
+    claim = {"runtime_role": "ac_input", "runtime_role_reason": "dashboard"}
+    harness, hardware, item, _runtime, before = charge_then_claim(claim)
+    dev = harness.devices[0]
+    ceiling = harness.controller.device_charge_ceiling_w(dev, item)
+    assert ceiling > 0
+    assert dev.charge_commanded is False
+
+    harness.controller.release_charging_devices()
+
+    assert hardware.writes[before:] == []
+    assert item.ac_mode == 1
+    assert item.input_limit_w == ceiling
+    assert item.grid_input == ceiling
+
+
 def test_a_claim_set_while_control_is_off_takes_the_charge_only_once_it_is_back():
     """Off is off (OFF-1): a claim with its own power cannot write while control is off.
 
@@ -2938,9 +2961,15 @@ def test_a_park_as_ac_input_ends_the_ems_s_charge_without_moving_the_relay():
     The exit to idle wrote acMode 2, and the state reconciler wrote acMode 1
     back for the role one cycle later: two relay moves for a device that was
     in the right mode all along. Ending the charge by its setpoint is enough.
+    A park is AC input at 0 W: without a power the role charges at the
+    device's ceiling.
     """
 
-    claim = {"runtime_role": "ac_input", "runtime_role_reason": "emsctl"}
+    claim = {
+        "runtime_role": "ac_input",
+        "runtime_role_reason": "emsctl",
+        "ac_charge_power_w": 0,
+    }
     harness, hardware, item, _runtime, before = charge_then_claim(claim)
     harness.run(cycles=3, states=[item])
 

@@ -84,7 +84,10 @@ both are on and its model can charge from AC — see
 **AC role** is the same setting as `emsctl.py device WR1 ac-mode`:
 **Output (EMS regulates)** is normal operation; **AC charging (input)** takes the
 inverter out of output regulation and lets it charge from the grid at the **AC
-charge power**. **Role set by** names the last writer (`dashboard`, `emsctl`).
+charge power**. Left empty, it charges at the inverter's maximum, and emptying
+the field goes back to that; an inverter not known to charge from AC stays at
+0 W then. **0** W keeps it in AC input without charging from the grid.
+**Role set by** names the last writer (`dashboard`, `emsctl`).
 A device controlled over MQTT shows *Not settable over MQTT* instead of the role
 and the charge power: the manual role is not available over MQTT. That is all it
 says. The EMS still regulates such a device through its power command — its

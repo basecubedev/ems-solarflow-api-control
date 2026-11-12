@@ -70,6 +70,12 @@
 
   function submit(event) {
     event.preventDefault();
+    const unreadable = [...event.currentTarget.querySelectorAll('input[type="number"]')].find((input) => input.validity.badInput);
+    if (unreadable) {
+      const field = fields.find((item) => item.name === unreadable.name);
+      feedback = { text: t("runtime.notANumber", { field: field?.label || unreadable.name }), error: true };
+      return;
+    }
     const payload = changedPayload(fields, values, baseline);
     if (!Object.keys(payload).length) {
       feedback = { text: t("runtime.nothing"), error: false };

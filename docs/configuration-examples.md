@@ -287,6 +287,8 @@ python3 emsctl.py device WR1 ac-mode output
 `ac-charge-power` stores `ac_charge_power_w` in runtime-state only. The
 controller applies it as `inputLimit` on the next EMS loop while the role is
 `ac_input`, and ignores it for hardware writes while the role is `ac_output`.
+Without it, or after `ac-charge-power max`, the `ac_input` role charges at the
+device's maximum charge power.
 
 The defaults are intended to expose the main regulation features with minimal
 setup. They are not a universal safety profile; review device limits, SOC

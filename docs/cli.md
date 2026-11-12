@@ -34,8 +34,8 @@ python3 emsctl.py system disable
 python3 emsctl.py system max-power 1200
 python3 emsctl.py device WR1 max-power 600
 python3 emsctl.py device WR1 ac-mode output
-python3 emsctl.py device WR1 ac-mode input
 python3 emsctl.py device WR1 ac-charge-power 200
+python3 emsctl.py device WR1 ac-mode input
 python3 emsctl.py device WR1 offgrid eco
 python3 emsctl.py winter enable
 python3 emsctl.py dashboard auth-status
@@ -226,8 +226,8 @@ non-zero if any read fails.
 
 ```bash
 python3 emsctl.py device WR1 ac-mode output
-python3 emsctl.py device WR1 ac-mode input
 python3 emsctl.py device WR1 ac-charge-power 200
+python3 emsctl.py device WR1 ac-mode input
 ```
 
 `ac-mode output` writes `runtime_role=ac_output` to runtime-state. The
@@ -253,21 +253,33 @@ python3 emsctl.py device WR1 ac-mode output
 `ac-charge-power` writes `ac_charge_power_w` to runtime-state and preserves
 the current runtime role. The controller applies it as Zendure `inputLimit` on
 the next EMS loop only while the device role is `ac_input`, and only when
-telemetry reports a different current `inputLimit`. While the role is
-`ac_output`, the stored charge power is ignored for hardware writes so it can
-be prepared before switching to input mode. Setting it never starts a charge on
+telemetry reports a different current `inputLimit`, or none at all. While the
+role is `ac_output`, the stored charge power is ignored for hardware writes so
+it can be prepared before switching to input mode. Setting it never starts a charge on
 its own.
 
+Without a charge power, `ac-mode input` charges at the device's maximum, its
+charge ceiling: the ceiling it reports, else its model's rating, never above
+`max_charge_power_w`. A device whose model the hardware catalogue does not
+identify or list as AC chargeable, or that refuses a charge or names no
+ceiling, is held at `0` instead, said once as `ac_input_maximum_unknown`. The device's `ac-charge on|off` switch is about charging from surplus
+and does not enter into it. `ac-charge-power max` clears an entered power and
+goes back to that maximum, and `0` holds the device in AC input without
+charging from the grid. Set the power before `ac-mode input`: the other way
+round the device charges at its maximum for the cycle in between. Until
+2026-11-13 an `ac_input` role without a power left the `inputLimit` the device
+held; where that served as a park, set `ac-charge-power 0` before updating.
+
 **Not to be confused with `max_charge_power_w`**, whose name is one word away
-and whose job is unrelated:
+and whose job is a different one:
 
 | | `ac_charge_power_w` | `max_charge_power_w` |
 |---|---|---|
 | Where | runtime-state, per device | `config.json`, per device |
 | Set with | `emsctl device WR1 ac-charge-power N` | the config file or Admin |
-| What it is | the exact `inputLimit` to hold | an upper bound on surplus charging |
-| Who reads it | the runtime AC-mode reconciler, while the role is `ac_input` | the surplus charge regulator |
-| Effect of setting it | none until the role is `ac_input` | caps the share this device may take |
+| What it is | the exact `inputLimit` to hold | an upper bound on surplus charging and on an AC-input role's default power |
+| Who reads it | the runtime AC-mode reconciler, while the role is `ac_input` | the surplus charge regulator, and the AC-mode reconciler for a role without a power |
+| Effect of setting it | none until the role is `ac_input` | caps the share this device may take, and the maximum an AC-input role without a power charges at |
 
 If the aim is "this device may charge from surplus, but never above N watts",
 the one to set is `max_charge_power_w`. `0` there means "ask the device for its
@@ -1060,7 +1072,7 @@ accept exactly the same values:
   configured `max_power` (where that is missing or not a positive number,
   `system.max_device_power`, else the EMS default of 800 W, as the EMS caps
   such a device),
-  `ac-charge-power` up to 5000 W
+  `ac-charge-power` up to 5000 W, or `max` for the device's maximum
 - `loop-interval` outside 1–3600 seconds
 - `pv-priority-factor` outside 0.01–100
 - invalid offgrid value; allowed values are `off`, `eco`, and `standard`

@@ -370,6 +370,21 @@ def test_the_dashboard_sets_the_ac_role_and_charge_power_like_emsctl(tmp_path):
     assert result["state"]["ac_charge_power_w"] == 600
 
 
+@pytest.mark.parametrize("cleared", [None, "", "max", " MAX "])
+def test_a_cleared_charge_power_goes_back_to_the_device_maximum(tmp_path, cleared):
+    runtime_state, context = _ac_runtime(tmp_path)
+    apply_device_update(
+        runtime_state, "WR1", {"ac_charge_power_w": 600}, context, source="dashboard"
+    )
+
+    result = apply_device_update(
+        runtime_state, "WR1", {"ac_charge_power_w": cleared}, context, source="dashboard"
+    )
+
+    assert result["state"]["ac_charge_power_w"] is None
+    assert runtime_state.snapshot()["devices"]["WR1"]["ac_charge_power_w"] is None
+
+
 @pytest.mark.parametrize(
     "payload",
     [{"runtime_role": "ac_input"}, {"ac_charge_power_w": 300}],
@@ -389,6 +404,8 @@ def test_the_ac_role_is_refused_for_an_mqtt_device(tmp_path, payload):
         ({"runtime_role": "reserved"}, "must be one of"),
         ({"ac_charge_power_w": 99999}, "between 0 and 5000"),
         ({"ac_charge_power_w": 300.5}, "must be an integer"),
+        ({"ac_charge_power_w": "maximum"}, "must be an integer or max"),
+        ({"ac_charge_power_w": False}, "must be an integer or max"),
     ],
 )
 def test_ac_values_are_validated(tmp_path, payload, message):

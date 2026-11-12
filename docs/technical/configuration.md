@@ -233,7 +233,8 @@ Runtime AC charge power is not a static device config value. Set it through
 runtime-state, for example with `python3 emsctl.py device WR1 ac-charge-power
 200`. The controller applies it as `inputLimit` on the next loop only while the
 device runtime role is `ac_input`; in `ac_output` mode the stored value is
-ignored for hardware writes.
+ignored for hardware writes. Without one, or after `ac-charge-power max`, an
+`ac_input` role charges at the device's maximum; `0` parks it in AC input.
 
 `system.reconcile_smart_mode` allows smart mode reconciliation and is required
 for the intended Zendure runtime/RAM mode behavior. A device whose report
@@ -620,6 +621,7 @@ So the EMS never borrows one as the other. A SolarFlow 800 Pro 2 reports an
 | 3 | The rated charge power of the device's resolved model, when it reports no ceiling at all |
 | — | A device that reports a ceiling of `0` has refused a charge; neither the rating nor `max_charge_power_w` overrides that |
 | — | A device with none of these charges nothing and logs `ac_charge_ceiling_unknown`; setting the key explicitly unblocks it |
+| — | Whatever the source, never above the rated charge power of a model that has one: a reported ceiling above what the catalogue says the model takes is not believed |
 
 On MQTT the result is additionally held to the device's `max_power`, because the
 MQTT client refuses any command above it before publishing, charge included.

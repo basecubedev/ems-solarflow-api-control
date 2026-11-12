@@ -281,7 +281,9 @@ def resolve_max_charge_power_w(device_config, state=None, rated_w=0):
     path. A device that reports 0 has refused a charge, and neither the rating
     nor an explicit setting overrides that; Zendure-HA reads a reported 0 as a
     zero charge limit too. With no report and no rating, the device charges
-    nothing unless ``max_charge_power_w`` is set.
+    nothing unless ``max_charge_power_w`` is set. A reported ceiling above the
+    rating is not believed: the rating caps it, as no installation limit
+    stands behind it by default (owner 2026-11-13).
     """
 
     explicit = getattr(device_config, "max_charge_power_w", 0) or 0
@@ -290,11 +292,14 @@ def resolve_max_charge_power_w(device_config, state=None, rated_w=0):
     except (TypeError, ValueError):
         explicit = 0
 
+    rated = safe_int(rated_w, 0, minimum=0)
     raw_reported = None if state is None else getattr(state, "charge_max_limit_w", None)
     if raw_reported is None:
-        ceiling = safe_int(rated_w, 0, minimum=0)
+        ceiling = rated
     else:
         ceiling = safe_int(raw_reported, 0, minimum=0)
+        if rated > 0:
+            ceiling = min(ceiling, rated)
 
     if raw_reported is not None and ceiling <= 0:
         return 0

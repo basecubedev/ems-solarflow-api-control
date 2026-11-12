@@ -657,7 +657,7 @@ LEGACY_CONFIG_PATHS = {
 RUNTIME_DEVICE_FIELDS = {
     "devices[].enabled": {"type": "boolean"},
     "devices[].offgrid_socket_mode": {"type": "integer"},
-    "devices[].ac_charge_power_w": {"type": "integer", "unit": "W"},
+    "devices[].ac_charge_power_w": {"type": "integer", "unit": "W", "nullable": True},
     "devices[].ac_charge_enabled": {"type": "boolean"},
     "devices[].grid_off_mode": {"type": "integer"},
 }

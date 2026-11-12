@@ -193,6 +193,32 @@ test.describe("Modern dashboard operator: runtime settings @smoke", () => {
     await expect(charging.locator('input[name="enabled"]')).toBeChecked();
   });
 
+  test("emptying the AC charge power of a charging device asks first and goes back to its maximum; an unreadable number saves nothing", async ({ page }) => {
+    const writes = await runtimeStore(page, (runtime) => {
+      Object.assign(runtime.devices.WR1, { runtime_role: "ac_input", ac_charge_power_w: 400 });
+      return runtime;
+    });
+    await openSignedIn(page, "#/control");
+    const device = form(page, "/api/runtime/device/WR1");
+    const power = device.locator('input[name="ac_charge_power_w"]');
+    const dialog = page.locator("dialog[open]");
+    await expect(power).toHaveValue("400");
+
+    await power.fill("");
+    await power.pressSequentially("4e");
+    await save(page, device);
+    await expect(device.getByRole("status")).toHaveText("AC charge power is not a number; nothing was saved.");
+    await expect(dialog).toHaveCount(0);
+
+    await power.fill("");
+    await save(page, device);
+    await expect(dialog).toContainText("Charge WR1 at its maximum?");
+    await dialog.getByTestId("confirm").click();
+    await expect.poll(() => writes.length).toBe(1);
+    expect(writes).toEqual([{ target: "device/WR1", method: "PATCH", body: { ac_charge_power_w: null }, csrf: CSRF }]);
+    await expect(power).toHaveValue("");
+  });
+
   test("a value the EMS refuses is said in the field's own words and the edit stays", async ({ page }) => {
     await page.route("**/api/runtime/device/WR1", (route) =>
       route.fulfill({ status: 400, json: { error: "invalid_runtime_update", message: "max_power must be between 0 and 800" } }));

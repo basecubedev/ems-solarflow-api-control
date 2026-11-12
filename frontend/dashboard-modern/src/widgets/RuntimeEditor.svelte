@@ -71,7 +71,7 @@
           { value: "ac_input", label: t("runtime.role.input") },
         ],
       });
-      fields.push({ name: "ac_charge_power_w", type: "number", label: t("runtime.acPower"), min: 0, max: Number(limits.ac_charge_power_max || 5000), unit: "W" });
+      fields.push({ name: "ac_charge_power_w", type: "number", label: t("runtime.acPower"), min: 0, max: Number(limits.ac_charge_power_max || 5000), unit: "W", clearable: true, help: t("runtime.acPowerHelp") });
       const reason = String(device.runtime_role_reason || "").trim();
       if (reason) fields.push({ name: "_role_reason", type: "readonly", label: t("runtime.roleSetBy"), value: reason });
     }

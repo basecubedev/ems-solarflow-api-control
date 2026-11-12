@@ -65,7 +65,11 @@ export function reseed(fields, { values = {}, baseline = {}, initial = {}, fresh
   return { values: next, baseline: base };
 }
 
-/** Classic's changedRuntimePayload: a field that equals its initial value is not sent; an empty number is not sent. */
+/**
+ * Classic's changedRuntimePayload: a field that equals its initial value is not
+ * sent; an empty number is not sent, except from a ``clearable`` field, where
+ * emptying it is the change and goes out as null.
+ */
 export function changedPayload(fields, values, initial) {
   const payload = {};
   fields.forEach((field) => {
@@ -73,7 +77,7 @@ export function changedPayload(fields, values, initial) {
     const current = normalizeValue(field, values[field.name]);
     const before = normalizeValue(field, initial[field.name]);
     if (current === before) return;
-    if (field.type === "number" && current === null) return;
+    if (field.type === "number" && current === null && !field.clearable) return;
     payload[field.name] = current;
   });
   return payload;
@@ -134,17 +138,22 @@ export function changeWarning(endpoint, payload, runtime) {
   }
   const off = offNote(device, payload, runtime);
   let opening = null;
+  const role = payload.runtime_role ?? acRole(runtime?.devices?.[device]);
+  const toMaximum = payload.ac_charge_power_w === null && role === "ac_input" && payload.runtime_role !== "ac_input"
+    ? { key: "runtime.warn.acPowerMax", vars: { device } }
+    : null;
   if (payload.runtime_role === "ac_input") opening = { key: "runtime.warn.acInput", vars: { device } };
   else if (payload.runtime_role === "ac_output" && off) opening = { key: "runtime.warn.acOutput", vars: { device } };
   else if (payload.offgrid_socket_mode !== undefined) opening = { key: "runtime.warn.offgrid", vars: { device } };
-  if (!opening && !change) return null;
+  if (!opening && !toMaximum && !change) return null;
   const kept = change?.kept || [];
   const handed = change?.handed || [];
   return [
-    opening || { key: "runtime.warn.settingsQuestion", settings: [...kept, ...handed], vars: { device } },
+    opening || toMaximum || { key: "runtime.warn.settingsQuestion", settings: [...kept, ...handed], vars: { device } },
+    opening ? toMaximum : null,
     kept.length ? { key: "runtime.warn.settingsKept", settings: kept } : null,
     ...notes,
-    opening || kept.length ? off : null,
+    opening || toMaximum || kept.length ? off : null,
     payload.runtime_role === "ac_output" && off ? { key: "runtime.warn.stopChargeInApp" } : null,
     handed.length ? { key: "runtime.warn.settingsHanded", settings: handed } : null,
   ].filter(Boolean);

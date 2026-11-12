@@ -47,8 +47,8 @@ which no reconcile writes while the report carries none
 ([winter-mode.md](../winter-mode.md#state-after-a-restart)), and `socSet`,
 `smartMode`, `gridOffMode` and `inputLimit` (K20). Over a missing `socSet`,
 `smartMode` or `gridOffMode` nothing is written; over a missing `inputLimit` only
-the charge power of an `ac_input` role the operator set, as for `acMode`. The
-full-charge assist's `acMode=1` and its charge power go out together or not at
+the charge power of an `ac_input` role the operator set, entered or the device
+maximum, as for `acMode`. The full-charge assist's `acMode=1` and its charge power go out together or not at
 all, and its restore over a missing field never holds the device out of output
 control for good (see [safety-model.md](safety-model.md#socset-and-inputlimit)). Each
 such field is logged once per device as `unknown_state_field` (with `field=`;

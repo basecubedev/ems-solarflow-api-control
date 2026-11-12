@@ -147,9 +147,9 @@ is drawing from the grid is the one action that must never wait for a threshold,
 a counter or a restart. Disabling the EMS (`system.enabled`) or one device does
 too: a charging device gets one final command that ends the charge, and then the
 EMS writes nothing more to it, whether the charge was the regulator's or the
-full-charge assist's. Parking a charging device ends the EMS's charge the same
-way, unless the park sets a charge power of its own, which then takes the charge
-over: switching the EMS off or stopping it does not end that one.
+full-charge assist's. A park at 0 W ends the EMS's charge the same way. An AC
+input role that charges, at its entered power or the device maximum, takes it
+over: only the role back to output, or 0 W, ends that one — not these switches.
 
 So does losing the grid meter. A meter client that cannot reach its hardware
 keeps returning its last reading, and "still exporting" is indistinguishable

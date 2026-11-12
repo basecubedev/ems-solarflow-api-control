@@ -50,6 +50,7 @@ COMMANDS = [
     ("device", "WR1", "ac-mode", "output"),
     ("device", "WR1", "ac-charge", "off"),
     ("device", "WR1", "ac-charge-power", "300"),
+    ("device", "WR1", "ac-charge-power", "max"),
     ("winter", None, "enable", None),
     ("winter", None, "disable", None),
     ("ac-charge", None, "enable", None),
@@ -316,3 +317,24 @@ def test_a_config_without_a_device_ceiling_takes_the_ems_default(configured):
     context = build_validation_context({"devices": [{"name": "WR1", "max_power": configured}]})
 
     assert context["device_max_power"]["WR1"] == default_runtime_config()["system"]["max_device_power"]
+
+
+def test_the_catalogue_says_which_runtime_device_fields_may_be_empty_as_the_writer_does():
+    """A field the writer stores as no entry is nullable in the catalogue, and only such a field."""
+
+    from ems.config_catalog import RUNTIME_DEVICE_FIELDS
+
+    shared = {
+        path.removeprefix("devices[]."): spec
+        for path, spec in RUNTIME_DEVICE_FIELDS.items()
+        if path.removeprefix("devices[].") in runtime_commands.WRITABLE_DEVICE_FIELDS
+    }
+    assert "ac_charge_power_w" in shared
+    for key, spec in shared.items():
+        value_type, rule = runtime_commands.WRITABLE_DEVICE_FIELDS[key]
+        try:
+            runtime_commands._validate_value(key, None, value_type, rule)
+            accepts_none = True
+        except RuntimeWriteError:
+            accepts_none = False
+        assert spec.get("nullable", False) is accepts_none, key

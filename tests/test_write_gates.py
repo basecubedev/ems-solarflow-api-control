@@ -71,6 +71,16 @@ def device(name, ac_discharge_enabled=True):
     )
 
 
+def chargeable_device(name="WR1"):
+    """A SolarFlow 800 Pro 2, a model that charges from AC, rated 1000 W."""
+
+    dev = device(name)
+    dev.hardware_profile = "solarflow_800_pro_2"
+    dev.ac_charge_enabled = True
+    dev.max_charge_power_w = 0
+    return dev
+
+
 def state(
     soc=80,
     min_soc=15,
@@ -994,13 +1004,14 @@ class WriteGateTest(unittest.TestCase):
 
         controlled.session.post.assert_not_called()
 
-    def test_ac_input_without_charge_power_does_not_write_input_limit(self):
-        controlled = device("WR1")
+    def ac_input_writes(self, controlled, telemetry, entry=None):
+        controlled.session.post.return_value = SimpleNamespace(status_code=200)
         runtime_state = RuntimeStateStub(
             devices={
                 "WR1": {
                     "runtime_role": "ac_input",
                     "runtime_role_reason": "test_charge",
+                    **(entry or {}),
                 }
             }
         )
@@ -1011,12 +1022,239 @@ class WriteGateTest(unittest.TestCase):
         ):
             self.run_controller_once(
                 [controlled],
-                [state(ac_mode=1, input_limit_w=0)],
+                [telemetry],
                 runtime_state=runtime_state,
                 load=700
             )
 
-        controlled.session.post.assert_not_called()
+        return [
+            call.kwargs["json"]["properties"]
+            for call in controlled.session.post.call_args_list
+        ]
+
+    def test_ac_input_without_charge_power_charges_at_the_device_ceiling(self):
+        """An AC input with no power of its own charges as fast as the device may.
+
+        Leaving ``inputLimit`` alone kept whatever the device last held: the
+        full-charge assist's 600 W, on a device that takes 1000 W.
+        """
+
+        for entry in ({}, {"ac_charge_power_w": None}, {"ac_charge_power_w": ""}):
+            with self.subTest(entry=entry):
+                writes = self.ac_input_writes(
+                    chargeable_device(),
+                    state(ac_mode=1, input_limit_w=600, charge_max_limit_w=900),
+                    entry,
+                )
+
+                self.assertEqual(writes, [{"inputLimit": 900}])
+
+    def test_ac_input_without_charge_power_falls_back_to_the_model_rating(self):
+        writes = self.ac_input_writes(
+            chargeable_device(),
+            state(ac_mode=1, input_limit_w=600, charge_max_limit_w=None),
+        )
+
+        self.assertEqual(writes, [{"inputLimit": 1000}])
+
+    def test_ac_input_without_charge_power_keeps_below_the_configured_maximum(self):
+        controlled = chargeable_device()
+        controlled.max_charge_power_w = 700
+
+        writes = self.ac_input_writes(
+            controlled,
+            state(ac_mode=1, input_limit_w=600, charge_max_limit_w=1000),
+        )
+
+        self.assertEqual(writes, [{"inputLimit": 700}])
+
+    def test_ac_input_without_charge_power_parks_a_model_not_known_to_charge_from_ac(self):
+        """Leaving inputLimit alone would let it charge on at whatever it last held; the model is named once."""
+
+        controlled = device("WR1")
+        with self.assertLogs(level="WARNING") as logs:
+            writes = self.ac_input_writes(
+                controlled,
+                state(ac_mode=1, input_limit_w=600, charge_max_limit_w=1000),
+            )
+
+        self.assertEqual(writes, [{"inputLimit": 0}])
+        self.assertEqual(
+            sum("event=ac_input_maximum_unknown" in line for line in logs.output), 1
+        )
+
+    def test_ac_input_without_charge_power_parks_where_the_device_names_no_maximum(self):
+        """A ceiling of 0 is none; the stale 600 W would charge on otherwise. The reason is said."""
+
+        for reported, reason in (
+            (0, "device_reports_zero_charge_limit"),
+            (None, "no_reported_or_rated_charge_limit"),
+        ):
+            with self.subTest(reason):
+                controlled = chargeable_device()
+                with patch(
+                    "ems.controller.EMSController.device_charge_ceiling_w",
+                    return_value=0,
+                ), self.assertLogs(level="WARNING") as logs:
+                    writes = self.ac_input_writes(
+                        controlled,
+                        state(ac_mode=1, input_limit_w=600, charge_max_limit_w=reported),
+                    )
+
+                self.assertEqual(writes, [{"inputLimit": 0}])
+                self.assertTrue(
+                    any(
+                        "event=ac_input_maximum_unknown" in line and f"reason={reason}" in line
+                        for line in logs.output
+                    ),
+                    logs.output,
+                )
+
+    def test_a_model_not_known_to_charge_is_named_again_after_another_claim(self):
+        controlled = device("WR1")
+        runtime_state = RuntimeStateStub(devices={"WR1": {"runtime_role": "ac_input"}})
+        controller = EMSController(
+            devices=[controlled],
+            shelly=ShellyStub(0),
+            sleep_enabled=False,
+            runtime_state=runtime_state,
+        )
+        report = state(ac_mode=1, input_limit_w=0, charge_max_limit_w=1000)
+        entered = {"runtime_role": "ac_input", "ac_charge_power_w": 300}
+
+        def named():
+            with patch("ems.controller.log_event") as log_event, patch(
+                "ems.controller.cfg.state_reconciliation_writes_allowed",
+                return_value=True,
+            ):
+                controller.reconcile_runtime_ac_charge_power(
+                    controlled, report, controller.get_device_runtime_intent(controlled, report)
+                )
+            return [call.args[1] for call in log_event.call_args_list].count(
+                "ac_input_maximum_unknown"
+            )
+
+        self.assertEqual(named(), 1)
+        self.assertEqual(named(), 0)
+        runtime_state.devices["WR1"] = entered
+        self.assertEqual(named(), 0)
+        runtime_state.devices["WR1"] = {"runtime_role": "ac_input"}
+        self.assertEqual(named(), 1)
+
+    def test_a_reported_ceiling_above_the_model_rating_is_not_believed(self):
+        """No installation limit stands behind it by default; the catalogue says what the model takes."""
+
+        writes = self.ac_input_writes(
+            chargeable_device(),
+            state(ac_mode=1, input_limit_w=600, charge_max_limit_w=65535),
+        )
+
+        self.assertEqual(writes, [{"inputLimit": 1000}])
+
+    def test_a_park_at_0_w_goes_out_over_an_unreported_input_limit(self):
+        """A missing inputLimit reads as 0, which is no sign the device holds 0."""
+
+        writes = self.ac_input_writes(
+            device("WR1"),
+            replace(
+                state(ac_mode=1, input_limit_w=0, charge_max_limit_w=1000),
+                input_limit_reported=False,
+            ),
+        )
+
+        self.assertEqual(writes, [{"inputLimit": 0}])
+
+    def test_the_0_w_park_is_named_where_it_holds_not_behind_a_shut_gate(self):
+        controlled = device("WR1")
+        controller = EMSController(
+            devices=[controlled],
+            shelly=ShellyStub(0),
+            sleep_enabled=False,
+            runtime_state=RuntimeStateStub(devices={"WR1": {"runtime_role": "ac_input"}}),
+        )
+        report = state(ac_mode=1, input_limit_w=600, charge_max_limit_w=1000)
+
+        def named(gate_open):
+            with patch("ems.controller.log_event") as log_event, patch(
+                "ems.controller.cfg.state_reconciliation_writes_allowed",
+                return_value=gate_open,
+            ):
+                controller.reconcile_runtime_ac_charge_power(
+                    controlled, report, controller.get_device_runtime_intent(controlled, report)
+                )
+            return [call.args[1] for call in log_event.call_args_list]
+
+        self.assertNotIn("ac_input_maximum_unknown", named(False))
+        self.assertIn("ac_input_maximum_unknown", named(True))
+
+    def test_ac_input_without_charge_power_ignores_the_surplus_switch(self):
+        """The device's AC charging switch is about charging from surplus, not the operator's role."""
+
+        controlled = chargeable_device()
+        controlled.ac_charge_enabled = False
+
+        writes = self.ac_input_writes(
+            controlled,
+            state(ac_mode=1, input_limit_w=600, charge_max_limit_w=1000),
+        )
+
+        self.assertEqual(writes, [{"inputLimit": 1000}])
+
+    def test_ac_input_without_charge_power_is_written_over_an_unreported_input_limit(self):
+        """As an entered power is (K20): the operator's role writes over a field the report lacks."""
+
+        writes = self.ac_input_writes(
+            chargeable_device(),
+            replace(
+                state(ac_mode=1, input_limit_w=0, charge_max_limit_w=1000),
+                input_limit_reported=False,
+            ),
+        )
+
+        self.assertEqual(writes, [{"inputLimit": 1000}])
+
+    def test_an_entered_charge_power_is_written_as_entered(self):
+        """Above the device's ceiling too: the entry is the operator's own."""
+
+        writes = self.ac_input_writes(
+            chargeable_device(),
+            state(ac_mode=1, input_limit_w=600, charge_max_limit_w=900),
+            {"ac_charge_power_w": 1200},
+        )
+
+        self.assertEqual(writes, [{"inputLimit": 1200}])
+
+    def test_a_max_written_into_runtime_state_by_hand_is_the_device_maximum(self):
+        writes = self.ac_input_writes(
+            chargeable_device(),
+            state(ac_mode=1, input_limit_w=600, charge_max_limit_w=1000),
+            {"ac_charge_power_w": " Max "},
+        )
+
+        self.assertEqual(writes, [{"inputLimit": 1000}])
+
+    def test_the_claim_without_a_power_does_not_move_with_telemetry(self):
+        """The maximum is resolved at the write, so a silent device keeps the same claim."""
+
+        controlled = chargeable_device()
+        controller = EMSController(
+            devices=[controlled],
+            shelly=ShellyStub(0),
+            sleep_enabled=False,
+            runtime_state=RuntimeStateStub(
+                devices={"WR1": {"runtime_role": "ac_input"}}
+            )
+        )
+
+        answered = controller.get_device_runtime_intent(
+            controlled, state(ac_mode=1, charge_max_limit_w=900)
+        )
+        silent = controller.get_device_runtime_intent(controlled, None)
+
+        self.assertEqual(answered, silent)
+        self.assertTrue(silent.at_device_maximum)
+        self.assertTrue(silent.commands_charge)
+        self.assertIsNone(silent.setpoint_w)
 
     def test_runtime_charge_power_write_gates_respected(self):
         controlled = device("WR1")

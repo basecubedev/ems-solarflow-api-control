@@ -88,9 +88,12 @@ normal `outputLimit` regulation.
 
 `acMode` writes are owned by the runtime intent reconciler. Optional runtime AC
 charge power is stored per device as `ac_charge_power_w` and is reconciled as
-Zendure `inputLimit` only while the runtime role is `ac_input`. Both values are
-compared against current telemetry and written only when they differ, using the
-existing runtime `/properties/write` path and the normal write gates.
+Zendure `inputLimit` only while the runtime role is `ac_input`. Without one the
+role commands the device's charge ceiling (reported, else its model's rating,
+capped by `max_charge_power_w`), resolved against each report, or `0` where
+the model cannot charge from AC or no ceiling is known. Both values are compared
+against current telemetry and written only when they differ, using the existing
+runtime `/properties/write` path and the normal write gates.
 
 A report without `acMode`, or with a value other than `1` or `2`, is an unknown
 mode, not `0` (K10, owner decision 2026-10-12). Over an unknown mode only a role
