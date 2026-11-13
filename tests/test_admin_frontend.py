@@ -7835,7 +7835,7 @@ console.log(JSON.stringify({
     label = json.loads(result.stdout)["latest"]
     # The option makes clear this is the rolling main build, and never labels it
     # as any kind of stable release.
-    assert "current main build" in label
+    assert "rolling build of main" in label
     assert "stable" not in label.lower()
 
 
@@ -7890,7 +7890,7 @@ console.log(JSON.stringify({
         "Development — Feature zendure-mqtt-device-support · 664f48e "
         "· 2026-07-19 · 01:07"
     )
-    assert labels["noTimestamp"] == "Latest · current main build"
+    assert labels["noTimestamp"] == "Latest · rolling build of main"
     assert labels["invalidTimestamp"] == "v0.6.1 — stable · docker"
 
 
@@ -7912,8 +7912,8 @@ def test_setup_channel_guidance_copy_sits_directly_above_the_selector():
     for term, blurb in (
         (
             "Latest",
-            "The current build from the main branch. Updated automatically "
-            "and not a versioned release.",
+            "The rolling build from the main branch, rebuilt weekly and "
+            "after each release. Not a versioned release.",
         ),
         ("Stable", "Recommended versioned releases for normal use."),
         (

@@ -26,7 +26,7 @@ These checks do not make bugs impossible. But they make regressions much harder 
 
 Docker images are built for `linux/amd64` and `linux/arm64`.
 
-Images are rebuilt on releases, on relevant changes to `main`, manually when needed, and at least weekly. This helps keep the image fresh and allows upstream base-image fixes to be picked up regularly.
+Images are built for every release. `latest` is rebuilt from `main` once a week, after every release and whenever the maintainer starts the build by hand, not on every change to `main`. The weekly build keeps the image fresh and picks up upstream base-image fixes.
 
 For stable installations, pin a release tag in `docker-compose.yml`. Use `latest` only if you intentionally want the newest state from `main`.
 

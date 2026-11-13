@@ -162,8 +162,9 @@ where nothing at all could be proven the rolling channel is placed on the versio
 line instead. The running image places itself when it can: every published image
 declares the newest release it descends from (`de.basecubedev.ems.contains_release`),
 and that label is where a `latest` or a development build stands. Only without it
-does the inference apply — `latest` is built from main, so it sits at or above
-every published tag and belongs to the line of the newest one. Whether the
+does the inference apply — `latest` is rebuilt from main after every release,
+so once that build is through it sits at or above every published tag and
+belongs to the line of the newest one. Whether the
 running build *is* rolling is read off its channel label, not the compose tag: a
 Guided Upgrade pins the compose image by digest, so a rolling install's compose
 file does not end in `:latest`, and reading only that tag once left such an

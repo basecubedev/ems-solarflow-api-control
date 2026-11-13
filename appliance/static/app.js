@@ -1896,7 +1896,7 @@
   var RELEASE_TRACKS = [
     { id: "stable", label: "Stable", help: "Recommended versioned releases for normal use." },
     { id: "rc", label: "Release candidate", help: "Release candidates for early testing. Mostly complete, but they may still contain issues." },
-    { id: "latest", label: "Rolling", help: "The current build from the main branch. Updated automatically and not a versioned release." },
+    { id: "latest", label: "Rolling", help: "The rolling build from the main branch, rebuilt weekly and after each release. Not a versioned release." },
     { id: "development", label: "Development", help: "Feature builds with unfinished changes. Intended for testing only." }
   ];
 
