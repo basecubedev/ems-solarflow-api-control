@@ -1188,7 +1188,7 @@ def print_next_steps():
 def build_plan(config, config_exists, config_path, base_dir):
     kind = classify_config(config, config_exists, base_dir)
     if kind == "edited":
-        plan = config_mod.build_config_upgrade_plan(config, base_dir)
+        plan = config_mod.build_config_upgrade_plan(config, base_dir, refresh_defaults=False)
         base_config = plan["upgraded_config"]
         layout = plan.get("template_layout")
     else:

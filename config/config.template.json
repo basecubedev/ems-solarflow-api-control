@@ -5,6 +5,7 @@
     "Example profiles: docs/configuration-examples.md."
   ],
   "config_schema_version": 3,
+  "config_defaults_revision": 1,
 
   "config_upgrade": {
     "_comment": [

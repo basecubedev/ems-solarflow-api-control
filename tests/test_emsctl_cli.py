@@ -1436,12 +1436,30 @@ def test_config_upgrade_dry_run_reports_missing_keys(tmp_path):
     assert "2 -> 3" in result.stdout
     assert "dashboard.animation_mode" in result.stdout
     assert "grid_meter.ip" in result.stdout
+    assert "Refresh defaults (still at a default a later release replaced):" in result.stdout
+    assert "  system.deadband: 10 -> 2" in result.stdout
     assert (
-        "Only values listed under Schema migrations will be overwritten."
+        "Only values listed under Schema migrations or Refresh defaults will be overwritten."
         in result.stdout
     )
     assert "Missing keys will be added from config.template.json." in result.stdout
     assert "Review live-write settings before restarting EMS." in result.stdout
+
+
+def test_config_upgrade_calls_a_current_config_without_the_defaults_revision_up_to_date(tmp_path):
+    config_path = tmp_path / "config.json"
+    template_text = (ROOT / "config" / "config.template.json").read_text()
+    current = json.loads(template_text)
+    current["devices"] = []
+    current.pop("config_defaults_revision")
+    cfg.write_config_json_atomic(str(config_path), current, layout=cfg._extract_template_layout(template_text))
+    before = config_path.read_text()
+
+    result = run_emsctl(tmp_path, "config", "upgrade", "--dry-run")
+
+    assert result.returncode == 0, result.stderr
+    assert "Config is already up to date." in result.stdout
+    assert config_path.read_text() == before
 
 
 def test_config_upgrade_dry_run_rejects_missing_config(tmp_path, monkeypatch, capsys):
@@ -1551,11 +1569,13 @@ def test_config_upgrade_interactive_can_write_without_backup(
     assert code == 0
     assert calls == []
     output = capsys.readouterr().out
-    assert "Only values listed under Schema migrations will be overwritten." in output
+    assert "Only values listed under Schema migrations or Refresh defaults will be overwritten." in output
     assert "Missing keys will be added from config.template.json." in output
     assert "Review live-write settings before restarting EMS." in output
     assert "Continuing without backup" in output
-    assert json.loads(config_path.read_text())["config_schema_version"] == 3
+    written = json.loads(config_path.read_text())
+    assert written["config_schema_version"] == 3
+    assert (written["config_defaults_revision"], written["system"]["deadband"]) == (1, 2)
 
 
 def test_config_upgrade_uses_existing_backup_tool_when_selected(

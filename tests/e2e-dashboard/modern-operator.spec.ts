@@ -615,8 +615,9 @@ test.describe("Modern dashboard operator: maintenance @smoke", () => {
     });
     await openSignedIn(page, "#/maintenance");
     const upgradeCard = page.getByRole("region", { name: "Config upgrade" });
-    await expect(upgradeCard).toContainText("4 config value change(s) planned.");
-    await expect(upgradeCard.locator("h3")).toHaveText(["Added keys", "Migrated values", "New explanatory comments", "Comment refresh"]);
+    await expect(upgradeCard).toContainText("5 config value change(s) planned.");
+    await expect(upgradeCard.locator("h3")).toHaveText(["Added keys", "Migrated values", "Old defaults moved to today's", "New explanatory comments", "Comment refresh"]);
+    await expect(upgradeCard.locator("li", { hasText: "max_total_charge_power_w" })).toHaveText("ac_charge_control.max_total_charge_power_w: 1200 → null");
     await expect(upgradeCard.locator("li", { hasText: "config_upgrade.on_startup" })).toHaveText('config_upgrade.on_startup = "check"');
     await expect(upgradeCard.locator("li", { hasText: "config_schema_version" })).toHaveText("config_schema_version: 2 → 3");
     await expect(upgradeCard.locator("li", { hasText: "dashboard._comment" })).toHaveCount(1);

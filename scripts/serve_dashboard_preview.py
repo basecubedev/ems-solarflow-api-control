@@ -301,6 +301,7 @@ PREVIEW_MAINTENANCE = {
         "comment_add_count": 4,
         "comment_refresh_count": 21,
         "migration_count": 1,
+        "refresh_default_count": 1,
         "template": "config.template.json",
         "items": [
             {"kind": "add", "path": "config_upgrade.on_startup", "value": "check"},
@@ -311,6 +312,12 @@ PREVIEW_MAINTENANCE = {
                 "path": "config_schema_version",
                 "old_value": 2,
                 "value": 3,
+            },
+            {
+                "kind": "refresh_default",
+                "path": "ac_charge_control.max_total_charge_power_w",
+                "old_value": 1200,
+                "value": None,
             },
             {"kind": "comment_add", "path": "config_upgrade._comment"},
             {"kind": "comment_add", "path": "dashboard._comment"},

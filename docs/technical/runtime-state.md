@@ -387,6 +387,19 @@ into the entry of the device the field's entry speaks for, and only for that ent
 `enabled` is written as whether the EMS builds the device (it always writes the value; it never just clears the override, because the EMS loads
 `config.json` once per process).
 
+## Old defaults
+
+When the EMS starts with a config that records `config_defaults_revision` (see
+[configuration.md](configuration.md#old-defaults)), a value in
+`runtime-state.json` still at a default that revision replaced moves to the
+value the config gives it, once: battery care's 5, 10 and 0 points,
+`system.loop_interval` 3. Each is logged as `runtime_default_refreshed`, and
+the file then records `defaults_revision`, so a value set afterwards stays. A
+value the config itself still holds at the old default stays too, and a config
+that does not record the revision yet leaves the file as it is. A new file
+records the config's revision at once. Only a live EMS start does this, not a
+dry run; emsctl, the dashboard and the Admin keep the key as they find it.
+
 ## Live control snapshot
 
 `control-status.json` sits beside the runtime-state file

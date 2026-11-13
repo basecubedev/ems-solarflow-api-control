@@ -235,6 +235,7 @@ def test_default_template_order_and_legacy_ha_defaults():
         "_comment",
         "_comment_docs",
         "config_schema_version",
+        "config_defaults_revision",
         "config_upgrade",
         "system",
         "grid_meter",

@@ -792,6 +792,7 @@ export const STRINGS = {
   "maint.valuesCurrent": s("Config values are up to date.", "Die Konfigurationswerte sind aktuell.", "De configuratiewaarden zijn actueel.", "Les valeurs sont à jour."),
   "maint.added": s("Added keys", "Neue Schlüssel", "Toegevoegde sleutels", "Clés ajoutées"),
   "maint.migrated": s("Migrated values", "Migrierte Werte", "Gemigreerde waarden", "Valeurs migrées"),
+  "maint.refreshedDefaults": s("Old defaults moved to today's", "Alte Standardwerte auf heutige gesetzt", "Oude standaardwaarden naar de huidige gezet", "Anciennes valeurs par défaut remplacées par les actuelles"),
   "maint.comments": s("New explanatory comments", "Neue Erklärkommentare", "Nieuw toelichtend commentaar", "Nouveaux commentaires"),
   "maint.commentRefresh": s("Comment refresh", "Kommentare auffrischen", "Commentaar vernieuwen", "Rafraîchir les commentaires"),
   "maint.formatChanged": s("config.json will be rewritten in the template layout.", "config.json wird im Vorlagen-Layout neu geschrieben.", "config.json wordt herschreven in de sjabloonindeling.", "config.json sera réécrit selon le modèle."),

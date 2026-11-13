@@ -9,6 +9,7 @@ on:
       - "ems/zendure_mqtt/**"
       - "ems/mqtt_control/**"
       - "ems/config.py"
+      - "ems/retired_defaults.py"
       - "ems/config_catalog.py"
       - "ems/template_addresses.py"
       - "ems/winter_policies.py"

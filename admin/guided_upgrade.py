@@ -700,7 +700,7 @@ class GuidedUpgradeExecutor:
         if options["config_check"] or want_config_write:
             try:
                 plan = ems_config.build_config_upgrade_plan(
-                    current_config, base_dir=str(release_dir)
+                    current_config, base_dir=str(release_dir), refresh_defaults=False
                 )
             except (ValueError, OSError, ems_config.ConfigUpgradeError) as exc:
                 steps.append(_step("config_check", "error", "Check config", detail=str(exc)))

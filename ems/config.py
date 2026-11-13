@@ -18,6 +18,12 @@ from ems.logging_utils import log_event
 from ems.modbus_meters import PROFILES_BY_TYPE as MODBUS_METER_PROFILES
 from ems.paths import resolve_config_path, resolve_template_path
 from ems.read_only_devices import E3DC_MODBUS_DEVICE_TYPE, is_read_only_device_config
+from ems.retired_defaults import (
+    CONFIG_REVISION_KEY,
+    DEFAULTS_REVISION,
+    refresh_retired_defaults,
+    stored_revision,
+)
 from ems.template_addresses import is_template_address
 from ems.winter_policies import MAX_RAISE_ABOVE_SOC, configurable_class_defaults
 
@@ -1045,7 +1051,16 @@ def _load_template_upgrade_data(base_dir=None):
     view["config_schema_version"] = LATEST_CONFIG_SCHEMA_VERSION
     view["devices"] = []
     view.pop("shelly", None)
+    view.pop(CONFIG_REVISION_KEY, None)
     return view, path, device_defaults, layout
+
+
+def _template_defaults_revision(base_dir=None):
+    """The defaults revision the installed template records, 0 for a template older than it."""
+
+    base_dir = base_dir or BASE_DIR or os.getcwd()
+    with open(resolve_template_path(base_dir=base_dir)) as handle:
+        return stored_revision(json.load(handle), CONFIG_REVISION_KEY)
 
 
 def load_template_upgrade_view(base_dir=None):
@@ -1741,6 +1756,7 @@ def build_config_upgrade_plan(
     *,
     migrations=None,
     latest_schema=None,
+    refresh_defaults=True,
 ):
     if not isinstance(user_config, dict):
         raise ValueError("config.json must contain a JSON object")
@@ -1755,6 +1771,9 @@ def build_config_upgrade_plan(
         migrations=migrations,
         latest_schema=latest_schema,
     )
+    refreshed_defaults = []
+    if refresh_defaults and _template_defaults_revision(base_dir) >= DEFAULTS_REVISION:
+        migrated_config, refreshed_defaults = refresh_config_defaults(migrated_config, template)
     upgraded = _merge_template_upgrade_view(
         template,
         migrated_config,
@@ -1781,7 +1800,7 @@ def build_config_upgrade_plan(
     }
     added = [
         item for item in _items_from_paths(upgraded, added_paths)
-        if item["path"] not in migration_paths
+        if item["path"] not in migration_paths and item["path"] != CONFIG_REVISION_KEY
     ]
     comments = _items_from_paths(upgraded, comment_paths)
     outdated_comments = template_comment_differences(user_config, base_dir)
@@ -1794,13 +1813,46 @@ def build_config_upgrade_plan(
         "comment_add": comments,
         "comment_refresh": outdated_comments,
         "schema_migrations": schema_steps,
+        "refresh_defaults": refreshed_defaults,
         "migrate": [
             change
             for step in schema_steps
             for change in step.get("changes", [])
         ],
-        "changed": upgraded != user_config,
+        "changed": without_defaults_revision(upgraded) != without_defaults_revision(user_config),
     }
+
+
+def without_defaults_revision(config):
+    """``config`` without its defaults revision, which alone is no change to offer."""
+
+    return {key: value for key, value in config.items() if key != CONFIG_REVISION_KEY}
+
+
+def refresh_config_defaults(config, template):
+    """``config`` with its untouched old defaults moved to the template's.
+
+    Every value still at a default a later release replaced (see
+    ``ems.retired_defaults``) takes the template's value, or the replacement
+    the registry names, and the config then records ``DEFAULTS_REVISION``. A config that records it already comes back
+    as it is. Returns the config and the changes.
+    """
+
+    stored = stored_revision(config, CONFIG_REVISION_KEY)
+    if stored >= DEFAULTS_REVISION:
+        return config, []
+    refreshed, changes = refresh_retired_defaults(config, template, stored)
+    refreshed[CONFIG_REVISION_KEY] = DEFAULTS_REVISION
+    return refreshed, changes
+
+
+def describe_refreshed_defaults(changes):
+    """One line per refreshed value: its path, the old default, the new one."""
+
+    return [
+        f"{change['path']}: {json.dumps(change['from'])} -> {json.dumps(change['to'])}"
+        for change in changes
+    ]
 
 
 def write_config_json_atomic(path, data, *, layout=None):
@@ -1929,6 +1981,96 @@ def _read_raw_config(path):
     return data
 
 
+def _refresh_startup_config_defaults(raw_config, path, base_dir, *, backup, backup_factory, emit_message):
+    """The config with its untouched old defaults refreshed, once, before EMS starts.
+
+    Runs in check mode too: a missing key the EMS fills in memory, but a value
+    at a retired default it reads as it is, so only the file can carry the new
+    one. A value changes behind the same backup as an auto-upgrade; with no
+    value to change only the revision is recorded. When the template or the
+    backup fails, the EMS says so as a warning and starts with the file as it
+    was; a file it may not write it only notes, since check mode never wrote.
+    """
+
+    if stored_revision(raw_config, CONFIG_REVISION_KEY) >= DEFAULTS_REVISION:
+        return raw_config
+    if not _config_writable(path):
+        emit_message(logging.INFO, "Config defaults refresh skipped: config.json is not writable.")
+        return raw_config
+    try:
+        template = _load_template_upgrade_data(base_dir)[0]
+        template_revision = _template_defaults_revision(base_dir)
+        with open(path) as handle:
+            text = handle.read()
+        layout = _own_layout_with_defaults_revision(text)
+        unchanged = _same_config(json.loads(text), raw_config)
+    except (OSError, ValueError) as exc:
+        emit_message(logging.WARNING, f"Config defaults refresh skipped: {exc}")
+        return raw_config
+    if template_revision < DEFAULTS_REVISION:
+        emit_message(
+            logging.WARNING,
+            "Config defaults refresh skipped: config.template.json is older than this EMS "
+            f"(defaults revision {template_revision}, needs {DEFAULTS_REVISION}).",
+        )
+        return raw_config
+    if not unchanged:
+        emit_message(logging.INFO, "Config defaults refresh skipped: config.json changed while the EMS started.")
+        return raw_config
+    refreshed, changes = refresh_config_defaults(raw_config, template)
+    written = _write_startup_config(
+        raw_config,
+        refreshed,
+        path,
+        base_dir,
+        label="Config defaults refresh",
+        layout=layout,
+        backup=bool(changes) and backup,
+        backup_factory=backup_factory,
+        emit_message=emit_message,
+        unwritable_level=logging.INFO,
+        expected_text=text,
+    )
+    if written is None:
+        return raw_config
+    if changes:
+        emit_message(
+            logging.INFO,
+            "Config defaults refreshed; these values were still at a default a later "
+            "release replaced:\n  " + "\n  ".join(describe_refreshed_defaults(changes)),
+        )
+    return written
+
+
+def _same_config(left, right):
+    """Whether two parsed configs are the same JSON, NaN included."""
+
+    return json.dumps(left, sort_keys=True) == json.dumps(right, sort_keys=True)
+
+
+def _config_writable(path):
+    """Whether the EMS may replace ``path``: the file and its directory are writable."""
+
+    return os.access(path, os.W_OK) and os.access(os.path.dirname(path) or ".", os.W_OK)
+
+
+def _own_layout_with_defaults_revision(text):
+    """The layout of a config ``text``, with the revision beside the schema version.
+
+    So a refresh changes the values it refreshes and adds one line, and leaves
+    the key order and blank lines of the rest as the file has them, each list
+    item its own rather than the first item's.
+    """
+
+    layout = _extract_template_layout(text)
+    layout["list_item_objects"] = {}
+    root = layout.get("objects", {}).get(())
+    if root and CONFIG_REVISION_KEY not in root["keys"] and "config_schema_version" in root["keys"]:
+        root["keys"].insert(root["keys"].index("config_schema_version") + 1, CONFIG_REVISION_KEY)
+        root["blank_lines_before"][CONFIG_REVISION_KEY] = 0
+    return layout
+
+
 def _startup_config_upgrade_summary(plan):
     return len(plan.get("add", [])) + len(plan.get("comment_add", [])) + len(
         plan.get("migrate", [])
@@ -1954,6 +2096,7 @@ def perform_startup_config_upgrade(
     *,
     backup_factory=None,
     emit_message=None,
+    refresh_defaults=True,
 ):
     base_dir = base_dir or BASE_DIR or os.getcwd()
     emit_message = emit_message or _emit_startup_config_message
@@ -1969,8 +2112,18 @@ def perform_startup_config_upgrade(
     if mode == "disabled":
         return raw_config
 
+    if refresh_defaults:
+        raw_config = _refresh_startup_config_defaults(
+            raw_config,
+            path,
+            base_dir,
+            backup=upgrade_config["backup_before_apply"],
+            backup_factory=backup_factory,
+            emit_message=emit_message,
+        )
+
     try:
-        plan = build_config_upgrade_plan(raw_config, base_dir)
+        plan = build_config_upgrade_plan(raw_config, base_dir, refresh_defaults=False)
     except (ConfigUpgradeError, OSError, ValueError) as exc:
         emit_message(
             logging.WARNING,
@@ -1991,28 +2144,73 @@ def perform_startup_config_upgrade(
         )
         return raw_config
 
-    if upgrade_config["backup_before_apply"]:
+    written = _write_startup_config(
+        raw_config,
+        plan["upgraded_config"],
+        path,
+        base_dir,
+        label="Config auto-upgrade",
+        layout=plan.get("template_layout"),
+        backup=upgrade_config["backup_before_apply"],
+        backup_factory=backup_factory,
+        emit_message=emit_message,
+    )
+    if written is None:
+        return raw_config
+    emit_message(
+        logging.INFO,
+        "Config auto-upgrade applied; reloading config.json before startup.",
+    )
+    return written
+
+
+def _write_startup_config(
+    raw_config,
+    new_config,
+    path,
+    base_dir,
+    *,
+    label,
+    layout,
+    backup,
+    backup_factory,
+    emit_message,
+    unwritable_level=logging.WARNING,
+    expected_text=None,
+):
+    """Back ``raw_config`` up when asked, write ``new_config`` and read it back.
+
+    ``None`` when the backup or the write fails, or when the file no longer
+    reads ``expected_text`` because something else wrote it meanwhile, after
+    saying so: the EMS then starts with the file as it is.
+    """
+
+    if backup:
         create_backup = backup_factory or _create_startup_config_backup
         try:
             backup_path = create_backup(raw_config, path, base_dir)
         except Exception as exc:
             emit_message(
                 logging.WARNING,
-                "Config auto-upgrade skipped because backup failed. "
+                f"{label} skipped because backup failed. "
                 f"Starting with existing config. Error: {exc}",
             )
-            return raw_config
-        emit_message(logging.INFO, f"Config auto-upgrade backup created: {backup_path}")
-
-    write_config_json_atomic(
-        path,
-        plan["upgraded_config"],
-        layout=plan.get("template_layout"),
-    )
-    emit_message(
-        logging.INFO,
-        "Config auto-upgrade applied; reloading config.json before startup.",
-    )
+            return None
+        emit_message(logging.INFO, f"{label} backup created: {backup_path}")
+    if expected_text is not None:
+        try:
+            with open(path) as handle:
+                current = handle.read()
+        except OSError:
+            current = None
+        if current != expected_text:
+            emit_message(logging.INFO, f"{label} skipped: config.json changed while the EMS started.")
+            return None
+    try:
+        write_config_json_atomic(path, new_config, layout=layout)
+    except OSError as exc:
+        emit_message(unwritable_level, f"{label} skipped: config.json could not be written: {exc}")
+        return None
     return _read_raw_config(path)
 
 
@@ -2116,12 +2314,47 @@ def load_config(args=None, base_dir=None):
         print("config.json missing. Please create it from template.")
         sys.exit(1)
 
-    raw_config = perform_startup_config_upgrade(raw_config, path, base_dir)
+    raw_config = perform_startup_config_upgrade(
+        raw_config,
+        path,
+        base_dir,
+        refresh_defaults=_start_may_refresh_defaults(args, raw_config),
+    )
     LOADED_DEVICES = device_fingerprints(raw_config)
     runtime_config = apply_runtime_config_defaults(raw_config)
     return apply_template_placeholder_safety(
         runtime_config,
         emit_message=_emit_startup_config_message,
+    )
+
+
+def _start_may_refresh_defaults(args, raw_config):
+    """Whether this start may move old defaults: a live start, not a check or a test.
+
+    A dry run or a simulation is read as ``initialize`` reads it, from the
+    config with its defaults and the placeholder safety, so a start the EMS
+    runs dry never lets the refresh write.
+    """
+
+    for flag in ("simulate", "replay", "self_test", "dry_run", "preflight"):
+        if getattr(args, flag, False):
+            return False
+    try:
+        effective = apply_template_placeholder_safety(
+            apply_runtime_config_defaults(raw_config),
+            emit_message=lambda level, message: None,
+        )
+    except Exception:
+        return False
+    system = effective.get("system") if isinstance(effective.get("system"), dict) else {}
+    return not (config_dry_run(system) or runtime_control_flag(system, "simulation_mode"))
+
+
+def config_dry_run(system):
+    """Whether a ``system`` block runs dry: its flag, or a simulation flag it cannot read."""
+
+    return runtime_control_flag(system, "dry_run") or not all(
+        control_flag_is_valid(system, name) for name in CONTROL_FLAGS_INVALID_FORCE_DRY_RUN
     )
 
 
@@ -2170,14 +2403,7 @@ def initialize(args, base_dir):
         MIN_OUTPUT_LIMIT = 0
 
     system_config = CONFIG["system"]
-    DRY_RUN = (
-        runtime_control_flag(system_config, "dry_run")
-        or args.dry_run
-        or not all(
-            control_flag_is_valid(system_config, name)
-            for name in CONTROL_FLAGS_INVALID_FORCE_DRY_RUN
-        )
-    )
+    DRY_RUN = config_dry_run(system_config) or args.dry_run
     SIMULATION_MODE = (
         runtime_control_flag(system_config, "simulation_mode") or args.simulate
     )
@@ -2845,6 +3071,20 @@ def runtime_state_path():
         return RUNTIME_STATE_PATH
 
     return os.path.join(BASE_DIR, RUNTIME_STATE_PATH)
+
+
+def recorded_defaults_revision(config):
+    """The defaults revision ``config`` records, 0 when it records none."""
+
+    return stored_revision(config, CONFIG_REVISION_KEY)
+
+
+def runtime_defaults_revision():
+    """The defaults revision runtime-state follows at this start; ``None`` in a dry run."""
+
+    if DRY_RUN or SIMULATION_MODE:
+        return None
+    return recorded_defaults_revision(CONFIG)
 
 
 def config_path():

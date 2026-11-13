@@ -82,8 +82,9 @@ python3 -B ems-solarflow-api-control.py --dry-run --once
 ## Updating config.json After Upgrades
 
 New releases may add config keys. EMS keeps older configs running by applying
-conservative runtime fallback defaults in memory. Normal startup does not
-rewrite `config.json`.
+conservative runtime fallback defaults in memory. Normal startup does not add
+them to `config.json`; it writes the file only to refresh
+[old defaults](#old-defaults).
 
 To review missing keys:
 
@@ -136,6 +137,49 @@ python3 emsctl.py config upgrade --yes --no-backup
 `--yes` remains non-interactive: it applies the normal upgrade according to the
 selected backup policy, does not ask about comment refresh, and does not refresh
 existing comments.
+
+### Old Defaults
+
+Some defaults turned out not to be good, and a later release replaced them:
+`system.loop_interval` 3 is 5 now, `ac_charge_control.max_total_charge_power_w`
+1200 is no limit, battery care's 5, 10 and 0 points are 3, 4 and 1. A value
+in `config.json` that still equals such an old default was most likely never
+changed by hand, so the EMS moves it to today's default once:
+
+- At start, unless `config_upgrade.on_startup` is `disabled`, and in `check`
+  mode too; not in a simulation, replay, self-test, preflight or dry run
+  (`--dry-run`, `system.dry_run`, `system.simulation_mode`, or setup
+  placeholders still in the config). Before it changes a value it makes a backup as an auto-upgrade
+  does, and the log names each value (`Config defaults refreshed`). The config
+  then records `config_defaults_revision`, so a value set afterwards stays, an
+  old default among them; a config with nothing to change only records it.
+  The file keeps its key order and blank lines, the revision goes beside
+  `config_schema_version`; values are written in the EMS's own JSON style.
+- A value set to exactly an old default before that cannot be told apart and
+  moves too; set it again afterwards.
+- When the template or the backup fails, the EMS logs a warning and starts
+  with the file as it was. A `config.json` it may not write it only notes
+  (INFO), without a backup, since check mode never wrote before; the values
+  stay until it can. A file something else writes while the EMS starts stays
+  as written, and the refresh waits for the next start.
+- `config upgrade` lists the same values under **Refresh defaults**, the
+  dashboard's Maintenance page under **Old defaults moved to today's**. The
+  Admin's Guided Upgrade leaves them to the EMS start, so its "add missing
+  keys" adds keys only.
+- Only tuning values are refreshed: never a switch, a write gate, a path or an
+  address, nor `system.min_output_limit` 0, which turns the standby floor off
+  and is as likely chosen. The 1200 W charge limit and battery care's first
+  points, PV-only 0 among them, are refreshed on the owner's decision. The
+  limit is cleared (null) rather than set to 0: both mean no limit now, but a
+  release before 2026-11-13 reads 0 as no charging at all and null as its own
+  1200 W, so going back to it keeps charging. `ems/retired_defaults.py` lists
+  them with the releases that shipped each.
+- Restoring the backup taken before the refresh brings the old values back,
+  and the next start refreshes them again; to keep one, set it again after
+  the refresh. A `config.template.json` older than the EMS, such as one a
+  checkout left beside a newer image, refreshes nothing and records nothing.
+- Runtime values still at an old default follow the config's once it records
+  the revision, see [runtime-state.md](runtime-state.md#old-defaults).
 
 After upgrading:
 

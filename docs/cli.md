@@ -435,7 +435,10 @@ run keeps an existing pairing and refuses a meter that has none.
 
 `config upgrade` is different from `config init`. It fills missing persisted
 keys after updates by comparing your config with `config.template.json`.
-Dry-run output includes missing keys, missing explanatory comments, and the
+Dry-run output includes missing keys, values still at an old default under
+**Refresh defaults** (see
+[Old Defaults](technical/configuration.md#old-defaults)), missing explanatory
+comments, and the
 number of existing template-managed `_comment*` entries whose text differs from
 the current template.
 
