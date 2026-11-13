@@ -13,8 +13,12 @@ to minSoc + 1 again and the loop repeated every 10-13 minutes (server EMS,
 The point dropped after a few watt-hours, not the 29 Wh it holds: the cell
 voltage sags under a high current near the floor and the SoC estimate follows
 it. So the battery share grows with the square of the distance from minSoc
-(owner 2026-11-12, "Akkuschonung"): full power from 5 points outside winter mode
-and from 10 points in it, a trickle just above the floor.
+(owner 2026-11-12, "Akkuschonung"). Since the live test (owner 2026-11-13) a
+battery by default rests one point above minSoc and passes only its PV, may
+give 50 W on the next point (the minimum discharge, the foot of the curve), and
+full power from 3 points outside winter mode and from 4 points in it. The cycle
+tests run on a longer curve, no PV-only point and full power at 5 and 10
+points, which holds a device across more points.
 """
 
 from types import SimpleNamespace
@@ -22,7 +26,12 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from ems.config import BATTERY_CARE_DEFAULTS, BATTERY_CARE_MAX_POINTS
+from ems.config import (
+    BATTERY_CARE_DEFAULTS,
+    BATTERY_CARE_MAX_POINTS,
+    BATTERY_CARE_MAX_WATTS,
+    normalize_battery_care_config,
+)
 from ems.controller import EMSController
 from ems.models import DeviceState
 from ems.target_control import (
@@ -40,7 +49,13 @@ pytestmark = [
     pytest.mark.unit,
 ]
 
-RAMP = MinSocRamp(pv_only_points=0, full_points=5)
+RAMP = MinSocRamp(pv_only_points=0, full_points=5, min_discharge_w=50)
+LONG_RAMP_CARE = {
+    **BATTERY_CARE_DEFAULTS,
+    "summer_full_points": 5,
+    "winter_full_points": 10,
+    "pv_only_points": 0,
+}
 
 
 def device(name="WR1", max_power=800):
@@ -109,16 +124,23 @@ def targets_for(states, devices, requested_total, ramp=RAMP, explain=False):
 
 @pytest.mark.parametrize(
     "points, share",
-    [(-3, 0.0), (0, 0.0), (1, 0.04), (2, 0.16), (3, 0.36), (4, 0.64), (5, 1.0), (40, 1.0)],
+    [(-3, 0.0), (0, 0.0), (1, 0.0), (2, 0.0625), (3, 0.25), (4, 0.5625), (5, 1.0), (40, 1.0)],
 )
-def test_the_battery_share_grows_with_the_square_of_the_distance(points, share):
+def test_the_share_grows_with_the_square_of_the_distance_from_the_first_point(points, share):
     assert min_soc_ramp_share(points, RAMP) == pytest.approx(share)
 
 
-def test_the_winter_curve_reaches_full_power_at_ten_points():
-    winter = MinSocRamp(pv_only_points=0, full_points=10)
-    watts = [round(800 * min_soc_ramp_share(points, winter)) for points in (1, 2, 3, 4, 5, 7, 10)]
-    assert watts == [8, 32, 72, 128, 200, 392, 800]
+def test_the_winter_curve_runs_from_the_minimum_discharge_to_full_power_at_ten_points():
+    winter = MinSocRamp(pv_only_points=0, full_points=10, min_discharge_w=50)
+    watts = [min_soc_ramp_cap_w(state(15 + points), device(), winter) for points in (1, 2, 3, 4, 5, 7, 10)]
+    assert watts == [50, 59, 87, 133, 198, 383, None]
+
+
+def test_the_first_point_gives_exactly_the_minimum_discharge_and_never_more_than_the_device():
+    assert min_soc_ramp_cap_w(state(16), device(), RAMP) == 50
+    assert min_soc_ramp_cap_w(state(16, solar=100), device(), MinSocRamp(0, 5, 0)) == 90
+    assert min_soc_ramp_cap_w(state(16), device(), MinSocRamp(0, 5, 900)) is None
+    assert min_soc_ramp_cap_w(state(15), device(), RAMP) == 0
 
 
 def test_full_points_zero_switches_the_ramp_off():
@@ -133,25 +155,30 @@ def test_full_points_at_or_below_pv_only_is_a_step():
 
 
 def test_a_narrow_window_reaches_full_power_by_its_middle():
-    assert min_soc_ramp_share(2, RAMP, window=6) == pytest.approx(4 / 9)
+    assert min_soc_ramp_share(2, RAMP, window=6) == pytest.approx(0.25)
     assert min_soc_ramp_share(3, RAMP, window=6) == 1.0
-    assert min_soc_ramp_share(2, RAMP, window=60) == pytest.approx(0.16)
+    assert min_soc_ramp_share(2, RAMP, window=60) == pytest.approx(0.0625)
 
 
-def test_a_window_too_narrow_for_the_ramp_still_reduces_the_first_point():
-    assert min_soc_ramp_share(1, RAMP, window=2) == pytest.approx(0.25)
+def test_a_window_too_narrow_for_the_ramp_still_holds_the_first_point_to_its_minimum():
+    assert min_soc_ramp_share(1, RAMP, window=2) == 0.0
     assert min_soc_ramp_share(2, RAMP, window=2) == 1.0
-    assert min_soc_ramp_cap_w(state(41, min_soc=40, max_soc=42), device(), RAMP) == 200
+    assert min_soc_ramp_cap_w(state(41, min_soc=40, max_soc=42), device(), RAMP) == 50
 
 
 def test_pv_only_points_hold_the_battery_before_the_curve_starts():
-    held = MinSocRamp(pv_only_points=1, full_points=5)
-    assert [min_soc_ramp_share(points, held) for points in (1, 3, 5)] == [0.0, 0.25, 1.0]
+    held = MinSocRamp(pv_only_points=1, full_points=5, min_discharge_w=50)
+    assert [min_soc_ramp_cap_w(state(15 + points), device(), held) for points in (1, 2, 3, 5)] == [
+        0,
+        50,
+        133,
+        None,
+    ]
 
 
 def test_the_cap_passes_pv_through_and_adds_the_battery_share():
-    assert min_soc_ramp_cap_w(state(16, solar=100), device(), RAMP) == 122
-    assert min_soc_ramp_cap_w(state(18, solar=0), device(), RAMP) == 288
+    assert min_soc_ramp_cap_w(state(16, solar=100), device(), RAMP) == 140
+    assert min_soc_ramp_cap_w(state(18, solar=0), device(), RAMP) == 238
     assert min_soc_ramp_cap_w(state(19, solar=600), device(), RAMP) is None
     assert min_soc_ramp_cap_w(state(20, solar=0), device(), RAMP) is None
 
@@ -169,14 +196,14 @@ def test_one_point_above_min_soc_the_house_load_does_not_drain_the_battery():
     """The incident: SoC minSoc + 1, floor lifted, the house asks 800 W."""
 
     targets, _current, _new = targets_for([state(16, solar=40)], [device()], 800)
-    assert targets == [68]
+    assert targets == [86]
 
 
 def test_what_a_held_device_cannot_deliver_goes_to_the_others_by_weight():
     devices = [device("Low"), device("High"), device("Mid")]
     states = [state(16), state(80), state(40)]
-    targets, _current, _new = targets_for(states, devices, 1200)
-    assert targets[0] == 32
+    targets, _current, _new = targets_for(states, devices, 1200, ramp=MinSocRamp(0, 5, 20))
+    assert targets[0] == 20
     assert targets[1] > targets[2] > 0
     assert sum(targets) == 1200
 
@@ -184,13 +211,13 @@ def test_what_a_held_device_cannot_deliver_goes_to_the_others_by_weight():
 def test_what_no_device_can_deliver_comes_from_the_grid():
     devices = [device("Low"), device("High")]
     targets, _current, _new = targets_for([state(17), state(80)], devices, 1600)
-    assert targets == [128, 800]
+    assert targets == [97, 800]
 
 
 def test_redistribution_never_lifts_a_held_device_above_its_cap():
     devices = [device("Low"), device("Small", max_power=300)]
     targets, _current, _new = targets_for([state(16, solar=100), state(80)], devices, 1000)
-    assert targets[0] <= 122
+    assert targets[0] <= 140
     assert targets[1] == 300
 
 
@@ -206,7 +233,7 @@ def test_the_pv_first_top_up_stops_at_the_cap():
         caps=caps_for(states, devices),
     )
     assert used is True
-    assert targets[0] <= 128
+    assert targets[0] <= 97
     assert targets[1] <= 800
 
 
@@ -233,7 +260,7 @@ def test_the_explanation_names_the_ramp():
     assert explanation.devices["Low"].limiting_reason == "battery_care"
     limit = next(item for item in explanation.limits if item.name == "battery_care")
     assert limit.active is True
-    assert limit.value == "[68, null]"
+    assert limit.value == "[86, null]"
 
 
 class RuntimeStateStub:
@@ -243,7 +270,7 @@ class RuntimeStateStub:
         self.data = {
             "system": self.system,
             "winter": winter or {"enabled": False},
-            "battery_care": {**BATTERY_CARE_DEFAULTS, **(care or {})},
+            "battery_care": {**LONG_RAMP_CARE, **(care or {})},
         }
 
     def load_if_changed(self):
@@ -275,11 +302,12 @@ def controller(system=None, devices=None, load=0, winter=None, runtime_devices=N
 
 def test_the_controller_reads_battery_care_from_the_runtime_state():
     states = [state(16, solar=100)]
-    assert controller().min_soc_ramp_caps(states) == [122]
+    assert controller().min_soc_ramp_caps(states) == [140]
+    assert controller(care={"min_discharge_w": 20}).min_soc_ramp_caps(states) == [110]
     assert controller(care={"enabled": False}).min_soc_ramp_caps(states) == [None]
     assert controller(care={"summer_full_points": 0}).min_soc_ramp_caps(states) == [None]
     wider = controller(care={"pv_only_points": 2, "summer_full_points": 10})
-    assert wider.min_soc_ramp_caps([state(21)]) == [200]
+    assert wider.min_soc_ramp_caps([state(21)]) == [188]
 
 
 def test_the_standby_floor_never_lifts_a_device_above_its_cap():
@@ -307,7 +335,7 @@ def test_a_charge_the_ems_commanded_ends_on_the_full_floor():
     assert ems.standby_floor_caps([0, 0], [state(16), state(16)]) == [None, 0]
 
 
-def test_one_point_above_min_soc_the_loop_writes_only_a_trickle():
+def test_one_point_above_min_soc_the_loop_writes_only_the_minimum_discharge():
     """The whole cycle. Without battery care this loop writes 785 W, then 800 W."""
 
     ems = controller(load=800)
@@ -323,20 +351,35 @@ def test_one_point_above_min_soc_the_loop_writes_only_a_trickle():
         for _cycle in range(6):
             ems.run_once()
     written = [call.args[1] for call in ems.set_output_limit.call_args_list]
-    assert written and max(written) <= 32
+    assert written and max(written) <= 50
 
 
 def test_winter_mode_takes_the_winter_full_point():
     from datetime import datetime
 
-    states = [state(16, solar=100)]
+    states = [state(17, solar=100)]
     winter = controller(winter={"enabled": True})
-    assert winter.min_soc_ramp_caps(states, now=datetime(2027, 1, 15)) == [98]
-    assert winter.min_soc_ramp_caps(states, now=datetime(2026, 7, 15)) == [122]
+    assert winter.min_soc_ramp_caps(states, now=datetime(2027, 1, 15)) == [149]
+    assert winter.min_soc_ramp_caps(states, now=datetime(2026, 7, 15)) == [187]
     off = controller(winter={"enabled": False})
-    assert off.min_soc_ramp_caps(states, now=datetime(2027, 1, 15)) == [122]
+    assert off.min_soc_ramp_caps(states, now=datetime(2027, 1, 15)) == [187]
     no_winter_ramp = controller(winter={"enabled": True}, care={"winter_full_points": 0})
     assert no_winter_ramp.min_soc_ramp_caps(states, now=datetime(2027, 1, 15)) == [None]
+
+
+def test_the_defaults_rest_one_point_above_min_soc_and_reach_full_power_at_three_or_four():
+    from datetime import datetime
+
+    shipped = controller(winter={"enabled": True}, care=BATTERY_CARE_DEFAULTS)
+    summer, winter = datetime(2026, 7, 15), datetime(2027, 1, 15)
+    assert shipped.min_soc_ramp_caps([state(16, solar=100)], now=summer) == [90]
+    assert [shipped.min_soc_ramp_caps([state(soc)], now=summer) for soc in (16, 17, 18)] == [[0], [50], [None]]
+    assert [shipped.min_soc_ramp_caps([state(soc)], now=winter) for soc in (16, 17, 18, 19)] == [
+        [0],
+        [50],
+        [238],
+        [None],
+    ]
 
 
 def test_a_soc_of_zero_without_a_confirmed_pack_is_not_held():
@@ -501,6 +544,24 @@ def test_the_admin_reads_a_hand_edited_distance_as_the_ems_does():
     assert config_effective_value(config, "section", "battery_care", "winter_full_points") == 50
 
 
+def test_the_admin_reads_a_hand_edited_minimum_discharge_as_the_ems_does():
+    from admin.config_runtime_overlap import config_effective_value
+
+    for written, read in ((9000, BATTERY_CARE_MAX_WATTS), (-20, 0), ("x", 50), (80, 80)):
+        config = {"battery_care": {"min_discharge_w": written}}
+        assert config_effective_value(config, "section", "battery_care", "min_discharge_w") == read
+        assert normalize_battery_care_config(config["battery_care"])["min_discharge_w"] == read
+
+
+def test_a_runtime_writer_takes_the_minimum_discharge_in_watts_within_its_bounds():
+    from ems.runtime_commands import RuntimeWriteError, SECTION_COMMAND_TABLES, validate_section_values
+
+    assert SECTION_COMMAND_TABLES["battery_care"]["min-discharge"].key == "min_discharge_w"
+    assert validate_section_values("battery_care", {"min_discharge_w": "60"}) == {"min_discharge_w": 60}
+    with pytest.raises(RuntimeWriteError):
+        validate_section_values("battery_care", {"min_discharge_w": BATTERY_CARE_MAX_WATTS + 1})
+
+
 def test_the_editors_offer_the_runtime_bounds():
     from pathlib import Path
 
@@ -508,6 +569,7 @@ def test_the_editors_offer_the_runtime_bounds():
     modern = (root / "frontend/dashboard-modern/src/widgets/RuntimeEditor.svelte").read_text(encoding="utf-8")
     classic = (root / "dashboard/static/app.js").read_text(encoding="utf-8")
     assert modern.count(f"min: 0, max: {BATTERY_CARE_MAX_POINTS}, unit") == 3
+    assert f'"min_discharge_w", type: "number", label: t("runtime.batteryCareMinDischarge"), min: 0, max: {BATTERY_CARE_MAX_WATTS}, unit: "W"' in modern
     assert classic.count(f', 0, {BATTERY_CARE_MAX_POINTS}, "%", "1")') == 3
 
 
@@ -562,6 +624,6 @@ def test_a_switched_off_device_beside_a_held_one_does_not_cost_import():
     ):
         for _cycle in range(25):
             ems.run_once()
-    assert meter.written["Held"] <= 32
+    assert meter.written["Held"] <= 50
     assert meter.written["Ok"] >= 750
     assert abs(meter.get_power()) <= 60

@@ -286,27 +286,31 @@ device's own current minSoc, so winter raises count) until the full point:
 
 | `d` | Most the device may deliver |
 |---|---|
-| up to `pv_only_points` (0) | 90 % of its PV, the battery rests |
-| up to the full point | 90 % of its PV plus `max_power` × ((`d` − `pv_only_points`) / (full − `pv_only_points`))² |
+| up to `pv_only_points` (1) | 90 % of its PV, the battery rests |
+| one point past it | 90 % of its PV plus `min_discharge_w` (50 W) |
+| up to the full point | 90 % of its PV plus `min_discharge_w` plus (`max_power` − `min_discharge_w`) × ((`d` − `pv_only_points` − 1) / (full − `pv_only_points` − 1))² |
 | from the full point | unrestricted |
 
-The full point is `winter_full_points` (10) while [winter mode](../winter-mode.md)
+The full point is `winter_full_points` (4) while [winter mode](../winter-mode.md)
 is in effect (switched on and in one of its months), else `summer_full_points`
-(5). For an 800 W device:
+(3). `min_discharge_w` is the foot of the curve, so a long ramp does not leave
+the points close to minSoc at a few watts; `0` leaves the first point its PV
+only, and it is never more than the device's `max_power`. For an 800 W device:
 
-| `d` | 1 | 2 | 3 | 4 | 5 | 7 | 10 |
-|---|---|---|---|---|---|---|---|
-| summer (full at 5) | 32 W | 128 W | 288 W | 512 W | full | full | full |
-| winter (full at 10) | 8 W | 32 W | 72 W | 128 W | 200 W | 392 W | full |
+| `d` | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|
+| summer (full at 3) | PV only | 50 W | full | full |
+| winter (full at 4) | PV only | 50 W | 238 W | full |
 
-Just above the floor the battery gives a trickle, which sags the voltage hardly
-at all and drains the last point in about an hour, so the regulation never
-drives a device back onto the floor in seconds. In winter the battery spends
-long hours in the middle of its range, where the flat LFP voltage curve makes
-the SoC estimate least reliable, hence the longer ramp. PV passes through
-slightly below what the device produces, so a small dip in PV within a cycle
+One point above its minSoc the battery rests: the EMS asks for no battery power
+in the last point before the firmware floor and leaves it to the slow standby
+drain. On the second point it may give 50 W, and from the third full power in
+summer. In winter the battery spends long hours in the middle of its range,
+where the flat LFP voltage curve makes the SoC estimate least reliable, hence
+the longer ramp. PV passes through slightly below what the device produces, so a small dip in PV within a cycle
 still leaves the pack charging; a cloud that takes more than a tenth of it draws
-on the battery until the next cycle lowers the ceiling. The ceiling applies to
+on the battery until the next cycle lowers the ceiling. It is a ceiling, not a
+target: a house that needs 5 W from the battery gets 5 W. It applies to
 discharge only: AC charging, a device in the `ac_input` role and the full-charge
 assist are not held by it.
 
@@ -322,31 +326,32 @@ assist are not held by it.
   no device counts below what it delivers now. A ceiling that rises then does
   not release a wound-up total onto the device.
 - `min_output_limit` does not lift a device above its ceiling between minSoc
-  and the full point: one point above minSoc without PV it gets its trickle,
-  not the 35 W standby floor, and with a little PV that PV even below the
-  floor. Two exceptions keep the full floor: a battery at or below its minSoc,
-  which the firmware floor already holds (night idle parks it there too), and a
-  device this EMS was charging when the cycle began, whose exit a lower value
-  would not write. With `pv_only_points` above 0 a held device without PV gets
-  `outputLimit 0`; an installation where that means stop or sleep sees that
-  state, and the next ceiling above zero wakes it.
+  and the full point: within `pv_only_points` a device without PV gets
+  `outputLimit 0`, not the 35 W standby floor, and with a little PV that PV
+  even below the floor; an installation where `outputLimit 0` means stop or
+  sleep sees that state, and the next ceiling above zero wakes it. Two
+  exceptions keep the full floor: a battery at or below its minSoc, which the
+  firmware floor already holds (night idle parks it there too), and a device
+  this EMS was charging when the cycle began, whose exit a lower value would
+  not write.
 - A battery whose Max-SoC to minSoc window is narrow reaches full power by the
   middle of that window, so the ramp never takes the whole of it, but never
-  before two points past `pv_only_points`, so the first point stays a reduced
-  share.
+  before two points past `pv_only_points`, so the first point keeps its
+  `min_discharge_w`.
 - A device without a battery (`packNum 0`), without a Max-SoC, or reporting SoC 0
   without a confirmed pack is never held.
 - `battery_care.enabled: false`, or a full point of 0 for the season, switches
   it off, which is the behaviour before it. A full point at or below
   `pv_only_points` makes the ramp a step: PV only up to `pv_only_points`,
-  unrestricted above it. All points stay within 0-50. All four keys are runtime
+  unrestricted above it. All points stay within 0-50, `min_discharge_w` within
+  0-5000 W. All five keys are runtime
   settings (see [runtime-state.md](runtime-state.md)); the control explanation
   names a held device with the limiting reason `battery_care`, and the
   dashboard's `battery_care_active` rule (**Battery care** under **Active
   rules** on the Overview) names every device held in the last cycle.
 
 The integer SoC can move by one point and back; the ceiling then moves with it,
-by a few dozen watts at the bottom of the curve.
+with the summer defaults by up to the step from 50 W to full power.
 
 ## Devices Without A Battery
 

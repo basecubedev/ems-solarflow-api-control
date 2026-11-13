@@ -36,6 +36,7 @@
     { name: "summer_full_points", type: "number", label: t("runtime.batteryCareSummer"), min: 0, max: 50, unit: "%" },
     { name: "winter_full_points", type: "number", label: t("runtime.batteryCareWinter"), min: 0, max: 50, unit: "%" },
     { name: "pv_only_points", type: "number", label: t("runtime.batteryCarePvOnly"), min: 0, max: 50, unit: "%" },
+    { name: "min_discharge_w", type: "number", label: t("runtime.batteryCareMinDischarge"), min: 0, max: 5000, unit: "W" },
   ]);
 
   const systemFields = $derived([

@@ -486,7 +486,7 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
     await expect(page.getByTestId("settings-changes")).toHaveCount(0);
   });
 
-  test("battery care is a feature right after winter mode, with its own name, mark and switch", async ({ page, seedAdminScenario }) => {
+  test("battery care is a feature right after winter mode, with its own name, mark, switch and every setting in view", async ({ page, seedAdminScenario }) => {
     await seededAt(page, seedAdminScenario, "#/settings");
     const sections = await page.locator("[data-section]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-section")));
     expect(sections.indexOf("battery_care")).toBe(sections.indexOf("winter") + 1);
@@ -494,6 +494,14 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
     await expect(care.getByRole("checkbox", { name: "Battery care on or off" })).toBeVisible();
     await expect(care.locator(".summary .name")).toHaveText("Battery care");
     await expect(care.locator(".summary .icon-tile use")).toHaveAttribute("href", "#i-battery-low");
+
+    await care.locator(".summary").click();
+    for (const [key, shipped] of [["summer_full_points", "3"], ["winter_full_points", "4"], ["pv_only_points", "1"], ["min_discharge_w", "50"]]) {
+      const input = care.locator(`[data-path="battery_care.${key}"] input`);
+      await expect(input).toBeVisible();
+      await expect(input).toHaveAttribute("placeholder", `${shipped} (default)`);
+    }
+    await expect(care.locator("details.level")).toHaveCount(0);
   });
 
   test("the overview's Control & safety card opens the safety settings", async ({ page, seedAdminScenario }) => {

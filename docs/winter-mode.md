@@ -268,14 +268,14 @@ what the battery holds.
 
 What this does not prevent: a battery that discharges down to its `minSoc`
 at full power draws the same burst; after a follow that is one point of
-discharge away. [Battery care](technical/control-logic.md#battery-care) keeps
-that discharge to a trickle close to the floor.
+discharge away. [Battery care](technical/control-logic.md#battery-care) asks
+for no battery power in that last point.
 
 ## Battery Care in Winter
 
 While winter mode is in effect, [battery care](technical/control-logic.md#battery-care)
-uses its winter full point (`battery_care.winter_full_points`, default 10
-points above minSoc) instead of the summer one (5): a battery that spends long
+uses its winter full point (`battery_care.winter_full_points`, default 4
+points above minSoc) instead of the summer one (3): a battery that spends long
 hours in the middle of its range, where its charge is hardest to estimate,
 discharges more gently close to the minSoc winter mode raised.
 

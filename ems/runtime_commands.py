@@ -13,7 +13,7 @@ import math
 from dataclasses import dataclass
 
 from ems import device_settings
-from ems.config import BATTERY_CARE_MAX_POINTS
+from ems.config import BATTERY_CARE_MAX_POINTS, BATTERY_CARE_MAX_WATTS
 from ems.logging_utils import log_event
 
 
@@ -60,6 +60,7 @@ SECTION_FIELDS = {
         "summer_full_points": ("int", (0, BATTERY_CARE_MAX_POINTS)),
         "winter_full_points": ("int", (0, BATTERY_CARE_MAX_POINTS)),
         "pv_only_points": ("int", (0, BATTERY_CARE_MAX_POINTS)),
+        "min_discharge_w": ("int", (0, BATTERY_CARE_MAX_WATTS)),
     },
 }
 
@@ -113,6 +114,7 @@ SECTION_COMMAND_TABLES = {
         "summer-full": RuntimeCommand("summer_full_points"),
         "winter-full": RuntimeCommand("winter_full_points"),
         "pv-only": RuntimeCommand("pv_only_points"),
+        "min-discharge": RuntimeCommand("min_discharge_w"),
     },
 }
 

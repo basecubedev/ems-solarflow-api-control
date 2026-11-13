@@ -450,7 +450,15 @@ def test_the_completion_reads_the_first_word_of_each_command_from_its_parser():
     assert COMMAND_FIRST_WORDS["system"] == list(emsctl.SYSTEM_ACTIONS)
     assert COMMAND_FIRST_WORDS["backup"] == list(emsctl.BACKUP_ACTIONS)
     assert COMMAND_FIRST_WORDS["ac-charge"] == ["enable", "disable", "status"]
-    assert COMMAND_FIRST_WORDS["battery-care"] == ["enable", "disable", "summer-full", "winter-full", "pv-only", "status"]
+    assert COMMAND_FIRST_WORDS["battery-care"] == [
+        "enable",
+        "disable",
+        "summer-full",
+        "winter-full",
+        "pv-only",
+        "min-discharge",
+        "status",
+    ]
     assert COMMAND_FIRST_WORDS["winter"] == ["enable", "disable", "status"]
     assert COMMAND_FIRST_WORDS["dashboard"] == ["set-password", "change-password", "disable-auth", "auth-status"]
     assert COMMAND_FIRST_WORDS["config"] == ["init", "upgrade", "migrate-zendure-mqtt"]

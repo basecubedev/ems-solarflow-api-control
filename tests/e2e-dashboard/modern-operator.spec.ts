@@ -39,7 +39,7 @@ async function runtimeStore(page, adjust = (runtime) => runtime) {
     if (!stored) stored = adjust(await (await route.fetch()).json());
     await route.fulfill({ json: stored });
   });
-  await page.route(/\/api\/runtime\/(system|winter|ac_charge_control|device\/[^/?]+)$/, async (route) => {
+  await page.route(/\/api\/runtime\/(system|winter|ac_charge_control|battery_care|device\/[^/?]+)$/, async (route) => {
     const request = route.request();
     const target = new URL(request.url()).pathname.replace("/api/runtime/", "");
     const body = request.postDataJSON();
@@ -217,6 +217,19 @@ test.describe("Modern dashboard operator: runtime settings @smoke", () => {
     await expect.poll(() => writes.length).toBe(1);
     expect(writes).toEqual([{ target: "device/WR1", method: "PATCH", body: { ac_charge_power_w: null }, csrf: CSRF }]);
     await expect(power).toHaveValue("");
+  });
+
+  test("battery care's minimum discharge goes out in watts on its own card", async ({ page }) => {
+    const care = { enabled: true, summer_full_points: 3, winter_full_points: 4, pv_only_points: 1, min_discharge_w: 50 };
+    const writes = await runtimeStore(page, (runtime) => ({ ...runtime, battery_care: care }));
+    await openSignedIn(page, "#/control");
+    const card = form(page, "/api/runtime/battery_care");
+    await expect(card.getByLabel("Minimum discharge")).toHaveValue("50");
+    await card.getByLabel("Minimum discharge").fill("80");
+    await save(page, card);
+    await expect.poll(() => writes).toEqual([{ target: "battery_care", method: "PATCH", body: { min_discharge_w: 80 }, csrf: CSRF }]);
+    await expect(card.getByRole("status")).toHaveText("Saved");
+    await expect(card.getByLabel("Minimum discharge")).toHaveValue("80");
   });
 
   test("a value the EMS refuses is said in the field's own words and the edit stays", async ({ page }) => {

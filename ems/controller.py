@@ -1475,6 +1475,7 @@ class EMSController:
         ramp = MinSocRamp(
             care["pv_only_points"],
             care["winter_full_points" if winter else "summer_full_points"],
+            care["min_discharge_w"],
         )
         return [
             min_soc_ramp_cap_w(state, dev, ramp)

@@ -625,15 +625,17 @@ python3 emsctl.py system min-output-limit 30
 python3 emsctl.py battery-care status
 python3 emsctl.py battery-care enable
 python3 emsctl.py battery-care disable
-python3 emsctl.py battery-care summer-full 5
-python3 emsctl.py battery-care winter-full 10
-python3 emsctl.py battery-care pv-only 0
+python3 emsctl.py battery-care summer-full 3
+python3 emsctl.py battery-care winter-full 4
+python3 emsctl.py battery-care pv-only 1
+python3 emsctl.py battery-care min-discharge 50
 ```
 
 The values are SoC points above minSoc for
 [battery care](technical/control-logic.md#battery-care): full power from
 `summer-full` outside winter mode and from `winter-full` in it (`0` switches it
-off for that season), PV only up to `pv-only`.
+off for that season), PV only up to `pv-only`. `min-discharge` is in watts:
+what a battery may discharge one point above PV only.
 
 ## Removed HA Commands
 
