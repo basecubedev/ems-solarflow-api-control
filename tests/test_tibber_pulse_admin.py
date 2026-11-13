@@ -214,16 +214,23 @@ class _Response:
 
 
 class _Session:
-    """Answers per path; records every request and the login it carried."""
+    """Answers per path; records every request and the login it carried.
 
-    def __init__(self, answers, accepted_password="AB12-CD34"):
+    ``anonymous`` answers a request without a login; a bridge locks its node
+    list, so by default that is the refusal of marq24/ha-tibber-pulse-local#111.
+    """
+
+    def __init__(self, answers, accepted_password="AB12-CD34", anonymous=None):
         self.answers = answers
         self.accepted = accepted_password
+        self.anonymous = LOCKED if anonymous is None else anonymous
         self.calls = []
 
     def get(self, url, params=None, timeout=None, headers=None, auth=None, allow_redirects=True, stream=False):
         path = "/" + url.split("/", 3)[3] if url.count("/") >= 3 else "/"
         self.calls.append((path, auth))
+        if auth is None and path in self.anonymous:
+            return self.anonymous[path]
         if auth is not None and auth[1] != self.accepted:
             return _Response(401, REFUSAL)
         answer = self.answers.get(path)
@@ -233,8 +240,18 @@ class _Session:
         pass
 
 
+LOCKED = {
+    "/nodes.json": _Response(401, REFUSAL, {"WWW-Authenticate": 'Basic realm="admin"'}),
+}
+HOMEVOLT_LOCKED = {
+    "/": _Response(200, b"<html><body>Bridge</body></html>", {"Content-Type": "text/html"}),
+    "/nodes.json": _Response(
+        401,
+        b"No permission -- see authorization schemes",
+        {"WWW-Authenticate": 'Basic realm="Access Homevolt default admin:QR-CODE"'},
+    ),
+}
 BRIDGE = {
-    "/": _Response(401, REFUSAL, {"WWW-Authenticate": 'Basic realm="admin"'}),
     "/nodes.json": _Response(200, json.dumps([{"node_id": 2, "eui": "70b3d5aaaa000002"}, {"node_id": 1, "eui": "70b3d5aaaa000001"}]).encode()),
     "/test.json": _Response(200, b'garbage{"esp32_fw_v": "1798-2baebf71"}trailing'),
 }
@@ -249,22 +266,36 @@ def test_the_refusal_text_makes_a_bridge_candidate():
     assert device.missing_config_fields == ["grid_meter.credentials_ref"]
 
 
+def test_a_bridge_with_an_open_start_page_is_found_by_its_homevolt_challenge():
+    """Issue #341: its start page answers 200, its node list a challenge naming Homevolt."""
+
+    session = _Session(BRIDGE, anonymous=HOMEVOLT_LOCKED)
+    device = discovery.probe_tibber_bridge(session, "192.0.2.7", 0.5)
+
+    assert device is not None and device.api_family == TYPE
+    assert session.calls == [("/nodes.json", None)]
+    discovery.unlock_tibber_bridge(session, device, [("basement", "AB12-CD34")])
+    assert (device.credentials_ref, device.node_id) == ("basement", 1)
+
+
 @pytest.mark.parametrize(
-    "answer",
+    "anonymous",
     [
-        _Response(401, b"Unauthorized", {"WWW-Authenticate": 'Basic realm="FRITZ!Box"'}),
-        _Response(200, REFUSAL),
-        _Response(403, REFUSAL),
+        {"/nodes.json": _Response(401, b"Unauthorized", {"WWW-Authenticate": 'Basic realm="FRITZ!Box"'})},
+        {"/nodes.json": _Response(401, b"", {"WWW-Authenticate": 'Digest realm="Homevolt"'})},
+        {"/nodes.json": _Response(200, REFUSAL)},
+        {"/nodes.json": _Response(403, REFUSAL)},
+        {"/": HOMEVOLT_LOCKED["/"]},
     ],
 )
-def test_another_login_page_is_not_a_bridge(answer):
-    assert discovery.probe_tibber_bridge(_Session({"/": answer}), "192.0.2.8", 0.5) is None
+def test_another_login_page_is_not_a_bridge(anonymous):
+    assert discovery.probe_tibber_bridge(_Session({}, anonymous=anonymous), "192.0.2.8", 0.5) is None
 
 
 def test_a_challenge_that_names_tibber_is_a_bridge_too():
     answer = _Response(401, b"", {"WWW-Authenticate": 'Basic realm="Tibber Bridge"'})
 
-    assert discovery.probe_tibber_bridge(_Session({"/": answer}), "192.0.2.7", 0.5) is not None
+    assert discovery.probe_tibber_bridge(_Session({}, anonymous={"/nodes.json": answer}), "192.0.2.7", 0.5) is not None
 
 
 def test_the_saved_passwords_open_the_bridge_and_name_its_first_reading_head():
@@ -351,8 +382,8 @@ def test_a_bridge_no_saved_password_opens_stays_a_candidate():
 
 
 def test_the_scan_sends_no_password_to_a_host_that_is_not_a_bridge():
-    router = {"/": _Response(401, b"Unauthorized", {"WWW-Authenticate": 'Basic realm="Router"'})}
-    session = _Session(router)
+    router = {"/nodes.json": _Response(401, b"Unauthorized", {"WWW-Authenticate": 'Basic realm="Router"'})}
+    session = _Session({}, anonymous=router)
     asked = []
 
     devices, _ = discovery.scan_network(
@@ -364,8 +395,9 @@ def test_the_scan_sends_no_password_to_a_host_that_is_not_a_bridge():
     assert all(auth is None for _, auth in session.calls)
 
 
-def test_the_scan_unlocks_a_found_bridge_with_the_saved_password():
-    session = _Session(BRIDGE)
+@pytest.mark.parametrize("anonymous", [LOCKED, HOMEVOLT_LOCKED])
+def test_the_scan_unlocks_a_found_bridge_with_the_saved_password(anonymous):
+    session = _Session(BRIDGE, anonymous=anonymous)
 
     devices, _ = discovery.scan_network(
         "127.0.0.1/32", session=session, bridge_passwords=lambda: [("basement", "AB12-CD34")]
