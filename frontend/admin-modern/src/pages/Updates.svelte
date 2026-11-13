@@ -10,7 +10,7 @@
   import { t, tn, fmt } from "../i18n/i18n.svelte.js";
   import { system, ensure, reload, keepWithOverview } from "../state/system.svelte.js";
   import { upgrade, chooseRelease, resumeUpgrade, noteStatus } from "../state/upgrade.svelte.js";
-  import { CHANNEL_FILTERS, CHANNEL_FILTER_KEY, CHANNEL_TONES, channelChoices, groupedReleases, noteView, pairView, releaseList, releasesInChannel, shownChannel } from "../lib/updates.js";
+  import { CHANNEL_FILTERS, CHANNEL_FILTER_KEY, CHANNEL_TONES, channelChoices, groupedReleases, noteView, pairView, recommendationNote, releaseList, releasesInChannel, shownChannel } from "../lib/updates.js";
   import { readStored, writeStored } from "../state/prefs.svelte.js";
   import { STAGE_TONES, activeUpgrade, lastRun } from "../lib/upgrade.js";
   import { activeWorkflow } from "../lib/workflow.js";
@@ -42,7 +42,7 @@
   const pairState = $derived(pairView(pair));
   const releases = $derived(releaseList(system.releases.data));
   const recommended = $derived(releases.find((release) => release.recommended) || null);
-  const runsStable = $derived(releases.some((release) => release.running && release.channel === "stable"));
+  const note = $derived(recommendationNote(system.releases.data, releases));
   const running = $derived(activeUpgrade(system.alignment.data?.transition) || activeWorkflow(system.lifecycle.data)?.owner === "guided_upgrade");
   const held = $derived(upgrade.busy || upgrade.holding || running);
 
@@ -124,8 +124,10 @@
     <div class="row-wrap actions">
       {#if recommended?.selectable && !recommended.running}
         <button class="btn" type="button" onclick={() => choose(recommended)} disabled={held} data-testid="start-upgrade"><Icon name="circle-arrow-up" size="sm" />{t("upgrade.start", { tag: recommended.tag })}</button>
-      {:else if !recommended && runsStable}
+      {:else if note === "stable"}
         <p class="note" data-testid="no-recommendation"><Icon name="circle-check" />{t("updates.noRecommendation")}</p>
+      {:else if note === "rolling"}
+        <p class="note" data-testid="rolling-no-recommendation"><Icon name="info" />{t("updates.rollingNoRecommendation")}</p>
       {:else}
         <p class="muted small">{t("updates.chooseBelow")}</p>
       {/if}

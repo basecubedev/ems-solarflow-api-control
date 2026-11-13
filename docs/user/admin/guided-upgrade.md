@@ -54,11 +54,14 @@ lead here too.
   versions it lists; the browser remembers the choice.
 
 **Which version is recommended:** the newest stable release that is neither the
-one you run nor behind it. On a stable release with nothing newer to install,
-nothing is recommended and the page says so; on a release candidate or a
-development build it asks you to choose. The rolling `latest` is recommended
-only when `latest` itself runs, when the running release cannot be told, or
-when nothing is installed.
+one you run nor behind it, and only a stable release. On a stable release with
+nothing newer to install, nothing is recommended and the page says so. On the
+rolling `latest` the page says that only stable releases are suggested: the
+next stable release newer than your build is (a build that names no release is
+offered the newest stable release), and a newer `latest` you choose in the list
+yourself. On a release candidate or a development build it asks
+you to choose. Only a fresh setup without any stable release starts from
+`latest`.
 
 **What it changes:** nothing. Reading the page never downloads anything.
 

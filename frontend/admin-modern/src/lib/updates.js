@@ -144,6 +144,17 @@ export function upgradePage(release) {
   return `maintenance-upgrade-${encodeURIComponent(String(release.tag))}`;
 }
 
+/**
+ * Why nothing is proposed, when nothing is: "rolling" on the rolling build,
+ * which is never proposed and only chosen by hand; "stable" on a stable
+ * release with nothing newer; null when a release is proposed or neither holds.
+ */
+export function recommendationNote(catalogue, releases) {
+  if (releases.some((release) => release.recommended)) return null;
+  if (catalogue?.running_rolling === true) return "rolling";
+  return releases.some((release) => release.running && release.channel === "stable") ? "stable" : null;
+}
+
 /** The releases worth showing first: the recommended one and anything newer than what runs. */
 export function releaseList(catalogue) {
   const releases = Array.isArray(catalogue?.releases) ? catalogue.releases : [];
