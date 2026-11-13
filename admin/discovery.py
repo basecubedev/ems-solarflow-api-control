@@ -521,15 +521,19 @@ def probe_homewizard_p1(session, ip, timeout_s, port=HOMEWIZARD_P1_DEFAULT_PORT,
     )
 
 
-# The refusal text a Tibber Pulse bridge sends without a login (one capture,
-# marq24/ha-tibber-pulse-local#111). Only this, or a challenge naming Tibber,
-# makes a candidate: a saved bridge password is sent to nothing else.
+# How a Tibber Pulse bridge refuses an anonymous request for its node list:
+# with this text (one capture, marq24/ha-tibber-pulse-local#111), or with a
+# Basic challenge naming Tibber or Homevolt (one capture, issue #341: realm
+# "Access Homevolt default admin:QR-CODE", while its start page answers 200).
+# Only these make a candidate: a saved bridge password is sent to nothing else.
 TIBBER_BRIDGE_REFUSAL = "username/password authentication failed"
+TIBBER_BRIDGE_CHALLENGE_NAMES = ("tibber", "homevolt")
+TIBBER_BRIDGE_PROBE_PATH = "/nodes.json"
 TIBBER_BRIDGE_READ_TIMEOUT_S = 2.5
 
 
 def _is_tibber_bridge_refusal(response):
-    """A 401 carrying the bridge's refusal text or a challenge naming Tibber.
+    """A 401 carrying the bridge's refusal text or a challenge naming Tibber or Homevolt.
 
     Only the first 2 KiB of a 401 are read; any other answer is not read at all.
     """
@@ -538,16 +542,17 @@ def _is_tibber_bridge_refusal(response):
     challenge = str(response.headers.get("WWW-Authenticate") or "").lower()
     head = next(response.iter_content(2048), b"")
     body = head.decode("utf-8", "replace").lower() if isinstance(head, bytes) else str(head).lower()
-    return TIBBER_BRIDGE_REFUSAL in body or (challenge.startswith("basic") and "tibber" in challenge)
+    named = challenge.startswith("basic") and any(name in challenge for name in TIBBER_BRIDGE_CHALLENGE_NAMES)
+    return TIBBER_BRIDGE_REFUSAL in body or named
 
 
 def probe_tibber_bridge(session, ip, timeout_s):
-    """A Tibber Pulse bridge whose web server answers an anonymous request."""
+    """A Tibber Pulse bridge that refuses an anonymous request for its node list."""
 
     # A dead host fails at the connect timeout; a bridge that accepted the
     # connection often needs more than a second to answer.
     response = session.get(
-        f"http://{ip}/",
+        f"http://{ip}{TIBBER_BRIDGE_PROBE_PATH}",
         timeout=(timeout_s, max(timeout_s, TIBBER_BRIDGE_READ_TIMEOUT_S)),
         allow_redirects=False,
         stream=True,

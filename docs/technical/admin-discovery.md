@@ -309,11 +309,13 @@ placeholder for a later phase.
     can take longer than the scan's timeout. The meter still has to be paired
     (its button pressed) in the hardware step: the setup preview stays not
     ready until it is, see [HomeWizard pairing](#homewizard-p1-meter-pairing).
-  - Tibber Pulse bridge (experimental) — `GET /` without a login → role
-    `grid_meter`, family `tibber_pulse_bridge`. Only a `401` whose body carries
-    the bridge's refusal text (`Username/Password Authentication Failed.`) or
-    whose Basic challenge names Tibber makes a candidate; any other login page
-    is no candidate. Only the first 2 KiB of a 401 are read, and nothing of any
+  - Tibber Pulse bridge (experimental) — `GET /nodes.json` without a login →
+    role `grid_meter`, family `tibber_pulse_bridge`. Only a `401` whose body
+    carries the bridge's refusal text (`Username/Password Authentication
+    Failed.`) or whose Basic challenge names Tibber or Homevolt makes a
+    candidate; any other login page is no candidate. The start page is no
+    sign: a bridge with recent firmware serves it without a login and refuses
+    only its node list, with the realm `Access Homevolt default admin:QR-CODE`. Only the first 2 KiB of a 401 are read, and nothing of any
     other answer. The connect timeout is the scan's; the read timeout is at
     least 2.5 s, because a bridge often needs more than a second to answer.
     On a candidate, and only there, the scan worker that found it tries the
@@ -330,9 +332,10 @@ placeholder for a later phase.
     password: one whose `/nodes.json` is no JSON keeps it and still needs its
     node (`grid_meter.node_id`). A server error (5xx) ends the attempt without
     a password, since the bridge answers a wrong login with 401 and hangs under
-    load; any other answer, a 404 among them, tries the next password. The refusal text comes from one published
-    capture; a bridge whose firmware answers differently is not found and is
-    added by hand.
+    load; any other answer, a 404 among them, tries the next password. The refusal text and the Homevolt
+    challenge come from one capture each (marq24/ha-tibber-pulse-local#111,
+    issue #341); a bridge whose firmware answers differently is not found and
+    is added by hand.
 - Reads the E3/DC magic word over Modbus TCP (port 502, unit ID 1, register
   40001) and offers a host that answers `0xE3DC` as an E3/DC storage system →
   role `grid_meter`, family `e3dc_modbus`, with its model, serial and firmware
