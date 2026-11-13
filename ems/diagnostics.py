@@ -54,6 +54,7 @@ from ems.paths import (
 from ems.build_info import collect_build_info
 from ems.control_status import CONTROL_STATUS_SCHEMA_VERSION
 from ems.models import BATTERY_ABSENT
+from ems.retired_defaults import CONFIG_REVISION_KEY
 from ems.zendure_mqtt import config_entries as zendure_mqtt_entries
 from ems.zendure_mqtt.builtin_broker import (
     broker_enabled,
@@ -485,7 +486,7 @@ def diagnose_missing_template_keys(config_data, template_data):
         if isinstance(template, dict):
             current_dict = current if isinstance(current, dict) else {}
             for key, value in template.items():
-                if str(key).startswith("_comment"):
+                if str(key).startswith("_comment") or (not prefix and key == CONFIG_REVISION_KEY):
                     continue
                 path = f"{prefix}.{key}" if prefix else str(key)
                 if key not in current_dict:

@@ -171,7 +171,9 @@
   }
 
   const items = $derived(Array.isArray(upgrade?.items) ? upgrade.items : []);
-  const valueCount = $derived(Number(upgrade?.add_count || 0) + Number(upgrade?.migration_count || 0));
+  const valueCount = $derived(
+    Number(upgrade?.add_count || 0) + Number(upgrade?.migration_count || 0) + Number(upgrade?.refresh_default_count || 0),
+  );
   const commentsOnly = $derived(
     Boolean(upgrade?.apply_available) && !valueCount && !upgrade?.format_changed
       && Number(upgrade?.comment_add_count || 0) + Number(upgrade?.comment_refresh_count || 0) > 0,
@@ -312,13 +314,13 @@
       <Status tone="c-ok" icon="circle-check" text={t("maint.upToDate")} />
     {:else}
       <p>{valueCount ? t("maint.valueChanges", { n: valueCount }) : t("maint.valuesCurrent")}</p>
-      {#each [["add", "maint.added"], ["migrate", "maint.migrated"], ["comment_add", "maint.comments"], ["comment_refresh", "maint.commentRefresh"]] as [kind, label] (kind)}
+      {#each [["add", "maint.added"], ["migrate", "maint.migrated"], ["refresh_default", "maint.refreshedDefaults"], ["comment_add", "maint.comments"], ["comment_refresh", "maint.commentRefresh"]] as [kind, label] (kind)}
         {@const rows = items.filter((item) => item.kind === kind)}
         {#if rows.length}
           <h3 class="sub">{t(label)}</h3>
           <ul class="files">
             {#each rows as item, index (index)}
-              <li><code>{item.path}</code>{#if kind === "add"}<span class="muted">{" "}= {JSON.stringify(item.value)}</span>{:else if kind === "migrate"}<span class="muted">: {JSON.stringify(item.old_value)} → {JSON.stringify(item.value)}</span>{/if}</li>
+              <li><code>{item.path}</code>{#if kind === "add"}<span class="muted">{" "}= {JSON.stringify(item.value)}</span>{:else if kind === "migrate" || kind === "refresh_default"}<span class="muted">: {JSON.stringify(item.old_value)} → {JSON.stringify(item.value)}</span>{/if}</li>
             {/each}
           </ul>
           {#if kind === "comment_refresh" && Number(upgrade.comment_refresh_count) > 0}

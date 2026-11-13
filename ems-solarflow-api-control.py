@@ -365,6 +365,7 @@ def main():
         cfg.runtime_state_path(),
         build_runtime_defaults(devices),
         cfg.config_path(),
+        cfg.runtime_defaults_revision(),
     )
     runtime_validation = build_validation_context(cfg.CONFIG, runtime_state)
     schedule_zone = local_zone()

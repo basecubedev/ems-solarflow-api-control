@@ -22,6 +22,12 @@ from ems.file_io import (
 )
 from ems.paths import install_root_for_config, resolve_schedules_path
 from ems.logging_utils import log_event
+from ems.retired_defaults import (
+    DEFAULTS_REVISION,
+    RUNTIME_REVISION_KEY,
+    refresh_retired_defaults,
+    stored_revision,
+)
 
 
 def _clean_identity(value):
@@ -318,7 +324,7 @@ def _config_file_digest(path):
         return None
 
 
-def start_runtime_state(path, defaults, config_path):
+def start_runtime_state(path, defaults, config_path, defaults_revision=None):
     """The runtime state a starting EMS works with.
 
     A fresh setup's request is settled first. While the config at
@@ -337,7 +343,7 @@ def start_runtime_state(path, defaults, config_path):
         removed = remove_stale_temp_files(stale_path)
         if removed:
             log_event(logging.INFO, "stale_temp_files_removed", path=stale_path, files=",".join(removed))
-    state = RuntimeState(path, defaults)
+    state = RuntimeState(path, defaults, defaults_revision)
     with state._file_lock(strict=False):
         _settle_runtime_reset(path, config_path)
         state.load_or_create()
@@ -381,12 +387,20 @@ def _settle_runtime_reset(path, config_path):
 
 
 class RuntimeState:
-    """Persist mutable operator state outside static config."""
+    """Persist mutable operator state outside static config.
 
-    def __init__(self, path, defaults):
+    ``defaults_revision`` is the defaults revision the config records, and a
+    new file records it. A live EMS start also lets loading move values still
+    at a default that revision retired to ``defaults``, once
+    (``refresh_defaults``); emsctl only records it in a file it creates.
+    """
+
+    def __init__(self, path, defaults, defaults_revision=None, *, refresh_defaults=True):
         self.path = path
         self.defaults = defaults
-        self.data = merge_runtime_defaults({}, defaults)
+        self.defaults_revision = defaults_revision
+        self.refresh_defaults = refresh_defaults
+        self.data = self._fresh_data()
         self.last_signature = None
         self.lock = threading.RLock()
         self._held = threading.local()
@@ -432,7 +446,7 @@ class RuntimeState:
     def load_or_create(self):
         with self._file_lock(strict=False):
             if not os.path.exists(self.path):
-                self.data = merge_runtime_defaults({}, self.defaults)
+                self.data = self._fresh_data()
                 log_event(
                     logging.INFO,
                     "runtime_state_created",
@@ -497,8 +511,9 @@ class RuntimeState:
         )
         merged["devices"] = reconciled_devices
 
+        merged, refreshed = self._refresh_retired_defaults(merged)
         destructive = bool(changes["renamed"] or changes["pruned"])
-        changed = destructive or bool(changes["added"] or changes["rekeyed"])
+        changed = destructive or refreshed or bool(changes["added"] or changes["rekeyed"])
 
         if destructive:
             self._backup_runtime_state()
@@ -542,6 +557,42 @@ class RuntimeState:
             self.save_atomic()
 
         return self.data
+
+    def _fresh_data(self):
+        data = merge_runtime_defaults({}, self.defaults)
+        if self.defaults_revision is not None:
+            data[RUNTIME_REVISION_KEY] = min(self.defaults_revision, DEFAULTS_REVISION)
+        return data
+
+    def _refresh_retired_defaults(self, merged):
+        """``merged`` with its untouched old defaults moved to this config's.
+
+        Only up to the config's revision, and no further than this release
+        knows: a config that has not been refreshed still holds the old default
+        itself, so the file keeps it too, and is refreshed once the config is.
+        Returns the state and whether it changed.
+        """
+
+        if self.defaults_revision is None or not self.refresh_defaults:
+            return merged, False
+        target = min(self.defaults_revision, DEFAULTS_REVISION)
+        stored = stored_revision(merged, RUNTIME_REVISION_KEY)
+        if stored >= target:
+            return merged, False
+        refreshed, changes = refresh_retired_defaults(merged, self.defaults, stored, target)
+        refreshed[RUNTIME_REVISION_KEY] = target
+        if changes:
+            self._backup_runtime_state()
+        for change in changes:
+            log_event(
+                logging.INFO,
+                "runtime_default_refreshed",
+                path=self.path,
+                key=change["path"],
+                old_default=json.dumps(change["from"]),
+                default=json.dumps(change["to"]),
+            )
+        return refreshed, True
 
     def _backup_runtime_state(self):
         """Best-effort one-step backup of the current file before pruning."""

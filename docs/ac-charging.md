@@ -134,7 +134,11 @@ each device charges up to its own ceiling. A charge is drawn through the fuse
 that protects the circuit, unlike feed-in, which adds to the current on it. Set
 a limit where several devices on one circuit should not charge at their full
 power together. Until 2026-11-13 a 0 here meant no charging from surplus at
-all; to keep it off, switch `ac_charge_control.enabled` off instead.
+all; to keep it off, switch `ac_charge_control.enabled` off instead. A config
+that still holds the former default 1200 is cleared to null, which means no
+limit too, at its next start (see
+[Old Defaults](technical/configuration.md#old-defaults)); enter the limit again
+afterwards to keep one.
 
 ## Behavior
 

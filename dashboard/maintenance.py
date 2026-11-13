@@ -949,6 +949,15 @@ def _upgrade_items(plan):
                 ),
             }
         )
+    for change in plan.get("refresh_defaults", []) or []:
+        items.append(
+            {
+                "kind": "refresh_default",
+                "path": change.get("path"),
+                "old_value": _redact_upgrade_value(change.get("path"), change.get("from")),
+                "value": _redact_upgrade_value(change.get("path"), change.get("to")),
+            }
+        )
     for entry in plan.get("comment_add", []) or []:
         items.append(
             {
@@ -1012,6 +1021,7 @@ def config_upgrade_plan(config, base_dir, config_path):
         "comment_add_count": len(plan.get("comment_add", []) or []),
         "comment_refresh_count": len(plan.get("comment_refresh", []) or []),
         "migration_count": len(plan.get("migrate", []) or []),
+        "refresh_default_count": len(plan.get("refresh_defaults", []) or []),
         "template": os.path.basename(template_path) if template_path else None,
         "items": _upgrade_items(plan),
         "plan_id": plan_id,
@@ -1105,6 +1115,7 @@ def apply_config_upgrade(
     applied = {
         "keys_added": len(plan.get("add", []) or []),
         "values_migrated": len(plan.get("migrate", []) or []),
+        "defaults_refreshed": len(plan.get("refresh_defaults", []) or []),
         "comments_added": len(plan.get("comment_add", []) or []),
         "comments_refreshed": len(refreshed_items),
         "format_changed": bool(format_changed),
@@ -1119,6 +1130,7 @@ def apply_config_upgrade(
         "applied_count": (
             applied["keys_added"]
             + applied["values_migrated"]
+            + applied["defaults_refreshed"]
             + applied["comments_added"]
             + applied["comments_refreshed"]
             + int(applied["format_changed"])

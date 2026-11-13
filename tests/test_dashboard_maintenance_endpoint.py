@@ -938,6 +938,37 @@ def test_config_upgrade_apply_creates_backup_first(tmp_path, monkeypatch):
         server.server_close()
 
 
+def test_config_upgrade_apply_moves_old_defaults_and_records_the_revision(tmp_path, monkeypatch):
+    server, base_url = maint_server(tmp_path, monkeypatch, minimal=True)
+    try:
+        config = json.loads((tmp_path / "config.json").read_text())
+        config.setdefault("system", {})["loop_interval"] = 3
+        config.setdefault("ac_charge_control", {})["max_total_charge_power_w"] = 1200
+        (tmp_path / "config.json").write_text(json.dumps(config))
+        cookie, csrf = login(base_url)
+        _, _, plan = json_response(
+            f"{base_url}/api/maintenance/config-upgrade",
+            headers={"Cookie": cookie},
+        )
+        assert plan["refresh_default_count"] == 2
+        status, _, payload = json_response(
+            f"{base_url}/api/maintenance/config-upgrade/apply",
+            method="POST",
+            payload={"refresh_comments": True, "confirm_apply": True, "plan_id": plan["plan_id"]},
+            headers={"Cookie": cookie, "X-CSRF-Token": csrf},
+        )
+        assert status == 200
+        assert payload["applied"]["defaults_refreshed"] == 2
+        assert payload["applied_count"] >= 2 + payload["applied"]["keys_added"]
+        written = json.loads((tmp_path / "config.json").read_text())
+        assert written["config_defaults_revision"] == 1
+        assert written["system"]["loop_interval"] == 5
+        assert written["ac_charge_control"]["max_total_charge_power_w"] is None
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_config_upgrade_comment_only_preview_and_refresh_modes(tmp_path, monkeypatch):
     server, base_url = maint_server(tmp_path, monkeypatch)
     try:

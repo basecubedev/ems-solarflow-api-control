@@ -26,6 +26,7 @@ from ems import config as cfg
 from ems.clients import parse_device
 from ems.config import AC_CHARGE_CONTROL_DEFAULTS
 from ems.controller import EMSController
+from ems.retired_defaults import CONFIG_REVISION_KEY, DEFAULTS_REVISION
 from tests.test_ac_charge_regulator import FollowingHardware, following_http_device
 from tests.test_off_means_off import Runtime
 from tests.test_write_gates import ShellyStub
@@ -182,6 +183,7 @@ def test_a_config_that_still_carries_the_key_loads_and_starts_unchanged(
         if with_key:
             config["winter"][RETIRED] = value
         config["config_upgrade"] = {"on_startup": "check"}
+        config[CONFIG_REVISION_KEY] = DEFAULTS_REVISION
         (tmp_path / "config").mkdir(exist_ok=True)
         shutil.copy("config/config.template.json", tmp_path / "config" / "config.template.json")
         path = tmp_path / ("with.json" if with_key else "without.json")

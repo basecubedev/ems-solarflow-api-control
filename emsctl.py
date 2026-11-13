@@ -1645,7 +1645,12 @@ def open_runtime_state(path, config):
         if not isinstance(existing, dict):
             raise ValueError(f"runtime state {path} must contain a JSON object")
 
-    runtime_state = RuntimeState(path, runtime_defaults(config, existing))
+    runtime_state = RuntimeState(
+        path,
+        runtime_defaults(config, existing),
+        config_mod.recorded_defaults_revision(config),
+        refresh_defaults=False,
+    )
     if existing is None:
         return runtime_state, True
     runtime_state.adopt(existing, signature)
@@ -3959,6 +3964,12 @@ def print_config_upgrade_plan(plan):
                     print(f"    {change['path']} = {_json_value(change['value'])}")
         print()
 
+    if plan.get("refresh_defaults"):
+        print("Refresh defaults (still at a default a later release replaced):")
+        for line in config_mod.describe_refreshed_defaults(plan["refresh_defaults"]):
+            print(f"  {line}")
+        print()
+
     if plan["add"]:
         print("Add:")
         for item in plan["add"]:
@@ -3976,8 +3987,16 @@ def print_config_upgrade_plan(plan):
         print("Reformat according to config.template.json layout.")
         print()
 
-    if plan.get("schema_migrations"):
-        print("Only values listed under Schema migrations will be overwritten.")
+    overwritten = [
+        heading
+        for heading, listed in (
+            ("Schema migrations", plan.get("schema_migrations")),
+            ("Refresh defaults", plan.get("refresh_defaults")),
+        )
+        if listed
+    ]
+    if overwritten:
+        print(f"Only values listed under {' or '.join(overwritten)} will be overwritten.")
     else:
         print("No existing user values will be overwritten.")
     print("Missing keys will be added from config.template.json.")
@@ -4341,10 +4360,10 @@ def handle_config_command(args, config):
         plan = config_mod.build_config_upgrade_plan(config, BASE_DIR)
     except config_mod.ConfigUpgradeError as exc:
         return fail(str(exc), code=2)
-    rendered_config = config_mod.render_config_json(
-        plan["upgraded_config"],
-        plan.get("template_layout"),
-    )
+    compared = plan["upgraded_config"]
+    if config_mod.CONFIG_REVISION_KEY not in config:
+        compared = config_mod.without_defaults_revision(compared)
+    rendered_config = config_mod.render_config_json(compared, plan.get("template_layout"))
     try:
         current_config_text = open(args.config).read()
     except OSError:

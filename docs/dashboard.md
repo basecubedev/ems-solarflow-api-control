@@ -318,7 +318,8 @@ What it can do:
   mid-write; bundled InfluxDB restore is replace-style and external InfluxDB is
   rejected.
 - **Preview and apply a config upgrade**. **Check config** shows the concrete
-  added keys, migrated values, new explanatory comments, refreshable comments,
+  added keys, migrated values, old defaults moved to today's, new explanatory
+  comments, refreshable comments,
   and format/layout changes. Sensitive values are redacted. **Apply with
   backup** requires explicit confirmation, always creates a config backup first,
   and reminds the operator to restart the EMS.
