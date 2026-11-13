@@ -234,12 +234,14 @@
       "Gentle discharge close to minSoc, enabled by default.",
       "From pv_only_points above minSoc a battery discharges a share that grows",
       "with the square of the distance; full power from summer_full_points",
-      "(outside winter mode) or winter_full_points (in winter mode). 0 = off."
+      "(outside winter mode) or winter_full_points (in winter mode). 0 = off.",
+      "One point above pv_only_points a battery may discharge min_discharge_w."
     ],
     "enabled": true,
-    "summer_full_points": 5,
-    "winter_full_points": 10,
-    "pv_only_points": 0
+    "summer_full_points": 3,
+    "winter_full_points": 4,
+    "pv_only_points": 1,
+    "min_discharge_w": 50
   },
 
   "battery_full_charge_assist": {

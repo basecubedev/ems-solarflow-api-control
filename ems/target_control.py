@@ -339,23 +339,26 @@ class MinSocRamp:
     """How far above its minSoc a battery discharges at full power (battery care).
 
     Up to ``pv_only_points`` above minSoc a device passes its PV through and
-    its battery rests; from there the battery share grows with the square of
-    the distance until ``full_points``, so the points just above the floor,
-    where a high current makes the cell voltage sag the most, give only a
-    trickle. ``full_points`` 0 switches the ramp off.
+    its battery rests. One point past them the battery may give
+    ``min_discharge_w``, and from there the share of the rest of its power
+    grows with the square of the distance until ``full_points``, so the points
+    just above the floor, where a high current makes the cell voltage sag the
+    most, give only a reduced share. ``full_points`` 0 switches the ramp off.
     """
 
     pv_only_points: int
     full_points: int
+    min_discharge_w: int = 0
 
 
 def min_soc_ramp_share(points_above_min, ramp, window=None):
-    """The share of its battery power a device may discharge, 0.0 to 1.0.
+    """How far a battery is along its discharge curve, 0.0 to 1.0.
 
-    A battery whose minSoc to Max-SoC window is narrow reaches full power by
-    the middle of that window, so the ramp never takes the whole of it, but
-    never before two points past the PV-only point: the first point keeps a
-    share below full.
+    0.0 up to one point past ``pv_only_points``, where the battery may give
+    ``min_discharge_w``; 1.0 from the full point. A battery whose minSoc to
+    Max-SoC window is narrow reaches full power by the middle of that window,
+    so the ramp never takes the whole of it, but never before two points past
+    the PV-only point: the first point keeps its minimum discharge.
     """
 
     full = ramp.full_points
@@ -367,7 +370,10 @@ def min_soc_ramp_share(points_above_min, ramp, window=None):
         return 0.0
     if points_above_min >= full:
         return 1.0
-    return ((points_above_min - ramp.pv_only_points) / (full - ramp.pv_only_points)) ** 2
+    first = ramp.pv_only_points + 1
+    if points_above_min <= first:
+        return 0.0
+    return ((points_above_min - first) / (full - first)) ** 2
 
 
 def min_soc_ramp_cap_w(state, device_config, ramp):
@@ -378,7 +384,8 @@ def min_soc_ramp_cap_w(state, device_config, ramp):
     voltage sag, the SoC estimate drops a point after a few watt-hours, the
     device re-enters the floor, and the 800 Pro 2 draws about 1.2 kW from the
     grid. PV passes through slightly below what the device produces, so a
-    passing cloud charges the pack a little instead of draining it.
+    passing cloud charges the pack a little instead of draining it. It is a
+    ceiling: a house that needs less from the battery gets less.
     """
 
     if ramp is None or ramp.full_points <= 0:
@@ -388,13 +395,13 @@ def min_soc_ramp_cap_w(state, device_config, ramp):
         return None
     if presence != BATTERY_PRESENT and state.soc <= 0:
         return None
-    share = min_soc_ramp_share(
-        state.soc - state.min_soc, ramp, state.max_soc - state.min_soc
-    )
+    points = state.soc - state.min_soc
+    share = min_soc_ramp_share(points, ramp, state.max_soc - state.min_soc)
     if share >= 1.0:
         return None
     max_power = get_device_max_power(device_config)
-    cap = round(MIN_SOC_RAMP_PV_SHARE * pv_power(state) + share * max_power)
+    floor = min(ramp.min_discharge_w, max_power) if points > ramp.pv_only_points else 0
+    cap = round(MIN_SOC_RAMP_PV_SHARE * pv_power(state) + floor + share * (max_power - floor))
     return cap if cap < max_power else None
 
 

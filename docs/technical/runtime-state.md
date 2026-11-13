@@ -52,9 +52,10 @@ Example:
   },
   "battery_care": {
     "enabled": true,
-    "summer_full_points": 5,
-    "winter_full_points": 10,
-    "pv_only_points": 0
+    "summer_full_points": 3,
+    "winter_full_points": 4,
+    "pv_only_points": 1,
+    "min_discharge_w": 50
   },
   "devices": {
     "WR1": {
@@ -87,7 +88,7 @@ Example:
 `min_output_limit=35` is the current template default and is useful on
 installations where `outputLimit=0` behaves like a stop, idle, or sleep state. A battery
 that [battery care](control-logic.md#battery-care) holds between minSoc and its
-full point gets less, its trickle without PV.
+full point gets its ceiling instead where that is lower.
 The guard is applied before deadband handling and only while EMS control is
 enabled.
 
@@ -292,7 +293,8 @@ Dashboard runtime-write whitelist:
   `system.min_output_limit`
 - `winter.enabled`, `ac_charge_control.enabled`
 - `battery_care.enabled`, `battery_care.summer_full_points`,
-  `battery_care.winter_full_points`, `battery_care.pv_only_points`
+  `battery_care.winter_full_points`, `battery_care.pv_only_points`,
+  `battery_care.min_discharge_w`
 - per device: `enabled`, `max_power`, `pv_priority_factor`,
   `offgrid_socket_mode`, `ac_charge_enabled`, for a device runtime-state holds
   an entry for. EMS seeds one for each device it builds to control when it

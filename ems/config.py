@@ -25,11 +25,13 @@ LATEST_CONFIG_SCHEMA_VERSION = 3
 CURRENT_CONFIG_SCHEMA_VERSION = LATEST_CONFIG_SCHEMA_VERSION
 
 BATTERY_CARE_MAX_POINTS = 50
+BATTERY_CARE_MAX_WATTS = 5000
 BATTERY_CARE_DEFAULTS = {
     "enabled": True,
-    "summer_full_points": 5,
-    "winter_full_points": 10,
-    "pv_only_points": 0,
+    "summer_full_points": 3,
+    "winter_full_points": 4,
+    "pv_only_points": 1,
+    "min_discharge_w": 50,
 }
 BATTERY_CARE_POINT_KEYS = ("summer_full_points", "winter_full_points", "pv_only_points")
 
@@ -3774,8 +3776,15 @@ def battery_care_points(value, default):
     return min(BATTERY_CARE_MAX_POINTS, safe_int(value, default, minimum=0))
 
 
+def battery_care_watts(value, default):
+    """A battery care power in watts, within what the runtime accepts."""
+
+    return min(BATTERY_CARE_MAX_WATTS, safe_int(value, default, minimum=0))
+
+
 def normalize_battery_care_config(config):
-    """The ``battery_care`` block with its defaults, every distance within 0-50 points."""
+    """The ``battery_care`` block with its defaults, every distance within 0-50
+    points and the minimum discharge within 0-5000 W."""
 
     config = config if isinstance(config, dict) else {}
     normalized = {
@@ -3783,6 +3792,9 @@ def normalize_battery_care_config(config):
     }
     for key in BATTERY_CARE_POINT_KEYS:
         normalized[key] = battery_care_points(config.get(key), BATTERY_CARE_DEFAULTS[key])
+    normalized["min_discharge_w"] = battery_care_watts(
+        config.get("min_discharge_w"), BATTERY_CARE_DEFAULTS["min_discharge_w"]
+    )
     return normalized
 
 

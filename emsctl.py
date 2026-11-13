@@ -470,13 +470,14 @@ Examples:
         epilog="""\
 Actions:
   enable, disable, status
-  summer-full N   Points above minSoc for full power outside winter mode (0 = off)
-  winter-full N   Points above minSoc for full power while winter mode is in effect (0 = off)
-  pv-only N       Points above minSoc up to which a battery only passes its PV through
+  summer-full N    Points above minSoc for full power outside winter mode (0 = off)
+  winter-full N    Points above minSoc for full power while winter mode is in effect (0 = off)
+  pv-only N        Points above minSoc up to which a battery only passes its PV through
+  min-discharge W  Watts a battery may discharge one point above PV only
 
 Examples:
   python3 emsctl.py battery-care status
-  python3 emsctl.py battery-care winter-full 10
+  python3 emsctl.py battery-care winter-full 4
   python3 emsctl.py battery-care disable
 """,
         formatter_class=EMSHelpFormatter,
@@ -484,9 +485,9 @@ Examples:
     battery_care.add_argument(
         "action",
         choices=list(runtime_commands.SECTION_COMMAND_TABLES["battery_care"]) + ["status"],
-        help="One of: enable, disable, summer-full, winter-full, pv-only, status.",
+        help="One of: enable, disable, summer-full, winter-full, pv-only, min-discharge, status.",
     )
-    battery_care.add_argument("value", nargs="?", help="Required for summer-full, winter-full and pv-only.")
+    battery_care.add_argument("value", nargs="?", help="Required for summer-full, winter-full, pv-only and min-discharge.")
 
     dashboard = subparsers.add_parser(
         "dashboard",
