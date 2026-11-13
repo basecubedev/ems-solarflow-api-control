@@ -1,7 +1,15 @@
 {
-  "generated_at": "2026-11-13T21:15:19Z",
+  "generated_at": "2026-11-13T21:40:53Z",
   "main_resources_present": true,
   "releases": [
+    {
+      "channel": "stable",
+      "name": "v0.10.1",
+      "prerelease": false,
+      "published_at": "2026-11-13T21:40:17Z",
+      "resources_present": true,
+      "tag": "v0.10.1"
+    },
     {
       "channel": "stable",
       "name": "v0.10.0",
