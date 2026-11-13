@@ -22,7 +22,7 @@ note that a config upgrade turns it on for an installation that predates it.
     "entry_confirm_cycles": 5,
     "entry_window_cycles": 7,
     "max_charge_entries_per_hour": 12,
-    "max_total_charge_power_w": 1200
+    "max_total_charge_power_w": 0
   }
 }
 ```
@@ -129,10 +129,12 @@ are read-only:
    model's rated charge power — and it is how fields the EMS was never taught
    get found.
 
-Note that `max_total_charge_power_w` defaults to **1200 W** for the whole
-installation, which is below what a 2400-class device could draw. That is the
-protective default, not a property of your hardware; raise it only for a circuit
-you know carries it.
+Note that `max_total_charge_power_w` defaults to **0**, no installation limit:
+each device charges up to its own ceiling. A charge is drawn through the fuse
+that protects the circuit, unlike feed-in, which adds to the current on it. Set
+a limit where several devices on one circuit should not charge at their full
+power together. Until 2026-11-13 a 0 here meant no charging from surplus at
+all; to keep it off, switch `ac_charge_control.enabled` off instead.
 
 ## Behavior
 
@@ -210,18 +212,19 @@ A claim that takes a charging device from the regulator — an operator park
 (`runtime_role` `ac_input`) or a maintenance routine such as the full-charge
 assist — is held to the same rule, logged with `reason=claimed` and the claim's
 own reason as `claim`. The exception is a claim that commands a charge of its
-own and can write it: an AC-input role with `ac_charge_power_w` on the local API
-with state reconciliation allowed and control switched on takes the charge over.
+own and can write it: an AC-input role on the local API, whose power is
+`ac_charge_power_w` or, without one, the device's charge ceiling, with state
+reconciliation allowed and control switched on, takes the charge over.
 The EMS releases its record of it (`ac_charge_handed_to_claim`) and writes
 nothing, and stopping the EMS does not end the claim's charge. Switching control
 off does not end an operator's park either; the full-charge assist's charge,
 which the EMS started, is ended like the regulator's (owner decision
 2026-10-10). A claim set while control is off cannot write, so the EMS's charge
 is ended, and the claim's power goes out once control is on again. A park as AC
-input without a power ends the EMS's charge by its setpoint alone on the local
-API — `inputLimit = 0`, the device staying in `acMode = 1` for the role, so the
-relay is not moved out and back; over MQTT, where nothing keeps that role, it is
-the exit to idle.
+input at 0 W ends the EMS's charge by its setpoint alone on the local API —
+`inputLimit = 0`, the device staying in `acMode = 1` for the role, so the relay
+is not moved out and back; over MQTT, where nothing keeps that role, it is the
+exit to idle.
 
 Both switches live in [runtime-state](technical/runtime-state.md), which the
 EMS seeds from `config.json` when it loads it. The Dashboard therefore shows

@@ -19,6 +19,7 @@ from ems.logging_utils import log_event
 
 OFFGRID_SOCKET_MODES = ("off", "eco", "standard")
 GENERIC_MAX_POWER_W = 5000
+DEVICE_MAXIMUM = "max"
 
 SYSTEM_FIELDS = {
     "enabled": ("bool", None),
@@ -38,7 +39,7 @@ DEVICE_FIELDS = {
 
 DEVICE_AC_FIELDS = {
     "runtime_role": ("enum", ("ac_output", "ac_input")),
-    "ac_charge_power_w": ("int", (0, GENERIC_MAX_POWER_W)),
+    "ac_charge_power_w": ("int_or_max", (0, GENERIC_MAX_POWER_W)),
 }
 
 DEVICE_SETTING_FIELDS = {
@@ -581,18 +582,12 @@ def _validate_value(key, value, value_type, rule):
         return value
 
     if value_type == "int":
-        if isinstance(value, bool):
-            raise RuntimeWriteError(f"{key} must be an integer")
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError) as exc:
-            raise RuntimeWriteError(f"{key} must be an integer") from exc
-        if parsed != value and not (isinstance(value, str) and value.strip() == str(parsed)):
-            raise RuntimeWriteError(f"{key} must be an integer")
-        minimum, maximum = rule
-        if parsed < minimum or parsed > maximum:
-            raise RuntimeWriteError(f"{key} must be between {minimum} and {maximum}")
-        return parsed
+        return _validated_int(key, value, rule, "an integer")
+
+    if value_type == "int_or_max":
+        if means_device_maximum(value):
+            return None
+        return _validated_int(key, value, rule, f"an integer or {DEVICE_MAXIMUM}")
 
     if value_type == "float":
         if isinstance(value, bool):
@@ -625,6 +620,29 @@ def _validate_value(key, value, value_type, rule):
         return normalized
 
     raise RuntimeWriteError(f"unsupported validator for {key}")
+
+
+def _validated_int(key, value, rule, kind):
+    if isinstance(value, bool):
+        raise RuntimeWriteError(f"{key} must be {kind}")
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeWriteError(f"{key} must be {kind}") from exc
+    if parsed != value and not (isinstance(value, str) and value.strip() == str(parsed)):
+        raise RuntimeWriteError(f"{key} must be {kind}")
+    minimum, maximum = rule
+    if parsed < minimum or parsed > maximum:
+        raise RuntimeWriteError(f"{key} must be between {minimum} and {maximum}")
+    return parsed
+
+
+def means_device_maximum(value):
+    """Whether an AC charge power ``value`` asks for the device's maximum: none, empty or ``max``."""
+
+    return value is None or (
+        isinstance(value, str) and value.strip().lower() in ("", DEVICE_MAXIMUM)
+    )
 
 
 def _save(runtime_state):

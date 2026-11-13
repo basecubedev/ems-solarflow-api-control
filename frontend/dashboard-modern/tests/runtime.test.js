@@ -24,6 +24,25 @@ test("an emptied number is not sent", () => {
   assert.deepEqual(changedPayload(fields, { max_power: "" }, initial), {});
 });
 
+test("emptying the AC charge power asks first, as the device then charges at its maximum", () => {
+  const runtime = { system: { enabled: true }, devices: { WR1: { runtime_role: "ac_input", ac_charge_power_w: 300 } } };
+  assert.equal(changeWarning(deviceEndpoint("WR1"), { ac_charge_power_w: null }, runtime)[0].key, "runtime.warn.acPowerMax");
+  assert.equal(changeWarning(deviceEndpoint("WR1"), { ac_charge_power_w: 500 }, runtime), null);
+  assert.equal(changeWarning(deviceEndpoint("WR1"), { runtime_role: "ac_input", ac_charge_power_w: null }, runtime)[0].key, "runtime.warn.acInput");
+  assert.equal(changeWarning(deviceEndpoint("WR1"), { runtime_role: "ac_output", ac_charge_power_w: null }, runtime), null);
+  const output = { system: { enabled: true }, devices: { WR1: { runtime_role: "ac_output", ac_charge_power_w: 300 } } };
+  assert.equal(changeWarning(deviceEndpoint("WR1"), { ac_charge_power_w: null }, output), null);
+  const both = changeWarning(deviceEndpoint("WR1"), { ac_charge_power_w: null, offgrid_socket_mode: "standard" }, runtime).map((item) => item.key);
+  assert.deepEqual(both, ["runtime.warn.offgrid", "runtime.warn.acPowerMax"]);
+});
+
+test("an emptied clearable number goes out as null, and an empty one left empty not at all", () => {
+  const power = [{ name: "ac_charge_power_w", type: "number", clearable: true }];
+  assert.deepEqual(changedPayload(power, { ac_charge_power_w: "" }, { ac_charge_power_w: 600 }), { ac_charge_power_w: null });
+  assert.deepEqual(changedPayload(power, { ac_charge_power_w: "" }, { ac_charge_power_w: null }), {});
+  assert.deepEqual(changedPayload(power, { ac_charge_power_w: "0" }, { ac_charge_power_w: null }), { ac_charge_power_w: 0 });
+});
+
 test("a stored value that changes under an untouched field is shown and never written back", () => {
   const before = { enabled: true, max_power: 800, pv_priority_factor: 1, offgrid_socket_mode: "off" };
   const seeded = reseed(fields, { initial: before, fresh: true });

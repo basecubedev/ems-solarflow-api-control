@@ -134,7 +134,7 @@ AC_CHARGE_CONTROL_DEFAULTS = {
     # the same thing. Keys for it were drafted and deliberately not built, so
     # they are not shipped either -- a setting that changes nothing is worse
     # than an absent one.
-    "max_total_charge_power_w": 1200
+    "max_total_charge_power_w": 0
 }
 
 CONFIG_UPGRADE_DEFAULTS = {
@@ -3660,6 +3660,35 @@ def resolve_influx_token(influxdb_config, environ=None):
 def ac_charge_control_int(key, default=0, minimum=None):
     return safe_int(
         AC_CHARGE_CONTROL_CONFIG.get(key, default), default, minimum=minimum
+    )
+
+
+def installation_charge_limit_w(value):
+    """What a ``max_total_charge_power_w`` allows: None for no limit, else watts.
+
+    0 is no limit (owner 2026-11-13): a charge is drawn through the fuse that
+    protects the circuit, so the devices' own ceilings bound it; so is no
+    value or a blank one, a cleared field. A fraction is cut to whole watts,
+    and a value that is no number, or below 0, is 0: it charges nothing rather
+    than becoming none.
+    """
+
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    number = -1.0 if isinstance(value, bool) else safe_float(value, -1.0)
+    if number < 0:
+        return 0
+    return None if number == 0 else int(number)
+
+
+def ac_charge_installation_limit_w():
+    """The configured installation charge limit, as :func:`installation_charge_limit_w` reads it."""
+
+    return installation_charge_limit_w(
+        AC_CHARGE_CONTROL_CONFIG.get(
+            "max_total_charge_power_w",
+            AC_CHARGE_CONTROL_DEFAULTS["max_total_charge_power_w"],
+        )
     )
 
 

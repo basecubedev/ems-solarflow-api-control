@@ -2781,6 +2781,22 @@ def diagnose_format_watts(value):
     return f"{rounded} W{suffix}"
 
 
+def diagnose_format_installation_limit(snapshot):
+    """The installation's charge limit as the loop applies it.
+
+    ``ac_charge_installation_limit_w`` is :func:`ems.config.installation_charge_limit_w`
+    of the configured ``ac_charge_system_limit_w``: None for none, 0 for a
+    value the loop charges nothing on.
+    """
+
+    limit = snapshot.get("ac_charge_installation_limit_w")
+    if limit is None:
+        return "none (each device's own ceiling)"
+    if limit == 0:
+        return "charges nothing (no number of watts from 1)"
+    return diagnose_format_threshold_watts(limit)
+
+
 def diagnose_format_threshold_watts(value):
     """A configured limit, without the import/export suffix a reading carries.
 
@@ -3016,6 +3032,7 @@ def diagnose_ac_charging_snapshot(config_data, runtime_data, runtime_devices):
 
     Runtime state wins over config, mirroring what the control loop resolves, or
     this would report a feature as on that an operator switched off an hour ago.
+    The installation limit has no runtime value; the loop reads it from config.
     """
 
     section = runtime_data.get("ac_charge_control")
@@ -3033,6 +3050,10 @@ def diagnose_ac_charging_snapshot(config_data, runtime_data, runtime_devices):
         )
 
     start = diagnose_float(section.get("charge_start_w", configured.get("charge_start_w")))
+    system_limit = configured.get(
+        "max_total_charge_power_w",
+        config_mod.AC_CHARGE_CONTROL_DEFAULTS["max_total_charge_power_w"],
+    )
     hysteresis = diagnose_float(
         section.get("charge_hysteresis_w", configured.get("charge_hysteresis_w"))
     )
@@ -3066,11 +3087,9 @@ def diagnose_ac_charging_snapshot(config_data, runtime_data, runtime_devices):
         "ac_charging_enabled": enabled,
         "ac_charge_start_w": start,
         "ac_charge_stop_w": stop,
-        "ac_charge_system_limit_w": diagnose_float(
-            section.get(
-                "max_total_charge_power_w",
-                configured.get("max_total_charge_power_w"),
-            )
+        "ac_charge_system_limit_w": diagnose_float(system_limit),
+        "ac_charge_installation_limit_w": config_mod.installation_charge_limit_w(
+            system_limit
         ),
         "ac_charge_permitted_devices": permitted,
         "ac_charge_refused_devices": refused,
@@ -3504,7 +3523,7 @@ def diagnose_ac_charging_text(snapshot):
     return [
         "AC Charging:          enabled",
         f"  Band:               {band}",
-        f"  Installation limit: {diagnose_format_threshold_watts(snapshot.get('ac_charge_system_limit_w'))}",
+        f"  Installation limit: {diagnose_format_installation_limit(snapshot)}",
         f"  Permitted devices:  {', '.join(devices) if devices else 'none'}",
         f"  Refused devices:    {refused or 'none'}",
         "  Refused at runtime: see event=ac_charge_refused for what a device does not report",

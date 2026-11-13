@@ -233,7 +233,8 @@ Runtime AC charge power is not a static device config value. Set it through
 runtime-state, for example with `python3 emsctl.py device WR1 ac-charge-power
 200`. The controller applies it as `inputLimit` on the next loop only while the
 device runtime role is `ac_input`; in `ac_output` mode the stored value is
-ignored for hardware writes.
+ignored for hardware writes. Without one, or after `ac-charge-power max`, an
+`ac_input` role charges at the device's maximum; `0` parks it in AC input.
 
 `system.reconcile_smart_mode` allows smart mode reconciliation and is required
 for the intended Zendure runtime/RAM mode behavior. A device whose report
@@ -551,7 +552,7 @@ config upgrade does enable it for an installation that predates the feature, and
   "entry_confirm_cycles": 5,
   "entry_window_cycles": 7,
   "max_charge_entries_per_hour": 12,
-  "max_total_charge_power_w": 1200
+  "max_total_charge_power_w": 0
 }
 ```
 
@@ -563,7 +564,7 @@ config upgrade does enable it for an installation that predates the feature, and
 | `entry_confirm_cycles` | Observations that must show surplus before charging starts |
 | `entry_window_cycles` | How many recent loops those observations are counted within |
 | `max_charge_entries_per_hour` | Safety limit on how often a device may enter charging; it also bounds how often the full-charge assist takes its AC input back after failed cycles returned it |
-| `max_total_charge_power_w` | Highest combined charging power across all devices |
+| `max_total_charge_power_w` | Highest combined charging power across all devices; `0` (the default) sets none beyond the devices' own |
 
 The lower edge of the charge band is **derived**, not configured:
 
@@ -620,13 +621,16 @@ So the EMS never borrows one as the other. A SolarFlow 800 Pro 2 reports an
 | 3 | The rated charge power of the device's resolved model, when it reports no ceiling at all |
 | — | A device that reports a ceiling of `0` has refused a charge; neither the rating nor `max_charge_power_w` overrides that |
 | — | A device with none of these charges nothing and logs `ac_charge_ceiling_unknown`; setting the key explicitly unblocks it |
+| — | Whatever the source, never above the rated charge power of a model that has one: a reported ceiling above what the catalogue says the model takes is not believed |
 
 On MQTT the result is additionally held to the device's `max_power`, because the
 MQTT client refuses any command above it before publishing, charge included.
 
 `ac_charge_control.max_total_charge_power_w` is a different question again: it is
 the **installation's** limit — your circuit and your fuse — not the devices'.
-Nothing in the EMS can measure that, so it stays a number you set.
+Nothing in the EMS can measure that, so it stays a number you set; `0`, the
+default, sets none, as the fuse protects a circuit against what is drawn
+through it.
 
 Charging additionally requires the device's resolved hardware model to carry an
 AC charge path in the hardware catalogue. That is a property of the model, not

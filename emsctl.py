@@ -199,8 +199,8 @@ Runtime control:
   python3 emsctl.py system disable
   python3 emsctl.py system max-power 1200
   python3 emsctl.py device WR1 max-power 600
-  python3 emsctl.py device WR1 ac-mode input
   python3 emsctl.py device WR1 ac-charge-power 200
+  python3 emsctl.py device WR1 ac-mode input
   python3 emsctl.py device WR1 offgrid eco
 
 Dashboard:
@@ -240,9 +240,10 @@ Device runtime control:
   python3 emsctl.py device WR1 disable
   python3 emsctl.py device WR1 max-power 600
   python3 emsctl.py device WR1 ac-mode output
-  python3 emsctl.py device WR1 ac-mode input
   python3 emsctl.py device WR1 ac-charge-power 200
+  python3 emsctl.py device WR1 ac-mode input
   python3 emsctl.py device WR1 ac-charge-power 0
+  python3 emsctl.py device WR1 ac-charge-power max
   python3 emsctl.py device WR1 pv-priority-factor 1.2
   python3 emsctl.py device WR1 offgrid off
   python3 emsctl.py device WR1 offgrid eco
@@ -388,7 +389,8 @@ Actions:
   offgrid off|eco|standard       Set offgrid socket mode
   pv-priority-factor VALUE       Set PV-first allocation weight
   ac-mode [output|input]         Set or show runtime AC mode role
-  ac-charge-power WATTS          Set runtime AC charge inputLimit in watts
+  ac-charge-power WATTS|max      Set runtime AC charge inputLimit in watts;
+                                 max (the default) charges at the device's maximum
   light on|off|unmanaged         Keep the inverter's light on or off
   fan auto|1|2|off|unmanaged     Keep the inverter's fan on auto, a speed, or off
   buzzer on|off|unmanaged        Keep the beeper on or off, where the inverter has one
@@ -400,8 +402,8 @@ Examples:
   python3 emsctl.py device WR1 disable
   python3 emsctl.py device WR1 max-power 600
   python3 emsctl.py device WR1 ac-mode output
-  python3 emsctl.py device WR1 ac-mode input
   python3 emsctl.py device WR1 ac-charge-power 200
+  python3 emsctl.py device WR1 ac-mode input
   python3 emsctl.py device WR1 offgrid eco
   python3 emsctl.py device WR1 pv-priority-factor 1.2
   python3 emsctl.py device WR1 light off
@@ -1375,6 +1377,8 @@ def device_value_words():
         value_type, rule = runtime_commands.WRITABLE_DEVICE_FIELDS.get(command.key, (None, None))
         if value_type == "enum":
             words[action] = safe_completion_words(rule)
+        elif value_type == "int_or_max":
+            words[action] = safe_completion_words((runtime_commands.DEVICE_MAXIMUM,))
         elif value_type == "setting":
             words[action] = safe_completion_words((*rule, device_settings.UNMANAGED))
     return words
@@ -4543,7 +4547,8 @@ def main(argv=None):
         )
         if args.command == "device" and args.action == "ac-charge-power":
             watts = result["state"]["ac_charge_power_w"]
-            print(f"Set {args.name} AC charge power to {watts} W.")
+            power = "the device's maximum" if watts is None else f"{watts} W"
+            print(f"Set {args.name} AC charge power to {power}.")
         else:
             print(f"updated {runtime_path}")
         return 0

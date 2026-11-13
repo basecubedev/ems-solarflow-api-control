@@ -57,6 +57,10 @@ class DeviceRuntimeIntent:
     ``operator_role`` marks the role the operator set in runtime state. Only
     such a claim writes ``acMode`` to a device whose report carries no known
     mode (K10, owner decision 2026-10-12).
+
+    ``at_device_maximum`` marks the operator's AC input without a power of its
+    own: it charges at the device's maximum, which the reconciler resolves
+    against each report, so the claim itself does not move with telemetry.
     """
 
     device: str
@@ -67,6 +71,13 @@ class DeviceRuntimeIntent:
     priority: int = PRIORITY_DEFAULT
     setpoint_w: int | None = None
     operator_role: bool = False
+    at_device_maximum: bool = False
+
+    @property
+    def commands_charge(self):
+        """Whether the claim commands a charge power of its own."""
+
+        return self.setpoint_w is not None or self.at_device_maximum
 
 
 def ac_output_intent(device_name, reason: str = "ac_output", *, priority=PRIORITY_DEFAULT):

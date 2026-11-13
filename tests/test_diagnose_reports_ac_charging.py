@@ -48,6 +48,7 @@ def test_the_band_is_reported_as_the_loop_derives_it():
     # Derived, never configured -- the same max(0, start - hysteresis).
     assert snapshot["ac_charge_stop_w"] == 100
     assert snapshot["ac_charge_system_limit_w"] == 1200
+    assert snapshot["ac_charge_installation_limit_w"] == 1200
 
 
 def test_a_collapsed_band_is_visible_here_too():
@@ -153,6 +154,57 @@ def test_a_threshold_is_not_labelled_as_an_import():
     text = "\n".join(diagnose_ac_charging_text(diagnose_ac_charging_snapshot(config(), {}, {})))
     assert "import" not in text
     assert "export" not in text
+
+
+NONE = "Installation limit: none (each device's own ceiling)"
+NOTHING = "Installation limit: charges nothing (no number of watts from 1)"
+
+
+@pytest.mark.parametrize(
+    "limit, shown",
+    [
+        (1200, "Installation limit: 1200 W"),
+        (0, NONE),
+        (-1200, NOTHING),
+        ("lots", NOTHING),
+        (0.5, NOTHING),
+        (None, NONE),
+        ("", NONE),
+        (1200.7, "Installation limit: 1200 W"),
+    ],
+)
+def test_the_installation_limit_reads_as_the_loop_reads_it(limit, shown):
+    text = "\n".join(
+        diagnose_ac_charging_text(
+            diagnose_ac_charging_snapshot(config(max_total_charge_power_w=limit), {}, {})
+        )
+    )
+
+    assert shown in text
+
+
+def test_the_installation_limit_is_the_config_s_as_the_loop_reads_it():
+    """Runtime state has no installation limit; a stale one there is not in force."""
+
+    snapshot = diagnose_ac_charging_snapshot(
+        config(max_total_charge_power_w=0),
+        {"ac_charge_control": {"enabled": True, "max_total_charge_power_w": 500}},
+        {},
+    )
+
+    assert snapshot["ac_charge_installation_limit_w"] is None
+    assert NONE in "\n".join(diagnose_ac_charging_text(snapshot))
+
+
+def test_a_config_without_an_installation_limit_has_none():
+    configured = config()
+    del configured["ac_charge_control"]["max_total_charge_power_w"]
+
+    text = "\n".join(
+        diagnose_ac_charging_text(diagnose_ac_charging_snapshot(configured, {}, {}))
+    )
+
+    assert NONE in text
 
 
 def test_the_text_says_plainly_when_charging_is_off():

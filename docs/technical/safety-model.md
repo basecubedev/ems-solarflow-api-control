@@ -165,7 +165,8 @@ maintenance claim that takes the charging device from the regulator gets the
 same single command — on the local API, for a claim that holds the device in AC
 input, as `inputLimit=0` alone, so the reconciler does not move the relay back
 for the role — unless the claim commands a charge power of its own that reaches
-the device — an AC-input role with `ac_charge_power_w`, on a transport with
+the device — an AC-input role with `ac_charge_power_w`, or without one at the
+device's charge ceiling, on a transport with
 state reconciliation and its gate open, and control switched on. That claim
 takes the charge over: the EMS's record of it is released, and a stop of the
 EMS does not end the claim's charge. A disable does not end an operator's park

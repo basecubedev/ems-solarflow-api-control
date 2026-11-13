@@ -464,8 +464,11 @@ def test_the_completion_reads_the_values_of_each_device_action_from_its_command(
     assert DEVICE_VALUE_WORDS["offgrid"] == ["off", "eco", "standard"]
     assert DEVICE_VALUE_WORDS["ac-mode"] == ["output", "input"]
     assert DEVICE_VALUE_WORDS["ac-charge"] == ["on", "off"]
+    assert DEVICE_VALUE_WORDS["ac-charge-power"] == ["max"]
     assert DEVICE_VALUE_WORDS["fan"] == ["auto", "1", "2", "off", "unmanaged"]
-    assert set(DEVICE_VALUE_WORDS) == {"offgrid", "ac-mode", "ac-charge", *(s.command for s in device_settings.SETTINGS)}
+    assert set(DEVICE_VALUE_WORDS) == {
+        "offgrid", "ac-mode", "ac-charge", "ac-charge-power", *(s.command for s in device_settings.SETTINGS)
+    }
 
 
 @pytest.mark.parametrize("action", sorted(DEVICE_VALUE_WORDS))
@@ -780,6 +783,13 @@ def test_emsctl_device_ac_charge_power_writes_runtime_state(tmp_path):
     assert result.stdout == "Set WR1 AC charge power to 0 W.\n"
     state = runtime_state(tmp_path)
     assert state["devices"]["WR1"]["ac_charge_power_w"] == 0
+
+    result = run_emsctl(tmp_path, "device", "WR1", "ac-charge-power", "max")
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "Set WR1 AC charge power to the device's maximum.\n"
+    state = runtime_state(tmp_path)
+    assert state["devices"]["WR1"]["ac_charge_power_w"] is None
 
 
 def test_emsctl_ac_charge_power_preserves_runtime_role(tmp_path):

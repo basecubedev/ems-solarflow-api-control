@@ -130,7 +130,7 @@ rather than place it, so know what that means before you run it:
   device catalogue's word, and the EMS logs `ac_charge_not_delivered` if a
   commanded charge never draws any current.
 - **Check `max_total_charge_power_w`** for your installation — your circuit and
-  your fuse, which nothing in the EMS can measure. The default is 1200 W.
+  your fuse, which nothing in the EMS can measure. The default 0 sets no limit.
   `max_charge_power_w` per device at 0 means "ask the device for its own
   ceiling" — or its model's rated charge power when it reports none.
 
@@ -147,9 +147,9 @@ is drawing from the grid is the one action that must never wait for a threshold,
 a counter or a restart. Disabling the EMS (`system.enabled`) or one device does
 too: a charging device gets one final command that ends the charge, and then the
 EMS writes nothing more to it, whether the charge was the regulator's or the
-full-charge assist's. Parking a charging device ends the EMS's charge the same
-way, unless the park sets a charge power of its own, which then takes the charge
-over: switching the EMS off or stopping it does not end that one.
+full-charge assist's. A park at 0 W ends the EMS's charge the same way. An AC
+input role that charges, at its entered power or the device maximum, takes it
+over: only the role back to output, or 0 W, ends that one — not these switches.
 
 So does losing the grid meter. A meter client that cannot reach its hardware
 keeps returning its last reading, and "still exporting" is indistinguishable
