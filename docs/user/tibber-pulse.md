@@ -23,7 +23,7 @@ does about it:
 
 | Limit | What EMS does |
 | --- | --- |
-| The bridge often takes about 1.5 s to answer, and too many requests can make it hang until it is unplugged; the Tibber app then gets no data either. | One background reader asks the bridge at most every 3 s. The control loop never waits on it. Do not let a second program (Home Assistant, ioBroker, …) read the same bridge at the same time. |
+| The bridge often takes about 1.5 s to answer, and too many requests can make it hang until it is unplugged; the Tibber app then gets no data either. | One background reader takes the telegrams the bridge streams as they come, and asks for them at most every 3 s only while the stream does not work, never both at once. The control loop never waits on it. Do not let a second program (Home Assistant, ioBroker, …) read the same bridge at the same time. |
 | New values arrive only every 2–3 s, not every second. | A reading older than 10 s counts as a failed meter read. |
 | The bridge now and then serves a damaged telegram. | Every telegram's checksum is verified; a damaged one is dropped, never used. |
 | Tibber updates the bridge over the air and has changed its unofficial local interface before (September 2026). | EMS tries the current and the older data path. A future change can still break the reading until EMS is updated. |

@@ -1530,11 +1530,39 @@ experimental and comes without guaranteed support:**
 Background, measurements and sources:
 [docs/user/tibber-pulse.md](../user/tibber-pulse.md).
 
-**Reading.** A background worker asks the bridge for the raw SML telegram at
-most every 3 seconds (`/node_data.json?node_id=N`, falling back to `/data.json`
-on firmware before 1794), with HTTP Basic login `admin` and the bridge
-password. The control loop never waits on the bridge: each cycle takes the
-last good reading the worker holds. Like the MQTT grid meter, that reading
+**Reading.** A background worker reads the bridge with HTTP Basic login
+`admin` and the bridge password. It asks for the raw SML telegram
+(`/node_data.json?node_id=N`, falling back to `/data.json` on firmware before
+1794) until it holds a first reading; each answer names the meter the
+configured reading head sees. Then it takes the telegrams the bridge streams
+on `/ws` as they come, about every 3 seconds.
+Firmware 1794 and later stream nothing to a WebSocket handshake, so the worker
+sends a plain `GET /ws` with the login and cuts the SML frames out of the raw
+stream (issue #341). The stream carries every reading head of the bridge, so
+only the configured head's meter counts, named by the meter's server ID or its
+96.1.0 entry; a meter that names itself in neither way is only asked for. A
+damaged frame or another head's is skipped, and does not count towards
+releasing the pinned CRC variant below; neither does a repeated telegram
+count as a new reading. The stream is given 15 seconds per new reading. The
+bridge itself pauses now and then, up to half a minute in a tester's capture
+(issue #341), with the connection open; the reading counts as failed once it
+is older than the maximum age below, as with every grid meter, whatever the
+stream does, and opening a stream anew costs the bridge less than the poll
+every 3 seconds it replaces. A stream that ends after a new reading is opened
+again, no sooner than a poll would come. One that brings none in 15 seconds
+hands over to asking for a
+telegram at most every 3 seconds, never both at once: for five minutes, twice
+as long after each further hand-over in a row, up to an hour;
+`tibber_pulse_stream_fallback` names the reason and `tibber_pulse_stream_retry`
+the next try. A refused login hands over for five minutes without doubling,
+and the polls then tell whether the password is wrong. After a stream that
+carried only other meters' telegrams one poll names the meter afresh: a head
+moved to another meter is streamed again at once, an unchanged one hands over.
+A stream answer that switches protocols, redirects or comes in chunks counts as
+one that brings nothing. `emsctl diagnose` and the Admin's search read the
+bridge too, so run them while the EMS is reading it only when needed. The
+control loop never waits on the bridge: each cycle takes the last good reading
+the worker holds. Like the MQTT grid meter, that reading
 serves every cycle while it is young enough, so when the bridge is slower than
 the loop a cycle can get the reading the previous cycle already used. At
 start, before `--preflight` and before `emsctl grid-meter test`, the EMS waits
