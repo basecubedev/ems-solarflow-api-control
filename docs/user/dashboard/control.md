@@ -207,7 +207,12 @@ measurements is worse than not commanding it.
 
 - **`dry_run`** — the EMS computes everything and writes nothing. The page still
   fills in, so you can check a configuration safely before going live. See
-  [Safety](../safety.md).
+  [Safety](../safety.md). A battery that stands idle stays idle in dry run, and
+  the EMS plans no more than the minimum output for it: it plans a discharge
+  only once the device shows its battery path active, and it wakes an idle
+  device by parking it at the minimum output, a write a dry run does not send.
+  Without PV, **PV surplus available** is then not active and reads *no PV
+  output*.
 - **Simulation / replay** — synthetic or recorded input; hardware writes are
   forced off.
 - **MQTT confirmation** — for an MQTT-controlled device, **publishing a command is

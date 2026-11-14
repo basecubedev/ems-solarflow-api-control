@@ -1066,13 +1066,16 @@ def calculate_targets(
             explanation_devices.append(entry)
             explanation_device_map[name] = entry
 
+        pv_surplus = solar_total > 0 and solar_total >= new_total
         add_limit(
             "pv_surplus_available",
-            solar_total >= new_total,
+            pv_surplus,
             solar_total,
             (
                 "total PV can cover the requested output"
-                if solar_total >= new_total
+                if pv_surplus
+                else "no PV output"
+                if solar_total <= 0
                 else "battery discharge is needed beyond PV output"
             )
         )
