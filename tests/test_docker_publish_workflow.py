@@ -245,3 +245,41 @@ def test_the_release_catalogue_is_published_after_the_images_and_verified():
     assert "github.ref_type == 'tag'" in expect_tag
     assert "github.ref_name" in expect_tag
     assert "steps" not in job
+
+
+def _publish_workflow():
+    return yaml.safe_load(PUBLISH_WORKFLOW.read_text(encoding="utf-8"))
+
+
+def test_latest_is_built_weekly_by_hand_and_after_a_release_not_on_a_push_to_main():
+    """Owner 2026-11-14: every merge to main built and published a new latest."""
+
+    workflow = _publish_workflow()
+    triggers = workflow[True]
+    publish = " ".join(workflow["jobs"]["publish-ghcr"]["if"].split())
+    refresh = workflow["jobs"]["refresh-latest"]
+
+    assert triggers["push"] == {"tags": ["v*"]}
+    assert triggers["schedule"] == [{"cron": "0 3 * * 1"}]
+    assert "workflow_dispatch" in triggers
+    assert "refs/heads/main' ||" not in publish
+    assert "github.event_name == 'schedule'" in publish
+    assert "(github.event_name == 'push' && startsWith(github.ref, 'refs/tags/'))" in publish
+    assert "(github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')" in publish
+    assert refresh["needs"] == ["publish-ghcr"]
+    assert refresh["if"] == "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')"
+    assert refresh["permissions"] == {"actions": "write"}
+    assert refresh["steps"][0]["run"] == 'gh workflow run docker-publish.yml --repo "${GITHUB_REPOSITORY}" --ref main'
+
+
+def test_only_a_run_on_main_tags_latest():
+    enables = [
+        line.strip()
+        for job in _publish_workflow()["jobs"].values()
+        for step in job.get("steps", [])
+        for line in str(step.get("with", {}).get("tags", "")).splitlines()
+        if "value=latest" in line
+    ]
+
+    assert len(enables) == 3
+    assert set(enables) == {"type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}"}

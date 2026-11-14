@@ -87,7 +87,7 @@ them:
 | --- | --- |
 | **Stable** | Recommended versioned releases for normal use. |
 | **Release candidate** | Release candidates for early testing. Mostly complete, but they may still contain issues. |
-| **Rolling** | The current build from the main branch (`latest`). Updated automatically and not a versioned release. |
+| **Rolling** | The rolling build from the main branch (`latest`), rebuilt weekly and after each release. Not a versioned release. |
 | **Development** | Feature builds with unfinished changes. Intended for testing only. Shown in Expert only. |
 
 The appliance decides the group from the version itself, never from the

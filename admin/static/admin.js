@@ -9643,7 +9643,7 @@ function releaseOptionLabel(release) {
   if (release.channel === "latest") {
     // The rolling main-branch build; the label states what it is rather than
     // pinning a version, and never calls it stable.
-    const base = "Latest · current main build";
+    const base = "Latest · rolling build of main";
     return (
       base +
       timestampSuffix +

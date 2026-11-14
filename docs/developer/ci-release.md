@@ -44,7 +44,7 @@ EMS build it can install.
 
 | Tag | Product | Runs | Produces |
 |---|---|---|---|
-| `v<x.y.z>` | EMS + Admin | `docker-publish.yml` | the two GHCR images, plus `latest` on `main` |
+| `v<x.y.z>` | EMS + Admin | `docker-publish.yml` | the two GHCR images, then a run on `main` it starts itself for `latest` |
 | `appliance-manager-v<x.y.z>` | Appliance Manager | `appliance-manager-release.yml` | a signed `.deb` and the index the fleet reads |
 | `appliance-image-v<x.y.z>` | Appliance OS image | `appliance-image.yml` | one prerelease carrying an image per board |
 
@@ -211,9 +211,22 @@ Workflow: `.github/workflows/docker-publish.yml`, named **EMS release** (job **E
 image**). It builds `linux/amd64` and `linux/arm64` images and publishes to
 GHCR. It runs on:
 
-- pushes to `main` and `v*` tags,
-- a weekly schedule (so upstream base-image fixes are picked up), and
-- manual `workflow_dispatch`.
+- `v*` tags, which publish the release and then start the workflow once on
+  `main`, so `latest` follows a release within about an hour; that run is its
+  own run under Actions, red if it fails,
+- a weekly schedule, Mondays at 03:00 UTC, which rebuilds `latest` from `main`
+  (so upstream base-image fixes are picked up), and
+- manual `workflow_dispatch` on `main` (Actions → **EMS release** → **Run
+  workflow**), which publishes a new `latest` between the weekly builds.
+
+A push to `main` does not build `latest` (owner 2026-11-14): with several
+branches merged one after another, every merge built and published a new
+`latest` for the installations that follow it. What only this workflow checks
+— the arm64 build, the Admin/EMS system-build pair metadata and the image
+sources — therefore runs on the weekly build, a manual run or a release tag,
+not on every merge; run it by hand before cutting a release to find a problem
+before the tag does. A failed weekly run is not retried on its own; start it
+again by hand.
 
 Tag builds are only published if the tag commit is contained in `main`. Images
 carry OCI and build-identity labels (`release_tag`, `build_serial`, `build_id`,

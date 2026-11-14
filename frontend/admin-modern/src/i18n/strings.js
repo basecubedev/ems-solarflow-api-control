@@ -52,7 +52,7 @@ export const STRINGS = {
   "setup.release.sub": s("The Admin console and EMS versions that are installed together", "Die Versionen von Verwaltung und EMS, die zusammen installiert werden", "De versies van beheer en EMS die samen worden geïnstalleerd", "Les versions de la console et de l’EMS installées ensemble"),
   "setup.release.choose": s("System Build", "System Build", "System Build", "System Build"),
   "setup.release.unavailable": s("The System Builds could not be loaded.", "Die System Builds ließen sich nicht laden.", "De System Builds konden niet worden geladen.", "Les System Builds n’ont pas pu être chargés."),
-  "setup.release.latestBuild": s("Latest · current main build", "Neuester · aktueller Hauptzweig", "Nieuwste · huidige hoofdbuild", "Dernière · build principale actuelle"),
+  "setup.release.latestBuild": s("Latest · rolling build of main", "Neuester · fortlaufender Build des Hauptzweigs", "Nieuwste · doorlopende build van de hoofdtak", "Dernière · build continu de la branche principale"),
   "setup.release.notStable": s("not stable", "nicht stabil", "niet stabiel", "pas stable"),
   "setup.release.prepared": s("prepared", "vorbereitet", "voorbereid", "préparé"),
   "setup.release.active": s("running", "läuft", "draait", "en service"),
