@@ -430,6 +430,8 @@ def test_a_rolling_install_can_select_the_release_it_was_built_past(tmp_path):
     """Seen on a live console: on `latest` (serial 170, built from v0.8.4),
     v0.8.4 was "older than the running EMS build" and not selectable. It is a
     rollback inside the 0.8 line: selectable, named as one, never the proposal.
+    Neither is the rolling channel itself: an upgrade proposes stable releases
+    only (owner 2026-11-13).
     """
 
     manager = _manager(tmp_path, lambda: _catalogue(_entry("v0.8.4"), _entry("v0.8.3"), _entry("v0.7.0", published="2026-07-07T00:00:00Z")))
@@ -441,5 +443,5 @@ def test_a_rolling_install_can_select_the_release_it_was_built_past(tmp_path):
     assert "rollback" in by_tag["v0.8.4"]["reason"]
     assert by_tag["v0.8.3"]["selectable"] is True
     assert by_tag["v0.7.0"]["upgrade_state"] == "downgrade_blocked"
-    assert result["default_release"] == "latest"
+    assert result["default_release"] is None
     assert result["latest_stable"] is None

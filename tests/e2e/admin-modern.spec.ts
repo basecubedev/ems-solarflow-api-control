@@ -963,6 +963,24 @@ test.describe("Modern Admin: on a phone", { tag: ["@smoke"] }, () => {
     await expect(page.locator(".choice.recommended")).toHaveCount(0);
   });
 
+  test("on the rolling build nothing is proposed at the top, and latest is still chosen by hand", async ({ page, seedAdminScenario }) => {
+    await openModern(page);
+    await seedAdminScenario("mqtt_migration");
+    await page.route("**/api/setup/releases?flow=upgrade", async (route: Route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      const releases = body.releases.map((release: { active: boolean }) => ({ ...release, active: false }));
+      await route.fulfill({ response, json: { ...body, releases, active_release: null, running_rolling: true, default_release: null } });
+    });
+    await page.goto("/#/updates");
+    await page.reload();
+
+    await expect(page.getByTestId("rolling-no-recommendation")).toContainText("Only stable releases are suggested here");
+    await expect(page.getByTestId("start-upgrade")).toHaveCount(0);
+    await expect(page.locator(".choice.recommended")).toHaveCount(0);
+    await expect(page.locator('[data-group="latest"] [data-tag="latest"] [data-testid="choose-release"]')).toBeEnabled();
+  });
+
   test("the channel filter shows one channel at a time, says when none of it can be installed, and is remembered", async ({ page, seedAdminScenario }) => {
     await openModern(page);
     await seedAdminScenario("mqtt_migration");

@@ -219,9 +219,10 @@ def test_release_default_prefers_stable_over_rolling_latest(tmp_path):
     assert result["default_release"] != "latest"
 
 
-def test_release_default_falls_back_to_latest_without_a_stable_release(tmp_path):
-    # No final versioned release is published (only a release candidate). The
-    # rolling ``latest`` channel is then the fallback default.
+def test_without_a_stable_release_only_a_setup_falls_back_to_latest(tmp_path):
+    # No final versioned release is published (only a release candidate). A
+    # fresh setup then defaults to the rolling ``latest`` channel; an upgrade
+    # proposes nothing, since it proposes stable releases only.
     payload = [
         {
             "tag_name": "v0.6.1-rc1",
@@ -239,7 +240,8 @@ def test_release_default_falls_back_to_latest_without_a_stable_release(tmp_path)
     assert by_tag["latest"]["channel"] == "latest"
     assert by_tag["latest"]["selectable"] is True
     assert result["latest_stable"] is None
-    assert result["default_release"] == "latest"
+    assert result["default_release"] is None
+    assert manager.list_releases(for_upgrade=False)["default_release"] == "latest"
 
 
 def test_offline_release_list_still_returns_cached_release(tmp_path):
@@ -420,7 +422,7 @@ def test_missing_docker_resources_disable_supported_release(tmp_path):
     assert result["default_release"] == "v0.6.0"
 
 
-def test_latest_is_default_fallback_when_no_stable_resources_verify(tmp_path):
+def test_latest_is_the_setup_fallback_when_no_stable_resources_verify(tmp_path):
     manager = ReleaseManager(
         data_dir=tmp_path,
         urlopen=_opener(),
@@ -429,7 +431,8 @@ def test_latest_is_default_fallback_when_no_stable_resources_verify(tmp_path):
     result = manager.list_releases()
 
     assert result["latest_stable"] is None
-    assert result["default_release"] == "latest"
+    assert result["default_release"] is None
+    assert manager.list_releases(for_upgrade=False)["default_release"] == "latest"
 
 
 def test_latest_is_synthetic_selectable_rolling_channel(tmp_path):
@@ -939,8 +942,9 @@ def test_a_rolling_install_is_never_defaulted_to_an_older_release(tmp_path):
     The newest release is unusable here, which is the state the failing console
     was in for every release it had not already downloaded. The default used to
     keep walking down the list until something was selectable and land on the
-    old cached one; there is no floor in that walk. Falling back to the rolling
-    channel that is already installed is the honest answer.
+    old cached one; there is no floor in that walk. Proposing nothing is the
+    honest answer: the rolling channel that is installed is not proposed
+    either, since an upgrade proposes stable releases only.
     """
 
     result = _rolling_install(
@@ -950,8 +954,7 @@ def test_a_rolling_install_is_never_defaulted_to_an_older_release(tmp_path):
         resource_checker=lambda ref: ref not in ("v0.8.3", "v0.8.1"),
     ).list_releases()
 
-    assert result["default_release"] == "latest"
-    assert result["default_release"] != "v0.7.0"
+    assert result["default_release"] is None
 
 
 def test_evidence_about_the_running_build_outranks_the_rolling_inference(tmp_path):
@@ -2485,6 +2488,40 @@ def test_a_pinned_rolling_install_refuses_the_older_line(tmp_path):
     assert by_tag["v0.7.0"]["selectable"] is False
     assert by_tag["v0.6.1"]["selectable"] is False
     assert result["default_release"] != "v0.7.0"
+
+
+def test_an_unlabelled_rolling_install_is_proposed_the_newest_stable_release(tmp_path):
+    """Without a declared release its place is the newest release seen, which
+    moves with every new one, so the newest stable release is proposed: it
+    brings the install back to the stable line, never to latest."""
+
+    result = _rolling_install(tmp_path, cached="v0.7.0", payload=_two_line_payload()).list_releases()
+
+    assert result["running_rolling"] is True
+    assert result["default_release"] == "v0.8.3"
+
+
+def test_a_rolling_install_is_proposed_the_next_stable_release_and_never_latest(tmp_path):
+    """Owner 2026-11-13: an upgrade proposes stable releases only.
+
+    A rolling install built past v0.8.3 is proposed v0.8.4 once it exists, so
+    it returns to the stable line; without a newer stable release it is
+    proposed nothing, while ``latest`` stays selectable by hand.
+    """
+
+    behind = _pinned_install(tmp_path / "behind", _labelled("latest", 170, "latest", contains="v0.8.3"))
+    current = _pinned_install(tmp_path / "current", _labelled("latest", 171, "latest", contains="v0.8.4"))
+    proposed = behind.list_releases()
+    nothing = current.list_releases()
+
+    assert proposed["default_release"] == "v0.8.4"
+    assert nothing["default_release"] is None
+    assert {item["tag"]: item["selectable"] for item in nothing["releases"]}["latest"] is True
+    assert (proposed["running_rolling"], nothing["running_rolling"]) == (True, True)
+    assert nothing["active_release"] is None
+    stable = _pinned_install(tmp_path / "stable", _labelled("stable", 172, "v0.8.4", contains="v0.8.4"))
+    assert stable.list_releases()["running_rolling"] is False
+    assert current.list_releases(for_upgrade=False)["running_rolling"] is False
 
 
 def test_a_pinned_development_install_refuses_the_older_line(tmp_path):

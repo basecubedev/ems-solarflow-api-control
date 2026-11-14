@@ -48,8 +48,8 @@ GITHUB_RELEASES_URL = (
 # its own, tagged outside the ``v*`` namespace, and every one of those used to
 # take a slot in a single fixed page: a weekly image build fills a 50-entry
 # window in under a year, at which point `latest_stable` is None and the console
-# falls back to the rolling `latest` channel without a warning, because the
-# fetch itself succeeded. So the page is followed to its end, up to a bound, and
+# proposed nothing for an update, or the rolling `latest` for a setup, without a
+# warning, because the fetch itself succeeded. So the page is followed to its end, up to a bound, and
 # a release whose tag is not a version is not a candidate to begin with.
 GITHUB_RELEASE_PAGES = 17
 # EMS image reference in a compose file; group 1 is the tag (may be ``latest``)
@@ -659,7 +659,11 @@ class ReleaseManager:
         # Selectable and proposed are not the same thing. A rollback has to be
         # reachable, but the console never suggests one on its own, and it is
         # the unbounded walk down this list that put an older release in front
-        # of an operator in the first place.
+        # of an operator in the first place. An upgrade proposes a stable
+        # release only: the rolling channel is chosen by hand, or an install
+        # that took it once is offered it again with every build. Only a
+        # fresh setup without any stable release falls back to it.
+        rolling = bool(for_upgrade and self._running_is_rolling())
         stable = next(
             (
                 item["tag"]
@@ -673,10 +677,9 @@ class ReleaseManager:
             ),
             None,
         )
-        runs_a_fixed_release = for_upgrade and bool(active) and active != "latest"
         default_release = stable or (
             None
-            if runs_a_fixed_release
+            if for_upgrade
             else next(
                 (item["tag"] for item in releases if item["tag"] == "latest" and item["selectable"]),
                 None,
@@ -688,6 +691,7 @@ class ReleaseManager:
             "latest": "latest",
             "latest_stable": stable,
             "default_release": default_release,
+            "running_rolling": rolling,
             "releases": releases,
             "warnings": warnings,
         }
@@ -1824,8 +1828,7 @@ class ReleaseManager:
         Only an image that declares nothing falls back to the newest release
         this manager has actually seen -- never a guess: with no catalogue and
         nothing cached there is nothing to compare against, and the listing says
-        so by keeping ``latest`` as its default rather than proposing a version
-        it cannot place.
+        so by proposing nothing rather than a version it cannot place.
         """
 
         if not self._running_has_no_version():

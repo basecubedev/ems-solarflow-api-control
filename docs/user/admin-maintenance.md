@@ -138,8 +138,8 @@ Guided upgrade moves **forward**, or back by one or more patches inside the
 release line you are running — `v0.8.3` back to `v0.8.1`, so a bad patch can be
 undone. It never offers that by itself: the proposed build is the newest stable
 release that is neither the one you are running nor behind it; without one,
-nothing is proposed and you choose, and the rolling `latest` is proposed only
-when nothing identifiable runs. Going further back, to an older
+nothing is proposed and you choose. The rolling `latest` is never proposed for
+an update, only chosen by hand. Going further back, to an older
 minor or major, belongs to the Backup / restore flow. It never removes
 containers, volumes, or data. The Admin Console asks
 for confirmation before changing config, compose files, containers, or data.

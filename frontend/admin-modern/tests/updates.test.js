@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { CHANNELS, CHANNEL_FILTERS, CHANNEL_TONES, RELEASE_GROUPS, UPGRADE_STATES, PAIR_STATES, channelChoices, groupedReleases, noteView, pairView, releaseList, releasesInChannel, shownChannel, upgradePage } from "../src/lib/updates.js";
+import { CHANNELS, CHANNEL_FILTERS, CHANNEL_TONES, RELEASE_GROUPS, UPGRADE_STATES, PAIR_STATES, channelChoices, groupedReleases, noteView, pairView, recommendationNote, releaseList, releasesInChannel, shownChannel, upgradePage } from "../src/lib/updates.js";
 
 const read = (path) => readFileSync(new URL(`../../../admin/${path}`, import.meta.url), "utf8");
 
@@ -131,4 +131,24 @@ test("a catalogue of one channel offers nothing to filter", () => {
   assert.deepEqual(channelChoices(releases, releases), []);
   assert.deepEqual(channelChoices([], []), []);
   assert.deepEqual(CHANNEL_FILTERS, ["all", ...RELEASE_GROUPS.map((group) => group.id)]);
+});
+
+test("nothing proposed says why: the rolling build is chosen by hand, a stable release is current", () => {
+  const rolling = { running_rolling: true, default_release: null, active_release: null, releases: [
+    { tag: "latest", channel: "latest", selectable: true },
+    { tag: "v1", channel: "stable", selectable: true, upgrade_state: "rollback_available" },
+  ] };
+  const stable = { running_rolling: false, default_release: null, active_release: "v1", releases: [
+    { tag: "latest", channel: "latest", selectable: true },
+    { tag: "v1", channel: "stable", active: true, selectable: false },
+  ] };
+  const proposed = { running_rolling: true, default_release: "v2", releases: [
+    { tag: "latest", channel: "latest" },
+    { tag: "v2", channel: "stable" },
+  ] };
+  const unknown = { running_rolling: false, default_release: null, releases: [{ tag: "v1", channel: "stable" }] };
+  const both = { running_rolling: true, default_release: null, releases: [{ tag: "v1", channel: "stable", active: true }] };
+  for (const [catalogue, note] of [[rolling, "rolling"], [stable, "stable"], [proposed, null], [unknown, null], [both, "rolling"]]) {
+    assert.equal(recommendationNote(catalogue, releaseList(catalogue)), note);
+  }
 });
