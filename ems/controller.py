@@ -69,9 +69,12 @@ from ems.runtime_intents import (
     runtime_intent_from_role,
 )
 from ems.state_store import BatteryFullChargeStateStore
-from ems.winter_policies import MAX_RAISE_ABOVE_SOC
+from ems.winter_policies import BATTERY_ONLY, MAX_RAISE_ABOVE_SOC, device_energy_class
+from ems.mqtt_control.zendure_profiles import device_model_class
 from ems.winter_reserve import MIN_SOC_UNMANAGED, WinterReserve
 from ems.target_control import (
+    SWING_LOCK_MAX_STEP_S,
+    BatteryCareSwingLock,
     ControlExplanation,
     ControlLimitExplanation,
     DeviceControlExplanation,
@@ -212,6 +215,7 @@ class EMSController:
         self.min_soc_raise_waiting = {}
         self.night_min_soc_idle_active = False
         self.night_min_soc_idle_parked = set()
+        self.battery_care_swing_lock = BatteryCareSwingLock()
         self._dashboard_capabilities = []
         self._last_dashboard_publish = 0
         self._last_influx_publish = 0
@@ -1465,22 +1469,49 @@ class EMSController:
         """Each device's battery care ceiling this cycle; ``None`` where it does not hold.
 
         The full point is the winter one while winter mode is in effect, else
-        the summer one; 0 switches the ramp off for that season.
+        the summer one; 0 switches the ramp off for that season. A battery
+        the swing lock holds rests at every point.
         """
 
+        rests = [self.battery_care_swing_lock.locked(dev.name) for dev in self.devices]
         care = cfg.battery_care_settings(self.runtime_state)
         if not care["enabled"]:
             return [None] * len(self.devices)
         winter = cfg.winter_mode_active(now or datetime.now(), self.runtime_state)
         ramp = MinSocRamp(
-            care["pv_only_points"],
-            care["winter_full_points" if winter else "summer_full_points"],
-            care["min_discharge_w"],
+            pv_only_points=care["pv_only_points"],
+            full_points=care["winter_full_points" if winter else "summer_full_points"],
+            min_discharge_w=care["min_discharge_w"],
+            pv_margin_percent=care["pv_margin_percent"],
+            pv_margin_min_w=care["pv_margin_min_w"],
         )
         return [
-            min_soc_ramp_cap_w(state, dev, ramp)
-            for dev, state in zip(self.devices, states)
+            min_soc_ramp_cap_w(state, dev, ramp, rest)
+            for rest, dev, state in zip(rests, self.devices, states)
         ]
+
+    def observe_swing_lock(self, states):
+        """Follow the swing lock of each battery without PV of its own.
+
+        Runs on every cycle's readings, before the night idle can end the
+        cycle, and whether battery care is on or off, so neither a floor nor a
+        charge goes unseen. The class is the one winter mode reads: the
+        catalogue model and ``pv_kwp``. Only a fresh reading with a battery in it
+        moves the lock; an offline device, or one whose pack count reads 0 for a
+        moment, keeps what it had. A step counts its charge up to twice the loop
+        interval, so a long interval does not read as a gap.
+        """
+
+        clock = time.monotonic()
+        max_step = max(SWING_LOCK_MAX_STEP_S, 2 * self._loop_interval_after_failure())
+        for dev, state in zip(self.devices, states):
+            entry = cfg.device_config_entry(dev.name) or {}
+            if device_energy_class(False, entry.get("pv_kwp"), device_model_class(dev)) != BATTERY_ONLY:
+                self.battery_care_swing_lock.forget(dev.name)
+                continue
+            if not self.device_online.get(dev.name, True) or battery_presence(state) == BATTERY_ABSENT:
+                continue
+            self.battery_care_swing_lock.update(dev.name, state, clock, max_step)
 
     def standby_floor_caps(self, discharge_caps, states):
         """The ramp ceilings the standby floor honours, taken before a target moves.
@@ -5194,6 +5225,8 @@ class EMSController:
             self.device_online[dev.name] = False
 
             states.append(zero_device_state())
+
+        self.observe_swing_lock(states)
 
         now = datetime.now().astimezone()
         full_charge_feature_transition = (

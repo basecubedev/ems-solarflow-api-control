@@ -319,17 +319,21 @@ a battery below this floor.
 
 `battery_care` (Admin: **Battery care**, on by default) discharges a battery
 gently close to its minSoc: up to `pv_only_points` (default `1`) above its
-minSoc it only passes its PV through, from there its battery share grows with
-the square of the distance until the full point,
+minSoc the device keeps its PV and its battery adds only a margin,
+`pv_margin_percent` (default `20` %) of the PV, at least `pv_margin_min_w`
+(default `35` W) and never more than the PV itself, so nothing without PV; from
+there its battery share grows with the square of the distance until the full
+point,
 `summer_full_points` (default `3`) outside winter mode and `winter_full_points`
 (default `4`) while winter mode is in effect; `0` switches it off for that
 season. One point past `pv_only_points` a battery may give `min_discharge_w`
-(default `50` W; `0` leaves that point its PV only), and from there its share
+(default `50` W; `0` leaves that point its PV and margin), and from there its share
 grows to full power. These are ceilings: a house that needs less from the
-battery gets less. With minSoc 40 an 800 W device only passes its PV through at
-41 %, may add 50 W to it at 42 %, and may deliver full power from 43 % in
-summer; in winter it may add 50 W at 42 % and 238 W at 43 % to its PV, and full
-power from 44 %. See
+battery gets less. With minSoc 40 an 800 W device may add the PV margin to its
+PV at 41 % (35 W at 100 W of PV, nothing at night), 50 W at 42 %, and may
+deliver full power from 43 % in summer; in winter it may add 50 W at 42 % and
+238 W at 43 % to its PV, and full power from 44 %. A battery without PV of its own that has reached its minSoc
+rests until it has taken 30 Wh of charge since then. See
 [control-logic.md](control-logic.md#battery-care).
 
 `system.loop_interval` is the control loop interval in seconds (Admin label:

@@ -331,24 +331,32 @@ def cannot_absorb_pv(state):
     return battery_presence(state) == BATTERY_ABSENT or is_full_soc_device(state)
 
 
-MIN_SOC_RAMP_PV_SHARE = 0.9
-
-
 @dataclass(frozen=True)
 class MinSocRamp:
     """How far above its minSoc a battery discharges at full power (battery care).
 
-    Up to ``pv_only_points`` above minSoc a device passes its PV through and
-    its battery rests. One point past them the battery may give
-    ``min_discharge_w``, and from there the share of the rest of its power
-    grows with the square of the distance until ``full_points``, so the points
-    just above the floor, where a high current makes the cell voltage sag the
-    most, give only a reduced share. ``full_points`` 0 switches the ramp off.
+    Up to ``pv_only_points`` above minSoc a device delivers its PV and its
+    battery adds no more than the PV margin. One point past them the battery
+    may give ``min_discharge_w``, and from there the share of the rest of its
+    power grows with the square of the distance until ``full_points``, so the
+    points just above the floor, where a high current makes the cell voltage
+    sag the most, give only a reduced share. ``full_points`` 0 switches the
+    ramp off.
+
+    The PV margin is ``pv_margin_percent`` of the PV, at least
+    ``pv_margin_min_w``, never more than the PV itself: delivering exactly the
+    PV would flip the pack between charging and discharging with every change
+    of the sun, while the margin keeps it discharging a little and small
+    enough that a battery just above its floor never gives full power
+    (owner 2026-11-14). Without PV it is nothing, so the battery rests, and a
+    battery at or below its minSoc gets none: it delivers its PV.
     """
 
     pv_only_points: int
     full_points: int
     min_discharge_w: int = 0
+    pv_margin_percent: int = 0
+    pv_margin_min_w: int = 0
 
 
 def min_soc_ramp_share(points_above_min, ramp, window=None):
@@ -376,16 +384,17 @@ def min_soc_ramp_share(points_above_min, ramp, window=None):
     return ((points_above_min - first) / (full - first)) ** 2
 
 
-def min_soc_ramp_cap_w(state, device_config, ramp):
+def min_soc_ramp_cap_w(state, device_config, ramp, rest=False):
     """Most a device may deliver while its battery is close to its minSoc.
 
     ``None`` when the ramp does not hold it back. The firmware lifts its
     discharge floor one point above minSoc; full power there makes the cell
     voltage sag, the SoC estimate drops a point after a few watt-hours, the
     device re-enters the floor, and the 800 Pro 2 draws about 1.2 kW from the
-    grid. PV passes through slightly below what the device produces, so a
-    passing cloud charges the pack a little instead of draining it. It is a
-    ceiling: a house that needs less from the battery gets less.
+    grid. The device keeps its PV, and the battery adds the larger of the PV
+    margin and its share of the curve. It is a ceiling: a house that needs
+    less from the battery gets less. ``rest`` holds the battery to the PV
+    margin at every point, as the swing lock does.
     """
 
     if ramp is None or ramp.full_points <= 0:
@@ -396,13 +405,80 @@ def min_soc_ramp_cap_w(state, device_config, ramp):
     if presence != BATTERY_PRESENT and state.soc <= 0:
         return None
     points = state.soc - state.min_soc
-    share = min_soc_ramp_share(points, ramp, state.max_soc - state.min_soc)
+    share = 0.0 if rest else min_soc_ramp_share(points, ramp, state.max_soc - state.min_soc)
     if share >= 1.0:
         return None
     max_power = get_device_max_power(device_config)
-    floor = min(ramp.min_discharge_w, max_power) if points > ramp.pv_only_points else 0
-    cap = round(MIN_SOC_RAMP_PV_SHARE * pv_power(state) + floor + share * (max_power - floor))
+    pv = pv_power(state)
+    margin = min(pv, max(ramp.pv_margin_percent / 100 * pv, ramp.pv_margin_min_w)) if points > 0 else 0
+    released = points > ramp.pv_only_points and not rest
+    floor = min(ramp.min_discharge_w, max_power) if released else 0
+    cap = round(pv + max(margin, floor + share * (max_power - floor)))
     return cap if cap < max_power else None
+
+
+SWING_LOCK_RELEASE_WH = 30
+SWING_LOCK_MAX_STEP_S = 120
+
+
+class BatteryCareSwingLock:
+    """Batteries without PV of their own held after their floor until really charged.
+
+    Such a battery rises above its minSoc only by charging, or by its SoC
+    estimate relaxing at rest. Once it has reached its floor it may discharge
+    again only after ``SWING_LOCK_RELEASE_WH`` of charge since then, so a point
+    gained at rest releases nothing and the battery does not swing between its
+    floor and the point above it (owner 2026-11-14). The charge is counted from
+    fresh readings only, and a step longer than ``max_step`` counts none, so
+    neither a cached reading nor a gap releases a battery; charge taken while
+    the battery still reads its floor counts too. The floor is a SoC at or
+    below minSoc, or the firmware's floor flag one point above it at most; a
+    reading without a reported minSoc or with a SoC of 0 arms nothing. A
+    minSoc lowered below the floor the lock last saw releases it: the battery
+    is no longer on its floor.
+    """
+
+    def __init__(self):
+        self.charged_wh = {}
+        self.armed_min_soc = {}
+        self.seen_at = {}
+
+    def locked(self, name):
+        """Whether ``name`` is held."""
+
+        return name in self.charged_wh
+
+    def update(self, name, state, clock, max_step=SWING_LOCK_MAX_STEP_S):
+        """Follow ``name`` with a fresh reading ``state`` at ``clock``."""
+
+        step = clock - self.seen_at.get(name, clock)
+        self.seen_at[name] = clock
+        if state.soc <= 0 or not getattr(state, "min_soc_reported", True):
+            return
+        if self.locked(name) and state.min_soc < self.armed_min_soc[name]:
+            self.forget(name)
+            self.seen_at[name] = clock
+        floor = state.soc <= state.min_soc or (
+            state.soc_limit == 2 and state.soc <= state.min_soc + 1
+        )
+        arming = floor and not self.locked(name)
+        if floor:
+            self.charged_wh.setdefault(name, 0.0)
+            self.armed_min_soc[name] = state.min_soc
+        if arming or not self.locked(name):
+            return
+        if 0 < step <= max_step:
+            self.charged_wh[name] += max(0.0, state.pack_out) * step / 3600
+        if not floor and self.charged_wh[name] >= SWING_LOCK_RELEASE_WH:
+            self.forget(name)
+            self.seen_at[name] = clock
+
+    def forget(self, name):
+        """Drop ``name``, which the lock does not hold."""
+
+        self.charged_wh.pop(name, None)
+        self.armed_min_soc.pop(name, None)
+        self.seen_at.pop(name, None)
 
 
 def _held_by_ramp(state, capability, cap, target):

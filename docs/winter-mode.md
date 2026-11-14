@@ -269,7 +269,8 @@ what the battery holds.
 What this does not prevent: a battery that discharges down to its `minSoc`
 at full power draws the same burst; after a follow that is one point of
 discharge away. [Battery care](technical/control-logic.md#battery-care) asks
-for no battery power in that last point.
+for no more than a small margin above the PV in that last point, and for nothing
+once the sun has gone.
 
 ## Battery Care in Winter
 

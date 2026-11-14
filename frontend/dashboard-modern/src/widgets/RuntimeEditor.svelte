@@ -38,6 +38,8 @@
     { name: "winter_full_points", type: "number", label: t("runtime.batteryCareWinter"), min: 0, max: 50, unit: "%" },
     { name: "pv_only_points", type: "number", label: t("runtime.batteryCarePvOnly"), min: 0, max: 50, unit: "%" },
     { name: "min_discharge_w", type: "number", label: t("runtime.batteryCareMinDischarge"), min: 0, max: 5000, unit: "W" },
+    { name: "pv_margin_percent", type: "number", label: t("runtime.batteryCarePvMargin"), min: 0, max: 100, unit: "%" },
+    { name: "pv_margin_min_w", type: "number", label: t("runtime.batteryCarePvMarginMin"), min: 0, max: 5000, unit: "W" },
   ].map((field) => withDefault(field, defaults.battery_care?.[field.name])));
 
   const systemFields = $derived([

@@ -352,6 +352,8 @@ def test_catalogue_runtime_defaults_leave_out_installation_values():
             "winter_full_points",
             "pv_only_points",
             "min_discharge_w",
+            "pv_margin_percent",
+            "pv_margin_min_w",
         ),
     }
     prefixes = {"system": "system", "devices": "devices[]", "battery_care": "battery_care"}
