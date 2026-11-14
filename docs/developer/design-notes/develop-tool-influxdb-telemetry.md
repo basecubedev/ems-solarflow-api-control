@@ -63,6 +63,7 @@ Main artifacts:
 - `develop/influxdb/README.md`
 - `develop/influxdb/tasks/downsample_1m.flux`
 - `develop/influxdb/tasks/downsample_15m.flux`
+- `develop/influxdb/tasks/downsample_1m_cells.flux`, `downsample_15m_cells.flux`
 - `scripts/capture_runtime_to_influx.py`
 - `scripts/setup_influx_buckets.py`
 - `scripts/query_influx_events.py`

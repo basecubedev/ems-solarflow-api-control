@@ -1,0 +1,130 @@
+// SPDX-FileCopyrightText: 2026 basecubedev
+// SPDX-License-Identifier: AGPL-3.0-or-later
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createFormat } from "../../shared/lib/format.js";
+import { packCells, cellRange, cellText, cellSeriesIds, cellKind, cellStyle, cellDevices, historyCellDevices, analyticsCellDevices, packsSeen, reportedCells, seriesExtreme, shownPack, voltRange } from "../src/lib/cells.js";
+import { normalizeDevice } from "../src/lib/devices.js";
+import { ANALYTICS_VIEWS, CELL_OVERLAYS, requestedSeries, seriesStyle, viewById } from "../src/lib/analytics.js";
+
+test("the live data's packs come in pack order, a missing voltage stays null and a nameless entry is dropped", () => {
+  assert.deepEqual(
+    packCells([
+      { pack: 2, cell_min_v: 3.3, cell_max_v: null },
+      { pack: 1, cell_min_v: 3.17, cell_max_v: 3.18 },
+      { pack: 0, cell_min_v: 3.2 },
+      { pack: "3", cell_min_v: 3.2 },
+      null,
+    ]),
+    [{ pack: 1, low: 3.17, high: 3.18 }, { pack: 2, low: 3.3, high: null }],
+  );
+  assert.deepEqual(packCells([{ pack: 17, cell_min_v: 3.2 }]), []);
+  assert.deepEqual(packCells(undefined), []);
+  assert.deepEqual(packCells({ pack: 1 }), []);
+});
+
+test("the range spans every pack and says nothing where no pack reports", () => {
+  assert.deepEqual(cellRange([{ pack: 1, low: 3.2, high: 3.22 }, { pack: 2, low: 3.3, high: null }]), { low: 3.2, high: 3.22 });
+  assert.deepEqual(cellRange([{ pack: 1, low: null, high: null }]), { low: null, high: null });
+  assert.deepEqual(cellRange([]), { low: null, high: null });
+});
+
+test("a range of cell voltages reads lowest to highest in the reader's language", () => {
+  const en = createFormat("en");
+  assert.equal(cellText(en, 3.17, 3.18), "3.17–3.18 V");
+  assert.equal(cellText(en, 3.2, 3.2), "3.20 V");
+  assert.equal(cellText(en, null, 3.18), "3.18 V");
+  assert.equal(cellText(en, null, null), "—");
+  assert.equal(cellText(createFormat("de"), 3.17, 3.18), "3,17–3,18 V");
+});
+
+test("a pack's two history series, and only they, are cell series", () => {
+  assert.deepEqual(cellSeriesIds(2), ["cell_min:2", "cell_max:2"]);
+  assert.equal(cellKind("cell_min:2"), "min");
+  assert.equal(cellKind("cell_max:12"), "max");
+  for (const id of ["cell_min:0", "cell_min:01", "cell_min:", "soc", "consumer:cell_min:1", undefined]) assert.equal(cellKind(id), null, String(id));
+  assert.deepEqual(cellStyle("cell_min:1"), { label: "series.cellMin", token: "--battery", fill: false });
+  assert.deepEqual(cellStyle("cell_max:1"), { label: "series.cellMax", token: "--m-muted", fill: false });
+  assert.equal(cellStyle("battery"), null);
+});
+
+test("only a device with a battery and a reported cell voltage gets a chart", () => {
+  const device = (name, hardware, packs) => normalizeDevice(name, { hardware, battery_packs: packs });
+  const devices = [
+    device("Grill", { battery: true }, [{ pack: 1, cell_min_v: 3.17, cell_max_v: 3.18 }]),
+    device("Silent", { battery: true }, [{ pack: 1, cell_min_v: null, cell_max_v: null }]),
+    device("Inverter", { battery: false }, [{ pack: 1, cell_min_v: 3.2, cell_max_v: 3.2 }]),
+    device("Old", { battery: true }, undefined),
+  ];
+  assert.deepEqual(cellDevices(devices), [{ name: "Grill", cells: [{ pack: 1, low: 3.17, high: 3.18 }] }]);
+  assert.deepEqual(reportedCells(devices[2]), []);
+  assert.deepEqual(devices[3].cells, []);
+});
+
+test("the cell history offers every battery device, one that reports nothing now by the packs it counts", () => {
+  const device = (name, over) => normalizeDevice(name, { hardware: { battery: true }, ...over });
+  const devices = [
+    device("Grill", { battery_packs: [{ pack: 1, cell_min_v: 3.17, cell_max_v: 3.18 }] }),
+    device("Offline", { online: false, pack_num: 2 }),
+    device("Unknown", {}),
+    normalizeDevice("Inverter", { hardware: { battery: false }, pack_num: 0 }),
+  ];
+  assert.deepEqual(historyCellDevices(devices), [
+    { name: "Grill", cells: [{ pack: 1, low: 3.17, high: 3.18 }], reporting: true },
+    { name: "Offline", cells: [{ pack: 1, low: null, high: null }, { pack: 2, low: null, high: null }], reporting: false },
+    { name: "Unknown", cells: [{ pack: 1, low: null, high: null }], reporting: false },
+  ]);
+});
+
+test("the Analytics cell view leaves out a device the EMS only reads, whose cells InfluxDB never gets", () => {
+  const battery = { battery: true };
+  const devices = [
+    normalizeDevice("Grill", { hardware: battery, battery_packs: [{ pack: 1, cell_min_v: 3.17, cell_max_v: 3.18 }] }),
+    normalizeDevice("Shed", { hardware: battery, read_only: true, battery_packs: [{ pack: 1, cell_min_v: 3.2, cell_max_v: 3.21 }] }),
+  ];
+  assert.deepEqual(analyticsCellDevices(devices).map((entry) => entry.name), ["Grill"]);
+  assert.deepEqual(historyCellDevices(devices).map((entry) => entry.name), ["Grill", "Shed"]);
+});
+
+test("a device that went quiet keeps the packs it reported before", () => {
+  const live = normalizeDevice("Grill", { hardware: { battery: true }, battery_packs: [{ pack: 1, cell_min_v: 3.2 }, { pack: 3, cell_max_v: 3.3 }] });
+  const seen = packsSeen([live], {});
+  assert.deepEqual(seen, { Grill: 3 });
+  assert.equal(packsSeen([live], seen), seen);
+  const quiet = normalizeDevice("Grill", { hardware: { battery: true }, online: false });
+  assert.deepEqual(historyCellDevices([quiet], seen)[0].cells.map((pack) => pack.pack), [1, 2, 3]);
+  assert.deepEqual(historyCellDevices([quiet])[0].cells.map((pack) => pack.pack), [1]);
+});
+
+test("a chart keeps the pack it was asked for while the device has it", () => {
+  const packs = [{ pack: 1 }, { pack: 2 }];
+  assert.equal(shownPack(packs, 2), 2);
+  assert.equal(shownPack(packs, 5), 1);
+  assert.equal(shownPack([], 1), null);
+});
+
+test("the volt axis hugs the data on 50 mV steps", () => {
+  assert.deepEqual(voltRange(3.17, 3.18), [3.15, 3.2]);
+  assert.deepEqual(voltRange(3.2, 3.2), [3.15, 3.25]);
+  assert.deepEqual(voltRange(3.33, 3.65), [3.3, 3.7]);
+  assert.deepEqual(voltRange(null, undefined), [3.0, 3.5]);
+});
+
+test("the lowest and highest value of a series in an answer", () => {
+  const data = { series: { "cell_min:1": [3.2, null, 3.17], "cell_max:1": [3.22, 3.25, null] } };
+  assert.equal(seriesExtreme(data, "cell_min:1", "min"), 3.17);
+  assert.equal(seriesExtreme(data, "cell_max:1", "max"), 3.25);
+  assert.equal(seriesExtreme(data, "cell_min:2", "min"), null);
+  assert.equal(seriesExtreme(null, "cell_min:1", "min"), null);
+});
+
+test("the cells view asks for one pack and the state of charge alone of the overlays", () => {
+  const view = viewById("cells");
+  assert.ok(view.cells && view.modernOnly);
+  assert.deepEqual(requestedSeries(view, ["target", "soc", "grid"], [], 2), ["cell_min:2", "cell_max:2", "soc"]);
+  assert.deepEqual(requestedSeries(view, ["soc"], [], null), []);
+  assert.deepEqual([...CELL_OVERLAYS], ["soc"]);
+  assert.deepEqual(seriesStyle(view, "cell_max:2"), { token: "--m-muted", fill: false });
+  assert.deepEqual(seriesStyle(view, "soc").dash, [6, 4]);
+  assert.ok(ANALYTICS_VIEWS.filter((item) => item.modernOnly).every((item) => item.consumers || item.cells));
+});

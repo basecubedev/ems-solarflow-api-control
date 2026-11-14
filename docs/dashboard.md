@@ -97,7 +97,25 @@ labels instead of raw numbers:
   `Calibration running`.
 
 The battery pack count and the AC input limit are main facts of the card when
-the device reports them. Unknown firmware values are still shown with their raw
+the device reports them, and so is **Cell voltage**, the lowest to the highest
+cell over the device's packs, with a folded section per pack when it has more
+than one.
+The live snapshot carries them per device as `devices.<name>.battery_packs`, a
+list of `{"pack": 1, "cell_min_v": 3.17, "cell_max_v": 3.18}`: Zendure's
+`packData[].minVol` and `maxVol`, hundredths of a volt, in volts, `null` where a
+pack reports none or a value no cell can have (outside 1.5–5.0 V, or a lowest
+cell above the highest). The packs are numbered from 1 in the order of their
+serial numbers, which are not published; adding or removing a pack renumbers
+the ones after it, so from then on a number's history goes on with another
+pack. The list stays empty unless the report counts its packs (`packNum`),
+lists as many and names each by serial, because a list short of one pack would
+file another pack's cells under its number, and it is empty for a device that is
+offline or whose telemetry is out of date. Over MQTT, where a report sent on a
+change carries only the packs and fields that changed, the EMS merges each pack
+it has heard of by serial number, field by field, and a report that gives its
+`packNum` and lists as many packs drops the ones it leaves out, so a device
+numbers its packs once it has heard of all of them, and a swapped pack is
+forgotten at the next such report; until then its cells are not numbered. Unknown firmware values are still shown with their raw
 value for debugging, for example `Unknown (value 9)`.
 
 When [battery full-charge assist](battery-full-charge-assist.md) is enabled
@@ -110,7 +128,8 @@ without a detected battery, and devices when the feature is globally disabled,
 do not show this block.
 
 Below the cards, the page draws the energy flow per device and a power chart
-from the local history with a device choice. See
+from the local history with a device choice, and, when a device reports its
+cell voltages, a cell voltage chart of one pack from the same history. See
 [Device cards](user/dashboard/devices.md).
 
 ![Devices page demo screenshot with the grid meter card first, then two inverter cards, the energy flow per device and the power chart](assets/preview-devices.jpg)
@@ -794,7 +813,17 @@ back to the default `pv,output,battery`. Besides the catalog series
 them in a request; the key is percent-encoded (`consumer:plug%40Dryer`), because
 the list is split on commas, and at most 256 characters long. InfluxDB answers the same
 ids from its `consumer` measurement (tag `device`, the history key; field `power`) and the
-meter's `house_other` field. For a **custom range**, pass `start`
+meter's `house_other` field. `cell_min:<pack>` and `cell_max:<pack>` read one
+battery pack's lowest and highest cell voltage in volts, the packs numbered
+from 1 to 16 as `devices.<name>.battery_packs` numbers them; with `devices`
+they read the selected devices, without it every device the EMS controls, and
+across devices the lowest and the highest one count; a device offline or out of
+date at the time counts none. InfluxDB answers them from its `battery_pack` measurement (tags `device`
+and `pack`; fields `cell_min_v` and `cell_max_v`), keeping each window's lowest
+and highest value rather than its mean, so a short dip still shows in a long
+range. SQLite reads them from the snapshot's `battery_packs` and thins a long
+range to at most 2,000 snapshots like every other series, so it can miss a dip
+shorter than the gap between two of them. For a **custom range**, pass `start`
 and `end` (epoch seconds or ISO 8601) instead of `range`; the response then
 reports `"range": "custom"`. `start >= end` or unparseable bounds return
 `400 invalid_range`. The response is columnar

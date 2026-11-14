@@ -92,7 +92,7 @@ test("schedule presets, statuses and weekdays are Classic's", () => {
 
 test("analytics views request the series Classic's tabs request", () => {
   const classicTabs = Object.fromEntries(classic.ANALYTICS_TABS.map((tab) => [tab.id, tab.series]));
-  const shared = ANALYTICS_VIEWS.filter((view) => !view.consumers);
+  const shared = ANALYTICS_VIEWS.filter((view) => !view.modernOnly);
   for (const view of shared) assert.deepEqual(view.series, classicTabs[view.id], view.id);
   assert.deepEqual(shared.map((v) => v.id).sort(), Object.keys(classicTabs).sort());
 });

@@ -23,8 +23,9 @@ from ems.charge_record import (
 )
 from ems.health import CommHealth, redact_error, redact_url_credentials
 from ems.logging_utils import log_event
-from ems.models import DEVICE_STATE_PROPERTIES, DeviceState, parse_pack_count
+from ems.models import DEVICE_STATE_PROPERTIES, MAX_PACK_NUMBER, DeviceState, PackCells, parse_pack_count
 from ems.power_direction import AC_MODE_INPUT, DEFAULT_SAFETY_PREEMPT_MARGIN_W
+from ems.zendure_mqtt.payloads import extract_packs
 from ems.zendure_mqtt.snapshot import observable_metrics
 
 
@@ -160,6 +161,24 @@ def _observed_pack_count(data, props):
 
 ZENDURE_TENTHS_KELVIN_AT_ZERO_C = 2731
 PLAUSIBLE_DEVICE_TEMPERATURE_C = (-60.0, 120.0)
+ZENDURE_CELL_VOLTAGE_HUNDREDTHS = 100
+PLAUSIBLE_CELL_VOLTAGE_V = (1.5, 5.0)
+
+
+def _zendure_reading(value, *, offset, divisor, digits, plausible):
+    """A scaled Zendure reading, ``None`` when it is missing or no device can have it."""
+
+    if isinstance(value, bool):
+        return None
+    try:
+        raw = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(raw):
+        return None
+    reading = round((raw - offset) / divisor, digits)
+    low, high = plausible
+    return reading if low <= reading <= high else None
 
 
 def zendure_temperature_c(value):
@@ -171,17 +190,60 @@ def zendure_temperature_c(value):
     reading either.
     """
 
-    if isinstance(value, bool):
-        return None
-    try:
-        tenths = float(value)
-    except (TypeError, ValueError, OverflowError):
-        return None
-    if not math.isfinite(tenths):
-        return None
-    celsius = round((tenths - ZENDURE_TENTHS_KELVIN_AT_ZERO_C) / 10, 1)
-    low, high = PLAUSIBLE_DEVICE_TEMPERATURE_C
-    return celsius if low <= celsius <= high else None
+    return _zendure_reading(
+        value,
+        offset=ZENDURE_TENTHS_KELVIN_AT_ZERO_C,
+        divisor=10,
+        digits=1,
+        plausible=PLAUSIBLE_DEVICE_TEMPERATURE_C,
+    )
+
+
+def zendure_cell_voltage_v(value):
+    """A cell voltage in volts, ``None`` when the pack reports none.
+
+    Zendure reports ``packData[].minVol``/``maxVol`` in hundredths of a volt.
+    A reading no cell chemistry can have is no reading.
+    """
+
+    return _zendure_reading(
+        value,
+        offset=0,
+        divisor=ZENDURE_CELL_VOLTAGE_HUNDREDTHS,
+        digits=2,
+        plausible=PLAUSIBLE_CELL_VOLTAGE_V,
+    )
+
+
+def battery_pack_cells(data, props):
+    """Each pack's lowest and highest cell voltage, the packs numbered from 1.
+
+    Empty unless the report counts its packs (``packNum``, at most
+    ``MAX_PACK_NUMBER``), lists as many and names each by a serial of its own:
+    a list short of one pack, or one in an order of its own, would file one
+    pack's cells under another's number. The packs are numbered in serial
+    order, so reports that list the same packs in another order number them
+    the same, and adding or removing a pack renumbers the ones after it; the
+    serial itself is not kept.
+    """
+
+    packs = extract_packs(data, props)
+    count = parse_pack_count(props.get("packNum"))
+    serials = [pack.get("sn") for pack in packs]
+    if not packs or count != len(packs) or count > MAX_PACK_NUMBER:
+        return ()
+    if not all(isinstance(sn, str) and sn for sn in serials) or len(set(serials)) != len(serials):
+        return ()
+    packs = sorted(packs, key=lambda pack: pack["sn"])
+    return tuple(_pack_cells(number, pack) for number, pack in enumerate(packs, start=1))
+
+
+def _pack_cells(number, pack):
+    low = zendure_cell_voltage_v(pack.get("minVol"))
+    high = zendure_cell_voltage_v(pack.get("maxVol"))
+    if low is not None and high is not None and low > high:
+        low = high = None
+    return PackCells(pack=number, cell_min_v=low, cell_max_v=high)
 
 
 def parse_device(data):
@@ -231,6 +293,7 @@ def parse_device(data):
         pack_num=_observed_pack_count(data, props),
         soc_status=props.get("socStatus") or 0,
         battery_calibration_time=props.get("batCalTime"),
+        battery_packs=battery_pack_cells(data, props),
         ac_mode_reported=props.get("acMode") is not None,
         min_soc_reported=props.get("minSoc") is not None,
         max_soc_reported=props.get("socSet") is not None,

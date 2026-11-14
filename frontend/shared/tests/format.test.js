@@ -10,6 +10,7 @@ test("a value that is not a number renders as a dash, never as zero", () => {
     assert.equal(f.power(value), MISSING);
     assert.equal(f.energy(value), MISSING);
     assert.equal(f.percent(value), MISSING);
+    assert.equal(f.voltage(value), MISSING);
     assert.equal(f.money(value), MISSING);
   }
   assert.equal(f.power(0), "0\u00a0W");
@@ -23,6 +24,12 @@ test("power switches to kilowatts on the rounded figure", () => {
   assert.equal(f.power(12500), "12.5\u00a0kW");
   assert.equal(f.power(-5, { signed: true }), "−5\u00a0W");
   assert.equal(f.power(880, { signed: true }), "+880\u00a0W");
+});
+
+test("a cell voltage keeps two decimals in the reader's language", () => {
+  assert.equal(createFormat("en").voltage(3.2), "3.20\u00a0V");
+  assert.equal(createFormat("en").voltage(3.175), "3.18\u00a0V");
+  assert.equal(createFormat("de").voltage(3.17), "3,17\u00a0V");
 });
 
 test("energy under one kilowatt-hour is shown in watt-hours", () => {

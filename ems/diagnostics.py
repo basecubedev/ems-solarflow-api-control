@@ -2619,7 +2619,7 @@ def diagnose_reported_property_names(payload):
         numeric = isinstance(current, (int, float)) and not isinstance(current, bool)
         probes = (987654, 123456, 2981) if numeric else ("?", 987654, 2981)
         if not any(
-            parse_device({"properties": {**properties, name: probe}}) != baseline
+            parse_device({**payload, "properties": {**properties, name: probe}}) != baseline
             for probe in probes
             if probe != current
         ):

@@ -196,12 +196,12 @@ def test_the_snapshot_reaches_the_controllers_own_answer():
     real lookup against a real controller.
     """
 
-    from dashboard.telemetry import _device_telemetry_is_measured
+    from dashboard.telemetry import device_telemetry_is_measured
 
     never_answered = _controller({}, online={"WR1": False})
     answered = _controller({"WR1": 1_000.0})
     answered.last_fetch_at = 1_002.0
 
     with _window(10):
-        assert _device_telemetry_is_measured(never_answered, "WR1") is False
-        assert _device_telemetry_is_measured(answered, "WR1") is True
+        assert device_telemetry_is_measured(never_answered, "WR1") is False
+        assert device_telemetry_is_measured(answered, "WR1") is True

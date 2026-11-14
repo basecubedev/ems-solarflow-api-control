@@ -119,7 +119,9 @@ def _within_float_range(number):
     return True
 
 
-def _extract_packs(data, properties):
+def extract_packs(data, properties):
+    """The pack entries a report lists, at its top level or in its properties."""
+
     packs = data.get("packData")
     if packs is None:
         packs = properties.get("packData")
@@ -149,7 +151,7 @@ def parse_report_payload(payload):
     properties = data.get("properties")
     if isinstance(properties, dict):
         report.properties = dict(properties)
-    report.battery_packs = _extract_packs(data, report.properties)
+    report.battery_packs = extract_packs(data, report.properties)
     report.extra = {
         key: value for key, value in data.items() if key not in _KNOWN_REPORT_KEYS
     }

@@ -58,7 +58,11 @@ class FakeClient:
     def __init__(
         self,
         present=("ems_raw", "ems_1m", "ems_5m", "ems_1h"),
-        tasks=("ems-downsample-1m", "ems-downsample-5m", "ems-downsample-1h"),
+        tasks=(
+            "ems-downsample-1m", "ems-downsample-1m:cells",
+            "ems-downsample-5m", "ems-downsample-5m:cells",
+            "ems-downsample-1h", "ems-downsample-1h:cells",
+        ),
     ):
         self.writes = []
         self.fail = False
@@ -323,14 +327,16 @@ def test_buckets_without_their_tasks_are_named_too(caplog):
     the tasks give it away.
     """
 
-    client = FakeClient(tasks=("ems-downsample-1m",))
+    client = FakeClient(tasks=("ems-downsample-1m", "ems-downsample-1m:cells"))
     writer = InfluxTelemetryWriter(DOWNSAMPLED_CONFIG, client_factory=lambda: client)
 
     with caplog.at_level(logging.WARNING):
         writer._report_schema_gap_once(client)
 
     assert "event=influx_schema_incomplete" in caplog.text
-    assert "missing_tasks=ems-downsample-5m,ems-downsample-1h" in caplog.text
+    assert (
+        "missing_tasks=ems-downsample-5m,ems-downsample-5m:cells,ems-downsample-1h,ems-downsample-1h:cells"
+    ) in caplog.text
     assert "missing_buckets" not in caplog.text
 
 
@@ -437,8 +443,11 @@ def test_a_task_that_exists_but_is_switched_off_fills_nothing(caplog):
         def list_tasks(self, limit=500, timeout=None):
             return [
                 {"name": "ems-downsample-1m", "status": "active"},
+                {"name": "ems-downsample-1m:cells", "status": "active"},
                 {"name": "ems-downsample-5m", "status": "inactive"},
+                {"name": "ems-downsample-5m:cells", "status": "active"},
                 {"name": "ems-downsample-1h", "status": "active"},
+                {"name": "ems-downsample-1h:cells", "status": "active"},
             ]
 
     client = Inactive()

@@ -5,6 +5,8 @@ import { createLiveTransport } from "../lib/transport.js";
 import { getJson } from "../../../shared/lib/api.js";
 import { prefs, applyDocumentPrefs } from "./prefs.svelte.js";
 import { auth } from "./auth.svelte.js";
+import { normalizedDevices } from "../lib/devices.js";
+import { packsSeen } from "../lib/cells.js";
 
 /**
  * The live snapshot. It is replaced wholesale on every frame and therefore
@@ -19,6 +21,8 @@ class Live {
   now = $state(Date.now());
   runtime = $state.raw(null);
   runtimeUnavailable = $state(false);
+  /** The highest pack number each device has reported cells for since the page loaded. */
+  cellPacks = $state.raw({});
 }
 
 export const live = new Live();
@@ -34,6 +38,7 @@ function accept(snapshot) {
   if (!snapshot || typeof snapshot !== "object") return;
   const previous = live.snapshot;
   live.snapshot = snapshot;
+  live.cellPacks = packsSeen(normalizedDevices(snapshot), live.cellPacks);
   if (!previous || previous.timestamp !== snapshot.timestamp) {
     live.changedAt = Date.now();
     live.sequence += 1;

@@ -622,6 +622,25 @@ publishes its port to the host loopback (`host_url`, default
 `http://127.0.0.1:8086`) and that the EMS is not unexpectedly detected as
 running inside a container (it honors an `EMS_IN_CONTAINER` override).
 
+### Battery cell voltages
+
+Each pack of a device the EMS controls that reports its cell voltages writes
+one `battery_pack` point per cycle while the device's telemetry is current (a state held past its last read
+writes none), tagged `device` and `pack` (numbered from 1, see
+[the Devices page](../dashboard.md#devices-page)), with `cell_min_v` and
+`cell_max_v` in volts; a value the pack does not report is left out.
+
+Each downsampling step has a second task for them, `<prefix>-downsample-<target>:cells`
+beside `<prefix>-downsample-<target>`, which carries each window's lowest
+`cell_min_v` and highest `cell_max_v` into the `1m`, `5m` and `1h` buckets
+rather than their means, so a dip of a few minutes still shows in a 30-day
+chart; Analytics reads them the same way. Being tasks of their own, they reach
+an installation that already has its schema without anyone asking: the EMS's
+safe sync ([The EMS keeps the schema in
+place](#the-ems-keeps-the-schema-in-place)) creates a task that is missing, and
+until it has, `influx status` and the EMS log name them under `missing_tasks`.
+The cell history in the downsampled buckets starts when they do.
+
 ### The device temperature up to v0.10.0
 
 The raw `temp` field holds the device temperature in °C. Zendure devices report

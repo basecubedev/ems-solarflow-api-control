@@ -175,7 +175,7 @@ def _grid_reading_is_valid(controller):
     )
 
 
-def _device_telemetry_is_measured(controller, name):
+def device_telemetry_is_measured(controller, name):
     """Whether this device's published power may be integrated as measured.
 
     Asked of the controller, which owns both the last-read timestamps and the
@@ -232,6 +232,7 @@ def _state_telemetry_fields(state):
         "fault_level": int(getattr(state, "fault_level", 0) or 0),
         "temperature_c": _rounded_or_none(getattr(state, "temp", None)),
         "voltage_v": _rounded(getattr(state, "voltage", 0)),
+        "battery_packs": [asdict(pack) for pack in getattr(state, "battery_packs", ()) or ()],
         "rssi": int(getattr(state, "rssi", 0) or 0),
         "remain_minutes": _rounded(getattr(state, "remain_minutes", 0)),
         "smart_mode": int(getattr(state, "smart_mode", 0) or 0),
@@ -461,7 +462,7 @@ def build_dashboard_snapshot(
     # Only a device the operator is actually running can stop the statistics:
     # a unit switched off for the season is disabled, and a disabled device is
     # not expected to report. A failed read is not a gap either -- see
-    # _device_telemetry_is_measured.
+    # device_telemetry_is_measured.
     unmeasured_devices = []
 
     capabilities = getattr(controller, "_dashboard_capabilities", None) or []
@@ -475,8 +476,10 @@ def build_dashboard_snapshot(
         if not online:
             offline_devices.append(name)
 
-        measured = _device_telemetry_is_measured(controller, name)
+        measured = device_telemetry_is_measured(controller, name)
         soc_reported = _reports_soc(state)
+        if not (online and measured):
+            fields["battery_packs"] = []
 
         if device_enabled and not measured:
             unmeasured_devices.append(name)
@@ -550,6 +553,7 @@ def build_dashboard_snapshot(
         fields = _state_telemetry_fields(state)
 
         if not online:
+            fields["battery_packs"] = []
             offline_devices.append(name)
             # A telemetry-only device has no enabled switch of its own and it
             # contributes to the aggregates, so it counts. Its status is

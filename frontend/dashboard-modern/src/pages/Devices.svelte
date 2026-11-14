@@ -4,14 +4,17 @@
   import DeviceCard from "../widgets/DeviceCard.svelte";
   import GridMeter from "../widgets/GridMeter.svelte";
   import DeviceHistory from "../widgets/DeviceHistory.svelte";
+  import CellHistory from "../widgets/CellHistory.svelte";
   import EnergyFlow from "../widgets/EnergyFlow.svelte";
   import Empty from "../../../shared/ui/Empty.svelte";
   import { t } from "../i18n/i18n.svelte.js";
   import { live } from "../state/live.svelte.js";
   import { devices } from "../state/derived.svelte.js";
+  import { historyCellDevices } from "../lib/cells.js";
 
   const list = $derived(devices());
   const names = $derived(list.map((device) => device.name));
+  const withCells = $derived(historyCellDevices(list, live.cellPacks).filter((entry) => entry.reporting || entry.name in live.cellPacks));
 </script>
 
 {#if !live.snapshot}
@@ -25,6 +28,7 @@
   </div>
   <EnergyFlow span="span-12" fixedMode="devices" />
   <DeviceHistory {names} />
+  {#if withCells.length}<CellHistory devices={withCells} />{/if}
 {/if}
 
 <style>

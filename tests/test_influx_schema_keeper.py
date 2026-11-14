@@ -86,8 +86,11 @@ def test_a_fresh_install_gets_its_downsampled_buckets_and_tasks_without_anyone_a
     assert sorted(client.buckets) == ["ems_1h", "ems_1m", "ems_5m", "ems_raw"]
     assert sorted(task["name"] for task in client.tasks.values()) == [
         "ems-downsample-1h",
+        "ems-downsample-1h:cells",
         "ems-downsample-1m",
+        "ems-downsample-1m:cells",
         "ems-downsample-5m",
+        "ems-downsample-5m:cells",
     ]
     assert all(task["status"] == "active" for task in client.tasks.values())
     assert client.buckets["ems_raw"] == 14 * DAY
@@ -133,7 +136,7 @@ def test_a_bucket_that_goes_missing_later_comes_back_on_the_next_round():
     keeper.reconcile()
 
     assert "ems_5m" in client.buckets
-    assert len(client.tasks) == 3
+    assert len(client.tasks) == 6
 
 
 def test_a_schema_in_place_is_left_alone_and_nothing_is_logged(caplog):
@@ -155,7 +158,10 @@ def test_what_the_keeper_created_is_logged_once(caplog):
 
     assert "event=influx_schema_synced" in caplog.text
     assert "created_buckets=ems_1m,ems_5m,ems_1h" in caplog.text
-    assert "created_tasks=ems-downsample-1m,ems-downsample-5m,ems-downsample-1h" in caplog.text
+    assert (
+        "created_tasks=ems-downsample-1m,ems-downsample-1m:cells,ems-downsample-5m,"
+        "ems-downsample-5m:cells,ems-downsample-1h,ems-downsample-1h:cells"
+    ) in caplog.text
     assert "updated_buckets=ems_raw" in caplog.text
 
 
@@ -264,7 +270,7 @@ def test_a_task_switched_off_by_hand_stays_off_and_is_named_once(caplog):
         keeper.reconcile()
 
     assert task["status"] == "inactive"
-    assert len(client.tasks) == 3
+    assert len(client.tasks) == 6
     assert caplog.text.count("event=influx_schema_task_kept") == 1
     assert f"tasks={task['name']}" in caplog.text
 

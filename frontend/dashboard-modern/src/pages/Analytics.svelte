@@ -11,7 +11,9 @@
   import { getJson } from "../../../shared/lib/api.js";
   import { fetchSeries } from "../lib/historyApi.js";
   import { escapeLeavesZoom, zoomSpan } from "../lib/history.js";
-  import { ANALYTICS_RANGES, ANALYTICS_VIEWS, ANALYTICS_OVERLAYS, viewById, requestedSeries, seriesStyle, seriesKwh, computeKpi, runtimeRole, KPIS } from "../lib/analytics.js";
+  import { ANALYTICS_RANGES, ANALYTICS_VIEWS, ANALYTICS_OVERLAYS, CELL_OVERLAYS, viewById, requestedSeries, seriesStyle, seriesKwh, computeKpi, runtimeRole, KPIS } from "../lib/analytics.js";
+  import { analyticsCellDevices, cellStyle, seriesExtreme, shownPack } from "../lib/cells.js";
+  import CellPicker from "../ui/CellPicker.svelte";
   import { chartConsumers, chartTokens, consumerPalette, consumerSeriesId, restOfHouse, OTHER_TOKEN } from "../lib/consumers.js";
   import { devices } from "../state/derived.svelte.js";
   import { live } from "../state/live.svelte.js";
@@ -24,6 +26,8 @@
   let custom = $state({ start: "", end: "" });
   let applied = $state(null);
   let device = $state("");
+  let wantedCellDevice = $state("");
+  let wantedPack = $state(1);
   let overlays = $state([]);
   let data = $state.raw(null);
   let loading = $state(false);
@@ -33,6 +37,7 @@
   let zoom = $state.raw(null);
   let dataPeriod = $state.raw(null);
   let dataKey = "";
+  let dataSelection = "";
   let failedKey = "";
   let zoomEpoch = $state(0);
   let liveExtent = $state.raw(null);
@@ -42,6 +47,14 @@
   const f = $derived(fmt());
   const view = $derived(viewById(viewId));
   const names = $derived(devices().map((d) => d.name));
+  const withCells = $derived(analyticsCellDevices(devices(), live.cellPacks));
+  const cellDevice = $derived(withCells.find((entry) => entry.name === wantedCellDevice) || withCells.find((entry) => entry.reporting) || withCells[0] || null);
+
+  $effect(() => {
+    if (!wantedCellDevice && cellDevice?.reporting) wantedCellDevice = cellDevice.name;
+  });
+  const pack = $derived(view.cells && cellDevice ? shownPack(cellDevice.cells, wantedPack) : null);
+  const shownDevice = $derived(view.cells ? cellDevice?.name || "" : device);
   const chosen = $derived(view.consumers ? chartConsumers(live.snapshot, live.snapshot?.energy_stats?.lifetime) : { shown: [], rest: false });
   const palette = $derived(view.consumers ? consumerPalette(live.snapshot, live.snapshot?.energy_stats?.lifetime) : null);
   // A string, so a live frame naming the same consumers in the same colours
@@ -49,7 +62,7 @@
   const consumerKey = $derived(JSON.stringify(chartTokens(chosen.shown, palette)));
   const consumers = $derived(JSON.parse(consumerKey));
   const rest = $derived(chosen.rest);
-  const seriesIds = $derived(requestedSeries(view, overlays, consumers.map((item) => item.key)));
+  const seriesIds = $derived(requestedSeries(view, overlays, consumers.map((item) => item.key), pack));
   const seriesKey = $derived(seriesIds.join(","));
   const chartSeries = $derived(
     view.consumers
@@ -57,7 +70,7 @@
           ...consumers.map((item) => ({ id: consumerSeriesId(item.key), label: item.name, token: item.token })),
           { id: "rest", label: t(rest ? "flow.otherConsumers" : "consumers.unmeasured"), token: OTHER_TOKEN },
         ]
-      : seriesIds.map((id) => ({ id, label: t(`series.${id}`), ...seriesStyle(view, id) })),
+      : seriesIds.map((id) => ({ id, label: t(cellStyle(id)?.label || `series.${id}`), ...seriesStyle(view, id) })),
   );
   const chartData = $derived(
     view.consumers && data
@@ -118,15 +131,23 @@
 
   async function load() {
     if (!status?.available) return;
+    if (!seriesIds.length) {
+      controller?.abort();
+      data = null;
+      loading = false;
+      return;
+    }
     controller?.abort();
     const mine = new AbortController();
     controller = mine;
     loading = true;
     const asked = zoom;
     const period = { zoom, applied, range };
-    const key = JSON.stringify([seriesIds, timeParams(), device]);
+    const key = JSON.stringify([seriesIds, timeParams(), shownDevice]);
     if (key !== failedKey) error = false;
-    const devicesParam = device ? [device] : undefined;
+    const devicesParam = shownDevice ? [shownDevice] : undefined;
+    const selection = `${shownDevice}|${pack ?? ""}`;
+    if (view.cells && dataSelection !== selection) data = null;
     try {
       const main = await fetchSeries({ source: "analytics", ...timeParams(), series: seriesIds, devices: devicesParam, signal: mine.signal });
       if (!main.available) {
@@ -140,6 +161,7 @@
         data = main;
         dataPeriod = period;
         dataKey = key;
+        dataSelection = selection;
         failedKey = "";
         if (!asked && main.time.length > 1) liveExtent = [main.time[0], main.time[main.time.length - 1]];
       }
@@ -165,7 +187,7 @@
     void seriesKey;
     void range;
     void applied;
-    void device;
+    void shownDevice;
     untrack(() => {
       clearTimeout(zoomTimer);
       zoom = null;
@@ -234,12 +256,14 @@
   const socNow = $derived.by(() => {
     const snapshot = live.snapshot;
     if (!snapshot) return null;
-    if (!device) return snapshot.average_soc ?? null;
-    const d = devices().find((item) => item.name === device);
+    if (!shownDevice) return snapshot.average_soc ?? null;
+    const d = devices().find((item) => item.name === shownDevice);
     return d?.socReported ? d.soc : null;
   });
-  const role = $derived(runtimeRole(live.snapshot, device));
-  const zoomScope = $derived(`${view.id}|${range}|${device}|${applied ? `${applied.start}-${applied.end}` : ""}|${zoomEpoch}`);
+  const role = $derived(runtimeRole(live.snapshot, shownDevice));
+  const zoomScope = $derived(`${view.id}|${range}|${shownDevice}|${pack ?? ""}|${applied ? `${applied.start}-${applied.end}` : ""}|${zoomEpoch}`);
+  const cellLow = $derived(view.cells && seriesIds[0] ? seriesExtreme(data, seriesIds[0], "min") : null);
+  const cellHigh = $derived(view.cells && seriesIds[1] ? seriesExtreme(data, seriesIds[1], "max") : null);
 </script>
 
 {#snippet unavailableInfo(info)}
@@ -259,7 +283,9 @@
   <div class="block span-12" role="group" aria-label={t("analytics.view")} data-testid="analytics-view-block">
     <div class="controls">
       <Segmented options={ANALYTICS_VIEWS.map((v) => ({ value: v.id, label: t(`analytics.view.${v.id}`) }))} value={viewId} label={t("analytics.view")} onchange={setView} />
-      {#if !view.consumers}
+      {#if view.cells}
+        <CellPicker devices={withCells} device={shownDevice} {pack} ondevice={(name) => (wantedCellDevice = name)} onpack={(value) => (wantedPack = value)} />
+      {:else if !view.consumers}
         <label class="inline">
           <span>{t("chart.device")}</span>
           <select class="input" bind:value={device}>
@@ -272,7 +298,7 @@
     {#if !view.consumers}
       <div class="controls overlays" role="group" aria-label={t("analytics.overlays")}>
         <span class="row-label">{t("analytics.overlays")}</span>
-        {#each ANALYTICS_OVERLAYS as id (id)}
+        {#each view.cells ? CELL_OVERLAYS : ANALYTICS_OVERLAYS as id (id)}
           <button type="button" class="chip" aria-pressed={overlays.includes(id) ? "true" : "false"} onclick={() => toggleOverlay(id)}>{t(`series.${id}`)}</button>
         {/each}
       </div>
@@ -297,13 +323,15 @@
     </button>
   {/snippet}
 
-  <Card icon="chart-spline" tone={unavailable || (error && !data) ? "c-warn" : "c-out"} title={t(`analytics.view.${view.id}`)} subtitle={t("analytics.source")} span="span-12" {actions}>
+  <Card icon={view.cells ? "battery-medium" : "chart-spline"} tone={unavailable || (error && !data) ? "c-warn" : view.cells ? "c-bat" : "c-out"} title={t(`analytics.view.${view.id}`)} subtitle={t(view.cells ? "analytics.sourceCells" : "analytics.source")} span="span-12" {actions}>
     {#if unavailable}
       {@render unavailableInfo(unavailable)}
     {:else if error && !data}
       <div class="empty error">{t("error.load")}</div>
+    {:else if view.cells && !withCells.length}
+      <Empty text={t("cells.none")} icon="battery-medium" />
     {:else}
-      <TimeChart series={chartSeries} stacked={Boolean(view.consumers)} time={data?.time || []} values={chartData?.series || {}} {showTable} label={t(`analytics.view.${view.id}`)} scope={zoomScope} bounds={liveExtent} {onzoom} emptyText={data ? "" : t("chart.loading")} />
+      <TimeChart series={chartSeries} unit={view.cells ? "V" : "W"} stacked={Boolean(view.consumers)} time={data?.time || []} values={chartData?.series || {}} {showTable} label={t(`analytics.view.${view.id}`)} scope={zoomScope} bounds={liveExtent} {onzoom} emptyText={data ? "" : t("chart.loading")} />
     {/if}
   </Card>
 
@@ -314,6 +342,16 @@
         <div class="kpi-value num">{f.energy(seriesKwh(chartData, item.id))}</div>
       </div>
     {/each}
+    {#if view.cells}
+      <div class="card kpi c-bat" data-testid="analytics-cell-kpi">
+        <div class="kpi-label">{t("series.cellMin")} · {rangeLabel}</div>
+        <div class="kpi-value num">{f.voltage(cellLow)}</div>
+      </div>
+      <div class="card kpi c-bat" data-testid="analytics-cell-kpi">
+        <div class="kpi-label">{t("series.cellMax")} · {rangeLabel}</div>
+        <div class="kpi-value num">{f.voltage(cellHigh)}</div>
+      </div>
+    {/if}
     {#each view.kpis as id (id)}
       {@const value = computeKpi(id, data)}
       <div class="card kpi" style:--c={`var(${KPIS[id].token})`}>

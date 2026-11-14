@@ -20,6 +20,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from urllib.parse import unquote
 
+from ems.models import MAX_PACK_NUMBER
+
 # Canonical chart series. Each entry maps a stable series id to the snapshot
 # field used by the SQLite provider. The InfluxDB provider maps the same ids to
 # measurements/fields in ems.history.influx_provider. Dotted paths descend into
@@ -69,6 +71,14 @@ DEFAULT_SERIES = ["pv", "output", "battery"]
 CONSUMER_SERIES_PREFIX = "consumer:"
 MAX_CONSUMER_SERIES = 32
 MAX_CONSUMER_NAME = 256
+
+# ``cell_min:<pack>`` and ``cell_max:<pack>`` read one battery pack's lowest
+# and highest cell voltage, the packs numbered as the live telemetry numbers
+# them. Each keeps its extreme, across devices and in InfluxDB across a window
+# and a downsampling step: a short dip of the lowest cell is what it is read for.
+PACK_CELL_SERIES = {"cell_min": "cell_min_v", "cell_max": "cell_max_v"}
+PACK_CELL_REDUCERS = {"cell_min_v": "min", "cell_max_v": "max"}
+_REDUCE = {"min": min, "max": max}
 
 # Per-device snapshot fields (under payload["devices"][name]) used when the
 # SQLite provider is asked to filter by device. Series absent from this map are
@@ -121,7 +131,9 @@ def decimate_history_result(result, max_points=DEFAULT_MAX_POINTS):
     """Stride-sample a :class:`HistoryResult` in place to ``max_points``.
 
     Keeps the time axis and every series aligned; always keeps the last point so
-    the most recent sample is never dropped. No-op when already small enough.
+    the most recent sample is never dropped. A cell series keeps the extreme of
+    the stretch each point stands for instead, so a short dip stays in the
+    chart. No-op when already small enough.
     Returns the (possibly mutated) result for convenience.
     """
     count = len(result.time)
@@ -136,11 +148,33 @@ def decimate_history_result(result, max_points=DEFAULT_MAX_POINTS):
 
     result.time = [result.time[i] for i in keep]
     for name, values in result.series.items():
-        if len(values) == count:
+        if len(values) != count:
+            continue
+        cells = pack_cells_of_series(name)
+        if cells is None:
             result.series[name] = [values[i] for i in keep]
+        else:
+            result.series[name] = _stretch_extremes(values, keep, PACK_CELL_REDUCERS[cells[0]])
     result.meta["point_count"] = len(result.time)
     result.meta["decimated"] = True
     return result
+
+
+def _stretch_extremes(values, keep, reducer):
+    """Each kept point's extreme over the stretch since the one before it.
+
+    A stretch without a value stays without one, so a gap longer than a
+    stretch stays a gap.
+    """
+
+    pick = _REDUCE[reducer]
+    extremes = []
+    start = 0
+    for index in keep:
+        stretch = [value for value in values[start:index + 1] if value is not None]
+        extremes.append(pick(stretch) if stretch else None)
+        start = index + 1
+    return extremes
 
 
 @dataclass
@@ -182,12 +216,31 @@ def consumer_of_series(series_name):
     return name if 0 < len(name) <= MAX_CONSUMER_NAME else None
 
 
+def pack_cells_of_series(series_name):
+    """``(field, pack)`` a ``cell_min:<n>``/``cell_max:<n>`` series reads, or ``None``."""
+
+    if not isinstance(series_name, str):
+        return None
+    kind, separator, number = series_name.partition(":")
+    field_name = PACK_CELL_SERIES.get(kind)
+    if not separator or field_name is None or not (number.isascii() and number.isdigit()):
+        return None
+    pack = int(number)
+    if str(pack) != number or not 1 <= pack <= MAX_PACK_NUMBER:
+        return None
+    return field_name, pack
+
+
 def normalize_series(series):
     """Validate requested series ids against the catalog; default if empty."""
     if not series:
         return list(DEFAULT_SERIES)
     consumers = list(dict.fromkeys(name for name in series if consumer_of_series(name)))[:MAX_CONSUMER_SERIES]
-    valid = [name for name in series if name in SERIES_CATALOG or name in consumers]
+    valid = [
+        name
+        for name in series
+        if name in SERIES_CATALOG or name in consumers or pack_cells_of_series(name)
+    ]
     return list(dict.fromkeys(valid)) or list(DEFAULT_SERIES)
 
 
@@ -211,6 +264,11 @@ _SUMMARY_FIELDS = ("timestamp", *(spec["sqlite_field"] for spec in SERIES_CATALO
 _SUMMARY_SELECT = (
     "SELECT json_extract(payload, "
     + ", ".join(f"'$.{field}'" for field in _SUMMARY_FIELDS)
+    + ") FROM snapshots WHERE rowid = ?"
+)
+_SUMMARY_WITH_DEVICES_SELECT = (
+    "SELECT json_extract(payload, "
+    + ", ".join(f"'$.{field}'" for field in (*_SUMMARY_FIELDS, "devices"))
     + ") FROM snapshots WHERE rowid = ?"
 )
 # Each consumer's power by its name as a JSON key, so no name has to fit
@@ -252,12 +310,13 @@ class SqliteHistoryProvider(HistoryProvider):
 
         device_filter = [d for d in (devices or []) if d]
         consumers = {name: consumer_of_series(name) for name in series if consumer_of_series(name)}
+        packs = {name: cells for name in series if (cells := pack_cells_of_series(name))}
 
         rows = self._read_snapshots(
             start,
             end,
             result.meta,
-            whole=bool(device_filter),
+            devices=bool(device_filter) or bool(packs),
             consumers=bool(consumers),
         )
         for payload in rows:
@@ -268,6 +327,8 @@ class SqliteHistoryProvider(HistoryProvider):
             for name in series:
                 if name in consumers:
                     value = _consumer_series_value(payload, consumers[name])
+                elif name in packs:
+                    value = _pack_series_value(payload, *packs[name], device_filter)
                 elif device_filter:
                     value = _device_series_value(payload, name, device_filter)
                 else:
@@ -279,20 +340,20 @@ class SqliteHistoryProvider(HistoryProvider):
         result.meta["point_count"] = len(result.time)
         return result
 
-    def _read_snapshots(self, start, end, meta=None, *, whole=False, consumers=False):
+    def _read_snapshots(self, start, end, meta=None, *, devices=False, consumers=False):
         """Yield snapshots, thinned to at most ``MAX_HISTORY_POINTS``.
 
         A 24 h window at a 5 s write interval is 17,280 snapshots of about
         20 KB each; a chart cannot show more points than its width. The rows
         to keep are picked from the timestamp index and only they are read.
-        Unless ``whole`` asks for the decoded payload (the per-device series),
-        SQLite picks the system-level fields out of it, keyed by their dotted
-        catalog path; ``consumers`` adds each consumer's power under
-        ``consumers``. Reading and decoding every payload took 30 s for two
-        days on a Raspberry Pi 3, and the chart stayed empty that long.
+        SQLite picks the system-level fields out of each, keyed by their dotted
+        catalog path; ``devices`` adds the per-device part under ``devices``
+        (the per-device and the pack series), and ``consumers`` each
+        consumer's power under ``consumers``. Reading and decoding every
+        payload took 30 s for two days on a Raspberry Pi 3, and the chart
+        stayed empty that long.
         """
 
-        select = "SELECT payload FROM snapshots WHERE rowid = ?" if whole else _SUMMARY_SELECT
         uri = f"file:{self.database_path}?mode=ro"
         con = sqlite3.connect(uri, uri=True)
         try:
@@ -312,15 +373,17 @@ class SqliteHistoryProvider(HistoryProvider):
                 meta["stride"] = stride
             for rowid in rowids[::stride]:
                 try:
-                    row = con.execute(select, (rowid,)).fetchone()
-                    values = json.loads(row[0])
-                    if not whole:
-                        values = dict(zip(_SUMMARY_FIELDS, values))
-                        if consumers:
-                            values["consumers"] = {
-                                key: {"power_w": power}
-                                for key, power in con.execute(_CONSUMERS_SELECT, (rowid,))
-                            }
+                    if devices:
+                        row = con.execute(_SUMMARY_WITH_DEVICES_SELECT, (rowid,)).fetchone()
+                        values = dict(zip((*_SUMMARY_FIELDS, "devices"), json.loads(row[0])))
+                    else:
+                        row = con.execute(_SUMMARY_SELECT, (rowid,)).fetchone()
+                        values = dict(zip(_SUMMARY_FIELDS, json.loads(row[0])))
+                    if consumers:
+                        values["consumers"] = {
+                            key: {"power_w": power}
+                            for key, power in con.execute(_CONSUMERS_SELECT, (rowid,))
+                        }
                 except (sqlite3.OperationalError, TypeError, ValueError):
                     continue
                 yield values
@@ -377,6 +440,31 @@ def _consumer_series_value(payload, name):
     consumers = payload.get("consumers")
     consumer = consumers.get(name) if isinstance(consumers, dict) else None
     return _coerce_number(consumer.get("power_w")) if isinstance(consumer, dict) else None
+
+
+def _pack_series_value(payload, field_name, pack, device_names):
+    """One pack's cell voltage in a snapshot, over the selected devices or all.
+
+    The extreme ``PACK_CELL_REDUCERS`` names for the field. Without a choice
+    the devices the EMS controls count, the ones InfluxDB records cells for.
+    """
+
+    devices = payload.get("devices")
+    if not isinstance(devices, dict):
+        return None
+    controlled = [name for name, device in devices.items() if isinstance(device, dict) and not device.get("read_only")]
+    values = []
+    for name in device_names or controlled:
+        device = devices.get(name)
+        entries = device.get("battery_packs") if isinstance(device, dict) else None
+        for entry in entries if isinstance(entries, list) else ():
+            if isinstance(entry, dict) and entry.get("pack") == pack:
+                number = _coerce_number(entry.get(field_name))
+                if number is not None:
+                    values.append(number)
+    if not values:
+        return None
+    return _REDUCE[PACK_CELL_REDUCERS[field_name]](values)
 
 
 def _device_series_value(payload, series_name, device_names):
