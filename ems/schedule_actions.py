@@ -46,6 +46,12 @@ EXCLUDED_KEYS = {
     "battery_care.min_discharge_w": (
         "battery protection tuned to the firmware's floor, not a target to move by the hour"
     ),
+    "battery_care.pv_margin_percent": (
+        "battery protection tuned to the firmware's floor, not a target to move by the hour"
+    ),
+    "battery_care.pv_margin_min_w": (
+        "battery protection tuned to the firmware's floor, not a target to move by the hour"
+    ),
 }
 
 SWITCH = "switch"

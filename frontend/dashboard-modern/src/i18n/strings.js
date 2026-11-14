@@ -619,6 +619,8 @@ export const STRINGS = {
   "runtime.batteryCareWinter": s("Full power from (winter)", "Volle Leistung ab (Winter)", "Vol vermogen vanaf (winter)", "Pleine puissance dès (hiver)"),
   "runtime.batteryCarePvOnly": s("PV only up to", "Nur PV bis", "Alleen PV tot", "PV seule jusqu’à"),
   "runtime.batteryCareMinDischarge": s("Minimum discharge", "Mindest-Entladung", "Minimale ontlading", "Décharge minimale"),
+  "runtime.batteryCarePvMargin": s("Above PV", "Über PV", "Boven PV", "Au-dessus du PV"),
+  "runtime.batteryCarePvMarginMin": s("Above PV, at least", "Über PV, mindestens", "Boven PV, minstens", "Au-dessus du PV, au moins"),
   "runtime.deviceEnabled": s("Device enabled", "Gerät aktiviert", "Apparaat ingeschakeld", "Appareil activé"),
   "runtime.acCharging": s("AC charging", "AC-Laden", "AC-laden", "Charge AC"),
   "runtime.maxPower": s("Max power", "Max. Leistung", "Max. vermogen", "Puissance max"),

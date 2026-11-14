@@ -464,16 +464,19 @@ Examples:
         help="Edit battery care runtime state.",
         description=(
             "Enable, disable, tune or inspect battery care: close to its minSoc a "
-            "battery passes its PV through and discharges a share that grows with "
-            "the square of the distance until the full point."
+            "device keeps its PV, its battery adds a small margin above it, and "
+            "further up a share that grows with the square of the distance until "
+            "the full point."
         ),
         epilog="""\
 Actions:
   enable, disable, status
   summer-full N    Points above minSoc for full power outside winter mode (0 = off)
   winter-full N    Points above minSoc for full power while winter mode is in effect (0 = off)
-  pv-only N        Points above minSoc up to which a battery only passes its PV through
+  pv-only N        Points above minSoc up to which a battery adds only the PV margin
   min-discharge W  Watts a battery may discharge one point above PV only
+  pv-margin P      Percent of its PV a battery close to minSoc may add on top of it
+  pv-margin-min W  Watts that margin is at least, never more than the PV itself
 
 Examples:
   python3 emsctl.py battery-care status
@@ -485,9 +488,16 @@ Examples:
     battery_care.add_argument(
         "action",
         choices=list(runtime_commands.SECTION_COMMAND_TABLES["battery_care"]) + ["status"],
-        help="One of: enable, disable, summer-full, winter-full, pv-only, min-discharge, status.",
+        help=(
+            "One of: enable, disable, summer-full, winter-full, pv-only, min-discharge, "
+            "pv-margin, pv-margin-min, status."
+        ),
     )
-    battery_care.add_argument("value", nargs="?", help="Required for summer-full, winter-full, pv-only and min-discharge.")
+    battery_care.add_argument(
+        "value",
+        nargs="?",
+        help="Required for summer-full, winter-full, pv-only, min-discharge, pv-margin and pv-margin-min.",
+    )
 
     dashboard = subparsers.add_parser(
         "dashboard",

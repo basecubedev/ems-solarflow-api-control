@@ -457,6 +457,8 @@ def test_the_completion_reads_the_first_word_of_each_command_from_its_parser():
         "winter-full",
         "pv-only",
         "min-discharge",
+        "pv-margin",
+        "pv-margin-min",
         "status",
     ]
     assert COMMAND_FIRST_WORDS["winter"] == ["enable", "disable", "status"]

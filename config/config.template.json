@@ -236,13 +236,17 @@
       "From pv_only_points above minSoc a battery discharges a share that grows",
       "with the square of the distance; full power from summer_full_points",
       "(outside winter mode) or winter_full_points (in winter mode). 0 = off.",
-      "One point above pv_only_points a battery may discharge min_discharge_w."
+      "One point above pv_only_points a battery may discharge min_discharge_w.",
+      "Up to pv_only_points it adds pv_margin_percent of its PV, at least",
+      "pv_margin_min_w and never more than the PV itself; nothing without PV."
     ],
     "enabled": true,
     "summer_full_points": 3,
     "winter_full_points": 4,
     "pv_only_points": 1,
-    "min_discharge_w": 50
+    "min_discharge_w": 50,
+    "pv_margin_percent": 20,
+    "pv_margin_min_w": 35
   },
 
   "battery_full_charge_assist": {

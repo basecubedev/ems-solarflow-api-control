@@ -55,7 +55,9 @@ Example:
     "summer_full_points": 3,
     "winter_full_points": 4,
     "pv_only_points": 1,
-    "min_discharge_w": 50
+    "min_discharge_w": 50,
+    "pv_margin_percent": 20,
+    "pv_margin_min_w": 35
   },
   "devices": {
     "WR1": {
@@ -294,7 +296,8 @@ Dashboard runtime-write whitelist:
 - `winter.enabled`, `ac_charge_control.enabled`
 - `battery_care.enabled`, `battery_care.summer_full_points`,
   `battery_care.winter_full_points`, `battery_care.pv_only_points`,
-  `battery_care.min_discharge_w`
+  `battery_care.min_discharge_w`, `battery_care.pv_margin_percent`,
+  `battery_care.pv_margin_min_w`
 - per device: `enabled`, `max_power`, `pv_priority_factor`,
   `offgrid_socket_mode`, `ac_charge_enabled`, for a device runtime-state holds
   an entry for. EMS seeds one for each device it builds to control when it

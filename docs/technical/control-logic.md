@@ -282,37 +282,78 @@ the same night caused no burst.
 
 So battery care (`battery_care`, on by default) lets the battery share of a
 device grow with the square of its distance from minSoc (`d = SoC - minSoc`, the
-device's own current minSoc, so winter raises count) until the full point:
+device's own current minSoc, so winter raises count) until the full point. The
+device keeps its PV, and its battery adds the larger of a margin above the PV
+and its share of the curve:
 
-| `d` | Most the device may deliver |
+| `d` | Most the battery may add to the device's PV |
 |---|---|
-| up to `pv_only_points` (1) | 90 % of its PV, the battery rests |
-| one point past it | 90 % of its PV plus `min_discharge_w` (50 W) |
-| up to the full point | 90 % of its PV plus `min_discharge_w` plus (`max_power` − `min_discharge_w`) × ((`d` − `pv_only_points` − 1) / (full − `pv_only_points` − 1))² |
+| up to `pv_only_points` (1) | the PV margin; nothing without PV |
+| one point past it | `min_discharge_w` (50 W), or the PV margin where that is more |
+| up to the full point | `min_discharge_w` + (`max_power` − `min_discharge_w`) × ((`d` − `pv_only_points` − 1) / (full − `pv_only_points` − 1))², or the PV margin where that is more |
 | from the full point | unrestricted |
+
+The PV margin is `pv_margin_percent` (20 %) of the PV, at least
+`pv_margin_min_w` (35 W), and never more than the PV itself (owner
+2026-11-14). PV changes from one cycle to the next; delivering exactly the PV
+would flip the pack between charging and discharging with every change of the
+sun, so the battery gives a little more and keeps discharging gently. Across
+the recordings of 2026-11-13 and 14 the PV rose by more than 20 % between two
+cycles in 0.7 % of them. Below the minimum the margin would fall under what the
+loop rewrites (2 W per device, 5 W on the total) and under the whole-watt PV
+reading. Capped at the PV itself, a few watts of PV noise at night release no
+battery power. So one point above minSoc a battery never gives full power:
+with 20 W of PV it may add 20 W, with 100 W 35 W, with 300 W 60 W, and nothing
+once the sun has gone. In the evening its share falls with the PV, and at night
+it rests, without a switch between day and night.
 
 The full point is `winter_full_points` (4) while [winter mode](../winter-mode.md)
 is in effect (switched on and in one of its months), else `summer_full_points`
 (3). `min_discharge_w` is the foot of the curve, so a long ramp does not leave
 the points close to minSoc at a few watts; `0` leaves the first point its PV
-only, and it is never more than the device's `max_power`. For an 800 W device:
+margin only, and it is never more than the device's `max_power`. For an 800 W
+device, on top of its PV:
 
 | `d` | 1 | 2 | 3 | 4 |
 |---|---|---|---|---|
-| summer (full at 3) | PV only | 50 W | full | full |
-| winter (full at 4) | PV only | 50 W | 238 W | full |
+| summer (full at 3) | PV margin | 50 W | full | full |
+| winter (full at 4) | PV margin | 50 W | 238 W | full |
 
-One point above its minSoc the battery rests: the EMS asks for no battery power
-in the last point before the firmware floor and leaves it to the slow standby
-drain. On the second point it may give 50 W, and from the third full power in
+One point above its minSoc the battery rests at night: the EMS asks for no
+battery power in the last point before the firmware floor and leaves it to the
+slow standby drain, which crossed onto the floor without a burst on the night of
+2026-11-13. In daylight that point gives the PV margin, so a battery may reach
+its floor there under a small discharge; whether the firmware draws from the
+grid at a crossing of 10-60 W is not known (it did once at 42 W, 2026-11-13
+12:56). On the second point it may give 50 W, and from the third full power in
 summer. In winter the battery spends long hours in the middle of its range,
 where the flat LFP voltage curve makes the SoC estimate least reliable, hence
-the longer ramp. PV passes through slightly below what the device produces, so a small dip in PV within a cycle
-still leaves the pack charging; a cloud that takes more than a tenth of it draws
-on the battery until the next cycle lowers the ceiling. It is a ceiling, not a
-target: a house that needs 5 W from the battery gets 5 W. It applies to
-discharge only: AC charging, a device in the `ac_input` role and the full-charge
-assist are not held by it.
+the longer ramp. It is a ceiling, not a target: a house that needs 5 W from the
+battery gets 5 W. It applies to discharge only: AC charging, a device in the
+`ac_input` role and the full-charge assist are not held by it. A battery at or
+below its minSoc gets no margin: it delivers its PV, and the firmware floor holds
+the rest.
+
+A battery without PV of its own (the energy class winter mode reads from the
+catalogue model and `pv_kwp`: the AC models, or a PV model with `pv_kwp: 0`) has no margin: it rests one point above minSoc and follows the
+curve above. Nothing but charging and its SoC estimate relaxing at rest lifts it
+off its floor, so it also has a swing lock (owner 2026-11-14): once it has
+reached its floor (a SoC at or below minSoc, or the firmware's floor flag at
+most one point above it) it rests at every point until it has taken 30 Wh of
+charge since then, from the grid or from an external inverter's surplus, and
+has left the floor; charge taken while it still reads its floor counts. A point gained at rest releases
+nothing, and the battery does not swing between its floor and the point above
+it. A minSoc lowered below the floor the lock last saw releases it, even while
+the firmware's flag lingers, since the battery is then no longer on its floor; a
+minSoc raised above the SoC arms it.
+The charge is summed from the pack's charge power in fresh readings only: an
+offline device's cached reading, a reading whose pack count is 0 for a moment
+and a step longer than two minutes or twice the loop interval, whichever is
+longer, count nothing, so none of them releases it,
+and a reading without a reported minSoc or with a SoC of 0 arms nothing. The
+lock is followed on every cycle's readings, during the night idle and while
+battery care is off too. A restart starts without a lock until the battery next
+reaches its floor.
 
 - What a held device cannot deliver goes to the other devices by their usual
   battery weights; what none of them can deliver comes from the grid. The
@@ -327,8 +368,8 @@ assist are not held by it.
   not release a wound-up total onto the device.
 - `min_output_limit` does not lift a device above its ceiling between minSoc
   and the full point: within `pv_only_points` a device without PV gets
-  `outputLimit 0`, not the 35 W standby floor, and with a little PV that PV
-  even below the floor; an installation where `outputLimit 0` means stop or
+  `outputLimit 0`, not the 35 W standby floor, and with a little PV its PV and
+  margin even below the floor; an installation where `outputLimit 0` means stop or
   sleep sees that state, and the next ceiling above zero wakes it. Two
   exceptions keep the full floor: a battery at or below its minSoc, which the
   firmware floor already holds (night idle parks it there too), and a device
@@ -342,9 +383,10 @@ assist are not held by it.
   without a confirmed pack is never held.
 - `battery_care.enabled: false`, or a full point of 0 for the season, switches
   it off, which is the behaviour before it. A full point at or below
-  `pv_only_points` makes the ramp a step: PV only up to `pv_only_points`,
-  unrestricted above it. All points stay within 0-50, `min_discharge_w` within
-  0-5000 W. All five keys are runtime
+  `pv_only_points` makes the ramp a step: the PV margin up to `pv_only_points`,
+  unrestricted above it. All points stay within 0-50, `min_discharge_w` and
+  `pv_margin_min_w` within 0-5000 W, `pv_margin_percent` within 0-100 %. All
+  seven keys are runtime
   settings (see [runtime-state.md](runtime-state.md)); the control explanation
   names a held device with the limiting reason `battery_care`, and the
   dashboard's `battery_care_active` rule (**Battery care** under **Active

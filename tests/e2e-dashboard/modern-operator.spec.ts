@@ -237,7 +237,7 @@ test.describe("Modern dashboard operator: runtime settings @smoke", () => {
   });
 
   test("battery care's minimum discharge goes out in watts on its own card", async ({ page }) => {
-    const care = { enabled: true, summer_full_points: 3, winter_full_points: 4, pv_only_points: 1, min_discharge_w: 50 };
+    const care = { enabled: true, summer_full_points: 3, winter_full_points: 4, pv_only_points: 1, min_discharge_w: 50, pv_margin_percent: 20, pv_margin_min_w: 35 };
     const writes = await runtimeStore(page, (runtime) => ({ ...runtime, battery_care: care }));
     await openSignedIn(page, "#/control");
     const card = form(page, "/api/runtime/battery_care");
@@ -247,6 +247,22 @@ test.describe("Modern dashboard operator: runtime settings @smoke", () => {
     await expect.poll(() => writes).toEqual([{ target: "battery_care", method: "PATCH", body: { min_discharge_w: 80 }, csrf: CSRF }]);
     await expect(card.getByRole("status")).toHaveText("Saved");
     await expect(card.getByLabel("Minimum discharge")).toHaveValue("80");
+  });
+
+  test("battery care's margin above PV goes out in percent and watts on its own card", async ({ page }) => {
+    const care = { enabled: true, summer_full_points: 3, winter_full_points: 4, pv_only_points: 1, min_discharge_w: 50, pv_margin_percent: 20, pv_margin_min_w: 35 };
+    const writes = await runtimeStore(page, (runtime) => ({ ...runtime, battery_care: care }));
+    await openSignedIn(page, "#/control");
+    const card = form(page, "/api/runtime/battery_care");
+    const percent = card.getByRole("spinbutton", { name: "Above PV %", exact: true });
+    const watts = card.getByRole("spinbutton", { name: "Above PV, at least W", exact: true });
+    await expect(percent).toHaveValue("20");
+    await expect(watts).toHaveValue("35");
+    await percent.fill("25");
+    await watts.fill("40");
+    await save(page, card);
+    await expect.poll(() => writes).toEqual([{ target: "battery_care", method: "PATCH", body: { pv_margin_percent: 25, pv_margin_min_w: 40 }, csrf: CSRF }]);
+    await expect(card.getByRole("status")).toHaveText("Saved");
   });
 
   test("a value the EMS refuses is said in the field's own words and the edit stays", async ({ page }) => {

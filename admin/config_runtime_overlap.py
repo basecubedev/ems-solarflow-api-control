@@ -356,8 +356,14 @@ _EMS_SECTION_READS = {
         )
         for key in cfg.BATTERY_CARE_POINT_KEYS
     },
-    ("battery_care", "min_discharge_w"): (
-        lambda value: cfg.battery_care_watts(value, cfg.BATTERY_CARE_DEFAULTS["min_discharge_w"])
+    **{
+        ("battery_care", key): (
+            lambda value, key=key: cfg.battery_care_watts(value, cfg.BATTERY_CARE_DEFAULTS[key])
+        )
+        for key in cfg.BATTERY_CARE_WATT_KEYS
+    },
+    ("battery_care", "pv_margin_percent"): (
+        lambda value: cfg.battery_care_percent(value, cfg.BATTERY_CARE_DEFAULTS["pv_margin_percent"])
     ),
 }
 

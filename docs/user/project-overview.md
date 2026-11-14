@@ -166,7 +166,7 @@ This protects a larger reserve during low-production months without changing the
 
 ### Battery care
 
-Battery care lets a battery close to its minimum level discharge gently: one point above the reserve it only passes its solar power through, and above that its share grows until a few points higher it may deliver its full power again. This keeps the battery from dropping back onto its reserve within seconds, which can make a device draw a burst from the grid.
+Battery care lets a battery close to its minimum level discharge gently: one point above the reserve it adds only a little to its solar power, and above that its share grows until a few points higher it may deliver its full power again. This keeps the battery from dropping back onto its reserve within seconds, which can make a device draw a burst from the grid. The house always gets all of a device's solar power, and once the sun has gone the battery rests one point above its reserve. A battery without solar panels of its own that has reached its reserve gives power again only after it has really been charged, so a point its charge estimate gains at rest does not make it swing.
 
 It is on by default, uses a longer ramp while winter mode is in effect, and can be switched off or tuned in the dashboard, in the Admin console and with `emsctl battery-care`. The dashboard's Overview names the batteries it is holding back. See [Battery care](../technical/control-logic.md#battery-care).
 

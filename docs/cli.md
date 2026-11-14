@@ -632,13 +632,17 @@ python3 emsctl.py battery-care summer-full 3
 python3 emsctl.py battery-care winter-full 4
 python3 emsctl.py battery-care pv-only 1
 python3 emsctl.py battery-care min-discharge 50
+python3 emsctl.py battery-care pv-margin 20
+python3 emsctl.py battery-care pv-margin-min 35
 ```
 
 The values are SoC points above minSoc for
 [battery care](technical/control-logic.md#battery-care): full power from
 `summer-full` outside winter mode and from `winter-full` in it (`0` switches it
 off for that season), PV only up to `pv-only`. `min-discharge` is in watts:
-what a battery may discharge one point above PV only.
+what a battery may discharge one point above PV only. Up to `pv-only` a battery
+adds `pv-margin` percent of its PV on top of it, at least `pv-margin-min` watts
+and never more than the PV itself.
 
 ## Removed HA Commands
 

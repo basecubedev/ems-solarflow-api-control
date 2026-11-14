@@ -496,7 +496,7 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
     await expect(care.locator(".summary .icon-tile use")).toHaveAttribute("href", "#i-battery-low");
 
     await care.locator(".summary").click();
-    for (const [key, shipped] of [["summer_full_points", "3"], ["winter_full_points", "4"], ["pv_only_points", "1"], ["min_discharge_w", "50"]]) {
+    for (const [key, shipped] of [["summer_full_points", "3"], ["winter_full_points", "4"], ["pv_only_points", "1"], ["min_discharge_w", "50"], ["pv_margin_percent", "20"], ["pv_margin_min_w", "35"]]) {
       const input = care.locator(`[data-path="battery_care.${key}"] input`);
       await expect(input).toBeVisible();
       await expect(input).toHaveAttribute("placeholder", `${shipped} (default)`);
