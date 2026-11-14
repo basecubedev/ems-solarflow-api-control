@@ -323,7 +323,11 @@ This page edits an existing installation.
   `docker-compose.yml`, or databases. Fields that also
   carry a live override set from the Dashboard show **Running: …** with the
   effective value, and **Put saved values back** makes the live EMS use the
-  saved values again.
+  saved values again. A field whose value differs from its default shows
+  **Default: …**, for information only, except values that describe the
+  installation, such as power limits and battery size. An emptied field names
+  in grey the value it falls back to, and saving makes that the value the EMS
+  runs; a device's emptied power limit takes the system's per-device limit.
 
   The **Devices** tab holds the configured hardware as collapsible cards — the
   grid meter, local-API inverters, Zendure MQTT devices (telemetry-only, or

@@ -6,6 +6,8 @@
   import ConfirmDialog from "../../../shared/ui/ConfirmDialog.svelte";
   import { t } from "../i18n/i18n.svelte.js";
   import { BROKER_CHOICE_ERRORS, brokerAddress, preferredBroker } from "../lib/mqtt.js";
+  import { mqttDefaultPort, portOrDefault } from "../lib/devices.js";
+  import { unreadableInput } from "../../../shared/lib/forms.js";
   import { mqtt, loadBrokers, searchBrokers, checkBroker, useBrokerAccount, addBroker, enableBroker } from "../state/mqtt.svelte.js";
 
   /**
@@ -16,7 +18,7 @@
 
   const TONES = { running: "c-ok", off: "c-idle", stopped: "c-warn", anonymous: "c-ok", account: "c-ok", needs_account: "c-warn", untrusted: "c-warn", unreachable: "c-warn", unchecked: "c-idle" };
   const ACTIONS = ["search", "check", "account", "manual", "brokers"];
-  const EMPTY_FORM = { host: "", port: "1883", tls: false, tls_insecure: false, username: "", password: "" };
+  const EMPTY_FORM = { host: "", port: "", tls: false, tls_insecure: false, username: "", password: "" };
 
   let confirming = $state(false);
   let accountFor = $state("");
@@ -24,6 +26,7 @@
   let password = $state("");
   let manual = $state(false);
   let form = $state({ ...EMPTY_FORM });
+  let portUnreadable = $state(false);
 
   const brokers = $derived(mqtt.brokers?.brokers || []);
   const busy = $derived(Boolean(mqtt.busy));
@@ -83,9 +86,10 @@
 
   async function submitManual(event) {
     event.preventDefault();
+    if (unreadableInput(event.currentTarget)) return;
     const answer = await addBroker({
       host: form.host.trim(),
-      port: Number(form.port),
+      port: portOrDefault(form.port, form.tls),
       tls: form.tls,
       tls_insecure: form.tls && form.tls_insecure,
       username: form.username,
@@ -94,6 +98,7 @@
     if (answer?.ok) {
       manual = false;
       form = { ...EMPTY_FORM };
+      portUnreadable = false;
       value = answer.ref;
     }
   }
@@ -137,7 +142,10 @@
 
   <div class="row-wrap">
     <button class="btn secondary small" type="button" onclick={searchBrokers} disabled={busy || searching} data-testid="mqtt-chooser-search"><Icon name={searching ? "loader" : "search"} size="sm" />{searching ? t("mqtt.brokers.searching") : t("mqtt.brokers.search")}</button>
-    <button class="btn secondary small" type="button" onclick={() => (manual = !manual)} aria-expanded={manual ? "true" : "false"} disabled={busy} data-testid="mqtt-chooser-manual"><Icon name="plus" size="sm" />{t("mqtt.brokers.add")}</button>
+    <button class="btn secondary small" type="button" onclick={() => {
+      manual = !manual;
+      portUnreadable = false;
+    }} aria-expanded={manual ? "true" : "false"} disabled={busy} data-testid="mqtt-chooser-manual"><Icon name="plus" size="sm" />{t("mqtt.brokers.add")}</button>
   </div>
   {#if searching}<p class="muted small">{t("mqtt.brokers.searchingHint")}</p>{/if}
   {#if searched && !searching}<p class="muted small" data-testid="mqtt-chooser-searched">{t("mqtt.brokers.searchDone", { count: searched.found })}</p>{/if}
@@ -145,7 +153,7 @@
   {#if manual}
     <form class="manual inner" onsubmit={submitManual} data-testid="mqtt-chooser-manual-form">
       <label class="field"><span class="small muted">{t("mqtt.brokers.host")}</span><input class="input" type="text" placeholder="192.168.1.20" bind:value={form.host} data-testid="mqtt-chooser-host" /></label>
-      <label class="field"><span class="small muted">{t("mqtt.broker.port")}</span><input class="input port" type="number" min="1" max="65535" bind:value={form.port} data-testid="mqtt-chooser-port" /></label>
+      <label class="field"><span class="small muted">{t("mqtt.broker.port")}</span><input class="input port" type="number" min="1" max="65535" placeholder={t("common.defaultValue", { value: mqttDefaultPort(form.tls) })} bind:value={form.port} aria-invalid={portUnreadable || undefined} oninput={(event) => (portUnreadable = event.currentTarget.validity?.badInput === true)} data-testid="mqtt-chooser-port" />{#if portUnreadable}<span class="form-error">{t("common.unreadableNumber")}</span>{/if}</label>
       <label class="check"><input type="checkbox" bind:checked={form.tls} /><span>{t("mqtt.brokers.tls")}</span></label>
       {#if form.tls}<label class="check"><input type="checkbox" bind:checked={form.tls_insecure} /><span>{t("mqtt.brokers.tlsInsecure")}</span></label>{/if}
       <label class="field"><span class="small muted">{t("mqtt.connect.user")}</span><input class="input" type="text" autocomplete="username" bind:value={form.username} /></label>
@@ -179,7 +187,7 @@
   .manual { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: var(--s2); align-items: end; }
   .manual .muted { grid-column: 1 / -1; }
   .field { display: grid; gap: 2px; }
-  .port { width: 7rem; }
+  .port { width: 10rem; }
   .check { display: inline-flex; gap: var(--s1); align-items: center; }
   .fit { justify-self: start; }
 </style>

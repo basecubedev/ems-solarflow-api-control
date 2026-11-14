@@ -73,6 +73,12 @@ on the same page.
 
 Each card has its own **Save** button.
 
+An emptied number field names its default in grey, such as *35 (default)*, and
+**Save** sets that default. The default is the one the Admin's settings name
+too. **Max total power** and a device's **Max power** have none: the shipped
+value is the example installation's, not yours. **AC charge power** shows
+*Device max* instead, see below.
+
 **AC charging** on the **AC charging** card switches charging from surplus on
 or off for the whole installation; the **AC charging** switch on a device card
 allows or forbids it for that device. A device charges from surplus only while

@@ -11,7 +11,7 @@
  * addresses themselves. Everything is pure.
  */
 
-import { commonDefaults, deviceKind, fieldKey, nextInverterName, newE3dc, E3DC_DEFAULTS, IDENTITY_KEYS } from "./devices.js";
+import { commonDefaults, deviceKind, fieldKey, nextInverterName, newE3dc, mqttDefaultPort, mqttUsesTls, E3DC_DEFAULTS, IDENTITY_KEYS } from "./devices.js";
 
 const OPAQUE = /^opaque:v1:[A-Za-z0-9_-]+$/;
 const CONNECTION = /^conn:v1:[A-Za-z0-9_-]+$/;
@@ -468,12 +468,12 @@ export function configuredFor(item, draft) {
 /** ``host:port`` of the Local MQTT broker an entry reads through, from the draft's broker profiles; "" when not known. */
 export function entryBroker(entry, draft) {
   const profile = draft?.zendure_mqtt?.brokers?.[entry?.mqtt?.broker_ref];
-  return profile?.host ? `${profile.host}:${profile.port || 1883}` : "";
+  return profile?.host ? `${profile.host}:${profile.port || mqttDefaultPort(mqttUsesTls(profile))}` : "";
 }
 
 /** ``host:port`` a proposal was found on; "" for one without a broker address. */
 export function proposalBroker(proposal) {
-  return proposal?.broker_host ? `${proposal.broker_host}:${proposal.broker_port || 1883}` : "";
+  return proposal?.broker_host ? `${proposal.broker_host}:${proposal.broker_port || mqttDefaultPort(mqttUsesTls({ tls: proposal.broker_tls, tls_mode: proposal.broker_tls_mode }))}` : "";
 }
 
 /** Taking a read-only connection for an inverter EMS regulates today gives up its regulation. */

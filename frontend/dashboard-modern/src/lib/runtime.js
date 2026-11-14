@@ -66,16 +66,30 @@ export function reseed(fields, { values = {}, baseline = {}, initial = {}, fresh
 }
 
 /**
- * Classic's changedRuntimePayload: a field that equals its initial value is not
- * sent; an empty number is not sent, except from a ``clearable`` field, where
- * emptying it is the change and goes out as null.
+ * The field with the default its emptied input stands for: the settings
+ * catalogue's, as /api/runtime names it, when it lies within the field's
+ * bounds. A ``clearable`` field has none: emptying it is a value of its own.
+ */
+export function withDefault(field, value) {
+  if (field.clearable || typeof value !== "number" || !Number.isFinite(value)) return field;
+  if ((field.min !== undefined && value < field.min) || (field.max !== undefined && value > field.max)) return field;
+  return { ...field, default: value };
+}
+
+/**
+ * The fields to send: one that equals its initial value is not sent, nor an
+ * empty number with no stored value. Unlike Classic, an emptied number goes
+ * out as its default; one without a default is not sent, except from a
+ * ``clearable`` field, where emptying it is the change and goes out as null.
  */
 export function changedPayload(fields, values, initial) {
   const payload = {};
   fields.forEach((field) => {
     if (field.type === "readonly") return;
-    const current = normalizeValue(field, values[field.name]);
+    const entered = normalizeValue(field, values[field.name]);
     const before = normalizeValue(field, initial[field.name]);
+    if (entered === null && before === null) return;
+    const current = entered ?? field.default ?? null;
     if (current === before) return;
     if (field.type === "number" && current === null && !field.clearable) return;
     payload[field.name] = current;

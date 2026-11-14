@@ -757,7 +757,7 @@ export function schedulePreview() {
 }
 
 function body(extra = {}) {
-  return { ...previewBody(setupDraft.draft, { workflowId: setup.workflowId, planId: setupDraft.plan.plan_id, supportedMeters: setupDraft.meters.length, password: setupDraft.brokerPassword }), ...extra };
+  return { ...previewBody(setupDraft.draft, { workflowId: setup.workflowId, planId: setupDraft.plan.plan_id, supportedMeters: setupDraft.meters.length, password: setupDraft.brokerPassword, catalog: setupDraft.catalog }), ...extra };
 }
 
 function workflowConflict(payload) {

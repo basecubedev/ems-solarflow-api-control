@@ -26,6 +26,7 @@ import {
   unselectedProposals,
   withItemIds,
   withNames,
+  previewBody,
 } from "../src/lib/setupDraft.js";
 
 const ID_A = "opaque:v1:aaaa";
@@ -208,4 +209,36 @@ test("a scanned unit ID stays with the type the scan found it as", () => {
   const found = { ip: "192.168.1.64", api_family: "sunspec_modbus", device_type: "sunspec_modbus", port: 502, unit_id: 200, sources: ["http_probe"] };
   const item = { ...itemFromDevice(found, "grid_meter", { id: "sunspec_modbus:192.168.1.64", items: [] }), grid_meter_type: "victron_gx_modbus" };
   assert.equal("grid_meter.unit_id" in syncGridFeatures({ "grid_meter.unit_id": 200 }, item).features, false);
+});
+
+test("Setup sends an emptied value as what its input named, a device's power limit as the system's per-device limit", () => {
+  const catalog = {
+    sections: [
+      { id: "system", fields: [
+        { path: "system.min_output_limit", type: "number", default: 35 },
+        { path: "system.max_device_power", type: "number", default: 800, installation_value: true },
+        { path: "system.deadband", type: "number", default: 2 },
+      ] },
+      { id: "grid_meter", fields: [{ path: "grid_meter.mqtt.port", type: "number", default: 1883 }] },
+      { id: "devices", fields: [
+        { path: "devices[].min_soc", type: "number", default: 15 },
+        { path: "devices[].max_power", type: "number", default: 800, installation_value: true },
+      ] },
+    ],
+  };
+  const draft = {
+    ...emptyDraft(),
+    features: { "system.min_output_limit": "", "system.max_device_power": 2400, "system.deadband": null, "grid_meter.mqtt.port": "" },
+    items: [
+      { source_id: "a", role: "inverter", config_values: { min_soc: "", max_power: "" } },
+      { source_id: "m", role: "grid_meter", config_values: { min_soc: "" } },
+    ],
+  };
+  const body = previewBody(draft, { workflowId: "w", planId: "p", supportedMeters: 1, catalog });
+  assert.equal(body.features["system.min_output_limit"], 35);
+  assert.equal(body.features["system.deadband"], null);
+  assert.equal(body.features["grid_meter.mqtt.port"], "");
+  assert.deepEqual(body.devices[0].config_values, { min_soc: 15, max_power: 2400 });
+  assert.deepEqual(body.devices[1].config_values, { min_soc: "" });
+  assert.equal(draft.items[0].config_values.min_soc, "");
 });

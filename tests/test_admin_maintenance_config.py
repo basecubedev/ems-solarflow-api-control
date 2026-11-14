@@ -742,6 +742,36 @@ def test_new_top_level_broker_is_written_without_enabled_key(tmp_path):
     assert "enabled" not in written
 
 
+@pytest.mark.parametrize(("tls", "port"), [(False, 1883), (True, 8883)])
+def test_a_new_top_level_broker_without_a_port_takes_the_default_port_of_its_tls(tmp_path, tls, port):
+    _write_config(tmp_path, _config())
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    draft = loaded["draft"]
+    draft["zendure_mqtt"] = {"present": True, "host": "192.168.1.20", "port": "", "tls": tls, "tls_explicit": True}
+    prepared = prepare_maintenance_config_apply(
+        draft, loaded["revision"], base_dir=str(tmp_path)
+    )
+    assert prepared["status"] == "ok"
+    written = json.loads(prepared["payload"])["zendure_mqtt"]
+    assert (written["port"], written.get("tls", False)) == (port, tls)
+
+
+def test_a_tls_grid_meter_draft_says_so_and_an_unchanged_apply_writes_nothing(tmp_path):
+    config = _config()
+    config["grid_meter"] = {
+        "type": "mqtt",
+        "mqtt": {"host": "192.168.1.7", "port": 8883, "tls_mode": "tls", "topic": "meter/power"},
+    }
+    _write_config(tmp_path, config)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    assert loaded["draft"]["grid_meter"]["mqtt"]["tls"] is True
+    prepared = prepare_maintenance_config_apply(
+        loaded["draft"], loaded["revision"], base_dir=str(tmp_path)
+    )
+    assert prepared["status"] == "ok"
+    assert json.loads(prepared["payload"])["grid_meter"] == config["grid_meter"]
+
+
 def test_legacy_enabled_key_roundtrips_unchanged_on_noop_apply(tmp_path):
     # An existing legacy key is neither rewritten nor stripped: an unchanged
     # draft round-trips the stored block as-is (the runtime ignores the key).

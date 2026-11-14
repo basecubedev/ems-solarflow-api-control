@@ -11,7 +11,8 @@
  * answer and never compare serials, hosts or names to reach one. Pure.
  */
 
-import { D0_TOPIC_PREFIX, D0_TOPIC_SUFFIX, generations, hardwareModels, modelsForGeneration } from "./devices.js";
+import { D0_TOPIC_PREFIX, D0_TOPIC_SUFFIX, IDENTITY_KEYS, deviceFallbacks, generations, hardwareModels, held, modelsForGeneration, withFallbacks } from "./devices.js";
+import { fieldIndex, sentFeatures } from "./settings.js";
 import { aliasTokens, bridgeValues, isConsumerProposal, isExternalProposal, isGridMeterProposal, issuedPhysicalIdentity, meterTypeOf, observationKey, proposalTopic, sourcesOf, unitValues } from "./discovery.js";
 import { HOMEWIZARD_TYPE, PAIRING_FIELDS, TOKEN_FIELD } from "./homewizard.js";
 
@@ -473,6 +474,27 @@ export function catalogSection(catalog, id) {
 
 export const deviceFieldKey = (path) => String(path).replace(/^devices\[\]\./, "");
 
+const indexes = new WeakMap();
+
+function featureIndex(catalog) {
+  if (!catalog || typeof catalog !== "object") return new Map();
+  if (!indexes.has(catalog)) indexes.set(catalog, fieldIndex({ catalog: { feature_sections: catalog.sections } }));
+  return indexes.get(catalog);
+}
+
+/** What each device value falls back to when emptied in Setup: its catalogue default, the power limit the system's per-device limit. */
+export function setupDeviceFallbacks(catalog, features, index = featureIndex(catalog)) {
+  const fields = (catalogSection(catalog, "devices")?.fields || []).filter((field) => !IDENTITY_KEYS.includes(deviceFieldKey(field.path)));
+  const defaults = Object.fromEntries(fields.map((field) => [deviceFieldKey(field.path), field.default]));
+  return deviceFallbacks(defaults, features, index);
+}
+
+function settledItem(item, fallbacks) {
+  const values = item?.config_values;
+  if (item?.role === "grid_meter" || !values || typeof values !== "object") return item;
+  return { ...item, config_values: withFallbacks(values, fallbacks) };
+}
+
 /** A row's value for a catalogue field: its own, else the release template's first device, else the catalogue default. */
 export function deviceValue(item, field, template) {
   const key = deviceFieldKey(field.path);
@@ -756,14 +778,24 @@ export function configStatus(draft, hints) {
   return "valid";
 }
 
-/** The body the preview, the download, the apply and the write each send. */
-export function previewBody(draft, { workflowId, planId, supportedMeters, password = "" }) {
+/**
+ * The body the preview, the download, the apply and the write each send. A
+ * value the reader emptied takes what its input named,
+ * as in Maintenance: a setting its default (``sentFeatures``), a device value
+ * its fallback (``setupDeviceFallbacks``). A value held empty on purpose
+ * (``null``) stays as it is, and so does an emptied grid meter value: it is
+ * removed, and the EMS takes the default for the meter's type and TLS.
+ */
+export function previewBody(draft, { workflowId, planId, supportedMeters, password = "", catalog = null }) {
+  const index = featureIndex(catalog);
+  const fallbacks = setupDeviceFallbacks(catalog, draft.features, index);
+  const emptied = Object.fromEntries(Object.entries(draft.features || {}).filter(([path, value]) => !path.startsWith("grid_meter.") && typeof value === "string" && !held(value)));
   return {
     setup_workflow_id: workflowId,
     device_plan_id: planId,
-    devices: draft.items,
+    devices: Array.isArray(draft.items) ? draft.items.map((item) => settledItem(item, fallbacks)) : draft.items,
     supported_grid_meter_count: supportedMeters,
-    features: draft.features,
+    features: sentFeatures(draft.features, emptied, index),
     zendure_mqtt_proposals: selectionsPayload(draft),
     zendure_mqtt_broker: brokerPayload(draft.broker, password),
     zendure_mqtt_manual_devices: manualPayload(draft.manual),

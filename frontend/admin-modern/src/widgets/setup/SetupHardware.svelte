@@ -9,9 +9,9 @@
   import HomeWizardPairing from "../HomeWizardPairing.svelte";
   import { HOMEWIZARD_TYPE, PAIRING_NAME_FIELD, SERIAL_FIELD, TOKEN_FIELD } from "../../lib/homewizard.js";
   import { t, tn, say, catalogText } from "../../i18n/i18n.svelte.js";
-  import { generations, hardwareModels, maturityWords, operationWords, reasonKey } from "../../lib/devices.js";
+  import { generations, hardwareModels, maturityWords, mqttDefaultPort, operationWords, reasonKey } from "../../lib/devices.js";
   import { isExternalProposal, observationKey, sourcesOf } from "../../lib/discovery.js";
-  import { CONTINUITY, D0_TYPE, DEFAULT_GRID_METER, DEFAULT_INVERTER, SWITCH_REASONS, candidateState, catalogSection, deviceFieldKey, deviceValue, featureValue, formGeneration, gridFields, gridMeterType, hasSource, inverterCards, isReady, manualControl, meterIsMqtt, modelsForGeneration, pendingConfirmations, selectionControllable, topicMode, unselectedProposals } from "../../lib/setupDraft.js";
+  import { CONTINUITY, D0_TYPE, DEFAULT_GRID_METER, DEFAULT_INVERTER, SWITCH_REASONS, candidateState, catalogSection, deviceFieldKey, deviceValue, featureValue, formGeneration, gridFields, gridMeterType, hasSource, inverterCards, isReady, manualControl, meterIsMqtt, modelsForGeneration, pendingConfirmations, selectionControllable, setupDeviceFallbacks, topicMode, unselectedProposals } from "../../lib/setupDraft.js";
   import { setup } from "../../state/setup.svelte.js";
   import BridgePasswordField from "../BridgePasswordField.svelte";
   import { setupDiscovery } from "../../state/setupDiscovery.svelte.js";
@@ -61,6 +61,7 @@
   const variants = $derived(catalog?.grid_meter_variants || {});
   const meterFields = $derived(gridFields(catalog, gridType));
   const deviceFields = $derived((catalogSection(catalog, "devices")?.fields || []).filter((field) => !HIDDEN.has(field.level)));
+  const fallbacks = $derived(setupDeviceFallbacks(catalog, draft.features));
   const levels = $derived({ normal: deviceFields.filter((field) => !["advanced", "expert"].includes(field.level)), advanced: deviceFields.filter((field) => field.level === "advanced"), expert: deviceFields.filter((field) => field.level === "expert") });
   const cards = $derived(inverterCards(draft, index));
   const confirmations = $derived(pendingConfirmations(setupDraft.plan, setupDraft.confirmedSwitches));
@@ -161,7 +162,7 @@
 {#snippet fieldList(list, item)}
   <div class="fields">
     {#each list as field (field.path)}
-      <SettingField {field} value={deviceValue(item, field, template)} onchange={(value) => setItemField(item.source_id, field, value)} />
+      <SettingField {field} value={deviceValue(item, field, template)} defaultValue={fallbacks[deviceFieldKey(field.path)]} onchange={(value) => setItemField(item.source_id, field, value)} />
     {/each}
   </div>
 {/snippet}
@@ -200,7 +201,7 @@
         {#if !meterIsMqtt(gridType)}
           <div class="two">
             <label class="field"><span>{t("setup.hardware.host")}</span><input class="input num" type="text" value={grid.ip || ""} oninput={(event) => setGridEndpoint("ip", event.currentTarget.value)} data-testid="setup-grid-ip" /></label>
-            <label class="field"><span>{t("setup.hardware.port")}</span><input class="input num" type="number" value={grid.port ?? ""} oninput={(event) => setGridEndpoint("port", event.currentTarget.value)} /></label>
+            <label class="field"><span>{t("setup.hardware.port")}</span><input class="input num" type="number" value={grid.port ?? ""} placeholder={variants[gridType]?.default_port != null ? t("common.defaultValue", { value: variants[gridType].default_port }) : ""} oninput={(event) => setGridEndpoint("port", event.currentTarget.value)} /></label>
           </div>
           <p class="muted small">{#if variants[gridType]?.port_description}<CatalogText text={variants[gridType].port_description} />{:else}{t("setup.hardware.httpPort")}{/if}</p>
         {/if}
@@ -362,7 +363,7 @@
         <div class="form" data-testid="setup-manual-broker">
           <label class="field"><span>{t("devices.mqttForm.name")}</span><input class="input" type="text" placeholder="local_mqtt" value={draft.broker.name || ""} oninput={(event) => setBroker("name", event.currentTarget.value)} /></label>
           <label class="field"><span>{t("setup.hardware.host")}</span><input class="input num" type="text" placeholder="192.168.1.20" value={draft.broker.host || ""} oninput={(event) => setBroker("host", event.currentTarget.value)} /></label>
-          <label class="field"><span>{t("setup.hardware.port")}</span><input class="input num" type="text" inputmode="numeric" placeholder="1883" value={draft.broker.port || ""} oninput={(event) => setBroker("port", event.currentTarget.value)} /></label>
+          <label class="field"><span>{t("setup.hardware.port")}</span><input class="input num" type="text" inputmode="numeric" placeholder={t("common.defaultValue", { value: mqttDefaultPort(draft.broker.security === "tls") })} value={draft.broker.port || ""} oninput={(event) => setBroker("port", event.currentTarget.value)} /></label>
           <label class="field"><span>{t("setup.hardware.security")}</span>
             <select class="input" value={draft.broker.security || "plain"} onchange={(event) => setBroker("security", event.currentTarget.value)}><option value="plain">{t("setup.hardware.plainMqtt")}</option><option value="tls">{t("setup.hardware.tlsMqtt")}</option></select>
           </label>

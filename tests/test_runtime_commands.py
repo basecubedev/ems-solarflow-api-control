@@ -338,3 +338,52 @@ def test_the_catalogue_says_which_runtime_device_fields_may_be_empty_as_the_writ
         except RuntimeWriteError:
             accepts_none = False
         assert spec.get("nullable", False) is accepts_none, key
+
+
+def test_catalogue_runtime_defaults_leave_out_installation_values():
+    from ems.config_catalog import get_config_feature_field_index
+
+    index = get_config_feature_field_index()
+    expected = {
+        "system": ("loop_interval", "min_output_limit"),
+        "devices": ("pv_priority_factor",),
+        "battery_care": (
+            "summer_full_points",
+            "winter_full_points",
+            "pv_only_points",
+            "min_discharge_w",
+        ),
+    }
+    prefixes = {"system": "system", "devices": "devices[]", "battery_care": "battery_care"}
+    assert runtime_commands.catalogue_runtime_defaults() == {
+        scope: {key: index[f"{prefixes[scope]}.{key}"]["default"] for key in keys}
+        for scope, keys in expected.items()
+    }
+    for path in ("system.max_total_power", "devices[].max_power"):
+        assert index[path]["installation_value"] is True, path
+    examples = {path for path, field in index.items() if field.get("example_default")}
+    assert examples == {"grid_meter.ip", "devices[].name", "devices[].ip", "devices[].sn"}
+    assert all(index[path]["installation_value"] for path in examples)
+
+
+def test_an_installation_setting_names_the_fallback_the_ems_runs():
+    from ems.config import apply_runtime_config_defaults
+    from ems.config_catalog import get_config_feature_field_index
+
+    fallback = apply_runtime_config_defaults({})
+    named = {
+        path: field["default"]
+        for path, field in get_config_feature_field_index().items()
+        if field.get("installation_value") and not field.get("example_default") and not path.startswith("devices[]")
+    }
+    assert named
+    for path, default in named.items():
+        section, key = path.split(".", 1)
+        assert fallback[section][key] == default, path
+
+
+def test_catalogue_runtime_defaults_travel_with_the_limits_and_cannot_be_changed_through_them():
+    limits = runtime_commands.attach_limits({"system": {}}, None)["_limits"]
+    assert limits["catalogue_defaults"] == runtime_commands.catalogue_runtime_defaults()
+    limits["catalogue_defaults"]["system"]["min_output_limit"] = 0
+    assert runtime_commands.catalogue_runtime_defaults()["system"]["min_output_limit"] == 35

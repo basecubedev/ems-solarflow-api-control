@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { adminSend } from "./auth.svelte.js";
 import { system, reload } from "./system.svelte.js";
-import { changeCount, fieldIndex, liveEdits, overrideTargets, sameAsSaved, storable, writeAtOnce } from "../lib/settings.js";
+import { changeCount, fieldIndex, liveEdits, overrideTargets, sameAsSaved, sentDraft, storable, writeAtOnce } from "../lib/settings.js";
 import { editableDraft } from "../lib/devices.js";
 
 const EDITS_KEY = "ems-admin.settings-edits";
@@ -173,6 +173,11 @@ export function discard() {
   settings.applyError = null;
 }
 
+/** The draft as the server receives it (``sentDraft``). */
+function sent() {
+  return sentDraft(settings.draft, settings.live, settings.fields, settings.editable, settings.saved?.catalog);
+}
+
 /**
  * The server's preview of the draft: what would change, and whether the
  * result is a valid config. A draft the server refuses answers with its
@@ -181,12 +186,13 @@ export function discard() {
 export async function previewDraft() {
   if (settings.previewing || !settings.draft) return;
   const draft = settings.draft;
+  const body = sent();
   settings.previewing = true;
   settings.previewError = null;
   settings.applyError = null;
   const current = () => JSON.stringify(settings.draft) === JSON.stringify(draft);
   try {
-    const answer = await adminSend(PATHS.preview, { body: { draft } });
+    const answer = await adminSend(PATHS.preview, { body: { draft: body } });
     if (!current()) return;
     settings.preview = answer;
     settings.previewedFor = JSON.stringify(draft);
@@ -213,12 +219,13 @@ export async function previewDraft() {
 export async function applyDraft({ backup = true } = {}) {
   if (settings.applying || !settings.reviewed || !settings.saved) return;
   const draft = settings.draft;
+  const body = sent();
   const changes = settings.preview?.diff;
   const revision = settings.preview.revision;
   settings.applying = true;
   settings.applyError = null;
   try {
-    const result = await adminSend(PATHS.apply, { body: { draft, revision, confirm: true, backup } });
+    const result = await adminSend(PATHS.apply, { body: { draft: body, revision, confirm: true, backup } });
     if (result?.ok === false) {
       settings.applyError = result;
       return;

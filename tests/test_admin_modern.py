@@ -12,6 +12,8 @@ words it has for a code are only right while the server still sends that code.
 import http.client
 import json
 import re
+import shutil
+import subprocess
 import threading
 import urllib.error
 import urllib.request
@@ -327,6 +329,62 @@ def test_device_kinds_are_the_ones_the_settings_view_draws():
     kinds = {"local_api", "zendure_mqtt", E3DC_MODBUS_DEVICE_TYPE, EXTERNAL_MQTT_TYPE}
     assert '"kind": "local_api"' in source
     assert set(js_list("lib/settings.js", "DEVICE_KINDS")) == kinds
+
+
+def devices_value(expression):
+    """The JSON value of an expression over the Admin's ``lib/devices.js`` (as ``m``), evaluated by Node."""
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node is required to evaluate the Admin's device defaults")
+    module = (SOURCE / "src" / "lib" / "devices.js").as_uri()
+    script = f"import({json.dumps(module)}).then((m) => process.stdout.write(JSON.stringify({expression})))"
+    result = subprocess.run(
+        [node, "--input-type=module", "-e", script], cwd=ROOT, capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    return json.loads(result.stdout)
+
+
+def test_the_default_ports_the_admin_names_are_the_ones_the_ems_and_the_broker_use():
+    from admin.mqtt_broker import DEFAULT_PORT
+    from ems.config import E3DC_MODBUS_DEFAULT_PORT, E3DC_MODBUS_DEFAULT_UNIT_ID, default_mqtt_port
+
+    e3dc = {"port": E3DC_MODBUS_DEFAULT_PORT, "unit_id": E3DC_MODBUS_DEFAULT_UNIT_ID}
+    assert devices_value("m.E3DC_DEFAULTS") == e3dc
+    mqtt = [default_mqtt_port(False), default_mqtt_port(True)]
+    assert devices_value("[m.mqttDefaultPort(false), m.mqttDefaultPort(true)]") == mqtt
+    assert DEFAULT_PORT == default_mqtt_port(False)
+
+
+def test_an_emptied_device_ceiling_names_the_ceiling_the_ems_falls_back_to(tmp_path):
+    from types import SimpleNamespace
+
+    from ems import config as cfg
+    from ems.config_catalog import build_default_template
+
+    config = build_default_template(1)
+    config["system"]["max_device_power"] = 1700
+    config["devices"][0].pop("max_power")
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(config), encoding="utf-8")
+    args = SimpleNamespace(config=str(path), dry_run=False, simulate=False, replay=None, self_test=False)
+    snapshot = {name: getattr(cfg, name) for name in dir(cfg) if name.isupper()}
+    try:
+        cfg.initialize(args, str(tmp_path))
+        ceiling = cfg.device_power_ceiling(cfg.CONFIG["devices"][0].get("max_power"))
+    finally:
+        for name, value in snapshot.items():
+            setattr(cfg, name, value)
+    features = json.dumps({"system.max_device_power": config["system"]["max_device_power"]})
+    named = devices_value(f"m.deviceFallbacks({{ max_power: 800 }}, {features}, new Map()).max_power")
+    assert named == ceiling == 1700
+
+
+def test_the_tls_modes_the_admin_reads_as_plain_are_the_ems_ones():
+    from ems.config import _MQTT_TLS_PLAIN_ALIASES
+
+    assert set(js_list("lib/devices.js", "PLAIN_TLS_MODES")) == _MQTT_TLS_PLAIN_ALIASES - {""}
 
 
 def test_install_states_are_the_detectors():

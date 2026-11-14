@@ -8,6 +8,7 @@ one set of validators, one writer that re-reads the file before it saves.
 """
 
 import copy
+import functools
 import logging
 import math
 from dataclasses import dataclass
@@ -439,11 +440,12 @@ def build_validation_context(config=None, runtime_state=None):
 
 
 def attach_limits(payload, validation_context, offered_settings=None):
-    """The runtime payload with its bounds, and the device settings each device has."""
+    """The runtime payload with its bounds, each device's settings and the catalogue's defaults."""
 
     result = copy.deepcopy(payload) if isinstance(payload, dict) else {}
     result["_limits"] = effective_limits(validation_context)
     result["_limits"]["device_settings_offered"] = dict(offered_settings or {})
+    result["_limits"]["catalogue_defaults"] = catalogue_runtime_defaults()
     return result
 
 
@@ -472,6 +474,43 @@ def effective_limits(validation_context=None):
         "ac_role_unsupported": list(context.get("ac_role_unsupported") or ()),
         "device_settings": device_settings.catalogue(),
     }
+
+
+def catalogue_runtime_defaults():
+    """The settings catalogue's default of each numeric runtime value.
+
+    Keyed like the runtime payload: ``system``, ``devices`` (one set for every
+    device) and the sections. A value the catalogue marks as an installation
+    value, such as the total or a device's power, has none: its default is the
+    template's example, not this installation's.
+    """
+
+    return {scope: dict(values) for scope, values in _catalogue_runtime_defaults().items()}
+
+
+@functools.lru_cache(maxsize=1)
+def _catalogue_runtime_defaults():
+    from ems.config_catalog import get_config_feature_field_index
+
+    index = get_config_feature_field_index()
+    tables = {
+        "system": ("system", SYSTEM_FIELDS),
+        "devices": ("devices[]", DEVICE_FIELDS),
+        **{name: (name, fields) for name, fields in SECTION_FIELDS.items()},
+    }
+    defaults = {}
+    for scope, (prefix, fields) in tables.items():
+        values = {}
+        for key, (kind, _bounds) in fields.items():
+            field = index.get(f"{prefix}.{key}", {})
+            default = field.get("default")
+            if kind not in ("int", "float") or field.get("installation_value"):
+                continue
+            if isinstance(default, (int, float)) and not isinstance(default, bool):
+                values[key] = default
+        if values:
+            defaults[scope] = values
+    return defaults
 
 
 def _runtime_section(runtime_state, section_name):

@@ -75,7 +75,18 @@ def _field(
     risk="restart_required",
     group=None,
     editable=True,
+    installation_value=False,
+    example_default=False,
 ):
+    """One catalogue field.
+
+    ``installation_value`` marks a value that describes the installation, such
+    as an address, a device's power or the battery size. Its default is only
+    the template's example: no badge, marked option or runtime default offers
+    it. An emptied one still names the value the EMS falls back to, unless
+    ``example_default`` says its default is an example and nothing more, as an
+    address or a serial number is.
+    """
     if restart_required is not None:
         requires_restart = restart_required
     risk = {
@@ -108,6 +119,10 @@ def _field(
         item["group"] = group
     if not editable:
         item["editable"] = False
+    if installation_value:
+        item["installation_value"] = True
+    if example_default:
+        item["example_default"] = True
     return item
 
 
@@ -751,6 +766,7 @@ _SECTIONS = [
                 minimum=0,
                 risk="control_stability",
                             group="limits",
+                installation_value=True,
             ),
             _field(
                 "system.loop_interval",
@@ -836,6 +852,7 @@ _SECTIONS = [
                 minimum=0,
                 risk="control_stability",
                             group="limits",
+                installation_value=True,
             ),
             _field(
                 "system.runtime_state_path",
@@ -1136,12 +1153,15 @@ _SECTIONS = [
                     "mqtt",
                 ),
                 required=True,
+                installation_value=True,
             ),
             _field(
                 "grid_meter.ip",
                 "Meter IP address",
                 "IP address of the grid meter in your local network, if the selected meter type needs one.",
                 "text",
+                installation_value=True,
+                example_default=True,
             ),
             _field(
                 "grid_meter.channels",
@@ -1321,6 +1341,8 @@ _SECTIONS = [
                 "Friendly name shown in logs, dashboard, and Admin pages.",
                 "text",
                 required=True,
+                installation_value=True,
+                example_default=True,
             ),
             _field(
                 "devices[].ip",
@@ -1328,6 +1350,8 @@ _SECTIONS = [
                 "Local IP address used to reach the device.",
                 "text",
                 required=True,
+                installation_value=True,
+                example_default=True,
             ),
             _field(
                 "devices[].sn",
@@ -1335,6 +1359,8 @@ _SECTIONS = [
                 "Device serial number used by the Zendure API.",
                 "text",
                 required=True,
+                installation_value=True,
+                example_default=True,
             ),
             _field(
                 "devices[].smart_mode",
@@ -1353,6 +1379,7 @@ _SECTIONS = [
                 unit="W",
                 minimum=0,
                 risk="control_stability",
+                installation_value=True,
             ),
             _field(
                 "devices[].pv_kwp",
@@ -1364,6 +1391,7 @@ _SECTIONS = [
                 unit="kWp",
                 minimum=0,
                 risk="control_stability",
+                installation_value=True,
             ),
             _field(
                 "devices[].winter_policy",
@@ -1393,6 +1421,7 @@ _SECTIONS = [
                 unit="kWh",
                 minimum=0,
                 risk="control_stability",
+                installation_value=True,
             ),
             _field(
                 "devices[].ac_discharge_enabled",
@@ -1764,12 +1793,14 @@ _SECTIONS = [
                 "number",
                 unit="currency/kWh",
                 minimum=0,
+                installation_value=True,
             ),
             _field(
                 "energy_savings.currency",
                 "Currency",
                 "Currency shown for estimated savings.",
                 "text",
+                installation_value=True,
             ),
             _field(
                 "energy_savings.max_sample_delta_seconds",
@@ -1786,6 +1817,7 @@ _SECTIONS = [
                 "Time zone used for daily savings boundaries and reports.",
                 "text",
                 level="advanced",
+                installation_value=True,
             ),
         ],
         enabled_path="energy_savings.enabled",
