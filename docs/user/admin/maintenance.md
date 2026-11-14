@@ -194,7 +194,14 @@ path across the tabs, and each tab counts its matches. Switching a tab never
 reloads and never touches your unsaved changes.
 
 **What you enter:** the change you want. Each field names its unit, says what
-it does and, when it is empty, which default applies (*800 (default)*).
+it does and, when it is empty, which default applies (*35 (default)*); saving
+an emptied field writes that default. A value that differs from its default
+shows **Default: …** beside it, for information only; a choice list marks its
+default option *(default)*. Values that describe your installation, such as
+power limits and battery size, get no such note: their default is only the
+template's example. Emptied, such a value names in grey what the EMS falls
+back to, and saving keeps it at that; a device's power limit falls back to the
+system's per-device limit.
 Advanced and expert fields are folded away under **Advanced settings** and
 **Expert settings**.
 

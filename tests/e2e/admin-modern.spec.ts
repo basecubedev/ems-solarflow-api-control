@@ -504,6 +504,77 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
     await expect(care.locator("details.level")).toHaveCount(0);
   });
 
+  test("a value away from its default names the default beside it, and an emptied one names it grey in the field", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings/safety");
+    const minimum = page.locator('[data-path="system.min_output_limit"]');
+    const input = minimum.locator("input");
+    await input.fill("40");
+    await expect(minimum.locator(".badge.default")).toHaveText("Default: 35");
+    await input.pressSequentially("e");
+    await expect(minimum.locator(".form-error")).toHaveText("Not a number");
+    await expect(minimum.locator(".badge.default")).toHaveText("Default: 35");
+    await page.getByTestId("review").click();
+    await expect(page.getByTestId("unreadable-number")).toBeVisible();
+    await expect(page.getByTestId("settings-review")).toHaveCount(0);
+    await input.fill("");
+    await expect(input).toHaveAttribute("placeholder", "35 (default)");
+    await expect(minimum.locator(".badge.default")).toHaveCount(0);
+    await input.fill("35");
+    await expect(minimum.locator(".badge.default")).toHaveCount(0);
+
+    await page.goto("/#/settings/expert");
+    const system = page.locator('[data-section="system"]');
+    await system.locator(".summary").click();
+    await system.locator("details.level summary").first().click();
+    const level = system.locator('[data-path="system.log_level"]');
+    await level.locator("select").selectOption("debug");
+    await expect(level.locator('option[value="info"]')).toHaveText(/\(default\)$/);
+    await expect(level.locator("option", { hasText: "(default)" })).toHaveCount(1);
+    await expect(level.locator(".badge.default")).toHaveText(/^Default: /);
+  });
+
+  test("an emptied value is saved as the value it named grey, on a setting and on a device", async ({ page, seedAdminScenario }) => {
+    const save = async () => {
+      await page.getByTestId("review").click();
+      await expect(page.getByTestId("settings-review")).toContainText("Settings are valid");
+      await page.getByTestId("apply").click();
+      await page.getByRole("dialog", { name: "Save the checked changes?" }).getByTestId("confirm").click();
+      await expect(page.getByTestId("settings-applied")).toBeVisible();
+      await page.reload();
+    };
+    await seededAt(page, seedAdminScenario, "#/settings/safety");
+    const minimum = page.locator('[data-path="system.min_output_limit"]');
+    await minimum.locator("input").fill("40");
+    await page.goto("/#/settings/devices");
+    const inverter = page.getByTestId("devices-editor").locator('[data-device="inverter-0"]');
+    await inverter.locator(".summary").click();
+    await inverter.locator('[data-path="devices[].min_soc"] input').fill("20");
+    await inverter.locator('[data-path="devices[].max_power"] input').fill("700");
+    await save();
+
+    await inverter.locator(".summary").click();
+    const soc = inverter.locator('[data-path="devices[].min_soc"] input');
+    const ceiling = inverter.locator('[data-path="devices[].max_power"] input');
+    await expect(soc).toHaveValue("20");
+    await expect(ceiling).toHaveValue("700");
+    await soc.fill("");
+    await expect(soc).toHaveAttribute("placeholder", "15 (default)");
+    await ceiling.fill("");
+    await expect(ceiling).toHaveAttribute("placeholder", "800 (default)");
+    await page.goto("/#/settings/safety");
+    await expect(minimum.locator(".badge.default")).toHaveText("Default: 35");
+    await minimum.locator("input").fill("");
+    await expect(minimum.locator("input")).toHaveAttribute("placeholder", "35 (default)");
+    await save();
+
+    await expect(minimum.locator("input")).toHaveValue("35");
+    await expect(minimum.locator(".badge.default")).toHaveCount(0);
+    await page.goto("/#/settings/devices");
+    await inverter.locator(".summary").click();
+    await expect(soc).toHaveValue("15");
+    await expect(ceiling).toHaveValue("800");
+  });
+
   test("the overview's Control & safety card opens the safety settings", async ({ page, seedAdminScenario }) => {
     await seededAt(page, seedAdminScenario, "#/overview");
     await page.getByRole("link", { name: "Change", exact: true }).click();

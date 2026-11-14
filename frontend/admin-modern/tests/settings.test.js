@@ -8,6 +8,10 @@ import {
   changeGroups,
   choices,
   defaultHint,
+  departedDefault,
+  nameableDefault,
+  sentDraft,
+  sentFeatures,
   fieldIndex,
   fieldMatches,
   levelled,
@@ -95,6 +99,49 @@ test("an unset switch shows its default, a list shows as text, an empty input na
   assert.equal(defaultHint(gate, undefined), "");
   assert.deepEqual(choices({ options: ["a", "b"] }, "c"), ["c", "a", "b"]);
   assert.deepEqual(choices({ options: ["a", "b"] }, "a"), ["a", "b"]);
+});
+
+test("a value away from its default names the default; at it, unset or without one, nothing", () => {
+  const gate = system.fields[0];
+  const minimum = { path: "system.min_output_limit", type: "number", default: 35 };
+  assert.equal(departedDefault(minimum, 40), 35);
+  assert.equal(departedDefault(minimum, "40"), 35);
+  assert.equal(departedDefault(minimum, 35), undefined);
+  assert.equal(departedDefault(minimum, "35.0"), undefined);
+  assert.equal(departedDefault(minimum, ""), undefined);
+  assert.equal(departedDefault(minimum, null), undefined);
+  assert.equal(departedDefault(system.fields[1], 1600), undefined);
+  assert.equal(departedDefault(gate, false), true);
+  assert.equal(departedDefault(gate, true), undefined);
+  assert.equal(departedDefault(gate, undefined), undefined);
+  assert.deepEqual(departedDefault(winter.fields[1], [11, 12]), [11, 12, 1]);
+  assert.equal(departedDefault(winter.fields[1], "11,12, 1"), undefined);
+  assert.equal(departedDefault({ ...minimum, secret: true }, 40), undefined);
+  assert.equal(departedDefault({ path: "grid_meter.port", type: "number" }, 8080, 80), 80);
+  assert.equal(departedDefault({ path: "grid_meter.port", type: "number" }, 8080, null), undefined);
+  assert.equal(departedDefault({ path: "devices[].max_power", type: "number", default: 800, installation_value: true }, 2400), undefined);
+  assert.equal(departedDefault({ path: "system.tag", type: "text", default: "1" }, "01"), "1");
+  assert.equal(departedDefault({ path: "system.tag", type: "text", default: "1" }, "1"), undefined);
+  assert.equal(departedDefault({ ...winter.fields[1], default: [10, 11, 12, 1] }, [1, 10, 11, 12]), undefined);
+  assert.deepEqual(departedDefault({ ...winter.fields[1], default: [10, 11, 12, 1] }, "1, 10, 11"), [10, 11, 12, 1]);
+});
+
+test("an installation value names no default but its fallback in grey, an example not even that", () => {
+  const address = { path: "grid_meter.ip", type: "text", default: "198.51.100.50", installation_value: true, example_default: true };
+  assert.equal(nameableDefault(address), undefined);
+  assert.equal(defaultHint(address, ""), "");
+  assert.equal(departedDefault(address, "192.168.1.50"), undefined);
+  const zone = { path: "energy_savings.timezone", type: "text", default: "Europe/Berlin", installation_value: true };
+  assert.equal(defaultHint(zone, ""), "Europe/Berlin");
+  assert.equal(departedDefault(zone, "Europe/Vienna"), undefined);
+  assert.equal(nameableDefault({ path: "system.min_output_limit", type: "number", default: 35 }), 35);
+  assert.equal(nameableDefault({ path: "grid_meter.port", type: "number" }, null), undefined);
+  assert.equal(defaultHint({ path: "grid_meter.port", type: "number" }, "", 502), "502");
+  const total = { path: "system.max_total_power", type: "number", default: 800, installation_value: true };
+  assert.equal(defaultHint(total, ""), "800");
+  assert.equal(departedDefault(total, 1600), undefined);
+  assert.equal(departedDefault({ path: "influxdb.org", type: "text", default: "ems" }, "e m s"), "ems");
+  assert.equal(departedDefault({ path: "influxdb.org", type: "text", default: "ems" }, " ems "), undefined);
 });
 
 test("changes are counted per setting, device and block, the way Classic counts them", () => {
@@ -297,4 +344,34 @@ test("the bridge password is a choice of the saved ones by name, and a stored on
   assert.deepEqual(field.optionLabels, { basement: "Basement meter", garage: "garage" });
   assert.deepEqual(choices(field, "attic"), ["attic", "basement", "garage"]);
   assert.deepEqual(bridgePasswordField({ path: "grid_meter.credentials_ref" }, null).options, []);
+});
+
+test("an emptied value is sent as the default it named, an installation value and an untouched one as they are", () => {
+  const fields = new Map([
+    ["system.min_output_limit", { path: "system.min_output_limit", type: "number", default: 35 }],
+    ["system.max_total_power", { path: "system.max_total_power", type: "number", default: 800, installation_value: true }],
+    ["winter.months", { path: "winter.months", type: "month_list", default: [10, 11] }],
+    ["system.deadband", { path: "system.deadband", type: "number", default: 2 }],
+  ]);
+  const features = { "system.min_output_limit": "", "system.max_total_power": "", "winter.months": " ", "system.deadband": null, "system.loop_interval": "" };
+  const sent = sentFeatures(features, { "system.min_output_limit": "", "system.max_total_power": "", "winter.months": " ", "system.loop_interval": "" }, fields);
+  assert.deepEqual(sent, { "system.min_output_limit": 35, "system.max_total_power": "", "winter.months": [10, 11], "system.deadband": null, "system.loop_interval": "" });
+  assert.equal(features["system.min_output_limit"], "");
+});
+
+test("an emptied broker port goes out as its default port, unless the broker's address is emptied too", () => {
+  const saved = { zendure_mqtt: { host: "b", port: 1884 } };
+  const draft = { features: {}, grid_meter: { type: "shelly", port: "" }, zendure_mqtt: { host: "b", port: "", tls_mode: "system_ca" } };
+  const sent = sentDraft(draft, {}, new Map(), saved, {});
+  assert.equal(sent.grid_meter.port, "");
+  assert.equal(sent.zendure_mqtt.port, 8883);
+  const off = sentDraft({ features: {}, zendure_mqtt: { host: "", port: "" } }, {}, new Map(), saved, {});
+  assert.equal("port" in off.zendure_mqtt, false);
+  assert.equal(draft.zendure_mqtt.port, "");
+});
+
+test("a list departs from its default by its items, not by the spacing around them", () => {
+  const phases = { path: "x.channels", type: "string_list", default: ["L1 total", "L2"] };
+  assert.equal(departedDefault(phases, "L1 total ,L2"), undefined);
+  assert.deepEqual(departedDefault(phases, "L1total, L2"), ["L1 total", "L2"]);
 });

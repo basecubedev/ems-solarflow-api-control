@@ -10,13 +10,37 @@
  */
 
 export const E3DC_DEFAULTS = Object.freeze({ port: 502, unit_id: 1 });
+
+/** The port an MQTT broker listens on when none is set: 8883 with TLS, else 1883. */
+export function mqttDefaultPort(tls) {
+  return tls ? 8883 : 1883;
+}
+
+/** A typed broker port as a number, left for the server to judge, or the default port when none is typed. */
+export function portOrDefault(value, tls) {
+  return held(value) ? Number(String(value).trim()) : mqttDefaultPort(tls);
+}
+
+/** Whether a value is set: neither missing nor only blanks. */
+export function held(value) {
+  return value !== null && value !== undefined && String(value).trim() !== "";
+}
+
+/** The TLS modes the EMS reads as plain MQTT (``ems.config``); an empty mode leaves it to the tls flag. */
+export const PLAIN_TLS_MODES = Object.freeze(["plaintext", "plain", "disabled", "none", "tcp"]);
+
+/** Whether MQTT settings mean TLS the way the EMS reads them: a TLS mode wins over the tls flag. */
+export function mqttUsesTls(settings) {
+  const mode = String(settings?.tls_mode ?? "").trim().toLowerCase();
+  return mode ? !PLAIN_TLS_MODES.includes(mode) : settings?.tls === true;
+}
 export const D0_TOPIC_PREFIX = "Zendure/sensor/";
 export const D0_TOPIC_SUFFIX = "/totalPower";
 const METER_BOUND_KEYS = Object.freeze(["token", "has_token", "serial", "pairing_name", "unit_id"]);
 const GRID_MQTT_PREFIX = "grid_meter.mqtt.";
 /** Connection values a named broker profile owns; never edited beside the reference. */
 const GRID_MQTT_CONNECTION = new Set(["grid_meter.mqtt.host", "grid_meter.mqtt.port", "grid_meter.mqtt.username", "grid_meter.mqtt.password"]);
-/** name, ip and sn always write, a cleared IP included; other device values drop back to unset when emptied. */
+/** name, ip and sn always write, a cleared IP included; other emptied device values are settled when sent (``sentDevices``). */
 export const IDENTITY_KEYS = Object.freeze(["name", "ip", "sn"]);
 
 const mapping = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : {});
@@ -51,11 +75,63 @@ export function commonDefaults(catalog) {
   return mapping(mapping(mapping(catalog).default_device).common);
 }
 
-/** One device value changed: an emptied value other than the identity is unset, so the default applies. */
-export function setDeviceValue(device, key, value) {
+/**
+ * What each device value falls back to when emptied: its default, and for
+ * the power ceiling the system's per-device ceiling, which the EMS takes for
+ * a device without one of its own.
+ */
+export function deviceFallbacks(defaults, features, fields) {
+  const typed = String(mapping(features)["system.max_device_power"] ?? "").trim();
+  const ceiling = typed === "" ? NaN : Number(typed);
+  return { ...mapping(defaults), max_power: Number.isFinite(ceiling) ? ceiling : fields?.get?.("system.max_device_power")?.default ?? mapping(defaults).max_power };
+}
+
+/**
+ * One device value changed. An emptied value other than the identity is held
+ * as "", so its input names the value it falls back to grey until
+ * ``sentDevices`` writes that value; where the saved entry (``original``) held
+ * nothing, it is unset again, so nothing changes.
+ */
+export function setDeviceValue(device, key, value, original = null) {
   const next = clone(device);
-  if (!IDENTITY_KEYS.includes(key) && String(value ?? "").trim() === "") delete next[key];
-  else next[key] = value;
+  if (IDENTITY_KEYS.includes(key)) next[key] = value;
+  else putEmptied(next, key, value, !original || held(original[key]));
+  return next;
+}
+
+/** A typed value, or for an emptied one "" where the saved config held a value (``kept``) and nothing where it did not. */
+function putEmptied(target, key, value, kept) {
+  if (held(value)) target[key] = value;
+  else if (kept) target[key] = "";
+  else delete target[key];
+}
+
+/**
+ * The device list as the server receives it: a value emptied in the editor is
+ * written as the value its input named (``deviceFallbacks``), so a device
+ * keeps every common value and runs what its card showed. A value the saved
+ * entry (in ``saved``, by original name) already held empty is left alone.
+ */
+export function sentDevices(devices, catalog, fallbacks, saved = []) {
+  const keys = new Set(deviceFields(catalog).common.map((field) => fieldKey(field.path)));
+  const before = savedByOriginalName(saved);
+  return (Array.isArray(devices) ? devices : []).map((device) => {
+    const original = before.get(device?.original_name) ?? null;
+    return withFallbacks(device, fallbacks, (key) => !keys.has(key) || original?.[key] === "");
+  });
+}
+
+/** The saved devices by the name a draft device keeps as ``original_name``. */
+export function savedByOriginalName(saved) {
+  return new Map((Array.isArray(saved) ? saved : []).filter((device) => device?.original_name).map((device) => [device.original_name, device]));
+}
+
+/** ``values`` with each value emptied in an editor ("") written as its fallback, except the keys ``kept`` names. */
+export function withFallbacks(values, fallbacks, kept = () => false) {
+  const next = { ...values };
+  for (const [key, value] of Object.entries(mapping(values))) {
+    if (value === "" && !kept(key) && held(fallbacks?.[key])) next[key] = clone(fallbacks[key]);
+  }
   return next;
 }
 
@@ -274,10 +350,14 @@ export function setGridValue(meter, path, value) {
   return next;
 }
 
-export function setGridPort(meter, value) {
+/**
+ * The meter's port. Emptied it goes out empty, which removes it, so the meter
+ * type's default applies; where the saved meter (``saved``) held no port, it
+ * is unset again, so nothing changes.
+ */
+export function setGridPort(meter, value, saved = null) {
   const next = clone(meter) || {};
-  if (String(value ?? "").trim() === "") delete next.port;
-  else next.port = value;
+  putEmptied(next, "port", value, held(saved?.port));
   return next;
 }
 
@@ -342,14 +422,11 @@ export function setGridPassword(meter, { password, clear }) {
 export const NO_GRID_METER = Object.freeze({ present: false, type: "", ip: "" });
 
 /** The legacy top-level broker form; a named-profile setup is read-only here. */
-export function setBroker(broker, key, value) {
+export function setBroker(broker, key, value, saved = null) {
   const next = clone(broker) || {};
   if (key === "host") next.host = String(value).trim();
-  else if (key === "port") {
-    const port = String(value ?? "").trim();
-    if (port === "") delete next.port;
-    else next.port = port;
-  } else if (key === "username") next.username = String(value).trim();
+  else if (key === "port") putEmptied(next, "port", String(value ?? "").trim(), held(saved?.port));
+  else if (key === "username") next.username = String(value).trim();
   else if (key === "security") {
     next.tls = value === "tls";
     next.tls_explicit = true;
@@ -419,10 +496,8 @@ export function manualBroker({ name = "", host = "", port = "", security = "plai
   const address = String(host).trim();
   if (!address) return null;
   const tls = security === "tls";
-  let number = parseInt(String(port).trim(), 10);
-  if (!Number.isFinite(number) || number <= 0) number = tls ? 8883 : 1883;
   const user = String(username).trim();
-  return { ref: brokerRef(name), host: address, port: number, tls, username: user, password, hasAuth: Boolean(user && password), authPartial: Boolean(user) !== Boolean(password) };
+  return { ref: brokerRef(name), host: address, port: portOrDefault(port, tls), tls, username: user, password, hasAuth: Boolean(user && password), authPartial: Boolean(user) !== Boolean(password) };
 }
 
 /** A new MQTT inverter bound to a typed local broker; its password travels only as the saved credential's reference. */

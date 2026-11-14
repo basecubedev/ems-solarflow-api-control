@@ -152,6 +152,8 @@ export const SHARED_STRINGS = {
   "common.saving": s("Saving", "Speichert", "Opslaan", "Enregistrement"),
   "common.on": s("On", "An", "Aan", "Activé"),
   "common.off": s("Off", "Aus", "Uit", "Désactivé"),
+  "common.defaultValue": s("{value} (default)", "{value} (Standard)", "{value} (standaard)", "{value} (par défaut)"),
+  "common.unreadableNumber": s("Not a number", "Keine Zahl", "Geen getal", "Pas un nombre"),
   "common.yes": s("Yes", "Ja", "Ja", "Oui"),
   "common.today": s("Today", "Heute", "Vandaag", "Aujourd’hui"),
   "common.details": s("Details", "Details", "Details", "Détails"),

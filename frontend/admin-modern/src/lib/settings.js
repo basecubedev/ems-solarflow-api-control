@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { commonDefaults, deviceFallbacks, held, mqttDefaultPort, mqttUsesTls, sentDevices } from "./devices.js";
 /**
  * The saved settings as the Maintenance config view describes them
  * (admin/maintenance_config.py), and the editor's draft of them. The draft is
@@ -47,6 +48,8 @@ export const SAFETY_GROUPS = Object.freeze(["safety_gates", "safety_holds", "lim
 
 const HIDDEN_LEVELS = new Set(["deprecated", "internal"]);
 const LEVELS = ["normal", "advanced", "expert"];
+const NUMBER_TYPES = new Set(["number", "integer"]);
+const LIST_TYPES = new Set(["month_list", "string_list"]);
 
 /** Consequences worth naming beside a field; ``restart_required`` is on most fields, so it is no signal. */
 export const RISKS = Object.freeze(["control_stability", "data_loss", "secret", "deprecated"]);
@@ -138,11 +141,85 @@ export function shownValue(field, value) {
   return Array.isArray(value) ? value.join(", ") : String(value);
 }
 
-/** The catalogue default named in an empty input. */
-export function defaultHint(field, value) {
-  if (field?.type === "boolean" || field?.default === undefined || field.default === null) return "";
+/**
+ * The default a field can name, or undefined: none, an empty one, a secret, an
+ * example such as an address, or an installation value, whose default is only
+ * the template's example, unless ``installation`` lets it name the value the
+ * EMS falls back to.
+ */
+export function nameableDefault(field, fallback = field?.default, { installation = false } = {}) {
+  if (!field || field.secret || field.example_default || (field.installation_value && !installation) || field.type === "password") return undefined;
+  if (fallback === undefined || fallback === null || fallback === "" || (Array.isArray(fallback) && !fallback.length)) return undefined;
+  return fallback;
+}
+
+/** The default named in an empty input; an installation value names the value the EMS falls back to. */
+export function defaultHint(field, value, fallback = field?.default) {
+  const standard = nameableDefault(field, fallback, { installation: true });
+  if (field?.type === "boolean" || standard === undefined) return "";
   if (value !== null && value !== undefined && value !== "") return "";
-  return Array.isArray(field.default) ? field.default.join(", ") : String(field.default);
+  return Array.isArray(standard) ? standard.join(", ") : String(standard);
+}
+
+function comparable(field, value) {
+  const text = shownValue(field, value);
+  if (!Array.isArray(value) && !LIST_TYPES.has(field.type)) return text.trim();
+  const items = text.split(",").map((item) => item.trim()).filter(Boolean);
+  return (field.type === "month_list" ? items.map(Number).sort((a, b) => a - b) : items).join(",");
+}
+
+/**
+ * The default a set value departs from, or undefined: the value is unset or at
+ * its default, or the field has no default to name. Numbers compare by value,
+ * lists without their spacing and months in any order.
+ */
+export function departedDefault(field, value, fallback = field?.default) {
+  const standard = nameableDefault(field, fallback);
+  if (standard === undefined) return undefined;
+  if (field.type === "boolean") {
+    if (value === null || value === undefined) return undefined;
+    return Boolean(value) === Boolean(standard) ? undefined : Boolean(standard);
+  }
+  if (value === null || value === undefined || value === "") return undefined;
+  const set = comparable(field, value);
+  const known = comparable(field, standard);
+  const numeric = NUMBER_TYPES.has(field.type) && set !== "" && Number.isFinite(Number(set)) && Number.isFinite(Number(known));
+  return (numeric ? Number(set) === Number(known) : set === known) ? undefined : standard;
+}
+
+/**
+ * The features as the server receives them. An emptied value that names a
+ * default is sent as that default, so what its input showed grey is what the
+ * EMS runs. An installation value goes empty, so it is removed and the EMS
+ * falls back as its input said.
+ */
+export function sentFeatures(features, edits, fields) {
+  const sent = { ...mapping(features) };
+  for (const [path, value] of Object.entries(mapping(edits))) {
+    if (held(value)) continue;
+    const standard = nameableDefault(fields?.get?.(path));
+    if (standard !== undefined) sent[path] = Array.isArray(standard) ? [...standard] : standard;
+  }
+  return sent;
+}
+
+/**
+ * The Maintenance draft as the server receives it, laid over ``saved`` (the
+ * editable draft of the saved config). Settings and device values take what
+ * their emptied inputs named. An emptied broker port, which an empty answer
+ * would leave as it was, goes out as the default port, unless the broker's
+ * address is emptied too.
+ */
+export function sentDraft(draft, edits, fields, saved, catalog) {
+  if (!draft) return draft;
+  const next = { ...draft, features: sentFeatures(draft.features, edits, fields) };
+  if (Array.isArray(draft.devices)) next.devices = sentDevices(draft.devices, catalog, deviceFallbacks(commonDefaults(catalog), draft.features, fields), saved?.devices);
+  const broker = mapping(draft.zendure_mqtt);
+  if (broker.port === "") {
+    next.zendure_mqtt = { ...broker, port: mqttDefaultPort(mqttUsesTls(broker)) };
+    if (!held(broker.host)) delete next.zendure_mqtt.port;
+  }
+  return next;
 }
 
 /** The grid meter's bridge password reference as a choice of the saved bridge passwords, shown by name. */

@@ -79,6 +79,7 @@ from ems.config import (
     check_homewizard_p1_pairing_name,
     config_control_devices_by_gate,
     config_control_flags,
+    default_mqtt_port,
     e3dc_modbus_device_settings,
     e3dc_modbus_grid_meter_settings,
     grid_meter_mqtt_settings,
@@ -929,7 +930,10 @@ def _grid_meter_mqtt_draft(grid_meter):
 
     Works for nested (``grid_meter.mqtt``) and legacy flat configs alike; the
     password is only surfaced as a ``has_password`` flag so the UI can offer
-    keep/clear without ever seeing the stored secret.
+    keep/clear without ever seeing the stored secret. ``tls`` says, read the way
+    the EMS connects, that the meter speaks TLS, so the editor names 8883 as
+    its default port; like ``has_password`` it is only a view, and
+    ``_grid_meter_changes`` never turns it into a change.
     """
 
     settings = grid_meter_mqtt_settings(grid_meter)
@@ -938,6 +942,8 @@ def _grid_meter_mqtt_draft(grid_meter):
         if settings.get(key) not in (None, ""):
             draft[key] = settings[key]
     draft["has_password"] = bool(settings.get("password"))
+    if _stored_broker_tls(settings)[0]:
+        draft["tls"] = True
     return draft
 
 
@@ -2189,7 +2195,7 @@ def _merge_zendure_mqtt_broker(merged, broker):
     if broker.get("port") not in (None, ""):
         target["port"] = _coerce_number(broker.get("port"))
     elif creating and host:
-        target["port"] = 1883
+        target["port"] = default_mqtt_port(bool(broker.get("tls")))
     stored_tls, stored_invalid = (
         _stored_broker_tls(existing) if existing_is_dict else (False, False)
     )
@@ -2243,6 +2249,7 @@ _GRID_METER_DRAFT_KEYS = (
     *HOMEWIZARD_P1_PAIRING_KEYS, *_GRID_METER_BRIDGE_KEYS,
 )
 _GRID_METER_OPTIONAL_NUMBER_KEYS = frozenset({"port", "node_id", *_GRID_METER_MODBUS_KEYS})
+_GRID_METER_MQTT_VIEW_KEYS = frozenset({"has_password", "tls"})
 
 
 def _grid_meter_changes(grid_meter):
@@ -2263,7 +2270,11 @@ def _grid_meter_changes(grid_meter):
         changes.append(ConfigChange(key, value))
     mqtt = grid_meter.get("mqtt")
     if isinstance(mqtt, dict):
-        changes.extend(ConfigChange(f"mqtt.{key}", value) for key, value in mqtt.items())
+        changes.extend(
+            ConfigChange(f"mqtt.{key}", value)
+            for key, value in mqtt.items()
+            if key not in _GRID_METER_MQTT_VIEW_KEYS
+        )
     return changes
 
 

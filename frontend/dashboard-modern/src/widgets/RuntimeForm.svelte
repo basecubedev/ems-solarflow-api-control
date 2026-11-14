@@ -9,6 +9,7 @@
   import { loadRuntime, live } from "../state/live.svelte.js";
   import { changedPayload, changeWarning, normalizeValue, reseed } from "../lib/runtime.js";
   import { errorText } from "../lib/errors.js";
+  import { unreadableInput } from "../../../shared/lib/forms.js";
 
   /**
    * One runtime card. Its values are local state seeded from /api/runtime, and
@@ -70,7 +71,7 @@
 
   function submit(event) {
     event.preventDefault();
-    const unreadable = [...event.currentTarget.querySelectorAll('input[type="number"]')].find((input) => input.validity.badInput);
+    const unreadable = unreadableInput(event.currentTarget);
     if (unreadable) {
       const field = fields.find((item) => item.name === unreadable.name);
       feedback = { text: t("runtime.notANumber", { field: field?.label || unreadable.name }), error: true };
@@ -110,7 +111,7 @@
         <label class="row">
           <span>{field.label}</span>
           <span class="number">
-            <input class="input num" type="number" name={field.name} min={field.min} max={field.max} step={field.step || 1} bind:value={values[field.name]} />
+            <input class="input num" type="number" name={field.name} min={field.min} max={field.max} step={field.step || 1} placeholder={field.default !== undefined ? t("common.defaultValue", { value: field.default }) : field.placeholder || ""} bind:value={values[field.name]} />
             <span class="unit">{field.unit}</span>
           </span>
         </label>
@@ -159,7 +160,7 @@
   .row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px var(--s3); background: var(--m-surface-2); border-radius: var(--m-radius-inner); padding: 6px 10px; min-height: 40px; font-size: 13px; }
   .row > span:first-child { color: var(--m-muted); }
   .number { display: inline-flex; align-items: center; gap: 6px; }
-  .number .input { width: 110px; text-align: right; }
+  .number .input { width: 136px; text-align: right; }
   .row select.input { width: auto; max-width: 100%; margin-left: auto; }
   .unit { color: var(--m-muted); font-size: 12px; min-width: 14px; }
   .readonly .value { font-size: 12.5px; }

@@ -16,8 +16,10 @@
     commonDefaults,
     connectionSource,
     d0Serial,
+    deviceFallbacks,
     deviceFields,
     deviceKind,
+    E3DC_DEFAULTS,
     fieldKey,
     generations,
     gridFields,
@@ -32,10 +34,13 @@
     newLocalInverter,
     newMqttInverter,
     manualBroker,
+    mqttDefaultPort,
+    mqttUsesTls,
     operationWords,
     onLocalBroker,
     reasonKey,
     removeDevice,
+    savedByOriginalName,
     setBroker,
     setD0Serial,
     setDeviceValue,
@@ -47,6 +52,7 @@
     VALIDATION_MATURITIES,
   } from "../lib/devices.js";
   import { CONSUMER_FAMILY } from "../lib/mqtt.js";
+  import { unreadableInput } from "../../../shared/lib/forms.js";
 
   let { config } = $props();
 
@@ -55,9 +61,11 @@
   const draft = $derived(settings.draft);
   const devices = $derived(Array.isArray(draft?.devices) ? draft.devices : []);
   const meter = $derived(draft?.grid_meter || {});
+  const meterTls = $derived(mqttUsesTls(meter.mqtt));
   const broker = $derived(draft?.zendure_mqtt || {});
   const fields = $derived(deviceFields(catalog));
-  const defaults = $derived(commonDefaults(catalog));
+  const defaults = $derived(deviceFallbacks(commonDefaults(catalog), draft?.features, settings.fields));
+  const savedDevices = $derived(savedByOriginalName(settings.editable?.devices));
   const variants = $derived(Object.values(catalog?.grid_meter_variants || {}));
   const meterType = $derived(String(meter.type || ""));
   const meterModel = $derived(gridVariant(catalog, meterType)?.label ? catalogText(gridVariant(catalog, meterType).label) : { text: t("devices.grid.none") });
@@ -97,6 +105,7 @@
    */
   async function addMqtt(event) {
     event.preventDefault();
+    if (unreadableInput(event.currentTarget)) return;
     const broker = manualBroker(mqttForm);
     if (broker?.authPartial) {
       mqttError = "partial";
@@ -216,7 +225,7 @@
 
 {#snippet deviceField(device, index, field)}
   {@const key = fieldKey(field.path)}
-  <SettingField {field} value={device[key]} live={liveFor(device, key)} defaultValue={["name", "ip", "sn"].includes(key) ? null : defaults[key]} onchange={(value) => update(index, setDeviceValue(device, key, value))} />
+  <SettingField {field} value={device[key]} live={liveFor(device, key)} defaultValue={defaults[key]} onchange={(value) => update(index, setDeviceValue(device, key, value, savedDevices.get(device.original_name) ?? null))} />
 {/snippet}
 
 {#snippet gridField(field)}
@@ -232,9 +241,9 @@
   {:else if field.path === "grid_meter.credentials_ref"}
     <BridgePasswordField {field} value={gridValue(meter, field.path)} onchange={(value) => setHardwareValues({ grid_meter: setGridValue(meter, field.path, value) })} />
   {:else}
-    <SettingField {field} value={gridValue(meter, field.path)} onchange={(value) => setHardwareValues({ grid_meter: setGridValue(meter, field.path, value) })} />
+    <SettingField {field} value={gridValue(meter, field.path)} defaultValue={field.path === "grid_meter.mqtt.port" ? mqttDefaultPort(meterTls) : undefined} onchange={(value) => setHardwareValues({ grid_meter: setGridValue(meter, field.path, value) })} />
     {#if field.path === "grid_meter.ip"}
-      <SettingField field={{ path: "grid_meter.port", type: "number", label: t("devices.field.port"), description: portHelp.text }} lang={null} descriptionLang={portHelp.lang ?? null} value={meter.port} onchange={(value) => setHardwareValues({ grid_meter: setGridPort(meter, value) })} />
+      <SettingField field={{ path: "grid_meter.port", type: "number", label: t("devices.field.port"), description: portHelp.text }} lang={null} descriptionLang={portHelp.lang ?? null} value={meter.port} defaultValue={gridVariant(catalog, meterType)?.default_port ?? null} onchange={(value) => setHardwareValues({ grid_meter: setGridPort(meter, value, settings.editable?.grid_meter) })} />
     {/if}
   {/if}
 {/snippet}
@@ -271,7 +280,7 @@
       {#if broker.tls_stored_invalid && !named}<p class="note warn"><Icon name="triangle-alert" />{t("devices.broker.tlsInvalid")}</p>{/if}
       <div class="fields">
         <SettingField field={own("host", false)} lang={null} value={broker.host || ""} disabled={named} onchange={(value) => setHardwareValues({ zendure_mqtt: setBroker(broker, "host", value) })} />
-        <SettingField field={{ ...own("port", false), type: "number" }} lang={null} value={broker.port ?? ""} disabled={named} onchange={(value) => setHardwareValues({ zendure_mqtt: setBroker(broker, "port", value) })} />
+        <SettingField field={{ ...own("port", false), type: "number" }} lang={null} value={broker.port ?? ""} defaultValue={mqttDefaultPort(mqttUsesTls(broker))} disabled={named} onchange={(value) => setHardwareValues({ zendure_mqtt: setBroker(broker, "port", value, settings.editable?.zendure_mqtt) })} />
         <div class="setting">
           <label class="head" for="broker-security">{t("devices.field.security")}</label>
           <select id="broker-security" class="input" value={broker.tls ? "tls" : "plain"} disabled={named} onchange={(event) => setHardwareValues({ zendure_mqtt: setBroker(broker, "security", event.currentTarget.value) })}>
@@ -355,8 +364,8 @@
           {@render enabledField(device, index, "e3dc")}
           <SettingField field={own("e3dcName")} lang={null} value={device.name || ""} onchange={(value) => update(index, { ...device, name: value })} />
           <SettingField field={own("e3dcHost")} lang={null} value={device.ip || ""} onchange={(value) => update(index, { ...device, ip: value })} />
-          <SettingField field={{ ...own("e3dcPort"), type: "number" }} lang={null} value={device.port ?? ""} onchange={(value) => update(index, { ...device, port: value })} />
-          <SettingField field={{ ...own("e3dcUnit"), type: "number" }} lang={null} value={device.unit_id ?? ""} onchange={(value) => update(index, { ...device, unit_id: value })} />
+          <SettingField field={{ ...own("e3dcPort"), type: "number" }} lang={null} value={device.port ?? ""} defaultValue={E3DC_DEFAULTS.port} onchange={(value) => update(index, { ...device, port: value })} />
+          <SettingField field={{ ...own("e3dcUnit"), type: "number" }} lang={null} value={device.unit_id ?? ""} defaultValue={E3DC_DEFAULTS.unit_id} onchange={(value) => update(index, { ...device, unit_id: value })} />
         </div>
       </DeviceCard>
     {/if}
@@ -375,7 +384,7 @@
     <div class="fields">
       <SettingField field={{ path: "broker.name", label: t("devices.mqttForm.name"), description: t("devices.mqttForm.nameHint") }} lang={null} value={mqttForm.name} onchange={(value) => (mqttForm.name = value)} />
       <SettingField field={own("host", false)} lang={null} value={mqttForm.host} onchange={(value) => (mqttForm.host = value)} />
-      <SettingField field={{ ...own("port", false), type: "number" }} lang={null} value={mqttForm.port} placeholder={mqttForm.security === "tls" ? "8883" : "1883"} onchange={(value) => (mqttForm.port = value)} />
+      <SettingField field={{ ...own("port", false), type: "number" }} lang={null} value={mqttForm.port} defaultValue={mqttDefaultPort(mqttForm.security === "tls")} onchange={(value) => (mqttForm.port = value)} />
       <div class="setting">
         <label class="head" for="mqtt-form-security">{t("devices.field.security")}</label>
         <select id="mqtt-form-security" class="input" value={mqttForm.security} onchange={(event) => (mqttForm.security = event.currentTarget.value)}>

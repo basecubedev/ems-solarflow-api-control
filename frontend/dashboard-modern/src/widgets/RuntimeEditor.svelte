@@ -11,10 +11,11 @@
   import { t, translatedOr } from "../i18n/i18n.svelte.js";
   import { auth } from "../state/auth.svelte.js";
   import { live, loadRuntime } from "../state/live.svelte.js";
-  import { SYSTEM_ENDPOINT, WINTER_ENDPOINT, AC_CHARGE_ENDPOINT, BATTERY_CARE_ENDPOINT, deviceEndpoint, acRole, settingWord, deviceSettings } from "../lib/runtime.js";
+  import { SYSTEM_ENDPOINT, WINTER_ENDPOINT, AC_CHARGE_ENDPOINT, BATTERY_CARE_ENDPOINT, deviceEndpoint, acRole, settingWord, deviceSettings, withDefault } from "../lib/runtime.js";
 
   const runtime = $derived(live.runtime || {});
   const limits = $derived(runtime._limits || {});
+  const defaults = $derived(limits.catalogue_defaults || {});
   const catalogue = $derived(limits.device_settings || []);
   const unsupported = $derived(new Set(limits.ac_role_unsupported || []));
   const devices = $derived(Object.entries(runtime.devices || {}));
@@ -37,14 +38,14 @@
     { name: "winter_full_points", type: "number", label: t("runtime.batteryCareWinter"), min: 0, max: 50, unit: "%" },
     { name: "pv_only_points", type: "number", label: t("runtime.batteryCarePvOnly"), min: 0, max: 50, unit: "%" },
     { name: "min_discharge_w", type: "number", label: t("runtime.batteryCareMinDischarge"), min: 0, max: 5000, unit: "W" },
-  ]);
+  ].map((field) => withDefault(field, defaults.battery_care?.[field.name])));
 
   const systemFields = $derived([
     { name: "enabled", type: "toggle", label: t("runtime.emsEnabled") },
     { name: "max_total_power", type: "number", label: t("runtime.maxTotal"), min: 0, max: Number(limits.system?.max_total_power || 5000), unit: "W" },
     { name: "min_output_limit", type: "number", label: t("runtime.minOutput"), min: 0, max: Number(limits.system?.min_output_limit || 5000), unit: "W" },
     { name: "loop_interval", type: "number", label: t("runtime.loop"), min: 1, max: 3600, unit: "s" },
-  ]);
+  ].map((field) => withDefault(field, defaults.system?.[field.name])));
 
   function deviceFields(name, device) {
     const maxPower = Number(limits.devices?.[name] || limits.fallback_device_max_power || 5000);
@@ -72,7 +73,7 @@
           { value: "ac_input", label: t("runtime.role.input") },
         ],
       });
-      fields.push({ name: "ac_charge_power_w", type: "number", label: t("runtime.acPower"), min: 0, max: Number(limits.ac_charge_power_max || 5000), unit: "W", clearable: true, help: t("runtime.acPowerHelp") });
+      fields.push({ name: "ac_charge_power_w", type: "number", label: t("runtime.acPower"), min: 0, max: Number(limits.ac_charge_power_max || 5000), unit: "W", clearable: true, placeholder: t("control.deviceMax"), help: t("runtime.acPowerHelp") });
       const reason = String(device.runtime_role_reason || "").trim();
       if (reason) fields.push({ name: "_role_reason", type: "readonly", label: t("runtime.roleSetBy"), value: reason });
     }
@@ -92,7 +93,7 @@
         ],
       });
     });
-    return fields;
+    return fields.map((field) => withDefault(field, defaults.devices?.[field.name]));
   }
 
   function deviceInitial(device) {

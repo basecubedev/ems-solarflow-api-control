@@ -2,6 +2,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
   import Card from "../../../shared/ui/Card.svelte";
+  import { unreadableInput } from "../../../shared/lib/forms.js";
   import Icon from "../../../shared/ui/Icon.svelte";
   import Empty from "../../../shared/ui/Empty.svelte";
   import Status from "../../../shared/ui/Status.svelte";
@@ -154,6 +155,23 @@
     return result.reason ? { state: result.reason } : { state: "failed", error: result.error };
   }
 
+  let unreadableNote = $state(false);
+
+  $effect(() => {
+    settings.draft;
+    unreadableNote = false;
+  });
+
+  /**
+   * Runs ``next`` unless a number on the page could not be read: the draft
+   * still holds the value before it, so checking or saving it would not be
+   * what the page shows. The change bar says so, since the field may be folded.
+   */
+  function readable(next) {
+    unreadableNote = Boolean(unreadableInput(document));
+    if (!unreadableNote) next();
+  }
+
   function sectionFields(section) {
     const levels = levelled(section);
     return [...levels.normal, ...levels.advanced, ...levels.expert];
@@ -292,8 +310,9 @@
       <div class="change-bar">
         <span class="count" data-testid="change-count">{settings.changes ? tn("settings.edit.unsaved", settings.changes) : t("settings.edit.noUnsaved")}</span>
         <button class="btn secondary small" type="button" onclick={discard} disabled={!settings.changes || settings.applying || settings.previewing} data-testid="discard"><Icon name="rotate-ccw" size="sm" />{t("settings.edit.discard")}</button>
-        <button class="btn small" type="button" onclick={previewDraft} disabled={settings.previewing || settings.applying || !settings.changes} data-testid="review"><Icon name="file-check" size="sm" />{settings.previewing ? t("settings.edit.reviewing") : t("settings.edit.review")}</button>
+        <button class="btn small" type="button" onclick={() => readable(previewDraft)} disabled={settings.previewing || settings.applying || !settings.changes} data-testid="review"><Icon name="file-check" size="sm" />{settings.previewing ? t("settings.edit.reviewing") : t("settings.edit.review")}</button>
       </div>
+      {#if unreadableNote}<p class="form-error" role="alert" data-testid="unreadable-number">{t("settings.edit.unreadable")}</p>{/if}
       {#if settings.hardwareStale}
         <p class="note warn" role="alert" data-testid="hardware-stale"><Icon name="triangle-alert" /><span>{t("devices.stale")}</span><button class="btn secondary small" type="button" onclick={discardHardware}>{t("devices.discardStale")}</button></p>
       {/if}
@@ -329,7 +348,7 @@
           {#if preview.validation?.ok && preview.changed}
             <div class="apply">
               <label class="check"><input type="checkbox" bind:checked={backup} data-testid="apply-backup" />{t("settings.edit.backup")}</label>
-              <button class="btn" type="button" onclick={() => (confirmApply = true)} disabled={!canApply} data-testid="apply"><Icon name="save" size="sm" />{settings.applying ? t("settings.edit.applying") : t("settings.edit.apply")}</button>
+              <button class="btn" type="button" onclick={() => readable(() => (confirmApply = true))} disabled={!canApply} data-testid="apply"><Icon name="save" size="sm" />{settings.applying ? t("settings.edit.applying") : t("settings.edit.apply")}</button>
             </div>
           {/if}
           {#if settings.applyError}{@render failure(settings.applyError)}{/if}

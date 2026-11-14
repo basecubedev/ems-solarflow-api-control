@@ -16,6 +16,7 @@ import time
 
 from ems.device_settings import catalogue as device_settings_catalogue
 from ems.energy_channels import ENERGY_CHANNELS
+from ems.runtime_commands import catalogue_runtime_defaults
 
 SCENARIOS = (
     "normal",
@@ -520,6 +521,7 @@ def _runtime(devices):
             "fallback_device_max_power": 800,
             "device_settings": device_settings_catalogue(),
             "device_settings_offered": preview_device_settings(devices),
+            "catalogue_defaults": catalogue_runtime_defaults(),
         },
     }
 

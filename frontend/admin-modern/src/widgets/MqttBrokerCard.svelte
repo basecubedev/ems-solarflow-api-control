@@ -8,6 +8,8 @@
   import { t } from "../i18n/i18n.svelte.js";
   import { errorView } from "../lib/errors.js";
   import { BROKER_ISSUES, BUILTIN_BROKER, CONNECT_TYPES, brokerState, connectSteps } from "../lib/mqtt.js";
+  import { mqttDefaultPort, portOrDefault } from "../lib/devices.js";
+  import { unreadableInput } from "../../../shared/lib/forms.js";
   import { mqtt, loadBroker, enableBroker, stopBroker, saveBroker, setPassword, revealPassword, waitForDevice, newGroup, setUpGroup, watchTopics } from "../state/mqtt.svelte.js";
 
   /** onsetup: called after a new device was handed to the mapping, so the page can show it. */
@@ -17,6 +19,8 @@
 
   let confirming = $state("");
   let port = $state("");
+  let portUnreadable = $state(false);
+  const chosenPort = $derived(portOrDefault(port, false));
   let name = $state("");
   let prefix = $state("");
   let bridge = $state(false);
@@ -39,7 +43,7 @@
   const impact = $derived(view?.stop_impact || { external_devices: [], zendure_devices: [], grid_meter: false });
   const issues = $derived([...(view?.issues || []), ...(mqtt.error?.payload?.issues || []), ...(mqtt.result?.answer?.issues || [])]);
   const failure = $derived(mqtt.error && !mqtt.error.payload?.issues?.length ? errorView(mqtt.error.error, t) : null);
-  const address = $derived(view?.host_address ? `${view.host_address}:${settings?.port || 1883}` : "");
+  const address = $derived(view?.host_address ? `${view.host_address}:${settings?.port || mqttDefaultPort(false)}` : "");
 
   $effect(() => {
     loadBroker();
@@ -76,7 +80,10 @@
   }
 
   $effect(() => {
-    if (settings) port = String(settings.port);
+    if (settings) {
+      port = String(settings.port);
+      portUnreadable = false;
+    }
   });
 
   function issueText(issue) {
@@ -140,8 +147,8 @@
 
   function savePort(event) {
     event.preventDefault();
-    const value = Number(port);
-    if (Number.isInteger(value)) saveBroker({ port: value });
+    if (unreadableInput(event.currentTarget)) return;
+    if (Number.isInteger(chosenPort)) saveBroker({ port: chosenPort });
   }
 </script>
 
@@ -164,8 +171,8 @@
     </div>
     <div class="row-wrap">
       <form class="row-wrap" onsubmit={savePort}>
-        <label class="field"><span class="small muted">{t("mqtt.broker.port")}</span><input class="input port" type="number" min="1" max="65535" bind:value={port} data-testid="mqtt-broker-port" /></label>
-        <button class="btn secondary small" type="submit" disabled={busy || port === String(settings.port)}><Icon name="save" size="sm" />{t("mqtt.broker.savePort")}</button>
+        <label class="field"><span class="small muted">{t("mqtt.broker.port")}</span><input class="input port" type="number" min="1" max="65535" placeholder={t("common.defaultValue", { value: mqttDefaultPort(false) })} bind:value={port} aria-invalid={portUnreadable || undefined} oninput={(event) => (portUnreadable = event.currentTarget.validity?.badInput === true)} data-testid="mqtt-broker-port" />{#if portUnreadable}<span class="form-error">{t("common.unreadableNumber")}</span>{/if}</label>
+        <button class="btn secondary small" type="submit" disabled={busy || chosenPort === Number(settings.port)}><Icon name="save" size="sm" />{t("mqtt.broker.savePort")}</button>
       </form>
       <button class="btn secondary small" type="button" onclick={toggleAnonymous} disabled={busy} data-testid="mqtt-broker-anonymous">
         <Icon name={settings.anonymous ? "lock" : "lock-open"} size="sm" />{settings.anonymous ? t("mqtt.broker.anonymousDisable") : t("mqtt.broker.anonymousEnable")}
@@ -312,7 +319,7 @@
   .secret { overflow-wrap: anywhere; user-select: all; }
   .form { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
   .field { display: grid; gap: 2px; }
-  .port { width: 7rem; }
+  .port { width: 10rem; }
   .check { display: inline-flex; gap: var(--s1); align-items: center; }
   .connect { display: grid; gap: var(--s2); }
   .steps { margin: 0; padding-left: 1.25rem; display: grid; gap: var(--s1); }

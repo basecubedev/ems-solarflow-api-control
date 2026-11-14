@@ -102,6 +102,23 @@ test.describe("Modern dashboard operator: runtime settings @smoke", () => {
     expect(writes).toHaveLength(1);
   });
 
+  test("an emptied minimum output names its default grey, and a Save sends that default", async ({ page }) => {
+    const writes = await runtimeStore(page);
+    await openSignedIn(page, "#/control");
+    const system = form(page, "/api/runtime/system");
+    const minimum = system.locator('input[name="min_output_limit"]');
+    await minimum.fill("");
+    await expect(minimum).toHaveAttribute("placeholder", "35 (default)");
+    await expect(system.locator('input[name="loop_interval"]')).toHaveAttribute("placeholder", "5 (default)");
+    await save(page, system);
+    await expect.poll(() => writes).toEqual([{ target: "system", method: "PATCH", body: { min_output_limit: 35 }, csrf: CSRF }]);
+    await expect(minimum).toHaveValue("35");
+
+    const device = form(page, "/api/runtime/device/WR1");
+    await expect(device.locator('input[name="max_power"]')).toHaveAttribute("placeholder", "");
+    await expect(device.locator('input[name="pv_priority_factor"]')).toHaveAttribute("placeholder", "1 (default)");
+  });
+
   test("a device's AC charging, max power and AC charge power go out as one write, and AC charging is forbidden again", async ({ page }) => {
     const writes = await runtimeStore(page);
     await openSignedIn(page, "#/control");

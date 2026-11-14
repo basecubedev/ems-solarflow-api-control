@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { changedPayload, changeWarning, deviceEndpoint, endpointDevice, acRole, deviceSettings, reseed, SYSTEM_ENDPOINT } from "../src/lib/runtime.js";
+import { changedPayload, changeWarning, deviceEndpoint, endpointDevice, acRole, deviceSettings, reseed, withDefault, SYSTEM_ENDPOINT } from "../src/lib/runtime.js";
 
 const fields = [
   { name: "enabled", type: "toggle" },
@@ -36,11 +36,37 @@ test("emptying the AC charge power asks first, as the device then charges at its
   assert.deepEqual(both, ["runtime.warn.offgrid", "runtime.warn.acPowerMax"]);
 });
 
+test("an emptied number with a default goes out as that default, and not at all where it already holds it", () => {
+  const minimum = [withDefault({ name: "min_output_limit", type: "number", min: 0, max: 800 }, 35)];
+  assert.deepEqual(changedPayload(minimum, { min_output_limit: "" }, { min_output_limit: 40 }), { min_output_limit: 35 });
+  assert.deepEqual(changedPayload(minimum, { min_output_limit: null }, { min_output_limit: 40 }), { min_output_limit: 35 });
+  assert.deepEqual(changedPayload(minimum, { min_output_limit: "" }, { min_output_limit: 35 }), {});
+  assert.deepEqual(changedPayload(minimum, { min_output_limit: "50" }, { min_output_limit: 40 }), { min_output_limit: 50 });
+});
+
+test("a number with no stored value that is left empty is not sent, default or not", () => {
+  const care = [{ name: "enabled", type: "toggle" }, withDefault({ name: "min_discharge_w", type: "number", min: 0, max: 5000 }, 50)];
+  assert.deepEqual(changedPayload(care, { enabled: false, min_discharge_w: "" }, { enabled: true }), { enabled: false });
+  assert.deepEqual(changedPayload(care, { enabled: true, min_discharge_w: "" }, { enabled: true, min_discharge_w: null }), {});
+});
+
+test("a field takes a default only when it is a number within its bounds", () => {
+  const total = { name: "max_total_power", type: "number", min: 0, max: 600 };
+  assert.equal(withDefault(total, 800), total);
+  assert.equal(withDefault(total, undefined), total);
+  assert.equal(withDefault(total, "35"), total);
+  assert.equal(withDefault({ ...total, min: 100 }, 50).default, undefined);
+  assert.equal(withDefault(total, 600).default, 600);
+  assert.equal(withDefault({ name: "pv_priority_factor", type: "number", min: 0.01, max: 100 }, 1).default, 1);
+});
+
 test("an emptied clearable number goes out as null, and an empty one left empty not at all", () => {
   const power = [{ name: "ac_charge_power_w", type: "number", clearable: true }];
   assert.deepEqual(changedPayload(power, { ac_charge_power_w: "" }, { ac_charge_power_w: 600 }), { ac_charge_power_w: null });
   assert.deepEqual(changedPayload(power, { ac_charge_power_w: "" }, { ac_charge_power_w: null }), {});
   assert.deepEqual(changedPayload(power, { ac_charge_power_w: "0" }, { ac_charge_power_w: null }), { ac_charge_power_w: 0 });
+  assert.deepEqual(changedPayload([withDefault(power[0], 300)], { ac_charge_power_w: "" }, { ac_charge_power_w: 600 }), { ac_charge_power_w: null });
+  assert.equal(withDefault(power[0], 300).default, undefined);
 });
 
 test("a stored value that changes under an untouched field is shown and never written back", () => {
