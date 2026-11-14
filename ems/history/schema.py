@@ -19,6 +19,7 @@ without a live InfluxDB.
 """
 
 from ems.config import INFLUXDB_RETENTION_KEY_BY_BUCKET
+from ems.history.provider import PACK_CELL_REDUCERS
 
 # Fields carried through downsampling. Numeric fields are averaged over the
 # window (right aggregate for power/SoC charts); state fields keep the last
@@ -72,6 +73,8 @@ MEASUREMENT_FILTER = (
 )
 
 TASK_NAME_INFIX = "-downsample-"
+CELL_TASK_SUFFIX = ":cells"
+CELL_MEASUREMENT = "battery_pack"
 
 
 def bucket_name(prefix, key):
@@ -82,6 +85,32 @@ def bucket_name(prefix, key):
 def task_name(prefix, target):
     """Stable task name for the downsampling task writing into ``target``."""
     return f"{prefix}{TASK_NAME_INFIX}{target}"
+
+
+def cell_task_name(prefix, target):
+    """The task that carries the battery cell voltages of one downsampling step.
+
+    A target may hold ``-`` but never ``:``, so no target's main task can take
+    this name.
+    """
+    return f"{task_name(prefix, target)}{CELL_TASK_SUFFIX}"
+
+
+def _planned_tasks(influx_config):
+    """``(name, flux builder, entry)`` for every task the downsampling asks for.
+
+    The cell voltages have a task of their own beside each step's main one: the
+    safe sync creates a task that is missing but never changes one that exists,
+    so a task of their own reaches an upgraded installation by itself.
+    """
+
+    prefix = influx_config["bucket_prefix"]
+    for entry in influx_config.get("downsampling", []):
+        target = entry.get("target")
+        if not target:
+            continue
+        yield task_name(prefix, target), build_downsample_flux, entry
+        yield cell_task_name(prefix, target), build_cell_downsample_flux, entry
 
 
 def retention_seconds_for_bucket(influx_config, key):
@@ -151,13 +180,8 @@ def planned_task_names(influx_config):
     nothing filling them -- an empty chart that reads as healthy everywhere.
     """
 
-    prefix = influx_config["bucket_prefix"]
     names = []
-    for entry in influx_config.get("downsampling", []):
-        target = entry.get("target")
-        if not target:
-            continue
-        name = task_name(prefix, target)
+    for name, _build, _entry in _planned_tasks(influx_config):
         if name not in names:
             names.append(name)
 
@@ -200,6 +224,33 @@ from(bucket: "{source_bucket}")
   |> aggregateWindow(every: {window}, fn: last, createEmpty: false)
   |> to(bucket: "{target_bucket}", org: "{org}")
 '''
+
+
+def build_cell_downsample_flux(influx_config, entry):
+    """Render the Flux body of the task that carries one step's cell voltages.
+
+    Each field keeps the window's extreme rather than its mean, so a short dip
+    of the lowest cell survives into the coarser buckets.
+    """
+    prefix = influx_config["bucket_prefix"]
+    org = influx_config["org"]
+    window = entry["window"]
+    source_bucket = bucket_name(prefix, entry["source"])
+    target_bucket = bucket_name(prefix, entry["target"])
+    name = cell_task_name(prefix, entry["target"])
+
+    pipelines = "".join(
+        f'''
+from(bucket: "{source_bucket}")
+  |> range(start: -task.every)
+  |> filter(fn: (r) => r._measurement == "{CELL_MEASUREMENT}" and r._field == "{field}")
+  |> aggregateWindow(every: {window}, fn: {reducer}, createEmpty: false)
+  |> to(bucket: "{target_bucket}", org: "{org}")
+'''
+        for field, reducer in PACK_CELL_REDUCERS.items()
+    )
+    return f'''option task = {{name: "{name}", every: {window}}}
+{pipelines}'''
 
 
 def _normalize_flux(text):
@@ -246,11 +297,7 @@ def _configured_task_names(influx_config):
     duplicate that looks like the outcome of a race.
     """
 
-    prefix = influx_config["bucket_prefix"]
-    configured = [
-        task_name(prefix, entry["target"])
-        for entry in influx_config.get("downsampling", [])
-    ]
+    configured = [name for name, _build, _entry in _planned_tasks(influx_config)]
     desired = set(configured)
     return desired, {name for name in desired if configured.count(name) > 1}
 
@@ -398,9 +445,8 @@ def sync(client, influx_config, safe=False, known_kept=()):
         if group[0].get("id")
     }
 
-    for entry in influx_config.get("downsampling", []):
-        name = task_name(prefix, entry["target"])
-        flux = build_downsample_flux(influx_config, entry)
+    for name, build, entry in _planned_tasks(influx_config):
+        flux = build(influx_config, entry)
         existing = existing_tasks.get(name)
 
         if existing is None:

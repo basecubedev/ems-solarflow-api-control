@@ -184,15 +184,22 @@ gives you the accumulated one.
 
 **What you see:** two rows of controls, the chart, and the KPI cards.
 
-1. **View** — **Overview**, **Devices**, **Grid**, **Battery**, **Solar** or
-   **Consumers**. Each keeps the one chart and changes its series and the KPI
-   cards. **Device** chooses one inverter instead of **All devices**.
-   **Consumers** stacks the five [consumers](consumers.md) that drew most on
-   the rest of the house, with one KPI card for each and one for the rest, and
-   has no device choice and no overlays.
+1. **View** — **Overview**, **Devices**, **Grid**, **Battery**, **Solar**,
+   **Consumers** or **Cell voltage**. Each keeps the one chart and changes its
+   series and the KPI cards. **Device** chooses one inverter instead of **All
+   devices**. **Consumers** stacks the five [consumers](consumers.md) that drew
+   most on the rest of the house, with one KPI card for each and one for the
+   rest, and has no device choice and no overlays. **Cell voltage** draws the
+   lowest and the highest cell of one pack of one device on a volt scale, with
+   **Lowest cell** and **Highest cell** of the period as KPI cards; its device
+   choice lists every device with a battery the EMS controls, also one that is
+   offline now, without *All devices*, and **Pack 1**, **Pack 2**, … choose the pack on a
+   device with several. A dip of the lowest cell still shows in a long range,
+   because each point keeps the lowest and the highest value of its interval.
 2. **Overlays** — **EMS target**, **Grid**, **AC charging** and **State of
    charge** add a series on top of the view, drawn as a dashed line; the state
-   of charge gets its own percent scale on the right.
+   of charge gets its own percent scale on the right. **Cell voltage** offers
+   **State of charge** only, so the device's estimate reads beside its cells.
 3. **Range** — **1 h**, **6 h**, **24 h**, **7 d**, **30 d** or **365 d**, or a
    custom range with **From**, **To** and **Apply**.
 4. The chart names its source, *From InfluxDB*, and **Table** lists the values.

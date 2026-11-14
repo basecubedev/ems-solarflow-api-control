@@ -96,6 +96,13 @@ export function createFormat(lang) {
     return percentFormat.format(fraction ? number : number / 100);
   }
 
+  /** A cell voltage moves in hundredths of a volt, so it keeps two decimals. */
+  function voltage(value) {
+    const number = finite(value);
+    if (number === null) return MISSING;
+    return `${two.format(number)}\u00a0V`;
+  }
+
   function money(value, currency = "EUR") {
     const number = finite(value);
     if (number === null) return MISSING;
@@ -195,5 +202,5 @@ export function createFormat(lang) {
     return `${one.format(parsed / (1024 * 1024 * 1024))}\u00a0GB`;
   }
 
-  return { lang, locale, power, energy, percent, money, number, time, date, dateTime, when, month, monthYear, weekday, relative, bytes };
+  return { lang, locale, power, energy, percent, voltage, money, number, time, date, dateTime, when, month, monthYear, weekday, relative, bytes };
 }

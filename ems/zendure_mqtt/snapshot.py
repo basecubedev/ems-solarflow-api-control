@@ -13,6 +13,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from ems.models import parse_pack_count
 from ems.zendure_mqtt.external_catalog import EXTERNAL_TOPIC_FAMILIES
 from ems.zendure_mqtt.payloads import coerce_scalar, parse_report_payload
 from ems.zendure_mqtt.topics import (
@@ -70,6 +71,35 @@ def observable_metrics(metrics):
         and isinstance(value, (int, float))
         and abs(value) < _EXACT_FLOAT_LIMIT
     }
+
+
+def merge_packs(known, reported, count=None):
+    """The pack list after a report, each pack merged field by field by serial.
+
+    A report sent on a change carries only the packs and fields that changed,
+    so every pack a report names keeps what it does not repeat. A report that
+    gives the pack count (``packNum``, as ``count``) and lists as many packs
+    names every pack, and a pack it leaves out is gone. A count from an earlier
+    report is no such proof: a pack just added is reported before the count
+    that says so. Until a full report leaves a swapped pack out,
+    ``battery_pack_cells`` numbers none of the packs rather than guess which
+    one left. The first list, and one whose entries do not all carry a serial
+    and so cannot be matched, replace the known packs as every report used to.
+    """
+
+    def serial(pack):
+        value = pack.get("sn")
+        return value if isinstance(value, str) and value else None
+
+    if not known or not all(serial(pack) for pack in reported):
+        return [dict(pack) for pack in reported]
+    merged = {serial(pack): dict(pack) for pack in known if serial(pack)}
+    for pack in reported:
+        merged.setdefault(serial(pack), {}).update(pack)
+    if count is not None and len(reported) == count:
+        named = {serial(pack) for pack in reported}
+        merged = {key: entry for key, entry in merged.items() if key in named}
+    return list(merged.values())
 
 
 def pack_witness(snapshot):
@@ -226,7 +256,9 @@ class ZendureMqttAggregator:
             snap.metric_monotonic[key] = snap.last_seen_monotonic
         snap.observed_metrics.update(report.properties)
         if report.battery_packs:
-            snap.battery_packs = report.battery_packs
+            snap.battery_packs = merge_packs(
+                snap.battery_packs, report.battery_packs, parse_pack_count(report.properties.get("packNum"))
+            )
 
     def snapshots(self):
         """Return merged snapshots with normalization and capabilities applied."""

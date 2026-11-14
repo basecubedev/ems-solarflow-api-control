@@ -8,6 +8,7 @@
 
 import { integrateKwh } from "./history.js";
 import { consumerSeriesId } from "./consumers.js";
+import { cellSeriesIds, cellStyle } from "./cells.js";
 
 export const ANALYTICS_RANGES = Object.freeze(["1h", "6h", "24h", "7d", "30d", "365d"]);
 
@@ -19,10 +20,14 @@ export const ANALYTICS_VIEWS = Object.freeze([
   { id: "pv", series: ["pv", "output"], kpis: ["pv", "pvPeak", "output"] },
   // Modern only: the consumers that drew most, each its own series, stacked on
   // the rest of the house, which is Home less them (consumers.js restOfHouse).
-  { id: "consumers", series: ["home"], kpis: [], consumers: true },
+  { id: "consumers", series: ["home"], kpis: [], consumers: true, modernOnly: true },
+  { id: "cells", series: [], kpis: [], cells: true, modernOnly: true },
 ]);
 
 export const ANALYTICS_OVERLAYS = Object.freeze(["target", "grid", "ac_charge", "soc"]);
+
+/** The one overlay a volt axis can carry: the state of charge reads on its own scale. */
+export const CELL_OVERLAYS = Object.freeze(["soc"]);
 
 export const SERIES_STYLE = Object.freeze({
   pv: { token: "--pv" },
@@ -56,8 +61,9 @@ export function viewById(id) {
 }
 
 /** The series one request asks for: the view's own plus the overlays the reader switched on. */
-export function requestedSeries(view, overlays, consumers = []) {
+export function requestedSeries(view, overlays, consumers = [], pack = null) {
   if (view.consumers) return [...consumers.map(consumerSeriesId), ...view.series];
+  if (view.cells) return pack === null ? [] : [...cellSeriesIds(pack), ...overlays.filter((id) => CELL_OVERLAYS.includes(id))];
   const ids = [...view.series];
   overlays.forEach((id) => {
     if (!ids.includes(id)) ids.push(id);
@@ -71,6 +77,8 @@ export function requestedSeries(view, overlays, consumers = []) {
  * overlay; the view's own series keep their style.
  */
 export function seriesStyle(view, id) {
+  const cell = cellStyle(id);
+  if (cell) return { token: cell.token, fill: cell.fill };
   const style = SERIES_STYLE[id] || {};
   return view.series.includes(id) ? style : { ...style, fill: false, dash: [6, 4] };
 }

@@ -411,6 +411,118 @@ test.describe("Modern dashboard views: history @smoke", () => {
   });
 });
 
+/** WR1 with one pack, WR2 with two, each pack's cells apart from the others'. */
+function withCells(body) {
+  body.devices.WR1.battery_packs = [{ pack: 1, cell_min_v: 3.17, cell_max_v: 3.18 }];
+  body.devices.WR2.battery_packs = [
+    { pack: 1, cell_min_v: 3.2, cell_max_v: 3.22 },
+    { pack: 2, cell_min_v: 3.3, cell_max_v: 3.33 },
+  ];
+}
+
+/** Each requested cell series reads a voltage of its own: pack n's lowest cell 3.n0 V, its highest 3.n5 V, WR2's a volt above. */
+async function cellSeries(page, path) {
+  await page.route(`**${path}**`, (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    const ids = (params.get("series") || "").split(",").filter(Boolean);
+    const offset = params.get("devices") === "WR2" ? 1 : 0;
+    const now = Math.floor(Date.now() / 1000);
+    const value = (id) => {
+      const match = /^cell_(min|max):(\d+)$/.exec(id);
+      if (!match) return 50;
+      return offset + 3 + Number(match[2]) / 10 + (match[1] === "max" ? 0.05 : 0);
+    };
+    const series = Object.fromEntries(ids.map((id) => [id, [value(id), value(id)]]));
+    return route.fulfill({ json: { available: true, source: "sqlite", time: [now - 120, now - 60], series, meta: {} } });
+  });
+}
+
+const cellsRead = (path, check = () => true) => seriesRead(path, (params) => /cell_/.test(params.get("series") || "") && check(params));
+
+test.describe("Modern dashboard views: cell voltage @smoke", () => {
+  test("a device card names its cells' voltage, and each pack's when it has several", async ({ page }) => {
+    await shapeLive(page, withCells);
+    await openModern(page, "#/devices");
+    const one = deviceCard(page, "WR1");
+    await expect(one.locator(".facts.main .fact").filter({ hasText: "Cell voltage" }).locator(".fact-value")).toHaveText("3.17–3.18 V");
+    await expect(one.getByTestId("device-cells")).toHaveCount(0);
+    const two = deviceCard(page, "WR2");
+    await expect(two.locator(".facts.main .fact").filter({ hasText: "Cell voltage" }).locator(".fact-value")).toHaveText("3.20–3.33 V");
+    const packs = two.getByTestId("device-cells");
+    await packs.locator("summary").click();
+    await expect(packs.locator(".fact-label")).toHaveText(["Pack 1", "Pack 2"]);
+    await expect(packs.locator(".fact-value")).toHaveText(["3.20–3.22 V", "3.30–3.33 V"]);
+  });
+
+  test("a device without cell readings shows no cell voltage and no cell chart", async ({ page }) => {
+    await openModern(page, "#/devices");
+    await expect(page.getByTestId("device-card")).not.toHaveCount(0);
+    await expect(page.locator(".fact").filter({ hasText: "Cell voltage" })).toHaveCount(0);
+    await expect(page.getByTestId("cell-history")).toHaveCount(0);
+  });
+
+  test("the cell chart on Devices reads one device's pack from the local history, then another device and pack", async ({ page }) => {
+    await shapeLive(page, withCells);
+    await cellSeries(page, "/api/history/series");
+    const [first] = await Promise.all([
+      page.waitForRequest(cellsRead("/api/history/series")),
+      openModern(page, "#/devices"),
+    ]);
+    expect(new URL(first.url()).searchParams.get("series")).toBe("cell_min:1,cell_max:1");
+    expect(new URL(first.url()).searchParams.get("devices")).toBe("WR1");
+    const chart = page.getByRole("region", { name: "Cell voltage, last 24 h", exact: true });
+    await expect(chart.locator(".legend-item")).toHaveText(["Lowest cell3.10 V", "Highest cell3.15 V"]);
+    await expect(chart.getByRole("group", { name: "Pack" })).toHaveCount(0);
+    const [other] = await Promise.all([
+      page.waitForRequest(cellsRead("/api/history/series", (params) => params.get("devices") === "WR2")),
+      chart.getByRole("combobox", { name: "Device" }).selectOption("WR2"),
+    ]);
+    expect(new URL(other.url()).searchParams.get("series")).toBe("cell_min:1,cell_max:1");
+    await expect(chart.locator(".legend-item")).toHaveText(["Lowest cell4.10 V", "Highest cell4.15 V"]);
+    const [second] = await Promise.all([
+      page.waitForRequest(cellsRead("/api/history/series", (params) => params.get("series") === "cell_min:2,cell_max:2")),
+      chart.getByRole("group", { name: "Pack" }).getByRole("button", { name: "Pack 2", exact: true }).click(),
+    ]);
+    expect(new URL(second.url()).searchParams.get("devices")).toBe("WR2");
+    await expect(chart.locator(".legend-item")).toHaveText(["Lowest cell4.20 V", "Highest cell4.25 V"]);
+  });
+
+  test("the analytics cell view reads one device's pack on a volt axis, with the state of charge as its only overlay", async ({ page }) => {
+    await shapeLive(page, withCells);
+    await cellSeries(page, "/api/analytics/series");
+    await openModern(page, "#/analytics");
+    await expect(page.locator(".chart .u-over")).toBeVisible();
+    const views = page.getByTestId("analytics-view-block").locator(".seg");
+    const [asked] = await Promise.all([
+      page.waitForRequest(cellsRead("/api/analytics/series")),
+      views.getByRole("button", { name: "Cell voltage", exact: true }).click(),
+    ]);
+    expect(new URL(asked.url()).searchParams.get("series")).toBe("cell_min:1,cell_max:1");
+    expect(new URL(asked.url()).searchParams.get("devices")).toBe("WR1");
+    const chart = page.getByRole("region", { name: "Cell voltage", exact: true });
+    await expect(chart.locator(".legend-item")).toHaveText(["Lowest cell3.10 V", "Highest cell3.15 V"]);
+    await expect(page.getByTestId("analytics-cell-kpi").locator(".kpi-label")).toHaveText(["Lowest cell · 24 h", "Highest cell · 24 h"]);
+    await expect(page.getByTestId("analytics-cell-kpi").locator(".kpi-value")).toHaveText(["3.10 V", "3.15 V"]);
+    await expect(page.getByRole("combobox", { name: "Device" }).locator("option")).toHaveText(["WR1", "WR2"]);
+    const overlays = page.getByRole("group", { name: "Overlays" });
+    await expect(overlays.getByRole("button")).toHaveText(["State of charge"]);
+    const [withSoc] = await Promise.all([
+      page.waitForRequest(cellsRead("/api/analytics/series", (params) => params.get("series") === "cell_min:1,cell_max:1,soc")),
+      overlays.getByRole("button", { name: "State of charge" }).click(),
+    ]);
+    expect(new URL(withSoc.url()).searchParams.get("devices")).toBe("WR1");
+    const [packTwo] = await Promise.all([
+      page.waitForRequest(cellsRead("/api/analytics/series", (params) => params.get("series") === "cell_min:2,cell_max:2,soc")),
+      (async () => {
+        await page.getByRole("combobox", { name: "Device" }).selectOption("WR2");
+        await page.getByRole("group", { name: "Pack" }).getByRole("button", { name: "Pack 2", exact: true }).click();
+      })(),
+    ]);
+    expect(new URL(packTwo.url()).searchParams.get("devices")).toBe("WR2");
+    await expect(page.getByTestId("analytics-cell-kpi").locator(".kpi-value")).toHaveText(["4.20 V", "4.25 V"]);
+  });
+});
+
 const ANALYTICS_VIEWS = [
   { label: "Devices", series: ["pv", "output", "battery"], legend: ["Solar", "Output", "Battery"], kpis: ["Solar", "Output", "Battery charged", "Battery discharged"] },
   { label: "Grid", series: ["grid", "home", "ac_charge"], legend: ["Grid", "Home use", "AC charging"], kpis: ["Grid import", "Grid export", "Home use", "AC charging"] },

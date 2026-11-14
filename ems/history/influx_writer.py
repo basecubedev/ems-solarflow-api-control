@@ -35,6 +35,7 @@ import threading
 import time
 
 from ems.history.influx_client import build_line_protocol
+from ems.history.provider import PACK_CELL_REDUCERS
 from ems.history.schema import (
     bucket_name,
     planned_bucket_names,
@@ -206,6 +207,28 @@ def _device_field_values(state):
     return fields
 
 
+_PACK_CELL_FIELDS = tuple(PACK_CELL_REDUCERS)
+
+
+def _battery_pack_lines(device_tags, state, timestamp_ns):
+    """One ``battery_pack`` point per pack that reports a cell voltage, tagged as its device."""
+
+    lines = []
+    for pack in getattr(state, "battery_packs", ()) or ():
+        fields = {
+            name: float(getattr(pack, name))
+            for name in _PACK_CELL_FIELDS
+            if _is_number(getattr(pack, name))
+        }
+        if not fields:
+            continue
+        tags = {**device_tags, "pack": str(pack.pack)}
+        line = build_line_protocol("battery_pack", tags, fields, timestamp_ns)
+        if line:
+            lines.append(line)
+    return lines
+
+
 def _is_number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
@@ -219,6 +242,7 @@ def build_telemetry_lines(
     timestamp_ns=None,
     read_only_tiles=(),
     consumers=None,
+    measured=None,
 ):
     """Build InfluxDB line protocol from one control-loop telemetry snapshot.
 
@@ -238,7 +262,10 @@ def build_telemetry_lines(
 
     ``consumers`` maps each consumer's name to its power, ``None`` while it
     does not read. Each becomes a ``consumer`` point; the meter point adds
-    ``house_other``, the house load no consumer measured.
+    ``house_other``, the house load no consumer measured. ``measured`` says
+    whether a device's state is a current reading, by the rule the dashboard
+    publishes cells by (``device_telemetry_is_measured``); one held past its
+    last read writes no ``battery_pack`` point.
     """
     if timestamp_ns is None:
         timestamp_ns = time.time_ns()
@@ -266,6 +293,8 @@ def build_telemetry_lines(
         line = build_line_protocol("zendure_device", tags, fields, timestamp_ns)
         if line:
             lines.append(line)
+        if measured is None or measured(device.name):
+            lines.extend(_battery_pack_lines(tags, state, timestamp_ns))
 
     for tile in read_only_tiles or ():
         tags = {"device": tile["name"], "source": tile.get("source", "read_only")}

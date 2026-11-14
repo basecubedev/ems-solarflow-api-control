@@ -36,8 +36,9 @@ INFLUX_SERVICE = "influxdb"
 
 # The schema sync waits for InfluxDB inside this call, so the call has to
 # outlive the wait and still leave room for its own requests. The count comes
-# from the operator's `influxdb.downsampling`: nineteen on a fresh install of
-# the shipped chain, five more per level. The allowance covers one level beyond
+# from the operator's `influxdb.downsampling`: twenty-two on a fresh install of
+# the shipped chain, six more per level (each level has a main task and one for
+# the battery cell voltages). The allowance covers one level beyond
 # what we ship, plus the one data probe the repair's safe sync makes before it
 # shortens a retention; a longer chain needs this raised, and a test says so by
 # counting.
@@ -47,7 +48,8 @@ INFLUX_SERVICE = "influxdb"
 # inside a synchronous Admin request, and covering it would buy nothing: a sync
 # whose every request times out has failed, and waiting it out does not change
 # the outcome. The measurement this is built on is the live Pi 3B+ appliance,
-# where all nineteen requests of a full sync answered in well under a second.
+# where all nineteen requests of a full sync (before the cell voltage tasks)
+# answered in well under a second.
 #
 # The gap between this figure and the per-request tolerance is deliberate and
 # not free: a sync whose requests all land between the two -- slow enough to
@@ -61,7 +63,7 @@ INFLUX_SERVICE = "influxdb"
 # the step is an error the page shows as a warning, and the EMS, restarted all
 # the same, completes the schema itself (ems/history/schema_keeper.py). The sync
 # is idempotent, so running it again is safe as well.
-INFLUX_SYNC_REQUEST_ALLOWANCE = 25
+INFLUX_SYNC_REQUEST_ALLOWANCE = 29
 INFLUX_SYNC_SLOW_REQUEST_SECONDS = 10
 INFLUX_SYNC_TIMEOUT_SECONDS = (
     INFLUX_READY_TIMEOUT_SECONDS

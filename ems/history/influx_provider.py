@@ -27,10 +27,12 @@ from ems.influx_setup import (
 )
 from ems.logging_utils import log_event
 from ems.history.provider import (
+    PACK_CELL_REDUCERS,
     HistoryProvider,
     HistoryResult,
     consumer_of_series,
     normalize_series,
+    pack_cells_of_series,
 )
 from ems.history.schema import bucket_name, planned_bucket_names
 
@@ -103,6 +105,17 @@ INFLUX_SERIES = {
     },
 }
 
+PACK_CELL_INFLUX_SERIES = {
+    field_name: {
+        "measurement": "battery_pack",
+        "field": field_name,
+        "device_scoped": True,
+        "window": reducer,
+        "collapse": reducer,
+    }
+    for field_name, reducer in PACK_CELL_REDUCERS.items()
+}
+
 # One consumer's power, selected by its name in the ``device`` tag.
 CONSUMER_SERIES = {
     "measurement": "consumer",
@@ -159,10 +172,16 @@ def build_field_flux(
     devices=None,
     device_scoped=False,
     collapse="sum",
+    pack=None,
+    window_fn="mean",
 ):
     """Render a Flux query for one field, collapsed to one value per window."""
-    reducer = "sum" if collapse == "sum" else "mean"
+    reducer = collapse if collapse in ("sum", "min", "max") else "mean"
+    window_fn = window_fn if window_fn in ("min", "max") else "mean"
     device_filter = build_device_filter(devices) if device_scoped else ""
+    pack_filter = (
+        f'  |> filter(fn: (r) => r.pack == "{int(pack)}")\n' if pack is not None else ""
+    )
 
     return (
         f'from(bucket: "{bucket}")\n'
@@ -170,7 +189,8 @@ def build_field_flux(
         f'  |> filter(fn: (r) => r._measurement == "{measurement}")\n'
         f'  |> filter(fn: (r) => r._field == "{field_name}")\n'
         f"{device_filter}"
-        f"  |> aggregateWindow(every: {window}, fn: mean, createEmpty: false)\n"
+        f"{pack_filter}"
+        f"  |> aggregateWindow(every: {window}, fn: {window_fn}, createEmpty: false)\n"
         '  |> group(columns: ["_time"])\n'
         f"  |> {reducer}()\n"
         '  |> sort(columns: ["_time"])\n'
@@ -430,14 +450,21 @@ class InfluxHistoryProvider(HistoryProvider):
 
         for name in series:
             consumer = consumer_of_series(name)
-            spec = CONSUMER_SERIES if consumer else INFLUX_SERIES.get(name)
+            pack_cells = pack_cells_of_series(name)
+            pack = pack_cells[1] if pack_cells else None
+            if consumer:
+                spec = CONSUMER_SERIES
+            elif pack_cells:
+                spec = PACK_CELL_INFLUX_SERIES[pack_cells[0]]
+            else:
+                spec = INFLUX_SERIES.get(name)
             if spec is None:
                 # Series with no InfluxDB mapping; leave empty rather than fail.
                 per_series_points[name] = {}
                 continue
             try:
                 points = self._query_series(
-                    spec, bucket, window, [consumer] if consumer else devices, start, end
+                    spec, bucket, window, [consumer] if consumer else devices, start, end, pack=pack
                 )
             except Exception as exc:
                 self._forget_rejected_client(exc)
@@ -454,7 +481,7 @@ class InfluxHistoryProvider(HistoryProvider):
         result.meta["point_count"] = len(timeline)
         return result
 
-    def _query_series(self, spec, bucket, window, devices, start, end):
+    def _query_series(self, spec, bucket, window, devices, start, end, pack=None):
         client = self.client()
 
         if "derived" in spec:
@@ -506,6 +533,8 @@ class InfluxHistoryProvider(HistoryProvider):
                     devices=devices,
                     device_scoped=spec["device_scoped"],
                     collapse=spec["collapse"],
+                    pack=pack,
+                    window_fn=spec.get("window", "mean"),
                 )
             )
         )

@@ -127,7 +127,11 @@ class SyncTest(unittest.TestCase):
 
         self.assertEqual(
             sorted(t["name"] for t in report["tasks"]),
-            ["ems-downsample-1h", "ems-downsample-1m", "ems-downsample-5m"],
+            [
+                "ems-downsample-1h", "ems-downsample-1h:cells",
+                "ems-downsample-1m", "ems-downsample-1m:cells",
+                "ems-downsample-5m", "ems-downsample-5m:cells",
+            ],
         )
         self.assertTrue(all(t["action"] == "created" for t in report["tasks"]))
 
@@ -338,7 +342,7 @@ class SyncTest(unittest.TestCase):
         ]
         self.assertEqual(still_active, [])
         self.assertEqual(
-            [t["reason"] for t in report["disabled_tasks"]],
+            [t["reason"] for t in report["disabled_tasks"] if t["name"] == "ems-downsample-1h"],
             ["not_configured", "not_configured"],
         )
 
@@ -462,7 +466,7 @@ class SyncTest(unittest.TestCase):
         named_1m = [t for t in client.tasks.values() if t["name"] == "ems-downsample-1m"]
         self.assertEqual(len(named_1m), 1)
         self.assertEqual(
-            [t["action"] for t in report["tasks"]], ["created", "updated"]
+            [t["action"] for t in report["tasks"] if t["name"] == "ems-downsample-1m"], ["created", "updated"]
         )
 
     def test_a_config_caused_duplicate_is_not_reported_as_a_race(self):
@@ -556,7 +560,7 @@ class SafeSyncTest(unittest.TestCase):
         report = schema.sync(client, self.config, safe=True)
 
         self.assertEqual(sorted(client.buckets), ["ems_1h", "ems_1m", "ems_5m", "ems_raw"])
-        self.assertEqual(len(client.tasks), 3)
+        self.assertEqual(len(client.tasks), 6)
         self.assertEqual(
             [b["action"] for b in report["buckets"]], ["updated", "created", "created", "created"]
         )
@@ -803,7 +807,7 @@ class PruneTest(unittest.TestCase):
 
         self.assertEqual(
             sorted(t["name"] for t in client.tasks.values()),
-            ["ems-downsample-1m", "ems-downsample-5m"],
+            ["ems-downsample-1m", "ems-downsample-1m:cells", "ems-downsample-5m", "ems-downsample-5m:cells"],
         )
 
     def test_a_task_the_config_still_wants_survives_being_disabled_by_hand(self):
@@ -901,7 +905,7 @@ class PruneTest(unittest.TestCase):
         self.assertNotIn(retired["id"], client.tasks)
         self.assertIn("ghost", client.tasks)
         self.assertEqual(
-            [t["action"] for t in report["tasks"]], ["deleted"]
+            [t["action"] for t in report["tasks"] if t["name"] == "ems-downsample-1h"], ["deleted"]
         )
 
     def test_a_second_prune_has_nothing_left_to_do(self):

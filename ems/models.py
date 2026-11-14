@@ -61,6 +61,18 @@ DEVICE_STATE_PROPERTIES = frozenset(
 )
 
 
+MAX_PACK_NUMBER = 16
+
+
+@dataclass(frozen=True)
+class PackCells:
+    """One battery pack's lowest and highest cell voltage, None when not reported."""
+
+    pack: int
+    cell_min_v: float | None
+    cell_max_v: float | None
+
+
 @dataclass
 class DeviceState:
     """One device report as the controller reads it.
@@ -122,6 +134,7 @@ class DeviceState:
     pack_num: int | None = None
     soc_status: int = 0
     battery_calibration_time: int | None = None
+    battery_packs: tuple[PackCells, ...] = ()
     ac_mode_reported: bool = True
     min_soc_reported: bool = True
     max_soc_reported: bool = True

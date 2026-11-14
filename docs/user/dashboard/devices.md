@@ -56,6 +56,7 @@ a battery — shows no battery, and the average state of charge leaves it out.
 | **Charge** | Instead of **Target** while the EMS charges this device from AC |
 | **Limit** | The output limit in force |
 | **Packs** | The number of battery packs |
+| **Cell voltage** | The lowest and the highest cell voltage over the device's packs, for example *3.17–3.18 V*, where the packs report them |
 | **AC input limit** | The AC charge limit, where the device reports one |
 
 A card shows only the parts its device has: a SolarFlow 800 without a battery
@@ -76,6 +77,11 @@ Under the facts, sections you open by clicking their name:
 
 - **Solar · 4** — the power on each solar input, **PV 1** to **PV 4**, when the
   inverter has more than one.
+- **Cell voltage · 2** — the lowest and the highest cell of each pack,
+  **Pack 1**, **Pack 2**, …, when the device has more than one. The packs are
+  numbered in the order of their serial numbers, which need not be the order
+  the Zendure app lists them in; adding or removing a pack renumbers the ones
+  after it, and the chart of a number goes on with the pack that has it now.
 - **Firmware status** — what the device itself reports, translated into words:
 
   | Field | Example values |
@@ -112,6 +118,18 @@ the local SQLite history; **All devices** chooses one device, the buttons
 **1 h**, **6 h**, **24 h** or **7 d**, and **Table** lists the values. The battery
 is drawn below zero while charging and above zero while discharging, and it
 zooms, the same way as the chart on the [Overview](overview.md#5--today-and-the-power-chart).
+
+When a device reports its cell voltages, **Cell voltage, last 24 h** follows:
+the lowest cell in green and the highest in grey, for one device and one pack
+at a time, on a volt scale that follows the values. Over **7 d** it shows
+every few minutes, so a short dip can fall between two points; the
+**Cell voltage** view on Analytics, which needs InfluxDB, keeps it. The device choice lists the
+devices that report cell voltages, **Pack 1**, **Pack 2**, … choose the pack on
+a device with several, and the range buttons and **Table** work as on the power
+chart. The cell voltage says where a battery stands more directly than its
+state of charge, which is the device's own estimate: two batteries at the same
+40 % can sit a tenth of a volt apart, and a cell that climbs or sags while the
+state of charge stands still shows what the estimate does not.
 
 ## Connection and control readiness
 
