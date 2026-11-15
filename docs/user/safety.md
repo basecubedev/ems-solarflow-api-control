@@ -47,10 +47,10 @@ Two features are enabled in the template and act without an operator:
   and the firmware may then charge it from the grid at full AC power. See
   [winter-mode.md](../winter-mode.md#device-types-and-policies).
 - **Battery full-charge assist** (`battery_full_charge_assist.enabled: true`)
-  raises `socSet` to 100 % every 28 days; with `enable_ac_charge_mode: true`
-  it switches the inverter to AC input at `force_time` (14:00 local time; in
-  Docker the container's [time zone](../docker.md#time-zone)) on the due day
-  and charges from the grid at 600 W.
+  raises `socSet` to 100 % every 28 days and keeps the device's PV in its
+  battery from midnight of the due day; with `enable_ac_charge_mode: true` it
+  charges from the grid at 600 W from `force_time` (14:00 local time; in Docker
+  the container's [time zone](../docker.md#time-zone)) if it is not full yet.
 
 Turn either off in the config if you do not want it.
 

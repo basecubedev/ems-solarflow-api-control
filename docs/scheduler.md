@@ -94,7 +94,9 @@ the start and the value it sets when the window ends).
 
 The scheduler holds no priority of its own. A scheduled charge from the grid is
 an operator AC-input claim, as from `emsctl`: it outranks charging from surplus,
-and maintenance and the full-charge assist outrank it. Its end (*stop*) sets
+and maintenance and the full-charge assist's AC charge outrank it; before
+`force_time`, while the assist charges from PV alone, it claims nothing and a
+scheduled charge goes ahead. Its end (*stop*) sets
 the AC role back to output, under which charging from surplus works as before.
 With EMS or device control off nothing reaches that device until a switch point
 or a person turns control on again.

@@ -754,7 +754,7 @@ target_calculation
 requested target by itself. This is usually normal in PV-first mode, especially
 when a device is already charging its battery or derating output. Treat
 `pv_first_battery_topup_unmet` as the warning event for an unresolved PV-first
-shortfall after allowed battery top-up.
+shortfall after allowed battery top-up and the PV the charge balance kept back.
 
 Keep `pv_priority_factor=1.0` first. Adjust only after confirming realistic
 `pv_kwp`, `battery_kwh`, and SOC limits.

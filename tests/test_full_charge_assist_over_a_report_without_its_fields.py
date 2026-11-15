@@ -151,7 +151,10 @@ def test_a_running_assist_claims_nothing_while_the_report_lacks_what_it_writes(
     written = rig.written_since(before)
     assert {"socSet": 1000} in written
     assert ({"acMode": 1} in written) is ac_mode
-    assert rig.controller.device_output_control_allowed(rig.dev) is False
+    assert rig.controller.device_output_control_allowed(rig.dev) is not ac_mode
+    if not ac_mode:
+        explained = rig.controller.last_control_explanation.devices["WR1"]
+        assert explained.limiting_reason == "full_charge_assist_solar"
     assert _dashboard_assist(rig, ac_mode=ac_mode)["status"] == "active"
 
 

@@ -1610,8 +1610,8 @@ _SECTIONS = [
             ),
             _field(
                 "battery_full_charge_assist.force_time",
-                "Force time",
-                "Time of day when EMS may force the full-charge attempt if it has not completed naturally.",
+                "AC charge time",
+                "On the assist day the battery charges from its own PV until this time; from then on EMS may charge it from the grid if it is not full yet.",
                 "time",
                 level="advanced",
                 risk="control_stability",
@@ -1629,7 +1629,7 @@ _SECTIONS = [
             _field(
                 "battery_full_charge_assist.enable_ac_charge_mode",
                 "Use AC charge mode",
-                "Allows EMS to use AC charge mode during the assist window when supported.",
+                "Allows EMS to charge the battery from the grid from the AC charge time on, when supported. Without it the assist charges from the device's own PV until the battery is full.",
                 "boolean",
                 level="advanced",
                 risk="control_stability",

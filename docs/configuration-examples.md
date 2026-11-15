@@ -316,8 +316,9 @@ The template enables EMS full-charge assist by default. Set `enabled` to
 ```
 
 When enabled, EMS temporarily requests `socSet=1000` and waits for firmware
-`socLimit == 1`. AC-assisted charging reuses the runtime AC intent path; EMS
-does not write firmware calibration properties.
+`socLimit == 1`. Until `force_time` on the day it started, the battery takes the
+device's own PV; from then on AC-assisted charging reuses the runtime AC intent
+path. EMS does not write firmware calibration properties.
 
 ## Example 6: Tasmota HTTP Grid Meter
 

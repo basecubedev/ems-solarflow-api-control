@@ -3207,6 +3207,7 @@ const CONTROL_CODE_LABELS = {
   max_output_limit: "Device output limit",
   no_allocation: "No share of the target",
   battery_care: "Battery care",
+  full_charge_assist_solar: "Full-charge assist charges the battery from its PV",
   no_battery: "Device reports no battery pack",
   below_min_soc: "Battery at or below minimum SoC",
   soc_protection: "SoC protection",
@@ -3845,7 +3846,7 @@ function fullChargeAssistMeta(status) {
 }
 
 function isAssistAcChargeActive(assist) {
-  return assist.ac_mode === 1 && assist.ac_status === 2;
+  return assist.phase !== "solar" && assist.ac_mode === 1 && assist.ac_status === 2;
 }
 
 function fullChargeAssistDescription(assist) {

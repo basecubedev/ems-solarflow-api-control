@@ -548,6 +548,29 @@ reaches its floor.
 The integer SoC can move by one point and back; the ceiling then moves with it,
 with the summer defaults by up to the step from 50 W to full power.
 
+## Full-Charge Assist: The Day's PV First
+
+A running [full-charge assist](../battery-full-charge-assist.md#the-days-pv-first)
+takes the battery's charge from the device's own PV until `force_time` on the
+day it started, and for its whole run without its AC charge mode. It claims
+nothing then; the device stays in output control under a ceiling that joins
+battery care's (the lower of the two holds): the device's PV above the charge
+ceiling it reports, 0 without a reported ceiling, all of its PV when it reports
+0. Where that ceiling holds part of the PV back, the PV-first split offers no
+more of the device's PV than the ceiling, gives that PV priority as it does a
+full battery's, and leaves the device out of the PV charge balance, so the other devices' PV and batteries cover the house; what
+neither covers comes from the PV the balance kept back for an emptier battery
+(see [Configuration](configuration.md)). Battery care's caps never bound the
+offer: they are at least the PV. The standby floor
+follows that ceiling, at minSoc too, unless the EMS is
+charging the device; only the [night idle](#night--minsoc-idle) still parks it
+at the floor, with no PV to lose. The integrator ceiling counts it like battery
+care's, at minSoc too. The control explanation names such a device with the
+limiting reason `full_charge_assist_solar` instead of `battery_care` while that
+ceiling binds, and keeps a winter export hold's reason. From `force_time` on the
+assist claims the device for its AC charge as before (see
+[Who owns a device's AC direction](#who-owns-a-devices-ac-direction)).
+
 ## Devices Without A Battery
 
 Battery presence comes from telemetry `packNum`, and it has three values:

@@ -103,7 +103,9 @@ With [battery full-charge assist](../../battery-full-charge-assist.md) on, a
 battery-backed device also carries a **Full-charge assist** block: its state
 (*Assist scheduled*, *Assist window active*, *Assist active*, *Assist overdue*,
 *Restore pending*, …), a sentence on what the EMS does next, and **Last full
-charge**, **Next due** and the restore steps.
+charge**, **Next due** and the restore steps. While the assist charges the
+battery from its own PV, the block shows **PV charging** and **AC charge from**,
+the time it may start charging from the grid.
 
 ### 5 — The grid meter, flow and history
 

@@ -518,6 +518,7 @@ def test_diagnose_reads_the_assist_s_control_switch_from_runtime_state(
     database_path = tmp_path / "ems_state.sqlite"
     config["battery_full_charge_assist"] = {
         "enabled": True,
+        "force_time": "00:00",
         "state_database_path": str(database_path),
     }
     config_path.write_text(json.dumps(config))

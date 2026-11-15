@@ -92,9 +92,17 @@ class ShellyStub:
 
 
 def configure_assist(**overrides):
+    """The assist's settings, its AC charge allowed from the start unless a test says otherwise.
+
+    ``force_time`` is ``00:00`` here, so a running assist with its AC mode
+    charges from AC whatever the wall clock reads; the PV-only phase before
+    ``force_time`` has its own tests with a clock of their own.
+    """
+
     config = {
         **cfg.BATTERY_FULL_CHARGE_ASSIST_DEFAULTS,
         "enabled": True,
+        "force_time": "00:00",
         **overrides,
     }
     return patch.object(cfg, "BATTERY_FULL_CHARGE_ASSIST_CONFIG", config)
@@ -489,16 +497,17 @@ def test_assist_window_below_start_soc_does_not_start(tmp_path):
     assert store.get_device_state("WR1")["full_charge_assist_active"] is False
 
 
-def test_force_time_starts_even_below_start_soc(tmp_path):
+def test_the_due_day_starts_the_assist_at_midnight_even_below_start_soc(tmp_path):
     dev = device()
     store = BatteryFullChargeStateStore(str(tmp_path / "ems_state.sqlite"))
     controller = controller_for(dev, store)
-    now = datetime(2026, 6, 14, 14, 0, tzinfo=timezone.utc)
+    due = datetime(2026, 6, 14, 14, 0).astimezone()
+    now = due.replace(hour=0, minute=0)
     record = store.update_device_state(
         "WR1",
         now,
         has_battery=True,
-        next_due_at=now.isoformat(),
+        next_due_at=due.isoformat(),
     )
 
     with configure_assist(enabled=True, assist_start_soc=80, force_time="14:00"):
@@ -507,9 +516,15 @@ def test_force_time_starts_even_below_start_soc(tmp_path):
             state(soc=40),
             now,
         )
+        day_before = controller.should_start_full_charge_assist(
+            record,
+            state(soc=40),
+            now - timedelta(minutes=1),
+        )
 
     assert start is True
     assert event_type == "full_charge_assist_forced"
+    assert day_before == (False, None)
 
 
 def test_existing_due_schedule_starts_when_already_enabled(tmp_path):

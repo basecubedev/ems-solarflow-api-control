@@ -30,7 +30,11 @@ import pytest
 from ems import config as cfg
 from ems.charge_record import EXIT_RESEND_SECONDS, FOUND_EXIT_ATTEMPTS
 from ems.config import AC_CHARGE_CONTROL_DEFAULTS
-from ems.controller import EMSController
+from ems.controller import (
+    FULL_CHARGE_ASSIST_REASON,
+    FULL_CHARGE_ASSIST_RESTORE_REASON,
+    EMSController,
+)
 from ems.state_store import BatteryFullChargeStateStore
 from tests.test_ac_charge_regulator import (
     IDLE_EXIT,
@@ -333,7 +337,12 @@ def test_switching_the_ac_mode_off_ends_the_assist_s_ac_input(tmp_path, caplog):
 def test_the_assist_without_its_ac_mode_leaves_the_direction_alone_after(
     tmp_path,
 ):
-    """One end, then nothing: a later AC input is not the assist's to fight."""
+    """One end, then the assist claims nothing: a later AC input is not the assist's to fight.
+
+    Without its AC mode the assist takes the battery's charge from PV alone and
+    leaves the device in output control, so a later AC input meets the
+    regulator's default claim as on any device, not the assist's.
+    """
 
     rig = Assist(
         tmp_path,
@@ -341,11 +350,18 @@ def test_the_assist_without_its_ac_mode_leaves_the_direction_alone_after(
         store=assist_running(tmp_path / "ems_state.sqlite"),
     )
     rig.run(cycles=2, ac_mode=False)
+    assert rig.hardware.writes == [{"acMode": 2}]
     rig.item.ac_mode = 1
 
     rig.run(cycles=3, ac_mode=False)
 
-    assert rig.hardware.writes == [{"acMode": 2}]
+    assert rig.hardware.writes == [{"acMode": 2}, {"acMode": 2}]
+    intent = rig.controller.runtime_intents["WR1"]
+    assert intent.reason not in (
+        FULL_CHARGE_ASSIST_REASON,
+        FULL_CHARGE_ASSIST_RESTORE_REASON,
+    )
+    assert rig.controller.device_output_control_allowed(rig.dev) is True
 
 
 def test_the_assist_s_ac_input_is_ended_only_on_the_state_gate(tmp_path):

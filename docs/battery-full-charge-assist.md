@@ -43,8 +43,10 @@ that as a new tracking start. If no assist or restore is active, it resets the
 schedule from the current time and ignores old overdue dates from the previous
 enabled period. This avoids immediate AC charging after seasonal re-enable.
 
-When a device is due, or due soon and already above `assist_start_soc`, and
-the assist can write what it needs there (see
+A device is due from midnight (local time) of its due day, whatever its SoC,
+and due soon within `assist_window_days` before that once its SoC reaches
+`assist_start_soc`. When a device is due or due soon, and the assist can write
+what it needs there (see
 [Behind a shut write gate](#behind-a-shut-write-gate),
 [Over MQTT control](#over-mqtt-control) and
 [Over a report without a field it writes](#over-a-report-without-a-field-it-writes)),
@@ -53,12 +55,56 @@ EMS:
 1. marks full-charge assist active in the core state store
 2. requests `socSet=1000` through the normal safe SOC write path; the write
    carries no `minSoc` (see [The assist and `minSoc`](#the-assist-and-minsoc))
-3. optionally requests AC input mode through the existing runtime AC intent path
-4. optionally applies `inputLimit=<ac_charge_power>` through the existing safe
+3. until `force_time` on the day it started, takes the battery's charge from
+   the device's own PV (see [The day's PV first](#the-days-pv-first))
+4. from `force_time` on, optionally requests AC input mode through the existing
+   runtime AC intent path
+5. optionally applies `inputLimit=<ac_charge_power>` through the existing safe
    AC charge input-limit writer
-5. blocks normal output allocation for the device while assist or restore is
-   pending, either only while it can be written (see
+6. blocks normal output allocation for the device while its AC charge or the
+   restore is pending, either only while it can be written (see
    [Behind a shut write gate](#behind-a-shut-write-gate))
+
+### The day's PV first
+
+Feeding the PV out and charging the battery back from the grid loses the
+conversion both ways (owner decision 2026-11-15), so a running assist does not
+charge from AC before `force_time` on the day it started (14:00 by default).
+Until then it claims nothing: the device stays in output control under a
+ceiling and feeds out only its PV above the charge ceiling it reports
+(`chargeMaxLimit`, 1000 W on a SolarFlow 800 Pro 2), the most its battery is
+taken to accept. In winter that is nothing, and all of the device's PV is
+offered to the battery; a summer PV above the ceiling still reaches the house
+instead of being curtailed. The ceiling is a setting, not what the battery
+takes at the moment: close to full, or in the cold, the battery takes less, and
+the firmware holds back the rest of the PV until the battery is full or
+`force_time` comes. A device that reports no ceiling feeds out nothing, and one
+that reports 0 refuses a charge and passes all its PV through. Where the
+ceiling holds part of the PV back, what lies above it is all the split offers
+from the device, and it goes first, as a full battery's PV does; the other
+devices' PV and batteries cover the rest of the house, and the device takes no
+part in the PV charge balance, which would otherwise keep an emptier device's
+PV back for a battery the assist is charging anyway. A device that reports 0
+holds nothing back and is split like any other. The standby
+floor (`min_output_limit`) takes no PV from the battery either, at minSoc too;
+only the night idle, which parks every device at the floor while no battery
+can discharge, may still write it, with no PV to lose. The battery gives the
+house nothing from midnight on: the house takes grid power directly then,
+instead of battery power the grid would have to charge back. Other
+devices cover the house as usual, and [AC charging from surplus](ac-charging.md)
+or a [scheduled charge](scheduler.md) may still charge the device. The control explanation names the ceiling with the
+limiting reason `full_charge_assist_solar` while that ceiling is the one that
+binds.
+
+From `force_time` on, if the firmware has not reported `socLimit == 1` yet, the
+assist charges from AC as the list above says; one that started after
+`force_time`, or runs on into a later day, does so at once. Without its AC
+charge mode (`enable_ac_charge_mode: false`) it charges from PV alone for its
+whole run, until the battery is full. An assist that owes `acMode=2` back holds
+its claim until the device reports it, and one that cannot write what it needs
+(the sections below) holds no ceiling either: it raises no `socSet` then, so it
+keeps nothing from the house. With `force_time` at `00:00` the assist charges
+from AC from the start of its due day.
 
 When firmware reports `socLimit == 1` while assist is active, EMS marks the
 assist complete, stores `last_full_charge_at`, schedules `next_due_at`, and
@@ -342,15 +388,20 @@ back.
 firmware-reported Max-SoC event.
 
 `assist_window_days` allows EMS to start early before the due date when current
-SOC is already at or above `assist_start_soc`.
+SOC is already at or above `assist_start_soc`. An early start before
+`force_time` also takes the battery's charge from PV first.
 
-`force_time` starts assist on or after the due day at the configured local time
-(in Docker, the container's [time zone](docker.md#time-zone)), regardless of
-current SOC, unless firmware already reports `socLimit == 1`.
+`force_time` (Admin: **AC charge time**) is the local time (in Docker, the
+container's [time zone](docker.md#time-zone)) from which a running assist may
+charge from AC on the day it started; before it, the assist charges from the
+device's own PV (see [The day's PV first](#the-days-pv-first)). The assist
+itself starts at midnight of the due day, regardless of current SOC, unless
+firmware already reports `socLimit == 1`.
 
-`enable_ac_charge_mode` controls whether active assist also requests AC input
-mode. The AC mode transition uses the runtime AC intent foundation; there is no
-separate assist-owned `acMode` writer. Switched off by a restart while an assist
+`enable_ac_charge_mode` controls whether a running assist also requests AC input
+mode from `force_time` on. Without it the assist charges from the device's own
+PV until the battery is full. The AC mode transition uses the runtime AC intent
+foundation; there is no separate assist-owned `acMode` writer. Switched off by a restart while an assist
 holds the device in AC input, the assist claims `acMode=2` back through the same
 reconciler and gates, as its restore does; once the device reports it, the
 assist leaves the direction alone for the rest of its run. Switched on again,
@@ -384,7 +435,10 @@ control switched off -- `system.enabled` or the device's `enabled`, read from
 runtime-state over the stored config as the EMS reads them. Diagnose does not
 see the running process, so a gate shut on the command line (`--dry-run`,
 `--simulate`, `--replay`) or a device report without a field the assist writes
-still reads `active` there; the dashboard shows those.
+still reads `active` there; the dashboard shows those. While the assist takes
+the battery's charge from PV alone the status reads
+`active, charging from PV until 14:00` (its `force_time`), or
+`active, charging from PV` without its AC charge mode.
 
 ## Dashboard
 
@@ -394,6 +448,12 @@ assist** section on each battery-backed device card (see
 
 - **Assist active** — EMS is helping the device reach firmware Max-SoC. This
   is normal and can take several hours to days; it is not an error state.
+  - **PV charging** · **Running** and **AC charge from** with the time its AC
+    charge may begin are shown while the assist takes the battery's charge from
+    PV alone (see [The day's PV first](#the-days-pv-first)); without its AC
+    charge mode the card names no AC time. The deprecated Classic dashboard
+    shows neither, and an AC charge running then is a surplus or scheduled
+    charge, not the assist's.
   - **AC charge** · **Running** is shown only when telemetry confirms `acMode=1`
     and `acStatus=2`. Assist can also run without AC charge mode
     (`enable_ac_charge_mode=false`).

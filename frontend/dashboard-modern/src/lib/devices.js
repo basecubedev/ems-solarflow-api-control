@@ -152,7 +152,9 @@ const ASSIST_DESCRIPTIONS = Object.freeze({ waiting: "assist.desc.waiting", unav
  * The full-charge assist as Classic's device card shows it
  * (renderFullChargeAssist): the facts each status names, what it means, and
  * the restore facts once a restore is pending. A restore flag while the
- * assist still charges is a plan for afterwards, not a restore problem.
+ * assist still charges is a plan for afterwards, not a restore problem. An
+ * active assist in its PV-only phase names when its AC charge may begin; an
+ * AC charge the device runs meanwhile is a surplus charge, not the assist's.
  */
 export function assistView(assist) {
   const status = ASSIST_STATUSES.includes(assist?.status) ? assist.status : "unknown";
@@ -161,9 +163,12 @@ export function assistView(assist) {
   const days = (value) => (Number.isFinite(value) ? value : null);
   const facts = [];
   const firmware = { label: "assist.firmware", firmware: { socGuard: enumLabel("soc_limit", assist?.soc_limit), acPath: acPath(assist) } };
+  const solar = status === "active" && assist.phase === "solar";
   if (status === "active") {
     facts.push({ label: "assist.started", time: assist.assist_started_at || null });
-    if (acCharging) facts.push({ label: "assist.acCharge", key: "assist.running" });
+    if (solar) facts.push({ label: "assist.solarCharge", key: "assist.running" });
+    if (solar && assist.ac_from) facts.push({ label: "assist.acFrom", time: assist.ac_from });
+    if (acCharging && !solar) facts.push({ label: "assist.acCharge", key: "assist.running" });
     facts.push(firmware);
     if (restoring) facts.push({ label: "assist.afterCharge", key: "assist.restorePlanned" });
   } else if (status === "waiting") {
@@ -179,7 +184,7 @@ export function assistView(assist) {
     facts.push({ label: "assist.last", time: assist?.last_full_charge_at || null }, { label: "assist.next", time: assist?.next_due_at || null });
   }
   const description = [];
-  if (status === "active") description.push(acCharging ? "assist.desc.activeAc" : "assist.desc.active");
+  if (status === "active") description.push(solar ? "assist.desc.activeSolar" : acCharging ? "assist.desc.activeAc" : "assist.desc.active");
   else if (ASSIST_DESCRIPTIONS[status]) description.push(ASSIST_DESCRIPTIONS[status]);
   else if (status === "restore_pending") {
     if (assist.restore_pending) {
