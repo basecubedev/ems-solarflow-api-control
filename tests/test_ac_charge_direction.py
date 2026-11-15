@@ -15,6 +15,7 @@ import pytest
 from ems.ac_charge_control import (
     REASON_ENTERED,
     REASON_ENTRY_RATE_LIMITED,
+    REASON_HELD,
     REASON_LEFT_BELOW_STOP,
     REASON_NOT_POSSIBLE,
     ChargeDirectionSettings,
@@ -240,6 +241,62 @@ def test_the_way_back_is_never_blocked_by_a_threshold_or_a_counter():
 
     assert decision.charging is False
     assert decision.reason == REASON_NOT_POSSIBLE
+
+
+def test_a_reading_already_observed_records_nothing_and_enters_nothing():
+    """Four observations and a repeated fifth reading are still four."""
+
+    state = ChargeDirectionState()
+    for _ in range(4):
+        state = _observe(state, -500).state
+
+    decision = decide_charge_direction(
+        state, charging_possible=True, commanded_total_w=0,
+        desired_total_w=-500, filtered_load_w=-500, now=0.0, settings=SETTINGS,
+        observe=False,
+    )
+
+    assert decision.charging is False
+    assert decision.reason == REASON_HELD
+    assert decision.state.entry_window == state.entry_window
+    assert _observe(decision.state, -500).charging is True
+
+
+def test_a_reading_already_observed_never_holds_a_charge_that_has_to_end():
+    charging = ChargeDirectionState(charging=True, entries=(0.0,))
+
+    left = decide_charge_direction(
+        charging, charging_possible=True, commanded_total_w=-900,
+        desired_total_w=-90, filtered_load_w=810, now=10.0, settings=SETTINGS,
+        observe=False,
+    )
+    refused = decide_charge_direction(
+        charging, charging_possible=False, commanded_total_w=-900,
+        desired_total_w=-900, filtered_load_w=-900, now=10.0, settings=SETTINGS,
+        observe=False,
+    )
+    held = decide_charge_direction(
+        charging, charging_possible=True, commanded_total_w=-900,
+        desired_total_w=-900, filtered_load_w=-900, now=10.0, settings=SETTINGS,
+        observe=False,
+    )
+
+    assert left.charging is False and left.reason == REASON_LEFT_BELOW_STOP
+    assert refused.charging is False and refused.reason == REASON_NOT_POSSIBLE
+    assert held.charging is True
+
+
+def test_a_reading_already_observed_keeps_the_hour_s_entries():
+    state = ChargeDirectionState(entry_window=(True,), entries=(0.0, 4000.0))
+
+    decision = decide_charge_direction(
+        state, charging_possible=True, commanded_total_w=0,
+        desired_total_w=-500, filtered_load_w=-500, now=4100.0, settings=SETTINGS,
+        observe=False,
+    )
+
+    assert decision.state.entries == (4000.0,)
+    assert decision.state.entry_window == (True,)
 
 
 def test_the_rate_limit_refuses_visibly_rather_than_silently():

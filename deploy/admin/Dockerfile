@@ -103,6 +103,7 @@ COPY ems/diagnostics.py ./ems/diagnostics.py
 COPY ems/control_status.py ./ems/control_status.py
 COPY ems/device_fingerprints.py ./ems/device_fingerprints.py
 COPY ems/health.py ./ems/health.py
+COPY ems/grid_reading.py ./ems/grid_reading.py
 COPY ems/clients.py ./ems/clients.py
 # The network scan opens a found Tibber Pulse bridge through the EMS's bridge reader.
 COPY ems/sml.py ./ems/sml.py

@@ -147,6 +147,7 @@ def decide_charge_direction(
     filtered_load_w,
     now,
     settings,
+    observe=True,
 ):
     """Decide whether the system charges this cycle.
 
@@ -159,6 +160,10 @@ def decide_charge_direction(
     it is false the decision is always "not charging": the way back is never
     blocked by a threshold, a counter or a rate limit, because failing closed on
     the *return* path would leave hardware drawing from the grid.
+
+    ``observe`` false says this cycle's meter reading was already observed: no
+    entry observation is recorded and no charge is entered on it. A running
+    charge is judged as on any cycle.
     """
 
     entries = _recent_entries(previous.entries, now)
@@ -184,6 +189,13 @@ def decide_charge_direction(
         return ChargeDirectionDecision(
             charging=True,
             state=replace(previous, entries=entries),
+            reason=REASON_HELD,
+        )
+
+    if not observe:
+        return ChargeDirectionDecision(
+            charging=False,
+            state=ChargeDirectionState(False, previous.entry_window, entries),
             reason=REASON_HELD,
         )
 

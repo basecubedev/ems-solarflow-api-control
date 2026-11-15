@@ -28,6 +28,7 @@ from ems.clients import (
     fetch_all_devices,
     zero_device_state,
 )
+from ems.grid_reading import ReadingTracker, read_grid_meter
 from ems.logging_utils import log_event
 from ems.mqtt_control.dispatch import (
     WriteDispatchStatus,
@@ -195,6 +196,10 @@ class EMSController:
         self.commanded_total_w = None
         self.filtered_load_w = None
         self.grid_meter_holding = False
+        self.grid_readings = ReadingTracker()
+        self.grid_reading_repeated = False
+        self._reading_goal = None
+        self._reading_base_w = None
         self.control_enabled = None
         self._legacy_grid_off_mode_warned = set()
         self.device_settings = device_settings.DeviceSettingsReconciler()
@@ -747,6 +752,58 @@ class EMSController:
         self.grid_meter_holding = holding
         return holding
 
+    def note_grid_reading(self, reading):
+        """Note whether this cycle sees a reading an earlier cycle already used.
+
+        A meter that keeps its last reading between two new ones hands it to
+        several cycles, and the integrator, the load filter and the charge
+        entry each count a reading once. A meter serving its last value because
+        it failed is held instead (:meth:`update_grid_meter_holding`).
+        """
+
+        new = self.grid_readings.is_new(self.shelly, reading)
+        self.grid_reading_repeated = not new and not self.grid_meter_holding
+        if self.grid_reading_repeated:
+            log_event(
+                logging.DEBUG,
+                "grid_reading_repeated",
+                grid_power_w=reading.power_w,
+            )
+        return self.grid_reading_repeated
+
+    def repeated_reading_charge_total_w(self, raw_load):
+        """The desired total a running charge is judged on when the cycle repeats a reading.
+
+        The total that reading asks for: the total from before its correction
+        plus the reading itself, unfiltered. Judged on the goal, the first cycle
+        after an entry read the zero the entry cycle left as "the surplus is
+        gone"; judged on new readings only, the filter's lag kept a charge
+        drawing for a meter period more after a load rose; judged on the
+        corrected total, the reading counted twice and a steady small surplus
+        entered and left a charge twelve times an hour. Entry and the total
+        never reuse a reading.
+        """
+
+        base = self.commanded_total_w if self._reading_base_w is None else self._reading_base_w
+        return base + raw_load
+
+    def reading_goal_w(self):
+        """What the last reading asked the total to be, while nothing else moved it since.
+
+        A correction the ramp or the ceiling held back carries on towards it on
+        a cycle without a new reading, within that cycle's ceiling: it is still
+        that one reading's correction. The floor is never carried: a charge, or
+        a deeper one, starts only on a reading whose own cycle allowed it, so a
+        surplus that is gone by then is never charged from the grid. Once
+        anything else set the total -- a charge being left, control reset --
+        the goal is gone and the total holds.
+        """
+
+        goal = self._reading_goal
+        if goal is None or goal[0] != self.commanded_total_w:
+            return self.commanded_total_w
+        return goal[1]
+
     def stabilized_total_target(
         self,
         raw_load,
@@ -754,12 +811,25 @@ class EMSController:
         max_power,
         has_export_capacity=True,
         standby_total_w=0,
-        active_device_count=None
+        active_device_count=None,
+        new_reading=True,
     ):
+        """The total to command this cycle, from the reading and what is commanded.
+
+        ``new_reading`` false says an earlier cycle already used this reading:
+        it is neither added to the total again nor fed to the load filter.
+        """
+
         if self.commanded_total_w is None:
             self.initialize_commanded_total(states, max_power)
 
-        filtered_load = self.filter_output_control_load(raw_load)
+        if new_reading:
+            self._reading_base_w = self.commanded_total_w
+            filtered_load = self.filter_output_control_load(raw_load)
+        else:
+            filtered_load = (
+                raw_load if self.filtered_load_w is None else self.filtered_load_w
+            )
         desired = self.commanded_total_w
         held = False
 
@@ -797,6 +867,16 @@ class EMSController:
                 active_devices=active_device_count,
                 reason="no_export_capacity"
             )
+        elif not new_reading:
+            desired = self.reading_goal_w()
+            held = desired == self.commanded_total_w
+            log_event(
+                logging.DEBUG,
+                "output_control_repeated_reading",
+                raw_load_w=round(raw_load, 1),
+                commanded_total_w=round(self.commanded_total_w, 1),
+                goal_total_w=round(desired, 1),
+            )
         elif abs(filtered_load) <= load_deadband:
             held = True
             log_event(
@@ -812,7 +892,10 @@ class EMSController:
             desired = self.commanded_total_w + filtered_load
 
         floor = self.commanded_total_floor_w()
+        asked = max(floor, desired)
         desired = max(floor, min(max_power, desired))
+        if not new_reading and desired == self.commanded_total_w:
+            held = True
 
         target_deadband = self.output_control_float(
             "target_deadband_w",
@@ -918,6 +1001,7 @@ class EMSController:
 
         self.desired_total_w = desired
         self.commanded_total_w = ramped
+        self._reading_goal = (ramped, asked)
         return ramped
 
     def apply_device_ramp(self, targets, raw_load, discharge_caps=None):
@@ -1103,6 +1187,8 @@ class EMSController:
         # The total before the ramp limits it. The charge direction's exit reads
         # this, so a sudden house load does not wait for the ramp.
         self.desired_total_w = None
+        self._reading_goal = None
+        self._reading_base_w = None
         self.load_history.clear()
         self.commanded_device_targets = {}
 
@@ -2830,11 +2916,15 @@ class EMSController:
         A reading the meter is holding is never an entry observation, however
         young. The freshness tolerance lets a running charge survive a missed
         read; it says nothing about whether the surplus that would start one
-        is still there.
+        is still there. A reading an earlier cycle already observed is not
+        observed again: the window counts readings, not cycles.
         """
 
+        observe = True
         if self.grid_meter_holding:
             filtered_load_w = 0
+        elif self.grid_reading_repeated:
+            observe = False
         if not meter_fresh and self.charge_direction.charging:
             log_event(
                 logging.WARNING,
@@ -2849,6 +2939,7 @@ class EMSController:
             filtered_load_w=filtered_load_w + max(0, releasable_output_w),
             now=time.monotonic(),
             settings=self.charge_settings(),
+            observe=observe,
         )
         self.log_charge_direction(
             decision, commanded_total_w, filtered_load_w, chargeable
@@ -2856,7 +2947,7 @@ class EMSController:
         self.charge_direction = decision.state
         return decision
 
-    def devices_leaving_a_charge(self, states):
+    def devices_leaving_a_charge(self, states, settle=True):
         """The online devices on their way out of a charge the EMS ends, and who just left.
 
         A device is leaving from the cycle the EMS ends its own charge -- on
@@ -2865,6 +2956,8 @@ class EMSController:
         charge has run down: a device that reports the exit taken still draws
         for about two seconds (:func:`ems.power_direction.settling_out_of_charge`).
         Returns their states and whether a device stopped leaving this cycle.
+        ``settle`` false keeps a device that stopped leaving on the list, for a
+        cycle that may size the discharge on it.
         """
 
         leaving = []
@@ -2877,7 +2970,7 @@ class EMSController:
                 or self.unproven_charge_exit(dev) is not None
             ):
                 self.charges_being_left.add(dev.name)
-            elif dev.name in self.charges_being_left and not (
+            elif settle and dev.name in self.charges_being_left and not (
                 settling_out_of_charge(state)
                 and cfg.safe_int(getattr(state, "grid_input", 0), 0) > 0
             ):
@@ -2910,13 +3003,19 @@ class EMSController:
         of the devices leaving -- the mirror of the entry, which adds back
         the output that stops when the devices switch -- and the filter starts
         again from there. Without export capacity it is held to the standby
-        total, as the integrator holds it. A held meter reading sizes nothing.
+        total, as the integrator holds it. A held meter reading sizes nothing,
+        and neither does one an earlier cycle already used: it shows the AC
+        input of a moment the device states no longer describe. Such a cycle
+        still notes a device that starts leaving, and the next new reading
+        sizes on it.
         """
 
         if self.grid_meter_holding:
             return total
-        leaving, left = self.devices_leaving_a_charge(states)
-        if not leaving and not left:
+        leaving, left = self.devices_leaving_a_charge(
+            states, settle=not self.grid_reading_repeated
+        )
+        if self.grid_reading_repeated or (not leaving and not left):
             return total
         draw_w = sum(
             cfg.safe_int(getattr(state, "grid_input", 0), 0, minimum=0)
@@ -2927,6 +3026,7 @@ class EMSController:
         )
         sized = house_w if has_export_capacity else min(house_w, standby_total_w)
         self.commanded_total_w = min(max_power, sized)
+        self._reading_goal = None
         self.load_history.clear()
         self.filtered_load_w = None
         log_event(
@@ -5120,8 +5220,10 @@ class EMSController:
             self.runtime_state.load_if_changed()
         self.tick_scheduler()
 
-        load = finite_grid_load(self.shelly.get_power())
+        reading = read_grid_meter(self.shelly)
+        load = finite_grid_load(reading.power_w)
         self.update_grid_meter_holding(load)
+        self.note_grid_reading(reading)
         self.refresh_read_only_devices()
 
         # =====================
@@ -5504,17 +5606,21 @@ class EMSController:
                 discharge_ceiling,
                 has_export_capacity=has_export_capacity,
                 standby_total_w=standby_total_w,
-                active_device_count=len(active_indexes)
+                active_device_count=len(active_indexes),
+                new_reading=not self.grid_reading_repeated,
             )
 
+        charge_desired_w = (
+            self.desired_total_w
+            if self.desired_total_w is not None
+            else stabilized_total
+        )
+        if self.grid_reading_repeated and self.charge_direction.charging:
+            charge_desired_w = self.repeated_reading_charge_total_w(load)
         charge_decision = self.take_charge_decision(
             meter_fresh,
             commanded_total_w=stabilized_total,
-            desired_total_w=(
-                self.desired_total_w
-                if self.desired_total_w is not None
-                else stabilized_total
-            ),
+            desired_total_w=charge_desired_w,
             filtered_load_w=self.filtered_load_w or 0,
             chargeable=chargeable,
             releasable_output_w=releasable_output_w,

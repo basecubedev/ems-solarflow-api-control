@@ -433,8 +433,9 @@ Shape (`schema_version: 1`):
 | `control.grid_power_w`, `control.filtered_load_w` | Grid meter reading the cycle used and its filtered value (positive is import) |
 | `control.commanded_total_w`, `control.allocated_target_total_w`, `control.effective_target_total_w` | The cycle's totals; `effective_target_total_w` is what the EMS commands |
 | `grid_meter.consecutive_read_failures`, `grid_meter.measured_at` | From the meter's health record; `null` for a meter without one |
+| `grid_meter.reading_repeated` | `true` when the cycle saw a reading an earlier cycle had already regulated on ([One correction per reading](control-logic.md#one-correction-per-reading)) |
 | `devices.<name>` | `online`, `last_seen_at`, `max_power_w`, `soc`, `min_soc`, `pv_input_w`, `output_w`, `output_limit_w`, `battery_charge_w`, `battery_discharge_w`, `battery`, `allocated_target_w`, `effective_target_w`, `limiting_reason`; telemetry fields are `null` for a device that never answered. `battery` is `yes`, `no` or `unknown` from the pack count the device reports; `diagnose --control` and `--control-quality` leave a `no` device out of their SOC analysis. `settings` holds each [device setting](#device-settings) the device has or that is set, as `{offered, reported, desired}` |
-| `grid_samples` | The last 30 cycles' `{cycle_at, grid_power_w, measured_at}` |
+| `grid_samples` | The last 30 cycles' `{cycle_at, grid_power_w, measured_at, reading_repeated}` |
 | `loaded_devices` | `{version, devices}`: one `{name, device_id, enabled, digest}` per device entry `config.json` held when this EMS started, after the startup upgrade; `device_id` is the id an MQTT mapping publishes an external device as (`null` otherwise), and `digest` covers the whole entry, `enabled` included. `ems/device_fingerprints.py` makes them, for the EMS and for the Admin console, which compares them with the file as saved now; `version` names the rule, so an Admin of another release does not compare. Left out by an EMS that was not given the devices it read |
 
 When a cycle fails before it decides, the `control` values are `null` rather
