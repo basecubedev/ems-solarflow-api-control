@@ -11,8 +11,10 @@ control chain, see [control-flow.md](control-flow.md).
 
 1. Reload `runtime-state.json` if changed, then apply the
    [schedule](../scheduler.md)'s due switch points as runtime values.
-2. Read the grid meter, and note whether it delivered a reading no earlier
-   cycle used ([One correction per reading](#one-correction-per-reading)).
+2. Read the grid meter, note whether it delivered a reading no earlier cycle
+   used ([One correction per reading](#one-correction-per-reading)), and
+   correct it for the targets sent after it arrived
+   ([Dead time after a write](#dead-time-after-a-write)).
 3. Read Zendure telemetry.
 4. Detect runtime capabilities.
 5. Run state reconciliation when due.
@@ -185,6 +187,97 @@ Unlike a [failed read](#grid-meter-unavailable-hold), a repeated reading logs no
 warning and keeps the load filter. `diagnose --control` counts the cycles that
 reused a reading (`meter_quality.repeated_readings`) and notes
 `meter_slower_than_loop` when they are the majority.
+
+### Dead time after a write
+
+The integrator assumes that a reading shows the total already commanded. A
+reading that reached the EMS before the last power write still shows the total
+from before, and adding it counts that write's correction a second time. A
+meter that pushes its readings — an MQTT meter, the Tibber Pulse bridge's
+stream — delivers such a reading whenever one arrives between a cycle's read
+and its write: the next cycle added it, and in the simulation a 500 W load step
+then swung the output between nothing and the device maximum for good.
+
+Each new reading is therefore corrected by exactly what it cannot show: the
+targets that went out to the devices after it arrived, and a target an MQTT
+transport still holds in its queue (for a minute at most). A target counts when
+an HTTP write returned or an MQTT target was published. A meter read at the
+start of every cycle comes after every write before it and is corrected only
+for an MQTT target that goes out while it is read. What a device had before
+the first target the EMS sent it is not known, and that first change is not
+corrected; a device whose control passes elsewhere — switched off, its control
+off, in the AC input role, parked by the night idle — is forgotten, since what
+it does meanwhile is no target of the EMS, and its next target counts as a
+first one. An offline device keeps its last target.
+The correction takes off only targets the reading cannot show, with two
+exceptions: an HTTP write is dated when the request returns, so a frame that
+came after the device took the target but before the answer is corrected for
+it, and a device whose power something other than the EMS moved (a firmware
+charge, the full-charge assist) is corrected against the last target the EMS
+sent it. The corrected reading feeds the integrator, the load filter and the
+bypass; logs, the dashboard and the control explanation keep the measured
+value. A corrected reading sizes nothing while a device leaves a charge: the
+device is still behind the target the correction assumes it had, and the
+integrator takes over from there. A running charge judged on a cycle that
+repeats a reading uses the reading as corrected when it came.
+
+A reading is dated when it reached the EMS: an MQTT message or a Tibber frame
+when it arrived, a polled reading by the read that first returned it. A DSMR P1
+telegram stream over TCP is drained on each read, and a HomeWizard P1 Meter or
+poweropti keeps the smart meter's last telegram until the next read, so behind
+a smart meter that sends every 10 s a telegram that came between a cycle's read
+and its write is dated after the write and not corrected. How long the meter
+itself took before the EMS got the reading is not known either.
+
+A device that follows its targets more slowly than the next reading comes
+shows a write only after that reading, and no correction can tell how much of
+it the reading already shows. In the simulation a device that delivered its
+target 1.5 s late under a 1 s loop swung between nothing and its maximum.
+`system.output_control.write_dead_time_seconds` (default `0`, off; up to 10 s)
+covers that: a new reading that reaches the EMS before the last move of the
+power plus that time is left alone like a
+[repeated one](#one-correction-per-reading). It adds nothing to
+`commanded_total_w`, feeds nothing to the filter and records no charge entry
+observation; a correction the ramp held back carries on towards what the last
+used reading asked for; and it sizes nothing while a device leaves a charge.
+The power moves when the total of the targets the devices got changed by more
+than `load_deadband_w` since the cycle before, dated by the last target that
+changed what its device had, also when it goes out while the cycle reads its
+meter. A target moved from one device to another, or one sent again unchanged,
+moves nothing, and nothing does while a write gate is closed (dry run,
+simulation, replay). State reconciliation writes (`acMode`, `inputLimit`) do
+not either. At most three new readings in a row are left alone, so a total that
+keeps moving cannot stop the regulation: the fourth is used whatever the dead
+time says.
+
+A dead time costs readings. Every reading it holds is one the regulator reacts
+to a cycle later, so it pays off only for a device that is really slower than
+the gap between a cycle's write and its next reading; for a device that
+follows within that gap it makes the regulation slower and moves more energy
+through the grid. Shorter than the device takes to follow it is no help either:
+behind a pushed meter it holds every reading that came before a write and still
+judges a charge on targets the device has not reached, and in the simulation a
+charge on a steady 450 W surplus switched twelve times instead of once. Set it
+to the time the device takes to follow a write, neither shorter nor longer; how
+long a particular Zendure device takes has not been measured.
+
+A running charge judged on a held reading is judged on the reading itself,
+against the deepest charge the commandable devices were sent in the dead time
+before the reading arrived: it shows no target that went out after it, and it
+may still show any the devices had in that time. A standby floor fed out beside
+a charge counts as house load there, as it does for the regulator. Judged
+against the total from before the last used reading, a charge ramp still on its
+way read as the surplus being gone, and a steady surplus entered and left a
+charge twelve times in ten minutes; judged against the commanded total, which
+runs ahead of the devices, a deficit right after an entry stayed hidden for
+four readings. A deficit beyond that deepest charge ends the charge on the
+reading that shows it; a smaller one ends it with the next reading the dead
+time lets through.
+
+`control-status.json` marks a held cycle (`grid_meter.reading_in_dead_time`).
+`diagnose --control` counts them (`meter_quality.dead_time_readings`) and notes
+`meter_readings_in_dead_time` when they are the majority. A correction is
+logged at debug level as `grid_reading_corrected`.
 
 ## Calculated Values And Targets
 
@@ -536,8 +629,9 @@ would leave hardware drawing from the grid. A cycle that only repeats a meter
 reading judges the exit on the total that reading asks for, unfiltered
 ([One correction per reading](#one-correction-per-reading)): a reading that
 shows the house needs the power back ends the charge on the first cycle that
-repeats it, if its own cycle has not already. A meter slower than the loop shows
-a change only with its next reading.
+repeats it, if its own cycle has not already. A reading a set
+[write dead time](#dead-time-after-a-write) holds is judged on the reading as
+well. A meter slower than the loop shows a change only with its next reading.
 
 ### Leaving a charge
 

@@ -1034,6 +1034,52 @@ def test_emsctl_diagnose_control_counts_the_cycles_that_reused_a_reading(tmp_pat
     assert note["details"] == {"repeated_readings": 5, "samples": 8}
 
 
+def test_emsctl_diagnose_control_notes_when_most_readings_came_inside_the_dead_time(tmp_path):
+    """Most new readings came before the last write could show in them: a note with a hint."""
+
+    write_control_runtime(tmp_path)
+    write_live_control_status(
+        tmp_path,
+        grid=(40, 52, 25, 33, 31, 29, 18, 24),
+        measured_at="per_cycle",
+        in_dead_time={1, 2, 4, 5, 7},
+    )
+
+    result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    quality = payload["control"]["meter_quality"]
+    assert (quality["samples"], quality["dead_time_readings"]) == (8, 5)
+    assert quality["mostly_in_dead_time"] is True
+    note = next(check for check in payload["checks"] if check["code"] == "meter_readings_in_dead_time")
+    assert note["level"] == "info"
+    assert note["details"] == {"dead_time_readings": 5, "samples": 8}
+    assert "write_dead_time_seconds" in note["hint"]
+    assert "loop_interval" in note["hint"]
+
+
+@pytest.mark.parametrize(
+    "grid, in_dead_time",
+    [
+        ((40, 52, 25, 33, 31, 29, 18, 24), {1, 3, 5, 7}),
+        ((40, 52, 25, 33, 31), {1, 2, 4}),
+    ],
+)
+def test_emsctl_diagnose_control_says_nothing_unless_most_readings_came_inside_the_dead_time(
+    tmp_path, grid, in_dead_time
+):
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, grid=grid, measured_at="per_cycle", in_dead_time=in_dead_time)
+
+    result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["control"]["meter_quality"]["mostly_in_dead_time"] is False
+    assert not any(check["code"] == "meter_readings_in_dead_time" for check in payload["checks"])
+
+
 @pytest.mark.parametrize(
     "grid, repeated",
     [

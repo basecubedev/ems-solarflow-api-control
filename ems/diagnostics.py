@@ -3136,6 +3136,12 @@ def diagnose_ac_charge_model_refusal(item):
 
 
 SLOWER_THAN_LOOP_MIN_SAMPLES = 6
+_DEAD_TIME_HINT = (
+    "Each held reading delays the regulation by a cycle. Set "
+    "system.output_control.write_dead_time_seconds no longer than the devices take to follow a "
+    "write, or 0; a system.loop_interval longer than the dead time plus the time a cycle takes "
+    "also leaves fewer readings unused."
+)
 
 
 def diagnose_live_grid_samples(live_data):
@@ -3151,6 +3157,7 @@ def diagnose_live_grid_samples(live_data):
             "timestamp": item.get("measured_at"),
             "cycle_at": item.get("cycle_at"),
             "reading_repeated": item.get("reading_repeated") is True,
+            "reading_in_dead_time": item.get("reading_in_dead_time") is True,
         })
     return samples
 
@@ -3206,6 +3213,8 @@ def diagnose_meter_quality(samples, live_data=None, loop_interval=None):
             "read_failures": failures,
             "repeated_readings": 0,
             "slower_than_loop": False,
+            "dead_time_readings": 0,
+            "mostly_in_dead_time": False,
         }
     sign_changes = 0
     previous_sign = 0
@@ -3239,6 +3248,8 @@ def diagnose_meter_quality(samples, live_data=None, loop_interval=None):
     stale = stale_reason is not None
     repeated = sum(1 for sample in samples if sample.get("reading_repeated") is True)
     slower_than_loop = len(values) >= SLOWER_THAN_LOOP_MIN_SAMPLES and repeated * 2 > len(values)
+    in_dead_time = sum(1 for sample in samples if sample.get("reading_in_dead_time") is True)
+    mostly_in_dead_time = len(values) >= SLOWER_THAN_LOOP_MIN_SAMPLES and in_dead_time * 2 > len(values)
     if noisy:
         warnings.append("Meter signal appears noisy")
     if stale:
@@ -3258,6 +3269,8 @@ def diagnose_meter_quality(samples, live_data=None, loop_interval=None):
         "read_failures": failures,
         "repeated_readings": repeated,
         "slower_than_loop": slower_than_loop,
+        "dead_time_readings": in_dead_time,
+        "mostly_in_dead_time": mostly_in_dead_time,
     }
 
 
@@ -3509,6 +3522,17 @@ def diagnose_control_add_checks(checks, control):
             "meter_slower_than_loop",
             "Most control cycles reuse the meter's last reading; each reading is regulated on once",
             repeated_readings=control["meter_quality"]["repeated_readings"],
+            samples=control["meter_quality"]["samples"],
+        )
+    if control["meter_quality"].get("mostly_in_dead_time"):
+        diagnose_add(
+            checks,
+            "control",
+            "info",
+            "meter_readings_in_dead_time",
+            "The write dead time holds most new readings; the EMS regulates on fewer of them",
+            hint=_DEAD_TIME_HINT,
+            dead_time_readings=control["meter_quality"]["dead_time_readings"],
             samples=control["meter_quality"]["samples"],
         )
     if control["soc_analysis"].get("soc_imbalance_percent") is not None and control["soc_analysis"]["soc_imbalance_percent"] > 20:

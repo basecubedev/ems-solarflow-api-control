@@ -657,7 +657,8 @@ already sets (see [Compatibility](#compatibility-note) below).
       "large_export_bypass_w": 600,
       "bypass_ramp_multiplier": 1.5,
       "telemetry_max_age_seconds": 10,
-      "stale_telemetry_ramp_factor": 0.5
+      "stale_telemetry_ramp_factor": 0.5,
+      "write_dead_time_seconds": 0.0
     }
   }
 }

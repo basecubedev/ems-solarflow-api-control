@@ -73,6 +73,7 @@ from ems.state_store import BatteryFullChargeStateStore
 from ems.winter_policies import BATTERY_ONLY, MAX_RAISE_ABOVE_SOC, device_energy_class
 from ems.mqtt_control.zendure_profiles import device_model_class
 from ems.winter_reserve import MIN_SOC_UNMANAGED, WinterReserve
+from ems.write_dead_time import MAX_DEAD_TIME_S, WriteDeadTime
 from ems.target_control import (
     SWING_LOCK_MAX_STEP_S,
     BatteryCareSwingLock,
@@ -198,6 +199,10 @@ class EMSController:
         self.grid_meter_holding = False
         self.grid_readings = ReadingTracker()
         self.grid_reading_repeated = False
+        self.grid_reading_in_dead_time = False
+        self.grid_reading_never_used = False
+        self.grid_reading_correction_w = 0
+        self.write_dead_time = WriteDeadTime()
         self._reading_goal = None
         self._reading_base_w = None
         self.control_enabled = None
@@ -752,30 +757,81 @@ class EMSController:
         self.grid_meter_holding = holding
         return holding
 
+    @property
+    def grid_reading_unused(self):
+        """Whether this cycle leaves its reading alone: repeated, or too soon after a write."""
+
+        return self.grid_reading_repeated or self.grid_reading_in_dead_time
+
+    def write_dead_time_s(self):
+        """``write_dead_time_seconds``, at most :data:`MAX_DEAD_TIME_S`."""
+
+        return min(
+            MAX_DEAD_TIME_S,
+            self.output_control_float(
+                "write_dead_time_seconds",
+                cfg.OUTPUT_CONTROL_DEFAULTS["write_dead_time_seconds"],
+                minimum=0.0,
+            ),
+        )
+
     def note_grid_reading(self, reading):
-        """Note whether this cycle sees a reading an earlier cycle already used.
+        """Note whether this cycle regulates on its reading.
 
         A meter that keeps its last reading between two new ones hands it to
         several cycles, and the integrator, the load filter and the charge
-        entry each count a reading once. A meter serving its last value because
+        entry each count a reading once. A new reading is corrected by the
+        targets that went out after it arrived, which it cannot show, and one
+        that came inside the write dead time is not counted at all
+        (:mod:`ems.write_dead_time`). A meter serving its last value because
         it failed is held instead (:meth:`update_grid_meter_holding`).
         """
 
         new = self.grid_readings.is_new(self.shelly, reading)
-        self.grid_reading_repeated = not new and not self.grid_meter_holding
+        fresh = not self.grid_meter_holding
+        self.grid_reading_repeated = not new and fresh
+        dead_time_s = self.write_dead_time_s()
+        self.grid_reading_in_dead_time = (
+            new and fresh and self.write_dead_time.holds(reading, dead_time_s)
+        )
+        if not fresh:
+            self.grid_reading_correction_w = 0
+        elif new:
+            self.grid_reading_never_used = self.grid_reading_in_dead_time
+            self.grid_reading_correction_w = self.write_dead_time.unseen_w(
+                reading.received_at, time.monotonic()
+            )
         if self.grid_reading_repeated:
             log_event(
                 logging.DEBUG,
                 "grid_reading_repeated",
                 grid_power_w=reading.power_w,
             )
-        return self.grid_reading_repeated
+        elif self.grid_reading_in_dead_time:
+            since = self.write_dead_time.since_move_s(reading)
+            log_event(
+                logging.DEBUG,
+                "grid_reading_in_dead_time",
+                grid_power_w=reading.power_w,
+                since_write_s=None if since is None else round(since, 2),
+                dead_time_s=dead_time_s,
+                held_in_a_row=self.write_dead_time.held_in_a_row,
+            )
+        elif new and fresh and self.grid_reading_correction_w:
+            log_event(
+                logging.DEBUG,
+                "grid_reading_corrected",
+                grid_power_w=reading.power_w,
+                unseen_w=round(self.grid_reading_correction_w, 1),
+            )
+        return self.grid_reading_unused
 
     def repeated_reading_charge_total_w(self, raw_load):
         """The desired total a running charge is judged on when the cycle repeats a reading.
 
         The total that reading asks for: the total from before its correction
-        plus the reading itself, unfiltered. Judged on the goal, the first cycle
+        plus the reading itself, unfiltered, less the targets it could not show
+        when it came. Judged on the goal, the first cycle
         after an entry read the zero the entry cycle left as "the surplus is
         gone"; judged on new readings only, the filter's lag kept a charge
         drawing for a meter period more after a load rose; judged on the
@@ -785,7 +841,27 @@ class EMSController:
         """
 
         base = self.commanded_total_w if self._reading_base_w is None else self._reading_base_w
-        return base + raw_load
+        return base + raw_load - self.grid_reading_correction_w
+
+    def unused_reading_charge_total_w(self, reading, raw_load, device_names):
+        """The desired total a running charge is judged on when the cycle leaves its reading alone.
+
+        A reading the write dead time held back was never corrected on. It is
+        judged against the deepest charge the commandable devices were sent in
+        the dead time before it arrived
+        (:meth:`WriteDeadTime.deepest_charge_w`): judged against the total from
+        before the last used reading, a charge ramp on its way read as the
+        surplus being gone; against the commanded total, which runs ahead of
+        the devices, a deficit stayed hidden for several readings.
+        """
+
+        if self.grid_reading_never_used:
+            base = self.write_dead_time.deepest_charge_w(
+                device_names, reading.received_at, self.write_dead_time_s(), time.monotonic()
+            )
+            if base is not None:
+                return base + raw_load
+        return self.repeated_reading_charge_total_w(raw_load)
 
     def reading_goal_w(self):
         """What the last reading asked the total to be, while nothing else moved it since.
@@ -2917,13 +2993,14 @@ class EMSController:
         young. The freshness tolerance lets a running charge survive a missed
         read; it says nothing about whether the surplus that would start one
         is still there. A reading an earlier cycle already observed is not
-        observed again: the window counts readings, not cycles.
+        observed again: the window counts readings, not cycles. Nor is one
+        that came before the last write could show in it.
         """
 
         observe = True
         if self.grid_meter_holding:
             filtered_load_w = 0
-        elif self.grid_reading_repeated:
+        elif self.grid_reading_unused:
             observe = False
         if not meter_fresh and self.charge_direction.charging:
             log_event(
@@ -3004,8 +3081,13 @@ class EMSController:
         the output that stops when the devices switch -- and the filter starts
         again from there. Without export capacity it is held to the standby
         total, as the integrator holds it. A held meter reading sizes nothing,
-        and neither does one an earlier cycle already used: it shows the AC
-        input of a moment the device states no longer describe. Such a cycle
+        and neither does one an earlier cycle already used, one a write dead
+        time holds, or one corrected for targets it could not show: it shows
+        the AC input of a moment the device states no longer describe, and a
+        device leaving a charge is still behind the target the correction
+        assumes it had. A corrected reading still notes who left; only a
+        repeated or held one keeps a device on the list for the next reading.
+        Such a cycle
         still notes a device that starts leaving, and the next new reading
         sizes on it.
         """
@@ -3013,9 +3095,13 @@ class EMSController:
         if self.grid_meter_holding:
             return total
         leaving, left = self.devices_leaving_a_charge(
-            states, settle=not self.grid_reading_repeated
+            states, settle=not self.grid_reading_unused
         )
-        if self.grid_reading_repeated or (not leaving and not left):
+        if (
+            self.grid_reading_unused
+            or self.grid_reading_correction_w
+            or (not leaving and not left)
+        ):
             return total
         draw_w = sum(
             cfg.safe_int(getattr(state, "grid_input", 0), 0, minimum=0)
@@ -4318,12 +4404,21 @@ class EMSController:
             return self.set_output_limit(dev, value)
         return self.set_output_limit(dev, value, charge_exit=charge_exit)
 
-    def retire_pending_output_limit(self, dev, reason):
-        """Tell a transport with a queued target that this cycle skips it."""
+    def retire_pending_output_limit(self, dev, reason, commanded=False):
+        """Tell a transport with a queued target that this cycle skips it.
+
+        A device whose control passes elsewhere (``commanded`` false: switched
+        off, its control off, the AC input role, the night idle) is forgotten
+        by the write dead time: what it does meanwhile is not the EMS's target,
+        so its next one is no change a reading could be corrected for. An
+        offline device keeps its last target, which it still has.
+        """
 
         cancel = getattr(dev, "cancel_pending_output_limit", None)
         if callable(cancel):
             cancel(reason)
+        if not commanded:
+            self.write_dead_time.forget(dev.name)
 
     def set_output_limit(self, dev, value, charge_exit=None):
         """Write output limit to the device via its transport, behind its gate.
@@ -4361,8 +4456,19 @@ class EMSController:
             )
             return False
 
+        self.note_power_sent(dev, result)
         self._log_write_dispatch(dev, gate, result)
         return result
+
+    def note_power_sent(self, dev, result):
+        """Tell the write dead time what a device's transport did with a target."""
+
+        if result.status is WriteDispatchStatus.PUBLISHED:
+            self.write_dead_time.note_published(dev.name, result.target_w, time.monotonic())
+        elif result.status is WriteDispatchStatus.QUEUED_LATEST:
+            self.write_dead_time.note_queued(dev.name, result.target_w, time.monotonic())
+        elif result.status in (WriteDispatchStatus.FAILED, WriteDispatchStatus.REJECTED):
+            self.write_dead_time.note_dropped(dev.name, result.target_w)
 
     def _log_write_dispatch(self, dev, gate, result):
         """Log a structured write dispatch under its honest, distinct event.
@@ -4432,6 +4538,10 @@ class EMSController:
     def _observe_deferred_write_dispatch(self, dev, result):
         """Receive the later outcome of a target initially logged as queued."""
 
+        if result.status is WriteDispatchStatus.PUBLISHED:
+            self.write_dead_time.note_published(dev.name, result.target_w, time.monotonic())
+        else:
+            self.write_dead_time.note_dropped(dev.name, result.target_w)
         gate = cfg.resolve_device_write_gate(dev)
         self._log_write_dispatch(dev, gate, result)
 
@@ -5220,10 +5330,14 @@ class EMSController:
             self.runtime_state.load_if_changed()
         self.tick_scheduler()
 
+        self.write_dead_time.close_cycle(
+            self.output_control_float("load_deadband_w", 5, minimum=0)
+        )
         reading = read_grid_meter(self.shelly)
         load = finite_grid_load(reading.power_w)
         self.update_grid_meter_holding(load)
         self.note_grid_reading(reading)
+        control_load = load - self.grid_reading_correction_w
         self.refresh_read_only_devices()
 
         # =====================
@@ -5601,13 +5715,13 @@ class EMSController:
             stabilized_total = min(self.commanded_total_w, discharge_ceiling)
         else:
             stabilized_total = self.stabilized_total_target(
-                load,
+                control_load,
                 states,
                 discharge_ceiling,
                 has_export_capacity=has_export_capacity,
                 standby_total_w=standby_total_w,
                 active_device_count=len(active_indexes),
-                new_reading=not self.grid_reading_repeated,
+                new_reading=not self.grid_reading_unused,
             )
 
         charge_desired_w = (
@@ -5615,8 +5729,12 @@ class EMSController:
             if self.desired_total_w is not None
             else stabilized_total
         )
-        if self.grid_reading_repeated and self.charge_direction.charging:
-            charge_desired_w = self.repeated_reading_charge_total_w(load)
+        if self.grid_reading_unused and self.charge_direction.charging:
+            charge_desired_w = self.unused_reading_charge_total_w(
+                reading,
+                load,
+                [dev.name for dev in self.devices if self.device_commandable(dev)],
+            )
         charge_decision = self.take_charge_decision(
             meter_fresh,
             commanded_total_w=stabilized_total,
@@ -5628,7 +5746,7 @@ class EMSController:
 
         if not charge_decision.charging:
             stabilized_total = self.discharge_total_leaving_a_charge(
-                load,
+                control_load,
                 states,
                 stabilized_total,
                 discharge_ceiling,
@@ -5676,7 +5794,7 @@ class EMSController:
 
         targets = self.apply_device_ramp(
             targets,
-            load,
+            control_load,
             discharge_caps
         )
         effective_targets = self.effective_control_targets(
@@ -5787,7 +5905,7 @@ class EMSController:
                     device=dev.name
                 )
 
-                self.retire_pending_output_limit(dev, "offline_skip_write")
+                self.retire_pending_output_limit(dev, "offline_skip_write", commanded=True)
                 continue
 
             if not self.runtime_device_bool(dev.name, "enabled", True):
@@ -5879,7 +5997,7 @@ class EMSController:
                     reference_source=deadband_reference_source,
                     deadband_w=cfg.DEADBAND
                 )
-                self.retire_pending_output_limit(dev, "deadband_skip_write")
+                self.retire_pending_output_limit(dev, "deadband_skip_write", commanded=True)
                 continue
 
             written = self.write_target(dev, target, charge_exit)
