@@ -180,6 +180,7 @@ export const LIMIT_REASONS = Object.freeze({
   "requested total was clamped to zero": "zeroClamped",
   "target calculation never requests negative output": "zeroFloor",
   "total PV can cover the requested output": "pvCovers",
+  "no PV output": "noPv",
   "battery discharge is needed beyond PV output": "dischargeBeyondPv",
   "devices that cannot store their own PV export first": "fullSocFirst",
   "PV-only contribution could not cover the target": "pvOnlyShort",
