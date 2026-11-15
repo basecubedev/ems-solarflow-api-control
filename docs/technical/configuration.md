@@ -591,6 +591,16 @@ charge: up to idle that move takes the configured ramp, so the way back from a
 grid charge is not held by stale telemetry. A ramp limit of `0` means no limit,
 and the factor does not make one.
 
+`write_dead_time_seconds` (default `0`, off; at most `10`) is for a device that
+follows a new target more slowly than the next grid reading comes: a new
+reading that reaches the EMS within this time after the power moved is not
+regulated on. Every held reading delays the regulator by a cycle, and a dead
+time shorter than the device takes makes a charge behind a pushed meter switch
+back and forth, so set it to the time the device takes to follow a write,
+neither shorter nor longer. A reading is corrected for the targets sent after
+it arrived whatever this says. See
+[Dead time after a write](control-logic.md#dead-time-after-a-write).
+
 ## AC Charging
 
 On by default, like the other features. It draws from the grid only against

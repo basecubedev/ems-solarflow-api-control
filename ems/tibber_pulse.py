@@ -498,7 +498,7 @@ class TibberPulseGridMeterClient:
         return self.get_reading().power_w
 
     def get_reading(self):
-        """The cached grid power; each new frame is one reading."""
+        """The cached grid power; each new frame is one reading, dated when it came in."""
 
         with self._lock:
             reading = self._reading
@@ -513,7 +513,7 @@ class TibberPulseGridMeterClient:
             first_hand_out = received_at != self._latency_reported_for
             self._latency_reported_for = received_at
             self.health.record_success(round_trip_ms if first_hand_out else None, age_seconds=age)
-            return GridReading(self.last_value, sequence)
+            return GridReading(self.last_value, sequence, received_at)
         if error is None and reading is not None:
             error = f"no new telegram for {age:.1f}s"
         self.health.record_failure(error=error or "no reading yet", stale_used=True)
@@ -530,7 +530,7 @@ class TibberPulseGridMeterClient:
                 age_seconds=None if age is None else round(age, 1),
                 stale_value=self.last_value,
             )
-        return GridReading(self.last_value, sequence)
+        return GridReading(self.last_value, sequence, received_at)
 
     def _warning_due(self, reason):
         """Warn when the reason changes, then once a minute while it lasts."""

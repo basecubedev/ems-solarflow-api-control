@@ -198,3 +198,130 @@ def test_another_client_s_reading_is_new_whatever_its_sequence():
     tracker.is_new(object(), GridReading(10, 1))
 
     assert tracker.is_new(object(), GridReading(10, 1)) is True
+
+
+def dated_mqtt():
+    from unittest.mock import patch
+
+    meter = mqtt_meter()
+    clock = SimpleNamespace(now=12.0)
+    with patch("time.monotonic", lambda: clock.now):
+        meter._on_message(None, None, Message(b"250"))
+        clock.now = 13.5
+        first = meter.get_reading()
+        repeated = meter.get_reading()
+    return first, repeated, 12.0
+
+
+def dated_tibber():
+    from tests.test_tibber_pulse_grid_meter import ISKRA, _client
+
+    client, clock = _client(ISKRA)
+    clock.now = 1012.0
+    client.poll_once()
+    clock.now = 1013.5
+    first = client.get_reading()
+    repeated = client.get_reading()
+    return first, repeated, 1012.0
+
+
+def dated_dsmr():
+    from tests.test_dsmr_p1_tcp_grid_meter import Clock, Reader, telegram
+
+    clock = Clock()
+    client = DsmrTcpClient(Reader([telegram("00.400")], []), clock=clock)
+    first = client.get_reading()
+    clock.now += 3
+    repeated = client.get_reading()
+    return first, repeated, 100.0
+
+
+def dated_homewizard():
+    from tests.test_homewizard_p1_grid_meter import SINGLE_PHASE_EXPORT, Clock, FakeApi
+
+    clock = Clock()
+    still = {**SINGLE_PHASE_EXPORT, "power_w": 300}
+    client = HomeWizardP1Client(FakeApi(still, still), clock=clock)
+    first = client.get_reading()
+    clock.now += 3
+    repeated = client.get_reading()
+    return first, repeated, 1000.0
+
+
+def dated_powerfox():
+    from tests.test_powerfox_grid_meter import KEY, Clock, Response, Session, _value
+
+    clock = Clock()
+    session = Session(Response(_value(100, 5)), Response(_value(100, 5)))
+    client = PowerfoxClient("192.0.2.50", session, KEY, clock=clock)
+    first = client.get_reading()
+    clock.now += 3
+    repeated = client.get_reading()
+    return first, repeated, 1000.0
+
+
+DATED_BY = {
+    MqttGridMeterClient: dated_mqtt,
+    TibberPulseGridMeterClient: dated_tibber,
+    DsmrTcpClient: dated_dsmr,
+    HomeWizardP1Client: dated_homewizard,
+    PowerfoxClient: dated_powerfox,
+}
+
+
+def test_every_client_that_names_its_readings_dates_them():
+    assert set(DATED_BY) == set(NAMES_ITS_READINGS)
+
+
+@pytest.mark.parametrize("kind", sorted(DATED_BY, key=lambda kind: kind.__name__), ids=lambda kind: kind.__name__)
+def test_a_reading_is_dated_when_it_reached_the_ems_and_keeps_that_date(kind):
+    """A message or a frame by its arrival, a polled reading by the read that first returned it."""
+
+    first, repeated, received_at = DATED_BY[kind]()
+
+    assert first.received_at == received_at
+    assert repeated.sequence == first.sequence
+    assert repeated.received_at == received_at
+
+
+def test_a_client_without_reading_identity_is_dated_when_the_read_went_out():
+    from unittest.mock import patch
+
+    clock = SimpleNamespace(now=5.0)
+
+    def get_power():
+        clock.now = 6.0
+        return 75
+
+    with patch("time.monotonic", lambda: clock.now):
+        reading = read_grid_meter(SimpleNamespace(get_power=get_power))
+
+    assert reading == GridReading(75, None)
+    assert reading.received_at == 5.0
+
+
+def test_a_reading_s_date_is_no_part_of_its_identity():
+    assert GridReading(75, 3, received_at=1.0) == GridReading(75, 3, received_at=2.0)
+
+
+def test_a_polled_meter_s_next_reading_is_dated_by_its_own_read():
+    from tests.test_dsmr_p1_tcp_grid_meter import Clock as DsmrClock, Reader, telegram
+    from tests.test_homewizard_p1_grid_meter import SINGLE_PHASE_EXPORT, Clock, FakeApi
+
+    clock = Clock()
+    still = {**SINGLE_PHASE_EXPORT, "power_w": 300}
+    moved = {**still, "timestamp": "2026-11-12T03:14:37"}
+    homewizard = HomeWizardP1Client(FakeApi(still, still, moved), clock=clock)
+    dsmr_clock = DsmrClock()
+    dsmr = DsmrTcpClient(
+        Reader([telegram("00.400")], [], [telegram("00.400", stamp="261112050010W")]),
+        clock=dsmr_clock,
+    )
+    for _ in range(2):
+        homewizard.get_reading()
+        dsmr.get_reading()
+        clock.now += 3
+        dsmr_clock.now += 3
+
+    assert homewizard.get_reading().received_at == 1006.0
+    assert dsmr.get_reading().received_at == 106.0

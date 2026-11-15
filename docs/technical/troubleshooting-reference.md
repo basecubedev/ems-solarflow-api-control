@@ -687,6 +687,7 @@ Tuning hints:
 | noisy load input | `load_deadband_w` | increase |
 | output follows every spike | `ema_alpha` | decrease |
 | target jumps too hard | `ramp_up_w_per_cycle` / `ramp_down_w_per_cycle` | decrease |
+| output swings between nothing and the maximum behind a meter read every cycle, each swing a few cycles long | `write_dead_time_seconds` | set to the time the device takes to follow a write, neither shorter nor longer; longer slows the regulation, shorter makes a charge switch back and forth ([Dead time after a write](control-logic.md#dead-time-after-a-write)) |
 | devices fight each other | disable other controllers | check Zendure app, HEMS, smart-home automations |
 
 Relevant events (`output_control_deadband_hold` is a `debug` trace; the actual

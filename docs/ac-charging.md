@@ -161,7 +161,9 @@ the standby floor `min_output_limit` exports those watts itself, and they vanish
 the moment it switches to charging, so they are not counted. An observation is
 a new meter reading: with a meter slower than the loop, the cycles that only
 repeat its last reading do not count, so five observations take five readings
-(see [One correction per reading](technical/control-logic.md#one-correction-per-reading)).
+(see [One correction per reading](technical/control-logic.md#one-correction-per-reading)),
+and neither does a reading a set write dead time holds
+([Dead time after a write](technical/control-logic.md#dead-time-after-a-write)).
 
 Charging stops **immediately** when the house needs the power back. The exit is
 never delayed by a threshold, a confirmation count or the rate limit. Behind a
