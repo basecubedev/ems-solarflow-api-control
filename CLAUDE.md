@@ -138,7 +138,7 @@ construction, controller startup, main loop. All real implementation lives in `e
 - `models.py` — telemetry/capability dataclasses
 - `clients.py` — HTTP, Zendure and grid-meter clients
 - `sml.py` — SML 1.04 telegram decoder (frame CRC, list entries, signed grid power) for meters read over their IR port; import-side-effect-free
-- `tibber_pulse.py` — Tibber Pulse IR bridge as an experimental grid meter: bridge HTTP reader and a cached background poller the control loop never waits on; import-side-effect-free
+- `tibber_pulse.py` — Tibber Pulse IR bridge as an experimental grid meter: a cached background reader that takes the bridge's `/ws` stream and polls only as the fallback, never both at once; the control loop never waits on it; import-side-effect-free
 - `runtime_state.py` — mutable runtime-state read/write
 - `runtime_intents.py` — runtime AC mode intent (`ac_output`/`ac_input`) reconciliation
 - `target_control.py` — capability detection and target/output calculation (core control math)

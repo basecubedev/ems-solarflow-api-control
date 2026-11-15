@@ -77,6 +77,14 @@ class Telegram:
         return next((e for e in self.entries if e.obis == obis), None)
 
     @property
+    def meter_id(self) -> bytes | None:
+        """The meter's identity: the response's server ID, else its 96.1.0 entry."""
+        if self.server_id is not None:
+            return self.server_id
+        serial = self.entry(SERVER_ID)
+        return serial.value if serial is not None and isinstance(serial.value, bytes) else None
+
+    @property
     def has_dzg_sign_bug(self) -> bool:
         """A DZG DVS74 from the serial ranges whose firmware mis-signs power.
 
@@ -164,39 +172,141 @@ def _unwrap(data: bytes, crc_variants):
     raise next((exc for exc in errors if exc.reason == "crc_mismatch"), errors[0])
 
 
-def _unwrap_at(data: bytes, start: int, crc_variants):
-    """Unwrap the frame that begins at ``start``.
+_BLOCK, _END, _BROKEN, _INCOMPLETE = range(4)
 
-    The transport is read in 4-byte blocks: a doubled escape is a literal
-    escape, ``ESC 1a pp cc cc`` ends the frame with the padding count and the
-    CRC over everything before the CRC.
+
+def _walk(data: bytes | bytearray, pos: int):
+    """Walk a frame's transport in 4-byte blocks from ``pos``.
+
+    Yields ``(_BLOCK, pos, size)`` for each block of data -- a doubled escape
+    is one literal escape spanning 8 bytes -- and then one of ``(_END, pos,
+    following)`` at the escape that ends the frame (``ESC 1a pp cc cc``),
+    ``(_BROKEN, pos, following)`` at any other escape, or ``(_INCOMPLETE, pos,
+    why)`` where the data runs out.
     """
-    body = bytearray()
-    pos = start + len(START)
     while True:
-        block = data[pos:pos + 4]
-        if len(block) < 4:
-            raise SmlError("incomplete_frame", "end sequence missing")
-        if block != ESCAPE:
-            body += block
+        if len(data) - pos < 4:
+            yield _INCOMPLETE, pos, "end sequence missing"
+            return
+        if data[pos:pos + 4] != ESCAPE:
+            yield _BLOCK, pos, 4
             pos += 4
             continue
         following = data[pos + 4:pos + 8]
         if following == ESCAPE:
-            body += ESCAPE
+            yield _BLOCK, pos, 8
             pos += 8
             continue
         if len(following) < 4:
-            raise SmlError("incomplete_frame", "end sequence truncated")
-        if following[0] != 0x1A:
-            raise SmlError("bad_escape", following.hex())
-        padding = following[1]
-        variant = _crc_variant(data[start:pos + 6], following[2:4], crc_variants)
+            yield _INCOMPLETE, pos, "end sequence truncated"
+            return
+        yield (_END if following[0] == 0x1A else _BROKEN), pos, bytes(following)
+        return
+
+
+def _unwrap_at(data: bytes, start: int, crc_variants):
+    """Unwrap the frame that begins at ``start``.
+
+    ``ESC 1a pp cc cc`` ends the frame with the padding count and the CRC over
+    everything before the CRC.
+    """
+    body = bytearray()
+    for kind, pos, value in _walk(data, start + len(START)):
+        if kind == _BLOCK:
+            body += data[pos:pos + 4]
+            continue
+        if kind == _INCOMPLETE:
+            raise SmlError("incomplete_frame", value)
+        if kind == _BROKEN:
+            raise SmlError("bad_escape", value.hex())
+        padding = value[1]
+        variant = _crc_variant(data[start:pos + 6], value[2:4], crc_variants)
         if variant is None:
             raise SmlError("crc_mismatch")
         if padding > len(body) or any(body[len(body) - padding:]):
             raise SmlError("bad_padding", str(padding))
         return bytes(body[:len(body) - padding]), variant
+
+
+def _scan(data: bytes | bytearray, start: int, pos: int | None = None) -> tuple[int | None, int]:
+    """``(end, reached)`` of the frame at ``start``, scanned from ``pos``.
+
+    Read as ``parse`` reads it, without the CRC, which ``parse`` checks.
+    ``end`` is where the frame ends, ``None`` while it is incomplete; a frame
+    broken off by a stray escape ends before it, since that may start the
+    next one. ``reached`` is where a scan of more data may go on.
+    """
+    for kind, at, _value in _walk(data, start + len(START) if pos is None else pos):
+        if kind == _END:
+            return at + 8, at
+        if kind == _BROKEN:
+            return at, at
+        if kind == _INCOMPLETE:
+            return None, at
+
+
+MAX_STREAM_BUFFER = 64 * 1024
+
+
+class FrameSplitter:
+    """Cuts complete frames out of a byte stream that carries other bytes too.
+
+    The bytes between frames are dropped. An unfinished frame is scanned on
+    from where the last chunk left it. A start sequence on its 4-byte grid
+    breaks it off where the walk meets it; one off the grid, which no intact
+    frame carries there, breaks it off too, so a frame cut short gives way to
+    the next. One that has not ended within ``limit`` bytes is given up, so a
+    lost end sequence cannot grow the buffer without bound.
+    """
+
+    def __init__(self, limit: int = MAX_STREAM_BUFFER):
+        self._buffer = bytearray()
+        self._limit = limit
+        self._reached = None
+        self._searched = None
+
+    def feed(self, chunk: bytes) -> list[bytes]:
+        self._buffer += chunk
+        frames = []
+        while True:
+            start = self._buffer.find(START)
+            if start < 0:
+                self._drop(max(0, len(self._buffer) - (len(START) - 1)))
+                return frames
+            if start:
+                self._drop(start)
+            end, reached = _scan(self._buffer, 0, self._reached)
+            if end is not None:
+                frames.append(bytes(self._buffer[:end]))
+                self._drop(end)
+                continue
+            later = self._off_grid_start()
+            if later >= 0:
+                self._drop(later)
+                continue
+            if len(self._buffer) > self._limit:
+                self._drop(len(self._buffer))
+                return frames
+            self._reached = reached
+            return frames
+
+    def _drop(self, count: int) -> None:
+        """Drop the first ``count`` bytes; both scan positions start over."""
+        del self._buffer[:count]
+        self._reached = self._searched = None
+
+    def _off_grid_start(self) -> int:
+        """The first start sequence off the grid of the frame at 0, or -1.
+
+        The search goes on where the last one stopped, so each byte is
+        searched once.
+        """
+        position = self._buffer.find(START, 1 if self._searched is None else self._searched)
+        while position >= 0 and position % 4 == 0:
+            position = self._buffer.find(START, position + 1)
+        if position < 0:
+            self._searched = max(1, len(self._buffer) - (len(START) - 1))
+        return position
 
 
 def _read_tl(buf: bytes, pos: int) -> tuple[int, int, int]:
