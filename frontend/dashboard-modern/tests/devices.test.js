@@ -80,6 +80,15 @@ test("the full-charge assist names the facts Classic's card names for each statu
   const labels = (assist) => assistView(assist).facts.map((fact) => fact.label);
   assert.deepEqual(labels({ status: "active", ac_mode: 1, ac_status: 2, restore_pending: true }), ["assist.started", "assist.acCharge", "assist.firmware", "assist.afterCharge"]);
   assert.deepEqual(assistView({ status: "active", ac_mode: 2, ac_status: 1 }).description, ["assist.desc.active"]);
+  const solar = assistView({ status: "active", phase: "solar", ac_from: "2026-11-16T14:00:00+01:00", ac_mode: 2, ac_status: 1 });
+  assert.deepEqual(solar.facts.map((fact) => fact.label), ["assist.started", "assist.solarCharge", "assist.acFrom", "assist.firmware"]);
+  assert.deepEqual(solar.facts[2], { label: "assist.acFrom", time: "2026-11-16T14:00:00+01:00" });
+  assert.deepEqual(solar.description, ["assist.desc.activeSolar"]);
+  assert.deepEqual(labels({ status: "active", phase: "solar", ac_from: null }), ["assist.started", "assist.solarCharge", "assist.firmware"]);
+  const surplus = assistView({ status: "active", phase: "solar", ac_from: null, ac_mode: 1, ac_status: 2 });
+  assert.deepEqual(surplus.facts.map((fact) => fact.label), ["assist.started", "assist.solarCharge", "assist.firmware"]);
+  assert.deepEqual(surplus.description, ["assist.desc.activeSolar"]);
+  assert.deepEqual(labels({ status: "active", phase: "ac", ac_mode: 1, ac_status: 2 }), ["assist.started", "assist.acCharge", "assist.firmware"]);
   assert.deepEqual(labels({ status: "waiting" }), ["assist.started", "assist.firmware"]);
   assert.deepEqual(labels({ status: "unavailable" }), ["assist.last"]);
   assert.deepEqual(assistView({ status: "overdue", days_until_due: -3 }).facts[0], { label: "assist.overdueBy", days: 3 });

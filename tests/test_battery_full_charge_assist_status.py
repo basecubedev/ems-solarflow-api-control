@@ -680,6 +680,26 @@ def test_frontend_renders_full_charge_assist_states_via_app_js():
         assert(!html.includes("Max-SoC restore"), "active status does not render the post-assist Max-SoC restore fact");
         assert(!html.includes("AC output mode"), "active status does not render the post-assist AC output mode restore fact");
 
+        // In its PV phase a surplus charge of the regulator's is not the
+        // assist's calibration charge.
+        html = context.renderFullChargeAssist({
+          battery_full_charge_assist: {
+            enabled: true,
+            has_battery: true,
+            status: "active",
+            phase: "solar",
+            ac_from: "2026-06-14T14:00:00+02:00",
+            assist_started_at: "2026-06-14T00:00:00+02:00",
+            soc_limit: 0,
+            ac_mode: 1,
+            ac_status: 2,
+            message: "Full-charge assist charging from PV",
+          },
+        });
+        assert(html.includes("Full-charge assist charging from PV"), "PV phase renders backend message");
+        assert(!html.includes("AC-charging for monthly battery calibration support"), "PV phase claims no calibration charge");
+        assert(!html.includes(">AC charge<"), "PV phase renders no AC charge fact row");
+
         // Active assist without AC charge mode renders neutral text and does
         // not claim AC charging is running.
         html = context.renderFullChargeAssist({

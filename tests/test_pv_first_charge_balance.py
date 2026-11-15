@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
+import logging
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -190,3 +191,81 @@ class PvFirstChargeBalanceTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@pytest.mark.parametrize("requested", [500, 800, 850, 900, 1000, 1100])
+def test_the_balance_gives_back_the_pv_it_kept_when_no_battery_can_cover(requested):
+    """A preference, not a reason to draw from the grid.
+
+    The emptier batteries at their minSoc keep their PV, and the fuller one tops
+    the house up to its rating. Past that nothing covered the rest: the split
+    stayed at 800 W up to the summed PV while the kept PV went into the emptier
+    batteries, then jumped to all of it.
+    """
+
+    states = [state(80, 100), state(15, 500), state(15, 500)]
+
+    targets, _current, _new = calculate_targets(
+        0,
+        states,
+        2400,
+        device_configs=[device("WR1"), device("WR2"), device("WR3")],
+        requested_total=requested,
+    )
+
+    assert sum(targets) == requested
+    assert targets[0] == min(requested, 800)
+
+
+def test_pv_the_balance_gives_back_is_no_shortfall_and_says_so(caplog):
+    states = [state(60, 300, min_soc=60), state(15, 400)]
+
+    with caplog.at_level(logging.DEBUG):
+        targets, _current, _new, explanation = calculate_targets(
+            0,
+            states,
+            1600,
+            device_configs=[device("WR1"), device("WR2")],
+            requested_total=500,
+            explain=True,
+        )
+
+    assert targets == [300, 200]
+    assert not [
+        record
+        for record in caplog.records
+        if record.levelno >= logging.WARNING
+        and "pv_first_battery_topup_unmet" in record.getMessage()
+    ]
+    assert "PV the charge balance kept back covered what no battery could" in explanation.notes
+    pv_only = next(
+        limit for limit in explanation.limits if limit.name == "pv_only_target_limit"
+    )
+    assert (pv_only.active, pv_only.value) == (False, 0)
+    assert explanation.devices["WR2"].decision_reason != "pv_first_with_battery_topup"
+
+
+@pytest.mark.parametrize(
+    "emptier_pv,unmet",
+    [(150, 150), (400, 0)],
+    ids=["still short", "covered"],
+)
+def test_the_pv_only_limit_counts_what_a_device_can_deliver(emptier_pv, unmet):
+    """PV above a device's rating is no PV-first share it can deliver."""
+
+    states = [state(60, 1000, min_soc=60), state(15, emptier_pv)]
+
+    targets, _current, _new, explanation = calculate_targets(
+        0,
+        states,
+        1600,
+        device_configs=[device("WR1"), device("WR2")],
+        requested_total=1100,
+        explain=True,
+    )
+
+    pv_only = next(
+        limit for limit in explanation.limits if limit.name == "pv_only_target_limit"
+    )
+    assert 1100 - sum(targets) == unmet
+    assert (pv_only.active, pv_only.value) == (unmet > 0, unmet)

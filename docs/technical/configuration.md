@@ -356,7 +356,10 @@ is clamped by limits.
 `system.pv_charge_balance_enabled` enables a PV-first charge balancing bias.
 When total PV can cover the requested output, devices with higher SOC receive
 more PV-first output weight so lower-SOC devices can keep more local PV for
-charging.
+charging. It is a preference, not a reason to draw from the grid: what neither
+the PV-first share nor a battery top-up covers, because the fuller batteries sit
+at their minSoc or the full-charge assist holds them, comes from the PV the
+bias kept back.
 
 In PV-first mode, devices that are full or charge-inhibited are prioritized for
 AC output up to their available PV and device limits. This helps Zendure systems
@@ -405,15 +408,20 @@ is already active.
 
 `battery_full_charge_assist.assist_window_days` allows an early start when the
 device is due soon and current SOC is at or above
-`battery_full_charge_assist.assist_start_soc`. On the due day,
-`battery_full_charge_assist.force_time` starts assist at or after the configured
-local `HH:MM` time regardless of current SOC, unless firmware already reports
-`socLimit == 1`. Local is the zone the EMS runs in; in Docker that is `TZ` (see
+`battery_full_charge_assist.assist_start_soc`. On the due day the assist starts
+at midnight regardless of current SOC, unless firmware already reports
+`socLimit == 1`. Until `battery_full_charge_assist.force_time` (Admin:
+**AC charge time**, local `HH:MM`) on the day it started, it takes the battery's
+charge from the device's own PV: the device feeds out only the PV above its
+reported charge ceiling. From then on it may charge from AC (see
+[The day's PV first](../battery-full-charge-assist.md#the-days-pv-first)).
+Local is the zone the EMS runs in; in Docker that is `TZ` (see
 [Time zone](../docker.md#time-zone)).
 
-`battery_full_charge_assist.enable_ac_charge_mode` controls whether active
-assist requests AC input mode through the existing runtime AC mode intent
-foundation. There is no separate assist-owned `acMode` writer.
+`battery_full_charge_assist.enable_ac_charge_mode` controls whether a running
+assist requests AC input mode from `force_time` on, through the existing runtime
+AC mode intent foundation; without it the assist charges from PV alone until
+the battery is full. There is no separate assist-owned `acMode` writer.
 
 `battery_full_charge_assist.state_database_path` defaults to
 `data/ems_state.sqlite`. This is a core EMS database and is independent of the

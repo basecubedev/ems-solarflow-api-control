@@ -449,7 +449,10 @@ again the moment it answers. See [user/safety.md](user/safety.md).
 the same device, and the claim ladder settles it in one place: the assist (200)
 beats the regulator (100), its claim forbids output control, and the regulator
 stops commanding that device in the same cycle rather than both writing a
-direction at it.
+direction at it. Before `force_time` on the day it started the assist claims
+nothing: it takes the battery's charge from the device's own PV, and a surplus
+charge of the regulator's may still go to the device (see
+[The day's PV first](battery-full-charge-assist.md#the-days-pv-first)).
 
 ### Known limit: a device that accepts a charge and draws nothing
 

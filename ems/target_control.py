@@ -620,6 +620,59 @@ def weighted_limited_allocation(total, weights, limits):
     return allocation
 
 
+def pv_held_back(cap, pv):
+    """Whether a discharge cap holds back part of a device's PV.
+
+    Battery care's caps never do: they are at least the PV. The full-charge
+    assist's PV ceiling does, and the PV above it is all the device offers the
+    split. Compared in whole watts, as the caps are.
+    """
+
+    return cap is not None and cap < round(pv)
+
+
+def release_balanced_pv(
+    targets,
+    states,
+    requested_total,
+    pv_only_limits,
+    base_weights,
+    device_configs=None,
+    commandable=None,
+    caps=None
+):
+    """Give the house the PV the charge balance kept back, where nothing else covers it.
+
+    The balance keeps an emptier battery's PV for charging and lets a fuller
+    battery top the house up. Where no battery can -- the fuller ones at their
+    minSoc, or held by the full-charge assist -- the house drew from the grid
+    while that PV went into the emptier battery, and the split jumped to the
+    whole of it only once the request passed all the PV, a gap a closed loop
+    cannot settle in. What is still missing after the top-up comes from that
+    PV, by the devices' plain PV-first weights; nothing is taken from a
+    battery, and a device the EMS cannot write to stays at what it delivers.
+    """
+
+    missing = requested_total - sum(targets)
+    if missing <= 0:
+        return targets
+    headroom = []
+    for i, (state, limit, target) in enumerate(zip(states, pv_only_limits, targets)):
+        dev_config = device_configs[i] if device_configs else None
+        room = min(limit, get_device_max_power(dev_config)) - target
+        if caps and caps[i] is not None:
+            room = min(room, caps[i] - target)
+        if commandable is not None and not commandable[i]:
+            room = min(room, uncommanded_delivery_ceiling(state) - target)
+        headroom.append(max(0, room))
+    extra = weighted_limited_allocation(
+        missing,
+        [weight if room > 0 else 0 for weight, room in zip(base_weights, headroom)],
+        headroom,
+    )
+    return [target + more for target, more in zip(targets, extra)]
+
+
 def allocate_full_soc_pv_first(
     requested_total,
     states,
@@ -627,9 +680,13 @@ def allocate_full_soc_pv_first(
     pv_only_limits,
     device_configs=None,
     capabilities=None,
-    commandable=None
+    commandable=None,
+    cannot_store=None
 ):
     """Prioritize PV export from devices that cannot absorb their own PV.
+
+    ``cannot_store`` names more such devices: one the full-charge assist holds
+    to its PV above the charge ceiling, which its battery cannot take either.
 
     The claim is exclusive: candidates are served first and the rest share what
     is left, so whoever holds it is expected to deliver it. A device the EMS
@@ -653,7 +710,7 @@ def allocate_full_soc_pv_first(
         max_power = get_device_max_power(dev_config)
         full_candidate = (
             can_export
-            and cannot_absorb_pv(state)
+            and (cannot_absorb_pv(state) or bool(cannot_store and cannot_store[i]))
             and pv_only_limits[i] > 0
         )
         claim_limit = min(pv_only_limits[i], max_power)
@@ -716,6 +773,37 @@ def apply_battery_topup_after_pv_first(
     Returns the updated targets and whether any battery top-up was applied.
     """
 
+    targets, topped_up, _released, _delivered = top_up_after_pv_first(
+        targets,
+        states,
+        device_configs,
+        capabilities,
+        requested_total,
+        commandable=commandable,
+        caps=caps,
+    )
+    return targets, topped_up
+
+
+def top_up_after_pv_first(
+    targets,
+    states,
+    device_configs,
+    capabilities,
+    requested_total,
+    commandable=None,
+    caps=None,
+    kept_pv=None
+):
+    """The battery top-up, and then the PV the charge balance kept back.
+
+    ``kept_pv`` -- the PV-only limits and plain PV-first weights -- lets what
+    the top-up leaves missing come from that PV (:func:`release_balanced_pv`)
+    before a shortfall is reported. Returns the targets, whether a battery
+    topped up, what each device took of the kept PV, and how much of the
+    PV-first share the devices can deliver at all, before either.
+    """
+
     deliverable_targets = []
 
     for i, target in enumerate(targets):
@@ -731,9 +819,10 @@ def apply_battery_topup_after_pv_first(
     targets = deliverable_targets
     pv_first_total = sum(targets)
     missing = max(0, requested_total - pv_first_total)
+    released = [0] * len(targets)
 
     if missing <= 0:
-        return targets, False
+        return targets, False, released, pv_first_total
 
     weights = []
     limits = []
@@ -812,6 +901,21 @@ def apply_battery_topup_after_pv_first(
             final_targets=json.dumps([round(t) for t in targets])
         )
 
+    if kept_pv is not None:
+        kept_limits, kept_weights = kept_pv
+        given = release_balanced_pv(
+            targets,
+            states,
+            requested_total,
+            kept_limits,
+            kept_weights,
+            device_configs=device_configs,
+            commandable=commandable,
+            caps=caps
+        )
+        released = [after - before for after, before in zip(given, targets)]
+        targets = given
+
     unmet = max(0, requested_total - sum(targets))
 
     if unmet > 0:
@@ -830,7 +934,7 @@ def apply_battery_topup_after_pv_first(
             reason=reason
         )
 
-    return targets, topup_total > 0
+    return targets, topup_total > 0, released, pv_first_total
 
 
 def apply_constraints_and_redistribute(
@@ -944,7 +1048,13 @@ def calculate_targets(
 
     Battery discharge:
     - allocate only confirmed usable battery energy
-    - never above a device's ``discharge_caps`` entry (battery care)
+    - never above a device's ``discharge_caps`` entry (battery care, the
+      full-charge assist's PV ceiling); a cap below a device's PV also bounds
+      the PV it hands out (:func:`pv_held_back`), as a device that cannot
+      export hands out none, so the others' PV and batteries cover the rest.
+      Such a device takes no part in the PV charge balance, which would
+      otherwise hold back the others' PV for a battery it keeps charging, and
+      its PV above the cap goes first, as a full battery's does
 
     This avoids:
     - cross-device battery charge/discharge churn
@@ -1098,7 +1208,14 @@ def calculate_targets(
 
         pv_only_limits = []
         pv_weights = []
-        balance_context = pv_charge_balance_context(devices)
+        base_pv_weights = []
+        held_back = [
+            pv_held_back(caps[i], max(0, d.solar - d.pack_in))
+            for i, d in enumerate(devices)
+        ]
+        balance_context = pv_charge_balance_context(
+            [d for d, held in zip(devices, held_back) if not held]
+        )
 
         for i, d in enumerate(devices):
             cap = capabilities[i] if capabilities else None
@@ -1113,10 +1230,13 @@ def calculate_targets(
                 # current solar minus current battery discharge
                 #
                 pv_only = max(0, d.solar - d.pack_in)
+            if held_back[i]:
+                pv_only = min(pv_only, caps[i])
 
             pv_only_limits.append(pv_only)
             base_pv_weight = pv_first_weight(pv_only, dev_config)
-            charge_balance_multiplier = pv_charge_balance_multiplier(
+            base_pv_weights.append(base_pv_weight)
+            charge_balance_multiplier = 1.0 if held_back[i] else pv_charge_balance_multiplier(
                 d,
                 pv_only,
                 balance_context
@@ -1190,7 +1310,8 @@ def calculate_targets(
                 pv_only_limits,
                 device_configs=device_configs,
                 capabilities=capabilities,
-                commandable=commandable
+                commandable=commandable,
+                cannot_store=held_back
             )
 
             if targets is not None:
@@ -1247,18 +1368,31 @@ def calculate_targets(
             before_topup_targets = targets[:]
             (
                 targets,
-                battery_topup_used
-            ) = apply_battery_topup_after_pv_first(
+                battery_topup_used,
+                released,
+                delivered_pv_first
+            ) = top_up_after_pv_first(
                 targets,
                 devices,
                 device_configs,
                 capabilities,
                 new_total,
                 commandable=commandable,
-                caps=caps
+                caps=caps,
+                kept_pv=(pv_only_limits, base_pv_weights)
             )
             if explain:
-                topup_w = sum(targets) - sum(before_topup_targets)
+                still_unmet = max(0, new_total - delivered_pv_first - sum(released))
+                for limit in explanation_limits:
+                    if limit.name == "pv_only_target_limit":
+                        limit.active = still_unmet > 0
+                        limit.value = still_unmet
+                        limit.reason = (
+                            "PV-only contribution could not cover the target"
+                            if still_unmet > 0
+                            else "PV-only allocation covered the target"
+                        )
+                topup_w = sum(targets) - sum(before_topup_targets) - sum(released)
                 add_limit(
                     "battery_topup_after_pv_first",
                     battery_topup_used,
@@ -1273,13 +1407,17 @@ def calculate_targets(
                     explanation_notes.append(
                         "battery top-up was applied after PV-first allocation"
                     )
-                    for index, (before, after) in enumerate(
-                        zip(before_topup_targets, targets)
+                    for index, (before, after, kept) in enumerate(
+                        zip(before_topup_targets, targets, released)
                     ):
-                        if after > before:
+                        if after - kept > before:
                             explanation_devices[
                                 index
                             ].decision_reason = "pv_first_with_battery_topup"
+                if any(kept > 0 for kept in released):
+                    explanation_notes.append(
+                        "PV the charge balance kept back covered what no battery could"
+                    )
             if pv_only_total >= new_total and not battery_topup_used:
                 final_target_limits = pv_only_limits[:]
 
@@ -1342,6 +1480,8 @@ def calculate_targets(
         for i, d in enumerate(devices):
             cap = capabilities[i] if capabilities else None
             exportable_solar = d.solar if not cap or cap.can_export else 0
+            if pv_held_back(caps[i], exportable_solar):
+                exportable_solar = caps[i]
             targets.append(exportable_solar)
             if explain:
                 entry = explanation_devices[i]

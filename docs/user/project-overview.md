@@ -174,7 +174,7 @@ It is on by default, uses a longer ramp while winter mode is in effect, and can 
 
 The optional full-charge assistant helps battery-backed devices periodically reach the full state reported by their firmware.
 
-It can schedule an assist window, temporarily prepare the required charging conditions and restore the normal battery settings afterwards. The process survives restarts and is visible in diagnostics and the device dashboard.
+It can schedule an assist window, temporarily prepare the required charging conditions and restore the normal battery settings afterwards. On the day it charges, the battery first takes the device's own solar power, without the losses of a charge from the grid; only from the configured AC charge time on does it charge from the grid if it is not full yet. The process survives restarts and is visible in diagnostics and the device dashboard.
 
 ---
 

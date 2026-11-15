@@ -69,7 +69,11 @@ from ems.runtime_intents import (
     resolve_device_intent,
     runtime_intent_from_role,
 )
-from ems.state_store import BatteryFullChargeStateStore
+from ems.state_store import (
+    BatteryFullChargeStateStore,
+    full_charge_assist_ac_from,
+    full_charge_assist_solar_phase,
+)
 from ems.winter_policies import BATTERY_ONLY, MAX_RAISE_ABOVE_SOC, device_energy_class
 from ems.mqtt_control.zendure_profiles import device_model_class
 from ems.winter_reserve import MIN_SOC_UNMANAGED, WinterReserve
@@ -231,6 +235,7 @@ class EMSController:
         self._last_influx_publish = 0
         self.last_control_explanation = None
         self.runtime_intents = {}
+        self.full_charge_assist_now = None
         self.ac_input_watched = set()
         self.charges_being_left = set()
         self.full_charge_assist_charges = {}
@@ -1173,13 +1178,17 @@ class EMSController:
 
         return ramped_targets
 
-    def log_pv_priority_change(self, explanation):
+    def log_pv_priority_change(self, explanation, assist_held=()):
         """Record at INFO when the exclusive PV-first claim moves.
 
         The claim decides which devices export the whole requested total, so a
         change is worth an operator seeing. Who holds it is steady for as long
         as a battery stays full or a device stays battery-less, which is why
-        the per-cycle detail stays at debug.
+        the per-cycle detail stays at debug. A device the full-charge assist
+        holds to its PV above the charge ceiling (``assist_held``, by name)
+        claims only while its PV is above that ceiling, which a passing cloud
+        moves; its claim is the assist's, named by its own limit, and is left
+        out here.
         """
 
         if explanation.mode != "pv_first":
@@ -1207,6 +1216,7 @@ class EMSController:
                 self.devices[index].name
                 for index in indexes
                 if 0 <= index < len(self.devices)
+                and self.devices[index].name not in assist_held
             )
         )
 
@@ -1692,7 +1702,9 @@ class EMSController:
             for dev, cap, state in zip(self.devices, discharge_caps, states)
         ]
 
-    def discharge_ceiling_w(self, max_power, discharge_caps, states, capabilities):
+    def discharge_ceiling_w(
+        self, max_power, discharge_caps, states, capabilities, assist_caps=None
+    ):
         """The most the plant may be asked for while the battery care holds devices back.
 
         Against a held device the integrator would wind up to ``max_power``, and
@@ -1704,12 +1716,15 @@ class EMSController:
         rating to the rest, offline and switched-off devices included, whose
         share the allocation keeps and only they deliver. No device counts
         below what it delivers now, so the ceiling never takes away output
-        that is there.
+        that is there. A device the full-charge assist holds to its PV
+        ceiling (``assist_caps``) is held at its minSoc too: the allocation
+        hands it that ceiling, not its PV.
         """
 
+        assist_caps = assist_caps or [None] * len(discharge_caps)
         held = [
-            cap is not None and state.soc > state.min_soc
-            for cap, state in zip(discharge_caps, states)
+            cap is not None and (state.soc > state.min_soc or assist is not None)
+            for cap, state, assist in zip(discharge_caps, states, assist_caps)
         ]
         if not any(held):
             return max_power
@@ -3727,20 +3742,16 @@ class EMSController:
             parsed = parsed.replace(tzinfo=datetime.now().astimezone().tzinfo)
         return parsed.astimezone(datetime.now().astimezone().tzinfo)
 
-    def force_time_reached(self, now, next_due_at):
-        if not next_due_at or now.date() < next_due_at.date():
-            return False
+    def due_day_reached(self, now, next_due_at):
+        """Whether ``now`` is on or after the local day the assist falls due.
 
-        hour_text, minute_text = self.full_charge_assist_config()[
-            "force_time"
-        ].split(":")
-        force_time = now.replace(
-            hour=int(hour_text),
-            minute=int(minute_text),
-            second=0,
-            microsecond=0
-        )
-        return now >= force_time
+        The assist starts at midnight of that day, whatever the SoC, so the
+        battery keeps its charge through the night and takes the day's PV
+        before ``force_time`` lets it charge from AC
+        (:func:`~ems.state_store.full_charge_assist_ac_from`).
+        """
+
+        return bool(next_due_at) and now.date() >= next_due_at.date()
 
     def should_start_full_charge_assist(self, record, state, now):
         if record.get("full_charge_assist_active"):
@@ -3757,7 +3768,7 @@ class EMSController:
         if next_due_at is None:
             return False, None
 
-        if self.force_time_reached(now, next_due_at):
+        if self.due_day_reached(now, next_due_at):
             return True, "full_charge_assist_forced"
 
         window = timedelta(
@@ -4021,13 +4032,19 @@ class EMSController:
                     ac_charge_mode
                 )
                 store.log_event(dev.name, event_type, now, state=state)
+                ac_from = (
+                    full_charge_assist_ac_from(record, config.get("force_time"))
+                    if ac_charge_mode
+                    else None
+                )
                 log_event(
                     logging.INFO,
                     event_type,
                     device=dev.name,
                     soc=state.soc,
                     next_due_at=record.get("next_due_at"),
-                    ac_charge_mode=ac_charge_mode
+                    ac_charge_mode=ac_charge_mode,
+                    ac_from=ac_from.isoformat() if ac_from is not None else None
                 )
 
                 write_ok = self.apply_soc_limits(
@@ -4258,6 +4275,98 @@ class EMSController:
             self.full_charge_assist_config().get("enable_ac_charge_mode", True)
         ) and not self.assist_ac_input_withheld()
 
+    def full_charge_assist_takes_pv_only(self, dev, record=None, now=None):
+        """Whether a running assist charges ``dev``'s battery from its own PV alone now.
+
+        Before ``force_time`` on the day it started, and for its whole run
+        without its AC charge mode
+        (:func:`~ems.state_store.full_charge_assist_solar_phase`): the PV goes
+        into the battery without the losses of feeding it out and charging the
+        battery back from AC (owner 2026-11-15). The assist claims nothing
+        then; the device stays in output control under the ceiling of
+        :meth:`full_charge_assist_caps`. Not while the assist cannot write what
+        it needs (:meth:`full_charge_assist_held_by`): then the device is in
+        output control like any other. Nor while it still owes ``acMode`` 2
+        back, whose claim stands until the device reports it; the phase says
+        so itself, for the dashboard and diagnose alike.
+        """
+
+        store = self.battery_full_charge_store
+        if not store:
+            return False
+        if record is None:
+            record = store.get_device_state(dev.name)
+        if not record or not record.get("has_battery"):
+            return False
+        if self.full_charge_assist_held_by(dev, record=record) is not None:
+            return False
+        return full_charge_assist_solar_phase(
+            record, self.full_charge_assist_config(), now or self.full_charge_assist_clock()
+        )
+
+    def full_charge_assist_clock(self):
+        """The wall clock the assist's phase is read at: the cycle's, once it began.
+
+        One reading per cycle, so the claim and the ceiling of one cycle agree:
+        read twice, a cycle that crossed ``force_time`` between them left the
+        device without the PV ceiling and without the AC claim, and handed it
+        the house load from its battery.
+        """
+
+        return self.full_charge_assist_now or datetime.now().astimezone()
+
+    def full_charge_assist_caps(self, states, now=None):
+        """Each device's ceiling while its assist takes the battery's charge from PV alone.
+
+        ``None`` for a device it does not hold so. One it holds feeds out only
+        its PV above the charge ceiling it reports, the most its battery is
+        taken to accept. In winter that is nothing, and all of its PV is
+        offered to the battery; a summer PV above the ceiling still reaches the
+        house instead of being curtailed. A device that reports no ceiling
+        feeds out nothing, and one that reports 0 refuses a charge and passes
+        all its PV through. The split offers no more of its PV than that, so
+        the other devices cover the rest (:func:`calculate_targets`).
+        """
+
+        now = now or self.full_charge_assist_clock()
+        caps = []
+        for dev, state in zip(self.devices, states):
+            if not self.full_charge_assist_takes_pv_only(dev, now=now):
+                caps.append(None)
+                continue
+            ceiling = getattr(state, "charge_max_limit_w", None)
+            caps.append(0 if ceiling is None else max(0, round(pv_power(state) - ceiling)))
+        return caps
+
+    @staticmethod
+    def explain_full_charge_assist_ceilings(explanation, assist_caps, held):
+        """Name the assist's PV ceiling as a limit of its own, not as battery care's.
+
+        The split sees one merged cap per device and calls every binding one
+        battery care's; a device ``held`` binds on the assist's ceiling instead.
+        """
+
+        if not held:
+            return
+        for limit in explanation.limits:
+            if limit.name != "battery_care" or not limit.active:
+                continue
+            caps = json.loads(limit.value)
+            caps = [None if i in held else cap for i, cap in enumerate(caps)]
+            limit.value = json.dumps(caps)
+            limit.active = any(cap is not None for cap in caps)
+        explanation.limits.append(
+            ControlLimitExplanation(
+                "full_charge_assist_solar",
+                True,
+                json.dumps([
+                    cap if i in held else None for i, cap in enumerate(assist_caps)
+                ]),
+                "devices in the full-charge assist's PV phase feed out only "
+                "their PV above the charge ceiling they report",
+            )
+        )
+
     def full_charge_assist_intent(self, dev, below=None):
         """Return the assist's claim on ``dev``, or None when it has none.
 
@@ -4321,6 +4430,8 @@ class EMSController:
                     priority=PRIORITY_MAINTENANCE
                 )
             if self.full_charge_assist_held_by(dev, record=record) is not None:
+                return None
+            if self.full_charge_assist_takes_pv_only(dev, record):
                 return None
             if self.full_charge_assist_ac_charge_mode():
                 return ac_input_intent(
@@ -5263,16 +5374,24 @@ class EMSController:
         self.cycles_through_since_release = None
 
     def full_charge_assist_takes_ac_input(self):
-        """Whether a running full-charge assist with its AC mode on holds any device."""
+        """Whether a running full-charge assist with its AC mode on holds any device.
+
+        One that still takes its battery's charge from PV alone
+        (:meth:`full_charge_assist_takes_pv_only`) holds none yet.
+        """
 
         store = self.battery_full_charge_store
         if not store or not self.full_charge_assist_config().get(
             "enable_ac_charge_mode", True
         ):
             return False
+        now = self.full_charge_assist_clock()
         return any(
-            (store.get_device_state(dev.name) or {}).get("full_charge_assist_active")
-            for dev in self.devices
+            record.get("full_charge_assist_active")
+            and not self.full_charge_assist_takes_pv_only(dev, record, now)
+            for dev, record in (
+                (dev, store.get_device_state(dev.name) or {}) for dev in self.devices
+            )
         )
 
     def charges_returned_after_failed_cycles(self):
@@ -5446,6 +5565,7 @@ class EMSController:
         self.observe_swing_lock(states)
 
         now = datetime.now().astimezone()
+        self.full_charge_assist_now = now
         full_charge_feature_transition = (
             self.full_charge_assist_feature_transition(now)
         )
@@ -5697,10 +5817,24 @@ class EMSController:
         # CALCULATE TARGETS
         # =====================
 
-        discharge_caps = self.min_soc_ramp_caps(states)
-        floor_caps = self.standby_floor_caps(discharge_caps, states)
+        assist_caps = self.full_charge_assist_caps(states)
+        discharge_caps = [
+            care if assist is None else assist if care is None else min(care, assist)
+            for care, assist in zip(self.min_soc_ramp_caps(states), assist_caps)
+        ]
+        floor_caps = [
+            cap
+            if assist is not None and not self.charge_commanded_by_ems(dev)
+            else floor
+            for dev, cap, floor, assist in zip(
+                self.devices,
+                discharge_caps,
+                self.standby_floor_caps(discharge_caps, states),
+                assist_caps,
+            )
+        ]
         discharge_ceiling = self.discharge_ceiling_w(
-            max_power, discharge_caps, states, capabilities
+            max_power, discharge_caps, states, capabilities, assist_caps
         )
         has_export_capacity = self.has_output_control_export_capacity(
             states,
@@ -5770,7 +5904,10 @@ class EMSController:
             discharge_caps=discharge_caps
         )
 
-        self.log_pv_priority_change(control_explanation)
+        self.log_pv_priority_change(
+            control_explanation,
+            {dev.name for dev, cap in zip(self.devices, assist_caps) if cap is not None},
+        )
 
         if charge_decision.charging and stabilized_total < 0:
             targets = allocate_charge_targets(
@@ -5808,12 +5945,26 @@ class EMSController:
         control_explanation.commanded_total_w = self.commanded_total_w
         control_explanation.filtered_load_w = self.filtered_load_w
         control_explanation.min_output_limit_w = min_output_limit
+        assist_held = {
+            i
+            for i, assist in enumerate(assist_caps)
+            if assist is not None
+            and not capabilities[i].export_held
+            and discharge_caps[i] == assist
+            and i < len(targets)
+            and targets[i] >= assist
+        }
+        self.explain_full_charge_assist_ceilings(
+            control_explanation, assist_caps, assist_held
+        )
         for i, dev in enumerate(self.devices):
             device_explanation = control_explanation.devices.get(dev.name)
             if not device_explanation:
                 continue
             if capabilities[i].export_held:
                 device_explanation.limiting_reason = capabilities[i].reason
+            if i in assist_held:
+                device_explanation.limiting_reason = "full_charge_assist_solar"
             if i < len(targets):
                 device_explanation.allocated_target_w = targets[i]
             if i < len(effective_targets):

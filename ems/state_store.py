@@ -8,7 +8,7 @@ features keep working when the dashboard is disabled.
 
 import os
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 
 from ems.models import parse_pack_count
 
@@ -508,6 +508,47 @@ def parse_iso_timestamp(value):
     return parsed
 
 
+def full_charge_assist_ac_from(record, force_time):
+    """When a running assist may charge from AC: ``force_time`` on the day it started.
+
+    Until then it charges the battery from the device's own PV only, so an
+    assist that starts at midnight of its due day, or early in its window,
+    first takes the day's PV straight into the battery. One started after
+    ``force_time`` may charge from AC at once, as may one on a later day.
+    ``None`` for a record without a readable start or ``force_time``: its AC
+    charge is not held back.
+    """
+
+    started = parse_iso_timestamp((record or {}).get("assist_started_at"))
+    if started is None:
+        return None
+    try:
+        hour_text, minute_text = str(force_time).split(":")
+        at = time(int(hour_text), int(minute_text))
+    except (TypeError, ValueError):
+        return None
+    return datetime.combine(started.astimezone().date(), at).astimezone()
+
+
+def full_charge_assist_solar_phase(record, config, now):
+    """Whether a running assist takes the battery's charge from PV alone at ``now``.
+
+    Before its AC charge may begin (:func:`full_charge_assist_ac_from`), and
+    for its whole run without its AC charge mode; not while it still owes
+    ``acMode`` 2 back, which it claims the device for until the device reports
+    it.
+    """
+
+    record = record or {}
+    if not record.get("full_charge_assist_active") or record.get("ac_mode_restore_pending"):
+        return False
+    config = config or {}
+    if not config.get("enable_ac_charge_mode", True):
+        return True
+    ac_from = full_charge_assist_ac_from(record, config.get("force_time"))
+    return ac_from is not None and now < ac_from
+
+
 def describe_full_charge_assist_status(
     config, enabled, has_battery, record, now, held_by=None
 ):
@@ -520,7 +561,9 @@ def describe_full_charge_assist_status(
     (:meth:`~ems.controller.EMSController.full_charge_assist_held_by`): on a
     transport without state reconciliation it never runs (``unavailable``),
     and an active one that cannot write what it needs is ``waiting``, not
-    running.
+    running. An active one says its ``phase``: ``solar`` while it takes the
+    battery's charge from PV alone, with ``ac_from`` the time its AC charge
+    may begin, else ``ac``.
     """
 
     config = config or {}
@@ -566,6 +609,8 @@ def describe_full_charge_assist_status(
     window_starts_at = None
     inside_assist_window = False
     days_until_due = None
+    phase = None
+    ac_from = None
     if next_due_at is not None:
         days_until_due = (next_due_at - now).days
         window_starts_at = next_due_at - timedelta(days=assist_window_days)
@@ -580,7 +625,14 @@ def describe_full_charge_assist_status(
         )
     elif record.get("full_charge_assist_active"):
         status = "active"
-        message = "Full-charge assist active"
+        phase = "solar" if full_charge_assist_solar_phase(record, config, now) else "ac"
+        if phase == "solar" and config.get("enable_ac_charge_mode", True):
+            ac_from = full_charge_assist_ac_from(record, config.get("force_time"))
+        message = (
+            "Full-charge assist charging from PV"
+            if phase == "solar"
+            else "Full-charge assist active"
+        )
     elif record.get("restore_pending") or record.get("ac_mode_restore_pending"):
         status = "restore_pending"
         message = "Restore pending"
@@ -604,6 +656,8 @@ def describe_full_charge_assist_status(
         "window_starts_at": (
             window_starts_at.isoformat() if window_starts_at is not None else None
         ),
+        "phase": phase,
+        "ac_from": ac_from.isoformat() if ac_from is not None else None,
         "message": message,
     }
 

@@ -62,6 +62,7 @@ from ems.zendure_mqtt.builtin_broker import (
     builtin_profile_users,
 )
 from ems.read_only_devices import is_e3dc_modbus_device_config, is_read_only_device_config
+from ems.state_store import full_charge_assist_solar_phase
 
 
 BATTERY_FULL_CHARGE_ASSIST_DEFAULTS = config_mod.BATTERY_FULL_CHARGE_ASSIST_DEFAULTS
@@ -1900,6 +1901,10 @@ def diagnose_battery_full_charge_status(device_state, assist_config, now, held_b
             return "disabled, abort pending"
         if held_by is not None:
             return "active, waiting for state writes"
+        if full_charge_assist_solar_phase(device_state, assist_config, now):
+            if assist_config.get("enable_ac_charge_mode", True):
+                return f"active, charging from PV until {assist_config.get('force_time')}"
+            return "active, charging from PV"
         return "active"
     if device_state.get("ac_mode_restore_pending"):
         if not assist_config.get("enabled"):

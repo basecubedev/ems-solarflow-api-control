@@ -537,7 +537,11 @@ def test_a_device_held_in_ac_input_mode_says_so():
 
 
 def _assist_held_explanation(tmp_path):
-    """One real EMS cycle while the full-charge assist holds WR1 without AC charging."""
+    """One real EMS cycle while the full-charge assist's restore holds WR1.
+
+    The assist completed and owes the configured Max-SoC back; the device
+    refuses that write, so the restore keeps claiming it, out of output control.
+    """
     from datetime import datetime, timezone
     from types import SimpleNamespace
 
@@ -545,14 +549,18 @@ def _assist_held_explanation(tmp_path):
     from tests import test_battery_full_charge_assist as assist
 
     dev = assist.device(max_soc=90)
-    dev.session.post.return_value = SimpleNamespace(status_code=200)
+    dev.session.post.return_value = SimpleNamespace(status_code=500)
     store = BatteryFullChargeStateStore(str(tmp_path / "ems_state.sqlite"))
-    store.mark_assist_started(
-        "WR1", datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc), ac_charge_mode=False
+    store.update_device_state(
+        "WR1",
+        datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
+        has_battery=True,
+        restore_pending=True,
     )
     controller = assist.controller_for(dev, store)
-    with assist.configure_assist(enabled=True, enable_ac_charge_mode=False):
-        assist.run_controller_once(controller, assist.state(soc=50, max_soc=90, soc_limit=0))
+    with assist.configure_assist(enabled=True):
+        assist.run_controller_once(controller, assist.state(soc=50, max_soc=100, soc_limit=0))
+    assert store.get_device_state("WR1")["restore_pending"] is True
     return controller.last_control_explanation.to_dict()
 
 
