@@ -138,6 +138,7 @@ def test_a_control_cycle_produces_the_snapshot_with_the_cycle_it_ran(tmp_path):
         "effective_target_total_w": explanation.effective_target_total_w,
     }
     assert snapshot["grid_meter"]["consecutive_read_failures"] == 0
+    assert snapshot["grid_meter"]["reading_repeated"] is False
     measured = diagnostics.diagnose_parse_timestamp(snapshot["grid_meter"]["measured_at"])
     assert abs(time.time() - measured.timestamp()) < 5
 
@@ -153,6 +154,7 @@ def test_a_control_cycle_produces_the_snapshot_with_the_cycle_it_ran(tmp_path):
         "cycle_at": snapshot["cycle"]["fetched_at"],
         "grid_power_w": 240.0,
         "measured_at": snapshot["grid_meter"]["measured_at"],
+        "reading_repeated": False,
     }]
 
 

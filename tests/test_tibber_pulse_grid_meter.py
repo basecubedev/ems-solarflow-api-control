@@ -318,6 +318,36 @@ def test_without_a_meter_clock_an_unchanged_telegram_is_not_a_new_reading():
     assert client.poll_once() is False
 
 
+def test_each_new_frame_is_one_reading_for_the_control_loop():
+    first = _frame(_get_list(_entry(sml.POWER_TOTAL, _int(-400, 4))))
+    second = _frame(_get_list(_entry(sml.POWER_TOTAL, _int(-380, 4))))
+    client, _ = _client(first, first, second)
+    client.poll_once()
+    reading = client.get_reading()
+
+    client.poll_once()
+    repeated = client.get_reading()
+    client.poll_once()
+    third = client.get_reading()
+
+    assert reading.power_w == repeated.power_w == -400
+    assert repeated.sequence == reading.sequence
+    assert third.power_w == -380
+    assert third.sequence != reading.sequence
+
+
+def test_a_stale_reading_keeps_its_identity():
+    client, clock = _client(ISKRA)
+    client.poll_once()
+    fresh = client.get_reading()
+    clock.now += MAX_AGE_SECONDS + 0.1
+
+    stale = client.get_reading()
+
+    assert stale == fresh
+    assert client.health.stale_used
+
+
 @pytest.mark.parametrize(
     "failure, reason",
     [

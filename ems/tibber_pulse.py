@@ -23,6 +23,7 @@ import time
 import requests
 
 from ems import sml
+from ems.grid_reading import GridReading
 from ems.health import CommHealth
 from ems.logging_utils import log_event
 
@@ -314,6 +315,7 @@ class TibberPulseGridMeterClient:
         self._stop = threading.Event()
         self._reading = None
         self._received_at = None
+        self._sequence = 0
         self._last_marker = None
         self._last_error = None
         self._round_trip_ms = None
@@ -442,6 +444,7 @@ class TibberPulseGridMeterClient:
             if not baseline:
                 self._reading = round(power, 1)
                 self._received_at = self._clock()
+                self._sequence += 1
                 self._round_trip_ms = None if started_at is None else (self._received_at - started_at) * 1000.0
         self._learn_crc_variant(decoded.crc_variant)
         if baseline:
@@ -492,9 +495,15 @@ class TibberPulseGridMeterClient:
     def get_power(self):
         """Return the cached grid power, recording a failure once it is stale."""
 
+        return self.get_reading().power_w
+
+    def get_reading(self):
+        """The cached grid power; each new frame is one reading."""
+
         with self._lock:
             reading = self._reading
             received_at = self._received_at
+            sequence = self._sequence
             error = self._last_error
             round_trip_ms = self._round_trip_ms
         age = None if received_at is None else self._clock() - received_at
@@ -504,7 +513,7 @@ class TibberPulseGridMeterClient:
             first_hand_out = received_at != self._latency_reported_for
             self._latency_reported_for = received_at
             self.health.record_success(round_trip_ms if first_hand_out else None, age_seconds=age)
-            return self.last_value
+            return GridReading(self.last_value, sequence)
         if error is None and reading is not None:
             error = f"no new telegram for {age:.1f}s"
         self.health.record_failure(error=error or "no reading yet", stale_used=True)
@@ -521,7 +530,7 @@ class TibberPulseGridMeterClient:
                 age_seconds=None if age is None else round(age, 1),
                 stale_value=self.last_value,
             )
-        return self.last_value
+        return GridReading(self.last_value, sequence)
 
     def _warning_due(self, reason):
         """Warn when the reason changes, then once a minute while it lasts."""

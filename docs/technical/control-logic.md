@@ -11,7 +11,8 @@ control chain, see [control-flow.md](control-flow.md).
 
 1. Reload `runtime-state.json` if changed, then apply the
    [schedule](../scheduler.md)'s due switch points as runtime values.
-2. Read Shelly house load.
+2. Read the grid meter, and note whether it delivered a reading no earlier
+   cycle used ([One correction per reading](#one-correction-per-reading)).
 3. Read Zendure telemetry.
 4. Detect runtime capabilities.
 5. Run state reconciliation when due.
@@ -125,6 +126,65 @@ is sized from what the house draws instead of integrated, see
 The sign-change fast response only adjusts the filtered load value inside the
 median/EMA stage. It does not bypass total ramping, per-device ramping, write
 deadbands, write gates, or state reconciliation safeguards.
+
+### One correction per reading
+
+The loop keeps its fixed `loop_interval`, but the integrator adds each grid
+reading once. A meter that keeps its last reading between two new ones — an
+MQTT meter, the Tibber Pulse bridge's stream, a DSMR P1 telegram stream, a
+HomeWizard P1 Meter or poweropti in front of a smart meter slower than the loop
+— hands the same reading to several cycles. Adding it on each of them made the
+same correction again and again: with a reading every third cycle, 600 W of
+house load drove the output to about 1180 W, back to 10 W and up again. A
+reading is what the client receives as one: an MQTT meter that republishes its
+last value, or a broker that resends a retained one on reconnect, delivers it
+as a new reading.
+
+A cycle that sees a reading an earlier cycle already used:
+
+- adds nothing to `commanded_total_w` and feeds nothing to the median/EMA filter;
+- lets a correction the ramp or the ceiling held back carry on towards what
+  that reading asked for, within each cycle's ceiling, as long as nothing else
+  set the total in between (a device leaving a charge, control switched back
+  on); otherwise the total holds. The floor is never carried: a charge, or a
+  deeper one, starts only on a reading whose own cycle allowed it, so a charge
+  entered on a reading starts with the next one, and a surplus gone by then is
+  never charged from the grid;
+- still applies the no-export-capacity hold, the floor and `max_total_power`;
+- records no [charge entry observation](#direction), so the entry window counts
+  readings, not cycles;
+- judges a running charge on the total that reading asks for: the total from
+  before its correction plus the reading itself, unfiltered. A reading that
+  shows the house needs the power back ends the charge on the first cycle that
+  repeats it, if its own cycle has not already, without counting the reading
+  twice. Every permission — the feature, a device, a full battery, a stale
+  meter — ends a charge on any cycle as before;
+- sizes nothing while a device [leaves a charge](#leaving-a-charge), but notes a
+  device that starts leaving, and the next new reading sizes on it.
+
+Device ramps, battery care, night idle, state reconciliation and the write gates
+run every cycle as before. Each client says which reading is which: a message,
+a frame or a telegram, or a moved meter time stamp (or a new value under the
+same one; a HomeWizard P1 Meter or poweropti that sends no time stamp counts
+every read as new). A client that has
+no way to tell its readings apart regulates every cycle as before: Shelly,
+Modbus and E3/DC measure on every read, while EcoTracker, Tasmota and the
+Zendure HTTP meters serve the last datagram of a reading head and, behind a
+smart meter slower than the loop, can still hand one reading to several cycles.
+
+A slower meter sees less: a change shows only with its next reading, and a
+short load spike that one of its readings catches stands for the whole meter
+period, so it can end a charge that a meter read every cycle would ride out.
+Ending a charge is the safe direction, and entering again takes
+`entry_confirm_cycles` new readings. A correction the ceiling held back follows
+the reading that asked for it: when the ceiling rises before the next reading,
+the output rises towards that demand even if the house has since dropped, and
+a device can feed out more than the house needs until the next reading.
+
+Unlike a [failed read](#grid-meter-unavailable-hold), a repeated reading logs no
+warning and keeps the load filter. `diagnose --control` counts the cycles that
+reused a reading (`meter_quality.repeated_readings`) and notes
+`meter_slower_than_loop` when they are the majority.
 
 ## Calculated Values And Targets
 
@@ -472,7 +532,12 @@ meant to be immediate wait for the ramp.
 
 Exit is immediate and unconditional. It is never gated by a threshold, a
 confirmation counter or the rate limit, because failing closed on the way *back*
-would leave hardware drawing from the grid.
+would leave hardware drawing from the grid. A cycle that only repeats a meter
+reading judges the exit on the total that reading asks for, unfiltered
+([One correction per reading](#one-correction-per-reading)): a reading that
+shows the house needs the power back ends the charge on the first cycle that
+repeats it, if its own cycle has not already. A meter slower than the loop shows
+a change only with its next reading.
 
 ### Leaving a charge
 

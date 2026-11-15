@@ -615,8 +615,8 @@ config upgrade does enable it for an installation that predates the feature, and
 | `enabled` | Whether the EMS may charge from surplus at all. Also runtime-toggleable. |
 | `charge_start_w` | Surplus needed before charging starts |
 | `charge_hysteresis_w` | How far below the start threshold charging continues |
-| `entry_confirm_cycles` | Observations that must show surplus before charging starts |
-| `entry_window_cycles` | How many recent loops those observations are counted within |
+| `entry_confirm_cycles` | Observations that must show surplus before charging starts; one per new meter reading |
+| `entry_window_cycles` | How many recent observations those are counted within |
 | `max_charge_entries_per_hour` | Safety limit on how often a device may enter charging; it also bounds how often the full-charge assist takes its AC input back after failed cycles returned it |
 | `max_total_charge_power_w` | Highest combined charging power across all devices; `0` (the default) sets none beyond the devices' own |
 
@@ -975,16 +975,19 @@ not moved for 30 s means the smart meter has stopped sending: the read counts as
 failed, so the EMS holds instead of regulating on a frozen value. Without a time
 stamp this check cannot run. A DSMR 5 meter sends a new reading every second, an older DSMR 4 meter
 only every 10 seconds, and the P1 Meter answers with the last one in between.
-The EMS adds each reading's correction to its target, so on a DSMR 4 meter with
-the default loop interval of 5 s one reading reaches two control cycles and its
-correction counts twice. For such a meter set the loop interval to 11 s or more,
-in the Admin Console or with `python3 emsctl.py system loop-interval 11` (the
-value in `runtime-state.json` overrides a hand edit of `config.json`), and
+The time stamp also tells each new reading, and the EMS regulates once per
+reading ([One correction per reading](control-logic.md#one-correction-per-reading)),
+so the default loop interval of 5 s needs no change. Only a P1 Meter that sends
+no time stamp hands one DSMR 4 reading to two control cycles at 5 s, and its
+correction counts twice: for such a meter set the loop interval to 11 s or
+more, in the Admin Console or with `python3 emsctl.py system loop-interval 11`
+(the value in `runtime-state.json` overrides a hand edit of `config.json`), and
 `system.output_control.telemetry_max_age_seconds` to at least twice that, for
 example 22, so a single missed read does not already count as stale.
-`emsctl diagnose --hardware` reads the meter once, names the DSMR version and
-warns when the loop interval the EMS uses, or the telemetry window for that
-loop, is too short for it (`homewizard_p1_slow_meter`).
+`emsctl diagnose --hardware` reads the meter once, names the DSMR version and,
+for a DSMR 4 meter, warns when a reading counts twice or when the telemetry
+window is too short for the loop interval the EMS uses
+(`homewizard_p1_slow_meter`).
 
 Example: HomeWizard P1 Meter, as pairing leaves it (`port` defaults to 443):
 

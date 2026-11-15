@@ -198,6 +198,23 @@ def test_a_new_telegram_counts_and_the_last_one_stands_until_it_is_too_old():
     assert client.health.consecutive_failures == 0
 
 
+def test_each_telegram_is_one_reading_and_a_quiet_poll_repeats_it():
+    """The control loop regulates once per telegram; a DSMR 4 meter sends every 10 s."""
+
+    client = DsmrTcpClient(
+        Reader([telegram("00.400")], [], [telegram("00.400", stamp="261112050010W")]),
+        clock=Clock(),
+    )
+
+    first = client.get_reading()
+    repeated = client.get_reading()
+    third = client.get_reading()
+
+    assert first.power_w == repeated.power_w == third.power_w == 400.0
+    assert repeated.sequence == first.sequence
+    assert third.sequence != first.sequence
+
+
 def test_a_bridge_that_falls_silent_is_connected_to_again():
     clock = Clock()
     reader = Reader([telegram("00.400")], *([[]] * 4))

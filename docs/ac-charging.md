@@ -158,10 +158,17 @@ surplus above `charge_start_w` has persisted — `entry_confirm_cycles` of the
 last `entry_window_cycles` observations, five of seven by default. The surplus
 is what remains once the chargeable devices stop feeding out: a device held at
 the standby floor `min_output_limit` exports those watts itself, and they vanish
-the moment it switches to charging, so they are not counted.
+the moment it switches to charging, so they are not counted. An observation is
+a new meter reading: with a meter slower than the loop, the cycles that only
+repeat its last reading do not count, so five observations take five readings
+(see [One correction per reading](technical/control-logic.md#one-correction-per-reading)).
 
 Charging stops **immediately** when the house needs the power back. The exit is
-never delayed by a threshold, a confirmation count or the rate limit.
+never delayed by a threshold, a confirmation count or the rate limit. Behind a
+meter slower than the loop it waits only for the reading that shows the house
+needs the power: a cycle that repeats that reading judges the exit on the total
+the reading asks for, unfiltered. A short load spike that such a reading
+catches can end a charge that a meter read every cycle would ride out.
 
 The first discharge after a charge is what the house draws. Until the device
 has switched — on an 800 Pro 2 about three seconds for the direction and five

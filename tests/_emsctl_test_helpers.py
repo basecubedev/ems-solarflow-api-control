@@ -237,7 +237,7 @@ class LiveEms:
             ems_paths.resolve_control_status_path(Path(directory) / "runtime-state.json")
         )
 
-    def cycle(self, grid_power_w, cycle_time):
+    def cycle(self, grid_power_w, cycle_time, repeated=False):
         """Run one cycle at ``cycle_time`` (epoch seconds) and publish it."""
 
         if self.health is not None and (
@@ -245,6 +245,7 @@ class LiveEms:
         ):
             self.health.measured = cycle_time
         controller = self.controller
+        controller.grid_reading_repeated = repeated
         controller.last_fetch_at = cycle_time
         controller.last_seen = {name: cycle_time for name in controller.last_states}
         controller.last_control_explanation = ControlExplanation(
@@ -261,18 +262,25 @@ class LiveEms:
         return json.loads(self.writer.path.read_text())
 
 
-def write_live_control_status(directory, *, grid=(142,), age_seconds=0, loop_interval=5, **options):
+def write_live_control_status(
+    directory, *, grid=(142,), age_seconds=0, loop_interval=5, repeated=(), **options
+):
     """Write control-status.json beside runtime-state.json as a running EMS does.
 
     Each entry of ``grid`` is one control cycle, ``loop_interval`` apart, the
-    last one ``age_seconds`` ago. The other options are :class:`LiveEms`'s.
+    last one ``age_seconds`` ago; ``repeated`` names the cycles, by index, that
+    reused an earlier cycle's reading. The other options are :class:`LiveEms`'s.
     """
 
     ems = LiveEms(directory, loop_interval=loop_interval, **options)
     last_cycle = math.floor(time.time() - age_seconds) + 0.5
     status = None
     for index, value in enumerate(grid):
-        status = ems.cycle(value, last_cycle - loop_interval * (len(grid) - 1 - index))
+        status = ems.cycle(
+            value,
+            last_cycle - loop_interval * (len(grid) - 1 - index),
+            repeated=index in repeated,
+        )
     return status
 
 

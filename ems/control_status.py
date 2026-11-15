@@ -66,6 +66,8 @@ def _grid_meter_block(controller, now, now_monotonic):
 
     A meter that misses a read keeps serving its last value, so the time of the
     last successful read is what dates the grid power, not the cycle.
+    ``reading_repeated`` says the cycle saw a reading an earlier one had
+    already regulated on.
     """
 
     health = getattr(getattr(controller, "shelly", None), "health", None)
@@ -75,6 +77,7 @@ def _grid_meter_block(controller, now, now_monotonic):
     return {
         "consecutive_read_failures": int(failures) if isinstance(failures, int) else None,
         "measured_at": None if age is None else _iso(now - age, "seconds"),
+        "reading_repeated": getattr(controller, "grid_reading_repeated", False) is True,
     }
 
 
@@ -175,6 +178,7 @@ class ControlStatusWriter:
             "cycle_at": cycle_at,
             "grid_power_w": grid_power,
             "measured_at": status["grid_meter"]["measured_at"],
+            "reading_repeated": status["grid_meter"]["reading_repeated"],
         })
 
     def write(self, controller, *, now=None, now_monotonic=None):

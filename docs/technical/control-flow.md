@@ -89,8 +89,8 @@ flowchart TD
 | `ac_charge_control.enabled` | Charge direction | Whether the EMS may charge from surplus at all. On by default; runtime state can override it. | [configuration.md](configuration.md), [control-logic.md](control-logic.md), [safety.md](../user/safety.md) |
 | `ac_charge_control.charge_start_w` | Charge direction | Surplus needed before charging starts. The lower edge of the band is derived from the hysteresis, never configured. | [control-logic.md](control-logic.md) |
 | `ac_charge_control.charge_hysteresis_w` | Charge direction | How far below the start threshold charging continues. | [control-logic.md](control-logic.md) |
-| `ac_charge_control.entry_confirm_cycles` | Charge direction | Observations that must show surplus before charging starts. Leaving charge is never gated by it. | [control-logic.md](control-logic.md) |
-| `ac_charge_control.entry_window_cycles` | Charge direction | How many recent loops those observations are counted within. | [control-logic.md](control-logic.md) |
+| `ac_charge_control.entry_confirm_cycles` | Charge direction | Observations that must show surplus before charging starts; one per new meter reading. Leaving charge is never gated by it. | [control-logic.md](control-logic.md) |
+| `ac_charge_control.entry_window_cycles` | Charge direction | How many recent observations those are counted within. | [control-logic.md](control-logic.md) |
 | `ac_charge_control.max_charge_entries_per_hour` | Charge direction | Caps how often a device may enter charging. Reaching it is logged as a warning. | [control-logic.md](control-logic.md) |
 | `ac_charge_control.max_total_charge_power_w` | Total target calculation / limits | Lower bound of the signed total while charging. | [control-logic.md](control-logic.md) |
 | `devices[].ac_discharge_enabled` | Allocation and effective target | Whether the EMS may command this device to supply the house. `false` makes a positive target `0` (written, so a running discharge ends) and leaves charging allowed. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |

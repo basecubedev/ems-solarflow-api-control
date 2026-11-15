@@ -2172,6 +2172,10 @@ _HOMEWIZARD_DSMR4_HINT = (
     "config.json), and system.output_control.telemetry_max_age_seconds to at least twice "
     "that, for example 22, so one missed read does not count as stale."
 )
+_HOMEWIZARD_TELEMETRY_HINT = (
+    "Set system.output_control.telemetry_max_age_seconds to at least twice the loop "
+    "interval, so one missed read does not count as stale."
+)
 
 
 _HOMEWIZARD_PAIR_HINT = "Pair the meter in the Admin Console or with 'python3 emsctl.py config init'."
@@ -2214,23 +2218,27 @@ def _diagnose_homewizard_p1(checks, grid_meter, grid_tracker, loop_interval, tel
     diagnose_add(checks, "hardware", "ok", "homewizard_p1_read_ok", "HomeWizard P1 Meter local API v2 returned parseable power", power_w=power, timestamp=timestamp, protocol_version=protocol_version, serial=settings["serial"])
     if type(protocol_version) is int and protocol_version < _HOMEWIZARD_DSMR5_VERSION:
         message = f"The smart meter speaks DSMR {protocol_version / 10:g} and sends a new reading only every 10 s"
-        if loop_interval < _HOMEWIZARD_DSMR4_LOOP_INTERVAL_MIN_S:
+        counts_twice = timestamp is None and loop_interval < _HOMEWIZARD_DSMR4_LOOP_INTERVAL_MIN_S
+        if counts_twice:
             message += (
-                f", so with a loop interval of {loop_interval:g} s one reading reaches two "
-                "control cycles and its correction counts twice"
+                ", and the P1 Meter sends no time stamp to tell its readings apart, so with a "
+                f"loop interval of {loop_interval:g} s one reading reaches two control cycles "
+                "and its correction counts twice"
             )
         elif telemetry_window < 2 * loop_interval:
             message += (
-                f"; the loop interval of {loop_interval:g} s is long enough, but "
+                f"; the loop interval of {loop_interval:g} s is fine, but "
                 f"system.output_control.telemetry_max_age_seconds at {telemetry_window:g} s is "
                 "below twice that, so one missed read already counts as stale"
             )
+        elif timestamp is not None:
+            message += "; its time stamp tells each new reading, and the EMS regulates once per reading"
         else:
             message += f"; the loop interval of {loop_interval:g} s reads each reading once"
-        settled = loop_interval >= _HOMEWIZARD_DSMR4_LOOP_INTERVAL_MIN_S and telemetry_window >= 2 * loop_interval
+        settled = not counts_twice and telemetry_window >= 2 * loop_interval
         diagnose_add(
             checks, "hardware", "info" if settled else "warning", "homewizard_p1_slow_meter", message,
-            hint=None if settled else _HOMEWIZARD_DSMR4_HINT,
+            hint=None if settled else _HOMEWIZARD_DSMR4_HINT if counts_twice else _HOMEWIZARD_TELEMETRY_HINT,
             protocol_version=protocol_version,
             loop_interval=loop_interval,
             telemetry_max_age_seconds=telemetry_window,
@@ -3127,6 +3135,9 @@ def diagnose_ac_charge_model_refusal(item):
     return None
 
 
+SLOWER_THAN_LOOP_MIN_SAMPLES = 6
+
+
 def diagnose_live_grid_samples(live_data):
     samples = []
     for item in live_data.get("grid_samples") or []:
@@ -3139,6 +3150,7 @@ def diagnose_live_grid_samples(live_data):
             "grid_power_w": value,
             "timestamp": item.get("measured_at"),
             "cycle_at": item.get("cycle_at"),
+            "reading_repeated": item.get("reading_repeated") is True,
         })
     return samples
 
@@ -3192,6 +3204,8 @@ def diagnose_meter_quality(samples, live_data=None, loop_interval=None):
             "sign_changes": 0,
             "stale_reason": "read_failures" if failures >= 2 else None,
             "read_failures": failures,
+            "repeated_readings": 0,
+            "slower_than_loop": False,
         }
     sign_changes = 0
     previous_sign = 0
@@ -3223,6 +3237,8 @@ def diagnose_meter_quality(samples, live_data=None, loop_interval=None):
     elif value_unchanged and timestamp_unchanged:
         stale_reason = "unchanged_value_and_timestamp"
     stale = stale_reason is not None
+    repeated = sum(1 for sample in samples if sample.get("reading_repeated") is True)
+    slower_than_loop = len(values) >= SLOWER_THAN_LOOP_MIN_SAMPLES and repeated * 2 > len(values)
     if noisy:
         warnings.append("Meter signal appears noisy")
     if stale:
@@ -3240,6 +3256,8 @@ def diagnose_meter_quality(samples, live_data=None, loop_interval=None):
         "stale_reason": stale_reason,
         "timestamp_age_seconds": round(timestamp_age, 1) if timestamp_age is not None else None,
         "read_failures": failures,
+        "repeated_readings": repeated,
+        "slower_than_loop": slower_than_loop,
     }
 
 
@@ -3483,6 +3501,16 @@ def diagnose_control_add_checks(checks, control):
         diagnose_add(checks, "control", "warning", "meter_signal_noisy", "Meter signal appears noisy")
     if control["meter_quality"].get("stale"):
         diagnose_add(checks, "control", "warning", "meter_signal_stale", "Meter values appear stale")
+    if control["meter_quality"].get("slower_than_loop"):
+        diagnose_add(
+            checks,
+            "control",
+            "ok",
+            "meter_slower_than_loop",
+            "Most control cycles reuse the meter's last reading; each reading is regulated on once",
+            repeated_readings=control["meter_quality"]["repeated_readings"],
+            samples=control["meter_quality"]["samples"],
+        )
     if control["soc_analysis"].get("soc_imbalance_percent") is not None and control["soc_analysis"]["soc_imbalance_percent"] > 20:
         diagnose_add(checks, "control", "warning", "soc_imbalance_high", "SOC difference exceeds 20%", imbalance_percent=control["soc_analysis"]["soc_imbalance_percent"])
     for device in control["soc_analysis"].get("min_soc_protected_devices", []):

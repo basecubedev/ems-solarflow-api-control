@@ -178,6 +178,61 @@ def test_a_meter_without_a_time_stamp_is_never_called_frozen():
     assert client.health.snapshot()["failure_count"] == 0
 
 
+def test_a_reading_is_new_when_the_meter_time_stamp_moves():
+    still = {**SINGLE_PHASE_EXPORT, "power_w": 300}
+    moved = {**still, "timestamp": "2026-11-12T03:14:37"}
+    client = HomeWizardP1Client(FakeApi(still, still, moved), clock=Clock())
+
+    first = client.get_reading()
+    repeated = client.get_reading()
+    third = client.get_reading()
+
+    assert first.power_w == repeated.power_w == third.power_w == 300.0
+    assert repeated.sequence == first.sequence
+    assert third.sequence != first.sequence
+
+
+def test_a_changed_power_is_a_new_reading_even_on_the_same_time_stamp():
+    still = {**SINGLE_PHASE_EXPORT, "power_w": 300}
+    client = HomeWizardP1Client(FakeApi(still, {**still, "power_w": 280}), clock=Clock())
+
+    first = client.get_reading()
+    changed = client.get_reading()
+
+    assert changed.power_w == 280.0
+    assert changed.sequence != first.sequence
+
+
+def test_a_frozen_meter_keeps_the_identity_of_its_last_reading():
+    clock = Clock()
+    still = {**SINGLE_PHASE_EXPORT, "power_w": 300}
+    client = HomeWizardP1Client(FakeApi(still, still), clock=clock)
+    first = client.get_reading()
+
+    clock.now += METER_FROZEN_AFTER_S + 1
+    frozen = client.get_reading()
+
+    assert client.health.stale_used is True
+    assert frozen == first
+
+
+def test_a_reading_without_a_time_stamp_is_always_a_new_one():
+    answer = {"power_w": 120}
+    client = HomeWizardP1Client(FakeApi(answer, answer), clock=Clock())
+
+    assert client.get_reading().sequence != client.get_reading().sequence
+
+
+def test_a_failed_read_repeats_the_last_reading():
+    client = HomeWizardP1Client(FakeApi(SINGLE_PHASE_EXPORT, OSError("down")), clock=Clock())
+
+    first = client.get_reading()
+    failed = client.get_reading()
+
+    assert failed == first
+    assert client.health.stale_used is True
+
+
 def test_closing_the_client_closes_the_connection():
     api = FakeApi()
     HomeWizardP1Client(api).close()
@@ -361,21 +416,38 @@ def test_diagnose_names_what_to_do_for_each_refusal(monkeypatch, reason, hint):
     assert health["grid_meter"]["failure_count"] == 1
 
 
+UNSTAMPED_EXPORT = {key: value for key, value in SINGLE_PHASE_EXPORT.items() if key != "timestamp"}
+
+
 @pytest.mark.parametrize("system", [None, {"loop_interval": 10}])
-def test_diagnose_warns_when_a_dsmr4_reading_reaches_two_control_cycles(monkeypatch, system):
-    codes, _health, _built = _diagnose_hardware(monkeypatch, {**SINGLE_PHASE_EXPORT, "protocol_version": 42}, system)
+def test_diagnose_warns_when_an_unstamped_dsmr4_reading_reaches_two_control_cycles(monkeypatch, system):
+    codes, _health, _built = _diagnose_hardware(monkeypatch, {**UNSTAMPED_EXPORT, "protocol_version": 42}, system)
 
     slow = codes["homewizard_p1_slow_meter"]
     assert slow["level"] == "warning"
     assert "DSMR 4.2" in slow["message"]
     assert "every 10 s" in slow["message"]
+    assert "no time stamp" in slow["message"]
     assert "counts twice" in slow["message"]
     assert "loop-interval 11" in slow["hint"]
     assert "telemetry_max_age_seconds" in slow["hint"]
 
 
+def test_diagnose_names_a_stamped_dsmr4_meter_without_a_warning_at_the_default_loop(monkeypatch):
+    """The time stamp tells each new reading, and the EMS regulates once per reading."""
+
+    codes, _health, _built = _diagnose_hardware(monkeypatch, {**SINGLE_PHASE_EXPORT, "protocol_version": 42}, None)
+
+    slow = codes["homewizard_p1_slow_meter"]
+    assert slow["level"] == "info"
+    assert "DSMR 4.2" in slow["message"]
+    assert "once per reading" in slow["message"]
+    assert "counts twice" not in slow["message"]
+    assert "hint" not in slow
+
+
 def test_diagnose_judges_the_loop_interval_the_ems_uses_not_the_one_in_the_file(monkeypatch):
-    dsmr4 = {**SINGLE_PHASE_EXPORT, "protocol_version": 42}
+    dsmr4 = {**UNSTAMPED_EXPORT, "protocol_version": 42}
 
     edited_by_hand, _health, _built = _diagnose_hardware(
         monkeypatch, dsmr4, {"loop_interval": 11}, {"system": {"loop_interval": 5}}
@@ -395,7 +467,7 @@ def test_diagnose_judges_the_loop_interval_the_ems_uses_not_the_one_in_the_file(
 def test_diagnose_only_names_a_dsmr4_meter_when_loop_and_window_fit_it(monkeypatch):
     codes, _health, _built = _diagnose_hardware(
         monkeypatch,
-        {**SINGLE_PHASE_EXPORT, "protocol_version": 40},
+        {**UNSTAMPED_EXPORT, "protocol_version": 40},
         {"loop_interval": 11, "output_control": {"telemetry_max_age_seconds": 22}},
     )
 
@@ -418,6 +490,22 @@ def test_diagnose_warns_when_the_telemetry_window_is_short_for_a_long_loop_set_a
     assert slow["level"] == "warning"
     assert "telemetry_max_age_seconds at 10 s" in slow["message"]
     assert "counts twice" not in slow["message"]
+    assert "telemetry_max_age_seconds" in slow["hint"]
+    assert "loop-interval 11" not in slow["hint"]
+
+
+def test_diagnose_warns_a_stamped_dsmr4_meter_only_about_a_short_telemetry_window(monkeypatch):
+    codes, _health, _built = _diagnose_hardware(
+        monkeypatch,
+        {**SINGLE_PHASE_EXPORT, "protocol_version": 42},
+        {"loop_interval": 5, "output_control": {"telemetry_max_age_seconds": 8}},
+    )
+
+    slow = codes["homewizard_p1_slow_meter"]
+    assert slow["level"] == "warning"
+    assert "loop interval of 5 s is fine" in slow["message"]
+    assert "counts twice" not in slow["message"]
+    assert "loop-interval 11" not in slow["hint"]
     assert "telemetry_max_age_seconds" in slow["hint"]
 
 

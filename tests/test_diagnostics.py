@@ -1010,6 +1010,49 @@ def test_emsctl_diagnose_control_repeated_meter_values_with_unchanged_timestamp_
     )
 
 
+def test_emsctl_diagnose_control_counts_the_cycles_that_reused_a_reading(tmp_path):
+    """A meter slower than the loop is said once, as a note: each reading counts once."""
+
+    write_control_runtime(tmp_path)
+    write_live_control_status(
+        tmp_path,
+        grid=(40, 40, 40, 25, 25, 25, 31, 31),
+        measured_at="per_cycle",
+        repeated={1, 2, 4, 5, 7},
+    )
+
+    result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    quality = payload["control"]["meter_quality"]
+    assert (quality["samples"], quality["repeated_readings"]) == (8, 5)
+    assert quality["slower_than_loop"] is True
+    assert quality["stale"] is False
+    note = next(check for check in payload["checks"] if check["code"] == "meter_slower_than_loop")
+    assert note["level"] == "ok"
+    assert note["details"] == {"repeated_readings": 5, "samples": 8}
+
+
+@pytest.mark.parametrize(
+    "grid, repeated",
+    [
+        ((40, 40, 25, 25, 31, 31, 18, 18), {1, 3, 5, 7}),
+        ((40, 40, 40, 25, 25), {1, 2, 4}),
+    ],
+)
+def test_emsctl_diagnose_control_says_nothing_unless_most_cycles_reused_a_reading(tmp_path, grid, repeated):
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, grid=grid, measured_at="per_cycle", repeated=repeated)
+
+    result = run_emsctl(tmp_path, "diagnose", "--control", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["control"]["meter_quality"]["slower_than_loop"] is False
+    assert not any(check["code"] == "meter_slower_than_loop" for check in payload["checks"])
+
+
 def test_emsctl_diagnose_control_meter_read_failures_are_stale(tmp_path):
     write_control_runtime(tmp_path)
     write_live_control_status(
@@ -2151,7 +2194,7 @@ def test_diagnose_hardware_hands_the_runtime_loop_interval_to_the_homewizard_che
             self.host = host
 
         def measurement(self):
-            return {"protocol_version": 42, "timestamp": "2026-11-12T03:14:27", "power_w": 120}
+            return {"protocol_version": 42, "power_w": 120}
 
         def close(self):
             return None

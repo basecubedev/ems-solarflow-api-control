@@ -18,6 +18,7 @@ from ems import config as cfg
 from ems import diagnostics
 from ems.clients import (
     METER_FROZEN_AFTER_S,
+    FrozenTimestampGuard,
     PowerfoxClient,
     _parse_powerfox_value,
     create_grid_meter_client,
@@ -185,6 +186,44 @@ def test_a_time_stamp_that_stops_moving_fails_the_reading():
     assert client.health.consecutive_failures == 1
     assert client.get_power() == 90.0
     assert client.health.consecutive_failures == 0
+
+
+def test_a_reading_is_new_when_the_poweropti_time_stamp_moves():
+    session = Session(Response(_value(100, 5)), Response(_value(100, 5)), Response(_value(100, 6)))
+    client = PowerfoxClient("192.0.2.50", session, KEY, clock=Clock())
+
+    first = client.get_reading()
+    repeated = client.get_reading()
+    third = client.get_reading()
+
+    assert first.power_w == repeated.power_w == third.power_w == 100.0
+    assert repeated.sequence == first.sequence
+    assert third.sequence != first.sequence
+
+
+def test_a_changed_poweropti_power_is_a_new_reading_even_on_the_same_time_stamp():
+    session = Session(Response(_value(100, 5)), Response(_value(90, 5)))
+    client = PowerfoxClient("192.0.2.50", session, KEY, clock=Clock())
+
+    first = client.get_reading()
+    changed = client.get_reading()
+
+    assert changed.power_w == 90.0
+    assert changed.sequence != first.sequence
+
+
+def test_the_time_stamp_guard_says_whether_a_reading_is_new():
+    clock = Clock()
+    guard = FrozenTimestampGuard(clock)
+
+    assert guard.check(5) is True
+    assert guard.check(5) is False
+    assert guard.check(6) is True
+    assert guard.check(None) is True
+    assert guard.check(None) is True
+    clock.now += METER_FROZEN_AFTER_S + 1
+    assert guard.check(6) is True
+    assert guard.check(6) is False
 
 
 # --- the CLI setup assistant -------------------------------------------------------

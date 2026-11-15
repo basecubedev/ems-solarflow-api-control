@@ -21,6 +21,7 @@ from ems.charge_record import (
     CHARGE_EXIT_TO_OUTPUT,
     ChargeRecord,
 )
+from ems.grid_reading import GridReading
 from ems.health import CommHealth, redact_error, redact_url_credentials
 from ems.logging_utils import log_event
 from ems.models import DEVICE_STATE_PROPERTIES, MAX_PACK_NUMBER, DeviceState, PackCells, parse_pack_count
@@ -844,6 +845,7 @@ class FrozenTimestampGuard:
     A reader in front of a smart meter keeps answering with the last telegram
     when the meter stops sending; its time stamp is the only sign of that. A
     reading without a time stamp passes, since there is nothing to compare.
+    :meth:`check` answers whether the reading is a new one.
     """
 
     def __init__(self, clock=time.monotonic, frozen_after_s=METER_FROZEN_AFTER_S):
@@ -856,12 +858,13 @@ class FrozenTimestampGuard:
         now = self._clock()
         if timestamp is None or timestamp != self._timestamp:
             self._timestamp, self._since = timestamp, now
-            return
+            return True
         frozen_s = now - self._since
         if frozen_s > self._frozen_after_s:
             raise ValueError(
                 f"the smart meter has sent no new reading for {frozen_s:.0f} s (time stamp {timestamp})"
             )
+        return False
 
 
 class HomeWizardP1Client:
@@ -880,6 +883,7 @@ class HomeWizardP1Client:
         self.last_value = 0
         self.health = CommHealth(self.provider, kind="read")
         self._frozen = FrozenTimestampGuard(clock)
+        self._sequence = 0
 
     def get_power(self):
         """Return current grid power: positive import, negative export."""
@@ -887,8 +891,10 @@ class HomeWizardP1Client:
         start = time.monotonic()
         try:
             power, timestamp = _parse_homewizard_p1_measurement(self.api.measurement())
-            self._frozen.check(timestamp)
-            self.last_value = round(power, 1)
+            power = round(power, 1)
+            if self._frozen.check(timestamp) or power != self.last_value:
+                self._sequence += 1
+            self.last_value = power
             self.health.record_success((time.monotonic() - start) * 1000.0)
 
         except Exception as e:
@@ -907,6 +913,12 @@ class HomeWizardP1Client:
             )
 
         return self.last_value
+
+    def get_reading(self):
+        """The grid power; a new meter time stamp or a new value is a new reading."""
+
+        power = self.get_power()
+        return GridReading(power, self._sequence)
 
     def close(self):
         self.api.close()
@@ -929,6 +941,7 @@ class PowerfoxClient:
         self.last_value = 0
         self.health = CommHealth(self.provider, kind="read")
         self._frozen = FrozenTimestampGuard(clock)
+        self._sequence = 0
 
     def get_power(self):
         """Return current grid power: positive import, negative export."""
@@ -940,8 +953,10 @@ class PowerfoxClient:
                 raise ValueError("the poweropti refused the API key, or its PRO service is not active")
             r.raise_for_status()
             power, timestamp = _parse_powerfox_value(r.json())
-            self._frozen.check(timestamp)
-            self.last_value = round(power, 1)
+            power = round(power, 1)
+            if self._frozen.check(timestamp) or power != self.last_value:
+                self._sequence += 1
+            self.last_value = power
             self.health.record_success((time.monotonic() - start) * 1000.0)
 
         except Exception as e:
@@ -959,6 +974,12 @@ class PowerfoxClient:
             )
 
         return self.last_value
+
+    def get_reading(self):
+        """The grid power; a new meter time stamp or a new value is a new reading."""
+
+        power = self.get_power()
+        return GridReading(power, self._sequence)
 
 
 DSMR_MAX_AGE_S = 15.0
@@ -983,6 +1004,7 @@ class DsmrTcpClient:
         self._clock = clock
         self._received_at = None
         self._quiet_since = None
+        self._sequence = 0
 
     @property
     def endpoint(self):
@@ -1003,6 +1025,7 @@ class DsmrTcpClient:
             if reading is not None:
                 self.last_value = reading.power_w
                 self._received_at = self._quiet_since = now
+                self._sequence += 1
             else:
                 self._check_quiet(now)
             self.health.record_success((time.monotonic() - start) * 1000.0)
@@ -1022,6 +1045,12 @@ class DsmrTcpClient:
             )
 
         return self.last_value
+
+    def get_reading(self):
+        """The grid power; each telegram is one reading."""
+
+        power = self.get_power()
+        return GridReading(power, self._sequence)
 
     def close(self):
         self.reader.close()
@@ -1199,6 +1228,7 @@ class MqttGridMeterClient:
         self.last_message_monotonic = None
         self.health = CommHealth(self.provider, kind="read")
         self._lock = threading.Lock()
+        self._sequence = 0
         self._connect_error = None
         self._client = self._create_client(client_factory)
 
@@ -1315,14 +1345,21 @@ class MqttGridMeterClient:
         with self._lock:
             self.last_value = round(value, 1)
             self.last_message_monotonic = time.monotonic()
+            self._sequence += 1
 
     def get_power(self):
         """Return the latest received MQTT grid power without blocking."""
+
+        return self.get_reading().power_w
+
+    def get_reading(self):
+        """The latest received grid power; each message is one reading."""
 
         start = time.monotonic()
         with self._lock:
             value = self.last_value
             last_message_monotonic = self.last_message_monotonic
+            sequence = self._sequence
 
         latency_ms = (time.monotonic() - start) * 1000.0
         if last_message_monotonic is None:
@@ -1341,7 +1378,7 @@ class MqttGridMeterClient:
                 error=error,
                 stale_value=value,
             )
-            return value
+            return GridReading(value, sequence)
 
         age_seconds = time.monotonic() - last_message_monotonic
         if age_seconds > self.max_age_seconds:
@@ -1360,10 +1397,10 @@ class MqttGridMeterClient:
                 max_age_seconds=self.max_age_seconds,
                 stale_value=value,
             )
-            return value
+            return GridReading(value, sequence)
 
         self.health.record_success(latency_ms)
-        return value
+        return GridReading(value, sequence)
 
     def close(self):
         try:
