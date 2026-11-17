@@ -23,8 +23,9 @@ Each device below carries one status. It describes **how much confidence we have
 that control/telemetry works on that exact hardware** — not how good the device
 is:
 
-- **Validated** — confirmed working on real hardware. Every Validated entry is
-  listed under [Validated devices](#validated-devices) with the connection(s)
+- **Validated** — confirmed working on real hardware, by the maintainer or by
+  a user's report. Every Validated entry is listed under
+  [Validated devices](#validated-devices) with the connection(s)
   tested and who confirmed it.
 - **Family-supported** — shares the exact API/reader protocol of a Validated
   device (same ZenSDK line, same meter reader). Expected to work, but not
@@ -32,8 +33,6 @@ is:
 - **Reverse-engineered** — the write/telemetry protocol was implemented from
   external community projects or public/vendor documentation and has **not**
   been confirmed on real hardware by anyone.
-- **User-reported** — a user reported it working. Once corroborated it can move
-  up to Validated.
 
 The maintainer tests on a **SolarFlow 800 Pro 2** and a **Shelly Pro** grid
 meter, so only that hardware is Validated first-hand. Everything else relies on
@@ -43,12 +42,13 @@ so more devices can move to Validated.
 ## Validated devices
 
 Confirmed working on real hardware. This is the ledger the statuses above point
-at — a device you report reaches it once your report has been corroborated,
-see [Help improve compatibility](#help-improve-compatibility).
+at — a device you report working reaches it with your report, see
+[Help improve compatibility](#help-improve-compatibility).
 
 Every row is backed by a concrete evidence statement. Devices tested first-hand
-by the maintainer are listed as **Maintainer hardware**; a device only earns a
-row here once a real hardware test is recorded, so the Zendure smart meters —
+by the maintainer are listed as **Maintainer hardware**, a user's report as
+**User reported**. A device only earns a row here once a real
+hardware test is recorded, so the Zendure smart meters —
 whose shared local-HTTP reader is exercised only by the automated test harness —
 are not listed until a physical report confirms them.
 
@@ -56,6 +56,7 @@ are not listed until a physical report confirms them.
 |---|---|---|---|
 | SolarFlow 800 Pro 2 | Local API + Zendure cloud MQTT | Maintainer | Maintainer hardware |
 | Shelly Pro (grid meter) | Local HTTP (RPC status) | Maintainer | Maintainer hardware |
+| SolarFlow 800 Plus | Local API | User | User reported |
 
 ## Supported Zendure Devices (Local API / ZenSDK)
 
@@ -66,7 +67,7 @@ ZenSDK-compatible HTTP API. Known ZenSDK-compatible models:
 |---|---|---|---|
 | SolarFlow 800 Pro 2 | Validated | **Measured** | Maintainer hardware; ZenSDK local HTTP control **and** Zendure cloud MQTT control confirmed. |
 | SolarFlow 800 | Family-supported | No AC charge path | Catalogue: no direct AC charging of the battery. |
-| SolarFlow 800 Plus | Family-supported | No AC charge path | Catalogue: no integrated AC charging. |
+| SolarFlow 800 Plus | Validated | No AC charge path | User reported over the Local API. Catalogue: no integrated AC charging. |
 | SolarFlow 800 Pro | Family-supported | Catalogue (1000 W) | Not measured here. |
 | SolarFlow 1600 AC+ | Family-supported | Catalogue (1600 W) | Not measured here. |
 | SolarFlow 2400 AC | Family-supported | Catalogue (2400 W) | Not measured here. |
@@ -164,7 +165,7 @@ physical hardware. Please report results (see below).
 
 | Generation | Example models | Connection | Status |
 |---|---|---|---|
-| New SolarFlow / ZenSDK | SolarFlow 800 Pro 2 (Validated); 800 / 800 Plus / 800 Pro / 1600 AC+ / 2400 AC / AC+ / Pro / 4000 AC+ (Family-supported) | Local API (preferred), plus output **control** over Zendure cloud MQTT | ZenSDK output control uses the exact-model `zensdk_properties_write` profile; **Validated on the maintainer's 800 Pro 2** (Local API + cloud MQTT), other ZenSDK models Family-supported. Over a **local** broker seen publishing scalar `Zendure/sensor/…` topics only, the device stays telemetry-only until that write path is verified on hardware. |
+| New SolarFlow / ZenSDK | SolarFlow 800 Pro 2 / 800 Plus (Validated); 800 / 800 Pro / 1600 AC+ / 2400 AC / AC+ / Pro / 4000 AC+ (Family-supported) | Local API (preferred), plus output **control** over Zendure cloud MQTT | ZenSDK output control uses the exact-model `zensdk_properties_write` profile; **Validated on the maintainer's 800 Pro 2** (Local API + cloud MQTT) and on a user's 800 Plus (Local API), other ZenSDK models Family-supported. Over a **local** broker seen publishing scalar `Zendure/sensor/…` topics only, the device stays telemetry-only until that write path is verified on hardware. |
 | Older Hub / Hyper | Hub 1200, Hub 2000, Hyper 2000, AIO 2400, Ace 1500, SuperBase V | MQTT control (local or cloud) | Reverse-engineered: exact listed models carry a legacy JSON write profile derived from external projects; that JSON report family is the local-broker path that stays enabled. Control still requires capability and transport gates; not confirmed on maintainer-owned physical hardware (Ace 1500 / SuperBase are telemetry-only). |
 | Any device via API key | Any Zendure device | Zendure cloud MQTT | Telemetry supported; saving the settings provisions the runtime broker credential; control requires an exact supported model and every control-eligibility condition above. |
 
@@ -206,9 +207,8 @@ firmware version, connection type and sanitized logs (remove serial numbers,
 tokens, passwords and public IPs first).
 
 A report that a device works is what lets it be marked as working on this page:
-the first one lists it as **User-reported**, and once the maintainer can
-corroborate it, for example by a second report, it can move up to **Validated**
-and into the [validated devices](#validated-devices). The next person with the
+it moves that model up to **Validated** and into the
+[validated devices](#validated-devices). The next person with the
 same device then knows it works before buying it. A report about a device that
 does not work helps just as much. The **About & licenses** page of the
 dashboard, the Admin console and the Appliance Manager links the same form.
