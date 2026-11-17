@@ -15,6 +15,13 @@ missing and deletes nothing -- an appliance whose raw bucket has kept months of
 telemetry forever keeps it until an operator syncs on purpose. A schema already
 in place costs a handful of lookups and no writes.
 
+One retention it does apply over older data: one the operator set in the
+Admin and confirmed there, which the Admin records for it
+(:mod:`ems.history.confirmed_retention`). The keeper applies exactly that
+retention once the EMS runs the settings it belongs to and removes the entry;
+as the EMS starts, :func:`drop_replaced_confirmations` removes the entries the
+settings it read no longer ask for.
+
 Every schema write on the host takes the schema lock (``schema_sync_lock``), so
 the keeper and an ``emsctl influx sync`` -- the operator's, or the Admin's
 one-off -- never create the same task side by side. The keeper does not wait for
@@ -28,7 +35,7 @@ import logging
 import threading
 
 from ems.file_io import FileLockTimeout
-from ems.history import schema
+from ems.history import confirmed_retention, schema
 from ems.logging_utils import log_event
 
 FIRST_ATTEMPT_SECONDS = 20.0
@@ -62,17 +69,10 @@ TASK_KEPT_HINT = (
 )
 RETENTION_KEPT_HINT = (
     "The bucket keeps data longer than influxdb.retention says. Shortening it "
-    "would delete the older data, so the EMS leaves it as it is. To apply the "
-    "configured retention, run: python3 emsctl.py influx sync"
+    "would delete the older data, so the EMS leaves it as it is. A retention "
+    "shortened and confirmed in the Admin console is applied by itself; to "
+    "apply this one, run: python3 emsctl.py influx sync"
 )
-
-
-def keeper_wanted(influx_config):
-    """Whether this config lets the EMS reconcile the schema on its own."""
-
-    if not isinstance(influx_config, dict) or not influx_config.get("enabled"):
-        return False
-    return influx_config.get("auto_sync") is not False
 
 
 def schema_lock_path():
@@ -120,8 +120,10 @@ class InfluxSchemaKeeper:
         client_factory=None,
         lock=schema_sync_lock,
         first_attempt_s=FIRST_ATTEMPT_SECONDS,
+        confirmed_path=None,
     ):
         self.config = influx_config
+        self.confirmed_path = confirmed_path
         self._client_factory = client_factory
         self._lock = lock
         self._first_attempt_s = first_attempt_s
@@ -132,6 +134,8 @@ class InfluxSchemaKeeper:
         self._kept_buckets = set()
         self._kept_tasks = set()
         self._unchecked_buckets = set()
+        self._unsettled = set()
+        self._refused_buckets = set()
 
     @property
     def running(self):
@@ -182,9 +186,14 @@ class InfluxSchemaKeeper:
             client = self._build_client()
             if client is None:
                 return self._failed("no_token", "no InfluxDB URL or token yet")
+            entries = self._confirmations()
             with self._lock(0):
                 report = schema.sync(
-                    client, self.config, safe=True, known_kept=frozenset(self._kept_buckets)
+                    client,
+                    self.config,
+                    safe=True,
+                    known_kept=frozenset(self._kept_buckets),
+                    confirmed={name: entry.retention_seconds for name, entry in entries.items()},
                 )
         except FileLockTimeout:
             return RETRY_SECONDS[0]
@@ -197,17 +206,77 @@ class InfluxSchemaKeeper:
         changes = _changes(report)
         if changes:
             log_event(logging.INFO, "influx_schema_synced", **changes)
+        try:
+            self._settle_confirmed(report, entries)
+        except Exception as exc:
+            log_event(logging.WARNING, "influx_schema_confirmed_retention_unsettled", error=exc)
         self._report_kept(report)
         self._failures = 0
         self._refused = None
         return RECHECK_SECONDS
+
+    def _confirmations(self):
+        if self.confirmed_path is None:
+            return {}
+        return confirmed_retention.for_settings(
+            confirmed_retention.confirmations(self.confirmed_path), self.config
+        )
+
+    def _settle_confirmed(self, report, entries):
+        """Say what a confirmation applied, and remove the entries the buckets now carry."""
+
+        done = {}
+        for bucket in report.get("buckets", []):
+            name = bucket.get("name")
+            entry = entries.get(name)
+            if entry is None or bucket.get("action") == "kept":
+                continue
+            done[name] = entry
+            self._kept_buckets.discard(name)
+            self._refused_buckets.discard(name)
+            if bucket.get("confirmed") or name not in self._unsettled:
+                log_event(
+                    logging.INFO,
+                    "influx_schema_confirmed_retention_applied",
+                    bucket=name,
+                    retention_seconds=entry.retention_seconds,
+                    updated_now=bool(bucket.get("confirmed")),
+                )
+        if not done:
+            return
+        try:
+            confirmed_retention.discard(self.confirmed_path, done)
+        except Exception as exc:
+            if set(done) - self._unsettled:
+                log_event(
+                    logging.WARNING,
+                    "influx_schema_confirmed_retention_unsettled",
+                    buckets=",".join(sorted(done)),
+                    error=exc,
+                )
+            self._unsettled.update(done)
+            return
+        self._unsettled.difference_update(done)
 
     def _report_kept(self, report):
         """Say once per bucket and task what the safe sync leaves as it is."""
 
         for bucket in report.get("buckets", []):
             name = bucket.get("name")
-            if bucket.get("action") != "kept" or name in self._kept_buckets:
+            if bucket.get("action") != "kept":
+                continue
+            if bucket.get("reason") == "refused":
+                if name not in self._refused_buckets:
+                    self._refused_buckets.add(name)
+                    log_event(
+                        logging.WARNING,
+                        "influx_schema_confirmed_retention_refused",
+                        bucket=name,
+                        retention_seconds=bucket.get("retention_seconds"),
+                        error=bucket.get("error"),
+                    )
+                continue
+            if name in self._kept_buckets:
                 continue
             if bucket.get("reason") != "older_data":
                 if name not in self._unchecked_buckets:
@@ -267,13 +336,40 @@ class InfluxSchemaKeeper:
         return RETRY_SECONDS[-1]
 
 
+def drop_replaced_confirmations(influx_config, settings_read_at, path=None):
+    """Remove the confirmed retentions the settings the EMS started with do not ask for.
+
+    Called once as the EMS starts on real hardware, whether or not analytics is
+    on: an entry confirmed before ``settings_read_at`` for other settings would
+    otherwise wait for them, and apply when they come back without anyone
+    confirming it again. Never raises.
+    """
+
+    try:
+        dropped = confirmed_retention.drop_replaced(
+            path or confirmed_retention.confirmed_path(), influx_config, settings_read_at
+        )
+    except Exception as exc:
+        log_event(logging.WARNING, "influx_schema_confirmed_retention_unsettled", error=exc)
+        return
+    for name, entry in sorted(dropped.items()):
+        log_event(
+            logging.INFO,
+            "influx_schema_confirmed_retention_dropped",
+            bucket=name,
+            retention_seconds=entry.retention_seconds,
+        )
+
+
 def start_schema_keeper(influx_config):
     """Start a keeper when the config allows one. Returns it, or None; never raises."""
 
-    if not keeper_wanted(influx_config):
+    if not schema.unattended_sync_wanted(influx_config):
         return None
     try:
-        keeper = InfluxSchemaKeeper(influx_config)
+        keeper = InfluxSchemaKeeper(
+            influx_config, confirmed_path=confirmed_retention.confirmed_path()
+        )
         keeper.start()
     except Exception as exc:
         log_event(logging.WARNING, "influx_schema_keeper_start_failed", error=exc)

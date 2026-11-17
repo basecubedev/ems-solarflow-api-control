@@ -481,6 +481,13 @@ def main():
     # writer's data flows into, and keeps asking until InfluxDB accepts them.
     influx_writer = None
     influx_schema_keeper = None
+    if not cfg.SIMULATION_MODE and not getattr(args, "replay", None):
+        try:
+            from ems.history.schema_keeper import drop_replaced_confirmations
+
+            drop_replaced_confirmations(cfg.INFLUXDB_CONFIG, cfg.SETTINGS_READ_AT)
+        except Exception as e:
+            log_event(logging.WARNING, "influx_schema_confirmed_retention_unsettled", error=e)
     if (
         cfg.INFLUXDB_CONFIG
         and cfg.INFLUXDB_CONFIG.get("enabled")

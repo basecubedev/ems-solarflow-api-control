@@ -398,8 +398,8 @@ reconciled from `config.json` by `emsctl.py influx`:
 #    that is still configured
 python3 emsctl.py influx sync
 
-# Create only what is missing and delete nothing (what the EMS and the Admin
-# console's Repair analytics run):
+# Create only what is missing and delete nothing (what the Admin console's
+# Restart EMS now and Repair analytics run; the EMS runs the same, see below):
 python3 emsctl.py influx sync --safe
 
 # Report live buckets, tasks and task health:
@@ -471,9 +471,10 @@ EMS syncs the schema itself:
   goes missing later comes back. A complete schema costs a few lookups and no
   writes; a bucket whose retention differs costs one more query, once.
 
-It runs the **safe** sync, the same as `influx sync --safe` and the same the
-Admin console runs for **Restart EMS now** and **Repair analytics**: it creates
-the buckets and tasks that are missing and deletes nothing.
+It runs the **safe** sync, like `influx sync --safe` and the Admin console's
+**Restart EMS now** and **Repair analytics**: it creates the buckets and tasks
+that are missing and deletes nothing. The one thing it does beyond them is to
+apply a retention you confirmed in the Admin console, below.
 
 - A retention is shortened only when no point in the bucket is old enough to
   fall out of it. An appliance whose raw bucket has kept months of telemetry
@@ -481,7 +482,35 @@ the buckets and tasks that are missing and deletes nothing.
   downsampling tasks only aggregate forward from the moment they exist. The EMS
   says so once as `event=influx_schema_retention_kept` and does not ask that
   bucket again while it runs; `influx sync` (without `--safe`) applies the
-  configured retention and deletes the older data. A check that fails — InfluxDB
+  configured retention and deletes the older data.
+- A retention you change in the Admin console's settings and confirm there is
+  applied after all, older data included: confirming the change records each
+  bucket, its InfluxDB and its new retention in
+  `data/influx-retention-confirmed.json`, as long as `influxdb.auto_sync` is
+  on. Once the EMS runs the saved settings on real hardware (not in simulation
+  or replay), it applies exactly that retention, logs
+  `event=influx_schema_confirmed_retention_applied` and removes the entry.
+  An entry counts only for the bucket, InfluxDB and retention it names. An EMS
+  running settings that name another retention or InfluxDB leaves it for the
+  restart. As the EMS starts, it removes every entry confirmed before it read
+  settings that do not ask for it — a backup restored, `config.json` edited by
+  hand, analytics or `auto_sync` switched off, another InfluxDB — and logs
+  `event=influx_schema_confirmed_retention_dropped`; such a retention keeps the
+  rule above, and setting it again later needs a new confirmation. An apply
+  that switches analytics or `auto_sync` off or back on clears the earlier
+  entries as well; a retention changed in that same apply is still recorded. A retention InfluxDB refuses is logged once as
+  `event=influx_schema_confirmed_retention_refused`; the entry stays and the
+  rest of the schema is still reconciled. An entry the EMS cannot remove is
+  logged once as `event=influx_schema_confirmed_retention_unsettled`.
+  `influx status` marks a bucket whose confirmed retention is still to come
+  with `"confirmed_retention": true`.
+- Every change to a retention in days asks InfluxDB for the shard-group
+  duration it would give a new bucket with that retention (1 hour below 2
+  days, 1 day below 180 days, 7 days above). A bucket made to keep its data
+  forever has week-long shard groups, and InfluxDB refuses a retention shorter
+  than them. A retention of 0 is sent as an expiry of 0, which is what makes
+  InfluxDB keep a bucket's data forever.
+- A check that fails — InfluxDB
   still settling, a query that times out — keeps the retention for that round
   and is asked again in the next one; the first such failure for a bucket is
   logged as `event=influx_schema_retention_unchecked`.

@@ -601,6 +601,76 @@ class SafeSyncTest(unittest.TestCase):
         self.assertEqual(report["buckets"][0]["action"], "kept")
         self.assertEqual(report["buckets"][0]["reason"], "probe_failed")
 
+    def test_a_shorter_retention_the_operator_confirmed_is_applied_over_older_data(self):
+        client = self._fresh_install()
+        client.old_points.add("ems_raw")
+
+        report = schema.sync(
+            client, self.config, safe=True, confirmed={"ems_raw": 14 * 86400}
+        )
+
+        self.assertEqual(client.buckets["ems_raw"], 14 * 86400)
+        self.assertNotIn("has_points_before", [call[0] for call in client.calls])
+        raw = report["buckets"][0]
+        self.assertEqual(raw["action"], "updated")
+        self.assertTrue(raw["confirmed"])
+
+    def test_a_confirmation_counts_only_for_the_retention_it_names(self):
+        client = self._fresh_install()
+        client.old_points.add("ems_raw")
+
+        report = schema.sync(
+            client, self.config, safe=True, confirmed={"ems_raw": 7 * 86400}
+        )
+
+        self.assertEqual(client.buckets["ems_raw"], 0)
+        self.assertEqual(report["buckets"][0]["action"], "kept")
+        self.assertNotIn("confirmed", report["buckets"][0])
+
+    def test_a_bucket_known_to_hold_older_data_still_takes_a_confirmed_retention(self):
+        client = self._fresh_install()
+        client.old_points.add("ems_raw")
+
+        schema.sync(
+            client,
+            self.config,
+            safe=True,
+            known_kept=frozenset({"ems_raw"}),
+            confirmed={"ems_raw": 14 * 86400},
+        )
+
+        self.assertEqual(client.buckets["ems_raw"], 14 * 86400)
+
+    def test_a_confirmed_retention_influxdb_refuses_is_kept_and_the_rest_goes_on(self):
+        client = self._fresh_install()
+        client.old_points.add("ems_raw")
+
+        def refusing(bucket_id, retention_seconds):
+            error = OSError("422 Unprocessable Entity")
+            error.response = type("Response", (), {"status_code": 422})()
+            raise error
+
+        client.update_bucket_retention = refusing
+        report = schema.sync(client, self.config, safe=True, confirmed={"ems_raw": 14 * 86400})
+
+        raw = report["buckets"][0]
+        self.assertEqual((raw["action"], raw["reason"]), ("kept", "refused"))
+        self.assertIn("422", raw["error"])
+        self.assertEqual(sorted(client.buckets), ["ems_1h", "ems_1m", "ems_5m", "ems_raw"])
+        self.assertEqual(len(client.tasks), 6)
+
+    def test_a_confirmed_retention_that_fails_otherwise_fails_the_sync(self):
+        client = self._fresh_install()
+
+        def unavailable(bucket_id, retention_seconds):
+            error = OSError("503 Service Unavailable")
+            error.response = type("Response", (), {"status_code": 503})()
+            raise error
+
+        client.update_bucket_retention = unavailable
+        with self.assertRaises(OSError):
+            schema.sync(client, self.config, safe=True, confirmed={"ems_raw": 14 * 86400})
+
     def test_a_longer_retention_is_applied_without_asking(self):
         client = FakeInfluxClient()
         schema.sync(client, self.config)
@@ -727,6 +797,18 @@ class StatusTest(unittest.TestCase):
         self.assertFalse(report["healthy"])
         self.assertIn("ems_1m", report["missing_buckets"])
         self.assertEqual(len(report["tasks"]), 1)
+
+    def test_status_marks_a_confirmed_retention_still_to_come(self):
+        config = normalize_influxdb_config({"enabled": True, "bucket_prefix": "ems"})
+        client = FakeInfluxClient()
+        schema.sync(client, config)
+        client.buckets["ems_raw"] = 0
+        client.buckets["ems_1m"] = 0
+
+        report = schema.status(client, config, confirmed={"ems_raw": 14 * 86400, "ems_1m": 7 * 86400})
+
+        marks = {bucket["name"]: bucket["confirmed_retention"] for bucket in report["buckets"]}
+        self.assertEqual(marks, {"ems_raw": True, "ems_1m": False, "ems_5m": False, "ems_1h": False})
 
     def test_a_half_synced_schema_is_not_healthy(self):
         """Only the raw bucket and no task used to read as healthy."""

@@ -122,6 +122,14 @@ def retention_seconds_for_bucket(influx_config, key):
     return int(retention.get(retention_key, 0) or 0) * 86400
 
 
+def unattended_sync_wanted(influx_config):
+    """Whether this config lets the EMS reconcile the schema on its own."""
+
+    if not isinstance(influx_config, dict) or not influx_config.get("enabled"):
+        return False
+    return influx_config.get("auto_sync") is not False
+
+
 def planned_buckets(influx_config):
     """Ordered {bucket_key: retention_seconds} derived from the config.
 
@@ -379,11 +387,26 @@ def _retention_blocker(client, name, current, wanted):
         return "probe_failed"
 
 
-def _safe_bucket(client, name, retention, known_kept=()):
+def _refused_by_influxdb(exc):
+    """Whether InfluxDB answered a request with a refusal of the request itself.
+
+    A token it does not accept (401/403) is the whole sync's problem, not one
+    bucket's, and so is everything that is not an answer.
+    """
+
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return isinstance(status, int) and 400 <= status < 500 and status not in (401, 403)
+
+
+def _safe_bucket(client, name, retention, known_kept=(), confirmed=None):
     """Create a missing bucket; correct a retention only where that deletes nothing.
 
     A bucket in ``known_kept`` was found holding older data before and is not
-    asked again: its answer does not change while its retention does not.
+    asked again: its answer does not change while its retention does not. A
+    retention ``confirmed`` names for the bucket was confirmed by an operator
+    who knew it may delete older data, and is applied without asking; one
+    InfluxDB refuses is reported ``kept`` with reason ``refused``, and the
+    rest of the schema is still reconciled.
     """
 
     wanted = int(retention or 0)
@@ -395,6 +418,21 @@ def _safe_bucket(client, name, retention, known_kept=()):
     current = client.bucket_retention_seconds(live)
     if current == wanted:
         return {"name": name, "action": "unchanged", "retention_seconds": wanted}
+    if (confirmed or {}).get(name) == wanted:
+        try:
+            client.update_bucket_retention(live.get("id"), wanted)
+        except Exception as exc:
+            if not _refused_by_influxdb(exc):
+                raise
+            return {
+                "name": name,
+                "action": "kept",
+                "reason": "refused",
+                "error": str(exc),
+                "retention_seconds": wanted,
+                "live_retention_seconds": current,
+            }
+        return {"name": name, "action": "updated", "retention_seconds": wanted, "confirmed": True}
     reason = "older_data" if name in known_kept else _retention_blocker(client, name, current, wanted)
     if reason is None:
         client.update_bucket_retention(live.get("id"), wanted)
@@ -408,16 +446,18 @@ def _safe_bucket(client, name, retention, known_kept=()):
     }
 
 
-def sync(client, influx_config, safe=False, known_kept=()):
+def sync(client, influx_config, safe=False, known_kept=(), confirmed=None):
     """Reconcile InfluxDB to the config. Returns a structured report dict.
 
     ``safe`` is the sync that runs without anyone watching: the EMS's own and
     the Admin's repair. It creates what is missing and changes nothing an
     operator may have meant -- no task is updated, re-activated or disabled --
-    and no data is deleted: a retention is shortened only when no point is old
-    enough to fall out of it. A bucket or task it leaves alone is reported
-    ``kept``; ``known_kept`` names buckets a caller already knows hold older
-    data, so they are not probed again.
+    and no data is deleted unasked: a retention is shortened only when no point
+    is old enough to fall out of it, or when ``confirmed`` maps the bucket to exactly
+    that retention, which an operator confirmed knowing it deletes older data
+    (:mod:`ems.history.confirmed_retention`). A bucket or task it leaves alone
+    is reported ``kept``; ``known_kept`` names buckets a caller already knows
+    hold older data, so they are not probed again.
     """
     prefix = influx_config["bucket_prefix"]
     org_id = client.get_org_id()
@@ -428,7 +468,7 @@ def sync(client, influx_config, safe=False, known_kept=()):
     for key, retention in planned_buckets(influx_config).items():
         name = bucket_name(prefix, key)
         if safe:
-            report["buckets"].append(_safe_bucket(client, name, retention, known_kept))
+            report["buckets"].append(_safe_bucket(client, name, retention, known_kept, confirmed))
             continue
         _bucket, action = client.ensure_bucket_retention(name, retention)
         report["buckets"].append(
@@ -518,11 +558,13 @@ def _raw_freshness(client, name, exists, window):
         return None, False
 
 
-def status(client, influx_config):
+def status(client, influx_config, confirmed=None):
     """Read live bucket/task state for diagnostics. Returns a report dict.
 
     Beside the schema it reports whether telemetry is arriving: a complete
-    schema says nothing about writes InfluxDB refuses.
+    schema says nothing about writes InfluxDB refuses. A bucket whose configured
+    retention ``confirmed`` names, and which does not carry it yet, says so as
+    ``confirmed_retention``: the EMS applies it by itself.
     """
     prefix = influx_config["bucket_prefix"]
     owned_bucket_prefix = f"{prefix}_"
@@ -532,14 +574,18 @@ def status(client, influx_config):
     for key, retention in planned_buckets(influx_config).items():
         name = bucket_name(prefix, key)
         live = client.find_bucket(name)
+        live_retention = client.bucket_retention_seconds(live) if live else None
         buckets.append(
             {
                 "name": name,
                 "exists": live is not None,
-                "retention_seconds": (
-                    client.bucket_retention_seconds(live) if live else None
-                ),
+                "retention_seconds": live_retention,
                 "expected_retention_seconds": retention,
+                "confirmed_retention": (
+                    live is not None
+                    and live_retention != retention
+                    and (confirmed or {}).get(name) == retention
+                ),
             }
         )
 

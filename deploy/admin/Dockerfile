@@ -118,6 +118,10 @@ COPY ems/logging_utils.py ./ems/logging_utils.py
 # reader/writer, so it must ship in the Admin image.
 COPY ems/file_io.py ./ems/file_io.py
 COPY ems/runtime_state.py ./ems/runtime_state.py
+COPY ems/history/__init__.py ./ems/history/__init__.py
+COPY ems/history/provider.py ./ems/history/provider.py
+COPY ems/history/schema.py ./ems/history/schema.py
+COPY ems/history/confirmed_retention.py ./ems/history/confirmed_retention.py
 # Offline Zendure MQTT setup proposals + config-derived runtime status: Admin
 # turns discovery telemetry into preview-only config fragments and builds the
 # Maintenance telemetry status view with the EMS code instead of duplicating

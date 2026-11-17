@@ -284,9 +284,13 @@ docker compose -f docker-compose.admin.yml up -d
   analytics is on it also creates the missing analytics buckets and
   downsampling tasks. **Repair analytics** creates the missing buckets and tasks
   without touching any container; it deletes nothing. The two never run at the
-  same time. A shorter retention or a removed downsampling entry is applied only
-  by a full schema sync, `docker compose exec ems python3 emsctl.py influx
-  sync`, because it deletes the data that falls out of the new retention.
+  same time. A retention you change under **Settings** and confirm there is
+  applied by the EMS once it runs the saved settings (with `influxdb.auto_sync`
+  on), and the data that falls out of it is deleted. A removed downsampling
+  entry, or a retention shortened in `config.json` by hand, is applied only by
+  a full schema sync,
+  `docker compose exec ems python3 emsctl.py influx sync`, because it deletes
+  data you did not confirm here.
 
 ## Settings & devices
 

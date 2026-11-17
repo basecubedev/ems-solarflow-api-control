@@ -152,8 +152,10 @@ access and version.
 **What it changes:** EMS is recreated with the saved settings, and the bundled
 analytics database is started or stopped as the settings say. When analytics
 is on it also creates missing analytics buckets and downsampling tasks, the
-same way **Repair analytics** does. Settings, data, volumes and backups are not
-deleted; control pauses for a moment while EMS restarts.
+same way **Repair analytics** does. Settings, volumes and backups are not
+deleted, and no data is, except what falls out of a retention you changed under
+**Settings** and confirmed there, which the restarted EMS applies; control
+pauses for a moment while EMS restarts.
 
 **Expected result:** *Done. The containers match the saved settings.*, with
 each step and when it ran. Analytics is optional, so a failed analytics step
@@ -164,11 +166,15 @@ buckets and downsampling tasks now. It deletes nothing and changes nothing
 else: no container is started, stopped or recreated. You rarely need it: while
 `influxdb.auto_sync` is on (the default), the running EMS does the same by
 itself within minutes of InfluxDB answering, and checks again every half hour.
-A shorter retention you configured, or a downsampling entry you removed, is
-applied only by a full schema sync, which you run on purpose because it deletes
-the data that falls out of the new retention — in the installation directory,
-`docker compose exec ems python3 emsctl.py influx sync`. **Run the checks**
-names a retention that differs from the settings.
+A retention you change under **Settings** and confirm there is applied by the
+EMS once it runs the saved settings, after **Restart EMS now**; the data that
+falls out of the new retention is deleted, as the settings warned. This needs
+`influxdb.auto_sync` on. A downsampling entry you removed, or a retention
+shortened in `config.json` by hand, is applied only by a full schema sync,
+which you run on purpose because it deletes data — in the installation
+directory, `docker compose exec ems python3 emsctl.py influx sync`. **Run the
+checks** names a retention that differs from the settings, and says when it is
+one you confirmed that the EMS still has to apply.
 
 **Restart EMS now** is greyed out when nothing can be restarted from here —
 Docker or the container setup is not available — and the two actions never run

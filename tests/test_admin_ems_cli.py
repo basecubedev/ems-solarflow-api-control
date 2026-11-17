@@ -449,6 +449,46 @@ def test_a_retention_that_differs_is_named_with_the_way_that_applies_it(tmp_path
     assert "docker compose exec ems python3 emsctl.py influx sync" in check["message"]
 
 
+def test_a_retention_confirmed_in_settings_is_named_as_still_to_come(tmp_path):
+    """Between the confirmed apply and the restart the bucket still keeps more;
+    the check must not send the operator to the full sync for it."""
+
+    from admin.ems_cli import INFLUX_RETENTION_CONFIRMED_MESSAGE, INFLUX_RETENTION_LONGER_MESSAGE
+
+    _standard_install(tmp_path)
+    report = {
+        "action": "status",
+        "ok": True,
+        "report": {
+            "healthy": True,
+            "missing_buckets": [],
+            "missing_tasks": [],
+            "buckets": [
+                {"name": "ems_raw", "exists": True, "retention_seconds": 30 * 86400,
+                 "expected_retention_seconds": 7 * 86400, "confirmed_retention": True},
+                {"name": "ems_1m", "exists": True, "retention_seconds": 0,
+                 "expected_retention_seconds": 90 * 86400, "confirmed_retention": False},
+            ],
+            "tasks": [],
+        },
+    }
+    run = FakeRun(
+        results={("influx", "status", "--json"): _completed(0, json.dumps(report))},
+        default=_completed(0, "{}"),
+    )
+    service = _service(tmp_path, docker=FakeDocker(container=_running_ems()), run=run)
+
+    check = service.run(check_ids=["influx_status"])["checks"][0]
+
+    assert check["status"] == "warning"
+    assert check["message"] == " ".join(
+        [
+            INFLUX_RETENTION_LONGER_MESSAGE.format(buckets="ems_1m keeps forever (config 90 days)"),
+            INFLUX_RETENTION_CONFIRMED_MESSAGE.format(buckets="ems_raw keeps 30 days (config 7 days)"),
+        ]
+    )
+
+
 def _status_check(tmp_path, report):
     _standard_install(tmp_path)
     run = FakeRun(
