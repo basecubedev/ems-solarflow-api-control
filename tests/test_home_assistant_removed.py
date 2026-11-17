@@ -155,7 +155,7 @@ def test_a_config_with_an_ha_section_loads_and_starts_unchanged(
             result = {
                 name: getattr(cfg, name)
                 for name in dir(cfg)
-                if name.isupper() and name not in ("ARGS", "CONFIG")
+                if name.isupper() and name not in ("ARGS", "CONFIG", "SETTINGS_READ_AT")
             }
             result["CONFIG"] = {
                 key: value for key, value in cfg.CONFIG.items() if key != "ha"

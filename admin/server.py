@@ -290,6 +290,7 @@ from ems.external_status import (
     sanitize_external_mqtt_status,
 )
 from ems.config import TIBBER_PULSE_GRID_METER_TYPE
+from ems.history import confirmed_retention
 from ems.tibber_pulse import login_can_carry
 from ems.zendure_mqtt.config_entries import EXTERNAL_MQTT_TYPE
 
@@ -3597,6 +3598,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                     500,
                 )
             result["runtime_sync"] = self._mirror_runtime_after_apply(prepared)
+            result["analytics_retention"] = self._record_confirmed_retention(prepared)
         result["validation"] = prepared["validation"]
         result["diff"] = prepared["diff"]
         return result, 200
@@ -3719,6 +3721,27 @@ class AdminHandler(BaseHTTPRequestHandler):
             )
         except Exception as exc:
             return {"applied": [], "skipped": [], "warnings": [f"runtime sync skipped: {exc}"]}
+
+    def _record_confirmed_retention(self, prepared):
+        """Record the bucket retentions this confirmed apply set.
+
+        The preview warned that the change can discard stored data and the
+        operator confirmed it, so the EMS's schema keeper applies the retention
+        over older data. Best-effort like the runtime mirror: the config is
+        saved, and without the record the keeper keeps the older data, says so
+        in its log, and Run the checks names the command that applies it.
+        """
+
+        try:
+            context = self.server.config_apply.install_context_provider()
+            confirmed = confirmed_retention.confirm_change(
+                confirmed_retention.confirmed_path(context.data_dir),
+                prepared["replaced"],
+                json.loads(prepared["payload"]),
+            )
+        except Exception as exc:
+            return {"confirmed": [], "warnings": [f"retention confirmation not recorded: {exc}"]}
+        return {"confirmed": confirmed, "warnings": []}
 
     def _handle_maintenance_container_plan(self):
         # Read-only: derive the desired/current/action plan from the live config

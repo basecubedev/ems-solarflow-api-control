@@ -1644,6 +1644,84 @@ def test_apply_succeeds_when_runtime_file_absent(tmp_path, monkeypatch):
     )
 
 
+def _apply_retention(tmp_path, monkeypatch, before, after, loop_interval=None):
+    data = _config()
+    data["influxdb"]["retention"] = {"raw_days": before}
+    data["system"]["loop_interval"] = 3
+    _write_config(tmp_path, data)
+    loaded = load_maintenance_config(base_dir=str(tmp_path))
+    loaded["draft"]["features"]["influxdb.retention.raw_days"] = after
+    if loop_interval is not None:
+        loaded["draft"]["features"]["system.loop_interval"] = loop_interval
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    srv, base = _server(config_apply=_convergence_service(tmp_path))
+    try:
+        return _post(
+            f"{base}/api/admin/maintenance/config/apply",
+            {
+                "draft": loaded["draft"],
+                "revision": loaded["revision"],
+                "confirm": True,
+                "backup": True,
+            },
+        )
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_a_confirmed_apply_records_the_retention_for_the_ems(tmp_path, monkeypatch):
+    """The operator saw the change and its data-loss warning and confirmed it;
+    the EMS's schema keeper applies a retention recorded here over older data."""
+
+    from ems.history.confirmed_retention import confirmations, confirmed_path
+
+    status, payload = _apply_retention(tmp_path, monkeypatch, 14, 7)
+
+    assert status == 200
+    assert payload["ok"] is True
+    assert payload["analytics_retention"] == {"confirmed": ["ems_raw"], "warnings": []}
+    entries = confirmations(confirmed_path(tmp_path / "data"))
+    assert {name: entry.retention_seconds for name, entry in entries.items()} == {"ems_raw": 7 * 86400}
+
+
+def test_a_confirmed_longer_retention_is_recorded_too(tmp_path, monkeypatch):
+    """InfluxDB's setup may have left the bucket keeping data forever; the
+    longer retention confirmed here is still shorter than that."""
+
+    from ems.history.confirmed_retention import confirmations, confirmed_path
+
+    status, payload = _apply_retention(tmp_path, monkeypatch, 14, 30)
+
+    assert status == 200
+    assert payload["analytics_retention"] == {"confirmed": ["ems_raw"], "warnings": []}
+    entries = confirmations(confirmed_path(tmp_path / "data"))
+    assert {name: entry.retention_seconds for name, entry in entries.items()} == {"ems_raw": 30 * 86400}
+
+
+def test_an_apply_that_changes_no_retention_records_nothing(tmp_path, monkeypatch):
+    from ems.history.confirmed_retention import confirmed_path
+
+    status, payload = _apply_retention(tmp_path, monkeypatch, 14, 14, loop_interval=7)
+
+    assert status == 200
+    assert payload["analytics_retention"] == {"confirmed": [], "warnings": []}
+    assert not confirmed_path(tmp_path / "data").exists()
+
+
+def test_a_confirmation_that_cannot_be_recorded_does_not_undo_the_apply(tmp_path, monkeypatch):
+    (tmp_path / "data").write_text("not a directory", encoding="utf-8")
+
+    status, payload = _apply_retention(tmp_path, monkeypatch, 14, 7)
+
+    assert status == 200
+    assert payload["ok"] is True
+    assert payload["analytics_retention"]["confirmed"] == []
+    assert payload["analytics_retention"]["warnings"]
+    saved = json.loads((tmp_path / "config" / "config.json").read_text())
+    assert saved["influxdb"]["retention"]["raw_days"] == 7
+
+
 def test_reset_runtime_endpoint_writes_config_value(tmp_path, monkeypatch):
     data = _config()
     data["system"]["loop_interval"] = 3

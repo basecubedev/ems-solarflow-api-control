@@ -63,6 +63,12 @@ INFLUX_RETENTION_LONGER_MESSAGE = (
     "it anyway, which deletes the older data, run in the installation directory: "
     + FULL_SYNC_COMMAND
 )
+INFLUX_RETENTION_CONFIRMED_MESSAGE = (
+    "Retention set under Settings and confirmed there, not applied yet: "
+    "{buckets}. The EMS applies it once it runs the saved settings and reaches "
+    "InfluxDB -- after Restart EMS now, if it has not restarted since -- and "
+    "deletes the data that falls out of it."
+)
 INFLUX_RETENTION_SHORTER_MESSAGE = (
     "Retention is shorter than the config: {buckets}. Repair analytics "
     "lengthens it; nothing is deleted."
@@ -357,7 +363,7 @@ def _influx_schema_message(parsed):
     missing_tasks = names("missing_tasks")
     absent = names("missing_buckets") + [name for name in missing_tasks if name not in present]
     off = [name for name in missing_tasks if name in present]
-    longer, shorter = [], []
+    longer, shorter, confirmed = [], [], []
     for bucket in report.get("buckets") or []:
         if not isinstance(bucket, dict) or not bucket.get("exists"):
             continue
@@ -366,7 +372,12 @@ def _influx_schema_message(parsed):
         if live is None or wanted is None or live == wanted:
             continue
         text = f"{bucket.get('name')} keeps {_days(live)} (config {_days(wanted)})"
-        (longer if _keeps_longer(live, wanted) else shorter).append(text)
+        if not _keeps_longer(live, wanted):
+            shorter.append(text)
+        elif bucket.get("confirmed_retention") is True:
+            confirmed.append(text)
+        else:
+            longer.append(text)
     parts = []
     if (
         report.get("raw_checked") is True
@@ -385,6 +396,8 @@ def _influx_schema_message(parsed):
         parts.append(INFLUX_TASKS_OFF_MESSAGE.format(tasks=", ".join(off)))
     if longer:
         parts.append(INFLUX_RETENTION_LONGER_MESSAGE.format(buckets="; ".join(longer)))
+    if confirmed:
+        parts.append(INFLUX_RETENTION_CONFIRMED_MESSAGE.format(buckets="; ".join(confirmed)))
     if shorter:
         parts.append(INFLUX_RETENTION_SHORTER_MESSAGE.format(buckets="; ".join(shorter)))
     return " ".join(parts) or None

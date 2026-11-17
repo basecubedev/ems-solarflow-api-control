@@ -20,8 +20,10 @@ import pytest
 
 from ems.config import normalize_influxdb_config
 from ems.file_io import FileLockTimeout
-from ems.history import schema_keeper
+from ems.history import schema, schema_keeper
+from ems.history.confirmed_retention import confirm_change, confirmations, confirmed_path
 from ems.history.schema_keeper import (
+    drop_replaced_confirmations,
     RECHECK_SECONDS,
     RETRY_SECONDS,
     InfluxSchemaKeeper,
@@ -74,8 +76,25 @@ def no_lock(timeout):
     return contextlib.nullcontext()
 
 
-def keeper_for(client, config=CONFIG, lock=no_lock):
-    return InfluxSchemaKeeper(config, client_factory=lambda: client, lock=lock)
+def keeper_for(client, config=CONFIG, lock=no_lock, confirmed=None):
+    return InfluxSchemaKeeper(
+        config, client_factory=lambda: client, lock=lock, confirmed_path=confirmed
+    )
+
+
+def confirmed_retentions(path):
+    return {name: entry.retention_seconds for name, entry in confirmations(path).items()}
+
+
+def confirm_raw(path, before_days, after_days, moment=1000.0):
+    """What the Admin records when the raw retention is changed and confirmed at ``moment``."""
+
+    confirm_change(
+        path,
+        {"influxdb": {"enabled": True, "retention": {"raw_days": before_days}}},
+        {"influxdb": {"enabled": True, "retention": {"raw_days": after_days}}},
+        now=lambda: moment,
+    )
 
 
 def test_a_fresh_install_gets_its_downsampled_buckets_and_tasks_without_anyone_asking():
@@ -290,6 +309,310 @@ def test_a_bucket_found_holding_older_data_is_not_probed_again():
     assert probes == [("has_points_before", "ems_raw", 14 * DAY)]
 
 
+def test_a_retention_confirmed_in_the_admin_is_applied_over_older_data(tmp_path, caplog):
+    """The operator set the raw retention in the Admin and confirmed it; the
+    EMS restarted with those settings applies it, older data and all."""
+
+    client = fresh_install()
+    client.old_points.add("ems_raw")
+    path = confirmed_path(tmp_path)
+    confirm_raw(path, 30, 14)
+
+    with caplog.at_level(logging.INFO):
+        keeper_for(client, confirmed=path).reconcile()
+
+    assert client.buckets["ems_raw"] == 14 * DAY
+    assert not path.exists()
+    assert "event=influx_schema_confirmed_retention_applied" in caplog.text
+    assert "bucket=ems_raw" in caplog.text
+    assert "updated_now=True" in caplog.text
+    assert "event=influx_schema_retention_kept" not in caplog.text
+
+
+def test_a_confirmed_retention_applied_in_a_round_that_failed_later_is_still_named(tmp_path, caplog):
+    """The update went through, then a later lookup timed out and the round
+    failed; the next round finds the bucket carrying the retention and must
+    still say that the confirmed retention was applied."""
+
+    class FailingOnce(FakeInfluxClient):
+        failed = False
+
+        def find_bucket(self, name):
+            if name == "ems_1m" and not self.failed:
+                self.failed = True
+                raise TimeoutError("lookup timed out")
+            return super().find_bucket(name)
+
+    client = FailingOnce()
+    client.buckets["ems_raw"] = 0
+    client.old_points.add("ems_raw")
+    path = confirmed_path(tmp_path)
+    confirm_raw(path, 30, 14)
+    keeper = keeper_for(client, confirmed=path)
+
+    with caplog.at_level(logging.INFO):
+        keeper.reconcile()
+        keeper.reconcile()
+
+    assert client.buckets["ems_raw"] == 14 * DAY
+    assert not path.exists()
+    assert "event=influx_schema_confirmed_retention_applied" in caplog.text
+    assert "updated_now=False" in caplog.text
+
+
+def test_a_confirmation_for_the_settings_the_ems_restarts_with_waits_for_it(tmp_path):
+    """Protected interleaving: the Admin records the confirmation when it saves
+    the settings, after the EMS read the old ones -- long before, or while it
+    was still starting. Neither the start nor the keeper touch the entry; the
+    keeper keeps the safe rule for its own retention."""
+
+    client = fresh_install()
+    client.old_points.add("ems_raw")
+    path = confirmed_path(tmp_path)
+    confirm_raw(path, 14, 7, moment=3000.0)
+
+    drop_replaced_confirmations(CONFIG, 2000.0, path=path)
+    keeper_for(client, confirmed=path).reconcile()
+
+    assert client.buckets["ems_raw"] == 0
+    assert confirmed_retentions(path) == {"ems_raw": 7 * DAY}
+
+
+def test_a_confirmation_replaced_before_the_ems_read_its_settings_is_dropped_at_start(tmp_path, caplog):
+    """Raw shortened to 7 days and confirmed, then the backup with 14 days
+    restored before the restart. The entry must not wait for a 7 that some
+    later hand sets without confirming it."""
+
+    path = confirmed_path(tmp_path)
+    confirm_raw(path, 14, 7, moment=1000.0)
+
+    with caplog.at_level(logging.INFO):
+        drop_replaced_confirmations(CONFIG, 2000.0, path=path)
+
+    assert not path.exists()
+    assert "event=influx_schema_confirmed_retention_dropped" in caplog.text
+    assert "bucket=ems_raw" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        None,
+        {**CONFIG, "enabled": False},
+        {**CONFIG, "auto_sync": False},
+        {**CONFIG, "url": "http://elsewhere:8086"},
+        {**CONFIG, "host_url": "http://127.0.0.1:9086"},
+        {**CONFIG, "mode": "external" if CONFIG["mode"] != "external" else "bundled"},
+        {**CONFIG, "org": "other"},
+        normalize_influxdb_config({"enabled": True, "bucket_prefix": "home"}),
+    ],
+    ids=[
+        "no-influxdb-block",
+        "analytics-off",
+        "auto-sync-off",
+        "other-url",
+        "other-host-url",
+        "other-mode",
+        "other-org",
+        "other-prefix",
+    ],
+)
+def test_settings_that_do_not_run_the_confirmed_schema_drop_it_at_start(tmp_path, settings):
+    """Analytics off, the schema managed by hand, another InfluxDB: the EMS that
+    starts with such settings has not run what was confirmed, and a later start
+    with the confirmed value again must not find the entry waiting."""
+
+    path = confirmed_path(tmp_path)
+    confirm_raw(path, 30, 14, moment=1000.0)
+
+    drop_replaced_confirmations(settings, 2000.0, path=path)
+
+    assert not path.exists()
+
+
+def test_the_start_keeps_a_confirmation_its_settings_ask_for(tmp_path):
+    path = confirmed_path(tmp_path)
+    confirm_raw(path, 30, 14, moment=1000.0)
+
+    drop_replaced_confirmations(CONFIG, 2000.0, path=path)
+
+    assert confirmed_retentions(path) == {"ems_raw": 14 * DAY}
+
+
+def test_a_confirmation_for_another_influxdb_is_not_applied(tmp_path):
+    client = fresh_install()
+    client.old_points.add("ems_raw")
+    path = confirmed_path(tmp_path)
+    confirm_raw(path, 30, 14)
+
+    keeper_for(client, config={**CONFIG, "url": "http://elsewhere:8086"}, confirmed=path).reconcile()
+
+    assert client.buckets["ems_raw"] == 0
+
+
+def test_a_start_that_cannot_read_or_clean_the_record_never_raises(tmp_path, caplog, monkeypatch):
+    path = confirmed_path(tmp_path)
+    confirm_raw(path, 30, 14, moment=1000.0)
+
+    def refused(*args):
+        raise PermissionError("read-only data directory")
+
+    monkeypatch.setattr(schema_keeper.confirmed_retention, "drop_replaced", refused)
+    with caplog.at_level(logging.INFO):
+        drop_replaced_confirmations(CONFIG, 2000.0, path=path)
+
+    assert "event=influx_schema_confirmed_retention_unsettled" in caplog.text
+
+
+def test_a_start_whose_settings_were_never_read_drops_nothing(tmp_path):
+    path = confirmed_path(tmp_path)
+    confirm_raw(path, 30, 14, moment=1000.0)
+
+    drop_replaced_confirmations(None, None, path=path)
+
+    assert confirmed_retentions(path) == {"ems_raw": 14 * DAY}
+
+
+def test_a_settlement_that_fails_unexpectedly_never_ends_the_keeper(tmp_path, caplog, monkeypatch):
+    client = fresh_install()
+    path = confirmed_path(tmp_path)
+    confirm_raw(path, 30, 14)
+    keeper = keeper_for(client, confirmed=path)
+
+    def broken(report, entries):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(keeper, "_settle_confirmed", broken)
+    with caplog.at_level(logging.INFO):
+        delay = keeper.reconcile()
+
+    assert delay == RECHECK_SECONDS
+    assert "event=influx_schema_confirmed_retention_unsettled" in caplog.text
+
+
+def test_a_confirmed_retention_influxdb_refuses_is_named_once_and_kept_for_later(tmp_path, caplog):
+    client = fresh_install()
+    client.old_points.add("ems_raw")
+    path = confirmed_path(tmp_path)
+    confirm_raw(path, 30, 14)
+
+    def refusing(bucket_id, retention_seconds):
+        error = OSError("422 shard-group duration")
+        error.response = SimpleNamespace(status_code=422)
+        raise error
+
+    client.update_bucket_retention = refusing
+    keeper = keeper_for(client, confirmed=path)
+    with caplog.at_level(logging.INFO):
+        assert keeper.reconcile() == RECHECK_SECONDS
+        keeper.reconcile()
+
+    assert caplog.text.count("event=influx_schema_confirmed_retention_refused") == 1
+    assert "ems_1h" in client.buckets
+    assert confirmed_retentions(path) == {"ems_raw": 14 * DAY}
+
+
+def test_a_refusal_is_named_for_a_bucket_found_holding_older_data_before(tmp_path, caplog):
+    client = fresh_install()
+    client.old_points.add("ems_raw")
+    keeper = keeper_for(client, confirmed=confirmed_path(tmp_path))
+    keeper.reconcile()
+    confirm_raw(confirmed_path(tmp_path), 30, 14)
+
+    def refusing(bucket_id, retention_seconds):
+        error = OSError("422 shard-group duration")
+        error.response = SimpleNamespace(status_code=422)
+        raise error
+
+    client.update_bucket_retention = refusing
+    with caplog.at_level(logging.INFO):
+        keeper.reconcile()
+
+    assert "event=influx_schema_confirmed_retention_refused" in caplog.text
+
+
+def test_a_confirmation_the_bucket_already_carries_is_settled(tmp_path):
+    client = FakeInfluxClient()
+    schema.sync(client, CONFIG)
+    path = confirmed_path(tmp_path)
+    confirm_raw(path, 30, 14)
+
+    keeper_for(client, confirmed=path).reconcile()
+
+    assert not path.exists()
+
+
+def test_a_record_that_cannot_be_read_keeps_the_safe_rule(tmp_path, caplog):
+    client = fresh_install()
+    client.old_points.add("ems_raw")
+    path = tmp_path / "unreadable"
+    path.mkdir()
+
+    with caplog.at_level(logging.INFO):
+        delay = keeper_for(client, confirmed=path).reconcile()
+
+    assert delay == RECHECK_SECONDS
+    assert client.buckets["ems_raw"] == 0
+    assert "event=influx_schema_retention_kept" in caplog.text
+
+
+def test_a_confirmation_that_cannot_be_settled_is_said_once_and_the_rounds_go_on(tmp_path, caplog, monkeypatch):
+    client = fresh_install()
+    client.old_points.add("ems_raw")
+    path = confirmed_path(tmp_path)
+    confirm_raw(path, 30, 14)
+
+    def refused(target, done):
+        raise PermissionError("read-only data directory")
+
+    monkeypatch.setattr(schema_keeper.confirmed_retention, "discard", refused)
+    keeper = keeper_for(client, confirmed=path)
+    with caplog.at_level(logging.INFO):
+        delay = keeper.reconcile()
+        keeper.reconcile()
+
+    assert delay == RECHECK_SECONDS
+    assert client.buckets["ems_raw"] == 14 * DAY
+    assert caplog.text.count("event=influx_schema_confirmed_retention_unsettled") == 1
+    assert caplog.text.count("event=influx_schema_confirmed_retention_applied") == 1
+
+
+def test_the_ems_keeper_reads_confirmations_from_the_data_directory(isolated_install_root, monkeypatch):
+    monkeypatch.setattr(InfluxSchemaKeeper, "start", lambda self: None)
+
+    keeper = start_schema_keeper(CONFIG)
+
+    assert keeper.confirmed_path == isolated_install_root / "data" / "influx-retention-confirmed.json"
+
+
+def test_the_moment_the_settings_were_read_is_taken_before_reading_them(tmp_path, monkeypatch):
+    import time
+
+    from ems import config as cfg
+
+    seen = {}
+    real_read = cfg._read_raw_config
+
+    def reading(path):
+        seen["read_at"] = cfg.SETTINGS_READ_AT
+        seen["reading_at"] = time.time()
+        return real_read(path)
+
+    (tmp_path / "config.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(cfg, "_read_raw_config", reading)
+    monkeypatch.setattr(cfg, "SETTINGS_READ_AT", None)
+    monkeypatch.setattr(cfg, "LOADED_DEVICES", [])
+    args = SimpleNamespace(config=str(tmp_path / "config.json"), simulate=False, replay=None, self_test=False)
+    before = time.time()
+
+    try:
+        cfg.load_config(args, base_dir=str(tmp_path))
+    except SystemExit:
+        pass
+
+    assert before <= seen["read_at"] <= seen["reading_at"]
+
+
 def test_the_sync_runs_inside_the_schema_lock():
     held = {"now": False, "during_sync": None}
 
@@ -393,6 +716,15 @@ def test_the_ems_starts_one_keeper_beside_the_writer_and_stops_it():
     assert source.count("start_schema_keeper(") == 1
     assert "influx_writer.start()" in block
     assert "influx_schema_keeper = start_schema_keeper(cfg.INFLUXDB_CONFIG)" in block
+    assert source.count("drop_replaced_confirmations(") == 1
+    before_gate = source[source.index("    influx_schema_keeper = None\n"):gate]
+    assert (
+        "    if not cfg.SIMULATION_MODE and not getattr(args, \"replay\", None):\n"
+        "        try:\n"
+        "            from ems.history.schema_keeper import drop_replaced_confirmations\n"
+        "\n"
+        "            drop_replaced_confirmations(cfg.INFLUXDB_CONFIG, cfg.SETTINGS_READ_AT)\n"
+    ) in before_gate
     assert (
         "        if influx_writer:\n"
         "            influx_writer.stop()\n"
@@ -403,6 +735,52 @@ def test_the_ems_starts_one_keeper_beside_the_writer_and_stops_it():
 
 def test_the_schema_lock_lives_in_the_data_directory(isolated_install_root):
     assert schema_keeper.schema_lock_path() == isolated_install_root / "data" / "influx-schema.lock"
+
+
+class _PatchSession:
+    def __init__(self):
+        self.bodies = []
+
+    def patch(self, url, **kwargs):
+        self.bodies.append(kwargs["json"])
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {})
+
+
+@pytest.mark.parametrize(
+    ("days", "shard_seconds"),
+    [(1, 3600), (3, DAY), (179, DAY), (180, 7 * DAY), (1825, 7 * DAY)],
+)
+def test_a_retention_update_asks_for_the_shard_groups_influxdb_would_pick(days, shard_seconds):
+    """InfluxDB refuses a retention shorter than the bucket's shard groups, and
+    the raw bucket its setup made to keep data forever has week-long ones: a
+    retention below a week only goes through with shorter shard groups."""
+
+    from ems.history.influx_client import HistoryInfluxClient
+
+    session = _PatchSession()
+    client = HistoryInfluxClient("http://influxdb:8086", "ems", "t", session=session)
+
+    client.update_bucket_retention("b-1", days * DAY)
+
+    assert session.bodies == [
+        {
+            "retentionRules": [
+                {"type": "expire", "everySeconds": days * DAY, "shardGroupDurationSeconds": shard_seconds}
+            ]
+        }
+    ]
+
+
+def test_a_bucket_set_to_keep_its_data_forever_asks_for_an_expiry_of_zero():
+    """InfluxDB 2.7 and 2.9 answer an empty rule list with 200 and keep the old
+    retention; an expiry of 0 is what makes a bucket keep its data forever."""
+
+    from ems.history.influx_client import HistoryInfluxClient
+
+    session = _PatchSession()
+    HistoryInfluxClient("http://influxdb:8086", "ems", "t", session=session).update_bucket_retention("b-1", 0)
+
+    assert session.bodies == [{"retentionRules": [{"type": "expire", "everySeconds": 0}]}]
 
 
 class _CsvSession:

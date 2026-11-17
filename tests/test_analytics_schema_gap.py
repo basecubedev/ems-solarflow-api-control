@@ -371,6 +371,48 @@ def test_a_status_read_bounds_its_requests_and_a_sync_does_not():
     ]
 
 
+@pytest.mark.parametrize(("auto_sync", "expected"), [(True, {"ems_raw": 7 * 86400}), (False, {})])
+def test_influx_status_names_a_confirmed_retention_only_where_the_ems_applies_it(
+    isolated_install_root, auto_sync, expected
+):
+    """With auto_sync off no keeper applies an entry; Run the checks must then
+    keep sending the operator to the full sync instead of promising it."""
+
+    from unittest.mock import patch
+
+    import emsctl
+    from ems.history.confirmed_retention import confirm_change, confirmed_path
+
+    confirm_change(
+        confirmed_path(),
+        {"influxdb": {"enabled": True, "retention": {"raw_days": 14}}},
+        {"influxdb": {"enabled": True, "retention": {"raw_days": 7}}},
+    )
+    seen = {}
+
+    def status(client, influx_config, confirmed=None):
+        seen["confirmed"] = confirmed
+        return {}
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    from ems.config import normalize_influxdb_config
+
+    config = normalize_influxdb_config(
+        {"enabled": True, "auto_sync": auto_sync, "token": "t", "retention": {"raw_days": 7}}
+    )
+    with patch("ems.history.influx_client.HistoryInfluxClient", _Client), patch(
+        "ems.history.influx_client.wait_for_influx_ready"
+    ), patch("ems.history.schema.status", status), patch.object(
+        emsctl, "resolve_influx_token_with_secret_file", return_value="t"
+    ):
+        emsctl.execute_influx_schema_op(config, "status")
+
+    assert seen["confirmed"] == expected
+
+
 def test_the_sync_budget_and_the_client_default_stay_the_same_number():
     """Two copies of one number, because they cannot be one.
 

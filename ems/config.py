@@ -10,6 +10,7 @@ import re
 import ssl
 import sys
 import stat
+import time
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -2223,6 +2224,7 @@ ARGS = None
 BASE_DIR = None
 CONFIG = None
 LOADED_DEVICES = []
+SETTINGS_READ_AT = None
 SYSTEM_ENABLED = True
 MAX_TOTAL_POWER = 0
 MAX_DEVICE_POWER = 0
@@ -2300,16 +2302,19 @@ def load_config(args=None, base_dir=None):
 
     ``LOADED_DEVICES`` keeps the fingerprints (ems/device_fingerprints.py) of
     the device entries as the file holds them after the startup upgrade, so the
-    control snapshot can say which entries this EMS runs.
+    control snapshot can say which entries this EMS runs. ``SETTINGS_READ_AT``
+    is the wall-clock moment before the file was read: a change saved later is
+    not part of what this EMS runs (ems/history/confirmed_retention.py).
     """
 
-    global LOADED_DEVICES
+    global LOADED_DEVICES, SETTINGS_READ_AT
     LOADED_DEVICES = []
     args = args or ARGS
     base_dir = base_dir or BASE_DIR or os.getcwd()
     path = str(resolve_config_path(args.config, base_dir=base_dir))
     args.config = path
 
+    SETTINGS_READ_AT = time.time()
     try:
         raw_config = _read_raw_config(path)
     except FileNotFoundError:

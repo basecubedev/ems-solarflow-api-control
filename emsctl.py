@@ -1922,7 +1922,7 @@ def execute_influx_schema_op(
     creates what is missing and deletes nothing (``schema.sync``).
     """
     from ems.file_io import FileLockTimeout
-    from ems.history import schema
+    from ems.history import confirmed_retention, schema
     from ems.history.influx_client import HistoryInfluxClient, wait_for_influx_ready
     from ems.history.schema_keeper import schema_sync_lock
     from ems import influx_setup
@@ -1981,7 +1981,15 @@ def execute_influx_schema_op(
             elif action == "prune":
                 report = schema.prune(client, influx_config, dry_run=dry_run)
             else:
-                report = schema.status(client, influx_config)
+                confirmed = confirmed_retention.for_settings(
+                    confirmed_retention.confirmations(confirmed_retention.confirmed_path()),
+                    influx_config,
+                )
+                report = schema.status(
+                    client,
+                    influx_config,
+                    confirmed={name: entry.retention_seconds for name, entry in confirmed.items()},
+                )
     except FileLockTimeout:
         return 1, {
             "action": action,

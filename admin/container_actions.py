@@ -488,7 +488,7 @@ def _summary(actions, config_state=CONFIG_STATE_UNKNOWN):
             parts.append("InfluxDB schema will be synced before EMS is recreated.")
     if not parts:
         return "No container changes are required."
-    parts.append("No volumes or data will be removed.")
+    parts.append("No volumes will be removed.")
     return " ".join(parts)
 
 
@@ -596,9 +596,11 @@ _INIT_WARNING = (
 )
 _START_WARNING = "Could not start bundled InfluxDB; Analytics stays unavailable until it runs."
 _STOP_WARNING = "Could not stop bundled InfluxDB; it keeps running."
-# Both the restart and the repair run the safe sync: an Admin button never
-# deletes analytics data. A shorter retention or a retired task is applied by
-# `emsctl influx sync`, which an operator runs on purpose.
+# Both the restart and the repair run the safe sync, which deletes no analytics
+# data itself. A retention set under Settings and confirmed there is applied by
+# the EMS once it runs the saved settings, so a restart can lead to that; any
+# other shorter retention or a retired task is applied by `emsctl influx sync`,
+# which an operator runs on purpose.
 SAFE_SYNC_COMMAND = ("python3", "emsctl.py", "influx", "sync", "--safe", "--json")
 _EMSCTL_ERROR = re.compile(r'"error":\s*("(?:[^"\\]|\\.)*")')
 _SYNC_WARNING = (

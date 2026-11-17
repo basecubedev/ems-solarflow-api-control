@@ -138,6 +138,35 @@ def _repository_secrets_stay_untouched(monkeypatch):
         guarded(name)
 
 
+REPOSITORY_RETENTION_RECORD = (
+    Path(__file__).resolve().parents[1] / "data" / "influx-retention-confirmed.json"
+)
+
+
+@pytest.fixture(autouse=True)
+def _repository_retention_record_stays_untouched(monkeypatch):
+    """Refuse any write to the checkout's own ``data/influx-retention-confirmed.json``.
+
+    An EMS started in a test without an isolated install root removes the
+    confirmed retentions its settings do not ask for; in a developer checkout
+    those are the ones a local Admin recorded. The write fails instead, which
+    the start logs and goes on from.
+    """
+
+    from ems.history import confirmed_retention
+
+    original = confirmed_retention._write
+
+    def refuse_repository_write(path, entries):
+        if Path(path).resolve() == REPOSITORY_RETENTION_RECORD:
+            raise AssertionError(
+                f"test wrote the repository's {REPOSITORY_RETENTION_RECORD}; use isolated_install_root"
+            )
+        return original(path, entries)
+
+    monkeypatch.setattr(confirmed_retention, "_write", refuse_repository_write)
+
+
 @pytest.fixture
 def isolated_install_root(tmp_path_factory, monkeypatch):
     """Point EMS path resolution at an empty temporary install root.

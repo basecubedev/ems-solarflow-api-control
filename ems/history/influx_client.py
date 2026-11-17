@@ -22,6 +22,24 @@ from scripts.influx_utils import (  # noqa: F401  (re-exported for convenience)
 )
 
 
+DAY_SECONDS = 86400
+
+
+def shard_group_seconds(retention_seconds):
+    """The shard-group duration InfluxDB itself gives a bucket with this retention.
+
+    InfluxDB refuses a retention shorter than the bucket's shard groups, and a
+    bucket made to keep its data forever has week-long ones; asking for the
+    duration InfluxDB would pick for the new retention lets it shorten.
+    """
+
+    if retention_seconds >= 180 * DAY_SECONDS:
+        return 7 * DAY_SECONDS
+    if retention_seconds >= 2 * DAY_SECONDS:
+        return DAY_SECONDS
+    return 3600
+
+
 class HistoryInfluxClient(InfluxHTTPClient):
     """InfluxHTTPClient extended with retention-update and task management."""
 
@@ -35,13 +53,17 @@ class HistoryInfluxClient(InfluxHTTPClient):
     # -- buckets -----------------------------------------------------------
 
     def update_bucket_retention(self, bucket_id, retention_seconds):
-        every_seconds = int(retention_seconds or 0)
-        retention_rules = []
+        """Set a bucket's retention; 0 keeps its data forever.
 
+        InfluxDB answers an empty rule list with success and keeps the old
+        retention, so forever is asked for as an expiry of 0.
+        """
+
+        every_seconds = int(retention_seconds or 0)
+        rule = {"type": "expire", "everySeconds": every_seconds}
         if every_seconds > 0:
-            retention_rules.append(
-                {"type": "expire", "everySeconds": every_seconds}
-            )
+            rule["shardGroupDurationSeconds"] = shard_group_seconds(every_seconds)
+        retention_rules = [rule]
 
         response = self.session.patch(
             f"{self.base_url}/api/v2/buckets/{bucket_id}",
