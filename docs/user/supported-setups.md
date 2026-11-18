@@ -72,7 +72,7 @@ ZenSDK-compatible HTTP API. Known ZenSDK-compatible models:
 | SolarFlow 1600 AC+ | Family-supported | Catalogue (1600 W) | Not measured here. |
 | SolarFlow 2400 AC | Family-supported | Catalogue (2400 W) | Not measured here. |
 | SolarFlow 2400 AC+ | Family-supported | Catalogue (2400 W) | Not measured here. |
-| SolarFlow 2400 Pro | Family-supported | No AC charge path | Catalogue: not an AC charger; not the 2400 AC series. |
+| SolarFlow 2400 Pro | Family-supported | Catalogue (2400 W) | Not measured here. |
 | SolarFlow 3000 Mix AC+ | Family-supported | Catalogue (3000 W) | Not measured here. |
 | SolarFlow 4000 Mix AC+ | Family-supported | Catalogue (4000 W) | Only the Mix variant of the 4000 exists; the plain "4000 AC+" name is still accepted. |
 

@@ -68,11 +68,11 @@ says nothing about whether the hardware has an AC input for battery charging.
 | yes | SolarFlow 1600 AC+ | 1600 W | vendor catalogue |
 | yes | SolarFlow 2400 AC | 2400 W | vendor catalogue |
 | yes | SolarFlow 2400 AC+ | 2400 W | vendor catalogue |
+| yes | SolarFlow 2400 Pro | 2400 W | vendor catalogue (grid charging through its AC input) |
 | yes | SolarFlow 3000 Mix AC+ | 3000 W | vendor catalogue |
 | yes | SolarFlow 4000 Mix AC+ | 4000 W | vendor catalogue |
 | yes | Hyper 2000 | 1600 W | vendor catalogue |
 | no | SolarFlow 800, 800 Plus | — | no AC charging of the battery |
-| no | SolarFlow 2400 Pro | — | not an AC charger; not the 2400 AC series |
 | no | AIO 2400 | — | different system architecture |
 | no | Hub 1200, Hub 2000 | — | only via an ACE 1500, which the EMS cannot command |
 | no | ACE 1500, SuperBase | — | telemetry-only: no write path at all |
@@ -82,8 +82,8 @@ name some firmware uses), capped by `max_charge_power_w` and the system maximum.
 A device that reports neither falls back to its model's **rated charge power**:
 the lower of the catalogue rating above and the limit Zendure-HA uses for the
 same model, or the catalogue rating alone where Zendure-HA has none. That is
-1000 W for both 800 Pro models, 1600 W for the 1600 AC+, 2400 W for the 2400 AC
-and AC+, 3000 W for the 3000 Mix AC+, 3200 W for the 4000 Mix AC+ and 1200 W for
+1000 W for both 800 Pro models, 1600 W for the 1600 AC+, 2400 W for the 2400 AC,
+AC+ and Pro, 3000 W for the 3000 Mix AC+, 3200 W for the 4000 Mix AC+ and 1200 W for
 the Hyper 2000. A device that *reports* a ceiling of 0 has refused a charge, and
 neither the rating nor `max_charge_power_w` overrides that. A device with no usable ceiling charges nothing
 and logs `ac_charge_ceiling_unknown`.

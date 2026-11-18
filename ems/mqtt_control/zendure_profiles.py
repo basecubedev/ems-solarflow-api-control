@@ -240,9 +240,11 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
         supports_discharge=True,
         supports_idle=True,
-        # Catalogue: not intended as an AC charger; not the 2400 AC series.
-        supports_charge=False,
-        charge_evidence=CHARGE_EVIDENCE_NONE,
+        # Vendor product guide: charges its battery from the grid, up to 2400 W
+        # AC input (Zendure-HA allows 3200 W; the lower rating counts).
+        supports_charge=True,
+        charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
+        rated_charge_power_w=2400,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
         device_settings=_ZENSDK_DEVICE_SETTINGS,

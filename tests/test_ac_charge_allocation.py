@@ -222,10 +222,49 @@ def test_the_charge_catalogue_matches_the_owner_device_list():
         "SolarFlow 1600 AC+",
         "SolarFlow 2400 AC",
         "SolarFlow 2400 AC+",
+        "SolarFlow 2400 Pro",
         "SolarFlow 3000 Mix AC+",
         "SolarFlow 4000 Mix AC+",
         "Hyper 2000",
     }
+
+
+def _table_rows(path, heading):
+    """The data rows of the first table under ``heading``, as lists of trimmed cells."""
+
+    from pathlib import Path
+
+    lines = (Path(__file__).resolve().parents[1] / path).read_text(encoding="utf-8").splitlines()
+    start = lines.index(heading)
+    rows, inside = [], False
+    for line in lines[start + 1:]:
+        if line.startswith("#"):
+            break
+        if line.startswith("|"):
+            cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+            if inside and not set("".join(cells)) <= set("-: "):
+                rows.append(cells)
+            inside = True
+        elif inside:
+            break
+    return rows
+
+
+def test_the_charging_docs_name_exactly_the_models_the_profiles_let_charge():
+    """docs/ac-charging.md and the AC column of docs/user/supported-setups.md are
+    kept by hand beside the profiles; a model that charges in one and not in the
+    other tells an operator the wrong thing about what the EMS will do."""
+
+    from ems.mqtt_control.zendure_profiles import _HARDWARE_PROFILES, resolve_hardware_profile
+
+    charging = {p.display_label for p in _HARDWARE_PROFILES if p.supports_charge}
+    told = {cells[1] for cells in _table_rows("docs/ac-charging.md", "## Which models charge") if cells[0] == "yes"}
+    assert told == charging
+
+    for model, _status, ac, _notes in _table_rows("docs/user/supported-setups.md", "## Supported Zendure Devices (Local API / ZenSDK)"):
+        profile = resolve_hardware_profile(model)
+        assert profile is not None, model
+        assert (ac != "No AC charge path") == profile.supports_charge, model
 
 
 def test_every_charging_model_names_what_the_permission_rests_on():
