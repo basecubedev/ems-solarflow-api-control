@@ -197,7 +197,7 @@ def test_charging_never_starts_without_the_per_device_permission():
 
 def test_charging_never_starts_on_a_model_without_a_charge_path():
     harness = Harness(
-        [charging_device(hardware_profile="solarflow_800")], load=-900
+        [charging_device(hardware_profile="solarflow_800_plus")], load=-900
     )
     harness.run(cycles=20)
 
@@ -1430,7 +1430,7 @@ def test_a_floor_charge_the_ems_could_not_have_started_is_the_firmware_s(refused
     if refused_by == "device_switch":
         dev.ac_charge_enabled = False
     if refused_by == "model":
-        dev.hardware_profile = "solarflow_800"
+        dev.hardware_profile = "solarflow_800_plus"
 
     harness.run(cycles=4, states=[item])
 
@@ -1877,7 +1877,7 @@ def someone_else_s_ac_input(held):
     if held == "device_switch":
         dev.ac_charge_enabled = False
     if held == "model":
-        dev.hardware_profile = "solarflow_800"
+        dev.hardware_profile = "solarflow_800_plus"
     harness.controller.device_state_writes_allowed = lambda _dev: False
     harness.run(cycles=2, states=[item])
     if held == "after_the_ems_saw_it_in_output":

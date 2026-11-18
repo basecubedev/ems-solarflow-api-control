@@ -273,8 +273,8 @@ def test_dispatch_queued_result():
 
 
 def test_dispatch_rejected_result_is_falsey():
-    # A model whose AC charge path has not been measured rejects a charge.
-    dev = _zensdk_device("solarflow_800")
+    # A model without an AC charge path rejects a charge.
+    dev = _zensdk_device("solarflow_800_plus")
     result = dev.dispatch_output_limit(-500)
     assert result.status is WriteDispatchStatus.REJECTED
     assert result.reason
@@ -282,7 +282,7 @@ def test_dispatch_rejected_result_is_falsey():
 
 
 def test_write_output_limit_wrapper_stays_boolean():
-    dev = _zensdk_device("solarflow_800")
+    dev = _zensdk_device("solarflow_800_plus")
     assert dev.write_output_limit(600) is True
     assert dev.write_output_limit(-500) is False
 

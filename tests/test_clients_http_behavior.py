@@ -658,7 +658,7 @@ def test_http_a_charge_the_ems_did_not_start_is_entered_whole():
 
 def test_http_charge_is_refused_for_a_model_without_a_charge_path():
     session = SessionStub()
-    dev = _zendure(session, hardware_profile="solarflow_800")
+    dev = _zendure(session, hardware_profile="solarflow_800_plus")
 
     result = dev.dispatch_output_limit(-300)
 
@@ -694,7 +694,7 @@ def test_a_pinned_model_outranks_the_reported_product():
     """Config is a decisive evidence source; the device report corroborates."""
 
     session = SessionStub(get_response=_report(product="solarFlow800Pro2"))
-    dev = _zendure(session, hardware_profile="solarflow_800")
+    dev = _zendure(session, hardware_profile="solarflow_800_plus")
     dev.fetch()
 
     result = dev.dispatch_output_limit(-300)

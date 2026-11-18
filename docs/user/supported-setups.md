@@ -65,8 +65,8 @@ ZenSDK-compatible HTTP API. Known ZenSDK-compatible models:
 
 | Model | Status | AC charging | Notes |
 |---|---|---|---|
-| SolarFlow 800 Pro 2 | Validated | **Measured** | Maintainer hardware; ZenSDK local HTTP control **and** Zendure cloud MQTT control confirmed. |
-| SolarFlow 800 | Family-supported | No AC charge path | Catalogue: no direct AC charging of the battery. |
+| SolarFlow 800 Pro 2 | Validated | **Measured** (1000 W) | Maintainer hardware; ZenSDK local HTTP control **and** Zendure cloud MQTT control confirmed. |
+| SolarFlow 800 | Family-supported | Catalogue (800 W) | Not measured here. |
 | SolarFlow 800 Plus | Validated | No AC charge path | User reported over the Local API. Catalogue: no integrated AC charging. |
 | SolarFlow 800 Pro | Family-supported | Catalogue (1000 W) | Not measured here. |
 | SolarFlow 1600 AC+ | Family-supported | Catalogue (1600 W) | Not measured here. |
@@ -86,12 +86,11 @@ fact, and each row says what it rests on:
 
 - **Measured** — the command was written to that model and the device drew the
   commanded power. Only the maintainer's 800 Pro 2.
-- **Catalogue (N W)** — the vendor/device catalogue records an AC input for
-  battery charging. Enabled, not confirmed here. The limit comes from the
-  device's own `chargeMaxLimit`; only a device that reports none falls back to
-  the model's rated charge power (see [AC charging](../ac-charging.md)), which
-  can be lower than the catalogue figure — 3200 W for the 4000 Mix AC+, 1200 W
-  for the Hyper 2000.
+- **Catalogue (N W)** — Zendure's own datasheet, manual or support article
+  records an AC input for battery charging, and N W is the charge power it
+  states. Enabled, not confirmed here. The limit comes from the device's own
+  `chargeMaxLimit`, capped by that rating; a device that reports none uses the
+  rating (see [AC charging](../ac-charging.md)).
 - **No AC charge path** — the catalogue says the model cannot charge from AC.
   The EMS refuses with a stable reason rather than failing silently.
 
