@@ -264,7 +264,7 @@ def test_unknown_profile_is_rejected_and_publishes_nothing():
 
 
 def test_negative_target_publishes_nothing_without_a_charge_path_e2e():
-    runtime, network = _build(_config("solarflow_800"))
+    runtime, network = _build(_config("solarflow_800_plus"))
     dev = runtime.devices[0]
     broker = network.broker("local_a")
     # Same write profile and same command shape as models that do charge, but

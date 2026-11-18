@@ -54,7 +54,7 @@ ZENSDK_MODEL = "solarflow_800_pro_2"
 # Same write profile, same command shape — but the catalogue records no AC
 # charge path for it, so it is the model to reach for when a test needs an
 # operation the catalogue refuses.
-ZENSDK_MODEL_WITHOUT_CHARGE = "solarflow_800"
+ZENSDK_MODEL_WITHOUT_CHARGE = "solarflow_800_plus"
 LEGACY_MODEL = "hyper_2000"
 PRODUCT_KEY = "73bkTV"
 ROUTE_DEVICE_ID = "ABCD1234567890"

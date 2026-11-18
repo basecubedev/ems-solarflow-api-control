@@ -71,9 +71,9 @@ class ZendureHardwareProfile:
     supports_charge: bool
     validation_status: str
     charge_evidence: str = CHARGE_EVIDENCE_NONE
-    # The AC charge power the model is rated for, used only when the device does
-    # not report its own ceiling. The lower of the vendor catalogue and the
-    # Zendure-HA limit for the same model; 0 where neither names one.
+    # The AC charge power Zendure itself states for the model (datasheet,
+    # manual or support article). It caps the ceiling a device reports and
+    # stands in for one it does not report; 0 where Zendure names none.
     rated_charge_power_w: int = 0
     # Source-backed MQTT-writable properties; empty = no verified contract.
     state_property_writes: tuple[str, ...] = ()
@@ -119,9 +119,11 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
         supports_discharge=True,
         supports_idle=True,
-        # Catalogue: no direct AC charging of the battery.
-        supports_charge=False,
-        charge_evidence=CHARGE_EVIDENCE_NONE,
+        # Vendor manual (V20250220): an on-grid input mode sets the AC charging
+        # power; AC input/output rated 800 W.
+        supports_charge=True,
+        charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
+        rated_charge_power_w=800,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
         device_settings=_ZENSDK_DEVICE_SETTINGS,
@@ -135,7 +137,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
         supports_discharge=True,
         supports_idle=True,
-        # Catalogue: AC grid charging integrated, up to 1000 W.
+        # Vendor manual: max. AC continuous input power 1000 W.
         supports_charge=True,
         charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
         rated_charge_power_w=1000,
@@ -170,7 +172,8 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
         supports_discharge=True,
         supports_idle=True,
-        # Catalogue: no integrated AC charging.
+        # Catalogue: no integrated AC charging. The spec sheet lists a 1000 W AC
+        # input, but no Zendure source describes a grid-charging mode.
         supports_charge=False,
         charge_evidence=CHARGE_EVIDENCE_NONE,
         validation_status=VALIDATION_EXISTING_SUPPORT,
@@ -187,7 +190,8 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
         supports_discharge=True,
         supports_idle=True,
-        # Catalogue: AC-coupled storage system, up to 1600 W.
+        # Vendor support: 1400 W for a single unit, up to 1600 W with
+        # additional battery modules.
         supports_charge=True,
         charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
         rated_charge_power_w=1600,
@@ -205,7 +209,7 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
         supports_discharge=True,
         supports_idle=True,
-        # Catalogue: AC-coupled storage system, up to 2400 W.
+        # Vendor datasheet: 2400 W bidirectional AC charging/discharging.
         supports_charge=True,
         charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
         rated_charge_power_w=2400,
@@ -223,7 +227,8 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
         supports_discharge=True,
         supports_idle=True,
-        # Catalogue: AC-coupled storage system, up to 2400 W.
+        # Vendor datasheet: battery charge/discharge 2400 W max; the 3200 W AC
+        # input of the on-grid terminal is more than the battery takes.
         supports_charge=True,
         charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
         rated_charge_power_w=2400,
@@ -240,9 +245,11 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
         supports_discharge=True,
         supports_idle=True,
-        # Catalogue: not intended as an AC charger; not the 2400 AC series.
-        supports_charge=False,
-        charge_evidence=CHARGE_EVIDENCE_NONE,
+        # Vendor manual and spec sheet: battery charge/discharge 2400 W max; the
+        # 3200 W AC input of the on-grid terminal is more than the battery takes.
+        supports_charge=True,
+        charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
+        rated_charge_power_w=2400,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
         device_settings=_ZENSDK_DEVICE_SETTINGS,
@@ -267,10 +274,11 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
         supports_discharge=True,
         supports_idle=True,
-        # Catalogue: AC-coupled storage system, up to 4000 W.
+        # Vendor: 4000 W AC input when hard-wired; on a Schuko plug the device
+        # itself holds 3000 W.
         supports_charge=True,
         charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
-        rated_charge_power_w=3200,
+        rated_charge_power_w=4000,
         validation_status=VALIDATION_EXISTING_SUPPORT,
         state_property_writes=_ZENSDK_STATE_PROPERTIES,
         device_settings=_ZENSDK_DEVICE_SETTINGS,
@@ -292,7 +300,8 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         power_write_profile=WRITE_PROFILE_ZENSDK_PROPERTIES,
         supports_discharge=True,
         supports_idle=True,
-        # Catalogue: AC-coupled storage system, up to 3000 W.
+        # Vendor datasheet: max. AC input 3000 W (800 W by default, 3000 W in
+        # Premium mode).
         supports_charge=True,
         charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
         rated_charge_power_w=3000,
@@ -309,7 +318,8 @@ _HARDWARE_PROFILES: tuple[ZendureHardwareProfile, ...] = (
         power_write_profile=WRITE_PROFILE_LEGACY_OBJECT,
         supports_discharge=True,
         supports_idle=True,
-        # Catalogue: bidirectional AC, up to 1600 W depending on pack count.
+        # Vendor manual: AC rated power 1200 W; the battery side takes up to
+        # 1600 W with two packs, more than the AC side delivers.
         supports_charge=True,
         charge_evidence=CHARGE_EVIDENCE_VENDOR_CATALOGUE,
         rated_charge_power_w=1200,

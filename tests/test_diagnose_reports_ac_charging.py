@@ -121,7 +121,7 @@ def test_a_device_whose_configured_model_refuses_is_not_listed_as_permitted():
         "ac_charge_control": {"enabled": True},
         "devices": [
             {"name": "LOCAL", "ip": "10.0.0.11"},
-            {"name": "OLD", "ip": "10.0.0.12", "hardware_profile": "solarflow_800"},
+            {"name": "OLD", "ip": "10.0.0.12", "hardware_profile": "solarflow_800_plus"},
             mqtt_control("PINNED", "solarflow_2400_ac"),
             mqtt_control("TYPO", "solarflow_9000"),
             {"type": "zendure_mqtt", "name": "WATCHED", "mqtt": {"device_id": "W"}},

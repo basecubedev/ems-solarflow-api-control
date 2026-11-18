@@ -59,7 +59,7 @@ def _device(hardware_profile, *, max_power=2000, **kwargs):
 def test_a_zensdk_model_without_a_charge_path_is_rejected_without_publish():
     # The command shape is family-wide; whether a model has an AC charge path is
     # a per-model fact, and a model without one must not be sent a charge command.
-    dev = _device("solarflow_800")
+    dev = _device("solarflow_800_plus")
     assert dev.write_output_limit(-500) is False
     assert dev._service.published == []
     assert dev.write_health.last_error == "charge_target_unsupported"
@@ -168,7 +168,7 @@ def test_zensdk_never_publishes_negative_output_limit():
 
 
 def test_a_zensdk_model_without_a_charge_path_publishes_nothing():
-    dev = _device("solarflow_800")
+    dev = _device("solarflow_800_plus")
     dev.write_output_limit(-300)
     assert dev._service.published == []
 

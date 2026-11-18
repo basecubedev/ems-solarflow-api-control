@@ -127,19 +127,30 @@ def test_a_shared_command_shape_does_not_decide_which_models_charge():
     contract is family-wide — but whether a given device has an AC charge path
     at all is a per-model fact, and the catalogue is where it is recorded.
 
-    These three share the write profile of models that do charge and still must
-    not be sent a charge command.
+    The 800 Plus shares the write profile of models that do charge and still
+    must not be sent a charge command: its spec sheet lists an AC input, but no
+    Zendure source describes charging the battery through it.
     """
 
-    for name in (
-        "SolarFlow 800",
-        "SolarFlow 800 Plus",
-        "SolarFlow 2400 Pro",
-    ):
-        prof = resolve_hardware_profile(name)
-        assert prof is not None, name
-        assert prof.supports_charge is False, name
-        assert "charge" not in prof.supported_operations, name
+    prof = resolve_hardware_profile("SolarFlow 800 Plus")
+    assert prof is not None
+    assert prof.supports_charge is False
+    assert "charge" not in prof.supported_operations
+
+
+def test_the_2400_pro_charges_from_ac_at_its_catalogue_rating():
+    """Zendure's manual and spec sheet give the 2400 Pro a battery charge of
+    2400 W at most; the 3200 W its on-grid terminal takes is more than the
+    battery does, so 2400 W is the rating."""
+
+    from ems.mqtt_control.zendure_profiles import CHARGE_EVIDENCE_VENDOR_CATALOGUE
+
+    prof = resolve_hardware_profile("SolarFlow 2400 Pro")
+
+    assert prof is not None and prof.canonical_name == "solarflow_2400_pro"
+    assert prof.supports_charge is True and "charge" in prof.supported_operations
+    assert prof.charge_evidence == CHARGE_EVIDENCE_VENDOR_CATALOGUE
+    assert prof.rated_charge_power_w == 2400
 
 
 def test_zensdk_brand_model_resolves_without_explicit_alias():

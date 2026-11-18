@@ -116,7 +116,7 @@ def test_charge_support_is_decided_per_model_not_per_write_profile():
 
     no_charge_path = resolve_power_write_capability(
         topic_family=FAMILY_LEGACY_JSON,
-        hardware_profile="solarflow_800",
+        hardware_profile="solarflow_800_plus",
         operation="charge",
         broker_source=BROKER_SOURCE_ZENDURE_CLOUD_MQTT,
     )
