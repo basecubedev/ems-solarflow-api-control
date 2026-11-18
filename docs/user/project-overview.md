@@ -367,10 +367,10 @@ A dedicated **appliance image** is also available for a Raspberry Pi that should
 
 | Hardware family | Available connection | Current confidence |
 |---|---|---|
-| SolarFlow 800 Pro 2 / 800 Plus | Local API and Zendure MQTT | Validated on real hardware |
+| SolarFlow 800 Pro 2 / 800 Plus / 2400 Pro | Local API and Zendure MQTT | Validated on real hardware |
 | SolarFlow 800 / 800 Pro | Local API and Zendure MQTT | Family-supported |
 | SolarFlow 1600 AC+ | Local API and Zendure MQTT | Family-supported |
-| SolarFlow 2400 AC / AC+ / Pro | Local API and Zendure MQTT | Family-supported |
+| SolarFlow 2400 AC / AC+ | Local API and Zendure MQTT | Family-supported |
 | SolarFlow 3000 / 4000 Mix AC+ | Local API and Zendure MQTT | Family-supported |
 | Hub 1200 / Hub 2000 / Hyper 2000 / AIO 2400 | Local MQTT or Zendure MQTT | Reverse-engineered; testers wanted |
 | Ace 1500 / SuperBase V | MQTT | Telemetry-only |
