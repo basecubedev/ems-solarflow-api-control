@@ -344,9 +344,32 @@ def test_backup_runner_uses_official_commands(tmp_path, monkeypatch):
     runner(str(out_dir))
 
     flat = [" ".join(c) for c in commands]
-    assert any("up -d influxdb" in c for c in flat)
-    assert any("influx backup" in c for c in flat)
+    started = next(i for i, c in enumerate(flat) if c.endswith(" start influxdb"))
+    assert started < next(i for i, c in enumerate(flat) if "influx backup" in c)
+    assert not any(" up " in f" {c} " for c in flat), "a backup never creates an InfluxDB container"
     assert any("cp" in c.split() for c in flat)
+
+
+def test_a_host_backup_with_no_influxdb_container_creates_none(tmp_path, monkeypatch):
+    """After `docker compose down` and a pulled pin, `up` would start the new
+    version on the old data; the backup refuses instead of converting it first."""
+
+    monkeypatch.setenv("EMS_IN_CONTAINER", "0")
+    monkeypatch.setattr(emsctl, "BASE_DIR", str(tmp_path))
+    monkeypatch.setattr(influx_setup, "ensure_data_dir", lambda *a, **k: "data/influxdb")
+    commands = []
+
+    def fake_run(command, cwd, dry_run=False, stdout_to_stderr=False):
+        commands.append(command)
+        return 1 if "start" in command else 0
+
+    monkeypatch.setattr(emsctl, "run_docker_compose", fake_run)
+    runner = emsctl.make_influx_backup_runner(bundled_config())
+
+    with pytest.raises(backup.BackupError, match="Name the image that wrote the data"):
+        runner(str(tmp_path / "influxdb"))
+
+    assert len(commands) == 1 and "up" not in commands[0]
 
 
 # ---------------------------------------------------------------------------

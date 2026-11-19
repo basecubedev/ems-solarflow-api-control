@@ -407,6 +407,190 @@ test.describe("Modern Admin: overview and status", { tag: ["@smoke"] }, () => {
     await expect(page.getByText("Docker or the container setup is not available")).toBeVisible();
   });
 
+  test("the bundled InfluxDB is offered under Updates, lit in the menu, upgraded behind its backup and rolled back", async ({ page, seedAdminScenario }) => {
+    await openModern(page);
+    await seedAdminScenario("influxdb_upgrade_available");
+    await page.goto("/#/overview");
+    await page.reload();
+    await expect(page.getByTestId("nav-mark-updates")).toHaveClass(/info/);
+    await page.locator('.sidebar a[data-page="updates"]').click();
+    const row = page.getByTestId("update-influxdb");
+    await expect(row).toHaveAttribute("data-state", "available");
+    await expect(row).toContainText("The update may take a very long time. Do not restart the system while it runs.");
+    await expect(page.getByTestId("influx-state")).toHaveCount(0);
+    const offer = (await row.locator(".name .num").textContent()) || "";
+    expect(offer).toMatch(/^InfluxDB 2\.7 → 2\.\d+\.\d+$/);
+    const target = offer.split("→")[1].trim();
+
+    await page.getByTestId("influx-upgrade").click();
+    const upgrade = page.getByRole("dialog", { name: `Upgrade InfluxDB to ${target}?` });
+    await expect(upgrade).toContainText("A full InfluxDB backup is made first and checked");
+    await expect(upgrade).toContainText("Do not restart the system while it runs.");
+    await expect(upgrade).toContainText("2.7 cannot open the converted data");
+    await upgrade.getByTestId("confirm").click();
+
+    await expect(page.getByTestId("influx-outcome")).toContainText("InfluxDB is upgraded.");
+    await expect(page.getByRole("list", { name: "Upgrade progress" }).locator('li[data-state="done"]')).toHaveCount(7);
+    await expect(page.getByTestId("influx-current")).toHaveText(target);
+    await expect(page.getByTestId("influx-last")).toContainText(`Upgraded from 2.7 to ${target}`);
+    await expect(row).toHaveAttribute("data-state", "current");
+    await expect(row).toContainText("Up to date");
+    await expect(page.getByTestId("influx-upgrade")).toHaveCount(0);
+    await expect(page.getByTestId("nav-mark-updates")).toHaveCount(0);
+
+    await page.getByTestId("influx-rollback").click();
+    const rollback = page.getByRole("dialog", { name: "Roll InfluxDB back to 2.7?" });
+    await expect(rollback).toContainText("set aside (not deleted)");
+    await rollback.getByTestId("confirm").click();
+
+    await expect(page.getByTestId("influx-outcome")).toContainText("InfluxDB is back on the previous version.");
+    await expect(page.getByTestId("influx-current")).toHaveText("2.7");
+    await expect(page.getByTestId("influx-last")).toContainText("Rolled back to 2.7");
+    await expect(page.getByTestId("influx-rollback")).toHaveCount(0);
+    await expect(page.getByTestId("influx-upgrade")).toBeVisible();
+    await expect(page.getByTestId("nav-mark-updates")).toHaveClass(/info/);
+  });
+
+  test("an InfluxDB upgrade the device lacks the memory for is shown with its figures and not offered", async ({ page, seedAdminScenario }) => {
+    await openModern(page);
+    await seedAdminScenario("influxdb_upgrade_low_memory");
+    await page.goto("/#/overview");
+    await page.reload();
+    await expect(page.getByTestId("nav-mark-updates")).toHaveClass(/info/);
+    await page.locator('.sidebar a[data-page="updates"]').click();
+    const row = page.getByTestId("update-influxdb");
+    await expect(row).toHaveAttribute("data-state", "low_memory");
+    await expect(row.locator(".name .num")).toHaveText(/^InfluxDB 2\.7 → 2\.\d+\.\d+$/);
+    await expect(row).toContainText("it needs about 124 MB free, 100 MB of memory and swap are free");
+    await expect(page.getByTestId("influx-upgrade")).toHaveCount(0);
+    await expect(page.getByTestId("influx-state")).toContainText("Switch on swap, shorten the retention under Settings");
+  });
+
+  test("a start that takes long is stopped from the card, and the run that did not finish is checked again", async ({ page, seedAdminScenario }) => {
+    await openModern(page);
+    await seedAdminScenario("influxdb_upgrade_available");
+    const record = { from_image: "influxdb:2.7", to_image: "influxdb:2.9.1", backup: "ems-influxdb-b.tar.gz", started_at: "2026-11-18T10:00:00Z" };
+    const base = { ok: true, current_image: "influxdb:2.9.1", target_image: "influxdb:2.9.1", current_version: "2.9.1", target_version: "2.9.1", container: { name: "ems-influxdb", running: true, found: true, image: "influxdb:2.9.1" } };
+    const plans = {
+      slow: { ...base, state: "busy", slow: true, live: true, last: { ...record, state: "running", finished_at: null }, rollback: null, recheck: null },
+      stopped: {
+        ...base, state: "current", last: { ...record, state: "failed", finished_at: "2026-11-18T10:40:00Z", message: "Waiting was stopped on request; InfluxDB may still be starting." },
+        rollback: { available: true, to_image: "influxdb:2.7", backup: record.backup, since: record.started_at, reason: null }, recheck: { available: true, reason: null },
+      },
+      done: { ...base, state: "current", last: { ...record, state: "upgraded", finished_at: "2026-11-18T11:00:00Z" }, rollback: { available: true, to_image: "influxdb:2.7", backup: record.backup, since: record.started_at, reason: null }, recheck: null },
+    };
+    let plan = plans.slow;
+    let readsSinceStop = -1;
+    const sent: Record<string, unknown>[] = [];
+    await page.route("**/api/admin/maintenance/influxdb", (route: Route) => {
+      if (readsSinceStop >= 0 && ++readsSinceStop >= 2) {
+        plan = plans.stopped;
+        readsSinceStop = -1;
+      }
+      return route.fulfill({ json: plan });
+    });
+    await page.route("**/api/admin/maintenance/influxdb/stop-waiting", (route: Route) => {
+      sent.push({ stop: route.request().postDataJSON() });
+      readsSinceStop = 0;
+      return route.fulfill({ status: 202, json: { ok: true, status: "stopping" } });
+    });
+    await page.route("**/api/admin/maintenance/influxdb/recheck", (route: Route) => {
+      sent.push({ recheck: route.request().postDataJSON() });
+      plan = plans.done;
+      return route.fulfill({ json: { ok: true, status: "completed", message: "InfluxDB runs influxdb:2.9.1 with every bucket and task." } });
+    });
+    await page.goto("/#/updates");
+    await page.reload();
+
+    await expect(page.getByTestId("influx-last")).toContainText("has been running since");
+    await page.getByTestId("influx-stop-waiting").click();
+    const stop = page.getByRole("dialog", { name: "Stop waiting for InfluxDB?" });
+    await expect(stop).toContainText("The run ends as not completed.");
+    await expect(stop).toContainText("Roll back then restores the backup made first");
+    await stop.getByTestId("confirm").click();
+
+    await expect(page.getByTestId("influx-stop-waiting")).toBeDisabled();
+    await expect(page.getByTestId("influx-stop-waiting")).toContainText("Stopping the wait");
+    await expect(page.getByTestId("update-influxdb")).toContainText("Look at it", { timeout: 15_000 });
+    await expect(page.getByTestId("nav-mark-updates")).toHaveClass(/warning/);
+    await expect(page.getByTestId("influx-stop-waiting")).toHaveCount(0);
+    await expect(page.getByTestId("influx-rollback")).toBeVisible();
+    await page.getByTestId("influx-recheck").click();
+
+    await expect(page.getByTestId("influx-recheck-outcome")).toContainText("the upgrade is complete");
+    await expect(page.getByTestId("update-influxdb")).toContainText("Up to date");
+    await expect(page.getByTestId("influx-recheck")).toHaveCount(0);
+    await expect(page.getByTestId("nav-mark-updates")).toHaveCount(0);
+    expect(sent).toEqual([{ stop: { confirm: true } }, { recheck: {} }]);
+  });
+
+  test("a run this page loses hold of is followed from the server, never reported as not completed", async ({ page, seedAdminScenario }) => {
+    await openModern(page);
+    await seedAdminScenario("influxdb_upgrade_available");
+    const record = { from_image: "influxdb:2.7", to_image: "influxdb:2.9.1", backup: "b.tar.gz", started_at: "2026-11-18T10:00:00Z" };
+    const base = { ok: true, target_image: "influxdb:2.9.1", target_version: "2.9.1", rollback: null, recheck: null };
+    let plan: Record<string, unknown> = { ...base, state: "available", current_image: "influxdb:2.7", current_version: "2.7", last: null };
+    await page.route("**/api/admin/maintenance/influxdb", (route: Route) => route.fulfill({ json: plan }));
+    await page.route("**/api/admin/maintenance/influxdb/upgrade", (route: Route) => {
+      plan = { ...base, state: "busy", live: true, slow: false, current_image: "influxdb:2.9.1", current_version: "2.9.1", last: { ...record, state: "running", finished_at: null } };
+      return route.fulfill({ status: 202, json: { ok: true, job_id: "gone", status: "running", steps: [{ key: "preflight", label: "Check", state: "running", message: null }] } });
+    });
+    await page.route("**/api/admin/maintenance/influxdb/jobs/gone", (route: Route) => route.fulfill({ status: 404, json: { ok: false, error: "job not found" } }));
+    await page.goto("/#/updates");
+    await page.reload();
+
+    await page.getByTestId("influx-upgrade").click();
+    await page.getByRole("dialog", { name: "Upgrade InfluxDB to 2.9.1?" }).getByTestId("confirm").click();
+
+    await expect(page.getByTestId("influx-last")).toContainText("has been running since");
+    await expect(page.getByTestId("influx-detached")).toContainText("the run goes on on the server");
+    await expect(page.getByTestId("influx-lost")).toHaveCount(0);
+    await expect(page.getByTestId("influx-outcome")).toHaveCount(0);
+    plan = { ...base, state: "current", current_image: "influxdb:2.9.1", current_version: "2.9.1", last: { ...record, state: "upgraded", finished_at: "2026-11-18T11:00:00Z" } };
+    await page.getByTestId("influx-state").locator("xpath=ancestor::section[1]").getByRole("button", { name: "Refresh" }).click();
+    await expect(page.getByTestId("influx-last")).toContainText("Upgraded from 2.7 to 2.9.1");
+    await expect(page.getByTestId("update-influxdb")).toContainText("Up to date");
+    await expect(page.getByTestId("influx-outcome")).toHaveCount(0);
+    await expect(page.getByTestId("influx-detached")).toHaveCount(0);
+  });
+
+  test("stopping a way back that waits long says the way back ends and InfluxDB is put back", async ({ page, seedAdminScenario }) => {
+    await openModern(page);
+    await seedAdminScenario("influxdb_upgrade_available");
+    await page.route("**/api/admin/maintenance/influxdb", (route: Route) => route.fulfill({ json: {
+      ok: true, state: "busy", slow: true, live: true, current_image: "influxdb:2.7", target_image: "influxdb:2.9.1",
+      last: { state: "rolling_back", from_image: "influxdb:2.7", to_image: "influxdb:2.9.1", backup: "b.tar.gz", started_at: "2026-11-01T10:00:00Z", finished_at: "2026-11-01T10:20:00Z", rollback_started_at: "2026-11-18T09:00:00Z" },
+      rollback: null, recheck: null,
+    } }));
+    await page.goto("/#/updates");
+    await page.reload();
+
+    await expect(page.getByTestId("influx-last")).toContainText("The way back to 2.7 has been running since");
+    await page.getByTestId("influx-stop-waiting").click();
+    const stop = page.getByRole("dialog", { name: "Stop waiting for InfluxDB?" });
+    await expect(stop).toContainText("The way back ends as not completed.");
+    await expect(stop).toContainText("The way back then puts InfluxDB back as it was before it.");
+    await stop.getByRole("button", { name: "Cancel" }).click();
+    await expect(stop).toHaveCount(0);
+  });
+
+  test("the services page leaves the InfluxDB version to the Updates page", async ({ page, seedAdminScenario }) => {
+    await openModern(page);
+    await seedAdminScenario("influxdb_upgrade_available");
+    await page.goto("/#/services");
+    await page.reload();
+    await expect(page.locator('[data-service="influxdb"]')).toBeVisible();
+    await expect(page.getByTestId("influx-upgrade")).toHaveCount(0);
+    await expect(page.getByTestId("update-influxdb")).toHaveCount(0);
+  });
+
+  test("an installation without the bundled InfluxDB lists no InfluxDB under Updates", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/updates");
+    await expect(page.getByTestId("update-release")).toBeVisible();
+    await expect(page.getByTestId("update-influxdb")).toHaveCount(0);
+    await expect(page.getByTestId("influx-state")).toHaveCount(0);
+  });
+
   test("the settings edit the devices here, with the network search beside them and no way to Classic", async ({ page, seedAdminScenario }) => {
     await seededAt(page, seedAdminScenario, "#/settings");
     await expect(page.getByTestId("settings-features")).toContainText("Winter mode");

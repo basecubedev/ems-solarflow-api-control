@@ -727,11 +727,23 @@ class BackupJob:
             state = _STEP_STATE.get(step.get("status"), "done")
             steps[idx]["state"] = state
             steps[idx]["message"] = step.get("detail")
+            steps[idx].pop("note", None)
             if state != "failed":
                 for nxt in steps[idx + 1:]:
                     if nxt["state"] == "pending":
                         nxt["state"] = "running"
                         break
+
+    def note_step(self, key, note):
+        """Mark the running step ``key`` with ``note``, a code the page has words for; None clears it."""
+
+        with self._lock:
+            for step in self._state["steps"]:
+                if step["key"] == key and step["state"] == "running":
+                    if note is None:
+                        step.pop("note", None)
+                    else:
+                        step["note"] = note
 
     def finish(self, result):
         with self._lock:
@@ -810,6 +822,7 @@ class BackupRestoreService:
         self.plans = plans or RestorePlanRegistry()
         self._ems_tool = ems_tool
         self.restore_lock = threading.Lock()
+        self._influx_backup_lock = threading.Lock()
         # ``() -> (status, detail)``: brings what the Admin renders from the
         # restored config files in line, as the last step of a config restore.
         self.after_config_restore = after_config_restore
@@ -1114,9 +1127,12 @@ class BackupRestoreService:
         raise BackupRestoreError("unsupported backup scope")
 
     def _create_influxdb_archive(self, env, password):
-        before = set(os.listdir(env.backup_dir)) if os.path.isdir(env.backup_dir) else set()
-        self._run_influx_backup_tool()
-        after = set(os.listdir(env.backup_dir)) if os.path.isdir(env.backup_dir) else set()
+        # The new archive is found by listing the directory before and after;
+        # a second InfluxDB backup in between would be taken for this one.
+        with self._influx_backup_lock:
+            before = set(os.listdir(env.backup_dir)) if os.path.isdir(env.backup_dir) else set()
+            self._run_influx_backup_tool()
+            after = set(os.listdir(env.backup_dir)) if os.path.isdir(env.backup_dir) else set()
         new = sorted(
             name for name in after - before
             if name.startswith("ems-influxdb-")
@@ -1521,6 +1537,52 @@ class BackupRestoreService:
         return {"ok": False, "status": "failed", "message": message,
                 "steps": list(steps), "actions": actions,
                 "rollback_backup": None}
+
+    def has_archive(self, name):
+        """Whether the backup directory lists an archive called ``name``."""
+
+        return isinstance(name, str) and name in BackupStore(self._env())._iter_names()
+
+    def check_influx_restore(self, name):
+        """The size of InfluxDB archive ``name`` once it verifies and an EMS can restore it.
+
+        Raises BackupRestoreError naming why it could not be restored now.
+        """
+
+        from admin.ems_tool import BLOCKED_MESSAGE, EmsToolRunner
+
+        env = self._env()
+        path = BackupStore(env).resolve(_safe_id(name) if isinstance(name, str) else None)
+        record = self._verify_archive(env, path, INFLUXDB_BACKUP_TYPE)
+        if not record["verified"]:
+            raise BackupRestoreError(record.get("error") or "the InfluxDB backup could not be verified")
+        tool = self._ems_tool or EmsToolRunner()
+        if tool.resolve_mode(self._context_provider())["mode"] == "blocked":
+            raise BackupRestoreError(BLOCKED_MESSAGE)
+        return record["size_bytes"]
+
+    def restore_influx_archive(self, name):
+        """Replace what the bundled InfluxDB holds with InfluxDB archive ``name``.
+
+        For the way back from an InfluxDB upgrade (admin/influx_upgrade.py),
+        which names the archive it took itself and checked it with
+        :meth:`check_influx_restore`; the EMS verifies the checksums again
+        before it restores. No rollback backup is made: the data it would hold
+        is set aside whole before this runs.
+        """
+
+        env = self._env()
+        store = BackupStore(env)
+        archive_id = _safe_id(name) if isinstance(name, str) else None
+        store.resolve(archive_id)
+        target = RestorePlanTarget(
+            archive_id=archive_id, name=name, backup_type=INFLUXDB_BACKUP_TYPE, archive_sha256=""
+        )
+        ok, message = self._run_influx_restore_cli(
+            env, store, target, None, dry_run=False, rollback_enabled=False
+        )
+        if not ok:
+            raise BackupRestoreError(message)
 
     def _run_influx_restore_cli(self, env, store, target, password, *,
                                 dry_run, rollback_enabled=True):

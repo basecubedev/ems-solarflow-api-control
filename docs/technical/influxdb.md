@@ -33,7 +33,7 @@ Official, supported deployment assets live under `deploy/`:
 
 | Path | Purpose |
 |---|---|
-| [`deploy/docker/compose.influxdb.yml`](../../deploy/docker/compose.influxdb.yml) | Docker Compose service for InfluxDB 2.7 |
+| [`deploy/docker/compose.influxdb.yml`](../../deploy/docker/compose.influxdb.yml) | Docker Compose service for the bundled InfluxDB 2.x; the one pin of its image |
 | [`deploy/docker/compose.ems-influx-env.yml`](../../deploy/docker/compose.ems-influx-env.yml) | Overlay giving the EMS container the shared `INFLUXDB_TOKEN` |
 | [`deploy/docker/influxdb.env.example`](../../deploy/docker/influxdb.env.example) | Reference template; the env file is normally generated for you |
 
@@ -330,6 +330,220 @@ tar -czf ems-backup.tar.gz config.json data/ deploy/docker/influxdb.env
 > `data/influxdb` (with the container stopped) before removing it, e.g.
 > `docker volume ls | grep influx` to find it. A fresh `data/influxdb` simply
 > starts empty.
+
+## Upgrading the bundled InfluxDB
+
+The bundled InfluxDB image is pinned in one place,
+[`deploy/docker/compose.influxdb.yml`](../../deploy/docker/compose.influxdb.yml),
+to an exact `2.x.y` tag. The installers, the root `docker-compose.yml`, the
+developer stack under `develop/influxdb/` and the licence inventory repeat
+that line; `python3 tools/bundled_influxdb.py --check` names a copy that
+differs and `--sync` rewrites them, and a test fails while one differs. CI's
+analytics job starts the pinned image itself rather than a copy of it.
+
+**New versions are tracked by Dependabot.** Its `docker-compose` block watches
+`deploy/docker/` and opens a pull request when Docker Hub carries a newer
+`influxdb` tag of the same form; **Repo dependency refresh** then carries the
+pin into the copies. The `docker` block only ever read the `Dockerfile`, whose
+`influxdb` stage ships the `influx` CLI and not the server, which is how the
+server stayed on 2.7 while the CLI stage moved to 2.9. A release on GitHub
+reaches Docker Hub a few days later, through the official-images review;
+Dependabot sees it from then on.
+
+**What an upgrade does to the data.** InfluxDB 2.x upgrades in place: the new
+`influxd` converts the metadata (`influxd.bolt`, `influxd.sqlite`) at its first
+start, keeping a copy of the old `influxd.bolt` beside it, and leaves the time
+series as they are. The step is one way. From 2.8 on the conversion hashes the
+API tokens, and from 2.9 that is the default; an older `influxd` refuses the
+converted directory with *DB contains record of unknown migration*, and
+`influxd downgrade` below 2.8 erases every token. The EMS never reads a token
+back from InfluxDB (it keeps its own in `influxdb.env`), so hashing changes
+nothing for it.
+
+A Guided Setup over an existing installation keeps the InfluxDB version its
+data was written by in the new `docker-compose.yml`, so the version moves
+only on purpose: the version the InfluxDB container ran, or else the one the old
+compose file named. When a Setup with Analytics on finds InfluxDB data in
+`data/influxdb` and neither names a version, it stops, before it writes
+anything, and asks for it rather than start some version on the data. A Setup
+that fails after the installer wrote the new compose file still leaves the
+dated version named in it, and while the installer runs the dating is noted
+beside the Setup's marker, so a retry dates the data the same way even when
+the Admin stopped in between. The note counts only while `docker-compose.yml`
+names nothing or the version that Setup wrote; a file changed since says
+more. `install-docker.sh --force` and a native `emsctl
+stack up` after a `git pull` take the version the release pins, which
+upgrades InfluxDB in place without a backup.
+
+**The Admin upgrade** (the **Analytics database** row on the Admin's
+**Updates** page, `admin/influx_upgrade.py`)
+is the supported way for an installation to move. It is offered only where
+its way back would work (the checks below that need no backup) and the device
+has the memory for it, runs only on confirmation, and stops before changing
+anything when InfluxDB is not running, cannot list its buckets and tasks with
+the EMS token, the new image cannot be downloaded, or the backup cannot be
+verified:
+
+1. list the buckets and tasks InfluxDB holds, with the EMS token;
+2. download the new image;
+3. take a full InfluxDB backup (`emsctl backup create --type influxdb`) and
+   verify its checksums; it is an ordinary archive under **Backups**;
+4. record both versions, the backup and the lists in
+   `influxdb-upgrade.json` in the Admin data directory;
+5. name the new image in `docker-compose.yml` and recreate the `influxdb`
+   service;
+6. wait for the new version to answer, and check that the container runs the
+   new image, `influxd version` reports it, and every bucket and task is still
+   listed.
+
+**Memory.** The first start of the new version loads every shard again; with
+the default retention InfluxDB holds about 400 shards after five years, and
+how much memory that takes grows with the shards and the series, not with the
+size on disk. The plan therefore reads what InfluxDB holds now (anonymous
+memory plus swap of `influxd`, PID 1 of its container, from
+`/proc/1/status`) and the host's free memory (`MemAvailable` from
+`/proc/meminfo`, which a container sees as the host's, plus the free swap from
+`/proc/swaps`). A zram device's free swap counts half, because the pages it
+takes are compressed into the memory `MemAvailable` already counts; a swap
+file counts in full, slow as it is. The upgrade needs 20 % of what InfluxDB
+holds plus 64 MB free (`MEMORY_GROWTH_SHARE`, `MEMORY_RESERVE_MB`): in a VM
+shaped like a Raspberry Pi 3B+ the new version's first start peaked about
+15 % above the process it replaced, and the backup runs beside the old one.
+With less, the plan's state is `low_memory`, its `memory` field names the
+three figures, the Updates page says how much is needed and free, and an
+upgrade started anyway is refused before anything changes. A database grown
+far past the defaults is measured, not guessed. Where a figure cannot be read
+(no `/proc` access, Docker refusing the exec, PID 1 not `influxd`) the check
+gives way. A failed start names its likely cause: Docker reports a container
+it stopped for lack of memory where the kernel's memory cgroup is on, and a
+start killed with exit code 137 -- what the kernel's own OOM killer leaves on
+a Raspberry Pi, whose kernel switches the memory cgroup off -- is named as
+killed. A check that broke because InfluxDB restarted says so instead of
+reporting the listing it could not finish.
+
+The first start converts the data and loads every shard, at a speed that
+depends on the hardware and the history. In the Pi-3B+-shaped VM (903 MB of
+RAM, half a laptop core, SD-card speed, zram swap) five years at the default
+retention for three devices took about 3 minutes to upgrade and 6 minutes to
+roll back; no real board has measured it. So time alone never ends the wait: after 15 minutes
+(`SLOW_START_SECONDS`) the running step notes that InfluxDB is still starting,
+and the wait goes on until InfluxDB answers, its container is reported not
+running six polls in a row or starts again more than twice (a crash loop Docker
+keeps restarting), or the operator ends it with **Stop waiting**
+(`POST /api/admin/maintenance/influxdb/stop-waiting`, taken only by a wait past
+that mark). Stopping ends the run as not completed and leaves InfluxDB as it
+is, possibly still converting; the upgrade's record then offers the way back,
+and **Check again** (`POST /api/admin/maintenance/influxdb/recheck`, offered
+by the plan's `recheck` while the compose file and the container name the new
+image and the container runs) records
+the upgrade as done once InfluxDB answers on the new version with every bucket
+and task it held, without touching a container. Both checks compare the IDs
+listed before the upgrade, so a bucket or task the EMS made anew under an old
+name does not count. InfluxDB answers when `influx ping --host
+http://localhost:8086` reaches it, and each command of a check has two minutes
+(`CHECK_TIMEOUT_SECONDS`): right after a start with years of history, the
+Pi-shaped VM once took longer than the half minute the Admin otherwise gives a
+command in a container. The way back's empty start and its check wait the same
+way. Only putting InfluxDB back after a failed way back
+cannot be stopped and gives up after 15 minutes, leaving the record that offers
+nothing more until the operator has looked. The page asks not to restart the
+system meanwhile.
+
+While it runs, analytics pauses and the EMS keeps controlling; its writer
+holds up to 600 batches (50 minutes at the default 5 s loop) and writes them
+once InfluxDB answers, so a longer conversion loses the readings before the
+last 50 minutes. Nothing rolls back by itself.
+
+**The way back** (*Roll back to …*) restores that backup on the previous
+version. Before it changes anything it checks that the backup verifies, that
+an EMS is there to restore it, that `config/`, `data/` and `data/influxdb` are
+plain directories (a symbolic link is refused), that `docker-compose.yml`
+mounts `./data/influxdb`, that `config/influxdb.env` holds the setup values
+with the EMS token, and that `data/` has room for twice the backup. Then
+InfluxDB stops, `data/influxdb` is renamed to
+`data/influxdb-<version>-set-aside-<time>` (never deleted), the previous image
+starts empty with fresh anonymous volumes and sets itself up from the
+`DOCKER_INFLUXDB_INIT_*` values, the backup is restored with
+`influx restore --full`, and the same buckets and tasks are checked again.
+The image sets itself up on a temporary server on another port, points the
+CLI configuration at it and only then starts the server that stays; the
+restore therefore waits for an answer at port 8086 itself. Asked through the
+CLI configuration, the temporary server answered for the real one in the
+slow VM and the restore found nobody listening.
+What InfluxDB recorded after the backup stays only in the set-aside directory.
+The readings of the minutes the way back takes are lost: the EMS writes what
+it held into the empty previous version as soon as it answers, and the
+restore replaces it. It is offered while `docker-compose.yml` still names the
+upgraded image and the backup is still in the backup directory.
+
+When a step of the way back fails, InfluxDB is put back as it was before it:
+what the attempt started is moved to
+`data/influxdb-<version>-failed-way-back-<time>`, the set-aside data returns to
+`data/influxdb`, `docker-compose.yml` names the upgraded image again, and
+InfluxDB starts on it with fresh anonymous volumes; the way back stays on
+offer. It counts as put back when it answers again, or, if it did not answer
+before the way back either, when data, compose file and container are as
+they were. Only when that fails too, or when a failed rename leaves the data
+where no check can find it, is the record left as a failed way back, and the
+page offers neither direction until the operator has looked and removed
+`influxdb-upgrade.json` from the Admin data directory. To put InfluxDB back by
+hand after that, stop it, move `data/influxdb` aside if the message says it
+holds what the way back started, rename the set-aside directory to
+`data/influxdb`, name the upgraded image in `docker-compose.yml` again and
+start it with `--force-recreate`. An upgrade the Admin did not finish (it restarted
+meanwhile) counts as a failed one: the way back is offered and a later
+upgrade may run.
+
+An upgrade or a way back holds the container-action and restore locks, so
+**Restart EMS now**, **Repair analytics**, a restore, a Guided Upgrade, an
+Admin update, a System Build resume or return and a Guided Setup prepare or
+start are refused as busy while it runs. It does not start beside any of them either, nor while an
+Admin update is in progress; the job and those writers start under one lock,
+so neither can slip in between the other's checks and its start. If the
+Admin itself restarts during a way back, the record stays *rolling back*: the
+page offers neither direction and names where the record last saw the data.
+A recreate with fresh anonymous volumes leaves the previous `/etc/influxdb2`
+volume behind unattached (a few kilobytes of CLI settings); `docker volume
+prune` removes it.
+
+**By hand**: back up first, then move the image and recreate only InfluxDB. In
+a Docker-first installation directory, after setting `image:` of the
+`influxdb` service in `docker-compose.yml` to the release's pin:
+
+```bash
+docker compose exec ems python3 emsctl.py backup create --type influxdb
+docker compose --profile with-analytics up -d influxdb
+docker compose exec ems python3 emsctl.py influx status
+```
+
+In a native checkout, whose `git pull` already moved the pin:
+
+```bash
+python3 emsctl.py backup create --type influxdb
+docker compose -f docker-compose.example.yml -f deploy/docker/compose.influxdb.yml \
+  -f deploy/docker/compose.ems-influx-env.yml up -d --force-recreate influxdb
+python3 emsctl.py influx status
+```
+
+The way back by hand: stop InfluxDB, rename `data/influxdb` and create it
+empty, put the previous `image:` back, start it
+with `docker compose --profile with-analytics up -d --force-recreate
+--renew-anon-volumes influxdb` (it sets itself up from `influxdb.env`; without
+fresh anonymous volumes it finds the old CLI configuration in `/etc/influxdb2`
+and refuses), and restore the backup with
+`emsctl backup restore <archive> --on-conflict replace`. The files belong to
+InfluxDB's user, so the moves need root, for example
+`docker run --rm -v "$PWD/data:/d" --entrypoint sh <influxdb image> -c 'mv …'`.
+
+A native checkout's `emsctl backup` only starts the InfluxDB container that
+ran on the data and creates none, so a pulled pin never converts the data
+before the backup has read it. After `docker compose down` there is no such
+container: name the image that wrote the data in
+`deploy/docker/compose.influxdb.yml` (after a pull that moved the pin, the
+earlier one), start it with `emsctl influx init` and back up then. A restore may
+create a container, since what it restores replaces the data. `emsctl stack up` and `influx init` do recreate InfluxDB on a
+changed pin. Only an `influxdb:2.x[.y]` image line is managed; a digest, a
+registry prefix or another flavour is left to its owner.
 
 ## Advanced / external path
 

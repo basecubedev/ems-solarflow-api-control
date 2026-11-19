@@ -3235,15 +3235,34 @@ def _influx_require_token(influx):
     return token
 
 
-def _influx_ensure_running(files, *, json_output=False):
-    """Start the bundled InfluxDB container (idempotent) before backup/restore."""
+def _influx_ensure_running(files, *, json_output=False, create=True):
+    """Start the bundled InfluxDB container (idempotent) before backup/restore.
+
+    A backup passes ``create=False``: it only starts the container that ran
+    on the data, never makes one from the image the compose file names now,
+    so a pulled pin cannot convert the data before the backup has read it. A
+    restore may create one (``--no-recreate`` keeps an existing one): what it
+    restores replaces the data anyway.
+    """
     from ems import influx_setup
 
     influx_setup.ensure_data_dir()
-    command = influx_setup.build_compose_command(
-        files, action=("up", "-d", influx_setup.INFLUX_SERVICE)
-    )
+    if create:
+        action = ("up", "-d", "--no-recreate", influx_setup.INFLUX_SERVICE)
+    else:
+        action = ("start", influx_setup.INFLUX_SERVICE)
+    command = influx_setup.build_compose_command(files, action=action)
     if run_docker_compose(command, cwd=BASE_DIR, stdout_to_stderr=json_output) != 0:
+        if not create:
+            raise backup_mod.BackupError(
+                "could not start the bundled InfluxDB container to back up from "
+                "(there may be none). A backup never creates one: the image "
+                "deploy/docker/compose.influxdb.yml names now may be newer than the "
+                "one that wrote the data and would convert it one way. Name the image "
+                "that wrote the data there (after a pull that moved the pin: the "
+                "earlier one), run 'python3 emsctl.py influx init', back up again, "
+                "then upgrade as docs/technical/influxdb.md describes"
+            )
         raise backup_mod.BackupError(
             "failed to start bundled InfluxDB via docker compose"
         )
@@ -3298,7 +3317,7 @@ def _make_influx_backup_runner_host(influx, *, json_output=False):
     _influx_require_token(influx)  # validate up front; secret stays in-container
 
     def runner(host_influx_dir):
-        _influx_ensure_running(files, json_output=json_output)
+        _influx_ensure_running(files, json_output=json_output, create=False)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         container_dir = f"/tmp/ems-influx-backup-{stamp}"
         backup_cmd = influx_setup.build_influx_backup_command(files, container_dir)

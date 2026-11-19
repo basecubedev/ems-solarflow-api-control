@@ -87,6 +87,8 @@ class _FakeDocker:
         self.permission_repair_error = None
         self.permission_checks = []
         self.permission_repairs = []
+        self.influx_ran = None
+        self.influx_data = False
 
     def probe(self):
         return dict(self.status)
@@ -103,6 +105,12 @@ class _FakeDocker:
             on_progress(100, "Status: Downloaded")
         if self.pull_error is not None:
             raise self.pull_error
+
+    def inspect_container_image_ref(self, container_name):
+        return self.influx_ran if container_name == "ems-influxdb" else None
+
+    def influx_data_present(self, workspace, image):
+        return self.influx_data
 
     def inspect_container(self, container_name):
         container = self.containers.get(container_name)
@@ -1033,6 +1041,322 @@ def test_prepare_runs_installer_with_no_start_and_pulls_images(tmp_path):
     ]
     ems_image = next(i for i in job["images"] if i["service"] == "ems")
     assert ems_image["status"] == "done"
+
+
+class _PinnedInstaller(_FakeInstaller):
+    """Writes the compose file a release that pins InfluxDB 2.9.1 writes."""
+
+    def prepare(self, workspace, script_path, analytics=False, tag=None, on_line=None):
+        super().prepare(workspace, script_path, analytics=analytics, tag=tag, on_line=on_line)
+        Path(workspace, "docker-compose.yml").write_text(
+            "services:\n  influxdb:\n    image: influxdb:2.9.1\n", encoding="utf-8"
+        )
+
+
+def _prepare_over_an_installation(tmp_path, old_image, data_dir=True, ran=None, data=False, overwrite=True,
+                                  installer=None):
+    workspace = tmp_path / "deployment"
+    (workspace / "data").mkdir(parents=True)
+    if data_dir:
+        (workspace / "data" / "influxdb").mkdir()
+    if data:
+        (workspace / "data" / "influxdb" / "influxd.bolt").write_bytes(b"bolt")
+    if old_image is not None:
+        (workspace / "docker-compose.yml").write_text(
+            f"services:\n  influxdb:\n    image: {old_image}\n", encoding="utf-8"
+        )
+    docker = _FakeDocker()
+    docker.influx_ran = ran
+    docker.influx_data = data
+    service = _service(tmp_path, influx=BUNDLED, docker=docker, installer=installer or _PinnedInstaller(),
+                       influx_image="influxdb:2.9.1")
+    _, job = _run_prepare(service, overwrite=overwrite)
+    return workspace, docker, job, service
+
+
+@pytest.mark.parametrize("old_image", ["influxdb:2.7", "influxdb:2.10.1"])
+def test_a_setup_over_an_installation_keeps_the_influxdb_its_data_was_written_by(tmp_path, old_image):
+    """Another InfluxDB version converts the data one way, or refuses it; only an
+    upgrade behind a verified backup moves it."""
+
+    workspace, docker, job, service = _prepare_over_an_installation(tmp_path, old_image)
+
+    assert job["status"] == "succeeded"
+    assert f"image: {old_image}" in (workspace / "docker-compose.yml").read_text(encoding="utf-8")
+    assert old_image in docker.pulled and "influxdb:2.9.1" not in docker.pulled
+    marker = json.loads(service.marker_path.read_text(encoding="utf-8"))
+    assert {"service": "influxdb", "image": old_image} in [
+        {"service": image["service"], "image": image["image"]} for image in marker["images"]
+    ]
+    assert any(f"InfluxDB stays on {old_image}" in line for line in job["log"])
+
+
+def test_a_retried_setup_keeps_the_version_the_container_ran_after_compose_was_replaced(tmp_path):
+    """Interleaving: a first overwrite wrote the release's compose file and failed; the retry
+    finds 2.9.1 there, while the container that ran on the data is still 2.7's."""
+
+    workspace, docker, job, service = _prepare_over_an_installation(
+        tmp_path, "influxdb:2.9.1", ran="influxdb:2.7"
+    )
+
+    assert job["status"] == "succeeded"
+    assert "image: influxdb:2.7" in (workspace / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "influxdb:2.7" in docker.pulled and "influxdb:2.9.1" not in docker.pulled
+
+
+def test_influxdb_data_nothing_dates_stops_the_prepare_before_it_writes_anything(tmp_path):
+    workspace, docker, job, service = _prepare_over_an_installation(tmp_path, None, data=True)
+
+    assert job["status"] == "failed"
+    assert job["error"]["code"] == "influx_version_unknown"
+    assert not service_marker_exists(service)
+    assert not (workspace / "docker-compose.yml").exists()
+    assert service.installer.calls == [] and docker.pulled == []
+
+
+def test_a_retried_prepare_is_refused_again_when_nothing_dates_the_data(tmp_path):
+    """Interleaving: the first prepare is refused; the operator just presses prepare again."""
+
+    workspace, docker, job, service = _prepare_over_an_installation(tmp_path, None, data=True)
+    assert job["error"]["code"] == "influx_version_unknown"
+
+    _, again = _run_prepare(service, overwrite=True)
+
+    assert again["status"] == "failed" and again["error"]["code"] == "influx_version_unknown"
+    assert not (workspace / "docker-compose.yml").exists()
+
+
+class _FailingAfterComposeInstaller(_PinnedInstaller):
+    """Writes the release's compose file, then fails once, as install-docker.sh can after write_compose."""
+
+    def __init__(self):
+        super().__init__()
+        self.failures = 1
+
+    def prepare(self, workspace, script_path, analytics=False, tag=None, on_line=None):
+        super().prepare(workspace, script_path, analytics=analytics, tag=tag, on_line=on_line)
+        if self.failures:
+            self.failures -= 1
+            raise DockerError("bootstrap_failed", "influx init could not pull the image")
+
+
+def test_a_retry_after_a_failure_behind_the_compose_file_keeps_the_version_dated_first(tmp_path):
+    """Interleaving: no container; the first attempt dates 2.7 from the old compose file, the
+    installer then writes 2.9.1 and fails; the failed attempt leaves 2.7 named, so the retry
+    does not take 2.9.1 for the data's version."""
+
+    installer = _FailingAfterComposeInstaller()
+    workspace, docker, job, service = _prepare_over_an_installation(
+        tmp_path, "influxdb:2.7", data=True, installer=installer
+    )
+    assert job["status"] == "failed"
+    assert "image: influxdb:2.7" in (workspace / "docker-compose.yml").read_text(encoding="utf-8")
+
+    _, again = _run_prepare(service, overwrite=True)
+
+    assert again["status"] == "succeeded"
+    assert "image: influxdb:2.7" in (workspace / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "influxdb:2.9.1" not in docker.pulled
+
+
+class _KeepingInstaller(_FakeInstaller):
+    """Keeps an existing docker-compose.yml, as install-docker.sh does without --force."""
+
+    def prepare(self, workspace, script_path, analytics=False, tag=None, on_line=None):
+        kept = Path(workspace, "docker-compose.yml")
+        text = kept.read_text(encoding="utf-8") if kept.exists() else None
+        super().prepare(workspace, script_path, analytics=analytics, tag=tag, on_line=on_line)
+        if text is not None:
+            kept.write_text(text, encoding="utf-8")
+
+
+def test_a_prepare_that_keeps_the_compose_file_records_the_influxdb_it_names(tmp_path):
+    """A second prepare of the same release and config keeps docker-compose.yml; the marker follows it."""
+
+    workspace, docker, job, service = _prepare_over_an_installation(tmp_path, "influxdb:2.7", ran="influxdb:2.7")
+    assert job["status"] == "succeeded"
+    service.installer = _KeepingInstaller()
+    docker.pulled.clear()
+
+    again, job = _run_prepare(service)
+
+    assert job is not None and job["status"] == "succeeded", again
+    assert "influxdb:2.7" in docker.pulled and "influxdb:2.9.1" not in docker.pulled
+    marker = json.loads(service.marker_path.read_text(encoding="utf-8"))
+    assert {"service": "influxdb", "image": "influxdb:2.7"} in [
+        {"service": image["service"], "image": image["image"]} for image in marker["images"]
+    ]
+
+
+def test_services_moving_influxdb_names_the_new_image_in_the_marker(tmp_path):
+    workspace, docker, job, service = _prepare_over_an_installation(tmp_path, "influxdb:2.7", ran="influxdb:2.7")
+
+    service.record_influx_image("influxdb:2.9.1")
+
+    marker = json.loads(service.marker_path.read_text(encoding="utf-8"))
+    influx = [image for image in marker["images"] if image["service"] == "influxdb"]
+    assert [image["image"] for image in influx] == ["influxdb:2.9.1"]
+
+
+def test_services_moving_influxdb_forgets_a_noted_dating(tmp_path):
+    workspace, docker, job, service = _prepare_over_an_installation(tmp_path, "influxdb:2.7", ran="influxdb:2.7")
+    service._note_influx_dating("influxdb:2.7", "influxdb:2.9.1")
+
+    service.record_influx_image("influxdb:2.9.1")
+
+    assert not service._influx_dating_path.exists()
+
+
+def test_a_dating_noted_before_the_admin_stopped_is_used_by_the_next_setup(tmp_path):
+    """Interleaving: the Admin stopped while the installer ran; the old compose file is gone, the
+    new one names the release's version, and no container ran on the data since."""
+
+    workspace = tmp_path / "deployment"
+    (workspace / "data" / "influxdb").mkdir(parents=True)
+    (workspace / "data" / "influxdb" / "influxd.bolt").write_bytes(b"bolt")
+    (workspace / "docker-compose.yml").write_text(
+        "services:\n  influxdb:\n    image: influxdb:2.9.1\n", encoding="utf-8"
+    )
+    docker = _FakeDocker()
+    service = _service(tmp_path, influx=BUNDLED, docker=docker, installer=_PinnedInstaller(),
+                       influx_image="influxdb:2.9.1")
+    service._note_influx_dating("influxdb:2.7", "influxdb:2.9.1")
+
+    _, job = _run_prepare(service, overwrite=True)
+
+    assert job["status"] == "succeeded"
+    assert "image: influxdb:2.7" in (workspace / "docker-compose.yml").read_text(encoding="utf-8")
+    assert not service._influx_dating_path.exists()
+
+
+def test_a_compose_file_that_cannot_be_rewritten_keeps_the_installer_error_and_the_dating(tmp_path, monkeypatch):
+    installer = _FailingAfterComposeInstaller()
+    workspace = tmp_path / "deployment"
+    (workspace / "data" / "influxdb").mkdir(parents=True)
+    (workspace / "docker-compose.yml").write_text(
+        "services:\n  influxdb:\n    image: influxdb:2.7\n", encoding="utf-8"
+    )
+    docker = _FakeDocker()
+    service = _service(tmp_path, influx=BUNDLED, docker=docker, installer=installer,
+                       influx_image="influxdb:2.9.1")
+
+    def read_only(*_args, **_kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(service, "_keep_influx_version", read_only)
+
+    _, job = _run_prepare(service, overwrite=True)
+
+    assert job["status"] == "failed" and job["error"]["code"] == "bootstrap_failed"
+    assert service._noted_influx_dating() == "influxdb:2.7"
+    assert any("could not be made to name influxdb:2.7" in line for line in job["log"])
+
+
+def test_a_compose_file_that_cannot_name_the_kept_version_fails_a_prepare_whose_installer_worked(
+    tmp_path, monkeypatch
+):
+    """The disk is full after the installer wrote the release's compose file: the prepare stops
+    rather than pull, record and later start the release's InfluxDB on the old data."""
+
+    workspace = tmp_path / "deployment"
+    (workspace / "data" / "influxdb").mkdir(parents=True)
+    (workspace / "docker-compose.yml").write_text(
+        "services:\n  influxdb:\n    image: influxdb:2.7\n", encoding="utf-8"
+    )
+    docker = _FakeDocker()
+    service = _service(tmp_path, influx=BUNDLED, docker=docker, installer=_PinnedInstaller(),
+                       influx_image="influxdb:2.9.1")
+
+    def disk_full(*_args, **_kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(service, "_keep_influx_version", disk_full)
+
+    _, job = _run_prepare(service, overwrite=True)
+
+    assert job["status"] == "failed"
+    assert docker.pulled == [] and not service_marker_exists(service)
+    assert service._noted_influx_dating() == "influxdb:2.7"
+
+
+class _FailingBeforeComposeInstaller(_FakeInstaller):
+    """Fails before it writes any compose file, as install-docker.sh does without Docker."""
+
+    def __init__(self):
+        super().__init__(error=DockerError("bootstrap_failed", "docker is not available"))
+
+    def prepare(self, workspace, script_path, analytics=False, tag=None, on_line=None):
+        raise self.error
+
+
+def test_a_dating_outlives_an_installer_that_failed_before_writing_compose(tmp_path):
+    """Interleaving: no container; the overwrite removed the old compose file and the installer
+    failed before writing a new one; the retry still keeps 2.7."""
+
+    workspace, docker, job, service = _prepare_over_an_installation(
+        tmp_path, "influxdb:2.7", data=True, installer=_FailingBeforeComposeInstaller()
+    )
+    assert job["status"] == "failed" and not (workspace / "docker-compose.yml").exists()
+    assert service._noted_influx_dating() == "influxdb:2.7"
+    service.installer = _PinnedInstaller()
+
+    _, again = _run_prepare(service, overwrite=True)
+
+    assert again["status"] == "succeeded"
+    assert "image: influxdb:2.7" in (workspace / "docker-compose.yml").read_text(encoding="utf-8")
+    assert service._noted_influx_dating() is None
+
+
+class _UnrewritableInstaller(_FakeInstaller):
+    """Writes a compose file whose InfluxDB line no rewrite can read, e.g. with a registry prefix."""
+
+    def prepare(self, workspace, script_path, analytics=False, tag=None, on_line=None):
+        super().prepare(workspace, script_path, analytics=analytics, tag=tag, on_line=on_line)
+        Path(workspace, "docker-compose.yml").write_text(
+            "services:\n  influxdb:\n    image: docker.io/library/influxdb:2.9.1\n", encoding="utf-8"
+        )
+
+
+def test_a_compose_file_that_still_names_another_version_after_the_rewrite_fails_the_prepare(tmp_path):
+    workspace, docker, job, service = _prepare_over_an_installation(
+        tmp_path, "influxdb:2.7", ran="influxdb:2.7", installer=_UnrewritableInstaller()
+    )
+
+    assert job["status"] == "failed" and job["error"]["code"] == "influx_version_not_kept"
+    assert docker.pulled == [] and not service_marker_exists(service)
+    assert service._noted_influx_dating() == "influxdb:2.7"
+
+
+def test_a_noted_dating_yields_to_a_compose_file_changed_since(tmp_path):
+    """Interleaving: a Setup failed and noted 2.7; the operator then moved InfluxDB to 2.10.1 by
+    hand and removed the container; the compose file, not the old note, dates the data."""
+
+    workspace = tmp_path / "deployment"
+    (workspace / "data" / "influxdb").mkdir(parents=True)
+    (workspace / "docker-compose.yml").write_text(
+        "services:\n  influxdb:\n    image: influxdb:2.10.1\n", encoding="utf-8"
+    )
+    docker = _FakeDocker()
+    service = _service(tmp_path, influx=BUNDLED, docker=docker, installer=_PinnedInstaller(),
+                       influx_image="influxdb:2.9.1")
+    service._note_influx_dating("influxdb:2.7", "influxdb:2.9.1")
+
+    _, job = _run_prepare(service, overwrite=True)
+
+    assert job["status"] == "succeeded"
+    assert "image: influxdb:2.10.1" in (workspace / "docker-compose.yml").read_text(encoding="utf-8")
+
+
+def service_marker_exists(service):
+    return service.marker_path.is_file()
+
+
+def test_a_setup_over_an_installation_without_influxdb_data_takes_the_release_version(tmp_path):
+    workspace, docker, job, _service_ = _prepare_over_an_installation(tmp_path, "influxdb:2.7", data_dir=False)
+
+    assert job["status"] == "succeeded"
+    assert "image: influxdb:2.9.1" in (workspace / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "influxdb:2.9.1" in docker.pulled
 
 
 def test_prepare_installer_skips_analytics_when_influx_disabled(tmp_path):
@@ -2466,6 +2790,28 @@ def test_docker_compose_start_uses_prepared_workspace_and_no_pull(tmp_path):
         }
     ]
     assert "pull" not in recorder[0]["command"]
+
+
+def test_docker_compose_stop_names_the_grace_period_as_compose_does(tmp_path):
+    """Compose v2 knows ``--timeout``; ``--time`` is ``docker stop``'s and Compose refuses it."""
+
+    recorder = []
+    compose = DockerCompose(popen=_make_popen(recorder, lines=[]))
+    compose.stop(tmp_path, services=("influxdb",), profiles=("with-analytics",))
+
+    assert recorder[0]["command"] == [
+        "docker", "compose", "--profile", "with-analytics", "stop", "--timeout", "20", "influxdb",
+    ]
+
+
+def test_docker_compose_up_renews_anonymous_volumes_only_when_asked(tmp_path):
+    recorder = []
+    compose = DockerCompose(popen=_make_popen(recorder, lines=[]))
+    compose.up(tmp_path, services=("influxdb",), force_recreate=True)
+    compose.up(tmp_path, services=("influxdb",), force_recreate=True, renew_anon_volumes=True)
+
+    assert recorder[0]["command"][-2:] == ["--force-recreate", "influxdb"]
+    assert recorder[1]["command"][-3:] == ["--force-recreate", "--renew-anon-volumes", "influxdb"]
 
 
 @pytest.mark.parametrize(

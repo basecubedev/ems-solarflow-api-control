@@ -67,6 +67,8 @@ export const system = {
   overview: new Resource("/api/admin/maintenance/overview"),
   config: new Resource("/api/admin/maintenance/config"),
   plan: new Resource("/api/admin/maintenance/containers/plan"),
+  influxdb: new Resource("/api/admin/maintenance/influxdb"),
+  updates: new Resource("/api/admin/maintenance/updates"),
   backups: new Resource("/api/admin/maintenance/backups"),
   alignment: new Resource("/api/admin/system-alignment/status"),
   lifecycle: new Resource("/api/admin/workflow-lifecycle"),

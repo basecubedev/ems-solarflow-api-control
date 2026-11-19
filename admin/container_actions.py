@@ -978,6 +978,17 @@ def _one_at_a_time(run):
         _CONTAINER_ACTION_LOCK.release()
 
 
+def claim_container_actions():
+    """Hold the container-action lock for a job that outlives its request.
+
+    Returns the call that releases it, or None while another action runs.
+    """
+
+    if not _CONTAINER_ACTION_LOCK.acquire(blocking=False):
+        return None
+    return _CONTAINER_ACTION_LOCK.release
+
+
 def run_maintenance_container_sync():
     """Run the confirmed container sync and return its result."""
 

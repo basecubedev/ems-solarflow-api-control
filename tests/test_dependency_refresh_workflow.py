@@ -104,7 +104,25 @@ def test_the_push_job_runs_no_action_and_none_of_the_updated_code():
 
     assert job["permissions"] == {"actions": "read", "contents": "read"}
     assert [entry["name"] for entry in job["steps"] if "uses" in entry] == []
-    assert interpreters == ["python3 -I tools/check_third_party_licenses.py --fix-versions; then"]
+    assert interpreters == [
+        "python3 -I tools/check_third_party_licenses.py --fix-versions; then",
+        "python3 -I tools/bundled_influxdb.py --sync",
+    ]
+
+
+def test_the_push_job_carries_the_bundled_influxdb_pin_into_every_copy():
+    """Dependabot moves the pin alone; a copy the push does not stage stays behind."""
+
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("bundled_influxdb", ROOT / "tools" / "bundled_influxdb.py")
+    tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    run = step(workflow()["jobs"]["push"], "Carry the bundled InfluxDB pin into its copies")["run"]
+    staged = next(line for line in run.splitlines() if "git add" in line).split(" -- ", 1)[1].split()
+
+    assert "python3 -I tools/bundled_influxdb.py --sync" in run
+    assert sorted(staged) == sorted((*tool.COMPOSE_COPIES, tool.INVENTORY))
 
 
 def test_only_a_dependabot_pull_request_starts_the_refresh():

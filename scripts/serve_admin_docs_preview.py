@@ -338,6 +338,8 @@ def build_routes():
         # Nothing to migrate: the card is expected to be absent.
         "/api/admin/maintenance/zendure-mqtt/migration-review": overview["migration_review_none"],
         "/api/admin/maintenance/admin-update/status": upgrade["admin_update_status"],
+        "/api/admin/maintenance/influxdb": upgrade["influxdb_plan"],
+        "/api/admin/maintenance/updates": upgrade["known_update"],
         "/api/admin/system-alignment/status": upgrade["alignment_idle"],
         "/api/admin/workflow-lifecycle": overview["recovery_preview_idle"]["lifecycle"],
         "/api/setup/config-template": setup["config_template"],
@@ -433,6 +435,8 @@ def build_scenarios():
                 jobs: upgrade["upgrade_job_done"],
                 "/api/admin/system-alignment/status": alignment(upgrade["upgrade_transitions"]["running"], "current"),
                 "/api/admin/maintenance/overview": _after_upgrade(overview["overview"], upgrade["upgrade_validate"]["target_release"]),
+                "/api/admin/maintenance/influxdb": upgrade["influxdb_plan_after_upgrade"],
+                "/api/admin/maintenance/updates": upgrade["known_update_after_upgrade"],
             },
             "POST": running["POST"],
         },

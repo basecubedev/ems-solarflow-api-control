@@ -119,7 +119,7 @@ test.describe("Modern Admin: the guided upgrade", { tag: ["@smoke", "@workflow"]
     await expect(page.locator(`[data-tag="${TARGET}"]`).getByTestId("choose-release")).toContainText("Checking");
     await expect(page.getByTestId("start-upgrade")).toHaveCount(0);
     const order = await page.locator(".content > .card").evaluateAll((cards) => cards.map((card) => card.querySelector(".card-title")?.textContent));
-    expect(order.slice(0, 2)).toEqual(["What runs now", `Update to ${TARGET}`]);
+    expect(order.slice(0, 2)).toEqual(["Versions and updates", `Update to ${TARGET}`]);
     release.open();
     await expect(panel).toHaveAttribute("data-stage", "ready", { timeout: 30_000 });
     await expect(page.getByTestId("upgrade-working")).toHaveCount(0);
@@ -171,6 +171,58 @@ test.describe("Modern Admin: the guided upgrade", { tag: ["@smoke", "@workflow"]
     expect(sent!.migration_revision).toBeTruthy();
     await page.getByTestId("upgrade-finish").click();
     await expect(page.getByTestId("upgrade")).toHaveCount(0);
+  });
+
+  test("an update says a newer InfluxDB follows as its own step and offers it once the new release runs", async ({ page, seedAdminScenario }) => {
+    await keepAdmin(page);
+    let shipped = "influxdb:2.7";
+    await page.route("**/api/admin/maintenance/influxdb", async (route) => {
+      await json(route, {
+        ok: true,
+        state: shipped === "influxdb:2.7" ? "current" : "available",
+        current_image: "influxdb:2.7",
+        target_image: shipped,
+        current_version: "2.7",
+        target_version: shipped.slice(9),
+        last: null,
+        rollback: null,
+      });
+    });
+    await openUpdates(page, seedAdminScenario);
+    await choose(page);
+    await expect(page.getByTestId("upgrade-influx-note")).toContainText("If the new version ships a newer InfluxDB, it follows afterwards as a separate step.");
+    const finish = gate();
+    await page.route("**/api/admin/maintenance/upgrade/execute", async (route) => {
+      await json(route, { ok: true, job_id: "e2e-influx", status: "running", steps: jobSteps(0), transition: transition("ems_operation_running") }, 202);
+    });
+    let done = false;
+    finish.opened.then(() => {
+      shipped = "influxdb:2.9.1";
+      done = true;
+    });
+    await page.route("**/api/admin/maintenance/upgrade/jobs/e2e-influx", async (route) => {
+      if (!done) {
+        await json(route, { ok: true, job_id: "e2e-influx", status: "running", steps: jobSteps(8), transition: transition("ems_operation_running") });
+        return;
+      }
+      await json(route, {
+        ok: true, job_id: "e2e-influx", status: "succeeded", steps: jobSteps(PLANNED.length),
+        result: { ok: true, target_release: TARGET, warnings: [], steps: [] }, transition: transition("completed"),
+      });
+    });
+    await startAndConfirm(page);
+    await expect(page.getByTestId("upgrade-next-influx")).toHaveCount(0);
+    finish.open();
+    await expect(page.getByTestId("upgrade-done")).toContainText("Update complete");
+    const next = page.getByTestId("upgrade-next-influx");
+    await expect(next).toContainText("Next step: InfluxDB 2.9.1");
+    await expect(next).toContainText("Do not restart the system while it runs.");
+    await expect(page.getByTestId("update-influxdb")).toHaveAttribute("data-state", "available");
+    await page.getByTestId("upgrade-next-influx-go").click();
+    const confirm = page.getByRole("dialog", { name: "Upgrade InfluxDB to 2.9.1?" });
+    await expect(confirm).toContainText("A full InfluxDB backup is made first and checked");
+    await confirm.getByRole("button", { name: "Cancel" }).click();
+    await expect(confirm).toHaveCount(0);
   });
 
   test("an update that replaces the Admin console reconnects, asks to sign in to the new one and follows the run there", async ({ page, seedAdminScenario }) => {

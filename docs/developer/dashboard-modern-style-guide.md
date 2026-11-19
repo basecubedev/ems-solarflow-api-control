@@ -293,8 +293,10 @@ from what the Admin server is.
   of a failure are the ones the transition offers (`resume_available`,
   `return_available`, `cancel_available`). Each new screen of the flow
   brings the update's card into view when it is above the window or, after
-  its first screen, below its fold, and takes the focus. The page leads with **What runs now**, the
-  update's card below it, then the guided upgrade and the versions: the
+  its first screen, below its fold, and takes the focus. The page leads with **Versions and updates**
+  (EMS and the Admin, then the bundled InfluxDB, each with its one button), the
+  update's card below it, the InfluxDB card while a run of it has something to
+  say, and the versions: the
   installable ones, grouped by channel, with a channel filter the browser
   keeps (`ems-admin.releaseChannel`). While the
   device works (`WORKING_STAGES`), a banner in the stage's tone

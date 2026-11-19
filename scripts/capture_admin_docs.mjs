@@ -311,6 +311,7 @@ const SHOTS = [
     file: "admin-upgrade-completed.png",
     scenario: "upgrade-done",
     hash: "#/updates",
+    full: true,
     session: upgradeMemo(),
     async prepare(page) {
       await appReady(page);

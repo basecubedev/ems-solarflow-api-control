@@ -31,6 +31,7 @@ from admin.image_identity import (
     identify_image,
     same_release_line,
 )
+from ems.file_io import atomic_write_bytes
 
 
 REPO = "basecubedev/ems-solarflow-api-control"
@@ -79,6 +80,9 @@ ROLLBACK_REASON = (
     "Earlier patch in the release line you are running. Selectable as a "
     "rollback; it is not an upgrade."
 )
+RELEASE_CHECK_FILE = "release-check.json"
+RELEASE_CHECK_VERSION = 1
+
 DEVELOPMENT_CATALOGUE_UNREADABLE = (
     "The development build catalogue could not be read, so no development "
     "builds are listed."
@@ -685,6 +689,8 @@ class ReleaseManager:
                 None,
             )
         )
+        if for_upgrade and remote_available:
+            self._remember_check(default_release)
         return {
             "active_release": active,
             "prepared_release": prepared,
@@ -694,6 +700,61 @@ class ReleaseManager:
             "running_rolling": rolling,
             "releases": releases,
             "warnings": warnings,
+        }
+
+    def _remember_check(self, recommended):
+        record = {
+            "version": RELEASE_CHECK_VERSION,
+            "checked_at": _utc_now(),
+            "recommended": recommended,
+        }
+        try:
+            self.state_dir.mkdir(parents=True, exist_ok=True)
+            atomic_write_bytes(
+                str(self.state_dir / RELEASE_CHECK_FILE),
+                (json.dumps(record, sort_keys=True) + "\n").encode("utf-8"),
+            )
+        except OSError:
+            pass
+
+    def _read_check(self):
+        try:
+            record = json.loads((self.state_dir / RELEASE_CHECK_FILE).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(record, dict) or record.get("version") != RELEASE_CHECK_VERSION:
+            return None
+        recommended = record.get("recommended")
+        if recommended is not None and not (isinstance(recommended, str) and _version(recommended)):
+            return None
+        checked_at = record.get("checked_at")
+        return {"recommended": recommended, "checked_at": checked_at if isinstance(checked_at, str) else None}
+
+    def known_update(self):
+        """The release the last upgrade listing proposed, judged against what is installed now.
+
+        Reads no network: ``state`` is ``available`` while that release is
+        newer than the installed one, ``current`` once nothing it proposed is,
+        and ``unknown`` before any listing or while the installed release
+        cannot be read.
+        """
+
+        record = self._read_check()
+        if record is None:
+            return {"state": "unknown", "running": None, "recommended": None, "checked_at": None}
+        try:
+            running = self.detect_active_release()
+        except Exception:
+            running = None
+        if not _version(running or ""):
+            return {"state": "unknown", "running": running, "recommended": None, "checked_at": record["checked_at"]}
+        recommended = record["recommended"]
+        newer = bool(recommended) and _version(recommended) > _version(running)
+        return {
+            "state": "available" if newer else "current",
+            "running": running,
+            "recommended": recommended if newer else None,
+            "checked_at": record["checked_at"],
         }
 
     def prepare(self, tag, *, revision=None):

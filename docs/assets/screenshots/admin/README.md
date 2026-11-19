@@ -34,12 +34,12 @@ hostnames.
 | `admin-guided-setup-config-preview.png` | Guided setup — 03 Settings: the check says Ready, the hardware in the draft | `setup` |
 | `admin-setup-deployment.png` | Guided setup — 04 Prepare: the deployment is ready | `setup` |
 | `admin-setup-start.png` | Guided setup — 05 Start EMS: EMS runs, Open the dashboard | `setup` |
-| `admin-updates.png` | Updates — what runs now, the guided upgrade, the available versions | `installed` |
+| `admin-updates.png` | Updates — versions and updates (EMS and the Admin, the bundled InfluxDB), the available versions | `installed` |
 | `admin-upgrade-verifying.png` | Updates — a version chosen and being prepared: images downloaded and checked | `installed` |
 | `admin-guided-upgrade-plan.png` | Updates — a version chosen and checked: options and what happens | `installed` |
 | `admin-upgrade-running.png` | Updates — an update running, EMS being installed | `upgrade-running` |
 | `admin-admin-update-reconnect.png` | Updates — the Admin console restarting, the page reconnecting | `upgrade-reconnect` |
-| `admin-upgrade-completed.png` | Updates — Update complete | `upgrade-done` |
+| `admin-upgrade-completed.png` | Updates — Update complete, the InfluxDB update as the next step | `upgrade-done` |
 | `admin-settings-features.png` | Settings & devices — Features, Winter mode opened | `installed` |
 | `admin-settings-safety.png` | Settings & devices — Safety | `installed` |
 | `admin-mqtt-broker.png` | Settings & devices — Add-ons: the built-in MQTT broker running, its address and two accounts | `installed` |

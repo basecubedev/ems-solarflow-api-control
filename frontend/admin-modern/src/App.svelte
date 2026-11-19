@@ -25,6 +25,7 @@
   import { resumeUpgrade } from "./state/upgrade.svelte.js";
   import { setupTransitionActive } from "./lib/setup.js";
   import { dashboardHref } from "./lib/links.js";
+  import { updateMark } from "./lib/updates.js";
   import { URGENT_STEPS, assistantMark, assistantSteps, bareAddress, installed, opensOnAssistant } from "./lib/assistant.js";
 
   /**
@@ -72,6 +73,11 @@
     if (auth.authenticated && isInstalled) untrack(() => ensure("config", "backups"));
   });
   const marked = $derived(assistantMark(assistantSteps({ overview: system.overview.data, config: system.config.data, backups: system.backups.data }), URGENT_STEPS));
+  /** The menu's Updates entry carries a dot while an update waits; reading it needs no network. */
+  $effect(() => {
+    if (auth.authenticated && isInstalled) untrack(() => ensure("updates", "influxdb"));
+  });
+  const updatesMark = $derived(updateMark(system.updates.data, system.influxdb.data));
 
   $effect(() => {
     if (auth.authenticated && auth.reachable) {
@@ -126,7 +132,7 @@
     nav,
     short: "ADMIN",
     locked: () => false,
-    mark: (id) => (id === "assistant" ? marked : ""),
+    mark: (id) => (id === "assistant" ? marked : id === "updates" ? updatesMark : ""),
     session: {
       get authenticated() {
         return auth.authenticated;

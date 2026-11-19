@@ -203,7 +203,7 @@ You confirm the whole upgrade **once**. There is no second, Admin-specific
 confirmation, no standalone *Update Admin* button, and no option to skip Admin
 alignment (or leave the Admin on a different build) in the normal flow.
 
-**Admin and EMS are named separately.** **What runs now** on the Updates page
+**Admin and EMS are named separately.** **Versions and updates** on the Updates page
 names the EMS container's release and the Admin's own release; the latter is
 read the same way, from the running Admin container's build labels by its
 immutable image id — the answer the Appliance Manager gives too. The Overview's
@@ -244,7 +244,7 @@ runs no check at all.
 A Guided Upgrade cancelled after it replaced the Admin leaves the Admin on the
 target build and EMS on the old one. That is not one System Build, so it is never
 recorded: the record keeps the pair it last verified, `running_pair` names both
-builds (`state: unpaired`), and **What runs now** on the Updates page reads
+builds (`state: unpaired`), and **Versions and updates** on the Updates page reads
 **Not a pair**. An Admin reinstalled from the Appliance
 Manager at another build than the EMS is named the same way. Upgrading to one
 System Build aligns both and records the pair again. While a transition is in
@@ -291,6 +291,21 @@ docker compose -f docker-compose.admin.yml up -d
   a full schema sync,
   `docker compose exec ems python3 emsctl.py influx sync`, because it deletes
   data you did not confirm here.
+- **Analytics database** on the Updates page shows the bundled InfluxDB
+  version and, when this Admin build ships a newer one, **Upgrade to …**; the
+  menu's Updates entry carries a dot meanwhile. **Upgrade to …** backs InfluxDB
+  up and verifies the backup before it changes anything, then starts the new
+  version, which converts the data, and checks that every bucket and task is
+  still there. That can take a very long time; do not restart the system
+  while it runs.
+  An older InfluxDB cannot open converted data, so **Roll back to …** restores
+  that backup on the previous version and sets the converted directory aside
+  instead of deleting it. When a step of the way back fails, InfluxDB is put
+  back as it was before it; only if that fails too does the page offer nothing
+  more, and the message says where the data is. A Guided Setup over the
+  installation keeps the InfluxDB version its data was written by.
+  [InfluxDB: upgrading the bundled InfluxDB](../technical/influxdb.md#upgrading-the-bundled-influxdb)
+  describes every step.
 
 ## Settings & devices
 

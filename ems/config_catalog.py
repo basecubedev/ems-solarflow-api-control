@@ -2279,7 +2279,9 @@ _SECTIONS = [
                 "influxdb.retention",
                 "Retention",
                 "How long analytics data is kept.",
-                "Controls storage periods for each analytics resolution.",
+                "Controls storage periods for each analytics resolution. Longer periods need more memory as "
+                "well as storage: InfluxDB loads every stored period when it starts or is upgraded. On a "
+                "device with 1 GB of memory, such as a Raspberry Pi 3, keep the defaults.",
                 1,
                 level="advanced",
                 risk="storage",

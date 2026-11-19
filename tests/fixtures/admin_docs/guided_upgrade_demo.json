@@ -180,5 +180,57 @@
       "image_ref": "ghcr.io/example/ems-admin:v0.8.16",
       "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
     }
+  },
+  "influxdb_plan": {
+    "ok": true,
+    "state": "current",
+    "message": null,
+    "current_image": "influxdb:2.7.11",
+    "target_image": "influxdb:2.7.11",
+    "current_version": "2.7.11",
+    "target_version": "2.7.11",
+    "container": {
+      "name": "ems-influxdb",
+      "running": true,
+      "found": true,
+      "image": "influxdb:2.7.11"
+    },
+    "last": null,
+    "rollback": null
+  },
+  "influxdb_plan_after_upgrade": {
+    "ok": true,
+    "state": "available",
+    "message": null,
+    "current_image": "influxdb:2.7.11",
+    "target_image": "influxdb:2.9.1",
+    "current_version": "2.7.11",
+    "target_version": "2.9.1",
+    "container": {
+      "name": "ems-influxdb",
+      "running": true,
+      "found": true,
+      "image": "influxdb:2.7.11"
+    },
+    "last": null,
+    "rollback": null
+  },
+  "known_update": {
+    "ok": true,
+    "release": {
+      "state": "unknown",
+      "running": null,
+      "recommended": null,
+      "checked_at": null
+    }
+  },
+  "known_update_after_upgrade": {
+    "ok": true,
+    "release": {
+      "state": "current",
+      "running": "v0.8.16",
+      "recommended": null,
+      "checked_at": "2026-07-05T13:02:11Z"
+    }
   }
 }
