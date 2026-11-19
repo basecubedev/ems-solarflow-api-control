@@ -162,8 +162,17 @@ def seed_host_files(root, *, now=None):
     (root / "proc" / "device-tree" / "model").write_text("Raspberry Pi 5 Model B Rev 1.0\x00")
     (root / "proc" / "uptime").write_text("1036800.00 900000.00\n", encoding="utf-8")
     (root / "proc" / "meminfo").write_text(
-        "MemTotal:        8054304 kB\nMemAvailable:    6000000 kB\n", encoding="utf-8"
+        "MemTotal:        8054304 kB\nMemAvailable:    6000000 kB\n"
+        "SwapTotal:       6083580 kB\nSwapFree:        6071292 kB\n", encoding="utf-8"
     )
+    (root / "proc" / "swaps").write_text(
+        "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n"
+        "/dev/zram0                              partition\t4027148\t\t12288\t\t100\n"
+        "/var/lib/ems-appliance-swap/swapfile    file\t\t2097148\t\t0\t\t10\n",
+        encoding="utf-8",
+    )
+    (root / "proc" / "sys" / "vm").mkdir(parents=True, exist_ok=True)
+    (root / "proc" / "sys" / "vm" / "swappiness").write_text("100\n", encoding="utf-8")
     thermal = root / "sys" / "class" / "thermal" / "thermal_zone0"
     thermal.mkdir(parents=True, exist_ok=True)
     (thermal / "temp").write_text("51234\n", encoding="utf-8")

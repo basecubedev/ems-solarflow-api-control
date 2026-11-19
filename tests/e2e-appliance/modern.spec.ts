@@ -1025,6 +1025,29 @@ test.describe("access, network and diagnostics", () => {
     await expect(page.getByTestId("plan-confirm")).toHaveClass(/danger/);
   });
 
+  test("the memory card shows each swap area with what it holds, and none when no swap is on", async ({ page }) => {
+    await createPassword(page);
+    await open(page, "diagnostics");
+    const memory = page.getByTestId("diag-memory");
+    await expect(memory.getByTestId("diag-swap-zram")).toContainText("Compressed swap (zram)");
+    await expect(memory.getByTestId("diag-swap-zram")).toContainText("12 MB of 3.8 GB in use");
+    await expect(memory.getByTestId("diag-swap-file")).toContainText("0 MB of 2.0 GB in use");
+    await expect(memory.getByTestId("diag-swappiness")).toHaveCount(0);
+    await page.locator(".topbar .seg button", { hasText: "Expert" }).click();
+    await expect(memory.getByTestId("diag-swappiness")).toContainText("100");
+
+    await page.route("**/api/status", async (route) => {
+      const answer = await route.fetch();
+      const status = await answer.json();
+      status.system.memory.swap = { total_mb: 0, used_mb: 0, swappiness: 60, areas: [] };
+      await route.fulfill({ response: answer, json: status });
+    });
+    await page.reload();
+    await open(page, "diagnostics");
+    await expect(page.getByTestId("diag-swap-none")).toContainText("None switched on");
+    await expect(page.getByTestId("diag-swap-zram")).toHaveCount(0);
+  });
+
   test("a support archive can be downloaded once it is made", async ({ page }) => {
     await createPassword(page);
     await open(page, "diagnostics");

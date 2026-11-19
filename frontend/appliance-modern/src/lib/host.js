@@ -202,6 +202,34 @@ export function gigabytes(megabytes) {
   return value >= 10240 ? { value: Math.round(value / 1024), digits: 0 } : { value: value / 1024, digits: 1 };
 }
 
+/** The swap areas the host reports, in the words the memory card has for each. */
+export const SWAP_KINDS = Object.freeze(["zram", "file", "partition"]);
+
+/**
+ * An amount of memory or swap as a person reads it: megabytes below one
+ * gigabyte, where a tenth of a gigabyte would hide what a 1 GB board holds in
+ * swap, and gigabytes from there. Zero is an amount; null for no reading.
+ */
+export function memoryAmount(megabytes) {
+  if (megabytes === null || megabytes === undefined || megabytes === "") return null;
+  const value = Number(megabytes);
+  if (!Number.isFinite(value) || value < 0) return null;
+  return value < 1024 ? { value: Math.round(value), digits: 0, unit: "MB" } : { ...gigabytes(value), unit: "GB" };
+}
+
+/**
+ * The swap areas that are on, in the order the kernel fills them, each with
+ * what it holds of its size. Null when the host could not read them; empty
+ * when no swap is on.
+ */
+export function swapAreas(memory) {
+  const areas = memory?.swap?.areas;
+  if (!Array.isArray(areas)) return null;
+  return areas
+    .filter((area) => SWAP_KINDS.includes(area?.kind))
+    .map((area) => ({ kind: area.kind, used_mb: area.used_mb, size_mb: area.size_mb }));
+}
+
 /**
  * A session limit in the largest unit it divides into exactly: 5400 seconds
  * rounded to "2 hours" would hide half an hour of a session that ends at 90

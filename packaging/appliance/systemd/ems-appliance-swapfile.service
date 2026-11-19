@@ -1,0 +1,24 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# The swap file behind compressed swap: up to 2 GB on the root, kept 2 GB clear
+# of a full card, used only once zram is full. After the root has grown on a
+# freshly imaged card, so the file is sized for the card and not for the image.
+#
+# Anchored on the build marker like the root growth: a .deb installation on
+# somebody else's Raspberry Pi OS keeps the swap its owner chose.
+[Unit]
+Description=EMS SolarFlow Appliance swap file
+Documentation=file:///usr/share/doc/ems-appliance-manager/installation.md
+ConditionPathExists=/etc/ems-appliance-os-build
+After=local-fs.target ems-appliance-grow-root.service ems-appliance-zram.service
+Before=docker.service ems-appliance-agent.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/ems-appliance-manager/swap-setup.sh file
+# A card that cannot allocate quickly falls back to writing the file out.
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

@@ -12,7 +12,7 @@ import { KNOWN_ERRORS } from "../src/lib/errors.js";
 import { FINDINGS, STATUS_SECTIONS } from "../src/lib/findings.js";
 import { OPERATION_STATES, OPERATION_TYPES, VERIFICATION_FAILURES } from "../src/lib/operations.js";
 import { PLAN_EXTRA_FIELDS, PLAN_FIELD_ORDER, PLAN_SCOPES } from "../src/lib/plan.js";
-import { RELEASE_TRACKS } from "../src/lib/host.js";
+import { RELEASE_TRACKS, SWAP_KINDS } from "../src/lib/host.js";
 import { MANAGER_DIRECTIONS, MANAGER_OUTCOMES, MANAGER_VERDICTS } from "../src/lib/manager.js";
 import { EXPORT_ACCESS_STATUSES, EXPORT_STATES, RESCUE_SSH_STATES, SFTP_EXAMPLES } from "../src/lib/access.js";
 import { KNOWN_LOG_SOURCES } from "../src/lib/logs.js";
@@ -93,6 +93,7 @@ const GENERATED = [
   ...RESCUE_SSH_STATES.map((state) => `rescue.ssh.${state}`),
   ...["absent", "network", "unknown", "noPassword", "shipped", "changed"].map((state) => `rescue.${state}.hint`),
   ...KNOWN_LOG_SOURCES.map((source) => `log.${source}`),
+  ...SWAP_KINDS.map((kind) => `diag.swap.${kind}`),
   ...CONTAINER_STATES.map((state) => `container.${state}`),
   ...CONNECTIVITY.map((state) => `connectivity.${state}`),
   ...UNIT_STATES.map((state) => `systemd.${state}`),

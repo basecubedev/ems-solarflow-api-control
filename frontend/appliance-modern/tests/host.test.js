@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { wifiRadio, adminContainer, adminGate, adminHealth, adminTransitionUntil, adminVersion, dockerCondition, exactDuration, gigabytes, groupByTrack, indexAge, indexAgeWords, latestVerdict, osTiles, securityUpdatesOffered, systemVerdict } from "../src/lib/host.js";
+import { wifiRadio, adminContainer, adminGate, adminHealth, adminTransitionUntil, adminVersion, dockerCondition, exactDuration, gigabytes, groupByTrack, memoryAmount, swapAreas, indexAge, indexAgeWords, latestVerdict, osTiles, securityUpdatesOffered, systemVerdict } from "../src/lib/host.js";
 import { planBlocked, planFields, vocabularyWords } from "../src/lib/plan.js";
 import { logSources, logSummary } from "../src/lib/logs.js";
 import { errorWords } from "../src/lib/errors.js";
@@ -73,6 +73,30 @@ test("sizes and durations read the way Classic reads them", () => {
   assert.deepEqual(indexAge({ index_age_seconds: 3607 }), { unit: "hour", count: 1 });
   assert.deepEqual(indexAge({ index_age_seconds: 3 * 86400 }), { unit: "day", count: 3 });
   assert.equal(indexAge({}), null);
+});
+
+test("memory and swap read in megabytes below a gigabyte, and zero is an amount", () => {
+  assert.deepEqual(memoryAmount(12), { value: 12, digits: 0, unit: "MB" });
+  assert.deepEqual(memoryAmount(0), { value: 0, digits: 0, unit: "MB" });
+  assert.deepEqual(memoryAmount(2047), { value: 2047 / 1024, digits: 1, unit: "GB" });
+  assert.equal(memoryAmount(null), null);
+  assert.equal(memoryAmount(-1), null);
+  assert.equal(memoryAmount("x"), null);
+});
+
+test("swap areas keep the kernel's order, no swap is an empty list and an unread one is unknown", () => {
+  const areas = [
+    { kind: "zram", name: "/dev/zram0", size_mb: 450, used_mb: 12, priority: 100 },
+    { kind: "file", name: "/var/lib/ems-appliance-swap/swapfile", size_mb: 2047, used_mb: 0, priority: 10 },
+    { kind: "tape", size_mb: 1, used_mb: 0 },
+  ];
+  assert.deepEqual(swapAreas({ swap: { areas } }), [
+    { kind: "zram", used_mb: 12, size_mb: 450 },
+    { kind: "file", used_mb: 0, size_mb: 2047 },
+  ]);
+  assert.deepEqual(swapAreas({ swap: { areas: [] } }), []);
+  assert.equal(swapAreas({ swap: { areas: null } }), null);
+  assert.equal(swapAreas({}), null);
 });
 
 test("the index age reads the same on every page: its age, unknown beside known counts, else nothing", () => {

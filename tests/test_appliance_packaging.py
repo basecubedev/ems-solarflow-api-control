@@ -558,6 +558,18 @@ REQUIRED_EXECUTABLES = {
     "chmod": "essential",
     "mkdir": "essential",
     "rm": "essential",
+    "modprobe": "kmod",
+    "zramctl": "util-linux",
+    "mkswap": "util-linux",
+    "swapon": "util-linux",
+    "swapoff": "util-linux",
+    "fallocate": "util-linux",
+    "blkid": "util-linux",
+    "df": "essential",
+    "dd": "essential",
+    "sed": "essential",
+    "cut": "essential",
+    "install": "essential",
 }
 
 
@@ -1433,6 +1445,71 @@ def test_the_admin_restart_policy_unit_is_shipped_enabled_and_ordered_after_dock
     )
     assert "Requires" not in service["Unit"]
     assert service["Install"]["WantedBy"] == "multi-user.target"
+
+
+@pytest.mark.parametrize(
+    ("name", "argument"), [("ems-appliance-zram.service", "zram"), ("ems-appliance-swapfile.service", "file")]
+)
+def test_the_swap_units_are_shipped_enabled_and_run_before_docker(name, argument):
+    """Swap is up before InfluxDB starts, only on a medium this project imaged.
+
+    The file waits for the root to grow and for zram, so it is sized for the
+    card and sits behind compressed swap. Starting them on an install is not
+    fatal: an appliance without swap runs as before and the units try again at
+    boot. An upgrade disables them like the restart-policy unit, so an older
+    package that does not ship them leaves no dangling enablement, and removal
+    switches the swap off before the units go.
+    """
+
+    build = (PACKAGING / "build-deb.sh").read_text(encoding="utf-8")
+    postinst = (PACKAGING / "debian" / "postinst").read_text(encoding="utf-8")
+    prerm = (PACKAGING / "debian" / "prerm").read_text(encoding="utf-8")
+    service = unit(PACKAGING / "systemd" / name)
+
+    assert f"systemd/{name}\"" in build and "bin/swap-setup.sh" in build
+    assert name in re.search(r'^UNITS="([^"]+)"', postinst, re.MULTILINE).group(1).split()
+    assert re.search(rf"systemctl start [^\n]*{re.escape(name)}[^\n]*\\\n\s*\|\| note", postinst)
+    assert service["Service"]["ExecStart"] == f"/usr/lib/ems-appliance-manager/swap-setup.sh {argument}"
+    assert service["Service"]["Type"] == "oneshot"
+    assert service["Unit"]["ConditionPathExists"] == "/etc/ems-appliance-os-build"
+    assert {"docker.service", "ems-appliance-agent.service"} <= set(service["Unit"]["Before"].split())
+    assert "Requires" not in service["Unit"]
+    assert service["Install"]["WantedBy"] == "multi-user.target"
+    removal, upgrade = prerm.split("upgrade|failed-upgrade)", 1)
+    assert name in removal and name in upgrade
+    assert "swap-setup.sh" not in prerm
+
+
+def test_an_aborted_upgrade_enables_again_what_the_upgrade_disabled():
+    """dpkg calls the old package's postinst abort-upgrade when a newer one fails to unpack.
+
+    Whatever the old prerm disabled for the upgrade has to come back there, or
+    the package stays installed with those units off from the next boot on.
+    """
+
+    prerm = (PACKAGING / "debian" / "prerm").read_text(encoding="utf-8")
+    postinst = (PACKAGING / "debian" / "postinst").read_text(encoding="utf-8")
+    disabled = set(re.findall(r"ems-appliance-[a-z-]+\.service", prerm.split("upgrade|failed-upgrade)", 1)[1].split(";;")[0]))
+    aborted = postinst.split('if [ "$1" = "abort-upgrade" ]', 1)[1].split("\n        fi\n", 1)[0]
+    enabled = set(re.findall(r"ems-appliance-[a-z-]+\.service", aborted))
+
+    assert disabled and disabled == enabled
+
+
+def test_the_image_installs_every_package_the_manager_depends_on():
+    """The image installs the package with dpkg, which resolves nothing."""
+
+    layer = (PACKAGING / "image" / "layer" / "ems-appliance.yaml").read_text(encoding="utf-8")
+    block = layer.split("mmdebstrap:\n  packages:\n", 1)[1].split("\n  customize-hooks:", 1)[0]
+    listed = set(re.findall(r"^    - ([a-z0-9.+-]+)$", block, re.MULTILINE))
+
+    assert declared_dependencies() - listed == set()
+
+
+def test_the_swap_file_waits_for_the_root_and_for_zram():
+    service = unit(PACKAGING / "systemd" / "ems-appliance-swapfile.service")
+
+    assert {"ems-appliance-grow-root.service", "ems-appliance-zram.service"} <= set(service["Unit"]["After"].split())
 
 
 def test_the_appliance_ships_no_second_unattended_upgrader():

@@ -123,6 +123,8 @@ The package installs:
 /usr/lib/systemd/system/ems-appliance-backup-access-disable.service
 /usr/lib/systemd/system/ems-appliance-config-seed.service
 /usr/lib/systemd/system/ems-appliance-grow-root.service
+/usr/lib/systemd/system/ems-appliance-zram.service
+/usr/lib/systemd/system/ems-appliance-swapfile.service
 /usr/lib/systemd/system/ems-appliance-manager-install.service
 /usr/lib/systemd/system/ems-appliance-manager-verify.service
 /usr/lib/systemd/system/ems-appliance-manager-verify.timer
@@ -132,6 +134,7 @@ The package installs:
 /usr/lib/ems-appliance-manager/rescue-account.sh
 /usr/lib/ems-appliance-manager/install-admin-console.sh
 /usr/lib/ems-appliance-manager/grow-root.sh
+/usr/lib/ems-appliance-manager/swap-setup.sh
 /usr/lib/ems-appliance-manager/install-manager.sh
 /usr/lib/ems-appliance-manager/verify-manager.sh
 /usr/lib/tmpfiles.d/ems-appliance-manager.conf
@@ -553,6 +556,50 @@ The migration copies and verifies before it removes anything, refuses a
 symlinked source instead of following it, and keeps both copies with a
 recoverable finding when the old and the new location disagree. Running it
 again changes nothing.
+
+## Swap
+
+A Raspberry Pi 3 has 1 GB of memory for Docker, the Admin console, EMS and
+InfluxDB. Without swap, a peak -- InfluxDB starting with years of history, or
+its upgrade -- makes the kernel drop program code it then reads back from the
+card, and in the end kill a process. On a medium written from an appliance
+image the Manager therefore switches on two kinds of swap at every boot,
+before Docker starts:
+
+- **Compressed swap in memory** (`ems-appliance-zram.service`): a zram device
+  of half the memory, zstd-compressed, at priority 100. Pages swapped there
+  stay in memory, compressed, and come back in microseconds; nothing is
+  written to the card. `vm.swappiness` is set to 100: swapping a page to zram
+  counts the same as dropping a cached file page, which comes back from the
+  card slowly.
+- **A swap file behind it** (`ems-appliance-swapfile.service`):
+  `/var/lib/ems-appliance-swap/swapfile`, 2 GB, or 1 GB or 512 MB on a card
+  that would otherwise keep less than 2 GB free, at priority 10, so it is
+  written only once zram is full. It is made once, after the root has grown on
+  a freshly imaged card, and switched on again at each boot. On ext4 the
+  kernel writes a swap file block by block, as fast as a partition, and unlike
+  a partition it is sized for the card and leaves with the package.
+
+Both are skipped on a `.deb` installation onto somebody else's Raspberry Pi
+OS (no `/etc/ems-appliance-os-build`), and no file is added while a swap the
+owner set up is on. Removing the package leaves the swap on until the next
+boot, because switching it off would have to fit its pages back into the
+memory EMS and InfluxDB are using; purging it deletes the file, or names it
+for a purge after the reboot while it is still in use. A Manager downgraded
+to a version without these units leaves the file in place unused; a later
+Manager with them uses it again, and only such a Manager's purge deletes it.
+
+In a VM shaped like a Pi 3B+ (903 MB of memory, four cores each held to about
+a sixteenth of a laptop core, SD-card speed), an InfluxDB upgrade with five
+years of history at the default retention took 2 to 3 minutes and its way back
+4 to 5, used up to 317 MB of zram and nothing of the file, and every EMS
+control cycle came within 6.6 s. At swappiness 100 both ran about a tenth
+faster than at 5, three runs each, with the same cycle times. No board has run
+it yet; see [the hardware gate](hardware-validation.md).
+
+The Manager's **Diagnostics** page shows each swap area on the memory card,
+in the order the kernel fills them, with what it holds of its size, or that no
+swap is on; in Expert mode it also shows the swappiness.
 
 ## First start
 

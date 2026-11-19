@@ -446,6 +446,7 @@ under Vendored Components above.
 | `openssh-client` | Trixie | BSD-3-Clause AND mixed | Host key material and the forced SFTP command policy | ✅ | ✅ | https://github.com/openssh/openssh-portable |
 | `cloud-guest-utils` | Trixie | GPL-3.0-or-later | `growpart` grows the persistent partition on first boot | ✅ | ✅ | https://github.com/canonical/cloud-utils |
 | `e2fsprogs` | Trixie | GPL-2.0-only AND LGPL-2.0-only (libext2fs) | `resize2fs` and `dumpe2fs` for the persistent filesystem | ✅ | ✅ | https://github.com/tytso/e2fsprogs |
+| `kmod` | Trixie | GPL-2.0-or-later AND LGPL-2.1-or-later (libkmod) | `modprobe zram` loads the compressed-swap module at boot | ✅ | ✅ | https://github.com/kmod-project/kmod |
 
 ## Optional Platform Dependencies
 

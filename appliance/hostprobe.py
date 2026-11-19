@@ -35,6 +35,9 @@ def uptime_seconds(root="/"):
     except ValueError:
         return 0.0
 MEMINFO_FILE = "proc/meminfo"
+SWAPS_FILE = "proc/swaps"
+SWAPPINESS_FILE = "proc/sys/vm/swappiness"
+SWAP_KINDS = ("zram", "file", "partition")
 # PID 1 is in the initial mount namespace. The agent's own namespace is a
 # snapshot taken when systemd applied ProtectHome/PrivateTmp, so /proc/self
 # would keep reporting the mount table as it looked at service start.
@@ -192,12 +195,48 @@ class HostProbe:
         total = values.get("MemTotal", 0)
         available = values.get("MemAvailable", 0)
         used = max(total - available, 0)
+        swap_total = values.get("SwapTotal", 0)
         return {
             "total_mb": total // 1024,
             "available_mb": available // 1024,
             "used_mb": used // 1024,
             "used_percent": round(used * 100.0 / total, 1) if total else None,
+            "swap": {
+                "total_mb": swap_total // 1024,
+                "used_mb": max(swap_total - values.get("SwapFree", 0), 0) // 1024,
+                "swappiness": self._swappiness(),
+                "areas": self._swap_areas(),
+            },
         }
+
+    def _swappiness(self):
+        value = (self._read(SWAPPINESS_FILE) or "").strip()
+        return int(value) if value.isdigit() else None
+
+    def _swap_areas(self):
+        """Every swap area the kernel has on, in the order it fills them; None when unread.
+
+        A zram device is listed as a partition by the kernel; it is told
+        apart by its name, because it is memory and not the card.
+        """
+
+        text = self._read(SWAPS_FILE)
+        if text is None:
+            return None
+        areas = []
+        for line in text.splitlines()[1:]:
+            fields = line.split()
+            if len(fields) < 5 or not all(field.lstrip("-").isdigit() for field in fields[2:5]):
+                continue
+            name, kind = fields[0], fields[1]
+            areas.append({
+                "kind": "zram" if name.startswith("/dev/zram") else ("file" if kind == "file" else "partition"),
+                "name": name,
+                "size_mb": int(fields[2]) // 1024,
+                "used_mb": int(fields[3]) // 1024,
+                "priority": int(fields[4]),
+            })
+        return sorted(areas, key=lambda area: -area["priority"])
 
     def _path(self, absolute):
         """``absolute`` read through the probe root, once: a path already under it stays."""

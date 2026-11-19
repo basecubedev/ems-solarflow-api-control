@@ -49,6 +49,7 @@ HOME_MARKER_NAME=.ems-appliance-backup-home
 HOME_MARKER_SCHEMA=1
 TAB=$(printf '\t')
 incomplete=""
+SWAP_DIR=/var/lib/ems-appliance-swap
 
 # Purge removes the sshd policy, and that policy is what refuses the shell
 # account every authentication method while it is switched off. Withdrawing the
@@ -708,6 +709,15 @@ case "$1" in
         done
         rmdir "$EXPORT_ROOT" 2>/dev/null || true
         rmdir "$CONFIG_DIR" 2>/dev/null || true
+        # The swap file the swapfile unit made (swap-setup.sh SWAP_DIR). It
+        # stays on after a removal until the next boot; a purge before that
+        # switches it off, which needs room for its pages in memory.
+        if grep -q "^$SWAP_DIR/" /proc/swaps 2>/dev/null \
+           && ! swapoff "$SWAP_DIR/swapfile" 2>/dev/null; then
+            incomplete="$incomplete $SWAP_DIR (still in use as swap; purge again after a reboot)"
+        else
+            rm -rf "$SWAP_DIR"
+        fi
 
         if command -v sshd >/dev/null 2>&1 && sshd -t >/dev/null 2>&1; then
             # A daemon started from ssh.socket exits on a reload: it binds port

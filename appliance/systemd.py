@@ -26,6 +26,8 @@ UNIT_GROW_ROOT = "ems-appliance-grow-root.service"
 UNIT_SSHD_KEYS = "ems-appliance-sshd-keys.service"
 UNIT_BACKUP_ACCESS_DISABLE = "ems-appliance-backup-access-disable.service"
 UNIT_ADMIN_RESTART_POLICY = "ems-appliance-admin-restart-policy.service"
+UNIT_ZRAM = "ems-appliance-zram.service"
+UNIT_SWAPFILE = "ems-appliance-swapfile.service"
 
 READABLE_UNITS = (
     UNIT_DOCKER,
@@ -47,6 +49,8 @@ READABLE_UNITS = (
     UNIT_SSHD_KEYS,
     UNIT_BACKUP_ACCESS_DISABLE,
     UNIT_ADMIN_RESTART_POLICY,
+    UNIT_ZRAM,
+    UNIT_SWAPFILE,
 )
 
 # Readable is not controllable: nothing above may be started or stopped

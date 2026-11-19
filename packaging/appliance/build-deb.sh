@@ -167,6 +167,12 @@ install -m 0644 "$PACKAGING/systemd/ems-appliance-grow-root.service" \
         "$STAGE/usr/lib/systemd/system/"
 install -m 0755 "$PACKAGING/bin/grow-root.sh" \
         "$STAGE/usr/lib/ems-appliance-manager/grow-root.sh"
+install -m 0644 "$PACKAGING/systemd/ems-appliance-zram.service" \
+        "$STAGE/usr/lib/systemd/system/"
+install -m 0644 "$PACKAGING/systemd/ems-appliance-swapfile.service" \
+        "$STAGE/usr/lib/systemd/system/"
+install -m 0755 "$PACKAGING/bin/swap-setup.sh" \
+        "$STAGE/usr/lib/ems-appliance-manager/swap-setup.sh"
 install -m 0644 "$PACKAGING/tmpfiles/ems-appliance-manager.conf" "$STAGE/usr/lib/tmpfiles.d/"
 install -m 0644 "$PACKAGING/logrotate/ems-appliance-manager" "$STAGE/etc/logrotate.d/"
 install -m 0644 "$PACKAGING/apt/apt-daily.service.conf" \

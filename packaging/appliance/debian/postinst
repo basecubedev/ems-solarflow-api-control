@@ -26,7 +26,7 @@ TMPFILES=/usr/lib/tmpfiles.d/ems-appliance-manager.conf
 # installed onto a plain Raspberry Pi OS never grows its root at all -- which is
 # the ordinary case once the manager ships as a package rather than inside an
 # image.
-UNITS="ems-appliance-config-seed.service ems-appliance-agent.service ems-appliance-web.service ems-appliance-sshd-keys.service ems-appliance-export.service ems-appliance-export.path ems-appliance-auto-update.timer ems-appliance-export-acl.path ems-appliance-grow-root.service ems-appliance-admin-restart-policy.service"
+UNITS="ems-appliance-config-seed.service ems-appliance-agent.service ems-appliance-web.service ems-appliance-sshd-keys.service ems-appliance-export.service ems-appliance-export.path ems-appliance-auto-update.timer ems-appliance-export-acl.path ems-appliance-grow-root.service ems-appliance-admin-restart-policy.service ems-appliance-zram.service ems-appliance-swapfile.service"
 
 fail() {
     echo "ems-appliance: $1" >&2
@@ -226,6 +226,10 @@ case "$1" in
             # reboot once, and the unit applies the policy at that boot.
             systemctl start ems-appliance-admin-restart-policy.service \
                 || note "the Admin restart policy was not applied now; it is applied at the next boot"
+            # Non-fatal: an appliance without swap runs as it did before this
+            # package; the units try again at the next boot.
+            systemctl start ems-appliance-zram.service ems-appliance-swapfile.service \
+                || note "the swap was not switched on now; it is tried again at the next boot"
 
             # Fail-closed: this enables the backup account only after the
             # effective confinement was validated, reloaded and read back, and
@@ -259,7 +263,8 @@ case "$1" in
         ;;
     abort-upgrade|abort-remove|abort-deconfigure)
         if [ "$1" = "abort-upgrade" ] && { [ -x /bin/systemctl ] || [ -x /usr/bin/systemctl ]; }; then
-            systemctl enable ems-appliance-admin-restart-policy.service >/dev/null 2>&1 || true
+            systemctl enable ems-appliance-admin-restart-policy.service \
+                ems-appliance-zram.service ems-appliance-swapfile.service >/dev/null 2>&1 || true
         fi
         # prerm stops and disables the Manager before its last checks, and a
         # check that fails calls the removal off: the package stays installed
