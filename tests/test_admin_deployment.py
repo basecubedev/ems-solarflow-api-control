@@ -2468,6 +2468,18 @@ def test_docker_compose_start_uses_prepared_workspace_and_no_pull(tmp_path):
     assert "pull" not in recorder[0]["command"]
 
 
+def test_docker_compose_stop_names_the_grace_period_as_compose_does(tmp_path):
+    """Compose v2 knows ``--timeout``; ``--time`` is ``docker stop``'s and Compose refuses it."""
+
+    recorder = []
+    compose = DockerCompose(popen=_make_popen(recorder, lines=[]))
+    compose.stop(tmp_path, services=("influxdb",), profiles=("with-analytics",))
+
+    assert recorder[0]["command"] == [
+        "docker", "compose", "--profile", "with-analytics", "stop", "--timeout", "20", "influxdb",
+    ]
+
+
 @pytest.mark.parametrize(
     ("output", "code"),
     [

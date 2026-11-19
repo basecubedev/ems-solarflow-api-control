@@ -940,7 +940,7 @@ class DockerCompose:
         command = ["docker", "compose"]
         for profile in profiles:
             command += ["--profile", str(profile)]
-        command += ["stop", "--time", "20"]
+        command += ["stop", "--timeout", "20"]
         command += [str(service) for service in services]
         try:
             process = self._popen(
