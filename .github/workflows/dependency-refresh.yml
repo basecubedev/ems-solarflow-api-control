@@ -161,6 +161,15 @@ jobs:
           fi
           git add -- THIRD_PARTY_LICENSES.md
 
+      # A Dependabot bump of the bundled InfluxDB moves its one pin; the
+      # installers, two compose files and the inventory repeat it.
+      - name: Carry the bundled InfluxDB pin into its copies
+        working-directory: dependabot
+        run: |
+          set -euo pipefail
+          python3 -I tools/bundled_influxdb.py --sync
+          git add -- docker-compose.yml install-docker.sh install-docker.ps1 develop/influxdb/docker-compose.yml THIRD_PARTY_LICENSES.md
+
       - name: Commit and push onto the Dependabot branch
         working-directory: dependabot
         env:
@@ -180,7 +189,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -q -m "build(deps): rebuild the Modern front ends and the inventory for this update"
+          git commit -q -m "build(deps): rebuild the Modern front ends and refresh the copies for this update"
           git push origin "HEAD:refs/heads/${HEAD_REF}"
 
   gate:

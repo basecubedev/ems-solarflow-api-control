@@ -33,7 +33,7 @@ Official, supported deployment assets live under `deploy/`:
 
 | Path | Purpose |
 |---|---|
-| [`deploy/docker/compose.influxdb.yml`](../../deploy/docker/compose.influxdb.yml) | Docker Compose service for InfluxDB 2.7 |
+| [`deploy/docker/compose.influxdb.yml`](../../deploy/docker/compose.influxdb.yml) | Docker Compose service for the bundled InfluxDB 2.x; the one pin of its image |
 | [`deploy/docker/compose.ems-influx-env.yml`](../../deploy/docker/compose.ems-influx-env.yml) | Overlay giving the EMS container the shared `INFLUXDB_TOKEN` |
 | [`deploy/docker/influxdb.env.example`](../../deploy/docker/influxdb.env.example) | Reference template; the env file is normally generated for you |
 
@@ -330,6 +330,89 @@ tar -czf ems-backup.tar.gz config.json data/ deploy/docker/influxdb.env
 > `data/influxdb` (with the container stopped) before removing it, e.g.
 > `docker volume ls | grep influx` to find it. A fresh `data/influxdb` simply
 > starts empty.
+
+## Upgrading the bundled InfluxDB
+
+The bundled InfluxDB image is pinned in one place,
+[`deploy/docker/compose.influxdb.yml`](../../deploy/docker/compose.influxdb.yml),
+to an exact `2.x.y` tag. The installers, the root `docker-compose.yml`, the
+developer stack under `develop/influxdb/` and the licence inventory repeat
+that line; `python3 tools/bundled_influxdb.py --check` names a copy that
+differs and `--sync` rewrites them, and a test fails while one differs. CI's
+analytics job starts the pinned image itself rather than a copy of it.
+
+**New versions are tracked by Dependabot.** Its `docker-compose` block watches
+`deploy/docker/` and opens a pull request when Docker Hub carries a newer
+`influxdb` tag of the same form; **Repo dependency refresh** then carries the
+pin into the copies. The `docker` block only ever read the `Dockerfile`, whose
+`influxdb` stage ships the `influx` CLI and not the server, which is how the
+server stayed on 2.7 while the CLI stage moved to 2.9. A release on GitHub
+reaches Docker Hub a few days later, through the official-images review;
+Dependabot sees it from then on.
+
+**What an upgrade does to the data.** InfluxDB 2.x upgrades in place: the new
+`influxd` converts the metadata (`influxd.bolt`, `influxd.sqlite`) at its first
+start, keeping a copy of the old `influxd.bolt` beside it, and leaves the time
+series as they are. The step is one way. From 2.8 on the conversion hashes the
+API tokens, and from 2.9 that is the default; an older `influxd` refuses the
+converted directory with *DB contains record of unknown migration*, and
+`influxd downgrade` below 2.8 erases every token. The EMS never reads a token
+back from InfluxDB (it keeps its own in `influxdb.env`), so hashing changes
+nothing for it.
+
+A Guided Setup over an existing installation keeps the InfluxDB version its
+data was written by in the new `docker-compose.yml`, so the version moves
+only on purpose: the version the InfluxDB container ran, or else the one the old
+compose file named. When a Setup with Analytics on finds InfluxDB data in
+`data/influxdb` and neither names a version, it stops, before it writes
+anything, and asks for it rather than start some version on the data. A Setup
+that fails after the installer wrote the new compose file still leaves the
+dated version named in it, and while the installer runs the dating is noted
+beside the Setup's marker, so a retry dates the data the same way even when
+the Admin stopped in between. The note counts only while `docker-compose.yml`
+names nothing or the version that Setup wrote; a file changed since says
+more. `install-docker.sh --force` and a native `emsctl
+stack up` after a `git pull` take the version the release pins, which
+upgrades InfluxDB in place without a backup.
+
+**By hand**: back up first, then move the image and recreate only InfluxDB. In
+a Docker-first installation directory, after setting `image:` of the
+`influxdb` service in `docker-compose.yml` to the release's pin:
+
+```bash
+docker compose exec ems python3 emsctl.py backup create --type influxdb
+docker compose --profile with-analytics up -d influxdb
+docker compose exec ems python3 emsctl.py influx status
+```
+
+In a native checkout, whose `git pull` already moved the pin:
+
+```bash
+python3 emsctl.py backup create --type influxdb
+docker compose -f docker-compose.example.yml -f deploy/docker/compose.influxdb.yml \
+  -f deploy/docker/compose.ems-influx-env.yml up -d --force-recreate influxdb
+python3 emsctl.py influx status
+```
+
+The way back by hand: stop InfluxDB, rename `data/influxdb` and create it
+empty, put the previous `image:` back, start it
+with `docker compose --profile with-analytics up -d --force-recreate
+--renew-anon-volumes influxdb` (it sets itself up from `influxdb.env`; without
+fresh anonymous volumes it finds the old CLI configuration in `/etc/influxdb2`
+and refuses), and restore the backup with
+`emsctl backup restore <archive> --on-conflict replace`. The files belong to
+InfluxDB's user, so the moves need root, for example
+`docker run --rm -v "$PWD/data:/d" --entrypoint sh <influxdb image> -c 'mv …'`.
+
+A native checkout's `emsctl backup` only starts the InfluxDB container that
+ran on the data and creates none, so a pulled pin never converts the data
+before the backup has read it. After `docker compose down` there is no such
+container: name the image that wrote the data in
+`deploy/docker/compose.influxdb.yml` (after a pull that moved the pin, the
+earlier one), start it with `emsctl influx init` and back up then. A restore may
+create a container, since what it restores replaces the data. `emsctl stack up` and `influx init` do recreate InfluxDB on a
+changed pin. Only an `influxdb:2.x[.y]` image line is managed; a digest, a
+registry prefix or another flavour is left to its owner.
 
 ## Advanced / external path
 

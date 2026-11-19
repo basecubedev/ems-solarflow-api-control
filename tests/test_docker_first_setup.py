@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 import docker_e2e_utils
+from ems.influx_image import pinned_image
 
 pytestmark = [
     pytest.mark.setup,
@@ -111,7 +112,7 @@ def test_compose_analytics_is_behind_with_analytics_profile():
 def test_compose_has_influxdb_service_with_local_paths():
     compose = read(COMPOSE)
     assert "influxdb:" in compose
-    assert "influxdb:2.7" in compose
+    assert pinned_image(ROOT) in compose
     assert "./data/influxdb:/var/lib/influxdb2" in compose
     assert "8086:8086" in compose
 

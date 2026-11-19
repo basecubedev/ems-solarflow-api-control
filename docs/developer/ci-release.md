@@ -515,15 +515,16 @@ a checked-in workflow file. Updates still require passing tests and review.
 
 ### Dependency refresh
 
-A Dependabot pull request changes manifests and nothing else, while two
+A Dependabot pull request changes manifests and nothing else, while three
 committed things follow from them: the Modern builds under
 `dashboard/static/modern/`, `admin/static/modern/` and
 `appliance/static/modern/`, which **Repo browser dashboard** rebuilds and
-compares, and the inventory's Version cells, which
-`tools/check_third_party_licenses.py` compares. Workflow
+compares, the inventory's Version cells, which
+`tools/check_third_party_licenses.py` compares, and the copies of the bundled
+InfluxDB pin, which `tools/bundled_influxdb.py` compares. Workflow
 `.github/workflows/dependency-refresh.yml`, named **Repo dependency refresh**,
-makes both on every Dependabot push and pushes them as one commit onto the
-Dependabot branch; the pull request's checks then run on that commit.
+makes all three on every Dependabot push and pushes them as one commit onto
+the Dependabot branch; the pull request's checks then run on that commit.
 
 - `Repo dependency refresh build` checks out the Dependabot commit, runs
   `npm ci` and `npm run build:modern`, and hands the build output on as a
@@ -535,7 +536,9 @@ Dependabot branch; the pull request's checks then run on that commit.
   from the patch only regular files with plain names inside the three build
   directories, rewrites the inventory itself with
   `python3 -I tools/check_third_party_licenses.py --fix-versions` from the
-  Dependabot commit, and pushes. A push made with `GITHUB_TOKEN` would start
+  Dependabot commit, carries a moved InfluxDB pin into the installers, the
+  root and developer compose files and the inventory with
+  `python3 -I tools/bundled_influxdb.py --sync`, and pushes. A push made with `GITHUB_TOKEN` would start
   no workflow, so the checks would never report on it. The push is a
   fast-forward onto the commit the build saw, so a newer Dependabot push is
   never overwritten; its own run takes over.

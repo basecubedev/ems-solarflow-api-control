@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 from docker_e2e_utils import assert_no_root_owned_files, compose_env
+from ems.influx_image import pinned_image
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = ROOT / "install-docker.sh"
@@ -70,9 +71,7 @@ services:
     container_name: ${{COMPOSE_PROJECT_NAME}}-ems
     ports: !override []
   influxdb:
-    image: influxdb:2.7
-    pull_policy: missing
-    container_name: ${{COMPOSE_PROJECT_NAME}}-influxdb
+{influx_image_line}    container_name: ${{COMPOSE_PROJECT_NAME}}-influxdb
     ports: !override []
 """
 
@@ -140,7 +139,9 @@ def _redact_config(text):
 
 
 class Project:
-    def __init__(self, path, image):
+    def __init__(self, path, image, influx_image=None):
+        """``influx_image`` False leaves the InfluxDB image to docker-compose.yml."""
+
         self.path = path
         self.name = "ems-first-e2e-" + uuid.uuid4().hex[:10]
         self.env = compose_env(
@@ -148,7 +149,11 @@ class Project:
             PUID=str(os.getuid()),
             PGID=str(os.getgid()),
         )
-        (path / "docker-compose.override.yml").write_text(_OVERRIDE.format(image=image))
+        if influx_image is False:
+            line = ""
+        else:
+            line = f"    image: {influx_image or pinned_image(ROOT)}\n    pull_policy: missing\n"
+        (path / "docker-compose.override.yml").write_text(_OVERRIDE.format(image=image, influx_image_line=line))
 
     def install(self, *args):
         return subprocess.run(

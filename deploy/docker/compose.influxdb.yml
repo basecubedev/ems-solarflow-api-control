@@ -32,9 +32,14 @@
 #
 # influxdb.env is gitignored. Never commit real tokens or passwords.
 # See docs/influxdb.md for the full setup and the bucket/task sync workflow.
+# The one pin of the bundled InfluxDB image (ems/influx_image.py): an exact
+# 2.x.y tag, so an installation runs what was tested. Dependabot proposes
+# newer tags; tools/bundled_influxdb.py --sync carries the pin into the
+# installers, the root and developer compose files and the licence inventory,
+# and CI reads it.
 services:
   influxdb:
-    image: influxdb:2.7
+    image: influxdb:2.9.1
     container_name: ems-influxdb
     ports:
       - "8086:8086"

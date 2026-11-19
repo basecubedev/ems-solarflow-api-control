@@ -71,6 +71,24 @@ updates:
     commit-message:
       prefix: "deps(docker)"
 
+  # The bundled InfluxDB pin. The "docker" block above reads only the
+  # Dockerfile, so the server image the installations run went unseen. Only the
+  # pin's own directory is watched; Repo dependency refresh carries a bump into
+  # the files that repeat it (tools/bundled_influxdb.py --sync).
+  - package-ecosystem: "docker-compose"
+    directory: "/deploy/docker"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:20"
+      timezone: "Europe/Berlin"
+    open-pull-requests-limit: 1
+    labels:
+      - "dependencies"
+      - "docker"
+    commit-message:
+      prefix: "deps(docker)"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

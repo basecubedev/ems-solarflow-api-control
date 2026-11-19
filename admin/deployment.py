@@ -30,11 +30,13 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+from admin.container_names import DEFAULT_INFLUX_CONTAINER
 from admin.install_context import detect_install_context
 from admin.models import utc_now_iso
 from admin.releases import DOCKER_IMAGE_REPOSITORY, ReleaseError, default_admin_data_dir
 from admin.setup_workflow import GENERATED_CONFIG_OWNER, read_generated_metadata
 from ems.config import resolve_influxdb_config
+from ems.influx_image import compose_image, parse_image, replace_image
 from ems.influx_setup import DEFAULT_DATA_DIR as INFLUX_DATA_DIR
 from ems.runtime_state import (
     config_digest,
@@ -723,6 +725,24 @@ class DockerCli:
                 "Could not stop the running EMS container.",
                 _safe_command_detail(result.stderr),
             )
+
+    def influx_data_present(self, workspace, image):
+        """Whether ``data/influxdb`` holds InfluxDB's metadata store; True when that cannot be told.
+
+        Asked as root in a throwaway container of ``image``, because the
+        directory belongs to InfluxDB's own user.
+        """
+
+        workspace = _validated_workspace(workspace)
+        command = self._workspace_command(
+            workspace, image, "0:0",
+            "[ -e /workspace/data/influxdb/influxd.bolt ] && exit 0; [ -d /workspace/data/influxdb ] && exit 3; exit 4",
+        )
+        try:
+            result = self._run(command, capture_output=True, text=True, timeout=CONTAINER_LIFECYCLE_TIMEOUT_SECONDS)
+        except (FileNotFoundError, OSError, subprocess.SubprocessError):
+            return True
+        return result.returncode not in (3, 4)
 
     def check_workspace_permissions(self, workspace, image, puid, pgid):
         workspace = _validated_workspace(workspace)
@@ -2656,6 +2676,15 @@ class DeploymentService:
         # Back up an existing live config/compose before any destructive write so
         # the standard install layout is never silently replaced.
         job.note_backups(self._backup_existing_runtime())
+        # Dated before anything is written, from what ran on the data, and
+        # noted on disk until the new compose file names it: the Admin may
+        # stop while the installer runs, after the old file is gone.
+        kept_influx = self._influx_image_to_keep()
+        if kept_influx is None and context["analytics"]:
+            self._refuse_influx_data_of_unknown_version()
+        if kept_influx:
+            shipped = next((image["image"] for image in images if image.get("service") == "influxdb"), None)
+            self._note_influx_dating(kept_influx, shipped)
         if context["overwrite"]:
             self._reset_for_overwrite()
         reset_deferred = not self._request_runtime_reset(config)
@@ -2667,13 +2696,26 @@ class DeploymentService:
         job.finish_step("workspace")
 
         job.start_step("bootstrap", "Writing docker-compose.yml (no start)…")
-        self.installer.prepare(
-            self.workspace_dir,
-            release["resource_dir"] / INSTALL_SCRIPT,
-            analytics=context["analytics"],
-            tag=release["tag"],
-            on_line=job.log_line,
-        )
+        try:
+            self.installer.prepare(
+                self.workspace_dir,
+                release["resource_dir"] / INSTALL_SCRIPT,
+                analytics=context["analytics"],
+                tag=release["tag"],
+                on_line=job.log_line,
+            )
+        except BaseException:
+            # Also when the installer fails after it wrote the compose file: a
+            # retry then finds the data's version there, not the release's.
+            # The installer's error is the one reported.
+            if kept_influx:
+                try:
+                    self._name_kept_influx(kept_influx, job)
+                except (OSError, DockerError) as exc:
+                    job.log_line(f"docker-compose.yml could not be made to name {kept_influx}: {exc}")
+            raise
+        if kept_influx:
+            self._name_kept_influx(kept_influx, job)
         # The installer keeps an existing config.json; re-assert ours to guarantee
         # the deployment uses the wizard-generated config.
         self._write_config(config)
@@ -2688,6 +2730,7 @@ class DeploymentService:
                 "This release's docker-compose.yml passes no TZ to the containers, so "
                 "they run on UTC whatever .env says; see docs/docker.md#time-zone."
             )
+        images = self._influx_as_composed(images, job)
         job.finish_step("bootstrap")
 
         for image in images:
@@ -2719,6 +2762,153 @@ class DeploymentService:
         job.succeed(marker)
 
     # --- workspace helpers ----------------------------------------------
+
+    def _influx_image_to_keep(self):
+        """The InfluxDB image the installation's data was written by, or None when nothing names one.
+
+        The container that ran on the data says it best; then a dating an
+        earlier Setup noted and could not write into the compose file yet;
+        then the compose file, which a Setup that keeps a version names it in
+        even when it fails.
+        """
+
+        if not (self.workspace_dir / INFLUX_DATA_DIR).is_dir():
+            return None
+        try:
+            text = (self.workspace_dir / "docker-compose.yml").read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            text = None
+        names = _CONTAINER_NAME_RE.findall(text) if text else []
+        name = next((found for found in names if "influx" in found.lower()), DEFAULT_INFLUX_CONTAINER)
+        inspect = getattr(self.docker, "inspect_container_image_ref", None)
+        try:
+            ran = inspect(name) if callable(inspect) else None
+        except Exception:  # an unreadable container names nothing
+            ran = None
+        composed = compose_image(text) if text else None
+        for image in (ran, self._noted_influx_dating(composed), composed):
+            if parse_image(image):
+                return image
+        return None
+
+    @property
+    def _influx_dating_path(self):
+        return self.marker_path.with_name("influxdb-dating.json")
+
+    def _noted_influx_dating(self, composed=None):
+        """The noted dating, while docker-compose.yml names nothing or what the failed Setup wrote.
+
+        A compose file naming anything else was changed since, and says more.
+        """
+
+        try:
+            noted = json.loads(self._influx_dating_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(noted, dict) or noted.get("workspace") != str(self.workspace_dir):
+            return None
+        if parse_image(composed) is not None and composed != noted.get("shipped"):
+            return None
+        return noted.get("image")
+
+    def _note_influx_dating(self, image, shipped):
+        payload = {"workspace": str(self.workspace_dir), "image": image, "shipped": shipped}
+        _atomic_write(self._influx_dating_path, (json.dumps(payload, sort_keys=True) + "\n").encode("utf-8"))
+
+    def _forget_influx_dating(self):
+        self._influx_dating_path.unlink(missing_ok=True)
+
+    def _name_kept_influx(self, kept, job):
+        """Make the new docker-compose.yml name ``kept``; DockerError when it then names another.
+
+        The noted dating is forgotten only once the file names it.
+        """
+
+        self._keep_influx_version(kept, job)
+        path = self.workspace_dir / "docker-compose.yml"
+        try:
+            named = compose_image(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            named = None
+        if named is None and not path.exists():
+            return
+        if named != kept:
+            raise DockerError(
+                "influx_version_not_kept",
+                f"docker-compose.yml does not name {kept}, the InfluxDB version the data was written "
+                "by, and could not be made to; nothing is started on the data.",
+            )
+        self._forget_influx_dating()
+
+    def _keep_influx_version(self, kept, job):
+        """Name ``kept`` instead of the release's InfluxDB image in the new docker-compose.yml.
+
+        Moving existing data to another InfluxDB version is one way, so a
+        Guided Setup never does it; that is a step of its own, behind a
+        verified backup.
+        """
+
+        path = self.workspace_dir / "docker-compose.yml"
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return
+        shipped = compose_image(text)
+        if parse_image(shipped) is None or shipped == kept:
+            return
+        _atomic_write(path, replace_image(text, kept).encode("utf-8"))
+        job.log_line(
+            f"InfluxDB stays on {kept}, the version its data was written by; "
+            f"this release ships {shipped}, a step of its own behind a backup."
+        )
+
+    def _influx_as_composed(self, images, job):
+        """The images to pull and record, InfluxDB's as docker-compose.yml names it.
+
+        The marker is what a later start compares the running container with,
+        so it names what Compose will run, not what the release ships.
+        """
+
+        try:
+            composed = compose_image((self.workspace_dir / "docker-compose.yml").read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            return images
+        if parse_image(composed) is None or not any(
+            image.get("service") == "influxdb" and image.get("image") != composed for image in images
+        ):
+            return images
+        images = [
+            {**image, "image": composed} if image.get("service") == "influxdb" else image
+            for image in images
+        ]
+        job.set_images(images)
+        return images
+
+    def _refuse_influx_data_of_unknown_version(self):
+        """Stop a prepare, before it writes anything, that would start some InfluxDB version on data nothing dates."""
+
+        data = self.workspace_dir / INFLUX_DATA_DIR
+        if not data.is_dir():
+            return
+        try:
+            os.stat(data / "influxd.bolt")
+            present = True
+        except FileNotFoundError:
+            present = False
+        except OSError:
+            present = None
+        if present is None:
+            from admin.admin_update import admin_image_ref_from_env
+
+            image = admin_image_ref_from_env()
+            present = True if image is None else self.docker.influx_data_present(self.workspace_dir, image)
+        if present:
+            raise DockerError(
+                "influx_version_unknown",
+                "data/influxdb holds InfluxDB data, and neither docker-compose.yml nor a container "
+                "names the InfluxDB version that wrote it. Name that image as the influxdb service's "
+                "image: in docker-compose.yml, or move the directory aside, then prepare again.",
+            )
 
     def _ensure_workspace(self):
         (self.workspace_dir / "config").mkdir(parents=True, exist_ok=True)

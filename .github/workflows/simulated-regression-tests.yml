@@ -368,25 +368,6 @@ jobs:
     permissions:
       contents: read
 
-    services:
-      influxdb:
-        image: influxdb:2.7
-        ports:
-          - 8086:8086
-        env:
-          DOCKER_INFLUXDB_INIT_MODE: setup
-          DOCKER_INFLUXDB_INIT_USERNAME: ci
-          DOCKER_INFLUXDB_INIT_PASSWORD: ci-password-123
-          DOCKER_INFLUXDB_INIT_ORG: ems-e2e
-          DOCKER_INFLUXDB_INIT_BUCKET: bootstrap
-          DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ci-e2e-token
-        options: >-
-          --health-cmd "influx ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 20
-          --health-start-period 10s
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -395,6 +376,30 @@ jobs:
         uses: actions/setup-python@v7
         with:
           python-version: "3.11"
+
+      # The image the installations run, read from its one pin rather than
+      # repeated here, so a Dependabot bump of the pin is what this job tests.
+      - name: Start the pinned bundled InfluxDB
+        run: |
+          set -euo pipefail
+          image="$(python3 -I tools/bundled_influxdb.py --print)"
+          echo "Bundled InfluxDB: $image"
+          docker run -d --name influxdb -p 8086:8086 \
+            -e DOCKER_INFLUXDB_INIT_MODE=setup \
+            -e DOCKER_INFLUXDB_INIT_USERNAME=ci \
+            -e DOCKER_INFLUXDB_INIT_PASSWORD=ci-password-123 \
+            -e DOCKER_INFLUXDB_INIT_ORG=ems-e2e \
+            -e DOCKER_INFLUXDB_INIT_BUCKET=bootstrap \
+            -e DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=ci-e2e-token \
+            "$image"
+          for attempt in $(seq 1 60); do
+            if docker exec influxdb influx ping >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs influxdb
+          exit 1
 
       - name: Install dependencies
         run: |

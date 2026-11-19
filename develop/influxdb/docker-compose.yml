@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 services:
   influxdb2:
-    image: influxdb:2.7
+    image: influxdb:2.9.1
     container_name: zendure-influxdb2
     ports:
       - "8086:8086"
