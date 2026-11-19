@@ -76,6 +76,7 @@ PROJECT_PACKAGES = {"ems-appliance-manager"}
 PROJECT_TAG_PREFIX = "appliance-manager-v"
 NO_SOURCE_DUTY = {
     "docker-ce": ("Apache-2.0", "https://github.com/moby/moby", "@docker.com"),
+    "docker-ce-cli": ("Apache-2.0", "https://github.com/docker/cli", "@docker.com"),
     "docker-buildx-plugin": ("Apache-2.0", "https://github.com/docker/buildx", "@docker.com"),
     "docker-compose-plugin": ("Apache-2.0", "https://github.com/docker/compose", "@docker.com"),
     "containerd.io": ("Apache-2.0", "https://github.com/containerd/containerd", "@containerd.io"),
