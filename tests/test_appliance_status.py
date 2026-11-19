@@ -83,6 +83,56 @@ def test_uptime_temperature_and_memory_are_normalised(tmp_path):
     assert 0 < memory["used_percent"] < 100
 
 
+SWAPS = (
+    "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n"
+    "/var/lib/ems-appliance-swap/swapfile       file\t\t2097148\t\t0\t\t10\n"
+    "/dev/zram0                              partition\t461820\t\t12288\t\t100\n"
+)
+
+
+def test_each_swap_area_is_reported_in_the_order_the_kernel_fills_them(tmp_path):
+    host_files(tmp_path)
+    (tmp_path / "proc" / "meminfo").write_text(
+        "MemTotal:  924804 kB\nMemAvailable:  540000 kB\nSwapTotal:  2558968 kB\nSwapFree:  2546680 kB\n",
+        encoding="utf-8")
+    (tmp_path / "proc" / "swaps").write_text(SWAPS, encoding="utf-8")
+    (tmp_path / "proc" / "sys" / "vm").mkdir(parents=True)
+    (tmp_path / "proc" / "sys" / "vm" / "swappiness").write_text("100\n", encoding="utf-8")
+
+    swap = HostProbe(root=str(tmp_path)).memory()["swap"]
+
+    assert swap == {
+        "total_mb": 2498,
+        "used_mb": 12,
+        "swappiness": 100,
+        "areas": [
+            {"kind": "zram", "name": "/dev/zram0", "size_mb": 450, "used_mb": 12, "priority": 100},
+            {"kind": "file", "name": "/var/lib/ems-appliance-swap/swapfile", "size_mb": 2047, "used_mb": 0,
+             "priority": 10},
+        ],
+    }
+
+
+def test_a_swap_partition_is_told_apart_from_compressed_swap(tmp_path):
+    (tmp_path / "proc").mkdir()
+    (tmp_path / "proc" / "swaps").write_text(
+        "Filename Type Size Used Priority\n/dev/sda2 partition 1048572 0 -2\n", encoding="utf-8")
+
+    swap = HostProbe(root=str(tmp_path)).memory()["swap"]
+
+    assert [area["kind"] for area in swap["areas"]] == ["partition"]
+    assert swap["areas"][0]["priority"] == -2
+
+
+def test_no_swap_reads_as_none_switched_on_and_an_unread_list_as_unknown(tmp_path):
+    (tmp_path / "proc").mkdir()
+    probe = HostProbe(root=str(tmp_path))
+    assert probe.memory()["swap"] == {"total_mb": 0, "used_mb": 0, "swappiness": None, "areas": None}
+
+    (tmp_path / "proc" / "swaps").write_text("Filename\tType\tSize\tUsed\tPriority\n", encoding="utf-8")
+    assert probe.memory()["swap"]["areas"] == []
+
+
 def test_a_missing_probe_file_degrades_that_probe_only(tmp_path):
     probe = HostProbe(root=str(tmp_path))
     assert probe.hardware()["model"] == "unknown"
@@ -543,6 +593,8 @@ APPLIANCE_UNIT_SOURCES = {
     "sshd_keys": "ems-appliance-sshd-keys.service",
     "backup_access": "ems-appliance-backup-access-disable.service",
     "admin_restart_policy": "ems-appliance-admin-restart-policy.service",
+    "zram": "ems-appliance-zram.service",
+    "swap_file": "ems-appliance-swapfile.service",
 }
 
 

@@ -436,6 +436,8 @@ the three newest archives and deletes older ones when it makes a new one.
 | `sshd_keys` | The sshd drop-in and host-key generation |
 | `backup_access` | The unit that disables backup access when the export fails |
 | `admin_restart_policy` | The boot unit that gives an older Admin installation its restart policy |
+| `zram` | The boot unit that switches on compressed swap in memory |
+| `swap_file` | The boot unit that makes and switches on the swap file behind it |
 
 All log output is bounded and redacted before it reaches the browser. A log the
 appliance could not read says so, because an empty log and an unreadable one

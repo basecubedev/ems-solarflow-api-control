@@ -31,6 +31,8 @@ export const KNOWN_LOG_SOURCES = Object.freeze([
   "sshd_keys",
   "backup_access",
   "admin_restart_policy",
+  "zram",
+  "swap_file",
 ]);
 export const LOG_LINES = 200;
 

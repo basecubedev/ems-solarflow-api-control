@@ -44,13 +44,14 @@ mmdebstrap:
     # package is installed below with dpkg, which resolves nothing, so a
     # dependency that only some base layer happened to pull in is a dependency
     # that is not met: the package stays unconfigured and the image build fails.
-    # tests/test_appliance_ab_packaging.py keeps this list equal to the control
-    # file's Depends, which remains the one place they are declared.
+    # tests/test_appliance_packaging.py keeps every package of the control
+    # file's Depends on this list, which remains the one place they are declared.
     - acl
     - adduser
     - ca-certificates
     - gpgv
     - iproute2
+    - kmod
     - mount
     - openssh-client
     - passwd

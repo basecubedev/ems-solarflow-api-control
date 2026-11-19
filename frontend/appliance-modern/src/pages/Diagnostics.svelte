@@ -11,7 +11,7 @@
   import { t, fmt, say, langOf } from "../i18n/i18n.svelte.js";
   import { host, ensure, held } from "../state/host.svelte.js";
   import { detail } from "../state/prefs.svelte.js";
-  import { gigabytes } from "../lib/host.js";
+  import { gigabytes, memoryAmount, swapAreas } from "../lib/host.js";
   import { logSources } from "../lib/logs.js";
   import { UNIT_STATES, word } from "../lib/words.js";
 
@@ -30,6 +30,23 @@
     const value = gigabytes(megabytes);
     return value ? `${fmt().number(value.value, value.digits)} GB` : null;
   };
+  const amount = (megabytes) => {
+    const value = memoryAmount(megabytes);
+    return value ? `${fmt().number(value.value, value.digits)} ${value.unit}` : null;
+  };
+  const swapRow = (area) => {
+    const held = amount(area.used_mb);
+    const capacity = amount(area.size_mb);
+    return { label: t(`diag.swap.${area.kind}`), value: held && capacity ? t("diag.swapUse", { used: held, size: capacity }) : null, testid: `diag-swap-${area.kind}` };
+  };
+  const swapRows = $derived.by(() => {
+    const areas = swapAreas(memory);
+    if (areas === null) return [];
+    const rows = areas.length ? areas.map(swapRow) : [{ label: t("diag.swap"), value: t("diag.swapNone"), testid: "diag-swap-none" }];
+    const swappiness = memory.swap?.swappiness;
+    if (detail.expert && Number.isInteger(swappiness)) rows.push({ label: t("diag.swappiness"), value: fmt().number(swappiness, 0), testid: "diag-swappiness" });
+    return rows;
+  });
   const used = (value) => (value === null || value === undefined ? null : t("diag.used", { percent: fmt().number(value, 1) }));
 </script>
 
@@ -44,7 +61,7 @@
   <div data-testid="diag-memory">
     <p class="big num">{used(memory.used_percent) || "—"}</p>
     {#if memory.used_percent !== undefined}<Bar value={memory.used_percent} label={t("diag.memory")} />{/if}
-    <KeyValues rows={[{ label: t("diag.total"), value: size(memory.total_mb) }, { label: t("diag.available"), value: size(memory.available_mb) }]} />
+    <KeyValues rows={[{ label: t("diag.total"), value: size(memory.total_mb) }, { label: t("diag.available"), value: size(memory.available_mb) }, ...swapRows]} />
   </div>
 </Card>
 

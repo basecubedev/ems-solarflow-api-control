@@ -123,11 +123,15 @@ Pi 5.
 
 **One Pi 3B+ has booted it, and it is not listed as supported.** That board has
 run the image since 2026-08-29, grown its root and taken Manager updates in
-place, but never with EMS on it. It is not tested what 1 GB of RAM does with
-Docker, Admin, EMS and InfluxDB together, or what
-100 Mbit/s Ethernet behind USB 2.0 does to a backup. "Built for it" and "known
-to work on it" are different claims, and only the first is being made. If you
-try it, InfluxDB is the first thing to leave out, and a
+place, but never with EMS on it. It is not tested on a board what 1 GB of RAM
+does with Docker, Admin, EMS and InfluxDB together, or what 100 Mbit/s
+Ethernet behind USB 2.0 does to a backup. In a VM shaped like it, with the compressed swap and
+swap file the appliance switches on, an InfluxDB upgrade with five years of
+history at the default retention went through while EMS kept its control
+cycle; keep that retention on a Pi 3, because longer periods make InfluxDB
+need more memory at every start. "Built for it" and "known to work on it" are
+different claims, and only the first is being made. If you try it, InfluxDB
+is the first thing to leave out, and a
 [compatibility report](https://github.com/basecubedev/ems-solarflow-api-control/issues)
 would be genuinely useful.
 

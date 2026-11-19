@@ -151,6 +151,8 @@ def populate_root(
         # program exists has something real to look for.
         program = {
             "ems-appliance-grow-root.service": "/usr/lib/ems-appliance-manager/grow-root.sh",
+            "ems-appliance-zram.service": "/usr/lib/ems-appliance-manager/swap-setup.sh zram",
+            "ems-appliance-swapfile.service": "/usr/lib/ems-appliance-manager/swap-setup.sh file",
         }.get(unit, "/usr/bin/ems-appliance")
         (units_dir / unit).write_text(f"[Unit]\n[Service]\nExecStart={program}\n")
         (wants / unit).symlink_to(f"/usr/lib/systemd/system/{unit}")
@@ -160,10 +162,11 @@ def populate_root(
     etc_units.mkdir(parents=True, exist_ok=True)
     for unit in image_inspect.MASKED_NETWORK_UNITS:
         (etc_units / unit).symlink_to("/dev/null")
-    helper = base / "usr/lib/ems-appliance-manager/grow-root.sh"
-    helper.parent.mkdir(parents=True, exist_ok=True)
-    helper.write_text("#!/bin/sh\n")
-    helper.chmod(0o755)
+    for name in ("grow-root.sh", "swap-setup.sh"):
+        helper = base / "usr/lib/ems-appliance-manager" / name
+        helper.parent.mkdir(parents=True, exist_ok=True)
+        helper.write_text("#!/bin/sh\n")
+        helper.chmod(0o755)
 
     # Time has to synchronise on a board without a clock, and every card
     # flashed from one image must make its own machine-id on first boot.

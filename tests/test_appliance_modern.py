@@ -312,6 +312,12 @@ def test_the_log_sources_with_names_are_the_declared_ones():
     assert set(js_list("lib/logs.js", "BASIC_LOG_SOURCES")) <= set(validation.LOG_SOURCES)
 
 
+def test_the_swap_areas_the_card_names_are_the_ones_the_host_reports():
+    from appliance import hostprobe
+
+    assert tuple(js_list("lib/host.js", "SWAP_KINDS")) == hostprobe.SWAP_KINDS
+
+
 def test_the_manager_vocabulary_is_the_manager_s():
     assert set(js_list("lib/manager.js", "MANAGER_OUTCOMES")) == constants(manager_install, "OUTCOME_")
     assert keys("lib/manager.js", "MANAGER_VERDICTS") == constants(manager_verify, "VERDICT_") - {manager_verify.VERDICT_PENDING, manager_verify.VERDICT_NAME}

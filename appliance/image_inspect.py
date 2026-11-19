@@ -255,6 +255,11 @@ REQUIRED_UNITS = {
     # Moves an Admin installed with `restart: "no"` to the policy that brings
     # it back after a reboot; without it such an Admin is missing after each.
     "admin_restart_policy_service_enabled": "ems-appliance-admin-restart-policy.service",
+    # Swap on a 1 GB board: compressed in memory first, a file on the root
+    # behind it. Without them InfluxDB's start and upgrade meet a full memory
+    # with nothing to give way.
+    "zram_service_enabled": "ems-appliance-zram.service",
+    "swapfile_service_enabled": "ems-appliance-swapfile.service",
     # The one DHCP client. Debian's networkd units are masked beside this
     # (MASKED_NETWORK_UNITS); nmcli is the only interface this appliance can
     # take an address back on.
