@@ -82,6 +82,12 @@ class OperationCoordinator:
         with self._lock:
             self._active.pop(operation_id, None)
 
+    def any_active(self):
+        """True while any worker holds a claim, whatever its operation."""
+
+        with self._lock:
+            return any(self._active.values())
+
     def is_active(self, operation_id):
         """True only while a live worker holds a claim for ``operation_id``."""
 

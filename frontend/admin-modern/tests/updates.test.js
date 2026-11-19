@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { CHANNELS, CHANNEL_FILTERS, CHANNEL_TONES, RELEASE_GROUPS, UPGRADE_STATES, PAIR_STATES, channelChoices, groupedReleases, noteView, pairView, recommendationNote, releaseList, releasesInChannel, shownChannel, upgradePage } from "../src/lib/updates.js";
+import { CHANNELS, CHANNEL_FILTERS, CHANNEL_TONES, RELEASE_GROUPS, UPGRADE_STATES, PAIR_STATES, channelChoices, groupedReleases, noteView, pairView, recommendationNote, releaseList, releasesInChannel, shownChannel, updateMark, updateWaits, upgradePage } from "../src/lib/updates.js";
 
 const read = (path) => readFileSync(new URL(`../../../admin/${path}`, import.meta.url), "utf8");
 
@@ -151,4 +151,28 @@ test("nothing proposed says why: the rolling build is chosen by hand, a stable r
   for (const [catalogue, note] of [[rolling, "rolling"], [stable, "stable"], [proposed, null], [unknown, null], [both, "rolling"]]) {
     assert.equal(recommendationNote(catalogue, releaseList(catalogue)), note);
   }
+});
+
+test("the menu's Updates entry waits on a release the server still proposes or an InfluxDB the running release ships", () => {
+  const influx = (state) => ({ ok: true, state, current_image: "influxdb:2.7", target_image: "influxdb:2.9.1" });
+  const known = (state) => ({ ok: true, release: { state } });
+  assert.equal(updateWaits(known("available"), influx("current")), true);
+  assert.equal(updateWaits(known("current"), influx("available")), true);
+  assert.equal(updateWaits(known("current"), influx("current")), false);
+  assert.equal(updateWaits(known("unknown"), influx("no_way_back")), false);
+  assert.equal(updateWaits(known("unknown"), influx("low_memory")), true);
+  assert.equal(updateWaits(known("unknown"), { ...influx("available"), target_image: null }), false);
+  assert.equal(updateWaits(null, null), false);
+});
+
+test("the menu marks Updates as a warning while an InfluxDB run needs looking at, else as a waiting update", () => {
+  const plan = (state, record) => ({ ok: true, state, current_image: "influxdb:2.7", target_image: "influxdb:2.9.1", last: record ? { state: record } : null });
+  const known = (state) => ({ ok: true, release: { state } });
+  assert.equal(updateMark(known("available"), plan("current", "failed")), "warning");
+  assert.equal(updateMark(known("current"), plan("available")), "info");
+  assert.equal(updateMark(known("current"), plan("low_memory")), "info");
+  assert.equal(updateMark(known("available"), plan("current")), "info");
+  assert.equal(updateMark(known("current"), plan("current", "upgraded")), "");
+  assert.equal(updateMark(known("current"), plan("busy", "running")), "");
+  assert.equal(updateMark(known("current"), plan("available", "failed")), "info");
 });

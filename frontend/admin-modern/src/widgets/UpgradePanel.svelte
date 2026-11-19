@@ -1,12 +1,14 @@
 <!-- SPDX-FileCopyrightText: 2026 basecubedev -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
-  import { tick } from "svelte";
+  import { tick, untrack } from "svelte";
   import Card from "../../../shared/ui/Card.svelte";
   import Icon from "../../../shared/ui/Icon.svelte";
   import ConfirmDialog from "../../../shared/ui/ConfirmDialog.svelte";
   import { t, tn, fmt } from "../i18n/i18n.svelte.js";
-  import { system } from "../state/system.svelte.js";
+  import { system, reload } from "../state/system.svelte.js";
+  import { askInflux, influxJob } from "../state/influxUpgrade.svelte.js";
+  import { influxView } from "../lib/influxdb.js";
   import { upgrade, verify, startUpgrade, closeUpgrade, recover, previewSetupDiscard, discardSetup } from "../state/upgrade.svelte.js";
   import { PHASES, PHASE_TONES, STAGE_TONES, WORKING_STAGES, phaseStates, phaseProgress, failedStep, backupArchive, rateLimited, replacesAdmin, migrationView, isDevelopment, clock, nothingChanged, phaseOfStage } from "../lib/upgrade.js";
   import { noteView } from "../lib/updates.js";
@@ -45,6 +47,12 @@
   const failure = $derived(upgrade.error ? errorView(upgrade.error, t) : null);
   const reason = $derived(upgrade.result?.message || stopped?.detail || own?.error_message || "");
   const closable = $derived(!upgrade.busy && !upgrade.holding && upgrade.stage !== "succeeded");
+  const influx = $derived(influxView(system.influxdb.data));
+
+  /** The release just installed may ship a newer InfluxDB; the next step is read from the new installation. */
+  $effect(() => {
+    if (upgrade.stage === "succeeded") untrack(() => reload("influxdb", "updates"));
+  });
 
   const uid = $props.id();
   let now = $state(Date.now());
@@ -204,6 +212,7 @@
       {#if isDevelopment(upgrade.release)}<p class="note warn"><Icon name="triangle-alert" />{t("upgrade.development")}</p>{/if}
       {#if releaseNote}<p class="note"><Icon name="info" />{#if releaseNote.key}{t(releaseNote.key)}{:else}<span lang="en">{releaseNote.text}</span>{/if}</p>{/if}
       {#if migration.required}<p class="note warn" data-testid="upgrade-migration"><Icon name="triangle-alert" /><span>{tn("upgrade.migration", migration.devices)}{#if migration.losing}{" "}{tn("upgrade.migrationLoses", migration.losing)}{/if}</span></p>{/if}
+      {#if influx?.shown && ["available", "current", "newer"].includes(influx.state)}<p class="note" data-testid="upgrade-influx-note"><Icon name="database" />{t("upgrade.influxMaybe")}</p>{/if}
       <fieldset class="choices">
         <legend class="sub">{t("upgrade.choices")}</legend>
         {#each ["backup", "settings", "diagnostics"] as choice (choice)}
@@ -262,6 +271,16 @@
         {#if archive}<div class="fact"><div class="fact-label">{t("upgrade.backupMade")}</div><div class="fact-value wrap small-value">{archive}</div></div>{/if}
       </div>
       {#each warnings as warning, index (index)}<p class="note warn"><Icon name="triangle-alert" /><span lang="en">{warning}</span></p>{/each}
+      {#if influx?.canUpgrade}
+        <div class="next inner" data-testid="upgrade-next-influx">
+          <span class="icon-tile sm c-out"><Icon name="database" /></span>
+          <div class="next-words">
+            <strong>{t("upgrade.nextInflux", { target: influx.target })}</strong>
+            <span class="muted small">{t("influx.longRun")}</span>
+          </div>
+          <button class="btn" type="button" disabled={influxJob.asking || influxJob.running} onclick={() => askInflux("upgrade")} data-testid="upgrade-next-influx-go"><Icon name="database" size="sm" />{t("upgrade.nextInfluxGo")}</button>
+        </div>
+      {/if}
       <div class="row-wrap actions">
         {#if dashboard}<a class="btn" href={dashboard} data-testid="upgrade-open-dashboard"><Icon name="layout-dashboard" size="sm" />{t("upgrade.openDashboard")}</a>{/if}
         <button class="btn secondary" type="button" onclick={closeUpgrade} data-testid="upgrade-finish">{t("common.done")}</button>
@@ -345,6 +364,8 @@
 />
 
 <style>
+  .next { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; margin-top: var(--s4); }
+  .next-words { flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 13.5px; }
   .upgrade { display: flex; flex-direction: column; gap: var(--s3); }
   .upgrade:focus { outline: none; }
   .working, .ready-banner {

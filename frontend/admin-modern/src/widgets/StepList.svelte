@@ -4,7 +4,7 @@
   import Icon from "../../../shared/ui/Icon.svelte";
   import { t } from "../i18n/i18n.svelte.js";
 
-  /** steps: [{ label (key) | text, type, tone, icon, state, detail }] */
+  /** steps: [{ label (key) | text, type, tone, icon, state, detail, detailKey }] */
   let { steps, label = "" } = $props();
 </script>
 
@@ -13,7 +13,7 @@
     <li class="step {step.tone}" data-state={step.state}>
       <Icon name={step.icon} size="sm" />
       <span class="what"><span class="sr-only">{t(`step.state.${step.state}`)}{" "}</span>{#if step.label}{t(step.label, { type: step.type ? t(`backup.type.${step.type}`) : "" })}{:else}<span lang="en">{step.text}</span>{/if}</span>
-      {#if step.detail}<span class="detail muted" lang="en">{step.detail}</span>{/if}
+      {#if step.detailKey}<span class="detail muted">{t(step.detailKey)}</span>{:else if step.detail}<span class="detail muted" lang="en">{step.detail}</span>{/if}
     </li>
   {/each}
 </ol>

@@ -1188,6 +1188,25 @@ def test_a_prepare_that_keeps_the_compose_file_records_the_influxdb_it_names(tmp
     ]
 
 
+def test_services_moving_influxdb_names_the_new_image_in_the_marker(tmp_path):
+    workspace, docker, job, service = _prepare_over_an_installation(tmp_path, "influxdb:2.7", ran="influxdb:2.7")
+
+    service.record_influx_image("influxdb:2.9.1")
+
+    marker = json.loads(service.marker_path.read_text(encoding="utf-8"))
+    influx = [image for image in marker["images"] if image["service"] == "influxdb"]
+    assert [image["image"] for image in influx] == ["influxdb:2.9.1"]
+
+
+def test_services_moving_influxdb_forgets_a_noted_dating(tmp_path):
+    workspace, docker, job, service = _prepare_over_an_installation(tmp_path, "influxdb:2.7", ran="influxdb:2.7")
+    service._note_influx_dating("influxdb:2.7", "influxdb:2.9.1")
+
+    service.record_influx_image("influxdb:2.9.1")
+
+    assert not service._influx_dating_path.exists()
+
+
 def test_a_dating_noted_before_the_admin_stopped_is_used_by_the_next_setup(tmp_path):
     """Interleaving: the Admin stopped while the installer ran; the old compose file is gone, the
     new one names the release's version, and no container ran on the data since."""
@@ -2783,6 +2802,16 @@ def test_docker_compose_stop_names_the_grace_period_as_compose_does(tmp_path):
     assert recorder[0]["command"] == [
         "docker", "compose", "--profile", "with-analytics", "stop", "--timeout", "20", "influxdb",
     ]
+
+
+def test_docker_compose_up_renews_anonymous_volumes_only_when_asked(tmp_path):
+    recorder = []
+    compose = DockerCompose(popen=_make_popen(recorder, lines=[]))
+    compose.up(tmp_path, services=("influxdb",), force_recreate=True)
+    compose.up(tmp_path, services=("influxdb",), force_recreate=True, renew_anon_volumes=True)
+
+    assert recorder[0]["command"][-2:] == ["--force-recreate", "influxdb"]
+    assert recorder[1]["command"][-3:] == ["--force-recreate", "--renew-anon-volumes", "influxdb"]
 
 
 @pytest.mark.parametrize(

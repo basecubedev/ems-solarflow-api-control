@@ -142,9 +142,14 @@ from admin.install_state import (
 from admin.container_actions import (
     REPAIR_REFUSALS,
     build_maintenance_container_plan,
+    claim_container_actions,
     run_maintenance_analytics_repair,
     run_maintenance_container_sync,
 )
+from admin.influx_upgrade import RECORD_FILE as INFLUX_UPGRADE_RECORD_FILE
+from admin.influx_upgrade import ROLLBACK_STEPS as INFLUX_ROLLBACK_STEPS
+from admin.influx_upgrade import UPGRADE_STEPS as INFLUX_UPGRADE_STEPS
+from admin.influx_upgrade import InfluxUpgradeService
 from admin.ems_tool import ems_container_name
 from admin.maintenance import run_maintenance_overview
 from admin.maintenance_config import (
@@ -795,6 +800,13 @@ class AdminRuntime:
     https_configured: bool = False
     https_port: int = 8091
     homewizard_pairer: object = pair_homewizard_p1
+    # The bundled InfluxDB upgrade and its way back, and the jobs that run
+    # them; both listeners share them so one browser sees another's job.
+    influx_upgrade: object = None
+    influx_upgrade_jobs: BackupJobRegistry = field(
+        default_factory=lambda: BackupJobRegistry(max_jobs=4)
+    )
+    container_write_gate: object = field(default_factory=lambda: ContainerWriteGate())
 
 
 def _running_admin_identity(docker):
@@ -993,6 +1005,7 @@ def create_admin_runtime(
     setup_intents=None,
     operation_coordinator=None,
     docker=None,
+    influx_upgrade=None,
 ):
     """Build the shared Admin service graph once, for one or more listeners.
 
@@ -1135,6 +1148,12 @@ def create_admin_runtime(
         if static_assets is not None
         else build_static_asset_index(STATIC_DIR)
     )
+    backup_service = backup_service or BackupRestoreService()
+    influx_upgrade = influx_upgrade or InfluxUpgradeService(
+        record_path=Path(admin_data_dir) / INFLUX_UPGRADE_RECORD_FILE,
+        backups=backup_service,
+        on_image_changed=getattr(deployment, "record_influx_image", lambda _image: None),
+    )
     return AdminRuntime(
         registry=registry,
         network_detector=network_detector,
@@ -1157,8 +1176,9 @@ def create_admin_runtime(
         guided_upgrade_context=guided_upgrade_context,
         system_alignment=system_alignment,
         admin_update=admin_update,
-        backup_service=backup_service or BackupRestoreService(),
+        backup_service=backup_service,
         backup_jobs=BackupJobRegistry(),
+        influx_upgrade=influx_upgrade,
         # Shared password, separate Admin session. Setup can be hammered but only
         # succeeds once, so a simple per-address limiter is enough there.
         auth_sessions=SessionStore(timeout_seconds=1800, absolute_max_seconds=43200),
@@ -1517,6 +1537,9 @@ class AdminServer(ThreadingHTTPServer):
         self.admin_update = runtime.admin_update
         self.backup_service = runtime.backup_service
         self.backup_jobs = runtime.backup_jobs
+        self.influx_upgrade = runtime.influx_upgrade
+        self.influx_upgrade_jobs = runtime.influx_upgrade_jobs
+        self.container_write_gate = runtime.container_write_gate
         self.auth_sessions = runtime.auth_sessions
         self.auth_login_limiter = runtime.auth_login_limiter
         self.auth_setup_limiter = runtime.auth_setup_limiter
@@ -1642,6 +1665,17 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/admin/maintenance/containers/plan":
             self._handle_maintenance_container_plan()
+            return
+        if path == "/api/admin/maintenance/influxdb":
+            self._handle_influx_upgrade_plan()
+            return
+        if path == "/api/admin/maintenance/updates":
+            self._handle_known_updates()
+            return
+        if path.startswith("/api/admin/maintenance/influxdb/jobs/"):
+            self._send_influx_upgrade_job(
+                path[len("/api/admin/maintenance/influxdb/jobs/"):]
+            )
             return
         if path.startswith("/api/admin/maintenance/upgrade/jobs/"):
             self._send_upgrade_job(
@@ -1854,13 +1888,17 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._handle_system_alignment_validate()
             return
         if path == "/api/admin/system-alignment/resume":
-            self._handle_system_alignment_resume()
+            with self._container_writer() as allowed:
+                if allowed:
+                    self._handle_system_alignment_resume()
             return
         if path == "/api/admin/system-alignment/verify-resources":
             self._handle_system_alignment_verify_resources()
             return
         if path == "/api/admin/system-alignment/return-to-running-build":
-            self._handle_system_alignment_return()
+            with self._container_writer() as allowed:
+                if allowed:
+                    self._handle_system_alignment_return()
             return
         if path == "/api/admin/system-alignment/cancel":
             self._handle_system_alignment_cancel()
@@ -1898,11 +1936,25 @@ class AdminHandler(BaseHTTPRequestHandler):
         if path == "/api/admin/maintenance/analytics/repair":
             self._handle_maintenance_analytics_repair()
             return
+        if path == "/api/admin/maintenance/influxdb/upgrade":
+            self._handle_influx_upgrade_start("upgrade", "target_image")
+            return
+        if path == "/api/admin/maintenance/influxdb/rollback":
+            self._handle_influx_upgrade_start("rollback", "image")
+            return
+        if path == "/api/admin/maintenance/influxdb/stop-waiting":
+            self._handle_influx_stop_waiting()
+            return
+        if path == "/api/admin/maintenance/influxdb/recheck":
+            self._handle_influx_recheck()
+            return
         if path == "/api/admin/maintenance/upgrade/validate":
             self._handle_maintenance_upgrade_validate()
             return
         if path == "/api/admin/maintenance/upgrade/execute":
-            self._handle_maintenance_upgrade_execute()
+            with self._container_writer() as allowed:
+                if allowed:
+                    self._handle_maintenance_upgrade_execute()
             return
         if path == "/api/admin/maintenance/upgrade/resume":
             self._handle_maintenance_upgrade_resume()
@@ -1911,7 +1963,9 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._handle_admin_update_plan()
             return
         if path == "/api/admin/maintenance/admin-update/execute":
-            self._handle_admin_update_execute()
+            with self._container_writer() as allowed:
+                if allowed:
+                    self._handle_admin_update_execute()
             return
         if path == "/api/admin/maintenance/backups/create":
             self._handle_backup_create()
@@ -1947,7 +2001,9 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._handle_release_prepare(mode=TRANSITION_MODE_AUTOMATED_SETUP)
             return
         if path == "/api/setup/system-build/update-admin":
-            self._handle_setup_update_admin()
+            with self._container_writer() as allowed:
+                if allowed:
+                    self._handle_setup_update_admin()
             return
         if path == "/api/setup/system-build/confirm":
             self._handle_setup_system_build_confirm()
@@ -1974,10 +2030,14 @@ class AdminHandler(BaseHTTPRequestHandler):
             self._handle_config_apply()
             return
         if path == "/api/setup/deployment/prepare":
-            self._handle_deployment_prepare()
+            with self._container_writer() as allowed:
+                if allowed:
+                    self._handle_deployment_prepare()
             return
         if path == "/api/setup/deployment/start":
-            self._handle_deployment_start()
+            with self._container_writer() as allowed:
+                if allowed:
+                    self._handle_deployment_start()
             return
         if path == "/api/setup/deployment/repair-permissions":
             self._handle_deployment_permission_repair()
@@ -3988,6 +4048,213 @@ class AdminHandler(BaseHTTPRequestHandler):
         elif not result.get("ok"):
             status = 500
         self._send_json(result, status=status)
+
+    def _handle_influx_upgrade_plan(self):
+        try:
+            plan = self.server.influx_upgrade.plan()
+        except Exception:  # a read must not 500 the page with a traceback
+            self._send_json(
+                {"ok": False, "error": "The InfluxDB version could not be read."},
+                status=500,
+            )
+            return
+        self._send_json(plan)
+
+    def _handle_influx_stop_waiting(self):
+        """Confirmed: the InfluxDB job stops waiting for an answer and ends as not completed."""
+
+        body = self._read_json_body()
+        if body is None:
+            return
+        if not isinstance(body, dict) or set(body) - {"confirm"} or body.get("confirm") is not True:
+            self._send_json({"error": "explicit confirmation is required"}, status=400)
+            return
+        if not self.server.influx_upgrade.stop_waiting():
+            self._send_json(
+                {"ok": False, "status": "not_waiting", "message": "No InfluxDB start is being waited for."},
+                status=409,
+            )
+            return
+        self._send_json({"ok": True, "status": "stopping"}, status=202)
+
+    def _handle_influx_recheck(self):
+        """Check an unfinished InfluxDB upgrade again, holding off every InfluxDB and container job meanwhile."""
+
+        if self._reject_unrelated_transition_write():
+            return
+        body = self._read_json_body()
+        if body is None:
+            return
+        if not isinstance(body, dict) or body:
+            self._send_json({"error": "expected an empty JSON object"}, status=400)
+            return
+        service = self.server.influx_upgrade
+        gate = self.server.container_write_gate
+        with gate.lock:
+            release = None
+            if not (gate.entered or self.server.operation_coordinator.any_active() or self._admin_update_running()):
+                release = self._claim_influx_upgrade(service, "recheck")
+        if release is None:
+            self._send_json({"ok": False, "status": "busy", "message": _INFLUX_UPGRADE_BUSY}, status=409)
+            return
+        try:
+            result = service.recheck()
+        except Exception:
+            result = {"ok": False, "status": "failed", "message": "The InfluxDB check failed unexpectedly."}
+        finally:
+            release()
+        self._send_json(result, status=200 if result.get("ok") else 409)
+
+    def _handle_known_updates(self):
+        """The release the last upgrade listing proposed; reads no network."""
+
+        try:
+            release = self.server.release_manager.known_update()
+        except Exception:
+            release = {"state": "unknown", "running": None, "recommended": None, "checked_at": None}
+        self._send_json({"ok": True, "release": release})
+
+    def _handle_influx_upgrade_start(self, kind, image_field):
+        # Confirmed mutation: move the bundled InfluxDB to the version this
+        # build ships behind a verified backup, or restore that backup on the
+        # previous version. The image the operator confirmed travels with the
+        # request, so a plan that changed since is refused rather than run.
+        if self._reject_unrelated_transition_write():
+            return
+        body = self._read_json_body()
+        if body is None:
+            return
+        if not isinstance(body, dict):
+            self._send_json({"error": "expected a JSON object"}, status=400)
+            return
+        if set(body) - {"confirm", image_field}:
+            self._send_json({"error": f"unsupported {kind} field"}, status=400)
+            return
+        if body.get("confirm") is not True:
+            self._send_json({"error": f"explicit {kind} confirmation is required"}, status=400)
+            return
+        image = body.get(image_field)
+        if not isinstance(image, str) or not image.strip():
+            self._send_json({"error": f"{image_field} is required"}, status=400)
+            return
+        service = self.server.influx_upgrade
+        refusal = _influx_upgrade_refusal(service.plan(), kind, image)
+        if refusal:
+            self._send_json({"ok": False, "status": "refused", "message": refusal}, status=409)
+            return
+        gate = self.server.container_write_gate
+        with gate.lock:
+            release = None
+            if not (gate.entered or self.server.operation_coordinator.any_active() or self._admin_update_running()):
+                release = self._claim_influx_upgrade(service, kind)
+        if release is None:
+            self._send_json(
+                {"ok": False, "status": "busy", "message": _INFLUX_UPGRADE_BUSY},
+                status=409,
+            )
+            return
+        steps = INFLUX_UPGRADE_STEPS if kind == "upgrade" else INFLUX_ROLLBACK_STEPS
+        job = BackupJob(uuid.uuid4().hex, [{"key": key, "label": label} for key, label in steps])
+        run = service.upgrade if kind == "upgrade" else service.rollback
+
+        def runner(handle):
+            try:
+                result = run(image, progress=handle)
+            except Exception:  # never leak a traceback; the record says where it stopped
+                result = {
+                    "ok": False,
+                    "status": "failed",
+                    "message": "The InfluxDB job failed unexpectedly; the Updates page shows where it stopped.",
+                }
+            finally:
+                release()
+            handle.finish(result)
+
+        try:
+            self.server.influx_upgrade_jobs.submit(job, runner)
+        except Exception:
+            release()
+            self._send_json(
+                {"ok": False, "status": "error", "message": "The InfluxDB job could not be started."},
+                status=500,
+            )
+            return
+        snapshot = job.snapshot()
+        self._send_json(
+            {"ok": True, "job_id": job.job_id, "status": snapshot["status"],
+             "steps": snapshot["steps"]},
+            status=202,
+        )
+
+    @contextlib.contextmanager
+    def _container_writer(self):
+        """Enter a write that recreates containers or the Admin, unless an InfluxDB job runs.
+
+        The InfluxDB job stops, renames and starts InfluxDB and rewrites
+        docker-compose.yml; replacing the Admin kills it halfway, and a second
+        writer of the compose file can undo its line. Entering is counted under
+        the gate's lock, which is the lock an InfluxDB job starts under, so a
+        writer that is still between its checks and its own durable claim
+        holds the job off too. Yields whether the write may go on.
+        """
+
+        gate = self.server.container_write_gate
+        with gate.lock:
+            running = getattr(self.server.influx_upgrade, "active", None) is not None
+            if not running:
+                gate.entered += 1
+        if running:
+            self._send_json(
+                {"ok": False, "error": "influx_upgrade_running", "message": _INFLUX_UPGRADE_RUNNING},
+                status=409,
+            )
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            gate.leave()
+
+    def _admin_update_running(self):
+        """Whether an Admin replacement was started and is not seen finished; unreadable counts as running."""
+
+        running = getattr(self.server.admin_update, "update_in_progress", None)
+        if not callable(running):
+            return False
+        try:
+            return bool(running())
+        except Exception:
+            return True
+
+    def _claim_influx_upgrade(self, service, kind):
+        """Hold the container-action and restore locks for one InfluxDB job; None while either is held.
+
+        The service says it is busy from here on, before the job's thread
+        starts, so the gates of the other container writers see it at once.
+        """
+
+        release_containers = claim_container_actions()
+        if release_containers is None:
+            return None
+        restore_lock = self.server.backup_service.restore_lock
+        if not restore_lock.acquire(blocking=False):
+            release_containers()
+            return None
+        service.active = kind
+
+        def release():
+            service.active = None
+            restore_lock.release()
+            release_containers()
+
+        return release
+
+    def _send_influx_upgrade_job(self, job_id):
+        job = self.server.influx_upgrade_jobs.get(job_id.strip("/"))
+        if job is None:
+            self._send_json({"ok": False, "error": "unknown job_id"}, status=404)
+            return
+        self._send_json({"ok": True, **job})
 
     def _handle_maintenance_analytics_repair(self):
         # Confirmed mutation: runs the analytics schema sync in a one-off EMS
@@ -8190,6 +8457,51 @@ def _result_view(record, identity_token_key=None):
     }
 
 
+class ContainerWriteGate:
+    """The lock an InfluxDB job starts under, and how many container writers are inside it."""
+
+    def __init__(self):
+        self.lock = threading.Condition()
+        self.entered = 0
+
+    def leave(self):
+        with self.lock:
+            self.entered -= 1
+            self.lock.notify_all()
+
+    def wait_until_empty(self, timeout):
+        """Whether every admitted writer has left within ``timeout`` seconds."""
+
+        with self.lock:
+            return self.lock.wait_for(lambda: self.entered == 0, timeout)
+
+
+_INFLUX_UPGRADE_BUSY = (
+    "Another container action, a restore, an upgrade or an InfluxDB job is still "
+    "running; try again once it has finished."
+)
+_INFLUX_UPGRADE_RUNNING = (
+    "An InfluxDB upgrade or its way back is running; try again once it has finished."
+)
+
+
+def _influx_upgrade_refusal(plan, kind, image):
+    """Why the plan does not offer ``kind`` to ``image`` now, or None."""
+
+    if kind == "upgrade":
+        if plan.get("state") != "available":
+            return plan.get("message") or "InfluxDB cannot be upgraded now."
+        if plan.get("target_image") != image:
+            return "The InfluxDB version on offer changed; read the page again."
+        return None
+    rollback = plan.get("rollback") or {}
+    if not rollback.get("available"):
+        return rollback.get("reason") or "There is no InfluxDB upgrade to roll back."
+    if rollback.get("to_image") != image:
+        return "The version to roll back to changed; read the page again."
+    return None
+
+
 def create_server(host="127.0.0.1", port=8090, registry=None, static_assets=None,
                   network_detector=None, gateway_prober=None, mdns_provider=None,
                   mqtt_discovery=None, zendure_cloud_discovery=None,
@@ -8198,7 +8510,7 @@ def create_server(host="127.0.0.1", port=8090, registry=None, static_assets=None
                   guided_upgrade=None, guided_upgrade_context=None,
                   system_alignment=None, admin_update=None,
                   backup_service=None, setup_intents=None,
-                  runtime=None, https_active=False):
+                  runtime=None, https_active=False, influx_upgrade=None):
     """Create (but do not start) an ``AdminServer`` bound to ``host:port``.
 
     Pass a shared ``runtime`` to bind a second (HTTPS) listener to the same
@@ -8225,6 +8537,7 @@ def create_server(host="127.0.0.1", port=8090, registry=None, static_assets=None
             admin_update=admin_update,
             backup_service=backup_service,
             setup_intents=setup_intents,
+            influx_upgrade=influx_upgrade,
         )
     return AdminServer(
         (host, int(port)), AdminHandler, runtime=runtime, https_active=https_active,

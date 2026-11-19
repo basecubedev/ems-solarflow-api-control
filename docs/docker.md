@@ -405,6 +405,12 @@ docker compose exec ems python3 emsctl.py config upgrade --yes --backup
 docker compose exec ems python3 emsctl.py diagnose
 ```
 
+`docker compose pull` keeps the InfluxDB version your `docker-compose.yml`
+names. A release that ships a newer one offers it in the Admin on the
+**Updates** page, behind a verified backup and with a way back;
+without the Admin, follow
+[Upgrading the bundled InfluxDB](technical/influxdb.md#upgrading-the-bundled-influxdb).
+
 If you intentionally do not want password protection for local backups, use:
 
 ```bash

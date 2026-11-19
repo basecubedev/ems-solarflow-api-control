@@ -2774,3 +2774,73 @@ def test_a_declaration_below_the_supported_floor_still_places_the_build(tmp_path
     assert manager._rolling_baseline() == "v0.5.0"
     for tag in ("v0.9.0", "v0.8.7", "v0.8.4", "v0.7.0"):
         assert by_tag[tag]["upgrade_state"] != "downgrade_blocked", tag
+
+
+# --- the menu's hint: what the last upgrade listing proposed ---------------
+
+
+def _installed(tmp_path, name, running_tag, urlopen=None):
+    place = tmp_path / name
+    place.mkdir()
+    return ReleaseManager(
+        data_dir=tmp_path / "data",
+        project_dir=_project_compose(place, running_tag),
+        urlopen=urlopen or _opener(),
+        docker=_FakeDocker(container=_running_container(running_tag)),
+    )
+
+
+def test_a_listing_remembers_its_proposal_until_the_installed_release_reaches_it(tmp_path):
+    before = _installed(tmp_path, "before", "v0.6.0")
+    assert before.known_update()["state"] == "unknown"
+
+    assert before.list_releases()["default_release"] == "v0.6.1"
+    known = before.known_update()
+
+    assert (known["state"], known["running"], known["recommended"]) == ("available", "v0.6.0", "v0.6.1")
+    assert known["checked_at"]
+    after = _installed(tmp_path, "after", "v0.6.1")
+    assert after.known_update() == {
+        "state": "current", "running": "v0.6.1", "recommended": None, "checked_at": known["checked_at"],
+    }
+
+
+def test_a_listing_that_reaches_no_release_source_keeps_the_last_proposal(tmp_path):
+    online = _installed(tmp_path, "online", "v0.6.0")
+    online.list_releases()
+    remembered = (tmp_path / "data" / "state" / "release-check.json").read_bytes()
+
+    def offline(request, timeout=None):
+        raise urllib.error.URLError("offline")
+
+    result = _installed(tmp_path, "offline", "v0.6.0", urlopen=offline).list_releases()
+
+    assert any("unavailable" in warning for warning in result["warnings"])
+    assert (tmp_path / "data" / "state" / "release-check.json").read_bytes() == remembered
+
+
+def test_a_setup_listing_remembers_nothing(tmp_path):
+    manager = _installed(tmp_path, "setup", "v0.6.0")
+
+    manager.list_releases(for_upgrade=False)
+
+    assert not (tmp_path / "data" / "state" / "release-check.json").exists()
+    assert manager.known_update()["state"] == "unknown"
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["{", "[]", '{"version": 2, "recommended": "v0.6.1"}', '{"version": 1, "recommended": "not-a-version"}'],
+)
+def test_a_note_that_cannot_be_read_as_written_is_not_knowing(tmp_path, content):
+    manager = _installed(tmp_path, "damaged", "v0.6.0")
+    (tmp_path / "data" / "state").mkdir(parents=True)
+    (tmp_path / "data" / "state" / "release-check.json").write_text(content, encoding="utf-8")
+
+    assert manager.known_update()["state"] == "unknown"
+
+
+def test_a_running_release_without_a_version_is_not_knowing(tmp_path):
+    _installed(tmp_path, "versioned", "v0.6.0").list_releases()
+
+    assert _installed(tmp_path, "rolling", "latest").known_update()["state"] == "unknown"

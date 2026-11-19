@@ -27,7 +27,7 @@ clean reinstall.
 | --- | --- | --- |
 | **Overview** | Is everything in order, and what needs doing | This page |
 | **Assistant** | What is still to do, and the way to each task | [The assistant](assistant.md) |
-| **Updates** | Move EMS and the Admin Console to a newer System Build | [Guided Upgrade](guided-upgrade.md) |
+| **Updates** | Move EMS and the Admin Console to a newer System Build, then the bundled InfluxDB to the version it ships | [Guided Upgrade](guided-upgrade.md) |
 | **Settings & devices** | Features, add-ons, safety switches, expert tuning, devices | This page, [Device management](device-management.md), and [MQTT broker and mapping](mqtt-mapping.md) |
 | **Services** | What runs, **Restart EMS now**, **Repair analytics** | This page |
 | **Backups** | Create, download, bring back, restore or delete backups | [Backup and restore](backup-restore.md) |
@@ -51,6 +51,7 @@ Read this before clicking something you are unsure about.
 | Services — reading | Yes | No | No |
 | **Restart EMS now** | No | No | Yes |
 | **Repair analytics** | No | No | No |
+| Updates, InfluxDB — **Upgrade to …**, **Roll back to …** | No | No | Yes, InfluxDB only |
 | Diagnostics — **Run the checks** | Yes | No | No |
 | System — files, device telemetry | Yes | No | No |
 | Settings & devices — editing and searching | Yes | No | No |
@@ -179,6 +180,9 @@ one you confirmed that the EMS still has to apply.
 **Restart EMS now** is greyed out when nothing can be restarted from here —
 Docker or the container setup is not available — and the two actions never run
 at the same time.
+
+The bundled InfluxDB's version and its update are on the **Updates** page:
+see [Guided Upgrade, step 7](guided-upgrade.md#7--update-the-bundled-influxdb).
 
 ### 3 — Change settings
 

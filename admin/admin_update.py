@@ -1817,6 +1817,18 @@ class AdminUpdateService:
             "pending": pending,
         }
 
+    def update_in_progress(self):
+        """Whether an Admin replacement was started and has not been seen to finish.
+
+        An unreadable pending record counts as one in progress.
+        """
+
+        try:
+            pending = self._reconcile_pending(self._store.read())
+        except PendingUpdateStateError:
+            return True
+        return isinstance(pending, dict) and pending.get("stage") == STAGE_STARTED
+
     def resume(self):
         try:
             pending = self._reconcile_pending(self._store.read())

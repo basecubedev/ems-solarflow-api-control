@@ -813,6 +813,118 @@ class _TestHomeWizardPairer:
             self._waited.clear()
 
 
+class _TestInfluxStack:
+    """A bundled InfluxDB the Updates page can upgrade and roll back without Docker.
+
+    It keeps the one rule the upgrade is built around: an older image refuses
+    data a newer one converted. The compose file it reads is the real one
+    under the install root, so the page's journey writes it as production does.
+    """
+
+    OLD = "influxdb:2.7"
+    BUCKETS = ["_monitoring", "_tasks", "ems_1h", "ems_1m", "ems_5m", "ems_raw"]
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.reset()
+
+    def reset(self):
+        with self._lock:
+            self.image = self.OLD
+            self.status = "running"
+            self.data = {"format": "2.7", "buckets": list(self.BUCKETS)}
+            self.aside = {}
+            self.archives = {}
+            self.held_kb = 300 * 1024
+            self.free_mb = 4096
+
+    # --- what the Docker CLI and Compose wrappers do --------------------------
+
+    def pull(self, image, on_progress=None):
+        return None
+
+    def inspect_image(self, image):
+        return {"ref": image}
+
+    def inspect_container(self, name):
+        with self._lock:
+            return {"container_name": name, "image": self.image, "status": self.status}
+
+    def exec_capture(self, name, command, timeout=30):
+        with self._lock:
+            if self.status != "running":
+                return 1, "", "not running"
+            if tuple(command[:2]) == ("influx", "ping"):
+                return 0, "OK\n", None
+            if tuple(command) == ("cat", "/proc/1/status"):
+                return 0, f"Name:\tinfluxd\nRssAnon:\t{self.held_kb} kB\nVmSwap:\t0 kB\n", None
+            if tuple(command) == ("influxd", "version"):
+                version = self.image.split(":", 1)[1]
+                return 0, f"InfluxDB v{version if version.count('.') == 2 else version + '.12'} (git: test)\n", None
+            names = self.data["buckets"] if "bucket list" in command[2] else []
+            return 0, json.dumps([{"name": name} for name in names]), None
+
+    def meminfo(self):
+        """The host memory the upgrade's check reads, in MB."""
+
+        with self._lock:
+            return {"MemAvailable": self.free_mb, "SwapFree": 0}
+
+    def set_aside_influx_data(self, workspace, image, name):
+        with self._lock:
+            self.aside[name] = self.data
+            self.data = None
+
+    def put_back_influx_data(self, workspace, image, aside, attempt):
+        with self._lock:
+            self.aside[attempt] = self.data
+            self.data = self.aside.pop(aside)
+
+    def up(self, workspace, profiles=(), services=(), force_recreate=False, on_line=None,
+           renew_anon_volumes=False):
+        from ems.influx_image import compose_image
+
+        text = (Path(workspace) / "docker-compose.yml").read_text(encoding="utf-8")
+        with self._lock:
+            self.image = compose_image(text)
+            if self.data is None:
+                self.data = {"format": "2.7" if self.image == self.OLD else "2.9", "buckets": ["_monitoring", "_tasks"]}
+            elif self.image != self.OLD:
+                self.data["format"] = "2.9"
+            self.status = "restarting" if self.image == self.OLD and self.data["format"] != "2.7" else "running"
+
+    def stop(self, workspace, services, profiles=(), on_line=None):
+        with self._lock:
+            self.status = "exited"
+
+    # --- what the backup service does ---------------------------------------------
+
+    def create_backup(self, request):
+        name = f"ems-influxdb-manual-{uuid.uuid4().hex[:8]}.tar.gz"
+        with self._lock:
+            self.archives[name] = json.loads(json.dumps(self.data))
+        return {"ok": True, "archives": [{"name": name, "verified": True}]}
+
+    def has_archive(self, name):
+        with self._lock:
+            return name in self.archives
+
+    def check_influx_restore(self, name):
+        with self._lock:
+            if name not in self.archives:
+                raise RuntimeError("unknown backup id")
+        return 1024
+
+    def restore_influx_archive(self, name):
+        with self._lock:
+            self.data = {**json.loads(json.dumps(self.archives[name])), "format": self.data["format"]}
+
+    def overview(self):
+        with self._lock:
+            container = {"name": "ems-influxdb", "running": self.status == "running", "image": self.image}
+        return {"docker": {"available": True}, "containers": {"influxdb": container}}
+
+
 def build_test_runtime(*, data_dir):
     """Compose the deterministic Admin runtime for ``EMS_ADMIN_TEST_MODE``."""
 
@@ -842,6 +954,12 @@ def build_test_runtime(*, data_dir):
     commit_hold = _install_setup_commit_hold(system_alignment)
     resource_hold = _install_resource_import_hold(system_alignment)
     mdns_provider, seeded_mdns_devices = _build_test_mdns_provider()
+    from admin.influx_upgrade import RECORD_FILE, InfluxUpgradeService
+
+    influx_stack = _TestInfluxStack()
+    influx_record = Path(data_dir) / RECORD_FILE
+    # Only what the InfluxDB scenario wrote is removed again on reset.
+    influx_seeded = []
     runtime = create_admin_runtime(
         registry=ScanRegistry(scan_runner=offline_network_scan),
         release_manager=release_manager,
@@ -849,6 +967,17 @@ def build_test_runtime(*, data_dir):
         operation_coordinator=operation_coordinator,
         mdns_provider=mdns_provider,
         docker=docker,
+        influx_upgrade=InfluxUpgradeService(
+            record_path=influx_record,
+            backups=influx_stack,
+            docker=influx_stack,
+            compose=influx_stack,
+            overview_provider=influx_stack.overview,
+            sleep=lambda _seconds: None,
+            disk_free=lambda _path: 2**40,
+            meminfo=influx_stack.meminfo,
+            swaps=lambda: [],
+        ),
     )
     original_instance_id = runtime.admin_instance_id
     instance_id_state["value"] = original_instance_id
@@ -1605,6 +1734,30 @@ def build_test_runtime(*, data_dir):
             _build_embedded_bundle(
                 Path(data_dir) / "embedded-bundle", "v9.9.9"
             )
+        elif scenario in {"influxdb_upgrade_available", "influxdb_upgrade_low_memory"}:
+            write_install_config({"config_schema_version": 3, "influxdb": {"enabled": True, "mode": "bundled"}})
+            context = detect_install_context()
+            fresh = (context.compose_path, Path(context.config_path).with_name("influxdb.env"))
+            taken = [path for path in fresh if path.exists()]
+            if taken:
+                raise RuntimeError(f"{taken[0]} exists; the InfluxDB scenario writes only fresh files")
+            influx_seeded.extend(fresh)
+            context.compose_path.write_text(
+                "services:\n  influxdb:\n    image: influxdb:2.7\n    container_name: ems-influxdb\n"
+                "    volumes:\n      - ./data/influxdb:/var/lib/influxdb2\n",
+                encoding="utf-8",
+            )
+            Path(context.data_dir, "influxdb").mkdir(parents=True, exist_ok=True)
+            Path(context.config_path).with_name("influxdb.env").write_text(
+                "INFLUXDB_TOKEN=test-token\nDOCKER_INFLUXDB_INIT_MODE=setup\n"
+                "DOCKER_INFLUXDB_INIT_USERNAME=admin\nDOCKER_INFLUXDB_INIT_PASSWORD=test-password\n"
+                "DOCKER_INFLUXDB_INIT_ORG=ems\nDOCKER_INFLUXDB_INIT_BUCKET=ems_raw\n"
+                "DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=test-token\n",
+                encoding="utf-8",
+            )
+            influx_stack.reset()
+            if scenario == "influxdb_upgrade_low_memory":
+                influx_stack.free_mb = 100
         elif scenario == "delete_install_config":
             # Deletion is a revision state too; the browser tests need to reach it.
             try:
@@ -2006,6 +2159,7 @@ def build_test_runtime(*, data_dir):
             # therefore its blocking — alive across specs.
             "guided-setup-workflow.json",
             ".admin-deployment.json",
+            "release-check.json",
         ):
             try:
                 (state_dir / name).unlink()
@@ -2047,6 +2201,10 @@ def build_test_runtime(*, data_dir):
             detect_install_context().config_path.unlink()
         except FileNotFoundError:
             pass
+        while influx_seeded:
+            influx_seeded.pop().unlink(missing_ok=True)
+        influx_record.unlink(missing_ok=True)
+        influx_stack.reset()
         runtime.zendure_cloud_discovery._trusted_candidates = []
         runtime.zendure_cloud_discovery._candidates = []
         _reset_test_mdns_provider(mdns_provider, seeded_mdns_devices)

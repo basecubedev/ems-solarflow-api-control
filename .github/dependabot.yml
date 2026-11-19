@@ -74,7 +74,8 @@ updates:
   # The bundled InfluxDB pin. The "docker" block above reads only the
   # Dockerfile, so the server image the installations run went unseen. Only the
   # pin's own directory is watched; Repo dependency refresh carries a bump into
-  # the files that repeat it (tools/bundled_influxdb.py --sync).
+  # the files that repeat it (tools/bundled_influxdb.py --sync), and the CI
+  # upgrade test proves the new image opens data an older one wrote.
   - package-ecosystem: "docker-compose"
     directory: "/deploy/docker"
     schedule:

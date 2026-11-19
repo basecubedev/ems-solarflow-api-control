@@ -50,6 +50,8 @@ INFLUX_COMPOSE_RESOURCE = "deploy/docker/compose.influxdb.yml"
 _JOB_LOG_MAX_LINES = 200
 
 _INFLUX_IMAGE_RE = re.compile(r"^\s*image:\s*(influxdb:\S+)", re.MULTILINE)
+# What an InfluxDB upgrade names the data directory it sets aside on the way back.
+_SET_ASIDE_NAME_RE = re.compile(r"influxdb-[a-z0-9][a-z0-9.-]{0,80}")
 _CONTAINER_NAME_RE = re.compile(
     r"^\s*container_name:\s*[\"']?([A-Za-z0-9][A-Za-z0-9_.-]*)[\"']?\s*(?:#.*)?$",
     re.MULTILINE,
@@ -526,6 +528,16 @@ class DockerCli:
             return None
         return str(result.stdout or "").strip() or None
 
+    def inspect_container_oom_killed(self, container_name):
+        """Whether Docker ended the container's last run for lack of memory; None where that cannot be read."""
+
+        value = self._inspect_container_format(container_name, "{{.State.OOMKilled}}")
+        if value == "true":
+            return True
+        if value == "false":
+            return False
+        return None
+
     def inspect_container_started_at(self, container_name):
         """Return when an exact container last started, or ``None``.
 
@@ -726,6 +738,45 @@ class DockerCli:
                 _safe_command_detail(result.stderr),
             )
 
+    def exec_capture(self, container_name, command, timeout=30):
+        """Run a short read-only ``command`` (argv the Admin built) in a running container.
+
+        Returns ``(returncode, stdout, detail)``; ``detail`` is the redacted
+        tail of stderr. Raises DockerError only when Docker itself cannot be
+        asked.
+        """
+
+        try:
+            result = self._run(
+                ["docker", "exec", container_name, *[str(part) for part in command]],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except FileNotFoundError as exc:
+            raise DockerError(
+                "docker_cli_missing", _DOCKER_MESSAGES["client_missing"]
+            ) from exc
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise DockerError(
+                "docker_exec_failed", "Could not run a command in the container."
+            ) from exc
+        return result.returncode, result.stdout or "", _safe_command_detail(result.stderr)
+
+    def set_aside_influx_data(self, workspace, image, name):
+        """Rename ``data/influxdb`` to ``data/<name>`` and leave an empty ``data/influxdb``.
+
+        Runs as root in a throwaway container of ``image``, as the permission
+        repair does, because the files belong to InfluxDB's own user. Nothing
+        is deleted, and an existing ``data/<name>`` is refused.
+        """
+
+        self._move_influx_data(
+            workspace, image,
+            'cd /workspace/data && [ -d influxdb ] && [ ! -e "$0" ] && mv influxdb "$0" && mkdir influxdb',
+            (name,),
+        )
+
     def influx_data_present(self, workspace, image):
         """Whether ``data/influxdb`` holds InfluxDB's metadata store; True when that cannot be told.
 
@@ -743,6 +794,44 @@ class DockerCli:
         except (FileNotFoundError, OSError, subprocess.SubprocessError):
             return True
         return result.returncode not in (3, 4)
+
+    def put_back_influx_data(self, workspace, image, aside, attempt):
+        """Move ``data/influxdb`` to ``data/<attempt>`` and ``data/<aside>`` back to ``data/influxdb``.
+
+        The undo of :meth:`set_aside_influx_data`; nothing is deleted, and an
+        existing ``data/<attempt>`` is refused.
+        """
+
+        self._move_influx_data(
+            workspace, image,
+            'cd /workspace/data && [ -d "$0" ] && [ ! -e "$1" ] '
+            '&& { [ ! -e influxdb ] || mv influxdb "$1"; } && mv "$0" influxdb',
+            (aside, attempt),
+        )
+
+    def _move_influx_data(self, workspace, image, script, names):
+        if not all(_SET_ASIDE_NAME_RE.fullmatch(str(name)) for name in names):
+            raise DockerError("influx_set_aside_invalid", "The set-aside directory name is invalid.")
+        workspace = _validated_workspace(workspace)
+        command = self._workspace_command(workspace, image, "0:0", script)
+        command.extend(str(name) for name in names)
+        try:
+            result = self._run(command, capture_output=True, text=True,
+                               timeout=CONTAINER_LIFECYCLE_TIMEOUT_SECONDS)
+        except FileNotFoundError as exc:
+            raise DockerError(
+                "docker_cli_missing", _DOCKER_MESSAGES["client_missing"]
+            ) from exc
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise DockerError(
+                "influx_set_aside_failed", "Could not move InfluxDB's data directory."
+            ) from exc
+        if result.returncode != 0:
+            raise DockerError(
+                "influx_set_aside_failed",
+                "Could not move InfluxDB's data directory.",
+                _safe_command_detail(result.stderr or result.stdout),
+            )
 
     def check_workspace_permissions(self, workspace, image, puid, pgid):
         workspace = _validated_workspace(workspace)
@@ -915,13 +1004,18 @@ class DockerCompose:
         self._stall_timeout = stall_timeout
         self._monotonic = monotonic or time.monotonic
 
-    def up(self, workspace, profiles=(), services=(), force_recreate=False, on_line=None):
+    def up(self, workspace, profiles=(), services=(), force_recreate=False, on_line=None,
+           renew_anon_volumes=False):
+        """``docker compose up -d``; ``renew_anon_volumes`` gives the new containers fresh anonymous volumes."""
+
         command = ["docker", "compose"]
         for profile in profiles:
             command += ["--profile", str(profile)]
         command += ["up", "-d"]
         if force_recreate:
             command.append("--force-recreate")
+        if renew_anon_volumes:
+            command.append("--renew-anon-volumes")
         command += [str(service) for service in services]
         try:
             process = self._popen(
@@ -2908,6 +3002,32 @@ class DeploymentService:
                 "data/influxdb holds InfluxDB data, and neither docker-compose.yml nor a container "
                 "names the InfluxDB version that wrote it. Name that image as the influxdb service's "
                 "image: in docker-compose.yml, or move the directory aside, then prepare again.",
+            )
+
+    def record_influx_image(self, image):
+        """Name ``image`` for InfluxDB in the marker after Services moved the installation to it.
+
+        The marker stays this service's to write; a missing or unreadable one
+        is left alone.
+        """
+
+        self._forget_influx_dating()
+        try:
+            marker = json.loads(self.marker_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        images = marker.get("images") if isinstance(marker, dict) else None
+        if not isinstance(images, list):
+            return
+        changed = False
+        for entry in images:
+            if isinstance(entry, dict) and entry.get("service") == "influxdb" and entry.get("image") != image:
+                entry["image"] = image
+                changed = True
+        if changed:
+            _atomic_write(
+                self.marker_path,
+                (json.dumps(marker, indent=2, sort_keys=True) + "\n").encode("utf-8"),
             )
 
     def _ensure_workspace(self):

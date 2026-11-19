@@ -495,6 +495,150 @@ def test_analytics_quickstart(built_image, tmp_path):
         project.down()
 
 
+def _influx_points(project, org):
+    res = project.compose(
+        "exec", "-T", "ems", "sh", "-lc",
+        _INFLUX_CLI_ENV + "influx query --raw -o " + org + " '"
+        + 'from(bucket:"ems_raw") |> range(start: -1d) '
+        + '|> filter(fn: (r) => r._measurement == "e2e_upgrade") |> count()\'',
+    )
+    assert res.returncode == 0, res.stdout + res.stderr
+    header = None
+    for line in res.stdout.splitlines():
+        cells = line.strip().split(",")
+        if "_value" in cells:
+            header = cells
+        elif header and len(cells) == len(header) and cells[header.index("_value")].isdigit():
+            return int(cells[header.index("_value")])
+    return 0
+
+
+def test_the_admin_upgrades_the_bundled_influxdb_through_the_ems_and_back(built_image, tmp_path, monkeypatch):
+    """An installation of an older release, upgraded and rolled back by the Admin's own code.
+
+    Everything is the production path but the Admin's container: the EMS
+    makes and restores the backups (``emsctl backup`` in a one-off EMS
+    container), Docker and Compose run for real, and the installation starts
+    on the oldest InfluxDB the installations still run.
+    """
+
+    from admin.backup_restore import BackupRestoreService
+    from admin.deployment import DockerCli, DockerCompose
+    from admin.ems_tool import EmsToolRunner
+    from admin.influx_upgrade import ROLLED_BACK, UPGRADED, InfluxUpgradeService
+    from admin.install_context import detect_install_context
+    from ems.influx_image import replace_image
+
+    oldest = "influxdb:2.7.12"
+    target = pinned_image(ROOT)
+    project = Project(tmp_path, built_image, influx_image=False)
+    seen = set()
+    for key in ("COMPOSE_PROJECT_NAME", "PUID", "PGID"):
+        monkeypatch.setenv(key, project.env[key])
+    failed = "setup"
+    try:
+        install = project.install("--analytics", "--no-start")
+        assert install.returncode == 0, install.stdout + install.stderr
+        compose_file = project.path / "docker-compose.yml"
+        compose_file.write_text(replace_image(compose_file.read_text(), oldest))
+
+        failed = "docker compose --profile with-analytics up -d"
+        up = project.compose("up", "-d", profile=True)
+        assert up.returncode == 0, up.stderr
+        seen |= _volumes_of(f"{project.name}-influxdb")
+        org = json.loads((project.path / "config" / "config.json").read_text())["influxdb"]["org"]
+
+        failed = "influx sync"
+        assert _wait(
+            lambda: project.compose("exec", "-T", "ems", "python3", "emsctl.py", "influx", "sync").returncode == 0,
+            timeout=90, interval=3,
+        )
+        failed = "seed points"
+        seed = project.compose(
+            "exec", "-T", "ems", "sh", "-lc",
+            _INFLUX_CLI_ENV + "now=$(date +%s); for i in $(seq 1 200); do echo \"e2e_upgrade value=$i $((now - 3600 + i))\"; done "
+            "| influx write -b ems_raw -o " + org + " --precision s",
+        )
+        assert seed.returncode == 0, seed.stdout + seed.stderr
+        assert _influx_points(project, org) == 200
+
+        root = str(project.path)
+        influx_name = f"{project.name}-influxdb"
+        docker = DockerCli()
+
+        def overview():
+            row = docker.inspect_container(influx_name)
+            return {
+                "docker": {"available": True},
+                "containers": {"influxdb": {
+                    "name": influx_name,
+                    "running": bool(row) and row["status"] == "running",
+                    "image": row["image"] if row else None,
+                }},
+            }
+
+        class TrackingCompose(DockerCompose):
+            """Compose that notes every volume the InfluxDB container was given."""
+
+            def up(self, *args, **kwargs):
+                try:
+                    return super().up(*args, **kwargs)
+                finally:
+                    seen.update(_volumes_of(influx_name))
+
+        context = lambda: detect_install_context(base_dir=root)  # noqa: E731
+        service = InfluxUpgradeService(
+            record_path=project.path / "admin-data" / "influxdb-upgrade.json",
+            backups=BackupRestoreService(context_provider=context, ems_tool=EmsToolRunner()),
+            context_provider=context,
+            docker=docker,
+            compose=TrackingCompose(),
+            overview_provider=overview,
+            target_image=lambda: target,
+        )
+
+        failed = "upgrade"
+        assert service.plan()["state"] == "available"
+        upgraded = service.upgrade(target)
+        assert upgraded["ok"] is True, upgraded
+        assert service.store.read()["state"] == UPGRADED
+        assert docker.inspect_container(influx_name)["image"] == target
+        assert _influx_points(project, org) == 200
+        status = project.compose("exec", "-T", "ems", "python3", "emsctl.py", "influx", "status")
+        assert status.returncode == 0 and "healthy: yes" in status.stdout, status.stdout + status.stderr
+
+        failed = "way back"
+        back = service.rollback(oldest)
+        assert back["ok"] is True, back
+        assert service.store.read()["state"] == ROLLED_BACK
+        assert docker.inspect_container(influx_name)["image"] == oldest
+        assert _influx_points(project, org) == 200
+    except Exception:
+        print(project.diagnostics(failed))
+        raise
+    finally:
+        project.down()
+        subprocess.run(
+            ["docker", "run", "--rm", "--user", "0:0", "--entrypoint", "sh",
+             "--mount", f"type=bind,src={project.path / 'data'},dst=/d", "influxdb:2.7.12",
+             "-c", "rm -rf /d/influxdb*"],
+            capture_output=True, timeout=120,
+        )
+        # The way back starts InfluxDB with fresh anonymous volumes, which
+        # leaves the old ones unattached; the ones its container had go.
+        if seen:
+            subprocess.run(["docker", "volume", "rm", *sorted(seen)], capture_output=True, timeout=60)
+
+
+def _volumes_of(container):
+    listed = subprocess.run(
+        ["docker", "inspect", "-f", '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}} {{end}}{{end}}', container],
+        capture_output=True, text=True, timeout=60,
+    )
+    return set(listed.stdout.split()) if listed.returncode == 0 else set()
+
+
+
 def test_the_installer_reads_no_host_zone_inside_a_container(tmp_path):
     """Inside the Admin container the "host" zone is the container's own UTC.
 

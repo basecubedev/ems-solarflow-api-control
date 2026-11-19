@@ -27,24 +27,35 @@ never proposes going back by itself. Further back belongs to
 
 ### 1 — Open Updates
 
-![Updates page: What runs now v0.8.15 as a proven pair, the Guided upgrade card with its five steps and Update to v0.8.16, and the available versions with the channel filter, v0.8.16 recommended and the rolling build](../../assets/screenshots/admin/admin-updates.png)
+![Updates page: Versions and updates with EMS & Admin console v0.8.15 → v0.8.16 and Update to v0.8.16, Analytics database InfluxDB 2.7.11 up to date, How an upgrade runs and the proven pair, then the available versions with the channel filter, v0.8.16 recommended and the rolling build](../../assets/screenshots/admin/admin-updates.png)
 
-**Where:** **Updates** in the menu; the **Update** tile of the
-[assistant](assistant.md) and **Updates** on the Overview's **Versions** card
-lead here too.
+**Where:** **Updates** in the menu; a dot on it says an update waits — a
+release the last look at the versions proposed, or a newer InfluxDB the
+running release ships. The **Update** tile of the [assistant](assistant.md)
+and **Updates** on the Overview's **Versions** card lead here too.
 
 **What you see,** from the top:
 
-- **What runs now** — the Admin Console and EMS versions, and whether they are
-  one build: **Proven pair**, **Recorded pair**, **Not verified**, **Not a
-  pair** or **Change in progress**. Once an update has run, *Last update:
-  v0.8.16* names it. While an update is open, a coloured line at its foot
-  names it and says where it is, such as *Update to v0.8.16 · Checking the
-  version*, with a turning symbol while the device works.
+- **Versions and updates** — one line for each part, in the order to update
+  them, each with its one button:
+  - **EMS & Admin console** — the version that runs and, when a newer stable
+    release is recommended, **Update to …**. With nothing to install it says
+    **Up to date** and why.
+  - **Analytics database** — the bundled InfluxDB version and, when the
+    running release ships a newer one, **Upgrade to …** with *The update may
+    take a very long time. Do not restart the system while it runs.* It is
+    its own step, not part of the Guided Upgrade; see
+    [step 7](#7--update-the-bundled-influxdb).
+
+  **How an upgrade runs** opens the five things an update does. Below the
+  lines: whether the Admin Console and EMS are one build — **Proven pair**,
+  **Recorded pair**, **Not verified**, **Not a pair** or **Change in
+  progress**. Once an update has run, *Last update: v0.8.16* names it. While
+  an update is open, a coloured line at its foot names it and says where it
+  is, such as *Update to v0.8.16 · Checking the version*, with a turning
+  symbol while the device works.
 - **The update** you chose, once you chose one: its own card, right below
-  *What runs now*. Steps 2 to 6 happen in it.
-- **Guided upgrade** — the five things an update does, and **Update to …** for
-  the recommended version. The button gives way while an update is open.
+  *Versions and updates*. Steps 2 to 6 happen in it.
 - **Available versions** — *Recommended: v0.8.16*, then the versions grouped
   **Stable releases**, **Rolling build**, **Release candidates** and
   **Development builds**, each with its channel and a state such as **Newer**
@@ -67,17 +78,17 @@ you to choose. Only a fresh setup without any stable release starts from
 
 ### 2 — Choose a version
 
-![Update to v0.8.16 being checked: the line Update to v0.8.16 · Checking the version under What runs now, and the coloured bar Checking v0.8.16 with a turning symbol, Running for 0:47 and a line along its foot](../../assets/screenshots/admin/admin-upgrade-verifying.png)
+![Update to v0.8.16 being checked: the line Update to v0.8.16 · Checking the version under Versions and updates, and the coloured bar Checking v0.8.16 with a turning symbol, Running for 0:47 and a line along its foot](../../assets/screenshots/admin/admin-upgrade-verifying.png)
 
-**What you select:** **Update to v0.8.16** in the Guided upgrade card, or
-**Choose** on any version in the list.
+**What you select:** **Update to v0.8.16** on the **EMS & Admin console**
+line, or **Choose** on any version in the list.
 
 **What it changes:** nothing that runs on the device. The version is checked
 at once: the Admin Console and EMS images are downloaded if needed and
 verified as a pair, and the MQTT migration review is read with them.
 
 **What you see while it works:** the card *Update to v0.8.16* opens right
-below *What runs now*, and the page moves to it when it is out of view. A
+below *Versions and updates*, and the page moves to it when it is out of view. A
 coloured bar says *Checking v0.8.16*, with a turning symbol, a
 line moving along its foot and *Running for 0:47* counting up; with motion
 switched off under **Appearance**, the symbol and the line stand still. A
@@ -122,6 +133,9 @@ happens**, in order:
 | **Run the checks afterwards** | On | Confirms that EMS reads its devices and runs as it should |
 
 Installing the new EMS is not an option: it is what the update is.
+
+While the bundled InfluxDB is on, a line above the options says that a newer
+InfluxDB the new version ships follows afterwards as its own step.
 
 **Leave *Back up first* on.** It is what lets you go back. It runs under the
 Admin Console that runs *now*, before any part of the update changes it.
@@ -184,21 +198,84 @@ docker compose -f docker-compose.admin.yml up -d
 
 ### 6 — Confirm completion
 
-![Update complete: EMS and the Admin console now run v0.8.16, before v0.8.15, finished 15:30, took 2:12, the backup made first, with Open the dashboard and Done](../../assets/screenshots/admin/admin-upgrade-completed.png)
+![Update complete: EMS and the Admin console now run v0.8.16, before v0.8.15, finished 15:30, took 2:12, the backup made first, Next step: InfluxDB 2.9.1 with Update InfluxDB, then Open the dashboard and Done](../../assets/screenshots/admin/admin-upgrade-completed.png)
 
 **What you see:** **Update complete** — *EMS and the Admin console now run
 v0.8.16.* — with **Before**, **Now**, **Finished**, **Took** and **Backup made
 first**.
 
-**What you select:** **Open the dashboard** to see live values again, or
-**Done**.
+When the new release ships a newer InfluxDB, **Next step: InfluxDB …** says
+so, with *The update may take a very long time. Do not restart the system
+while it runs.* and **Update InfluxDB**, which asks *Upgrade InfluxDB to …?*
+as the **Analytics database** line does.
+
+**What you select:** **Open the dashboard** to see live values again,
+**Update InfluxDB** for the next step, or **Done**.
 
 **Expected result:** EMS runs the new build and the pair is recorded as known
-good. **What runs now** names the new version without a reload, and *Last
-update: v0.8.16* stays on the page afterwards.
+good. **Versions and updates** names the new version without a reload, and *Last
+update: v0.8.16* stays on the page afterwards; the InfluxDB step waits on the
+**Analytics database** line until you take it.
 
 **Verify for yourself:** the Overview shows the new version, and the
 [EMS Dashboard](../dashboard/index.md) shows live telemetry again.
+
+### 7 — Update the bundled InfluxDB
+
+**Where:** the **Analytics database** line under **Versions and updates**, or
+**Update InfluxDB** at the end of step 6. It is offered while the bundled
+analytics database is on and the running release ships a newer InfluxDB than
+the one that runs; the menu's **Updates** carries a dot meanwhile.
+
+**What you select:** **Upgrade to …**, then **Upgrade to …** again in *Upgrade
+InfluxDB to …?*.
+
+**What it changes,** in this order:
+
+1. checks that InfluxDB runs and lists its buckets and tasks with the EMS
+   token, and downloads the new image;
+2. makes a full InfluxDB backup and checks it — it stays under **Backups**.
+   If any of this fails, nothing is changed;
+3. names the new version in `docker-compose.yml` and starts InfluxDB on it.
+   The new version converts its data. **The update may take a very long time.
+   Do not restart the system while it runs.** When the start takes long, the
+   progress says *InfluxDB is still starting* and waits on; only an InfluxDB
+   that does not keep running stops it. If it never answers, **Stop waiting**
+   ends the run as not completed and leaves InfluxDB as it is; **Check again**
+   finishes it later once InfluxDB answers on the new version with every
+   bucket and task it held (the same ones, not ones made anew), and **Roll
+   back to …** is offered as well. Analytics pauses meanwhile, and EMS keeps
+   controlling;
+4. checks that InfluxDB runs the new version and still has every bucket and
+   task.
+
+**Not enough memory:** the new version loads all stored history again when it
+starts. When the device lacks the free memory for that, the line names the
+new version but offers no **Upgrade to …**; it says how much memory the
+upgrade needs and how much (memory and swap) is free. Switch on swap, shorten
+the retention under **Settings** (**Analytics / InfluxDB**), or move to a
+device with more memory first. On a device with 1 GB of memory, such as a
+Raspberry Pi 3, keep the default retention: longer periods make InfluxDB need
+more memory at every start, not only for the upgrade.
+
+**What you see:** the **InfluxDB version** card below the list with each step,
+then *InfluxDB is upgraded.*, the run and **Roll back to …**. The line says
+**Up to date**, and the dot on **Updates** goes out. A run that did not finish
+leaves the line on **Look at it** and a warning dot on **Updates** until
+**Check again** confirms the upgrade or **Roll back to …** undoes it.
+
+**The way back:** the older version cannot open the converted data, so it is
+**Roll back to …**: InfluxDB stops, its data directory is set aside as
+`data/influxdb-<version>-set-aside-<time>` (not deleted), the previous version
+starts empty, and the backup is restored into it. Readings recorded after the
+backup remain only in the set-aside directory, and those of the minutes the
+way back takes are lost. It is offered as long as `docker-compose.yml` still
+names the upgraded version and the backup is still there; nothing rolls back
+by itself. Before it changes anything, the way back checks the backup, the
+directories and the free space; when a later step fails, InfluxDB is put back
+as it was before it. An upgrade or a way back does not run beside **Restart
+EMS now**, **Repair analytics**, a restore, a Guided Upgrade or an Admin
+update.
 
 ## What happens in the background
 

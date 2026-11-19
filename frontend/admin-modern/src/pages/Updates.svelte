@@ -20,8 +20,11 @@
   import UpgradePanel from "../widgets/UpgradePanel.svelte";
   import AlignmentCard from "../widgets/AlignmentCard.svelte";
   import Spinner from "../widgets/Spinner.svelte";
+  import InfluxVersion from "../widgets/InfluxVersion.svelte";
+  import { askInflux, influxJob } from "../state/influxUpgrade.svelte.js";
+  import { influxNeedsAttention, influxSettled, influxView, stateWords } from "../lib/influxdb.js";
 
-  ensure("overview", "alignment", "releases", "lifecycle");
+  ensure("overview", "alignment", "releases", "lifecycle", "influxdb");
   keepWithOverview("alignment");
 
   const STEPS = ["backup", "config", "admin", "deploy", "check"];
@@ -44,7 +47,21 @@
   const recommended = $derived(releases.find((release) => release.recommended) || null);
   const note = $derived(recommendationNote(system.releases.data, releases));
   const running = $derived(activeUpgrade(system.alignment.data?.transition) || activeWorkflow(system.lifecycle.data)?.owner === "guided_upgrade");
-  const held = $derived(upgrade.busy || upgrade.holding || running);
+  const influx = $derived(influxView(system.influxdb.data));
+  const influxStale = $derived(Boolean(system.influxdb.error));
+  const influxDone = $derived(influxSettled(influx));
+  const influxUnfinished = $derived(influxNeedsAttention(influx));
+  const upgradeHeld = $derived(upgrade.busy || upgrade.holding || running);
+  /** The Guided Upgrade and an InfluxDB run hold off each other; the server refuses either while the other runs. */
+  const held = $derived(upgradeHeld || influxJob.running || influx?.state === "busy");
+  /** The release row offers the recommendation, never the version EMS already runs, even from a list read before the update. */
+  const offered = $derived(recommended?.selectable && !recommended.running && recommended.tag !== ems.version ? recommended : null);
+  const adminTag = $derived(overview?.components?.admin?.tag || pair?.admin?.release || "");
+
+  /** A listing just read is what the menu's hint follows; it is told so here. */
+  $effect(() => {
+    if (system.releases.loadedAt) untrack(() => reload("updates"));
+  });
 
   /** A run the server holds is shown here even when this page lost hold of it: closed, signed out, another tab's. */
   $effect(() => {
@@ -94,11 +111,58 @@
   {#if release.state}<Status tone={release.tone} text={t(`updates.state.${release.state}`)} />{/if}
 {/snippet}
 
-<Card icon="server" tone="c-inv" title={t("updates.current")} subtitle={t("updates.currentSub")} span="span-12">
-  <div class="facts two">
-    <div class="fact"><div class="fact-label">{t("version.admin")}</div><div class="fact-value num" class:na={!overview?.components?.admin?.tag && !pair?.admin?.release}>{overview?.components?.admin?.tag || pair?.admin?.release || t("version.unknown")}</div></div>
-    <div class="fact"><div class="fact-label">{t("version.ems")}</div><div class="fact-value num" class:na={!ems.version}>{ems.version || t("version.unknown")}</div></div>
-  </div>
+<Card icon="circle-arrow-up" tone="c-out" title={t("updates.versions")} subtitle={t("updates.versionsSub")} span="span-12">
+  <ol class="updates" data-testid="update-list">
+    <li class="update inner" data-testid="update-release">
+      <span class="icon-tile sm {offered ? 'c-out' : 'c-ok'}"><Icon name={offered ? "circle-arrow-up" : "circle-check"} /></span>
+      <div class="words">
+        <div class="name">
+          <strong>{t("updates.release.name")}</strong>{" "}<span class="num">{ems.version || t("version.unknown")}{#if offered}{" "}→ {offered.tag}{/if}</span>
+          {#if adminTag && ems.version && adminTag !== ems.version}<span class="muted num">{" "}· {t("version.admin")} {adminTag}</span>{/if}
+        </div>
+        {#if upgrade.stage !== "idle" || offered}
+          <p class="muted small">{t("updates.release.how")}</p>
+        {:else if note === "stable"}
+          <p class="muted small" data-testid="no-recommendation">{t("updates.noRecommendation")}</p>
+        {:else if note === "rolling"}
+          <p class="muted small" data-testid="rolling-no-recommendation">{t("updates.rollingNoRecommendation")}</p>
+        {:else}
+          <p class="muted small">{t("updates.chooseBelow")}</p>
+        {/if}
+      </div>
+      {#if upgrade.stage === "idle" && offered}
+        <button class="btn" type="button" onclick={() => choose(offered)} disabled={held} data-testid="start-upgrade"><Icon name="circle-arrow-up" size="sm" />{t("upgrade.start", { tag: offered.tag })}</button>
+      {:else if upgrade.stage === "idle" && note === "stable"}
+        <Status tone="c-ok" text={t("updates.upToDate")} />
+      {/if}
+    </li>
+    {#if influx?.shown}
+      <li class="update inner" data-testid="update-influxdb" data-state={influx.state}>
+        <span class="icon-tile sm {influx.canUpgrade ? 'c-out' : influxUnfinished || influx.state === 'low_memory' ? 'c-warn' : influxDone ? 'c-ok' : 'c-idle'}"><Icon name="database" /></span>
+        <div class="words">
+          <div class="name"><strong>{t("version.analytics")}</strong>{" "}<span class="num">{t("updates.influx.version", { version: influx.current || "—" })}{#if influx.offered}{" "}→ {influx.target}{/if}</span></div>
+          <p class="muted small">
+            {#if influx.canUpgrade}{t("influx.longRun")}{:else if influxUnfinished}{t("updates.influx.unfinished")}{:else}{t(`influx.state.${influx.state}`, stateWords(influx))}{/if}
+          </p>
+        </div>
+        {#if influx.canUpgrade}
+          <button class="btn" type="button" disabled={influxStale || influxJob.asking || influxJob.running || upgradeHeld} onclick={() => askInflux("upgrade")} data-testid="influx-upgrade">
+            <Icon name={influxJob.running && influxJob.kind === "upgrade" ? "loader" : "database"} size="sm" />{t("influx.upgrade", { version: influx.target })}
+          </button>
+        {:else if influxUnfinished}
+          <Status tone="c-warn" text={t("updates.attention")} />
+        {:else if influxDone}
+          <Status tone="c-ok" text={t("updates.upToDate")} />
+        {/if}
+      </li>
+    {/if}
+  </ol>
+  <details class="more">
+    <summary><Icon name="chevron-right" />{t("updates.howTitle")}</summary>
+    <ol class="how">
+      {#each STEPS as step (step)}<li><span class="icon-tile sm {STEP_LOOKS[step].tone}"><Icon name={STEP_LOOKS[step].icon} /></span><span>{t(`updates.step.${step}`)}</span></li>{/each}
+    </ol>
+  </details>
   {#if pairState}
     <p class="pair"><Status tone={pairState.tone} text={t(`updates.pair.${pairState.state}`)} /><span class="muted">{t("updates.pairHint")}</span></p>
   {/if}
@@ -114,26 +178,8 @@
 </Card>
 
 {#if upgrade.stage !== "idle"}<UpgradePanel />{/if}
+<InfluxVersion />
 <AlignmentCard />
-
-<Card icon="route" tone="c-out" title={t("updates.guidedTitle")} subtitle={t("updates.guidedSub")} span="span-12">
-  <ol class="how">
-    {#each STEPS as step (step)}<li><span class="icon-tile sm {STEP_LOOKS[step].tone}"><Icon name={STEP_LOOKS[step].icon} /></span><span>{t(`updates.step.${step}`)}</span></li>{/each}
-  </ol>
-  {#if upgrade.stage === "idle"}
-    <div class="row-wrap actions">
-      {#if recommended?.selectable && !recommended.running}
-        <button class="btn" type="button" onclick={() => choose(recommended)} disabled={held} data-testid="start-upgrade"><Icon name="circle-arrow-up" size="sm" />{t("upgrade.start", { tag: recommended.tag })}</button>
-      {:else if note === "stable"}
-        <p class="note" data-testid="no-recommendation"><Icon name="circle-check" />{t("updates.noRecommendation")}</p>
-      {:else if note === "rolling"}
-        <p class="note" data-testid="rolling-no-recommendation"><Icon name="info" />{t("updates.rollingNoRecommendation")}</p>
-      {:else}
-        <p class="muted small">{t("updates.chooseBelow")}</p>
-      {/if}
-    </div>
-  {/if}
-</Card>
 
 <Card icon="boxes" tone="c-out" title={t("updates.releases")} subtitle={recommended ? t("updates.recommendedIs", { tag: recommended.tag }) : t("updates.releasesSub")} span="span-12">
   {#snippet actions()}
@@ -196,13 +242,17 @@
   }
   .now :global(svg.i) { color: var(--c); }
   .now-title { font-weight: 620; }
-  .how { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13.5px; }
+  .updates { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s2); }
+  .update { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+  .update .words { flex: 1 1 260px; min-width: 0; }
+  .update .name { font-size: 13.5px; }
+  .update p { margin: 2px 0 0; }
+  .how { list-style: none; margin: var(--s3) 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13.5px; }
   .how li { display: flex; gap: 10px; align-items: center; }
   @container content (min-width: 820px) {
     .how { flex-direction: row; gap: var(--s4); }
     .how li { flex: 1 1 0; min-width: 0; flex-direction: column; align-items: flex-start; }
   }
-  .actions { margin-top: var(--s4); gap: var(--s2); align-items: center; }
   .releases { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s2); }
   .release { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; width: 100%; }
   .release.off { opacity: 0.6; }

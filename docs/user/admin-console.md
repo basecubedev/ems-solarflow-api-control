@@ -105,11 +105,13 @@ new system**, the Overview of an empty host and the System page open it. See
 
 ### Updates
 
-![Updates: What runs now v0.8.15 as a proven pair, the Guided upgrade card with Update to v0.8.16, and the available versions filtered by channel and grouped Stable releases and Rolling build](../assets/screenshots/admin/admin-updates.png)
+![Updates: Versions and updates with EMS & Admin console v0.8.15 → v0.8.16 and Update to v0.8.16, the analytics database's InfluxDB up to date, the proven pair, and the available versions filtered by channel and grouped Stable releases and Rolling build](../assets/screenshots/admin/admin-updates.png)
 
-**Updates** shows what runs now at the top, recommends a version and runs the
-guided upgrade: choosing a version checks it at once in a card right below,
-one confirmation starts it, and the page follows it to **Update complete**. See
+**Updates** lists at the top what can be updated, in order: EMS and the Admin
+Console with the recommended version, then the bundled InfluxDB, with an
+upgrade when the running release ships a newer one; a dot on **Updates** in
+the menu says one waits. Choosing a version checks it at once in a card right below, one
+confirmation starts it, and the page follows it to **Update complete**. See
 [Guided Upgrade](admin/guided-upgrade.md).
 
 ### Settings & devices

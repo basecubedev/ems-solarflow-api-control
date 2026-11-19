@@ -6,6 +6,8 @@
  * again, by the Guided Upgrade itself; this only shows its verdicts.
  */
 
+import { influxNeedsAttention, influxView } from "./influxdb.js";
+
 export const CHANNELS = Object.freeze(["stable", "rc", "latest", "development", "legacy", "unknown"]);
 export const UPGRADE_STATES = Object.freeze({
   upgrade_available: "c-ok",
@@ -159,4 +161,20 @@ export function recommendationNote(catalogue, releases) {
 export function releaseList(catalogue) {
   const releases = Array.isArray(catalogue?.releases) ? catalogue.releases : [];
   return releases.map((release) => releaseView(release, catalogue));
+}
+
+/**
+ * Whether an update waits: the release the last listing proposed
+ * (GET /api/admin/maintenance/updates, judged against what is installed) or a
+ * newer InfluxDB the running release ships, also one held back for want of
+ * memory. It lights the menu's Updates entry and decides nothing.
+ */
+export function updateWaits(known, influxPlan) {
+  return known?.release?.state === "available" || Boolean(influxView(influxPlan)?.offered);
+}
+
+/** The menu's mark for Updates: a warning while an InfluxDB run needs looking at, else whether an update waits. */
+export function updateMark(known, influxPlan) {
+  if (influxNeedsAttention(influxView(influxPlan))) return "warning";
+  return updateWaits(known, influxPlan) ? "info" : "";
 }
