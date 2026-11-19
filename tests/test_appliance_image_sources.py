@@ -251,6 +251,23 @@ def test_a_go_program_of_a_docker_package_is_recorded_with_its_modules():
     assert dockerd["settings"] == {"CGO_ENABLED": "1"} and dockerd["sha256"] == digest(binary)
 
 
+def test_the_docker_cli_built_from_its_own_source_is_recorded_too():
+    """Docker 29.10 builds docker-ce-cli from a source of that name, no longer from docker-ce's."""
+
+    binary = go_binary(["path\tgithub.com/docker/cli/cmd/docker", "mod\tgithub.com/docker/cli\t(devel)\t", "build\tCGO_ENABLED=0"])
+    root = docker_root(**{"/usr/bin/docker": binary})
+    root.files[sources.DPKG_STATUS] += (
+        "\nPackage: docker-ce-cli\nStatus: install ok installed\nVersion: 5:29.10.0-1~debian.13~trixie\n"
+        "Architecture: arm64\nMaintainer: Docker <support@docker.com>\n"
+    )
+    root.files[f"{sources.DPKG_INFO}/docker-ce-cli.list"] = "/.\n/usr/bin/docker\n"
+    request_ = sources.request_from_root(root, "rpi4")
+    cli = next(item for item in request_["packages"] if item["package"] == "docker-ce-cli")
+    assert (cli["source"], cli["source_version"]) == ("docker-ce-cli", "5:29.10.0-1~debian.13~trixie")
+    docker = next(item for item in request_["programs"] if item["path"] == "/usr/bin/docker")
+    assert (docker["package"], docker["package_path"]) == ("docker-ce-cli", "github.com/docker/cli/cmd/docker")
+
+
 def test_a_docker_package_whose_files_dpkg_does_not_list_is_refused():
     root = docker_root()
     del root.files[f"{sources.DPKG_INFO}/docker-ce.list"]
@@ -330,6 +347,16 @@ def test_a_source_found_nowhere_is_refused_by_name(tmp_path):
     packages = request()["packages"] + [package("ghost", "ghost", "9.9-1")]
     with pytest.raises(sources.SourceError, match="ghost 9.9-1"):
         run(tmp_path, [request(packages=packages)])
+
+
+def test_the_docker_cli_built_from_its_own_source_owes_none(tmp_path):
+    packages = request()["packages"] + [
+        package("docker-ce-cli", "docker-ce-cli", "5:29.10.0-1~debian.13~trixie", "Docker <support@docker.com>"),
+    ]
+    manifest, _, _ = run(tmp_path, [request(packages=packages)])
+    exempt = {item["source"]: item for item in manifest["without_source_duty"]}
+    assert sorted(exempt) == ["docker-ce", "docker-ce-cli"]
+    assert (exempt["docker-ce-cli"]["license"], exempt["docker-ce-cli"]["upstream"]) == ("Apache-2.0", "https://github.com/docker/cli")
 
 
 def test_a_package_named_like_dockers_but_maintained_by_someone_else_is_refused(tmp_path):
