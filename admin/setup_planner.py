@@ -619,11 +619,15 @@ DRAFT_FIELD_AUTHORITY = {
     "config_name": AUTHORITY_EXACT_PREVIEW,
     "display_name": AUTHORITY_EXACT_PREVIEW,
     "enabled": AUTHORITY_EXACT_PREVIEW,
+    "unit_id": AUTHORITY_EXACT_PREVIEW,
+    "credentials_ref": AUTHORITY_EXACT_PREVIEW,
+    "node_id": AUTHORITY_EXACT_PREVIEW,
     # Browser bookkeeping. Never read where the config is produced, so it
     # authorizes nothing and needs no authority of its own.
     "auto_added": AUTHORITY_PRESENTATION,
     "auto_selected": AUTHORITY_PRESENTATION,
     "connection_type": AUTHORITY_PRESENTATION,
+    "d0_topic_mode": AUTHORITY_PRESENTATION,
     "discovery_source": AUTHORITY_PRESENTATION,
     "manual": AUTHORITY_PRESENTATION,
 }
