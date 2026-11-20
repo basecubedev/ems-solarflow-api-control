@@ -101,6 +101,11 @@ def test_admin_installer_supports_bridge_mode():
     assert "--bridge" in text
     assert "127.0.0.1" in text
     assert "EMS_ADMIN_BIND" in text or "127.0.0.1:8090:8090" in text
+    bridge = text.split('if [ "$NETWORK" = "bridge" ]; then', 1)
+    assert len(bridge) == 2
+    assert '"host.docker.internal:host-gateway"' in text
+    assert 'EMS_ADMIN_EMS_HOST: "host.docker.internal"' in text
+    assert 'EMS_ADMIN_EMS_HOST: "127.0.0.1"' in text
 
 
 def test_admin_installer_accepts_hostnet_as_compat_noop():

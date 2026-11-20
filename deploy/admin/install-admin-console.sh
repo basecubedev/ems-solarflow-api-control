@@ -388,8 +388,11 @@ EOF
     network_mode: host
 EOF
     else
-        # Bridge networking: publish the UI on the chosen host address and port.
+        # Bridge networking: publish the UI on the chosen host address and port,
+        # and reach the EMS's published dashboard port through the host.
         cat <<EOF
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${BIND}:${PORT}:8090"
 EOF
@@ -420,6 +423,15 @@ EOF
     if [ "$MODE" = "deployment" ]; then
         cat <<EOF
       DOCKER_CONFIG: /tmp/docker
+EOF
+    fi
+    if [ "$NETWORK" = "bridge" ]; then
+        cat <<EOF
+      EMS_ADMIN_EMS_HOST: "host.docker.internal"
+EOF
+    else
+        cat <<EOF
+      EMS_ADMIN_EMS_HOST: "127.0.0.1"
 EOF
     fi
     # Optional parallel HTTPS listener; HTTP on 8090 always stays available.

@@ -49,25 +49,75 @@ the one the request names; the Admin never sets the file aside itself. A restore
 writes `runtime-state.json` wholesale, and a config it puts back voids a pending
 reset request.
 
-### Two front ends, one server
+### The front end: one app for the console and the dashboard
 
-The Admin server answers two browser front ends from `admin/static/`: Modern
-at `/`, a build of `frontend/admin-modern/` committed under
-`admin/static/modern/`, and the deprecated Classic at `/classic/` (`index.html`,
-`admin.js` at the static root). Both are static
-files behind the same headers below; both call the same API with the same
-session and CSRF token, and neither gains an endpoint or an authority the other
-lacks. Modern runs the maintenance writes it covers (container sync, analytics
-repair, diagnostics, backups and restore, workflow recovery, and the Guided
-Upgrade: validate, execute, resume, the job poll, the system-alignment
-recovery routes and the workflow switch) with exactly the bodies Classic sends,
-and runs Guided Setup and the settings editor itself. The server maps the
-addresses onto the two trees with `dashboard/static_files.py`
+The Admin server answers one browser front end at `/`, a build of
+`frontend/admin-modern/` committed under `admin/static/modern/`: static files
+behind the same headers below, calling the API with the session and its CSRF
+token. The app carries the EMS dashboard's pages as well (their components
+live in `frontend/dashboard-modern/`), so the product has one address.
+
+Those pages call the EMS's API on the console's own origin, and the console
+forwards it (`admin/ems_forwarding.py`):
+
+- **Which paths.** Exactly the ones the dashboard server dispatches,
+  `dashboard/api_paths.py`; `tests/test_ems_forwarding.py` walks
+  `dashboard/server.py` and `admin/server.py` and holds the list to the first
+  and apart from the second. The check runs before the console's own session
+  gate: a forwarded request needs no console session.
+- **No authority of its own.** The EMS checks its session cookie and CSRF token
+  as for a direct request. Headers pass by allow-list each way, every header
+  value comes back on one line, and the console's security headers go on every
+  answer. The browser never holds the EMS's session: the console keeps it
+  (`EmsSessions`) behind a link cookie of its own, `ems_console_link`, a fresh
+  random value at every sign-in (`HttpOnly`, `SameSite=Strict`, `Secure` on
+  HTTPS), hands the EMS its session cookie in the link's place, and ends the
+  link when the EMS ends the session. No other cookie passes either way. The
+  live stream (`/api/events`) is passed on as it arrives.
+- **Where the EMS is.** The `dashboard` port and HTTPS switch of the installed
+  `config.json`, read as the EMS reads them (`normalize_dashboard_config`,
+  `safe_bool`, `safe_int`), on this host's loopback: the console runs in the
+  host's network. A console in a Docker bridge network reaches the host at its
+  default gateway, or as `host.docker.internal` where `EMS_ADMIN_EMS_HOST` and a
+  `host-gateway` entry say so (the bridge compose files and the installer's
+  `--bridge` set both; an installation from before them is found through the
+  gateway). The gateway is tried only by a process in such a bridge network,
+  and taken only once it answered `/api/ui-config` as the EMS does (over HTTPS
+  with the EMS's own certificate): on the host's own network it is the LAN's
+  router, and a password forwarded there would leave the host. The
+  host-network compose files and the installer name the loopback outright. With HTTPS, the
+  dashboard's own certificate is the trust anchor. An
+  EMS that is not set up, whose dashboard is off, or that does not answer is
+  refused with `ems_not_configured`, `ems_dashboard_disabled` or
+  `ems_unreachable`, and the app shows that in place of the page.
+- **Which client.** The EMS counts sign-in attempts and live streams per
+  client; behind the console every request comes from the console. The console
+  names the client in `X-Forwarded-For` and proves it is the console with
+  `config/admin-forwarding.key` (`dashboard/forwarding.py`, created by the
+  console, readable by both, written whole and replaced when it holds no
+  key); without a matching key the EMS ignores the header.
+
+The EMS keeps its own copy of the dashboard at its port. The console writes the
+ports it listens on to `config/admin-console.json`
+(`dashboard/console_address.py`) while it listens on the host's network, and
+removes it while it listens on loopback only; in a bridge network its ports
+are not the host's, and it writes none. A console that stopped, or an older
+one put back that carries no dashboard, leaves the file behind, so the EMS
+reports the ports in `/api/ui-config` only while the console answers
+`/api/console` on them as one that carries the dashboard, asked at most every
+10 seconds (`ConsoleCheck`). The EMS reached it; the reader may not (a proxy,
+an IPv6 address, a firewall), so the dashboard page's `connect-src` names the
+console's address at the host the browser asked for, the page asks the
+console's `/api/console` itself, and only once that answered does it send the
+reader there, to the same page, after a few seconds, unless the reader stays;
+otherwise the address is offered. Both sides find the port the other publishes on this host's loopback
+first and at the container's default gateway after that
+(`dashboard/host_reach.py`), so an Admin or an EMS in a Docker bridge network
+finds the other without being told. The server maps the addresses with `dashboard/static_files.py`
 (`modern_asset_path`, `modern_redirect`), as the dashboard does: an old
-`/modern/...` address is sent to the same page at the root, never cached.
-Nothing is remembered; Modern's `fallback.js` sends an address that names a
-Classic page (`#setup`, `#maintenance-...`), `?ui=classic` and a browser
-without the Popover API to `/classic/` before the first paint; see the
+`/modern/...` address, and one of the removed Classic console under
+`/classic/`, is sent to the root, never cached. `fallback.js` sends a browser
+without the Popover API to `/unsupported.html` before the first paint; see the
 [Modern front ends style guide](../developer/dashboard-modern-style-guide.md).
 
 ## Standard deployment layout
@@ -190,7 +240,9 @@ exactly one local password per host, and no Admin-only password store.
   auto-deleted — the operator repairs or removes it on the EMS host.
 - **Shared password, separate sessions.** Admin and the Dashboard share the
   password but not the browser session: Admin uses its own `ems_admin_session`
-  cookie, so a Dashboard login does not grant Admin access and vice versa.
+  cookie, so a Dashboard login does not grant Admin access and vice versa. The
+  app's one sign-in sends the password to both servers in turn; each checks
+  it and sets its own cookie, and nothing passes from one session to the other.
 - **Standard web hardening.** Authenticated mutating endpoints require the
   session CSRF token (`X-CSRF-Token`); read-only endpoints require a valid
   session. Logins are rate limited. The password is never logged or returned to

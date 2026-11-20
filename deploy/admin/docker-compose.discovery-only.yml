@@ -37,9 +37,14 @@ services:
     # Bind published port to loopback so the scanner is not reachable off-host by
     # default. To scan the LAN from a Raspberry Pi, use the host-network
     # override documented in docker-compose.hostnet.yml.
+    # In this bridge network the Admin reaches the EMS's published dashboard
+    # port through the host, not on its own loopback.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${EMS_ADMIN_BIND:-127.0.0.1}:${EMS_ADMIN_PORT:-8090}:8090"
     environment:
+      EMS_ADMIN_EMS_HOST: "host.docker.internal"
       # Same-path mounting keeps install-context resolution consistent with the
       # deployment compose even though this restricted mode mounts no socket.
       EMS_INSTALL_DIR: "${EMS_INSTALL_DIR}"

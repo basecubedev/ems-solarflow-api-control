@@ -13,6 +13,8 @@ import argparse
 import os
 import threading
 
+from admin.ems_forwarding import shares_host_network
+from admin.install_context import detect_install_context
 from admin.https import (
     DEFAULT_ADMIN_HTTPS_PORT,
     DEFAULT_ADMIN_SSL_CERT_FILE,
@@ -27,9 +29,11 @@ from admin.server import (
     create_server,
     resume_pending_guided_upgrade,
 )
+from dashboard.console_address import console_address, publish_console_address
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8090
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
 
 
 def _env_bool(name, default=False):
@@ -105,7 +109,7 @@ def _print_startup(args, https_enabled):
 def main(argv=None):
     args = parse_args(argv)
 
-    if args.host not in ("127.0.0.1", "localhost", "::1"):
+    if args.host not in LOOPBACK_HOSTS:
         print(
             f"WARNING: binding admin server to {args.host}. Device discovery "
             "scans the local network — expose only on trusted local networks, "
@@ -123,6 +127,9 @@ def main(argv=None):
         runtime = create_admin_runtime()
     runtime.https_configured = bool(args.https)
     runtime.https_port = int(args.https_port)
+    publishing = not _env_bool("EMS_ADMIN_TEST_MODE")
+    if publishing and args.host not in LOOPBACK_HOSTS and shares_host_network():
+        runtime.console_address = console_address(args.port, int(args.https_port) if args.https else None)
 
     try:
         http_server = create_server(
@@ -168,6 +175,10 @@ def main(argv=None):
             raise SystemExit(f"could not enable admin HTTPS: {exc}")
 
     _print_startup(args, https_server is not None)
+    if publishing:
+        publish_console_address(
+            detect_install_context().config_path.parent, getattr(runtime, "console_address", None)
+        )
 
     threading.Thread(target=http_server.serve_forever, daemon=True).start()
     if https_server is not None:

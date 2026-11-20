@@ -22,6 +22,8 @@ from dashboard.auth import (
     resolve_auth_path,
     verify_password_file,
 )
+from dashboard.console_address import CONSOLE_ADDRESS_NAME, ConsoleCheck, read_console_address
+from dashboard.forwarding import FORWARDING_KEY_NAME, ForwardingKey, forwarded_client
 from dashboard.https import HANDSHAKE_TIMEOUT_SECONDS, wrap_listening_socket
 from dashboard.sqlite_store import SUPPORTED_RANGES
 from dashboard.static_files import SHARED_ROOT_FILES, build_static_asset_index, lookup_static_asset, modern_asset_path, modern_redirect
@@ -560,6 +562,46 @@ class SSEConnectionLimiter:
                 self.by_ip[remote_addr] = current - 1
 
 
+_HOSTNAME = re.compile(r"\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+")
+
+
+def _request_hostname(header):
+    """The host name of a ``Host`` header, without its port, or ``None`` when it is not a plain name or address."""
+
+    raw = header or ""
+    if "\r" in raw or "\n" in raw:
+        return None
+    text = raw.replace("\n", "").strip()
+    name = text[: text.index("]") + 1] if text.startswith("[") and "]" in text else text.split(":", 1)[0]
+    return name if _HOSTNAME.fullmatch(name) else None
+
+
+def _console_sources(handler):
+    """The console's origins at the host this browser asked for, while the EMS names the console.
+
+    The dashboard page may then ask the console itself whether this browser
+    reaches it, before it sends the reader there.
+    """
+
+    payload = getattr(handler, "_ui_config_payload", None)
+    console = payload().get("admin_console") if payload else None
+    host = _request_hostname(handler.headers.get("Host")) if getattr(handler, "headers", None) is not None else None
+    if not console or not host:
+        return ()
+    sources = [f"http://{host}:{console['port']}"]
+    if console.get("https_port"):
+        sources.append(f"https://{host}:{console['https_port']}")
+    return tuple(sources)
+
+
+def _request_client(handler):
+    """The client a limit counts: the address, or the one the Admin names with its key."""
+
+    remote = handler.client_address[0] if handler.client_address else "unknown"
+    key = getattr(handler.server, "forwarding_key", None)
+    return forwarded_client(getattr(handler, "headers", None) or {}, remote, key.read() if key else None)
+
+
 def _is_schedule_path(path):
     return path == "/api/schedule" or path.startswith("/api/schedule/")
 
@@ -604,6 +646,9 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         )
         self.auth_file = auth_file or resolve_auth_path(BASE_DIR)
         self.https_active = bool(https_active)
+        self.config_dir = os.path.dirname(os.fspath(config_path)) if config_path else os.path.dirname(os.fspath(self.auth_file))
+        self.forwarding_key = ForwardingKey(os.path.join(self.config_dir, FORWARDING_KEY_NAME))
+        self.console_check = ConsoleCheck()
         # Paths the diagnose endpoints use to build service args. runtime_state_path
         # falls back to the RuntimeState object's own path when not supplied.
         self.config_path = config_path
@@ -765,7 +810,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
         if parsed.path == "/api/ui-config":
             # Read-only UI bootstrap hints (no auth/control/runtime impact).
-            self._send_json({"animation_mode": self.server.animation_mode})
+            self._send_json(self._ui_config_payload())
             return
 
         if parsed.path == "/api/auth/status":
@@ -941,9 +986,11 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_security_headers(self):
+    def _send_security_headers(self, connect=()):
         self._security_headers_sent = True
         for key, value in SECURITY_HEADERS.items():
+            if key == "Content-Security-Policy" and connect:
+                value = value.replace("connect-src 'self'", "connect-src 'self' " + " ".join(connect))
             self.send_header(key, value)
 
     def _read_json_body(self):
@@ -989,7 +1036,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             return False
 
     def _handle_login(self):
-        remote = self.client_address[0] if self.client_address else "unknown"
+        remote = _request_client(self)
 
         body_error = self._json_body_preflight()
         if body_error:
@@ -1827,6 +1874,20 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
         return None
 
+    def _ui_config_payload(self):
+        """The page's start-up hints: the animation choice and where the Admin console answers.
+
+        The console is named only while it answers as a console that carries
+        the dashboard (``dashboard.console_address``).
+        """
+
+        config_dir = getattr(self.server, "config_dir", None)
+        console = read_console_address(os.path.join(config_dir, CONSOLE_ADDRESS_NAME)) if config_dir else None
+        check = getattr(self.server, "console_check", None)
+        if console is not None and (check is None or not check(console)):
+            console = None
+        return {"animation_mode": self.server.animation_mode, "admin_console": console}
+
     def _current_session(self):
         return self.server.sessions.get(
             self._session_cookie_value(),
@@ -1869,7 +1930,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         return "; ".join(parts)
 
     def _send_events(self):
-        remote = self.client_address[0] if self.client_address else "unknown"
+        remote = _request_client(self)
         if not self.server.sse_limiter.acquire(remote):
             self._send_json({"error": "sse_connection_limit"}, status=429)
             return
@@ -1937,16 +1998,17 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
 
+        connect = _console_sources(self) if content_type.startswith("text/html") else ()
         if _if_none_match_matches(self.headers.get("If-None-Match"), etag):
             self.send_response(304)
-            self._send_security_headers()
+            self._send_security_headers(connect)
             self.send_header("ETag", etag)
             self.send_header("Cache-Control", STATIC_CACHE_CONTROL)
             self.end_headers()
             return
 
         self.send_response(200)
-        self._send_security_headers()
+        self._send_security_headers(connect)
         self.send_header("Content-Type", content_type)
         self.send_header("ETag", etag)
         self.send_header("Cache-Control", STATIC_CACHE_CONTROL)

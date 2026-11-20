@@ -67,6 +67,14 @@ COPY admin/ ./admin/
 COPY mqtt_mapping/ ./mqtt_mapping/
 COPY dashboard/__init__.py ./dashboard/__init__.py
 COPY dashboard/static_files.py ./dashboard/static_files.py
+# The console serves the dashboard's pages too: it forwards the EMS's API paths
+# (api_paths, forwarding), tells the EMS where it answers (console_address) and
+# serves the chart library the dashboard pages load from the root.
+COPY dashboard/api_paths.py ./dashboard/api_paths.py
+COPY dashboard/forwarding.py ./dashboard/forwarding.py
+COPY dashboard/console_address.py ./dashboard/console_address.py
+COPY dashboard/host_reach.py ./dashboard/host_reach.py
+COPY dashboard/static/uPlot.iife.min.js dashboard/static/uPlot.min.css dashboard/static/uPlot.LICENSE ./dashboard/static/
 # Admin install-context detection reuses the central EMS path resolver, the
 # setup config UI reads the central config catalog, and the guided upgrade reuses
 # the EMS config upgrade/render helpers. The Admin backup/restore workflow drives
