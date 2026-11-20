@@ -225,6 +225,75 @@ test.describe("Modern Admin: the guided upgrade", { tag: ["@smoke", "@workflow"]
     await expect(confirm).toHaveCount(0);
   });
 
+  test("the InfluxDB upgrade offered as the next step runs where it was offered and ends there with the new version up to date", async ({ page, seedAdminScenario }) => {
+    await keepAdmin(page);
+    let phase: "offered" | "running" | "upgraded" = "offered";
+    let released = false;
+    const readBack = gate();
+    const INFLUX_STEPS = ["preflight", "inventory", "pull", "backup", "update_compose", "recreate", "verify"];
+    const influxSteps = (doneUntil: number) => INFLUX_STEPS.map((key, index) => ({ key, label: key, state: index < doneUntil ? "done" : index === doneUntil ? "running" : "pending", message: null }));
+    await page.route("**/api/admin/maintenance/influxdb", async (route) => {
+      const record = { state: "upgraded", from_image: "influxdb:2.7", to_image: "influxdb:2.9.1", backup: "ems-influxdb-manual-e2e.tar.gz", started_at: "2026-11-20T16:00:00Z", finished_at: "2026-11-20T16:01:00Z" };
+      if (phase === "upgraded") await readBack.opened;
+      const upgraded = phase === "upgraded";
+      await json(route, {
+        ok: true,
+        state: { offered: "available", running: "busy", upgraded: "current" }[phase],
+        current_image: upgraded ? "influxdb:2.9.1" : "influxdb:2.7",
+        target_image: "influxdb:2.9.1",
+        current_version: upgraded ? "2.9.1" : "2.7",
+        target_version: "2.9.1",
+        last: upgraded ? record : null,
+        rollback: upgraded ? { available: true, to_image: "influxdb:2.7", backup: record.backup, since: record.started_at } : null,
+      });
+    });
+    await openUpdates(page, seedAdminScenario);
+    await choose(page);
+    await page.route("**/api/admin/maintenance/upgrade/execute", async (route) => {
+      await json(route, { ok: true, job_id: "e2e-run", status: "running", steps: jobSteps(0), transition: transition("ems_operation_running") }, 202);
+    });
+    await page.route("**/api/admin/maintenance/upgrade/jobs/e2e-run", async (route) => {
+      await json(route, { ok: true, job_id: "e2e-run", status: "succeeded", steps: jobSteps(PLANNED.length), result: { ok: true, target_release: TARGET, warnings: [], steps: [] }, transition: transition("completed") });
+    });
+    await startAndConfirm(page);
+    await expect(page.getByTestId("upgrade-done")).toContainText("Update complete");
+    const next = page.getByTestId("upgrade-next-influx");
+    await expect(next).toContainText("Next step: InfluxDB 2.9.1");
+
+    await page.route("**/api/admin/maintenance/influxdb/upgrade", async (route) => {
+      phase = "running";
+      await json(route, { ok: true, job_id: "e2e-influxdb", status: "running", steps: influxSteps(0) }, 202);
+    });
+    await page.route("**/api/admin/maintenance/influxdb/jobs/e2e-influxdb", async (route) => {
+      if (!released) {
+        await json(route, { ok: true, job_id: "e2e-influxdb", status: "running", steps: influxSteps(3) });
+        return;
+      }
+      phase = "upgraded";
+      await json(route, { ok: true, job_id: "e2e-influxdb", status: "succeeded", steps: influxSteps(INFLUX_STEPS.length), result: { ok: true, status: "upgraded" } });
+    });
+    await page.getByTestId("upgrade-next-influx-go").click();
+    await page.getByRole("dialog", { name: "Upgrade InfluxDB to 2.9.1?" }).getByTestId("confirm").click();
+
+    await expect(next).toHaveAttribute("data-run", "running");
+    await expect(next).toContainText("Step 4 of 7 · Back up InfluxDB and check the backup");
+    await expect(next.locator(".status")).toHaveText("Upgrading");
+    await expect(page.getByTestId("upgrade-next-influx-go")).toHaveCount(0);
+
+    await expect(page.getByTestId("update-influxdb")).toHaveAttribute("data-state", "busy");
+    const followedToTheEnd = page.waitForRequest((request) => request.url().endsWith("/api/admin/maintenance/backups"));
+    released = true;
+    await followedToTheEnd;
+    await expect(next).toHaveAttribute("data-run", "running");
+    await expect(next).toContainText("Step 7 of 7");
+    readBack.open();
+    await expect(next).toHaveAttribute("data-run", "done");
+    await expect(next.locator("strong")).toHaveText("InfluxDB 2.9.1");
+    await expect(next).toContainText("InfluxDB is upgraded.");
+    await expect(next.locator(".status")).toHaveText("Up to date");
+    await expect(page.getByTestId("update-influxdb-version")).toHaveText("InfluxDB 2.9.1");
+  });
+
   test("an update that replaces the Admin console reconnects, asks to sign in to the new one and follows the run there", async ({ page, seedAdminScenario }) => {
     await openUpdates(page, seedAdminScenario);
     await choose(page);

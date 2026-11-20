@@ -5,13 +5,14 @@
   import Card from "../../../shared/ui/Card.svelte";
   import Icon from "../../../shared/ui/Icon.svelte";
   import Empty from "../../../shared/ui/Empty.svelte";
+  import Status from "../../../shared/ui/Status.svelte";
   import ConfirmDialog from "../../../shared/ui/ConfirmDialog.svelte";
   import StaleNote from "./StaleNote.svelte";
   import StepList from "./StepList.svelte";
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { system, ensure, reload } from "../state/system.svelte.js";
   import { askInflux, askStopWaiting, cancelInflux, confirmInflux, influxJob, recheckInflux } from "../state/influxUpgrade.svelte.js";
-  import { STEP_NOTES, influxCanRecheck, influxCardShown, influxView, stepView, stateWords } from "../lib/influxdb.js";
+  import { STEP_NOTES, influxCanRecheck, influxCardShown, influxOutcome, influxSettled, influxView, stepView, stateWords } from "../lib/influxdb.js";
   import { errorView } from "../lib/errors.js";
 
   const BUSY_POLL_MS = 15_000;
@@ -58,13 +59,11 @@
   );
 
   function outcomeOf(job) {
-    if (job.running) return null;
-    if (job.result) {
-      const done = job.result.ok === true;
-      return { tone: done ? "ok" : "warn", text: t(`influx.outcome.${job.kind}.${done ? "done" : "failed"}`), detail: job.result.message || "" };
-    }
-    if (job.error) return { tone: "warn", text: t(`influx.outcome.${job.kind}.failed`), ...detailOf(errorView(job.error, t)) };
-    return null;
+    const ended = influxOutcome(job);
+    if (!ended) return null;
+    const text = t(`influx.outcome.${ended.kind}.${ended.done ? "done" : "failed"}`);
+    if (job.result) return { tone: ended.done ? "ok" : "warn", text, detail: job.result.message || "" };
+    return { tone: "warn", text, ...detailOf(errorView(job.error, t)) };
   }
 
   function detailOf(error) {
@@ -87,7 +86,7 @@
     <StaleNote resource={system.influxdb} />
     {#if view}
       <div class="facts two">
-        <div class="fact"><div class="fact-label">{t("influx.runs")}</div><div class="fact-value num" class:na={!view.current} data-testid="influx-current">{view.current || "—"}</div></div>
+        <div class="fact"><div class="fact-label">{t("influx.runs")}</div><div class="fact-value with-status" class:na={!view.current}><span class="num" data-testid="influx-current">{view.current || "—"}</span>{#if !influxJob.running && influxSettled(view)}<Status tone="c-ok" text={t("updates.upToDate")} />{/if}</div></div>
         <div class="fact"><div class="fact-label">{t("influx.ships")}</div><div class="fact-value num" class:na={!view.target} data-testid="influx-target">{view.target || "—"}</div></div>
       </div>
       <p class="state" data-testid="influx-state" data-state={view.state}>
@@ -125,12 +124,6 @@
     {:else}
       <Empty text={t("common.loading")} icon="loader" />
     {/if}
-    {#if steps.length}<StepList {steps} label={t(`influx.progress.${influxJob.kind}`)} />{/if}
-    {#if slow}
-      <div class="row-wrap actions">
-        <button class="btn secondary" type="button" onclick={askStopWaiting} disabled={influxJob.stopping} data-testid="influx-stop-waiting"><Icon name={influxJob.stopping ? "loader" : "circle-x"} size="sm" />{t(influxJob.stopping ? "influx.stopping" : "influx.stopWaiting")}</button>
-      </div>
-    {/if}
     <div role="status" aria-live="polite">
       {#if influxJob.lost}<p class="note warn" data-testid="influx-lost"><Icon name="wifi-off" />{t("influx.lost")}</p>{/if}
       {#if influxJob.detached && view?.state === "busy"}<p class="note" data-testid="influx-detached"><Icon name="info" />{t("influx.detached")}</p>{/if}
@@ -142,6 +135,12 @@
         <p class="note {outcome.tone}" data-testid="influx-outcome"><Icon name={outcome.tone === "ok" ? "circle-check" : "triangle-alert"} /><span>{outcome.text}{#if outcome.detail}<span lang={outcome.lang ?? "en"}>{" "}{outcome.detail}</span>{/if}</span></p>
       {/if}
     </div>
+    {#if steps.length}<StepList {steps} label={t(`influx.progress.${influxJob.kind}`)} />{/if}
+    {#if slow}
+      <div class="row-wrap actions">
+        <button class="btn secondary" type="button" onclick={askStopWaiting} disabled={influxJob.stopping} data-testid="influx-stop-waiting"><Icon name={influxJob.stopping ? "loader" : "circle-x"} size="sm" />{t(influxJob.stopping ? "influx.stopping" : "influx.stopWaiting")}</button>
+      </div>
+    {/if}
   </Card>
 {/if}
 
@@ -184,4 +183,5 @@
   .state { margin: var(--s3) 0 0; font-size: 13.5px; }
   .small { font-size: 12.5px; overflow-wrap: anywhere; }
   .actions { margin-top: var(--s4); gap: var(--s2); }
+  .with-status { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
 </style>

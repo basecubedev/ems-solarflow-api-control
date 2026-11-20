@@ -206,7 +206,7 @@ test("no orphan keys: each key is used literally or belongs to a generated famil
     "nav.", "page.", "error.", "finding.", "install.", "container.status.", "health.path.", "health.pill.", "overview.verdict.",
     "overview.attention.", "overview.notes.", "backup.purpose.", "backups.scope.influxdb.", "step.state.", "control.status.", "control.short.", "control.transport.", "control.gate.", "control.writing.",
     "service.", "services.change.", "services.config.", "services.step.", "services.desired.", "services.status.",
-    "influx.state.", "influx.last.", "influx.progress.", "influx.outcome.", "influx.step.",
+    "influx.state.", "influx.last.", "influx.progress.", "influx.outcome.", "influx.step.", "influx.working.",
     "backup.type.", "backup.step.", "backup.file.", "backups.scope.", "workflow.owner.", "workflow.state.", "workflow.stale.",
     "diagnostics.check.", "diagnostics.status.", "diagnostics.mode.", "diagnostics.overall.", "diagnostics.count.",
     "updates.channel.", "updates.group.", "updates.state.", "updates.pair.", "updates.step.", "updates.showAll.", "updates.last.", "system.runtime.", "system.source.",

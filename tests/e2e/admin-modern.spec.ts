@@ -451,6 +451,42 @@ test.describe("Modern Admin: overview and status", { tag: ["@smoke"] }, () => {
     await expect(page.getByTestId("nav-mark-updates")).toHaveClass(/info/);
   });
 
+  test("an InfluxDB upgrade says in its own line which step runs, and there how it ended, with the new version up to date", async ({ page, seedAdminScenario }) => {
+    await openModern(page);
+    await seedAdminScenario("influxdb_upgrade_available");
+    let held = true;
+    await page.route("**/api/admin/maintenance/influxdb/jobs/*", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      if (held) {
+        body.status = "running";
+        body.steps = body.steps.map((step: Record<string, unknown>, index: number) => ({ ...step, state: index < 3 ? "done" : index === 3 ? "running" : "pending" }));
+        delete body.result;
+      }
+      await route.fulfill({ response, json: body });
+    });
+    await page.goto("/#/updates");
+    await page.reload();
+    const row = page.getByTestId("update-influxdb");
+    await expect(row).toHaveAttribute("data-state", "available");
+    await page.getByTestId("influx-upgrade").click();
+    await page.getByRole("dialog", { name: /Upgrade InfluxDB to/ }).getByTestId("confirm").click();
+
+    await expect(row).toHaveAttribute("data-run", "running");
+    await expect(row).toContainText("Step 4 of 7 · Back up InfluxDB and check the backup");
+    await expect(row.locator(".status")).toHaveText("Upgrading");
+    await expect(page.getByTestId("influx-upgrade")).toHaveCount(0);
+
+    held = false;
+    await expect(row).toHaveAttribute("data-run", "done");
+    await expect(row.getByTestId("influx-line-outcome")).toHaveText("InfluxDB is upgraded.");
+    await expect(page.getByTestId("update-influxdb-version")).toHaveText(/^InfluxDB 2\.\d+\.\d+$/);
+    await expect(row.locator(".status")).toHaveText("Up to date");
+    const running = page.locator(".fact", { has: page.getByTestId("influx-current") });
+    await expect(running.locator(".status")).toHaveText("Up to date");
+    await expect(page.getByTestId("influx-outcome")).toContainText("InfluxDB is upgraded.");
+  });
+
   test("an InfluxDB upgrade the device lacks the memory for is shown with its figures and not offered", async ({ page, seedAdminScenario }) => {
     await openModern(page);
     await seedAdminScenario("influxdb_upgrade_low_memory");
