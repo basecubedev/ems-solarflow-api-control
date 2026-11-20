@@ -343,6 +343,10 @@ main() {
     log "  docker compose exec ems python3 emsctl.py config init"
     log "For a Zendure SmartMeter D0, select \"Zendure Grid Meter via local HTTP\" (recommended)."
     log "Then restart EMS with: docker compose restart"
+    log ""
+    warn "Docker Bootstrap without the Admin console is deprecated. Install the Admin"
+    warn "console in this folder to set up, update and back up this installation:"
+    warn "  https://basecubedev.github.io/ems-solarflow-api-control/user/admin-console.html"
 }
 
 main
