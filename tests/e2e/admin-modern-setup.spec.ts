@@ -6,7 +6,7 @@
 // running Admin installs from its release archive).
 import { expect, test, ADMIN_PASSWORD } from "./fixtures/admin";
 import type { Page, Route } from "@playwright/test";
-import { SHELLY_METER, apiInverter } from "./helpers/discovery-state";
+import { SHELLY_METER, apiInverter, cloudInverter, setDiscoveryPriority } from "./helpers/discovery-state";
 
 
 async function openSetup(page: Page) {
@@ -71,6 +71,36 @@ test.describe("Modern Admin: guided setup, the System Build", { tag: ["@smoke", 
     await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem("ems-admin-setup-workflow") || "{}").workflow_id)).not.toBe(before);
   });
 });
+
+async function atSwitchableInverter(page: Page, seed: (state: Record<string, unknown>) => Promise<void>) {
+  await page.route("**/api/discovery/zendure-cloud-mqtt/settings", (route: Route) =>
+    route.fulfill({ json: { token_saved: true, broker: "mqtt.zen-iot.com", tls_mode: "system_ca" } }),
+  );
+  await page.goto("/#/status");
+  await page.fill("#admin-password", ADMIN_PASSWORD);
+  await page.getByTestId("sign-in-submit").click();
+  await expect(page.locator(".app")).toBeVisible();
+  await seed({ local_api_devices: [apiInverter("SNE2ESWITCH1", "192.168.100.78"), SHELLY_METER], cloud_devices: [cloudInverter("SNE2ESWITCH1")] });
+  await setDiscoveryPriority(page, ["local_api", "local_mqtt", "zendure_mqtt"]);
+  await page.goto("/#/setup");
+  await page.reload();
+  await page.getByTestId("setup-begin").click();
+  await expect(page.getByTestId("setup-release")).toBeVisible();
+  await confirmLatest(page);
+  await expect(page.getByTestId("setup-unified").locator("li[data-role='inverter']")).not.toHaveCount(0, { timeout: 60_000 });
+  await page.getByTestId("setup-next").click();
+  await expect(page.getByTestId("setup-step-config")).toHaveAttribute("aria-selected", "true");
+  const inverters = page.getByTestId("setup-inverters");
+  await expect(inverters.locator("[data-device]")).toHaveCount(1);
+  await expect(inverters).toContainText("API");
+  return inverters;
+}
+
+async function useOtherConnection(page: Page) {
+  const use = page.getByTestId("setup-use-connection").first();
+  if (!(await use.isVisible())) await page.getByTestId("setup-add-more").locator("summary").first().click();
+  await use.click();
+}
 
 async function confirmLatest(page: Page) {
   await choose(page, "latest");
@@ -142,6 +172,69 @@ test.describe("Modern Admin: guided setup, devices to start", { tag: ["@setup"] 
     await expect(page.getByTestId("setup-deployment")).toContainText("Saved");
   });
 
+  test("a check the server refuses for a stale device plan withdraws the check, and checks again only on a new plan", async ({ page, seedDiscoveryState }) => {
+    await openSetup(page);
+    await seedDiscoveryState({ local_api_devices: [SHELLY_METER, apiInverter("SNE2EMODERN1", "192.168.100.21")] });
+    await confirmLatest(page);
+    const order: string[] = [];
+    let refused = false;
+    await page.route("**/api/setup/config-preview", async (route: Route) => {
+      order.push("preview");
+      if (refused) return route.continue();
+      refused = true;
+      return route.fulfill({ status: 409, json: { ok: false, error: "stale_device_plan", message: "The device plan changed." } });
+    });
+    page.on("request", (request) => {
+      if (request.url().includes("/api/setup/device-plan") && request.method() === "POST") order.push("plan");
+    });
+    await page.getByTestId("setup-next").click();
+    await expect(page.getByTestId("setup-step-config")).toHaveAttribute("aria-selected", "true");
+    await expect.poll(() => order.filter((step) => step === "preview").length).toBeGreaterThan(0);
+    await expect(page.getByTestId("setup-next")).toBeDisabled();
+    const after = order.slice(order.indexOf("preview") + 1);
+    if (after.includes("preview")) expect(after.slice(0, after.indexOf("preview"))).toContain("plan");
+  });
+
+  test("an inverter moves to its other connection and stays switched off", async ({ page, seedDiscoveryState }) => {
+    test.setTimeout(90_000);
+    const inverters = await atSwitchableInverter(page, seedDiscoveryState);
+    await inverters.getByRole("button", { name: /^Inverter 1 / }).click();
+    await inverters.getByRole("checkbox", { name: "On" }).uncheck();
+    await expect(inverters.getByRole("checkbox", { name: "On" })).not.toBeChecked();
+    const planned = page.waitForResponse((response) => response.url().includes("/api/setup/device-plan") && Boolean(response.request().postData()?.includes('"switch"')));
+    await useOtherConnection(page);
+    await planned;
+    await expect(inverters.locator("[data-device]")).toHaveCount(1);
+    await expect(inverters).not.toContainText("API");
+    await inverters.getByRole("button", { name: /^Inverter 1 / }).click();
+    await expect(inverters.getByRole("checkbox", { name: "On" })).not.toBeChecked();
+  });
+
+  test("an inverter keeps its connection until the plan answers the switch, then moves and stays moved", async ({ page, seedDiscoveryState }) => {
+    test.setTimeout(90_000);
+    const inverters = await atSwitchableInverter(page, seedDiscoveryState);
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let asked = false;
+    await page.route("**/api/setup/device-plan", async (route: Route) => {
+      if (route.request().postData()?.includes('"switch"')) {
+        asked = true;
+        await held;
+      }
+      await route.continue();
+    });
+    await useOtherConnection(page);
+    await expect.poll(() => asked).toBe(true);
+    await expect(inverters).toContainText("API");
+    await expect(inverters.locator("[data-device]")).toHaveCount(1);
+    release();
+    await expect(inverters).not.toContainText("API", { timeout: 15_000 });
+    await expect(inverters.locator("[data-device]")).toHaveCount(1);
+    await page.reload();
+    await expect(page.getByTestId("setup-inverters").locator("[data-device]")).toHaveCount(1, { timeout: 15_000 });
+    await expect(page.getByTestId("setup-inverters")).not.toContainText("API");
+  });
+
   test("a removed inverter stays removed, and the draft can be cleared", async ({ page, seedDiscoveryState }) => {
     test.setTimeout(90_000);
     await openSetup(page);
@@ -208,7 +301,7 @@ test.describe("Modern Admin: guided setup, devices to start", { tag: ["@setup"] 
     await expect(page.getByTestId("setup-start-success")).toBeVisible();
     expect(resolved).toMatchObject({ container_name: "ems-solarflow", action: "remove_stopped_and_continue" });
     const href = await page.getByTestId("setup-start-success").getByRole("link").getAttribute("href");
-    expect(href).toMatch(/^http:\/\/[^/]+:8080\/$/);
+    expect(href).toBe("#/overview");
   });
 });
 

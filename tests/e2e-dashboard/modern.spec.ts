@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The Modern dashboard at the root, against the same preview server and the
-// same API as the deprecated Classic at /classic/. Never `waitUntil: "networkidle"`: /api/events stays open.
+// The Modern dashboard at the root, against the preview server.
+// Never `waitUntil: "networkidle"`: /api/events stays open.
 import { expect, test } from "@playwright/test";
 import { DOCS_SHOT_TIME, pinTheDay } from "./pin-the-day";
 
@@ -33,35 +33,78 @@ async function openModern(page, hash = "#/overview") {
 }
 
 test.describe("Modern dashboard @smoke", () => {
-  test("demo mode, ?ui=classic and a browser too old for Modern go to Classic", async ({ page }) => {
-    await page.goto("/?Demo=TRUE", { waitUntil: "domcontentloaded" });
-    await expect(page).toHaveURL(/\/classic\/\?Demo=TRUE$/);
-    await expect(page.locator("#themeSelect")).toBeVisible();
-    await page.goto("/?ui=classic", { waitUntil: "domcontentloaded" });
-    await expect(page).toHaveURL(/\/classic\/\?ui=classic$/);
-    await page.goto("/?demo=0", { waitUntil: "domcontentloaded" });
+  test("a browser too old for the dashboard is told so, and old addresses open the dashboard", async ({ page }) => {
+    await page.goto("/classic/?ui=classic", { waitUntil: "domcontentloaded" });
+    await expect(page).toHaveURL(/:\d+\/\?ui=classic$/);
     await expect(page.getByTestId("ems-state")).toBeVisible();
-    await expect(page).toHaveURL(/:\d+\/\?demo=0$/);
-
     await page.addInitScript(() => {
       delete HTMLElement.prototype.popover;
     });
     await page.goto("/", { waitUntil: "domcontentloaded" });
-    await expect(page).toHaveURL(/\/classic\/$/);
-    await expect(page.locator("#themeSelect")).toBeVisible();
+    await expect(page).toHaveURL(/\/unsupported\.html$/);
+    await expect(page.getByTestId("browser-too-old")).toContainText("Firefox 125");
   });
 
-  test("Modern answers at the root, Classic under /classic/ says it is deprecated, and each links to the other", async ({ page }) => {
-    await page.goto("/", { waitUntil: "domcontentloaded" });
+  test("with an Admin console, this address says where the app is and goes there, unless the reader stays", async ({ page, context, baseURL }) => {
+    await context.addCookies([{ name: "ems-preview-console", value: "8093", url: baseURL as string }]);
+    await page.route("http://127.0.0.1:8093/**", (route) => route.fulfill({ status: 200, contentType: "text/html", body: "<title>console</title>" }));
+    await page.goto("/#/energy", { waitUntil: "domcontentloaded" });
+    const notice = page.getByTestId("moved-notice");
+    await expect(notice).toContainText("http://127.0.0.1:8093");
+    await expect(page.getByTestId("moved-go")).toHaveAttribute("href", "http://127.0.0.1:8093/#/energy");
+    await expect(page.getByTestId("open-console")).toHaveAttribute("href", "http://127.0.0.1:8093/#/energy");
+    await page.waitForURL("http://127.0.0.1:8093/#/energy", { timeout: 15_000 });
+
+    await page.goto("/#/energy", { waitUntil: "domcontentloaded" });
+    await page.getByTestId("moved-stay").click();
+    await expect(page.getByTestId("moved-notice")).toHaveCount(0);
+    expect(await page.evaluate(() => localStorage.getItem("ems-modern.stayOnDashboard"))).toBe("1");
+    await page.reload({ waitUntil: "domcontentloaded" });
     await expect(page.getByTestId("ems-state")).toBeVisible();
-    await page.getByTestId("switch-classic").click();
-    await expect(page).toHaveURL(/\/classic\/$/);
-    await expect(page.locator("#classicNotice")).toContainText("deprecated");
-    await page.locator("#modernLink").click();
-    await expect(page).toHaveURL(/:\d+\/$/);
-    await expect(page.getByTestId("ems-state")).toBeVisible();
-    await page.goto("/", { waitUntil: "domcontentloaded" });
-    await expect(page.getByTestId("ems-state")).toBeVisible();
+    await expect(page.getByTestId("moved-notice")).toHaveCount(0);
+  });
+
+  test("a console the EMS names but this browser does not reach is offered, never opened by itself", async ({ page, context, baseURL }) => {
+    await context.addCookies([{ name: "ems-preview-console", value: "8094", url: baseURL as string }]);
+    await page.route("http://127.0.0.1:8094/**", (route) => route.abort("connectionrefused"));
+    await page.clock.install();
+    await page.goto("/#/energy", { waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("moved-go")).toHaveAttribute("href", "http://127.0.0.1:8094/#/energy");
+    await page.clock.fastForward(10_000);
+    await expect(page.getByTestId("moved-countdown")).toHaveCount(0);
+    expect(new URL(page.url()).port).not.toBe("8094");
+  });
+
+  test("a session is kept alive by the reader's activity, at most once a minute, only signed in, with its CSRF token", async ({ page }) => {
+    await page.clock.install();
+    let signedIn = true;
+    await page.route("**/api/auth/status", (route) => route.fulfill({ json: signedIn ? SIGNED_IN : { ...SIGNED_IN, authenticated: false, csrf_token: null } }));
+    const refreshes: (string | undefined)[] = [];
+    await page.route("**/api/auth/refresh", (route) => {
+      refreshes.push(route.request().headers()["x-csrf-token"]);
+      return route.fulfill({ json: SIGNED_IN });
+    });
+    await openModern(page);
+    await page.locator("main").click({ position: { x: 5, y: 5 } });
+    await page.locator("main").click({ position: { x: 6, y: 6 } });
+    await expect.poll(() => refreshes.length).toBe(1);
+    expect(refreshes[0]).toBe(SIGNED_IN.csrf_token);
+    await page.clock.fastForward(61_000);
+    await page.locator("main").click({ position: { x: 7, y: 7 } });
+    await expect.poll(() => refreshes.length).toBe(2);
+
+    signedIn = false;
+    await page.clock.fastForward(61_000);
+    await expect(page.getByTestId("sign-in")).toBeVisible();
+    await page.clock.fastForward(61_000);
+    await page.locator("main").click({ position: { x: 8, y: 8 } });
+    expect(refreshes).toHaveLength(2);
+  });
+
+  test("without an Admin console, the menu leads to installing one", async ({ page }) => {
+    await openModern(page);
+    await expect(page.getByTestId("moved-notice")).toHaveCount(0);
+    await expect(page.getByTestId("install-console")).toHaveAttribute("href", /\/user\/admin-console\.html$/);
   });
 
   test("a bookmark of the old Modern address opens the same page at the root", async ({ page }) => {

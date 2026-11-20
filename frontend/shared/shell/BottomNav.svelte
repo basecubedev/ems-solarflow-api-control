@@ -210,7 +210,7 @@
         {/each}
         {#if hasAbout}<a class="ghost-link" href={href("about")} onclick={() => (open = false)} data-testid="sheet-about"><Icon name="info" /><span>{t("nav.about")}</span></a>{/if}
         <button class="ghost-link" type="button" onclick={startEditing} data-testid="customize-bar"><Icon name="pencil" /><span>{t("nav.customize")}</span></button>
-        <button class="ghost-link" type="button" onclick={() => shell.classic(router.page)}><Icon name="arrow-left-right" /><span>{t("nav.classicSwitch")}</span></button>
+        {#if shell.classic}<button class="ghost-link" type="button" onclick={() => shell.classic(router.page)}><Icon name="arrow-left-right" /><span>{t("nav.classicSwitch")}</span></button>{/if}
       </div>
     {/if}
   </div>

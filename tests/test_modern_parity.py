@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Every API path a Classic front end calls is called by Modern or listed.
+"""Every API path the Appliance Manager's Classic calls is called by Modern or listed.
 
 The Modern Admin console once listed the release versions and could not
 install one, and no test noticed. docs/developer/modern-parity.md lists what
@@ -22,14 +22,6 @@ DOC = ROOT / "docs" / "developer" / "modern-parity.md"
 API_PATH = re.compile(r"[\"'`](/api/[A-Za-z0-9_\-/.?=&]*)")
 
 PRODUCTS = {
-    "admin": (
-        ["admin/static/admin.js"],
-        ["frontend/admin-modern/src", "frontend/shared"],
-    ),
-    "dashboard": (
-        ["dashboard/static/app.js", "dashboard/static/index.html"],
-        ["frontend/dashboard-modern/src", "frontend/shared"],
-    ),
     "appliance": (
         ["appliance/static/app.js"],
         ["frontend/appliance-modern/src", "frontend/shared"],
@@ -78,7 +70,3 @@ def test_every_classic_api_path_is_called_by_modern_or_listed(product):
         "Modern calls these now, or Classic no longer does: remove them from the "
         "registry in docs/developer/modern-parity.md"
     )
-
-
-def test_the_registry_is_found_for_the_console_that_has_gaps():
-    assert _registry("admin"), "the admin registry block is missing from the parity page"

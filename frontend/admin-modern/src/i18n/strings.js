@@ -13,10 +13,9 @@ const s = (en, de, nl, fr) => ({ en, de, nl, fr });
 
 export const STRINGS = {
   "app.name": s("EMS SolarFlow", "EMS SolarFlow", "EMS SolarFlow", "EMS SolarFlow"),
-  "app.sub": s("Admin console", "Verwaltung", "Beheer", "Console d’administration"),
+  "app.sub": s("Control your energy.", "Deine Energie im Griff.", "Grip op je energie.", "Maîtrisez votre énergie."),
   "app.reconnecting": s("The Admin console does not answer. Reconnecting…", "Die Verwaltung antwortet nicht. Verbindung wird wiederhergestellt …", "Het beheer antwoordt niet. Opnieuw verbinden…", "La console ne répond pas. Reconnexion…"),
 
-  "nav.overview": s("Overview", "Übersicht", "Overzicht", "Aperçu"),
   "nav.assistant": s("Assistant", "Assistent", "Assistent", "Assistant"),
   "nav.services": s("Services", "Dienste", "Diensten", "Services"),
   "nav.settings": s("Settings & devices", "Einstellungen & Geräte", "Instellingen & apparaten", "Réglages et appareils"),
@@ -25,6 +24,9 @@ export const STRINGS = {
   "nav.updates": s("Updates", "Updates", "Updates", "Mises à jour"),
   "nav.diagnostics": s("Diagnostics", "Diagnose", "Diagnose", "Diagnostic"),
   "nav.system": s("System", "System", "Systeem", "Système"),
+  "nav.status": s("Status", "Status", "Status", "État"),
+  "nav.group.dashboard": s("Dashboard", "Dashboard", "Dashboard", "Tableau de bord"),
+  "nav.group.admin": s("Admin", "Admin", "Admin", "Admin"),
   "nav.setup": s("Guided setup", "Geführte Einrichtung", "Begeleide installatie", "Installation guidée"),
   "page.setup.sub": s("Set up a new system, step by step", "Ein neues System Schritt für Schritt einrichten", "Een nieuw systeem stap voor stap instellen", "Installer un nouveau système, étape par étape"),
   "setup.steps": s("Setup steps", "Schritte der Einrichtung", "Stappen van de installatie", "Étapes de l’installation"),
@@ -569,13 +571,13 @@ export const STRINGS = {
   "setup.run.noServices": s("The services are listed once the deployment is planned.", "Die Dienste erscheinen, sobald die Bereitstellung geplant ist.", "De diensten verschijnen zodra de uitrol gepland is.", "Les services apparaissent une fois le déploiement planifié."),
   "nav.dashboard": s("Open the dashboard", "Dashboard öffnen", "Dashboard openen", "Ouvrir le tableau de bord"),
 
-  "page.overview.sub": s("Your installation at a glance and what needs doing", "Deine Installation auf einen Blick und was zu tun ist", "Je installatie in één oogopslag en wat er te doen is", "Votre installation d’un coup d’œil et ce qu’il reste à faire"),
+  "page.status.sub": s("Your installation at a glance and what needs doing", "Deine Installation auf einen Blick und was zu tun ist", "Je installatie in één oogopslag en wat er te doen is", "Votre installation d’un coup d’œil et ce qu’il reste à faire"),
   "page.assistant.sub": s("What is still to do, and the way to what you came for", "Was noch zu tun ist, und der Weg zu dem, was du vorhast", "Wat nog te doen is, en de weg naar wat je wilt doen", "Ce qu’il reste à faire, et le chemin vers ce que vous voulez faire"),
   "page.services.sub": s("State and restart of EMS and the analytics database", "Zustand und Neustart von EMS und Analysedatenbank", "Toestand en herstart van EMS en analysedatabase", "État et redémarrage de l’EMS et de la base d’analyse"),
   "page.settings.sub": s("Devices, features and the safety switches", "Geräte, Funktionen und die Sicherheitsschalter", "Apparaten, functies en de veiligheidsschakelaars", "Appareils, fonctions et interrupteurs de sécurité"),
   "page.backups.sub": s("Save your settings, or put an older copy back", "Einstellungen sichern oder eine ältere Kopie zurückholen", "Instellingen bewaren of een oudere kopie terugzetten", "Sauvegarder vos réglages ou restaurer une copie plus ancienne"),
   "page.updates.sub": s("Versions, and the guided upgrade", "Versionen und das geführte Upgrade", "Versies en de begeleide upgrade", "Versions et mise à niveau guidée"),
-  "page.diagnostics.sub": s("Read-only checks of the installed EMS", "Lesende Prüfungen des installierten EMS", "Alleen-lezen controles van het geïnstalleerde EMS", "Vérifications en lecture seule de l’EMS installé"),
+  "page.diagnostics.sub": s("Checks of the installation and the EMS's own diagnosis", "Prüfungen der Installation und die Diagnose des EMS", "Controles van de installatie en de eigen diagnose van het EMS", "Vérifications de l’installation et diagnostic propre de l’EMS"),
   "page.system.sub": s("Files, device telemetry and unfinished workflows", "Dateien, Geräte-Telemetrie und unfertige Abläufe", "Bestanden, apparaattelemetrie en onafgemaakte processen", "Fichiers, télémétrie des appareils et processus inachevés"),
 
   "auth.signedIn": s("Signed in", "Angemeldet", "Aangemeld", "Connecté"),
@@ -586,6 +588,13 @@ export const STRINGS = {
   "signIn.createTitle": s("Protect your Admin console", "Schütze deine Verwaltung", "Beveilig je beheer", "Protégez votre console"),
   "signIn.createLead": s("This password is shared with the EMS dashboard. It protects setup, maintenance, backups, restores and updates on this host.", "Dieses Passwort gilt auch für das EMS-Dashboard. Es schützt Einrichtung, Wartung, Sicherungen, Wiederherstellungen und Updates auf diesem Rechner.", "Dit wachtwoord geldt ook voor het EMS-dashboard. Het beschermt installatie, onderhoud, back-ups, herstel en updates op deze computer.", "Ce mot de passe est partagé avec le tableau de bord EMS. Il protège l’installation, la maintenance, les sauvegardes, les restaurations et les mises à jour sur cette machine."),
   "signIn.confirm": s("Repeat the password", "Passwort wiederholen", "Wachtwoord herhalen", "Répétez le mot de passe"),
+  "signIn.continue": s("Continue to the dashboard without signing in", "Ohne Anmeldung zum Dashboard", "Zonder aanmelden naar het dashboard", "Continuer vers le tableau de bord sans se connecter"),
+  "ems.ems_not_configured": s("The EMS is not set up yet. The assistant leads you through the setup.", "Das EMS ist noch nicht eingerichtet. Der Assistent führt dich durch die Einrichtung.", "Het EMS is nog niet ingesteld. De assistent leidt je door de installatie.", "L’EMS n’est pas encore configuré. L’assistant vous guide dans l’installation."),
+  "ems.ems_not_configured.next": s("Open the assistant", "Assistent öffnen", "Assistent openen", "Ouvrir l’assistant"),
+  "ems.ems_dashboard_disabled": s("The EMS runs with its dashboard switched off, so its pages show nothing here.", "Das EMS läuft mit ausgeschaltetem Dashboard, daher zeigen seine Seiten hier nichts.", "Het EMS draait met het dashboard uitgeschakeld, dus de pagina’s tonen hier niets.", "L’EMS fonctionne avec son tableau de bord désactivé ; ses pages n’affichent donc rien ici."),
+  "ems.ems_dashboard_disabled.next": s("Open the settings", "Einstellungen öffnen", "Instellingen openen", "Ouvrir les réglages"),
+  "ems.ems_unreachable": s("The EMS does not answer. It may be starting, or it is stopped.", "Das EMS antwortet nicht. Es startet vielleicht gerade, oder es ist gestoppt.", "Het EMS antwoordt niet. Het start misschien net, of het is gestopt.", "L’EMS ne répond pas. Il est peut-être en train de démarrer, ou il est arrêté."),
+  "ems.ems_unreachable.next": s("Open the services", "Dienste öffnen", "Diensten openen", "Ouvrir les services"),
   "signIn.create": s("Create password and continue", "Passwort anlegen und weiter", "Wachtwoord maken en verder", "Créer le mot de passe et continuer"),
   "signIn.failed": s("Sign-in failed. Try again.", "Anmeldung fehlgeschlagen. Versuche es erneut.", "Aanmelden mislukt. Probeer het opnieuw.", "Échec de la connexion. Réessayez."),
   "signIn.createFailed": s("The password could not be created.", "Das Passwort konnte nicht angelegt werden.", "Het wachtwoord kon niet worden gemaakt.", "Le mot de passe n’a pas pu être créé."),
@@ -767,7 +776,6 @@ export const STRINGS = {
   "assistant.task.check.text": s("Run read-only checks when something seems wrong.", "Lesende Prüfungen ausführen, wenn etwas nicht stimmt.", "Alleen-lezen controles uitvoeren als er iets niet klopt.", "Lancer des vérifications en lecture seule quand quelque chose semble anormal."),
   "assistant.task.reinstall.title": s("Set up again", "Neu einrichten", "Opnieuw installeren", "Réinstaller"),
   "assistant.task.reinstall.text": s("Run the guided setup over the running system. It replaces the settings, so make a backup first.", "Die geführte Einrichtung über dem laufenden System ausführen. Sie ersetzt die Einstellungen, lege also vorher eine Sicherung an.", "De begeleide installatie over het draaiende systeem uitvoeren. Ze vervangt de instellingen, maak dus eerst een back-up.", "Lancer l’installation guidée par-dessus le système en marche. Elle remplace les réglages : faites d’abord une sauvegarde."),
-  "assistant.keepHint": s("Kept in this browser. While nothing is installed, the console always opens here.", "Gilt für diesen Browser. Solange nichts installiert ist, öffnet die Verwaltung immer hier.", "Geldt voor deze browser. Zolang er niets is geïnstalleerd, opent het beheer altijd hier.", "Valable pour ce navigateur. Tant que rien n’est installé, la console s’ouvre toujours ici."),
 
   "overview.noneLead": s("Set up a new installation step by step, or restore one from a backup.", "Richte eine neue Installation Schritt für Schritt ein oder hole eine aus einer Sicherung zurück.", "Zet stap voor stap een nieuwe installatie op of zet er een terug uit een back-up.", "Installez pas à pas une nouvelle installation ou restaurez-en une depuis une sauvegarde."),
   "overview.startSetup": s("Set up a new system", "Neues System einrichten", "Nieuw systeem instellen", "Installer un nouveau système"),
@@ -791,6 +799,7 @@ export const STRINGS = {
   "overview.versionsSub": s("What runs on this host", "Was auf diesem Rechner läuft", "Wat er op deze computer draait", "Ce qui tourne sur cette machine"),
   "overview.openUpdates": s("Updates", "Updates", "Updates", "Mises à jour"),
   "overview.dashboard": s("EMS dashboard", "EMS-Dashboard", "EMS-dashboard", "Tableau de bord EMS"),
+  "overview.dashboardOwn": s("Also at the EMS's own address: {address}", "Auch unter der eigenen Adresse des EMS: {address}", "Ook op het eigen adres van het EMS: {address}", "Aussi à l’adresse propre de l’EMS : {address}"),
 
   "version.admin": s("Admin console", "Verwaltung", "Beheer", "Administration"),
   "version.ems": s("EMS", "EMS", "EMS", "EMS"),

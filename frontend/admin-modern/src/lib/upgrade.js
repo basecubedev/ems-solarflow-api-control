@@ -97,7 +97,7 @@ export function upgradeOptions(choices) {
 
 const DEVELOPMENT_TAG = /^dev-[a-z0-9](?:[a-z0-9._-]*[a-z0-9])?-[0-9a-f]{7,40}-[1-9][0-9]*-[1-9][0-9]*$/;
 
-/** A build that has not been released: the catalogue says so, or its tag is an immutable development tag (admin.js isImmutableDevelopmentBuildTag). */
+/** A build that has not been released: the catalogue says so, or its tag is an immutable development tag. */
 export function isDevelopment(release) {
   const tag = typeof release?.tag === "string" ? release.tag.trim() : "";
   return release?.channel === "development" || (tag.length <= 128 && DEVELOPMENT_TAG.test(tag));
@@ -121,7 +121,7 @@ export function executeBody({ release, choices, migrationRevision, fingerprint }
   return body;
 }
 
-/** A verification counts only with the server's yes and its fingerprint (admin.js upgradeValidationAccepted). */
+/** A verification counts only with the server's yes and its fingerprint. */
 export function verificationAccepted(data) {
   return Boolean(data && data.valid && data.upgrade_allowed !== false && typeof data.selection_fingerprint === "string" && data.selection_fingerprint);
 }
@@ -284,7 +284,7 @@ export function backupArchive(result) {
 
 export const RATE_LIMITED = Object.freeze(["system_build_registry_rate_limited", "image_pull_rate_limited"]);
 
-/** A run the registry turned away: nothing was changed, and waiting is the remedy (admin.js upgradeFailureReason). */
+/** A run the registry turned away: nothing was changed, and waiting is the remedy. */
 export function rateLimited(result) {
   if (typeof result?.reason === "string" && RATE_LIMITED.includes(result.reason)) return true;
   const steps = Array.isArray(result?.steps) ? result.steps : [];

@@ -17,6 +17,8 @@ import urllib.parse
 from html.parser import HTMLParser
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 SHARED = ROOT / "frontend" / "shared"
 TOKENS_CSS = SHARED / "styles" / "tokens.css"
@@ -156,6 +158,30 @@ def js_export(module, name):
     )
     assert result.returncode == 0, result.stderr[-2000:]
     return json.loads(result.stdout)
+
+
+def js_run(module, body):
+    """Run ``body`` in Node with ``module`` imported as ``m``; what it prints is read as JSON.
+
+    Skips the calling test when Node is not installed.
+    """
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is required to run the frontend module")
+    script = f"const m = await import({json.dumps(module.as_uri())});\n{body}"
+    result = subprocess.run(
+        [node, "--input-type=module", "-e", script], cwd=ROOT, capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    return json.loads(result.stdout)
+
+
+def js_call(module, name, *args):
+    """One exported function of a frontend module, called with JSON arguments; its result as JSON."""
+
+    call = f"m[{json.dumps(name)}](...{json.dumps(list(args))})"
+    return js_run(module, f"process.stdout.write(JSON.stringify({call}) ?? \"null\");")
 
 
 def assert_build_matches_source(config, committed, out, hint):

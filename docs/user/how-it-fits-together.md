@@ -2,9 +2,9 @@
 
 > **Video:** [How the System Fits Together](https://www.youtube.com/watch?v=b1bVZoxTOu0)
 
-EMS SolarFlow has grown into three pieces of software with three web pages.
-This page shows which one does what, how they are set up one after the other,
-and where your power is actually controlled.
+EMS SolarFlow is three pieces of software behind two web pages. This page
+shows which one does what, how they are set up one after the other, and where
+your power is actually controlled.
 
 ## The short version
 
@@ -14,13 +14,15 @@ and where your power is actually controlled.
   inverter's output.
 - **The Admin Console sets the EMS up and keeps it maintained.** Device
   discovery, the configuration, updates, backups. It does not run the control
-  loop.
+  loop. It is also the address you open: one app at `http://<host>:8090` with
+  the dashboard's pages under **Dashboard** and its own under **Admin**.
 - **The Appliance Manager looks after the Raspberry Pi**, and only exists on the
   [appliance image](appliance/index.md). Operating-system updates, network,
   SSH and backup access, and installing the Admin Console. It never touches
   EMS configuration or devices.
 
-All three ask for the same password.
+All three ask for the same password. Signing in to the app signs you in to
+the EMS's dashboard pages too; reading them needs no sign-in at all.
 
 ## The big picture
 
@@ -31,7 +33,7 @@ flowchart LR
         manager["Appliance Manager · port 8088<br/>Raspberry Pi appliance only<br/>OS updates, network, SSH"]
         subgraph docker["Docker"]
             direction TB
-            admin["Admin Console · port 8090<br/>setup, discovery, updates, backups"]
+            admin["Admin Console · port 8090<br/>the app: dashboard and admin pages"]
             config[/"config/config.json"/]
             ems["EMS + Dashboard · port 8080<br/>the control loop"]
             influx[("InfluxDB · optional<br/>long-range history")]
@@ -46,6 +48,7 @@ flowchart LR
 
     manager -- "installs, updates, repairs" --> admin
     admin -- "writes" --> config
+    admin -- "passes the dashboard's pages through" --> ems
     config -- "read at start" --> ems
     admin -. "deploys and upgrades" .-> ems
     ems --- influx
@@ -54,8 +57,15 @@ flowchart LR
 ```
 
 The thick arrow is the only connection that changes what your hardware does,
-and it belongs to the EMS. Each part has its own page in your browser, at the
-port shown.
+and it belongs to the EMS.
+
+You open one address, the Admin Console's at port 8090. Its dashboard pages
+read the EMS through the console: the console passes each request on and the
+EMS answers it, checking its own session for anything that writes, exactly as
+before. The EMS keeps its own dashboard at port 8080 as well: opened there, it
+says where the app now is and goes there after a few seconds, unless you
+choose to stay. It is the way in while the Admin Console is down, for example
+during its own update. The Appliance Manager keeps its own page at port 8088.
 
 On a machine you already run, there is no Appliance Manager: the
 [Admin Console](admin-console.md) is installed with one script and takes it from
@@ -105,8 +115,8 @@ you can see why the EMS chose exactly this value — see
 | | EMS + Dashboard | Admin Console | Appliance Manager |
 | --- | --- | --- | --- |
 | Runs as | Docker container `ems-solarflow-api-control` | Docker container `ems-solarflow-admin` | Two system services on the Raspberry Pi, outside Docker |
-| Address | `http://<host>:8080` | `http://<host>:8090` | `http://ems-solarflow.local:8088` |
-| Does | Controls the inverters, shows the live flow, devices, energy, history and diagnostics | Guided setup, device discovery, writes `config/config.json`, deploys and upgrades the EMS, maintenance, backup and restore | OS updates, its own updates, network and WLAN, SSH and backup access, installs, updates, repairs and rolls back the Admin Console |
+| Address | `http://<host>:8080`, which sends you on to the Admin Console | `http://<host>:8090`, the address you open | `http://ems-solarflow.local:8088` |
+| Does | Controls the inverters; answers the live flow, devices, energy, history and diagnostics the dashboard pages show | Serves the app with the dashboard's pages; guided setup, device discovery, writes `config/config.json`, deploys and upgrades the EMS, maintenance, backup and restore | OS updates, its own updates, network and WLAN, SSH and backup access, installs, updates, repairs and rolls back the Admin Console |
 | Does not | — | Run the control loop or set an inverter's output | Edit EMS configuration, discover devices, or change the EMS container |
 | Needed for control | **Yes** | No | No |
 
@@ -144,14 +154,15 @@ sequenceDiagram
 
 On a machine you already run, step 1 is one command instead: the
 [Admin Console install script](admin-console.md). Steps 2 and 3 are identical.
-[Docker Bootstrap](docker-bootstrap.md) skips the Admin Console altogether and
-starts the EMS from the shell.
+[Docker Bootstrap](docker-bootstrap.md), which starts the EMS from the shell
+without the Admin Console, is deprecated; such an installation keeps its
+dashboard at port 8080 and can move to the Admin Console where it stands.
 
 ## What keeps running when something stops
 
 | What stops | What happens to control |
 | --- | --- |
-| The Admin Console | Nothing. The EMS keeps controlling. |
+| The Admin Console | Nothing. The EMS keeps controlling, and its own dashboard answers at port 8080. |
 | The Appliance Manager, for example during its own update | Nothing. The EMS keeps controlling. |
 | The EMS | Control stops. The inverters keep the last output limit they were given until the EMS is back. |
 | The whole machine, for example a reboot after an OS update | As above: the last output limit stays in force. See [while the appliance is down](appliance/overview.md#while-the-appliance-is-down). |
@@ -165,11 +176,11 @@ each one waits for your confirmation.
 
 | I want to … | Go to |
 | --- | --- |
-| See what my system is doing right now | Dashboard (`:8080`) |
-| Understand why the EMS wrote a value | Dashboard → **Control** |
-| Add, change or remove a device | Admin Console (`:8090`) → **Settings & devices** → **Devices** |
-| Update EMS and Admin | Admin Console → **Updates** → **Update to …** |
-| Back up or restore the EMS | Admin Console → **Backups** |
+| See what my system is doing right now | `:8090` → **Dashboard** → **Overview** |
+| Understand why the EMS wrote a value | **Dashboard** → **Control** |
+| Add, change or remove a device | **Admin** → **Settings & devices** → **Devices** |
+| Update EMS and Admin | **Admin** → **Updates** → **Update to …** |
+| Back up or restore the EMS | **Admin** → **Backups** |
 | Update the operating system or the Appliance Manager | Appliance Manager (`:8088`) → **Updates** |
 | Install, update, repair or roll back the Admin Console | Appliance Manager → **EMS Admin** |
 | Change the network or WLAN of the Pi | Appliance Manager → **Network** |

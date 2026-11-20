@@ -426,3 +426,46 @@ def test_the_three_axes_are_stored_apart():
     whole arrangement exists for."""
 
     assert len({STORAGE_KEY, STYLE_STORAGE_KEY, DENSITY_STORAGE_KEY}) == 3
+
+
+GROUPING_AT_RULES = ("@media", "@supports", "@container", "@layer", "@document")
+
+
+def _orphaned_css_text(css):
+    """Text a parser drops: declarations or stray ``;`` sitting outside any rule."""
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    css = re.sub(r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'", '""', css)
+    orphans = []
+    stack = ["group"]
+    prelude = ""
+    for char in css:
+        if stack[-1] != "group":
+            if char == "{":
+                stack.append("rule")
+            elif char == "}":
+                stack.pop()
+                prelude = ""
+            continue
+        if char == "{":
+            head = prelude.strip()
+            if ";" in head:
+                orphans.append(head)
+            stack.append("group" if head.startswith(GROUPING_AT_RULES) else "rule")
+            prelude = ""
+        elif char == "}":
+            if prelude.strip():
+                orphans.append(prelude.strip())
+            stack.pop()
+            prelude = ""
+        elif char == ";":
+            if not prelude.strip().startswith("@"):
+                orphans.append(prelude.strip() + ";")
+            prelude = ""
+        else:
+            prelude += char
+    return orphans
+
+
+def test_the_stylesheet_carries_no_declaration_outside_a_rule():
+    css = (ROOT / "appliance/static/styles.css").read_text(encoding="utf-8")
+    assert _orphaned_css_text(css) == []

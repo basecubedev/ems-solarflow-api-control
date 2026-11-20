@@ -36,7 +36,9 @@
       value={prefs.motion} label={t("appearance.motion")} onchange={(v) => setPref("motion", v)} />
   </div>
   {#if prefs.serverAnimation === "off"}<p class="note"><Icon name="info" />{t("appearance.motionServerOff")}</p>{/if}
-  <button class="ghost-link" type="button" onclick={() => shell.classic(shell.nav.router.page)}>
-    <Icon name="arrow-left-right" /><span>{t("nav.classicSwitch")}</span>
-  </button>
+  {#if shell.classic}
+    <button class="ghost-link" type="button" onclick={() => shell.classic(shell.nav.router.page)}>
+      <Icon name="arrow-left-right" /><span>{t("nav.classicSwitch")}</span>
+    </button>
+  {/if}
 </div>

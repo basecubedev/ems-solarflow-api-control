@@ -1,12 +1,11 @@
 # SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Contracts of the Modern dashboard, at ``/`` beside the deprecated Classic at ``/classic/``.
+"""Contracts of the Modern dashboard at ``/``, where the removed Classic dashboard's ``/classic/`` addresses lead.
 
 Modern is a build output committed under ``dashboard/static/modern/``. These
-tests hold that output to the rules the hand-written Classic page follows by
-construction: the server's CSP (no inline script or style), the shared energy
-colours, the flow renderer's no-CSS-animation invariant, and a licence
-inventory that names every package the bundle carries.
+tests hold that output to the server's CSP (no inline script or style), the
+shared energy colours, the flow renderer's no-CSS-animation invariant, and a
+licence inventory that names every package the bundle carries.
 """
 
 import http.client
@@ -39,11 +38,16 @@ ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "dashboard" / "static"
 MODERN = STATIC / "modern"
 SOURCE = ROOT / "frontend" / "dashboard-modern"
-CLASSIC_CSS = STATIC / "styles.css"
 MODERN_CSS = MODERN / "assets" / "modern.css"
 MODERN_JS = MODERN / "assets" / "modern.js"
 
-SHARED_ENERGY_TOKENS = ("--pv", "--battery", "--output", "--grid", "--danger")
+SHARED_ENERGY_COLOURS = {
+    "--pv": "#ffd166",
+    "--battery": "#39e58c",
+    "--output": "#38d5ff",
+    "--grid": "#d87cff",
+    "--danger": "#ff6b7a",
+}
 
 
 class StoreStub:
@@ -70,20 +74,20 @@ def _served(assets, path):
     return lookup_static_asset(assets, asset_path) if asset_path else None
 
 
-def test_modern_answers_at_the_root_and_classic_under_classic():
+def test_modern_answers_at_the_root_and_nothing_under_classic():
     assets = build_static_asset_index(str(STATIC))
     for path in ("/", "/index.html"):
         full_path, content_type = _served(assets, path)
         assert full_path.endswith("modern/index.html")
         assert content_type.startswith("text/html")
-    assert _served(assets, "/classic/")[0].endswith("static/index.html")
-    assert _served(assets, "/classic/app.js")[0].endswith("static/app.js")
+    assert _served(assets, "/classic/") is None
+    assert _served(assets, "/classic/app.js") is None
     assert _served(assets, "/uPlot.iife.min.js")[0].endswith("static/uPlot.iife.min.js")
     assert _served(assets, "/app.js") is None
     assert _served(assets, "/classic/modern/index.html") is None
     assert _served(assets, "/classic/./modern/index.html") is None
     assert _served(assets, "/classic//modern/index.html") is None
-    assert _served(assets, "/classic/./app.js")[0].endswith("static/app.js")
+    assert _served(assets, "/classic/./app.js") is None
     assert _served(assets, "/../../server.py") is None
     assert _served(assets, "/classic/../../server.py") is None
     assert _served(assets, "/nowhere/") is None
@@ -93,7 +97,11 @@ def test_the_old_addresses_move_to_the_new_ones():
     assert modern_redirect("/modern") == "/"
     assert modern_redirect("/modern/") == "/"
     assert modern_redirect("/modern/assets/modern.js") == "/assets/modern.js"
-    assert modern_redirect("/classic") == "/classic/"
+    assert modern_redirect("/classic") == "/"
+    assert modern_redirect("/classic/") == "/"
+    assert modern_redirect("/classic/app.js") == "/"
+    assert modern_redirect("/classic/", "demo=1") == "/?demo=1"
+    assert modern_redirect("/classical") is None
     assert modern_redirect("/modernity") is None
     assert modern_redirect("/") is None
     assert modern_redirect("/modern/", "demo=1") == "/?demo=1"
@@ -148,18 +156,9 @@ def test_the_tab_icon_is_the_mark_in_the_token_colours():
 
 
 def test_the_shared_energy_colours_have_the_contract_values():
-    classic = root_block(CLASSIC_CSS.read_text(encoding="utf-8"))
     modern = root_block(TOKENS_CSS.read_text(encoding="utf-8"))
-    for token in SHARED_ENERGY_TOKENS:
-        assert modern[token].strip().lower() == classic[token].strip().lower(), token
-
-
-def test_the_soc_is_drawn_in_the_colour_classic_draws_it_in():
-    classic_token = re.search(r'soc:\s*\{[^}]*colorVar:\s*"([^"]+)"', (STATIC / "app.js").read_text(encoding="utf-8")).group(1)
-    classic = root_block(CLASSIC_CSS.read_text(encoding="utf-8"))
-    modern = root_block(TOKENS_CSS.read_text(encoding="utf-8"))
-    assert re.search(r'soc: \{ token: "--soc"', (SOURCE / "src" / "lib" / "analytics.js").read_text(encoding="utf-8"))
-    assert modern["--soc"].strip().lower() == classic[classic_token].strip().lower()
+    for token, value in SHARED_ENERGY_COLOURS.items():
+        assert modern[token].strip().lower() == value, token
 
 
 def test_no_colour_literal_outside_the_token_blocks():

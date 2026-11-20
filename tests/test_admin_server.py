@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Admin discovery HTTP server / API tests (no real network scans)."""
 
+import http.client
 import json
 import re
 import threading
@@ -172,20 +173,26 @@ def _setup_build_authority(srv, base, *, confirm=False):
 def test_root_serves_html(server):
     with urllib.request.urlopen(f"{server}/") as resp:
         assert resp.status == 200
-        assert b'<div id="app">' in resp.read()
-    with urllib.request.urlopen(f"{server}/classic/") as resp:
-        assert resp.status == 200
         assert resp.headers["Content-Type"].startswith("text/html")
         assert resp.headers["X-Content-Type-Options"] == "nosniff"
-        body = resp.read().decode("utf-8")
-        assert "EMS SolarFlow Admin" in body
-        assert "Set up a new EMS installation, or manage the one already" in body
+        assert b'<div id="app">' in resp.read()
+    host, port = server.removeprefix("http://").split(":")
+    conn = http.client.HTTPConnection(host, int(port), timeout=5)
+    try:
+        conn.request("GET", "/classic/")
+        resp = conn.getresponse()
+        resp.read()
+        assert resp.status == 302
+        assert resp.getheader("Location") == "/"
+        assert resp.getheader("Cache-Control") == "no-store"
+    finally:
+        conn.close()
 
 
 def test_static_assets_have_content_types(server):
-    with urllib.request.urlopen(f"{server}/classic/admin.css") as resp:
+    with urllib.request.urlopen(f"{server}/assets/admin.css") as resp:
         assert resp.headers["Content-Type"].startswith("text/css")
-    with urllib.request.urlopen(f"{server}/classic/admin.js") as resp:
+    with urllib.request.urlopen(f"{server}/assets/admin.js") as resp:
         assert resp.headers["Content-Type"].startswith("application/javascript")
 
 

@@ -74,7 +74,7 @@ into the sign-in; use that instead.
 
 ### 3 — Sign in
 
-![Sign in card asking for the EMS dashboard password, with the Sign in button, the language choice and the Classic view link](../../assets/screenshots/admin/admin-login.png)
+![Sign in card asking for the EMS dashboard password, with the Sign in button and the language choice](../../assets/screenshots/admin/admin-login.png)
 
 **What you see:** *Sign in* — *Use your EMS dashboard password.*
 
@@ -196,9 +196,9 @@ described in [Guided setup](guided-setup.md#recovery-or-next-steps) and
 - **Bridge mode makes discovery less reliable.** If you installed with
   `--bridge`, a LAN scan may only see Docker networks; enter your LAN range by
   hand.
-- **An older browser opens Classic.** A browser older than the ones listed
-  under *Prerequisites* is sent to the deprecated Classic console at
-  `/classic/`; see [the Classic console](index.md#the-deprecated-classic-console).
+- **An older browser cannot open the console.** A browser older than the ones
+  listed under *Prerequisites* shows a page that says so; see
+  [Browsers and old addresses](index.md#browsers-and-old-addresses).
 
 ## Recovery or next steps
 

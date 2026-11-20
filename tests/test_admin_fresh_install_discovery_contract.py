@@ -19,7 +19,6 @@ before the source refreshes).
 
 import base64
 import json
-import os
 import threading
 import time
 from dataclasses import dataclass
@@ -931,37 +930,3 @@ def test_fresh_install_discovery_never_exposes_secrets(harness_factory):
     blob = json.dumps(connections)
     for marker in SECRET_MARKERS:
         assert marker not in blob
-
-
-# --- UI orchestration --------------------------------------------------------
-
-
-STATIC_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "admin", "static"
-)
-
-
-def test_fresh_install_run_button_delegates_refresh_to_the_backend():
-    """The UI runs only the backend orchestration; no parallel discovery logic.
-
-    ``runUnifiedDiscovery`` keeps the LAN scan (which finishes first by design)
-    and then triggers exactly the orchestrated run — it must not re-implement
-    the per-source refresh fan-out that the backend already owns.
-    """
-
-    with open(os.path.join(STATIC_DIR, "admin.js"), encoding="utf-8") as handle:
-        js = handle.read()
-    assert "async function runUnifiedDiscovery" in js
-    body = js.split("async function runUnifiedDiscovery", 1)[1].split("\n}", 1)[0]
-    assert "refresh: true" in body or "refreshUnifiedDevices(true)" in body, (
-        "the fresh-install run must request the backend source refresh"
-    )
-    for forbidden in (
-        "refreshMdns()",
-        "refreshMqttBrokers()",
-        "refreshZendureCloudDiscovery()",
-    ):
-        assert forbidden not in body, (
-            "per-source refresh orchestration must live in the backend, "
-            f"not in runUnifiedDiscovery ({forbidden})"
-        )

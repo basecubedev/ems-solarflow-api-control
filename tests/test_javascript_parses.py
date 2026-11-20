@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Every tracked JavaScript file parses.
 
-CI compiles all of the Python (`compileall`) and parses exactly one JavaScript
-file (`node --check admin/static/admin.js`). Everything else written in the
-language -- two more frontends, and the Playwright drivers and probes the
-performance work added -- was never parsed by anything. A syntax error in a
+CI compiles all of the Python (`compileall`) and parsed one JavaScript file,
+the removed Classic Admin console. Everything else written in the language --
+the other frontends, and the Playwright drivers and probes the performance work
+added -- was never parsed by anything. A syntax error in a
 benchmark driver ships and is found by whoever next runs a benchmark; a syntax
 error in a frontend is caught only where a test happens to `require` it.
 
@@ -62,5 +62,5 @@ def test_the_listing_is_not_silently_empty():
 
     paths = tracked_javascript()
     assert len(paths) > 20, paths
-    assert "dashboard/static/app.js" in paths
-    assert "scripts/dashboard_profile/profile_driver.mjs" in paths
+    assert "frontend/dashboard-modern/src/main.js" in paths
+    assert "frontend/shared/unsupported/fallback.js" in paths

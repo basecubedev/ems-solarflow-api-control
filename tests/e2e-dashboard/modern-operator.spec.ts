@@ -483,6 +483,77 @@ test.describe("Modern dashboard operator: schedule @smoke", () => {
       expect(times).toEqual([...times].sort((a, b) => a - b));
       expect(points.map((point) => point.name).slice(0, 2)).toEqual(["Morning cap", "Evening cap"]);
     });
+
+    test("rule times are named as the EMS's when the browser's clock is in another zone", async ({ page }) => {
+      await openSignedIn(page, "#/schedule");
+      await expect(page.locator(".note").filter({ hasText: "rule times are the EMS's" })).toHaveText(
+        /The EMS runs on Europe\/Berlin \(UTC\+0[12]:00\), this browser on UTC−0[45]:00: rule times are the EMS's/,
+      );
+    });
+
+    test("a one-time night window edited into an evening one ends the same evening", async ({ page, request }) => {
+      const day = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
+      const next = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10);
+      const created = await request.post("/api/schedule/rules", {
+        headers: { "X-CSRF-Token": CSRF },
+        data: { rule: { name: "Night", target: { scope: "device", device: "WR1" }, action: { id: "offgrid_socket", value: "standard", end_value: "off" }, when: { start: `${day}T22:00`, end: `${next}T02:00` } } },
+      });
+      expect(created.status()).toBe(201);
+      const rule = await created.json();
+      await openSignedIn(page, "#/schedule");
+      await page.locator("[data-rule]").filter({ hasText: "Night" }).getByRole("button", { name: "Edit" }).click();
+      await expect(page.getByLabel("Until date")).toHaveValue(day);
+      await page.getByRole("textbox", { name: "From", exact: true }).fill("20:00");
+      await page.getByRole("textbox", { name: "To", exact: true }).fill("23:00");
+      await expect(page.getByTestId("schedule-preview")).not.toContainText("Checking");
+      await Promise.all([
+        page.waitForResponse((response) => response.url().includes(`/api/schedule/rules/${rule.id}`)),
+        page.getByTestId("schedule-save").click(),
+      ]);
+      const saved = await (await request.get("/api/schedule")).json();
+      expect(saved.rules[0].when).toMatchObject({ start: `${day}T20:00`, end: `${day}T23:00` });
+    });
+  });
+
+  test.describe("in a browser in the EMS's zone", () => {
+    test.use({ timezoneId: "Europe/Berlin" });
+
+    test("no time zone difference is named when there is none", async ({ page }) => {
+      await openSignedIn(page, "#/schedule");
+      await expect(page.getByText("Schedules on")).toBeVisible();
+      await expect(page.locator(".content")).toContainText("Europe/Berlin");
+      await expect(page.locator(".content")).not.toContainText("this browser on");
+    });
+  });
+
+  test("a value the installation does not take keeps Save off and says why", async ({ page }) => {
+    await openSignedIn(page, "#/schedule");
+    await page.getByRole("button", { name: "New rule" }).click();
+    await page.getByLabel("Name").fill("Too much");
+    await page.getByLabel("Action").selectOption("device_output_limit");
+    await page.getByRole("spinbutton", { name: "Set to", exact: true }).fill("900");
+    await page.getByRole("spinbutton", { name: "Then set to" }).fill("0");
+    const preview = page.getByTestId("schedule-preview");
+    await expect(preview).toContainText("Cannot be saved");
+    await expect(preview).toContainText("max_power must be between 0 and 800");
+    await expect(page.getByTestId("schedule-save")).toBeDisabled();
+    await page.getByRole("spinbutton", { name: "Set to", exact: true }).fill("400");
+    await expect(preview).toContainText("400 W");
+    await expect(page.getByTestId("schedule-save")).toBeEnabled();
+  });
+
+  test("a rule on a device no longer offered keeps it in the editor instead of moving to another", async ({ page, request }) => {
+    const created = await request.post("/api/schedule/rules", {
+      headers: { "X-CSRF-Token": CSRF },
+      data: { rule: { name: "Old inverter", enabled: false, target: { scope: "device", device: "Gone" }, action: { id: "offgrid_socket", value: "standard" }, when: { start: "2027-01-01T06:00", repeat: { freq: "daily" } } } },
+    });
+    expect(created.status()).toBe(201);
+    await openSignedIn(page, "#/schedule");
+    await page.locator("[data-rule]").filter({ hasText: "Old inverter" }).getByRole("button", { name: "Edit" }).click();
+    await page.getByLabel("Name").fill("Old inverter, renamed");
+    const device = page.getByLabel("Applies to");
+    await expect(device).toHaveValue("Gone");
+    await expect(device.locator('option[value="Gone"]')).toHaveText("Gone (not available)");
   });
 });
 

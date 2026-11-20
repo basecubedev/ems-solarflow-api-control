@@ -18,7 +18,6 @@ from admin.maintenance_config import (
 )
 from admin.server import ScanRegistry, create_server
 from tests.admin_auth_helpers import auth_headers, authenticate
-from tests.test_admin_maintenance_transport_switch_frontend import _extract_fn, _read
 
 pytestmark = [
     pytest.mark.admin,
@@ -423,9 +422,9 @@ def _adopted_mqtt_grid_meter_config():
 
 
 # Exactly the draft the Admin grid-meter adoption writes
-# (admin/static/admin.js mqttGridMeterConfigFromProposal): meter type, broker
-# reference, topic and payload defaults from the trusted proposal fragment, and
-# no endpoint fields of its own.
+# (frontend/admin-modern/src/lib/discovery.js meterFromProposal): meter type,
+# broker reference, topic and payload defaults from the trusted proposal
+# fragment, and no endpoint fields of its own.
 _ADOPTED_MQTT_GRID_METER_DRAFT = {
     "present": True,
     "type": "zendure_smartmeter_d0",
@@ -2382,15 +2381,3 @@ def test_a_security_choice_against_a_stored_tls_mode_is_refused_not_dropped(
     assert "contradicts tls_mode" in next(
         e["message"] for e in errors if e["code"] == "zendure_mqtt_tls_invalid"
     )
-
-
-def test_the_invalid_tls_help_names_a_stored_tls_mode():
-    """The card's TLS view resolves ``tls_mode`` as the EMS does, so a stored
-    mode the EMS refuses is shown as invalid; the help must name that key
-    rather than send the operator to ``tls_insecure`` alone."""
-
-    js = _read()
-    sync = _extract_fn(js, "syncMaintenanceBrokerForm")
-
-    assert "Without a tls_mode, choosing " in sync
-    assert "A stored zendure_mqtt.tls_mode decides TLS on its own" in sync

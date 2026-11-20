@@ -479,7 +479,7 @@ def test_developer_docs_are_preserved():
         "docs/developer/developer.md",
         "docs/developer/testing.md",
         "docs/developer/ci-release.md",
-        "docs/developer/dashboard-style-guide.md",
+        "docs/developer/dashboard-modern-style-guide.md",
         "docs/developer/design-notes/develop-tool-influxdb-telemetry.md",
     ]:
         assert (ROOT / path).exists(), path

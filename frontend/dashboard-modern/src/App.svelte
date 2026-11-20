@@ -8,6 +8,7 @@
   import { provideShell } from "../../shared/shell/context.js";
   import TopbarStatus from "./app/TopbarStatus.svelte";
   import LoginDialog from "./app/LoginDialog.svelte";
+  import MovedNotice from "./app/MovedNotice.svelte";
   import Overview from "./pages/Overview.svelte";
   import Devices from "./pages/Devices.svelte";
   import Consumers from "./pages/Consumers.svelte";
@@ -19,12 +20,14 @@
   import Maintenance from "./pages/Maintenance.svelte";
   import Schedule from "./pages/Schedule.svelte";
   import About from "../../shared/widgets/About.svelte";
-  import { pageSet, pageById } from "./app/pages.js";
+  import { pageSet } from "./app/pages.js";
   import { nav, router } from "./app/router.svelte.js";
   import { t } from "./i18n/i18n.svelte.js";
-  import { prefs, chooseClassic } from "./state/prefs.svelte.js";
+  import { prefs } from "./state/prefs.svelte.js";
   import { auth, logout } from "./state/auth.svelte.js";
   import { live } from "./state/live.svelte.js";
+  import { consoleAddress } from "./state/console.svelte.js";
+  import { INSTALL_CONSOLE, consoleTarget } from "./lib/console.js";
 
   const COMPONENTS = { overview: Overview, devices: Devices, consumers: Consumers, energy: Energy, analytics: Analytics, control: Control, schedule: Schedule, diagnose: Diagnose, logs: Logs, maintenance: Maintenance, about: About };
   const Page = $derived(COMPONENTS[router.page] || Overview);
@@ -48,8 +51,13 @@
       signIn: () => (auth.loginOpen = true),
       signOut: logout,
     },
-    classic: (pageId) => chooseClassic(pageId ? pageById(pageId).classicView : undefined),
-    links: [],
+    get links() {
+      if (!live.uiConfigLoaded) return [];
+      const target = consoleTarget(consoleAddress.record);
+      return target
+        ? [{ href: target.href, icon: "layout-dashboard", label: "nav.console", testid: "open-console" }]
+        : [{ href: INSTALL_CONSOLE, icon: "arrow-up-right", label: "nav.installConsole", testid: "install-console", external: true }];
+    },
     about: { notices: [{ name: "uPlot", license: "MIT", file: "/uPlot.LICENSE" }] },
   });
 </script>
@@ -68,6 +76,7 @@
       {#snippet status()}<TopbarStatus />{/snippet}
     </Topbar>
     <main class="content" id="content" tabindex="-1">
+      <MovedNotice />
       {#key router.page}
         <Page />
       {/key}

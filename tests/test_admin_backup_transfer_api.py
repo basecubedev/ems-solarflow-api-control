@@ -243,39 +243,6 @@ def test_import_is_refused_without_a_csrf_token(server, install):
     assert os.listdir(_backup_dir(install)) == []
 
 
-# --- the page offers both directions --------------------------------------
-
-
-def _static(name):
-    path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "admin",
-        "static",
-        name,
-    )
-    with open(path, encoding="utf-8") as handle:
-        return handle.read()
-
-
-def test_the_backup_page_offers_both_directions():
-    html = _static("index.html")
-    panel = html.split('id="maintenance-backup-panel"', 1)[1]
-    assert 'id="backup-import-input"' in panel
-    js = _static("admin.js")
-    assert '"/api/admin/maintenance/backups/export"' in js
-    assert '"/api/admin/maintenance/backups/import"' in js
-    assert 'data-backup-action="export"' in js
-
-
-def test_the_download_keeps_the_csrf_gated_post():
-    """A plain link the address bar can follow would drop the CSRF token."""
-
-    js = _static("admin.js")
-    body = js.split("async function exportBackup", 1)[1].split("\nasync function ", 1)[0]
-    assert 'method: "POST"' in body
-    assert "res.blob()" in body
-
-
 def test_a_refused_import_does_not_corrupt_the_next_request(server, install):
     """_drain_body stops at the JSON ceiling, so it cannot drain an archive.
 

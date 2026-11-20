@@ -503,28 +503,11 @@ a charging inverter's line turns round and takes the grid colour, and its node
 shows the charge as a negative figure. See
 [Overview and navigation](user/dashboard/overview.md#3--energy-flow).
 
-The deprecated Classic dashboard at `/classic/` draws it differently. Its
-aggregated flow diagram draws a **grid → inverter** pipe for a charging fleet,
-and the inverter node states `Charging <W>` above its output. Its value stays
-the output it feeds the house, because in a mixed fleet one device can export
-while another charges. What the charger takes off the meter is not drawn a
-second time on the grid → home pipe, so at night — when the whole import is
-the charge — that pipe falls idle rather than showing the same watts twice.
-That diagram has no busbar node, so the inward flow is anchored at the grid.
-When the charge is actually covered by a sibling inverter rather than by the
-grid, the grid node still reads the truth (near zero) while the pipe overstates
-its role. Classic's per-device view draws the same flow per row: while a device
-charges, the line between house and inverter turns round and takes the grid
-colour, and the inverter node states `Charging <W>` above the output it shows
-for as long as that line is drawn, so the path grid ↔ house ↔ inverter ↔
-battery is complete in either direction.
-
-Preview both with `serve_dashboard_preview.py --scenario ac-charging`.
+Preview it with `serve_dashboard_preview.py --scenario ac-charging`.
 
 Energy statistics count charged energy separately (**AC charging**, kWh) and
 deliberately attach no monetary value to it. The Energy page lists it in
-**Expert**; the deprecated Classic page lists it as **AC Charge** in **Basic**
-too.
+**Expert**.
 
 The household load is corrected for it: the grid meter cannot tell a charging
 device from an appliance, so the charge power is subtracted again before

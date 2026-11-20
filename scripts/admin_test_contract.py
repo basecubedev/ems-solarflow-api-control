@@ -4,7 +4,8 @@
 """Fail-closed probe for the Admin Page Object test-hook contract.
 
 The replacement canary drives two published Admin images with one shared set of
-page objects, so both images have to serve the same ``data-testid`` hooks. A
+page objects, so both images have to serve the same ``data-testid`` hooks. The
+console's markup lives in its built assets, so the hooks are read there. A
 missing hook must fail here, naming the hook and the image, instead of inside a
 Playwright locator timeout — and it must never be worked around by teaching the
 shared page objects a second markup contract.
@@ -18,7 +19,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_PATH = ROOT / "tests" / "e2e" / "admin-test-contract.json"
-ADMIN_MARKUP_PATH = "/app/admin/static/index.html"
+ADMIN_ASSETS_PATH = "/app/admin/static/modern/assets"
 
 
 def load_contract(path=CONTRACT_PATH):
@@ -43,14 +44,14 @@ def missing_hooks(markup, hooks):
 def read_admin_markup(image, run=None):
     runner = run or subprocess.run
     result = runner(
-        ["docker", "run", "--rm", "--entrypoint", "cat", image, ADMIN_MARKUP_PATH],
+        ["docker", "run", "--rm", "--entrypoint", "sh", image, "-c", f"cat {ADMIN_ASSETS_PATH}/*.js"],
         capture_output=True,
         text=True,
         check=False,
     )
-    if result.returncode != 0:
+    if result.returncode != 0 or not result.stdout:
         raise RuntimeError(
-            f"could not read {ADMIN_MARKUP_PATH} from {image}: "
+            f"could not read {ADMIN_ASSETS_PATH} from {image}: "
             f"{(result.stderr or '').strip() or result.returncode}"
         )
     return result.stdout

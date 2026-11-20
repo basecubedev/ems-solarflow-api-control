@@ -385,15 +385,13 @@ the plan the operator confirms — for example
 > validation/canonicalization, the emsctl command, the startup fail-closed guard
 > and the Admin migration-review orchestration layer are implemented and tested.
 > The interactive frontends are wired to this backend: the "Older MQTT device
-> setup" card — on the **System** page in the Modern console, in Maintenance in
-> the deprecated Classic one (`renderMqttMigrationReview()` /
-> `applyMqttMigration()` in `admin/static/admin.js`), both served by
+> setup" card on the **System** page of the console, served by
 > `/api/admin/maintenance/zendure-mqtt/migration-review` and
-> `/api/admin/maintenance/zendure-mqtt/migration-apply` in `admin/server.py`)
+> `/api/admin/maintenance/zendure-mqtt/migration-apply` in `admin/server.py`,
 > and the Guided Upgrade `migration_review` / `mqtt_migration` steps
 > (`admin/guided_upgrade.py`; a stale review is rejected as
 > `mqtt_migration_review_stale` and re-loaded by the frontend). Covered by
-> `tests/test_admin_mqtt_migration_frontend.py`,
+> `frontend/admin-modern/tests/migration.test.js`,
 > `tests/test_admin_zendure_mqtt_migration_endpoints.py` and
 > `tests/test_admin_guided_upgrade.py`.
 

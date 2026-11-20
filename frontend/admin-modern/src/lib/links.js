@@ -19,3 +19,11 @@ export function dashboardHref(dashboardUrl, location = globalThis.location) {
   const port = parsed.port ? `:${parsed.port}` : "";
   return `${parsed.protocol}//${host}${port}/`;
 }
+
+/**
+ * The dashboard's pages are in this app; a dashboard the overview names is
+ * opened here, at its overview, and none is offered while it names none.
+ */
+export function dashboardPage(dashboardUrl) {
+  return dashboardHref(dashboardUrl, { hostname: "localhost" }) ? "#/overview" : null;
+}

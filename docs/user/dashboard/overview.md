@@ -128,8 +128,7 @@ yesterday the tile says *no comparison yet*.
 names the source, **SQLite**, the local history that is always there. The
 buttons choose **1 h**, **6 h**, **Today**, **24 h** or **7 d**; **Table**
 lists the values instead. The battery is drawn below zero while charging and
-above zero while discharging into the inverter, as in Classic; the legend and
-the table say **Charge** or **Discharge** with the power. Grid is positive while
+above zero while discharging into the inverter; the legend and the table say **Charge** or **Discharge** with the power. Grid is positive while
 importing. Hatched areas are periods without samples; they stay gaps and are
 never shown as zero.
 
@@ -147,11 +146,11 @@ others — and **More** for the rest. The status tiles stack in one column. In
 the energy flow the home and the grid sit side by side at the bottom, and the
 inverters' line runs down into the home. Nothing is left out.
 
-![The More sheet on a phone: the other pages as tiles with a lock on those that need a sign-in, the language and colour scheme, the sign-in, and the links to choose the bar's pages and to switch to the classic view](../../assets/screenshots/dashboard/dashboard-phone-more.png)
+![The More sheet on a phone: the other pages as tiles with a lock on those that need a sign-in, the language and colour scheme, the sign-in, and the link to choose the bar's pages](../../assets/screenshots/dashboard/dashboard-phone-more.png)
 
 1. Tap **More**. A sheet opens from the bottom with the other pages, the
-   **Quick settings** (language, colour scheme, sign in or out) and **Switch to
-   classic view**. A lock marks the pages that need a sign-in.
+   **Quick settings** (language, colour scheme, sign in or out). A lock marks
+   the pages that need a sign-in.
 2. On a page that is not in the bar, the fifth button shows that page's name,
    so the bar always says where you are.
 3. To change the bar, tap **Choose the pages in the bar** and tap two pages to

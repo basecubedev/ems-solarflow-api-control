@@ -1,9 +1,20 @@
 # EMS Dashboard — step-by-step guides
 
-The live operating UI (**EMS SolarFlow**, *"Control your energy."*) on port
-`8080`. It shows what the EMS is measuring, what it decided and why, and, once
+The live operating UI (**EMS SolarFlow**, *"Control your energy."*): the
+**Dashboard** pages of the app at `http://<host>:8090`, served by the Admin
+Console. It shows what the EMS is measuring, what it decided and why, and, once
 you sign in, lets you change a small set of runtime values, set up schedules and
 use the operator tools.
+
+The EMS keeps its own copy of the dashboard at port `8080`. Opened there
+while an Admin Console answers on this host, it says where the app is and,
+once this browser reaches the console too, goes there after five seconds, to
+the same page; **Stay on this address** keeps this browser on port 8080, as a
+tablet on the wall that only shows the dashboard may. Otherwise, as without an
+Admin Console (a [Docker Bootstrap](../docker-bootstrap.md) installation) or
+while it is down, port 8080 is the dashboard, with **Maintenance** and
+**Diagnose** in its menu and **About the Admin console** at the foot of the
+menu.
 
 ![EMS Dashboard Overview with the side menu, the four status tiles, the energy flow, the batteries card and the active rules](../../assets/screenshots/dashboard/dashboard-overview.png)
 
@@ -74,20 +85,14 @@ The dashboard is a view onto the EMS, not a second controller.
 
 Reading the dashboard never changes anything on the EMS, signed in or not.
 
-## The deprecated Classic dashboard
+## Browsers and old addresses
 
-The previous design, **Classic**, still answers at
-`http://<host>:8080/classic/` and is removed in a later release. It reads the
-same API, uses the same password and writes the same runtime settings, so
-switching changes nothing on the EMS. **Classic view** at the foot of the side
-menu, or **Switch to classic view** in the Appearance menu, opens it; Classic's
-**New dashboard** link comes back.
+The dashboard needs Chrome or Edge 114, Firefox 125 or Safari 17 (iOS and
+iPadOS 17) or newer. An older browser shows a page that says so, in English,
+German, Dutch and French.
 
-The dashboard's address always opens the Modern design except in three cases:
-demo mode (`?demo=1`), which only Classic has; `?ui=classic` from a link made
-before Modern moved to the address; and a browser too old for Modern. Modern
-needs Chrome or Edge 114, Firefox 125 or Safari 17 (iPadOS 17) or newer. An old
-bookmark of `/modern/` opens the same page at the address.
+The previous design, **Classic**, has been removed. An old bookmark of
+`/classic/` or `/modern/` opens the dashboard at its address.
 
 ## Related
 

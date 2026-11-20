@@ -2,34 +2,30 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { type Page, type Locator, expect } from "@playwright/test";
 
-// Guided Setup Step 1 (System Build selection). Drives the real browser controls
-// and reads the server-backed compatibility state; it holds no assertions of its
-// own beyond the small wait helpers, so tests stay readable.
+const CHANNEL_GROUPS: Record<string, string> = { stable: "Stable" };
+export const ADMIN_UPDATE_LABEL = "Update the Admin console";
+export const READY_MESSAGE = "The Admin console is ready for this build.";
+
+/**
+ * The guided setup's first step, the System Build: drives the console's own
+ * controls and records the server's verification answers. It holds no
+ * assertions of its own beyond the small waits, so tests stay readable.
+ */
 export class SetupPage {
   readonly buildSelect: Locator;
   readonly continueButton: Locator;
   readonly adminUpdateButton: Locator;
   readonly status: Locator;
-  readonly embeddedCheck: Locator;
   readonly error: Locator;
-  readonly progressTag: Locator;
-  readonly progressRevision: Locator;
-  readonly progressAdminImage: Locator;
-  readonly progressEmsImage: Locator;
   private validationResponse: Record<string, any> | null = null;
   private validationResponses: Record<string, any>[] = [];
 
   constructor(private readonly page: Page) {
-    this.buildSelect = page.getByTestId("system-build-select");
-    this.continueButton = page.getByTestId("continue-button");
-    this.adminUpdateButton = page.getByTestId("admin-update-button");
-    this.status = page.getByTestId("system-build-status");
-    this.embeddedCheck = page.getByTestId("embedded-resources-check");
-    this.error = page.locator("#setup-system-build-error");
-    this.progressTag = page.locator("#system-alignment-tag");
-    this.progressRevision = page.locator("#system-alignment-revision");
-    this.progressAdminImage = page.locator("#system-alignment-admin-image");
-    this.progressEmsImage = page.locator("#system-alignment-ems-image");
+    this.buildSelect = page.getByTestId("setup-release-select");
+    this.continueButton = page.getByTestId("setup-right");
+    this.adminUpdateButton = page.getByTestId("setup-left").filter({ hasText: ADMIN_UPDATE_LABEL });
+    this.status = page.getByTestId("setup-build-message");
+    this.error = page.getByTestId("setup-release").locator(".form-error");
     page.on("response", async (response) => {
       if (
         response.url().includes("/api/admin/system-alignment/validate") &&
@@ -45,21 +41,13 @@ export class SetupPage {
   }
 
   async chooseFreshInstall() {
-    await this.page.getByTestId("start-fresh-install").click();
+    await this.page.getByTestId("setup-begin").click();
     await expect(this.buildSelect).toBeVisible();
   }
 
-  async previewBuild(tag: string) {
-    // Selecting a build is side-effect free: it shows the local catalogue preview
-    // and the single explicit "Verify System Build" primary. No validation runs.
+  /** Choose a build and verify it: the one validation request the verification sends. */
+  async selectBuild(tag: string) {
     await this.buildSelect.selectOption(tag);
-    await expect(this.continueButton).toHaveText(/Verify System Build/i);
-  }
-
-  async verifyBuild() {
-    // The explicit verification: click Verify System Build and wait for the one
-    // validation response it triggers.
-    await expect(this.continueButton).toHaveText(/Verify System Build/i);
     await expect(this.continueButton).toBeEnabled();
     const validated = this.page.waitForResponse(
       (r) =>
@@ -67,39 +55,25 @@ export class SetupPage {
         r.request().method() === "POST",
     );
     await this.continueButton.click();
-    const response = await validated;
-    this.validationResponse = await response.json();
-    // Let the render settle after the fetch resolves.
-    await expect(this.status).not.toHaveText(/Downloading and verifying/i);
-  }
-
-  async selectBuild(tag: string) {
-    // Convenience for tests that need the verified verdict: select, then verify.
-    await this.previewBuild(tag);
-    await this.verifyBuild();
-  }
-
-  async selectBuildByLabel(label: RegExp) {
-    const option = this.buildSelect.locator("option").filter({ hasText: label });
-    await expect(option).toHaveCount(1);
-    await this.selectBuild(await option.getAttribute("value") as string);
-  }
-
-  developmentOptions(): Locator {
-    return this.buildSelect.locator('option[data-channel="development"]');
+    this.validationResponse = await (await validated).json();
   }
 
   async selectChannelBuild(tag: string, channel: string) {
     await expect(
-      this.buildSelect.locator(
-        `option[value="${tag}"][data-channel="${channel}"]`,
-      ),
+      this.buildSelect.locator(`optgroup[label="${CHANNEL_GROUPS[channel]}"] option[value="${tag}"]`),
     ).toHaveCount(1);
     await this.selectBuild(tag);
   }
 
-  async selectDevelopmentBuild(tag: string) {
-    await this.selectChannelBuild(tag, "development");
+  /** The status line as it stands, or "" while the step shows none; never waits for one to appear. */
+  async statusText(): Promise<string> {
+    if (!(await this.status.count())) return "";
+    return ((await this.status.textContent({ timeout: 1_000 }).catch(() => "")) ?? "").trim();
+  }
+
+  /** Whether the step offers the Admin update, enabled: the button exists only while it may be needed. */
+  async adminUpdateOffered() {
+    return (await this.adminUpdateButton.count()) > 0 && (await this.adminUpdateButton.isEnabled());
   }
 
   async latestValidation(): Promise<Record<string, any>> {
@@ -116,6 +90,25 @@ export class SetupPage {
     return response as Record<string, any>;
   }
 
+  /**
+   * The verification the Admin that answers now gives for ``tag``, asked with
+   * the console's session. The console verifies again on its own once it
+   * resumes, but a verification the replaced Admin answered before the reload
+   * may be the one recorded; this one can only come from the new Admin.
+   */
+  async revalidate(tag: string): Promise<Record<string, any>> {
+    const auth = await (await this.page.request.get("/api/admin/auth/status")).json();
+    const response = await this.page.request.post("/api/admin/system-alignment/validate", {
+      headers: { "X-CSRF-Token": auth.csrf_token as string },
+      data: { tag },
+    });
+    expect(response.ok(), `validate ${tag}: ${response.status()}`).toBeTruthy();
+    const body = await response.json();
+    this.validationResponse = body;
+    this.validationResponses.push(body);
+    return body;
+  }
+
   validationHistory(): Record<string, any>[] {
     return [...this.validationResponses];
   }
@@ -126,11 +119,7 @@ export class SetupPage {
   }
 
   devicesTab(): Locator {
-    return this.page.locator('[data-setup-step="devices"]');
-  }
-
-  progressStage(key: string): Locator {
-    return this.page.locator(`[data-system-alignment-stage="${key}"]`);
+    return this.page.getByRole("tab", { name: /Devices/ });
   }
 
   async continueToDevices() {

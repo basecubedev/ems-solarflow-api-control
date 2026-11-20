@@ -81,9 +81,8 @@ export function hardwareOf(devices) {
 }
 
 /**
- * Firmware enums as label keys. The tables mirror Classic's label functions
- * (app.js), and a pairing test walks both; an unknown value keeps its raw
- * number, as Classic does, instead of collapsing to a bare "unknown".
+ * Firmware enums as label keys. An unknown value keeps its raw number
+ * instead of collapsing to a bare "unknown".
  */
 export const FIRMWARE_ENUMS = Object.freeze({
   soc_limit: { 0: "fw.socLimit.normal", 1: "fw.socLimit.max", 2: "fw.socLimit.min" },

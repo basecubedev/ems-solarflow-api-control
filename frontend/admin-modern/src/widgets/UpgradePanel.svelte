@@ -13,7 +13,7 @@
   import { PHASES, PHASE_TONES, STAGE_TONES, WORKING_STAGES, phaseStates, phaseProgress, failedStep, backupArchive, rateLimited, replacesAdmin, migrationView, isDevelopment, clock, nothingChanged, phaseOfStage } from "../lib/upgrade.js";
   import { noteView } from "../lib/updates.js";
   import { errorView } from "../lib/errors.js";
-  import { dashboardHref } from "../lib/links.js";
+  import { dashboardPage } from "../lib/links.js";
   import Spinner from "./Spinner.svelte";
   import InfluxUpdateLine from "./InfluxUpdateLine.svelte";
 
@@ -44,7 +44,7 @@
   const unchanged = $derived(nothingChanged({ started: Boolean(upgrade.operationId || upgrade.jobId || upgrade.workDone), steps: upgrade.steps, result: upgrade.result }));
   const archive = $derived(backupArchive(upgrade.result));
   const warnings = $derived((Array.isArray(upgrade.result?.warnings) ? upgrade.result.warnings : []).map(String));
-  const dashboard = $derived(dashboardHref(system.overview.data?.links?.dashboard_url));
+  const dashboard = $derived(dashboardPage(system.overview.data?.links?.dashboard_url));
   const failure = $derived(upgrade.error ? errorView(upgrade.error, t) : null);
   const reason = $derived(upgrade.result?.message || stopped?.detail || own?.error_message || "");
   const closable = $derived(!upgrade.busy && !upgrade.holding && upgrade.stage !== "succeeded");

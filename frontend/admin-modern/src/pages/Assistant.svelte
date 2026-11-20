@@ -9,12 +9,11 @@
   import TaskTile from "../../../shared/assistant/TaskTile.svelte";
   import StepList from "../../../shared/assistant/StepList.svelte";
   import TaskGrid from "../../../shared/assistant/TaskGrid.svelte";
-  import KeepChoice from "../../../shared/assistant/KeepChoice.svelte";
   import { t, tn, fmt } from "../i18n/i18n.svelte.js";
   import { system, ensure } from "../state/system.svelte.js";
   import { assistantSteps, assistantTasks, attentionCount, dashboardStep, installKind, installed, managesExisting, stepProgress } from "../lib/assistant.js";
   import { healthVerdict } from "../lib/health.js";
-  import { dashboardHref } from "../lib/links.js";
+  import { dashboardPage } from "../lib/links.js";
   import { href } from "../app/router.svelte.js";
   import { errorView } from "../lib/errors.js";
 
@@ -25,7 +24,7 @@
   const kind = $derived(installKind(overview));
   const steps = $derived(assistantSteps({ overview, config: system.config.data, backups: system.backups.data }));
   const progress = $derived(stepProgress(steps));
-  const dashboard = $derived(dashboardHref(overview?.links?.dashboard_url));
+  const dashboard = $derived(dashboardPage(overview?.links?.dashboard_url));
   const finish = $derived(dashboardStep(overview, dashboard, system.config.data));
   const tasks = $derived(assistantTasks(overview));
   const attention = $derived(attentionCount(healthVerdict(overview, false)));
@@ -75,12 +74,12 @@
   {:else if step.id === "install" && step.kind === "legacy"}
     <a class="btn" class:secondary={!step.next} href={href("system")} data-testid="assistant-legacy">{t("system.legacyMove")}</a>
   {:else if step.id === "install" && step.kind === "partial" && managesExisting(overview)}
-    <a class="btn" class:secondary={!step.next} href={href("overview")} data-testid="assistant-missing">{t("assistant.step.install.missing")}</a>
+    <a class="btn" class:secondary={!step.next} href={href("status")} data-testid="assistant-missing">{t("assistant.step.install.missing")}</a>
     <a class="btn secondary" href={href("setup")} data-testid="assistant-setup"><Icon name="play" size="sm" />{t("overview.startSetup")}</a>
   {:else if step.id === "install"}
     <a class="btn" class:secondary={!step.next} href={href("setup")} data-testid="assistant-setup"><Icon name="play" size="sm" />{t("overview.startSetup")}</a>
     {#if step.kind === "partial"}
-      <a class="btn secondary" href={href("overview")} data-testid="assistant-missing">{t("assistant.step.install.missing")}</a>
+      <a class="btn secondary" href={href("status")} data-testid="assistant-missing">{t("assistant.step.install.missing")}</a>
     {:else}
       <a class="btn secondary" href={`${href("backups")}/restore`} data-testid="assistant-restore">{t("overview.restoreBackup")}</a>
     {/if}
@@ -95,7 +94,7 @@
   {#if finish.reason === "off"}
     <a class="btn secondary" href={href("settings")} data-testid="assistant-dashboard-settings">{t("assistant.task.settings.title")}</a>
   {:else}
-    <a class="btn secondary" href={dashboard} data-testid="assistant-dashboard"><Icon name="arrow-up-right" size="sm" />{t("nav.dashboard")}</a>
+    <a class="btn secondary" href={dashboard} data-testid="assistant-dashboard"><Icon name="layout-dashboard" size="sm" />{t("nav.dashboard")}</a>
   {/if}
 {/snippet}
 
@@ -108,7 +107,7 @@
   </div>
 {/if}
 
-<AssistantWelcome lead={lead()} {kind} attention={attention ? tn("overview.attention", attention) : ""} attentionHref={href("overview")} />
+<AssistantWelcome lead={lead()} {kind} attention={attention ? tn("overview.attention", attention) : ""} attentionHref={href("status")} />
 
 <Card icon="list-checks" tone="c-out" title={t("assistant.next.title")} subtitle={progressText()} span="span-12">
   <StepList>
@@ -140,5 +139,3 @@
     </TaskGrid>
   </Card>
 {/if}
-
-<KeepChoice hint={t("assistant.keepHint")} overviewHref={href("overview")} />

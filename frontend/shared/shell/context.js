@@ -17,7 +17,8 @@ const SHELL = Symbol("shell");
  *   session   { authenticated, label, icon, pill, signIn(), signOut() }; pill
  *             false keeps the label out of the top bar (the phone sheet still
  *             shows it)
- *   classic   (pageId) => void, the switch to the Classic view
+ *   classic   optional (pageId) => void, the switch to the Appliance
+ *             Manager's Classic view; no switch without it
  *   links     [{ href, icon, label, testid, external }], opened in place, or in
  *             a new tab when external is true
  *   about     optional { notices, version, tagPrefix, links } for the About page:

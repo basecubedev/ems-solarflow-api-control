@@ -19,7 +19,6 @@ import serve_dashboard_preview  # noqa: E402
 from dashboard.server import DashboardRequestHandler  # noqa: E402
 from dashboard_preview_data import (  # noqa: E402
     DIAGNOSE_PROFILES,
-    FLOW_VIEWS,
     SCENARIOS,
     build_scenario,
 )
@@ -82,30 +81,9 @@ def test_default_host_is_loopback(preview_server):
     assert host == "127.0.0.1"
 
 
-@pytest.mark.parametrize("view", FLOW_VIEWS)
-def test_preview_views_return_html(preview_server, view):
-    _, base = preview_server()
-    with _get(base, f"/preview/{view}") as response:
-        assert response.status == 200
-        body = response.read().decode("utf-8")
-    assert response.headers.get("Content-Type", "").startswith("text/html")
-    assert "<html" in body.lower()
-    # The injected bootstrap opens the requested view and still loads app.js.
-    assert "dashboard.flowView" in body
-    assert json.dumps(view) in body
-    assert '<script src="/classic/app.js"></script>' in body
-
-
-def test_unknown_preview_view_is_404(preview_server):
-    _, base = preview_server()
-    with pytest.raises(urllib.error.HTTPError) as exc:
-        _get(base, "/preview/does-not-exist")
-    assert exc.value.code == 404
-
-
 def test_static_assets_served(preview_server):
     _, base = preview_server()
-    for path, content_type in (("/classic/app.js", "javascript"), ("/classic/styles.css", "css")):
+    for path, content_type in (("/", "html"), ("/uPlot.iife.min.js", "javascript"), ("/uPlot.min.css", "css")):
         with _get(base, path) as response:
             assert response.status == 200
             assert content_type in response.headers.get("Content-Type", "")
@@ -225,10 +203,6 @@ def test_maintenance_preview_uses_current_upgrade_contract(preview_server):
         item["kind"] for item in payload["items"]
     }
 
-    with _get(base, "/preview/maintenance") as response:
-        html = response.read().decode("utf-8")
-    assert "setFlowView('maintenance',false)" in html
-
 
 def test_auth_status_changes_with_scenario(preview_server):
     _, base_normal = preview_server("normal")
@@ -288,32 +262,6 @@ def test_all_scenarios_build():
         assert "diagnose" in data
 
 
-@pytest.mark.parametrize("path", ["/preview", "/preview/"])
-def test_landing_page_lists_all_views(preview_server, path):
-    _, base = preview_server("firmware-status")
-    with _get(base, path) as response:
-        assert response.status == 200
-        assert response.headers.get("Content-Type", "").startswith("text/html")
-        body = response.read().decode("utf-8")
-    # Names the current scenario and links every flow view.
-    assert "firmware-status" in body
-    for view in FLOW_VIEWS:
-        assert f'href="/preview/{view}"' in body
-    # Makes the safety guarantee explicit.
-    assert "Synthetic data only" in body
-
-
-def test_landing_page_is_not_the_real_dashboard(preview_server):
-    _, base = preview_server()
-    with _get(base, "/preview") as response:
-        landing = response.read().decode("utf-8")
-    with _get(base, "/classic/") as response:
-        index = response.read().decode("utf-8")
-    # The landing page must not replace the real dashboard index.html.
-    assert '<script src="/classic/app.js"></script>' not in landing
-    assert '<script src="/classic/app.js"></script>' in index
-
-
 def test_default_scenario_is_normal():
     assert parse_args([]).scenario == "normal"
 
@@ -364,9 +312,3 @@ def test_list_flags_exit_without_serving(capsys):
     assert "Scenarios:" in out
     for name in SCENARIOS:
         assert name in out
-
-    serve_dashboard_preview.main(["--list-views"])
-    out = capsys.readouterr().out
-    assert "Views:" in out
-    for view in FLOW_VIEWS:
-        assert view in out

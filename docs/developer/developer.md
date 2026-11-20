@@ -168,20 +168,10 @@ dashboard answers at the root, exactly as on port 8080:
 http://127.0.0.1:8767/
 ```
 
-The deprecated Classic dashboard has a landing page that links every view for
-the current scenario, and a stable URL per view that opens Classic directly in
-it: `/preview/aggregated`, `/preview/devices`, `/preview/control`,
-`/preview/energy`, `/preview/diagnose`, `/preview/logs`.
-
-```text
-http://127.0.0.1:8767/preview
-```
-
-List the available scenarios or views without starting a server:
+List the available scenarios without starting a server:
 
 ```bash
 python3 scripts/serve_dashboard_preview.py --list-scenarios
-python3 scripts/serve_dashboard_preview.py --list-views
 ```
 
 Scenarios:
@@ -611,8 +601,9 @@ asks for a fresh plan; the mutation itself is never retried. The browser is
 never told *which* fact moved — a plan from a replaced run and a plan from a
 moved discovery state are the same repair — and a refusal answering an older
 plan does not re-plan at all, or it would race the request already in flight.
-`tests/test_admin_setup_plan_frontend.py` drives the shipped handler for all
-four codes; it duplicates no backend rule.
+`frontend/admin-modern/tests/setupDraft.test.js` names each refusal by what it
+asks of the reader, and `server-codes.test.js` holds the four codes to the ones
+the server sends; neither duplicates a backend rule.
 
 ### Test layering
 

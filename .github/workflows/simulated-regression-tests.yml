@@ -58,10 +58,6 @@ jobs:
         run: |
           reuse lint
 
-      - name: Check the admin.js frontend parses
-        run: |
-          node --check admin/static/admin.js
-
   # The four groups are an exact partition of the non-Docker suite: ownership is
   # resolved by the fixed priority power-control > mqtt > admin > core, so every
   # test runs in exactly one group and none runs twice.

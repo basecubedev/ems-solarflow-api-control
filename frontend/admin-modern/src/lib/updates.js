@@ -130,20 +130,9 @@ export function releaseView(release, catalogue) {
     recommended: Boolean(release?.tag) && release.tag === catalogue?.default_release,
     running: Boolean(release?.active),
     selectable: release?.selectable !== false,
-    upgrade: upgradePage(release),
+    installable: Boolean(release?.tag) && release.selectable !== false,
     note: noteView(release?.reason || release?.upgrade_warning),
   };
-}
-
-/**
- * The Classic Guided Upgrade page with this release already chosen, or null
- * for one the catalogue does not let it choose. Choosing verifies and changes
- * nothing; Classic reads the release from the address once (admin.js,
- * maintenanceUpgradeTagForHash).
- */
-export function upgradePage(release) {
-  if (!release?.tag || release.selectable === false) return null;
-  return `maintenance-upgrade-${encodeURIComponent(String(release.tag))}`;
 }
 
 /**

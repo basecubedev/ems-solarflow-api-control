@@ -9,8 +9,6 @@ be refused by Admin exactly when the EMS would refuse them.
 """
 
 import json
-import re
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -23,7 +21,7 @@ from admin.maintenance_config import (
 )
 from admin.setup_config import build_setup_catalog
 from ems import config as cfg
-from ems.config_catalog import grid_meter_types
+from tests.modern_frontend import js_run
 
 pytestmark = [
     pytest.mark.admin,
@@ -33,7 +31,7 @@ pytestmark = [
     pytest.mark.contract,
 ]
 
-_ADMIN_JS = Path(__file__).resolve().parents[1] / "admin" / "static" / "admin.js"
+SETUP_DRAFT_JS = Path(__file__).resolve().parents[1] / "frontend" / "admin-modern" / "src" / "lib" / "setupDraft.js"
 
 
 @pytest.fixture(autouse=True)
@@ -217,14 +215,6 @@ def test_maintenance_switch_to_another_meter_drops_the_modbus_keys(tmp_path):
     assert "unit_id" not in grid
 
 
-def test_admin_js_type_mirror_matches_the_catalog():
-    source = _ADMIN_JS.read_text(encoding="utf-8")
-    block = re.search(r"const GRID_METER_TYPE_CHOICES = new Set\(\[(.*?)\]\);", source, re.S)
-    assert block, "GRID_METER_TYPE_CHOICES not found in admin.js"
-    mirrored = set(re.findall(r'"([a-z0-9_]+)"', block.group(1)))
-    assert mirrored == set(grid_meter_types())
-
-
 @pytest.mark.parametrize(
     "stored, new_type",
     [
@@ -339,29 +329,21 @@ def test_setup_variants_carry_the_default_port_the_frontend_resets_to():
     assert "default_port" not in variants["mqtt"]
 
 
-def test_admin_js_port_switch_agrees_with_the_core_rule_for_every_variant_pair():
+def test_the_admin_port_switch_agrees_with_the_core_rule_for_every_variant_pair():
     from ems.config_catalog import GRID_METER_VARIANTS, grid_meter_port_carries_over
 
-    source = _ADMIN_JS.read_text(encoding="utf-8")
-    body = re.search(
-        r"function gridMeterPortAfterSwitch\(port, previous, next\) \{.*?\n\}", source, re.S
-    )
-    assert body, "gridMeterPortAfterSwitch not found in admin.js"
     variants = build_setup_catalog()["grid_meter_variants"]
     types = sorted(GRID_METER_VARIANTS)
-    script = (
-        body.group(0)
-        + "\nconst variants = "
-        + json.dumps(variants)
-        + ";\nconst types = "
-        + json.dumps(types)
-        + ";\nconst out = {};\n"
-        + "for (const a of types) for (const b of types) {\n"
-        + "  out[a + '>' + b] = gridMeterPortAfterSwitch(4711, variants[a], variants[b]) ?? null;\n"
-        + "}\nconsole.log(JSON.stringify(out));\n"
+    js = js_run(
+        SETUP_DRAFT_JS,
+        f"const variants = {json.dumps(variants)};\n"
+        f"const types = {json.dumps(types)};\n"
+        "const out = {};\n"
+        "for (const a of types) for (const b of types) {\n"
+        "  out[a + '>' + b] = m.portAfterSwitch(4711, variants[a], variants[b]) ?? null;\n"
+        "}\n"
+        "process.stdout.write(JSON.stringify(out));\n",
     )
-    result = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True)
-    js = json.loads(result.stdout)
     for a in types:
         for b in types:
             expected = (
@@ -580,15 +562,6 @@ def test_the_meter_is_added_as_a_device_only_when_nothing_reads_that_endpoint(ex
     if added:
         assert new[0]["name"] != existing["name"]
         assert new[0]["name"] in names
-
-
-def test_admin_js_offers_the_e3dc_device_card_and_button():
-    source = _ADMIN_JS.read_text(encoding="utf-8")
-    html = (_ADMIN_JS.parent / "index.html").read_text(encoding="utf-8")
-    assert 'id="maintenance-config-add-e3dc-device"' in html
-    assert "function renderMaintenanceE3dcDevice(" in source
-    assert 'kind: "e3dc_modbus"' in source
-    assert "if (mconfigIsE3dcDevice(configured)) return;" in source
 
 
 def test_nothing_about_an_e3dc_device_is_mirrored_into_runtime_state(tmp_path):

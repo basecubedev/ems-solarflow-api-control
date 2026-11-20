@@ -4,22 +4,18 @@ import { createPageSet } from "../../../shared/shell/pages.js";
 
 export { swapPinned } from "../../../shared/shell/pages.js";
 
-/**
- * The fixed navigation. "classicView" is the value Classic stores in
- * dashboard.flowView for the same page; tests/classic-parity.test.js walks Classic's
- * tab list and requires every tab to appear here.
- */
+/** The fixed navigation. */
 export const PAGES = Object.freeze([
-  { id: "overview", icon: "layout-dashboard", group: "main", classicView: "aggregated" },
-  { id: "devices", icon: "cpu", group: "main", classicView: "devices" },
+  { id: "overview", icon: "layout-dashboard", group: "main" },
+  { id: "devices", icon: "cpu", group: "main" },
   { id: "consumers", icon: "plug-zap", group: "main" },
-  { id: "energy", icon: "chart-column", group: "main", classicView: "energy" },
-  { id: "analytics", icon: "chart-spline", group: "main", classicView: "analytics" },
-  { id: "control", icon: "sliders-horizontal", group: "main", classicView: "control" },
-  { id: "schedule", icon: "calendar-clock", group: "main", operator: true, classicView: "schedule" },
-  { id: "diagnose", icon: "stethoscope", group: "system", operator: true, classicView: "diagnose" },
-  { id: "logs", icon: "scroll-text", group: "system", operator: true, classicView: "logs" },
-  { id: "maintenance", icon: "wrench", group: "system", operator: true, classicView: "maintenance" },
+  { id: "energy", icon: "chart-column", group: "main" },
+  { id: "analytics", icon: "chart-spline", group: "main" },
+  { id: "control", icon: "sliders-horizontal", group: "main" },
+  { id: "schedule", icon: "calendar-clock", group: "main", operator: true },
+  { id: "diagnose", icon: "stethoscope", group: "system", operator: true },
+  { id: "logs", icon: "scroll-text", group: "system", operator: true },
+  { id: "maintenance", icon: "wrench", group: "system", operator: true },
   { id: "about", icon: "info", group: "system", shortLabel: "nav.about.short", hidden: true },
 ]);
 

@@ -6,15 +6,17 @@ front ends offer is therefore listed here with what Modern does about it, and
 a test keeps the list honest. This page is the work list for a Modern that
 works on its own.
 
+The Classic EMS dashboard and Classic Admin console were removed on
+2026-11-20, once nothing was left that only they could do; their rows below are
+the inventory as it stood then. The Appliance Manager keeps its Classic, and the
+test still holds its paths to the registry.
+
 ## How the list is kept
 
-- **Every API path Classic calls is either called by Modern or named below as
-  Classic-only.** `tests/test_modern_parity.py` reads the paths out of
-  `admin/static/admin.js`, `dashboard/static/app.js`,
-  `dashboard/static/index.html` and `appliance/static/app.js`, looks for each
-  in the Modern sources (`frontend/admin-modern/src`,
-  `frontend/dashboard-modern/src`, `frontend/appliance-modern/src`,
-  `frontend/shared`), and compares what it cannot find with the registry at the
+- **Every API path the Appliance Manager's Classic calls is either called by
+  Modern or named below as Classic-only.** `tests/test_modern_parity.py` reads
+  the paths out of `appliance/static/app.js`, looks for each in the Modern
+  sources (`frontend/appliance-modern/src`, `frontend/shared`), and compares what it cannot find with the registry at the
   end of this page. A new Classic function on a path Modern does not use fails
   the test until it is built in Modern or added to the registry; a path Modern
   starts to use fails it until it leaves the registry.
@@ -125,9 +127,4 @@ regression would go unnoticed:
 
 ## Registry: API paths only Classic calls
 
-The EMS dashboard and the Appliance Manager have none: Modern calls every path
-Classic does.
-
-```text classic-only admin
-/api/admin/install-state
-```
+The Appliance Manager has none: Modern calls every path Classic does.

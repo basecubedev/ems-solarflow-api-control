@@ -35,32 +35,40 @@ with its button, and links to the page for anything else you came to do.
 
 ## The pages
 
-The side menu lists the pages in two groups, in this order:
+The app shows the EMS dashboard's pages and the console's own in one side
+menu, in two groups:
 
 ```text
-Overview · Assistant · Updates · Settings & devices · Services · Backups
-System: Diagnostics · System
+Dashboard: Overview · Devices · Consumers · Energy · Analytics · Control · Schedule · Logs
+Admin: Status · Assistant · Updates · Settings & devices · Services · Backups · Diagnostics · System
 ```
+
+The **Dashboard** pages are described in the
+[EMS Dashboard guides](../dashboard/index.md); anyone who reaches the address
+can read them, and a write there needs the sign-in. The **Admin** pages need the
+sign-in to open: choosing one while signed out shows the sign-in in its place,
+with the way back to the dashboard. Signing in once signs you in to both.
 
 | Page | What it shows and does |
 | --- | --- |
-| **Overview** | *Your installation at a glance and what needs doing*: one verdict, what needs your attention, tiles for EMS, the analytics database, control and the last backup, **Control & safety** and **Versions** |
+| **Status** | *Your installation at a glance and what needs doing*: one verdict, what needs your attention, tiles for EMS, the analytics database, control and the last backup, **Control & safety** and **Versions** |
 | **Assistant** | *What is still to do, and the way to what you came for* — see [The assistant](assistant.md) |
 | **Updates** | *Versions, and the guided upgrade*: what runs now, the available versions, the update itself |
 | **Settings & devices** | *Devices, features and the safety switches*, in the tabs **Features**, **Safety**, **Expert** and **Devices** |
 | **Services** | *State and restart of EMS and the analytics database*: **Restart EMS now** and **Repair analytics** |
 | **Backups** | *Save your settings, or put an older copy back*: create, download, bring back, restore, delete |
-| **Diagnostics** | *Read-only checks of the installed EMS* |
+| **Diagnostics** | *Checks of the installation and the EMS's own diagnosis*: the console's read-only checks, then the EMS's diagnosis profiles and the support bundle |
 | **System** | *Files, device telemetry and unfinished workflows*, and the way into the guided setup |
 
-**Guided setup** has no place in the menu. The assistant, the Overview of an
-empty host and the System page open it.
+**Guided setup** has no place in the menu. The assistant, the Status page of an
+empty host and the System page open it. On a host with nothing installed the
+app opens on the assistant; otherwise it opens on the dashboard's Overview.
 
 The top bar always names the page, says how the installation is — **All
 good**, **A note**, **Needs a look**, **Needs attention**, **Not installed**,
-**Checking…** or **Unknown state**, a pill that leads to the Overview — and
-carries **Sign out** and the **Appearance** button. The foot of the side menu
-holds **Open the dashboard**, **Hide menu text**, **Classic view** and
+**Checking…** or **Unknown state**, a pill that leads to Status — beside the
+EMS's live state, and carries **Sign in** or **Sign out** and the
+**Appearance** button. The foot of the side menu holds **Hide menu text** and
 **About & licenses**. On a phone the menu becomes a bar at the bottom with
 four pages and **More**; see
 [Appearance, language and phone](appearance.md#on-a-phone).
@@ -117,21 +125,16 @@ Every writing action shows what it will do first and asks for an explicit
 confirmation. Saving settings, the guided upgrade and a restore back up what
 they replace first, unless you switch that off.
 
-## The deprecated Classic console
+## Browsers and old addresses
 
-The previous design, **Classic**, still answers at
-`http://<host>:8090/classic/` and is removed in a later release. It uses the
-same password, the same server and the same checks, so switching changes
-nothing on the host. **Classic view** at the foot of the side menu opens the
-same page there; Classic's **New design** button comes back. Every workflow
-runs in Modern; these guides describe Modern only.
+The console needs Chrome or Edge 114, Firefox 125 or Safari 17 (iOS and
+iPadOS 17) or newer. An older browser shows a page that says so, in English,
+German, Dutch and French.
 
-The console's address opens Modern except in three cases: an address that
-names a Classic page (such as `#setup` or `#maintenance-upgrade`, from a link
-or bookmark made before Modern moved to the address), `?ui=classic` from such a
-link, and a browser too old for Modern. Modern needs Chrome or Edge 114,
-Firefox 125 or Safari 17 (iPadOS 17) or newer. An old bookmark of `/modern/`
-opens the same page at the address.
+The previous design, **Classic**, has been removed. An old bookmark of
+`/classic/` or `/modern/` opens the console at its address, and an address
+that named a Classic page (such as `#maintenance-upgrade` or
+`#maintenance-settings-features`) opens the same page here.
 
 ## Deeper reference
 

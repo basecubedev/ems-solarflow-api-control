@@ -158,9 +158,7 @@ all** stops every rule, and the list of coming switch points stays empty until
 **Repeat**, **Check**. While you type, the EMS checks the draft and answers
 with the rule as a sentence ("Every weekday, 18:00–23:00, from Mon 19 Oct
 2026"), what it sets and its next switch points, or *Cannot be saved* and the
-reason. **Save rule** follows that answer. The deprecated Classic dashboard at
-`/classic/` also lists the `emsctl` commands the draft equals; the Modern page
-does not. Step by step:
+reason. **Save rule** follows that answer. Step by step:
 [Runtime settings and schedules](user/dashboard/runtime-settings.md#schedules).
 
 ## emsctl schedule

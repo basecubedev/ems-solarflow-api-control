@@ -19,10 +19,10 @@ The address opens the dashboard's pages — **Overview**, **Devices**,
 **Logs** and **Maintenance** — in English, German, Dutch or French. The
 [step-by-step guides](user/dashboard/index.md) walk through each of them; this
 page is the reference for what they show, how they are configured and the API
-behind them. The deprecated Classic dashboard still answers at `/classic/` until
-a later release removes it: the same API, the same session and the same CSRF
-token. `/` sends demo mode (`?demo=1`), `?ui=classic` and a browser too old for
-the current design to Classic; `/modern/`, an earlier address, redirects to `/`.
+behind them. The previous Classic dashboard has been removed; `/classic/` and
+`/modern/`, earlier addresses, redirect to `/`. A browser too old for the
+dashboard (no Popover API: before Chrome or Edge 114, Firefox 125 or Safari 17)
+is sent to `/unsupported.html`, which says so.
 
 ![The dashboard's Overview page: the status tiles, the live energy flow, the batteries, active rules, today's energy by the hour and the power chart](assets/preview-aggregated.jpg)
 
@@ -369,8 +369,8 @@ python3 scripts/serve_dashboard_preview.py --scenario write-mode
 python3 scripts/serve_dashboard_preview.py --now 2026-10-21T18:30:00+02:00
 ```
 
-It serves the real dashboard assets on `http://127.0.0.1:8767`: the dashboard
-at `/`, and the deprecated Classic at `/preview` with a link per view.
+It serves the real dashboard assets on `http://127.0.0.1:8767`, the dashboard
+at `/`.
 Scenarios cover a healthy system, a fleet where one device AC-charges the
 surplus of another (`ac-charging`), mixed firmware-status values (including
 unknown values), an offline device, and read-only/write-mode authentication
@@ -909,12 +909,12 @@ measurement rather than a wiring mistake.
 Overlay toggles add optional series on top of the active view without changing
 it: **EMS target**, **Grid**, **AC charging** and **State of charge** (drawn on
 its own 0–100 % scale on the right). An overlay is drawn as a dashed line
-without a fill, as in Classic, so it reads as laid over the view's own series;
+without a fill, so it reads as laid over the view's own series;
 a series the view carries itself, such as Grid on the Grid view, keeps its
 style. Every overlay is data-backed (no overlay is
 empty by design). The live legend above the chart reports every visible series
 at the cursor. Every power chart — Analytics and the SQLite charts on Overview
-and Devices, in Classic and in Modern — draws the battery below zero while
+and Devices — draws the battery below zero while
 charging and above zero while discharging, and its legend reads *Charge* or
 *Discharge* with the power. That is display only: the APIs, the stores and the
 KPIs keep the battery positive while charging. A custom date range (**From** /

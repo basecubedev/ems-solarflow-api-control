@@ -6,15 +6,21 @@ import { createFormat, localeFor } from "../lib/format.js";
 
 const formats = new Map();
 const plurals = new Map();
+const layers = [];
 let table = SHARED_STRINGS;
 
 /**
- * The app's own string table, beside the shared one. Called once while the
- * app's modules load, before anything renders; a key may live in one table
- * only, which tests/strings.test.js of each app enforces.
+ * An app's own string table, beside the shared one. Called once per table
+ * while the app's modules load, before anything renders. The console carries
+ * the dashboard's pages as well, so it holds both apps' tables; where the two
+ * name the same key, the table with the higher ``rank`` speaks, whatever order
+ * the modules loaded in. A key lives in the shared table or in an app's, which
+ * tests/strings.test.js of each app enforces.
  */
-export function useStrings(strings) {
-  table = { ...SHARED_STRINGS, ...strings };
+export function useStrings(strings, rank = 0) {
+  layers.push({ strings, rank });
+  layers.sort((a, b) => a.rank - b.rank);
+  table = Object.assign({}, SHARED_STRINGS, ...layers.map((layer) => layer.strings));
 }
 
 /**

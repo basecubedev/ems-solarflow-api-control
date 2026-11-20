@@ -670,6 +670,12 @@ test.describe("Modern dashboard views: energy @smoke", () => {
       await expect(today.nth(index)).toHaveText(label);
       await expect(bestDay.nth(index)).toHaveText(label);
     }
+    await page.locator('aside.sidebar a[data-page="analytics"]').click();
+    await page.locator('aside.sidebar a[data-page="energy"]').click();
+    await expect(today.nth(basic.length)).toHaveText("AC charging");
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(today.nth(basic.length)).toHaveText("AC charging");
+    await expect(page.getByRole("button", { name: "Expert" })).toHaveAttribute("aria-pressed", "true");
   });
 });
 
@@ -868,4 +874,66 @@ test.describe("Modern dashboard views: labels fit @smoke", () => {
       }
     });
   }
+});
+
+/**
+ * The zoom buttons sit in the legend row above a chart. uPlot paints the y
+ * axis on the canvas, so the buttons are clear of its labels exactly when they
+ * end above the canvas -- zoomed or not, with Reset zoom beside them.
+ */
+async function zoomButtonsEndAboveTheChart(card) {
+  const boxes = await card.evaluate((element) => {
+    const zoom = element.querySelector(".legend .zoom").getBoundingClientRect();
+    const canvas = element.querySelector(".chart canvas").getBoundingClientRect();
+    return { zoomBottom: zoom.bottom, canvasTop: canvas.top };
+  });
+  expect(boxes.zoomBottom, JSON.stringify(boxes)).toBeLessThanOrEqual(boxes.canvasTop);
+}
+
+test.describe("Modern dashboard views: chart controls keep clear of the axis @smoke", () => {
+  for (const [name, hash] of [
+    ["analytics", "#/analytics"],
+    ["history", "#/devices"],
+  ]) {
+    test(`the ${name} chart's zoom buttons end above its canvas, zoomed or not`, async ({ page }) => {
+      await openModern(page, hash);
+      const card = page.locator(".card", { has: page.getByTestId("chart-zoom-in") }).first();
+      await expect(card.locator(".chart canvas").first()).toBeVisible();
+      await zoomButtonsEndAboveTheChart(card);
+      await card.getByTestId("chart-zoom-in").click();
+      await expect(card.getByTestId("chart-zoom-reset")).toBeVisible();
+      await zoomButtonsEndAboveTheChart(card);
+    });
+  }
+});
+
+test.describe("Modern dashboard views: energy cards in one row @smoke", () => {
+  test("cards side by side start their facts at the same height in Expert, however many facts each has", async ({ page }) => {
+    await shapeLive(page, (body) => {
+      withAcCharging(body);
+      const stats = body.energy_stats;
+      stats.best_day = { ...stats.best_day, ratios: { self_sufficiency: null }, channels: { pv_yield: { kwh: 3.1 }, home_consumption: { kwh: 0 } }, coverage: { home_consumption: "none" } };
+    });
+    await pinTheDay(page, DOCS_SHOT_TIME);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await openModern(page, "#/energy");
+    await page.getByRole("button", { name: "Expert" }).click();
+    const regions = page.getByTestId("energy-periods").getByRole("region");
+    await expect(regions.first().locator(".energy-facts dt").first()).toBeVisible();
+    const cards = await regions.evaluateAll((elements) =>
+      elements.map((element) => ({
+        top: Math.round(element.getBoundingClientRect().top),
+        facts: element.querySelector(".energy-facts")?.getBoundingClientRect().top ?? -1,
+        count: element.querySelectorAll(".energy-facts dt").length,
+      })),
+    );
+    const rows = new Map();
+    for (const card of cards) rows.set(card.top, [...(rows.get(card.top) || []), card]);
+    const shared = [...rows.values()].filter((row) => row.length > 1 && new Set(row.map((card) => card.count)).size > 1);
+    expect(shared.length, JSON.stringify(cards)).toBeGreaterThan(0);
+    for (const row of shared) {
+      const starts = row.map((card) => card.facts);
+      expect(Math.max(...starts) - Math.min(...starts), JSON.stringify(row)).toBeLessThan(4);
+    }
+  });
 });

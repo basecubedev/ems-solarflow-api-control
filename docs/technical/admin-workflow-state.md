@@ -337,10 +337,8 @@ Rows 3, 5a and 5b are covered by §7's tests. Rows 15, 16–16d, 18, 20–26c �
 `tests/test_admin_setup_workflow_identity.py`,
 `tests/test_admin_setup_cancellation_ownership.py`,
 `tests/test_admin_setup_artifact_ownership.py`,
-`tests/test_admin_guided_upgrade_context_lifecycle.py`,
-`tests/e2e/workflow-abandon.spec.ts`, `tests/e2e/setup-stale-config.spec.ts`,
-`tests/e2e/setup-stale-apply.spec.ts`, `tests/e2e/setup-recovery-ownership.spec.ts`
-and `tests/e2e/admin-restart.spec.ts`.
+and `tests/test_admin_guided_upgrade_context_lifecycle.py`, and the console's
+browser specs in `tests/e2e/admin-modern*.spec.ts`.
 
 ### 3.1 Gating reach
 
@@ -442,7 +440,7 @@ Each action names exactly what it does, and appears only where it is accurate.
 An unknown transition owner is offered **no** destructive action, and the
 public cancel primitive refuses it (`transition_cancel_unsupported`).
 
-The action names and places above are the Classic console's. The Modern
+The action names and places above are the removed Classic console's. The
 console calls the same endpoints **Start setup over** (`/api/setup/abandon`,
 then a fresh workflow), **Discard the setup**, **Cancel the update** and **Go
 back to the version that runs**, and the §7.4 recovery on **System** →
@@ -1704,6 +1702,4 @@ calls `load()`, so the two answers cannot drift apart.
   `tests/test_admin_workflow_switching.py`,
   `tests/test_admin_workflow_recovery.py`,
   `tests/test_admin_workflow_recovery_routes.py`,
-  `tests/test_admin_workflow_lifecycle_frontend.py`,
-  `tests/e2e/workflow-switching.spec.ts` and
-  `tests/e2e/workflow-recovery.spec.ts`.
+  and `frontend/admin-modern/tests/workflow.test.js`.

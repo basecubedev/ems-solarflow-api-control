@@ -30,18 +30,6 @@ SCENARIOS = (
 )
 DEFAULT_SCENARIO = "normal"
 
-# Flow views exposed by the dashboard frontend (dashboard/static/app.js).
-FLOW_VIEWS = (
-    "aggregated",
-    "devices",
-    "analytics",
-    "control",
-    "schedule",
-    "energy",
-    "diagnose",
-    "logs",
-    "maintenance",
-)
 
 
 FROZEN_TIMESTAMP = "2026-06-17T12:00:00+00:00"

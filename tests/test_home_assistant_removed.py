@@ -50,7 +50,6 @@ from ems.config_catalog import (
 from ems.controller import EMSController
 from ems.runtime_state import RuntimeState, build_runtime_defaults
 from tests._emsctl_test_helpers import run_emsctl, write_config
-from tests.test_dashboard_frontend_xss import APP_JS, run_node
 from tests.test_dashboard_server import StoreStub, json_response, with_server
 
 pytestmark = [
@@ -368,39 +367,6 @@ def test_a_token_in_an_old_ha_section_stays_redacted_in_the_admin_view():
     assert view["ha"]["url"] == OLD_SECTION["url"]
 
 
-def test_the_dashboard_offers_no_home_assistant_card_for_a_runtime_state_with_ha_fields():
-    script = f"""
-const app = require({json.dumps(str(APP_JS))});
-app.state.auth = {{ configured: true, authenticated: true, csrfToken: "token" }};
-app.state.runtime = {{
-  system: {{ enabled: true, max_total_power: 800, min_output_limit: 35, loop_interval: 5 }},
-  devices: {{ WR1: {{ enabled: true, max_power: 800, offgrid_socket_mode: "off", pv_priority_factor: 1.0 }} }},
-  winter: {{ enabled: false }},
-  ac_charge_control: {{ enabled: true }},
-  ha: {{ enabled: true, control_enabled: true }},
-  _limits: {{
-    system: {{ max_total_power: 800, min_output_limit: 800 }},
-    devices: {{ WR1: 800 }},
-    fallback_device_max_power: 800
-  }}
-}};
-const html = app.runtimeControlPanel();
-const endpoints = [...html.matchAll(/data-runtime-endpoint="([^"]+)"/g)].map((match) => match[1]);
-console.log(JSON.stringify({{ html, endpoints }}));
-"""
-    output = run_node(script)
-
-    assert output["endpoints"] == [
-        "/api/runtime/system",
-        "/api/runtime/device/WR1",
-        "/api/runtime/winter",
-        "/api/runtime/ac_charge_control",
-        "/api/runtime/battery_care",
-    ]
-    assert "Home Assistant" not in output["html"]
-    assert "HA " not in output["html"]
-
-
 def test_the_zendure_cloud_key_is_never_called_an_ha_token_where_a_person_reads_it():
     """Owner 2026-10-25: Zendure's deviceList token keeps working, but the
     consoles and the server's messages name only the Zendure API key. "HA"
@@ -409,8 +375,6 @@ def test_the_zendure_cloud_key_is_never_called_an_ha_token_where_a_person_reads_
     import re
 
     sources = [
-        ROOT / "admin" / "static" / "index.html",
-        ROOT / "admin" / "static" / "admin.js",
         ROOT / "frontend" / "admin-modern" / "src" / "i18n" / "strings.js",
         ROOT / "admin" / "server.py",
         ROOT / "admin" / "zendure_cloud_auth.py",
@@ -419,13 +383,3 @@ def test_the_zendure_cloud_key_is_never_called_an_ha_token_where_a_person_reads_
     for path in sources:
         found = re.findall(r".{0,40}\bHA\b.{0,40}", path.read_text(encoding="utf-8"))
         assert found == [], (path.name, found)
-
-
-def test_js_grid_meter_type_choices_are_the_catalog_grid_meter_types():
-    """A type the catalog does not know reads as unresolved, not as chosen."""
-    from ems.config_catalog import grid_meter_types
-
-    js = (ROOT / "admin" / "static" / "admin.js").read_text(encoding="utf-8")
-    choices = js.split("const GRID_METER_TYPE_CHOICES = new Set([", 1)[1].split("]);", 1)[0]
-
-    assert set(json.loads("[" + choices.rstrip().rstrip(",") + "]")) == set(grid_meter_types())

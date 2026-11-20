@@ -14,9 +14,7 @@ Usage:
     python3 scripts/serve_dashboard_preview.py --host 127.0.0.1 --port 8767
 
 Open, for example:
-    http://127.0.0.1:8767/                      the Modern dashboard
-    http://127.0.0.1:8767/preview               the deprecated Classic, one link per view
-    http://127.0.0.1:8767/preview/control
+    http://127.0.0.1:8767/                      the dashboard
 
 A request carrying the cookie ``ems-preview-scenario=<name>`` is answered from
 that scenario instead of the server's own, so one browser context can show
@@ -38,7 +36,6 @@ import os
 import threading
 import time
 from datetime import datetime, timezone
-from html import escape
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
@@ -61,7 +58,6 @@ from dashboard.static_files import (  # noqa: E402
 from dashboard_preview_data import (  # noqa: E402
     DEFAULT_SCENARIO,
     DIAGNOSE_PROFILES,
-    FLOW_VIEWS,
     SCENARIOS,
     build_scenario,
     diagnose_report,
@@ -72,121 +68,13 @@ STATIC_ASSETS = build_static_asset_index(STATIC_DIR)
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8767
 SCENARIO_COOKIE = "ems-preview-scenario"
+CONSOLE_COOKIE = "ems-preview-console"
 SAFE_RESPONSE_CONTENT_TYPES = {
     "application/json; charset=utf-8",
     *STATIC_CONTENT_TYPES.values(),
 }
 
 
-ENERGY_DETAIL_LEVELS = ("basic", "expert")
-
-
-def _preview_injection(view, energy_detail=None):
-    """Minimal bootstrap injected into the real index.html.
-
-    Sets the persisted flow view so the page opens directly in the requested
-    view, then re-uses the existing frontend functions (setFlowView, runDiagnose)
-    once the page is ready. ``energy_detail`` seeds the energy board's
-    basic/expert choice, which lives in localStorage rather than in the payload,
-    so a screenshot can document the expert rows. Values are constants from a
-    fixed allow-list, so no dynamic/user data is interpolated into the page.
-    """
-
-    view_json = json.dumps(view)
-    detail_seed = ""
-    if energy_detail in ENERGY_DETAIL_LEVELS:
-        detail_json = json.dumps(energy_detail)
-        detail_seed = (
-            f"try{{window.localStorage.setItem('dashboard.energyDetail',{detail_json});}}"
-            "catch(e){}"
-        )
-    before = (
-        "<script>"
-        f"try{{window.localStorage.setItem('dashboard.flowView',{view_json});}}"
-        "catch(e){}"
-        f"{detail_seed}"
-        "</script>"
-    )
-    after = f"""
-  <script>
-    window.addEventListener("load", function () {{
-      try {{
-        if (typeof setFlowView === "function") setFlowView({view_json}, false);
-        if ({view_json} === "diagnose" && typeof runDiagnose === "function") {{
-          // Auto-run the real diagnose fetch as soon as auth status lands so the
-          // tab shows a report (when authenticated) without a manual click.
-          var tries = 0;
-          var poll = window.setInterval(function () {{
-            tries += 1;
-            var st = window.state || {{}};
-            if (st.diagnose && st.diagnose.report) {{ window.clearInterval(poll); return; }}
-            if (st.auth && st.auth.authenticated && st.diagnose && !st.diagnose.running) {{
-              runDiagnose(st.diagnose.profile);
-            }}
-            if (tries > 40) window.clearInterval(poll);
-          }}, 100);
-        }}
-      }} catch (e) {{ /* preview bootstrap is best-effort */ }}
-      document.body.dataset.previewReady = "true";
-    }});
-  </script>
-"""
-    return before, after
-
-
-def _landing_page(scenario):
-    """Developer-only landing page listing preview views and scenarios.
-
-    All interpolated values are HTML-escaped even though they are constants.
-    """
-
-    view_items = "\n".join(
-        f'      <li><a href="/preview/{escape(view)}">/preview/{escape(view)}</a></li>'
-        for view in FLOW_VIEWS
-    )
-    scenario_items = "\n".join(
-        f"      <li><code>--scenario {escape(name)}</code></li>" for name in SCENARIOS
-    )
-    return f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Dashboard preview</title>
-  <style>
-    body {{ font-family: system-ui, sans-serif; background: #0f1115; color: #e6e9ee;
-           margin: 0; padding: 2rem; line-height: 1.5; }}
-    h1 {{ font-size: 1.25rem; }}
-    h2 {{ font-size: 0.95rem; text-transform: uppercase; letter-spacing: .08em;
-          color: #9aa4b2; margin-top: 1.75rem; }}
-    a {{ color: #6ea8fe; }}
-    ul {{ list-style: none; padding-left: 0; }}
-    li {{ margin: .25rem 0; }}
-    code {{ background: #1b1f27; padding: .1rem .35rem; border-radius: .25rem; }}
-    .note {{ margin-top: 1.75rem; color: #9aa4b2; font-size: .9rem; }}
-  </style>
-</head>
-<body>
-  <h1>Dashboard preview</h1>
-  <p>Current scenario: <code>{escape(scenario)}</code></p>
-  <h2>Views</h2>
-  <ul>
-{view_items}
-  </ul>
-  <h2>Scenarios</h2>
-  <p>Restart the server with one of:</p>
-  <ul>
-{scenario_items}
-  </ul>
-  <p class="note">Synthetic data only — no real hardware, secrets, runtime state,
-  or device writes. For trusted local use only.</p>
-</body>
-</html>
-"""
-
-
-# Synthetic Maintenance-tab data. Mirrors the sanitized shapes the real
-# /api/maintenance/* endpoints return so the tab renders fully in the preview.
 PREVIEW_MAINTENANCE = {
     "status": {
         "config_path": "config/config.json",
@@ -392,13 +280,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
         path = parsed.path
 
         if path == "/api/ui-config":
-            self._send_json({"animation_mode": "normal"})
-            return
-        if path in ("/preview", "/preview/"):
-            self._send_landing()
-            return
-        if path.startswith("/preview/"):
-            self._send_preview(path[len("/preview/"):], parsed.query)
+            self._send_json({"animation_mode": "normal", "admin_console": self._console_address()})
             return
 
         if path == "/api/live":
@@ -479,6 +361,27 @@ class PreviewHandler(BaseHTTPRequestHandler):
             now=self.server.fixed_now,
         )
 
+    def _cookie(self, name):
+        cookies = SimpleCookie()
+        try:
+            cookies.load(self.headers.get("Cookie", ""))
+        except CookieError:
+            return None
+        morsel = cookies.get(name)
+        return morsel.value if morsel is not None else None
+
+    def _console_address(self):
+        """The Admin console a request's cookie ``ems-preview-console=<port>`` names, else none.
+
+        Only that browser context sees a console, and with it the notice that
+        sends the reader there, so the other pages' captures stay as they are.
+        """
+
+        value = self._cookie(CONSOLE_COOKIE)
+        if not value or not value.isdigit() or not 1 <= int(value) <= 65535:
+            return None
+        return {"port": int(value), "https_port": None}
+
     def _scenario_name(self):
         """The scenario this request's cookie names, else the server's own.
 
@@ -486,15 +389,8 @@ class PreviewHandler(BaseHTTPRequestHandler):
         rather than failing the request.
         """
 
-        cookies = SimpleCookie()
-        try:
-            cookies.load(self.headers.get("Cookie", ""))
-        except CookieError:
-            return self.server.scenario_name
-        morsel = cookies.get(SCENARIO_COOKIE)
-        if morsel is not None and morsel.value in SCENARIOS:
-            return morsel.value
-        return self.server.scenario_name
+        value = self._cookie(SCENARIO_COOKIE)
+        return value if value in SCENARIOS else self.server.scenario_name
 
     # Map each chart series id to the history-item field it reads. ``target``
     # (EMS commanded) tracks the inverter output in the synthetic data.
@@ -675,107 +571,6 @@ class PreviewHandler(BaseHTTPRequestHandler):
             "applied": False,
             "message": "Preview server does not apply changes.",
         })
-
-    def _send_landing(self):
-        body = _landing_page(self.server.scenario_name).encode("utf-8")
-        self._send_bytes(body, "text/html; charset=utf-8")
-
-    def _send_preview(self, raw_view, query=""):
-        view = raw_view.strip("/").lower()
-        if view not in FLOW_VIEWS:
-            self.send_error(404, "Unknown preview view")
-            return
-        detail = (parse_qs(query).get("detail") or [None])[0]
-        if detail is not None and detail not in ENERGY_DETAIL_LEVELS:
-            self.send_error(404, "Unknown energy detail level")
-            return
-        index_path = os.path.join(STATIC_DIR, "index.html")
-        with open(index_path, encoding="utf-8") as handle:
-            html = handle.read()
-        before, after = _preview_injection(view, detail)
-        seed = self._chart_seed_script(view)
-        marker = '<script src="/classic/app.js"></script>'
-        html = html.replace(marker, f"{before}\n  {marker}{after}{seed}", 1)
-        self._send_bytes(html.encode("utf-8"), "text/html; charset=utf-8")
-
-    def _chart_seed_script(self, view):
-        """Inline the chart series so the headless screenshot is never blank.
-
-        The captured charts otherwise show the async "Loading…" state because
-        Firefox screenshots at the load event, before the fetch resolves (and a
-        blocking XHR is rejected on the main thread). Embedding the same series
-        the API would return lets the chart render synchronously on load.
-        """
-
-        scenario = self._scenario()
-        auth = scenario["auth"]
-        snapshot = scenario["snapshot"]
-        runtime = scenario["runtime"]
-
-        # Seed auth + runtime + the live snapshot so the page renders the logged-in
-        # state of the scenario (e.g. write-mode shows the Control editor buttons
-        # and the Diagnose/Logs content) instead of the async "Connecting" state.
-        body = (
-            "if(typeof setConnection==='function')setConnection('Live',true);"
-            f"state.auth.configured={json.dumps(bool(auth.get('auth_configured')))};"
-            f"state.auth.authenticated={json.dumps(bool(auth.get('authenticated')))};"
-            f"state.auth.csrfToken={json.dumps(auth.get('csrf_token'))};"
-            f"state.runtime={json.dumps(runtime)};"
-            "if(typeof renderAuthState==='function')renderAuthState();"
-            f"if(typeof updateSnapshot==='function')updateSnapshot({json.dumps(snapshot)});"
-        )
-
-        query = {"range": ["24h"], "series": ["pv,output,battery,soc,grid"]}
-        if view in ("aggregated", "devices"):
-            data = self._history_series(query, source="sqlite")
-            body += (
-                f"state.history.data={json.dumps(data)};"
-                "if(typeof renderHistoryChart==='function')renderHistoryChart();"
-                "if(typeof setHistoryLoading==='function')setHistoryLoading(false);"
-            )
-        elif view == "analytics":
-            data = self._history_series(query, source="influxdb")
-            body += (
-                f"state.analytics.data={json.dumps(data)};"
-                # Enable the Grid Power overlay so the analytics preview also
-                # demonstrates the grid meter exchange line (import positive /
-                # export negative) on top of the overview series.
-                "if(state.analytics&&state.analytics.overlays)"
-                "state.analytics.overlays.grid=true;"
-                "if(typeof setAnalyticsAvailable==='function')setAnalyticsAvailable(true);"
-                "if(typeof renderAnalytics==='function')renderAnalytics();"
-                "if(typeof setAnalyticsLoading==='function')setAnalyticsLoading(false);"
-            )
-        elif view == "control":
-            # Force the runtime editor (control buttons) to render with the
-            # seeded auth + runtime, even before the async runtime fetch lands.
-            body += (
-                "if(typeof renderControlExplain==='function')"
-                "renderControlExplain(state.snapshot,{forceRuntimeEditor:true});"
-            )
-        elif view == "diagnose":
-            body += (
-                f"state.diagnose.report={json.dumps(scenario['diagnose'])};"
-                "if(typeof renderDiagnoseView==='function')renderDiagnoseView();"
-            )
-        elif view == "logs":
-            body += (
-                f"state.logs.lines={json.dumps(self._log_lines())};"
-                "if(typeof applyLogs==='function')applyLogs();"
-            )
-        elif view == "maintenance":
-            body += (
-                f"state.maintenance.status={json.dumps(PREVIEW_MAINTENANCE['status'])};"
-                f"state.maintenance.backups={json.dumps(PREVIEW_MAINTENANCE['backups'])};"
-                "state.maintenance.configUpgrade="
-                f"{json.dumps(PREVIEW_MAINTENANCE['config_upgrade'])};"
-                "if(typeof setFlowView==='function')"
-                "setFlowView('maintenance',false);"
-            )
-        return (
-            "\n  <script>window.addEventListener('load',function(){"
-            "try{if(typeof state!=='undefined'){" + body + "}}catch(e){}});</script>"
-        )
 
     def _send_events(self):
         remote = self.client_address[0]
@@ -992,11 +787,6 @@ def _print_urls(host, port, scenario):
     print(f"Dashboard preview server: scenario={scenario}")
     print("Modern dashboard:")
     print(f"  http://{display_host}:{port}/")
-    print("Classic (deprecated), landing page:")
-    print(f"  http://{display_host}:{port}/preview")
-    print("Classic views:")
-    for view in FLOW_VIEWS:
-        print(f"  http://{display_host}:{port}/preview/{view}")
     print("Synthetic data only — no real hardware, secrets, or runtime state.")
     print("Press Ctrl+C to stop.")
 
@@ -1005,12 +795,6 @@ def _print_scenarios():
     print("Scenarios:")
     for name in SCENARIOS:
         print(f"  {name}")
-
-
-def _print_views():
-    print("Views:")
-    for view in FLOW_VIEWS:
-        print(f"  {view}")
 
 
 def _instant(text):
@@ -1075,11 +859,6 @@ def parse_args(argv=None):
         action="store_true",
         help="print available scenarios and exit",
     )
-    parser.add_argument(
-        "--list-views",
-        action="store_true",
-        help="print available views and exit",
-    )
     return parser.parse_args(argv)
 
 
@@ -1088,9 +867,6 @@ def main(argv=None):
 
     if args.list_scenarios:
         _print_scenarios()
-        return
-    if args.list_views:
-        _print_views()
         return
 
     if args.host not in ("127.0.0.1", "localhost", "::1"):

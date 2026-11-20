@@ -12,6 +12,7 @@ where a new model, transport, broker source, secret field or grid-meter field
 must be declared.
 """
 
+import functools
 import pathlib
 
 import pytest
@@ -25,7 +26,16 @@ pytestmark = [
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 ADMIN = REPO / "admin"
-ADMIN_JS = REPO / "admin" / "static" / "admin.js"
+ADMIN_CONSOLE = REPO / "frontend" / "admin-modern" / "src"
+
+
+@functools.cache
+def _console_source():
+    """Every script and component of the Admin console, as one text."""
+
+    files = sorted(path for pattern in ("*.js", "*.svelte") for path in ADMIN_CONSOLE.rglob(pattern))
+    assert files, "no Admin console source found"
+    return "\n".join(path.read_text(encoding="utf-8") for path in files)
 
 
 def _admin_modules(*, exclude=()):
@@ -170,7 +180,7 @@ def test_both_workflows_mutate_through_the_shared_core():
 def test_the_browser_holds_no_config_mutation_rule():
     """Variant cleanup and credential intent stay server-side."""
 
-    source = ADMIN_JS.read_text()
+    source = _console_source()
     for marker in (
         "strip_incompatible_grid_meter",
         "GRID_METER_KNOWN_TOP_KEYS",
@@ -199,7 +209,7 @@ def test_runtime_and_admin_resolve_control_through_core():
 def test_frontend_carries_no_hardware_capability_table():
     """The browser projects a verdict; it never owns the model/route matrix."""
 
-    source = ADMIN_JS.read_text()
+    source = _console_source()
     for marker in (
         # write profiles
         "zensdk_properties",
@@ -219,7 +229,7 @@ def test_frontend_carries_no_hardware_capability_table():
 def test_frontend_reads_the_backend_control_verdict():
     """The browser's control state is fed by backend fields, not re-derived."""
 
-    source = ADMIN_JS.read_text()
+    source = _console_source()
     for field in (
         "output_control_supported",
         "control_broker_sources",
@@ -285,23 +295,23 @@ def test_setup_and_maintenance_adapt_the_same_planner():
 
 
 def test_the_browser_cannot_mint_an_issued_id():
-    """admin.js may test and compare issued ids; it may never construct one."""
+    """The Admin console may test and compare issued ids; it may never construct one."""
 
-    source = ADMIN_JS.read_text()
+    source = _console_source()
     for prefix in ("obs:v1:", "conn:v1:", "opaque:v1:", "plan:v1:"):
-        for minting in (f'"{prefix}" +', f"'{prefix}' +", f'"{prefix}" +'):
-            assert minting not in source, f"admin.js concatenates a {prefix} id"
+        for minting in (f'"{prefix}" +', f"'{prefix}' +", f"`{prefix}${{"):
+            assert minting not in source, f"the Admin console builds a {prefix} id"
 
 
 def test_setup_state_is_rehydrated_through_the_backend():
     """Legacy Setup stores are resolved by the planner, not re-matched locally."""
 
-    source = ADMIN_JS.read_text()
+    source = _console_source()
     assert '"/api/setup/device-plan"' in source
     for adopted in (
-        "function adoptPlannedIdentityState(",
-        "function applySetupPlanOperations(",
-        "legacyPhysicalDismissals",
+        "export function applyOperations(",
+        "export function adoptDismissals(",
+        "legacyDismissals",
     ):
         assert adopted in source, adopted
 
@@ -327,19 +337,19 @@ def test_frontend_carries_no_physical_identity_decision_table():
     collection key must not be reachable from a displayed hardware field.
     """
 
-    source = ADMIN_JS.read_text()
+    source = _console_source()
     for removed in ("function deviceKey(", "function discoveryDeviceMatch("):
         assert removed not in source, removed
     assert "function observationKey(" in source
-    assert "function hasObservationIdentity(" in source
 
 
 def test_browser_collection_key_reads_only_the_issued_observation_id():
     """observationKey must not consult a serial to decide equality."""
 
-    source = ADMIN_JS.read_text()
+    source = _console_source()
     start = source.index("function observationKey(")
-    body = source[start : source.index("\nfunction ", start)]
+    rest = source[start:]
+    body = rest[: min(end for end in (rest.find("\nexport function ", 1), rest.find("\nfunction ", 1)) if end > 0)]
     assert "observation_id" in body
     for hardware_field in ("serial_number", "sn", "product_key", "physical_identity_token"):
         assert hardware_field not in body, hardware_field

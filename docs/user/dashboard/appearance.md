@@ -21,7 +21,7 @@ want it.
 
 ### 1 — Open the Appearance menu
 
-![Overview with the Appearance menu open at the top right: colour scheme, language, density, side menu and motion, and the switch to the classic view](../../assets/screenshots/dashboard/dashboard-appearance-menu.png)
+![Overview with the Appearance menu open at the top right: colour scheme, language, density, side menu and motion](../../assets/screenshots/dashboard/dashboard-appearance-menu.png)
 
 **What you select:** the settings button at the right end of the top bar.
 
@@ -70,8 +70,6 @@ such as log lines and the diagnosis texts, stay in English.
   address. A tablet in the hall and a laptop at the desk can each have their
   own. They are not installation state and change nothing on the EMS.
 - The Admin Console is a separate address, so its choices are separate too.
-- The Classic dashboard keeps its own appearance; changing one never changes
-  the other.
 - If the installation has animation switched off (`dashboard.animation_mode`),
   **Motion** cannot turn it back on, and the menu says *Animation is switched
   off for this installation.* A system that asks for reduced motion gets none
@@ -88,7 +86,7 @@ every time, in this browser.
 | --- | --- | --- |
 | Another browser shows the default again | The choices belong to the browser they were made in | Choose them there too |
 | The dashes in the flow do not move | **Motion** is off, the installation has animation switched off, or the system asks for reduced motion | Check **Appearance → Motion** |
-| The address opens the Classic dashboard | Demo mode, `?ui=classic`, or a browser too old for Modern | See [The deprecated Classic dashboard](index.md#the-deprecated-classic-dashboard) |
+| A page says the browser is too old | The dashboard needs Chrome or Edge 114, Firefox 125 or Safari 17 or newer | See [Browsers and old addresses](index.md#browsers-and-old-addresses) |
 
 ## Recovery or next steps
 

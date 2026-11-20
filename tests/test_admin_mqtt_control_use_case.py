@@ -12,6 +12,7 @@ entry — a no-op roundtrip preserves it.
 
 import copy
 import json
+from pathlib import Path
 
 import pytest
 
@@ -25,6 +26,7 @@ from admin.zendure_mqtt_config_draft import (
     sanitize_zendure_mqtt_fragment,
 )
 from admin.zendure_mqtt_config_proposals import build_proposals
+from tests.modern_frontend import js_call
 
 pytestmark = [
     pytest.mark.admin,
@@ -32,6 +34,18 @@ pytestmark = [
     pytest.mark.integration,
     pytest.mark.simulation,
 ]
+
+DISCOVERY_JS = Path(__file__).resolve().parents[1] / "frontend" / "admin-modern" / "src" / "lib" / "discovery.js"
+
+
+def _maintenance_draft_entry(proposal):
+    """The draft entry the Admin console's Maintenance editor adds for a proposal.
+
+    Built by its own ``mqttDeviceFromProposal`` with no central common
+    defaults, so the comparison is about the MQTT entry itself.
+    """
+
+    return js_call(DISCOVERY_JS, "mqttDeviceFromProposal", proposal, [], {"default_device": {"common": {}}})
 
 
 def test_manual_supported_inverter_is_controllable_without_editing_config():
@@ -210,6 +224,33 @@ def test_maintenance_preserves_existing_manual_control_entry(tmp_path, isolated_
 # --- Fresh Setup / Maintenance discovery parity -------------------------------
 
 
+def _local_control_observation():
+    return {
+        "source_type": "local_mqtt",
+        "broker_host": "10.0.0.10",
+        "broker_port": 1883,
+        "topic_family": "legacy_zendure_json",
+        "serial_number": "CTL1",
+        "device_id": "CTL1",
+        "product_key": "PKCTL",
+        "model_hint": "SolarFlow Hub 2000",
+        "metrics_seen": ["outputLimit", "electricLevel", "outputHomePower"],
+    }
+
+
+def _local_scalar_observation():
+    return {
+        "source_type": "local_mqtt",
+        "broker_host": "10.0.0.10",
+        "broker_port": 1883,
+        "topic_family": "zensdk_ha_scalar",
+        "serial_number": "SF800",
+        "device_id": "SF800",
+        "model_hint": "SolarFlow 800",
+        "metrics_seen": ["outputLimit", "electricLevel"],
+    }
+
+
 def _soc_only_observation():
     return {
         "source_type": "local_mqtt",
@@ -235,12 +276,6 @@ def test_setup_and_maintenance_selection_produce_equivalent_mqtt_device(
     and the real Maintenance browser path must yield the same device config.
     """
 
-    from tests.test_admin_frontend import (
-        _local_control_observation,
-        _local_scalar_observation,
-        run_mconfig_add_mqtt_proposal,
-    )
-
     observation = {
         "control_inverter": _local_control_observation,
         "scalar_telemetry": _local_scalar_observation,
@@ -256,7 +291,7 @@ def test_setup_and_maintenance_selection_produce_equivalent_mqtt_device(
 
     # Maintenance: the real browser selection function builds the draft entry,
     # then the shared draft builder projects it onto a new config device.
-    draft_entry = run_mconfig_add_mqtt_proposal(proposal)["device"]
+    draft_entry = _maintenance_draft_entry(proposal)
     maintenance_device = {}
     apply_zendure_mqtt_draft_fields(maintenance_device, draft_entry)
 
@@ -298,8 +333,6 @@ def _modern_model_on_alt_json_observation():
 
 
 def test_modern_device_on_alt_json_layout_stays_modern_and_controllable():
-    from tests.test_admin_frontend import run_mconfig_add_mqtt_proposal
-
     proposal = build_proposals([_modern_model_on_alt_json_observation()])[0]
     assert proposal["hardware_generation"] == "solarflow_zensdk"
     assert proposal["hardware_model"] == "solarflow_800_pro_2"
@@ -307,7 +340,7 @@ def test_modern_device_on_alt_json_layout_stays_modern_and_controllable():
     assert proposal["product"] == "SolarFlow 800 Pro 2"
     assert proposal["output_control_supported"] is True
 
-    draft = run_mconfig_add_mqtt_proposal(proposal)["device"]
+    draft = _maintenance_draft_entry(proposal)
     device = {}
     apply_zendure_mqtt_draft_fields(device, draft)
     assert device["mqtt"]["topic_family"] == "legacy_zendure_json_alt"
@@ -318,8 +351,6 @@ def test_modern_device_on_alt_json_layout_stays_modern_and_controllable():
 
 
 def test_a_scalar_observation_without_a_product_key_has_no_write_route():
-    from tests.test_admin_frontend import run_mconfig_add_mqtt_proposal
-
     observation = dict(_hub_model_on_scalar_observation())
     # Judged on the cloud broker, which carries the write route on every family,
     # so the only remaining blocker is the address itself.
@@ -333,7 +364,7 @@ def test_a_scalar_observation_without_a_product_key_has_no_write_route():
     # scalar topic carries no product key, and iot/<pk>/<dev>/… needs one.
     assert proposal["output_control_reason"] == "write_target_missing"
 
-    draft = run_mconfig_add_mqtt_proposal(proposal)["device"]
+    draft = _maintenance_draft_entry(proposal)
     device = {}
     apply_zendure_mqtt_draft_fields(device, draft)
     # The hardware label must not re-home the observed transport schema.

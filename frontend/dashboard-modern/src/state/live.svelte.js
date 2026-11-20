@@ -7,6 +7,7 @@ import { prefs, applyDocumentPrefs } from "./prefs.svelte.js";
 import { auth } from "./auth.svelte.js";
 import { normalizedDevices } from "../lib/devices.js";
 import { packsSeen } from "../lib/cells.js";
+import { setConsoleRecord } from "./console.svelte.js";
 
 /**
  * The live snapshot. It is replaced wholesale on every frame and therefore
@@ -23,6 +24,8 @@ class Live {
   runtimeUnavailable = $state(false);
   /** The highest pack number each device has reported cells for since the page loaded. */
   cellPacks = $state.raw({});
+  /** Whether /api/ui-config has answered once, so links that depend on it wait for it. */
+  uiConfigLoaded = $state(false);
 }
 
 export const live = new Live();
@@ -89,6 +92,8 @@ async function loadUiConfig() {
       prefs.serverAnimation = config.animation_mode;
       applyDocumentPrefs();
     }
+    setConsoleRecord(config?.admin_console ?? null);
+    live.uiConfigLoaded = true;
   } catch {
     prefs.serverAnimation = "normal";
   }

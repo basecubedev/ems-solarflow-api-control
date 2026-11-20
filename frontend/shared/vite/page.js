@@ -20,6 +20,7 @@ const NOTICES = {
   "Lucide.LICENSE": resolve(ROOT, "node_modules/lucide-static/LICENSE"),
 };
 const VITE_LICENSE = resolve(ROOT, "node_modules/vite/LICENSE.md");
+const UNSUPPORTED = resolve(SHARED, "unsupported");
 const VITE_HELPER = "vite:preloadError";
 
 /** Vite's own MIT notice, the part of its LICENSE.md that covers Vite rather than what Vite bundles. */
@@ -33,10 +34,14 @@ export function viteNotice(text) {
  * colours, read from tokens.css. It is a data: URI, which both servers' CSP
  * admits for images, so neither needs a new file type.
  */
-function favicon() {
+function rootTokens() {
   const css = readFileSync(TOKENS, "utf8");
   const start = css.indexOf(":root {");
-  const root = css.slice(start, css.indexOf("}", start));
+  return css.slice(start, css.indexOf("}", start) + 1);
+}
+
+function favicon() {
+  const root = rootTokens();
   const token = (name) => {
     const match = root.match(new RegExp(`${name}:\\s*([^;]+);`));
     if (!match) throw new Error(`tokens.css has no ${name} in its first :root block`);
@@ -56,10 +61,10 @@ function favicon() {
 
 const SHAPE = /<(?:path|circle|ellipse|line|polygon|polyline|rect)\b[^<>]*\/>/g;
 
-/** The shared parts' icons and the app's own, each once, in a stable order. */
+/** The shared parts' icons and the app's own (one list, or several for an app that carries another's pages), each once, in a stable order. */
 export function iconNames(appIcons) {
   const shared = JSON.parse(readFileSync(SHARED_ICONS, "utf8"));
-  const own = JSON.parse(readFileSync(appIcons, "utf8"));
+  const own = [appIcons].flat().flatMap((file) => JSON.parse(readFileSync(file, "utf8")));
   return [...new Set([...shared, ...own])].sort();
 }
 
@@ -86,18 +91,43 @@ function iconSprite(appIcons) {
 }
 
 /**
+ * The page a browser too old for the app is sent to, and its stylesheet: the
+ * default scheme's tokens, read from tokens.css like the tab icon, and a few
+ * rules of its own. No script, so the oldest browser shows it.
+ */
+export function unsupportedStyles() {
+  const layout = [
+    "html { color-scheme: dark; }",
+    "body { margin: 0; font-family: system-ui, sans-serif; line-height: 1.5; color: var(--m-text); background: var(--m-bg); }",
+    "main { max-width: 560px; margin: 12vh auto; padding: 0 24px; }",
+    "h1 { font-size: 20px; margin: 0 0 16px; }",
+    "p { margin: 0 0 12px; color: var(--m-muted); }",
+    "p[lang=\"en\"] { color: var(--m-text); }",
+  ];
+  return `${PROJECT_BANNER}\n${rootTokens()}\n${layout.join("\n")}\n`;
+}
+
+/**
  * The page plugin: fills <!--favicon--> and <!--icons-->, and <!--vendored-->
  * with what the app passes. The font and the icon paths are copied, not
  * bundled, so their licence texts ship beside them as files; Vite's
  * licenses.json covers bundled packages only, and neither the preload helper
  * Vite writes into a build with page chunks, whose notice ships as Vite.LICENSE.
+ * ``unsupported`` adds fallback.js, which the page loads first, and the page
+ * it sends a browser too old for the app to.
  */
-export function modernPage({ name, icons, vendored = "" }) {
+export function modernPage({ name, icons, vendored = "", unsupported = false }) {
   return {
     name,
     generateBundle(_options, bundle) {
       for (const [fileName, path] of Object.entries(NOTICES)) {
         this.emitFile({ type: "asset", fileName, source: readFileSync(path, "utf8") });
+      }
+      if (unsupported) {
+        for (const fileName of ["fallback.js", "unsupported.html"]) {
+          this.emitFile({ type: "asset", fileName, source: readFileSync(resolve(UNSUPPORTED, fileName), "utf8") });
+        }
+        this.emitFile({ type: "asset", fileName: "unsupported.css", source: unsupportedStyles() });
       }
       if (Object.values(bundle).some((chunk) => chunk.type === "chunk" && chunk.code.includes(VITE_HELPER))) {
         this.emitFile({ type: "asset", fileName: "Vite.LICENSE", source: viteNotice(readFileSync(VITE_LICENSE, "utf8")) });
@@ -123,7 +153,8 @@ const PROJECT_BANNER = "/* SPDX-FileCopyrightText: 2026 basecubedev */\n/* SPDX-
  * The build both apps share: fixed file names, one stylesheet, a licence list.
  * An app that loads its pages as separate chunks (``split``) keeps every
  * bundled package in one ``vendor.js``, which THIRD_PARTY_LICENSES.md names,
- * and its string tables in one ``strings.js``, which would otherwise make the
+ * and its string tables in ``strings.js`` (the dashboard's pages', which the
+ * console carries, in ``dashboard-strings.js``), which would otherwise make the
  * chunk shared by every page larger than a file the repository takes; every
  * other chunk is the project's own code (the entry chunk also holds Vite's
  * preload helper) and says so in its banner, and
@@ -132,7 +163,7 @@ const PROJECT_BANNER = "/* SPDX-FileCopyrightText: 2026 basecubedev */\n/* SPDX-
 export function modernBuild({ outDir, entry, split = false }) {
   const chunking = split
     ? {
-        manualChunks: (id) => (id.includes("/node_modules/") ? "vendor" : id.endsWith("/i18n/strings.js") ? "strings" : undefined),
+        manualChunks: (id) => (id.includes("/node_modules/") ? "vendor" : id.endsWith("/dashboard-modern/src/i18n/strings.js") ? "dashboard-strings" : id.endsWith("/i18n/strings.js") ? "strings" : undefined),
         postBanner: (chunk) => (chunk.name === "vendor" ? "" : PROJECT_BANNER),
       }
     : {};

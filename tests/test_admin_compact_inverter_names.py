@@ -2,14 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Compact inverter-name contract shared by Setup and Maintenance."""
 
-import json
-import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
 
 from admin.config_preview import ConfigPreviewGenerator
+from tests.modern_frontend import js_call
 
 
 pytestmark = [
@@ -20,53 +18,7 @@ pytestmark = [
 ]
 
 ROOT = Path(__file__).resolve().parents[1]
-ADMIN_JS = ROOT / "admin" / "static" / "admin.js"
-
-
-def _extract_function(source, name):
-    marker = f"function {name}"
-    start = source.find(marker)
-    assert start >= 0, f"{name} is missing from admin.js"
-    brace = source.find(") {", start) + 2
-    assert brace >= 2, f"function body for {name} is missing"
-    depth = 0
-    quote = None
-    escaped = False
-    for index in range(brace, len(source)):
-        char = source[index]
-        if quote:
-            if escaped:
-                escaped = False
-            elif char == "\\":
-                escaped = True
-            elif char == quote:
-                quote = None
-            continue
-        if char in "'\"`":
-            quote = char
-        elif char == "{":
-            depth += 1
-        elif char == "}":
-            depth -= 1
-            if depth == 0:
-                return source[start : index + 1]
-    raise AssertionError(f"unterminated function {name}")
-
-
-def _run_node(functions, setup):
-    node = shutil.which("node")
-    if not node:
-        pytest.skip("node is required for compact inverter-name tests")
-    source = ADMIN_JS.read_text(encoding="utf-8")
-    script = "\n".join(_extract_function(source, name) for name in functions)
-    result = subprocess.run(
-        [node, "-e", script + "\n" + setup],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout)
+SETUP_DRAFT_JS = ROOT / "frontend" / "admin-modern" / "src" / "lib" / "setupDraft.js"
 
 
 @pytest.mark.parametrize(
@@ -81,13 +33,7 @@ def _run_node(functions, setup):
     ],
 )
 def test_frontend_compact_allocator_contract(names, count, expected):
-    result = _run_node(
-        ["nextCompactInverterName"],
-        "console.log(JSON.stringify(nextCompactInverterName("
-        + json.dumps(names)
-        + f", {count})));",
-    )
-    assert result == expected
+    assert js_call(SETUP_DRAFT_JS, "nextCompactName", names, count) == expected
 
 
 @pytest.mark.parametrize(
@@ -104,191 +50,6 @@ def test_backend_compact_allocator_matches_frontend(names, count, expected):
     from admin.inverter_names import next_compact_inverter_name
 
     assert next_compact_inverter_name(names, count) == expected
-
-
-def test_fresh_local_api_and_mqtt_share_one_sequence():
-    result = _run_node(
-        [
-            "nextCompactInverterName",
-            "inverterItems",
-            "selectedMqttDeviceEntries",
-            "freshInverterConfigNames",
-            "nextInverterName",
-            "normalizeInverterAliasTokens",
-            "serializeMqttProposalSelection",
-        ],
-        """
-let configDraftItems = [];
-const zendureMqttPreviewProposals = new Map();
-let manualMqttDevices = [];
-configDraftItems.push({role: "inverter", config_name: nextInverterName()});
-const proposal = {
-  id: "mqtt:1", target: "device", display_name: "SolarFlow 800 Pro 2",
-  serial_number: "EOD1NLN9P010902", device_id: "EOD1NLN9P010902",
-  config_fragment: {name: "Zendure MQTT SolarFlow 800 Pro 2 EOD1NLN9P010902"},
-};
-const selected = serializeMqttProposalSelection(proposal, {target: "device"});
-zendureMqttPreviewProposals.set(selected.id, selected);
-manualMqttDevices.push({name: nextInverterName(), serial_number: "MANUAL"});
-console.log(JSON.stringify({
-  local: configDraftItems[0].config_name,
-  mqtt: selected.config_name,
-  mqttDisplay: selected.display_name,
-  mqttSerial: selected.serial_number,
-  manual: manualMqttDevices[0].name,
-}));
-""",
-    )
-    assert result == {
-        "local": "INV_1",
-        "mqtt": "INV_2",
-        "mqttDisplay": "SolarFlow 800 Pro 2",
-        "mqttSerial": "EOD1NLN9P010902",
-        "manual": "INV_3",
-    }
-
-
-def test_maintenance_creation_paths_share_the_allocator():
-    result = _run_node(
-        [
-            "nextCompactInverterName",
-            "mconfigNextInverterName",
-            "issuedPhysicalIdentity",
-            "issuedConnectionId",
-            "sameIssuedDevice",
-            "mconfigDeviceCommonDefaults",
-            "mconfigApplyCommonDefaults",
-            "mconfigAddInverter",
-            "mconfigAddZendureMqttDevice",
-            "mconfigAddDiscovered",
-            "mqttProposalBrokerRef",
-            "mqttProposalBrokerProfile",
-            "normalizeInverterAliasTokens",
-            "mconfigZendureMqttDraftFromProposal",
-            "mconfigAddZendureMqttProposal",
-        ],
-        """
-const mconfigState = {
-  draft: {devices: []}, catalog: {zendure_mqtt_generations: []},
-  openHardware: new Set(),
-};
-function mconfigDeviceCatalogFields() { return []; }
-const MCONFIG_DEVICE_IDENTITY_KEYS = new Set(["name", "ip", "sn"]);
-function deviceFieldKey(path) { return path; }
-function mconfigGenerations() { return []; }
-function renderMaintenanceInverters() {}
-function mconfigRerenderDiscoveryReview() {}
-function renderMaintenanceGridMeter() {}
-function mconfigMarkDraftChanged() {}
-function mconfigIdentity(value) { return String(value || "").trim().toLowerCase(); }
-function mconfigMqttProposalState() { return "new"; }
-mconfigAddInverter();
-mconfigAddZendureMqttDevice();
-mconfigAddDiscovered({
-  role: "inverter",
-  discovered: {ip: "192.0.2.3", serial_number: "LOCAL-3"},
-});
-mconfigAddZendureMqttProposal({
-  id: "mqtt:4", display_name: "SolarFlow 800 Pro 2",
-  serial_number: "EOD1NLN9P010902", broker_ref: "cloud",
-  config_fragment: {
-    name: "Zendure MQTT SolarFlow 800 Pro 2 EOD1NLN9P010902",
-    serial_number: "EOD1NLN9P010902", mqtt: {broker_ref: "cloud"},
-    capabilities: {write_output_limit: false},
-  },
-});
-console.log(JSON.stringify(mconfigState.draft.devices.map((device) => device.name)));
-""",
-    )
-    assert result == ["INV_1", "INV_2", "INV_3", "INV_4"]
-
-
-def test_reset_and_reorder_preserve_metadata_and_existing_aliases():
-    result = _run_node(
-        [
-            "nextCompactInverterName",
-            "inverterItems",
-            "selectedMqttDeviceEntries",
-            "freshInverterConfigNames",
-            "nextInverterName",
-            "moveDraftItem",
-            "resetDraftItemName",
-        ],
-        """
-let configDraftItems = [
-  {source_id: "a", role: "inverter", config_name: "Roof West",
-   display_name: "SolarFlow 800 Pro", serial_number: "SN-A"},
-  {source_id: "b", role: "inverter", config_name: "INV_2",
-   display_name: "SolarFlow 800 Pro 2", serial_number: "SN-B"},
-];
-const zendureMqttPreviewProposals = new Map();
-let manualMqttDevices = [];
-let commits = 0;
-function commitDraftChange() { commits += 1; }
-function rememberInverterName() {}
-moveDraftItem("b", -1);
-const namesAfterMove = configDraftItems.map((item) => item.config_name);
-resetDraftItemName("a");
-console.log(JSON.stringify({
-  namesAfterMove,
-  order: configDraftItems.map((item) => item.source_id),
-  namesAfterReset: configDraftItems.map((item) => item.config_name),
-  displays: configDraftItems.map((item) => item.display_name),
-  commits,
-}));
-""",
-    )
-    assert result == {
-        "namesAfterMove": ["INV_2", "Roof West"],
-        "order": ["b", "a"],
-        "namesAfterReset": ["INV_2", "INV_3"],
-        "displays": ["SolarFlow 800 Pro 2", "SolarFlow 800 Pro"],
-        "commits": 2,
-    }
-
-
-def test_removed_generated_alias_is_not_reused():
-    result = _run_node(
-        ["nextCompactInverterName"],
-        'console.log(JSON.stringify(nextCompactInverterName(["INV_2"], 1)));',
-    )
-    assert result == "INV_3"
-
-
-def test_old_saved_mqtt_selection_gets_one_persisted_compact_name():
-    result = _run_node(
-        ["nextCompactInverterName", "upgradeStoredInverterNames"],
-        """
-let configDraftItems = [
-  {role: "inverter", config_name: "Roof West", serial_number: "LOCAL"},
-];
-const zendureMqttPreviewProposals = new Map([
-  ["old", {id: "old", target: "device", serial_number: "MQTT-1",
-    display_name: "SolarFlow 800 Pro"}],
-  ["custom", {id: "custom", target: "device", serial_number: "MQTT-2",
-    config_name: "Battery Garage"}],
-]);
-let manualMqttDevices = [];
-let proposalSaves = 0;
-let manualSaves = 0;
-function saveMqttPreviewProposals() { proposalSaves += 1; }
-function saveManualMqttDevices() { manualSaves += 1; }
-upgradeStoredInverterNames();
-upgradeStoredInverterNames();
-console.log(JSON.stringify({
-  old: zendureMqttPreviewProposals.get("old").config_name,
-  custom: zendureMqttPreviewProposals.get("custom").config_name,
-  proposalSaves,
-  manualSaves,
-}));
-""",
-    )
-    assert result == {
-        "old": "INV_3",
-        "custom": "Battery Garage",
-        "proposalSaves": 1,
-        "manualSaves": 0,
-    }
 
 
 def _generator():

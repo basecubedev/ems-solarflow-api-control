@@ -281,8 +281,8 @@ the new settings.*, with **Open the dashboard**. It points at
   the server. Closing the tab does not cancel it: after a sign-in, a reload or
   an Admin Console restart, the console opens the unfinished setup again, and
   every other page shows **Continue the setup**.
-- The draft is kept in the browser under the same names Classic uses, so a
-  setup begun in one console continues in the other.
+- The draft is kept in the browser under the names the removed Classic console
+  used, so a setup a browser began there before the update continues here.
 
 ## Expected result
 

@@ -2,10 +2,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Devices, the grid meter and the top-level Zendure MQTT broker in the
- * settings draft, edited the way the Classic editor edits them
- * (admin/static/admin.js, mconfig*): the same draft keys, the same defaults
- * and the same derived control capability, so the server's preview and apply
- * see what they would see from Classic. Everything here is pure: it returns a
+ * settings draft: the draft keys, their defaults and the derived control
+ * capability the server's preview and apply read. Everything here is pure: it returns a
  * new value and never changes the one it was given.
  */
 

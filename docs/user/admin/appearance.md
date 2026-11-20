@@ -22,12 +22,11 @@ you want it, and on a phone.
 
 ### 1 — Open the Appearance menu
 
-![Overview with the Appearance menu open at the top right: colour scheme, language, density, side menu and motion, and the switch to the classic view](../../assets/screenshots/admin/admin-appearance-menu.png)
+![Overview with the Appearance menu open at the top right: colour scheme, language, density, side menu and motion](../../assets/screenshots/admin/admin-appearance-menu.png)
 
 **What you select:** the settings button at the right end of the top bar.
 
-**What you see:** **Appearance** with five choices and the way to the old
-design:
+**What you see:** **Appearance** with five choices:
 
 | Choice | Values |
 | --- | --- |
@@ -37,9 +36,8 @@ design:
 | **Side menu** | **Auto** (text beside the icons on a desktop, icons only below 1024 px), **With text** or **Icons** |
 | **Motion** | The console's small movements, such as the sheet sliding in on a phone, **On** or **Off** |
 
-**Switch to classic view** opens the same page in the deprecated Classic
-console. **Hide menu text** at the foot of the side menu switches the text
-beside the icons as well, and is kept like the choice in the menu.
+**Hide menu text** at the foot of the side menu switches the text beside the
+icons as well, and is kept like the choice in the menu.
 
 ### 2 — Choose a colour scheme
 
@@ -74,12 +72,12 @@ On a narrow screen the side menu gives way to a bar at the bottom with four
 pages — **Overview**, **Updates**, **Settings** and **Services** until you
 choose others — and **More**.
 
-![The More sheet on a phone: the pages Assistant, Backups, Diagnostics and System, the quick settings for language and colour scheme, Sign out, Open the dashboard, Choose the pages in the bar and Switch to classic view](../../assets/screenshots/admin/admin-phone-more.png)
+![The More sheet on a phone: the pages Assistant, Backups, Diagnostics and System, the quick settings for language and colour scheme, Sign out, Open the dashboard and Choose the pages in the bar](../../assets/screenshots/admin/admin-phone-more.png)
 
 **More** opens a sheet with the other pages (**Assistant**, **Backups**,
 **Diagnostics**, **System**), **Quick settings** for the language and the
-colour scheme, **Sign out**, **Open the dashboard**, **Choose the pages in the
-bar** and **Switch to classic view**. To change the bar, choose **Choose the
+colour scheme, **Sign out**, **Open the dashboard** and **Choose the pages in
+the bar**. To change the bar, choose **Choose the
 pages in the bar**, tap two pages to swap them — one **In the bar**, one
 **Under More** — and **Done**; **Default pages** puts the four back. Swipe the
 sheet down or tap its handle to close it.
@@ -91,8 +89,6 @@ sheet down or tap its handle to close it.
   installation state and change nothing on the host.
 - The EMS Dashboard is a separate address, so its choices are separate too,
   although it offers the same ones.
-- The Classic console keeps its own appearance; changing one never changes the
-  other.
 - A system that asks for reduced motion gets none, whatever **Motion** says.
 
 ## Expected result
@@ -106,7 +102,7 @@ every time, in this browser.
 | --- | --- | --- |
 | Another browser shows the default again | The choices belong to the browser they were made in | Choose them there too |
 | A message is in English | It comes from the server and has no translation yet | It is still accurate; report it if it matters to you |
-| The address opens the Classic console | An address that names a Classic page, `?ui=classic`, or a browser too old for Modern | See [The deprecated Classic console](index.md#the-deprecated-classic-console) |
+| A page says the browser is too old | The console needs Chrome or Edge 114, Firefox 125 or Safari 17 or newer | See [Browsers and old addresses](index.md#browsers-and-old-addresses) |
 
 ## Recovery or next steps
 

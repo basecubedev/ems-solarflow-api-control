@@ -20,6 +20,7 @@ class Auth {
 export const auth = new Auth();
 
 let lastHeartbeat = 0;
+let epoch = 0;
 
 function adopt(payload) {
   auth.configured = Boolean(payload?.auth_configured);
@@ -28,10 +29,14 @@ function adopt(payload) {
   auth.loaded = true;
 }
 
+/** A status read that a sign-in or sign-out overtook says nothing about the session any more. */
 export async function loadAuth() {
+  const asked = epoch;
   try {
-    adopt(await getJson("/api/auth/status"));
+    const payload = await getJson("/api/auth/status");
+    if (asked === epoch) adopt(payload);
   } catch {
+    if (asked !== epoch) return;
     auth.configured = false;
     auth.authenticated = false;
     auth.csrfToken = null;
@@ -41,6 +46,7 @@ export async function loadAuth() {
 
 export async function login(password) {
   const payload = await sendJson("/api/auth/login", { body: { password } });
+  epoch += 1;
   auth.configured = Boolean(payload?.auth_configured ?? true);
   auth.authenticated = true;
   auth.csrfToken = payload?.csrf_token || null;
@@ -50,6 +56,7 @@ export async function login(password) {
 
 export async function logout() {
   await sendJson("/api/auth/logout", {});
+  epoch += 1;
   auth.authenticated = false;
   auth.csrfToken = null;
 }

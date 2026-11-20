@@ -4,37 +4,32 @@
 
 The control explanation reaches the browser as codes: the strategy, why a device
 was limited or not written, the firmware signals behind its capability, and
-the limits the target passed through. The dashboard keeps one table of labels
-for them, and the codes live in the EMS, so the two are a paired registry: a
-code without a label reached the operator as ``pv_first`` or ``runtime role ac
-input``, and a label keyed on a code the EMS does not send never showed at all.
+the limits the target passed through. The dashboard keeps one list of the codes
+it has words for (``CONTROL_CODES`` and ``DECISION_SENTENCES`` in
+``frontend/dashboard-modern/src/lib/control.js``), and the codes live in the
+EMS, so the two are a paired registry: a code without words reaches the
+operator as ``pv_first`` or ``runtime role ac input``, and words kept for a
+code the EMS does not send never show at all.
 
 The EMS side of that pairing is read by walking the syntax tree of ems/. The
 walk covers the forms ems/ uses to put a code into an explanation, and fails on
 the binding forms it knows it cannot follow unless ``UNREADABLE`` names them. It
 does not prove completeness against every Python construct: a code passed in a
 form the walk does not know can still go unseen.
-
-A device card says what the EMS decided about the device in the same terms: a
-stage shows as blocked only where the EMS's explanation blocks it, and the
-device's name reaches the page escaped once.
 """
 
 import ast
 import dataclasses
 import functools
-import json
-import re
-import shutil
-import subprocess
 from pathlib import Path
 
 import pytest
 
 from ems.runtime_intents import DeviceRuntimeRole
-from ems.target_control import calculate_targets, detect_capabilities
+from ems.target_control import detect_capabilities
 from ems.winter_reserve import SOLAR_CHARGE_REASON
-from tests.test_write_gates import RuntimeStateStub, device, state
+from tests.modern_frontend import js_export
+from tests.test_write_gates import state
 
 pytestmark = [
     pytest.mark.contract,
@@ -42,7 +37,7 @@ pytestmark = [
 
 
 ROOT = Path(__file__).resolve().parents[1]
-APP_JS = ROOT / "dashboard" / "static" / "app.js"
+CONTROL_JS = ROOT / "frontend" / "dashboard-modern" / "src" / "lib" / "control.js"
 EMS = ROOT / "ems"
 REASON_FIELDS = ("decision_reason", "limiting_reason", "write_reason", "capability_reason")
 
@@ -84,21 +79,6 @@ REPLACED_BEFORE_SENT = {
         "decision for every device before it returns; "
         "test_the_strategy_never_reaches_a_device_as_its_decision runs both branches",
 }
-
-
-def run_node(script):
-    node = shutil.which("node")
-    if not node:
-        pytest.skip("node is required for executable dashboard rendering test")
-    result = subprocess.run(
-        [node, "-e", script],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout)
 
 
 def _name(node):
@@ -385,15 +365,12 @@ def emitted_control_codes():
 
 
 def frontend_control_labels():
-    script = f"""
-const app = require({json.dumps(str(APP_JS))});
-console.log(JSON.stringify({{
-  short: Object.keys(app.CONTROL_CODE_LABELS),
-  decision: Object.keys(app.CONTROL_DECISION_SENTENCES),
-}}));
-"""
-    out = run_node(script)
-    return {"short": set(out["short"]), "decision": set(out["decision"])}
+    """The codes the dashboard has words for, read from its control module."""
+    short = js_export(CONTROL_JS, "CONTROL_CODES")
+    decision = js_export(CONTROL_JS, "DECISION_SENTENCES")
+    if short is None or decision is None:
+        pytest.skip("node is required to read the dashboard's control vocabulary")
+    return {"short": set(short), "decision": set(decision)}
 
 
 def test_the_vocabulary_walk_finds_the_codes_it_is_meant_to_find():
@@ -477,109 +454,6 @@ def test_no_label_waits_for_a_code_the_ems_never_sends():
     assert sorted(labels["decision"] - codes["decision"]) == []
 
 
-def _control_html(explain):
-    script = f"""
-const app = require({json.dumps(str(APP_JS))});
-console.log(JSON.stringify(app.controlExplainHtml({{ control_explain: {json.dumps(explain)} }})));
-"""
-    return run_node(script)
-
-
-def test_the_strategy_is_named_in_the_pipeline_and_the_context_rail():
-    html = _control_html({
-        "mode": "pv_first",
-        "requested_total_w": 400,
-        "effective_target_total_w": 400,
-        "devices": {},
-        "limits": [{"name": "pv_surplus_available", "active": True}],
-    })
-    assert html.count("PV first") == 2
-    assert "pv_first" not in html
-    assert "pv first" not in html
-    assert "PV surplus available" in html
-    assert "pv surplus available" not in html
-
-
-def _ems_cycle_explanation(devices, states, *, runtime_state=None, load=700):
-    """The control explanation one real EMS control cycle publishes."""
-    from tests.test_write_gates import WriteGateTest
-
-    controller = WriteGateTest().run_controller_once(
-        devices, states, runtime_state=runtime_state, load=load
-    )
-    return controller.last_control_explanation.to_dict()
-
-
-def test_a_device_held_in_ac_input_mode_says_so():
-    from tests.test_write_gates import RuntimeStateStub, device, state
-
-    explanation = _ems_cycle_explanation(
-        [device("WR1"), device("WR2")],
-        [state(output=0, output_limit=0), state(output=300, output_limit=300)],
-        runtime_state=RuntimeStateStub(
-            devices={"WR1": {"runtime_role": "ac_input", "runtime_role_reason": "manual"}}
-        ),
-    )
-    wr1 = explanation["devices"]["WR1"]
-    assert (wr1["write_decision"], wr1["write_reason"]) == ("blocked", "runtime_role_ac_input")
-    assert wr1["decision_reason"] == "pv_first_allocation"
-
-    html = _control_html(explanation)
-
-    assert (
-        "<span>WR1 is blocked: AC input mode is active; normal output writes are blocked.</span>"
-        in html
-    )
-    assert explanation["devices"]["WR2"]["write_decision"] != "blocked"
-    assert "WR2 is blocked" not in html
-    assert "runtime role" not in html
-    assert "runtime_role" not in html
-
-
-def _assist_held_explanation(tmp_path):
-    """One real EMS cycle while the full-charge assist's restore holds WR1.
-
-    The assist completed and owes the configured Max-SoC back; the device
-    refuses that write, so the restore keeps claiming it, out of output control.
-    """
-    from datetime import datetime, timezone
-    from types import SimpleNamespace
-
-    from ems.state_store import BatteryFullChargeStateStore
-    from tests import test_battery_full_charge_assist as assist
-
-    dev = assist.device(max_soc=90)
-    dev.session.post.return_value = SimpleNamespace(status_code=500)
-    store = BatteryFullChargeStateStore(str(tmp_path / "ems_state.sqlite"))
-    store.update_device_state(
-        "WR1",
-        datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc),
-        has_battery=True,
-        restore_pending=True,
-    )
-    controller = assist.controller_for(dev, store)
-    with assist.configure_assist(enabled=True):
-        assist.run_controller_once(controller, assist.state(soc=50, max_soc=100, soc_limit=0))
-    assert store.get_device_state("WR1")["restore_pending"] is True
-    return controller.last_control_explanation.to_dict()
-
-
-def test_a_device_the_full_charge_assist_holds_says_so(tmp_path):
-    explanation = _assist_held_explanation(tmp_path)
-    wr1 = explanation["devices"]["WR1"]
-    assert wr1["write_decision"] == "blocked"
-    assert wr1["write_reason"] == wr1["limiting_reason"] == wr1["capability_reason"] == (
-        "runtime_role_ac_output"
-    )
-
-    html = _control_html(explanation)
-
-    assert "<span>WR1 is blocked: Full-charge assist holds this device.</span>" in html
-    assert html.count("<strong>Full-charge assist holds this device</strong>") == 3
-    assert "AC output role" not in html
-    assert "runtime role" not in html
-
-
 def _may_hold_an_output_role(call):
     """Whether ``call`` can build an ac_output intent that is not allowed output control.
 
@@ -605,141 +479,3 @@ def test_only_the_full_charge_assist_holds_a_device_in_its_output_role():
             if isinstance(node, ast.Call) and _may_hold_an_output_role(node):
                 holders.add((module.rel, getattr(module.scope_of.get(node), "name", None)))
     assert holders == {("ems/controller.py", "full_charge_assist_intent")}
-
-
-def test_every_capability_signal_in_the_list_is_named():
-    html = _control_html({
-        "mode": "pv_first",
-        "requested_total_w": 400,
-        "devices": {
-            "WR1": {
-                "device": "WR1",
-                "online": True,
-                "capability_reason": "pv_evidence,output_evidence,ac_evidence",
-                "write_decision": "send",
-                "write_reason": "output_limit_update",
-            }
-        },
-    })
-    assert "PV input detected, Output detected, AC path active" in html
-    assert "evidence" not in html
-
-
-def test_a_parked_device_explains_itself_in_a_sentence():
-    html = _control_html({
-        "mode": "night_min_soc_idle",
-        "requested_total_w": 0,
-        "devices": {
-            "WR1": {
-                "device": "WR1",
-                "online": True,
-                "decision_reason": "night_min_soc_idle",
-                "limiting_reason": "below_min_soc",
-                "write_decision": "skip",
-                "write_reason": "already_parked",
-            }
-        },
-    })
-    assert "night min soc idle" not in html
-    assert "below min soc" not in html
-    assert "already parked" not in html
-    assert "WR1 is parked at the minimum output" in html
-
-
-def _device_cards(html):
-    """Each device card's HTML, by the name its card carries."""
-    cards = {}
-    for match in re.finditer(r'data-control-device="([^"]*)"', html):
-        end = html.find('data-control-device="', match.end())
-        cards[match.group(1)] = html[match.start(): end if end >= 0 else len(html)]
-    return cards
-
-
-def _limits_result_blocked(card):
-    stage = re.search(
-        r'<section class="control-stage control-stage-limits"[\s\S]*?</section>', card
-    )
-    assert stage, "the card has an Adjustments / Limits stage"
-    result = re.search(r'class="control-result control-stage-result([^"]*)"', stage.group(0))
-    assert result, "the stage has a result"
-    return "tone-blocked" in result.group(1).split()
-
-
-def _ems_explanation(states):
-    names = [f"WR{index + 1}" for index in range(len(states))]
-    _targets, _current, _new, explanation = calculate_targets(
-        0,
-        states,
-        1600,
-        device_configs=[device(name) for name in names],
-        capabilities=[detect_capabilities(report) for report in states],
-        requested_total=600,
-        explain=True,
-    )
-    return explanation.to_dict()
-
-
-def test_a_device_the_ems_did_not_limit_is_not_shown_blocked():
-    explanation = _ems_explanation([
-        state(solar=500, output=300, output_limit=300),
-        state(solar=0, soc=60),
-    ])
-    reasons = {name: entry["capability_reason"] for name, entry in explanation["devices"].items()}
-    assert all(reasons.values()), reasons
-    assert all(entry["can_export"] for entry in explanation["devices"].values())
-
-    cards = _device_cards(_control_html(explanation))
-
-    assert sorted(cards) == ["WR1", "WR2"]
-    assert {name: _limits_result_blocked(card) for name, card in cards.items()} == {
-        "WR1": False,
-        "WR2": False,
-    }
-
-
-def test_a_device_the_full_charge_assist_holds_is_shown_blocked_at_its_limits(tmp_path):
-    explanation = _assist_held_explanation(tmp_path)
-    assert explanation["devices"]["WR1"]["can_export"] is False
-
-    cards = _device_cards(_control_html(explanation))
-
-    assert _limits_result_blocked(cards["WR1"]) is True
-
-
-def test_a_device_the_ems_cannot_export_from_is_shown_blocked_at_its_limits():
-    explanation = _ems_explanation([
-        state(solar=500, output=300, output_limit=300),
-        state(solar=0, soc_limit=2, dc_status=0, ac_status=0),
-    ])
-    assert explanation["devices"]["WR2"]["can_export"] is False
-    assert explanation["devices"]["WR2"]["limiting_reason"] == "cannot_export"
-
-    cards = _device_cards(_control_html(explanation))
-
-    assert _limits_result_blocked(cards["WR1"]) is False
-    assert _limits_result_blocked(cards["WR2"]) is True
-
-
-def test_a_device_name_is_escaped_once_in_the_sentence_above_its_card():
-    explanation = _ems_cycle_explanation(
-        [device("Garage & <Carport>"), device("Shed & Co")],
-        [state(solar=500), state(solar=500)],
-        runtime_state=RuntimeStateStub(devices={"Shed & Co": {"enabled": False}}),
-        load=300,
-    )
-    devices = explanation["devices"]
-    assert devices["Garage & <Carport>"]["decision_reason"] == "pv_first_allocation"
-    assert (devices["Shed & Co"]["write_decision"], devices["Shed & Co"]["write_reason"]) == (
-        "blocked",
-        "device_disabled",
-    )
-
-    html = _control_html(explanation)
-
-    assert "&amp;amp;" not in html
-    assert "&amp;lt;" not in html
-    assert "<Carport>" not in html
-    assert (
-        "Garage &amp; &lt;Carport&gt; target is shaped by PV-first allocation" in html
-    )
-    assert "Shed &amp; Co is blocked: Device is switched off." in html

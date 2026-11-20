@@ -4,7 +4,7 @@
 [![Repo browser e2e](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/playwright-e2e.yml/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/playwright-e2e.yml)
 [![CodeQL](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/basecubedev/ems-solarflow-api-control/actions/workflows/github-code-scanning/codeql)
 [![Dependabot](https://img.shields.io/badge/Dependabot-enabled-brightgreen?logo=dependabot)](.github/dependabot.yml)
-![automated tests](https://img.shields.io/badge/automated%20tests-21100%2B-blue)
+![automated tests](https://img.shields.io/badge/automated%20tests-19400%2B-blue)
 [![Test-Driven Development](https://img.shields.io/badge/Test--Driven%20Development-contract--first-blue)](docs/developer/testing.md#development-approach)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.14-blue)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue)](LICENSE)
@@ -120,7 +120,8 @@ sh install-admin-console.sh
 
 Then open `http://127.0.0.1:8090` — or `http://<host-ip>:8090` from another
 machine, which is the usual case on a headless Pi — and create the
-shared EMS/Admin password in the browser. **That sign-in page is how you know
+shared EMS/Admin password in the browser. That address is the whole app from
+then on: the dashboard and the console in one menu. **That sign-in page is how you know
 the install worked**; if it does not appear,
 `docker compose -f docker-compose.admin.yml ps` says whether the container
 came up. Host networking is the default (best for local discovery); add

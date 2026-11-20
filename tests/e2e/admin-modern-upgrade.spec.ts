@@ -19,7 +19,7 @@ async function signIn(page: Page) {
 }
 
 async function openUpdates(page: Page, seed: (scenario: string) => Promise<void>, scenario = "mqtt_migration") {
-  await page.goto("/");
+  await page.goto("/#/status");
   await signIn(page);
   await seed(scenario);
   await page.goto("/#/updates");
@@ -112,7 +112,7 @@ test.describe("Modern Admin: the guided upgrade", { tag: ["@smoke", "@workflow"]
     await expect(panel).toHaveAttribute("data-stage", "verifying");
     await expect(page.getByTestId("upgrade-working")).toContainText(`Checking ${TARGET}`);
     await expect(page.getByTestId("upgrade-clock")).toHaveText(/Running for 0:(0[2-9]|[1-5]\d)/, { timeout: 10_000 });
-    await page.goto("/#/overview");
+    await page.goto("/#/status");
     await page.goto("/#/updates");
     await expect(page.getByTestId("upgrade-clock")).toHaveText(/Running for 0:(0[2-9]|[1-5]\d)/);
     await expect(page.getByTestId("upgrade-now")).toContainText(`Update to ${TARGET} · Checking the version`);

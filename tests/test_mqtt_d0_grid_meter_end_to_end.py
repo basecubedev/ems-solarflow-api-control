@@ -19,9 +19,7 @@ no output-control write gate is involved.
 """
 
 import json
-import os
-import shutil
-import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -31,6 +29,7 @@ from admin.config_preview import ConfigPreviewGenerator
 from admin.models import MqttHardwareCandidate
 from admin.zendure_mqtt_config_proposals import build_proposals
 from ems.clients import close_grid_meter_client, create_grid_meter_client
+from tests.modern_frontend import js_call
 
 pytestmark = [
     pytest.mark.mqtt,
@@ -39,31 +38,18 @@ pytestmark = [
     pytest.mark.power_control,
 ]
 
-_SERIALIZER_RUNNER = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "js", "mqtt_serializer_runner.js"
-)
+SETUP_DRAFT_JS = Path(__file__).resolve().parents[1] / "frontend" / "admin-modern" / "src" / "lib" / "setupDraft.js"
 
 
 def _serialize_selection_with_real_js(proposal, options):
-    """Run the real admin.js serializer over a proposal, or skip without node.
+    """Run the Admin console's own ``serializeSelection`` over a proposal.
 
-    This exercises the actual browser payload contract (the extracted
-    ``serializeMqttProposalSelection`` source) instead of rebuilding its expected
-    JSON in Python, so dropping a required serializer field fails this test.
+    This exercises the actual browser payload contract instead of rebuilding
+    its expected JSON in Python, so dropping a required serializer field fails
+    this test.
     """
 
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("node is required for the real browser serializer test")
-    result = subprocess.run(
-        [node, _SERIALIZER_RUNNER],
-        input=json.dumps({"proposal": proposal, "options": options}),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout)
+    return js_call(SETUP_DRAFT_JS, "serializeSelection", proposal, options)
 
 
 @pytest.fixture(autouse=True)
@@ -255,6 +241,7 @@ def test_real_browser_serializer_reaches_preview_grid_meter():
     assert payload["serial_number"] == "D0SN"
     assert "Zendure/sensor/D0SN/totalPower" in payload["seen_topics"]
     assert payload["connection_source"] == "local_mqtt"
+    assert payload["replace_grid_meter"] is False
 
     # 5-7. backend adapter -> shared Core validation -> preview.
     result = ConfigPreviewGenerator(_ReleaseManager()).generate(

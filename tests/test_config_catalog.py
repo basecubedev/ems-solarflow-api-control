@@ -426,8 +426,7 @@ def test_the_safety_groups_are_not_hidden_behind_a_disclosure():
 def test_the_safety_groups_do_not_relevel_the_fields_themselves():
     """Guided Setup partitions on field level; re-levelling here would move it.
 
-    The group is a second, independent axis. tests/e2e/setup-config-tuning.spec.ts
-    pins the promoted control tuning, and system.allow_* must not become
+    The group is a second, independent axis: system.allow_* must not become
     always-visible for a first-time installer.
     """
 

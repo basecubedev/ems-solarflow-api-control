@@ -13,7 +13,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC = join(HERE, "../src");
 const OWN = JSON.parse(readFileSync(join(SRC, "icons.json"), "utf8"));
 const SHARED = JSON.parse(readFileSync(join(HERE, "../../shared/icons.json"), "utf8"));
-const ICONS = [...SHARED, ...OWN];
+const DASHBOARD = JSON.parse(readFileSync(join(HERE, "../../dashboard-modern/src/icons.json"), "utf8"));
+const ICONS = [...SHARED, ...OWN, ...DASHBOARD];
 const LUCIDE = join(HERE, "../../../node_modules/lucide-static/icons");
 
 function sources(dir = SRC) {

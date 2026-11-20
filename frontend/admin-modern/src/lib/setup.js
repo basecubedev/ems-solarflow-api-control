@@ -1,9 +1,7 @@
 // SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * Guided Setup as the Classic console runs it (admin/static/admin.js, the
- * setup wizard and the System Build step): its five steps, which of them are
- * open, and the System Build's state from selection to confirmation. The
+ * Guided Setup: its five steps, which of them are open, and the System Build's state from selection to confirmation. The
  * server decides every step; these helpers only read its answers. Pure.
  */
 
