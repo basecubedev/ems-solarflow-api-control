@@ -2,24 +2,30 @@
 
 How the dashboard frontend stays cheap over time and across several open tabs,
 and how to prove that a change helped. The visual rules are in
-[`../developer/dashboard-style-guide.md`](../developer/dashboard-style-guide.md);
+[`../developer/dashboard-modern-style-guide.md`](../developer/dashboard-modern-style-guide.md);
 this document is only about cost.
 
 ## Measuring first
 
-`scripts/dashboard_bench.py` drives real browsers over Playwright against the
-synthetic payloads in `scripts/dashboard_preview_data.py`. It needs no EMS, no
-hardware and no network.
+The measurements on this page were taken on the Classic dashboard, which has
+been removed together with the benchmark harnesses that drove it. Their
+findings are what the dashboard's flow renderer (`frontend/dashboard-modern/src/lib/flowAnim.js`)
+and live feed (`frontend/dashboard-modern/src/lib/transport.js`) are built on.
+The written accounts stay in
+[`../../reports/dashboard-perf/README.md`](../../reports/dashboard-perf/README.md).
+
+The current dashboard is measured with `scripts/dashboard_bench.mjs`: it starts
+the preview server scaled to each device count, opens each page in one or more
+tabs, and reports for the tab in front its frame rate, its 95th-percentile
+frame time and its long frames, and in Chromium its main-thread time per second
+(task, script, layout, style), its JavaScript heap and its DOM size.
 
 ```bash
-python3 scripts/dashboard_bench.py --matrix ab       --browser firefox
-python3 scripts/dashboard_bench.py --matrix baseline --browser chromium
-python3 scripts/dashboard_bench_report.py reports/dashboard-perf/*.json
+node scripts/dashboard_bench.mjs                                # Chromium, every page, 2 and 8 devices, 1 and 3 tabs
+node scripts/dashboard_bench.mjs --browser chromium,firefox --pages overview --seconds 30 --out reports/dashboard-perf/run.json
 ```
 
-Reports and the measurement caveats live in
-[`../../reports/dashboard-perf/README.md`](../../reports/dashboard-perf/README.md).
-Two rules that the harness cannot enforce:
+Two rules hold for any new measurement:
 
 - **Never run two benchmarks at once.** They contend for the same CPU and both
   results become fiction.
@@ -39,9 +45,10 @@ GET /api/live (polling) ─┘        │
                                   └─ document.hidden? store it, render on visibilitychange.
 ```
 
-Three invariants hold here, and
-[`../../tests/test_dashboard_live_transport.py`](../../tests/test_dashboard_live_transport.py)
-fails if any of them stops holding:
+Three invariants hold here. A test of the removed Classic dashboard pinned
+them; for the current dashboard,
+[`../../frontend/dashboard-modern/tests/transport.test.js`](../../frontend/dashboard-modern/tests/transport.test.js)
+does:
 
 1. **An unchanged snapshot renders nothing.** Measured: an unchanged timestamp
    drops a view's DOM mutations by roughly half, which is the whole rebuild.
@@ -174,8 +181,7 @@ These properties of the renderer are worth knowing before changing it:
   `getScreenCTM`, leaves the CSS animation in place rather than showing no flow
   at all.
 
-[`../../tests/test_dashboard_flow_tiles.py`](../../tests/test_dashboard_flow_tiles.py)
-pins each of them.
+A test of the removed Classic dashboard pinned each of them.
 
 ### What is still slow, and what only looked slow
 
@@ -304,9 +310,10 @@ unaffected either way.
 
 The rule to take from it is not "that element was fine". It is that **no rule
 here is guaranteed to stay matched by one element**, so no keyframe on this page
-may move a paint property. Three guardrails in
-[`../../tests/test_dashboard_perf_guardrails.py`](../../tests/test_dashboard_perf_guardrails.py)
-keep it that way: one fails if *any* referenced keyframe animates
+may move a paint property. Three guardrails in a test of the removed Classic
+dashboard kept it that way; the current flow layer is held to the same rule by
+the contract test on its built stylesheet
+([style guide](../developer/dashboard-modern-style-guide.md)): one fails if *any* referenced keyframe animates
 `background-position`, `background-size`, `mask-position`, `filter`,
 `box-shadow` or `clip-path`; one fails if a `.control-result` rule takes the old
 keyframe back; and one fails if `prefers-reduced-motion` or
@@ -383,16 +390,14 @@ largest per-snapshot cost 40-54% *more* expensive, because that cost was a
 layout flush and an animation keeps the style tree from accumulating work
 between flushes. Fixing the flush (above) dissolved that.
 
-`scripts/dashboard_profile/` is the harness that can say this. It charges
-main-thread time to the callback that spent it -- listeners, timers, animation
-frames, observers, and optionally the layout-forcing reads themselves -- and it
-adds the axes the frame-rate harness has no way to express: a feed that is
-silent, a dashboard in the background, and a second page beside it. It is
-engine-neutral by construction, which is the point: the slowdown was reported
-on Firefox on macOS, and
+The removed `scripts/dashboard_profile/` was the harness that could say this.
+It charged main-thread time to the callback that spent it -- listeners, timers,
+animation frames, observers, and optionally the layout-forcing reads
+themselves -- and added the axes the frame-rate harness had no way to express:
+a feed that is silent, a dashboard in the background, and a second page beside
+it. The slowdown was reported on Firefox on macOS, and
 [`../../reports/dashboard-perf/firefox-macos-investigation.md`](../../reports/dashboard-perf/firefox-macos-investigation.md)
-contains no macOS measurement. That directory's README is the instruction for
-taking one.
+contains no macOS measurement.
 
 ## Views that are not on screen
 
