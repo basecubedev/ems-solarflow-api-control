@@ -451,11 +451,17 @@ under Vendored Components above.
 ## Optional Platform Dependencies
 
 Packages that `package-lock.json` marks optional and platform-specific. npm
-installs only the one for the machine it runs on. All of them belong to the
-Modern dashboard's build tools and stay on the build machine.
+installs only the one for the machine it runs on; the helpers of Rolldown's
+WebAssembly bundler come only with that bundler, on a machine no native one
+fits. All of them belong to the Modern dashboard's build tools and stay on
+the build machine.
 
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream |
 |---|---|---|---|:---:|:---:|---|
+| `@emnapi/core` | 2.0.0-beta.2 | MIT | Node-API core for Rolldown's WebAssembly bundler | ❌ | ❌ | https://github.com/toyobayashi/emnapi |
+| `@emnapi/runtime` | 2.0.0-beta.2 | MIT | Node-API runtime for Rolldown's WebAssembly bundler | ❌ | ❌ | https://github.com/toyobayashi/emnapi |
+| `@emnapi/wasi-threads` | 2.2.0 | MIT | WASI threads for Rolldown's WebAssembly bundler | ❌ | ❌ | https://github.com/toyobayashi/emnapi |
+| `@napi-rs/wasm-runtime` | 1.2.6 | MIT | WebAssembly runtime for Rolldown's WebAssembly bundler | ❌ | ❌ | https://github.com/napi-rs/napi-rs |
 | `@rolldown/binding-android-arm-eabi` | 1.2.19 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
 | `@rolldown/binding-android-arm64` | 1.2.19 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
 | `@rolldown/binding-darwin-arm64` | 1.2.19 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
@@ -469,8 +475,10 @@ Modern dashboard's build tools and stay on the build machine.
 | `@rolldown/binding-linux-x64-gnu` | 1.2.19 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
 | `@rolldown/binding-linux-x64-musl` | 1.2.19 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
 | `@rolldown/binding-openharmony-arm64` | 1.2.19 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@rolldown/binding-wasm32-wasi` | 1.2.19 | MIT | Rolldown bundler as WebAssembly, for a machine no native one fits, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
 | `@rolldown/binding-win32-arm64-msvc` | 1.2.19 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
 | `@rolldown/binding-win32-x64-msvc` | 1.2.19 | MIT | Native Rolldown bundler for this platform, used by Vite at build time | ❌ | ❌ | https://github.com/rolldown/rolldown |
+| `@tybys/wasm-util` | 0.10.5 | MIT | WASI support for Rolldown's WebAssembly bundler | ❌ | ❌ | https://github.com/toyobayashi/wasm-util |
 | `fsevents` | 2.3.3 | MIT | macOS file watcher, used by Vite's development server | ❌ | ❌ | https://github.com/fsevents/fsevents |
 | `lightningcss-android-arm64` | 1.33.0 | MPL-2.0 | Native CSS minifier for this platform, used by Vite at build time; never modified or shipped | ❌ | ❌ | https://github.com/parcel-bundler/lightningcss |
 | `lightningcss-darwin-arm64` | 1.33.0 | MPL-2.0 | Native CSS minifier for this platform, used by Vite at build time; never modified or shipped | ❌ | ❌ | https://github.com/parcel-bundler/lightningcss |
@@ -483,6 +491,7 @@ Modern dashboard's build tools and stay on the build machine.
 | `lightningcss-linux-x64-musl` | 1.33.0 | MPL-2.0 | Native CSS minifier for this platform, used by Vite at build time; never modified or shipped | ❌ | ❌ | https://github.com/parcel-bundler/lightningcss |
 | `lightningcss-win32-arm64-msvc` | 1.33.0 | MPL-2.0 | Native CSS minifier for this platform, used by Vite at build time; never modified or shipped | ❌ | ❌ | https://github.com/parcel-bundler/lightningcss |
 | `lightningcss-win32-x64-msvc` | 1.33.0 | MPL-2.0 | Native CSS minifier for this platform, used by Vite at build time; never modified or shipped | ❌ | ❌ | https://github.com/parcel-bundler/lightningcss |
+| `tslib` | 2.9.1 | 0BSD | TypeScript helper functions for Rolldown's WebAssembly bundler | ❌ | ❌ | https://github.com/microsoft/tslib |
 
 At the Python level, `typing-extensions` is the equivalent case: a conditional
 `cryptography` dependency for `python_full_version < 3.11`, never installed on
