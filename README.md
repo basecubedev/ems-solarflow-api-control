@@ -50,7 +50,7 @@ or **Reverse-engineered** — explained with the full list in the [supported set
 <tbody><tr><td>Zendure Ace 1500, SuperBase V, and any other Zendure device reached with an API key</td><td>Local broker or Zendure cloud MQTT</td><td>Telemetry only</td></tr></tbody>
 <tbody><tr><td>E3/DC storage system (S10 family): its PV, battery and grid</td><td>Modbus TCP</td><td>Reverse-engineered</td></tr></tbody>
 <tbody><tr><td>Inverters and batteries of other makers, as FHEM, ioBroker, Node-RED or a script publishes them (<a href="docs/user/external-devices.md">guide</a>)</td><td>Local MQTT</td><td>Reverse-engineered</td></tr></tbody>
-<tbody><tr><td>Devices that publish in a format of their own, such as OpenDTU or AhoyDTU, through the <a href="docs/user/admin/mqtt-mapping.md">MQTT mapping</a> and its optional built-in broker, and household consumers behind a Shelly or Tasmota plug (<a href="docs/user/dashboard/consumers.md">guide</a>)</td><td>Local MQTT</td><td>Reverse-engineered</td></tr></tbody></table>
+<tbody><tr><td>Devices that publish in a format of their own, such as OpenDTU or AhoyDTU, through the <a href="docs/user/admin/mqtt-mapping.md">MQTT mapping</a> and its optional built-in broker, and household consumers behind a Shelly or Tasmota plug (<a href="docs/user/dashboard/consumers.md">guide</a>)</td><td>Local MQTT</td><td>Reverse-engineered (OpenDTU: Validated)</td></tr></tbody></table>
 
 **MQTT control is an implemented EMS transport** with the Local API's control
 loop and safety gates: Validated on the 800 Pro 2 over ZenSDK cloud MQTT,
