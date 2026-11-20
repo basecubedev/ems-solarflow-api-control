@@ -5,10 +5,10 @@ Short Admin Console workflow demos (720p, no audio), embedded in
 **deterministic demo data** (fake devices, IPs, serials, image refs and backup
 names) and do **not** show a real installation.
 
-They were recorded from the deprecated **Classic** console, before the Modern
-design became the console's default. The workflows are the same in Modern, but
-the screens look different; the screenshots in
-[`../../screenshots/admin/`](../../screenshots/admin/) show Modern.
+Each video is made from the console's documentation screenshots in
+[`../../screenshots/admin/`](../../screenshots/admin/): every screen of the
+workflow is shown for a few seconds, a screen taller than the frame scrolls
+while it is shown, and the screens fade into each other.
 
 ## Formats
 
@@ -27,8 +27,8 @@ Currently committed videos (two, in both formats):
 
 | Workflow | MP4 | WebM | Length |
 | --- | --- | --- | --- |
-| Guided Setup (fresh install with hardware discovery, feature settings and starting EMS) | `admin-guided-setup-demo.mp4` | `admin-guided-setup-demo.webm` | ~28s |
-| Guided Upgrade (EMS software upgrade with the live "Upgrade validation" box ticking off each step) | `admin-guided-upgrade-demo.mp4` | `admin-guided-upgrade-demo.webm` | ~26s |
+| Guided Setup (fresh install with hardware discovery, feature settings and starting EMS) | `admin-guided-setup-demo.mp4` | `admin-guided-setup-demo.webm` | ~21s |
+| Guided Upgrade (the version checked, the plan, the run, the Admin console reconnecting, the end) | `admin-guided-upgrade-demo.mp4` | `admin-guided-upgrade-demo.webm` | ~21s |
 
 Planned optional future video (not committed yet):
 
@@ -42,49 +42,16 @@ actually exists — do not link to it before then.
 
 ## How to refresh
 
-The videos are rendered from the **real** Classic Admin static UI
-(`admin/static/`, served at `/classic/`) driven by the docs-preview server and
-its Classic drive script (`scripts/admin_docs_preview.js`) with deterministic
-demo API responses from
-[`tests/fixtures/admin_docs/`](../../../../tests/fixtures/admin_docs). Each
-workflow step is captured as a full-page frame with headless Firefox and the
-frames are stitched into a 1280x720 `.webm` (VP9) with gentle vertical pans, so
-tall pages stay readable. No hardware, Docker, discovery, MQTT, `config.json` or
-password is involved, and nothing is written to config/runtime state.
-
-Requirements: `firefox` (headless), ImageMagick `convert` and `ffmpeg`.
-(MP4-only conversion needs just `ffmpeg` — it reuses the committed WebM.)
-
-Render both videos in both formats (WebM + MP4, the default):
+Refresh the screenshots first ([capture guide](../../screenshots/admin/README.md)),
+then render the videos from them:
 
 ```bash
-python3 scripts/render_admin_docs_video.py
+scripts/render_admin_docs_videos.sh            # both videos, MP4 and WebM
+scripts/render_admin_docs_videos.sh upgrade    # one of them
 ```
 
-Render one workflow, or pick formats with `--format {webm,mp4,all}`:
-
-```bash
-python3 scripts/render_admin_docs_video.py --videos admin-guided-setup-demo.webm
-python3 scripts/render_admin_docs_video.py --format webm    # WebM only
-python3 scripts/render_admin_docs_video.py --format mp4     # MP4 from existing WebM
-```
-
-The MP4 is a straight H.264 transcode of the rendered WebM. To make one by hand
-(same encoding the script uses — forum/mobile-friendly, no audio):
-
-```bash
-ffmpeg -i admin-guided-setup-demo.webm \
-  -c:v libx264 -pix_fmt yuv420p -movflags +faststart \
-  -crf 23 -preset medium -an \
-  admin-guided-setup-demo.mp4
-```
-
-If an MP4 comes out too large, retry with `-crf 26`; if quality looks too low,
-`-crf 20`. Keep 1280x720 — do not upscale.
-
-To change the steps, durations or which screens appear, edit `VIDEOS` in
-`scripts/render_admin_docs_video.py`; to change what a screen shows, edit the
-matching fixture in `tests/fixtures/admin_docs/`.
+The script lists the screens of each video in order. It needs `ffmpeg` with
+`libx264` and `libvpx-vp9`.
 
 ## Rules
 

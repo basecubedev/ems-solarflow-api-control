@@ -237,14 +237,14 @@ const SHOTS = [
   },
   {
     file: "admin-overview.png",
-    hash: "#/overview",
+    hash: "#/status",
     async prepare(page) {
       await overviewReady(page);
     },
   },
   {
     file: "admin-overview-phone.png",
-    hash: "#/overview",
+    hash: "#/status",
     viewport: PHONE,
     async prepare(page) {
       await overviewReady(page);
@@ -253,7 +253,7 @@ const SHOTS = [
   },
   {
     file: "admin-phone-more.png",
-    hash: "#/overview",
+    hash: "#/status",
     viewport: PHONE,
     async prepare(page) {
       await appReady(page);
@@ -541,7 +541,7 @@ const SHOTS = [
   },
   {
     file: "admin-appearance-menu.png",
-    hash: "#/overview",
+    hash: "#/status",
     async prepare(page) {
       await overviewReady(page);
       await page.getByTestId("appearance-button").click();
@@ -552,7 +552,7 @@ const SHOTS = [
   },
   {
     file: "admin-appearance-themes.png",
-    hash: "#/overview",
+    hash: "#/status",
     async capture(page) {
       await overviewReady(page);
       const graphite = await column(page, 0);
@@ -621,7 +621,7 @@ async function take(browser, base, shot) {
     await context.clock.setFixedTime(DEMO_NOW);
     const page = await context.newPage();
     const query = shot.scenario ? `?scenario=${shot.scenario}` : "";
-    await page.goto(`${base}/${query}${shot.hash ?? "#/overview"}`);
+    await page.goto(`${base}/${query}${shot.hash ?? "#/status"}`);
     await page.evaluate(() => document.fonts.ready);
     if (shot.capture) {
       await shot.capture(page);

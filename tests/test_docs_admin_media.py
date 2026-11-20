@@ -141,17 +141,19 @@ def test_admin_console_doc_has_static_screenshot_fallback():
         assert len(alt.split()) >= 3, f"{name} alt text not descriptive: {alt!r}"
 
 
-def test_admin_console_doc_says_the_videos_show_classic():
-    """The videos predate Modern; the page must not present them as the current console."""
+def test_the_videos_are_made_from_the_screenshots_they_sit_beside():
+    """Each demo video is rendered from the console's own screenshots, by a script that names them."""
 
     text = " ".join(read(ROOT / "docs" / "user" / "admin-console.md").split())
-    videos = text.split("### Demo videos (Classic view)", 1)
-    assert len(videos) == 2, "admin-console.md has no Demo videos (Classic view) section"
-    assert "deprecated **Classic** console" in videos[1].split("<video", 1)[0]
-    for heading in re.findall(r"#### [^#<]+", videos[1]):
-        assert "(Classic view)" in heading, f"video heading not labelled Classic: {heading}"
+    section = text.split("### Demo videos", 1)
+    assert len(section) == 2, "admin-console.md has no Demo videos section"
+    assert "previous design" not in section[1] and "Classic" not in section[1]
+    script = read(ROOT / "scripts" / "render_admin_docs_videos.sh")
+    for shot in re.findall(r"admin-[a-z0-9-]+", script.split("declare -A VIDEOS=(", 1)[1].split(")", 1)[0]):
+        assert (ROOT / "docs" / "assets" / "screenshots" / "admin" / f"{shot}.png").is_file(), shot
     readme = " ".join(read(VIDEOS / "README.md").split())
-    assert "deprecated **Classic** console" in readme
+    assert "scripts/render_admin_docs_videos.sh" in readme
+    assert "Classic" not in readme
 
 
 def test_no_committed_markdown_references_missing_admin_media():
@@ -199,8 +201,6 @@ def test_capture_and_render_tooling_present():
     for script in (
         "capture_admin_docs.mjs",
         "serve_admin_docs_preview.py",
-        "admin_docs_preview.js",
-        "render_admin_docs_video.py",
     ):
         assert (ROOT / "scripts" / script).is_file(), script
 

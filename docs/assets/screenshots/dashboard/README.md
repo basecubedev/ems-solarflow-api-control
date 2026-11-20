@@ -2,8 +2,7 @@
 
 Documentation screenshots of the live dashboard (**EMS SolarFlow**), embedded
 from the step-by-step guides in [docs/user/dashboard/](../../../user/dashboard/).
-Every one shows the current (Modern) dashboard; the deprecated Classic dashboard
-at `/classic/` is not documented with screenshots any more.
+Every one shows the current dashboard.
 
 All screenshots use **deterministic synthetic data** (fake devices, values,
 backup names and image refs). They do **not** show a real installation and must
@@ -20,7 +19,7 @@ Admin Console screenshots live in [`../admin/`](../admin/).
 | `dashboard-overview-today.png` | Overview scrolled down — the four today tiles and Power today | `normal` |
 | `dashboard-overview-per-device.png` | Overview in Midnight, energy flow Per device | `normal` |
 | `dashboard-overview-narrow.png` | Overview on a phone (390×844), with the bar at the bottom | `normal` |
-| `dashboard-phone-more.png` | The More sheet on a phone: other pages, Quick settings, Classic switch | `normal` |
+| `dashboard-phone-more.png` | The More sheet on a phone: other pages, Quick settings | `normal` |
 | `dashboard-devices.png` | Devices — the grid meter, then the two inverter cards, the flow per device | `normal` |
 | `dashboard-devices-details.png` | Devices — WR1 with Firmware status and Device settings opened | `normal` |
 | `dashboard-devices-offline.png` | Devices — WR2 offline, the grid meter importing | `offline-device` |
