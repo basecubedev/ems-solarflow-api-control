@@ -298,7 +298,14 @@ from what the Admin server is.
   update's card below it, the InfluxDB card while a run of it has something to
   say, and the versions: the
   installable ones, grouped by channel, with a channel filter the browser
-  keeps (`ems-admin.releaseChannel`). While the
+  keeps (`ems-admin.releaseChannel`). An InfluxDB run is also said where it
+  was started, in its line or in the next step the finished update offers
+  (`InfluxUpdateLine`): the step under way while it runs, then how it ended
+  beside the version and its state, so a run whose card ends below the window
+  is still seen. `influxRun` decides it from the plan and the run this browser
+  follows; the next step follows only the run it started for its own update,
+  and an outcome is said only while the plan still shows what the run did.
+  While the
   device works (`WORKING_STAGES`), a banner in the stage's tone
   (`STAGE_TONES`) shows the turning loader, a clock and a moving line, or the
   share of the phases behind it once the run has started. The start of a

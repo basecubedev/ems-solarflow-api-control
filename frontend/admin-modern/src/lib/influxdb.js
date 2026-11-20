@@ -147,3 +147,48 @@ export function stepView(kind, step) {
     detailKey: state === "running" && Object.hasOwn(STEP_NOTES, step?.note) ? STEP_NOTES[step.note] : null,
   };
 }
+
+/**
+ * Where a run stands: the step under way, else the next one due, or for a run
+ * that ended the last one it reached; its place among all and the share
+ * behind it.
+ */
+export function influxProgress(kind, steps, { ended = false } = {}) {
+  const views = (Array.isArray(steps) ? steps : []).map((step) => stepView(kind, step));
+  if (!views.length) return null;
+  const behind = views.filter((step) => !["pending", "running"].includes(step.state)).length;
+  const running = views.findIndex((step) => step.state === "running");
+  const reached = views.findLastIndex((step) => step.state !== "pending");
+  const index = running >= 0 ? running : ended ? Math.max(reached, 0) : Math.min(behind, views.length - 1);
+  return { step: index + 1, total: views.length, current: views[index], share: behind / views.length };
+}
+
+/** How a run this browser followed ended; done only when its result says so, null while it runs or when none ran. */
+export function influxOutcome(job) {
+  if (!job?.kind || job.running) return null;
+  if (job.result) return { kind: job.kind, done: job.result.ok === true };
+  if (job.error) return { kind: job.kind, done: false };
+  return null;
+}
+
+/**
+ * What a line about the bundled InfluxDB says beyond the plan: a run it
+ * follows while that goes on, a run the server holds elsewhere, and how the
+ * followed upgrade ended while the plan still shows what it did (done: up to
+ * date on the version it went to; failed: offered again for the same image).
+ * A busy plan asked for before the followed run ended (``askedAt``, the
+ * plan's Resource) is that run, while the one read after its end is under way
+ * (``reading``). Null where the plan speaks for itself.
+ */
+export function influxRun(view, job, { followed = true, askedAt = 0, reading = false } = {}) {
+  const readBack = followed && reading && view?.state === "busy" && askedAt < (Number(job?.endedAt) || 0);
+  if (followed && job?.running) return { state: "running", kind: job.kind, progress: influxProgress(job.kind, job.steps) };
+  if (readBack) return { state: "running", kind: job.kind, progress: influxProgress(job.kind, job.steps, { ended: true }) };
+  if (!view) return null;
+  if (view.state === "busy") return { state: "busy" };
+  const outcome = followed ? influxOutcome(job) : null;
+  const image = text(job?.image);
+  if (outcome?.kind !== "upgrade" || !image) return null;
+  if (outcome.done) return influxSettled(view) && view.current === imageTag(image) ? { state: "done", kind: "upgrade" } : null;
+  return view.offered && view.targetImage === image ? { state: "failed", kind: "upgrade" } : null;
+}

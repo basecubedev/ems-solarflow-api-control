@@ -23,15 +23,23 @@ const AFTERWARDS = ["influxdb", "overview", "plan", "backups"];
  * server for a long time whatever page is open, so it is followed here rather
  * than by the Updates page: coming back finds it where it is. ``confirming``
  * is the run the reader is asked to confirm, from whichever part of the page
- * offered it.
+ * offered it. ``image`` is the image the run went for, and ``origin`` where it
+ * was asked for, so a line that offered one run follows that run and no other;
+ * ``endedAt`` is when this browser stopped following it, and ``readingBack``
+ * holds while the plan read then is under way.
  */
 class InfluxJob {
   confirming = $state("");
+  askedFrom = "";
   asking = $state(false);
   checking = $state(false);
   recheck = $state.raw(null);
   stopFailed = $state(false);
   kind = $state("");
+  image = $state("");
+  origin = $state("");
+  endedAt = $state(0);
+  readingBack = $state(false);
   jobId = $state(null);
   running = $state(false);
   steps = $state.raw([]);
@@ -44,10 +52,14 @@ class InfluxJob {
 
 export const influxJob = new InfluxJob();
 
-export async function startInfluxJob(kind, image) {
+export async function startInfluxJob(kind, image, origin = "") {
   if (influxJob.running || !Object.hasOwn(STARTS, kind) || !image) return;
   const { path, field } = STARTS[kind];
   influxJob.kind = kind;
+  influxJob.image = image;
+  influxJob.origin = origin;
+  influxJob.endedAt = 0;
+  influxJob.readingBack = false;
   influxJob.jobId = null;
   influxJob.steps = [];
   influxJob.result = null;
@@ -75,8 +87,11 @@ export async function startInfluxJob(kind, image) {
     else influxJob.error = error;
   } finally {
     influxJob.lost = false;
+    influxJob.endedAt = Date.now();
+    influxJob.readingBack = true;
     influxJob.running = false;
-    reload(...AFTERWARDS);
+    reload(...AFTERWARDS.filter((name) => name !== "influxdb"));
+    reload("influxdb").finally(() => (influxJob.readingBack = false));
   }
 }
 
@@ -95,9 +110,9 @@ function detach() {
 /**
  * Ask to confirm an upgrade or its way back. The confirmation names versions
  * and a backup, so it is asked against what the server says now, not against
- * what has been on screen.
+ * what has been on screen. ``origin`` names the line that asked (startInfluxJob).
  */
-export async function askInflux(kind) {
+export async function askInflux(kind, origin = "") {
   if (influxJob.running || influxJob.asking || !Object.hasOwn(STARTS, kind)) return;
   const ticket = ++asked;
   influxJob.asking = true;
@@ -111,6 +126,7 @@ export async function askInflux(kind) {
   if (system.influxdb.error || !fresh) return;
   if (kind === "upgrade" && !fresh.canUpgrade) return;
   if (kind === "rollback" && !fresh.rollback?.available) return;
+  influxJob.askedFrom = origin;
   influxJob.confirming = kind;
 }
 
@@ -122,7 +138,7 @@ export function confirmInflux() {
     return;
   }
   const fresh = influxView(system.influxdb.data);
-  startInfluxJob(kind, kind === "upgrade" ? fresh?.targetImage : fresh?.rollback?.toImage);
+  startInfluxJob(kind, kind === "upgrade" ? fresh?.targetImage : fresh?.rollback?.toImage, influxJob.askedFrom);
 }
 
 /** Forget a confirmation asked for and any still being asked, as when its page closes. */

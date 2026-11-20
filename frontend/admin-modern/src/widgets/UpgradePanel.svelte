@@ -8,13 +8,14 @@
   import { t, tn, fmt } from "../i18n/i18n.svelte.js";
   import { system, reload } from "../state/system.svelte.js";
   import { askInflux, influxJob } from "../state/influxUpgrade.svelte.js";
-  import { influxView } from "../lib/influxdb.js";
+  import { influxRun, influxSettled, influxView } from "../lib/influxdb.js";
   import { upgrade, verify, startUpgrade, closeUpgrade, recover, previewSetupDiscard, discardSetup } from "../state/upgrade.svelte.js";
   import { PHASES, PHASE_TONES, STAGE_TONES, WORKING_STAGES, phaseStates, phaseProgress, failedStep, backupArchive, rateLimited, replacesAdmin, migrationView, isDevelopment, clock, nothingChanged, phaseOfStage } from "../lib/upgrade.js";
   import { noteView } from "../lib/updates.js";
   import { errorView } from "../lib/errors.js";
   import { dashboardHref } from "../lib/links.js";
   import Spinner from "./Spinner.svelte";
+  import InfluxUpdateLine from "./InfluxUpdateLine.svelte";
 
   const f = $derived(fmt());
   const tag = $derived(upgrade.target);
@@ -48,6 +49,15 @@
   const reason = $derived(upgrade.result?.message || stopped?.detail || own?.error_message || "");
   const closable = $derived(!upgrade.busy && !upgrade.holding && upgrade.stage !== "succeeded");
   const influx = $derived(influxView(system.influxdb.data));
+  /**
+   * The InfluxDB upgrade this update offers as its next step stays where it
+   * was offered while it runs and once it ended: the run started here for this
+   * update is followed, and no other.
+   */
+  const nextOrigin = $derived(`next:${upgrade.operationId || upgrade.target || ""}`);
+  const influxFollowed = $derived(influxJob.kind === "upgrade" && influxJob.origin === nextOrigin);
+  const influxNow = $derived(influxRun(influx, influxJob, { followed: influxFollowed, askedAt: system.influxdb.askedAt, reading: influxJob.readingBack }));
+  const influxNext = $derived(Boolean(influx?.shown && (influx.canUpgrade || influxFollowed)));
 
   /** The release just installed may ship a newer InfluxDB; the next step is read from the new installation. */
   $effect(() => {
@@ -271,14 +281,14 @@
         {#if archive}<div class="fact"><div class="fact-label">{t("upgrade.backupMade")}</div><div class="fact-value wrap small-value">{archive}</div></div>{/if}
       </div>
       {#each warnings as warning, index (index)}<p class="note warn"><Icon name="triangle-alert" /><span lang="en">{warning}</span></p>{/each}
-      {#if influx?.canUpgrade}
-        <div class="next inner" data-testid="upgrade-next-influx">
-          <span class="icon-tile sm c-out"><Icon name="database" /></span>
-          <div class="next-words">
-            <strong>{t("upgrade.nextInflux", { target: influx.target })}</strong>
-            <span class="muted small">{t("influx.longRun")}</span>
-          </div>
-          <button class="btn" type="button" disabled={influxJob.asking || influxJob.running} onclick={() => askInflux("upgrade")} data-testid="upgrade-next-influx-go"><Icon name="database" size="sm" />{t("upgrade.nextInfluxGo")}</button>
+      {#if influxNext}
+        <div class="next inner" data-testid="upgrade-next-influx" data-run={influxNow?.state ?? null}>
+          <InfluxUpdateLine view={influx} run={influxNow}>
+            {#snippet title()}<strong>{influxNow?.state !== "running" && influxSettled(influx) ? t("updates.influx.version", { version: influx.current || "—" }) : t("upgrade.nextInflux", { target: influx.target || "—" })}</strong>{/snippet}
+            {#snippet offer()}
+              <button class="btn" type="button" disabled={influxJob.asking || influxJob.running} onclick={() => askInflux("upgrade", nextOrigin)} data-testid="upgrade-next-influx-go"><Icon name="database" size="sm" />{t("upgrade.nextInfluxGo")}</button>
+            {/snippet}
+          </InfluxUpdateLine>
         </div>
       {/if}
       <div class="row-wrap actions">
@@ -365,7 +375,6 @@
 
 <style>
   .next { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; margin-top: var(--s4); }
-  .next-words { flex: 1 1 240px; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 13.5px; }
   .upgrade { display: flex; flex-direction: column; gap: var(--s3); }
   .upgrade:focus { outline: none; }
   .working, .ready-banner {

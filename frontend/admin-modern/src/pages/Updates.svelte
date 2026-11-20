@@ -21,8 +21,9 @@
   import AlignmentCard from "../widgets/AlignmentCard.svelte";
   import Spinner from "../widgets/Spinner.svelte";
   import InfluxVersion from "../widgets/InfluxVersion.svelte";
+  import InfluxUpdateLine from "../widgets/InfluxUpdateLine.svelte";
   import { askInflux, influxJob } from "../state/influxUpgrade.svelte.js";
-  import { influxNeedsAttention, influxSettled, influxView, stateWords } from "../lib/influxdb.js";
+  import { influxRun, influxView } from "../lib/influxdb.js";
 
   ensure("overview", "alignment", "releases", "lifecycle", "influxdb");
   keepWithOverview("alignment");
@@ -49,8 +50,8 @@
   const running = $derived(activeUpgrade(system.alignment.data?.transition) || activeWorkflow(system.lifecycle.data)?.owner === "guided_upgrade");
   const influx = $derived(influxView(system.influxdb.data));
   const influxStale = $derived(Boolean(system.influxdb.error));
-  const influxDone = $derived(influxSettled(influx));
-  const influxUnfinished = $derived(influxNeedsAttention(influx));
+  /** The line says any run this browser follows, since every run changes the version it shows. */
+  const influxNow = $derived(influxRun(influx, influxJob, { askedAt: system.influxdb.askedAt, reading: influxJob.readingBack }));
   const upgradeHeld = $derived(upgrade.busy || upgrade.holding || running);
   /** The Guided Upgrade and an InfluxDB run hold off each other; the server refuses either while the other runs. */
   const held = $derived(upgradeHeld || influxJob.running || influx?.state === "busy");
@@ -137,23 +138,15 @@
       {/if}
     </li>
     {#if influx?.shown}
-      <li class="update inner" data-testid="update-influxdb" data-state={influx.state}>
-        <span class="icon-tile sm {influx.canUpgrade ? 'c-out' : influxUnfinished || influx.state === 'low_memory' ? 'c-warn' : influxDone ? 'c-ok' : 'c-idle'}"><Icon name="database" /></span>
-        <div class="words">
-          <div class="name"><strong>{t("version.analytics")}</strong>{" "}<span class="num">{t("updates.influx.version", { version: influx.current || "—" })}{#if influx.offered}{" "}→ {influx.target}{/if}</span></div>
-          <p class="muted small">
-            {#if influx.canUpgrade}{t("influx.longRun")}{:else if influxUnfinished}{t("updates.influx.unfinished")}{:else}{t(`influx.state.${influx.state}`, stateWords(influx))}{/if}
-          </p>
-        </div>
-        {#if influx.canUpgrade}
-          <button class="btn" type="button" disabled={influxStale || influxJob.asking || influxJob.running || upgradeHeld} onclick={() => askInflux("upgrade")} data-testid="influx-upgrade">
-            <Icon name={influxJob.running && influxJob.kind === "upgrade" ? "loader" : "database"} size="sm" />{t("influx.upgrade", { version: influx.target })}
-          </button>
-        {:else if influxUnfinished}
-          <Status tone="c-warn" text={t("updates.attention")} />
-        {:else if influxDone}
-          <Status tone="c-ok" text={t("updates.upToDate")} />
-        {/if}
+      <li class="update inner" data-testid="update-influxdb" data-state={influx.state} data-run={influxNow?.state ?? null}>
+        <InfluxUpdateLine view={influx} run={influxNow}>
+          {#snippet title()}<strong>{t("version.analytics")}</strong>{" "}<span class="num" data-testid="update-influxdb-version">{t("updates.influx.version", { version: influx.current || "—" })}{#if influx.offered}{" "}→ {influx.target}{/if}</span>{/snippet}
+          {#snippet offer()}
+            <button class="btn" type="button" disabled={influxStale || influxJob.asking || influxJob.running || upgradeHeld} onclick={() => askInflux("upgrade")} data-testid="influx-upgrade">
+              <Icon name="database" size="sm" />{t("influx.upgrade", { version: influx.target })}
+            </button>
+          {/snippet}
+        </InfluxUpdateLine>
       </li>
     {/if}
   </ol>

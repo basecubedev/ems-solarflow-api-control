@@ -297,7 +297,13 @@ docker compose -f docker-compose.admin.yml up -d
   up and verifies the backup before it changes anything, then starts the new
   version, which converts the data, and checks that every bucket and task is
   still there. That can take a very long time; do not restart the system
-  while it runs.
+  while it runs. On the page that started it, the line it was started from
+  -- the one under **Versions and updates**, or the next step an EMS update
+  offers -- says meanwhile which step runs (*Step 4 of 7 · Back up InfluxDB
+  and check the backup*) and afterwards how it ended, with the new version
+  and **Up to date**; the InfluxDB card below lists every step and puts
+  **Up to date** beside the version that runs. Another tab, or the page
+  after a reload, says that an upgrade is running until it has ended.
   An older InfluxDB cannot open converted data, so **Roll back to …** restores
   that backup on the previous version and sets the converted directory aside
   instead of deleting it. When a step of the way back fails, InfluxDB is put

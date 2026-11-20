@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { EXPLAINED_STATES, PLAN_STATES, RECORD_STATES, ROLLBACK_STEPS, STEP_NOTES, UPGRADE_STEPS, imageTag, influxCanRecheck, influxCardShown, influxNeedsAttention, influxSettled, influxView, lastView, rollbackView, stateWords, stepView } from "../src/lib/influxdb.js";
+import { EXPLAINED_STATES, PLAN_STATES, RECORD_STATES, ROLLBACK_STEPS, STEP_NOTES, UPGRADE_STEPS, imageTag, influxCanRecheck, influxCardShown, influxNeedsAttention, influxOutcome, influxProgress, influxRun, influxSettled, influxView, lastView, rollbackView, stateWords, stepView } from "../src/lib/influxdb.js";
 import { STRINGS } from "../src/i18n/strings.js";
 
 const SERVER = readFileSync(new URL("../../../admin/influx_upgrade.py", import.meta.url), "utf8");
@@ -62,7 +62,7 @@ test("every key the card can ask for exists in every language", () => {
     ...RECORD_STATES.map((state) => `influx.last.${state}`),
     ...UPGRADE_STEPS.map((step) => `influx.step.upgrade.${step}`),
     ...ROLLBACK_STEPS.map((step) => `influx.step.rollback.${step}`),
-    ...["upgrade", "rollback"].flatMap((kind) => [`influx.progress.${kind}`, `influx.outcome.${kind}.done`, `influx.outcome.${kind}.failed`]),
+    ...["upgrade", "rollback"].flatMap((kind) => [`influx.progress.${kind}`, `influx.outcome.${kind}.done`, `influx.outcome.${kind}.failed`, `influx.working.${kind}`]),
     ...[...WIDGET.matchAll(/t\("(influx\.[A-Za-z.]+)"/g)].map((match) => match[1]),
   ];
   for (const key of keys) {
@@ -116,6 +116,80 @@ test("a step names its kind's words, and an unknown one keeps the server's", () 
   assert.deepEqual([unknown.label, unknown.text, unknown.state], [null, "Beam", "pending"]);
   assert.equal(imageTag("influxdb:2.9.1"), "2.9.1");
   assert.equal(imageTag("ghcr.io/x:1"), null);
+});
+
+test("a run's progress names the step under way and its place, so a line beside the version can say where the run is", () => {
+  const steps = (states) => UPGRADE_STEPS.map((key, index) => ({ key, label: key, state: states[index] ?? "pending" }));
+  const first = influxProgress("upgrade", steps([]));
+  assert.deepEqual([first.step, first.total, first.current.label, first.share], [1, 7, "influx.step.upgrade.preflight", 0]);
+  const backup = influxProgress("upgrade", steps(["done", "done", "done", "running"]));
+  assert.deepEqual([backup.step, backup.total, backup.current.label, backup.share], [4, 7, "influx.step.upgrade.backup", 3 / 7]);
+  const between = influxProgress("upgrade", steps(["done", "skipped", "done"]));
+  assert.deepEqual([between.step, between.current.label], [4, "influx.step.upgrade.backup"]);
+  const over = influxProgress("upgrade", steps(UPGRADE_STEPS.map(() => "done")));
+  assert.deepEqual([over.step, over.share], [7, 1]);
+  assert.equal(influxProgress("upgrade", steps(["done", "done", "failed"]), { ended: true }).step, 3);
+  assert.equal(influxProgress("upgrade", steps(["done", "done", "failed"])).step, 4);
+  assert.equal(influxProgress("upgrade", steps([]), { ended: true }).step, 1);
+  const back = influxProgress("rollback", ROLLBACK_STEPS.map((key, index) => ({ key, state: index < 2 ? "done" : index === 2 ? "running" : "pending" })));
+  assert.deepEqual([back.step, back.total, back.current.label], [3, ROLLBACK_STEPS.length, "influx.step.rollback.stop"]);
+  const unknown = influxProgress("upgrade", [{ key: "beam", label: "Beam", state: "running" }]);
+  assert.deepEqual([unknown.current.label, unknown.current.text], [null, "Beam"]);
+  assert.equal(influxProgress("upgrade", []), null);
+  assert.equal(influxProgress("upgrade", null), null);
+});
+
+test("a run this browser followed ends as done only when its result says so; a run under way or never started has no outcome", () => {
+  const job = (fields) => ({ kind: "upgrade", running: false, result: null, error: null, ...fields });
+  assert.deepEqual(influxOutcome(job({ result: { ok: true } })), { kind: "upgrade", done: true });
+  assert.deepEqual(influxOutcome(job({ result: { ok: false, message: "x" } })), { kind: "upgrade", done: false });
+  assert.deepEqual(influxOutcome(job({ result: {} })), { kind: "upgrade", done: false });
+  assert.deepEqual(influxOutcome(job({ kind: "rollback", error: new Error("refused") })), { kind: "rollback", done: false });
+  assert.equal(influxOutcome(job({ running: true, result: { ok: true } })), null);
+  assert.equal(influxOutcome(job({})), null);
+  assert.equal(influxOutcome(job({ kind: "", result: { ok: true } })), null);
+  assert.equal(influxOutcome(null), null);
+});
+
+test("a line says a run it follows while it goes on, a run held elsewhere, and how the run ended only while the plan still shows what it did", () => {
+  const view = (state, current = "2.9.1", extra = {}) => influxView({ ok: true, state, current_image: `influxdb:${current}`, target_image: "influxdb:2.9.1", ...extra });
+  const job = (fields) => ({ kind: "upgrade", image: "influxdb:2.9.1", running: false, steps: [], result: null, error: null, ...fields });
+  const running = influxRun(view("busy", "2.7"), job({ running: true, steps: [{ key: "backup", state: "running" }] }));
+  assert.deepEqual([running.state, running.kind, running.progress.current.label], ["running", "upgrade", "influx.step.upgrade.backup"]);
+  assert.equal(influxRun(view("busy", "2.7"), job({ running: true }), { followed: false }).state, "busy");
+  assert.equal(influxRun(view("busy", "2.7"), job({})).state, "busy");
+  assert.equal(influxRun(view("busy", "2.7"), job({ result: { ok: true } })).state, "busy");
+  const ended = job({ result: { ok: true }, endedAt: 1000, steps: UPGRADE_STEPS.map((key) => ({ key, state: "done" })) });
+  const readBack = influxRun(view("busy", "2.7"), ended, { askedAt: 999, reading: true });
+  assert.deepEqual([readBack.state, readBack.progress.step], ["running", 7]);
+  assert.equal(influxRun(view("busy", "2.7"), ended, { askedAt: 999 }).state, "busy");
+  assert.equal(influxRun(view("busy", "2.7"), ended, { askedAt: 1000, reading: true }).state, "busy");
+  assert.equal(influxRun(view("busy", "2.7"), ended, { followed: false, askedAt: 999, reading: true }).state, "busy");
+  assert.deepEqual(influxRun(view("current"), ended, { askedAt: 999, reading: true }), { state: "done", kind: "upgrade" });
+  const stopped = job({ result: { ok: false }, endedAt: 1000, steps: UPGRADE_STEPS.map((key, index) => ({ key, state: index < 3 ? "done" : index === 3 ? "failed" : "pending" })) });
+  const stoppedBack = influxRun(view("busy", "2.7"), stopped, { askedAt: 999, reading: true });
+  assert.deepEqual([stoppedBack.progress.step, stoppedBack.progress.current.label], [4, "influx.step.upgrade.backup"]);
+
+  assert.deepEqual(influxRun(view("current"), job({ result: { ok: true } })), { state: "done", kind: "upgrade" });
+  assert.equal(influxRun(view("current"), job({ result: { ok: true } }), { followed: false }), null);
+  assert.equal(influxRun(view("current", "2.9.1", { last: { state: "failed", from_image: "influxdb:2.7", to_image: "influxdb:2.9.1", backup: "b" } }), job({ result: { ok: true } })), null);
+  assert.equal(influxRun(view("available", "2.9.1", { target_image: "influxdb:2.10.0" }), job({ result: { ok: true } })), null);
+  assert.equal(influxRun(view("current", "2.10.0", { target_image: "influxdb:2.10.0" }), job({ result: { ok: true } })), null);
+  assert.equal(influxRun(view("not_running"), job({ result: { ok: true } })), null);
+
+  assert.deepEqual(influxRun(view("available", "2.7"), job({ result: { ok: false } })), { state: "failed", kind: "upgrade" });
+  assert.deepEqual(influxRun(view("available", "2.7"), job({ error: new Error("refused") })), { state: "failed", kind: "upgrade" });
+  assert.equal(influxRun(view("available", "2.7", { target_image: "influxdb:2.10.0" }), job({ result: { ok: false } })), null);
+  assert.equal(influxRun(view("current"), job({ result: { ok: false } })), null);
+
+  assert.equal(influxRun(view("available", "2.7"), job({ kind: "rollback", image: "influxdb:2.7", result: { ok: true } })), null);
+  assert.equal(influxRun(view("current"), job({ result: null, error: null })), null);
+  assert.equal(influxRun(null, job({ result: { ok: true } })), null);
+});
+
+test("a step under way that says more than its name says that instead", () => {
+  const putBack = influxProgress("rollback", ROLLBACK_STEPS.map((key) => ({ key, state: key === "restore" ? "running" : "done", note: key === "restore" ? "putting_back" : null })));
+  assert.deepEqual([putBack.current.label, putBack.current.detailKey], ["influx.step.rollback.restore", "influx.puttingBack"]);
 });
 
 test("up to date means no run left to look at; an unfinished one asks to be looked at while nothing runs", () => {
