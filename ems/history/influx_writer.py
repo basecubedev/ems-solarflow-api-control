@@ -204,6 +204,11 @@ def _device_field_values(state):
             fields[name] = float(value)
     if battery_presence(state) == BATTERY_ABSENT:
         fields.pop("soc", None)
+    reported = getattr(state, "pv_inputs_reported", None)
+    if reported is not None:
+        for index, carried in enumerate(reported, start=1):
+            if not carried:
+                fields.pop(f"solar{index}", None)
     return fields
 
 

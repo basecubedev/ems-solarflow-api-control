@@ -148,6 +148,10 @@ def opendtu_device_state(reading):
         dc_status=0,
         grid_state=0,
         pack_num=0,
+        pv_inputs_reported=tuple(
+            index < len(reading_inputs) and reading.pv_inputs_w[index] is not None
+            for index in range(PV_INPUT_SLOTS)
+        ),
     )
 
 

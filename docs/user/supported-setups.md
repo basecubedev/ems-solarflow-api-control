@@ -309,6 +309,10 @@ against the same meter, are in the
 |---|---|---|---|---|
 | External device | `ems-solarflow/<id>/inverterPower` | Watts, 0 or more | Reverse-engineered | Required: a device is found only once it reports this. AC power delivered to the house. |
 | External device | `ems-solarflow/<id>/solarPower` | Watts, 0 or more | Reverse-engineered | Optional. PV power at the device's input. |
+| External device | `ems-solarflow/<id>/solarPower1` | Watts, 0 or more | Reverse-engineered | Optional. PV power of input (string) 1. |
+| External device | `ems-solarflow/<id>/solarPower2` | Watts, 0 or more | Reverse-engineered | Optional. PV power of input (string) 2. |
+| External device | `ems-solarflow/<id>/solarPower3` | Watts, 0 or more | Reverse-engineered | Optional. PV power of input (string) 3. |
+| External device | `ems-solarflow/<id>/solarPower4` | Watts, 0 or more | Reverse-engineered | Optional. PV power of input (string) 4. |
 | External device | `ems-solarflow/<id>/batteryPower` | Watts, positive charging, negative discharging | Reverse-engineered | Optional. Negate a value whose source counts the other way round. |
 | External device | `ems-solarflow/<id>/batterySoc` | Percent, 0 to 100 | Reverse-engineered | Optional. Without it the device counts as having no battery. |
 | External device | `ems-solarflow/<id>/state` | JSON object with any of the keys above | Validated | All values at once. Validated with `inverterPower` and `solarPower` from a user's OpenDTU, published by the MQTT mapping; the battery keys, and mixing with the single topics, are Reverse-engineered. |

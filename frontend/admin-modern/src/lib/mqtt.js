@@ -70,7 +70,7 @@ export const SILENCE_REASONS = Object.freeze(["disabled", "source_missing", "sta
 
 export const VALUE_REASONS = Object.freeze(["format_invalid", "not_json", "path_invalid", "path_missing", "not_a_number", "out_of_range"]);
 
-export const TARGETS = Object.freeze(["inverterPower", "solarPower", "batteryPower", "batterySoc"]);
+export const TARGETS = Object.freeze(["inverterPower", "solarPower", "solarPower1", "solarPower2", "solarPower3", "solarPower4", "batteryPower", "batterySoc"]);
 
 /** A consumer publishes its power alone, under its own catalog family. */
 export const CONSUMER_TARGETS = Object.freeze(["power"]);
@@ -81,6 +81,10 @@ export const isConsumer = (device) => device?.family === CONSUMER_FAMILY;
 
 /** The targets a mapping entry may carry. */
 export const targetsOf = (device) => (isConsumer(device) ? CONSUMER_TARGETS : TARGETS);
+
+/** The targets a device that publishes leaves out of its state, each with why: an optional value not read. */
+export const leftOutTargets = (evaluation) =>
+  evaluation?.state ? (evaluation.targets || []).filter((target) => target.reason) : [];
 
 export const BROKER_STATES = Object.freeze(["off", "running", "stopped", "unknown"]);
 
@@ -157,7 +161,7 @@ export const POWER_UNITS = Object.freeze(["W", "kW"]);
 export const SOC_UNITS = Object.freeze(["percent", "fraction"]);
 
 /** Targets that must never be negative; a negative reading there is a sign to turn round. */
-export const NON_NEGATIVE_TARGETS = Object.freeze(["inverterPower", "solarPower", "batterySoc", "power"]);
+export const NON_NEGATIVE_TARGETS = Object.freeze(["inverterPower", "solarPower", "solarPower1", "solarPower2", "solarPower3", "solarPower4", "batterySoc", "power"]);
 
 export const MIN_MAX_AGE = 60;
 export const MAX_MAX_AGE = 900;
@@ -416,7 +420,7 @@ export function sourceFromValue(choice, target, unit = "W", { turnSign = true } 
 
 /** Only a device without a battery can be read as having its sign the wrong way round from one negative value. */
 function turnsSign(kind, target) {
-  return kind === "balcony" || kind === "consumer" || target === "solarPower" || target === "batterySoc";
+  return kind === "balcony" || kind === "consumer" || target.startsWith("solarPower") || target === "batterySoc";
 }
 
 /**

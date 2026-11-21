@@ -118,7 +118,7 @@ def build_device_fields(device_state):
     def f(value):
         return float(value) if isinstance(value, (int, float)) else value
 
-    return {
+    fields = {
         "available": True,
         "soc": f(device_state.soc),
         "min_soc": f(device_state.min_soc),
@@ -157,6 +157,11 @@ def build_device_fields(device_state):
         "output_active": device_state.output > 0,
         "fault_active": device_state.fault_level > 0,
     }
+    reported = getattr(device_state, "pv_inputs_reported", None)
+    for index, carried in enumerate(reported or (), start=1):
+        if not carried:
+            fields.pop(f"solar{index}", None)
+    return fields
 
 
 def runtime_state_points(runtime_state, run_id, timestamp_ns):

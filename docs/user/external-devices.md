@@ -40,6 +40,7 @@ Every topic starts with `ems-solarflow`, then a device id you choose, then a key
 | --- | --- | --- |
 | `ems-solarflow/<id>/inverterPower` | AC power the device delivers to the house, watts, `0` or more | **Required** |
 | `ems-solarflow/<id>/solarPower` | PV power at the device's input, watts, `0` or more | Optional |
+| `ems-solarflow/<id>/solarPower1` … `solarPower4` | PV power of one input (string), watts, `0` or more | Optional |
 | `ems-solarflow/<id>/batteryPower` | Battery power in watts: **positive while charging, negative while discharging** | Optional |
 | `ems-solarflow/<id>/batterySoc` | Battery state of charge, `0` to `100` | Optional |
 | `ems-solarflow/<id>/state` | All of the above at once, as one JSON object | Alternative |
@@ -56,12 +57,18 @@ Rules that decide whether a value is read:
 - **Exact spelling:** topics and keys are case-sensitive — `InverterPower` or
   `EMS-SolarFlow` is not read.
 - **A plain number:** `765`, `765.5`, `-55`. Not `765 W`, not `765,0`.
-- **Send `0`, not a small negative standby value:** a negative `inverterPower`
-  or `solarPower` is dropped.
+- **Send `0`, not a small negative standby value:** a negative `inverterPower`,
+  `solarPower` or string is dropped.
 - **Battery sign:** many systems count discharging as positive. Negate such a
   value before publishing it.
 - **No battery, no SoC:** leave `batterySoc` out and the device counts as having
   no battery; its card shows no charge level.
+- **Strings:** `solarPower1` … `solarPower4` are each one PV input; the card
+  shows them and the history records each, only those you send. Without
+  `solarPower` their sum is the device's PV.
+- **Keep sending every value:** a value that has not arrived for 60 seconds is
+  dropped, while the device's other values keep it online as long as
+  `inverterPower` is among them; without it the device is offline.
 - **Publish retained, at least every 30 seconds, also when nothing changed.**
   Discovery listens for a few seconds only and finds a device by its retained
   values. A device that has sent nothing readable for a minute shows as stale,

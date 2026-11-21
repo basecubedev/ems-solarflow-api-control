@@ -143,6 +143,7 @@ EMS_SOLARFLOW = ExternalTopicFamily(
         {
             "inverterPower": _non_negative("outputHomePower"),
             "solarPower": _non_negative("solarInputPower"),
+            **{f"solarPower{index}": _non_negative(f"solarPower{index}") for index in range(1, 5)},
             "batteryPower": _signed("outputPackPower", "packInputPower"),
             "batterySoc": _percent("electricLevel"),
         }

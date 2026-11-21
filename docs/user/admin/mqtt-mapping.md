@@ -304,9 +304,13 @@ is written as the consumer's `history_id` (see
 ## Expected result
 
 The mapping publishes the device every 15 s, retained, with an expiry of 45 s.
-It falls silent as soon as one of its sources is older than its maximum age or a
-value would be refused by EMS (a negative inverter power, a charge level above
-100 %); EMS then shows the device as stale after 60 s.
+It falls silent as soon as a source of its inverter power is older than its
+maximum age, or a value would be refused by EMS (a negative inverter power, a
+charge level above 100 %); EMS then shows the device as stale after 60 s. A
+source of any other value that goes stale — one string of two, say — leaves
+only that value out: the device goes on with the rest, its row and the check
+say **Left out:** with the value and why, and EMS drops the value it no longer
+gets after the same 60 s.
 
 ## Warnings and common problems
 

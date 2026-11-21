@@ -274,6 +274,7 @@ def parse_device(data):
         solar2=props.get("solarPower2") or 0,
         solar3=props.get("solarPower3") or 0,
         solar4=props.get("solarPower4") or 0,
+        pv_inputs_reported=tuple(props.get(f"solarPower{index}") is not None for index in range(1, 5)),
 
         output_limit=props.get("outputLimit") or 0,
         soc_limit=props.get("socLimit") or 0,

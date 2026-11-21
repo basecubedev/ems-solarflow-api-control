@@ -3,8 +3,10 @@
 """The calculation from a source payload to a published value, as a table.
 
 Factor, sign, the negative rule, sums, charge minus discharge, freshness and the
-catalog's own gate, each in isolation; a device publishes only when every
-target passes, so a dead power source cannot hide behind a live charge level.
+catalog's own gate, each in isolation. A device publishes only while its
+required target is read, so a dead power source cannot hide behind a live
+charge level; an optional target that is not read is left out (#382), and a
+value the catalog refuses silences the device.
 """
 
 import json
@@ -126,6 +128,26 @@ def test_a_stale_source_silences_the_whole_device_even_when_another_is_fresh():
     assert evaluation.reason == "stale"
     assert evaluation.targets[0].reason == "stale"
     assert evaluation.targets[1].value == 80
+
+
+def test_a_stale_optional_target_is_left_out_and_the_device_publishes_the_rest():
+    """#380: one stale string made a mapped inverter go silent, its fresh power with it."""
+
+    device = _device(
+        inverterPower={"sources": [{"topic": "power", "format": "number"}]},
+        solarPower1={"sources": [{"topic": "pv1", "format": "number", "max_age_seconds": 60}]},
+        solarPower2={"sources": [{"topic": "pv2", "format": "number"}]},
+    )
+    latest = {"power": Received(b"500", 100.0), "pv1": Received(b"260", 0.0), "pv2": Received(b"250", 100.0)}
+
+    evaluation = evaluate_device(device, latest, 100.0)
+
+    assert (evaluation.state, evaluation.reason) == ({"inverterPower": 500, "solarPower2": 250}, None)
+    assert {target.key: target.reason for target in evaluation.targets} == {
+        "inverterPower": None,
+        "solarPower1": "stale",
+        "solarPower2": None,
+    }
 
 
 def test_a_source_exactly_at_its_maximum_age_is_still_fresh():
