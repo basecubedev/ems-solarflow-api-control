@@ -1,6 +1,21 @@
 {
   "builds": [
     {
+      "admin_digest": "sha256:e4cbe2dece0ef82063ac923f1c2ab144900125d123cc2832608b5c01a876f376",
+      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-unified-dashboard-696c8f63db-942b365-44903241148-1",
+      "build_id": "dev-feat-unified-dashboard-696c8f63db-942b365-44903241148-1",
+      "channel": "development",
+      "created_at": "2026-11-21T12:30:19Z",
+      "display_name": "Feature feat-unified-dashboard",
+      "ems_digest": "sha256:e87ec03b78a6fb2e2d72d048b363df4990a31f4e4e281775638a84b96c663938",
+      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-feat-unified-dashboard-696c8f63db-942b365-44903241148-1",
+      "installable": true,
+      "revision": "942b36513b33e334fe43086a65f43fff40905495",
+      "run_attempt": 1,
+      "run_id": "44903241148",
+      "tag": "dev-feat-unified-dashboard-696c8f63db-942b365-44903241148-1"
+    },
+    {
       "admin_digest": "sha256:51d74aec605634f97ed8d64a5880db378d17aa26114c54aa7fcb9beef9f8c215",
       "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-unified-dashboard-696c8f63db-19b8adb-44839205636-1",
       "build_id": "dev-feat-unified-dashboard-696c8f63db-19b8adb-44839205636-1",
