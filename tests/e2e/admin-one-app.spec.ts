@@ -147,6 +147,19 @@ test.describe("One app for the dashboard and the console", { tag: ["@authority"]
     await expect(page.getByLabel("Name")).toHaveValue("Kept while the EMS restarts");
   });
 
+  test("signed in, a runtime state that does not answer is named on the Control page and asked again", async ({ page, baseURL }) => {
+    await installConfig(baseURL);
+    let failing = true;
+    await page.route("**/api/runtime", (route) => (failing ? route.fulfill({ status: 503, json: { error: "unavailable" } }) : route.continue()));
+    await page.goto("/#/status");
+    await signIn(page);
+    await page.locator('aside.sidebar a[data-page="control"]').click();
+    await expect(page.getByText("The runtime state did not answer. Asking again…")).toBeVisible();
+    failing = false;
+    await expect(page.getByTestId("runtime-editor")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("The runtime state did not answer. Asking again…")).toHaveCount(0);
+  });
+
   test("a browser too old for the app is told so instead of a blank page", async ({ page }) => {
     await page.addInitScript(() => {
       delete (HTMLElement.prototype as unknown as Record<string, unknown>).popover;

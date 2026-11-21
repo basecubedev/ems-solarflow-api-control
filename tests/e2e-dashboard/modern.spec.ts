@@ -611,14 +611,16 @@ test.describe("Modern dashboard @smoke", () => {
     await expect(page.getByText("Write mode · runtime state unavailable, retrying").first()).toBeVisible();
   });
 
-  test("a runtime state that does not answer is named beside the write mode and asked again", async ({ page }) => {
+  test("a runtime state that does not answer is named beside the write mode and on the Control page, and asked again", async ({ page }) => {
     await page.route("**/api/auth/status", (route) => route.fulfill({ json: SIGNED_IN }));
     let failing = true;
     await page.route("**/api/runtime", (route) => (failing ? route.fulfill({ status: 503, json: { error: "unavailable" } }) : route.continue()));
-    await openModern(page);
+    await openModern(page, "#/control");
     await expect(page.getByText("Write mode · runtime state unavailable, retrying").first()).toBeVisible();
+    await expect(page.getByText("The runtime state did not answer. Asking again…")).toBeVisible();
     failing = false;
     await expect(page.getByText("Write mode · runtime state unavailable, retrying")).toHaveCount(0, { timeout: 10_000 });
+    await expect(page.getByTestId("runtime-editor")).toBeVisible();
   });
 
   test("an overdue full-charge assist names how far overdue it is and when it is due next", async ({ page }) => {

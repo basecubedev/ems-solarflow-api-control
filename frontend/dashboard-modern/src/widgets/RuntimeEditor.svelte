@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 basecubedev -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script module>
-  export const manifest = { id: "runtime-editor", data: ["runtime", "auth"], refresh: "on-save", minWidth: 320, states: ["auth-not-configured", "signed-out", "editing"] };
+  export const manifest = { id: "runtime-editor", data: ["runtime", "auth"], refresh: "on-save", minWidth: 320, states: ["auth-not-configured", "signed-out", "runtime-unavailable", "editing"] };
 </script>
 
 <script>
@@ -116,6 +116,8 @@
     <Empty text={t("runtime.signIn")} icon="lock">
       {#snippet action()}<button class="btn small" type="button" onclick={() => (auth.loginOpen = true)}>{t("auth.signIn")}</button>{/snippet}
     </Empty>
+  {:else if !live.runtime && live.runtimeUnavailable}
+    <Empty text={t("runtime.unavailable")} icon="loader" />
   {:else if !live.runtime}
     <div class="skeleton"></div>
   {:else}

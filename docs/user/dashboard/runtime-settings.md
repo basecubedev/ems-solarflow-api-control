@@ -272,7 +272,7 @@ have no config value and stay as you set them.
 | --- | --- | --- |
 | No fields, only *Read-only. Sign in to change runtime values.* | Not signed in | Sign in |
 | *Read-only. No dashboard password is set …* | No password configured | Set a password, see step 1 |
-| The top bar reads *Write mode · runtime state unavailable, retrying* | The runtime state did not answer; the dashboard asks again | Wait, then check `docker compose logs ems` |
+| The runtime settings read *The runtime state did not answer. Asking again…*; on port 8080 the top bar also reads *Write mode · runtime state unavailable, retrying* | The runtime state did not answer; the dashboard asks again | Wait, then check `docker compose logs ems` |
 | An error on save | The value is out of range or refused | Nothing was written; correct it |
 | Saved but nothing changed | Wait one loop interval, then check the pipeline | [Control pipeline](control.md) |
 | Value reverts | Something else writes runtime state | Check `emsctl.py`, another dashboard tab, a schedule rule, a second controller |
