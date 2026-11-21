@@ -200,18 +200,29 @@ for the SQLite vs InfluxDB split and the endpoints involved.
 ## Zooming A Chart
 
 Every chart with a time axis — the Analytics chart and the power charts on
-Overview and Devices — is zoomed the same three ways:
+Overview and Devices — is zoomed the same four ways:
 
 - **Drag** across the plot. The selection is drawn while the pointer is down.
 - **Mouse wheel** over the plot. It zooms around the pointer, so whatever is
   under it stays under it, and it never scrolls the page while the pointer is
-  over a chart.
+  over a chart. One notch is one zoom step; a touchpad's scroll or pinch zooms
+  by as much as the fingers move, as far as the browser lets the two be told
+  apart.
+- **Two fingers** on a touch screen. Pinching zooms around the point between
+  them; moving them together moves the window too. One finger moving up or
+  down still scrolls the page.
 - The **Zoom in** and **Zoom out** buttons beside the chart's legend. They zoom
   around the middle of the visible window.
 
+A zoomed chart moves along the time axis without changing its zoom: by
+scrolling sideways over the plot (a touchpad swipe, or `Shift` with the mouse
+wheel), by swiping it sideways with one finger, or with the **Earlier** and
+**Later** buttons beside **Zoom in**, which move it by a quarter of its width
+and are greyed out at the start and the end of the range.
+
 **Reset zoom** appears as soon as a chart is zoomed and returns it to the whole
 range. `Esc` does the same, and so does zooming all the way back out with the
-wheel or **Zoom out**. Choosing another range, device or view also leaves the
+wheel, a pinch or **Zoom out**. Choosing another range, device or view also leaves the
 zoom, and so does a click on the range or view already shown. A
 zoomed chart keeps its zoom while new data arrives. A zoom never narrows below
 a minute. The **Power today** chart on the Overview zooms within today.

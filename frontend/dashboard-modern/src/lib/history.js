@@ -264,6 +264,77 @@ export function zoomStep(min, max, center, factor, start, end) {
   return { min: low, max: low + next };
 }
 
+/** How far one press of the earlier or later button moves a zoomed window: a quarter of its span. */
+export const PAN_STEP = 0.25;
+
+/**
+ * The x window moved by ``shift`` seconds (negative is earlier) at its own
+ * span, stopping at the outer bounds. Null when the inputs describe no window.
+ */
+export function panStep(min, max, shift, start, end) {
+  const nums = [min, max, shift, start, end];
+  if (!nums.every((n) => typeof n === "number" && Number.isFinite(n))) return null;
+  const outer = end - start;
+  if (!(outer > 0) || !(max > min)) return null;
+  const span = Math.min(max - min, outer);
+  const low = Math.min(Math.max(min + shift, start), end - span);
+  return { min: low, max: low + span };
+}
+
+/** The pixels one mouse-wheel notch counts as when zooming: one zoom step (``wheelZoomFactor``). */
+const NOTCH_PX = 100;
+/** The pixels macOS reports for one line of a mouse wheel, in every browser. */
+const MAC_LINE_PX = 4.000244140625;
+
+/**
+ * What a wheel event over a chart asks for, in pixels: a sideways scroll (a
+ * touchpad swipe, or Shift with a mouse wheel) moves the window, anything
+ * else zooms it. A mouse wheel's notch zooms one step however many pixels
+ * its platform reports for it; it shows by counting in lines or pages, by a
+ * ``wheelDeltaY`` in whole notches of 120 that is not a touchpad's three
+ * times its pixels, or by macOS's line of pixels. A touchpad's scroll zooms
+ * by its pixels, and its pinch, a wheel with Ctrl held in tiny steps, tenfold.
+ * ``pagePx`` is a page's width, for a wheel that counts in pages.
+ */
+export function wheelGesture({ deltaX = 0, deltaY = 0, deltaMode = 0, wheelDeltaY = 0, shiftKey = false, ctrlKey = false } = {}, pagePx = 800) {
+  const unit = deltaMode === 1 ? 33 : deltaMode === 2 ? pagePx : 1;
+  const x = deltaX * unit;
+  const y = deltaY * unit;
+  if (shiftKey && !x) return { pan: y };
+  if (Math.abs(x) > Math.abs(y)) return { pan: x };
+  const touchpad = wheelDeltaY === -3 * deltaY;
+  const notch =
+    deltaMode !== 0 ||
+    (wheelDeltaY !== 0 && wheelDeltaY % 120 === 0 && !touchpad) ||
+    (deltaY !== 0 && Number.isInteger(Math.abs(deltaY) / MAC_LINE_PX));
+  if (notch) return { zoom: Math.sign(y) * NOTCH_PX };
+  return { zoom: ctrlKey ? y * 10 : y };
+}
+
+/** The span multiplier for a wheel's pixels: a mouse notch (100 px) or more is one zoom step, a touchpad's small deltas a share of one. */
+export function wheelZoomFactor(pixels) {
+  if (!Number.isFinite(pixels) || pixels === 0) return 1;
+  return ZOOM_STEP ** Math.max(-1, Math.min(1, pixels / NOTCH_PX));
+}
+
+/**
+ * The x window a two-finger pinch gives: the span ``pinch`` began with,
+ * scaled by how much nearer or further apart the fingers are than at its
+ * start, the time first under their midpoint kept under it at ``fraction``
+ * of the plot's width. Clamped like a zoom step; null when the inputs
+ * describe no window.
+ */
+export function pinchWindow(pinch, distance, fraction, start, end) {
+  const { span, anchor, distance: from } = pinch || {};
+  const nums = [span, anchor, from, distance, fraction, start, end];
+  if (!nums.every((n) => typeof n === "number" && Number.isFinite(n))) return null;
+  const outer = end - start;
+  if (!(outer > 0) || !(span > 0) || !(from > 0) || !(distance > 0)) return null;
+  const next = Math.min(Math.max((span * from) / distance, Math.min(MIN_ZOOM_SPAN_S, outer)), outer);
+  const low = Math.min(Math.max(anchor - fraction * next, start), end - next);
+  return { min: low, max: low + next };
+}
+
 /**
  * Escape leaves a zoom only when no dialog or popover is open to take it for
  * itself: closing the sign-in or the appearance menu keeps the chart as it is.

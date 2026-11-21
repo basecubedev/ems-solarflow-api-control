@@ -250,6 +250,80 @@ test.describe("Modern dashboard @smoke", () => {
     await expect.poll(() => requests.at(-1)).toContain("range=");
   });
 
+  /**
+   * #384. Playwright has no multi-touch in every browser, so the fingers are
+   * touch pointer events on the plot, as a phone's browser sends them.
+   */
+  test("a zoomed chart moves by the earlier and later buttons, a sideways scroll and a swipe, and a pinch zooms it; a tap or an unzoomed swipe moves nothing", async ({ page }) => {
+    const windows: { start: number; end: number }[] = [];
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.pathname.endsWith("/api/analytics/series") && url.searchParams.has("start")) {
+        windows.push({ start: Number(url.searchParams.get("start")), end: Number(url.searchParams.get("end")) });
+      }
+    });
+    const next = async (previous) => {
+      await expect.poll(() => windows.at(-1)).not.toEqual(previous);
+      return windows.at(-1);
+    };
+    const span = (window) => window.end - window.start;
+    await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
+    const card = page.locator(".card", { has: page.getByTestId("chart-zoom-in") }).first();
+    const plot = card.locator(".chart .u-over");
+    await expect(plot).toBeVisible();
+    await expect(plot).toHaveCSS("touch-action", "pan-y");
+    await expect(card.getByTestId("chart-pan-earlier")).toHaveCount(0);
+    const box = await plot.boundingBox();
+    const middle = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    const finger = (type, pointerId, x, y = middle.y) =>
+      plot.dispatchEvent(type, { pointerId, pointerType: "touch", isPrimary: pointerId === 1, clientX: x, clientY: y, bubbles: true });
+
+    await finger("pointerdown", 1, middle.x);
+    await finger("pointermove", 1, middle.x + 120);
+    await finger("pointerup", 1, middle.x + 120);
+    await card.getByTestId("chart-zoom-in").click();
+    const zoomed = await next(undefined);
+    await finger("pointerdown", 1, middle.x);
+    await finger("pointermove", 1, middle.x + 5, middle.y + 2);
+    await finger("pointermove", 1, middle.x + 6, middle.y + 40);
+    await finger("pointerup", 1, middle.x + 6, middle.y + 40);
+    await card.getByTestId("chart-pan-earlier").click();
+    const earlier = await next(zoomed);
+    expect(windows).toHaveLength(2);
+    expect(Math.abs(earlier.start - (zoomed.start - span(zoomed) / 4))).toBeLessThanOrEqual(2);
+    expect(Math.abs(span(earlier) - span(zoomed))).toBeLessThanOrEqual(2);
+    await card.getByTestId("chart-pan-later").click();
+    const later = await next(earlier);
+    expect(later.start).toBeGreaterThan(earlier.start);
+    expect(Math.abs(span(later) - span(zoomed))).toBeLessThanOrEqual(2);
+
+    await page.mouse.move(middle.x, middle.y);
+    await page.mouse.wheel(-150, 0);
+    const scrolled = await next(later);
+    expect(scrolled.start).toBeLessThan(later.start);
+    expect(Math.abs(span(scrolled) - span(zoomed))).toBeLessThanOrEqual(2);
+    await expect(card.getByTestId("chart-zoom-reset")).toBeVisible();
+
+    await finger("pointerdown", 1, middle.x);
+    await finger("pointermove", 1, middle.x + 60);
+    await finger("pointermove", 1, middle.x + 120);
+    await finger("pointerup", 1, middle.x + 120);
+    const swiped = await next(scrolled);
+    expect(swiped.start).toBeLessThan(scrolled.start);
+    expect(Math.abs(span(swiped) - span(zoomed))).toBeLessThanOrEqual(2);
+
+    await finger("pointerdown", 1, middle.x - 20);
+    await finger("pointerdown", 2, middle.x + 20);
+    await finger("pointermove", 1, middle.x - 80);
+    await finger("pointermove", 2, middle.x + 80);
+    await finger("pointerup", 1, middle.x - 80);
+    await finger("pointerup", 2, middle.x + 80);
+    const pinched = await next(swiped);
+    expect(span(pinched)).toBeLessThan(span(swiped) / 2);
+    expect(pinched.start).toBeGreaterThan(swiped.start);
+    expect(pinched.end).toBeLessThan(swiped.end);
+  });
+
   test("analytics that are not set up say so", async ({ page }) => {
     await page.route("**/api/analytics/status", (route) => route.fulfill({ json: { available: false, reason: "not_configured" } }));
     await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
