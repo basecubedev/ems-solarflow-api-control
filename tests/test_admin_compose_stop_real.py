@@ -9,24 +9,15 @@ fake accepted it, so switching Analytics or the built-in broker off reported
 """
 
 import os
-import shutil
 import subprocess
 import uuid
 
 import pytest
 
 from admin.deployment import DockerCompose
-from docker_e2e_utils import AMBIENT_COMPOSE_VARS
+from docker_e2e_utils import AMBIENT_COMPOSE_VARS, docker_compose_ready
 
 IMAGE = "influxdb:2.7.12"
-
-
-def _docker_ready():
-    if shutil.which("docker") is None:
-        return False
-    if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
-        return False
-    return subprocess.run(["docker", "compose", "version"], capture_output=True).returncode == 0
 
 
 pytestmark = [
@@ -34,7 +25,7 @@ pytestmark = [
     pytest.mark.docker,
     pytest.mark.maintenance,
     pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX-only Docker e2e"),
-    pytest.mark.skipif(not _docker_ready(), reason="Docker is not available"),
+    pytest.mark.skipif(not docker_compose_ready(), reason="Docker is not available"),
 ]
 
 

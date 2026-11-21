@@ -30,6 +30,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from docker_e2e_utils import docker_compose_ready
+
 from admin.config_export import config_payload_bytes
 from admin.config_preview import ConfigPreviewGenerator
 from admin.deployment import BootstrapInstaller, DeploymentService, DockerCli
@@ -92,16 +94,8 @@ DRAFT = [
 ]
 
 
-def _docker_ready():
-    if not shutil.which("docker"):
-        return False
-    info = subprocess.run(["docker", "info"], capture_output=True, text=True)
-    compose = subprocess.run(["docker", "compose", "version"], capture_output=True, text=True)
-    return info.returncode == 0 and compose.returncode == 0
-
-
 pytestmark.append(
-    pytest.mark.skipif(not _docker_ready(), reason="needs a Docker daemon with Compose v2")
+    pytest.mark.skipif(not docker_compose_ready(), reason="needs a Docker daemon with Compose v2")
 )
 
 

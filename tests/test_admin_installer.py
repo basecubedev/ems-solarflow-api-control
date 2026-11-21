@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from docker_e2e_utils import docker_compose_ready
+
 from appliance.admin_deployment import ADMIN_RESTART_POLICY, INSTALLER_MARKER
 
 pytestmark = [
@@ -903,21 +905,8 @@ def test_publish_workflow_builds_both_images():
 # --- Gated: generate and validate Compose with a real daemon --------------
 
 
-def _docker_ready():
-    if not shutil.which("docker"):
-        return False
-    try:
-        if subprocess.run(
-            ["docker", "compose", "version"], capture_output=True
-        ).returncode != 0:
-            return False
-        return subprocess.run(["docker", "info"], capture_output=True).returncode == 0
-    except OSError:
-        return False
-
-
 docker_required = pytest.mark.skipif(
-    not _docker_ready(), reason="docker daemon not available"
+    not docker_compose_ready(), reason="docker daemon not available"
 )
 
 
