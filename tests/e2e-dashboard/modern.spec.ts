@@ -861,6 +861,80 @@ test.describe("Modern dashboard on a phone @smoke", () => {
     await page.setViewportSize({ width: 390, height: 844 });
   });
 
+  test("an analytics chart that reloads while it is moved keeps its place: the loading label takes no room of its own", async ({ page }) => {
+    let hold = null;
+    await page.route("**/api/analytics/series**", async (route) => {
+      if (hold) await hold;
+      await route.continue();
+    });
+    await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
+    const card = page.locator(".card", { has: page.getByTestId("chart-zoom-in") }).first();
+    const chart = card.locator(".chart");
+    const busy = card.getByText("Loading", { exact: true });
+    await expect(chart.locator(".u-over")).toBeVisible();
+    const top = async () => (await chart.boundingBox()).y;
+    const unzoomed = await top();
+    await card.getByTestId("chart-zoom-in").click();
+    await expect(busy).toBeHidden();
+    const before = await top();
+    expect(before).toBe(unzoomed);
+
+    let release;
+    hold = new Promise((resolve) => (release = resolve));
+    await card.getByTestId("chart-pan-earlier").click();
+    await expect(busy).toBeVisible();
+    await expect(busy).toHaveCSS("pointer-events", "none");
+    expect(await top()).toBe(before);
+    release();
+    await expect(busy).toBeHidden();
+    expect(await top()).toBe(before);
+  });
+
+  test("an analytics view that is empty or unavailable shows its loading in place, and nothing moves", async ({ page }) => {
+    let answer = { available: true, source: "influxdb", time: [], series: {}, meta: {} };
+    let hold = null;
+    await page.route("**/api/analytics/series**", async (route) => {
+      if (hold) await hold;
+      await route.fulfill({ json: answer });
+    });
+    await page.goto("/#/analytics", { waitUntil: "domcontentloaded" });
+    const card = page.locator(".card", { has: page.getByRole("button", { name: "Table" }) }).first();
+    const busy = card.getByText("Loading", { exact: true });
+    const range = (name) => page.getByRole("button", { name, exact: true }).click();
+    const box = async (locator) => {
+      const { y, height } = await locator.boundingBox();
+      return { y, height };
+    };
+    const held = async (step) => {
+      let release;
+      hold = new Promise((resolve) => (release = resolve));
+      await step();
+      await expect(busy).toBeVisible();
+      return () => {
+        hold = null;
+        release();
+      };
+    };
+
+    const frame = card.locator(".chart-empty");
+    await expect(frame).toBeVisible();
+    await expect(busy).toBeHidden();
+    const empty = await box(frame);
+    let release = await held(() => range("7 d"));
+    expect(await box(frame)).toEqual(empty);
+    answer = { available: false, reason: "unreachable" };
+    release();
+    const unavailable = card.getByTestId("analytics-unavailable");
+    await expect(unavailable).toBeVisible();
+    await expect(busy).toBeHidden();
+    const resting = await box(card);
+    release = await held(() => range("24 h"));
+    expect(await box(card)).toEqual(resting);
+    release();
+    await expect(busy).toBeHidden();
+    expect(await box(card)).toEqual(resting);
+  });
+
   test("the sidebar gives way to a bottom bar", async ({ page }) => {
     await openModern(page);
     await expect(page.locator(".sidebar")).toBeHidden();

@@ -28,7 +28,9 @@
    * ``stacked`` draws each series on top of the ones before it, as parts of
    * one whole; the legend and the table keep each series' own value.
    * ``unit`` "V" reads the left axis in volts, close around the data, for
-   * cell voltages; every other chart reads it in watts from zero.
+   * cell voltages; every other chart reads it in watts from zero. ``busy``
+   * lays a Loading pill over the plot, or over its empty frame, while a page
+   * reads new data for it, taking no room, so nothing around the chart moves.
    */
   let {
     series,
@@ -42,6 +44,7 @@
     scope = "",
     bounds = null,
     onzoom = null,
+    busy = false,
     stacked = false,
     unit = "W",
   } = $props();
@@ -479,8 +482,15 @@
   const shownIndex = $derived(cursorIndex ?? lastIndex);
 </script>
 
+{#snippet loadingPill()}
+  {#if busy}<span class="pill busy">{t("common.loading")}</span>{/if}
+{/snippet}
+
 {#if !hasData}
-  <div class="empty chart-empty" role="status">{emptyText || t("chart.empty")}</div>
+  <div class="plot">
+    <div class="empty chart-empty" role="status">{emptyText || t("chart.empty")}</div>
+    {@render loadingPill()}
+  </div>
 {:else}
   <div class="legend" aria-live="off">
     <span class="legend-time num">{shownIndex !== null ? stampText(prepared.time[shownIndex]) : ""}</span>
@@ -502,7 +512,10 @@
       <button class="icon-btn small" type="button" onclick={() => zoomBy(ZOOM_STEP)} aria-label={t("chart.zoomOut")} title={t("chart.zoomOut")} data-testid="chart-zoom-out"><Icon name="zoom-out" size="sm" /></button>
     </span>
   </div>
-  <div class="chart" bind:this={host} role="img" aria-label={label}></div>
+  <div class="plot">
+    <div class="chart" bind:this={host} role="img" aria-label={label}></div>
+    {@render loadingPill()}
+  </div>
   {#if showTable}
     <div class="table-scroll">
       <table class="data">
@@ -538,6 +551,8 @@
   .legend-item i { width: 10px; height: 10px; border-radius: 3px; background: var(--c); }
   .legend-item i.dash { width: 12px; height: 0; border-radius: 0; background: none; border-top: 2px dashed var(--c); }
   .legend-item b { color: var(--m-text); font-weight: 600; min-width: 54px; }
+  .plot { position: relative; }
+  .busy { position: absolute; top: var(--s2); left: 50%; transform: translateX(-50%); pointer-events: none; }
   .chart { width: 100%; min-height: 120px; cursor: crosshair; }
   .chart :global(.u-over) { cursor: crosshair; touch-action: pan-y; }
   .chart-empty { min-height: 160px; justify-content: center; }

@@ -997,8 +997,12 @@ Performance and refresh behavior:
   [zoomed](#zooming-a-chart). Each view loads only its own series and the
   overlays switched on. An answer for a choice that is no longer on screen — a
   refresh overtaken by a device, range, view or zoom choice — is dropped, so the
-  chart and KPIs show the latest choice. A refresh that fails keeps the last
-  answer and says *Could not refresh; this is the last answer.*; a new range
+  chart and KPIs show the latest choice. While a read runs, a *Loading* pill
+  lies over the top of the chart, or of its empty frame, taking no room, so
+  neither the chart nor the card's heading moves when it comes and goes; under
+  a view that is unavailable or failed to load, it shows in a row kept free for
+  it. A refresh that fails keeps the last answer and says *Could not refresh;
+  this is the last answer.* under the chart; a new range
   whose read fails says so instead of showing the last range under the new
   label. The power charts on Overview and Devices refresh once a minute under
   the same rules.
