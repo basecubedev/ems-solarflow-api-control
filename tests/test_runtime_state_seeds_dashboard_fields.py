@@ -39,6 +39,7 @@ def _device(name="WR1", **overrides):
         "max_power": 800,
         "pv_priority_factor": 1.0,
         "ac_charge_enabled": True,
+        "ac_discharge_enabled": True,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -52,6 +53,22 @@ def test_every_dashboard_runtime_field_is_seeded_from_config():
         assert set(fields) <= set(defaults[section]), section
     for name, entry in defaults["devices"].items():
         assert set(DEVICE_FIELDS) <= set(entry), name
+
+
+def test_the_control_page_offers_every_device_runtime_field():
+    """A whitelisted device key the Control page leaves out can be set from
+    emsctl and a schedule, and is never shown where the operator looks."""
+
+    import re
+    from pathlib import Path
+
+    from ems.runtime_commands import DEVICE_AC_FIELDS
+
+    editor = Path(__file__).resolve().parents[1] / "frontend/dashboard-modern/src/widgets/RuntimeEditor.svelte"
+    body = editor.read_text(encoding="utf-8").split("function deviceFields", 1)[1].split("function deviceInitial", 1)[0]
+    offered = set(re.findall(r'name: "([a-z_]+)"', body))
+
+    assert set(DEVICE_FIELDS) | set(DEVICE_AC_FIELDS) <= offered
 
 
 def test_every_dashboard_runtime_section_reaches_the_runtime_state():
@@ -150,13 +167,13 @@ def test_emsctl_seeds_the_same_runtime_keys_and_ac_charge_values_as_the_ems(monk
     device = {"name": "WR1", "ip": "192.168.1.100", "sn": "SN1", "max_power": 800}
     config = {
         "system": {},
-        "devices": [dict(device, ac_charge_enabled=False)],
+        "devices": [dict(device, ac_charge_enabled=False, ac_discharge_enabled=False)],
         "ac_charge_control": {"enabled": False},
     }
     monkeypatch.setattr(cfg, "AC_CHARGE_CONTROL_CONFIG", {"enabled": False})
 
     cli = emsctl.runtime_defaults(config)
-    ems = build_runtime_defaults([_device("WR1", sn="SN1", ac_charge_enabled=False)])
+    ems = build_runtime_defaults([_device("WR1", sn="SN1", ac_charge_enabled=False, ac_discharge_enabled=False)])
 
     assert set(cli) == set(ems)
     for section in ("system", "winter", "ac_charge_control"):
@@ -164,6 +181,7 @@ def test_emsctl_seeds_the_same_runtime_keys_and_ac_charge_values_as_the_ems(monk
     assert set(cli["devices"]["WR1"]) == set(ems["devices"]["WR1"])
     assert cli["ac_charge_control"] == ems["ac_charge_control"] == {"enabled": False}
     assert cli["devices"]["WR1"]["ac_charge_enabled"] is ems["devices"]["WR1"]["ac_charge_enabled"] is False
+    assert cli["devices"]["WR1"]["ac_discharge_enabled"] is ems["devices"]["WR1"]["ac_discharge_enabled"] is False
 
 
 def test_emsctl_treats_a_missing_ac_charge_block_as_on_like_the_ems():
@@ -175,3 +193,4 @@ def test_emsctl_treats_a_missing_ac_charge_block_as_on_like_the_ems():
 
     assert defaults["ac_charge_control"] == {"enabled": True}
     assert defaults["devices"]["WR1"]["ac_charge_enabled"] is True
+    assert defaults["devices"]["WR1"]["ac_discharge_enabled"] is True

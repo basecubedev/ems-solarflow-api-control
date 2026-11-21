@@ -523,10 +523,10 @@ alike, so it never replaces the saved values with older ones. A save sends only
 the fields that were changed; a field nobody edited takes a newer stored value.
 
 What the Control page can change: EMS enabled / max total power / min output
-limit / loop interval; per device its enabled flag, **AC charging**, max power,
-PV priority, off-grid socket mode, AC role and AC charge power, and the light,
-fan, buzzer and battery heating where the inverter has them; Winter mode; and
-**AC charging** for the whole installation.
+limit / loop interval; per device its enabled flag, **AC charging**, **AC
+discharging**, max power, PV priority, off-grid socket mode, AC role and AC
+charge power, and the light, fan, buzzer and battery heating where the inverter
+has them; Winter mode; and **AC charging** for the whole installation.
 
 Both AC-charging switches take effect on the next control cycle. Turning either
 one off stops a running charge in the same cycle, without a restart — stopping a

@@ -492,6 +492,7 @@ def _runtime(devices):
             "offgrid_socket_mode": "off",
             "pv_priority_factor": 1.0,
             "ac_charge_enabled": False,
+            "ac_discharge_enabled": True,
         }
     return {
         "system": {

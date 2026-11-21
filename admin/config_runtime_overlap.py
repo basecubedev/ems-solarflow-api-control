@@ -58,6 +58,7 @@ def _device_defaults(config, entry=None):
         "offgrid_socket_mode": cfg.offgrid_socket_mode_for(grid_off_mode),
         "pv_priority_factor": _DEVICE_COMMON_DEFAULTS["pv_priority_factor"],
         "ac_charge_enabled": _DEVICE_COMMON_DEFAULTS["ac_charge_enabled"],
+        "ac_discharge_enabled": _DEVICE_COMMON_DEFAULTS["ac_discharge_enabled"],
     }
 
 
@@ -266,6 +267,7 @@ def _effective_values(entry, config):
         "offgrid_socket_mode": cfg.offgrid_socket_mode_for(entry.get("grid_off_mode")),
         "pv_priority_factor": cfg.safe_float(entry.get("pv_priority_factor", 1.0) or 1.0, 1.0, minimum=0.01),
         "ac_charge_enabled": bool(entry.get("ac_charge_enabled", True)),
+        "ac_discharge_enabled": bool(entry.get("ac_discharge_enabled", True)),
     }
 
 

@@ -141,6 +141,29 @@ test.describe("Modern dashboard operator: runtime settings @smoke", () => {
     await expect(device.locator('input[name="max_power"]')).toHaveValue("600");
   });
 
+  test("a device's AC discharging goes off and on again on its own, and AC charging stays as it was", async ({ page }) => {
+    const writes = await runtimeStore(page);
+    await openSignedIn(page, "#/control");
+    const device = form(page, "/api/runtime/device/WR1");
+    const discharging = device.locator('input[name="ac_discharge_enabled"]');
+    await expect(discharging).toBeChecked();
+    await expect(device.getByText("may still charge from surplus")).toBeVisible();
+
+    await discharging.uncheck();
+    await save(page, device);
+    await expect.poll(() => writes.length).toBe(1);
+    await expect(device.getByRole("status")).toHaveText("Saved");
+    await discharging.check();
+    await save(page, device);
+    await expect.poll(() => writes.length).toBe(2);
+
+    expect(writes).toEqual([
+      { target: "device/WR1", method: "PATCH", body: { ac_discharge_enabled: false }, csrf: CSRF },
+      { target: "device/WR1", method: "PATCH", body: { ac_discharge_enabled: true }, csrf: CSRF },
+    ]);
+    await expect(device.locator('input[name="ac_charge_enabled"]')).not.toBeChecked();
+  });
+
   test("switching a device to AC charging asks first; back to output it does not while the EMS and the device are on", async ({ page }) => {
     const writes = await runtimeStore(page);
     await openSignedIn(page, "#/control");

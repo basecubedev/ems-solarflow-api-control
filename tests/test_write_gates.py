@@ -227,6 +227,68 @@ class WriteGateTest(unittest.TestCase):
         self.assertEqual(written.get("WR1"), 0)
         self.assertGreater(written.get("WR2", 0), 0)
 
+    def test_the_runtime_switch_forbids_discharge_without_a_restart(self):
+        """The Control page's switch ends a running discharge on the next
+        cycle, below the standby floor, while the config still allows it."""
+
+        controller = self.run_controller_once(
+            [device("WR1"), device("WR2")],
+            [state(output_limit=300, output=300), state()],
+            runtime_state=RuntimeStateStub(
+                system={"min_output_limit": 50},
+                devices={"WR1": {"ac_discharge_enabled": False}},
+            ),
+        )
+
+        written = {
+            write.args[0].name: write.args[1]
+            for write in controller.set_output_limit.call_args_list
+        }
+        self.assertEqual(written.get("WR1"), 0)
+        self.assertGreater(written.get("WR2", 0), 0)
+
+    def test_the_runtime_switch_lets_a_device_the_config_forbade_discharge(self):
+        controller = self.run_controller_once(
+            [device("WR1", ac_discharge_enabled=False), device("WR2", ac_discharge_enabled=False)],
+            [state(), state()],
+            runtime_state=RuntimeStateStub(devices={"WR1": {"ac_discharge_enabled": True}}),
+        )
+
+        written = {
+            write.args[0].name: write.args[1]
+            for write in controller.set_output_limit.call_args_list
+        }
+        self.assertGreater(written.get("WR1", 0), 0)
+        self.assertEqual(written.get("WR2", 0), 0)
+
+    def test_a_runtime_discharge_value_that_is_no_boolean_forbids_discharge_and_says_so(self):
+        for value in (None, "nope", "on", 1):
+            with self.subTest(value=value), self.assertLogs(level=logging.WARNING) as logs:
+                controller = self.run_controller_once(
+                    [device("WR1"), device("WR2")],
+                    [state(output_limit=300, output=300), state()],
+                    runtime_state=RuntimeStateStub(devices={"WR1": {"ac_discharge_enabled": value}}),
+                )
+                written = {
+                    write.args[0].name: write.args[1]
+                    for write in controller.set_output_limit.call_args_list
+                }
+                self.assertEqual(written.get("WR1"), 0)
+                self.assertTrue(any("event=ac_discharge_runtime_value_invalid" in line for line in logs.output))
+
+    def test_a_runtime_switch_over_a_device_entry_that_forbids_discharge_is_named_once(self):
+        controller = EMSController(devices=[device("WR1", ac_discharge_enabled=False)], shelly=ShellyStub(0), sleep_enabled=False)
+        controller.runtime_state = RuntimeStateStub(devices={"WR1": {"ac_discharge_enabled": True}})
+
+        with self.assertLogs(level=logging.WARNING) as logs:
+            self.assertTrue(controller.device_may_discharge(controller.devices[0]))
+            self.assertTrue(controller.device_may_discharge(controller.devices[0]))
+            logging.getLogger().warning("end")
+
+        said = [line for line in logs.output if "event=ac_discharge_config_overridden" in line]
+        self.assertEqual(len(said), 1)
+        self.assertIn("ac-discharge on|off", said[0])
+
     def test_runtime_disabled_device_receives_no_write(self):
         disabled = device("WR1")
         enabled = device("WR2")
@@ -280,6 +342,54 @@ class WriteGateTest(unittest.TestCase):
         )
 
         controller.set_output_limit.assert_not_called()
+
+    def test_a_parked_device_switched_off_from_discharging_during_the_night_idle_goes_to_zero(self):
+        """The idle parks only devices that may supply the house, so a device
+        parked at the standby floor and then forbidden to discharge at runtime
+        left the idle's set while the idle went on, and kept feeding the floor."""
+
+        def idle(**overrides):
+            values = dict(
+                soc=15, min_soc=15, solar=0, output=0, output_limit=30, pack_in=0,
+                pack_out=0, soc_limit=2, dc_status=0, ac_status=0, pack_state=0,
+            )
+            values.update(overrides)
+            return state(**values)
+
+        runtime_state = RuntimeStateStub(
+            system={"min_output_limit": 30},
+            devices={"WR1": {"ac_discharge_enabled": False}},
+        )
+
+        controller = self.run_controller_once(
+            [device("WR1"), device("WR2")],
+            [idle(), idle()],
+            runtime_state=runtime_state,
+            load=0,
+        )
+        written = [(write.args[0].name, write.args[1]) for write in controller.set_output_limit.call_args_list]
+        self.assertTrue(controller.night_min_soc_idle_active)
+        self.assertEqual(written, [("WR1", 0)])
+
+        controller = self.run_controller_once(
+            [device("WR1"), device("WR2")],
+            [idle(output_limit=0), idle()],
+            runtime_state=runtime_state,
+            load=0,
+        )
+        controller.set_output_limit.assert_not_called()
+
+    def test_the_idle_sends_no_zero_to_a_forbidden_device_in_ac_input(self):
+        """A bare outputLimit does not move a device in AC input; sent every cycle it would be noise all night."""
+
+        controller = EMSController(devices=[device("WR1", ac_discharge_enabled=False)], shelly=ShellyStub(0), sleep_enabled=False)
+        controller.set_output_limit = Mock()
+
+        controller.end_a_standby_floor_the_device_may_not_feed(controller.devices[0], state(output_limit=30, ac_mode=1))
+        controller.set_output_limit.assert_not_called()
+
+        controller.end_a_standby_floor_the_device_may_not_feed(controller.devices[0], state(output_limit=30, ac_mode=2))
+        controller.set_output_limit.assert_called_once_with(controller.devices[0], 0)
 
     def test_night_min_soc_idle_publishes_control_explanation_to_dashboard(self):
         wr1 = device("WR1")

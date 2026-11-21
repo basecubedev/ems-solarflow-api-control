@@ -9,6 +9,8 @@ exactly what the emsctl commands it names do.
 """
 
 import json
+import re
+from pathlib import Path
 
 import pytest
 
@@ -32,6 +34,7 @@ pytestmark = [pytest.mark.contract, pytest.mark.config]
 SAMPLES = {
     "total_output_limit": [600],
     "device_output_limit": [0, 500],
+    "device_discharge": [False, True],
     "pv_priority": [1.3],
     "offgrid_socket": ["standard", "off"],
     "charge_from_grid": [600, 0],
@@ -46,6 +49,9 @@ SAMPLES = {
     "auto_heat": ["on", "off"],
     "minimum_output_limit": [40],
 }
+
+
+FRONTEND = Path(__file__).resolve().parents[1] / "frontend" / "dashboard-modern" / "src"
 
 
 def _whitelisted_paths():
@@ -76,6 +82,21 @@ def test_every_action_has_a_place_and_says_what_it_does():
         assert action.label.strip() and action.help.strip(), action.id
         assert action.per_device == (action.scope == "device"), action.id
         assert schedule_action(action.id) is action
+
+
+def test_the_schedule_page_names_every_action_in_every_language():
+    """The page shows its own label for the actions it knows and the
+    catalogue's English one for the rest, so an action missing there reads
+    in English on a German page and nothing fails."""
+
+    page = (FRONTEND / "pages" / "Schedule.svelte").read_text(encoding="utf-8")
+    strings = (FRONTEND / "i18n" / "strings.js").read_text(encoding="utf-8")
+    known = re.search(r"const KNOWN_ACTIONS = \[([^\]]*)\]", page)
+
+    assert known is not None
+    assert sorted(re.findall(r'"([a-z_]+)"', known.group(1))) == sorted(action.id for action in ACTIONS)
+    for action in ACTIONS:
+        assert f'"schedule.action.{action.id}": s(' in strings, action.id
 
 
 @pytest.mark.parametrize(

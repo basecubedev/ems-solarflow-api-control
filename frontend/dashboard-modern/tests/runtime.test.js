@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { changedPayload, changeWarning, deviceEndpoint, endpointDevice, acRole, deviceSettings, reseed, withDefault, SYSTEM_ENDPOINT } from "../src/lib/runtime.js";
+import { changedPayload, changeWarning, deviceEndpoint, endpointDevice, acRole, deviceSettings, normalizeValue, reseed, withDefault, SYSTEM_ENDPOINT } from "../src/lib/runtime.js";
 
 const fields = [
   { name: "enabled", type: "toggle" },
@@ -123,4 +123,11 @@ test("device settings: offered ones, plus any the device still has a value for",
   const catalogue = [{ key: "light", values: [] }, { key: "fan", values: [] }, { key: "buzzer", values: [] }];
   const settings = deviceSettings({ buzzer: "on" }, catalogue, ["light"]);
   assert.deepEqual(settings.map((s) => [s.key, s.offered]), [["light", true], ["buzzer", false]]);
+});
+
+test("a strict toggle shows on only for a stored true, as the EMS reads anything else as off", () => {
+  const strict = { name: "ac_discharge_enabled", type: "toggle", strict: true };
+  const loose = { name: "enabled", type: "toggle" };
+  assert.deepEqual(["on", 1, "true", null, undefined, false, true].map((value) => normalizeValue(strict, value)), [false, false, false, false, false, false, true]);
+  assert.equal(normalizeValue(loose, "on"), true);
 });

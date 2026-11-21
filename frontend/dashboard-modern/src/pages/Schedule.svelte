@@ -16,7 +16,7 @@
   } from "../lib/schedule.js";
 
   const TONES = { waiting: "c-ok", paused: "c-idle", orphaned: "c-warn", refused: "c-warn", finished: "c-idle", broken: "c-fault" };
-  const KNOWN_ACTIONS = ["total_output_limit", "device_output_limit", "pv_priority", "offgrid_socket", "charge_from_grid", "surplus_charging", "device_surplus_charging", "winter_mode", "ems_control", "device_control", "light", "fan", "buzzer", "auto_heat", "minimum_output_limit"];
+  const KNOWN_ACTIONS = ["total_output_limit", "device_output_limit", "device_discharge", "pv_priority", "offgrid_socket", "charge_from_grid", "surplus_charging", "device_surplus_charging", "winter_mode", "ems_control", "device_control", "light", "fan", "buzzer", "auto_heat", "minimum_output_limit"];
   const KNOWN_GROUPS = ["power", "offgrid_socket", "ac_charging", "battery", "control", "device_settings", "advanced"];
 
   let overview = $state.raw(null);

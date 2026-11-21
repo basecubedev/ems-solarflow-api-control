@@ -187,12 +187,16 @@ Important runtime fields:
 }
 ```
 
-Runtime-editable values are limited to the fields shown above:
+Runtime-editable values are limited to the fields listed below:
 
 - system `enabled`, `max_total_power`, `loop_interval`, `min_output_limit`
-- winter runtime `enabled`
-- per-device `enabled`, `max_power`, `offgrid_socket_mode`, and
-  `pv_priority_factor`
+- winter runtime `enabled`, AC charging `enabled`, and battery care
+- per-device `enabled`, `max_power`, `offgrid_socket_mode`,
+  `pv_priority_factor`, `ac_charge_enabled`, `ac_discharge_enabled`, the AC
+  role and charge power, and the device settings
+
+The canonical list is the whitelist in
+[runtime-state.md](runtime-state.md#one-command-path).
 
 Other safety and tuning values are config-only and require editing
 `config.json` plus a restart. Examples: `dry_run`, `allow_hardware_writes`,
@@ -381,6 +385,7 @@ night_min_soc_idle_enter
 night_min_soc_idle_hold_skip_write
 night_min_soc_idle_park_write
 night_min_soc_idle_charge_exit_write
+night_min_soc_idle_discharge_forbidden_write
 min_output_limit_applied
 ```
 
@@ -391,6 +396,9 @@ are real transitions/writes and stay at `info`.
 a device it does not park — one forbidden to discharge — that is owed it: the
 resend to the EMS's own charge (`reason=ems_charge_on_record`) or the one exit
 after a start (`reason=unproven_charge`).
+`night_min_soc_idle_discharge_forbidden_write` is the zero the idle sends a
+device forbidden to discharge that still has an output, such as one the runtime
+switch forbade while it was parked.
 `night_min_soc_idle_exit` carries a `reason`: `pv_returned`, `state_changed`,
 `control_unavailable`, or `ac_charge_surplus` when a confirmed surplus is about
 to be charged from AC.

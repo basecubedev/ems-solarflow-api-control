@@ -795,6 +795,7 @@ def build_runtime_defaults(devices):
                 minimum=0.01
             ),
             "ac_charge_enabled": bool(getattr(dev, "ac_charge_enabled", True)),
+            "ac_discharge_enabled": bool(getattr(dev, "ac_discharge_enabled", True)),
         }
         identity = _clean_identity(str(getattr(dev, "sn", "") or ""))
         if identity is not None:
