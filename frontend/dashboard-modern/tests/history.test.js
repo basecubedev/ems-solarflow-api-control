@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { integrateKwh, hourlyKwh, gapRanges, withGapBreaks, sameTimeComparison, sampleSpacing, localDayStart, niceCeiling, zoomStep, zoomDiffers, zoomSpan, zoomCenter, escapeLeavesZoom, emptyKey, sourceKey, tickLabels, tickSpace, tickPad, atLeastAMinute, shownValue, batteryReading, axisPower } from "../src/lib/history.js";
+import { integrateKwh, hourlyKwh, gapRanges, withGapBreaks, sameTimeComparison, sampleSpacing, localDayStart, niceCeiling, zoomStep, zoomDiffers, zoomSpan, zoomCenter, panStep, wheelGesture, wheelZoomFactor, pinchWindow, ZOOM_STEP, escapeLeavesZoom, emptyKey, sourceKey, tickLabels, tickSpace, tickPad, atLeastAMinute, shownValue, batteryReading, axisPower } from "../src/lib/history.js";
 import { createFormat } from "../../shared/lib/format.js";
 
 const MIDNIGHT = localDayStart(new Date(1_800_000_000 * 1000));
@@ -102,6 +102,58 @@ test("a zoom step keeps the point under the pointer, stays inside the bounds and
   assert.deepEqual(zoomStep(900, 1000, 950, 4, 0, 1000), { min: 600, max: 1000 });
   assert.equal(zoomStep(0, 100, 50, 0.01, 0, 1000).max - zoomStep(0, 100, 50, 0.01, 0, 1000).min, 60);
   assert.equal(zoomStep(0, 0, 0, 0.5, 0, 1000), null);
+});
+
+test("a pan moves a window at its own span and stops at the bounds", () => {
+  assert.deepEqual(panStep(200, 400, 100, 0, 1000), { min: 300, max: 500 });
+  assert.deepEqual(panStep(200, 400, -500, 0, 1000), { min: 0, max: 200 });
+  assert.deepEqual(panStep(700, 900, 500, 0, 1000), { min: 800, max: 1000 });
+  assert.deepEqual(panStep(-50, 1200, 10, 0, 1000), { min: 0, max: 1000 });
+  assert.equal(panStep(400, 400, 10, 0, 1000), null);
+  assert.equal(panStep(200, 400, Number.NaN, 0, 1000), null);
+});
+
+test("a sideways wheel moves the chart and an upright one zooms it, a touchpad pinch tenfold", () => {
+  assert.deepEqual(wheelGesture({ deltaX: 40, deltaY: 3 }), { pan: 40 });
+  assert.deepEqual(wheelGesture({ deltaX: -2, deltaY: -1 }), { pan: -2 });
+  assert.deepEqual(wheelGesture({ deltaY: 37 }), { zoom: 37 });
+  assert.deepEqual(wheelGesture({ deltaY: 30, shiftKey: true }), { pan: 30 });
+  assert.deepEqual(wheelGesture({ deltaY: -4, ctrlKey: true, wheelDeltaY: 12 }), { zoom: -40 });
+  assert.deepEqual(wheelGesture({ deltaX: 1, deltaMode: 2 }, 640), { pan: 640 });
+});
+
+test("a mouse wheel's notch is one zoom step however many pixels its platform reports", () => {
+  assert.deepEqual(wheelGesture({ deltaY: 3, deltaMode: 1 }), { zoom: 100 });
+  assert.deepEqual(wheelGesture({ deltaY: -4.000244140625, wheelDeltaY: 120 }), { zoom: -100 });
+  assert.deepEqual(wheelGesture({ deltaY: 53, wheelDeltaY: -120 }), { zoom: 100 });
+  assert.deepEqual(wheelGesture({ deltaY: -2, ctrlKey: true, wheelDeltaY: 240 }), { zoom: -100 });
+  assert.deepEqual(wheelGesture({ deltaY: 4.000244140625, wheelDeltaY: -12 }), { zoom: 100 });
+  assert.deepEqual(wheelGesture({ deltaY: -8.00048828125 }), { zoom: -100 });
+  assert.equal(wheelZoomFactor(wheelGesture({ deltaY: 4, wheelDeltaY: -120 }).zoom), ZOOM_STEP);
+});
+
+test("a touchpad's scroll that happens to come in notches of 120 stays a touchpad's scroll", () => {
+  assert.deepEqual(wheelGesture({ deltaY: 40, wheelDeltaY: -120 }), { zoom: 40 });
+  assert.deepEqual(wheelGesture({ deltaY: -80, wheelDeltaY: 240 }), { zoom: -80 });
+});
+
+test("a mouse notch zooms one step, a touchpad's small delta a share of one, never more than a step", () => {
+  assert.equal(wheelZoomFactor(100), ZOOM_STEP);
+  assert.equal(wheelZoomFactor(-300), 1 / ZOOM_STEP);
+  assert.equal(wheelZoomFactor(0), 1);
+  assert.equal(wheelZoomFactor(Number.NaN), 1);
+  assert.ok(wheelZoomFactor(10) > 1 && wheelZoomFactor(10) < 1.1);
+});
+
+test("a pinch scales the span it began with and keeps the time under the fingers under them", () => {
+  const pinch = { span: 400, anchor: 500, distance: 100 };
+  assert.deepEqual(pinchWindow(pinch, 200, 0.5, 0, 1000), { min: 400, max: 600 });
+  assert.deepEqual(pinchWindow(pinch, 50, 0.5, 0, 1000), { min: 100, max: 900 });
+  assert.deepEqual(pinchWindow(pinch, 10, 0.5, 0, 1000), { min: 0, max: 1000 });
+  assert.deepEqual(pinchWindow(pinch, 100, 0.25, 0, 1000), { min: 400, max: 800 });
+  assert.equal(pinchWindow(pinch, 1e6, 0.5, 0, 1000).max - pinchWindow(pinch, 1e6, 0.5, 0, 1000).min, 60);
+  assert.equal(pinchWindow(pinch, 0, 0.5, 0, 1000), null);
+  assert.equal(pinchWindow(null, 100, 0.5, 0, 1000), null);
 });
 
 test("a window equal to its extent is no zoom; one that differs either way is", () => {
