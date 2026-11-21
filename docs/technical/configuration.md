@@ -1954,11 +1954,11 @@ are of this type has nothing for the control loop to do.
 
 **What it changes, and what it does not.** Its values reach the dashboard tiles
 and totals — PV, inverter output, battery power, average SoC, house load — and
-the energy statistics the dashboard keeps. InfluxDB Analytics records only the
-devices EMS controls and the consumers, so its house load leaves out what an
-external device delivers, and so does its `house_other`: on such an
-installation the consumers and **Other** in Analytics add up to less than the
-dashboard's home use. The control loop never sees them: a
+the energy statistics the dashboard keeps. InfluxDB Analytics records it as a
+`zendure_device` series tagged `source=read_only`, as it does a Zendure MQTT
+device without a write method, with `available=false` while its reading is
+stale, and counts what it delivers in its house load and `house_other` the way
+the dashboard does while it reads. The control loop never sees them: a
 device that is only read is not among the devices the target is distributed
 over, so no PV-first weighting, winter policy, full-charge assist or AC charge
 ever involves it. It changes the control only the way any appliance in the house
