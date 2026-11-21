@@ -266,6 +266,10 @@
   const cellHigh = $derived(view.cells && seriesIds[1] ? seriesExtreme(data, seriesIds[1], "max") : null);
 </script>
 
+{#snippet retrying()}
+  <div class="retrying"><span class="pill" class:on={loading}>{t("common.loading")}</span></div>
+{/snippet}
+
 {#snippet unavailableInfo(info)}
   <div class="unavailable" data-testid="analytics-unavailable" data-reason={info.reason || ""}>
     <h3 class="sub">{info.reason === "schema_incomplete" ? t("analytics.schemaIncomplete") : info.hint || info.reason === "unreachable" ? t("analytics.notReachable") : t("analytics.notConfiguredTitle")}</h3>
@@ -316,7 +320,6 @@
   </div>
 
   {#snippet actions()}
-    {#if loading}<span class="muted small">{t("common.loading")}</span>{:else if error && data}<span class="muted small" role="status">{t("chart.stale")}</span>{/if}
     {#if zoom && (unavailable || !chartHasData)}<button class="btn secondary small" type="button" onclick={leaveZoom} data-testid="analytics-zoom-reset">{t("chart.zoomReset")}</button>{/if}
     <button class="btn secondary small" type="button" aria-pressed={showTable ? "true" : "false"} onclick={() => (showTable = !showTable)}>
       <Icon name="table" size="sm" />{t("chart.table")}
@@ -326,12 +329,15 @@
   <Card icon={view.cells ? "battery-medium" : "chart-spline"} tone={unavailable || (error && !data) ? "c-warn" : view.cells ? "c-bat" : "c-out"} title={t(`analytics.view.${view.id}`)} subtitle={t(view.cells ? "analytics.sourceCells" : "analytics.source")} span="span-12" {actions}>
     {#if unavailable}
       {@render unavailableInfo(unavailable)}
+      {@render retrying()}
     {:else if error && !data}
       <div class="empty error">{t("error.load")}</div>
+      {@render retrying()}
     {:else if view.cells && !withCells.length}
       <Empty text={t("cells.none")} icon="battery-medium" />
     {:else}
-      <TimeChart series={chartSeries} unit={view.cells ? "V" : "W"} stacked={Boolean(view.consumers)} time={data?.time || []} values={chartData?.series || {}} {showTable} label={t(`analytics.view.${view.id}`)} scope={zoomScope} bounds={liveExtent} {onzoom} emptyText={data ? "" : t("chart.loading")} />
+      <TimeChart series={chartSeries} unit={view.cells ? "V" : "W"} stacked={Boolean(view.consumers)} time={data?.time || []} values={chartData?.series || {}} {showTable} label={t(`analytics.view.${view.id}`)} scope={zoomScope} bounds={liveExtent} {onzoom} busy={loading && data !== null} emptyText={data ? "" : t("chart.loading")} />
+      {#if error && data}<p class="note" role="status"><Icon name="circle-alert" />{t("chart.stale")}</p>{/if}
     {/if}
   </Card>
 
@@ -389,4 +395,7 @@
   .unavailable p { margin: 0; }
   .hint { white-space: pre-wrap; font-family: var(--m-mono); font-size: 12.5px; background: var(--m-well); border-radius: var(--m-radius-inner); padding: var(--s3); margin: var(--s3) 0 0; }
   .small { font-size: 12px; }
+  .retrying { margin-top: var(--s3); }
+  .retrying .pill { visibility: hidden; }
+  .retrying .pill.on { visibility: visible; }
 </style>

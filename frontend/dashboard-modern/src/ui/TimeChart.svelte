@@ -4,7 +4,7 @@
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { prefs } from "../state/prefs.svelte.js";
   import Icon from "../../../shared/ui/Icon.svelte";
-  import { withGapBreaks, stackLists, gapRanges, sampleSpacing, shownValue, batteryReading, axisPower, tickLabels, tickPad, tickSpace, atLeastAMinute, ZOOM_STEP, escapeLeavesZoom, zoomCenter, zoomDiffers, zoomStep } from "../lib/history.js";
+  import { withGapBreaks, stackLists, gapRanges, sampleSpacing, shownValue, batteryReading, axisPower, tickLabels, tickPad, tickSpace, atLeastAMinute, ZOOM_STEP, PAN_STEP, escapeLeavesZoom, zoomCenter, zoomDiffers, zoomStep, panStep, pinchWindow, wheelGesture, wheelZoomFactor } from "../lib/history.js";
   import { voltRange } from "../lib/cells.js";
 
   /**
@@ -13,7 +13,9 @@
    * the language or the height. That is Classic's chart contract. A mouse
    * drag across the plot zooms into that stretch; a refresh of the same data
    * keeps the zoom, and a new range, device or view (``scope``) drops it.
-   * The wheel and the + and − buttons zoom too, Escape and Reset zoom leave
+   * The wheel, a two-finger pinch and the + and − buttons zoom too; a
+   * sideways scroll, a one-finger swipe and the earlier and later buttons
+   * move a zoomed window. Escape and Reset zoom leave
    * it, and a rebuild for a new scheme or language keeps it. How far out it
    * may zoom is the fixed ``xRange``, else ``bounds``, else the loaded data;
    * ``onzoom`` hears every window, and null for the way back, so a page can
@@ -26,7 +28,9 @@
    * ``stacked`` draws each series on top of the ones before it, as parts of
    * one whole; the legend and the table keep each series' own value.
    * ``unit`` "V" reads the left axis in volts, close around the data, for
-   * cell voltages; every other chart reads it in watts from zero.
+   * cell voltages; every other chart reads it in watts from zero. ``busy``
+   * lays a Loading pill over the plot, or over its empty frame, while a page
+   * reads new data for it, taking no room, so nothing around the chart moves.
    */
   let {
     series,
@@ -40,6 +44,7 @@
     scope = "",
     bounds = null,
     onzoom = null,
+    busy = false,
     stacked = false,
     unit = "W",
   } = $props();
@@ -50,8 +55,15 @@
   let signature = "";
   let cursorIndex = $state(null);
   let zoomed = $state(false);
+  let viewWindow = $state.raw(null);
   let zoomWindow = null;
   let zoomScope = null;
+  const touches = new Map();
+  /** How far one finger travels sideways before it moves the chart, so a tap or a page scroll that drifts does not. */
+  const SWIPE_START_PX = 8;
+  let gesture = null;
+  let pendingWindow = null;
+  let frame = 0;
 
   const f = $derived(fmt());
   const prepared = $derived.by(() => {
@@ -60,6 +72,12 @@
     return { time: broken.time, lists: broken.series, gaps: gapRanges(time, lists) };
   });
   const plotted = $derived(stacked ? stackLists(prepared.lists) : prepared.lists);
+  /** Whether the zoomed window touches the start or the end of the range, re-read as new data widens it. */
+  const atEdge = $derived.by(() => {
+    const limits = outer();
+    if (!viewWindow || !limits) return { start: false, end: false };
+    return { start: viewWindow.min <= limits[0], end: viewWindow.max >= limits[1] };
+  });
   const hasData = $derived(prepared.lists.some((list) => list.some((v) => v !== null)));
   const shown = $derived.by(() => {
     if (xRange) return { from: xRange[0], to: xRange[1] - 1 };
@@ -150,6 +168,7 @@
 
   function applyZoom(next) {
     zoomWindow = next;
+    viewWindow = next;
     zoomed = true;
     chart?.setScale("x", next);
     onzoom?.(next);
@@ -168,7 +187,9 @@
   }
 
   function resetZoom() {
+    dropPending();
     zoomWindow = null;
+    viewWindow = null;
     zoomed = false;
     const stamps = prepared.time;
     if (chart && stamps.length) chart.setScale("x", { min: stamps[0], max: stamps[stamps.length - 1] });
@@ -199,17 +220,150 @@
     applyZoom(next);
   }
 
+  /**
+   * Move a zoomed window by ``shift`` seconds, stopping at the bounds; a chart
+   * not zoomed has nothing to move. A window that new data left partly outside
+   * the range never moves against the asked direction to get back into it.
+   */
+  function panBy(shift) {
+    const limits = outer();
+    if (!chart || !limits || !zoomed || !shift) return;
+    const { min, max } = chart.scales.x;
+    const next = panStep(min, max, shift, limits[0], limits[1]);
+    if (next && Math.sign(next.min - min) === Math.sign(shift)) applyZoom(next);
+  }
+
+  function panByStep(direction) {
+    if (!chart) return;
+    const { min, max } = chart.scales.x;
+    panBy(direction * PAN_STEP * (max - min));
+  }
+
   function onWheel(event) {
     event.preventDefault();
     if (!chart) return;
     const rect = chart.over.getBoundingClientRect();
+    const wheel = wheelGesture(event, rect.width);
+    if ("pan" in wheel) {
+      const { min, max } = chart.scales.x;
+      if (rect.width > 0 && wheel.pan) panBy((wheel.pan / rect.width) * (max - min));
+      return;
+    }
+    if (!wheel.zoom) return;
     const center = chart.posToVal(event.clientX - rect.left, "x");
-    zoomBy(event.deltaY < 0 ? 1 / ZOOM_STEP : ZOOM_STEP, Number.isFinite(center) ? center : undefined);
+    zoomBy(wheelZoomFactor(wheel.zoom), Number.isFinite(center) ? center : undefined);
+  }
+
+  /** The share of the plot's width at ``clientX``, for a gesture's fingers. */
+  function plotFraction(clientX) {
+    const rect = chart.over.getBoundingClientRect();
+    return rect.width > 0 ? (clientX - rect.left) / rect.width : 0.5;
+  }
+
+  function fingerSpan(a, b) {
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  }
+
+  /** Start what the fingers now on the plot do: two pinch, one moves a zoomed window, each from the window shown now. */
+  function beginGesture() {
+    const points = [...touches.values()];
+    if (!chart || !points.length) {
+      gesture = null;
+      return;
+    }
+    const { min, max } = pendingWindow ?? chart.scales.x;
+    if (points.length === 1) {
+      gesture = { pan: { min, max, x: points[0].x, y: points[0].y, width: chart.over.getBoundingClientRect().width, moving: false } };
+      return;
+    }
+    const [a, b] = points;
+    gesture = { pinch: { span: max - min, anchor: min + plotFraction((a.x + b.x) / 2) * (max - min), distance: fingerSpan(a, b) } };
+  }
+
+  /** Keep a finger's moves on this plot when it slides off; false for a pointer the browser no longer tracks. */
+  function capturePointer(id) {
+    try {
+      chart.over.setPointerCapture(id);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function onPointerDown(event) {
+    if (event.pointerType !== "touch" || !chart) return;
+    touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    capturePointer(event.pointerId);
+    beginGesture();
+  }
+
+  function onPointerMove(event) {
+    if (!gesture || !touches.has(event.pointerId)) return;
+    touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    const limits = outer();
+    if (!limits) return;
+    if (gesture.pinch) {
+      const [a, b] = [...touches.values()];
+      showWindow(pinchWindow(gesture.pinch, fingerSpan(a, b), plotFraction((a.x + b.x) / 2), limits[0], limits[1]));
+    } else if (zoomed && gesture.pan.width > 0) {
+      const pan = gesture.pan;
+      if (!pan.moving) {
+        const dx = event.clientX - pan.x;
+        if (Math.abs(dx) < SWIPE_START_PX || Math.abs(dx) <= Math.abs(event.clientY - pan.y)) return;
+        pan.moving = true;
+        pan.x = event.clientX;
+      }
+      const { min, max, x, width } = pan;
+      showWindow(panStep(min, max, ((x - event.clientX) / width) * (max - min), limits[0], limits[1]));
+    }
+  }
+
+  function onPointerEnd(event) {
+    if (touches.delete(event.pointerId)) beginGesture();
+  }
+
+  /** The browser took the touch for itself, as a page scroll: the frame not yet drawn is dropped, not drawn. */
+  function onPointerCancel(event) {
+    if (!touches.delete(event.pointerId)) return;
+    dropPending();
+    beginGesture();
+  }
+
+  /** Draw a gesture's window once a frame, however often the fingers report; all the way out is the way back. */
+  function showWindow(next) {
+    if (!next) return;
+    pendingWindow = next;
+    if (frame) return;
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      const shown = pendingWindow;
+      pendingWindow = null;
+      const limits = outer();
+      if (!chart || !shown || !limits) return;
+      if (!zoomDiffers(shown.min, shown.max, limits[0], limits[1])) {
+        if (zoomed) resetZoom();
+        return;
+      }
+      if (shown.min !== chart.scales.x.min || shown.max !== chart.scales.x.max) applyZoom(shown);
+    });
+  }
+
+  function dropPending() {
+    if (frame) cancelAnimationFrame(frame);
+    frame = 0;
+    pendingWindow = null;
+  }
+
+  function dropGesture() {
+    touches.clear();
+    gesture = null;
+    dropPending();
   }
 
   function build() {
     const uPlot = globalThis.uPlot;
     if (!host || !uPlot) return;
+    dropGesture();
     chart?.destroy();
     const font = "12px InterVariable, sans-serif";
     const axis = {
@@ -273,6 +427,10 @@
       host,
     );
     chart.over.addEventListener("wheel", onWheel, { passive: false });
+    chart.over.addEventListener("pointerdown", onPointerDown);
+    chart.over.addEventListener("pointermove", onPointerMove);
+    chart.over.addEventListener("pointerup", onPointerEnd);
+    chart.over.addEventListener("pointercancel", onPointerCancel);
   }
 
   $effect(() => {
@@ -280,6 +438,7 @@
     const reach = `${scope}|${xRange ? xRange.join("-") : ""}`;
     if (zoomScope !== null && reach !== zoomScope) {
       zoomWindow = null;
+      viewWindow = null;
       zoomed = false;
     }
     zoomScope = reach;
@@ -306,6 +465,7 @@
     observer.observe(host);
     return () => {
       observer.disconnect();
+      dropGesture();
       chart?.destroy();
       chart = null;
       signature = "";
@@ -322,8 +482,15 @@
   const shownIndex = $derived(cursorIndex ?? lastIndex);
 </script>
 
+{#snippet loadingPill()}
+  {#if busy}<span class="pill busy">{t("common.loading")}</span>{/if}
+{/snippet}
+
 {#if !hasData}
-  <div class="empty chart-empty" role="status">{emptyText || t("chart.empty")}</div>
+  <div class="plot">
+    <div class="empty chart-empty" role="status">{emptyText || t("chart.empty")}</div>
+    {@render loadingPill()}
+  </div>
 {:else}
   <div class="legend" aria-live="off">
     <span class="legend-time num">{shownIndex !== null ? stampText(prepared.time[shownIndex]) : ""}</span>
@@ -335,14 +502,20 @@
     <span class="zoom">
       {#if zoomed}
         <button class="btn secondary small" type="button" onclick={resetZoom} data-testid="chart-zoom-reset">{t("chart.zoomReset")}</button>
+        <button class="icon-btn small" type="button" onclick={() => panByStep(-1)} disabled={atEdge.start} aria-label={t("chart.panEarlier")} title={t("chart.panEarlier")} data-testid="chart-pan-earlier"><Icon name="chevron-left" size="sm" /></button>
+        <button class="icon-btn small" type="button" onclick={() => panByStep(1)} disabled={atEdge.end} aria-label={t("chart.panLater")} title={t("chart.panLater")} data-testid="chart-pan-later"><Icon name="chevron-right" size="sm" /></button>
       {:else}
         <span class="zoom-hint">{t("chart.zoomHint")}</span>
+        <span class="zoom-hint touch">{t("chart.pinchHint")}</span>
       {/if}
       <button class="icon-btn small" type="button" onclick={() => zoomBy(1 / ZOOM_STEP)} aria-label={t("chart.zoomIn")} title={t("chart.zoomIn")} data-testid="chart-zoom-in"><Icon name="zoom-in" size="sm" /></button>
       <button class="icon-btn small" type="button" onclick={() => zoomBy(ZOOM_STEP)} aria-label={t("chart.zoomOut")} title={t("chart.zoomOut")} data-testid="chart-zoom-out"><Icon name="zoom-out" size="sm" /></button>
     </span>
   </div>
-  <div class="chart" bind:this={host} role="img" aria-label={label}></div>
+  <div class="plot">
+    <div class="chart" bind:this={host} role="img" aria-label={label}></div>
+    {@render loadingPill()}
+  </div>
   {#if showTable}
     <div class="table-scroll">
       <table class="data">
@@ -369,13 +542,19 @@
   .legend-time { color: var(--m-muted); min-width: 44px; }
   .zoom { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
   .zoom-hint { font-size: 11.5px; color: var(--m-muted-2); }
-  @media (pointer: coarse) { .zoom-hint { display: none; } }
+  .zoom-hint.touch { display: none; }
+  @media (pointer: coarse) {
+    .zoom-hint { display: none; }
+    .zoom-hint.touch { display: inline; }
+  }
   .legend-item { display: inline-flex; align-items: center; gap: 7px; color: var(--m-muted); }
   .legend-item i { width: 10px; height: 10px; border-radius: 3px; background: var(--c); }
   .legend-item i.dash { width: 12px; height: 0; border-radius: 0; background: none; border-top: 2px dashed var(--c); }
   .legend-item b { color: var(--m-text); font-weight: 600; min-width: 54px; }
+  .plot { position: relative; }
+  .busy { position: absolute; top: var(--s2); left: 50%; transform: translateX(-50%); pointer-events: none; }
   .chart { width: 100%; min-height: 120px; cursor: crosshair; }
-  .chart :global(.u-over) { cursor: crosshair; }
+  .chart :global(.u-over) { cursor: crosshair; touch-action: pan-y; }
   .chart-empty { min-height: 160px; justify-content: center; }
   .table-scroll { max-height: 420px; overflow: auto; margin-top: var(--s4); }
 </style>

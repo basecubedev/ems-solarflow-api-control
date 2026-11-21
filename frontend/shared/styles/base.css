@@ -107,7 +107,8 @@ svg.i.lg { width: 22px; height: 22px; }
   width: 32px; height: 32px; display: grid; place-items: center; border-radius: 10px; flex: none;
   border: 1px solid var(--m-line); background: var(--m-surface-1); color: var(--m-muted); cursor: pointer;
 }
-.icon-btn:hover { color: var(--m-text); border-color: var(--m-line-strong); }
+.icon-btn:hover:not(:disabled) { color: var(--m-text); border-color: var(--m-line-strong); }
+.icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   height: 32px; padding: 0 14px; border-radius: var(--m-radius-pill); border: 0;

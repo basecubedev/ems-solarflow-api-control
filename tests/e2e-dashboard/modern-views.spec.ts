@@ -411,6 +411,25 @@ test.describe("Modern dashboard views: history @smoke", () => {
   });
 });
 
+test.describe("Modern dashboard views: moving a zoomed chart @smoke", () => {
+  test("the earlier and later buttons stop at the ends of today, greyed out there", async ({ page }) => {
+    await openModern(page, "#/overview");
+    const card = page.locator(".card", { has: page.getByTestId("history-source") }).first();
+    await expect(card.locator(".chart .u-over")).toBeVisible();
+    await card.getByTestId("chart-zoom-in").click();
+    const earlier = card.getByTestId("chart-pan-earlier");
+    const later = card.getByTestId("chart-pan-later");
+    await expect(earlier).toBeEnabled();
+    await expect(later).toBeEnabled();
+    for (const [button, other] of [[later, earlier], [earlier, later]]) {
+      for (let press = 0; press < 12 && (await button.isEnabled()); press += 1) await button.click();
+      await expect(button).toBeDisabled();
+      await expect(button).toHaveCSS("cursor", "not-allowed");
+      await expect(other).toBeEnabled();
+    }
+  });
+});
+
 /** WR1 with one pack, WR2 with two, each pack's cells apart from the others'. */
 function withCells(body) {
   body.devices.WR1.battery_packs = [{ pack: 1, cell_min_v: 3.17, cell_max_v: 3.18 }];
