@@ -31,7 +31,7 @@ Admin Console screenshots live in [`../admin/`](../admin/).
 | `dashboard-control-pipeline.png` | Control — How the target is made, Decision per device | `write-mode` |
 | `dashboard-control-device.png` | Control — Decision per device with WR1's five stages opened | `write-mode` |
 | `dashboard-control-readonly.png` | Control signed out with a password set — the runtime card asks for a sign-in | `auth-readonly` |
-| `dashboard-sign-in.png` | The Sign in to the dashboard dialog | `auth-readonly` |
+| `dashboard-sign-in.png` | The app's sign-in, opened from the Control page | `auth-readonly` |
 | `dashboard-schedule.png` | Schedule — one saved rule and the next seven days | `write-mode` |
 | `dashboard-diagnose.png` | Diagnose — the five diagnosis cards and a Hardware report | `write-mode` |
 | `dashboard-logs.png` | Logs — level filter, Follow, Service level, the log lines | `write-mode` |

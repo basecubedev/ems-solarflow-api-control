@@ -13,8 +13,10 @@
 # The Admin Console's script (scripts/capture_admin_docs.mjs) starts its own
 # loopback-only preview server, scripts/serve_admin_docs_preview.py over the
 # deterministic fixtures in tests/fixtures/admin_docs/; the EMS Dashboard's is
-# a Playwright spec (tests/e2e-dashboard/capture-docs.spec.ts) whose webServer
-# is scripts/serve_dashboard_preview.py over scripts/dashboard_preview_data.py;
+# a Playwright spec (tests/e2e-dashboard/capture-docs.spec.ts) whose webServers
+# are scripts/serve_dashboard_preview.py over scripts/dashboard_preview_data.py
+# and, in front of it, the console's docs preview with --ems-preview, so the
+# dashboard's pages are photographed in the one app;
 # the Appliance Manager's is a Playwright spec too
 # (tests/e2e-appliance/capture-docs.spec.ts) against the browser suite's
 # scripted EMS_APPLIANCE_TEST_MODE host (tests/e2e-appliance/serve_appliance_test.py).

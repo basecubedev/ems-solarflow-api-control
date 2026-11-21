@@ -205,8 +205,12 @@ EMS_DASHBOARD_CAPTURE_DOCS=1 npx playwright test \
   --config=playwright.dashboard.config.ts --project=chromium capture-docs
 ```
 
-That run starts its own preview server on port 8128 with `--now` and runs in
-Europe/Berlin, so the pictures show the same day on any date and any host. See
+That run starts its own preview server on port 8128 with `--now` and, on port
+8131, the console's docs preview (`scripts/serve_admin_docs_preview.py
+--ems-preview`), which serves the one app and reads the EMS from the first: the
+dashboard's pages are photographed in the app, the EMS's own Diagnose and
+Maintenance pages on the preview itself. It runs in Europe/Berlin, so the
+pictures show the same day on any date and any host. See
 [the capture index](../assets/screenshots/dashboard/README.md).
 
 ## Authority map and test layering

@@ -15,14 +15,23 @@
 //   EMS_DASHBOARD_CAPTURE_DOCS=1 npx playwright test \
 //     --config=playwright.dashboard.config.ts --project=chromium capture-docs
 //
+// The dashboard's pages are part of the one app, so they are photographed in
+// it: the console's docs preview (scripts/serve_admin_docs_preview.py, which
+// playwright.dashboard.config.ts starts beside the dashboard preview) serves
+// the app and reads the EMS from the dashboard preview. Signed in to the
+// console where the dashboard preview's scenario is "write-mode", signed out
+// otherwise, as the console's sign-in is the one sign-in. The EMS's own
+// Diagnose and Maintenance pages exist only on its own port and are taken from
+// the dashboard preview itself.
+//
 // A guide PNG is the 1440x900 window (390x844 on a phone); a preview JPG is
 // the whole page at the same width. The data is the preview server's
 // synthetic set in scripts/dashboard_preview_data.py. A capture that needs a
 // scenario other than the server's own -- signed in, a password set but signed
 // out, a device offline -- names it with the preview's "ems-preview-scenario"
-// cookie, which holds for that browser context only; an offline device seen
-// signed in, which no scenario has, adds the signed-in answer to
-// /api/auth/status as the browser suite does. pinTheDay (pin-the-day.ts)
+// cookie, which holds for that browser context only; an image of the EMS's own
+// port seen signed in adds the signed-in answer to /api/auth/status as the
+// browser suite does. pinTheDay (pin-the-day.ts)
 // fixes the day and the zone every capture shows, and the config starts the
 // preview server on the same instant, so a run on any date shows the same
 // content and a capture just after midnight does not document an empty chart.
@@ -42,6 +51,8 @@ const DESKTOP = { width: 1440, height: 900 };
 const PHONE = { width: 390, height: 844 };
 const STRIP = { width: 714, height: 560, gap: 12 };
 const SCENARIO_COOKIE = "ems-preview-scenario";
+const DASHBOARD_URL = process.env.EMS_DASHBOARD_PREVIEW_URL ?? "http://127.0.0.1:8128";
+const SIGNED_OUT = "signed-out";
 const CSRF = { "X-CSRF-Token": "preview-csrf-token" };
 const SIGNED_IN = {
   auth_configured: true,
@@ -56,17 +67,20 @@ const DEFAULT_PREFS = {
   "ems-modern.density": "normal",
   "ems-modern.flow": "system",
   "ems-modern.energyDetail": "basic",
+  "ems-admin.oneAppSeen": "1",
 };
 
-async function open(page, baseURL, hash, { scenario = "normal", signedIn = false, viewport = DESKTOP, prefs = {} } = {}) {
+async function open(page, baseURL, hash, { scenario = "normal", signedIn = false, viewport = DESKTOP, prefs = {}, standalone = false } = {}) {
   await page.setViewportSize(viewport);
-  if (signedIn) await page.route("**/api/auth/status", (route) => route.fulfill({ json: SIGNED_IN }));
-  await page.context().addCookies([{ name: SCENARIO_COOKIE, value: scenario, url: baseURL }]);
+  if (signedIn && standalone) await page.route("**/api/auth/status", (route) => route.fulfill({ json: SIGNED_IN }));
+  await page.context().addCookies([{ name: SCENARIO_COOKIE, value: scenario, url: standalone ? DASHBOARD_URL : baseURL }]);
   await page.addInitScript((stored) => {
     for (const [key, value] of Object.entries(stored)) window.localStorage.setItem(key, value);
   }, { ...DEFAULT_PREFS, ...prefs });
   await pinTheDay(page, DOCS_SHOT_TIME);
-  await page.goto(`/${hash}`, { waitUntil: "domcontentloaded" });
+  const signedInToConsole = signedIn || scenario === "write-mode";
+  await page.goto(standalone ? `${DASHBOARD_URL}/${hash}` : `/${signedInToConsole ? "" : `?scenario=${SIGNED_OUT}`}${hash}`, { waitUntil: "domcontentloaded" });
+  if (!standalone) await expect(page.getByTestId(signedInToConsole ? "sign-out" : "sign-in").first()).toBeAttached();
   await expect(page.getByTestId("ems-state")).toContainText("EMS active");
   await page.evaluate(() => document.fonts.ready);
 }
@@ -281,10 +295,10 @@ test.describe("EMS Dashboard documentation captures @docs", () => {
   test("dashboard-sign-in", async ({ page, baseURL }) => {
     await open(page, baseURL, "#/control", { scenario: "auth-readonly" });
     await page.getByTestId("sign-in").click();
-    const dialog = page.getByRole("dialog");
-    await expect(dialog).toBeVisible();
-    await dialog.getByLabel("Password").fill("demo-password");
-    await settled(dialog);
+    const screen = page.getByTestId("sign-in-screen");
+    await expect(screen).toHaveAttribute("data-mode", "login");
+    await page.fill("#admin-password", "demo-password");
+    await settled(screen);
     await shoot(page, "dashboard-sign-in");
   });
 
@@ -307,7 +321,7 @@ test.describe("EMS Dashboard documentation captures @docs", () => {
   });
 
   test("dashboard-diagnose", async ({ page, baseURL }) => {
-    await open(page, baseURL, "#/diagnose", { scenario: "write-mode" });
+    await open(page, baseURL, "#/diagnose", { scenario: "write-mode", signedIn: true, standalone: true });
     await page.locator('[data-profile="hardware"]').click();
     await expect(page.locator(".card", { hasText: "Root causes" }).first()).toBeVisible();
     await shoot(page, "dashboard-diagnose");
@@ -320,7 +334,7 @@ test.describe("EMS Dashboard documentation captures @docs", () => {
   });
 
   test("dashboard-maintenance", async ({ page, baseURL }) => {
-    await open(page, baseURL, "#/maintenance", { scenario: "write-mode" });
+    await open(page, baseURL, "#/maintenance", { scenario: "write-mode", signedIn: true, standalone: true });
     await expect(page.locator("table.data tbody tr")).toHaveCount(3);
     await shoot(page, "dashboard-maintenance");
   });
@@ -394,7 +408,7 @@ test.describe("EMS Dashboard documentation captures @docs", () => {
   });
 
   test("preview-diagnose", async ({ page, baseURL }) => {
-    await open(page, baseURL, "#/diagnose", { scenario: "offline-device", signedIn: true });
+    await open(page, baseURL, "#/diagnose", { scenario: "offline-device", signedIn: true, standalone: true });
     await page.locator('[data-profile="hardware"]').click();
     await expect(page.locator(".card", { hasText: "Root causes" }).first()).toBeVisible();
     await preview(page, "preview-diagnose");
@@ -407,7 +421,7 @@ test.describe("EMS Dashboard documentation captures @docs", () => {
   });
 
   test("preview-maintenance", async ({ page, baseURL }) => {
-    await open(page, baseURL, "#/maintenance", { scenario: "write-mode" });
+    await open(page, baseURL, "#/maintenance", { scenario: "write-mode", signedIn: true, standalone: true });
     await expect(page.locator("table.data tbody tr")).toHaveCount(3);
     await page.getByRole("button", { name: "Check config" }).click();
     await expect(page.getByText("Added keys")).toBeVisible();

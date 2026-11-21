@@ -469,11 +469,13 @@ signed-out browser, an update that runs, a guided setup, ...). The settings
 page, its check, the telemetry view and the guided setup's device search and
 device plan are answered by the shipped Admin builders from the demo
 installation's `config.json`, so a setting the template gains shows up without
-a fixture edit. The dashboard's spec runs against
+a fixture edit. The dashboard's spec photographs the dashboard's pages in the
+one app: the console's docs preview with `--ems-preview` reads the EMS from
 `scripts/serve_dashboard_preview.py` over `scripts/dashboard_preview_data.py`,
-the server of the dashboard browser suite. No Docker, hardware, discovery, MQTT
-broker, Zendure credential, `config.json` or runtime state is involved,
-unrelated containers are untouched, and nothing is pushed. Requirements:
+the server of the dashboard browser suite, and the EMS's own Diagnose and
+Maintenance pages are taken from that server directly. No Docker, hardware,
+discovery, MQTT broker, Zendure credential, `config.json` or runtime state is
+involved, unrelated containers are untouched, and nothing is pushed. Requirements:
 `node` with the Playwright Chromium for both.
 
 Add a screen by adding an entry to `SHOTS` in `scripts/capture_admin_docs.mjs`

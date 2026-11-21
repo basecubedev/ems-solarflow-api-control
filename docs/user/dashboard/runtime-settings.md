@@ -20,9 +20,10 @@ grid meter — use the Admin Console instead:
 
 ## Prerequisites
 
-- A dashboard **sign-in**. The password is the same one the Admin Console uses,
-  stored in `config/dashboard-auth.json`.
-- If no password is set yet, the card says so instead of showing a form.
+- A **sign-in** to the app. The password is the same one the Admin Console
+  uses, stored in `config/dashboard-auth.json`.
+- If no password is set yet, the app opens on *Protect your Admin console*,
+  which creates it ([First start](../admin/first-start.md)).
 
 ## Step-by-step instructions
 
@@ -37,21 +38,25 @@ hope you do not press it.
 
 **What you select:** **Sign in**, in the card or in the top bar.
 
-![The Sign in to the dashboard dialog over the Control page, with the password entered and the Cancel and Sign in buttons](../../assets/screenshots/dashboard/dashboard-sign-in.png)
+![The app's sign-in with the password entered, its Sign in button and the link back to the dashboard's pages](../../assets/screenshots/dashboard/dashboard-sign-in.png)
 
-**What you enter:** the shared EMS/Admin password in **Sign in to the
-dashboard**, then **Sign in**.
+**What you enter:** the shared EMS/Admin password in the app's sign-in, then
+**Sign in**. It is the one sign-in of the app: it opens the dashboard's
+operator pages and the Admin pages alike, and **Sign out** in the top bar ends
+both.
 
-**Expected result:** the top bar's pill changes from **Read-only** to **Write
-mode**, the button to **Sign out**, and the runtime settings appear.
+**Expected result:** the app returns to the page, the top bar's button turns
+to **Sign out**, and the runtime settings appear.
 
 **If it differs:**
 
-- *No dashboard password is set* means none exists yet. Create one in the Admin
-  Console ([First start](../admin/first-start.md)) or with
-  `python3 emsctl.py dashboard set-password`.
-- *Wrong password.* — try again. *Too many sign-in attempts. Wait a minute, then
-  try again.* — the server slows down repeated attempts.
+- *Wrong password.* — try again. *Too many attempts. Wait a moment and try
+  again.* — the server slows down repeated attempts.
+- On port 8080 without an Admin Console the sign-in is the dashboard's own
+  dialog, **Sign in to the dashboard**. There *No dashboard password is set*
+  means none exists yet; create one with
+  `python3 emsctl.py dashboard set-password`. Its rate limit reads *Too many
+  sign-in attempts. Wait a minute, then try again.*
 
 ### 2 — Find the runtime settings
 

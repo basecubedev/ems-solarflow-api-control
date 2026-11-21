@@ -34,7 +34,14 @@ menu.
 
 ## The pages
 
-The side menu lists the pages in two groups, in this order:
+In the app the side menu lists the dashboard's pages under **Dashboard**,
+above the **Admin** group (see [Admin console](../admin-console.md)):
+
+```text
+Dashboard: Overview · Devices · Consumers · Energy · Analytics · Control · Schedule · Logs
+```
+
+On port 8080 without an Admin Console the menu has its own two groups:
 
 ```text
 Overview · Devices · Consumers · Energy · Analytics · Control · Schedule
@@ -50,12 +57,12 @@ System: Diagnose · Logs · Maintenance
 | **Analytics** | *Long-range history from InfluxDB*, when InfluxDB is set up |
 | **Control** | *What the EMS is doing and why*: the current decision, the runtime settings, the six stages of the control pipeline and the decision per device |
 | **Schedule** | *Switch points the EMS applies by itself* |
-| **Diagnose** | *Health checks and root causes* |
 | **Logs** | *What the EMS has written to its log* |
-| **Maintenance** | *Backups, restore and config upgrade* |
+| **Diagnose**, port 8080 only | *Health checks and root causes*; in the app, the Admin's **Diagnostics** |
+| **Maintenance**, port 8080 only | *Backups, restore and config upgrade*; in the app, the Admin's **Backups** and **Updates** |
 
-A lock beside Schedule, Diagnose, Logs and Maintenance means they need you to
-be signed in. Signed out, they show *"Sign in to see this page."* with a
+A lock beside Schedule and Logs, and on port 8080 beside Diagnose and
+Maintenance, means they need you to be signed in. Signed out, they show *"Sign in to see this page."* with a
 **Sign in** button instead of empty panels. On a phone the menu becomes a bar
 at the bottom, see [Overview and navigation](overview.md#on-a-phone).
 
@@ -72,13 +79,16 @@ license of every component the page is built from.
 
 The dashboard is a view onto the EMS, not a second controller.
 
-- Without signing in it is **read-only**. The top bar shows a **Read-only**
-  pill and a **Sign in** button.
-- After signing in the pill reads **Write mode** and the button **Sign out**.
-  The runtime settings on the Control page and the Schedule, Diagnose, Logs
-  and Maintenance pages become usable.
+- Without signing in it is **read-only**. The top bar shows **Sign in**, and a
+  lock in the menu marks the pages that need it.
+- After signing in the button reads **Sign out**. The runtime settings on the
+  Control page, the Schedule and Logs pages and the **Admin** pages become
+  usable. It is the app's one sign-in, and **Sign out** ends it for both.
 - The password is the **same one as the Admin Console's**, stored in
-  `config/dashboard-auth.json`. If none is set, the sign-in dialog says
+  `config/dashboard-auth.json`; the console's first start creates it.
+- On port 8080 without an Admin Console the top bar carries a **Read-only** /
+  **Write mode** pill, and signing in there opens **Diagnose** and
+  **Maintenance** as well. If no password is set, its sign-in dialog says
   *"No dashboard password is set. Set one with: python3 emsctl.py dashboard
   set-password"*.
 - Every write is checked on the server for a session **and** a CSRF token. A

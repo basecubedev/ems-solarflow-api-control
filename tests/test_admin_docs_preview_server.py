@@ -162,3 +162,109 @@ def test_the_demo_config_names_no_template_placeholder():
     assert "YOUR_SN" not in text
     assert "DEMO-" in text
     assert serve_admin_docs_preview.DEMO_IDENTITY_KEY.startswith(b"ems-admin-docs-preview")
+
+
+class _FakeEms:
+    """The dashboard preview as the docs preview sees it: records each request and answers, the live stream in two parts."""
+
+    def __init__(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        seen = self.seen = []
+        release = self.release = threading.Event()
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def _answer(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                seen.append({"method": self.command, "path": self.path, "headers": dict(self.headers.items()), "body": self.rfile.read(length) if length else b""})
+                if self.path.startswith("/api/events"):
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.end_headers()
+                    self.wfile.write(b"data: 1\n\n")
+                    self.wfile.flush()
+                    release.wait(10)
+                    self.wfile.write(b"data: 2\n\n")
+                    return
+                body = json.dumps({"answered": self.path}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = _answer
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    def close(self):
+        self.release.set()
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def test_the_app_reads_the_ems_from_the_dashboard_preview_and_answers_its_sign_in_itself():
+    """What the dashboard's images in the one app depend on: the EMS's paths, the stream as it comes, the sign-in kept."""
+
+    ems = _FakeEms()
+    server = start_server("127.0.0.1", 0, ems_preview=ems.url)
+    base = "http://{}:{}".format(*server.server_address)
+    try:
+        assert _request(base, "/api/live?since=1") == {"answered": "/api/live?since=1"}
+        assert _request(base, "/api/auth/status")["authenticated"] is True
+        assert [seen["path"] for seen in ems.seen] == ["/api/live?since=1"]
+
+        request = urllib.request.Request(base + "/api/schedule/r1", data=b"{}", method="DELETE",
+                                         headers={"Content-Type": "application/json", "X-CSRF-Token": "console-token", "Cookie": "ems-preview-scenario=write-mode"})
+        with urllib.request.urlopen(request, timeout=10) as response:
+            assert json.loads(response.read()) == {"answered": "/api/schedule/r1"}
+        headers = ems.seen[-1]["headers"]
+        assert headers["X-CSRF-Token"] == "preview-csrf-token" and headers["Cookie"] == "ems-preview-scenario=write-mode"
+
+        with urllib.request.urlopen(base + "/api/events", timeout=10) as stream:
+            assert stream.readline() == b"data: 1\n"
+            ems.release.set()
+
+        with urllib.request.urlopen(base + "/uPlot.min.css", timeout=10) as response:
+            assert response.status == 200 and response.headers["Content-Type"].startswith("text/css")
+    finally:
+        ems.close()
+        server.shutdown()
+        server.server_close()
+
+
+def test_an_unreachable_dashboard_preview_is_answered_as_the_console_answers_an_unreachable_ems():
+    """A capture whose dashboard preview is missing sees the app's own refusal, never a dropped connection."""
+
+    import http.client
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        closed_port = probe.getsockname()[1]
+    server = start_server("127.0.0.1", 0, ems_preview=f"http://127.0.0.1:{closed_port}")
+    host, port = server.server_address
+    try:
+        connection = http.client.HTTPConnection(host, port, timeout=10)
+        connection.request("GET", "/api/live")
+        response = connection.getresponse()
+        assert (response.status, json.loads(response.read())["error"]) == (502, "ems_unreachable")
+        connection.close()
+
+        connection = http.client.HTTPConnection(host, port, timeout=10)
+        connection.putrequest("POST", "/api/runtime/system")
+        connection.putheader("Content-Length", "many")
+        connection.endheaders()
+        response = connection.getresponse()
+        assert (response.status, json.loads(response.read())["error"]) == (400, "bad_request")
+        connection.close()
+    finally:
+        server.shutdown()
+        server.server_close()

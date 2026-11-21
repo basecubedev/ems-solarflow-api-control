@@ -30,6 +30,15 @@ Open, for example::
     http://127.0.0.1:8092/?scenario=fresh#/assistant
     http://127.0.0.1:8092/?scenario=upgrade-running#/updates
 
+With ``--ems-preview URL`` the dashboard's pages in the app read the EMS from
+the dashboard preview at that address (``scripts/serve_dashboard_preview.py``):
+every path the EMS answers but its sign-in, which the console answers itself,
+is passed on with its cookies, so the dashboard preview's scenario cookie still
+picks its data, and the live stream as it arrives. A change carries the
+dashboard preview's demo CSRF token, as the console vouches for its operator
+to the EMS. The dashboard's documentation images are taken this way, in the
+one app.
+
 Safety: the preview never contacts real Zendure/Shelly/MQTT/Docker/InfluxDB
 endpoints, never reads secrets from config.json, and never writes runtime-state,
 auth files, config or the dashboard database. Its only write is the demo
@@ -39,6 +48,7 @@ binds to loopback by default.
 
 import argparse
 import copy
+import http.client
 import json
 import os
 import shutil
@@ -47,13 +57,18 @@ import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, urlsplit
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SCRIPT_DIR)
 STATIC_DIR = os.path.join(ROOT, "admin", "static")
+DASHBOARD_STATIC_DIR = os.path.join(ROOT, "dashboard", "static")
 FIXTURE_DIR = os.path.join(ROOT, "tests", "fixtures", "admin_docs")
 TEMPLATE_PATH = os.path.join(ROOT, "config", "config.template.json")
+
+EMS_PREVIEW_CSRF = "preview-csrf-token"
+FORWARDED_REQUEST_HEADERS = ("Accept", "Content-Type", "Cookie", "Last-Event-ID")
+FORWARDED_RESPONSE_HEADERS = ("Cache-Control", "Content-Length", "Content-Type")
 
 DEFAULT_HOST = "127.0.0.1"
 DEMO_IDENTITY_KEY = b"ems-admin-docs-preview-demo-key!"
@@ -475,10 +490,12 @@ class DocsPreviewHandler(BaseHTTPRequestHandler):
         """The Modern console's build output, at the root as the Admin server serves it."""
 
         _on_path()
-        from dashboard.static_files import build_static_asset_index, lookup_static_asset, modern_asset_path
+        from dashboard.static_files import SHARED_ROOT_FILES, build_static_asset_index, lookup_static_asset, modern_asset_path
 
-        asset_path = modern_asset_path(path)
-        asset = lookup_static_asset(build_static_asset_index(STATIC_DIR), asset_path) if asset_path else None
+        asset_path = modern_asset_path(path, SHARED_ROOT_FILES)
+        shared = asset_path and asset_path.lstrip("/") in SHARED_ROOT_FILES
+        index = build_static_asset_index(DASHBOARD_STATIC_DIR if shared else STATIC_DIR)
+        asset = lookup_static_asset(index, asset_path) if asset_path else None
         if asset is None:
             self.send_error(404)
             return
@@ -507,11 +524,71 @@ class DocsPreviewHandler(BaseHTTPRequestHandler):
             return {}
         return body if isinstance(body, dict) else {}
 
+    def _for_ems_preview(self, path):
+        if not getattr(self.server, "ems_preview", None):
+            return False
+        _on_path()
+        from admin.server import SIGN_IN_PATHS
+        from dashboard.api_paths import is_ems_api_path
+
+        return is_ems_api_path(path) and path not in SIGN_IN_PATHS
+
+    def _forward_to_ems_preview(self):
+        """Answer an EMS path from the dashboard preview, as the console answers it from the EMS."""
+
+        _on_path()
+        from admin.ems_forwarding import one_line
+
+        target = urlsplit(self.server.ems_preview)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        if length < 0:
+            self.close_connection = True
+            self._send_json({"error": "bad_request", "message": "Content-Length must be an integer >= 0."}, status=400)
+            return
+        body = self.rfile.read(length) if length else None
+        headers = {name: self.headers[name] for name in FORWARDED_REQUEST_HEADERS if self.headers.get(name)}
+        if self.command not in ("GET", "HEAD"):
+            headers["X-CSRF-Token"] = EMS_PREVIEW_CSRF
+        connection = http.client.HTTPConnection(target.hostname, target.port, timeout=60)
+        try:
+            connection.request(self.command, self.path, body=body, headers=headers)
+            response = connection.getresponse()
+        except (OSError, http.client.HTTPException):
+            connection.close()
+            self.close_connection = True
+            self._send_json({"error": "ems_unreachable", "message": "The EMS does not answer."}, status=502)
+            return
+        try:
+            self.send_response(response.status)
+            for name in FORWARDED_RESPONSE_HEADERS:
+                if response.getheader(name):
+                    self.send_header(name, one_line(response.getheader(name)))
+            if response.getheader("Content-Length") is None:
+                self.send_header("Connection", "close")
+                self.close_connection = True
+            self.end_headers()
+            while True:
+                chunk = response.read1(65536)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                self.wfile.flush()
+        except (OSError, http.client.HTTPException):
+            self.close_connection = True
+        finally:
+            connection.close()
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
         if not path.startswith("/api/"):
             self._send_modern(path)
+            return
+        if self._for_ems_preview(path):
+            self._forward_to_ems_preview()
             return
         answer = self._scenario_answer("GET", path)
         if answer is not None:
@@ -531,6 +608,9 @@ class DocsPreviewHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if self._for_ems_preview(path):
+            self._forward_to_ems_preview()
+            return
         body = self._read_body()
         if not path.startswith("/api/"):
             self.send_error(404)
@@ -553,6 +633,14 @@ class DocsPreviewHandler(BaseHTTPRequestHandler):
         else:
             self._send_json({"ok": True})
 
+    def _forward_or_refuse(self):
+        if self._for_ems_preview(urlparse(self.path).path):
+            self._forward_to_ems_preview()
+            return
+        self.send_error(405)
+
+    do_PUT = do_PATCH = do_DELETE = _forward_or_refuse
+
 
 class DocsPreviewServer(ThreadingHTTPServer):
     """The preview, which removes its demo installation when it closes."""
@@ -562,9 +650,11 @@ class DocsPreviewServer(ThreadingHTTPServer):
         self.installation.remove()
 
 
-def start_server(host, port):
+def start_server(host, port, ems_preview=None):
     get_routes, post_routes, releases = build_routes()
     server = DocsPreviewServer((host, port), DocsPreviewHandler)
+    server.daemon_threads = True
+    server.ems_preview = ems_preview
     server.get_routes = get_routes
     server.post_routes = post_routes
     server.releases = releases
@@ -580,12 +670,13 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--ems-preview", default=None, help="the dashboard preview the EMS paths are answered from, e.g. http://127.0.0.1:8128")
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
-    server = start_server(args.host, args.port)
+    server = start_server(args.host, args.port, ems_preview=args.ems_preview)
     print(f"Admin docs preview on http://{args.host}:{args.port}/#/overview")
     print(f"Scenarios (?scenario=): {', '.join(SCENARIOS)}")
     try:

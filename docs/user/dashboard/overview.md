@@ -12,7 +12,8 @@ Every day. **Overview** is the page to leave open.
 
 ## Prerequisites
 
-- The EMS running, and the dashboard reachable at `http://<host>:8080`.
+- The EMS running, and the app reachable at `http://<host>:8090`; without an
+  Admin Console the EMS's own dashboard at `http://<host>:8080`.
 - No sign-in needed for this page.
 
 ## What you see
@@ -26,9 +27,12 @@ Every day. **Overview** is the page to leave open.
 | Page title and subtitle | Here **Overview** — *Your energy system right now* |
 | **EMS active** / **EMS paused** | Whether the control loop is switched on; *Waiting for data* before the first snapshot |
 | **Live · updated 4 s ago** | How the values arrive and how old the newest is. **Live** is the event stream; **Polling** a fallback that asks every 2 s; **Reconnecting**, **Offline** or **Stale** mean the values are not current |
-| **Read-only** / **Write mode** | Whether this browser is signed in, see [Runtime settings](runtime-settings.md#1--sign-in) |
-| **Sign in** / **Sign out** | Starts or ends the session; the dashboard stays readable either way |
+| **All good**, signed in | In one word how the installation is; it leads to the Admin's **Status**, see [Admin console](../admin-console.md) |
+| **Sign in** / **Sign out** | Starts or ends the app's one session, for the Dashboard and the Admin pages; the Dashboard pages stay readable either way, see [Runtime settings](runtime-settings.md#1--sign-in) |
 | The settings button at the right end | The **Appearance** menu, see [Appearance and language](appearance.md) |
+
+The EMS's own dashboard on port 8080, without an Admin Console, shows a
+**Read-only** / **Write mode** pill in place of **All good**.
 
 ### 2 — The four status tiles
 
@@ -138,10 +142,10 @@ zooms within today. Longer-range history is on [Analytics](energy.md#the-analyti
 
 ## On a phone
 
-![Overview on a phone: the four status tiles in one column, the start of the energy flow, and the bar at the bottom with Overview, Devices, Energy, Control and More](../../assets/screenshots/dashboard/dashboard-overview-narrow.png)
+![Overview on a phone: the four status tiles in one column, the start of the energy flow, and the bar at the bottom with Overview, Energy, Status, Updates and More](../../assets/screenshots/dashboard/dashboard-overview-narrow.png)
 
 On a narrow screen the side menu gives way to a bar at the bottom with four
-pages — **Overview**, **Devices**, **Energy** and **Control** until you choose
+pages — **Overview**, **Energy**, **Status** and **Updates** until you choose
 others — and **More** for the rest. The status tiles stack in one column. In
 the energy flow the home and the grid sit side by side at the bottom, and the
 inverters' line runs down into the home. Nothing is left out.
