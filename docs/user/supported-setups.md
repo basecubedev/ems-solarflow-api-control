@@ -57,6 +57,7 @@ are not listed until a physical report confirms them.
 | SolarFlow 800 Pro 2 | Local API + Zendure cloud MQTT | Maintainer | Maintainer hardware |
 | Shelly Pro (grid meter) | Local HTTP (RPC status) | Maintainer | Maintainer hardware |
 | SolarFlow 800 Plus | Local API | User | User reported |
+| TSUN inverter via OpenDTU (MQTT mapping) | Local MQTT (`ems-solarflow/<id>/state`) | User | User reported |
 
 ## Supported Zendure Devices (Local API / ZenSDK)
 
@@ -309,12 +310,14 @@ against the same meter, are in the
 | External device | `ems-solarflow/<id>/solarPower` | Watts, 0 or more | Reverse-engineered | Optional. PV power at the device's input. |
 | External device | `ems-solarflow/<id>/batteryPower` | Watts, positive charging, negative discharging | Reverse-engineered | Optional. Negate a value whose source counts the other way round. |
 | External device | `ems-solarflow/<id>/batterySoc` | Percent, 0 to 100 | Reverse-engineered | Optional. Without it the device counts as having no battery. |
-| External device | `ems-solarflow/<id>/state` | JSON object with any of the keys above | Reverse-engineered | All values at once; mixes with the single topics. |
+| External device | `ems-solarflow/<id>/state` | JSON object with any of the keys above | Validated | All values at once. Validated with `inverterPower` and `solarPower` from a user's OpenDTU, published by the MQTT mapping; the battery keys, and mixing with the single topics, are Reverse-engineered. |
 | External consumer | `ems-consumer/<id>/power` | Watts, 0 or more | Reverse-engineered | Required. What one consumer in the house draws: a washing machine, a heat pump, a metered plug. |
 | External consumer | `ems-consumer/<id>/state` | JSON object `{"power": …}` | Reverse-engineered | The same value as a JSON object. |
 
-Read only, never controlled. The namespace has been read end to end against a
-real broker in tests; no installation has run it yet.
+Read only, never controlled. One user's installation reads the `state` topic
+with `inverterPower` and `solarPower`, published by the MQTT mapping for an
+OpenDTU. The other topics and keys have been read end to end against a real
+broker in tests only.
 
 A consumer is part of the house load the grid meter already measures. The
 dashboard shows where that load goes and what each consumer cost
@@ -325,8 +328,8 @@ the built-in [MQTT mapping](admin/mqtt-mapping.md), on the optional built-in
 broker or on a broker of your own. The live topics label Shelly (Gen1 and
 Gen2+), Tasmota, OpenDTU and AhoyDTU devices they recognise; anything else is
 mapped by hand. A mapped device is then read like any other external device
-above, with the same status: tested against a real broker, not yet on an
-installation.
+above. An OpenDTU mapped as an inverter is Validated by a user's report; the
+other devices are tested against a real broker, not yet on an installation.
 
 ## Optional Integrations
 
