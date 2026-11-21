@@ -32,7 +32,7 @@ export function viteNotice(text) {
 /**
  * The browser tab's icon: the side menu's mark in the default scheme's
  * colours, read from tokens.css. It is a data: URI, which both servers' CSP
- * admits for images, so neither needs a new file type.
+ * admits for images; only the home-screen icons below are files.
  */
 function rootTokens() {
   const css = readFileSync(TOKENS, "utf8");
@@ -40,14 +40,16 @@ function rootTokens() {
   return css.slice(start, css.indexOf("}", start) + 1);
 }
 
-function favicon() {
-  const root = rootTokens();
-  const token = (name) => {
-    const match = root.match(new RegExp(`${name}:\\s*([^;]+);`));
-    if (!match) throw new Error(`tokens.css has no ${name} in its first :root block`);
-    return match[1].trim();
-  };
-  const svg = markSvg({
+/** A colour of the default scheme, from tokens.css's first :root block. */
+export function token(name) {
+  const match = rootTokens().match(new RegExp(`${name}:\\s*([^;]+);`));
+  if (!match) throw new Error(`tokens.css has no ${name} in its first :root block`);
+  return match[1].trim();
+}
+
+/** The mark's colours in the default scheme. */
+export function markColors() {
+  return {
     "--pv": token("--pv"),
     "--battery": token("--battery"),
     "--output": token("--output"),
@@ -55,8 +57,54 @@ function favicon() {
     tile: token("--m-surface-2"),
     line: token("--m-line-strong"),
     bolt: token("--m-text"),
-  });
-  return `<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,${encodeURIComponent(svg)}">`;
+  };
+}
+
+function favicon() {
+  return `<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,${encodeURIComponent(markSvg(markColors()))}">`;
+}
+
+/**
+ * An app a phone or tablet can put on its home screen: the web app manifest
+ * and the mark as PNG icons (frontend/shared/brand/, drawn from the mark by
+ * scripts/build_app_icons.mjs), which the page names in its head.
+ */
+export const APP_ICONS = Object.freeze({
+  "app-icon-192.png": 192,
+  "app-icon-512.png": 512,
+  "app-icon-maskable-512.png": 512,
+  "apple-touch-icon.png": 180,
+});
+
+export function appManifest({ name, shortName, description }) {
+  const background = token("--m-bg");
+  return JSON.stringify(
+    {
+      name,
+      short_name: shortName,
+      description,
+      start_url: "/",
+      scope: "/",
+      display: "standalone",
+      background_color: background,
+      theme_color: background,
+      icons: [
+        { src: "/app-icon-192.png", sizes: "192x192", type: "image/png" },
+        { src: "/app-icon-512.png", sizes: "512x512", type: "image/png" },
+        { src: "/app-icon-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+      ],
+    },
+    null,
+    2,
+  ) + "\n";
+}
+
+function appHead() {
+  return [
+    '<link rel="manifest" href="/manifest.webmanifest">',
+    '<link rel="apple-touch-icon" href="/apple-touch-icon.png">',
+    `<meta name="theme-color" content="${token("--m-bg")}">`,
+  ].join("\n    ");
 }
 
 const SHAPE = /<(?:path|circle|ellipse|line|polygon|polyline|rect)\b[^<>]*\/>/g;
@@ -116,10 +164,16 @@ export function unsupportedStyles() {
  * ``unsupported`` adds fallback.js, which the page loads first, and the page
  * it sends a browser too old for the app to.
  */
-export function modernPage({ name, icons, vendored = "", unsupported = false }) {
+export function modernPage({ name, icons, vendored = "", unsupported = false, app = null }) {
   return {
     name,
     generateBundle(_options, bundle) {
+      if (app) {
+        this.emitFile({ type: "asset", fileName: "manifest.webmanifest", source: appManifest(app) });
+        for (const fileName of Object.keys(APP_ICONS)) {
+          this.emitFile({ type: "asset", fileName, source: readFileSync(resolve(SHARED, "brand", fileName)) });
+        }
+      }
       for (const [fileName, path] of Object.entries(NOTICES)) {
         this.emitFile({ type: "asset", fileName, source: readFileSync(path, "utf8") });
       }
@@ -137,7 +191,7 @@ export function modernPage({ name, icons, vendored = "", unsupported = false }) 
       order: "post",
       handler(html) {
         return html
-          .replace("<!--favicon-->", favicon())
+          .replace("<!--favicon-->", app ? `${favicon()}\n    ${appHead()}` : favicon())
           .replace("<!--icons-->", iconSprite(icons))
           .replace("<!--vendored-->", vendored);
       },

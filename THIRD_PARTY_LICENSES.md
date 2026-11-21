@@ -193,6 +193,7 @@ installed by any manifest in this repository.
 | `Node.js` | 20 in CI | MIT AND mixed | Runs Playwright and the frontend contract runners under `tests/js/` | ❌ | ❌ | https://github.com/nodejs/node |
 | `ffmpeg` | host install | LGPL-2.1-or-later, or GPL-2.0-or-later depending on the build | Converts the Admin documentation videos under `docs/assets/videos/admin/` to MP4 | ❌ | ❌ | https://git.ffmpeg.org/ffmpeg.git |
 | `ImageMagick` | host install (`convert`) | ImageMagick | Trims and measures captured documentation screenshots | ❌ | ❌ | https://github.com/ImageMagick/ImageMagick |
+| `Inkscape` | host install | GPL-2.0-or-later | Draws the app's home-screen icons from the mark (`scripts/build_app_icons.mjs`) | ❌ | ❌ | https://gitlab.com/inkscape/inkscape |
 | `Pillow` | host install (verified 12.2.0) | MIT-CMU | Renders the optional install demo animation (`docs/demo/build_install_demo.py`); see the License Notes below | ❌ | ❌ | https://github.com/python-pillow/Pillow |
 | `DejaVu fonts` | host install | Bitstream-Vera AND Public-Domain | Glyphs for the install demo animation when present on the host | ❌ | ❌ | https://github.com/dejavu-fonts/dejavu-fonts |
 | `xz-utils` | host install | GPL-2.0-or-later AND Public-Domain (liblzma) | Compresses the published appliance image (`scripts/appliance-build-rpi-image.sh`) | ❌ | ❌ | https://github.com/tukaani-project/xz |
@@ -285,7 +286,13 @@ notices, with the Feather list, in `dashboard/static/modern/`,
 (`dashboard/static/`, `admin/static/` and `appliance/static/` outside their
 `modern/` folders) remains
 project-authored HTML, CSS, inline SVG symbols and plain browser JavaScript;
-they use system font stacks only and bundle no font file.
+they use system font stacks only and bundle no font file. The Admin console's
+web app manifest and home-screen icons are project-authored too:
+`admin/static/modern/manifest.webmanifest`,
+`admin/static/modern/app-icon-192.png`, `admin/static/modern/app-icon-512.png`,
+`admin/static/modern/app-icon-maskable-512.png` and
+`admin/static/modern/apple-touch-icon.png`, drawn from
+`frontend/shared/brand/mark.js`.
 
 ## Container Base Images
 
@@ -506,6 +513,7 @@ already inventoried above.
 | Artifact | Produced by | Third-party content | Distributed |
 |---|---|---|:---:|
 | `config/config.template.json` | `tools/build_config_template.py` from `ems/config_catalog.py` | none | ✅ |
+| `frontend/shared/brand/*.png` | `scripts/build_app_icons.mjs` (Inkscape) from `frontend/shared/brand/mark.js` | none | ✅ |
 | `/app/release-resources` inside the Admin image | `scripts/generate_release_resources.py` at image build | none | ✅ |
 | `docs/assets/screenshots/**`, `docs/assets/preview-*.jpg` | `scripts/capture_admin_docs.mjs`, `tests/e2e-dashboard/capture-docs.spec.ts`, `tests/e2e-appliance/capture-docs.spec.ts` (all Playwright Chromium) | none beyond the pixels the pages render: Inter glyphs and Lucide icon shapes in the Modern pages (inventoried above), chart pixels drawn by `uPlot` from project data | ❌ |
 | `docs/assets/videos/**` | recorded from the removed Classic Admin console (headless Firefox + ffmpeg); no longer rendered | none | ❌ |

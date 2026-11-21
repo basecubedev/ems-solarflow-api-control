@@ -12,7 +12,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
  * fallback.js runs first and sends a browser too old for the app to the page
  * that says so. The console carries the dashboard's pages, so it loads the
  * dashboard's vendored uPlot as the dashboard does, from the root, and draws
- * the dashboard's icons as well as its own.
+ * the dashboard's icons as well as its own. It is the app a phone or tablet
+ * puts on its home screen (``app``: the web app manifest and the icons).
  */
 const VENDORED = '<script src="/fallback.js"></script>\n    <link rel="stylesheet" href="/uPlot.min.css">\n    <script src="/uPlot.iife.min.js"></script>';
 const ICONS = [resolve(HERE, "src/icons.json"), resolve(ROOT, "frontend/dashboard-modern/src/icons.json")];
@@ -21,7 +22,16 @@ export default defineConfig({
   root: HERE,
   base: "/",
   publicDir: false,
-  plugins: [svelte(), modernPage({ name: "ems-admin-modern-page", icons: ICONS, vendored: VENDORED, unsupported: true })],
+  plugins: [
+    svelte(),
+    modernPage({
+      name: "ems-admin-modern-page",
+      icons: ICONS,
+      vendored: VENDORED,
+      unsupported: true,
+      app: { name: "EMS SolarFlow", shortName: "EMS SolarFlow", description: "Dashboard and Admin of EMS SolarFlow, in one app" },
+    }),
+  ],
   build: modernBuild({ outDir: resolve(ROOT, "admin/static/modern"), entry: "admin", split: true }),
   server: {
     fs: { allow: [ROOT] },

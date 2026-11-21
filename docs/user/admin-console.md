@@ -185,6 +185,14 @@ pages — Overview, Updates, Settings and Services until you choose others — a
 **More** for the rest, the language, the colour scheme and signing out. See
 [Appearance, language and phone](admin/appearance.md#on-a-phone).
 
+The app can sit on a phone's or a tablet's home screen like an app of its
+own, with the EMS SolarFlow mark and without the browser's address bar: open
+`http://<host>:8090`, then **Add to Home Screen** in the browser's share or
+menu button. On an iPhone or iPad this works over plain HTTP; Android's
+Chrome offers it as an app of its own only over HTTPS with a certificate the
+phone trusts (see [Optional HTTPS](#optional-https)) and otherwise adds a
+shortcut.
+
 ### Demo videos
 
 Two short demos (no audio, demo data only) step through the two main
