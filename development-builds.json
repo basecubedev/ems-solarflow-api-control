@@ -1,3 +1,19 @@
 {
-  "builds": []
+  "builds": [
+    {
+      "admin_digest": "sha256:fca8b383a0f5c58507e0b6b677ffc75cc9fb6fa5f88495906f2ad29349e8e55c",
+      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-fix-chart-pan-pinch-zoom-9b2c028a5e-11c8d5f-44951954150-1",
+      "build_id": "dev-fix-chart-pan-pinch-zoom-9b2c028a5e-11c8d5f-44951954150-1",
+      "channel": "development",
+      "created_at": "2026-11-21T21:50:27Z",
+      "display_name": "Feature fix-chart-pan-pinch-zoom",
+      "ems_digest": "sha256:7f8ab94385615992c47f843e236b23550241936e59678b8d35ac83a58d58c611",
+      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-fix-chart-pan-pinch-zoom-9b2c028a5e-11c8d5f-44951954150-1",
+      "installable": true,
+      "revision": "11c8d5f15e00c515210c5d2c2155943e9ac8980d",
+      "run_attempt": 1,
+      "run_id": "44951954150",
+      "tag": "dev-fix-chart-pan-pinch-zoom-9b2c028a5e-11c8d5f-44951954150-1"
+    }
+  ]
 }
