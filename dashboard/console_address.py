@@ -1,35 +1,36 @@
 # SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Where the Admin console, the one address of the whole product, answers.
+"""Where the Admin console, the one address of the whole product, answers, and whether it still does.
 
 The Admin console serves the dashboard's pages together with its own. The EMS
-keeps its dashboard on its own port as a way in that works while the console
-is down, and sends a browser that opens it on to the console. It learns the
-console's ports from ``config/admin-console.json``, which the console writes
-beside ``config.json`` while it listens on the network, and removes while it
-listens on this host only. The host name is the one the browser already used,
-so the file names ports, never an address.
+keeps its dashboard on its own port, which points to the console while the
+console runs and is the way in while it does not. It learns the console's
+ports from ``config/admin-console.json``, which the console writes beside
+``config.json`` while it listens on the network and removes while it listens
+on this host only. The host name is the one the browser already used, so the
+file names ports, never an address.
 
-The file outlives the console that wrote it: a console stopped, or replaced by
-an older one that carries no dashboard, leaves it behind. So the EMS reports
-the console only once the console has answered ``/api/console`` on that port
-saying it carries the dashboard. Import-side-effect-free, so the Admin image
-can carry it.
+The file is a lease: the console renews it every few seconds
+(:class:`ConsoleLease`), and the EMS takes it as the console's word only while
+it is fresh (:func:`read_live_console`). A console that stopped, or an older one
+put back that carries no dashboard and renews nothing, leaves a file that goes
+stale within half a minute, and the EMS answers in full again. Neither side
+reaches the other over the network for it. Import-side-effect-free, so the
+Admin image can carry it.
 """
 
-import http.client
 import json
+import logging
 import os
 import tempfile
 import threading
 import time
 
-from dashboard.host_reach import host_candidates
-
 CONSOLE_ADDRESS_NAME = "admin-console.json"
 CONSOLE_PATH = "/api/console"
 CONSOLE_IDENTITY = {"console": "ems-solarflow-admin", "dashboard": True}
-CONSOLE_CHECK_SECONDS = 10.0
+LEASE_SECONDS = 30.0
+RENEW_SECONDS = 10.0
 
 
 def _port(value):
@@ -99,47 +100,53 @@ def publish_console_address(config_dir, record):
     return True
 
 
-def console_answers(port, hosts, timeout=0.5):
-    """Whether a console carrying the dashboard answers ``/api/console`` on ``port`` at one of ``hosts``."""
+def read_live_console(path, now=None):
+    """The console's ports from ``path`` while the console keeps renewing it, else ``None``.
 
-    for host in hosts:
-        connection = http.client.HTTPConnection(host, port, timeout=timeout)
+    A file renewed less than :data:`LEASE_SECONDS` ago is live; one from the
+    future by more than that, as after the clock went back, is not.
+    """
+
+    try:
+        renewed = os.stat(path).st_mtime
+    except OSError:
+        return None
+    age = (time.time() if now is None else now) - renewed
+    if not -LEASE_SECONDS <= age <= LEASE_SECONDS:
+        return None
+    return read_console_address(path)
+
+
+class ConsoleLease:
+    """The console's side of the lease: publish its record and renew it, from a thread of its own."""
+
+    def __init__(self, config_dir, record, interval=RENEW_SECONDS):
+        self._config_dir = config_dir
+        self._record = record
+        self._interval = interval
+        self._stop = threading.Event()
+
+    def renew(self):
+        """Publish the record where the installation's ``config.json`` lies now, and mark it renewed."""
+
+        config_dir = os.fspath(self._config_dir())
+        publish_console_address(config_dir, self._record)
         try:
-            connection.request("GET", CONSOLE_PATH)
-            response = connection.getresponse()
-            body = response.read(4096)
-        except (OSError, http.client.HTTPException):
-            continue
-        finally:
-            connection.close()
-        if response.status != 200:
-            continue
-        try:
-            payload = json.loads(body)
-        except ValueError:
-            continue
-        if isinstance(payload, dict) and payload.get("dashboard") is True:
-            return True
-    return False
+            os.utime(os.path.join(config_dir, CONSOLE_ADDRESS_NAME))
+        except OSError:
+            return False
+        return True
 
+    def start(self):
+        threading.Thread(target=self._run, name="console-lease", daemon=True).start()
 
-class ConsoleCheck:
-    """Whether the console a record names answers, asked again at most every 10 seconds per port."""
+    def stop(self):
+        self._stop.set()
 
-    def __init__(self, answers=None, clock=time.monotonic):
-        self._answers = answers or (lambda port: console_answers(port, host_candidates()))
-        self._clock = clock
-        self._lock = threading.Lock()
-        self._known = {}
-
-    def __call__(self, record):
-        port = record["port"]
-        now = self._clock()
-        with self._lock:
-            known = self._known.get(port)
-            if known and known[0] > now:
-                return known[1]
-        answered = bool(self._answers(port))
-        with self._lock:
-            self._known[port] = (now + CONSOLE_CHECK_SECONDS, answered)
-        return answered
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                self.renew()
+            except Exception:
+                logging.exception("console_lease_renew_failed")
+            self._stop.wait(self._interval)

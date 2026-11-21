@@ -4,7 +4,11 @@ import hashlib
 import json
 import logging
 import os
+import errno
 import re
+import socket
+import socketserver
+import stat
 import tempfile
 import threading
 import time
@@ -22,8 +26,8 @@ from dashboard.auth import (
     resolve_auth_path,
     verify_password_file,
 )
-from dashboard.console_address import CONSOLE_ADDRESS_NAME, ConsoleCheck, read_console_address
-from dashboard.forwarding import FORWARDING_KEY_NAME, ForwardingKey, forwarded_client
+from dashboard.console_address import CONSOLE_ADDRESS_NAME, read_live_console
+from dashboard.forwarding import FORWARDING_KEY_NAME, ForwardingKey, forwarded_client, sent_by_console, vouched_by_console
 from dashboard.https import HANDSHAKE_TIMEOUT_SECONDS, wrap_listening_socket
 from dashboard.sqlite_store import SUPPORTED_RANGES
 from dashboard.static_files import SHARED_ROOT_FILES, build_static_asset_index, lookup_static_asset, modern_asset_path, modern_redirect
@@ -57,6 +61,10 @@ ANALYTICS_SCHEMA_UNPLANNED_HINT = (
     "Check influxdb.query_profiles against influxdb.downsampling in config.json."
 )
 MAX_JSON_BODY_BYTES = 16 * 1024
+SIGNPOST_OPEN_PATHS = frozenset({"/api/ui-config"})
+LOCAL_CLIENT = "local"
+SOCKET_MODE = 0o660
+SOCKET_DIR_MODE = 0o750
 MAX_SSE_CONNECTIONS = 8
 MAX_SSE_CONNECTIONS_PER_IP = 2
 SSE_MAX_CONNECTION_SECONDS = 30 * 60
@@ -631,8 +639,10 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         sse_max_connection_seconds=SSE_MAX_CONNECTION_SECONDS,
         schedule_api=None,
         device_settings=None,
+        signpost=True,
     ):
         super().__init__(address, handler)
+        self.signpost = bool(signpost)
         self.store = store
         self.runtime_state = runtime_state
         self.schedule_api = schedule_api
@@ -648,7 +658,6 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self.https_active = bool(https_active)
         self.config_dir = os.path.dirname(os.fspath(config_path)) if config_path else os.path.dirname(os.fspath(self.auth_file))
         self.forwarding_key = ForwardingKey(os.path.join(self.config_dir, FORWARDING_KEY_NAME))
-        self.console_check = ConsoleCheck()
         # Paths the diagnose endpoints use to build service args. runtime_state_path
         # falls back to the RuntimeState object's own path when not supplied.
         self.config_path = config_path
@@ -743,6 +752,41 @@ class DashboardHTTPServer(ThreadingHTTPServer):
             return None
 
 
+class DashboardSocketServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    """The dashboard server's way in through a local socket file, for the Admin console.
+
+    It runs the same handler on the network server's state (store, sessions,
+    locks and limits), so the two ways in are one server. It is never a
+    signpost: only a process that may open the file reaches it.
+    """
+
+    daemon_threads = True
+    https_active = False
+    local_socket = True
+
+    def __init__(self, path, handler, network):
+        object.__setattr__(self, "network", network)
+        super().__init__(os.fspath(path), handler)
+        object.__setattr__(self, "_started", True)
+
+    def get_request(self):
+        request, _ = self.socket.accept()
+        return request, (LOCAL_CLIENT, 0)
+
+    def __getattr__(self, name):
+        if name in ("network", "_started"):
+            raise AttributeError(name)
+        return getattr(self.network, name)
+
+    def __setattr__(self, name, value):
+        """What the handler keeps on the server later lands on the network server, so both ways in share it."""
+
+        if not getattr(self, "_started", False) or name in vars(self):
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self.network, name, value)
+
+
 class DashboardRequestHandler(BaseHTTPRequestHandler):
     server_version = "EMSDashboard/1.0"
     timeout = HANDSHAKE_TIMEOUT_SECONDS
@@ -754,6 +798,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if self._refused_by_signpost(parsed.path):
+            return
 
         if parsed.path == "/api/live":
             self._send_json(
@@ -868,6 +914,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if self._refused_by_signpost(parsed.path):
+            return
 
         if parsed.path == "/api/auth/login":
             self._handle_login()
@@ -913,6 +961,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         parsed = urlparse(self.path)
+        if self._refused_by_signpost(parsed.path):
+            return
 
         if _is_schedule_path(parsed.path):
             self._handle_schedule("PUT", parsed)
@@ -922,6 +972,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
     def do_PATCH(self):
         parsed = urlparse(self.path)
+        if self._refused_by_signpost(parsed.path):
+            return
 
         if parsed.path.startswith("/api/runtime/"):
             self._handle_runtime_patch(parsed.path)
@@ -935,6 +987,8 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         parsed = urlparse(self.path)
+        if self._refused_by_signpost(parsed.path):
+            return
 
         if _is_schedule_path(parsed.path):
             self._handle_schedule("DELETE", parsed)
@@ -1012,14 +1066,14 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
     def _auth_status_payload(self):
         configured = self._auth_configured()
         session = self._current_session() if configured else None
-        authenticated = session is not None
+        authenticated = session is not None or (configured and self._vouched_by_console())
         payload = {
             "auth_configured": configured,
             "authenticated": authenticated,
             "write_mode_available": configured,
             "write_mode_active": authenticated,
         }
-        if authenticated:
+        if session is not None:
             payload["csrf_token"] = session.csrf_token
             if session.expires_at is None:
                 payload["session_expires_in_seconds"] = None
@@ -1851,6 +1905,9 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         if not self._auth_configured():
             return {"error": "auth_not_configured"}, 403
 
+        if self._vouched_by_console():
+            return None
+
         session = self._current_session()
         if session is None:
             return {"error": "not_authenticated"}, 401
@@ -1869,24 +1926,72 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
         if not self._auth_configured():
             return {"error": "auth_not_configured"}, 403
 
+        if self._vouched_by_console():
+            return None
+
         if self._current_session() is None:
             return {"error": "not_authenticated"}, 401
 
         return None
 
     def _ui_config_payload(self):
-        """The page's start-up hints: the animation choice and where the Admin console answers.
+        """The page's start-up hints: the animation choice, where the Admin console answers, and whether this address only points there."""
 
-        The console is named only while it answers as a console that carries
-        the dashboard (``dashboard.console_address``).
+        console = self._named_console()
+        payload = {"animation_mode": self.server.animation_mode, "admin_console": console, "console_operator": self._console_may_vouch()}
+        if console is not None and not self._answered_in_full():
+            payload["signpost"] = True
+        return payload
+
+    def _named_console(self):
+        """The Admin console's ports, only while it keeps renewing its lease (``dashboard.console_address``) and ``dashboard.signpost`` is on."""
+
+        if not getattr(self.server, "signpost", True):
+            return None
+        config_dir = getattr(self.server, "config_dir", None)
+        return read_live_console(os.path.join(config_dir, CONSOLE_ADDRESS_NAME)) if config_dir else None
+
+    def _vouched_by_console(self):
+        """Whether the Admin console, the one sign-in, says its signed-in operator sent this request (``dashboard.forwarding``).
+
+        Taken only through the local socket, where the file's permissions are
+        the boundary; the key alone, which also travels to the network port,
+        never stands in for a password.
         """
 
-        config_dir = getattr(self.server, "config_dir", None)
-        console = read_console_address(os.path.join(config_dir, CONSOLE_ADDRESS_NAME)) if config_dir else None
-        check = getattr(self.server, "console_check", None)
-        if console is not None and (check is None or not check(console)):
-            console = None
-        return {"animation_mode": self.server.animation_mode, "admin_console": console}
+        key = getattr(self.server, "forwarding_key", None)
+        return getattr(self.server, "local_socket", False) and vouched_by_console(self.headers, key.read() if key else None)
+
+    def _console_may_vouch(self):
+        """Whether the console's word would count for a request like this one: through the socket, with a key this EMS can read."""
+
+        key = getattr(self.server, "forwarding_key", None)
+        return bool(getattr(self.server, "local_socket", False) and sent_by_console(self.headers, key.read() if key else None))
+
+    def _answered_in_full(self):
+        """Whether the request came through the local socket or from the console itself, by its key."""
+
+        if getattr(self.server, "local_socket", False):
+            return True
+        key = getattr(self.server, "forwarding_key", None)
+        return sent_by_console(self.headers, key.read() if key else None)
+
+    def _refused_by_signpost(self, path):
+        """Refuse an API request on the network listener while it is a signpost to the Admin console.
+
+        The dashboard is part of the console: while the console answers, this
+        port shows the way there and gives out no data and takes no sign-in.
+        Without a console, as after going back to an older one, it answers as
+        it always did.
+        """
+
+        if not path.startswith("/api/") or path in SIGNPOST_OPEN_PATHS or self._answered_in_full():
+            return False
+        console = self._named_console()
+        if console is None:
+            return False
+        self._send_json({"error": "moved_to_console", "admin_console": console}, status=410)
+        return True
 
     def _current_session(self):
         return self.server.sessions.get(
@@ -2096,6 +2201,8 @@ def start_dashboard_server(
     sse_max_connection_seconds=SSE_MAX_CONNECTION_SECONDS,
     schedule_api=None,
     device_settings=None,
+    socket_path=None,
+    signpost=True,
 ):
     server = DashboardHTTPServer(
         (host, int(port)),
@@ -2117,6 +2224,7 @@ def start_dashboard_server(
         sse_max_connection_seconds=sse_max_connection_seconds,
         schedule_api=schedule_api,
         device_settings=device_settings,
+        signpost=signpost,
     )
 
     if ssl_enabled:
@@ -2142,4 +2250,64 @@ def start_dashboard_server(
         port,
         bool(ssl_enabled),
     )
+    server.socket_listener = _start_socket_listener(server, socket_path) if socket_path else None
     return server
+
+
+def _start_socket_listener(network, path):
+    """Answer on the local socket file too, or log why not and go on with the port alone."""
+
+    path = os.fspath(path)
+    listener = None
+    try:
+        _private_directory(os.path.dirname(path))
+        _clear_stale_socket(path)
+        listener = DashboardSocketServer(path, DashboardRequestHandler, network)
+        os.chmod(path, SOCKET_MODE)
+    except OSError as exc:
+        if listener is not None:
+            listener.server_close()
+        logging.warning("dashboard_socket_unavailable path=%s error=%s", path, exc)
+        return None
+    threading.Thread(target=listener.serve_forever, daemon=True).start()
+    logging.info("dashboard_socket_started path=%s", path)
+    return listener
+
+
+def _private_directory(path):
+    """The socket's directory, made if missing, open to this user and its group only.
+
+    The console hands what it forwards to whatever answers at the socket, so
+    no one else may place a file there. A directory this process cannot make
+    private is refused.
+    """
+
+    os.makedirs(path, mode=SOCKET_DIR_MODE, exist_ok=True)
+    if os.lstat(path).st_uid == os.geteuid():
+        os.chmod(path, SOCKET_DIR_MODE)
+    mode = os.lstat(path).st_mode
+    if not stat.S_ISDIR(mode) or mode & (stat.S_IWGRP | stat.S_IWOTH):
+        raise OSError(f"{path} is not a private directory")
+
+
+def _clear_stale_socket(path):
+    """Remove a socket file no server answers on any more; anything else at the path stays and fails the bind."""
+
+    try:
+        mode = os.lstat(path).st_mode
+    except FileNotFoundError:
+        return
+    if not stat.S_ISSOCK(mode):
+        return
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        probe.settimeout(1.0)
+        probe.connect(path)
+    except OSError as exc:
+        if exc.errno != errno.ECONNREFUSED:
+            raise
+        os.unlink(path)
+        return
+    finally:
+        probe.close()
+    raise OSError(f"another dashboard server answers on {path}")

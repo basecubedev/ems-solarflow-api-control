@@ -249,6 +249,12 @@ export const CATALOG_WORDS = {
   "Log buffer size": t3("Größe des Protokollpuffers", "Grootte van de logbuffer", "Taille du tampon de journal"),
   "Number of recent log lines kept available for the dashboard.": t3("Anzahl der letzten Protokollzeilen, die das Dashboard bereithält.", "Aantal recente logregels dat beschikbaar blijft voor het dashboard.", "Nombre de lignes de journal récentes gardées pour le tableau de bord."),
   "Redact logs": t3("Protokolle schwärzen", "Logs afschermen", "Masquer les données sensibles des journaux"),
+  "Port points to the console": t3("Port zeigt zur Konsole", "Poort wijst naar de console", "Le port renvoie vers la console"),
+  "While the Admin console runs, the dashboard's own port only shows the way there. Turn off where a proxy or VPN reaches this port and not the console.": t3(
+    "Solange die Admin-Konsole läuft, zeigt der eigene Port des Dashboards nur den Weg dorthin. Ausschalten, wo ein Proxy oder VPN diesen Port erreicht, aber nicht die Konsole.",
+    "Zolang de Admin-console draait, wijst de eigen poort van het dashboard alleen de weg daarheen. Uitschakelen waar een proxy of VPN deze poort bereikt, maar niet de console.",
+    "Tant que la console Admin tourne, le port propre du tableau de bord indique seulement le chemin vers elle. À désactiver lorsqu’un proxy ou un VPN atteint ce port mais pas la console.",
+  ),
   "Hides sensitive values in dashboard-visible logs when possible.": t3("Verbirgt sensible Werte in den im Dashboard sichtbaren Protokollen, wo möglich.", "Verbergt gevoelige waarden in de logs die het dashboard toont, waar mogelijk.", "Masque si possible les valeurs sensibles dans les journaux visibles dans le tableau de bord."),
   "Animation mode": t3("Animationsmodus", "Animatiemodus", "Mode d’animation"),
   "Controls dashboard animation intensity. Use reduced or off on slower devices.": t3("Legt die Stärke der Dashboard-Animationen fest. Auf langsameren Geräten Reduziert oder Aus wählen.", "Bepaalt hoe sterk het dashboard animeert. Kies Verminderd of Uit op tragere apparaten.", "Règle l’intensité des animations du tableau de bord. Choisissez Réduit ou Désactivé sur les appareils plus lents."),

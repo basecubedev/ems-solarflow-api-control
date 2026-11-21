@@ -8,7 +8,6 @@
   import { provideShell } from "../../shared/shell/context.js";
   import TopbarStatus from "./app/TopbarStatus.svelte";
   import LoginDialog from "./app/LoginDialog.svelte";
-  import MovedNotice from "./app/MovedNotice.svelte";
   import Overview from "./pages/Overview.svelte";
   import Devices from "./pages/Devices.svelte";
   import Consumers from "./pages/Consumers.svelte";
@@ -76,7 +75,6 @@
       {#snippet status()}<TopbarStatus />{/snippet}
     </Topbar>
     <main class="content" id="content" tabindex="-1">
-      <MovedNotice />
       {#key router.page}
         <Page />
       {/key}

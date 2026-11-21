@@ -126,6 +126,20 @@ def resolve_data_dir(explicit_path=None, *, base_dir=None):
     return Path(explicit_path) if explicit_path else _base_path(base_dir) / "data"
 
 
+DASHBOARD_SOCKET_FILENAME = "dashboard.sock"
+
+
+def resolve_dashboard_socket_path(data_dir):
+    """The local socket the EMS's dashboard server answers on besides its port.
+
+    It lies in the data directory, which the Admin console mounts at the same
+    place it holds the rest of the installation, so the console reaches the EMS
+    through the file and needs no port of the host's.
+    """
+
+    return Path(data_dir) / "run" / DASHBOARD_SOCKET_FILENAME
+
+
 ZENDURE_MQTT_STATUS_FILENAME = "zendure-mqtt-status.json"
 
 

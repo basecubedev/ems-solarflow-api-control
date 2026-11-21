@@ -164,6 +164,10 @@ def direct_handler(path, *, method="GET", body=b"", auth_file=None, runtime_stat
         "_auth_configured",
         "_current_session",
         "_session_cookie_value",
+        "_refused_by_signpost",
+        "_answered_in_full",
+        "_named_console",
+        "_vouched_by_console",
     ):
         setattr(
             handler,
@@ -231,7 +235,7 @@ def test_ui_config_reports_animation_mode():
         status, headers, payload = json_response(f"{base_url}/api/ui-config")
         assert status == 200
         assert "application/json" in headers["Content-Type"]
-        assert payload == {"animation_mode": "reduced", "admin_console": None}
+        assert payload == {"animation_mode": "reduced", "admin_console": None, "console_operator": False}
     finally:
         server.shutdown()
         server.server_close()
@@ -242,7 +246,7 @@ def test_ui_config_defaults_to_normal_and_sanitizes_invalid():
     server, base_url = with_server(store, animation_mode="bogus")
     try:
         _, _, payload = json_response(f"{base_url}/api/ui-config")
-        assert payload == {"animation_mode": "normal", "admin_console": None}
+        assert payload == {"animation_mode": "normal", "admin_console": None, "console_operator": False}
     finally:
         server.shutdown()
         server.server_close()

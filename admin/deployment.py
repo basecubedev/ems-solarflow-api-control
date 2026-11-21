@@ -17,6 +17,7 @@ never pulls images itself.
 
 import copy
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -31,6 +32,7 @@ import uuid
 from pathlib import Path
 
 from admin.container_names import DEFAULT_INFLUX_CONTAINER
+from admin.ems_forwarding import SocketConnection
 from admin.install_context import detect_install_context
 from admin.models import utc_now_iso
 from admin.releases import DOCKER_IMAGE_REPOSITORY, ReleaseError, default_admin_data_dir
@@ -38,6 +40,7 @@ from admin.setup_workflow import GENERATED_CONFIG_OWNER, read_generated_metadata
 from ems.config import resolve_influxdb_config
 from ems.influx_image import compose_image, parse_image, replace_image
 from ems.influx_setup import DEFAULT_DATA_DIR as INFLUX_DATA_DIR
+from ems.paths import resolve_dashboard_socket_path
 from ems.runtime_state import (
     config_digest,
     request_runtime_reset,
@@ -1264,6 +1267,30 @@ def probe_dashboard_url(url, timeout=3.0):
         return False
 
 
+def probe_dashboard(url, socket_path=None, timeout=3.0):
+    """Return True when the EMS's dashboard server answers: on its socket file, else at ``url``.
+
+    The socket is how the console reaches the EMS; the port may be published
+    elsewhere or only on this host's loopback (``EMS_DASHBOARD_PUBLISH``).
+    """
+
+    if socket_path is not None and _socket_answers(socket_path, timeout):
+        return True
+    return probe_dashboard_url(url, timeout)
+
+
+def _socket_answers(socket_path, timeout):
+    connection = SocketConnection(socket_path, timeout)
+    try:
+        connection.request("GET", "/api/ui-config")
+        connection.getresponse().read(1)
+        return True
+    except (OSError, http.client.HTTPException):
+        return False
+    finally:
+        connection.close()
+
+
 def _socket_present(socket_path):
     try:
         return Path(socket_path).exists()
@@ -2030,7 +2057,8 @@ class DeploymentService:
         self.compose = compose or DockerCompose()
         self.registry = registry or DeploymentJobRegistry()
         self.start_registry = start_registry or DeploymentJobRegistry()
-        self._dashboard_probe = dashboard_probe or probe_dashboard_url
+        local = resolve_dashboard_socket_path(self.workspace_dir / "data")
+        self._dashboard_probe = dashboard_probe or (lambda url: probe_dashboard(url, local))
         self._sleep = sleep or time.sleep
         self._dashboard_attempts = max(1, int(dashboard_attempts))
         self._dashboard_retry_seconds = max(0.0, float(dashboard_retry_seconds))

@@ -59,13 +59,16 @@ flowchart LR
 The thick arrow is the only connection that changes what your hardware does,
 and it belongs to the EMS.
 
-You open one address, the Admin Console's at port 8090. Its dashboard pages
-read the EMS through the console: the console passes each request on and the
-EMS answers it, checking its own session for anything that writes, exactly as
-before. The EMS keeps its own dashboard at port 8080 as well: opened there, it
-says where the app now is and goes there after a few seconds, unless you
-choose to stay. It is the way in while the Admin Console is down, for example
-during its own update. The Appliance Manager keeps its own page at port 8088.
+You open one address, the Admin Console's at port 8090, and sign in once. Its
+dashboard pages read the EMS through the console, over a socket file the two
+share rather than the network: the console passes each request on, says
+whether you are signed in, and the EMS answers it. While the Admin Console
+runs in the host's network, as the installer sets it up, the EMS's own port
+8080 only shows the way to the app and goes there
+after a few seconds, to the same page; it shows no data and takes no sign-in.
+While the console is down, for example during its own update, port 8080 is the
+dashboard again, with its own sign-in. The Appliance Manager keeps its own page
+at port 8088.
 
 On a machine you already run, there is no Appliance Manager: the
 [Admin Console](admin-console.md) is installed with one script and takes it from

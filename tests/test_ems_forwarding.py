@@ -7,24 +7,33 @@ call the EMS through the console's own address. What these tests hold:
 
 - the forwarded paths are exactly the ones the dashboard server dispatches,
   and none of the console's own;
-- a request reaches the EMS with its body, its EMS cookie and its CSRF token,
-  and with nothing the client was not meant to send it; the answer comes back
-  with the console's security headers and nothing the EMS was not meant to say;
-- the forwarding needs no console session and adds no authority: the EMS
-  decides every request as it decides a direct one;
+- a request reaches the EMS with its body and with nothing the client was not
+  meant to send it, no cookie either way; the answer comes back with the
+  console's security headers and nothing the EMS was not meant to say;
+- one sign-in: the console answers the EMS's sign-in paths itself, and says
+  its signed-in operator sent a request only with its session, and with its
+  CSRF token for a change; the EMS takes that word only with the key;
 - the live stream arrives event by event, not when it ends;
 - an EMS that is not set up, switched off or silent is said as such;
 - the EMS counts a forwarded client as that client only with the forwarding key;
-- the console tells the EMS where it answers, for the EMS's own dashboard.
+- the console tells the EMS where it answers, for the EMS's own dashboard;
+- the console reaches the EMS through its socket file, and through its port
+  only when the EMS has none; the port only points to the console while the
+  console answers, and gives out no data then.
 """
 
 import json
 import os
 import re
 import socket
+import socketserver
+import stat
+import tempfile
 import threading
+import time
 import urllib.error
 import urllib.request
+import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -35,29 +44,27 @@ from admin.ems_forwarding import (
     MAX_FORWARD_BODY_BYTES,
     EmsUpstream,
     ForwardingRefusal,
-    LINK_COOKIE_NAME,
-    LINK_ENDED,
-    EmsSessions,
     ems_host,
-    link_cookie,
     one_line,
     ems_upstream,
     installed_ems,
-    secure_cookie,
     shares_host_network,
 )
 from admin.server import create_server
+from tests.admin_auth_helpers import TEST_PASSWORD, auth_headers, authenticate
 from dashboard.api_paths import EMS_API_PATHS, EMS_API_PREFIXES, is_ems_api_path
 from dashboard.console_address import (
-    ConsoleCheck,
-    console_answers,
     CONSOLE_ADDRESS_NAME,
+    LEASE_SECONDS,
+    ConsoleLease,
     console_address,
     publish_console_address,
     read_console_address,
+    read_live_console,
 )
 from dashboard.host_reach import default_gateway, host_candidates, in_bridge_network
-from dashboard.forwarding import FORWARDING_KEY_HEADER, FORWARDING_KEY_NAME, ForwardingKey, forwarded_client
+from dashboard.auth import write_password_file
+from dashboard.forwarding import CONSOLE_OPERATOR_HEADER, FORWARDING_KEY_HEADER, FORWARDING_KEY_NAME, ForwardingKey, forwarded_client
 from dashboard.server import start_dashboard_server
 
 pytestmark = [pytest.mark.contract, pytest.mark.admin]
@@ -189,30 +196,59 @@ def test_a_read_reaches_the_ems_with_its_query_and_comes_back_with_the_console_s
     assert headers["X-Frame-Options"] == "DENY"
     assert "default-src 'self'" in headers["Content-Security-Policy"]
     assert headers.get("X-Internal") is None
-    [link] = headers.get_all("Set-Cookie")
-    assert re.fullmatch(rf"{LINK_COOKIE_NAME}=[A-Za-z0-9_-]{{43}}; Path=/; HttpOnly; SameSite=Strict", link)
+    assert headers.get_all("Set-Cookie") is None
     seen = fake_ems.seen[0]["headers"]
     assert "Cookie" not in seen
     assert seen["X-Forwarded-For"] == "127.0.0.1"
     assert seen[FORWARDING_KEY_HEADER] == KEY
     assert "Authorization" not in seen
-    _call(f"{base}/api/live", headers={"Cookie": f"ems_admin_session=adm; {link.split(';', 1)[0]}"})
-    assert fake_ems.seen[1]["headers"]["Cookie"] == "ems_dashboard_session=abc"
+    assert CONSOLE_OPERATOR_HEADER not in seen
 
 
-def test_a_write_reaches_the_ems_unchanged_and_needs_no_console_session(console, fake_ems):
+def test_a_signed_out_write_reaches_the_ems_without_the_console_s_word(console, fake_ems):
     _, base = console
-    body = json.dumps({"password": "pw"}).encode()
+    body = json.dumps({"enabled": False}).encode()
     status, _, answer = _call(
-        f"{base}/api/auth/login", method="POST", body=body,
+        f"{base}/api/runtime/device/a", method="PATCH", body=body,
         headers={"Content-Type": "application/json", "X-CSRF-Token": "t1"},
     )
-    assert status == 201
-    assert json.loads(answer)["answered"] == "/api/auth/login"
+    assert status == 200
+    assert json.loads(answer)["answered"] == "/api/runtime/device/a"
     seen = fake_ems.seen[0]
     assert seen["body"] == body
-    assert seen["headers"]["X-CSRF-Token"] == "t1"
     assert seen["headers"]["Content-Type"] == "application/json"
+    assert "X-CSRF-Token" not in seen["headers"] and CONSOLE_OPERATOR_HEADER not in seen["headers"]
+
+
+def test_the_console_answers_the_ems_sign_in_paths_itself(console, fake_ems):
+    _, base = console
+    status, _, body = _call(f"{base}/api/auth/status")
+    assert status == 200 and json.loads(body)["authenticated"] is False
+    authenticate(base)
+    status, headers, body = _call(f"{base}/api/auth/login", method="POST", body=json.dumps({"password": TEST_PASSWORD}).encode(),
+                                  headers={"Content-Type": "application/json"})
+    assert status == 200 and json.loads(body)["csrf_token"]
+    assert "ems_admin_session=" in headers["Set-Cookie"]
+    assert fake_ems.seen == []
+
+
+def test_the_console_vouches_for_its_signed_in_operator_and_a_change_needs_its_csrf_token(console, fake_ems):
+    _, base = console
+    authenticate(base)
+    signed_in = auth_headers(base, "PATCH")
+    cookie = {"Cookie": signed_in["Cookie"]}
+    assert _call(f"{base}/api/live", headers=cookie)[0] == 200
+    assert fake_ems.seen[-1]["headers"][CONSOLE_OPERATOR_HEADER] == "1"
+    assert _call(f"{base}/api/auth/status", headers=cookie)[0] == 200
+    assert len(fake_ems.seen) == 1
+    for refused in ({}, {"X-CSRF-Token": "not-the-token"}):
+        status, _, body = _call(f"{base}/api/runtime/device/a", method="PATCH", body=b"{}", headers={**cookie, **refused})
+        assert (status, json.loads(body)["error"]) == (403, "csrf_failed")
+    assert len(fake_ems.seen) == 1
+    assert _call(f"{base}/api/runtime/device/a", method="PATCH", body=b"{}", headers=signed_in)[0] == 200
+    seen = fake_ems.seen[-1]["headers"]
+    assert seen[CONSOLE_OPERATOR_HEADER] == "1" and seen[FORWARDING_KEY_HEADER] == KEY
+    assert "Cookie" not in seen and "X-CSRF-Token" not in seen
 
 
 @pytest.mark.parametrize("method, path", [("PATCH", "/api/runtime/device/a"), ("PUT", "/api/schedule/r1"), ("DELETE", "/api/schedule/r1")])
@@ -286,18 +322,19 @@ def _context(tmp_path, dashboard):
     config = tmp_path / "config" / "config.json"
     config.parent.mkdir(parents=True, exist_ok=True)
     config.write_text(json.dumps({"dashboard": dashboard}), encoding="utf-8")
-    return SimpleNamespace(config_exists=True, config_path=config, install_root=tmp_path)
+    return SimpleNamespace(config_exists=True, config_path=config, install_root=tmp_path, data_dir=tmp_path / "data")
 
 
 def test_the_ems_is_found_from_the_installed_dashboard_settings(tmp_path):
-    assert ems_upstream(_context(tmp_path, {"port": 8085})) == EmsUpstream(port=8085)
-    assert ems_upstream(_context(tmp_path, {})) == EmsUpstream(port=8080)
-    assert ems_upstream(_context(tmp_path, {"port": "8086"})) == EmsUpstream(port=8086)
-    assert ems_upstream(_context(tmp_path, {"port": 70000})) == EmsUpstream(port=8080)
+    local = tmp_path / "data" / "run" / "dashboard.sock"
+    assert ems_upstream(_context(tmp_path, {"port": 8085})) == EmsUpstream(port=8085, socket=local)
+    assert ems_upstream(_context(tmp_path, {})) == EmsUpstream(port=8080, socket=local)
+    assert ems_upstream(_context(tmp_path, {"port": "8086"})) == EmsUpstream(port=8086, socket=local)
+    assert ems_upstream(_context(tmp_path, {"port": 70000})) == EmsUpstream(port=8080, socket=local)
     assert ems_upstream(_context(tmp_path, {"ssl_enabled": "true"})).https
-    assert ems_upstream(_context(tmp_path, {"enabled": "yes"})) == EmsUpstream(port=8080)
+    assert ems_upstream(_context(tmp_path, {"enabled": "yes"})) == EmsUpstream(port=8080, socket=local)
     secure = ems_upstream(_context(tmp_path, {"ssl_enabled": True}))
-    assert secure == EmsUpstream(port=8080, https=True, cafile=tmp_path / "config" / "dashboard.crt")
+    assert secure == EmsUpstream(port=8080, https=True, cafile=tmp_path / "config" / "dashboard.crt", socket=local)
     for off in (False, "false", "off"):
         with pytest.raises(ForwardingRefusal) as refused:
             ems_upstream(_context(tmp_path, {"enabled": off}))
@@ -307,11 +344,8 @@ def test_the_ems_is_found_from_the_installed_dashboard_settings(tmp_path):
     assert refused.value.code == "ems_not_configured"
 
 
-def test_a_cookie_is_secure_exactly_when_the_browser_s_connection_is():
-    cookie = "ems_dashboard_session=abc; Path=/; HttpOnly; SameSite=Strict; Secure"
-    assert secure_cookie(cookie, False) == "ems_dashboard_session=abc; Path=/; HttpOnly; SameSite=Strict"
-    assert secure_cookie(cookie, True) == cookie
-    assert secure_cookie("a=b; Path=/", True) == "a=b; Path=/; Secure"
+def test_a_header_value_comes_back_on_one_line():
+    assert one_line("a\r\nb") == "a  b"
 
 
 def test_a_forwarded_client_counts_only_with_the_key():
@@ -342,30 +376,6 @@ def test_a_key_file_left_broken_is_written_again(tmp_path, left):
     assert ForwardingKey(tmp_path / FORWARDING_KEY_NAME).read() == made
     assert os.stat(tmp_path / FORWARDING_KEY_NAME).st_mode & 0o777 == 0o600
     assert sorted(path.name for path in tmp_path.iterdir()) == [FORWARDING_KEY_NAME]
-
-
-def test_the_browser_holds_a_link_of_the_console_s_making_never_the_ems_session():
-    sessions = EmsSessions()
-    assert sessions.adopt(None, ["ems_admin_session=planted; Path=/"]) is None
-    link = sessions.adopt(None, ["ems_dashboard_session=s1; Path=/; HttpOnly; SameSite=Strict; Secure"])
-    assert link and "s1" not in link
-    assert sessions.session_for(f"x=1; {LINK_COOKIE_NAME}={link}") == "s1"
-    assert sessions.session_for("ems_dashboard_session=s1") is None
-    renewed = sessions.adopt(f"{LINK_COOKIE_NAME}={link}", ["ems_dashboard_session=s2; Path=/"])
-    assert renewed != link
-    assert sessions.session_for(f"{LINK_COOKIE_NAME}={link}") is None
-    assert sessions.session_for(f"{LINK_COOKIE_NAME}={renewed}") == "s2"
-    ended = sessions.adopt(f"{LINK_COOKIE_NAME}={renewed}", ["ems_dashboard_session=; Path=/; Max-Age=0; HttpOnly"])
-    assert ended is LINK_ENDED
-    assert sessions.session_for(f"{LINK_COOKIE_NAME}={renewed}") is None
-    assert link_cookie(LINK_ENDED, True) == f"{LINK_COOKIE_NAME}=; Max-Age=0; Path=/; HttpOnly; SameSite=Strict; Secure"
-    assert one_line("a\r\nb") == "a  b"
-
-
-def test_only_the_newest_links_are_kept():
-    sessions = EmsSessions(limit=2)
-    links = [sessions.adopt(None, [f"ems_dashboard_session=s{index}"]) for index in range(3)]
-    assert [sessions.session_for(f"{LINK_COOKIE_NAME}={link}") for link in links] == [None, "s1", "s2"]
 
 
 def test_the_ems_is_reached_on_loopback_unless_the_admin_s_network_names_the_host(monkeypatch):
@@ -447,18 +457,6 @@ def test_the_console_s_address_is_published_beside_the_config_and_read_back(tmp_
         console_address(0)
 
 
-class _OlderAdmin(BaseHTTPRequestHandler):
-    """An Admin console from before it carried the dashboard: no ``/api/console``."""
-
-    def log_message(self, *_args):
-        pass
-
-    def do_GET(self):
-        self.send_response(404)
-        self.send_header("Content-Length", "0")
-        self.end_headers()
-
-
 def _serve(handler):
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     server.daemon_threads = True
@@ -466,7 +464,14 @@ def _serve(handler):
     return server
 
 
-def test_the_ems_dashboard_names_the_console_only_while_it_answers_as_one(tmp_path):
+def _age(path, seconds):
+    then = time.time() - seconds
+    os.utime(path, (then, then))
+
+
+def test_the_ems_dashboard_names_the_console_only_while_its_lease_is_renewed(tmp_path):
+    """A console that stopped, or an older one that renews nothing, is named for half a minute at most."""
+
     config = tmp_path / "config" / "config.json"
     config.parent.mkdir()
     config.write_text("{}", encoding="utf-8")
@@ -474,41 +479,39 @@ def test_the_ems_dashboard_names_the_console_only_while_it_answers_as_one(tmp_pa
         _Store(), host="127.0.0.1", port=0, config_path=str(config), auth_file=str(tmp_path / "auth.json"),
     )
     base = f"http://127.0.0.1:{server.server_address[1]}"
-    current = create_server("127.0.0.1", 0)
-    threading.Thread(target=current.serve_forever, daemon=True).start()
-    older = _serve(_OlderAdmin)
-    gone = socket.socket()
-    gone.bind(("127.0.0.1", 0))
-    gone_port = gone.getsockname()[1]
-    gone.close()
+    lease = config.parent / CONSOLE_ADDRESS_NAME
     try:
         assert json.loads(_call(f"{base}/api/ui-config")[2])["admin_console"] is None
-        for port, named in ((current.server_address[1], True), (older.server_address[1], False), (gone_port, False)):
-            server.console_check = ConsoleCheck(answers=lambda port: console_answers(port, ["127.0.0.1"]))
-            publish_console_address(config.parent, console_address(port))
-            expected = {"port": port, "https_port": None} if named else None
-            assert json.loads(_call(f"{base}/api/ui-config")[2])["admin_console"] == expected, port
+        publish_console_address(config.parent, console_address(8090))
+        assert json.loads(_call(f"{base}/api/ui-config")[2])["admin_console"] == {"port": 8090, "https_port": None}
+        for seconds in (LEASE_SECONDS + 5, -(LEASE_SECONDS + 5)):
+            _age(lease, seconds)
+            assert json.loads(_call(f"{base}/api/ui-config")[2])["admin_console"] is None, seconds
+        _age(lease, LEASE_SECONDS - 5)
+        assert json.loads(_call(f"{base}/api/ui-config")[2])["admin_console"] is not None
     finally:
-        for running in (server, current, older):
-            running.shutdown()
-            running.server_close()
+        server.shutdown()
+        server.server_close()
+
+
+def test_the_console_publishes_its_lease_once_the_installation_is_there_and_renews_it(tmp_path):
+    config_dir = tmp_path / "config"
+    lease = ConsoleLease(lambda: config_dir, console_address(8090, 8091))
+    assert lease.renew() is False
+    config_dir.mkdir()
+    assert lease.renew() is True
+    path = config_dir / CONSOLE_ADDRESS_NAME
+    assert read_live_console(path) == {"port": 8090, "https_port": 8091}
+    _age(path, LEASE_SECONDS + 5)
+    assert read_live_console(path) is None
+    lease.renew()
+    assert read_live_console(path) == {"port": 8090, "https_port": 8091}
 
 
 def test_the_console_says_signed_out_that_it_carries_the_dashboard(console):
     _, base = console
     status, _, body = _call(f"{base}/api/console")
     assert (status, json.loads(body)) == (200, {"console": "ems-solarflow-admin", "dashboard": True})
-
-
-def test_a_console_check_is_asked_again_only_after_its_time():
-    asked = []
-    now = [0.0]
-    check = ConsoleCheck(answers=lambda port: asked.append(port) or True, clock=lambda: now[0])
-    assert check({"port": 8090}) and check({"port": 8090})
-    assert asked == [8090]
-    now[0] = 31.0
-    check({"port": 8090})
-    assert asked == [8090, 8090]
 
 
 def test_the_host_is_the_loopback_then_the_default_gateway(tmp_path):
@@ -608,7 +611,6 @@ def test_the_dashboard_page_may_ask_the_console_it_names_and_nothing_else(tmp_pa
         policy = _call(f"{base}/")[1]["Content-Security-Policy"]
         assert "connect-src 'self';" in policy
         publish_console_address(config.parent, console_address(8090, 8091))
-        server.console_check = lambda record: True
         policy = _call(f"{base}/", headers={"Host": "ems.local:8080"})[1]["Content-Security-Policy"]
         assert "connect-src 'self' http://ems.local:8090 https://ems.local:8091;" in policy
         assert "connect-src 'self';" in _call(f"{base}/api/ui-config")[1]["Content-Security-Policy"]
@@ -635,3 +637,301 @@ def test_the_console_serves_the_chart_library_the_dashboard_pages_load(console):
     assert status == 200
     assert "javascript" in headers["Content-Type"]
     assert body == (ROOT / "dashboard" / "static" / "uPlot.iife.min.js").read_bytes()
+
+
+@pytest.fixture()
+def short_dir():
+    """A directory with a short path: a socket file's path may hold only about a hundred bytes."""
+
+    path = Path(tempfile.mkdtemp(prefix="ems-"))
+    try:
+        yield path
+    finally:
+        for entry in sorted(path.rglob("*"), reverse=True):
+            entry.rmdir() if entry.is_dir() and not entry.is_symlink() else entry.unlink()
+        path.rmdir()
+
+
+def _installation(root, record=None, key=None):
+    config = root / "config" / "config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text("{}", encoding="utf-8")
+    if key:
+        (config.parent / FORWARDING_KEY_NAME).write_text(key + "\n", encoding="ascii")
+    if record:
+        publish_console_address(config.parent, record)
+    return config
+
+
+def _local_call(path, target, method="GET", headers=None):
+    connection = http.client.HTTPConnection("localhost", timeout=10)
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(10)
+    sock.connect(os.fspath(path))
+    connection.sock = sock
+    try:
+        connection.request(method, target, headers=headers or {})
+        response = connection.getresponse()
+        return response.status, response.read()
+    finally:
+        connection.close()
+
+
+def _dashboard(config, tmp, socket_path):
+    return start_dashboard_server(
+        _Store(), host="127.0.0.1", port=0, config_path=str(config), auth_file=str(tmp / "auth.json"), socket_path=socket_path,
+    )
+
+
+def _stop(server):
+    for running in (getattr(server, "socket_listener", None), server):
+        if running is not None:
+            running.shutdown()
+            running.server_close()
+
+
+def test_the_ems_answers_on_its_socket_file_as_the_same_server(short_dir):
+    config = _installation(short_dir)
+    local = short_dir / "data" / "run" / "dashboard.sock"
+    server = _dashboard(config, short_dir, local)
+    try:
+        assert stat.S_ISSOCK(local.lstat().st_mode)
+        assert stat.S_IMODE(local.lstat().st_mode) == 0o660
+        status, body = _local_call(local, "/api/live")
+        assert (status, json.loads(body)) == (200, {"timestamp": 1})
+        listener = server.socket_listener
+        assert listener.sessions is server.sessions and listener.maintenance_lock is server.maintenance_lock
+        assert listener.https_active is False
+    finally:
+        _stop(server)
+
+
+def test_a_socket_file_no_one_answers_on_is_replaced_and_anything_else_is_left(short_dir):
+    config = _installation(short_dir)
+    local = short_dir / "data" / "run" / "dashboard.sock"
+    local.parent.mkdir(parents=True)
+    left = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    left.bind(os.fspath(local))
+    left.close()
+    server = _dashboard(config, short_dir, local)
+    second = _dashboard(config, short_dir, local)
+    try:
+        assert server.socket_listener is not None
+        assert second.socket_listener is None
+        assert _local_call(local, "/api/live")[0] == 200
+    finally:
+        _stop(second)
+        _stop(server)
+    other = short_dir / "data" / "run" / "other.sock"
+    other.write_text("not a socket", encoding="utf-8")
+    server = _dashboard(config, short_dir, other)
+    try:
+        assert server.socket_listener is None
+        assert other.read_text(encoding="utf-8") == "not a socket"
+        assert _call(f"http://127.0.0.1:{server.server_address[1]}/api/live")[0] == 200
+    finally:
+        _stop(server)
+
+
+def test_the_port_only_points_to_the_console_while_the_console_renews_its_lease(short_dir):
+    """The port gives out no data and takes no sign-in while the console runs; the socket and the console's own key always get answers."""
+
+    record = console_address(8090)
+    config = _installation(short_dir, record=record, key=KEY)
+    local = short_dir / "data" / "run" / "dashboard.sock"
+    server = _dashboard(config, short_dir, local)
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    named = {"port": 8090, "https_port": None}
+    try:
+        status, _, body = _call(f"{base}/api/live")
+        assert (status, json.loads(body)) == (410, {"error": "moved_to_console", "admin_console": named})
+        assert _call(f"{base}/api/auth/login", method="POST", body=b"{}", headers={"Content-Type": "application/json"})[0] == 410
+        assert _call(f"{base}/api/runtime/system", method="PATCH", body=b"{}")[0] == 410
+        assert _call(f"{base}/api/schedule", method="DELETE")[0] == 410
+        config_answer = json.loads(_call(f"{base}/api/ui-config")[2])
+        assert config_answer["signpost"] is True and config_answer["admin_console"] == named
+        assert _call(f"{base}/")[0] == 200
+
+        assert _call(f"{base}/api/live", headers={FORWARDING_KEY_HEADER: KEY})[0] == 200
+        assert "signpost" not in json.loads(_call(f"{base}/api/ui-config", headers={FORWARDING_KEY_HEADER: KEY})[2])
+        assert _call(f"{base}/api/live", headers={FORWARDING_KEY_HEADER: "cd" * 32})[0] == 410
+        assert _local_call(local, "/api/live")[0] == 200
+        assert "signpost" not in json.loads(_local_call(local, "/api/ui-config")[1])
+
+        _age(config.parent / CONSOLE_ADDRESS_NAME, LEASE_SECONDS + 5)
+        assert _call(f"{base}/api/live")[0] == 200
+        assert "signpost" not in json.loads(_call(f"{base}/api/ui-config")[2])
+    finally:
+        _stop(server)
+
+
+class _UnixEms(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
+    daemon_threads = True
+
+    def get_request(self):
+        request, _ = self.socket.accept()
+        return request, ("local", 0)
+
+
+def test_the_console_reaches_the_ems_through_its_socket_and_by_its_port_when_it_has_none(short_dir, fake_ems):
+    local = short_dir / "dashboard.sock"
+    over_socket = _UnixEms(os.fspath(local), FakeEms)
+    over_socket.seen = []
+    over_socket.release = threading.Event()
+    threading.Thread(target=over_socket.serve_forever, daemon=True).start()
+    console = create_server("127.0.0.1", 0)
+    console.ems_upstream = lambda: (EmsUpstream(port=fake_ems.server_address[1], socket=local), KEY)
+    threading.Thread(target=console.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{console.server_address[1]}"
+    try:
+        assert _call(f"{base}/api/live")[0] == 200
+        assert [seen["path"] for seen in over_socket.seen] == ["/api/live"] and fake_ems.seen == []
+        assert over_socket.seen[0]["headers"][FORWARDING_KEY_HEADER] == KEY
+        over_socket.shutdown()
+        over_socket.server_close()
+        assert local.exists()
+        assert _call(f"{base}/api/runtime")[0] == 200
+        assert [seen["path"] for seen in fake_ems.seen] == ["/api/runtime"]
+        local.unlink()
+        assert _call(f"{base}/api/history")[0] == 200
+        assert [seen["path"] for seen in fake_ems.seen] == ["/api/runtime", "/api/history"]
+    finally:
+        over_socket.release.set()
+        console.shutdown()
+        console.server_close()
+
+
+def test_the_console_s_status_finds_the_ems_on_its_socket_wherever_its_port_is_published(short_dir):
+    from admin.deployment import probe_dashboard
+
+    gone = socket.socket()
+    gone.bind(("127.0.0.1", 0))
+    nowhere = f"http://127.0.0.1:{gone.getsockname()[1]}"
+    gone.close()
+    local = short_dir / "dashboard.sock"
+    assert probe_dashboard(nowhere, local, timeout=1.0) is False
+    over_socket = _UnixEms(os.fspath(local), FakeEms)
+    over_socket.seen = []
+    over_socket.release = threading.Event()
+    threading.Thread(target=over_socket.serve_forever, daemon=True).start()
+    try:
+        assert probe_dashboard(nowhere, local, timeout=1.0) is True
+        assert [seen["path"] for seen in over_socket.seen] == ["/api/ui-config"]
+    finally:
+        over_socket.shutdown()
+        over_socket.server_close()
+
+
+def _local_send(path, target, method="POST", headers=None):
+    connection = http.client.HTTPConnection("localhost", timeout=10)
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(10)
+    sock.connect(os.fspath(path))
+    connection.sock = sock
+    try:
+        connection.request(method, target, body=b"{}", headers={"Content-Type": "application/json", **(headers or {})})
+        response = connection.getresponse()
+        return response.status, json.loads(response.read() or b"{}")
+    finally:
+        connection.close()
+
+
+def test_the_ems_takes_the_console_s_word_only_through_its_socket_with_the_key(short_dir):
+    """The console's word replaces a session of the EMS's own only through the socket; the key alone on the port, or no password set, counts for nothing."""
+
+    config = _installation(short_dir, key=KEY)
+    auth = short_dir / "config" / "dashboard-auth.json"
+    local = short_dir / "data" / "run" / "dashboard.sock"
+    server = start_dashboard_server(_Store(), host="127.0.0.1", port=0, config_path=str(config), auth_file=str(auth), socket_path=local)
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    vouched = {CONSOLE_OPERATOR_HEADER: "1", FORWARDING_KEY_HEADER: KEY}
+    try:
+        assert _local_send(local, "/api/auth/refresh", headers=vouched)[0] == 403
+        write_password_file(auth, "pw")
+        status, body = _local_send(local, "/api/auth/refresh", headers=vouched)
+        assert status == 200 and body["authenticated"] is True and "csrf_token" not in body
+        assert _local_call(local, "/api/ui-config", headers={FORWARDING_KEY_HEADER: KEY})[1].find(b'"console_operator": true') >= 0
+        assert _call(f"{base}/api/auth/refresh", method="POST", body=b"{}", headers=vouched)[0] == 401
+        assert json.loads(_call(f"{base}/api/ui-config", headers={FORWARDING_KEY_HEADER: KEY})[2])["console_operator"] is False
+        for unproven in ({CONSOLE_OPERATOR_HEADER: "1"}, {CONSOLE_OPERATOR_HEADER: "1", FORWARDING_KEY_HEADER: "cd" * 32},
+                         {FORWARDING_KEY_HEADER: KEY}, {CONSOLE_OPERATOR_HEADER: "yes", FORWARDING_KEY_HEADER: KEY}):
+            assert _local_send(local, "/api/auth/refresh", headers=unproven)[0] == 401, unproven
+        assert b'"console_operator": false' in _local_call(local, "/api/ui-config")[1]
+    finally:
+        _stop(server)
+
+
+def test_with_the_signpost_switched_off_the_port_answers_in_full_while_the_console_runs(short_dir):
+    """``dashboard.signpost: false`` is for a proxy or VPN that reaches this port and not the console."""
+
+    config = _installation(short_dir, record=console_address(8090))
+    server = start_dashboard_server(
+        _Store(), host="127.0.0.1", port=0, config_path=str(config), auth_file=str(short_dir / "auth.json"), signpost=False,
+    )
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        assert _call(f"{base}/api/live")[0] == 200
+        assert json.loads(_call(f"{base}/api/ui-config")[2]) == {"animation_mode": "normal", "admin_console": None, "console_operator": False}
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_the_socket_server_keeps_what_the_handler_stores_later_on_the_network_server(short_dir):
+    config = _installation(short_dir)
+    server = _dashboard(config, short_dir, short_dir / "data" / "run" / "dashboard.sock")
+    try:
+        listener = server.socket_listener
+        listener._external_device_alias_cache = {"alias": 1}
+        assert server._external_device_alias_cache == {"alias": 1}
+        assert "_external_device_alias_cache" not in vars(listener)
+        assert stat.S_IMODE((short_dir / "data" / "run").lstat().st_mode) == 0o750
+    finally:
+        _stop(server)
+
+
+def test_a_socket_directory_of_its_own_left_open_is_made_private_again(short_dir):
+    config = _installation(short_dir)
+    run = short_dir / "data" / "run"
+    run.mkdir(parents=True)
+    run.chmod(0o777)
+    server = _dashboard(config, short_dir, run / "dashboard.sock")
+    try:
+        assert server.socket_listener is not None
+        assert stat.S_IMODE(run.lstat().st_mode) == 0o750
+    finally:
+        _stop(server)
+
+
+def test_a_socket_directory_others_may_write_to_is_refused(short_dir, monkeypatch):
+    import dashboard.server as dashboard_server
+
+    config = _installation(short_dir)
+    run = short_dir / "data" / "run"
+    run.mkdir(parents=True)
+    run.chmod(0o777)
+    monkeypatch.setattr(dashboard_server.os, "geteuid", lambda: os.getuid() + 1)
+    server = _dashboard(config, short_dir, run / "dashboard.sock")
+    try:
+        assert server.socket_listener is None
+        assert not (run / "dashboard.sock").exists()
+        assert _call(f"http://127.0.0.1:{server.server_address[1]}/api/live")[0] == 200
+    finally:
+        _stop(server)
+
+
+def test_without_a_key_the_console_never_vouches(fake_ems):
+    """``operator`` asks for the header, but the EMS could not prove it, so none is sent."""
+
+    console = create_server("127.0.0.1", 0)
+    console.ems_upstream = lambda: (EmsUpstream(port=fake_ems.server_address[1]), None)
+    threading.Thread(target=console.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{console.server_address[1]}"
+    try:
+        authenticate(base)
+        assert _call(f"{base}/api/live", headers={"Cookie": auth_headers(base, "GET")["Cookie"]})[0] == 200
+        seen = fake_ems.seen[-1]["headers"]
+        assert CONSOLE_OPERATOR_HEADER not in seen and FORWARDING_KEY_HEADER not in seen
+    finally:
+        console.shutdown()
+        console.server_close()

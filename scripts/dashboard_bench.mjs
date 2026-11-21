@@ -103,7 +103,7 @@ async function measure(browserName, browser, base, page, devices, tabs, seconds)
   try {
     await context.addInitScript(() => {
       localStorage.setItem("ems-modern.lang", "en");
-      localStorage.setItem("ems-modern.stayOnDashboard", "1");
+      localStorage.setItem("ems-admin.oneAppSeen", "1");
     });
     const opened = [];
     for (let index = 0; index < tabs; index += 1) {

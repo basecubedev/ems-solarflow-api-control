@@ -1,20 +1,17 @@
 // SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { readStoredText, writeStored } from "../../../shared/state/prefs.svelte.js";
-import { STAY_KEY, consoleTarget } from "../lib/console.js";
+import { consoleTarget } from "../lib/console.js";
 
 export const PROBE_MS = 3000;
 
 /**
  * Where the Admin console answers, as the EMS last named it (it names one
- * only while that console answers as one that carries the dashboard), and whether this
- * browser chose to stay on the EMS's own address anyway, as a wall tablet
- * showing only the dashboard may.
+ * only while that console answers as one that carries the dashboard), and
+ * whether this browser reaches it.
  */
 class ConsoleAddress {
   record = $state.raw(null);
   answers = $state(false);
-  stay = $state(readStoredText(STAY_KEY) === "1");
 }
 
 export const consoleAddress = new ConsoleAddress();
@@ -46,9 +43,4 @@ export function setConsoleRecord(record) {
       () => {},
     )
     .finally(() => clearTimeout(timer));
-}
-
-export function stayHere() {
-  consoleAddress.stay = true;
-  writeStored(STAY_KEY, "1");
 }

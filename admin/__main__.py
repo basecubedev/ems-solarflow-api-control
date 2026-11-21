@@ -10,6 +10,7 @@ self-signed certificate can still fall back to HTTP.
 """
 
 import argparse
+import json
 import os
 import threading
 
@@ -29,7 +30,8 @@ from admin.server import (
     create_server,
     resume_pending_guided_upgrade,
 )
-from dashboard.console_address import console_address, publish_console_address
+from dashboard.console_address import ConsoleLease, console_address, publish_console_address
+from ems.config import normalize_dashboard_config
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8090
@@ -106,6 +108,29 @@ def _print_startup(args, https_enabled):
     print("Read-only discovery; enter a local CIDR to scan. Press Ctrl+C to stop.")
 
 
+ADMIN_SESSIONS_FILE = "admin-sessions.json"
+
+
+SESSION_LIMITS = (1800, 43200)
+
+
+def session_limits():
+    """The sign-in's idle and absolute limits, read at start: the installed EMS's (``dashboard.session_*``) where they are shorter.
+
+    The console's session can change the whole installation, so the EMS's
+    settings only ever tighten it; ``0`` (never ends) and longer limits keep
+    the console's own.
+    """
+
+    try:
+        config = json.loads(detect_install_context().config_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        config = {}
+    dashboard = normalize_dashboard_config(config.get("dashboard") if isinstance(config, dict) else None)
+    configured = (dashboard["session_idle_timeout_seconds"], dashboard["session_absolute_max_seconds"])
+    return tuple(value if 0 < value < limit else limit for value, limit in zip(configured, SESSION_LIMITS))
+
+
 def main(argv=None):
     args = parse_args(argv)
 
@@ -124,7 +149,10 @@ def main(argv=None):
 
         runtime = build_test_runtime(data_dir=default_admin_data_dir())
     else:
-        runtime = create_admin_runtime()
+        runtime = create_admin_runtime(
+            auth_session_path=default_admin_data_dir() / "state" / ADMIN_SESSIONS_FILE,
+            auth_session_limits=session_limits(),
+        )
     runtime.https_configured = bool(args.https)
     runtime.https_port = int(args.https_port)
     publishing = not _env_bool("EMS_ADMIN_TEST_MODE")
@@ -176,9 +204,11 @@ def main(argv=None):
 
     _print_startup(args, https_server is not None)
     if publishing:
-        publish_console_address(
-            detect_install_context().config_path.parent, getattr(runtime, "console_address", None)
-        )
+        record = getattr(runtime, "console_address", None)
+        if record is None:
+            publish_console_address(detect_install_context().config_path.parent, None)
+        else:
+            ConsoleLease(lambda: detect_install_context().config_path.parent, record).start()
 
     threading.Thread(target=http_server.serve_forever, daemon=True).start()
     if https_server is not None:

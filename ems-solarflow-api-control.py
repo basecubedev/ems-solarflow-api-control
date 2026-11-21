@@ -392,6 +392,7 @@ def main():
             from dashboard.server import start_dashboard_server
             from dashboard.sqlite_store import DashboardStore
             from ems.log_buffer import get_log_buffer
+            from ems.paths import resolve_dashboard_socket_path, resolve_data_dir
 
             dashboard_store = DashboardStore(
                 cfg.dashboard_database_path(),
@@ -466,6 +467,8 @@ def main():
                     device_settings=lambda: offered_by_device(devices),
                 ),
                 device_settings=lambda: offered_by_device(devices),
+                socket_path=resolve_dashboard_socket_path(resolve_data_dir(base_dir=base_dir)),
+                signpost=cfg.safe_bool(cfg.DASHBOARD_CONFIG.get("signpost", True), True),
             )
         except Exception as e:
             log_event(

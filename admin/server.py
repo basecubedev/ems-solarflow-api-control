@@ -451,6 +451,16 @@ PUBLIC_POST_PATHS = frozenset(
     }
 )
 
+# The EMS's sign-in paths, which the dashboard's pages call: the console
+# answers them as its own, since its sign-in is the one sign-in of the app.
+SIGN_IN_PATHS = {
+    "/api/auth/status": "/api/admin/auth/status",
+    "/api/auth/login": "/api/admin/auth/login",
+    "/api/auth/logout": "/api/admin/auth/logout",
+    "/api/auth/refresh": "/api/admin/auth/refresh",
+}
+SAFE_METHODS = frozenset({"GET", "HEAD"})
+
 def _validate_new_password(password, confirm):
     """Validate an initial password. Returns an error code or ``None``.
 
@@ -1010,6 +1020,8 @@ def create_admin_runtime(
     operation_coordinator=None,
     docker=None,
     influx_upgrade=None,
+    auth_session_path=None,
+    auth_session_limits=(1800, 43200),
 ):
     """Build the shared Admin service graph once, for one or more listeners.
 
@@ -1185,7 +1197,9 @@ def create_admin_runtime(
         influx_upgrade=influx_upgrade,
         # Shared password, separate Admin session. Setup can be hammered but only
         # succeeds once, so a simple per-address limiter is enough there.
-        auth_sessions=SessionStore(timeout_seconds=1800, absolute_max_seconds=43200),
+        auth_sessions=SessionStore(
+            timeout_seconds=auth_session_limits[0], absolute_max_seconds=auth_session_limits[1], path=auth_session_path
+        ),
         auth_login_limiter=LoginRateLimiter(),
         auth_setup_limiter=LoginRateLimiter(max_failures=10, window_seconds=60),
         admin_instance_id=uuid.uuid4().hex,
@@ -1555,8 +1569,7 @@ class AdminServer(ThreadingHTTPServer):
         self.identity_token_key = runtime.identity_token_key
         self.workflow_lifecycle = runtime.workflow_lifecycle
         self.static_assets = runtime.static_assets
-        self.console_address = getattr(runtime, "console_address", None)
-        self.ems_upstream = getattr(runtime, "ems_upstream", None) or (lambda: installed_ems(self.console_address))
+        self.ems_upstream = getattr(runtime, "ems_upstream", None) or installed_ems
         self.mqtt_live_topics = getattr(runtime, "mqtt_live_topics", None) or LiveTopicSessions()
         self.mqtt_compose = getattr(runtime, "mqtt_compose", None)
         self.mqtt_mapping_brokers = getattr(runtime, "mqtt_mapping_brokers", None) or MappingBrokers(
@@ -1637,6 +1650,7 @@ class AdminHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path, _, query = self.path.partition("?")
+        path = SIGN_IN_PATHS.get(path, path)
         if is_ems_api_path(path):
             self._forward_to_ems()
             return
@@ -1834,7 +1848,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         self._send_json({"error": "not found"}, status=404)
 
     def do_POST(self):
-        path = self.path.split("?", 1)[0]
+        path = SIGN_IN_PATHS.get(self.path.split("?", 1)[0], self.path.split("?", 1)[0])
         if is_ems_api_path(path):
             self._forward_to_ems()
             return
@@ -2168,14 +2182,33 @@ class AdminHandler(BaseHTTPRequestHandler):
         self._send_json({"error": "method_not_allowed"}, status=405)
 
     def _forward_to_ems(self):
-        """Pass the request to the EMS's dashboard server; it decides, this only carries."""
+        """Pass the request to the EMS's dashboard server, saying whether this console's signed-in operator sent it.
 
+        A change from a signed-in browser without the console's CSRF token is
+        refused here, as the console's own changes are; signed out, the EMS
+        decides alone and refuses what needs a sign-in.
+        """
+
+        session = self._vouching_session()
+        if session is not None and self.command not in SAFE_METHODS:
+            token = self.headers.get("X-CSRF-Token", "")
+            if not token or not _hmac_compare(token, session.csrf_token):
+                self.close_connection = True
+                self._send_json({"error": "csrf_failed"}, status=403)
+                return
         try:
             upstream, key = self.server.ems_upstream()
-            forward(self, upstream, key=key, security_headers=SECURITY_HEADERS)
+            forward(self, upstream, key=key, security_headers=SECURITY_HEADERS, operator=session is not None)
         except ForwardingRefusal as refusal:
             self.close_connection = True
             self._send_json({"error": refusal.code, "message": refusal.message}, status=refusal.status)
+
+    def _vouching_session(self):
+        """This browser's console session while the password file is sound, else ``None``."""
+
+        if not admin_auth.admin_auth_status().valid:
+            return None
+        return self._current_admin_session()
 
     def do_DELETE(self):
         path = self.path.split("?", 1)[0]

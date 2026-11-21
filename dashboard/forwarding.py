@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Which client a request forwarded by the Admin console comes from.
+"""Which client a request forwarded by the Admin console comes from, and whether the console vouches for it.
 
 The Admin console serves the one browser app and forwards the EMS's API to the
 dashboard server, so every forwarded request reaches the EMS from the Admin's
@@ -22,6 +22,7 @@ import threading
 FORWARDING_KEY_NAME = "admin-forwarding.key"
 FORWARDED_FOR_HEADER = "X-Forwarded-For"
 FORWARDING_KEY_HEADER = "X-EMS-Forwarding-Key"
+CONSOLE_OPERATOR_HEADER = "X-EMS-Console-Operator"
 _KEY_BYTES = 32
 
 
@@ -102,6 +103,25 @@ def _load_key(path):
     return value
 
 
+def sent_by_console(headers, key):
+    """Whether the request carries the installation's forwarding key, so the Admin console sent it."""
+
+    presented = headers.get(FORWARDING_KEY_HEADER)
+    if not key or not presented:
+        return False
+    return hmac.compare_digest(presented.encode("utf-8", "replace"), key.encode("ascii"))
+
+
+def vouched_by_console(headers, key):
+    """Whether the Admin console says its signed-in operator sent the request, proven by its key.
+
+    The console is the one sign-in: it checks its own session, and its CSRF
+    token for a change, before it says so (``admin.ems_forwarding``).
+    """
+
+    return headers.get(CONSOLE_OPERATOR_HEADER) == "1" and sent_by_console(headers, key)
+
+
 def forwarded_client(headers, remote, key):
     """The client a request names, when the forwarding key proves the Admin sent it.
 
@@ -110,10 +130,7 @@ def forwarded_client(headers, remote, key):
     """
 
     claimed = headers.get(FORWARDED_FOR_HEADER)
-    presented = headers.get(FORWARDING_KEY_HEADER)
-    if not key or not claimed or not presented:
-        return remote
-    if not hmac.compare_digest(presented.encode("utf-8", "replace"), key.encode("ascii")):
+    if not claimed or not sent_by_console(headers, key):
         return remote
     try:
         return str(ipaddress.ip_address(claimed.strip()))

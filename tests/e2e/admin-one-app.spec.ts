@@ -3,8 +3,11 @@
 // The console is the product's one address: the dashboard's pages and its own
 // in one menu. The dashboard's pages read the EMS through the console -- here
 // the dashboard preview server, which playwright.config.ts starts beside the
-// test-mode Admin -- and are readable signed out; the console's pages need its
-// sign-in, and that one sign-in signs in to the EMS as well.
+// test-mode Admin -- and are readable signed out; the console's pages and the
+// dashboard's operator pages need the console's sign-in, the only one. That
+// the console vouches for its operator to a real EMS, and only through its
+// socket, is held by tests/test_ems_forwarding.py; the preview server takes it
+// as given.
 import { expect, test, ADMIN_PASSWORD } from "./fixtures/admin";
 import { request as apiRequest, type Page } from "@playwright/test";
 
@@ -74,22 +77,56 @@ test.describe("One app for the dashboard and the console", { tag: ["@authority"]
     await expect(page.locator('aside.sidebar a[data-page="diagnostics"]')).toHaveAttribute("aria-current", "page");
   });
 
-  test("signed out of the console, a dashboard page's sign-in is the one sign-in, and an EMS session of its own is ended", async ({ page, baseURL }) => {
+  test("signed out, a dashboard page's sign-in is the console's, and the menu's sign-out ends it for every page", async ({ page, baseURL }) => {
     await installConfig(baseURL);
-    let emsSignedIn = true;
-    await page.route("**/api/auth/status", (route) =>
-      route.fulfill({ json: { auth_configured: true, authenticated: emsSignedIn, csrf_token: "preview-csrf-token", write_mode_available: true, write_mode_active: emsSignedIn } }),
-    );
-    const ended = page.waitForRequest((sent) => sent.url().endsWith("/api/auth/logout") && sent.method() === "POST");
-    await page.route("**/api/auth/logout", (route) => {
-      emsSignedIn = false;
-      return route.fulfill({ json: { ok: true } });
-    });
     await page.goto("/#/schedule");
-    await ended;
     await expect(page.locator(".content").getByRole("button", { name: "Sign in" })).toBeVisible();
     await page.locator(".content").getByRole("button", { name: "Sign in" }).click();
-    await expect(page.getByTestId("sign-in-screen")).toHaveAttribute("data-mode", "login");
+    await signIn(page);
+    await expect(page.getByRole("button", { name: "New rule" })).toBeVisible();
+    await expect(page.locator('aside.sidebar a[data-page="schedule"] .lock')).toHaveCount(0);
+
+    await page.getByTestId("sign-out").click();
+    await expect(page.locator(".content").getByRole("button", { name: "Sign in" })).toBeVisible();
+    await expect(page.locator('aside.sidebar a[data-page="schedule"] .lock')).toBeVisible();
+  });
+
+  test("a browser meets the one app once, and its notice stays away once understood", async ({ browser, baseURL }) => {
+    const context = await browser.newContext({ baseURL });
+    const fresh = await context.newPage();
+    await fresh.goto("/");
+    const notice = fresh.getByTestId("one-app-notice");
+    await expect(notice).toContainText("Dashboard and Admin are one app now");
+    await expect(notice).toContainText("old dashboard address");
+    await fresh.getByTestId("one-app-dismiss").click();
+    await expect(notice).toHaveCount(0);
+    await fresh.reload();
+    await expect(fresh.locator("aside.sidebar nav")).toBeVisible();
+    await expect(fresh.getByTestId("one-app-notice")).toHaveCount(0);
+    await context.close();
+  });
+
+  test("an EMS that does not take the console's sign-in says why: older, or reached without its socket", async ({ page, baseURL }) => {
+    await installConfig(baseURL);
+    await page.route("**/api/ui-config", async (route) => {
+      const response = await route.fetch();
+      const { console_operator: _, ...older } = await response.json();
+      await route.fulfill({ response, json: older });
+    });
+    await page.goto("/#/energy");
+    await expect(page.getByTestId("ems-too-old")).toContainText("older than the console");
+    await page.unroute("**/api/ui-config");
+    await page.route("**/api/ui-config", async (route) => {
+      const response = await route.fetch();
+      await route.fulfill({ response, json: { ...(await response.json()), console_operator: false } });
+    });
+    await page.reload();
+    await expect(page.getByTestId("ems-unlinked")).toContainText("socket file");
+    await expect(page.getByTestId("ems-too-old")).toHaveCount(0);
+    await page.unroute("**/api/ui-config");
+    await page.reload();
+    await expect(page.getByTestId("ems-too-old")).toHaveCount(0);
+    await expect(page.getByTestId("ems-unlinked")).toHaveCount(0);
   });
 
   test("a dashboard page the EMS answered stays open while the EMS does not answer, and says so", async ({ page, baseURL }) => {

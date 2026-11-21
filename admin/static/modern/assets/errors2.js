@@ -1,0 +1,3 @@
+/* SPDX-FileCopyrightText: 2026 basecubedev */
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+var e=Object.freeze([`invalid_password`,`login_rate_limited`,`not_authenticated`,`csrf_failed`,`auth_not_configured`,`maintenance_busy`,`diagnose_busy`,`request_too_large`]);function t(t,n){let r=t?.payload||{},i=typeof r.message==`string`?r.message.trim():``,a=t?.code||r.error||``;return e.includes(a)?n(`error.${a}`):i||n(`error.generic`,{code:a||`unknown`})}export{t};

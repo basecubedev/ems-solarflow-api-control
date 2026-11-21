@@ -45,6 +45,7 @@ const DEFAULT_PREFS = {
   "ems-modern.theme": "graphite",
   "ems-modern.density": "normal",
   "ems-modern.motion": "off",
+  "ems-admin.oneAppSeen": "1",
 };
 
 const upgradeDemo = JSON.parse(readFileSync(path.join(FIXTURES, "guided_upgrade_demo.json"), "utf8"));

@@ -45,23 +45,22 @@ test.describe("Modern dashboard @smoke", () => {
     await expect(page.getByTestId("browser-too-old")).toContainText("Firefox 125");
   });
 
-  test("with an Admin console, this address says where the app is and goes there, unless the reader stays", async ({ page, context, baseURL }) => {
+  test("with an Admin console, this address only shows the way to the app, reads nothing, and goes there", async ({ page, context, baseURL }) => {
     await context.addCookies([{ name: "ems-preview-console", value: "8093", url: baseURL as string }]);
     await page.route("http://127.0.0.1:8093/**", (route) => route.fulfill({ status: 200, contentType: "text/html", body: "<title>console</title>" }));
+    const asked: string[] = [];
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.port !== "8093" && url.pathname.startsWith("/api/")) asked.push(url.pathname);
+    });
     await page.goto("/#/energy", { waitUntil: "domcontentloaded" });
-    const notice = page.getByTestId("moved-notice");
-    await expect(notice).toContainText("http://127.0.0.1:8093");
+    await expect(page.getByTestId("signpost")).toBeVisible();
+    await expect(page.getByTestId("moved-notice")).toContainText("http://127.0.0.1:8093");
     await expect(page.getByTestId("moved-go")).toHaveAttribute("href", "http://127.0.0.1:8093/#/energy");
-    await expect(page.getByTestId("open-console")).toHaveAttribute("href", "http://127.0.0.1:8093/#/energy");
+    await expect(page.getByTestId("ems-state")).toHaveCount(0);
+    await expect(page.getByRole("navigation")).toHaveCount(0);
     await page.waitForURL("http://127.0.0.1:8093/#/energy", { timeout: 15_000 });
-
-    await page.goto("/#/energy", { waitUntil: "domcontentloaded" });
-    await page.getByTestId("moved-stay").click();
-    await expect(page.getByTestId("moved-notice")).toHaveCount(0);
-    expect(await page.evaluate(() => localStorage.getItem("ems-modern.stayOnDashboard"))).toBe("1");
-    await page.reload({ waitUntil: "domcontentloaded" });
-    await expect(page.getByTestId("ems-state")).toBeVisible();
-    await expect(page.getByTestId("moved-notice")).toHaveCount(0);
+    expect(asked).toEqual(["/api/ui-config"]);
   });
 
   test("a console the EMS names but this browser does not reach is offered, never opened by itself", async ({ page, context, baseURL }) => {
@@ -103,7 +102,7 @@ test.describe("Modern dashboard @smoke", () => {
 
   test("without an Admin console, the menu leads to installing one", async ({ page }) => {
     await openModern(page);
-    await expect(page.getByTestId("moved-notice")).toHaveCount(0);
+    await expect(page.getByTestId("signpost")).toHaveCount(0);
     await expect(page.getByTestId("install-console")).toHaveAttribute("href", /\/user\/admin-console\.html$/);
   });
 

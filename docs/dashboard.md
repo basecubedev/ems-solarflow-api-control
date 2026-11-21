@@ -6,6 +6,11 @@ The EMS includes an optional standalone dashboard at:
 http://<ems-host>:8080
 ```
 
+With an Admin Console, the dashboard's pages are part of the console's app at
+`http://<host>:8090`, and while the console runs in the host's network this
+port only points there
+(`dashboard.signpost`, see [Configuration](technical/configuration.md)).
+
 The dashboard is read-only by default. Runtime write mode is unavailable until a
 local dashboard password is configured. There is no default password. The
 password can be created two ways: on the **Admin Console** first start (in the
@@ -543,6 +548,12 @@ be handled with a VPN, reverse proxy, strong TLS, and external access control.
 Do not expose the built-in dashboard directly to the public internet.
 
 ## API
+
+While an Admin Console runs in the host's network, this port refuses every API
+path below except
+`/api/ui-config` with `410` and `{"error": "moved_to_console"}`; the same API is
+reached through the console at `http://<host>:8090/api/...`. A reverse proxy or
+script that must keep using this port sets `dashboard.signpost` to `false`.
 
 Live snapshot:
 
@@ -1116,4 +1127,7 @@ opt-in) and negative values are rejected back to the secure default:
 
 The secure defaults are 30 min / 12 h. Setting either to `0` weakens the
 "walk away → logged out" property and the stolen-cookie bound; it is an explicit
-per-deployment operator choice.
+per-deployment operator choice. With an Admin Console, its sign-in is the one
+sign-in; it takes the two limits when it starts where they are shorter than its
+own 30 min / 12 h, and it keeps its sessions across a restart, so an update
+does not sign you out.

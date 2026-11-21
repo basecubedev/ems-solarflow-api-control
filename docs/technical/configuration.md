@@ -462,13 +462,24 @@ timeout that slides on genuine user activity. `dashboard.session_absolute_max_se
 For both, `0` disables the bound (an explicit "infinite" opt-in) and negative
 values are rejected back to the default. The secure defaults are 30 min / 12 h;
 disabling a bound weakens the "walk away → logged out" and stolen-cookie
-protections.
+protections. They also tighten the one sign-in of the Admin Console, which
+reads them when it starts and takes a value only where it is shorter than its
+own 30 min / 12 h (never `0`), and they time the EMS's own sign-in on port
+8080 while the console is down.
 
 `dashboard.log_buffer_lines` (default `5000`) sizes the in-memory log ring buffer
 that backs the dashboard's Logs page. It is count-based, so quieter systems retain a longer
 window; ~5000 lines covers well over 15 minutes at typical settings and costs a
 few MB of RAM. `dashboard.log_redaction` (default `false`) masks secret-looking
 values in served log lines; enable it for shared/remote deployments.
+
+`dashboard.signpost` (default `true`) makes the dashboard's own port a
+signpost while the Admin console runs (it renews `config/admin-console.json`):
+the port then shows only the way to the console, refuses every API path but
+`/api/ui-config` with `410 moved_to_console`, and takes no sign-in. Set it to
+`false` where a reverse proxy, a VPN or a firewall rule reaches the dashboard
+at this port but not the console; the port then answers in full as before.
+The console reaches the EMS through `data/run/dashboard.sock` either way.
 
 `dashboard.animation_mode` (default `normal`) controls how much the animated
 energy-flow view animates. It is purely visual and never affects control, auth

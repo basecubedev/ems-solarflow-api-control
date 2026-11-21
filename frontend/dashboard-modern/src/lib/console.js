@@ -8,7 +8,6 @@ import { DOCS_SITE } from "../../../shared/lib/about.js";
  * host name is the one this browser used, so only the ports come from the
  * EMS. Pure.
  */
-export const STAY_KEY = "ems-modern.stayOnDashboard";
 export const REDIRECT_SECONDS = 5;
 export const INSTALL_CONSOLE = `${DOCS_SITE}/user/admin-console.html`;
 

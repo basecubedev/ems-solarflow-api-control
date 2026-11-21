@@ -26,6 +26,16 @@
       <Status tone="c-warn" icon={ICONS[ems.state] || "triangle-alert"} text={t(`ems.${ems.state}`)} />
       <a class="btn secondary small" href={href(NEXT[ems.state])}>{t(`ems.${ems.state}.next`)}</a>
     </div>
+  {:else if ems.state === "running" && ems.vouch === "older"}
+    <div class="span-12 interrupted" role="status" data-testid="ems-too-old">
+      <Status tone="c-warn" icon="circle-arrow-up" text={t("ems.tooOld")} />
+      <a class="btn secondary small" href={href("updates")}>{t("ems.tooOld.next")}</a>
+    </div>
+  {:else if ems.state === "running" && ems.vouch === "unlinked"}
+    <div class="span-12 interrupted" role="status" data-testid="ems-unlinked">
+      <Status tone="c-warn" icon="plug-zap" text={t("ems.unlinked")} />
+      <a class="btn secondary small" href={href("services")}>{t("ems.ems_unreachable.next")}</a>
+    </div>
   {/if}
   {@render children()}
 {:else if ems.state === "checking"}

@@ -72,6 +72,12 @@ type AdminFixtures = {
 };
 
 export const test = base.extend<AdminFixtures>({
+  // A browser that already saw the one-time "one app" notice, so no spec has
+  // to step around it; the spec about the notice opens a context of its own.
+  page: async ({ page }, use) => {
+    await page.addInitScript(() => localStorage.setItem("ems-admin.oneAppSeen", "1"));
+    await use(page);
+  },
   freshAdmin: [
     async ({ baseURL }, use) => {
       const ctx = await request.newContext({ baseURL });

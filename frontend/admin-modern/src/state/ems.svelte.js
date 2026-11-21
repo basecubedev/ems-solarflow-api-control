@@ -3,25 +3,24 @@
 import { getJson } from "../../../shared/lib/api.js";
 import { emsRefusal } from "../lib/ems.js";
 import { startLive } from "../../../dashboard-modern/src/state/live.svelte.js";
-import {
-  loadAuth as loadEmsAuth,
-  login as emsLogin,
-  logout as emsLogout,
-  watchActivity as watchEmsActivity,
-  watchSession as watchEmsSession,
-} from "../../../dashboard-modern/src/state/auth.svelte.js";
 
 export const EMS_CHECK_MS = 15000;
 
 /**
  * Whether the EMS answers through this console: "checking" until the first
  * answer, "running", or the refusal that says why not. The dashboard's live
- * feed and its session start once it answers, and not before, so a console
- * without an EMS asks nothing of one.
+ * feed starts once it answers, and not before, so a console without an EMS
+ * asks nothing of one. Its session is the console's (``App.svelte``), which the
+ * EMS takes only as ``console_operator`` in its /api/ui-config says: an EMS
+ * older than this console does not name it ("older"), and one this console
+ * reaches without its socket file, or that cannot read the console's key,
+ * names it false ("unlinked"). Its pages then read, but nothing on them
+ * needing a sign-in works.
  */
 class Ems {
   state = $state("checking");
   answered = $state(false);
+  vouch = $state("linked");
 }
 
 export const ems = new Ems();
@@ -31,15 +30,13 @@ let timer = null;
 
 export async function checkEms() {
   try {
-    await getJson("/api/ui-config");
+    const config = await getJson("/api/ui-config");
+    ems.vouch = config?.console_operator === true ? "linked" : config && "console_operator" in config ? "unlinked" : "older";
     ems.state = "running";
     ems.answered = true;
     if (started) return;
     started = true;
     startLive();
-    loadEmsAuth();
-    watchEmsSession();
-    watchEmsActivity();
   } catch (error) {
     ems.state = emsRefusal(error);
   }
@@ -51,25 +48,4 @@ export function watchEms() {
   timer = setInterval(() => {
     if (!document.hidden) checkEms();
   }, EMS_CHECK_MS);
-}
-
-/**
- * One sign-in for both: the console's password is the EMS's, so the EMS is
- * signed in with it too. Each server checks it and keeps its own session; an
- * EMS that does not answer now asks for it again on its own pages.
- */
-export async function signInToEms(password) {
-  try {
-    await emsLogin(password);
-  } catch {
-    await loadEmsAuth();
-  }
-}
-
-export async function signOutOfEms() {
-  try {
-    await emsLogout();
-  } catch {
-    await loadEmsAuth();
-  }
 }

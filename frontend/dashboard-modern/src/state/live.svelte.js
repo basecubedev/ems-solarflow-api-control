@@ -85,21 +85,25 @@ export async function loadRuntime() {
   return live.runtime;
 }
 
+function applyUiConfig(config) {
+  if (config && typeof config.animation_mode === "string") {
+    prefs.serverAnimation = config.animation_mode;
+    applyDocumentPrefs();
+  }
+  setConsoleRecord(config?.admin_console ?? null);
+  live.uiConfigLoaded = true;
+}
+
 async function loadUiConfig() {
   try {
-    const config = await getJson("/api/ui-config");
-    if (config && typeof config.animation_mode === "string") {
-      prefs.serverAnimation = config.animation_mode;
-      applyDocumentPrefs();
-    }
-    setConsoleRecord(config?.admin_console ?? null);
-    live.uiConfigLoaded = true;
+    applyUiConfig(await getJson("/api/ui-config"));
   } catch {
     prefs.serverAnimation = "normal";
   }
 }
 
-export function startLive() {
+/** Start reading the EMS; ``config`` is /api/ui-config when the page already has it. */
+export function startLive(config = null) {
   if (transport) return;
   transport = createLiveTransport({
     onSnapshot: accept,
@@ -119,7 +123,8 @@ export function startLive() {
     if (!document.hidden) loadRuntime();
   }, RUNTIME_REFRESH_MS);
   stopAuthWatch = retryRuntimeOnSignIn();
-  loadUiConfig();
+  if (config) applyUiConfig(config);
+  else loadUiConfig();
 }
 
 /**

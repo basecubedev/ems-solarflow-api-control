@@ -6,11 +6,12 @@ Console. It shows what the EMS is measuring, what it decided and why, and, once
 you sign in, lets you change a small set of runtime values, set up schedules and
 use the operator tools.
 
-The EMS keeps its own copy of the dashboard at port `8080`. Opened there
-while an Admin Console answers on this host, it says where the app is and,
-once this browser reaches the console too, goes there after five seconds, to
-the same page; **Stay on this address** keeps this browser on port 8080, as a
-tablet on the wall that only shows the dashboard may. Otherwise, as without an
+The EMS keeps its own copy of the dashboard at port `8080`. While an Admin
+Console runs on this host in its network, as the installer sets it up, port
+8080 is only a signpost: it shows where the
+app is and, once this browser reaches the console too, goes there after five
+seconds, to the same page. It shows no data and takes no sign-in then, so a
+bookmark or a tablet on the wall moves to `http://<host>:8090`. Without an
 Admin Console (a [Docker Bootstrap](../docker-bootstrap.md) installation) or
 while it is down, port 8080 is the dashboard, with **Maintenance** and
 **Diagnose** in its menu and **About the Admin console** at the foot of the

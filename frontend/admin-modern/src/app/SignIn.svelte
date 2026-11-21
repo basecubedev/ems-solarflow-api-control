@@ -9,7 +9,6 @@
   import { prefs, setPref, LANGUAGES } from "../state/prefs.svelte.js";
   import { auth, createPassword, loadAuth, login, SESSION_ERRORS } from "../state/auth.svelte.js";
   import { errorView } from "../lib/errors.js";
-  import { signInToEms } from "../state/ems.svelte.js";
 
   /**
    * The one sign-in for the console and the EMS. ``onContinue``, when given,
@@ -41,7 +40,6 @@
     try {
       if (mode === "create") await createPassword(password, confirm);
       else await login(password);
-      await signInToEms(password);
       password = "";
       confirm = "";
     } catch (err) {

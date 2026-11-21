@@ -280,7 +280,11 @@ class PreviewHandler(BaseHTTPRequestHandler):
         path = parsed.path
 
         if path == "/api/ui-config":
-            self._send_json({"animation_mode": "normal", "admin_console": self._console_address()})
+            console = self._console_address()
+            payload = {"animation_mode": "normal", "admin_console": console, "console_operator": True}
+            if console is not None:
+                payload["signpost"] = True
+            self._send_json(payload)
             return
 
         if path == "/api/live":
@@ -373,7 +377,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
     def _console_address(self):
         """The Admin console a request's cookie ``ems-preview-console=<port>`` names, else none.
 
-        Only that browser context sees a console, and with it the notice that
+        Only that browser context sees a console, and with it the signpost that
         sends the reader there, so the other pages' captures stay as they are.
         """
 

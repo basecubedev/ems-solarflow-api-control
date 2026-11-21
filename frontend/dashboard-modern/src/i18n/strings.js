@@ -28,7 +28,6 @@ export const STRINGS = {
   "moved.text": s("The dashboard and the Admin console are one app now, at {address}. This address keeps working while that one is down.", "Dashboard und Admin-Console sind jetzt eine App, unter {address}. Diese Adresse funktioniert weiter, solange jene nicht erreichbar ist.", "Het dashboard en de Admin-console zijn nu één app, op {address}. Dit adres blijft werken zolang dat andere niet bereikbaar is.", "Le tableau de bord et la console Admin forment désormais une seule application, à {address}. Cette adresse reste utilisable tant que l’autre ne répond pas."),
   "moved.countdown": s("Opening it in {n} s.", "Wird in {n} s geöffnet.", "Wordt over {n} s geopend.", "Ouverture dans {n} s."),
   "moved.go": s("Open it now", "Jetzt öffnen", "Nu openen", "Ouvrir maintenant"),
-  "moved.stay": s("Stay on this address", "Auf dieser Adresse bleiben", "Op dit adres blijven", "Rester à cette adresse"),
   "nav.diagnose": s("Diagnose", "Diagnose", "Diagnose", "Diagnostic"),
   "nav.logs": s("Logs", "Protokolle", "Logboek", "Journaux"),
   "nav.maintenance": s("Maintenance", "Wartung", "Onderhoud", "Maintenance"),
