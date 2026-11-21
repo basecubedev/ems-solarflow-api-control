@@ -324,6 +324,7 @@
         {:else if reason}
           <p class="note fault"><Icon name="circle-x" /><span lang="en">{reason}</span></p>
         {/if}
+        {#each warnings as warning, index (index)}<p class="note warn" data-testid="upgrade-failed-warning"><Icon name="triangle-alert" /><span lang="en">{warning}</span></p>{/each}
         <p class="muted">{upgrade.stage === "refused" || unchanged ? t("upgrade.nothingChanged") : t("upgrade.mayHaveChanged")}</p>
         {#if own?.worker_active === true}<p class="note"><Spinner />{t("upgrade.stillWorking")}</p>{/if}
       {/if}

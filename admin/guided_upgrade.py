@@ -21,6 +21,16 @@ from pathlib import Path
 from ems import config as ems_config
 
 from admin.compose_ports import current_publishes
+from admin.container_actions import (
+    ALIGN_IMAGE_UNCONFIRMED,
+    ALIGN_NOT_MANAGED,
+    ALIGN_NOT_RUNNING,
+    ALIGN_RECREATED,
+    ALIGN_UNCHANGED,
+    ALIGN_UNDETERMINED,
+    INFLUX_SERVICE,
+    align_bundled_influx,
+)
 from admin.deployment import EMS_SERVICE, DockerCli, DockerCompose, DockerError
 from admin.ems_cli import EmsCliDiagnostics
 from admin.ems_tool import EmsToolRunner, mode_detail
@@ -51,12 +61,55 @@ _PULL_DIGEST_MISMATCH = (
 EMS_IMAGE_RE = re.compile(
     r"ghcr\.io/basecubedev/ems-solarflow-api-control[@:][^\s\"'{}]+"
 )
-# Said once, when the update moves the bundled InfluxDB's port off the network.
+# Said once, when the update rewrites the bundled InfluxDB's port line. Where the
+# port is published follows EMS_INFLUX_PUBLISH in .env, which the Admin does not
+# read, so the notice names that condition rather than claim an address.
 INFLUX_PORT_CLOSED = (
-    "InfluxDB is now published on this host only (127.0.0.1:8086) once its "
-    "container is next recreated. To reach it from another machine, for a "
-    "Grafana, set EMS_INFLUX_PUBLISH=8086 in .env beside docker-compose.yml."
+    "docker-compose.yml now publishes InfluxDB's port as EMS_INFLUX_PUBLISH in "
+    ".env says, and on this host only (127.0.0.1:8086) where .env does not set "
+    "it; InfluxDB runs that way now. To reach it from another machine, for a "
+    "Grafana, set EMS_INFLUX_PUBLISH=8086 in .env beside docker-compose.yml, "
+    "then run docker compose --profile with-analytics up -d influxdb there."
 )
+INFLUX_PORT_CLOSED_LATER = (
+    "docker-compose.yml now publishes InfluxDB's port as EMS_INFLUX_PUBLISH in "
+    ".env says, and on this host only (127.0.0.1:8086) where .env does not set "
+    "it; InfluxDB takes that once Docker Compose next creates its container. To "
+    "keep reaching it from another machine, for a Grafana, set "
+    "EMS_INFLUX_PUBLISH=8086 in .env beside docker-compose.yml."
+)
+INFLUX_RECREATE_FAILED = (
+    "InfluxDB could not be recreated to match its entry in docker-compose.yml "
+    "and may be stopped. Start it with docker compose --profile with-analytics "
+    "up -d influxdb beside docker-compose.yml."
+)
+_INFLUX_ALIGNMENT = {
+    ALIGN_RECREATED: (
+        "ok",
+        "InfluxDB was recreated: Docker Compose found it no longer matched its entry in docker-compose.yml.",
+    ),
+    ALIGN_UNCHANGED: ("skipped", "InfluxDB already matches its entry in docker-compose.yml."),
+    ALIGN_NOT_RUNNING: (
+        "skipped",
+        "InfluxDB is not running; it takes its entry when Docker Compose next creates its container.",
+    ),
+    ALIGN_NOT_MANAGED: (
+        "skipped",
+        "docker-compose.yml names no InfluxDB 2.x version the Admin manages, so InfluxDB is left to you.",
+    ),
+    ALIGN_IMAGE_UNCONFIRMED: (
+        "warning",
+        "InfluxDB was left as it is: Docker Compose would recreate it to match its entry in "
+        "docker-compose.yml, but the image the file names could not be confirmed as the one it "
+        "runs now, so recreating it might change what runs. Recreate it with docker compose "
+        "--profile with-analytics up -d influxdb once that image is the one you want.",
+    ),
+    ALIGN_UNDETERMINED: (
+        "warning",
+        "InfluxDB was left as it is: whether it runs as docker-compose.yml describes it could not be read.",
+    ),
+}
+
 # The created backup archive path printed by ``backup create`` (``.tar.gz`` or
 # its encrypted ``.tar.gz.enc`` variant).
 _BACKUP_ARCHIVE_RE = re.compile(r"(\S+\.tar\.gz(?:\.enc)?)")
@@ -119,6 +172,7 @@ _PLAN_LABELS = {
     "config_write": "Update config",
     "pull_image": "Pull image",
     "update_compose": "Update compose",
+    "align_influxdb": "Bring InfluxDB in line with docker-compose.yml",
     "recreate_ems": "Recreate EMS",
     "diagnostics": "Run diagnostics",
 }
@@ -179,6 +233,7 @@ def plan_upgrade_steps(options):
         keys.append("pull_image")
     keys.append("update_compose")
     if options["recreate"]:
+        keys.append("align_influxdb")
         keys.append("recreate_ems")
     if options["diagnostics"]:
         keys.append("diagnostics")
@@ -788,11 +843,14 @@ class GuidedUpgradeExecutor:
         steps.append(step)
         if step["status"] == "error":
             return failed()
-        if "influxdb" in step.get("ports", ()):
-            warnings.append(INFLUX_PORT_CLOSED)
+        moved_influx = INFLUX_SERVICE in step.get("ports", ())
 
-        # 07 recreate_ems
+        # 07 align_influxdb, then recreate_ems: EMS starts last, against the
+        # InfluxDB it writes to, as the Maintenance container sync orders them.
         if options["recreate"]:
+            aligned, notices = self._align_influxdb(context, moved_influx)
+            steps.append(aligned)
+            warnings.extend(notices)
             try:
                 self.compose.up(
                     str(context.install_root), services=(EMS_SERVICE,), force_recreate=True
@@ -1059,6 +1117,28 @@ class GuidedUpgradeExecutor:
         if moved:
             return _step("update_compose", "ok", "Update compose", image=runtime_image, ports=list(moved))
         return _step("update_compose", "ok", "Update compose", image=runtime_image)
+
+    def _align_influxdb(self, context, moved_port):
+        """The bundled InfluxDB brought in line with the compose file this upgrade wrote.
+
+        Returns the step and the notices the owner needs: what was left undone,
+        and where InfluxDB's port is published when this upgrade moved it.
+        """
+
+        label = _PLAN_LABELS["align_influxdb"]
+        try:
+            outcome = align_bundled_influx(context, self.compose, self.docker_cli)
+        except DockerError as exc:
+            step = _step("align_influxdb", "warning", label, detail=exc.message, code=exc.code)
+            return step, [INFLUX_RECREATE_FAILED, *([INFLUX_PORT_CLOSED_LATER] if moved_port else [])]
+        status, detail = _INFLUX_ALIGNMENT[outcome]
+        step = _step("align_influxdb", status, label, detail=detail, outcome=outcome)
+        notices = [detail] if status == "warning" else []
+        if moved_port and outcome == ALIGN_RECREATED:
+            notices.append(INFLUX_PORT_CLOSED)
+        elif moved_port and outcome != ALIGN_UNCHANGED:
+            notices.append(INFLUX_PORT_CLOSED_LATER)
+        return step, notices
 
     def _run_diagnostics(self, steps, warnings):
         try:

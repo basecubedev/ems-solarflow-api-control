@@ -21,10 +21,11 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from admin.deployment import EMS_SERVICE, DockerCompose
+from admin.deployment import EMS_SERVICE, DockerCompose, DockerError
 from admin.install_context import detect_install_context
 from admin.maintenance import run_maintenance_overview
 from ems.config import resolve_influxdb_config
+from ems.influx_image import compose_image, parse_image
 from ems.influx_setup import (
     DOCKER_FIRST_SECRET_FILE,
     INFLUX_READY_TIMEOUT_SECONDS,
@@ -75,6 +76,17 @@ INFLUX_SYNC_TIMEOUT_SECONDS = (
 DESIRED_RUNNING = "running"
 DESIRED_STOPPED = "stopped"
 DESIRED_UNAVAILABLE = "unavailable"
+
+ALIGN_RECREATED = "recreated"
+ALIGN_UNCHANGED = "unchanged"
+ALIGN_NOT_RUNNING = "not_running"
+ALIGN_NOT_MANAGED = "not_managed"
+ALIGN_IMAGE_UNCONFIRMED = "image_unconfirmed"
+ALIGN_UNDETERMINED = "undetermined"
+
+# A container Docker keeps going: running, or restarted by its policy after a
+# crash, which would bring the old definition back each time.
+_LIVE_STATES = frozenset({"running", "restarting"})
 
 CONFIG_STATE_PENDING = "pending"
 CONFIG_STATE_CURRENT = "current"
@@ -651,6 +663,54 @@ def _ensure_influx_data_dir(workspace):
     # Admin starts the bundled InfluxDB directly (not via ``influx init``), so the
     # host-side bind-mount target must exist first. Idempotent; never deletes.
     Path(workspace, "data", "influxdb").mkdir(parents=True, exist_ok=True)
+
+
+def align_bundled_influx(context, compose, docker):
+    """Bring a live bundled InfluxDB in line with its entry in docker-compose.yml.
+
+    Compose's own fingerprint decides: the container is recreated only when the
+    stamp it was created with differs from the one its entry gives now. Nothing
+    else is touched. A stopped InfluxDB stays stopped and takes its entry when
+    Compose next creates its container. An image the Admin does not manage
+    (``influxdb:latest``, or no InfluxDB 2.x entry at all) is left to the
+    operator, and so is a recreate that would run other image content than the
+    container runs now, as after its tag was pulled again: that would change
+    what runs without the backup the InfluxDB upgrade takes first.
+
+    Returns one of the ``ALIGN_*`` outcomes. A Docker failure while deciding is
+    ``ALIGN_UNDETERMINED``; a failed recreate raises
+    :class:`admin.deployment.DockerError`, since InfluxDB may then be down.
+    """
+
+    try:
+        named = compose_image(Path(context.compose_path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return ALIGN_UNDETERMINED
+    if named is None or parse_image(named) is None:
+        return ALIGN_NOT_MANAGED
+    workspace = context.install_root
+    try:
+        live = next(
+            (
+                row for row in compose.ps(workspace, include_stopped=True)
+                if row.get("service") == INFLUX_SERVICE and row.get("state") in _LIVE_STATES
+            ),
+            None,
+        )
+        if live is None:
+            return ALIGN_NOT_RUNNING
+        wanted = compose.fingerprints(workspace, (INFLUX_SERVICE,), profiles=(ANALYTICS_PROFILE,))
+    except DockerError:
+        return ALIGN_UNDETERMINED
+    if wanted[INFLUX_SERVICE] == live.get("fingerprint"):
+        return ALIGN_UNCHANGED
+    running_id = docker.inspect_container_image_id(live.get("name"))
+    if running_id is None:
+        return ALIGN_UNDETERMINED
+    if (docker.inspect_image(named) or {}).get("id") != running_id:
+        return ALIGN_IMAGE_UNCONFIRMED
+    compose.up(workspace, profiles=(ANALYTICS_PROFILE,), services=(INFLUX_SERVICE,))
+    return ALIGN_RECREATED
 
 
 class MaintenanceContainerActions:

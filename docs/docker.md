@@ -173,9 +173,30 @@ socket, as after going back a version, is reached at `127.0.0.1:8080` only, so
 moving or closing the EMS's port is for an installation that stays on a
 current version. An installation from
 before these lines publishes `8080:8080` and `8086:8086`; the Admin Console's
-next EMS update rewrites those two entries, and only those, to the lines above
-(InfluxDB keeps its old port until its container is next recreated, for
-example by its next update or `docker compose --profile with-analytics up -d influxdb`).
+next EMS update rewrites those two entries, and only those, to the lines above.
+
+Every EMS update through the Admin Console also brings a running bundled
+InfluxDB in line with its entry in `docker-compose.yml`, so a moved port applies
+at once. Compose's own
+fingerprint decides: the config hash it stamps on each container it creates.
+
+- A container whose stamp still matches its entry keeps running untouched.
+- A running or restarting one whose stamp differs is recreated, and nothing
+  else with it.
+- A stopped one stays stopped. It takes its entry when Compose next creates
+  its container; `docker start` brings back the old one.
+- An image the Admin Console does not manage, such as `influxdb:latest`, is
+  left to you.
+- A recreate that would run other image content than the container runs now,
+  for example after its tag was pulled again, is left to you, since it would
+  change what runs without the backup the InfluxDB upgrade takes first. The
+  update says so and names the command.
+
+An InfluxDB last created by another Docker Compose version than the Admin
+Console's, such as the host's, may be recreated once without a change of yours,
+since the stamp depends on that version. To apply your own edit of `.env` or of
+InfluxDB's entry without an update, run
+`docker compose --profile with-analytics up -d influxdb`.
 
 `PUID` and `PGID` are optional for the standard flow. If you want to set the
 runtime UID/GID explicitly, start with:

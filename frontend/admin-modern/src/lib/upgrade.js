@@ -58,6 +58,7 @@ export const UPGRADE_STEPS = Object.freeze([
   "config_write",
   "pull_image",
   "update_compose",
+  "align_influxdb",
   "recreate_ems",
   "diagnostics",
 ]);
@@ -71,7 +72,7 @@ export const PHASES = Object.freeze([
   { id: "check", steps: ["verify_image", "preflight", "migration_review"] },
   { id: "backup", steps: ["backup", "mqtt_migration"] },
   { id: "admin", steps: [] },
-  { id: "install", steps: ["target_resources", "config_check", "config_write", "pull_image", "update_compose", "recreate_ems"] },
+  { id: "install", steps: ["target_resources", "config_check", "config_write", "pull_image", "update_compose", "align_influxdb", "recreate_ems"] },
   { id: "verify", steps: ["diagnostics"] },
 ]);
 

@@ -98,10 +98,14 @@ then shows ordered progress while the server runs this pipeline:
 8. Align the Admin to the target System Build, reconnect if needed, and verify
    its identity.
 9. Prepare the target EMS image and resources.
-10. Recreate EMS.
-11. Run the health check.
-12. Run diagnostics.
-13. Mark the Known-Good state.
+10. Bring a running bundled InfluxDB in line with its entry in
+    `docker-compose.yml` when Docker Compose finds it no longer matches (see
+    [Docker](../docker.md#published-ports)); a recreate that could change the
+    image InfluxDB runs is left to you.
+11. Recreate EMS.
+12. Run the health check.
+13. Run diagnostics.
+14. Mark the Known-Good state.
 
 The page follows it in five phases — **Check the new version**, **Back up and
 prepare**, **Update the Admin console**, **Install EMS …**, **Check that
