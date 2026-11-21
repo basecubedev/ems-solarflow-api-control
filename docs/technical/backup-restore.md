@@ -163,6 +163,15 @@ and can still be restored by passing the archive path:
 
 A new backup never silently overwrites an existing one.
 
+A database backup first takes a consistent snapshot of each SQLite file into a
+hidden `.ems-db-backup-…` folder beside that file (in `data/` by default) and
+removes it when the backup ends, so `data/` needs room for the databases once
+more while it runs. Neither the system temp folder, which in the Admin
+Console's container is a small RAM disk that a grown dashboard database does
+not fit, nor the backup folder, which the appliance hands to its backup
+account, is used for this. A backup whose process is killed half-way leaves
+that folder behind; it is safe to delete once no backup is running.
+
 ## Should I use password protection?
 
 Use `--password` when:

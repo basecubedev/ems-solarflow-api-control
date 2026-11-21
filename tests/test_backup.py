@@ -8,6 +8,7 @@ import os
 import sqlite3
 import stat
 import tarfile
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -896,6 +897,72 @@ def test_db_backup_copy_is_valid_sqlite(tmp_path):
         assert conn.execute("SELECT x FROM t").fetchone() == ("dash",)
     finally:
         conn.close()
+
+
+def _hidden_entries(*directories):
+    return {
+        os.path.join(directory, name)
+        for directory in directories
+        for name in os.listdir(directory)
+        if name.startswith(".")
+    }
+
+
+def test_db_snapshots_are_staged_beside_each_database(tmp_path, monkeypatch):
+    """Not in the system temp directory, which in the Admin container is a 16 MiB
+    tmpfs, and not in the backup folder, which the appliance exports and watches."""
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "no-system-temp"))
+    base, config = write_db_project(tmp_path)
+    state_db = os.path.join(base, "state", "ems_state.sqlite")
+    _make_sqlite(state_db, "state")
+    real_copy = backup._sqlite_backup_copy
+    staged = []
+
+    def recording_copy(src_path, dst_path):
+        staged.append((src_path, dst_path))
+        real_copy(src_path, dst_path)
+
+    monkeypatch.setattr(backup, "_sqlite_backup_copy", recording_copy)
+    path = create_db(base, config, state_db_path=state_db)
+
+    assert [src for src, _ in staged] == [
+        os.path.join(base, "data", "ems_dashboard.sqlite"),
+        state_db,
+    ]
+    for src_path, dst_path in staged:
+        staging = os.path.relpath(dst_path, os.path.dirname(src_path)).split(os.sep)[0]
+        assert staging.startswith(".ems-db-backup-"), dst_path
+    assert os.listdir(os.path.join(base, "backup")) == [os.path.basename(path)]
+    assert _hidden_entries(os.path.join(base, "data"), os.path.dirname(state_db)) == set()
+
+
+def test_a_failed_db_snapshot_leaves_no_staging_behind(tmp_path, monkeypatch):
+    base, config = write_db_project(tmp_path)
+    data_dir = os.path.join(base, "data")
+    staged_into = []
+
+    def failing_copy(src_path, dst_path):
+        staged_into.append(dst_path)
+        Path(dst_path).write_bytes(b"partial")
+        raise backup.BackupError(f"SQLite backup failed for {src_path}: disk full")
+
+    monkeypatch.setattr(backup, "_sqlite_backup_copy", failing_copy)
+    with pytest.raises(backup.BackupError, match="disk full"):
+        create_db(base, config)
+    assert os.path.commonpath([staged_into[0], data_dir]) == data_dir
+    assert _hidden_entries(data_dir, os.path.join(base, "backup")) == set()
+
+
+def test_a_database_folder_that_takes_no_staging_fails_as_a_backup_error(tmp_path, monkeypatch):
+    base, config = write_db_project(tmp_path)
+
+    def refuse(*args, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(tempfile, "mkdtemp", refuse)
+    with pytest.raises(backup.BackupError, match="cannot stage a snapshot beside"):
+        create_db(base, config)
 
 
 def test_db_backup_not_a_plain_file_copy(tmp_path):

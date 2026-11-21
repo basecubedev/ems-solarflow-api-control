@@ -955,9 +955,10 @@ def create_database_backup(
 ):
     """Create a database backup and return the path to the created archive.
 
-    Local SQLite databases are snapshotted consistently into a temporary
-    staging directory (never a live file copy) before being archived. Missing
-    databases are recorded in the manifest rather than failing the backup.
+    Local SQLite databases are snapshotted consistently (never a live file
+    copy) into a hidden staging directory beside each database before being
+    archived (:func:`_staging_beside`). Missing databases are recorded in the
+    manifest rather than failing the backup.
     InfluxDB data is detected but not included in this task.
     """
 
@@ -978,10 +979,11 @@ def create_database_backup(
     influx = detect_influxdb_status(config)
 
     os.makedirs(backup_dir, exist_ok=True)
-    staging = tempfile.mkdtemp(prefix="ems-db-backup-")
+    staging_dirs = {}
     try:
         staged = []
         for entry in present:
+            staging = _staging_beside(entry["abs_path"], staging_dirs)
             staged_path = os.path.join(staging, *entry["arcname"].split("/"))
             os.makedirs(os.path.dirname(staged_path) or staging, exist_ok=True)
             _sqlite_backup_copy(entry["abs_path"], staged_path)
@@ -1042,7 +1044,27 @@ def create_database_backup(
             encryption_options=encryption_options,
         )
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        for staging in staging_dirs.values():
+            shutil.rmtree(staging, ignore_errors=True)
+
+
+def _staging_beside(database_path, staging_dirs):
+    """The hidden staging directory beside ``database_path``, made once per directory.
+
+    Not the system temp directory, which in the Admin container is a 16 MiB
+    tmpfs a grown dashboard database does not fit, and not the backup folder,
+    which the appliance exports and watches.
+    """
+
+    parent = os.path.dirname(os.path.abspath(database_path))
+    if parent not in staging_dirs:
+        try:
+            staging_dirs[parent] = tempfile.mkdtemp(prefix=".ems-db-backup-", dir=parent)
+        except OSError as exc:
+            raise BackupError(
+                f"cannot stage a snapshot beside {database_path}: {exc}"
+            ) from exc
+    return staging_dirs[parent]
 
 
 def create_database_rollback_backup(
