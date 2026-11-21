@@ -5264,20 +5264,20 @@ class EMSController:
         self._last_influx_publish = now
 
         try:
-            from dashboard.telemetry import consumer_readings, device_telemetry_is_measured
+            from dashboard.telemetry import (
+                consumer_readings,
+                device_telemetry_is_measured,
+                telemetry_only_device_tiles,
+            )
             from ems.history.influx_writer import build_telemetry_lines
 
-            read_only_devices = getattr(self, "read_only_devices", None)
-            read_only_tiles = (
-                read_only_devices.tiles() if read_only_devices is not None else ()
-            )
             lines = build_telemetry_lines(
                 self.devices,
                 states,
                 self.device_online,
                 load,
                 target,
-                read_only_tiles=read_only_tiles,
+                read_only_tiles=telemetry_only_device_tiles(self),
                 consumers=consumer_readings(self),
                 measured=lambda name: device_telemetry_is_measured(self, name),
             )

@@ -491,3 +491,103 @@ def test_both_kinds_of_read_only_device_can_be_present_at_once():
     assert snapshot["inverter_output_w"] == 300 + 280 + 1234
     # And it stops the sample from counting as a measurement.
     assert snapshot["device_power_valid"] is False
+
+
+class _InfluxSink:
+    def __init__(self):
+        self.lines = []
+
+    def enqueue(self, lines):
+        self.lines.extend(lines)
+
+
+def _influx_history(controller, load_w=0, states=None):
+    from ems.controller import EMSController
+
+    controller.influx_writer = _InfluxSink()
+    controller._last_influx_publish = 0
+    EMSController.publish_to_influx(
+        controller, load_w, states or [_control_state()], target=300
+    )
+    return controller.influx_writer.lines
+
+
+def _point(lines, series):
+    matches = [line for line in lines if line.startswith(series + " ")]
+    assert len(matches) == 1, lines
+    return dict(item.split("=", 1) for item in matches[0].split(" ")[1].split(","))
+
+
+def _read_only_runtime(*, with_stale=True):
+    summaries = [
+        {"name": "WR1", "identifier": "ID1", "status": "online"},
+        {"name": "INV_2", "identifier": "ID2", "status": "online"},
+        {"name": "INV_3", "identifier": "ID3", "status": "online"},
+        {"name": "Washer", "identifier": "ID5", "status": "online"},
+    ]
+    if with_stale:
+        summaries.append({"name": "INV_4", "identifier": "ID4", "status": "stale"})
+    return _FakeTelemetryRuntime(
+        summaries=summaries,
+        snapshots={
+            "ID1": _snapshot({"outputHomePower": 9999}),
+            "ID2": _snapshot({"outputHomePower": 280, "solarInputPower": 315}),
+            "ID3": _snapshot({"gridInputPower": 150, "electricLevel": 40}),
+            "ID4": _snapshot({"outputHomePower": 1234}),
+            "ID5": SimpleNamespace(metrics={"consumerPower": 450}, topic_families={"ems_consumer"}),
+        },
+    )
+
+
+def test_the_influx_history_writes_every_read_only_device_the_live_view_counts():
+    """#386: a telemetry-only MQTT device reached the dashboard but never InfluxDB."""
+
+    controller = _controller(["WR1"], {"WR1": True}, runtime=_read_only_runtime())
+    controller.read_only_devices = SimpleNamespace(
+        tiles=lambda: [
+            {
+                "name": "E3DC",
+                "source": "e3dc",
+                "online": True,
+                "state": SimpleNamespace(output=500.0, solar=600.0),
+            }
+        ]
+    )
+    lines = _influx_history(controller)
+
+    inv_2 = _point(lines, "zendure_device,device=INV_2,source=read_only")
+    assert (inv_2["available"], inv_2["output"], inv_2["solar"]) == ("true", "280.0", "315.0")
+    assert "soc" not in inv_2
+    inv_3 = _point(lines, "zendure_device,device=INV_3,source=read_only")
+    assert (inv_3["available"], inv_3["grid_input"], inv_3["soc"]) == ("true", "150.0", "40.0")
+    assert _point(lines, "consumer,device=Washer,source=mqtt") == {"available": "true", "power": "450.0"}
+    assert not any(line.startswith("zendure_device,device=Washer") for line in lines)
+    assert _point(lines, "zendure_device,device=INV_4,source=read_only") == {
+        "available": "false"
+    }
+    assert _point(lines, "zendure_device,device=E3DC,source=e3dc")["output"] == "500.0"
+    assert not any(line.startswith("zendure_device,device=WR1,source=read_only") for line in lines)
+    assert _point(lines, "zendure_device,device=WR1,source=zendure")["output"] == "300.0"
+
+
+def test_the_influx_house_load_matches_the_live_view_with_read_only_devices():
+    controller = _controller(
+        ["WR1"], {"WR1": True}, runtime=_read_only_runtime(with_stale=False)
+    )
+
+    snapshot = build_dashboard_snapshot(
+        controller,
+        load_w=-200,
+        states=[_control_state()],
+        targets=[300],
+        effective_targets=[300],
+        allocated_total_w=300,
+        effective_total_w=300,
+        enabled=True,
+        max_total_power=1600,
+        min_output_limit=35,
+    )
+    meter = _point(_influx_history(controller, load_w=-200), "shelly_meter,source=shelly")
+
+    assert snapshot["home_load_w"] == 300 + 280 - 150 - 200
+    assert float(meter["house_load"]) == snapshot["home_load_w"]
