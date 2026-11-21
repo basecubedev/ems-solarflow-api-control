@@ -12,6 +12,8 @@ import copy
 import hashlib
 import hmac
 import json
+from collections.abc import Callable
+from typing import NamedTuple
 
 from admin import consumer_history
 from admin.config_preview import (
@@ -85,6 +87,7 @@ from ems.config import (
     grid_meter_mqtt_settings,
     homewizard_p1_grid_meter_settings,
     normalize_mqtt_grid_meter_settings,
+    opendtu_http_device_settings,
     parse_mqtt_port,
     resolve_config_write_gate,
     resolve_grid_meter_mqtt_settings,
@@ -94,7 +97,13 @@ from ems.config import (
     stored_config_placeholder_fields,
     TLS_INSECURE_WITHOUT_TLS,
 )
-from ems.read_only_devices import E3DC_MODBUS_DEVICE_TYPE, is_e3dc_modbus_device_config
+from ems.read_only_devices import (
+    E3DC_MODBUS_DEVICE_TYPE,
+    OPENDTU_HTTP_DEVICE_TYPE,
+    READ_ONLY_DEVICE_TYPES,
+    device_config_type,
+    is_read_only_device_config,
+)
 from ems.config_catalog import (
     ZENDURE_MQTT_BROKER_HELP,
     config_field_index,
@@ -734,8 +743,8 @@ def _device_draft(device, broker_sources=None, *, entry_ref=None, catalog_ids=(N
         return _external_device_draft(device, entry_ref, catalog_ids)
     if is_zendure_mqtt_device_config(device):
         return zendure_mqtt_device_draft(device, broker_sources=broker_sources)
-    if is_e3dc_modbus_device_config(device):
-        return _e3dc_device_draft(device)
+    if is_read_only_device_config(device):
+        return _read_only_device_draft(device)
     name = str(device.get("name") or "").strip()
     draft = {
         "kind": "local_api",
@@ -753,53 +762,76 @@ def _device_draft(device, broker_sources=None, *, entry_ref=None, catalog_ids=(N
     return draft
 
 
-def _e3dc_device_draft(device):
-    """Editable view of a read-only E3/DC device: its connection, nothing to control."""
+class _ReadOnlyKind(NamedTuple):
+    """The optional draft keys of one read-only device kind, and the EMS validator for it."""
 
+    text_keys: tuple
+    number_keys: tuple
+    settings: Callable
+    invalid_code: str
+
+
+_READ_ONLY_KINDS = {
+    E3DC_MODBUS_DEVICE_TYPE: _ReadOnlyKind(
+        (), ("port", "unit_id"), e3dc_modbus_device_settings, "e3dc_modbus_device_invalid"
+    ),
+    OPENDTU_HTTP_DEVICE_TYPE: _ReadOnlyKind(
+        ("serial",), ("port", "max_age_seconds"), opendtu_http_device_settings, "opendtu_http_device_invalid"
+    ),
+}
+
+
+def _read_only_device_draft(device):
+    """Editable view of a read-only device: its connection, nothing to control."""
+
+    kind = device_config_type(device)
+    spec = _READ_ONLY_KINDS[kind]
     name = str(device.get("name") or "").strip()
     draft = {
-        "kind": E3DC_MODBUS_DEVICE_TYPE,
+        "kind": kind,
         "original_name": name,
         "name": name,
         "ip": str(device.get("ip") or "").strip(),
         "enabled": bool(device.get("enabled", True)),
         "has_enabled_key": "enabled" in device,
     }
-    for key in _E3DC_DEVICE_NUMBER_KEYS:
+    for key in (*spec.text_keys, *spec.number_keys):
         if device.get(key) is not None:
             draft[key] = device[key]
     return draft
 
 
-_E3DC_DEVICE_NUMBER_KEYS = ("port", "unit_id")
+def _is_read_only_draft_item(item):
+    kind = item.get("kind")
+    return isinstance(kind, str) and kind in READ_ONLY_DEVICE_TYPES
 
 
-def _is_e3dc_draft_item(item):
-    return item.get("kind") == E3DC_MODBUS_DEVICE_TYPE
+def _materialize_read_only_device(original, item):
+    """Write a read-only draft item back onto its stored entry, keeping custom keys.
 
-
-def _materialize_e3dc_device(original, item):
-    """Write an E3/DC draft item back onto its stored entry, keeping custom keys.
-
-    A read-only device gets no Zendure defaults, no serial and no control
-    values; an entry of another kind is never turned into one silently, so only
-    a stored E3/DC entry is used as the base.
+    A read-only device gets no Zendure defaults, no Zendure serial and no
+    control values; an entry of another kind is never turned into one silently,
+    so only a stored entry of the item's own kind is used as the base.
     """
 
-    base = original if is_e3dc_modbus_device_config(original) else {}
+    kind = item["kind"]
+    spec = _READ_ONLY_KINDS[kind]
+    base = original if device_config_type(original) == kind else {}
     device = copy.deepcopy(base)
-    device["type"] = E3DC_MODBUS_DEVICE_TYPE
+    device["type"] = kind
     for key in ("name", "ip"):
         if key in item:
             device[key] = str(item.get(key) or "").strip()
-    for key in _E3DC_DEVICE_NUMBER_KEYS:
+    for key in (*spec.text_keys, *spec.number_keys):
         if key not in item:
             continue
         value = item.get(key)
         if value is None or (isinstance(value, str) and not value.strip()):
             device.pop(key, None)
-        else:
+        elif key in spec.number_keys:
             device[key] = _coerce_number(value)
+        else:
+            device[key] = value.strip() if isinstance(value, str) else value
     enabled = bool(item.get("enabled", True))
     if "enabled" in device or item.get("has_enabled_key") or not enabled:
         device["enabled"] = enabled
@@ -1062,8 +1094,8 @@ def _summary(config, draft):
     grid_meter = config.get("grid_meter") if isinstance(config.get("grid_meter"), dict) else {}
     dashboard = config.get("dashboard") if isinstance(config.get("dashboard"), dict) else {}
     influx = resolve_influxdb_config(config)
-    read_only = [device for device in devices if _is_e3dc_draft_item(device)]
-    controlled = [device for device in devices if not _is_e3dc_draft_item(device)]
+    read_only = [device for device in devices if _is_read_only_draft_item(device)]
+    controlled = [device for device in devices if not _is_read_only_draft_item(device)]
     return {
         "device_count": len(controlled),
         "enabled_device_count": sum(1 for device in controlled if device.get("enabled", True)),
@@ -2014,8 +2046,8 @@ def _merge_devices(
             name = str(item.get("name") or "").strip()
             if name:
                 allocation_names.append(name)
-        if _is_e3dc_draft_item(item):
-            result.append(_materialize_e3dc_device(original, item))
+        if _is_read_only_draft_item(item):
+            result.append(_materialize_read_only_device(original, item))
             continue
         if _is_mqtt_draft_item(item):
             was_mqtt = is_zendure_mqtt_device_config(original)
@@ -2521,17 +2553,16 @@ def _validate(config, merge_issues=()):
                         validation, device, label, "Zendure MQTT"
                     )
                 continue
-            if is_e3dc_modbus_device_config(device):
+            if is_read_only_device_config(device):
                 if not _valid_host(device.get("ip")):
                     validation["errors"].append(
                         _issue("device_host_invalid", f"{label} has an invalid IP address or hostname.")
                     )
+                spec = _READ_ONLY_KINDS[device_config_type(device)]
                 try:
-                    e3dc_modbus_device_settings(device)
+                    spec.settings(device)
                 except ValueError as exc:
-                    validation["errors"].append(
-                        _issue("e3dc_modbus_device_invalid", f"{label}: {exc}")
-                    )
+                    validation["errors"].append(_issue(spec.invalid_code, f"{label}: {exc}"))
                 continue
             if not _valid_host(device.get("ip")):
                 validation["errors"].append(

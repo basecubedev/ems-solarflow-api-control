@@ -1854,6 +1854,11 @@ device stays offline with `event=opendtu_http_read_error`.
 }
 ```
 
+In the Admin console, **Settings & devices** → **Devices** has an **Add an
+OpenDTU inverter (read only)** button under the devices, and a card with its
+name, the OpenDTU's address, the inverter's serial number, port, maximum age and
+**Enabled** switch. The network search does not look for OpenDTUs.
+
 ### Legacy config compatibility
 
 Legacy configs with only `shelly.ip` still work. New configs should use

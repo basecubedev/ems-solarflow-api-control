@@ -373,8 +373,9 @@ This page edits an existing installation.
   read-only device** (an E3/DC, see
   [device management](admin/device-management.md)) and their match state
   against the current config (**In the settings**, **Not found**, **Address
-  changed**), and **Add an inverter**, **Add an inverter over MQTT** and **Add an
-  E3/DC (read only)** add one by hand. Adding a device — from discovery or by
+  changed**), and **Add an inverter**, **Add an inverter over MQTT**, **Add an
+  E3/DC (read only)** and **Add an OpenDTU inverter (read only)** add one by
+  hand. Adding a device — from discovery or by
   hand — opens its card, where all device configuration happens. Discovery here
   also surfaces Zendure MQTT config proposals you can add straight to the draft.
   An MQTT proposal recognized as a grid meter offers **Use as grid meter**

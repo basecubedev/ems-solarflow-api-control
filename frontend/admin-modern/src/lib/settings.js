@@ -9,7 +9,7 @@ import { commonDefaults, deviceFallbacks, held, mqttDefaultPort, mqttUsesTls, se
  * the grid meter stay with the Classic editor for now.
  */
 
-export const DEVICE_KINDS = Object.freeze(["local_api", "zendure_mqtt", "e3dc_modbus", "external_mqtt"]);
+export const DEVICE_KINDS = Object.freeze(["local_api", "zendure_mqtt", "e3dc_modbus", "opendtu_http", "external_mqtt"]);
 export const MQTT_SOURCES = Object.freeze(["local_mqtt", "zendure_cloud_mqtt"]);
 /** The Classic editor's tabs, which #maintenance-settings-<tab> opens. */
 export const SETTINGS_TABS = Object.freeze(["devices", "features", "safety", "expert"]);

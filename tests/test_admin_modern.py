@@ -323,12 +323,18 @@ def test_every_catalogue_feature_has_its_words_here_in_the_catalogues_order():
 def test_device_kinds_are_the_ones_the_settings_view_draws():
     from admin import maintenance_config
     from ems.device_identity import EXTERNAL_MQTT_TYPE
-    from ems.read_only_devices import E3DC_MODBUS_DEVICE_TYPE
+    from ems.read_only_devices import READ_ONLY_DEVICE_TYPES
 
     source = Path(maintenance_config.__file__).read_text(encoding="utf-8")
-    kinds = {"local_api", "zendure_mqtt", E3DC_MODBUS_DEVICE_TYPE, EXTERNAL_MQTT_TYPE}
+    kinds = {"local_api", "zendure_mqtt", *READ_ONLY_DEVICE_TYPES, EXTERNAL_MQTT_TYPE}
     assert '"kind": "local_api"' in source
     assert set(js_list("lib/settings.js", "DEVICE_KINDS")) == kinds
+
+
+def test_the_read_only_kinds_the_console_draws_are_the_ones_the_ems_only_reads():
+    from ems.read_only_devices import READ_ONLY_DEVICE_TYPES
+
+    assert set(js_list("lib/devices.js", "READ_ONLY_KINDS")) == READ_ONLY_DEVICE_TYPES
 
 
 def devices_value(expression):
@@ -348,10 +354,18 @@ def devices_value(expression):
 
 def test_the_default_ports_the_admin_names_are_the_ones_the_ems_and_the_broker_use():
     from admin.mqtt_broker import DEFAULT_PORT
-    from ems.config import E3DC_MODBUS_DEFAULT_PORT, E3DC_MODBUS_DEFAULT_UNIT_ID, default_mqtt_port
+    from ems.config import (
+        E3DC_MODBUS_DEFAULT_PORT,
+        E3DC_MODBUS_DEFAULT_UNIT_ID,
+        OPENDTU_HTTP_DEFAULT_MAX_AGE_SECONDS,
+        OPENDTU_HTTP_DEFAULT_PORT,
+        default_mqtt_port,
+    )
 
     e3dc = {"port": E3DC_MODBUS_DEFAULT_PORT, "unit_id": E3DC_MODBUS_DEFAULT_UNIT_ID}
     assert devices_value("m.E3DC_DEFAULTS") == e3dc
+    opendtu = {"port": OPENDTU_HTTP_DEFAULT_PORT, "max_age_seconds": OPENDTU_HTTP_DEFAULT_MAX_AGE_SECONDS}
+    assert devices_value("m.OPENDTU_DEFAULTS") == opendtu
     mqtt = [default_mqtt_port(False), default_mqtt_port(True)]
     assert devices_value("[m.mqttDefaultPort(false), m.mqttDefaultPort(true)]") == mqtt
     assert DEFAULT_PORT == default_mqtt_port(False)

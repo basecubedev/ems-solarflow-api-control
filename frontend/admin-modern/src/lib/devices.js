@@ -8,6 +8,9 @@
  */
 
 export const E3DC_DEFAULTS = Object.freeze({ port: 502, unit_id: 1 });
+export const OPENDTU_DEFAULTS = Object.freeze({ port: 80, max_age_seconds: 60 });
+/** The device kinds the EMS only reads and never controls (``ems.read_only_devices``). */
+export const READ_ONLY_KINDS = Object.freeze(["e3dc_modbus", "opendtu_http"]);
 
 /** The port an MQTT broker listens on when none is set: 8883 with TLS, else 1883. */
 export function mqttDefaultPort(tls) {
@@ -46,7 +49,7 @@ const clone = (value) => (value === undefined ? undefined : JSON.parse(JSON.stri
 
 export function deviceKind(device) {
   if (device?.kind === "external_mqtt") return "external_mqtt";
-  if (device?.kind === "e3dc_modbus") return "e3dc_modbus";
+  if (READ_ONLY_KINDS.includes(device?.kind)) return device.kind;
   if (device?.kind === "zendure_mqtt" || device?.type === "zendure_mqtt") return "zendure_mqtt";
   return "local_api";
 }
@@ -158,12 +161,26 @@ export function newLocalInverter(devices, catalog) {
   return withDefaults({ original_name: null, name: nextInverterName(devices), ip: "", sn: "", enabled: true }, catalog);
 }
 
+/** ``base``, or the first of base2, base3 and so on that no device is named yet. */
+function freeName(devices, base) {
+  const taken = new Set((devices || []).map((device) => String(device?.name || "")));
+  let name = base;
+  for (let suffix = 2; taken.has(name); suffix += 1) name = `${base}${suffix}`;
+  return name;
+}
+
 /** A new read-only E3/DC, named E3DC, E3DC2 and so on. */
 export function newE3dc(devices, endpoint = {}) {
-  const taken = new Set((devices || []).map((device) => String(device?.name || "")));
-  let name = "E3DC";
-  for (let suffix = 2; taken.has(name); suffix += 1) name = `E3DC${suffix}`;
-  return { kind: "e3dc_modbus", original_name: null, name, ip: endpoint.ip || "", port: endpoint.port || E3DC_DEFAULTS.port, unit_id: E3DC_DEFAULTS.unit_id, enabled: true, has_enabled_key: true };
+  return { kind: "e3dc_modbus", original_name: null, name: freeName(devices, "E3DC"), ip: endpoint.ip || "", port: endpoint.port || E3DC_DEFAULTS.port, unit_id: E3DC_DEFAULTS.unit_id, enabled: true, has_enabled_key: true };
+}
+
+/**
+ * A new inverter read from an OpenDTU, named OpenDTU, OpenDTU2 and so on. Its
+ * serial, port and maximum age stay unset, so the EMS's defaults apply until
+ * one is typed.
+ */
+export function newOpenDtu(devices) {
+  return { kind: "opendtu_http", original_name: null, name: freeName(devices, "OpenDTU"), ip: "", enabled: true, has_enabled_key: true };
 }
 
 export function generations(catalog) {
@@ -296,6 +313,7 @@ export function setMqttValue(device, key, value, catalog) {
 /** Where a configured MQTT device's broker is: its own source, else the one its broker profile resolves to. */
 export function connectionSource(device) {
   if (deviceKind(device) === "e3dc_modbus") return "modbus_tcp";
+  if (deviceKind(device) === "opendtu_http") return "opendtu_http";
   if (deviceKind(device) !== "zendure_mqtt") return deviceKind(device) === "local_api" ? "local_api" : "";
   const source = String(device?.mqtt?.source || device?.broker?.source || device?.mqtt?.effective_source || "").trim();
   if (!source) return "";

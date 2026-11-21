@@ -4,6 +4,7 @@
 // against the deterministic test-mode Admin: the sign-in, the language, and the
 // pages whose writes it runs itself -- a backup from creation through details,
 // restore and deletion.
+import { readFileSync } from "node:fs";
 import { expect, test, ADMIN_PASSWORD } from "./fixtures/admin";
 import type { Page, Route } from "@playwright/test";
 import { post } from "./helpers/setup-authority";
@@ -798,6 +799,36 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
     await page.reload();
     await expect(editor.locator('[data-device="inverter-0"]')).toContainText("700 W");
     await expect(editor.locator('[data-device="e3dc-3"]')).toContainText("192.168.50.30");
+  });
+
+  test("an inverter an OpenDTU reads is added read only, checked and saved into the config", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings/devices");
+    const editor = page.getByTestId("devices-editor");
+    await page.getByTestId("add-opendtu").click();
+    const card = editor.locator('[data-device="opendtu-3"]');
+    await expect(card).toContainText("Inverter read by an OpenDTU");
+    await expect(card).toContainText("OpenDTU, read only");
+    await expect(card.locator('[data-path="name"] input')).toHaveValue("OpenDTU");
+    await expect(card.locator('[data-path="opendtuPort"] input')).toHaveAttribute("placeholder", "80 (default)");
+    await expect(card.locator('[data-path="opendtuMaxAge"] input')).toHaveAttribute("placeholder", "60 (default)");
+    await card.locator('[data-path="name"] input').fill("Balcony");
+    await card.locator('[data-path="opendtuHost"] input').fill("192.168.50.70");
+    await card.locator('[data-path="opendtuSerial"] input').fill("116491234567");
+    await card.locator('[data-path="opendtuMaxAge"] input').fill("90");
+
+    await page.getByTestId("review").click();
+    await expect(page.getByTestId("settings-review")).toContainText("Settings are valid");
+    await page.getByTestId("apply").click();
+    await page.getByRole("dialog", { name: "Save the checked changes?" }).getByTestId("confirm").click();
+    await expect(page.getByTestId("settings-applied")).toBeVisible();
+
+    const saved = await (await page.request.get("/api/admin/maintenance/config")).json();
+    const written = JSON.parse(readFileSync(saved.config_path, "utf8"));
+    expect(written.devices.filter((device: { type?: string }) => device.type === "opendtu_http")).toEqual([
+      { name: "Balcony", type: "opendtu_http", ip: "192.168.50.70", serial: "116491234567", max_age_seconds: 90, enabled: true },
+    ]);
+    await page.reload();
+    await expect(editor.locator('[data-device="opendtu-3"]')).toContainText("Balcony · 192.168.50.70 · SN 116491234567 · read only");
   });
 
   test("the grid meter's type changes its fields, and removing it leaves none", async ({ page, seedAdminScenario }) => {
