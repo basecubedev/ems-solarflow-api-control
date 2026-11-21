@@ -43,7 +43,7 @@ hope you do not press it.
 **What you enter:** the shared EMS/Admin password in the app's sign-in, then
 **Sign in**. It is the one sign-in of the app: it opens the dashboard's
 operator pages and the Admin pages alike, and **Sign out** in the top bar ends
-both.
+both and leads to the **Overview**.
 
 **Expected result:** the app returns to the page, the top bar's button turns
 to **Sign out**, and the runtime settings appear.

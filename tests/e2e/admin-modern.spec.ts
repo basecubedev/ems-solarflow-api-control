@@ -29,7 +29,7 @@ async function openModern(page: Page, hash = "") {
 }
 
 test.describe("Modern Admin: signing in", { tag: ["@smoke"] }, () => {
-  test("a wrong password is refused in words, the right one opens the console, signing out closes it", async ({ page }) => {
+  test("a wrong password is refused in words, the right one opens the console, signing out leads to the Overview", async ({ page }) => {
     await page.goto("/");
     await signIn(page, "not-the-password");
     await expect(page.getByRole("alert")).toHaveText("Wrong password.");
@@ -39,10 +39,27 @@ test.describe("Modern Admin: signing in", { tag: ["@smoke"] }, () => {
     await page.getByTestId("sign-in-submit").click();
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Assistant");
 
+    await page.evaluate(() => {
+      const seen = { signIn: false };
+      (globalThis as unknown as { signInSeen: typeof seen }).signInSeen = seen;
+      new MutationObserver((records) => {
+        for (const record of records) {
+          for (const node of record.addedNodes) {
+            if (node instanceof Element && (node.matches('[data-testid="sign-in-screen"]') || node.querySelector('[data-testid="sign-in-screen"]'))) seen.signIn = true;
+          }
+        }
+      }).observe(document.body, { childList: true, subtree: true });
+    });
+    const entries = await page.evaluate(() => history.length);
     await page.getByTestId("sign-out").click();
-    await expect(page.getByTestId("sign-in-screen")).toBeVisible();
+    await expect(page).toHaveURL(/#\/overview$/);
+    await expect(page.locator('aside.sidebar a[data-page="assistant"] .lock')).toBeVisible();
+    expect(await page.evaluate(() => history.length)).toBe(entries);
+    await expect(page.getByTestId("sign-in")).toBeFocused();
     const status = await (await page.request.get("/api/admin/auth/status")).json();
     expect(status.authenticated).toBe(false);
+    await expect(page.getByTestId("sign-in-screen")).toHaveCount(0);
+    expect(await page.evaluate(() => (globalThis as unknown as { signInSeen: { signIn: boolean } }).signInSeen.signIn)).toBe(false);
   });
 
   test("a session that ended elsewhere brings the sign-in back", async ({ page }) => {
@@ -70,6 +87,7 @@ test.describe("Modern Admin: signing in", { tag: ["@smoke"] }, () => {
     await expect(page.getByRole("alert")).toBeVisible();
     await expect(page.locator(".app")).toBeVisible();
     await expect(page.getByTestId("sign-in-screen")).toHaveCount(0);
+    await expect(page).toHaveURL(/#\/assistant$/);
   });
 
   test("a password file the console cannot read shows the repair, never a password form", async ({ page }) => {

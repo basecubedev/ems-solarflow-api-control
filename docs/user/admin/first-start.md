@@ -132,7 +132,7 @@ These look similar in the browser and mean very different things.
 
 | What you see | What it means | What to do |
 | --- | --- | --- |
-| The sign-in card comes back | Your session ended: you signed out (perhaps in another tab), it expired, a restore put back an older password file, or the Admin Console was replaced | Sign in again. Nothing was lost — running workflows are stored on the server, not in the tab |
+| The sign-in card comes back | Your session ended: you signed out in another tab, it expired, a restore put back an older password file, or the Admin Console was replaced | Sign in again. Nothing was lost — running workflows are stored on the server, not in the tab |
 | *The Admin console does not answer. Reconnecting…* at the top of the page | The console lost contact with its server, for example while the Admin Console restarts | Wait. The page keeps trying and goes on by itself |
 | The page reloads by itself | A new Admin Console answers — after an update of itself | Sign in again if asked; the page then follows what was running |
 | *This page could not be loaded. The Admin console may be restarting.* | The page's own file did not arrive | **Reload** once the console answers |
@@ -172,8 +172,9 @@ docker compose -f docker-compose.admin.yml up -d
 
 ### Signing out and returning safely
 
-**Sign out** (top right; on a phone under **More**) ends the session only. It
-does not cancel a workflow, roll anything back, or stop a running update —
+**Sign out** (top right; on a phone under **More**) ends the session only and
+leads to the dashboard's **Overview**, which stays readable signed out. It does
+not cancel a workflow, roll anything back, or stop a running update —
 server-side work keeps running and you can sign back in to watch it.
 
 To leave a workflow without ending it, open another page from the menu. The

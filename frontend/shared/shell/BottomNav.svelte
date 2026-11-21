@@ -97,13 +97,16 @@
     session.signIn();
   }
 
+  /** A shell whose sign-out leaves for another view (``session.leavesOnSignOut``), as the console's for the Overview, closes the sheet over it. */
   async function signOut() {
     signOutFailed = false;
     try {
       await session.signOut();
     } catch {
       signOutFailed = true;
+      return;
     }
+    if (session.leavesOnSignOut) closed();
   }
 </script>
 

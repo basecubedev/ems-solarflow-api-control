@@ -77,7 +77,7 @@ test.describe("One app for the dashboard and the console", { tag: ["@authority"]
     await expect(page.locator('aside.sidebar a[data-page="diagnostics"]')).toHaveAttribute("aria-current", "page");
   });
 
-  test("signed out, a dashboard page's sign-in is the console's, and the menu's sign-out ends it for every page", async ({ page, baseURL }) => {
+  test("signed out, a dashboard page's sign-in is the console's, and the menu's sign-out ends it for every page and leads to the Overview", async ({ page, baseURL }) => {
     await installConfig(baseURL);
     await page.goto("/#/schedule");
     await expect(page.locator(".content").getByRole("button", { name: "Sign in" })).toBeVisible();
@@ -87,8 +87,43 @@ test.describe("One app for the dashboard and the console", { tag: ["@authority"]
     await expect(page.locator('aside.sidebar a[data-page="schedule"] .lock')).toHaveCount(0);
 
     await page.getByTestId("sign-out").click();
-    await expect(page.locator(".content").getByRole("button", { name: "Sign in" })).toBeVisible();
+    await expect(page).toHaveURL(/#\/overview$/);
+    await expect(page.getByTestId("energy-flow")).toBeVisible();
     await expect(page.locator('aside.sidebar a[data-page="schedule"] .lock')).toBeVisible();
+  });
+
+  for (const from of ["status", "overview"]) {
+    test(`on a phone, signing out from the More sheet on ${from} closes it on the Overview`, async ({ page, baseURL }) => {
+      await installConfig(baseURL);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto("/#/status");
+      await signIn(page);
+      if (from === "overview") {
+        await page.goto("/#/overview");
+        await expect(page.getByTestId("energy-flow")).toBeVisible();
+      }
+      await page.getByTestId("nav-more").click();
+      await page.getByTestId("sheet-sign-out").click();
+      await expect(page).toHaveURL(/#\/overview$/);
+      await expect(page.getByRole("dialog", { name: "More" })).toBeHidden();
+      await expect(page.getByTestId("sign-in-screen")).toHaveCount(0);
+      await expect(page.getByTestId("nav-more")).toBeFocused();
+    });
+  }
+
+  test("on a phone, a sign-out the server refuses keeps the sheet open on its page and says so", async ({ page, baseURL }) => {
+    await installConfig(baseURL);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/#/status");
+    await signIn(page);
+    await page.route("**/api/admin/auth/logout", (route) => route.fulfill({ status: 500, json: { error: "internal_error" } }));
+    await page.getByTestId("nav-more").click();
+    await page.getByTestId("sheet-sign-out").click();
+    const sheet = page.getByRole("dialog", { name: "More" });
+    await expect(sheet.getByRole("alert")).toBeVisible();
+    await expect(sheet).toBeVisible();
+    await expect(page).toHaveURL(/#\/status$/);
+    await expect(page.getByTestId("sign-in-screen")).toHaveCount(0);
   });
 
   test("a browser meets the one app once, and its notice stays away once understood", async ({ browser, baseURL }) => {

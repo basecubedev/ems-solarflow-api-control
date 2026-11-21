@@ -839,6 +839,22 @@ test.describe("Modern dashboard on a phone @smoke", () => {
     expect(Math.abs(bus.y + bus.height - home.y)).toBeLessThan(8);
   });
 
+  test("signing out from the sheet keeps it open on its page, now offering the sign-in", async ({ page }) => {
+    let signedIn = true;
+    await page.route("**/api/auth/status", (route) => route.fulfill({ json: signedIn ? SIGNED_IN : { ...SIGNED_IN, authenticated: false, csrf_token: null } }));
+    await page.route("**/api/auth/logout", (route) => {
+      signedIn = false;
+      return route.fulfill({ json: { ok: true } });
+    });
+    await openModern(page, "#/energy");
+    await page.getByTestId("nav-more").click();
+    const sheet = page.getByRole("dialog", { name: "More" });
+    await sheet.getByTestId("sheet-sign-out").click();
+    await expect(sheet.getByTestId("sheet-sign-in")).toBeVisible();
+    await expect(sheet).toBeVisible();
+    await expect(page).toHaveURL(/#\/energy$/);
+  });
+
   test("More opens a sheet that Esc, the scrim, the handle, a swipe and a page close", async ({ page }) => {
     await openModern(page);
     const more = page.getByTestId("nav-more");

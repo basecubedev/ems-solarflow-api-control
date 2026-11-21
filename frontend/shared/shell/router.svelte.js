@@ -36,6 +36,16 @@ export function createRouter(pageSet, { alias = () => null } = {}) {
         globalThis.scrollTo?.(0, 0);
       });
     },
+    /**
+     * Open a page from code in place of the one in the history. Page and
+     * address change in one step, without waiting for a hashchange, so nothing
+     * drawn in between still shows the page being left.
+     */
+    replace(id) {
+      globalThis.history?.replaceState(globalThis.history.state, "", `#/${id}`);
+      router.page = fromHash();
+      globalThis.scrollTo?.(0, 0);
+    },
     /** The four pages of a phone's bar, in the order the bar shows them. */
     setPinned(ids) {
       router.pinned = pageSet.pinnedPages(ids);

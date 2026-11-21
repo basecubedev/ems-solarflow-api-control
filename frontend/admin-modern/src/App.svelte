@@ -1,7 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 basecubedev -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
-  import { untrack } from "svelte";
+  import { tick, untrack } from "svelte";
   import Sidebar from "../../shared/shell/Sidebar.svelte";
   import Topbar from "../../shared/shell/Topbar.svelte";
   import BottomNav from "../../shared/shell/BottomNav.svelte";
@@ -82,8 +82,9 @@
    * yet or a password file it cannot read.
    */
   let signingIn = $state(false);
+  let signingOut = $state(false);
   const signInShown = $derived(
-    auth.loaded && !auth.authenticated && (signingIn || needsConsole(page) || auth.requiresInitialPassword || auth.recoveryRequired || !auth.reachable),
+    auth.loaded && !auth.authenticated && !signingOut && (signingIn || needsConsole(page) || auth.requiresInitialPassword || auth.recoveryRequired || !auth.reachable),
   );
   $effect(() => {
     if (auth.authenticated) signingIn = false;
@@ -175,8 +176,23 @@
     }
   }
 
+  /**
+   * A chosen sign-out lands on the Overview, readable without a session, so the
+   * page being left never asks for the password it just gave up. The sign-in is
+   * held back until the Overview is open, in the same step, and a refused
+   * sign-out stays where it was and says so. The Sign out button the focus was
+   * on is gone afterwards, so the focus moves to the Sign in in its place.
+   */
   async function signOut() {
-    await logout();
+    signingOut = true;
+    try {
+      await logout();
+      nav.replace("overview");
+    } finally {
+      signingOut = false;
+    }
+    await tick();
+    if (document.activeElement === document.body) document.querySelector('[data-testid="sign-in"]')?.focus();
   }
 
   provideShell({
@@ -196,6 +212,7 @@
         return auth.authenticated ? "lock-open" : "lock";
       },
       pill: false,
+      leavesOnSignOut: true,
       signIn: () => (signingIn = true),
       signOut,
     },
