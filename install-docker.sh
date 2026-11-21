@@ -162,7 +162,7 @@ services:
       - path: ./config/influxdb.env
         required: false
     ports:
-      - "8080:8080"
+      - "${EMS_DASHBOARD_PUBLISH:-8080}:8080"
     volumes:
       - ./config:/app/config
       - ./data:/app/data
@@ -173,7 +173,7 @@ services:
     profiles:
       - with-analytics
     ports:
-      - "8086:8086"
+      - "${EMS_INFLUX_PUBLISH:-127.0.0.1:8086}:8086"
     env_file:
       - ./config/influxdb.env
     volumes:

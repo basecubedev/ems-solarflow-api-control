@@ -17,9 +17,10 @@
 #   python3 emsctl.py influx status
 #
 # All bootstrap values (DOCKER_INFLUXDB_INIT_*) and the EMS token live directly
-# in influxdb.env. We intentionally do NOT use ${...} interpolation here:
-# Compose variable substitution reads the shell / --env-file, not a service
-# env_file, so keeping the values in env_file avoids that pitfall.
+# in influxdb.env, never in ${...} interpolation: Compose variable substitution
+# reads the shell / --env-file, not a service env_file, so keeping the values
+# in env_file avoids that pitfall. The one interpolation below, the published
+# port, is meant for the shell or .env (EMS_INFLUX_PUBLISH).
 #
 # IMPORTANT: env_file below is resolved relative to the *project directory*
 # (the directory of the first -f compose file), so it is written repo-root
@@ -43,7 +44,7 @@ services:
     image: influxdb:2.9.1
     container_name: ems-influxdb
     ports:
-      - "8086:8086"
+      - "${EMS_INFLUX_PUBLISH:-127.0.0.1:8086}:8086"
     env_file:
       - deploy/docker/influxdb.env
     # Database state is bind-mounted under the repo-local ./data/ directory so

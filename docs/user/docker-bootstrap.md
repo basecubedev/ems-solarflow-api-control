@@ -72,8 +72,9 @@ Add `-Analytics` on Windows for the bundled InfluxDB analytics feature.
 
 The installer writes `docker-compose.yml`, creates `config/` and `data/`, and
 starts EMS. The generated `docker-compose.yml` uses service name `ems`, publishes
-the dashboard as `8080:8080`, mounts `./config:/app/config`, and mounts
-`./data:/app/data`. Existing `config/config.json` files are not overwritten.
+the dashboard on port 8080 (`EMS_DASHBOARD_PUBLISH`, see
+[Docker](../docker.md#published-ports)), mounts `./config:/app/config`, and
+mounts `./data:/app/data`. Existing `config/config.json` files are not overwritten.
 
 For EMS-only installs `config/config.json` is created on first container start;
 with `--analytics` the installer creates it during setup by running
@@ -112,5 +113,6 @@ Bootstrap where it stands:
    console finds the running installation and opens its maintenance pages;
    the dashboard's pages are part of it.
 3. From then on, update with **Updates** and back up with **Backups** in the
-   console. The EMS's own dashboard at port 8080 keeps working and sends you on
-   to the console's address.
+   console. With the console in the host's network, as its installer sets it
+   up, the EMS's own port 8080 then only sends you on to the console's
+   address; while the console is down, it is the dashboard again.

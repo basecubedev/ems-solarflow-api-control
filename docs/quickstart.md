@@ -96,8 +96,9 @@ On first start, the container creates `config/config.json` from the built-in
 template if the file does not exist yet. Existing `config/config.json` files
 are not overwritten.
 
-The generated Compose file uses service name `ems`, port mapping
-`8080:8080`, and bind mounts `./config:/app/config` and `./data:/app/data`.
+The generated Compose file uses service name `ems`, publishes port 8080
+(`EMS_DASHBOARD_PUBLISH`, see [Docker](docker.md#published-ports)), and bind
+mounts `./config:/app/config` and `./data:/app/data`.
 
 Check that the container started:
 

@@ -114,13 +114,13 @@ def test_compose_has_influxdb_service_with_local_paths():
     assert "influxdb:" in compose
     assert pinned_image(ROOT) in compose
     assert "./data/influxdb:/var/lib/influxdb2" in compose
-    assert "8086:8086" in compose
+    assert '"${EMS_INFLUX_PUBLISH:-127.0.0.1:8086}:8086"' in compose
 
 
 def test_compose_keeps_ems_basics():
     compose = read(COMPOSE)
     assert "  ems:" in compose
-    assert "8080:8080" in compose
+    assert '"${EMS_DASHBOARD_PUBLISH:-8080}:8080"' in compose
     assert "./config:/app/config" in compose
     assert "./data:/app/data" in compose
     assert 'EMS_IN_CONTAINER: "1"' in compose

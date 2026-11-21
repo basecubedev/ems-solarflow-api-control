@@ -112,8 +112,10 @@ docker compose ps
 docker compose logs -f
 ```
 
-The example Compose file publishes `8080:8080`. Open
-`http://<host-ip>:8080`, or `http://127.0.0.1:8080` on the same host.
+The example Compose file publishes port 8080 (`EMS_DASHBOARD_PUBLISH`). Open
+`http://<host-ip>:8080`, or `http://127.0.0.1:8080` on the same host. While an
+Admin Console runs in the host's network, that address only points to the
+console at port 8090; open that one instead.
 
 ## EMS CLI diagnostics
 

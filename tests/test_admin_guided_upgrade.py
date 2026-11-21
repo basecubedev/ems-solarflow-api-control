@@ -16,6 +16,7 @@ import pytest
 from admin.deployment import ONEOFF_TIMEOUT_SECONDS, DockerError
 from admin.ems_tool import EXEC_GUARD, EmsToolRunner
 from admin.guided_upgrade import (
+    INFLUX_PORT_CLOSED,
     GuidedUpgradeExecutor,
     UpgradeJob,
     guided_upgrade_request_fingerprint,
@@ -937,6 +938,51 @@ def test_upgraded_compose_is_digest_pinned_and_recreate_stable(tmp_path):
     # the verified digest, never a newer image behind the old tag.
     step = executor._update_compose(compose_path, runtime_ref)
     assert step["status"] == "skipped"
+
+
+def test_an_upgrade_brings_the_installers_former_ports_to_today_s_layout(tmp_path):
+    """The EMS's port is published as ``.env`` says, InfluxDB's on loopback only; the file before is kept beside it."""
+
+    docker = FakeDockerCli()
+    executor, install, compose = _digest_executor_for(tmp_path, TAG, docker)
+    sb = _resolved_build(ems_digest=_DIGEST_A)
+    runtime_ref = digest_pinned_ref(sb["ems_image"], sb["ems_digest"])
+    compose_path = install / "docker-compose.yml"
+    former = (
+        f"services:\n  ems:\n    image: {runtime_ref}\n    container_name: ems-solarflow-api-control\n"
+        "    ports:\n      - \"8080:8080\"\n"
+        "  influxdb:\n    image: influxdb:2.7\n    container_name: ems-influxdb\n    ports:\n      - \"8086:8086\"\n"
+    )
+    compose_path.write_text(former, encoding="utf-8")
+
+    step = executor._update_compose(compose_path, runtime_ref)
+
+    assert step["status"] == "ok" and step["ports"] == ["ems", "influxdb"]
+    current = compose_path.read_text(encoding="utf-8")
+    assert '- "${EMS_DASHBOARD_PUBLISH:-8080}:8080"' in current
+    assert '- "${EMS_INFLUX_PUBLISH:-127.0.0.1:8086}:8086"' in current
+    assert compose_path.with_name("docker-compose.yml.bak").read_text(encoding="utf-8") == former
+    assert executor._update_compose(compose_path, runtime_ref)["status"] == "skipped"
+
+
+def test_an_upgrade_that_moves_influxdb_off_the_network_says_so(tmp_path):
+    docker = FakeDockerCli()
+    executor, install, compose = _digest_executor_for(tmp_path, TAG, docker)
+    sb = _resolved_build(ems_digest=_DIGEST_A)
+    compose_path = install / "docker-compose.yml"
+    compose_path.write_text(
+        compose_path.read_text(encoding="utf-8").replace(
+            "  influxdb:\n    image: influxdb:2.7\n",
+            "  influxdb:\n    image: influxdb:2.7\n    container_name: ems-influxdb\n    ports:\n      - \"8086:8086\"\n",
+        ),
+        encoding="utf-8",
+    )
+
+    result = executor.execute(TAG, ALL_OPTIONS, confirm=True, system_build=sb)
+
+    assert result["ok"] is True
+    assert INFLUX_PORT_CLOSED in result["warnings"]
+    assert executor.execute(TAG, ALL_OPTIONS, confirm=True, system_build=sb)["warnings"].count(INFLUX_PORT_CLOSED) == 0
 
 
 @pytest.mark.parametrize(

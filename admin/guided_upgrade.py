@@ -20,6 +20,7 @@ from pathlib import Path
 
 from ems import config as ems_config
 
+from admin.compose_ports import current_publishes
 from admin.deployment import EMS_SERVICE, DockerCli, DockerCompose, DockerError
 from admin.ems_cli import EmsCliDiagnostics
 from admin.ems_tool import EmsToolRunner, mode_detail
@@ -49,6 +50,12 @@ _PULL_DIGEST_MISMATCH = (
 # digest-pinned ``@sha256:...`` form; the bundled InfluxDB image never matches.
 EMS_IMAGE_RE = re.compile(
     r"ghcr\.io/basecubedev/ems-solarflow-api-control[@:][^\s\"'{}]+"
+)
+# Said once, when the update moves the bundled InfluxDB's port off the network.
+INFLUX_PORT_CLOSED = (
+    "InfluxDB is now published on this host only (127.0.0.1:8086) once its "
+    "container is next recreated. To reach it from another machine, for a "
+    "Grafana, set EMS_INFLUX_PUBLISH=8086 in .env beside docker-compose.yml."
 )
 # The created backup archive path printed by ``backup create`` (``.tar.gz`` or
 # its encrypted ``.tar.gz.enc`` variant).
@@ -781,6 +788,8 @@ class GuidedUpgradeExecutor:
         steps.append(step)
         if step["status"] == "error":
             return failed()
+        if "influxdb" in step.get("ports", ()):
+            warnings.append(INFLUX_PORT_CLOSED)
 
         # 07 recreate_ems
         if options["recreate"]:
@@ -1034,12 +1043,12 @@ class GuidedUpgradeExecutor:
                 "update_compose", "error", "Update compose",
                 detail="No EMS image reference found in docker-compose.yml.",
             )
-        if matches[0] == runtime_image:
+        updated_text, moved = current_publishes(EMS_IMAGE_RE.sub(lambda _m: runtime_image, compose_text))
+        if updated_text == compose_text:
             return _step(
                 "update_compose", "skipped", "Update compose",
                 detail="Compose already targets the verified runtime image.",
             )
-        updated_text, _ = EMS_IMAGE_RE.subn(lambda _m: runtime_image, compose_text)
         try:
             compose_path.with_name(compose_path.name + ".bak").write_text(
                 compose_text, encoding="utf-8"
@@ -1047,6 +1056,8 @@ class GuidedUpgradeExecutor:
             compose_path.write_text(updated_text, encoding="utf-8")
         except OSError as exc:
             return _step("update_compose", "error", "Update compose", detail=str(exc))
+        if moved:
+            return _step("update_compose", "ok", "Update compose", image=runtime_image, ports=list(moved))
         return _step("update_compose", "ok", "Update compose", image=runtime_image)
 
     def _run_diagnostics(self, steps, warnings):
