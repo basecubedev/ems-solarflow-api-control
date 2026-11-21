@@ -471,6 +471,24 @@ test.describe("Modern dashboard views: cell voltage @smoke", () => {
     await packs.locator("summary").click();
     await expect(packs.locator(".fact-label")).toHaveText(["Pack 1", "Pack 2"]);
     await expect(packs.locator(".fact-value")).toHaveText(["3.20–3.22 V", "3.30–3.33 V"]);
+    await expect(page.locator(".fact").filter({ hasText: "Pack power" })).toHaveCount(0);
+  });
+
+  test("a device card names the power its packs report, signed by the direction they report", async ({ page }) => {
+    await shapeLive(page, (body) => {
+      withCells(body);
+      body.devices.WR1.battery_packs[0] = { ...body.devices.WR1.battery_packs[0], power_w: 4, state: 2 };
+      body.devices.WR2.battery_packs[0] = { ...body.devices.WR2.battery_packs[0], power_w: 30, state: 1 };
+      body.devices.WR2.battery_packs[1] = { ...body.devices.WR2.battery_packs[1], power_w: 10, state: 2 };
+    });
+    await openModern(page, "#/devices");
+    const fact = (card) => card.locator(".facts.main .fact").filter({ hasText: "Pack power" }).locator(".fact-value");
+    await expect(fact(deviceCard(page, "WR1"))).toHaveText("−4 W");
+    const two = deviceCard(page, "WR2");
+    await expect(fact(two)).toHaveText("+20 W");
+    const packs = two.getByTestId("device-cells");
+    await packs.locator("summary").click();
+    await expect(packs.locator(".fact-value")).toHaveText(["3.20–3.22 V · +30 W", "3.30–3.33 V · −10 W"]);
   });
 
   test("a device without cell readings shows no cell voltage and no cell chart", async ({ page }) => {

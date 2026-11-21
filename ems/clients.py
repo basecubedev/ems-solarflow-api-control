@@ -164,6 +164,10 @@ ZENDURE_TENTHS_KELVIN_AT_ZERO_C = 2731
 PLAUSIBLE_DEVICE_TEMPERATURE_C = (-60.0, 120.0)
 ZENDURE_CELL_VOLTAGE_HUNDREDTHS = 100
 PLAUSIBLE_CELL_VOLTAGE_V = (1.5, 5.0)
+PLAUSIBLE_PACK_POWER_W = (-10000.0, 10000.0)
+INT16_NEGATIVE_FIRST = 32768
+UINT16_MAX = 65535
+ZENDURE_PACK_STATES = (0, 1, 2)
 
 
 def _zendure_reading(value, *, offset, divisor, digits, plausible):
@@ -216,6 +220,31 @@ def zendure_cell_voltage_v(value):
     )
 
 
+def zendure_pack_power_w(value):
+    """A pack's own ``packData[].power`` in whole watts, ``None`` when it reports none.
+
+    The direction is the pack's ``state``. Zendure sends a signed 16-bit value
+    as unsigned (``batcur`` 65535 beside a 4 W drain is -1), so 32768-65535
+    read as the negative value they encode; no pack moves 32 kW. A reading no
+    pack can have is no reading.
+    """
+
+    reading = _zendure_reading(value, offset=0, divisor=1, digits=0, plausible=(-65536.0, 65536.0))
+    if reading is not None and INT16_NEGATIVE_FIRST <= reading <= UINT16_MAX:
+        reading -= UINT16_MAX + 1
+    low, high = PLAUSIBLE_PACK_POWER_W
+    return reading if reading is not None and low <= reading <= high else None
+
+
+def zendure_pack_state(value):
+    """A pack's ``packData[].state``: 0 idle, 1 charging, 2 discharging; ``None`` otherwise."""
+
+    reading = _zendure_reading(value, offset=0, divisor=1, digits=6, plausible=(0.0, 2.0))
+    if reading is None or reading not in ZENDURE_PACK_STATES:
+        return None
+    return int(reading)
+
+
 def battery_pack_cells(data, props):
     """Each pack's lowest and highest cell voltage, the packs numbered from 1.
 
@@ -244,7 +273,13 @@ def _pack_cells(number, pack):
     high = zendure_cell_voltage_v(pack.get("maxVol"))
     if low is not None and high is not None and low > high:
         low = high = None
-    return PackCells(pack=number, cell_min_v=low, cell_max_v=high)
+    return PackCells(
+        pack=number,
+        cell_min_v=low,
+        cell_max_v=high,
+        power_w=zendure_pack_power_w(pack.get("power")),
+        state=zendure_pack_state(pack.get("state")),
+    )
 
 
 def parse_device(data):

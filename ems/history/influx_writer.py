@@ -35,7 +35,7 @@ import threading
 import time
 
 from ems.history.influx_client import build_line_protocol
-from ems.history.provider import PACK_CELL_REDUCERS
+from ems.history.provider import PACK_CELL_REDUCERS, PACK_RAW_FIELDS
 from ems.history.schema import (
     bucket_name,
     planned_bucket_names,
@@ -208,17 +208,18 @@ def _device_field_values(state):
 
 
 _PACK_CELL_FIELDS = tuple(PACK_CELL_REDUCERS)
+_PACK_FIELDS = (*_PACK_CELL_FIELDS, *PACK_RAW_FIELDS)
 
 
 def _battery_pack_lines(device_tags, state, timestamp_ns):
-    """One ``battery_pack`` point per pack that reports a cell voltage, tagged as its device."""
+    """One ``battery_pack`` point per pack that reports a reading, tagged as its device."""
 
     lines = []
     for pack in getattr(state, "battery_packs", ()) or ():
         fields = {
             name: float(getattr(pack, name))
-            for name in _PACK_CELL_FIELDS
-            if _is_number(getattr(pack, name))
+            for name in _PACK_FIELDS
+            if _is_number(getattr(pack, name, None))
         }
         if not fields:
             continue

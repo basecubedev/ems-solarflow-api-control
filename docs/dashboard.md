@@ -104,12 +104,23 @@ labels instead of raw numbers:
 The battery pack count and the AC input limit are main facts of the card when
 the device reports them, and so is **Cell voltage**, the lowest to the highest
 cell over the device's packs, with a folded section per pack when it has more
-than one.
+than one, and **Pack power**, what the packs report flowing in or out of
+themselves, positive while charging and negative while discharging. It shows a
+standby drain of a few watts that the device-level battery power, 0 W while the
+device stands idle at its minimum SoC, does not. Only a pack whose state names
+the direction counts (charging, discharging, or idle at 0 W); one that reports
+power without it is left out rather than shown as charging. The folded **Packs**
+section lists every pack that reports its cells or such a power.
 The live snapshot carries them per device as `devices.<name>.battery_packs`, a
-list of `{"pack": 1, "cell_min_v": 3.17, "cell_max_v": 3.18}`: Zendure's
-`packData[].minVol` and `maxVol`, hundredths of a volt, in volts, `null` where a
-pack reports none or a value no cell can have (outside 1.5–5.0 V, or a lowest
-cell above the highest). The packs are numbered from 1 in the order of their
+list of `{"pack": 1, "cell_min_v": 3.17, "cell_max_v": 3.18, "power_w": 4,
+"state": 2}`: Zendure's `packData[].minVol` and `maxVol`, hundredths of a volt,
+in volts, `null` where a pack reports none or a value no cell can have (outside
+1.5–5.0 V, or a lowest cell above the highest); `packData[].power` in whole
+watts, whose sign is not a direction (`state` names it), a 16-bit value of 32768–65535 read as the
+negative number it encodes (as `batcur` 65535 is −1), `null` outside ±10 kW; and
+`packData[].state`, 0 idle, 1 charging, 2 discharging, `null` for any other
+value. The card takes the
+direction from `state`; the EMS's control does not read either. The packs are numbered from 1 in the order of their
 serial numbers, which are not published; adding or removing a pack renumbers
 the ones after it, so from then on a number's history goes on with another
 pack. The list stays empty unless the report counts its packs (`packNum`),

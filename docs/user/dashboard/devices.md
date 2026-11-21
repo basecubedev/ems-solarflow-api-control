@@ -57,6 +57,7 @@ a battery — shows no battery, and the average state of charge leaves it out.
 | **Limit** | The output limit in force |
 | **Packs** | The number of battery packs |
 | **Cell voltage** | The lowest and the highest cell voltage over the device's packs, for example *3.17–3.18 V*, where the packs report them |
+| **Pack power** | What the packs report flowing in or out of themselves, for example *−4 W* while a device at its minimum SoC stands idle and **Battery** reads 0 W; positive while they charge, negative while they discharge, where the packs report it and name its direction. On a device with several packs the folded section lists each pack's |
 | **AC input limit** | The AC charge limit, where the device reports one |
 
 A card shows only the parts its device has: a SolarFlow 800 without a battery

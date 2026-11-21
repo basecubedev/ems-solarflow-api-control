@@ -66,11 +66,18 @@ MAX_PACK_NUMBER = 16
 
 @dataclass(frozen=True)
 class PackCells:
-    """One battery pack's lowest and highest cell voltage, None when not reported."""
+    """One battery pack's readings, each None when not reported.
+
+    Its lowest and highest cell voltage, and the power and state (0 idle,
+    1 charging, 2 discharging) the pack reports of itself, which the
+    device-level pack values do not show while the device stands idle.
+    """
 
     pack: int
     cell_min_v: float | None
     cell_max_v: float | None
+    power_w: float | None = None
+    state: int | None = None
 
 
 @dataclass

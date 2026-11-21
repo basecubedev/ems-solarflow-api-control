@@ -867,11 +867,22 @@ running inside a container (it honors an `EMS_IN_CONTAINER` override).
 
 ### Battery cell voltages
 
-Each pack of a device the EMS controls that reports its cell voltages writes
-one `battery_pack` point per cycle while the device's telemetry is current (a state held past its last read
-writes none), tagged `device` and `pack` (numbered from 1, see
+Each pack of a device the EMS controls that reports its cell voltages, its
+power or its state writes one `battery_pack` point per cycle while the device's
+telemetry is current (a state held past its last read writes none), tagged
+`device` and `pack` (numbered from 1, see
 [the Devices page](../dashboard.md#devices-page)), with `cell_min_v` and
-`cell_max_v` in volts; a value the pack does not report is left out.
+`cell_max_v` in volts, `power_w`, the pack's own `packData[].power` in whole
+watts, and `state`, 0 idle, 1 charging, 2 discharging; a value the pack does
+not report is left out. The sign of `power_w` is not a direction (a 16-bit
+value Zendure sends as 32768–65535 is stored as the negative number it
+encodes); `state` names the direction, as the dashboard reads it.
+
+`power_w` and `state` stay in the raw bucket (`retention.raw_days`, 14 days by
+default). A window's mean of a power without a direction means nothing once the
+direction changes inside it, and a field added to the cell task would leave the
+task every installation already has as `kept` until an operator syncs it by
+hand.
 
 Each downsampling step has a second task for them, `<prefix>-downsample-<target>:cells`
 beside `<prefix>-downsample-<target>`, which carries each window's lowest
