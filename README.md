@@ -37,8 +37,8 @@ or **Reverse-engineered** — explained with the full list in the [supported set
 
 <table><thead><tr><th align="left">Device</th><th align="left">Connection</th><th align="left">Status</th></tr>
 <tr><td colspan="3"><strong>Inverters and batteries the EMS controls</strong></td></tr></thead>
-<tbody><tr><td>Zendure SolarFlow 800 Pro 2, 800 Plus</td><td>Local API or Zendure cloud MQTT</td><td>Validated</td></tr></tbody>
-<tbody><tr><td>Zendure SolarFlow 800, 800 Pro, 1600 AC+, 2400 AC, 2400 AC+, SolarFlow 2400 Pro, 3000 Mix AC+, 4000 Mix AC+</td><td>Local API or Zendure cloud MQTT</td><td>Family-supported</td></tr></tbody>
+<tbody><tr><td>Zendure SolarFlow 800 Pro 2, 800 Plus, SolarFlow 2400 Pro</td><td>Local API or Zendure cloud MQTT</td><td>Validated</td></tr></tbody>
+<tbody><tr><td>Zendure SolarFlow 800, 800 Pro, 1600 AC+, 2400 AC, 2400 AC+, 3000 Mix AC+, 4000 Mix AC+</td><td>Local API or Zendure cloud MQTT</td><td>Family-supported</td></tr></tbody>
 <tbody><tr><td>Zendure Hub 1200/2000, Hyper 2000, AIO 2400</td><td>Local broker or Zendure cloud MQTT</td><td>Reverse-engineered</td></tr>
 <tr><td colspan="3"><strong>Grid meters, only read</strong> (<a href="docs/user/supported-setups.md#grid-meters-by-country">which fits in which country</a>)</td></tr></tbody>
 <tbody><tr><td>Shelly Pro (current clamps)</td><td>HTTP</td><td>Validated</td></tr></tbody>
