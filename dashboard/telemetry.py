@@ -364,6 +364,49 @@ def _telemetry_only_tiles(controller):
     return tiles
 
 
+def _split_telemetry_only_tiles(tiles, controlled_names):
+    """Split read-only tiles into ``(consumer tiles, device tiles)`` as the live totals take them.
+
+    A name a controlled device or an earlier device tile already holds is
+    skipped, so no device is counted twice; a consumer holds no name.
+    """
+
+    taken = set(controlled_names)
+    consumer_tiles = []
+    device_tiles = []
+    for tile in tiles:
+        name = tile["name"]
+        if name in taken:
+            continue
+        if "consumer_power_w" in tile:
+            consumer_tiles.append(tile)
+            continue
+        taken.add(name)
+        device_tiles.append(tile)
+    return consumer_tiles, device_tiles
+
+
+def _tile_reports_soc(tile):
+    """Whether a read-only tile's state of charge is a reading: a device never read, or one that sent none, has none, not 0 %."""
+
+    return bool(
+        tile.get("has_reading", True)
+        and tile.get("soc_reported", True)
+        and _reports_soc(tile["state"])
+    )
+
+
+def telemetry_only_device_tiles(controller):
+    """The read-only device tiles the dashboard counts into its totals, for the InfluxDB history.
+
+    Each carries ``soc_reported`` as the dashboard's average decides it.
+    """
+
+    controlled = [dev.name for dev in getattr(controller, "devices", None) or ()]
+    tiles = _split_telemetry_only_tiles(_telemetry_only_tiles(controller), controlled)[1]
+    return [{**tile, "soc_reported": _tile_reports_soc(tile)} for tile in tiles]
+
+
 def _consumer_keys():
     """``name -> history key`` of the configured consumers (``consumer_history_keys``)."""
 
@@ -529,27 +572,29 @@ def build_dashboard_snapshot(
 
     consumers = {}
     consumer_keys = _consumer_keys()
-    for tile in _telemetry_only_tiles(controller):
+    consumer_tiles, device_tiles = _split_telemetry_only_tiles(
+        _telemetry_only_tiles(controller), devices
+    )
+    for tile in consumer_tiles:
         name = tile["name"]
-        if name in devices:
+        online = tile["online"]
+        # A consumer is a part of the house load the meter already saw, so
+        # it joins no aggregate and no validity flag: it only says where
+        # the house's power went. It is keyed by its history key, so a
+        # renamed one keeps its energy and its power series.
+        key = consumer_keys.get(name, name)
+        if key in consumers:
             continue
+        power_w = tile["consumer_power_w"]
+        consumers[key] = {
+            "name": name,
+            "online": online,
+            "power_w": _rounded(power_w) if online and power_w is not None else None,
+        }
+    for tile in device_tiles:
+        name = tile["name"]
         state = tile["state"]
         online = tile["online"]
-        if "consumer_power_w" in tile:
-            # A consumer is a part of the house load the meter already saw, so
-            # it joins no aggregate and no validity flag: it only says where
-            # the house's power went. It is keyed by its history key, so a
-            # renamed one keeps its energy and its power series.
-            key = consumer_keys.get(name, name)
-            if key in consumers:
-                continue
-            power_w = tile["consumer_power_w"]
-            consumers[key] = {
-                "name": name,
-                "online": online,
-                "power_w": _rounded(power_w) if online and power_w is not None else None,
-            }
-            continue
         fields = _state_telemetry_fields(state)
 
         if not online:
@@ -565,12 +610,7 @@ def build_dashboard_snapshot(
         inverter_total_w += fields["output_w"]
         inverter_charge_total_w += fields["ac_charge_w"]
         battery_total_w += fields["battery_power_w"]
-        # A device that has never been read has no state of charge, not 0 %.
-        soc_reported = (
-            tile.get("has_reading", True)
-            and tile.get("soc_reported", True)
-            and _reports_soc(state)
-        )
+        soc_reported = _tile_reports_soc(tile)
         if soc_reported:
             soc_values.append(fields["soc"])
 

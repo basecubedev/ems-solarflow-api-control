@@ -256,9 +256,11 @@ def build_telemetry_lines(
     ``house_load`` mirrors the dashboard telemetry semantics and is derived by
     the shared :func:`ems.power_direction.derive_house_load_w`, so a charging
     device's own draw is not billed to the household. ``read_only_tiles`` are
-    the devices the EMS reads but does not control (an E3/DC); they are written
-    the same way, tagged with their own ``source``, and their output counts in
-    ``house_load`` as it does on the dashboard.
+    the devices the EMS reads but does not control (an E3/DC, a telemetry-only
+    MQTT device); they are written the same way, tagged with their own
+    ``source`` (``read_only`` when the tile names none), and their output and
+    AC charge count in ``house_load`` as they do on the dashboard. A tile whose
+    ``soc_reported`` is false writes no ``soc``, which Analytics would average.
 
     ``consumers`` maps each consumer's name to its power, ``None`` while it
     does not read. Each becomes a ``consumer`` point; the meter point adds
@@ -307,8 +309,12 @@ def build_telemetry_lines(
             continue
         fields = {"available": True}
         fields.update(_device_field_values(tile["state"]))
+        if not tile.get("soc_reported", True):
+            fields.pop("soc", None)
         if _is_number(fields.get("output")):
             inverter_total += fields["output"]
+        if _is_number(fields.get("grid_input")):
+            charge_total += fields["grid_input"]
         line = build_line_protocol("zendure_device", tags, fields, timestamp_ns)
         if line:
             lines.append(line)
