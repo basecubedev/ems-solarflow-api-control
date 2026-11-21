@@ -1,6 +1,21 @@
 {
   "builds": [
     {
+      "admin_digest": "sha256:7af570366976670c29dad58fc04881fc57f28db41b02351c60665189bcf5d91c",
+      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-fix-chart-pan-pinch-zoom-9b2c028a5e-5e1ed9d-44956770641-1",
+      "build_id": "dev-fix-chart-pan-pinch-zoom-9b2c028a5e-5e1ed9d-44956770641-1",
+      "channel": "development",
+      "created_at": "2026-11-21T22:44:47Z",
+      "display_name": "Feature fix-chart-pan-pinch-zoom",
+      "ems_digest": "sha256:e3838dfb6437ef4ee119a42c0d260b196a0446d6343696117c4f25f7aa7d8870",
+      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-fix-chart-pan-pinch-zoom-9b2c028a5e-5e1ed9d-44956770641-1",
+      "installable": true,
+      "revision": "5e1ed9d5088cab971799e5c970c097768dcebd08",
+      "run_attempt": 1,
+      "run_id": "44956770641",
+      "tag": "dev-fix-chart-pan-pinch-zoom-9b2c028a5e-5e1ed9d-44956770641-1"
+    },
+    {
       "admin_digest": "sha256:fca8b383a0f5c58507e0b6b677ffc75cc9fb6fa5f88495906f2ad29349e8e55c",
       "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-fix-chart-pan-pinch-zoom-9b2c028a5e-11c8d5f-44951954150-1",
       "build_id": "dev-fix-chart-pan-pinch-zoom-9b2c028a5e-11c8d5f-44951954150-1",
