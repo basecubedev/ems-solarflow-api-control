@@ -166,5 +166,4 @@ For contributors and maintainers. Git clone and build-from-source belong here.
 | CI / release | [developer/ci-release.md](developer/ci-release.md) | Continuous integration, image publishing and release archives. |
 | Documentation website | [developer/docs-site.md](developer/docs-site.md) | Building, previewing and publishing this documentation as a website. |
 | Third-party licenses | [../THIRD_PARTY_LICENSES.md](../THIRD_PARTY_LICENSES.md) | Full inventory of runtime, development, vendored, optional and container dependencies. |
-| Dashboard style guide | [developer/dashboard-style-guide.md](developer/dashboard-style-guide.md) | Dashboard UI style conventions. |
 | Design notes | [developer/design-notes/](developer/design-notes/) | Development tools and deeper design notes. |

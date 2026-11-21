@@ -142,7 +142,8 @@ After `sh install-docker.sh` (EMS only) from an empty folder, confirm:
 After `sh install-docker.sh --analytics`, also confirm:
 
 - `config/influxdb.env` and `data/influxdb/` exist
-- the InfluxDB container is up and reachable on `http://localhost:8086`
+- the InfluxDB container is up and reachable on `http://localhost:8086`, from
+  this host only
 - `docker compose exec ems python3 emsctl.py influx status` runs
 
 Docker does not automatically run a container as the same user that runs
@@ -151,7 +152,51 @@ normal host user is usually enough: EMS detects the owner of these mounted
 directories and runs as that UID/GID.
 
 The recommended Compose file uses service name `ems`, port mapping
-`8080:8080`, and bind mounts `./config:/app/config` and `./data:/app/data`.
+`"${EMS_DASHBOARD_PUBLISH:-8080}:8080"`, and bind mounts
+`./config:/app/config` and `./data:/app/data`.
+
+### Published ports
+
+Two lines in `.env`, beside `docker-compose.yml`, decide where the EMS's port
+and the bundled InfluxDB's are published. `docker compose up -d` applies a
+change to the EMS's, `docker compose --profile with-analytics up -d` to
+InfluxDB's as well:
+
+| Line | Default | Means |
+| --- | --- | --- |
+| `EMS_DASHBOARD_PUBLISH` | `8080` | The EMS's own port on every address. While the Admin Console runs in the host's network it is only a signpost to the console; `127.0.0.1:8080` keeps it off the network, `18080` moves it when another program holds 8080. |
+| `EMS_INFLUX_PUBLISH` | `127.0.0.1:8086` | InfluxDB on this host only: the EMS reaches it inside Docker, the Admin Console through `docker exec`, `emsctl` on the host at `127.0.0.1:8086`. `8086` opens it to the network, for a Grafana on another machine. |
+
+The Admin Console reaches the EMS through the socket file
+`data/run/dashboard.sock`, not through either port. An EMS from before the
+socket, as after going back a version, is reached at `127.0.0.1:8080` only, so
+moving or closing the EMS's port is for an installation that stays on a
+current version. An installation from
+before these lines publishes `8080:8080` and `8086:8086`; the Admin Console's
+next EMS update rewrites those two entries, and only those, to the lines above.
+
+Every EMS update through the Admin Console also brings a running bundled
+InfluxDB in line with its entry in `docker-compose.yml`, so a moved port applies
+at once. Compose's own
+fingerprint decides: the config hash it stamps on each container it creates.
+
+- A container whose stamp still matches its entry keeps running untouched.
+- A running or restarting one whose stamp differs is recreated, and nothing
+  else with it.
+- A stopped one stays stopped. It takes its entry when Compose next creates
+  its container; `docker start` brings back the old one.
+- An image the Admin Console does not manage, such as `influxdb:latest`, is
+  left to you.
+- A recreate that would run other image content than the container runs now,
+  for example after its tag was pulled again, is left to you, since it would
+  change what runs without the backup the InfluxDB upgrade takes first. The
+  update says so and names the command.
+
+An InfluxDB last created by another Docker Compose version than the Admin
+Console's, such as the host's, may be recreated once without a change of yours,
+since the stamp depends on that version. To apply your own edit of `.env` or of
+InfluxDB's entry without an update, run
+`docker compose --profile with-analytics up -d influxdb`.
 
 `PUID` and `PGID` are optional for the standard flow. If you want to set the
 runtime UID/GID explicitly, start with:

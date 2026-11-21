@@ -182,9 +182,11 @@ does not answer. Reconnecting…*.
 
 **What it changes:** the Admin container is recreated on the new image.
 
-**Expected result:** the page reloads from the new console. Sign in again with
-the same password — sessions do not survive the restart; the sign-in says why.
-The page then opens **Updates** and follows the update on. The backup and the
+**Expected result:** the page reloads from the new console and you stay signed
+in: the console keeps its sessions across the restart. Only the first update
+from a console that did not keep them yet asks you to sign in again with the
+same password; the sign-in says why. The page then opens **Updates** and
+follows the update on. The backup and the
 first checks are **not** repeated.
 
 **If it differs:** on a Raspberry Pi the restart can take several minutes;

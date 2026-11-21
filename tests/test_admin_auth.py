@@ -487,9 +487,9 @@ def test_admin_static_and_status_are_public(tmp_path, monkeypatch):
         with urllib.request.urlopen(f"{base}/") as resp:
             assert resp.status == 200
             assert b'<div id="app">' in resp.read()
-        with urllib.request.urlopen(f"{base}/classic/") as resp:
+        with urllib.request.urlopen(f"{base}/assets/admin.js") as resp:
             assert resp.status == 200
-        with urllib.request.urlopen(f"{base}/classic/admin.js") as resp:
+        with urllib.request.urlopen(f"{base}/fallback.js") as resp:
             assert resp.status == 200
     finally:
         srv.shutdown()
@@ -667,3 +667,59 @@ def test_login_behind_a_proxy_that_rewrites_host_is_not_refused():
     handler._request_hostnames = lambda: AdminHandler._request_hostnames(handler)
     assert AdminHandler._public_auth_request_rejection(handler, check_origin=False) is None
     assert AdminHandler._public_auth_request_rejection(handler, check_origin=True)[1] == 403
+
+
+def test_a_sign_in_outlives_a_restart_of_the_console(tmp_path, monkeypatch):
+    """An update replaces the console's process; the operator stays signed in."""
+
+    from admin.server import create_admin_runtime
+    from tests.admin_auth_helpers import TEST_PASSWORD
+
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    sessions = tmp_path / "state" / "admin-sessions.json"
+
+    def started():
+        server = create_server("127.0.0.1", 0, runtime=create_admin_runtime(auth_session_path=sessions))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        return server, f"http://127.0.0.1:{server.server_address[1]}"
+
+    def call(base, path, body=None, cookie=None):
+        headers = {"Content-Type": "application/json"} if body is not None else {}
+        if cookie:
+            headers["Cookie"] = cookie
+        request = urllib.request.Request(f"{base}{path}", data=json.dumps(body).encode() if body is not None else None,
+                                         headers=headers, method="POST" if body is not None else "GET")
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.headers, json.loads(response.read())
+
+    first, base = started()
+    try:
+        call(base, "/api/admin/auth/setup", {"password": TEST_PASSWORD, "confirm_password": TEST_PASSWORD})
+        headers, signed_in = call(base, "/api/admin/auth/login", {"password": TEST_PASSWORD})
+    finally:
+        first.shutdown()
+        first.server_close()
+    cookie = headers["Set-Cookie"].split(";", 1)[0]
+    second, base = started()
+    try:
+        _, status = call(base, "/api/admin/auth/status", cookie=cookie)
+        assert status["authenticated"] is True and status["csrf_token"] == signed_in["csrf_token"]
+    finally:
+        second.shutdown()
+        second.server_close()
+
+
+def test_the_ems_s_session_limits_only_ever_tighten_the_console_s_sign_in(tmp_path, monkeypatch):
+    from admin.__main__ import session_limits
+
+    monkeypatch.setenv("EMS_INSTALL_DIR", str(tmp_path))
+    assert session_limits() == (1800, 43200)
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.json").write_text(
+        json.dumps({"dashboard": {"session_idle_timeout_seconds": 300, "session_absolute_max_seconds": "-5"}}), encoding="utf-8"
+    )
+    assert session_limits() == (300, 43200)
+    (tmp_path / "config" / "config.json").write_text(
+        json.dumps({"dashboard": {"session_idle_timeout_seconds": 0, "session_absolute_max_seconds": 999999}}), encoding="utf-8"
+    )
+    assert session_limits() == (1800, 43200)

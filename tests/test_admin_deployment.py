@@ -2771,6 +2771,59 @@ def test_every_compose_double_matches_the_real_run_oneoff_signature():
         )
 
 
+def _hash_run(stdout, returncode=0, calls=None):
+    def run(argv, **kwargs):
+        if calls is not None:
+            calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, returncode, stdout, "")
+
+    return run
+
+
+def test_compose_names_each_service_s_fingerprint_from_the_file_as_it_is_now(tmp_path):
+    calls = []
+    compose = DockerCompose(run=_hash_run("influxdb 3b3d\nems fb02\n", calls=calls))
+
+    found = compose.fingerprints(tmp_path, ("influxdb", "ems"), profiles=("with-analytics",))
+
+    assert found == {"influxdb": "3b3d", "ems": "fb02"}
+    argv, kwargs = calls[0]
+    assert argv == ["docker", "compose", "--profile", "with-analytics", "config", "--hash", "influxdb,ems"]
+    assert kwargs["cwd"] == str(tmp_path)
+
+
+@pytest.mark.parametrize("stdout,returncode", [("ems fb02\n", 0), ("", 1)], ids=["service missing", "compose failed"])
+def test_a_fingerprint_compose_does_not_give_is_never_guessed(tmp_path, stdout, returncode):
+    compose = DockerCompose(run=_hash_run(stdout, returncode))
+
+    with pytest.raises(DockerError) as raised:
+        compose.fingerprints(tmp_path, ("influxdb",))
+
+    assert raised.value.code == "docker_compose_config_failed"
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [
+        "com.docker.compose.project.config_files=/a/docker-compose.yml,/a/override.yml,"
+        "com.docker.compose.config-hash=1c89,com.docker.compose.service=influxdb",
+        {"com.docker.compose.config-hash": "1c89", "com.docker.compose.service": "influxdb"},
+    ],
+    ids=["text", "mapping"],
+)
+def test_each_running_service_carries_the_fingerprint_it_was_created_with(tmp_path, labels):
+    row = {"Name": "ems-influxdb", "Service": "influxdb", "State": "running", "Labels": labels}
+    compose = DockerCompose(run=_hash_run(json.dumps(row)))
+
+    assert compose.ps(tmp_path)[0]["fingerprint"] == "1c89"
+
+
+def test_a_service_without_labels_has_no_fingerprint(tmp_path):
+    row = {"Name": "ems-influxdb", "Service": "influxdb", "State": "running"}
+
+    assert DockerCompose(run=_hash_run(json.dumps(row))).ps(tmp_path)[0]["fingerprint"] is None
+
+
 def test_docker_compose_start_uses_prepared_workspace_and_no_pull(tmp_path):
     recorder = []
     compose = DockerCompose(popen=_make_popen(recorder, lines=["Container ems Started"]))
@@ -2915,6 +2968,7 @@ def test_docker_compose_status_normalizes_services_and_ports(tmp_path):
             "state": "running",
             "status": "Up",
             "ports": ["8080:8080/tcp"],
+            "fingerprint": None,
         }
     ]
 

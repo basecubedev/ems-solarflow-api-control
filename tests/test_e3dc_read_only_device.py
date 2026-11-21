@@ -14,9 +14,6 @@ control cycle and over the same connection as an E3/DC grid meter.
 
 import importlib.util
 import os
-import shutil
-import subprocess
-import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -348,97 +345,6 @@ def test_no_read_only_device_ever_joins_the_controlled_set():
 
 
 # --- the frontend tile ------------------------------------------------------------
-
-
-def test_frontend_renders_grid_and_no_limit_on_the_e3dc_tile():
-    node = shutil.which("node")
-    if not node:
-        pytest.skip("node is required for the executable dashboard render test")
-
-    script = textwrap.dedent(
-        """
-        const fs = require("fs");
-        const vm = require("vm");
-        const appPath = process.argv[2];
-        const source = fs.readFileSync(appPath, "utf8")
-          .split('document.querySelectorAll(".range-tabs button")')[0];
-
-        class FakeElement {
-          constructor(id = "") {
-            this.id = id;
-            this.textContent = "";
-            this.innerHTML = "";
-            this.className = "";
-            this.children = [];
-            this.dataset = {};
-            this.style = { setProperty: () => {} };
-          }
-          setAttribute() {}
-          appendChild(child) { this.children.push(child); }
-          querySelectorAll() { return []; }
-        }
-
-        const elements = new Map();
-        function element(id) {
-          if (!elements.has(id)) elements.set(id, new FakeElement(id));
-          return elements.get(id);
-        }
-        const context = {
-          console,
-          document: {
-            getElementById: element,
-            createElement: () => new FakeElement(),
-            querySelector: () => null,
-            querySelectorAll: () => [],
-          },
-          window: { addEventListener: () => {}, localStorage: null },
-        };
-        vm.createContext(context);
-        vm.runInContext(source, context, { filename: appPath });
-        context.readDeviceSocFillWidths = () => new Map();
-        context.applyDeviceSocFillStarts = () => {};
-        context.animateDeviceSocFills = () => {};
-
-        function assert(condition, message) {
-          if (!condition) throw new Error(message);
-        }
-        const assist = { status: "unknown", enabled: false };
-        context.renderDevices({
-          WR1: {
-            online: true, soc: 60, pv_input_w: 400, output_w: 300, battery_power_w: 100,
-            target_w: 260, output_limit_w: 300, battery_full_charge_assist: assist,
-          },
-          E3DC: {
-            online: true, read_only: true, soc: 87, pv_input_w: 4321, output_w: 3624,
-            battery_power_w: -1500, grid_power_w: -600, output_limit_w: 0,
-            output_limit_applicable: false, firmware_status_applicable: false,
-            target_w: 0, battery_full_charge_assist: assist,
-          },
-        });
-        const cards = element("deviceGrid").innerHTML.split("<article").map((p) => "<article" + p);
-        const wr1 = cards.find((html) => html.includes("WR1"));
-        const e3dc = cards.find((html) => html.includes("E3DC"));
-        assert(e3dc.includes(">Grid<"), "the E3/DC tile shows its grid value");
-        assert(e3dc.includes("-600 W"), "the grid value keeps its sign");
-        assert(!e3dc.includes(">Limit<"), "the E3/DC tile has no output limit");
-        assert(!e3dc.includes(">Target<"), "the E3/DC tile has no target");
-        assert(e3dc.includes(">PV<") && e3dc.includes(">Output<") && e3dc.includes(">Battery<"),
-          "the E3/DC tile shows PV, inverter output and battery");
-        assert(e3dc.split(">Grid<").length === 2, "exactly one Grid row: the measured power");
-        assert(!e3dc.includes("Firmware status"), "no Zendure firmware enums on an E3/DC");
-        assert(!wr1.includes("-600 W"), "a Zendure tile shows no E3/DC grid power");
-        assert(wr1.includes("Firmware status"), "a Zendure tile keeps its firmware status");
-        assert(wr1.includes(">Limit<"), "a Zendure tile keeps its limit");
-        """
-    )
-    result = subprocess.run(
-        [node, "-", str(ROOT / "dashboard/static/app.js")],
-        input=script,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
 
 
 def test_the_probe_still_imports_only_the_shared_protocol_module():

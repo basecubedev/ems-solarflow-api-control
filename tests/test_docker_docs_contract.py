@@ -31,7 +31,7 @@ def test_compose_example_contract_matches_user_docs():
     compose = read(COMPOSE)
 
     assert "  ems:" in compose
-    assert "8080:8080" in compose
+    assert '"${EMS_DASHBOARD_PUBLISH:-8080}:8080"' in compose
     assert "./config:/app/config" in compose
     assert "./data:/app/data" in compose
 

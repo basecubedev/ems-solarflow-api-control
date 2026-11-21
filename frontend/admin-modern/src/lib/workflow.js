@@ -3,8 +3,8 @@
 /**
  * The Admin workflow lifecycle (admin/workflow_lifecycle.py): who holds the
  * console and whether a stuck Guided Setup or Upgrade can be reset.
- * tests/classic-parity.test.js keeps these lists in step with Classic's
- * WORKFLOW_OWNER_LABELS, WORKFLOW_STATE_LABELS and WORKFLOW_STALE_REASON_LABELS.
+ * tests/workflow.test.js and tests/server-codes.test.js keep these lists in
+ * step with the server's.
  */
 
 export const WORKFLOW_OWNERS = Object.freeze(["guided_setup", "guided_upgrade", "align_existing_install", "none", "conflict", "unknown"]);
@@ -18,7 +18,7 @@ export const STALE_REASONS = Object.freeze([
   "setup_transition_owner_unproven",
 ]);
 
-/** Refusals of a workflow switch that mean another workflow holds the console; Classic's WORKFLOW_BLOCKED_CODES. */
+/** Refusals of a workflow switch that mean another workflow holds the console. */
 export const WORKFLOW_BLOCKED_CODES = Object.freeze(["workflow_operation_in_progress", "setup_operation_in_progress", "workflow_switch_blocked", "workflow_owner_unknown", "workflow_owner_conflict"]);
 
 export const ownerKey = (owner) => `workflow.owner.${WORKFLOW_OWNERS.includes(owner) ? owner : "unknown"}`;

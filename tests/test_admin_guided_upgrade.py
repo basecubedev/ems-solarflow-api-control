@@ -16,6 +16,9 @@ import pytest
 from admin.deployment import ONEOFF_TIMEOUT_SECONDS, DockerError
 from admin.ems_tool import EXEC_GUARD, EmsToolRunner
 from admin.guided_upgrade import (
+    INFLUX_PORT_CLOSED,
+    INFLUX_PORT_CLOSED_LATER,
+    INFLUX_RECREATE_FAILED,
     GuidedUpgradeExecutor,
     UpgradeJob,
     guided_upgrade_request_fingerprint,
@@ -101,16 +104,37 @@ BACKUP_ARCHIVE_PATH = "data/backups/ems-config-manual-2026-07-15-120000.tar.gz"
 
 
 class FakeCompose:
-    def __init__(self, backup_returncode=0):
+    """Records each ``up``.
+
+    ``containers`` are the rows ``ps -a`` lists, ``wanted`` the fingerprints the
+    file gives now; ``ps_error`` fails reading them, ``up_error`` the ``up`` of
+    the services it names.
+    """
+
+    def __init__(self, backup_returncode=0, containers=(), wanted=None, ps_error=None, up_error=None):
         self.calls = []
         self.oneoff_calls = []
         self._backup_returncode = backup_returncode
+        self.containers = [dict(row) for row in containers]
+        self.wanted = dict(wanted or {})
+        self.ps_error = ps_error
+        self.up_error = up_error
 
     def up(self, workspace, services=(), force_recreate=False, **kwargs):
         self.calls.append(
             {"workspace": str(workspace), "services": tuple(services),
-             "force_recreate": force_recreate}
+             "force_recreate": force_recreate, "profiles": tuple(kwargs.get("profiles", ()))}
         )
+        if self.up_error is not None and set(services) & set(self.up_error[0]):
+            raise self.up_error[1]
+
+    def ps(self, workspace, include_stopped=False):
+        if self.ps_error is not None:
+            raise self.ps_error
+        return [dict(row) for row in self.containers if include_stopped or row["state"] == "running"]
+
+    def fingerprints(self, workspace, services, profiles=()):
+        return {service: self.wanted[service] for service in services}
 
     def run_oneoff(
         self, workspace, service, command,
@@ -937,6 +961,232 @@ def test_upgraded_compose_is_digest_pinned_and_recreate_stable(tmp_path):
     # the verified digest, never a newer image behind the old tag.
     step = executor._update_compose(compose_path, runtime_ref)
     assert step["status"] == "skipped"
+
+
+def test_an_upgrade_brings_the_installers_former_ports_to_today_s_layout(tmp_path):
+    """The EMS's port is published as ``.env`` says, InfluxDB's on loopback only; the file before is kept beside it."""
+
+    docker = FakeDockerCli()
+    executor, install, compose = _digest_executor_for(tmp_path, TAG, docker)
+    sb = _resolved_build(ems_digest=_DIGEST_A)
+    runtime_ref = digest_pinned_ref(sb["ems_image"], sb["ems_digest"])
+    compose_path = install / "docker-compose.yml"
+    former = (
+        f"services:\n  ems:\n    image: {runtime_ref}\n    container_name: ems-solarflow-api-control\n"
+        "    ports:\n      - \"8080:8080\"\n"
+        "  influxdb:\n    image: influxdb:2.7\n    container_name: ems-influxdb\n    ports:\n      - \"8086:8086\"\n"
+    )
+    compose_path.write_text(former, encoding="utf-8")
+
+    step = executor._update_compose(compose_path, runtime_ref)
+
+    assert step["status"] == "ok" and step["ports"] == ["ems", "influxdb"]
+    current = compose_path.read_text(encoding="utf-8")
+    assert '- "${EMS_DASHBOARD_PUBLISH:-8080}:8080"' in current
+    assert '- "${EMS_INFLUX_PUBLISH:-127.0.0.1:8086}:8086"' in current
+    assert compose_path.with_name("docker-compose.yml.bak").read_text(encoding="utf-8") == former
+    assert executor._update_compose(compose_path, runtime_ref)["status"] == "skipped"
+
+
+def test_an_upgrade_that_moves_a_stopped_influxdb_off_the_network_says_so_once(tmp_path):
+    docker = FakeDockerCli()
+    executor, install, compose = _digest_executor_for(tmp_path, TAG, docker)
+    sb = _resolved_build(ems_digest=_DIGEST_A)
+    compose_path = install / "docker-compose.yml"
+    compose_path.write_text(
+        compose_path.read_text(encoding="utf-8").replace(
+            "  influxdb:\n    image: influxdb:2.7\n",
+            "  influxdb:\n    image: influxdb:2.7\n    container_name: ems-influxdb\n    ports:\n      - \"8086:8086\"\n",
+        ),
+        encoding="utf-8",
+    )
+
+    result = executor.execute(TAG, ALL_OPTIONS, confirm=True, system_build=sb)
+
+    assert result["ok"] is True
+    assert INFLUX_PORT_CLOSED_LATER in result["warnings"]
+    assert executor.execute(TAG, ALL_OPTIONS, confirm=True, system_build=sb)["warnings"].count(INFLUX_PORT_CLOSED_LATER) == 0
+
+
+class _InfluxImageDocker(FakeDockerCli):
+    """A docker whose containers run the image ids in ``running`` and whose local tags point at ``local``."""
+
+    def __init__(self, running=None, local=None):
+        super().__init__()
+        self.running = dict(running or {})
+        self.local = dict(local or {})
+
+    def inspect_container_image_id(self, name):
+        return self.running.get(name)
+
+    def inspect_image(self, ref):
+        if ref in self.local:
+            return {"image_ref": ref, "id": self.local[ref], "labels": {}}
+        return super().inspect_image(ref)
+
+
+_INFLUX = {"service": "influxdb", "name": "ems-influxdb", "state": "running", "fingerprint": "old-entry"}
+_SAME_CONTENT = _InfluxImageDocker(running={"ems-influxdb": "sha256:27"}, local={"influxdb:2.7": "sha256:27"})
+
+
+def _influx_executor(tmp_path, *, compose, docker, influx_ports=False, image="influxdb:2.7"):
+    install = _install(tmp_path)
+    path = install / "docker-compose.yml"
+    entry = f"  influxdb:\n    image: {image}\n"
+    if influx_ports:
+        entry += "    container_name: ems-influxdb\n    ports:\n      - \"8086:8086\"\n"
+    path.write_text(path.read_text(encoding="utf-8").replace("  influxdb:\n    image: influxdb:2.7\n", entry), encoding="utf-8")
+    return GuidedUpgradeExecutor(
+        release_manager=FakeReleaseManager(_prepared_release(tmp_path, tag=TAG), prepared=TAG),
+        compose=compose,
+        docker_cli=docker,
+        ems_cli=FakeEmsCli(),
+        install_context_provider=lambda: detect_install_context(base_dir=str(install)),
+    )
+
+
+def _upgrade(executor):
+    return executor.execute(TAG, ALL_OPTIONS, confirm=True, system_build=_resolved_build(ems_digest=_DIGEST_A))
+
+
+def _step_of(result, key):
+    return next(step for step in result["steps"] if step["id"] == key)
+
+
+def _influx_notices(result):
+    return [warning for warning in result["warnings"] if "InfluxDB" in warning]
+
+
+def test_the_plan_brings_influxdb_in_line_before_ems_is_recreated():
+    keys = [step["key"] for step in plan_upgrade_steps(ALL_OPTIONS)]
+
+    assert keys.index("update_compose") < keys.index("align_influxdb") == keys.index("recreate_ems") - 1
+
+
+@pytest.mark.parametrize("state", ["running", "restarting"])
+def test_a_live_influxdb_whose_entry_moved_off_the_network_takes_it_before_ems_is_recreated(tmp_path, state):
+    """Compose's fingerprint differs from the container's stamp; a crash-looping one would restart on the old port."""
+
+    compose = FakeCompose(containers=[{**_INFLUX, "state": state}], wanted={"influxdb": "new-entry"})
+    result = _upgrade(_influx_executor(tmp_path, compose=compose, docker=_SAME_CONTENT, influx_ports=True))
+
+    assert result["ok"] is True
+    assert _step_of(result, "align_influxdb")["status"] == "ok"
+    assert [(call["services"], call["profiles"], call["force_recreate"]) for call in compose.calls] == [
+        (("influxdb",), ("with-analytics",), False),
+        (("ems",), (), True),
+    ]
+    assert _influx_notices(result) == [INFLUX_PORT_CLOSED]
+
+
+@pytest.mark.parametrize("moved", [True, False], ids=["port moved", "port kept"])
+def test_an_influxdb_that_already_runs_its_entry_is_left_running_and_nothing_is_claimed(tmp_path, moved):
+    """With EMS_INFLUX_PUBLISH=8086 already in .env, the moved line resolves to the binding InfluxDB has."""
+
+    compose = FakeCompose(containers=[_INFLUX], wanted={"influxdb": "old-entry"})
+    result = _upgrade(_influx_executor(tmp_path, compose=compose, docker=_SAME_CONTENT, influx_ports=moved))
+
+    assert _step_of(result, "align_influxdb")["status"] == "skipped"
+    assert [call["services"] for call in compose.calls] == [("ems",)]
+    assert _influx_notices(result) == []
+
+
+def test_a_stopped_influxdb_stays_stopped_and_its_new_port_is_promised_for_its_next_creation(tmp_path):
+    compose = FakeCompose(containers=[{**_INFLUX, "state": "exited"}], wanted={"influxdb": "new-entry"})
+    result = _upgrade(_influx_executor(tmp_path, compose=compose, docker=_SAME_CONTENT, influx_ports=True))
+
+    assert _step_of(result, "align_influxdb")["status"] == "skipped"
+    assert [call["services"] for call in compose.calls] == [("ems",)]
+    assert _influx_notices(result) == [INFLUX_PORT_CLOSED_LATER]
+
+
+@pytest.mark.parametrize(
+    "docker",
+    [
+        _InfluxImageDocker(running={"ems-influxdb": "sha256:27"}, local={"influxdb:2.7": "sha256:re-pulled"}),
+        _InfluxImageDocker(running={"ems-influxdb": "sha256:27"}),
+    ],
+    ids=["tag pulled again", "tag not on this host"],
+)
+def test_an_influxdb_whose_recreate_could_change_what_runs_is_left_to_the_owner(tmp_path, docker):
+    """Recreating would run other content without the backup the InfluxDB upgrade takes, so the owner decides."""
+
+    compose = FakeCompose(containers=[_INFLUX], wanted={"influxdb": "new-entry"})
+    result = _upgrade(_influx_executor(tmp_path, compose=compose, docker=docker, influx_ports=True))
+
+    assert result["ok"] is True
+    step = _step_of(result, "align_influxdb")
+    assert step["status"] == "warning"
+    assert [call["services"] for call in compose.calls] == [("ems",)]
+    assert _influx_notices(result) == [step["detail"], INFLUX_PORT_CLOSED_LATER]
+    assert "up -d influxdb" in step["detail"] and "upgrade" not in step["detail"]
+
+
+@pytest.mark.parametrize(
+    "compose",
+    [
+        FakeCompose(ps_error=DockerError("docker_compose_status_failed", "Could not read container status.")),
+        FakeCompose(containers=[_INFLUX], wanted={"influxdb": "new-entry"}),
+    ],
+    ids=["containers unreadable", "running image unreadable"],
+)
+def test_an_influxdb_whose_state_cannot_be_read_is_left_as_it_is_without_claiming_a_change(tmp_path, compose):
+    docker = _InfluxImageDocker(local={"influxdb:2.7": "sha256:27"})
+    result = _upgrade(_influx_executor(tmp_path, compose=compose, docker=docker))
+
+    assert result["ok"] is True
+    assert _step_of(result, "align_influxdb")["status"] == "warning"
+    assert [call["services"] for call in compose.calls] == [("ems",)]
+    (notice,) = _influx_notices(result)
+    assert "could not be read" in notice and "changed" not in notice
+
+
+@pytest.mark.parametrize("image", ["influxdb:latest", "influxdb:2", "influxdb:1.8"])
+def test_an_influxdb_image_the_operator_manages_is_never_recreated(tmp_path, image):
+    compose = FakeCompose(containers=[_INFLUX], wanted={"influxdb": "new-entry"})
+    docker = _InfluxImageDocker(running={"ems-influxdb": "sha256:x"}, local={image: "sha256:x"})
+    result = _upgrade(_influx_executor(tmp_path, compose=compose, docker=docker, image=image))
+
+    assert _step_of(result, "align_influxdb")["status"] == "skipped"
+    assert [call["services"] for call in compose.calls] == [("ems",)]
+    assert _influx_notices(result) == []
+
+
+def test_a_run_that_fails_after_the_influxdb_step_keeps_its_notices(tmp_path):
+    """The failed view shows the result's warnings; InfluxDB may be down although EMS failed later."""
+
+    compose = FakeCompose(
+        containers=[_INFLUX], wanted={"influxdb": "new-entry"},
+        up_error=(("influxdb", "ems"), DockerError("compose_start_failed", "The daemon does not answer.")),
+    )
+    result = _upgrade(_influx_executor(tmp_path, compose=compose, docker=_SAME_CONTENT, influx_ports=True))
+
+    assert result["ok"] is False
+    assert _step_of(result, "recreate_ems")["status"] == "error"
+    assert _influx_notices(result) == [INFLUX_RECREATE_FAILED, INFLUX_PORT_CLOSED_LATER]
+
+
+def test_the_port_notices_name_the_env_line_that_can_keep_influxdb_on_the_network():
+    """The Admin does not read EMS_INFLUX_PUBLISH, so neither notice may promise loopback without it."""
+
+    for notice in (INFLUX_PORT_CLOSED, INFLUX_PORT_CLOSED_LATER):
+        assert "as EMS_INFLUX_PUBLISH in .env says, and on this host only (127.0.0.1:8086) where .env does not set it" in notice
+
+
+def test_a_recreate_that_fails_says_influxdb_may_be_down_and_the_upgrade_goes_on(tmp_path):
+    """Compose removes the old container before it starts the new one, so a failed up can leave none running."""
+
+    compose = FakeCompose(
+        containers=[_INFLUX], wanted={"influxdb": "new-entry"},
+        up_error=(("influxdb",), DockerError("compose_port_conflict", "Port 8086 is taken.")),
+    )
+    result = _upgrade(_influx_executor(tmp_path, compose=compose, docker=_SAME_CONTENT, influx_ports=True))
+
+    assert result["ok"] is True
+    step = _step_of(result, "align_influxdb")
+    assert (step["status"], step["code"]) == ("warning", "compose_port_conflict")
+    assert _influx_notices(result) == [INFLUX_RECREATE_FAILED, INFLUX_PORT_CLOSED_LATER]
+    assert [call["services"] for call in compose.calls] == [("influxdb",), ("ems",)]
 
 
 @pytest.mark.parametrize(

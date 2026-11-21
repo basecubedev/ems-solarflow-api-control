@@ -2216,4 +2216,16 @@ def build_test_runtime(*, data_dir):
 
     runtime.test_reset = test_reset
     runtime.mqtt_compose = ProcessMappingCompose()
+    ems_port = os.environ.get("EMS_ADMIN_TEST_EMS_PORT")
+    if ems_port:
+        runtime.ems_upstream = lambda: _test_ems_upstream(int(ems_port))
     return runtime
+
+
+def _test_ems_upstream(port):
+    """The browser tests' EMS: refused as the installation says, else the preview server on ``port``."""
+
+    from admin.ems_forwarding import EmsUpstream, ems_upstream
+
+    ems_upstream(detect_install_context())
+    return EmsUpstream(port=port), None

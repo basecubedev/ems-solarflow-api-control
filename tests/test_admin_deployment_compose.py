@@ -313,3 +313,38 @@ def test_local_compose_forwards_every_system_build_argument(compose_name):
         assert f"${{{environment_name}" in compose, (
             f"{compose_name} does not source {build_arg} from {environment_name}"
         )
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "docker-compose.yml",
+        "docker-compose.discovery-only.yml",
+        "docker-compose.runtime.bridge.yml",
+        "docker-compose.runtime.yml",
+        "docker-compose.runtime.discovery-only.yml",
+    ],
+)
+def test_an_admin_in_a_bridge_network_reaches_the_ems_through_the_host(name):
+    """The Admin forwards the EMS's API to the port the EMS publishes on the host.
+
+    On the host network that port is on the Admin's own loopback; in a bridge
+    network the Admin's loopback is its own container, so the host is named.
+    """
+
+    import yaml
+
+    service = yaml.safe_load(_read(name))["services"]["ems-solarflow-admin"]
+    environment = service.get("environment") or {}
+    if service.get("network_mode") == "host":
+        assert environment.get("EMS_ADMIN_EMS_HOST") == "127.0.0.1"
+        assert "extra_hosts" not in service
+    else:
+        assert environment.get("EMS_ADMIN_EMS_HOST") == "host.docker.internal"
+        assert "host.docker.internal:host-gateway" in service["extra_hosts"]
+
+
+def test_the_host_network_override_takes_the_bridge_s_way_to_the_ems_back():
+    text = _read("docker-compose.hostnet.yml")
+    assert "extra_hosts: !reset []" in text
+    assert 'EMS_ADMIN_EMS_HOST: "127.0.0.1"' in text

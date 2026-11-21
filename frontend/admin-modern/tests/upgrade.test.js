@@ -35,7 +35,6 @@ import {
 } from "../src/lib/upgrade.js";
 
 const read = (path) => readFileSync(new URL(`../../../admin/${path}`, import.meta.url), "utf8");
-const CLASSIC = readFileSync(new URL("../../../admin/static/admin.js", import.meta.url), "utf8");
 
 test("the steps are the executor's, in its order, and every one belongs to exactly one phase", () => {
   const source = read("guided_upgrade.py");
@@ -59,12 +58,9 @@ test("the owner's choices cover every option the executor takes, and the deploy 
   assert.ok(Object.values(upgradeOptions(defaultChoices())).every(Boolean));
 });
 
-test("a development build is recognised as Classic recognises it, and only it carries the acknowledgement", () => {
-  const classic = CLASSIC.slice(CLASSIC.indexOf("function isImmutableDevelopmentBuildTag("), CLASSIC.indexOf("\n}\n", CLASSIC.indexOf("function isImmutableDevelopmentBuildTag(")) + 2);
-  const isDev = new Function(`${classic}\nreturn isImmutableDevelopmentBuildTag;`)();
-  for (const tag of ["dev-feature-x-abcdef1-12-1", "dev-a-0123456789abcdef-3-2", "v0.9.0", "latest", "dev-x-abc-1-1", "dev--abcdef1-1-1", ` dev-feature-x-abcdef1-12-1 `]) {
-    assert.equal(isDevelopment({ tag }), isDev(tag), tag);
-  }
+test("a development build is recognised by its immutable tag or its channel, and only it carries the acknowledgement", () => {
+  const expected = { "dev-feature-x-abcdef1-12-1": true, "dev-a-0123456789abcdef-3-2": true, "v0.9.0": false, latest: false, "dev-x-abc-1-1": false, " dev-feature-x-abcdef1-12-1 ": true };
+  for (const [tag, development] of Object.entries(expected)) assert.equal(isDevelopment({ tag }), development, tag);
   assert.equal(isDevelopment({ tag: "v1", channel: "development" }), true);
   assert.deepEqual(validateBody({ tag: "v0.9.0", channel: "stable" }), { tag: "v0.9.0" });
   assert.deepEqual(validateBody({ tag: "dev-feature-x-abcdef1-12-1" }), { tag: "dev-feature-x-abcdef1-12-1", acknowledge_risk: true });
@@ -181,9 +177,9 @@ test("the backup a run wrote is named by its archive, never by another sentence"
   assert.equal(backupArchive(null), null);
 });
 
-test("a registry rate limit is recognised by its reason or by the pull step's code, as in Classic", () => {
-  const classic = CLASSIC.match(/const UPGRADE_REGISTRY_RATE_LIMIT_REASONS = new Set\(\[([^\]]*)\]\)/)[1];
-  assert.deepEqual([...classic.matchAll(/"([a-z_]+)"/g)].map((match) => match[1]).sort(), [...RATE_LIMITED].sort());
+test("a registry rate limit is recognised by its reason or by the pull step's code, the two codes the server gives it", () => {
+  assert.match(read("system_build.py"), new RegExp(`^SYSTEM_BUILD_RATE_LIMIT_CODE = "${RATE_LIMITED[0]}"$`, "m"));
+  assert.match(read("deployment.py"), new RegExp(`DockerError\\(\\s*"${RATE_LIMITED[1]}",\\s*REGISTRY_RATE_LIMIT_MESSAGE`));
   assert.equal(rateLimited({ reason: "image_pull_rate_limited" }), true);
   assert.equal(rateLimited({ steps: [{ id: "pull_image", status: "error", code: "system_build_registry_rate_limited" }] }), true);
   assert.equal(rateLimited({ steps: [{ id: "backup", status: "error", code: "image_pull_rate_limited" }] }), false);

@@ -14,6 +14,19 @@ export class ApiError extends Error {
   }
 }
 
+let watcher = null;
+
+/** A page may see every refused request first, as the dashboard on the EMS's own port does to notice the console taking over. */
+export function watchRefusals(handler) {
+  watcher = handler;
+}
+
+function refused(response, payload) {
+  const error = new ApiError(response.status, payload);
+  watcher?.(error);
+  return error;
+}
+
 async function parse(response) {
   const type = response.headers.get("Content-Type") || "";
   if (!type.includes("application/json")) return null;
@@ -27,7 +40,7 @@ async function parse(response) {
 export async function getJson(path, { signal } = {}) {
   const response = await fetch(path, { credentials: "same-origin", signal, headers: { Accept: "application/json" } });
   const payload = await parse(response);
-  if (!response.ok) throw new ApiError(response.status, payload);
+  if (!response.ok) throw refused(response, payload);
   return payload;
 }
 
@@ -43,7 +56,7 @@ export async function sendJson(path, { method = "POST", body, csrfToken, signal,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const payload = await parse(response);
-  if (!response.ok) throw new ApiError(response.status, payload);
+  if (!response.ok) throw refused(response, payload);
   return payload;
 }
 

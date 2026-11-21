@@ -11,6 +11,8 @@ import { guardLeaving } from "./state/backupJobs.svelte.js";
 import { serviceAction } from "./state/services.svelte.js";
 import { upgrade, explainSignInDuringUpgrade } from "./state/upgrade.svelte.js";
 import { watchHash } from "./app/router.svelte.js";
+import { watchEms } from "./state/ems.svelte.js";
+import "../../dashboard-modern/src/i18n/i18n.svelte.js";
 
 applyDocumentPrefs();
 watchSystemMotion();
@@ -21,6 +23,7 @@ loadAuth();
 watchSession();
 watchActivity();
 startPolling(() => auth.authenticated);
+watchEms();
 guardLeaving(() => Boolean(serviceAction.busy) || upgrade.stage === "starting" || Boolean(upgrade.recovering));
 
 mount(App, { target: document.getElementById("app") });

@@ -204,7 +204,7 @@ gives you the accumulated one.
    custom range with **From**, **To** and **Apply**.
 4. The chart names its source, *From InfluxDB*, and **Table** lists the values.
    The battery is drawn below zero while charging and above zero while
-   discharging into the inverter, as in Classic; the legend and the table say
+   discharging into the inverter; the legend and the table say
    **Charge** or **Discharge**. The **Battery charged** and **Battery
    discharged** cards are both positive amounts. It zooms like every chart here; on Analytics a zoom
    asks InfluxDB for just the zoomed window, so the detail gets finer the further

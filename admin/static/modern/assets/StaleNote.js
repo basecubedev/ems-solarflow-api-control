@@ -1,0 +1,3 @@
+/* SPDX-FileCopyrightText: 2026 basecubedev */
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+import{A as e,D as t,K as n,M as r,U as i,Y as a,ct as o,et as s,it as c,j as l,k as u,q as d,rt as f,z as p}from"./vendor.js";import{n as m,r as h,y as g}from"./Card.js";import"./errors.js";var _=r(`<p class="note stale svelte-w50dtn" role="status" data-testid="stale-note"><!> </p>`);function v(r,v){c(v,!0);let y=s(m);var b=l(),x=d(b),S=t=>{var r=_(),s=n(r);g(s,{name:`clock`});var c=a(s,1,!0);o(r),i(e=>u(c,e),[()=>h(`stale.note`,{when:p(y).when(v.resource.loadedAt)})]),e(t,r)};t(x,e=>{v.resource.error&&v.resource.data&&v.resource.loadedAt&&e(S)}),e(r,b),f()}export{v as t};

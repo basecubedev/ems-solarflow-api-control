@@ -19,7 +19,7 @@ pytestmark = [pytest.mark.contract, pytest.mark.documentation]
 ROOT = Path(__file__).resolve().parents[1]
 APPS = {
     "dashboard": ("frontend/dashboard-modern", {"uPlot.LICENSE": "dashboard/static/uPlot.LICENSE"}),
-    "admin": ("frontend/admin-modern", {}),
+    "admin": ("frontend/admin-modern", {"uPlot.LICENSE": "dashboard/static/uPlot.LICENSE"}),
     "appliance": ("frontend/appliance-modern", {}),
 }
 SHARED_ABOUT = ROOT / "frontend" / "shared" / "lib" / "about.js"
@@ -51,7 +51,7 @@ def test_the_about_page_reads_every_notice_its_build_ships(app):
 def test_the_about_page_is_reachable_in_every_app(app):
     source, _ = APPS[app]
     pages = (ROOT / source / "src" / "app" / "pages.js").read_text(encoding="utf-8")
-    assert re.search(r'\{ id: "about", icon: "info", group: "system",[^}]*hidden: true \}', pages)
+    assert re.search(r'\{ id: "about", icon: "info", group: "(?:system|admin)",[^}]*hidden: true \}', pages)
     app_source = (ROOT / source / "src" / "App.svelte").read_text(encoding="utf-8")
     assert re.search(r'about: (?:About\b|\(\) => import\("\.\./\.\./shared/widgets/About\.svelte"\))', app_source)
     assert 'import About from "../../shared/widgets/About.svelte"' in app_source or "shared/widgets/About.svelte" in app_source

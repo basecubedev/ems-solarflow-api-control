@@ -7,6 +7,7 @@ import { prefs, applyDocumentPrefs } from "./prefs.svelte.js";
 import { auth } from "./auth.svelte.js";
 import { normalizedDevices } from "../lib/devices.js";
 import { packsSeen } from "../lib/cells.js";
+import { setConsoleRecord } from "./console.svelte.js";
 
 /**
  * The live snapshot. It is replaced wholesale on every frame and therefore
@@ -23,6 +24,8 @@ class Live {
   runtimeUnavailable = $state(false);
   /** The highest pack number each device has reported cells for since the page loaded. */
   cellPacks = $state.raw({});
+  /** Whether /api/ui-config has answered once, so links that depend on it wait for it. */
+  uiConfigLoaded = $state(false);
 }
 
 export const live = new Live();
@@ -82,19 +85,25 @@ export async function loadRuntime() {
   return live.runtime;
 }
 
+function applyUiConfig(config) {
+  if (config && typeof config.animation_mode === "string") {
+    prefs.serverAnimation = config.animation_mode;
+    applyDocumentPrefs();
+  }
+  setConsoleRecord(config?.admin_console ?? null);
+  live.uiConfigLoaded = true;
+}
+
 async function loadUiConfig() {
   try {
-    const config = await getJson("/api/ui-config");
-    if (config && typeof config.animation_mode === "string") {
-      prefs.serverAnimation = config.animation_mode;
-      applyDocumentPrefs();
-    }
+    applyUiConfig(await getJson("/api/ui-config"));
   } catch {
     prefs.serverAnimation = "normal";
   }
 }
 
-export function startLive() {
+/** Start reading the EMS; ``config`` is /api/ui-config when the page already has it. */
+export function startLive(config = null) {
   if (transport) return;
   transport = createLiveTransport({
     onSnapshot: accept,
@@ -114,7 +123,8 @@ export function startLive() {
     if (!document.hidden) loadRuntime();
   }, RUNTIME_REFRESH_MS);
   stopAuthWatch = retryRuntimeOnSignIn();
-  loadUiConfig();
+  if (config) applyUiConfig(config);
+  else loadUiConfig();
 }
 
 /**

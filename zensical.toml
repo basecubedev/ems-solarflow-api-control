@@ -141,8 +141,7 @@ nav = [
     { "E3/DC Modbus probe" = "developer/e3dc-modbus-probe.md" },
     { "CI / release" = "developer/ci-release.md" },
     { "Documentation website" = "developer/docs-site.md" },
-    { "Dashboard style guide" = "developer/dashboard-style-guide.md" },
-    { "Modern dashboard style guide" = "developer/dashboard-modern-style-guide.md" },
+    { "Front end style guide" = "developer/dashboard-modern-style-guide.md" },
     { "Classic and Modern parity" = "developer/modern-parity.md" },
     { "Design notes" = [
       "developer/design-notes/README.md",

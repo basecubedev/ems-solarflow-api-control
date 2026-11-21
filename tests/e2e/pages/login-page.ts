@@ -3,38 +3,24 @@
 import { type Page, expect } from "@playwright/test";
 import { ADMIN_PASSWORD } from "../fixtures/admin";
 
-// Drive the real Admin auth screen through the browser. The shared password may
-// already exist (created by the reset fixture), so this handles both the
-// create-password and login forms.
+/**
+ * The console's sign-in through the browser. The shared password may already
+ * exist, so this answers both the sign-in and the first password.
+ */
 export class LoginPage {
   constructor(private readonly page: Page) {}
 
-  /**
-   * Classic at /classic/. A published Admin from before Modern moved to the
-   * root -- the replacement canary's source release -- has no /classic/ and
-   * answers Classic at / once the browser has chosen it.
-   */
+  /** The guided setup at the console's address; the sign-in stands in its place until a session exists. */
   async open() {
-    const response = await this.page.goto("/classic/");
-    if (response?.status() !== 404) return;
-    await this.page.evaluate(() => window.localStorage.setItem("ems-admin-ui", "classic"));
-    await this.page.goto("/");
+    await this.page.goto("/#/setup");
   }
 
   async authenticate(password = ADMIN_PASSWORD) {
-    // Both auth blocks are present; only the applicable one lacks [hidden].
-    const login = this.page.locator("#auth-login:not([hidden])");
-    const create = this.page.locator("#auth-create:not([hidden])");
-    await expect(login.or(create)).toBeVisible();
-    if (await login.count()) {
-      await this.page.fill("#auth-login-password", password);
-      await this.page.locator("#auth-login-form button[type=submit]").click();
-    } else {
-      await this.page.fill("#auth-create-password", password);
-      await this.page.fill("#auth-create-confirm", password);
-      await this.page.locator("#auth-create-form button[type=submit]").click();
-    }
-    // The auth view is dismissed once a session is established.
-    await expect(this.page.locator("#view-start")).toBeVisible();
+    const screen = this.page.getByTestId("sign-in-screen");
+    await expect(screen).toHaveAttribute("data-mode", /^(login|create)$/);
+    await this.page.fill("#admin-password", password);
+    if ((await screen.getAttribute("data-mode")) === "create") await this.page.fill("#admin-password-confirm", password);
+    await this.page.getByTestId("sign-in-submit").click();
+    await expect(screen).toBeHidden();
   }
 }

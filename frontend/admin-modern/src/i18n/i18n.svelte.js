@@ -5,7 +5,7 @@ import { CATALOG_NAMES, CATALOG_OPTIONS, CATALOG_WORDS } from "./catalog.js";
 import { t, useStrings } from "../../../shared/i18n/i18n.svelte.js";
 import { prefs } from "../../../shared/state/prefs.svelte.js";
 
-useStrings(STRINGS);
+useStrings(STRINGS, 1);
 
 export { t, tn, fmt } from "../../../shared/i18n/i18n.svelte.js";
 

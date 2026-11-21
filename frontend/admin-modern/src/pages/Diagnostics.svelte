@@ -6,6 +6,8 @@
   import Empty from "../../../shared/ui/Empty.svelte";
   import Status from "../../../shared/ui/Status.svelte";
   import DiagnosisReport from "../../../shared/widgets/DiagnosisReport.svelte";
+  import Diagnose from "../../../dashboard-modern/src/pages/Diagnose.svelte";
+  import EmsPage from "../app/EmsPage.svelte";
   import { t, tn, fmt } from "../i18n/i18n.svelte.js";
   import { diagnostics, runChecks } from "../state/diagnostics.svelte.js";
   import { checkView, summaryTone, unavailableView, RUN_MODES } from "../lib/diagnostics.js";
@@ -78,6 +80,8 @@
     {/if}
   </Card>
 {/each}
+
+<EmsPage><Diagnose /></EmsPage>
 
 <style>
   .promises { list-style: none; margin: 0 0 var(--s3); padding: 0; display: flex; flex-direction: column; gap: 6px; color: var(--m-muted); font-size: 13px; }

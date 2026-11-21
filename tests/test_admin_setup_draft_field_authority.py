@@ -14,8 +14,9 @@ Setup submits two editable collections, and they are authorized differently:
 ``devices[]``
     The draft the browser owns between plans. Classified field by field in
     :data:`admin.setup_planner.DRAFT_FIELD_AUTHORITY`, pinned below against both
-    the fields the browser builds and the fields the config-producing modules
-    read.
+    the fields the Admin console builds (``frontend/admin-modern/src/lib/setupDraft.js``
+    and ``state/setupDraft.svelte.js``) and the fields the config-producing
+    modules read.
 
 ``zendure_mqtt_proposals[]``
     Not classified field by field, because nothing the browser sends survives:
@@ -28,6 +29,8 @@ See ``docs/developer/developer.md`` — "Setup draft field authority".
 """
 
 import copy
+import functools
+import json
 import pathlib
 import re
 
@@ -42,6 +45,7 @@ from admin.setup_planner import (
     _DRAFT_IDENTITY_FIELDS,
     draft_field_authority,
 )
+from tests.modern_frontend import js_export, js_run
 
 pytestmark = [
     pytest.mark.admin,
@@ -52,47 +56,139 @@ pytestmark = [
 ]
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-ADMIN_JS = REPO / "admin" / "static" / "admin.js"
+CONSOLE = REPO / "frontend" / "admin-modern" / "src"
+SETUP_DRAFT_JS = CONSOLE / "lib" / "setupDraft.js"
+SETUP_DRAFT_STATE = CONSOLE / "state" / "setupDraft.svelte.js"
 
-# Every place the browser builds or mutates an entry of ``configDraftItems``.
-# Named rather than discovered: a new construction site has to be added here,
-# which is exactly the review this contract exists to force.
-DRAFT_CONSTRUCTION_SITES = (
-    "function draftItemFromDevice(",
-    "function addDeviceToDraft(",
-    "function selectGridMeter(",
-    "function applyConnectionSwitch(",
-    "function applySetupPlanOperations(",
-    "function autoSelectGridMeter(",
-    "function addManualDevice(",
-    "function updateDraftDeviceField(",
-)
-
-_LITERAL_KEY = re.compile(r"^\s{4,}([a-z][a-z0-9_]*):", re.MULTILINE)
-# Draft entries are built and mutated as ``item``; an MQTT selection in the same
-# function is ``entry`` and is authorized by server-side re-resolution instead.
-_ASSIGNED_KEY = re.compile(r"\bitem\.([a-z][a-z0-9_]*)\s*=[^=]")
-
-# Names that appear inside those functions but are not draft-entry fields:
-# arguments of neighbouring calls and keys of other payloads.
-_NOT_DRAFT_FIELDS = frozenset({"target"})
+_ITEM_LITERAL = re.compile(r"\{\s*\.\.\.(?:item|grid|entry|meter)\s*,|\{\s*\.\.\.itemFromDevice\(")
+_ITEM_ASSIGNMENT = re.compile(r"\b(?:item|grid|meter)\.([a-z][a-z0-9_]*)\s*=(?!=)")
+_EXPORTED_FUNCTION = re.compile(r"^export (?:async )?function (\w+)\(", re.MULTILINE)
+_CLOSING = {"{": "}", "(": ")", "[": "]"}
 
 
-def _function_body(source, anchor):
-    start = source.index(anchor)
-    end = source.find("\nfunction ", start + len(anchor))
-    return source[start : end if end > 0 else len(source)]
+def _draft_authority(field):
+    """The planner's authority for a draft field, or ``None``."""
+
+    return draft_field_authority(field)
 
 
+def _all_classified():
+    return dict(DRAFT_FIELD_AUTHORITY)
+
+
+def _literal_parts(source, start):
+    """The top-level comma-separated parts of the object literal opening at ``start``."""
+
+    parts, depth, quote, part = [], 0, None, start + 1
+    position = start
+    while position < len(source):
+        char = source[position]
+        if quote:
+            if char == "\\":
+                position += 1
+            elif char == quote:
+                quote = None
+        elif char in "'\"`":
+            quote = char
+        elif char in _CLOSING:
+            depth += 1
+        elif char in _CLOSING.values():
+            depth -= 1
+            if depth == 0:
+                parts.append(source[part:position])
+                return [chunk.strip() for chunk in parts if chunk.strip()]
+        elif char == "," and depth == 1:
+            parts.append(source[part:position])
+            part = position + 1
+        position += 1
+    raise AssertionError("unbalanced object literal in the Setup draft state")
+
+
+def _endpoint_keys():
+    """The fields the console's components hand to ``setGridEndpoint`` by name."""
+
+    components = "\n".join(path.read_text(encoding="utf-8") for path in sorted(CONSOLE.rglob("*.svelte")))
+    keys = re.findall(r'setGridEndpoint\("([a-z_]+)"', components)
+    assert keys and len(keys) == components.count("setGridEndpoint("), "setGridEndpoint is called with a key the walk cannot read"
+    return set(keys)
+
+
+def _state_fields():
+    """Every field the Setup draft state adds to a draft entry, read from its source.
+
+    A literal that starts from an entry (``{ ...item, ... }``, ``{ ...grid, ... }``,
+    ``{ ...itemFromDevice(...), ... }``) or an assignment to one names its keys;
+    a computed key is resolved only where the function that writes it is known.
+    """
+
+    bridge_keys = js_export(SETUP_DRAFT_JS, "BRIDGE_KEYS")
+    if bridge_keys is None:
+        pytest.skip("node is required to read the Setup draft's bridge keys")
+    computed = {
+        ("setGridFeature", "bridgeKey"): set(bridge_keys),
+        ("setGridEndpoint", "key"): _endpoint_keys(),
+    }
+    source = SETUP_DRAFT_STATE.read_text(encoding="utf-8")
+    functions = [(match.start(), match.group(1)) for match in _EXPORTED_FUNCTION.finditer(source)]
+    fields = set(_ITEM_ASSIGNMENT.findall(source))
+    for match in _ITEM_LITERAL.finditer(source):
+        owner = next((name for start, name in reversed(functions) if start < match.start()), "")
+        for part in _literal_parts(source, match.start()):
+            if part.startswith("..."):
+                continue
+            if part.startswith("["):
+                expression = part[1 : part.index("]")]
+                assert (owner, expression) in computed, f"{owner} sets a draft key the walk cannot follow: [{expression}]"
+                fields |= computed[(owner, expression)]
+                continue
+            key = part.split(":", 1)[0].strip().strip("\"'")
+            assert re.fullmatch(r"[a-z][a-z0-9_]*", key), f"{owner} sets a draft key the walk cannot read: {part}"
+            fields.add(key)
+    return fields
+
+
+def _constructed_fields():
+    """Every field the console's own draft constructors put on an entry, run under Node."""
+
+    from admin.setup_config import build_setup_catalog
+
+    return set(
+        js_run(
+            SETUP_DRAFT_JS,
+            f"""
+const catalog = {json.dumps(build_setup_catalog())};
+const built = new Set();
+const take = (item) => {{ for (const key of Object.keys(item || {{}})) built.add(key); return item; }};
+const device = {{ observation_id: "obs:v1:a", ip: "192.0.2.10", port: 80, serial_number: "SN1",
+  physical_identity_token: "opaque:v1:a", device_type: "zendure", api_family: "zendure",
+  display_name: "Inverter", sources: ["active_scan"] }};
+const bridge = {{ observation_id: "obs:v1:b", ip: "192.0.2.20", port: 80, serial_number: "M1",
+  device_type: m.BRIDGE_TYPE, api_family: m.BRIDGE_TYPE, credentials_ref: "bridge-1", node_id: 1,
+  unit_id: 1, sources: ["mdns"] }};
+const inverter = take(m.itemFromDevice(device, "inverter", {{ id: "item-1", items: [], configName: "INV_1" }}));
+const grid = take(m.itemFromDevice(bridge, "grid_meter", {{ id: "item-2", items: [] }}));
+take(m.manualItem(m.emptyDraft(), catalog, {{ role: "inverter", host: "192.0.2.30" }}, "item-3").item);
+take(m.manualItem(m.emptyDraft(), catalog, {{ role: "grid_meter", host: "192.0.2.31" }}, "item-4").item);
+const devices = (catalog.sections || []).find((section) => section.id === "devices");
+for (const field of devices ? devices.fields : []) take(m.setDeviceField(inverter, field, 1));
+for (const type of [m.D0_TYPE, m.BRIDGE_TYPE]) take(m.syncGridFeatures({{}}, {{ ...grid, grid_meter_type: type }}).item);
+const draft = {{ ...m.emptyDraft(), items: [{{ ...inverter, auto_added: false }}, grid] }};
+m.reassertPriority(draft).items.forEach(take);
+m.withItemIds([{{ role: "inverter" }}]).forEach(take);
+const plan = {{ plan_id: "plan:v1:p", generation: "g1", operations: {{ adopt_observations: [{{ observation_ref: "obs:v1:c" }}] }} }};
+const available = new Map([["obs:v1:c", {{ ...device, observation_id: "obs:v1:c", ip: "192.0.2.40" }}]]);
+const adopted = m.applyOperations(draft, plan, plan, {{ proposals: [], available, names: new Map(), newId: () => "item-5" }});
+adopted.draft.items.forEach(take);
+m.previewBody(adopted.draft, {{ workflowId: "w", planId: "plan:v1:p", supportedMeters: 1, catalog }}).devices.forEach(take);
+process.stdout.write(JSON.stringify([...built]));
+""",
+        )
+    )
+
+
+@functools.cache
 def _browser_draft_fields():
-    source = ADMIN_JS.read_text(encoding="utf-8")
-    fields = set()
-    for anchor in DRAFT_CONSTRUCTION_SITES:
-        assert anchor in source, f"draft construction site renamed: {anchor}"
-        body = _function_body(source, anchor)
-        fields.update(_LITERAL_KEY.findall(body))
-        fields.update(_ASSIGNED_KEY.findall(body))
-    return fields - _NOT_DRAFT_FIELDS
+    return _constructed_fields() | _state_fields()
 
 
 # --- the draft the browser owns ----------------------------------------------
@@ -100,7 +196,7 @@ def test_every_field_the_browser_builds_into_a_draft_is_classified():
     unclassified = sorted(
         field
         for field in _browser_draft_fields()
-        if draft_field_authority(field) is None
+        if _draft_authority(field) is None
     )
     assert unclassified == [], (
         "these Setup draft fields belong to no authority model: "
@@ -111,7 +207,7 @@ def test_every_field_the_browser_builds_into_a_draft_is_classified():
 def test_the_classification_carries_no_field_the_browser_stopped_sending():
     """Drift in the other direction: a removed field must leave the map too."""
 
-    stale = sorted(set(DRAFT_FIELD_AUTHORITY) - _browser_draft_fields())
+    stale = sorted(set(_all_classified()) - _browser_draft_fields())
     assert stale == [], "these classified fields are no longer built: " + ", ".join(
         stale
     )
@@ -137,7 +233,7 @@ def test_every_field_has_exactly_one_known_authority():
     }
     unknown = sorted(
         f"{field}={authority}"
-        for field, authority in DRAFT_FIELD_AUTHORITY.items()
+        for field, authority in _all_classified().items()
         if authority not in known
     )
     assert unknown == []
@@ -153,7 +249,7 @@ def test_catalog_values_travel_only_inside_config_values():
     from admin.device_common_fields import common_device_value_fields
 
     assert DRAFT_FIELD_AUTHORITY["config_values"] == AUTHORITY_CATALOG_MUTATION
-    assert not set(common_device_value_fields()) & set(DRAFT_FIELD_AUTHORITY)
+    assert not set(common_device_value_fields()) & set(_all_classified())
 
 
 def test_presentation_fields_never_reach_the_generated_config():
@@ -167,7 +263,7 @@ def test_presentation_fields_never_reach_the_generated_config():
     sources = {path.name: path.read_text(encoding="utf-8") for path in producers}
     offenders = [
         f"{name}:{field}"
-        for field, authority in DRAFT_FIELD_AUTHORITY.items()
+        for field, authority in _all_classified().items()
         if authority == AUTHORITY_PRESENTATION
         for name, source in sources.items()
         if f'"{field}"' in source
@@ -208,7 +304,7 @@ def test_exact_preview_fields_are_bound_from_review_to_apply():
         "ip": "10.0.0.11",
     }
     reviewed = fingerprint([base])
-    for field, authority in DRAFT_FIELD_AUTHORITY.items():
+    for field, authority in _all_classified().items():
         if authority not in (AUTHORITY_EXACT_PREVIEW, AUTHORITY_CATALOG_MUTATION):
             continue
         moved = dict(base)

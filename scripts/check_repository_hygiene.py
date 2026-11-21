@@ -37,8 +37,7 @@ PYTHON_CACHE_PATTERNS = ("*.pyc", "*.pyo", "*/__pycache__/*", "__pycache__/*")
 # describes. Under reports/dashboard-perf/ it is the written accounts only --
 # what was measured, what it meant, and which earlier conclusions it withdrew.
 # The runs themselves are not committed: a benchmark's JSON is the output of one
-# afternoon on one machine, and this repository keeps the conclusions and the
-# means of reproducing them instead (scripts/dashboard_profile/).
+# afternoon on one machine, and this repository keeps the conclusions instead.
 SCRATCH_EXCEPTIONS = ("reports/appliance/*", "reports/dashboard-perf/*")
 
 SCRATCH_PATTERNS = (

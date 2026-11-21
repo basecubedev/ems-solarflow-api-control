@@ -98,6 +98,7 @@ DASHBOARD_DEFAULTS = {
     "session_absolute_max_seconds": 43200,
     "log_buffer_lines": 5000,
     "log_redaction": False,
+    "signpost": True,
     # Dashboard animation cost. "normal" keeps the full animated flow view;
     # "reduced" trims glows/filters and slows pipe motion; "off" disables
     # continuous pipe animations and glow/blur filters. Browser-level
@@ -3426,6 +3427,10 @@ def normalize_dashboard_config(config):
     merged["log_redaction"] = safe_bool(
         merged.get("log_redaction"),
         DASHBOARD_DEFAULTS["log_redaction"],
+    )
+    merged["signpost"] = safe_bool(
+        merged.get("signpost"),
+        DASHBOARD_DEFAULTS["signpost"],
     )
     mode = str(merged.get("animation_mode", "")).strip().lower()
     merged["animation_mode"] = (

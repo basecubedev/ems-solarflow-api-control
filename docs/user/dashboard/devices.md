@@ -158,7 +158,7 @@ A device can be shown but not written to. The reasons, and where to fix them:
 
 | Reason | What the card shows | Fix |
 | --- | --- | --- |
-| You are not signed in | Nothing different: the top bar reads **Read-only**; the EMS still controls normally | Nothing — this is display only |
+| You are not signed in | Nothing different: the top bar shows **Sign in**; the EMS still controls normally | Nothing — this is display only |
 | Device disabled | **Disabled**, *Disabled in the configuration; the EMS does not control it.* | Re-enable in [Device management](../admin/device-management.md) |
 | Telemetry stale | **Offline**, *Excluded from regulation until it reports again.* | Restore the transport |
 | No output control | **Telemetry only**, *Read-only device: the EMS shows its values and never writes to it.* | [Why a device is read-only](../admin/device-management.md#why-a-device-is-read-only) |
@@ -166,9 +166,8 @@ A device can be shown but not written to. The reasons, and where to fix them:
 | Write gate off | The [Control pipeline](control.md) shows the write blocked | [MQTT write gates](../admin/mqtt.md#write-safety-gates) |
 | Dry run / simulation | The EMS deliberately writes nothing | Configuration choice |
 
-> The **Read-only** pill in the top bar describes *your browser session*, not
-> the EMS. The EMS keeps controlling your hardware whether or not you are signed
-> in.
+> Signing in or out changes what *your browser* may do, not the EMS. The EMS
+> keeps controlling your hardware whether or not you are signed in.
 
 ## Offline and stale devices
 

@@ -7,7 +7,7 @@
   import ConfirmDialog from "../../../../shared/ui/ConfirmDialog.svelte";
   import StepList from "../StepList.svelte";
   import { t } from "../../i18n/i18n.svelte.js";
-  import { dashboardHref } from "../../lib/links.js";
+  import { dashboardPage } from "../../lib/links.js";
   import { DOCKER_STATES, conflictService, jobSteps, serviceKey, startMessage, startTone } from "../../lib/setup.js";
   import { setup } from "../../state/setup.svelte.js";
   import { setupDeploy, loadPlan, loadStatus, repairPermissions, resolveConflict, startEms } from "../../state/setupDeploy.svelte.js";
@@ -24,7 +24,7 @@
   const safe = $derived(conflict?.safe_fix_available === true);
   const services = $derived(start.services.length ? start.services : setupDeploy.images.map((image) => ({ service: image.service, image: image.image, state: null, status: "pending" })));
   const identity = $derived(setupDeploy.plan?.runtime_identity || null);
-  const href = $derived(dashboardHref(start.dashboardUrl || "http://localhost:8080"));
+  const href = $derived(dashboardPage(start.dashboardUrl || "http://localhost:8080"));
   const blocked = $derived(start.status === "running" || !setupDeploy.prepared || !setupDeploy.dockerReady || Boolean(conflict) || start.errorCode === "workspace_permission_denied");
 
   $effect(() => {
@@ -82,7 +82,7 @@
       <div class="lead inner" data-testid="setup-start-success">
         <span class="icon-tile sm c-ok"><Icon name="circle-check" /></span>
         <p>{t("setup.run.success")}</p>
-        {#if href}<a class="btn small" href={href} target="_blank" rel="noopener noreferrer"><Icon name="layout-dashboard" size="sm" />{t("setup.run.openDashboard")}</a>{/if}
+        {#if href}<a class="btn small" href={href}><Icon name="layout-dashboard" size="sm" />{t("setup.run.openDashboard")}</a>{/if}
       </div>
     {/if}
   </div>

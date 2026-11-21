@@ -9,6 +9,7 @@ cross-source consistency (catalogue == template == Core).
 """
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -197,10 +198,17 @@ def test_core_runtime_defaults_match_generated_config_defaults():
 
 
 def test_no_javascript_only_fallback_disagrees_with_core():
-    # admin.js is fully catalogue-driven: it must not hardcode a numeric default
-    # for any promoted control field (which could silently disagree with Core).
-    admin_js = (ROOT / "admin" / "static" / "admin.js").read_text(encoding="utf-8")
-    for key in (
+    """The Admin console binds no number to a promoted control field.
+
+    It may name one to read the live value (``lib/control.js`` reads
+    ``system.max_total_power``), but a number written beside it would be a
+    second default that could silently disagree with Core.
+    """
+
+    source = ROOT / "frontend" / "admin-modern" / "src"
+    files = sorted(path for pattern in ("*.js", "*.svelte") for path in source.rglob(pattern))
+    assert files, "no Admin console source found"
+    keys = (
         "loop_interval",
         "max_total_power",
         "target_deadband_w",
@@ -208,8 +216,15 @@ def test_no_javascript_only_fallback_disagrees_with_core():
         "ramp_down_w_per_cycle",
         "device_ramp_up_w_per_cycle",
         "device_ramp_down_w_per_cycle",
-    ):
-        assert key not in admin_js, key
+    )
+    bound = re.compile(r"\b(?:" + "|".join(keys) + r")\b[\"'\]]*\s*(?:[:=]|\?\?|\|\|)\s*-?\d")
+    assert bound.search('{ "system.loop_interval": 5 }') and bound.search("values.max_total_power ?? 1600")
+    found = [
+        f"{path.relative_to(ROOT)}: {match.group(0)}"
+        for path in files
+        for match in bound.finditer(path.read_text(encoding="utf-8"))
+    ]
+    assert found == []
 
 
 # --- existing-value preservation (never silently replaced) ---------------

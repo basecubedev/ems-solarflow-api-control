@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Shared helpers and assertions for the Docker end-to-end suites."""
 import os
+import shutil
+import subprocess
 from pathlib import Path
 
 # Compose reads its project/profile/file selection from the environment. A
@@ -16,6 +18,19 @@ AMBIENT_COMPOSE_VARS = (
     "COMPOSE_IGNORE_ORPHANS",
     "COMPOSE_REMOVE_ORPHANS",
 )
+
+
+def docker_compose_ready():
+    """Whether a Docker daemon answers here and Compose v2 is installed."""
+    if shutil.which("docker") is None:
+        return False
+    try:
+        return (
+            subprocess.run(["docker", "info"], capture_output=True).returncode == 0
+            and subprocess.run(["docker", "compose", "version"], capture_output=True).returncode == 0
+        )
+    except OSError:
+        return False
 
 
 def compose_env(**overrides):

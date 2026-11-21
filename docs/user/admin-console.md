@@ -36,12 +36,9 @@ links to the page for anything else you came to do. See
   [Maintenance](admin/maintenance.md) and the
   [maintenance reference](admin-maintenance.md).
 
-The console works in English, German, Dutch or French, and on a phone. Its
-previous design, **Classic**, is deprecated and still answers at `/classic/`
-until a later release removes it; **Classic view** at the foot of the side menu
-opens it. Every workflow, the guided setup and the guided upgrade included,
-runs in the current design; see the
-[step-by-step guides](admin/index.md).
+The console works in English, German, Dutch or French, and on a phone; see the
+[step-by-step guides](admin/index.md). Its previous design, **Classic**, has
+been removed; an old `/classic/` address opens the console.
 
 Changing actions show what they will do and ask for confirmation. Saving
 settings, the guided upgrade and a restore back up what they replace first.
@@ -57,22 +54,24 @@ Every screenshot on this page shows the current console, with demo data only
 (fake devices, addresses, serials and versions). The step-by-step guides in
 [docs/user/admin/](admin/index.md) walk through each page in detail.
 
-### The side menu, the top bar and the Overview
+### The side menu, the top bar and Status
 
 ![The Overview with the side menu on the left — Overview, Assistant, Updates, Settings and devices, Services, Backups, and under System Diagnostics and System — the top bar with All good, Sign out and the Appearance button, and the verdict Everything is in order with the four tiles, Control and safety and Versions](../assets/screenshots/admin/admin-overview.png)
 
-The side menu lists the pages in two groups, in this order:
+The side menu lists the EMS dashboard's pages and the console's own in two
+groups:
 
 ```text
-Overview · Assistant · Updates · Settings & devices · Services · Backups
-System: Diagnostics · System
+Dashboard: Overview · Devices · Consumers · Energy · Analytics · Control · Schedule · Logs
+Admin: Status · Assistant · Updates · Settings & devices · Services · Backups · Diagnostics · System
 ```
 
-Its foot holds **Open the dashboard**, **Hide menu text** and **Classic view**.
-The top bar names the page and says in one word how the installation is —
-**All good**, **A note**, **Needs a look**, **Needs attention**, **Not
-installed**, **Checking…** or **Unknown state** — a pill that leads to the
-Overview, beside **Sign out** and the **Appearance** button.
+The dashboard's pages are readable without a sign-in, as the dashboard always
+was; the **Admin** pages need it. Its foot holds **Hide menu text**. The top
+bar names the page and shows the EMS's live state and, signed in, in one word
+how the installation is — **All good**, **A note**, **Needs a look**, **Needs
+attention**, **Not installed**, **Checking…** or **Unknown state** — a pill
+that leads to **Status**, beside **Sign out** and the **Appearance** button.
 
 The **Overview** answers whether everything is in order: one verdict, what
 needs your attention, ranked and with the way out of each, tiles for EMS, the
@@ -183,22 +182,27 @@ choices and keeps its own. See
 
 On a narrow screen the side menu gives way to a bar at the bottom with four
 pages — Overview, Updates, Settings and Services until you choose others — and
-**More** for the rest, the language, the colour scheme, signing out and the
-switch to Classic. See
+**More** for the rest, the language, the colour scheme and signing out. See
 [Appearance, language and phone](admin/appearance.md#on-a-phone).
 
-### Demo videos (Classic view)
+The app can sit on a phone's or a tablet's home screen like an app of its
+own, with the EMS SolarFlow mark and without the browser's address bar: open
+`http://<host>:8090`, then **Add to Home Screen** in the browser's share or
+menu button. On an iPhone or iPad this works over plain HTTP; Android's
+Chrome offers it as an app of its own only over HTTPS with a certificate the
+phone trusts (see [Optional HTTPS](#optional-https)) and otherwise adds a
+shortcut.
 
-Two short demos (no audio, demo data only) show the two main workflows. They
-show the Classic view: they were recorded in the deprecated **Classic**
-console, before the current design became the default. The workflows are the
-same, the screens look different. Each demo ships in two formats — MP4/H.264
-(best for forums and mobile browsers) preferred, with WebM as a fallback. If
-your Markdown viewer does not play a video inline, use a download link under
-it; the screenshot under each video shows the same workflow in the current
-design.
+### Demo videos
 
-#### Fresh install — Guided Setup with hardware discovery (Classic view)
+Two short demos (no audio, demo data only) step through the two main
+workflows on the console's own screens, a few seconds each. Each demo ships in
+two formats — MP4/H.264 (best for forums and mobile browsers) preferred, with
+WebM as a fallback. If your Markdown viewer does not play a video inline, use
+a download link under it; the screenshot under each video shows one of its
+screens.
+
+#### Fresh install — Guided Setup with hardware discovery
 
 Pick a release → discover devices → review the generated settings and features
 → start EMS and open the dashboard.
@@ -212,9 +216,9 @@ Pick a release → discover devices → review the generated settings and featur
 [Download MP4](../assets/videos/admin/admin-guided-setup-demo.mp4) ·
 [Download WebM](../assets/videos/admin/admin-guided-setup-demo.webm)
 
-![Guided setup step 02 Devices in the current design: the search order, the search progress and the devices found](../assets/screenshots/admin/admin-discovery-preview.png)
+![Guided setup step 02 Devices: the search order, the search progress and the devices found](../assets/screenshots/admin/admin-discovery-preview.png)
 
-#### Software update — Guided Upgrade with live validation (Classic view)
+#### Software update — Guided Upgrade with live validation
 
 Choose a version → start the update → each step is ticked off (backup,
 settings, Admin Console, EMS install, checks) until the update completes.
@@ -228,7 +232,7 @@ settings, Admin Console, EMS install, checks) until the update completes.
 [Download MP4](../assets/videos/admin/admin-guided-upgrade-demo.mp4) ·
 [Download WebM](../assets/videos/admin/admin-guided-upgrade-demo.webm)
 
-![Guided upgrade in the current design: the chosen version checked, the options and what happens, before the update starts](../assets/screenshots/admin/admin-guided-upgrade-plan.png)
+![Guided upgrade: the chosen version checked, the options and what happens, before the update starts](../assets/screenshots/admin/admin-guided-upgrade-plan.png)
 
 Individual per-screen images live in
 [docs/assets/screenshots/admin/](../assets/screenshots/admin/); to refresh them

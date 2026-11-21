@@ -10,6 +10,8 @@ STATIC_CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".js": "application/javascript; charset=utf-8",
     ".json": "application/json; charset=utf-8",
+    ".png": "image/png",
+    ".webmanifest": "application/manifest+json; charset=utf-8",
     ".woff2": "font/woff2",
 }
 DEFAULT_CONTENT_TYPE = "application/octet-stream"
@@ -65,31 +67,35 @@ def lookup_static_asset(assets, request_path):
     return assets.get(f"{key}/index.html")
 
 
-CLASSIC_PREFIX = "/classic/"
+LEGACY_CLASSIC_PATH = "/classic"
 MODERN_DIR = "modern"
 LEGACY_MODERN_PATH = "/modern"
 SHARED_ROOT_FILES = frozenset({"uPlot.min.css", "uPlot.iife.min.js", "uPlot.LICENSE"})
 
 
+def _under(request_path, prefix):
+    return request_path == prefix or request_path.startswith(prefix + "/")
+
+
 def modern_redirect(request_path, query=""):
     """The ``Location`` an old dashboard or Admin address moved to, or ``None``.
 
-    The Modern front end was served at ``/modern/`` and now answers at the
-    root, so a bookmark of the old address is sent there; ``/classic`` gets
-    its slash so the Classic page's relative world stays one directory. The
-    servers send it as a temporary redirect that is never cached: a browser
-    that remembered it would loop between ``/`` and ``/modern/`` after a
-    return to an earlier release, whose ``/`` still sends it to ``/modern/``.
+    The front end was served at ``/modern/`` and answers at the root, so a
+    bookmark of that address is sent to the same page there. The Classic front
+    ends that answered under ``/classic/`` are gone, and their addresses lead to
+    the root. The servers send it as a temporary redirect that is never cached:
+    a browser that remembered it would loop between ``/`` and ``/modern/`` after
+    a return to an earlier release, whose ``/`` still sends it to ``/modern/``.
     The query goes along. A line break is percent-encoded, since the value is
     written into a response header, and so is a backslash, which a browser
     would read as a slash: ``/\\host`` must never become a jump to another
     site.
     """
 
-    if request_path == LEGACY_MODERN_PATH or request_path.startswith(LEGACY_MODERN_PATH + "/"):
+    if _under(request_path, LEGACY_MODERN_PATH):
         moved = "/" + request_path[len(LEGACY_MODERN_PATH):].lstrip("/\\")
-    elif request_path == CLASSIC_PREFIX.rstrip("/"):
-        moved = CLASSIC_PREFIX
+    elif _under(request_path, LEGACY_CLASSIC_PATH):
+        moved = "/"
     else:
         return None
     location = f"{moved}?{query}" if query else moved
@@ -97,22 +103,14 @@ def modern_redirect(request_path, query=""):
 
 
 def modern_asset_path(request_path, shared=frozenset()):
-    """The path inside the static tree that an address serves, or ``None``.
+    """The path inside the static tree that an address serves.
 
-    The dashboard's and the Admin console's Modern front end answers at the
-    root from its build directory; the deprecated Classic page answers under
-    ``/classic/`` from the files at the static root, where they have always
-    been. The two trees stay apart: a Classic address never reaches the Modern
-    build. ``shared`` names the files both pages load from the root -- the
-    dashboard's uPlot (``SHARED_ROOT_FILES``), vendored once and hash-pinned
-    in the licence inventory.
+    The dashboard's and the Admin console's front end answers at the root from
+    its build directory. ``shared`` names the files the page loads from the
+    root of the tree instead -- the dashboard's uPlot (``SHARED_ROOT_FILES``),
+    vendored once and hash-pinned in the licence inventory.
     """
 
-    if request_path.startswith(CLASSIC_PREFIX):
-        key = static_asset_key("/" + request_path[len(CLASSIC_PREFIX):])
-        if key is None or key.split("/", 1)[0] == MODERN_DIR:
-            return None
-        return "/" + key
     name = request_path.lstrip("/")
     if name in shared:
         return "/" + name

@@ -75,13 +75,13 @@
   const last = $derived(lastRun(system.alignment.data?.transition));
   let showAll = $state(false);
   let channel = $state(readStored(CHANNEL_FILTER_KEY, CHANNEL_FILTERS, "all"));
-  const installable = $derived(releases.filter((release) => release.upgrade));
+  const installable = $derived(releases.filter((release) => release.installable));
   const listed = $derived(showAll ? releases : installable);
   const choices = $derived(channelChoices(releases, listed));
   const filter = $derived(shownChannel(choices, channel));
   const shown = $derived(releasesInChannel(listed, filter, upgrade.stage !== "idle" ? upgrade.target : null));
   const groups = $derived(groupedReleases(shown));
-  const choosable = $derived(shown.filter((release) => release.upgrade));
+  const choosable = $derived(shown.filter((release) => release.installable));
   const channelOptions = $derived(
     choices.map((choice) => ({ value: choice.id, tone: choice.tone || undefined, dot: Boolean(choice.tone), label: `${t(FILTER_LABELS[choice.id] || `updates.channel.${choice.id}`)} (${choice.count})` })),
   );
@@ -197,7 +197,7 @@
           <ul class="releases">
             {#each group.releases as release (release.tag)}
               <li data-tag={release.tag}>
-                {#if release.upgrade}
+                {#if release.installable}
                   {@const chosen = upgrade.target === release.tag && upgrade.stage !== "idle"}
                   {@const checking = chosen && upgrade.stage === "verifying"}
                   <button class="release inner choice {checking ? STAGE_TONES.verifying : ''}" class:chosen class:checking class:recommended={release.recommended} type="button" onclick={() => choose(release)} disabled={held} data-testid="choose-release">

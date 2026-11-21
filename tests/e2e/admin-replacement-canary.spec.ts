@@ -6,7 +6,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { expectValidSystemBuildAction } from "./helpers/system-build-action";
 import { ADMIN_PASSWORD } from "./fixtures/admin";
 import { LoginPage } from "./pages/login-page";
-import { SetupPage } from "./pages/setup-page";
+import { READY_MESSAGE, SetupPage } from "./pages/setup-page";
 
 const SOURCE_TAG = process.env.CANARY_SOURCE_TAG as string;
 const SOURCE_REVISION = process.env.CANARY_SOURCE_REVISION as string;
@@ -69,10 +69,10 @@ async function reloadedSinceMark(page: Page) {
 }
 
 /**
- * The tab that started the replacement shows the login as soon as its session
- * is gone, and reloads once its reconnect poll sees the new Admin instance; a
- * password typed into the old tab is lost in that reload. Only the reloaded
- * page is read.
+ * The tab that started the replacement reloads once it sees the new Admin
+ * instance, and the new Admin, holding no session yet, shows the sign-in in
+ * place of the setup; a password typed into the old tab is lost in that
+ * reload. Only the reloaded page is read.
  */
 async function reauthenticateAfterReconnect(page: Page, setup: SetupPage) {
   let outcome = "waiting";
@@ -83,25 +83,17 @@ async function reauthenticateAfterReconnect(page: Page, setup: SetupPage) {
           outcome = "waiting";
           return outcome;
         }
-        const loginVisible = await page
-          .locator("#auth-login:not([hidden]), #auth-create:not([hidden])")
-          .isVisible();
-        const ready = /ready for the selected System Build/i.test(
-          (await setup.status.textContent()) || "",
-        );
-        outcome = loginVisible ? "login" : ready ? "ready" : "waiting";
+        if (await page.getByTestId("sign-in-screen").isVisible().catch(() => false)) {
+          outcome = "login";
+          return outcome;
+        }
+        outcome = (await setup.statusText()) === READY_MESSAGE ? "ready" : "waiting";
         return outcome;
       },
       { timeout: 120_000 },
     )
     .toMatch(/login|ready/);
-  if (outcome === "login") {
-    await expect(setup.continueButton).toBeDisabled();
-    const login = page.locator("#auth-login:not([hidden])");
-    await page.fill("#auth-login-password", ADMIN_PASSWORD);
-    await login.locator('button[type="submit"]').click();
-    await expect(login).toBeHidden();
-  }
+  if (outcome === "login") await new LoginPage(page).authenticate();
 }
 
 test("real Admin replacement reconnects and preserves the selected build", async ({
@@ -163,9 +155,9 @@ test("real Admin replacement reconnects and preserves the selected build", async
   await expect(setup.continueButton).toBeDisabled();
   await reauthenticateAfterReconnect(page, setup);
   await expect(setup.buildSelect).toHaveValue(TAG);
-  await expect(setup.status).toHaveText(/ready for the selected System Build/i, {
-    timeout: 120_000,
-  });
+  await expect(setup.status).toHaveText(READY_MESSAGE, { timeout: 120_000 });
+  setup.resetValidationHistory();
+  await setup.revalidate(TAG);
   expect(await expectValidSystemBuildAction(page, setup, testInfo)).toBe("continue");
   expect(updateRequests).toBe(1);
 

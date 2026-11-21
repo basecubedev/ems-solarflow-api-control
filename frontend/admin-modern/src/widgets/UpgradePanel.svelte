@@ -13,7 +13,7 @@
   import { PHASES, PHASE_TONES, STAGE_TONES, WORKING_STAGES, phaseStates, phaseProgress, failedStep, backupArchive, rateLimited, replacesAdmin, migrationView, isDevelopment, clock, nothingChanged, phaseOfStage } from "../lib/upgrade.js";
   import { noteView } from "../lib/updates.js";
   import { errorView } from "../lib/errors.js";
-  import { dashboardHref } from "../lib/links.js";
+  import { dashboardPage } from "../lib/links.js";
   import Spinner from "./Spinner.svelte";
   import InfluxUpdateLine from "./InfluxUpdateLine.svelte";
 
@@ -44,7 +44,7 @@
   const unchanged = $derived(nothingChanged({ started: Boolean(upgrade.operationId || upgrade.jobId || upgrade.workDone), steps: upgrade.steps, result: upgrade.result }));
   const archive = $derived(backupArchive(upgrade.result));
   const warnings = $derived((Array.isArray(upgrade.result?.warnings) ? upgrade.result.warnings : []).map(String));
-  const dashboard = $derived(dashboardHref(system.overview.data?.links?.dashboard_url));
+  const dashboard = $derived(dashboardPage(system.overview.data?.links?.dashboard_url));
   const failure = $derived(upgrade.error ? errorView(upgrade.error, t) : null);
   const reason = $derived(upgrade.result?.message || stopped?.detail || own?.error_message || "");
   const closable = $derived(!upgrade.busy && !upgrade.holding && upgrade.stage !== "succeeded");
@@ -324,6 +324,7 @@
         {:else if reason}
           <p class="note fault"><Icon name="circle-x" /><span lang="en">{reason}</span></p>
         {/if}
+        {#each warnings as warning, index (index)}<p class="note warn" data-testid="upgrade-failed-warning"><Icon name="triangle-alert" /><span lang="en">{warning}</span></p>{/each}
         <p class="muted">{upgrade.stage === "refused" || unchanged ? t("upgrade.nothingChanged") : t("upgrade.mayHaveChanged")}</p>
         {#if own?.worker_active === true}<p class="note"><Spinner />{t("upgrade.stillWorking")}</p>{/if}
       {/if}

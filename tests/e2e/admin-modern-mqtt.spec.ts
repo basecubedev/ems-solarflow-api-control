@@ -9,7 +9,7 @@ import type { Page } from "@playwright/test";
 import { routeRunnablePlan } from "./helpers/container-plan";
 
 async function seededAt(page: Page, seed: (scenario: string) => Promise<void>, hash: string) {
-  await page.goto("/");
+  await page.goto("/#/status");
   await expect(page.getByTestId("sign-in-screen")).toHaveAttribute("data-mode", "login");
   await page.fill("#admin-password", ADMIN_PASSWORD);
   await page.getByTestId("sign-in-submit").click();

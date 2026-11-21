@@ -49,9 +49,7 @@ FILES = (
     "admin/config_preview.py",
     "admin/server.py",
     "admin/zendure_mqtt_runtime_status.py",
-    "admin/static/admin.js",
-    "admin/static/admin.css",
-    "admin/static/index.html",
+    "frontend/admin-modern/src/i18n/strings.js",
 )
 
 # Generic claims that are no longer true for this release. Matching happens on

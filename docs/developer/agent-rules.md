@@ -285,27 +285,20 @@ MUST NOT be renamed casually.
 
 ## 11. Frontend and UI rules
 
-Use established Admin and Dashboard patterns. Before Dashboard UI work, read
-[`dashboard-style-guide.md`](dashboard-style-guide.md), declare the selected
-style family (`Aggregate / Device` or `Control / Energy stage`), reuse existing
-tokens/classes, and do not create a new visual system.
-
-The Modern front ends are the one sanctioned exception: the Modern dashboard
-(`frontend/dashboard-modern/`, the dashboard's `/`; the deprecated Classic
-dashboard answers at `/classic/`) and the Modern Admin console
-(`frontend/admin-modern/`, the Admin server's `/`; the deprecated Classic
-console answers at `/classic/`) are second front ends
-with one visual system of their own, built from the shared design
-system in `frontend/shared/`, and
-[`dashboard-modern-style-guide.md`](dashboard-modern-style-guide.md) is their
-rule set. Every rule there binds both apps alike. Read that guide instead before
-Modern work. A part, helper, string or token both apps can use lives once in
-`frontend/shared/`, never copied into one app. Modern shares the API, the
-auth/CSRF gates and the energy colours with Classic and keeps Classic's
-vocabulary through paired-registry tests; it never borrows Classic's classes,
-and Classic never borrows Modern's. A Modern source change is committed
-together with its rebuilt output in `dashboard/static/modern/` or
-`admin/static/modern/` -- both, when the change is in `frontend/shared/`.
+Use established Admin and Dashboard patterns, reuse existing tokens and
+classes, and do not create a new visual system. The Modern dashboard
+(`frontend/dashboard-modern/`, the dashboard's `/`) and the Modern Admin
+console (`frontend/admin-modern/`, the Admin server's `/`) have one visual
+system, built from the shared design system in `frontend/shared/`, and
+[`dashboard-modern-style-guide.md`](dashboard-modern-style-guide.md) is its
+rule set. Every rule there binds every app alike. Read that guide before UI
+work. A part, helper, string or token both apps can use lives once in
+`frontend/shared/`, never copied into one app. The Classic dashboard and Admin
+console have been removed; the Appliance Manager keeps its Classic front end,
+which never borrows Modern's classes, nor Modern Classic's. A Modern source
+change is committed together with its rebuilt output in
+`dashboard/static/modern/` or `admin/static/modern/` -- both, when the change
+is in `frontend/shared/`.
 
 Keep semantic labels, inputs, selects and buttons, keyboard accessibility,
 escaped dynamic text, and authentication/CSRF gates. Prefer `textContent` and
@@ -504,7 +497,6 @@ Validation MUST match the changed risk. Use the applicable baseline:
 ```bash
 ruff check .
 python -m compileall -q admin appliance ems dashboard mqtt_mapping scripts tests emsctl.py ems-solarflow-api-control.py
-node --check admin/static/admin.js
 python tools/build_config_template.py --check
 python tools/check_third_party_licenses.py
 git diff --check

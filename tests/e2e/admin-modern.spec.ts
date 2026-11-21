@@ -1,18 +1,21 @@
 // SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The Modern Admin console at the root, beside the deprecated Classic at /classic/. It
-// is driven here against the deterministic test-mode Admin: the switch between
-// the two, the sign-in, the language, and the pages whose writes it runs
-// itself -- a backup from creation through details, restore and deletion.
+// The Admin console's own pages in the one app at the root. It is driven here
+// against the deterministic test-mode Admin: the sign-in, the language, and the
+// pages whose writes it runs itself -- a backup from creation through details,
+// restore and deletion.
 import { expect, test, ADMIN_PASSWORD } from "./fixtures/admin";
 import type { Page, Route } from "@playwright/test";
 import { post } from "./helpers/setup-authority";
-import { SetupPage } from "./pages/setup-page";
 import { E3DC_SYSTEM, apiInverter } from "./helpers/discovery-state";
 import { routeRunnablePlan } from "./helpers/container-plan";
 
+/** The sign-in, opened from the top bar where the address showed the dashboard's pages. */
 async function signIn(page: Page, password = ADMIN_PASSWORD) {
-  await expect(page.getByTestId("sign-in-screen")).toBeVisible();
+  const screen = page.getByTestId("sign-in-screen");
+  await expect(screen.or(page.getByTestId("sign-in"))).toBeVisible();
+  if (!(await screen.isVisible())) await page.getByTestId("sign-in").click();
+  await expect(screen).toBeVisible();
   await expect(page.getByTestId("sign-in-screen")).toHaveAttribute("data-mode", "login");
   await page.fill("#admin-password", password);
   await page.getByTestId("sign-in-submit").click();
@@ -25,65 +28,8 @@ async function openModern(page: Page, hash = "") {
   if (!hash) await expect(page).toHaveURL(/\/#\/assistant$/);
 }
 
-test.describe("Modern Admin: the switch", { tag: ["@smoke"] }, () => {
-  test("the console opens in Modern at the root, Classic is one click away at /classic/ and is not remembered", async ({ page }) => {
-    await page.goto("/");
-    await expect(page).toHaveURL(/\/$/);
-    await signIn(page);
-    await expect(page.locator(".app")).toBeVisible();
-
-    await page.getByTestId("switch-classic").click();
-    await expect(page).toHaveURL(/\/classic\/#maintenance$/);
-    await expect(page.locator("#classic-notice")).toBeVisible();
-    await expect(page.locator("#modern-admin-link")).toBeVisible();
-    await page.goto("/");
-    await expect(page.locator(".app")).toBeVisible();
-
-    await page.goto("/classic/");
-    await page.locator("#modern-admin-link").click();
-    await expect(page).toHaveURL(/\/(#\/assistant)?$/);
-    await expect(page.locator(".app")).toBeVisible();
-    expect(await page.evaluate(() => localStorage.getItem("ems-admin-ui"))).toBeNull();
-  });
-
-  test("a guided setup begun in Classic stays in Classic across a reload", async ({ page }) => {
-    const signedIn = await page.request.post("/api/admin/auth/login", { data: { password: ADMIN_PASSWORD } });
-    expect(signedIn.ok()).toBeTruthy();
-    await page.goto("/classic/#maintenance");
-    await page.locator('.workspace-back[data-back="landing"]:visible').first().click();
-    await expect(page.locator("#view-start")).toBeVisible();
-    await expect(page).toHaveURL(/\/classic\/$/);
-    await new SetupPage(page).chooseFreshInstall();
-    await expect(page).toHaveURL(/\/classic\/#setup$/);
-    await page.reload();
-    await expect(page).toHaveURL(/\/classic\/#setup$/);
-    await expect(page.locator("#modern-admin-link")).toBeVisible();
-  });
-
-  test("the guided upgrade's Classic page stays in Classic across a reload", async ({ page }) => {
-    const signedIn = await page.request.post("/api/admin/auth/login", { data: { password: ADMIN_PASSWORD } });
-    expect(signedIn.ok()).toBeTruthy();
-    await page.goto("/classic/#maintenance-upgrade");
-    await expect(page.locator("#modern-admin-link")).toBeVisible();
-    await page.reload();
-    await expect(page).toHaveURL(/\/classic\/#maintenance-upgrade$/);
-    await expect(page.locator("#modern-admin-link")).toBeVisible();
-  });
-
-  test("an old address keeps working: a Classic page opens in Classic, /modern/ in Modern at the root", async ({ page }) => {
-    await page.goto("/#maintenance-settings");
-    await expect(page).toHaveURL(/\/classic\/#maintenance-settings$/);
-    await expect(page.locator("#modern-admin-link")).toBeVisible();
-    await page.goto("/?ui=classic");
-    await expect(page).toHaveURL(/\/classic\/\?ui=classic$/);
-    await page.goto("/#/updates");
-    await expect(page).toHaveURL(/\/#\/updates$/);
-    await expect(page.getByTestId("sign-in-screen")).toBeVisible();
-  });
-});
-
 test.describe("Modern Admin: signing in", { tag: ["@smoke"] }, () => {
-  test("a wrong password is refused in words, the right one opens the console, signing out closes it", async ({ page }) => {
+  test("a wrong password is refused in words, the right one opens the console, signing out leads to the Overview", async ({ page }) => {
     await page.goto("/");
     await signIn(page, "not-the-password");
     await expect(page.getByRole("alert")).toHaveText("Wrong password.");
@@ -93,10 +39,27 @@ test.describe("Modern Admin: signing in", { tag: ["@smoke"] }, () => {
     await page.getByTestId("sign-in-submit").click();
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Assistant");
 
+    await page.evaluate(() => {
+      const seen = { signIn: false };
+      (globalThis as unknown as { signInSeen: typeof seen }).signInSeen = seen;
+      new MutationObserver((records) => {
+        for (const record of records) {
+          for (const node of record.addedNodes) {
+            if (node instanceof Element && (node.matches('[data-testid="sign-in-screen"]') || node.querySelector('[data-testid="sign-in-screen"]'))) seen.signIn = true;
+          }
+        }
+      }).observe(document.body, { childList: true, subtree: true });
+    });
+    const entries = await page.evaluate(() => history.length);
     await page.getByTestId("sign-out").click();
-    await expect(page.getByTestId("sign-in-screen")).toBeVisible();
+    await expect(page).toHaveURL(/#\/overview$/);
+    await expect(page.locator('aside.sidebar a[data-page="assistant"] .lock')).toBeVisible();
+    expect(await page.evaluate(() => history.length)).toBe(entries);
+    await expect(page.getByTestId("sign-in")).toBeFocused();
     const status = await (await page.request.get("/api/admin/auth/status")).json();
     expect(status.authenticated).toBe(false);
+    await expect(page.getByTestId("sign-in-screen")).toHaveCount(0);
+    expect(await page.evaluate(() => (globalThis as unknown as { signInSeen: { signIn: boolean } }).signInSeen.signIn)).toBe(false);
   });
 
   test("a session that ended elsewhere brings the sign-in back", async ({ page }) => {
@@ -117,12 +80,32 @@ test.describe("Modern Admin: signing in", { tag: ["@smoke"] }, () => {
     await expect(page.getByRole("alert")).toHaveCount(0);
   });
 
+  test("a sign-out the server refuses leaves the console signed in and says so", async ({ page }) => {
+    await openModern(page);
+    await page.route("**/api/admin/auth/logout", (route: Route) => route.fulfill({ status: 500, json: { error: "internal_error" } }));
+    await page.getByTestId("sign-out").click();
+    await expect(page.getByRole("alert")).toBeVisible();
+    await expect(page.locator(".app")).toBeVisible();
+    await expect(page.getByTestId("sign-in-screen")).toHaveCount(0);
+    await expect(page).toHaveURL(/#\/assistant$/);
+  });
+
+  test("a password file the console cannot read shows the repair, never a password form", async ({ page }) => {
+    await page.route("**/api/admin/auth/status", (route: Route) =>
+      route.fulfill({ json: { auth_configured: true, authenticated: false, requires_initial_password: false, recovery_required: true, error: "auth_file_invalid", message: "The password file cannot be read." } }),
+    );
+    await page.goto("/#/status");
+    await expect(page.getByTestId("sign-in-screen")).toHaveAttribute("data-mode", "recovery");
+    await expect(page.getByTestId("recovery-retry")).toBeVisible();
+    await expect(page.locator("#admin-password")).toHaveCount(0);
+  });
+
   test("the language chosen at the sign-in carries into the console", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/#/status");
     await page.getByTestId("sign-in-screen").getByRole("button", { name: "DE" }).click();
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Anmelden");
     await signIn(page);
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Assistent");
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Status");
     await expect(page.locator("html")).toHaveAttribute("lang", "de");
   });
 });
@@ -163,7 +146,7 @@ async function opens(page: Page, task: string, address: RegExp, target: string) 
 }
 
 test.describe("Modern Admin: the assistant", { tag: ["@smoke"] }, () => {
-  test("with nothing installed the console opens on it, the guided setup comes first, and unticking it does not hide it", async ({ page }) => {
+  test("with nothing installed the app opens on it, and the guided setup comes first", async ({ page }) => {
     await openModern(page);
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Assistant");
     const steps = page.getByTestId("assistant-steps");
@@ -182,11 +165,8 @@ test.describe("Modern Admin: the assistant", { tag: ["@smoke"] }, () => {
     await expect(page.locator(".sidebar a[href='#/assistant']")).toBeVisible();
     await expect(page.getByTestId("nav-mark-assistant")).toHaveClass(/warning/);
 
-    await page.getByTestId("assistant-keep").uncheck();
-    expect(await page.evaluate(() => localStorage.getItem("ems-modern.welcome"))).toBe("off");
     await landedAt(page, "/");
     await expect(page).toHaveURL(/\/#\/assistant$/);
-    await expect(page.getByTestId("assistant-keep")).not.toBeChecked();
     await page.goBack();
     await expect(page).toHaveURL("about:blank");
     await page.goto("/#/assistant");
@@ -216,13 +196,15 @@ test.describe("Modern Admin: the assistant", { tag: ["@smoke"] }, () => {
     await expect(page).toHaveURL(/\/#\/updates$/);
   });
 
-  test("on an installed system it lists what is left and the ways to the rest; turned off, the console opens on the overview", async ({ page, seedAdminScenario }) => {
+  test("on an installed system it lists what is left and the ways to the rest, and the app opens on the dashboard", async ({ page, seedAdminScenario }) => {
     await openModern(page);
     await seedAdminScenario("mixed_transports");
     await installedAs(page, { running: true });
     await withoutBackups(page);
     await landedAt(page, "/");
-    await expect(page).toHaveURL(/\/#\/assistant$/);
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.locator('.sidebar a[data-page="overview"]')).toHaveAttribute("aria-current", "page");
+    await landedAt(page, "/#/assistant");
     const steps = page.getByTestId("assistant-steps");
     await expect(steps.locator('[data-step="install"]')).toHaveAttribute("data-state", "done");
     await expect(steps.locator('[data-step="devices"]')).toHaveAttribute("data-state", "done");
@@ -230,8 +212,8 @@ test.describe("Modern Admin: the assistant", { tag: ["@smoke"] }, () => {
     await expect(steps.locator('[data-step="backup"]')).toHaveAttribute("data-state", "todo");
     await expect(steps.locator('[data-step="backup"]')).toHaveClass(/next/);
     await expect(page.getByTestId("assistant-backup")).toHaveAttribute("href", "#/backups/create");
-    await expect(page.getByTestId("assistant-dashboard")).toHaveAttribute("href", "http://127.0.0.1:9/");
-    await expect(page.getByTestId("assistant-attention")).toHaveAttribute("href", "#/overview");
+    await expect(page.getByTestId("assistant-dashboard")).toHaveAttribute("href", "#/overview");
+    await expect(page.getByTestId("assistant-attention")).toHaveAttribute("href", "#/status");
     await expect(page.getByTestId("assistant-attention")).toContainText(/needs? your attention/);
     const tasks = page.getByTestId("assistant-tasks");
     await expect(tasks.locator("[data-task]")).toHaveCount(6);
@@ -251,15 +233,6 @@ test.describe("Modern Admin: the assistant", { tag: ["@smoke"] }, () => {
     await opens(page, "reinstall", /\/#\/setup$/, "setup-begin");
     await opens(page, "device", /\/#\/settings\/devices$/, "discovery-start");
 
-    await page.goto("/#/assistant");
-    await page.getByTestId("assistant-keep").uncheck();
-    await landedAt(page, "/");
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Overview");
-    await expect(page).toHaveURL(/\/$/);
-
-    await page.goto("/#/assistant");
-    await page.getByTestId("assistant-keep").check();
-    expect(await page.evaluate(() => localStorage.getItem("ems-modern.welcome"))).toBe("on");
     await landedAt(page, "/#/services");
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Services");
     await expect(page.getByTestId("nav-mark-assistant")).toHaveClass(/info/);
@@ -289,7 +262,7 @@ test.describe("Modern Admin: the assistant", { tag: ["@smoke"] }, () => {
     await expect(page.getByTestId("assistant-attention")).toBeVisible();
     await expect(page.getByTestId("assistant-unreadable")).toHaveCount(0);
     await page.route("**/api/admin/maintenance/overview", (route: Route) => route.fulfill({ status: 500, json: { ok: false, error: "internal_error" } }));
-    await page.goto("/#/overview");
+    await page.goto("/#/status");
     await page.getByTestId("refresh").click();
     await expect(page.getByTestId("overview-hero")).toHaveAttribute("data-level", "unreadable");
     await page.goto("/#/assistant");
@@ -327,7 +300,7 @@ async function seededAt(page: Page, seed: (scenario: string) => Promise<void>, h
 test.describe("Modern Admin: overview and status", { tag: ["@smoke"] }, () => {
 
   test("an incomplete installation is named, with the way out of it", async ({ page, seedAdminScenario }) => {
-    await seededAt(page, seedAdminScenario, "#/overview");
+    await seededAt(page, seedAdminScenario, "#/status");
     const hero = page.getByTestId("overview-hero");
     await expect(hero).toHaveAttribute("data-level", "error");
     const finding = page.locator('[data-code="installation_incomplete"]');
@@ -339,7 +312,7 @@ test.describe("Modern Admin: overview and status", { tag: ["@smoke"] }, () => {
   });
 
   test("the restart saved settings wait for runs in place from the overview's finding: a failure says why and offers it again, a success ends the finding, and a later save raises it afresh", async ({ page, seedAdminScenario }) => {
-    await seededAt(page, seedAdminScenario, "#/overview");
+    await seededAt(page, seedAdminScenario, "#/status");
     await expect(page.getByTestId("overview-hero")).toHaveAttribute("data-level", "error");
     let restarted = false;
     let rewritten = false;
@@ -376,7 +349,7 @@ test.describe("Modern Admin: overview and status", { tag: ["@smoke"] }, () => {
     await confirmation.getByTestId("confirm").click();
     await reread;
     await expect(finding).toHaveCount(0);
-    await expect(page).toHaveURL(/#\/overview$/);
+    await expect(page).toHaveURL(/#\/status$/);
     expect(attempts).toBe(2);
 
     rewritten = true;
@@ -410,7 +383,7 @@ test.describe("Modern Admin: overview and status", { tag: ["@smoke"] }, () => {
   test("the bundled InfluxDB is offered under Updates, lit in the menu, upgraded behind its backup and rolled back", async ({ page, seedAdminScenario }) => {
     await openModern(page);
     await seedAdminScenario("influxdb_upgrade_available");
-    await page.goto("/#/overview");
+    await page.goto("/#/status");
     await page.reload();
     await expect(page.getByTestId("nav-mark-updates")).toHaveClass(/info/);
     await page.locator('.sidebar a[data-page="updates"]').click();
@@ -490,7 +463,7 @@ test.describe("Modern Admin: overview and status", { tag: ["@smoke"] }, () => {
   test("an InfluxDB upgrade the device lacks the memory for is shown with its figures and not offered", async ({ page, seedAdminScenario }) => {
     await openModern(page);
     await seedAdminScenario("influxdb_upgrade_low_memory");
-    await page.goto("/#/overview");
+    await page.goto("/#/status");
     await page.reload();
     await expect(page.getByTestId("nav-mark-updates")).toHaveClass(/info/);
     await page.locator('.sidebar a[data-page="updates"]').click();
@@ -796,7 +769,7 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
   });
 
   test("the overview's Control & safety card opens the safety settings", async ({ page, seedAdminScenario }) => {
-    await seededAt(page, seedAdminScenario, "#/overview");
+    await seededAt(page, seedAdminScenario, "#/status");
     await page.getByRole("link", { name: "Change", exact: true }).click();
     await expect(page).toHaveURL(/#\/settings\/safety$/);
     await expect(page.getByTestId("settings-safety")).toContainText("Allow hardware writes");
@@ -1127,6 +1100,14 @@ test.describe("Modern Admin: backups", { tag: ["@smoke"] }, () => {
     await details.getByRole("button", { name: "Close" }).click();
     await expect(details).toBeHidden();
 
+    const exported = page.waitForRequest((request) => request.url().endsWith("/api/admin/maintenance/backups/export"));
+    const downloaded = page.waitForEvent("download");
+    await row.getByRole("button", { name: `Download ${created}` }).click();
+    const request = await exported;
+    expect(request.method()).toBe("POST");
+    expect(request.headers()["x-csrf-token"]).toBeTruthy();
+    expect((await downloaded).suggestedFilename()).toBe(created);
+
     await row.getByTestId("restore-open").click();
     await expect(page.getByTestId("restore-summary")).toContainText("Files unchanged");
     await page.getByTestId("restore-execute").click();
@@ -1141,6 +1122,41 @@ test.describe("Modern Admin: backups", { tag: ["@smoke"] }, () => {
     await page.getByRole("dialog").getByTestId("confirm").click();
     await expect(names).toHaveCount(count - 1);
     await expect(page.getByTestId("backup-list").locator("li").filter({ hasText: created })).toHaveCount(0);
+  });
+
+  test("an encrypted archive asks for its password before the server previews its restore", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/backups");
+    await page.locator('[data-scope="config"]').click();
+    await page.getByTestId("create-backup").click();
+    await expect(page.getByTestId("create-outcome")).toHaveText("The backup was created and verified.");
+    await page.route("**/api/admin/maintenance/backups", async (route: Route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      await route.fulfill({ response, json: { ...body, backups: (body.backups || []).map((backup: Record<string, unknown>) => ({ ...backup, locked: true })) } });
+    });
+    const previews: string[] = [];
+    page.on("request", (request) => {
+      if (request.url().endsWith("/api/admin/maintenance/backups/restore/preview")) previews.push(request.url());
+    });
+    await page.reload();
+    await page.getByTestId("backup-list").locator('li[data-kind="archive"]').first().getByTestId("restore-open").click();
+    await expect(page.locator("form.unlock")).toBeVisible();
+    await expect(page.getByTestId("restore-summary")).toHaveCount(0);
+    expect(previews).toHaveLength(0);
+  });
+
+  test("a restore the server's preview blocks cannot be started", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/backups");
+    await page.locator('[data-scope="config"]').click();
+    await page.getByTestId("create-backup").click();
+    await expect(page.getByTestId("create-outcome")).toHaveText("The backup was created and verified.");
+    await page.route("**/api/admin/maintenance/backups/restore/preview", async (route: Route) => {
+      const response = await route.fetch();
+      await route.fulfill({ response, json: { ...(await response.json()), blocked: true, block_reason: "restore_blocked" } });
+    });
+    await page.getByTestId("backup-list").locator('li[data-kind="archive"]').first().getByTestId("restore-open").click();
+    await expect(page.getByTestId("restore-summary")).toBeVisible();
+    await expect(page.getByTestId("restore-execute")).toBeDisabled();
   });
 
   test("a restore whose preview was used up elsewhere is refused, and a fresh preview takes its place", async ({ page, seedAdminScenario }) => {
@@ -1328,7 +1344,7 @@ test.describe("Modern Admin: on a phone", { tag: ["@smoke"] }, () => {
     const bar = page.locator(".bottom-nav");
     await expect(bar).toBeVisible();
     await expect(bar.locator("a")).toHaveCount(4);
-    await expect(bar.locator("a .slot-label")).toHaveText(["Overview", "Updates", "Settings", "Services"]);
+    await expect(bar.locator("a .slot-label")).toHaveText(["Overview", "Energy", "Status", "Updates"]);
     await page.getByTestId("nav-more").click();
     const sheet = page.getByRole("dialog", { name: "More" });
     await expect(sheet.getByRole("link", { name: "Diagnostics" })).toBeVisible();
@@ -1376,7 +1392,7 @@ test.describe("Modern Admin: settings in the old place", { tag: ["@smoke"] }, ()
 
 test.describe("Modern Admin: About & licenses", () => {
   test("the sign-in screen opens the same page without a password", async ({ page }) => {
-    await page.goto("/");
+    await page.goto("/#/status");
     await expect(page.getByTestId("sign-in-screen")).toBeVisible();
     await page.getByTestId("sign-in-about").click();
     const dialog = page.getByTestId("about-dialog");

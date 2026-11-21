@@ -215,7 +215,6 @@ def test_mqtt_release_contract_runs_static_validation():
     assert "ruff check ." in section
     assert "python -m compileall -q" in section
     assert "python tools/build_config_template.py --check" in section
-    assert "node --check admin/static/admin.js" in section
     for package in ("admin", "ems", "dashboard", "scripts", "tests"):
         assert package in section, package
     assert "emsctl.py" in section

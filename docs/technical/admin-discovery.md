@@ -35,13 +35,13 @@ step reports its resources ready, and the server enforces that lock. This page
 calls the first step the Release step, as the code does.
 
 The panel, button and state names further down this page are the ones the
-deprecated Classic console at `/classic/` shows; the behaviour behind them is
-the same in Modern. The Modern names are in the
+removed Classic console showed; the behaviour behind them is the same in the
+console. Its names are in the
 [guided setup](../user/admin/guided-setup.md#02--find-your-devices) and
 [device management](../user/admin/device-management.md) guides; the ones this
 page uses most map as follows:
 
-| Classic | Modern |
+| Classic (removed) | Console |
 | --- | --- |
 | **Run discovery** / **Run discovery again** | **Run the search** / **Search again** |
 | **Scan networks** | **Scan the networks** |
@@ -566,8 +566,7 @@ without them (`grid_meter_homewizard_p1_unpaired`), as the EMS would. Every
 browser view shows `has_token`, never the token; the tab's storage keeps a new
 pairing in memory only. Pairing again asks first, because the meter refuses the
 stored token as soon as it hands out a new one, and setup drops a pairing when
-the grid meter's type or address changes. The Classic console offers no
-pairing; it shows the token as a write-only secret field.
+the grid meter's type or address changes.
 
 ## Maintenance discovery sources
 
@@ -1466,8 +1465,7 @@ host networking with a Compose override instead of `--bridge`:
 python3 scripts/serve_admin_preview.py --host 127.0.0.1 --port 8090
 ```
 
-Then open http://127.0.0.1:8090/classic/#setup (the Classic view, where the discovery
-runs), enter a local CIDR, and start a scan.
+Then open http://127.0.0.1:8090/#/setup, enter a local CIDR, and start a scan.
 
 ## Docker setup (default: deployment-capable)
 

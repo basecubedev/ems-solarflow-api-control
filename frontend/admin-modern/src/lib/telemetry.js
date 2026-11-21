@@ -3,8 +3,8 @@
 /**
  * Zendure MQTT telemetry as the EMS reports it
  * (admin/zendure_mqtt_runtime_status.py). Read-only: no command is sent from
- * here. tests/classic-parity.test.js keeps the states and the broker issue
- * codes in step with Classic's tables.
+ * here. tests/telemetry.test.js and tests/server-codes.test.js keep the
+ * states, the sources and the broker issues in step with the server's.
  */
 
 export const RUNTIME_STATES = Object.freeze({ configured: "c-ok", inactive: "c-idle", unavailable: "c-warn" });

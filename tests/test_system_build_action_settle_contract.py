@@ -2,30 +2,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Static contract: the browser gate waits on the server's answer, not on prose.
 
-``expectValidSystemBuildAction`` is the shared assertion behind every System
-Build browser test. Before asserting which action a build authorizes it has to
-know the action has settled, and for a long time the only thing it waited on was
-the status line not matching ``/checking|confirming|updating|reconnecting/i``.
-
-Those words belong to admin.js, which renders them while a request of its own is
-in flight. The *server* has its own busy stages, and none of their progress
-messages contains any of those words:
-
-    admin_update_pending      "Preparing the Admin Server update…"
-    admin_reconnect_pending   "Waiting for the updated Admin Server to reconnect…"
-    admin_aligned             "Verifying selected System Build resources…"
-
-So the guard passed while a transition was still running. The helper then read a
-validation snapshot that said ``busy: true`` and compared its progress message
-against a status line that had already moved on to the settled text --
-"The Admin Server is ready for the selected System Build." Firefox lost that race
-on main twice on 2026-08-28 (`f504b246` and `00e50f7d`); Chromium landed after
-the settle and passed, which is why it read as a merge breaking something.
-
-The fix is to wait on ``action_state.busy``, which the server derives from
-``_ACTION_BUSY_STAGES``. This module keeps that true, and keeps the message table
-complete so the helper's "did not settle" diagnostic can still name the stage it
-was stuck in.
+``expectValidSystemBuildAction`` is the shared assertion behind the System
+Build browser journeys. Before asserting which action a build authorizes it has
+to know the action has settled. Two things can still be moving: the console's
+own request (its status line names it, ``buildMessage`` in
+``frontend/admin-modern/src/lib/setup.js``) and the server's transition, whose
+busy stages the console never shows in words. The helper waits for the first by
+the console's own texts and for the second on ``action_state.busy``, which the
+server derives from ``_ACTION_BUSY_STAGES``. This module keeps both waits, their
+order, and the list of the console's transient messages true.
 """
 
 import re
@@ -89,30 +74,37 @@ def test_the_wait_comes_before_the_snapshot_it_protects():
     )
 
 
-def test_no_busy_stage_message_is_matched_by_the_client_side_guard():
-    """The defect itself, stated so it cannot come back as a false sense of cover.
+def _console_messages():
+    """The status keys ``buildMessage`` returns, and the English text of each."""
 
-    If someone ever writes a progress message containing one of these words, the
-    text guard would appear to work for that stage and not for its siblings --
-    which is exactly the half-covered state that made this flake so hard to read.
+    source = (ROOT / "frontend" / "admin-modern" / "src" / "lib" / "setup.js").read_text(encoding="utf-8")
+    body = source[source.index("export function buildMessage("):]
+    body = body[: body.index("\n}\n")]
+    keys = set(re.findall(r'return "([a-zA-Z]+)"', body)) | set(re.findall(r'"([a-zA-Z]+)" : "', body)) | set(re.findall(r': "([a-zA-Z]+)";', body))
+    strings = (ROOT / "frontend" / "admin-modern" / "src" / "i18n" / "strings.js").read_text(encoding="utf-8")
+    texts = dict(re.findall(r'"setup\.build\.([a-zA-Z]+)": s\("([^"]*)"', strings))
+    return keys, texts
+
+
+def test_the_guard_names_only_the_console_s_own_requests_under_way():
+    """The console's transient messages, and none that says where a build stands.
+
+    A settled message in the list would make the helper wait for a state that
+    stays; a transient one missing from it would let the assertions read a
+    frame the console is still changing.
     """
 
-    guard = re.search(r"/([a-z|]+)/i", helper())
-    assert guard, "the client-side transient guard is gone or changed shape"
-    words = re.compile(guard.group(1), re.IGNORECASE)
-
-    covered = {
-        stage: message
-        for stage, message in progress_messages().items()
-        if words.search(message)
-    }
-
-    assert covered == {}, (
-        f"{covered} would now be matched by the client-side guard. That guard is "
-        "for admin.js transients; the server's busy stages are waited on through "
-        "action_state.busy, and a message that matches both invites the next "
-        "reader to think the text guard is what covers them"
-    )
+    listed = re.search(r"CONSOLE_TRANSIENT_MESSAGES = \[([^\]]*)\]", helper())
+    assert listed, "the helper no longer names the console's transient messages"
+    transient = set(re.findall(r'"([a-zA-Z]+)"', listed.group(1)))
+    keys, texts = _console_messages()
+    assert transient <= keys, sorted(transient - keys)
+    assert transient <= set(texts), sorted(transient - set(texts))
+    assert transient == {"validating", "confirming", "updating", "reconnecting", "busy", "inProgress"}
+    settled = keys - transient
+    assert {"aligned", "updateRequired", "terminal", "legacyReady"} <= settled
+    shared = {key for key in transient if any(texts[key] == texts[other] for other in settled if other in texts)}
+    assert shared == set(), shared
 
 
 def test_every_busy_stage_can_name_itself_when_it_fails_to_settle():
@@ -124,17 +116,4 @@ def test_every_busy_stage_can_name_itself_when_it_fails_to_settle():
     assert missing == [], (
         f"{missing} are reported busy with no progress message; the browser "
         "gate's 'did not settle' failure would then name nothing"
-    )
-
-
-def test_the_dom_is_given_the_same_chance_to_catch_up():
-    """A validation response is recorded by a listener that can run before the
-    page renders it. The button reads after the snapshot are single shots, so the
-    helper waits for the status line to stop showing a progress message too."""
-
-    text = helper()
-
-    assert "validationHistory()" in text and "progressMessages" in text, (
-        "the helper no longer waits for the rendered status to leave its busy "
-        "message; the button assertions can then read the busy frame"
     )

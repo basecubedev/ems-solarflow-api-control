@@ -99,6 +99,7 @@ from admin.setup_planner import (
 )
 from admin.ems_cli import EmsCliDiagnostics
 from admin.ems_device_states import ems_device_states
+from admin.ems_forwarding import ForwardingRefusal, forward, installed_ems
 from admin.embedded_resources import (
     EmbeddedReleaseResources,
     ReleaseArchiveResources,
@@ -281,7 +282,9 @@ from admin.system_build import (
 )
 from dashboard.auth import LoginRateLimiter, SessionStore, auth_file_fingerprint
 from dashboard.https import HANDSHAKE_TIMEOUT_SECONDS
-from dashboard.static_files import build_static_asset_index, lookup_static_asset, modern_asset_path, modern_redirect
+from dashboard.api_paths import is_ems_api_path
+from dashboard.console_address import CONSOLE_IDENTITY, CONSOLE_PATH
+from dashboard.static_files import SHARED_ROOT_FILES, build_static_asset_index, lookup_static_asset, modern_asset_path, modern_redirect
 from ems import backup as backup_mod
 from ems.device_identity import (
     PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
@@ -300,6 +303,7 @@ from ems.tibber_pulse import login_can_carry
 from ems.zendure_mqtt.config_entries import EXTERNAL_MQTT_TYPE
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+SHARED_STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "dashboard", "static")
 MAX_JSON_BODY_BYTES = 4 * 1024
 MAX_MQTT_MAPPING_BODY_BYTES = 256 * 1024
 
@@ -446,6 +450,16 @@ PUBLIC_POST_PATHS = frozenset(
         "/api/admin/auth/logout",
     }
 )
+
+# The EMS's sign-in paths, which the dashboard's pages call: the console
+# answers them as its own, since its sign-in is the one sign-in of the app.
+SIGN_IN_PATHS = {
+    "/api/auth/status": "/api/admin/auth/status",
+    "/api/auth/login": "/api/admin/auth/login",
+    "/api/auth/logout": "/api/admin/auth/logout",
+    "/api/auth/refresh": "/api/admin/auth/refresh",
+}
+SAFE_METHODS = frozenset({"GET", "HEAD"})
 
 def _validate_new_password(password, confirm):
     """Validate an initial password. Returns an error code or ``None``.
@@ -1006,6 +1020,8 @@ def create_admin_runtime(
     operation_coordinator=None,
     docker=None,
     influx_upgrade=None,
+    auth_session_path=None,
+    auth_session_limits=(1800, 43200),
 ):
     """Build the shared Admin service graph once, for one or more listeners.
 
@@ -1181,7 +1197,9 @@ def create_admin_runtime(
         influx_upgrade=influx_upgrade,
         # Shared password, separate Admin session. Setup can be hammered but only
         # succeeds once, so a simple per-address limiter is enough there.
-        auth_sessions=SessionStore(timeout_seconds=1800, absolute_max_seconds=43200),
+        auth_sessions=SessionStore(
+            timeout_seconds=auth_session_limits[0], absolute_max_seconds=auth_session_limits[1], path=auth_session_path
+        ),
         auth_login_limiter=LoginRateLimiter(),
         auth_setup_limiter=LoginRateLimiter(max_failures=10, window_seconds=60),
         admin_instance_id=uuid.uuid4().hex,
@@ -1551,6 +1569,7 @@ class AdminServer(ThreadingHTTPServer):
         self.identity_token_key = runtime.identity_token_key
         self.workflow_lifecycle = runtime.workflow_lifecycle
         self.static_assets = runtime.static_assets
+        self.ems_upstream = getattr(runtime, "ems_upstream", None) or installed_ems
         self.mqtt_live_topics = getattr(runtime, "mqtt_live_topics", None) or LiveTopicSessions()
         self.mqtt_compose = getattr(runtime, "mqtt_compose", None)
         self.mqtt_mapping_brokers = getattr(runtime, "mqtt_mapping_brokers", None) or MappingBrokers(
@@ -1582,6 +1601,18 @@ class AdminServer(ThreadingHTTPServer):
         seed_saved_brokers(self.mqtt_discovery, broker.config_dir)
         seed_builtin_broker(self.mqtt_discovery, broker, host_address())
         return outcome
+
+
+_SHARED_ROOT_ASSETS = {}
+
+
+def shared_root_assets():
+    """The dashboard's vendored files the app loads from the root (uPlot), indexed once."""
+
+    if not _SHARED_ROOT_ASSETS:
+        index = build_static_asset_index(SHARED_STATIC_DIR) if os.path.isdir(SHARED_STATIC_DIR) else {}
+        _SHARED_ROOT_ASSETS.update({name: index[name] for name in SHARED_ROOT_FILES if name in index})
+    return _SHARED_ROOT_ASSETS
 
 
 def _authority_hostname(authority):
@@ -1619,10 +1650,17 @@ class AdminHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path, _, query = self.path.partition("?")
+        path = SIGN_IN_PATHS.get(path, path)
+        if is_ems_api_path(path):
+            self._forward_to_ems()
+            return
         # The unauthenticated browser must be able to load the login/setup UI and
         # read auth status; every other GET below requires a valid Admin session.
         if path == "/api/admin/auth/status":
             self._send_json(self._auth_status_payload())
+            return
+        if path == CONSOLE_PATH:
+            self._send_json(CONSOLE_IDENTITY)
             return
         if not path.startswith("/api/"):
             self._send_static(path, query)
@@ -1810,7 +1848,10 @@ class AdminHandler(BaseHTTPRequestHandler):
         self._send_json({"error": "not found"}, status=404)
 
     def do_POST(self):
-        path = self.path.split("?", 1)[0]
+        path = SIGN_IN_PATHS.get(self.path.split("?", 1)[0], self.path.split("?", 1)[0])
+        if is_ems_api_path(path):
+            self._forward_to_ems()
+            return
         if path in PUBLIC_POST_PATHS:
             self._handle_public_auth_post(path)
             return
@@ -2125,8 +2166,55 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         self._send_json({"error": "not found"}, status=404)
 
+    def do_PUT(self):
+        self._forward_or_refuse()
+
+    def do_PATCH(self):
+        self._forward_or_refuse()
+
+    def _forward_or_refuse(self):
+        """Only the EMS's paths take PUT and PATCH; anything else is refused unread."""
+
+        if is_ems_api_path(self.path.split("?", 1)[0]):
+            self._forward_to_ems()
+            return
+        self.close_connection = True
+        self._send_json({"error": "method_not_allowed"}, status=405)
+
+    def _forward_to_ems(self):
+        """Pass the request to the EMS's dashboard server, saying whether this console's signed-in operator sent it.
+
+        A change from a signed-in browser without the console's CSRF token is
+        refused here, as the console's own changes are; signed out, the EMS
+        decides alone and refuses what needs a sign-in.
+        """
+
+        session = self._vouching_session()
+        if session is not None and self.command not in SAFE_METHODS:
+            token = self.headers.get("X-CSRF-Token", "")
+            if not token or not _hmac_compare(token, session.csrf_token):
+                self.close_connection = True
+                self._send_json({"error": "csrf_failed"}, status=403)
+                return
+        try:
+            upstream, key = self.server.ems_upstream()
+            forward(self, upstream, key=key, security_headers=SECURITY_HEADERS, operator=session is not None)
+        except ForwardingRefusal as refusal:
+            self.close_connection = True
+            self._send_json({"error": refusal.code, "message": refusal.message}, status=refusal.status)
+
+    def _vouching_session(self):
+        """This browser's console session while the password file is sound, else ``None``."""
+
+        if not admin_auth.admin_auth_status().valid:
+            return None
+        return self._current_admin_session()
+
     def do_DELETE(self):
         path = self.path.split("?", 1)[0]
+        if is_ems_api_path(path):
+            self._forward_to_ems()
+            return
         auth_error = self._require_admin_write_auth()
         if auth_error:
             self._send_json(auth_error[0], status=auth_error[1])
@@ -8312,18 +8400,19 @@ class AdminHandler(BaseHTTPRequestHandler):
         return parsed
 
     def _send_static(self, request_path, query=""):
-        """Modern at the root, the deprecated Classic under ``/classic/``.
+        """The console's front end at the root.
 
-        An old address of Modern (``/modern/...``) and ``/classic`` without its
-        slash are sent on, as the dashboard sends them.
+        An old address (``/modern/...``, or the removed Classic console's
+        ``/classic/...``) is sent on, as the dashboard sends it.
         """
 
         moved = modern_redirect(request_path, query)
         if moved is not None:
             self._send_bytes(b"", "text/plain; charset=utf-8", status=302, headers={"Location": moved})
             return
-        asset_path = modern_asset_path(request_path or "/")
-        asset = lookup_static_asset(self.server.static_assets, asset_path) if asset_path else None
+        asset_path = modern_asset_path(request_path or "/", SHARED_ROOT_FILES)
+        assets = shared_root_assets() if asset_path.lstrip("/") in SHARED_ROOT_FILES else self.server.static_assets
+        asset = lookup_static_asset(assets, asset_path)
         if asset is None:
             self._send_json({"error": "not found"}, status=404)
             return

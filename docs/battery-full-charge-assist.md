@@ -451,9 +451,7 @@ assist** section on each battery-backed device card (see
   - **PV charging** · **Running** and **AC charge from** with the time its AC
     charge may begin are shown while the assist takes the battery's charge from
     PV alone (see [The day's PV first](#the-days-pv-first)); without its AC
-    charge mode the card names no AC time. The deprecated Classic dashboard
-    shows neither, and an AC charge running then is a surplus or scheduled
-    charge, not the assist's.
+    charge mode the card names no AC time.
   - **AC charge** · **Running** is shown only when telemetry confirms `acMode=1`
     and `acStatus=2`. Assist can also run without AC charge mode
     (`enable_ac_charge_mode=false`).

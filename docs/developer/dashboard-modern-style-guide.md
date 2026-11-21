@@ -1,27 +1,66 @@
 # Modern front ends style guide
 
-The dashboard, the Admin console and the Appliance Manager each have two front
-ends on one server and one API. **Classic** is the hand-written page (`dashboard/static/`,
-`admin/static/`, `appliance/static/`) and follows the
-[Dashboard style guide](dashboard-style-guide.md) or the console's own
-stylesheet. **Modern** is a Svelte 5 application
-built with Vite, one for each server:
+The dashboard, the Admin console and the Appliance Manager each have a
+**Modern** front end, a Svelte 5 application built with Vite, one for each
+server:
 
 | App | Source | Build output, committed | Served at |
 | --- | --- | --- | --- |
-| Modern dashboard | `frontend/dashboard-modern/` | `dashboard/static/modern/` | the dashboard's `/` (Classic, deprecated, at `/classic/`) |
-| Modern Admin console | `frontend/admin-modern/` | `admin/static/modern/` | the Admin server's `/` (Classic, deprecated, at `/classic/`) |
+| Modern dashboard | `frontend/dashboard-modern/` | `dashboard/static/modern/` | the dashboard's `/` |
+| Modern Admin console | `frontend/admin-modern/` | `admin/static/modern/` | the Admin server's `/` |
 | Modern Appliance Manager | `frontend/appliance-modern/` | `appliance/static/modern/` | the Appliance Manager's `/` (Classic, deprecated, at `/classic/`) |
+
+The Classic dashboard and Admin console, the hand-written pages that came
+before, have been removed; `/classic/` on either server leads to `/`. The
+Appliance Manager keeps its Classic page (`appliance/static/`), which follows
+its own stylesheet.
+
+A browser too old for the app -- one without the Popover API, which no engine
+shipped before the syntax and the modal dialogs the apps also rely on -- is sent
+by `fallback.js` to `unsupported.html`, which names the browser versions the
+app needs in its four languages. Both files, and the page's stylesheet, come
+from `frontend/shared/unsupported/` through the build recipe
+(`modernPage({ unsupported: true })` in `frontend/shared/vite/page.js`), so the
+dashboard and the Admin console ship the same ones.
 
 All three are built from one design system in `frontend/shared/`, so they read
 as one product -- and the dashboard and the Admin console will keep doing so
 when one web container serves them both.
 
-Modern is a visual system of its own, deliberately. The rule that dashboard work
-must not introduce a new visual system binds Classic; Modern is the one
-sanctioned exception, and this guide is its rule set, for both apps alike. A
-change to Modern follows this page, a change to Classic follows its own guide,
-and neither borrows the other's classes.
+Modern is a visual system of its own, and this guide is its rule set, for every
+app alike. It never borrows the Appliance Manager's Classic classes, nor they
+Modern's.
+
+## The console carries the dashboard's pages
+
+The Admin console's app is the product's one address: its menu holds the
+dashboard's pages (**Dashboard**) beside its own (**Admin**), with
+`area: "ems"` or `"admin"` in `frontend/admin-modern/src/app/pages.js`. The
+dashboard's page components are imported from `frontend/dashboard-modern/src/`
+and stay the dashboard's: the EMS's own server still builds and serves the
+dashboard app from the same sources, as the way in while the console is down,
+and sends a reader on to the console (`src/app/MovedNotice.svelte`).
+
+- **Data.** The pages call the EMS's API on the console's origin, and the
+  console forwards it ([Admin architecture](../technical/admin-architecture.md)).
+  `src/state/ems.svelte.js` asks the EMS whether it answers before the
+  dashboard's live feed and session start; `src/app/EmsPage.svelte` shows a
+  page while it does, and in its place why not and where to change that.
+- **Sign-in.** The dashboard's pages are readable signed out; the console's
+  need its session, and opening one shows the sign-in. The sign-in signs in to
+  both servers; the dashboard's own sign-in dialog stays for a lapsed EMS
+  session.
+- **Words.** Both string tables are loaded; `useStrings(table, rank)` lets the
+  console's words win where both name a key, and
+  `frontend/admin-modern/tests/strings.test.js` lists every key where they
+  differ. The dashboard's table ships as its own chunk,
+  `dashboard-strings.js`.
+- **Icons.** The console's sprite holds the dashboard's icons as well
+  (`modernPage({ icons: [...] })`).
+- **Folded pages.** The dashboard's **Diagnose** is part of the console's
+  **Diagnostics**; its **Maintenance** (backups of the EMS) is not carried, as
+  the console's **Backups** and **Updates** cover it. Their old addresses open
+  the console's pages.
 
 ## One design system, two apps
 
@@ -41,8 +80,8 @@ app adds only what is its own:
 - **The shell** gets what it needs from the app through one context
   (`shell/context.js`): the page set and router, the word under the folded mark,
   which pages need a sign-in, the session (signed-in state, its label and icon,
-  sign in and out), the switch to Classic and extra links (the Admin console's
-  link to the dashboard). The top bar takes the app's status pills as a snippet.
+  sign in and out), the Appliance Manager's switch to its Classic page, and
+  extra links (the Admin console's link to the dashboard). The top bar takes the app's status pills as a snippet.
 - **Strings** live in one table each: the shared parts' table and the app's.
   A key lives in one of them only; `app.name` and `app.sub` are the two every
   app defines for the shell. A text that depends on a count is a plural pair
@@ -60,23 +99,20 @@ app adds only what is its own:
 | --- | --- |
 | The API, the auth session and the CSRF header | Markup, components and CSS |
 | The energy and status colours `--pv`, `--battery`, `--output`, `--grid`, `--danger` | Surface tokens: Modern's carry the `--m-` prefix |
-| Classic's vocabulary: rule list, control codes, decision sentences, firmware enums, schedule presets, analytics series, flow hysteresis and scale ladder | Appearance choices: Modern's keys carry the `ems-modern.` prefix |
+| The server's vocabulary: rule list, control codes, decision sentences, schedule presets and statuses, setup and workflow refusals | Appearance choices: Modern's keys carry the `ems-modern.` prefix |
 
 The shared colours keep the names and values of the shared token contract
 (`docs/developer/agent-rules.md`, *Shared design-token invariant*);
-`tests/test_dashboard_modern.py` compares them with Classic's `:root`. Every
-other Modern token is surface-specific and says so with its `--m-` prefix.
+`tests/test_dashboard_modern.py` compares them with the Appliance Manager's
+Classic `:root`. Every other Modern token is surface-specific and says so with
+its `--m-` prefix.
 
-The vocabulary is copied, not imported, because Classic is not a module.
-`frontend/dashboard-modern/tests/classic-parity.test.js` walks Classic's own
-lists out of `dashboard/static/app.js` and fails when the two drift -- the
-paired-registry rule in `agent-rules.md` applied to a second front end.
-
-Classic is deprecated and gets no new entries. A list that grows on in Modern
-is paired with its source instead, and Classic's list stays a subset of it:
-the rule list with `rule_states` in `dashboard/telemetry.py`
-(`tests/test_dashboard_modern.py`), which since battery care has one rule
-Classic does not show.
+A list of codes the server writes is paired with its source, the
+paired-registry rule in `agent-rules.md`: the rule list with `rule_states` in
+`dashboard/telemetry.py` (`tests/test_dashboard_modern.py`), and the control
+codes, decision sentences, schedule vocabulary and the guided setup's refusals
+with the Python modules that write them (`tests/server-codes.test.js` of each
+app).
 
 ## Colour
 
@@ -174,10 +210,10 @@ groups things does not paint a fill of its own.
 
 ## Writing to the EMS
 
-Modern sends exactly what Classic sends, to the same endpoints:
+A write to the EMS sends:
 
 - only the fields the operator changed (`src/lib/runtime.js`, `changedPayload`);
-- the confirmation Classic asks for, with the same warnings;
+- after the confirmation the change needs, with its warnings;
 - the `X-CSRF-Token` header from `/api/auth/status`, through
   `authorizedSend` in `src/state/auth.svelte.js`.
 
@@ -188,12 +224,11 @@ is what authorizes a write; nothing in Modern decides it.
 
 One `EventSource` on `/api/events`, falling back to polling `/api/live` every
 two seconds when the stream does not answer within three, and promoted back to
-the stream after thirty -- the transport contract of Classic, in
-`src/lib/transport.js`. A hidden tab releases its stream after thirty seconds.
+the stream after thirty, in `src/lib/transport.js`. A hidden tab releases its stream after thirty seconds.
 
-The energy flow draws Classic's pipes: a translucent track, a halo around it
-and rounded dashes moving along it, faster and brighter in Classic's three
-power buckets (150 W and 600 W). The dashes move with `element.animate()` on a
+The energy flow draws pipes: a translucent track, a halo around it and rounded
+dashes moving along it, faster and brighter in three power buckets (150 W and
+600 W). The dashes move with `element.animate()` on a
 transform, one animated layer per straight run, and are painted into that
 layer's own background with gradients, so each layer is rasterised once and
 then only moved. The halo is three wider, fainter strokes in the static SVG,
@@ -249,8 +284,7 @@ from what the Admin server is.
   with the facts the payload carries filled in; an unknown one keeps the
   server's sentence, marked `lang="en"`, so a newer server is never silenced.
   Each list of codes is a paired registry, walked against the server's source
-  (`frontend/admin-modern/tests/`, `tests/test_admin_modern.py`) and against
-  Classic's tables (`tests/classic-parity.test.js`).
+  (`frontend/admin-modern/tests/`, `tests/test_admin_modern.py`).
 - **The settings catalogue, translated by its English.** Labels, help texts,
   units, section and group titles and option values come from
   `ems/config_catalog.py`. `src/i18n/catalog.js` keys their German, Dutch and
@@ -258,24 +292,18 @@ from what the Admin server is.
   value; `tests/test_admin_modern.py` walks both catalogue payloads, so a new or
   changed catalogue sentence fails it until it is translated, and an entry
   nothing uses any more fails it too.
-- **The same writes as Classic.** Every write sends exactly the body Classic
-  sends to the same endpoint, with the same `confirm` flags, plan ids and
-  fingerprints, through `adminSend` with the session's CSRF token. A
+- **Writes carry their proof.** Every write sends its `confirm` flags, plan ids
+  and fingerprints through `adminSend` with the session's CSRF token. A
   confirmation dialog says what will change before anything is sent; a job is
   followed until it ends, and a read with no answer is retried and said so, as
   the job keeps running on the server.
-- **Hand-overs to Classic.** A workflow Modern does not run yet -- Guided Setup,
-  the settings editor, the MQTT migration -- is named and opened in Classic at
-  its page (`/#maintenance-settings-devices` and so on). An address with a
-  Classic page in it opens Classic whatever the browser chose, so a hand-over
-  never changes the choice. A hand-over may carry what the reader chose: the
-  Updates page's way to Classic's Guided Upgrade opens
-  `/#maintenance-upgrade-<tag>` for the version on screen, which Classic reads
-  once (`maintenanceUpgradeTagForHash`) and selects. A guided workflow that
-  holds the console is shown on every page with the way to continue it.
+- **Old addresses still arrive.** An address of the removed Classic console
+  (`#maintenance-upgrade`, `#maintenance-settings-<tab>` and the like) opens
+  the same page here (`LEGACY_ADDRESSES` in `src/app/pages.js`). A guided
+  workflow that holds the console is shown on every page with the way to
+  continue it.
 - **The Guided Upgrade runs here.** `state/upgrade.svelte.js` holds the one run
-  this console follows, beside the pages, and sends what Classic sends:
-  validate, the migration review, execute, resume, the job poll and the
+  this console follows, beside the pages, and sends: validate, the migration review, execute, resume, the job poll and the
   system-alignment recovery routes. Choosing a version verifies it and reads
   the migration review at once, so the owner confirms one plan with one
   button. `lib/upgrade.js` turns the job's steps and the transition's stage
@@ -339,17 +367,10 @@ from what the Admin server is.
   which scroll once to that card (the restore card at once, the create card
   when the listing has answered, as its button needs it) and focus its button
   if it can be pressed then.
-- **Modern answers at the root**, the deprecated Classic at `/classic/`; the
-  Admin server maps the addresses as the dashboard does
-  (`dashboard/static_files.py`) and sends an old `/modern/...` address to the
-  root. Nothing is remembered. Modern's `public/fallback.js` sends an address
-  that names a Classic page (`#setup`, `#maintenance-...`), `?ui=classic` and a
-  browser without the Popover API to `/classic/`. Classic's guided setup and
-  guided upgrade keep their `#setup` / `#maintenance-upgrade` address under
-  `/classic/`, so a reload or the reconnect after an Admin update stays in
-  Classic; Modern's own upgrade reloads at `/#/updates`. Classic's Playwright
-  specs open `/classic/` (see [e2e-playwright.md](e2e-playwright.md)); the
-  appearance gallery photographs Classic there.
+- **The console answers at the root**; the Admin server maps the addresses as
+  the dashboard does (`dashboard/static_files.py`) and sends an old
+  `/modern/...` or `/classic/...` address to the root, never cached. The
+  upgrade reloads at `/#/updates`.
 
 ## The Appliance Manager
 
@@ -409,35 +430,24 @@ from what the Manager is: the recovery console of a Raspberry Pi, served by
   specs open `/classic/`; the Modern spec is
   `tests/e2e-appliance/modern.spec.ts`.
 
-## What the Modern Admin only shows or hands to Classic
+## What the Admin console only shows
 
-The goal is a Modern console that works on its own. This list holds
-everything Modern only shows or opens in Classic, as of 2026-10-25. Every
-workflow has moved; what remains are details shown without an action. Classic
-stays the reference for each item. Remove an entry in the change that makes it
-native.
+Every workflow the removed Classic console had runs here;
+`docs/developer/modern-parity.md` keeps the inventory taken before it was
+removed. What remains are details shown without an action. Remove an entry in
+the change that adds the action.
 
-### Workflows Modern hands to Classic
-
-None any more. The settings editor, the older MQTT setup's migration, the
-Guided Setup and moving a root `config.json` to `config/config.json` (System
-page) run in Modern. Classic's start gate is replaced by the assistant, which
-opens at the console's address; `docs/developer/modern-parity.md` lists every
-function of both consoles.
-
-### Display-only details inside native pages
+### Display-only details
 
 | Page | Shown without an action | Way out today |
 | --- | --- | --- |
 | Updates | The Admin/EMS pair state (not a pair, not verified); the catalogue's warnings | The Guided Upgrade aligns the pair |
 | Services | Docker not reachable; there is no start or stop per service, only **Restart EMS now** (sync) and **Repair analytics** | Fix Docker on the host |
-| Diagnostics | The checks' results; the report cannot be copied or exported | Classic has no export either |
+| Diagnostics | The checks' results; the report cannot be copied or exported | — |
 | System | Missing installation paths; broker and device problems from MQTT telemetry | Settings & devices, the Guided Setup |
-| Backups | Encrypted backups cannot be created (existing ones can be inspected and restored) | Classic cannot create them either; the backend accepts `encrypt`/`password` on create (`admin/backup_restore.py`) |
+| Backups | Encrypted backups cannot be created (existing ones can be inspected and restored) | The backend accepts `encrypt`/`password` on create (`admin/backup_restore.py`) |
 
-### Missing from both consoles
-
-These are not Modern gaps; neither console has them:
+### Missing from the console
 
 - Changing the Admin password: the server has no endpoint for it. Only setup,
   login, logout and refresh exist.
@@ -445,7 +455,7 @@ These are not Modern gaps; neither console has them:
 - Logs and a support bundle. The support archive exists only in the Appliance
   Manager (`appliance/support_archive.py`).
 
-The server also has routes neither console calls. They are probably for the
+The server also has routes the console does not call. They are probably for the
 CLI; check before building on them:
 
 - GET `admin-update/{status,resume}` and POST `admin-update/{plan,execute}`

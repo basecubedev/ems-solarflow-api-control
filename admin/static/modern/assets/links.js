@@ -1,0 +1,3 @@
+/* SPDX-FileCopyrightText: 2026 basecubedev */
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+function e(e,t=globalThis.location){if(typeof e!=`string`||!e||!t?.hostname)return null;let n;try{n=new URL(e)}catch{return null}if(n.protocol!==`http:`&&n.protocol!==`https:`)return null;let r=t.hostname.includes(`:`)&&!t.hostname.startsWith(`[`)?`[${t.hostname}]`:t.hostname,i=n.port?`:${n.port}`:``;return`${n.protocol}//${r}${i}/`}function t(t){return e(t,{hostname:`localhost`})?`#/overview`:null}export{t as n,e as t};

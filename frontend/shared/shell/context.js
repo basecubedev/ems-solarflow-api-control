@@ -14,10 +14,12 @@ const SHELL = Symbol("shell");
  *   locked    (page) => true when the page needs a sign-in first
  *   mark      optional (pageId) => "error" | "warning" | "info" | "": a page
  *             with something waiting gets a dot and the words for it
- *   session   { authenticated, label, icon, pill, signIn(), signOut() }; pill
- *             false keeps the label out of the top bar (the phone sheet still
- *             shows it)
- *   classic   (pageId) => void, the switch to the Classic view
+ *   session   { authenticated, label, icon, pill, leavesOnSignOut, signIn(),
+ *             signOut() }; pill false keeps the label out of the top bar (the
+ *             phone sheet still shows it); leavesOnSignOut true says a
+ *             sign-out leaves for another view, so the phone sheet closes
+ *   classic   optional (pageId) => void, the switch to the Appliance
+ *             Manager's Classic view; no switch without it
  *   links     [{ href, icon, label, testid, external }], opened in place, or in
  *             a new tab when external is true
  *   about     optional { notices, version, tagPrefix, links } for the About page:

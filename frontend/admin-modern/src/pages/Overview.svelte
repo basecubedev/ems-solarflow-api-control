@@ -14,7 +14,7 @@
   import { serviceView } from "../lib/services.js";
   import { controlView } from "../lib/control.js";
   import { latestBackup } from "../lib/backups.js";
-  import { dashboardHref } from "../lib/links.js";
+  import { dashboardHref, dashboardPage } from "../lib/links.js";
   import { href } from "../app/router.svelte.js";
   import { errorView } from "../lib/errors.js";
 
@@ -41,6 +41,7 @@
   const control = $derived(controlView(system.config.data?.summary?.control, system.config.data?.overrides));
   const lastBackup = $derived(latestBackup(system.backups.data));
   const dashboard = $derived(dashboardHref(overview?.links?.dashboard_url));
+  const dashboardHere = $derived(dashboardPage(overview?.links?.dashboard_url));
   const hero = $derived(HERO[verdict.level] || HERO.warning);
   const refreshing = $derived(system.overview.loading || system.plan.loading);
 
@@ -70,7 +71,7 @@
   <button class="icon-btn" type="button" onclick={refresh} aria-label={t("common.refresh")} title={t("common.refresh")} disabled={refreshing} data-testid="refresh">
     <Icon name="refresh-cw" />
   </button>
-  {#if dashboard && ems.running}<a class="btn secondary small" href={dashboard} data-testid="hero-dashboard"><Icon name="arrow-up-right" size="sm" />{t("nav.dashboard")}</a>{/if}
+  {#if dashboardHere && ems.running}<a class="btn secondary small" href={dashboardHere} data-testid="hero-dashboard"><Icon name="layout-dashboard" size="sm" />{t("nav.dashboard")}</a>{/if}
 {/snippet}
 
 <section class="card hero span-12 {hero.tone}" aria-labelledby="overview-verdict" data-level={verdict.level} data-testid="overview-hero">
@@ -164,7 +165,7 @@
       <div class="fact"><div class="fact-label">{t("version.docker")}</div><div class="fact-value num" class:na={!overview.docker?.server_version}>{overview.docker?.server_version || "—"}</div></div>
     </div>
     {#if dashboard}
-      <a class="dash-link inner" href={dashboard}><Icon name="layout-dashboard" /><span><strong>{t("overview.dashboard")}</strong><span class="muted">{dashboard}</span></span><Icon name="arrow-up-right" size="sm" /></a>
+      <a class="dash-link inner" href={dashboardHere}><Icon name="layout-dashboard" /><span><strong>{t("overview.dashboard")}</strong><span class="muted">{t("overview.dashboardOwn", { address: dashboard })}</span></span><Icon name="chevron-right" size="sm" /></a>
     {/if}
   </Card>
 {/if}

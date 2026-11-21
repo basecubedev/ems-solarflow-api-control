@@ -301,8 +301,8 @@ dashboard class names.
 The consequence to respect: **do not lift this page's styling into the
 dashboard, and do not treat it as a precedent.** If these values ever become a
 real dashboard surface, that surface follows
-[dashboard-style-guide.md](dashboard-style-guide.md) and this page is thrown
-away.
+[dashboard-modern-style-guide.md](dashboard-modern-style-guide.md) and this
+page is thrown away.
 
 ## Offline self-test
 

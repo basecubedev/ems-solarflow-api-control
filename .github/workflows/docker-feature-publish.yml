@@ -130,7 +130,6 @@ jobs:
             admin ems dashboard scripts tests emsctl.py ems-solarflow-api-control.py \
             2>&1 | tee -a release-contract.log
           python tools/build_config_template.py --check 2>&1 | tee -a release-contract.log
-          node --check admin/static/admin.js 2>&1 | tee -a release-contract.log
       - name: Run fast MQTT release gate
         run: |
           set -o pipefail

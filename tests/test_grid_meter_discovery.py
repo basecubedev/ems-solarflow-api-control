@@ -246,17 +246,6 @@ def test_a_found_poweropti_is_ready_once_its_key_is_typed():
     assert "1a2b3c4d5e6f" not in json.dumps(found)
 
 
-def test_every_console_turns_a_found_meter_into_the_same_type():
-    import re
-    from pathlib import Path
-
-    from admin.config_preview import _GRID_TYPES
-
-    source = (Path(__file__).parents[1] / "admin" / "static" / "admin.js").read_text(encoding="utf-8")
-    classic = re.search(r"const GRID_METER_FAMILY_TYPES = \{(.*?)\};", source, re.S).group(1)
-    assert dict(re.findall(r'([a-z0-9_]+): "([a-z0-9_]+)"', classic)) == _GRID_TYPES
-
-
 def test_a_scanned_unit_id_does_not_follow_the_meter_to_another_type():
     found = DiscoveredDevice(
         ip="192.168.1.64", api_family="sunspec_modbus", device_type="sunspec_modbus",

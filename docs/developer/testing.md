@@ -310,8 +310,8 @@ npm run build:admin-modern        # rewrites admin/static/modern/
 `tests/test_dashboard_modern.py` and `tests/test_admin_modern.py` rebuild into
 a scratch directory and fail when the committed output differs; the dashboard
 Playwright job does the same for both with `git diff --exit-code`. The browser
-specs are `tests/e2e-dashboard/modern.spec.ts`, in the same suite as Classic's
-cockpit, and `tests/e2e/admin-modern.spec.ts` and
+specs are `tests/e2e-dashboard/modern.spec.ts` and the rest of
+`tests/e2e-dashboard/`, and `tests/e2e/admin-modern.spec.ts` and
 `tests/e2e/admin-modern-upgrade.spec.ts`, in the Admin suite.
 
 Four things are worth knowing before adding a spec to either:
@@ -457,6 +457,7 @@ The user guides are screenshot-led. Regenerate every image with:
 ./scripts/capture-docs-screenshots.sh            # Admin + Dashboard
 ./scripts/capture-docs-screenshots.sh admin      # Admin Console only
 ./scripts/capture-docs-screenshots.sh dashboard  # EMS Dashboard only
+./scripts/render_admin_docs_videos.sh            # the Admin demo videos, from the new screenshots
 ```
 
 Every image is of the Modern design, taken with Playwright Chromium. The Admin
@@ -468,11 +469,13 @@ signed-out browser, an update that runs, a guided setup, ...). The settings
 page, its check, the telemetry view and the guided setup's device search and
 device plan are answered by the shipped Admin builders from the demo
 installation's `config.json`, so a setting the template gains shows up without
-a fixture edit. The dashboard's spec runs against
+a fixture edit. The dashboard's spec photographs the dashboard's pages in the
+one app: the console's docs preview with `--ems-preview` reads the EMS from
 `scripts/serve_dashboard_preview.py` over `scripts/dashboard_preview_data.py`,
-the server of the dashboard browser suite. No Docker, hardware, discovery, MQTT
-broker, Zendure credential, `config.json` or runtime state is involved,
-unrelated containers are untouched, and nothing is pushed. Requirements:
+the server of the dashboard browser suite, and the EMS's own Diagnose and
+Maintenance pages are taken from that server directly. No Docker, hardware,
+discovery, MQTT broker, Zendure credential, `config.json` or runtime state is
+involved, unrelated containers are untouched, and nothing is pushed. Requirements:
 `node` with the Playwright Chromium for both.
 
 Add a screen by adding an entry to `SHOTS` in `scripts/capture_admin_docs.mjs`
@@ -493,9 +496,8 @@ Two traps worth knowing:
   adopted as the sign-in state. The preview answers it with the scenario's own
   sign-in state; an answer without one signs the page out mid-capture.
 
-The demo videos in `docs/assets/videos/admin/` were recorded from the
-deprecated Classic console by `scripts/render_admin_docs_video.py`, which
-drives Classic through the preview's `?screen=` and `scripts/admin_docs_preview.js`.
+The demo videos in `docs/assets/videos/admin/` were recorded from the Classic
+console, which has been removed; they can no longer be rendered again as they are.
 
 After a run, review `git status --short docs/assets` before committing.
 

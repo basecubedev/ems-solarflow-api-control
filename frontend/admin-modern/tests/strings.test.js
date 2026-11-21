@@ -6,8 +6,10 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { STRINGS } from "../src/i18n/strings.js";
+import { STRINGS as DASHBOARD_STRINGS } from "../../dashboard-modern/src/i18n/strings.js";
 import { APP_KEYS, SHARED_STRINGS } from "../../shared/i18n/strings.js";
 import { PAGES } from "../src/app/pages.js";
+import { EMS_REFUSALS } from "../src/lib/ems.js";
 import { KNOWN_ERRORS, KNOWN_SENTENCES } from "../src/lib/errors.js";
 import { FINDINGS, INSTALL_STATES, CONTAINER_STATUSES } from "../src/lib/health.js";
 import { CONTROL_STATUSES, CONTROL_TRANSPORTS } from "../src/lib/control.js";
@@ -38,7 +40,19 @@ function sources(dir = SRC) {
 }
 
 const placeholders = (text) => [...text.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
-const exists = (key) => Boolean(STRINGS[key] || SHARED_STRINGS[key]);
+const exists = (key) => Boolean(STRINGS[key] || SHARED_STRINGS[key] || DASHBOARD_STRINGS[key]);
+
+/**
+ * Keys both tables name with different words. The console carries the
+ * dashboard's pages and its words win there (``useStrings`` rank); each entry
+ * is a sentence about the same thing, said once for the whole app.
+ */
+const OWN_WORDS = ["error.auth_not_configured", "error.csrf_failed", "error.login_rate_limited", "error.not_authenticated"];
+
+test("a key both apps name has the same words, or the console's are meant to win", () => {
+  const differing = Object.keys(STRINGS).filter((key) => key in DASHBOARD_STRINGS && JSON.stringify(STRINGS[key]) !== JSON.stringify(DASHBOARD_STRINGS[key]));
+  assert.deepEqual(differing.sort(), [...OWN_WORDS].sort());
+});
 
 test("every key carries all four languages", () => {
   for (const [key, entry] of Object.entries(STRINGS)) {
@@ -76,6 +90,7 @@ test("every literal key the components ask for exists, and every counted one has
 test("every generated key family is complete", () => {
   const required = [
     ...PAGES.flatMap((page) => [`nav.${page.id}`, `page.${page.id}.sub`, ...(page.shortLabel ? [page.shortLabel] : [])]),
+    ...EMS_REFUSALS.flatMap((code) => [`ems.${code}`, `ems.${code}.next`]),
     ...KNOWN_ERRORS.map((code) => `error.${code}`),
     ...Object.values(KNOWN_SENTENCES),
     ...Object.values(RELEASE_NOTES),
@@ -222,7 +237,7 @@ test("no orphan keys: each key is used literally or belongs to a generated famil
     "setup.manualControl.", "setup.deploy.status.", "setup.docker.", "setup.dockerMode.", "setup.run.status.", "setup.run.conflict.existing.", "setup.service.",
     "setup.devices.sourcesEnabled.", "setup.devices.found.", "setup.devices.brokerCount.", "setup.devices.deviceCount.", "setup.devices.ignored.",
     "setup.devices.proposalCount.", "setup.hardware.metersFound.", "setup.hardware.ready.", "setup.recovery.",
-    "feature.", "assistant.state.", "assistant.lead.", "assistant.task.", "assistant.step.devices.done.", "history.question.",
+    "feature.", "ems.", "assistant.state.", "assistant.lead.", "assistant.task.", "assistant.step.devices.done.", "history.question.",
     ...STEP_IDS.map((id) => `assistant.step.${id}.title`),
     ...["off", "stopped", "docker", "noAddress"].map((reason) => `assistant.step.dashboard.${reason}`),
   ];

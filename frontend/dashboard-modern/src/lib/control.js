@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
  * Reading the EMS control explanation. The EMS decides; this only reads what
- * it reported. Codes the EMS writes are paired with Classic's
- * CONTROL_CODE_LABELS and CONTROL_DECISION_SENTENCES, and an unknown code
- * still falls back to its words, so a newer EMS stays legible.
+ * it reported. tests/server-codes.test.js holds every code here to one the
+ * EMS writes, and an unknown code still falls back to its words, so a newer
+ * EMS stays legible.
  */
 
 export const CONTROL_CODES = Object.freeze([

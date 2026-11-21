@@ -127,30 +127,22 @@ Tags: `@smoke` (fast critical journeys), `@setup`, `@maintenance`,
   next click. The Firefox failure of the MQTT migration spec was this, and it
   had been written off as a flake.
 
-- The console's address opens Modern; the deprecated Classic answers at
-  `/classic/`, and the Classic specs open it there (`LoginPage.goto` and every
-  `page.goto` of a Classic page). Nothing is remembered between the two, so no
-  spec needs a stored choice.
+- The console's address opens the console; the Classic console has been
+  removed, and `/classic/` leads to the address.
 
 ## Covered lifecycle workflows
 
-The workflows that originally shipped as backend/contract-only coverage now have
-browser-level specs:
-
-- Admin update reconnect → Continue completion, and a failed replacement —
-  `tests/e2e/admin-update.spec.ts` (plus the real-container replacement canary
-  in `tests/e2e/admin-replacement-canary.spec.ts`, which upgrades the previous
-  stable release's Admin to the latest stable release; see
-  [`ci-release.md`](ci-release.md)).
-- MQTT migration review/apply and stale-fingerprint rejection —
-  `tests/e2e/mqtt-migration.spec.ts`.
-- Guided Upgrade preflight and live step progression —
-  `tests/e2e/guided-upgrade.spec.ts`.
-- Mixed API / local-MQTT / cloud-MQTT config round trip —
-  `tests/e2e/mixed-transports.spec.ts` (config-draft persistence:
-  `tests/e2e/setup-reload.spec.ts`).
-- Maintenance Admin/EMS identity display —
-  `tests/e2e/component-identities.spec.ts`.
+The browser-level specs drive the console's own pages
+(`tests/e2e/admin-modern*.spec.ts`), the one app with the dashboard's pages
+forwarded to a preview EMS (`tests/e2e/admin-one-app.spec.ts`) and the packaged
+System Build gate (`tests/e2e/system-build-*packaged.spec.ts`). The specs that
+drove the removed Classic console -- Admin update reconnect, MQTT migration,
+Guided Upgrade steps, mixed transports, identity display, setup recovery and
+workflow switching among them -- went with it; their server side stays covered
+by the Python contract tests, and the console's pages by the specs above. The
+real-container replacement canary (`tests/e2e/admin-replacement-canary.spec.ts`,
+see [`ci-release.md`](ci-release.md)) still drives Classic and has to be
+rewritten for the console.
 
 When extending coverage, grow the deterministic test-mode — extend the
 catalog and the `admin/test_support.py` adapters rather than faking frontend-only

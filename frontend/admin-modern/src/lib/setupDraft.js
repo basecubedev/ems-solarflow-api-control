@@ -1,12 +1,11 @@
 // SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * Guided Setup's hardware draft as the Classic console keeps it
- * (admin/static/admin.js, the Config step): the discovered and hand-added
- * draft items, the chosen MQTT connections, the hand-entered MQTT broker and
- * devices, the feature values and what the operator removed. It is stored
- * under Classic's own keys and in Classic's shapes, so a setup moves between
- * the two consoles. Which observations are one inverter, and which connection
+ * Guided Setup's hardware draft: the discovered and hand-added draft items,
+ * the chosen MQTT connections, the hand-entered MQTT broker and devices, the
+ * feature values and what the operator removed. It is stored under the keys
+ * and in the shapes the removed Classic console used, so a setup a browser
+ * started there before the update continues here. Which observations are one inverter, and which connection
  * each uses, is the server's device plan; these helpers only apply its typed
  * answer and never compare serials, hosts or names to reach one. Pure.
  */

@@ -383,8 +383,7 @@ def test_the_browser_form_imposes_no_length_either():
     """The rule has to be absent where an operator meets it, not only in the
     validator. A length floor on the input refuses the password before the
     request is made, so the browser would reject a secret the EMS side accepts
-    -- the same lockout the validator was freed of. Admin already pins this for
-    its own form in test_admin_frontend.py."""
+    -- the same lockout the validator was freed of."""
 
     from pathlib import Path
 

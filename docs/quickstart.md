@@ -96,8 +96,9 @@ On first start, the container creates `config/config.json` from the built-in
 template if the file does not exist yet. Existing `config/config.json` files
 are not overwritten.
 
-The generated Compose file uses service name `ems`, port mapping
-`8080:8080`, and bind mounts `./config:/app/config` and `./data:/app/data`.
+The generated Compose file uses service name `ems`, publishes port 8080
+(`EMS_DASHBOARD_PUBLISH`, see [Docker](docker.md#published-ports)), and bind
+mounts `./config:/app/config` and `./data:/app/data`.
 
 Check that the container started:
 
@@ -179,9 +180,7 @@ http://127.0.0.1:8080
 ```
 
 The dashboard opens with its **Overview** page; the guides in
-[EMS Dashboard](user/dashboard/index.md) walk through every page. **Classic
-view** in the side menu opens the deprecated Classic dashboard at `/classic/`,
-which a later release removes.
+[EMS Dashboard](user/dashboard/index.md) walk through every page.
 
 ## 8. Next Steps
 

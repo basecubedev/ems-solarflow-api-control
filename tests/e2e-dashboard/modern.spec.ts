@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The Modern dashboard at the root, against the same preview server and the
-// same API as the deprecated Classic at /classic/. Never `waitUntil: "networkidle"`: /api/events stays open.
+// The Modern dashboard at the root, against the preview server.
+// Never `waitUntil: "networkidle"`: /api/events stays open.
 import { expect, test } from "@playwright/test";
 import { DOCS_SHOT_TIME, pinTheDay } from "./pin-the-day";
 
@@ -33,35 +33,77 @@ async function openModern(page, hash = "#/overview") {
 }
 
 test.describe("Modern dashboard @smoke", () => {
-  test("demo mode, ?ui=classic and a browser too old for Modern go to Classic", async ({ page }) => {
-    await page.goto("/?Demo=TRUE", { waitUntil: "domcontentloaded" });
-    await expect(page).toHaveURL(/\/classic\/\?Demo=TRUE$/);
-    await expect(page.locator("#themeSelect")).toBeVisible();
-    await page.goto("/?ui=classic", { waitUntil: "domcontentloaded" });
-    await expect(page).toHaveURL(/\/classic\/\?ui=classic$/);
-    await page.goto("/?demo=0", { waitUntil: "domcontentloaded" });
+  test("a browser too old for the dashboard is told so, and old addresses open the dashboard", async ({ page }) => {
+    await page.goto("/classic/?ui=classic", { waitUntil: "domcontentloaded" });
+    await expect(page).toHaveURL(/:\d+\/\?ui=classic$/);
     await expect(page.getByTestId("ems-state")).toBeVisible();
-    await expect(page).toHaveURL(/:\d+\/\?demo=0$/);
-
     await page.addInitScript(() => {
       delete HTMLElement.prototype.popover;
     });
     await page.goto("/", { waitUntil: "domcontentloaded" });
-    await expect(page).toHaveURL(/\/classic\/$/);
-    await expect(page.locator("#themeSelect")).toBeVisible();
+    await expect(page).toHaveURL(/\/unsupported\.html$/);
+    await expect(page.getByTestId("browser-too-old")).toContainText("Firefox 125");
   });
 
-  test("Modern answers at the root, Classic under /classic/ says it is deprecated, and each links to the other", async ({ page }) => {
-    await page.goto("/", { waitUntil: "domcontentloaded" });
-    await expect(page.getByTestId("ems-state")).toBeVisible();
-    await page.getByTestId("switch-classic").click();
-    await expect(page).toHaveURL(/\/classic\/$/);
-    await expect(page.locator("#classicNotice")).toContainText("deprecated");
-    await page.locator("#modernLink").click();
-    await expect(page).toHaveURL(/:\d+\/$/);
-    await expect(page.getByTestId("ems-state")).toBeVisible();
-    await page.goto("/", { waitUntil: "domcontentloaded" });
-    await expect(page.getByTestId("ems-state")).toBeVisible();
+  test("with an Admin console, this address only shows the way to the app, reads nothing, and goes there", async ({ page, context, baseURL }) => {
+    await context.addCookies([{ name: "ems-preview-console", value: "8093", url: baseURL as string }]);
+    await page.route("http://127.0.0.1:8093/**", (route) => route.fulfill({ status: 200, contentType: "text/html", body: "<title>console</title>" }));
+    const asked: string[] = [];
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.port !== "8093" && url.pathname.startsWith("/api/")) asked.push(url.pathname);
+    });
+    await page.goto("/#/energy", { waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("signpost")).toBeVisible();
+    await expect(page.getByTestId("moved-notice")).toContainText("http://127.0.0.1:8093");
+    await expect(page.getByTestId("moved-go")).toHaveAttribute("href", "http://127.0.0.1:8093/#/energy");
+    await expect(page.getByTestId("ems-state")).toHaveCount(0);
+    await expect(page.getByRole("navigation")).toHaveCount(0);
+    await page.waitForURL("http://127.0.0.1:8093/#/energy", { timeout: 15_000 });
+    expect(asked).toEqual(["/api/ui-config"]);
+  });
+
+  test("a console the EMS names but this browser does not reach is offered, never opened by itself", async ({ page, context, baseURL }) => {
+    await context.addCookies([{ name: "ems-preview-console", value: "8094", url: baseURL as string }]);
+    await page.route("http://127.0.0.1:8094/**", (route) => route.abort("connectionrefused"));
+    await page.clock.install();
+    await page.goto("/#/energy", { waitUntil: "domcontentloaded" });
+    await expect(page.getByTestId("moved-go")).toHaveAttribute("href", "http://127.0.0.1:8094/#/energy");
+    await page.clock.fastForward(10_000);
+    await expect(page.getByTestId("moved-countdown")).toHaveCount(0);
+    expect(new URL(page.url()).port).not.toBe("8094");
+  });
+
+  test("a session is kept alive by the reader's activity, at most once a minute, only signed in, with its CSRF token", async ({ page }) => {
+    await page.clock.install();
+    let signedIn = true;
+    await page.route("**/api/auth/status", (route) => route.fulfill({ json: signedIn ? SIGNED_IN : { ...SIGNED_IN, authenticated: false, csrf_token: null } }));
+    const refreshes: (string | undefined)[] = [];
+    await page.route("**/api/auth/refresh", (route) => {
+      refreshes.push(route.request().headers()["x-csrf-token"]);
+      return route.fulfill({ json: SIGNED_IN });
+    });
+    await openModern(page);
+    await page.locator("main").click({ position: { x: 5, y: 5 } });
+    await page.locator("main").click({ position: { x: 6, y: 6 } });
+    await expect.poll(() => refreshes.length).toBe(1);
+    expect(refreshes[0]).toBe(SIGNED_IN.csrf_token);
+    await page.clock.fastForward(61_000);
+    await page.locator("main").click({ position: { x: 7, y: 7 } });
+    await expect.poll(() => refreshes.length).toBe(2);
+
+    signedIn = false;
+    await page.clock.fastForward(61_000);
+    await expect(page.getByTestId("sign-in")).toBeVisible();
+    await page.clock.fastForward(61_000);
+    await page.locator("main").click({ position: { x: 8, y: 8 } });
+    expect(refreshes).toHaveLength(2);
+  });
+
+  test("without an Admin console, the menu leads to installing one", async ({ page }) => {
+    await openModern(page);
+    await expect(page.getByTestId("signpost")).toHaveCount(0);
+    await expect(page.getByTestId("install-console")).toHaveAttribute("href", /\/user\/admin-console\.html$/);
   });
 
   test("a bookmark of the old Modern address opens the same page at the root", async ({ page }) => {
@@ -569,14 +611,16 @@ test.describe("Modern dashboard @smoke", () => {
     await expect(page.getByText("Write mode · runtime state unavailable, retrying").first()).toBeVisible();
   });
 
-  test("a runtime state that does not answer is named beside the write mode and asked again", async ({ page }) => {
+  test("a runtime state that does not answer is named beside the write mode and on the Control page, and asked again", async ({ page }) => {
     await page.route("**/api/auth/status", (route) => route.fulfill({ json: SIGNED_IN }));
     let failing = true;
     await page.route("**/api/runtime", (route) => (failing ? route.fulfill({ status: 503, json: { error: "unavailable" } }) : route.continue()));
-    await openModern(page);
+    await openModern(page, "#/control");
     await expect(page.getByText("Write mode · runtime state unavailable, retrying").first()).toBeVisible();
+    await expect(page.getByText("The runtime state did not answer. Asking again…")).toBeVisible();
     failing = false;
     await expect(page.getByText("Write mode · runtime state unavailable, retrying")).toHaveCount(0, { timeout: 10_000 });
+    await expect(page.getByTestId("runtime-editor")).toBeVisible();
   });
 
   test("an overdue full-charge assist names how far overdue it is and when it is due next", async ({ page }) => {
@@ -793,6 +837,22 @@ test.describe("Modern dashboard on a phone @smoke", () => {
     expect(bus.x).toBeGreaterThan(home.x + 24);
     expect(bus.x + bus.width).toBeLessThan(home.x + home.width - 16);
     expect(Math.abs(bus.y + bus.height - home.y)).toBeLessThan(8);
+  });
+
+  test("signing out from the sheet keeps it open on its page, now offering the sign-in", async ({ page }) => {
+    let signedIn = true;
+    await page.route("**/api/auth/status", (route) => route.fulfill({ json: signedIn ? SIGNED_IN : { ...SIGNED_IN, authenticated: false, csrf_token: null } }));
+    await page.route("**/api/auth/logout", (route) => {
+      signedIn = false;
+      return route.fulfill({ json: { ok: true } });
+    });
+    await openModern(page, "#/energy");
+    await page.getByTestId("nav-more").click();
+    const sheet = page.getByRole("dialog", { name: "More" });
+    await sheet.getByTestId("sheet-sign-out").click();
+    await expect(sheet.getByTestId("sheet-sign-in")).toBeVisible();
+    await expect(sheet).toBeVisible();
+    await expect(page).toHaveURL(/#\/energy$/);
   });
 
   test("More opens a sheet that Esc, the scrim, the handle, a swipe and a page close", async ({ page }) => {

@@ -19,7 +19,7 @@ async function signIn(page: Page) {
 }
 
 async function openUpdates(page: Page, seed: (scenario: string) => Promise<void>, scenario = "mqtt_migration") {
-  await page.goto("/");
+  await page.goto("/#/status");
   await signIn(page);
   await seed(scenario);
   await page.goto("/#/updates");
@@ -45,7 +45,7 @@ function gate() {
   return { opened, open: () => open() };
 }
 
-const PLANNED = ["verify_image", "preflight", "migration_review", "backup", "mqtt_migration", "target_resources", "config_check", "config_write", "pull_image", "update_compose", "recreate_ems", "diagnostics"];
+const PLANNED = ["verify_image", "preflight", "migration_review", "backup", "mqtt_migration", "target_resources", "config_check", "config_write", "pull_image", "update_compose", "align_influxdb", "recreate_ems", "diagnostics"];
 
 function jobSteps(doneUntil: number, failedAt = -1) {
   return PLANNED.map((key, index) => ({
@@ -112,7 +112,7 @@ test.describe("Modern Admin: the guided upgrade", { tag: ["@smoke", "@workflow"]
     await expect(panel).toHaveAttribute("data-stage", "verifying");
     await expect(page.getByTestId("upgrade-working")).toContainText(`Checking ${TARGET}`);
     await expect(page.getByTestId("upgrade-clock")).toHaveText(/Running for 0:(0[2-9]|[1-5]\d)/, { timeout: 10_000 });
-    await page.goto("/#/overview");
+    await page.goto("/#/status");
     await page.goto("/#/updates");
     await expect(page.getByTestId("upgrade-clock")).toHaveText(/Running for 0:(0[2-9]|[1-5]\d)/);
     await expect(page.getByTestId("upgrade-now")).toContainText(`Update to ${TARGET} · Checking the version`);
@@ -378,8 +378,13 @@ test.describe("Modern Admin: the guided upgrade", { tag: ["@smoke", "@workflow"]
         ok: true,
         job_id: "e2e-fail",
         status: "failed",
-        steps: jobSteps(10, 10),
-        result: { ok: false, message: "EMS could not be recreated.", steps: [{ id: "recreate_ems", status: "error", detail: "manifest unknown" }] },
+        steps: jobSteps(11, 11),
+        result: {
+          ok: false,
+          message: "EMS could not be recreated.",
+          warnings: ["InfluxDB could not be recreated to match its entry in docker-compose.yml and may be stopped."],
+          steps: [{ id: "recreate_ems", status: "error", detail: "manifest unknown" }],
+        },
       }),
     );
     await page.route("**/api/admin/system-alignment/status", (route) =>
@@ -396,6 +401,7 @@ test.describe("Modern Admin: the guided upgrade", { tag: ["@smoke", "@workflow"]
     await expect(failed).toContainText("The update did not finish");
     await expect(failed).toContainText(`Stopped at: Install EMS ${TARGET}`);
     await expect(page.getByTestId("upgrade")).toContainText("EMS could not be recreated.");
+    await expect(page.getByTestId("upgrade-failed-warning")).toContainText("InfluxDB could not be recreated to match its entry");
     await expect(page.getByTestId("upgrade")).toContainText("Parts of the update may already have been applied");
     await expect(page.getByTestId("upgrade-retry")).toBeVisible();
     await expect(page.getByTestId("upgrade-cancel")).toBeVisible();

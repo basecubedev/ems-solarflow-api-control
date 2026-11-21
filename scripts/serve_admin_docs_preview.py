@@ -2,13 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Local docs-preview server for the Admin Console.
 
-Serves the real admin static assets (``admin/static/``) as the Admin server
-does -- Modern at the root, the deprecated Classic under ``/classic/`` -- with deterministic,
-non-secret demo API responses loaded from ``tests/fixtures/admin_docs/`` so the
+Serves the real Admin console build (``admin/static/modern/``) at the root, as
+the Admin server does, with deterministic, non-secret demo API responses loaded from ``tests/fixtures/admin_docs/`` so the
 Admin Console screens can be screenshotted for the docs without real hardware,
 Docker, discovery, MQTT, config.json, passwords, or a running EMS.
 
-The Modern console is the one the documentation screenshots show
+The documentation screenshots are taken from it
 (``scripts/capture_admin_docs.mjs``). A page names the installation it
 shows with ``?scenario=<name>`` in its own address -- a fresh host, a signed-out
 browser, an update that runs, and so on (``SCENARIOS``); without one it shows
@@ -19,11 +18,6 @@ they can never describe a settings layout the product no longer has. A fixed,
 non-secret ``DEMO_IDENTITY_KEY`` signs the device identities of the settings
 and of the network search alike, as the Admin server's own key does, so both
 agree on which device is which.
-
-The Classic console keeps a small drive script (``admin_docs_preview.js``,
-injected before ``</body>`` of the Classic page) for the demo videos
-(``scripts/render_admin_docs_video.py``): it reads a ``?screen=`` query
-parameter and navigates the already-authenticated Classic SPA to that screen.
 
 Usage::
 
@@ -36,6 +30,15 @@ Open, for example::
     http://127.0.0.1:8092/?scenario=fresh#/assistant
     http://127.0.0.1:8092/?scenario=upgrade-running#/updates
 
+With ``--ems-preview URL`` the dashboard's pages in the app read the EMS from
+the dashboard preview at that address (``scripts/serve_dashboard_preview.py``):
+every path the EMS answers but its sign-in, which the console answers itself,
+is passed on with its cookies, so the dashboard preview's scenario cookie still
+picks its data, and the live stream as it arrives. A change carries the
+dashboard preview's demo CSRF token, as the console vouches for its operator
+to the EMS. The dashboard's documentation images are taken this way, in the
+one app.
+
 Safety: the preview never contacts real Zendure/Shelly/MQTT/Docker/InfluxDB
 endpoints, never reads secrets from config.json, and never writes runtime-state,
 auth files, config or the dashboard database. Its only write is the demo
@@ -44,8 +47,8 @@ binds to loopback by default.
 """
 
 import argparse
-import base64
 import copy
+import http.client
 import json
 import os
 import shutil
@@ -54,19 +57,18 @@ import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, urlsplit
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SCRIPT_DIR)
 STATIC_DIR = os.path.join(ROOT, "admin", "static")
-CLASSIC_FILES = {
-    "/classic/admin.js": ("admin.js", "application/javascript"),
-    "/classic/admin.css": ("admin.css", "text/css"),
-    "/classic/admin-theme.js": ("admin-theme.js", "application/javascript"),
-}
+DASHBOARD_STATIC_DIR = os.path.join(ROOT, "dashboard", "static")
 FIXTURE_DIR = os.path.join(ROOT, "tests", "fixtures", "admin_docs")
 TEMPLATE_PATH = os.path.join(ROOT, "config", "config.template.json")
-DRIVE_SCRIPT = os.path.join(SCRIPT_DIR, "admin_docs_preview.js")
+
+EMS_PREVIEW_CSRF = "preview-csrf-token"
+FORWARDED_REQUEST_HEADERS = ("Accept", "Content-Type", "Cookie", "Last-Event-ID")
+FORWARDED_RESPONSE_HEADERS = ("Cache-Control", "Content-Length", "Content-Type")
 
 DEFAULT_HOST = "127.0.0.1"
 DEMO_IDENTITY_KEY = b"ems-admin-docs-preview-demo-key!"
@@ -88,19 +90,9 @@ SCENARIOS = (
     "mqtt",
 )
 
-# Classic screens of the demo videos that need an active, server-confirmed
-# Fresh Setup transition to be reachable at all (Guided Setup steps 02-05).
-SETUP_STEP_SCREENS = frozenset({"discovery", "config-preview", "setup-start-done"})
 
-# Firefox ``--screenshot`` captures at the ``load`` event and does not wait for
-# post-load fetches. A hidden image pointed at ``/__hold`` deliberately delays
-# ``load`` so the Classic SPA has time to authenticate, fetch its demo data,
-# navigate to the requested screen and render before a video frame is taken.
-HOLD_SECONDS = 5.0
-# 1x1 transparent PNG.
-_HOLD_PNG = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-)
+EMS_SIGNED_IN = {"auth_configured": True, "authenticated": True, "csrf_token": "docs-preview", "write_mode_available": True, "write_mode_active": True}
+EMS_SIGNED_OUT = {"auth_configured": True, "authenticated": False, "write_mode_available": True, "write_mode_active": False}
 
 
 def _load_fixture(name):
@@ -326,6 +318,7 @@ def build_routes():
         "/api/discovery/mqtt-mapping/brokers": mqtt["brokers"],
         "/api/discovery/mqtt-topics/sessions/demo": mqtt["topics"],
         "/api/admin/auth/status": common["auth_status"],
+        "/api/auth/status": EMS_SIGNED_IN,
         "/api/admin/install-state": common["install_state"],
         "/api/discovery/mdns/status": common["mdns_status"],
         "/api/discovery/devices": common["mdns_devices"],
@@ -416,8 +409,8 @@ def build_scenarios():
                 "/api/admin/maintenance/backups": backups["backups_list_empty"],
             }
         },
-        "signed-out": {"GET": {"/api/admin/auth/status": common["auth_status_signed_out"]}},
-        "first-start": {"GET": {"/api/admin/auth/status": common["auth_status_first_start"]}},
+        "signed-out": {"GET": {"/api/admin/auth/status": common["auth_status_signed_out"], "/api/auth/status": EMS_SIGNED_OUT}},
+        "first-start": {"GET": {"/api/admin/auth/status": common["auth_status_first_start"], "/api/auth/status": EMS_SIGNED_OUT}},
         "setup": {
             "GET": {
                 scan: {**common["scan_result"], "devices": common["mdns_devices"]["devices"]},
@@ -473,9 +466,6 @@ class DocsPreviewHandler(BaseHTTPRequestHandler):
         name = self._referer_query().get("scenario", ["installed"])[0]
         return name if name in self.server.scenarios else "installed"
 
-    def _classic_screen(self):
-        return self._referer_query().get("screen", [""])[0]
-
     def _scenario_answer(self, method, path):
         return self.server.scenarios[self._scenario()].get(method, {}).get(path)
 
@@ -496,44 +486,22 @@ class DocsPreviewHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_static(self, filename, content_type):
-        try:
-            with open(os.path.join(STATIC_DIR, filename), "rb") as handle:
-                body = handle.read()
-        except OSError:
-            self.send_error(404)
-            return
-        self._send_bytes(body, content_type)
-
     def _send_modern(self, path):
         """The Modern console's build output, at the root as the Admin server serves it."""
 
         _on_path()
-        from dashboard.static_files import build_static_asset_index, lookup_static_asset, modern_asset_path
+        from dashboard.static_files import SHARED_ROOT_FILES, build_static_asset_index, lookup_static_asset, modern_asset_path
 
-        asset_path = modern_asset_path(path)
-        asset = lookup_static_asset(build_static_asset_index(STATIC_DIR), asset_path) if asset_path else None
+        asset_path = modern_asset_path(path, SHARED_ROOT_FILES)
+        shared = asset_path and asset_path.lstrip("/") in SHARED_ROOT_FILES
+        index = build_static_asset_index(DASHBOARD_STATIC_DIR if shared else STATIC_DIR)
+        asset = lookup_static_asset(index, asset_path) if asset_path else None
         if asset is None:
             self.send_error(404)
             return
         full_path, content_type = asset
         with open(full_path, "rb") as handle:
             self._send_bytes(handle.read(), content_type)
-
-    def _send_index(self):
-        try:
-            with open(os.path.join(STATIC_DIR, "index.html"), encoding="utf-8") as handle:
-                html = handle.read()
-        except OSError:
-            self.send_error(404)
-            return
-        inject = (
-            '  <img src="/__hold" alt="" width="1" height="1"'
-            ' style="position:absolute;left:-9999px;opacity:0" aria-hidden="true">\n'
-            '  <script src="/_docs_preview.js"></script>\n</body>'
-        )
-        html = html.replace("</body>", inject, 1)
-        self._send_bytes(html.encode("utf-8"), "text/html; charset=utf-8")
 
     def _stamped(self, path, payload):
         """A device list with the observation identity the Admin server attaches to every one."""
@@ -556,31 +524,71 @@ class DocsPreviewHandler(BaseHTTPRequestHandler):
             return {}
         return body if isinstance(body, dict) else {}
 
+    def _for_ems_preview(self, path):
+        if not getattr(self.server, "ems_preview", None):
+            return False
+        _on_path()
+        from admin.server import SIGN_IN_PATHS
+        from dashboard.api_paths import is_ems_api_path
+
+        return is_ems_api_path(path) and path not in SIGN_IN_PATHS
+
+    def _forward_to_ems_preview(self):
+        """Answer an EMS path from the dashboard preview, as the console answers it from the EMS."""
+
+        _on_path()
+        from admin.ems_forwarding import one_line
+
+        target = urlsplit(self.server.ems_preview)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        if length < 0:
+            self.close_connection = True
+            self._send_json({"error": "bad_request", "message": "Content-Length must be an integer >= 0."}, status=400)
+            return
+        body = self.rfile.read(length) if length else None
+        headers = {name: self.headers[name] for name in FORWARDED_REQUEST_HEADERS if self.headers.get(name)}
+        if self.command not in ("GET", "HEAD"):
+            headers["X-CSRF-Token"] = EMS_PREVIEW_CSRF
+        connection = http.client.HTTPConnection(target.hostname, target.port, timeout=60)
+        try:
+            connection.request(self.command, self.path, body=body, headers=headers)
+            response = connection.getresponse()
+        except (OSError, http.client.HTTPException):
+            connection.close()
+            self.close_connection = True
+            self._send_json({"error": "ems_unreachable", "message": "The EMS does not answer."}, status=502)
+            return
+        try:
+            self.send_response(response.status)
+            for name in FORWARDED_RESPONSE_HEADERS:
+                if response.getheader(name):
+                    self.send_header(name, one_line(response.getheader(name)))
+            if response.getheader("Content-Length") is None:
+                self.send_header("Connection", "close")
+                self.close_connection = True
+            self.end_headers()
+            while True:
+                chunk = response.read1(65536)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                self.wfile.flush()
+        except (OSError, http.client.HTTPException):
+            self.close_connection = True
+        finally:
+            connection.close()
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
-        if path in ("/classic/", "/classic/index.html"):
-            self._send_index()
-            return
-        if path in CLASSIC_FILES:
-            self._send_static(*CLASSIC_FILES[path])
-            return
-        if path == "/__hold":
-            # Slow response that holds the load event open (see HOLD_SECONDS).
-            time.sleep(HOLD_SECONDS)
-            self._send_bytes(_HOLD_PNG, "image/png")
-            return
-        if path == "/_docs_preview.js":
-            try:
-                with open(DRIVE_SCRIPT, "rb") as handle:
-                    body = handle.read()
-            except OSError:
-                self.send_error(404)
-                return
-            self._send_bytes(body, "application/javascript")
-            return
         if not path.startswith("/api/"):
             self._send_modern(path)
+            return
+        if self._for_ems_preview(path):
+            self._forward_to_ems_preview()
             return
         answer = self._scenario_answer("GET", path)
         if answer is not None:
@@ -588,8 +596,6 @@ class DocsPreviewHandler(BaseHTTPRequestHandler):
         elif path == "/api/setup/releases":
             flow = parse_qs(parsed.query).get("flow", ["setup"])[0]
             self._send_json(self.server.releases.get(flow, self.server.releases["setup"]))
-        elif path == "/api/admin/system-alignment/status" and self._classic_screen() in SETUP_STEP_SCREENS:
-            self._send_json(self.server.classic_setup_alignment)
         elif path == "/api/admin/maintenance/config":
             self._send_json(self.server.installation.config())
         elif path == "/api/admin/maintenance/zendure-mqtt/runtime-status":
@@ -602,6 +608,9 @@ class DocsPreviewHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if self._for_ems_preview(path):
+            self._forward_to_ems_preview()
+            return
         body = self._read_body()
         if not path.startswith("/api/"):
             self.send_error(404)
@@ -624,6 +633,14 @@ class DocsPreviewHandler(BaseHTTPRequestHandler):
         else:
             self._send_json({"ok": True})
 
+    def _forward_or_refuse(self):
+        if self._for_ems_preview(urlparse(self.path).path):
+            self._forward_to_ems_preview()
+            return
+        self.send_error(405)
+
+    do_PUT = do_PATCH = do_DELETE = _forward_or_refuse
+
 
 class DocsPreviewServer(ThreadingHTTPServer):
     """The preview, which removes its demo installation when it closes."""
@@ -633,14 +650,15 @@ class DocsPreviewServer(ThreadingHTTPServer):
         self.installation.remove()
 
 
-def start_server(host, port):
+def start_server(host, port, ems_preview=None):
     get_routes, post_routes, releases = build_routes()
     server = DocsPreviewServer((host, port), DocsPreviewHandler)
+    server.daemon_threads = True
+    server.ems_preview = ems_preview
     server.get_routes = get_routes
     server.post_routes = post_routes
     server.releases = releases
     server.scenarios = build_scenarios()
-    server.classic_setup_alignment = _load_fixture("guided_setup_demo.json")["system_alignment_status"]
     server.installation = DemoInstallation()
     server.discovery = DemoDiscovery(_load_fixture("common.json")["mdns_devices"]["devices"])
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -652,12 +670,13 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--ems-preview", default=None, help="the dashboard preview the EMS paths are answered from, e.g. http://127.0.0.1:8128")
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
-    server = start_server(args.host, args.port)
+    server = start_server(args.host, args.port, ems_preview=args.ems_preview)
     print(f"Admin docs preview on http://{args.host}:{args.port}/#/overview")
     print(f"Scenarios (?scenario=): {', '.join(SCENARIOS)}")
     try:

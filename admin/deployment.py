@@ -17,6 +17,7 @@ never pulls images itself.
 
 import copy
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -31,6 +32,7 @@ import uuid
 from pathlib import Path
 
 from admin.container_names import DEFAULT_INFLUX_CONTAINER
+from admin.ems_forwarding import SocketConnection
 from admin.install_context import detect_install_context
 from admin.models import utc_now_iso
 from admin.releases import DOCKER_IMAGE_REPOSITORY, ReleaseError, default_admin_data_dir
@@ -38,6 +40,7 @@ from admin.setup_workflow import GENERATED_CONFIG_OWNER, read_generated_metadata
 from ems.config import resolve_influxdb_config
 from ems.influx_image import compose_image, parse_image, replace_image
 from ems.influx_setup import DEFAULT_DATA_DIR as INFLUX_DATA_DIR
+from ems.paths import resolve_dashboard_socket_path
 from ems.runtime_state import (
     config_digest,
     request_runtime_reset,
@@ -46,6 +49,7 @@ from ems.runtime_state import (
 
 INSTALL_SCRIPT = "install-docker.sh"
 EMS_SERVICE = "ems"
+COMPOSE_FINGERPRINT_LABEL = "com.docker.compose.config-hash"
 INFLUX_COMPOSE_RESOURCE = "deploy/docker/compose.influxdb.yml"
 _JOB_LOG_MAX_LINES = 200
 
@@ -990,6 +994,15 @@ class BootstrapInstaller:
             raise _bootstrap_error("\n".join(tail))
 
 
+def _compose_command(profiles=()):
+    """``docker compose`` with each profile switched on."""
+
+    command = ["docker", "compose"]
+    for profile in profiles:
+        command += ["--profile", str(profile)]
+    return command
+
+
 class DockerCompose:
     """Thin ``docker compose`` wrapper for starting and inspecting the stack.
 
@@ -1008,10 +1021,7 @@ class DockerCompose:
            renew_anon_volumes=False):
         """``docker compose up -d``; ``renew_anon_volumes`` gives the new containers fresh anonymous volumes."""
 
-        command = ["docker", "compose"]
-        for profile in profiles:
-            command += ["--profile", str(profile)]
-        command += ["up", "-d"]
+        command = _compose_command(profiles) + ["up", "-d"]
         if force_recreate:
             command.append("--force-recreate")
         if renew_anon_volumes:
@@ -1051,10 +1061,7 @@ class DockerCompose:
     def stop(self, workspace, services, profiles=(), on_line=None):
         """Stop feature services without removing containers, volumes or data."""
 
-        command = ["docker", "compose"]
-        for profile in profiles:
-            command += ["--profile", str(profile)]
-        command += ["stop", "--timeout", "20"]
+        command = _compose_command(profiles) + ["stop", "--timeout", "20"]
         command += [str(service) for service in services]
         try:
             process = self._popen(
@@ -1205,10 +1212,49 @@ class DockerCompose:
         # raising here would replace the diagnosis with its own error.
         return result.returncode == 0
 
-    def ps(self, workspace):
+    def fingerprints(self, workspace, services, profiles=()):
+        """Compose's fingerprint of each named service as docker-compose.yml defines it now.
+
+        It is the config hash Compose stamps on every container it creates and
+        compares on ``up``: a container whose stamp differs was created from
+        another definition, or by another Compose version, and ``up`` recreates
+        it. Raises unless every service has one.
+        """
+
+        services = [str(service) for service in services]
+        failure = DockerError(
+            "docker_compose_config_failed",
+            "Could not read the service definitions from Docker Compose.",
+        )
         try:
             result = self._run(
-                ["docker", "compose", "ps", "--format", "json"],
+                _compose_command(profiles) + ["config", "--hash", ",".join(services)],
+                cwd=str(workspace),
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except FileNotFoundError as exc:
+            raise DockerError(
+                "docker_cli_missing", _DOCKER_MESSAGES["client_missing"]
+            ) from exc
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise failure from exc
+        if result.returncode != 0:
+            raise failure
+        found = dict(
+            line.split() for line in (result.stdout or "").splitlines() if len(line.split()) == 2
+        )
+        if any(service not in found for service in services):
+            raise failure
+        return {service: found[service] for service in services}
+
+    def ps(self, workspace, include_stopped=False):
+        """The project's containers, running ones only unless ``include_stopped``."""
+
+        try:
+            result = self._run(
+                ["docker", "compose", "ps", *(["-a"] if include_stopped else []), "--format", "json"],
                 cwd=str(workspace),
                 capture_output=True,
                 text=True,
@@ -1262,6 +1308,30 @@ def probe_dashboard_url(url, timeout=3.0):
         return True
     except Exception:  # unreachable, DNS/connection error, timeout
         return False
+
+
+def probe_dashboard(url, socket_path=None, timeout=3.0):
+    """Return True when the EMS's dashboard server answers: on its socket file, else at ``url``.
+
+    The socket is how the console reaches the EMS; the port may be published
+    elsewhere or only on this host's loopback (``EMS_DASHBOARD_PUBLISH``).
+    """
+
+    if socket_path is not None and _socket_answers(socket_path, timeout):
+        return True
+    return probe_dashboard_url(url, timeout)
+
+
+def _socket_answers(socket_path, timeout):
+    connection = SocketConnection(socket_path, timeout)
+    try:
+        connection.request("GET", "/api/ui-config")
+        connection.getresponse().read(1)
+        return True
+    except (OSError, http.client.HTTPException):
+        return False
+    finally:
+        connection.close()
 
 
 def _socket_present(socket_path):
@@ -1689,7 +1759,20 @@ def _normalize_service(row):
         "state": state,
         "status": row.get("Status") or row.get("status"),
         "ports": _normalize_service_ports(row.get("Publishers") or row.get("Ports")),
+        "fingerprint": _compose_label(row.get("Labels"), COMPOSE_FINGERPRINT_LABEL),
     }
+
+
+def _compose_label(labels, key):
+    """One label of a ``docker compose ps`` row, whose labels are a mapping or ``k=v,k=v`` text."""
+
+    if isinstance(labels, dict):
+        value = labels.get(key)
+        return str(value) if value else None
+    if not isinstance(labels, str):
+        return None
+    match = re.search(rf"(?:^|,){re.escape(key)}=([^,]*)", labels)
+    return (match.group(1) or None) if match else None
 
 
 def _normalize_service_ports(value):
@@ -2030,7 +2113,8 @@ class DeploymentService:
         self.compose = compose or DockerCompose()
         self.registry = registry or DeploymentJobRegistry()
         self.start_registry = start_registry or DeploymentJobRegistry()
-        self._dashboard_probe = dashboard_probe or probe_dashboard_url
+        local = resolve_dashboard_socket_path(self.workspace_dir / "data")
+        self._dashboard_probe = dashboard_probe or (lambda url: probe_dashboard(url, local))
         self._sleep = sleep or time.sleep
         self._dashboard_attempts = max(1, int(dashboard_attempts))
         self._dashboard_retry_seconds = max(0.0, float(dashboard_retry_seconds))

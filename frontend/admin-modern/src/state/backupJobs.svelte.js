@@ -175,7 +175,7 @@ export async function uploadBackup(file) {
 /**
  * A restore, a backup or an upload runs on while this page is open, but its
  * result reaches only this page, and an upload ends with it. Leaving the
- * console then -- a hand-off to Classic is a full page change -- asks first.
+ * console then asks first.
  */
 export function guardLeaving(isBusy) {
   globalThis.addEventListener("beforeunload", (event) => {

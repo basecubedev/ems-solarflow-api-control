@@ -34,10 +34,15 @@ services:
     # to loopback so the UI is not reachable off-host unless you set EMS_ADMIN_BIND.
     # The optional HTTPS port is always mapped (loopback by default); the server
     # only listens on it when EMS_ADMIN_HTTPS_ENABLED=true.
+    # In this bridge network the Admin reaches the EMS's published dashboard
+    # port through the host, not on its own loopback.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${EMS_ADMIN_BIND:-127.0.0.1}:${EMS_ADMIN_PORT:-8090}:8090"
       - "${EMS_ADMIN_HTTPS_BIND:-127.0.0.1}:${EMS_ADMIN_HTTPS_PORT:-8091}:8091"
     environment:
+      EMS_ADMIN_EMS_HOST: "host.docker.internal"
       # Same-path mounting: point at the real host install root and Admin data
       # dir so any bind mount Admin forwards to the host Docker daemon stays a
       # valid host path.

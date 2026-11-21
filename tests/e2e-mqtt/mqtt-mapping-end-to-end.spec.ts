@@ -60,7 +60,7 @@ function noEmsRunning(world: Harness) {
 
 /** The first browser sets the password on the sign-in screen, the second signs in with it. */
 async function signIn(page: Page) {
-  await page.goto("/");
+  await page.goto("/#/status");
   const screen = page.getByTestId("sign-in-screen");
   await expect(screen).toHaveAttribute("data-mode", /^(create|login)$/);
   const creating = (await screen.getAttribute("data-mode")) === "create";

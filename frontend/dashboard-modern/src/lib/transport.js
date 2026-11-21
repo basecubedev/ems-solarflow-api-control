@@ -1,15 +1,15 @@
 // SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * The live feed, with Classic's transport contract:
+ * The live feed:
  *
  * - one EventSource per tab, on /api/events, event "telemetry";
  * - no telemetry within 3 s, or an error before the first one: fall back to
  *   polling /api/live every 2 s and retry the stream every 30 s;
  * - a retried stream that delivers promotes the tab back to SSE.
  *
- * Added for Modern: a tab hidden for 30 s releases its stream, because the
- * server allows two per address and Classic may be holding the other one.
+ * A tab hidden for 30 s releases its stream, because the server allows two
+ * per address and another tab may need the other one.
  */
 
 export const TELEMETRY_TIMEOUT_MS = 3000;

@@ -74,7 +74,7 @@ into the sign-in; use that instead.
 
 ### 3 — Sign in
 
-![Sign in card asking for the EMS dashboard password, with the Sign in button, the language choice and the Classic view link](../../assets/screenshots/admin/admin-login.png)
+![Sign in card asking for the EMS dashboard password, with the Sign in button and the language choice](../../assets/screenshots/admin/admin-login.png)
 
 **What you see:** *Sign in* — *Use your EMS dashboard password.*
 
@@ -132,7 +132,7 @@ These look similar in the browser and mean very different things.
 
 | What you see | What it means | What to do |
 | --- | --- | --- |
-| The sign-in card comes back | Your session ended: you signed out (perhaps in another tab), it expired, a restore put back an older password file, or the Admin Console was replaced | Sign in again. Nothing was lost — running workflows are stored on the server, not in the tab |
+| The sign-in card comes back | Your session ended: you signed out in another tab, it expired, a restore put back an older password file, or the Admin Console was replaced | Sign in again. Nothing was lost — running workflows are stored on the server, not in the tab |
 | *The Admin console does not answer. Reconnecting…* at the top of the page | The console lost contact with its server, for example while the Admin Console restarts | Wait. The page keeps trying and goes on by itself |
 | The page reloads by itself | A new Admin Console answers — after an update of itself | Sign in again if asked; the page then follows what was running |
 | *This page could not be loaded. The Admin console may be restarting.* | The page's own file did not arrive | **Reload** once the console answers |
@@ -172,8 +172,9 @@ docker compose -f docker-compose.admin.yml up -d
 
 ### Signing out and returning safely
 
-**Sign out** (top right; on a phone under **More**) ends the session only. It
-does not cancel a workflow, roll anything back, or stop a running update —
+**Sign out** (top right; on a phone under **More**) ends the session only and
+leads to the dashboard's **Overview**, which stays readable signed out. It does
+not cancel a workflow, roll anything back, or stop a running update —
 server-side work keeps running and you can sign back in to watch it.
 
 To leave a workflow without ending it, open another page from the menu. The
@@ -196,9 +197,9 @@ described in [Guided setup](guided-setup.md#recovery-or-next-steps) and
 - **Bridge mode makes discovery less reliable.** If you installed with
   `--bridge`, a LAN scan may only see Docker networks; enter your LAN range by
   hand.
-- **An older browser opens Classic.** A browser older than the ones listed
-  under *Prerequisites* is sent to the deprecated Classic console at
-  `/classic/`; see [the Classic console](index.md#the-deprecated-classic-console).
+- **An older browser cannot open the console.** A browser older than the ones
+  listed under *Prerequisites* shows a page that says so; see
+  [Browsers and old addresses](index.md#browsers-and-old-addresses).
 
 ## Recovery or next steps
 

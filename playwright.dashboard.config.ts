@@ -23,8 +23,14 @@ import { DOCS_SHOT_TIME, DOCS_ZONE } from "./tests/e2e-dashboard/pin-the-day";
 // silently becomes the system under test, and sixteen tests then report that
 // the theme menu is not visible -- which is true, on that page. Taken:
 // 8123 Admin, 8124 Appliance Manager and packaged Admin, 8125 remote packaged
-// Admin, 8126 Admin replacement canary; this suite has 8127, its documentation
-// captures 8128.
+// Admin, 8126 Admin replacement canary, 8129 MQTT end to end, 8130 the Admin
+// suite's EMS preview; this suite has 8127, its documentation captures 8128,
+// and the console those captures are taken in, 8131: the dashboard's pages
+// are part of the one app, so their images show them there, with the console's
+// docs preview reading the EMS
+// from the dashboard preview (scripts/serve_admin_docs_preview.py
+// --ems-preview). The EMS's own Diagnose and Maintenance pages, which only its
+// own port has, are taken from the dashboard preview itself.
 //
 // The documentation captures show one fixed day in one zone: the preview
 // server, these workers and the browser all read DOCS_ZONE, and the server
@@ -37,6 +43,9 @@ const SUITE_PORT = Number(process.env.EMS_DASHBOARD_E2E_PORT ?? 8127);
 const CAPTURE_PORT = Number(process.env.EMS_DASHBOARD_CAPTURE_PORT ?? 8128);
 const PORT = CAPTURE_DOCS ? CAPTURE_PORT : SUITE_PORT;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
+const CONSOLE_PORT = Number(process.env.EMS_DASHBOARD_CAPTURE_CONSOLE_PORT ?? 8131);
+const CONSOLE_URL = `http://127.0.0.1:${CONSOLE_PORT}`;
+if (CAPTURE_DOCS) process.env.EMS_DASHBOARD_PREVIEW_URL = BASE_URL;
 if (CAPTURE_DOCS) process.env.TZ = DOCS_ZONE;
 const PINNED_CLOCK = CAPTURE_DOCS ? ` --now ${DOCS_SHOT_TIME}` : "";
 
@@ -53,7 +62,7 @@ export default defineConfig({
   timeout: 30_000,
   expect: { timeout: 7_000 },
   use: {
-    baseURL: BASE_URL,
+    baseURL: CAPTURE_DOCS ? CONSOLE_URL : BASE_URL,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     video: "off",
@@ -62,13 +71,24 @@ export default defineConfig({
     { name: "chromium", use: { ...devices["Desktop Chrome"] } },
     { name: "firefox", use: { ...devices["Desktop Firefox"] } },
   ],
-  webServer: {
-    // /api/auth/status is the cheapest endpoint the preview answers, and it
-    // answers it only once the scenario is built -- so it is a readiness probe
-    // rather than a liveness one.
-    command: `python3 scripts/serve_dashboard_preview.py --host 127.0.0.1 --port ${PORT}${PINNED_CLOCK}`,
-    url: `${BASE_URL}/api/auth/status`,
-    reuseExistingServer: !process.env.CI && !CAPTURE_DOCS,
-    timeout: 60_000,
-  },
+  webServer: [
+    {
+      // /api/auth/status is the cheapest endpoint the preview answers, and it
+      // answers it only once the scenario is built -- so it is a readiness probe
+      // rather than a liveness one.
+      command: `python3 scripts/serve_dashboard_preview.py --host 127.0.0.1 --port ${PORT}${PINNED_CLOCK}`,
+      url: `${BASE_URL}/api/auth/status`,
+      reuseExistingServer: !process.env.CI && !CAPTURE_DOCS,
+      timeout: 60_000,
+    },
+    ...(CAPTURE_DOCS
+      ? [{
+          command: `python3 scripts/serve_admin_docs_preview.py --host 127.0.0.1 --port ${CONSOLE_PORT} --ems-preview ${BASE_URL}`,
+          url: `${CONSOLE_URL}/api/admin/auth/status`,
+          reuseExistingServer: false,
+          timeout: 60_000,
+          gracefulShutdown: { signal: "SIGINT" as const, timeout: 5000 },
+        }]
+      : []),
+  ],
 });

@@ -6,9 +6,16 @@
   import Segmented from "../../../shared/ui/Segmented.svelte";
   import AboutDialog from "../../../shared/widgets/AboutDialog.svelte";
   import { t } from "../i18n/i18n.svelte.js";
-  import { prefs, setPref, LANGUAGES, chooseClassic } from "../state/prefs.svelte.js";
+  import { prefs, setPref, LANGUAGES } from "../state/prefs.svelte.js";
   import { auth, createPassword, loadAuth, login, SESSION_ERRORS } from "../state/auth.svelte.js";
   import { errorView } from "../lib/errors.js";
+
+  /**
+   * The one sign-in for the console and the EMS. ``onContinue``, when given,
+   * closes it again without signing in, back to the dashboard's pages, which
+   * need no sign-in to be read.
+   */
+  let { onContinue = null } = $props();
 
   const languages = LANGUAGES.map((value) => ({ value, label: value.toUpperCase() }));
 
@@ -86,11 +93,13 @@
           {mode === "create" ? t("signIn.create") : t("auth.signIn")}
         </button>
       </form>
+      {#if mode === "login"}
+        <a class="link continue" href="#/overview" onclick={() => onContinue?.()} data-testid="sign-in-continue"><Icon name="layout-dashboard" size="sm" />{t("signIn.continue")}</a>
+      {/if}
     {/if}
 
     <div class="foot">
       <Segmented options={languages} value={prefs.lang} label={t("appearance.language")} onchange={(value) => setPref("lang", value)} />
-      <button class="link" type="button" onclick={() => chooseClassic()}><Icon name="arrow-left-right" size="sm" />{t("nav.classic")}</button>
       <button class="link" type="button" onclick={() => (aboutOpen = true)} data-testid="sign-in-about"><Icon name="info" size="sm" />{t("nav.about")}</button>
     </div>
   </div>
@@ -121,4 +130,5 @@
   .foot { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); flex-wrap: wrap; padding-top: var(--s3); border-top: 1px solid var(--m-line); }
   .link { display: inline-flex; align-items: center; gap: 6px; border: 0; background: none; color: var(--m-muted); cursor: pointer; font-size: 12.5px; padding: 4px; }
   .link:hover { color: var(--m-text); }
+  .continue { margin-top: var(--s3); text-decoration: none; }
 </style>

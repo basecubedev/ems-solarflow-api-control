@@ -5,7 +5,7 @@ import { ApiError } from "../../../shared/lib/api.js";
 import { reload, system } from "./system.svelte.js";
 import { STALE_INTENT, SETUP_STEPS, actionState, buildBusy, pipelineStage, confirmedOperation, continueAllowed, groupReleases, initialRelease, setupTransitionActive, stepLocked, updateAllowed, verifyAllowed } from "../lib/setup.js";
 
-/** Shared with Classic, so a setup started in one console continues in the other. */
+/** The keys the removed Classic console used, so a setup a browser started there before the update continues here. */
 const WORKFLOW_KEY = "ems-admin-setup-workflow";
 const STEP_KEY = "ems-admin-setup-step";
 const WORKFLOW_CONFLICTS = new Set(["setup_workflow_required", "setup_workflow_not_active", "setup_intent_workflow_mismatch", "setup_transition_owner_unproven", "setup_transition_context_mismatch"]);

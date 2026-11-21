@@ -266,7 +266,6 @@ def test_capture_tooling_present():
         "tests/e2e-appliance/capture-docs.spec.ts",
         "scripts/serve_admin_docs_preview.py",
         "scripts/serve_dashboard_preview.py",
-        "scripts/admin_docs_preview.js",
     ):
         assert (ROOT / rel).is_file(), rel
     assert (ADMIN_SHOTS / "README.md").is_file()

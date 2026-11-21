@@ -83,8 +83,8 @@ every flashed image, and it can never move. See
 Workflow: `.github/workflows/simulated-regression-tests.yml`, named **Repo PR
 gate**. It runs on every pull request and on pushes to `main`:
 
-- `Repo static checks` — Ruff lint, compile check, generated config template and
-  `node --check admin/static/admin.js`
+- `Repo static checks` — Ruff lint, compile check, generated config template,
+  the licence inventory and `reuse lint`
 - `Repo python <group> (<python-version>)` — the four functional groups (`core`,
   `admin`, `mqtt`, `power-control`) across the supported Python versions
   (currently 3.11 and 3.14), each through `scripts/test-pr.sh`
@@ -370,7 +370,7 @@ before every one of them is green. Each checks out the run's own revision.
 
 | Job | What it runs |
 | --- | --- |
-| `mqtt-release-contract` | `ruff check .`, `compileall`, `tools/build_config_template.py --check`, `node --check admin/static/admin.js`, then `pytest -m mqtt_release` and `pytest -m "simulation and power_control"` |
+| `mqtt-release-contract` | `ruff check .`, `compileall`, `tools/build_config_template.py --check`, then `pytest -m mqtt_release` and `pytest -m "simulation and power_control"` |
 | `packaged-system-build-smoke` | packaged Admin three-build Chromium smoke |
 | `mosquitto-lifecycle` | the real-broker contract against a live Mosquitto |
 | `package-smoke` | Admin/EMS image builds plus the paired startup contract |

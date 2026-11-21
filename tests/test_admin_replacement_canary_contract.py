@@ -40,7 +40,6 @@ RUNNER = ROOT / "tests" / "e2e" / "run-admin-replacement-canary.sh"
 SPEC = ROOT / "tests" / "e2e" / "admin-replacement-canary.spec.ts"
 PAGES = ROOT / "tests" / "e2e" / "pages"
 CONTRACT = ROOT / "tests" / "e2e" / "admin-test-contract.json"
-MARKUP = ROOT / "admin" / "static" / "index.html"
 
 ADMIN_REPO = "ghcr.io/basecubedev/ems-solarflow-admin"
 EMS_REPO = "ghcr.io/basecubedev/ems-solarflow-api-control"
@@ -507,35 +506,12 @@ def test_the_runner_rejects_a_mutable_reference():
 # --- one shared test-hook contract -----------------------------------------
 
 
-def test_every_contract_hook_exists_in_the_admin_markup():
-    markup = MARKUP.read_text(encoding="utf-8")
-    missing = contract_probe.missing_hooks(markup, HOOKS)
-    assert missing == [], missing
-
-
 def test_shared_page_objects_use_only_contract_test_hooks():
     used = set()
     for path in sorted(PAGES.glob("*.ts")):
         used |= set(re.findall(r'getByTestId\("([^"]+)"\)', path.read_text(encoding="utf-8")))
     assert used, "the shared page objects must address the Admin through data-testid"
     assert used <= set(HOOKS), sorted(used - set(HOOKS))
-
-
-def test_shared_page_objects_carry_no_legacy_selector_fallback():
-    # A hooked element's own id is the markup generation the hooks replaced.
-    # Reintroducing it in a shared page object is the fallback this forbids.
-    markup = MARKUP.read_text(encoding="utf-8")
-    legacy_ids = set()
-    for hook in HOOKS:
-        index = markup.index(f'data-testid="{hook}"')
-        element = markup[markup.rindex("<", 0, index) : markup.index(">", index)]
-        legacy_ids |= {f"#{value}" for value in re.findall(r'(?<![-\w])id="([^"]+)"', element)}
-
-    for path in sorted(PAGES.glob("*.ts")):
-        text = path.read_text(encoding="utf-8")
-        for legacy in legacy_ids:
-            assert legacy not in text, f"{path.name} falls back to legacy selector {legacy}"
-        assert 'locator("[data-testid' not in text, path.name
 
 
 def test_probe_reports_every_missing_hook_by_name():

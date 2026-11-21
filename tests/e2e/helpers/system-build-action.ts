@@ -2,6 +2,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { expect, type Page, type TestInfo } from "@playwright/test";
 import { SetupPage } from "../pages/setup-page";
+import { STRINGS } from "../../../frontend/admin-modern/src/i18n/strings.js";
+
+/**
+ * The status lines the console shows while a request of its own is under way
+ * (``buildMessage`` in frontend/admin-modern/src/lib/setup.js). They say
+ * nothing about the server's state, which is waited on through
+ * ``action_state.busy``.
+ */
+export const CONSOLE_TRANSIENT_MESSAGES = ["validating", "confirming", "updating", "reconnecting", "busy", "inProgress"];
+const TRANSIENT_TEXTS = CONSOLE_TRANSIENT_MESSAGES.map((key) => STRINGS[`setup.build.${key}`].en);
 
 type ActionState = {
   admin_update_allowed?: boolean;
@@ -17,10 +27,10 @@ async function attachActionDiagnostics(
   setup: SetupPage,
   testInfo: TestInfo,
 ) {
-  const selectedBuild = await setup.buildSelect.inputValue().catch(() => "");
+  const selectedBuild = await setup.buildSelect.inputValue({ timeout: 1_000 }).catch(() => "");
   const visibleBuildLabel = await setup.buildSelect
     .locator("option:checked")
-    .textContent()
+    .textContent({ timeout: 1_000 })
     .catch(() => null);
   const transitionResponse = await page.request
     .get("/api/admin/system-alignment/status")
@@ -33,20 +43,20 @@ async function attachActionDiagnostics(
       {
         selectedBuild,
         visibleBuildLabel,
-        statusText: await setup.status.textContent().catch(() => null),
-        errorText: await setup.error.textContent().catch(() => null),
+        statusText: await setup.statusText(),
+        errorText: (await setup.error.count()) ? await setup.error.textContent({ timeout: 1_000 }).catch(() => null) : null,
         transition,
         buttons: {
           update: {
-            disabled: await setup.adminUpdateButton.isDisabled().catch(() => null),
+            disabled: await setup.adminUpdateButton.isDisabled({ timeout: 1_000 }).catch(() => null),
             ariaDisabled: await setup.adminUpdateButton
-              .getAttribute("aria-disabled")
+              .getAttribute("aria-disabled", { timeout: 1_000 })
               .catch(() => null),
           },
           continue: {
-            disabled: await setup.continueButton.isDisabled().catch(() => null),
+            disabled: await setup.continueButton.isDisabled({ timeout: 1_000 }).catch(() => null),
             ariaDisabled: await setup.continueButton
-              .getAttribute("aria-disabled")
+              .getAttribute("aria-disabled", { timeout: 1_000 })
               .catch(() => null),
           },
         },
@@ -68,25 +78,17 @@ export async function expectValidSystemBuildAction(
   testInfo: TestInfo,
 ): Promise<"continue" | "admin_update" | "terminal_error"> {
   try {
-    // Client-side transients only. The words below are rendered by admin.js
-    // while it is mid-request; they say nothing about the server's own state.
-    await expect(setup.status).not.toHaveText(
-      /checking|confirming|updating|reconnecting/i,
-    );
+    await expect
+      .poll(async () => TRANSIENT_TEXTS.includes(await setup.statusText()), {
+        message: "the console kept showing a request of its own as under way",
+        timeout: 15_000,
+      })
+      .toBe(false);
 
-    // The server's own busy stages need their own wait, and this is the one
-    // that was missing. `admin_update_pending`, `admin_reconnect_pending` and
-    // `admin_aligned` render "Preparing the Admin Server update…", "Waiting for
-    // the updated Admin Server to reconnect…" and "Verifying selected System
-    // Build resources…" -- not one of which contains any word the guard above
-    // looks for. So the guard passed while a transition was still running, the
-    // snapshot below caught `busy: true`, and its progress message was then
-    // compared against a status line that had already settled. Firefox lost
-    // that race twice on main; Chromium landed after the settle and passed.
-    //
-    // `busy` is the authoritative answer -- the server derives it from
-    // `_ACTION_BUSY_STAGES` in admin/system_alignment.py -- so waiting on it
-    // needs no timer and no list of stage names kept in step over here.
+    // The server's own busy stages are waited on through `busy`, which the
+    // server derives from `_ACTION_BUSY_STAGES` in admin/system_alignment.py;
+    // the console never shows the server's progress messages, so no text says
+    // when they end.
     await expect
       .poll(
         async () => {
@@ -105,38 +107,19 @@ export async function expectValidSystemBuildAction(
       )
       .toBe(false);
 
-    // A validation response is recorded by a listener, which can run before the
-    // page has rendered what it says. The button and status reads below are
-    // single shots, so without this they could still see the busy frame.
-    const progressMessages = new Set(
-      setup
-        .validationHistory()
-        .map((entry) => (entry.action_state as ActionState | undefined)?.progress_message)
-        .filter((message): message is string => Boolean(message)),
-    );
-    if (progressMessages.size > 0) {
-      await expect
-        .poll(
-          async () => progressMessages.has(((await setup.status.textContent()) ?? "").trim()),
-          { message: "the status line kept showing a busy stage after it settled" },
-        )
-        .toBe(false);
-    }
-
     const validation = await setup.latestValidation();
     const action = validation.action_state as ActionState | undefined;
     expect(action, "validation must include authoritative action_state").toBeTruthy();
 
-    const updateEnabled = await setup.adminUpdateButton.isEnabled();
+    const updateEnabled = await setup.adminUpdateOffered();
     const continueEnabled = await setup.continueButton.isEnabled();
     const errorVisible = await setup.error.isVisible();
-    const status = (await setup.status.textContent())?.trim() ?? "";
+    const status = await setup.statusText();
 
     if (action?.busy === true) {
       expect(action.polling_required).toBe(true);
       expect(action.progress_message).toBeTruthy();
-      await expect(setup.status).toContainText(action.progress_message as string);
-      throw new Error("System Build action did not settle before the assertion");
+      throw new Error(`System Build action did not settle before the assertion: ${action.progress_message}`);
     }
 
     if (action?.terminal_error) {

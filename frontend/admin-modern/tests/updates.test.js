@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { CHANNELS, CHANNEL_FILTERS, CHANNEL_TONES, RELEASE_GROUPS, UPGRADE_STATES, PAIR_STATES, channelChoices, groupedReleases, noteView, pairView, recommendationNote, releaseList, releasesInChannel, shownChannel, updateMark, updateWaits, upgradePage } from "../src/lib/updates.js";
+import { CHANNELS, CHANNEL_FILTERS, CHANNEL_TONES, RELEASE_GROUPS, UPGRADE_STATES, PAIR_STATES, channelChoices, groupedReleases, noteView, pairView, recommendationNote, releaseList, releasesInChannel, shownChannel, updateMark, updateWaits } from "../src/lib/updates.js";
 
 const read = (path) => readFileSync(new URL(`../../../admin/${path}`, import.meta.url), "utf8");
 
@@ -56,20 +56,6 @@ test("a release that cannot be chosen says why, not a warning about its metadata
   assert.equal(release.note.key, "updates.note.resourcesUnverified");
 });
 
-test("a release the catalogue lets the upgrade choose opens it, chosen; any other opens nothing", () => {
-  const list = releaseList({
-    releases: [
-      { tag: "v0.9.0-rc.1", selectable: true },
-      { tag: "latest" },
-      { tag: "v0.8.0", selectable: false, upgrade_state: "older_than_running_build" },
-      { tag: "", selectable: true },
-    ],
-  });
-  assert.deepEqual(list.map((release) => release.upgrade), ["maintenance-upgrade-v0.9.0-rc.1", "maintenance-upgrade-latest", null, null]);
-  assert.equal(upgradePage({ tag: "a b/c", selectable: true }), "maintenance-upgrade-a%20b%2Fc");
-  assert.equal(upgradePage(null), null);
-});
-
 test("every channel has a tone and lands in exactly one group, stable releases first", () => {
   assert.deepEqual(Object.keys(CHANNEL_TONES).sort(), [...CHANNELS].sort());
   const grouped = RELEASE_GROUPS.flatMap((group) => group.channels);
@@ -109,7 +95,7 @@ test("the channel filter offers all and each listed group, counts what is shown,
       { tag: "x", channel: "nightly" },
     ],
   });
-  const installable = releases.filter((release) => release.upgrade);
+  const installable = releases.filter((release) => release.installable);
   const choices = channelChoices(releases, installable);
   assert.deepEqual(choices.map((choice) => [choice.id, choice.count]), [["all", 3], ["stable", 1], ["latest", 1], ["rc", 0], ["other", 1]]);
   assert.deepEqual(choices.map((choice) => choice.tone), [null, CHANNEL_TONES.stable, CHANNEL_TONES.latest, CHANNEL_TONES.rc, CHANNEL_TONES.legacy]);

@@ -34,6 +34,7 @@ services:
     # sees the real LAN. No Docker port mapping applies.
     network_mode: host
     environment:
+      EMS_ADMIN_EMS_HOST: "127.0.0.1"
       # Same-path mounting: point at the real host install root and Admin data
       # dir so any bind mount Admin forwards to the host Docker daemon stays a
       # valid host path.

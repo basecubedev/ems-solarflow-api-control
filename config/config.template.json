@@ -322,7 +322,13 @@
       "'off' disables continuous pipe animations and glow filters.",
       "This does not affect control behavior or authentication."
     ],
-    "animation_mode": "normal"
+    "animation_mode": "normal",
+    "_comment_signpost": [
+      "While the Admin console runs, the dashboard port only points to it:",
+      "no data, no sign-in there. Set false where a proxy or a VPN reaches",
+      "the dashboard at this port and cannot reach the console."
+    ],
+    "signpost": true
   },
 
   "influxdb": {

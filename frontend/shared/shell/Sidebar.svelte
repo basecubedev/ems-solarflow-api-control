@@ -60,9 +60,11 @@
     >
       <Icon name={prefs.navIconsOnly ? "panel-left-open" : "panel-left-close"} /><span>{t("nav.hideLabels")}</span>
     </button>
-    <button class="ghost-link" type="button" onclick={() => shell.classic(router.page)} title={t("nav.classicSwitch")} data-testid="switch-classic">
-      <Icon name="arrow-left-right" /><span>{t("nav.classic")}</span>
-    </button>
+    {#if shell.classic}
+      <button class="ghost-link" type="button" onclick={() => shell.classic(router.page)} title={t("nav.classicSwitch")} data-testid="switch-classic">
+        <Icon name="arrow-left-right" /><span>{t("nav.classic")}</span>
+      </button>
+    {/if}
     {#if hasAbout}
       <a class="ghost-link" href={href("about")} aria-current={router.page === "about" ? "page" : undefined} title={t("nav.about")} data-testid="nav-about">
         <Icon name="info" /><span>{t("nav.about")}</span>

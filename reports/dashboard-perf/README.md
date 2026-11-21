@@ -1,16 +1,15 @@
 # Dashboard performance reports
 
-Reproducible measurements of the dashboard frontend. Produced by
-[`scripts/dashboard_bench.py`](../../scripts/dashboard_bench.py), which serves
-the synthetic payloads from `scripts/dashboard_preview_data.py` and drives real
-browsers through Playwright. No EMS, no hardware and no network are involved,
-so a run here says nothing about a real installation's data — only about what
-the frontend costs to render.
-
-```bash
-python3 scripts/dashboard_bench.py --matrix ab       --browser chromium
-python3 scripts/dashboard_bench.py --matrix baseline --browser firefox
-```
+Measurements of the Classic dashboard frontend, taken with
+`scripts/dashboard_bench.py` and `scripts/dashboard_profile/` against the
+synthetic payloads of `scripts/dashboard_preview_data.py` in real browsers
+through Playwright. No EMS, no hardware and no network were involved, so a run
+said nothing about a real installation's data -- only about what the frontend
+cost to render. The Classic dashboard and both harnesses have been removed; the
+reports stay as the written account of what was measured and what it meant,
+which the current dashboard's flow renderer and live feed are built on. The
+current dashboard is measured with `scripts/dashboard_bench.mjs`; see
+[docs/technical/dashboard-performance.md](../../docs/technical/dashboard-performance.md).
 
 ## Start here
 
@@ -37,9 +36,8 @@ before it, and the first that looked at the whole dashboard rather than its
 flow rendering. It found and fixed the dashboard's largest per-snapshot cost --
 a forced synchronous layout taken to discover that a view is not on screen --
 and it is explicit that no macOS measurement exists, which is what the reported
-symptom was about. Its harness,
-[`scripts/dashboard_profile/`](../../scripts/dashboard_profile/), is built to be
-run on a Mac; that directory's README says how.
+symptom was about. Its harness, `scripts/dashboard_profile/`, was built to be
+run on a Mac and has been removed with the Classic dashboard.
 
 [energy-pipe-performance-study.md](energy-pipe-performance-study.md) is the
 study before it. It asks, given that the renderer question is settled, how the

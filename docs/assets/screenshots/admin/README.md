@@ -5,8 +5,7 @@ embedded from the step-by-step guides in
 [docs/user/admin/](../../../user/admin/), from
 [docs/user/admin-console.md](../../../user/admin-console.md), the other
 `docs/user/admin-*.md` pages and [README.md](../../../../README.md). Every one
-shows the current (Modern) console; the deprecated Classic console at
-`/classic/` is not documented with screenshots any more.
+shows the current console.
 
 Dashboard screenshots live in [`../dashboard/`](../dashboard/) and are captured
 by `tests/e2e-dashboard/capture-docs.spec.ts`. Regenerate both sets with
@@ -27,7 +26,7 @@ hostnames.
 | `admin-assistant.png` | Assistant on an installed system — the first backup is the next step, the tasks below | `no-backups` |
 | `admin-overview.png` | Overview — everything in order, the four tiles, Control & safety, Versions | `installed` |
 | `admin-overview-phone.png` | Overview on a phone (390×844), with the bar at the bottom | `installed` |
-| `admin-phone-more.png` | The More sheet on a phone: other pages, Quick settings, Classic switch | `installed` |
+| `admin-phone-more.png` | The More sheet on a phone: other pages, Quick settings | `installed` |
 | `admin-guided-setup-begin.png` | Guided setup — the start card with the five steps | `fresh` |
 | `admin-guided-setup-start.png` | Guided setup — 01 System Build, verified and ready | `setup` |
 | `admin-discovery-preview.png` | Guided setup — 02 Devices: search sources, progress, devices found | `setup` |

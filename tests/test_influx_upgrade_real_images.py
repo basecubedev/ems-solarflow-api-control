@@ -18,11 +18,12 @@ covers them through the EMS.
 
 import json
 import os
-import shutil
 import subprocess
 import uuid
 
 import pytest
+
+from docker_e2e_utils import docker_compose_ready
 
 from admin.deployment import DockerCli, DockerCompose
 from admin.ems_tool import BACKUP_RESTORE_TIMEOUT
@@ -38,21 +39,13 @@ TOKEN = "e2e-upgrade-token-0123456789abcdef"
 POINTS = 5000
 
 
-def _docker_ready():
-    if shutil.which("docker") is None:
-        return False
-    if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
-        return False
-    return subprocess.run(["docker", "compose", "version"], capture_output=True).returncode == 0
-
-
 pytestmark = [
     pytest.mark.e2e,
     pytest.mark.docker,
     pytest.mark.slow,
     pytest.mark.maintenance,
     pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX-only Docker e2e"),
-    pytest.mark.skipif(not _docker_ready(), reason="Docker is not available"),
+    pytest.mark.skipif(not docker_compose_ready(), reason="Docker is not available"),
 ]
 
 

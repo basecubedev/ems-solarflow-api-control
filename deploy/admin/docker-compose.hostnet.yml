@@ -21,3 +21,7 @@ services:
     # The server binds directly to every host address on port 8090. Compose's
     # reset tag removes the loopback-only mapping inherited from the base file.
     ports: !reset []
+    extra_hosts: !reset []
+    # On the host network the EMS's published port is on the Admin's own loopback.
+    environment:
+      EMS_ADMIN_EMS_HOST: "127.0.0.1"

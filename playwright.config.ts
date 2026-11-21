@@ -7,6 +7,9 @@ import { defineConfig, devices } from "@playwright/test";
 // reset through the gated /api/admin/test/reset endpoint (see fixtures).
 const PORT = Number(process.env.EMS_ADMIN_E2E_PORT ?? 8123);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
+// The EMS the console forwards the dashboard's pages to: the dashboard preview
+// server, synthetic data only, on a port of its own.
+const EMS_PORT = Number(process.env.EMS_ADMIN_E2E_EMS_PORT ?? 8130);
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -37,11 +40,19 @@ export default defineConfig({
     // installs it and selects this project explicitly.
     { name: "webkit", use: { ...devices["Desktop Safari"] } },
   ],
-  webServer: {
-    command: "bash tests/e2e/run-admin.sh",
-    url: BASE_URL,
-    reuseExistingServer: !process.env.CI,
-    timeout: 60_000,
-    env: { EMS_ADMIN_E2E_PORT: String(PORT) },
-  },
+  webServer: [
+    {
+      command: `python3 scripts/serve_dashboard_preview.py --host 127.0.0.1 --port ${EMS_PORT}`,
+      url: `http://127.0.0.1:${EMS_PORT}/api/auth/status`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 60_000,
+    },
+    {
+      command: "bash tests/e2e/run-admin.sh",
+      url: BASE_URL,
+      reuseExistingServer: !process.env.CI,
+      timeout: 60_000,
+      env: { EMS_ADMIN_E2E_PORT: String(PORT), EMS_ADMIN_TEST_EMS_PORT: String(EMS_PORT) },
+    },
+  ],
 });

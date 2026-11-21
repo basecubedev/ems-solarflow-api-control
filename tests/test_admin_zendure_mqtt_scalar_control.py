@@ -19,11 +19,14 @@ carries the write route on every family, so these cases isolate the family and
 route axes.
 """
 
+from pathlib import Path
+
 import pytest
 
 from admin.models import MqttHardwareCandidate
 from admin.zendure_mqtt_config_draft import build_manual_zendure_mqtt_fragment
 from admin.zendure_mqtt_config_proposals import build_proposals
+from tests.modern_frontend import js_call
 
 pytestmark = [
     pytest.mark.admin,
@@ -34,6 +37,7 @@ pytestmark = [
 
 PRODUCT_KEY = "TESTPK0001"
 ROUTE_DEVICE_ID = "TESTROUTE01"
+SETUP_DRAFT_JS = Path(__file__).resolve().parents[1] / "frontend" / "admin-modern" / "src" / "lib" / "setupDraft.js"
 
 
 def manual_output_control_capability(*args, **kwargs):
@@ -283,91 +287,49 @@ def test_the_manual_projection_rejects_an_unknown_generation():
     assert verdict["reason"] == "hardware_generation_unknown"
 
 
-def _browser_manual_verdict(model, generation, route_id, product_key, broker_source):
-    """Run the shipped manual-capability helper from admin.js under node.
+def _browser_manual_verdict(generation, model, route_id, product_key):
+    """The Admin console's own manual-control verdict, read against the real setup catalog.
 
-    ``generation`` is the real backend catalog entry, so the browser reads the
-    Core-derived ``control_broker_sources`` projection rather than a rule of its
-    own.
+    The catalog carries the Core-derived ``control_broker_sources`` projection,
+    so the console reads that rather than a rule of its own.
     """
 
-    import json
-    import os
-    import shutil
-    import subprocess
+    from admin.setup_config import build_setup_catalog
 
-    node = shutil.which("node")
-    if not node:
-        pytest.skip("node is required for the frontend/backend agreement test")
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    with open(os.path.join(root, "admin", "static", "admin.js"), encoding="utf-8") as f:
-        source = f.read()
-    marker = "function manualMqttControlAvailable"
-    body = marker + source.split(marker, 1)[1].split("\nfunction ", 1)[0]
-    script = (
-        "const MANUAL_MQTT_BROKER_SOURCE = 'local_mqtt';\n"
-        "const mqttManualEls = {"
-        "  deviceMqttId: { value: " + json.dumps(route_id) + " },"
-        "  deviceProductKey: { value: " + json.dumps(product_key) + " },"
-        "};\n"
-        "function selectedMqttGeneration() { return "
-        + json.dumps(generation)
-        + "; }\n"
-        "function selectedMqttModel() { return " + json.dumps(model) + "; }\n"
-        + body
-        + "\nconsole.log(JSON.stringify(manualMqttControlAvailable("
-        + json.dumps(broker_source)
-        + ")));"
+    return js_call(
+        SETUP_DRAFT_JS,
+        "manualControl",
+        build_setup_catalog(),
+        {"generation": generation, "model": model, "routeId": route_id, "productKey": product_key},
     )
-    result = subprocess.run(
-        [node, "-e", script], text=True, capture_output=True, check=False
-    )
-    assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout)
-
-
-def _catalog_generation(generation_id):
-    from admin.zendure_mqtt_config_draft import generation_catalog
-
-    for entry in generation_catalog():
-        if entry["id"] == generation_id:
-            return entry
-    return {"id": generation_id}
 
 
 @pytest.mark.parametrize(
-    ("generation_id", "model_id", "broker_source", "route_id", "product_key"),
+    ("generation_id", "model_id", "route_id", "product_key", "controllable"),
     [
-        # cloud + scalar, cloud + verified JSON, local + scalar, local + JSON
-        ("solarflow_zensdk", "solarflow_800_pro_2", CLOUD_SOURCE, ROUTE_DEVICE_ID, PRODUCT_KEY),
-        ("hub_hyper_legacy", "hyper_2000", CLOUD_SOURCE, ROUTE_DEVICE_ID, PRODUCT_KEY),
-        ("solarflow_zensdk", "solarflow_800_pro_2", LOCAL_SOURCE, ROUTE_DEVICE_ID, PRODUCT_KEY),
-        ("zendure_cloud", "solarflow_800_pro_2", LOCAL_SOURCE, ROUTE_DEVICE_ID, PRODUCT_KEY),
-        ("hub_hyper_legacy", "hyper_2000", LOCAL_SOURCE, ROUTE_DEVICE_ID, PRODUCT_KEY),
-        # incomplete route and unknown model, on a verified source
-        ("solarflow_zensdk", "solarflow_800_pro_2", CLOUD_SOURCE, ROUTE_DEVICE_ID, ""),
-        ("solarflow_zensdk", "solarflow_800_pro_2", CLOUD_SOURCE, "", PRODUCT_KEY),
-        ("solarflow_zensdk", "solarflow_800_pro_2", CLOUD_SOURCE, "", ""),
-        ("solarflow_zensdk", "", CLOUD_SOURCE, ROUTE_DEVICE_ID, PRODUCT_KEY),
+        ("hub_hyper_legacy", "hyper_2000", ROUTE_DEVICE_ID, PRODUCT_KEY, True),
+        ("solarflow_zensdk", "solarflow_800_pro_2", ROUTE_DEVICE_ID, PRODUCT_KEY, False),
+        ("zendure_cloud", "solarflow_800_pro_2", ROUTE_DEVICE_ID, PRODUCT_KEY, False),
+        ("hub_hyper_legacy", "ace_1500", ROUTE_DEVICE_ID, PRODUCT_KEY, False),
+        ("hub_hyper_legacy", "hyper_2000", ROUTE_DEVICE_ID, "", False),
+        ("hub_hyper_legacy", "hyper_2000", "", PRODUCT_KEY, False),
+        ("hub_hyper_legacy", "hyper_2000", "", "", False),
+        ("hub_hyper_legacy", "", ROUTE_DEVICE_ID, PRODUCT_KEY, False),
     ],
 )
 def test_the_browser_and_the_backend_agree_on_manual_capability(
-    generation_id, model_id, broker_source, route_id, product_key
+    generation_id, model_id, route_id, product_key, controllable
 ):
     """One verdict per input, whichever layer is asked.
 
     The browser projects; the fragment builder decides. They must never disagree
-    about whether a manually entered profile ends up controllable — including
-    across broker sources, which is the axis the browser must not re-derive.
+    about whether a manually entered profile ends up controllable. The Admin
+    console enters such a device on the local broker only
+    (``MANUAL_BROKER_SOURCE``), so both are asked there, and a generation that
+    controls only over the Zendure cloud broker stays telemetry-only in both.
     """
 
-    generation = _catalog_generation(generation_id)
-    model = (
-        {"id": model_id, "control_supported": True} if model_id else {"id": ""}
-    )
-    browser = _browser_manual_verdict(
-        model, generation, route_id, product_key, broker_source
-    )
+    browser = _browser_manual_verdict(generation_id, model_id, route_id, product_key)
     fragment, _issues = build_manual_zendure_mqtt_fragment(
         _manual_item(
             hardware_generation=generation_id,
@@ -376,14 +338,14 @@ def test_the_browser_and_the_backend_agree_on_manual_capability(
             product_key=product_key,
         ),
         "b1",
-        broker_source=broker_source,
+        broker_source=LOCAL_SOURCE,
     )
     backend = bool(
         fragment is not None
         and fragment["capabilities"]["write_output_limit"] is True
     )
 
-    assert browser["enabled"] is backend
+    assert browser["enabled"] is backend is controllable
 
 
 def test_every_control_capable_model_needs_a_product_key_route():

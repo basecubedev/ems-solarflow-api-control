@@ -704,7 +704,7 @@ function adopt(transition, memo) {
 
 /**
  * A failed run on screen follows what the status says about it later:
- * another tab or Classic may retry or cancel it, or its time may run out. A
+ * another tab may retry or cancel it, or its time may run out. A
  * status that names another operation means the run was ended elsewhere: the
  * page lets go of it. The Updates page hands each new status read in here.
  */

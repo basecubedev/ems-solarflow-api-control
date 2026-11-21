@@ -149,7 +149,7 @@ def direct_handler(path, *, method="GET", body=b"", auth_file=None, runtime_stat
 
     handler.send_response = send_response
     handler.send_header = send_header
-    handler._send_security_headers = lambda: DashboardRequestHandler._send_security_headers(handler)
+    handler._send_security_headers = lambda *connect: DashboardRequestHandler._send_security_headers(handler, *connect)
     handler.end_headers = end_headers
     handler.send_error = send_error
     handler.log_message = lambda *args: None
@@ -164,6 +164,10 @@ def direct_handler(path, *, method="GET", body=b"", auth_file=None, runtime_stat
         "_auth_configured",
         "_current_session",
         "_session_cookie_value",
+        "_refused_by_signpost",
+        "_answered_in_full",
+        "_named_console",
+        "_vouched_by_console",
     ):
         setattr(
             handler,
@@ -231,7 +235,7 @@ def test_ui_config_reports_animation_mode():
         status, headers, payload = json_response(f"{base_url}/api/ui-config")
         assert status == 200
         assert "application/json" in headers["Content-Type"]
-        assert payload == {"animation_mode": "reduced"}
+        assert payload == {"animation_mode": "reduced", "admin_console": None, "console_operator": False}
     finally:
         server.shutdown()
         server.server_close()
@@ -242,7 +246,7 @@ def test_ui_config_defaults_to_normal_and_sanitizes_invalid():
     server, base_url = with_server(store, animation_mode="bogus")
     try:
         _, _, payload = json_response(f"{base_url}/api/ui-config")
-        assert payload == {"animation_mode": "normal"}
+        assert payload == {"animation_mode": "normal", "admin_console": None, "console_operator": False}
     finally:
         server.shutdown()
         server.server_close()
@@ -317,10 +321,9 @@ def test_read_only_gets_remain_public_when_auth_is_configured(tmp_path):
     auth_file = tmp_path / "dashboard-auth.json"
     write_password_file(auth_file, "secret-password")
 
-    status, headers, body = direct_handler("/classic/", auth_file=auth_file)
-    assert status == 200
-    assert "text/html" in headers["Content-Type"]
-    assert b'id="loginModal"' in body
+    status, headers, _ = direct_handler("/classic/", auth_file=auth_file)
+    assert status == 302
+    assert headers["Location"] == "/"
 
     status, headers, body = direct_handler("/", auth_file=auth_file)
     assert status == 200
@@ -1534,8 +1537,8 @@ def test_json_responses_include_no_store_and_security_headers():
         def send_header(self, key, value):
             sent_headers[key] = value
 
-        def _send_security_headers(self):
-            DashboardRequestHandler._send_security_headers(self)
+        def _send_security_headers(self, connect=()):
+            DashboardRequestHandler._send_security_headers(self, connect)
 
         def end_headers(self):
             pass
@@ -1806,7 +1809,7 @@ def test_an_idle_event_stream_sends_a_heartbeat_and_frees_a_dead_client(monkeypa
         send_response=lambda status: None,
         send_header=lambda key, value: None,
         end_headers=lambda: None,
-        _send_security_headers=lambda: None,
+        _send_security_headers=lambda *connect: None,
     )
 
     DashboardRequestHandler._send_events(handler)

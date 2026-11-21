@@ -266,3 +266,90 @@ def test_concurrent_logins_cannot_exceed_the_attempt_limit():
 
     assert allowed.count(True) == 5
     assert limiter.is_limited("192.0.2.9")
+
+
+def test_a_kept_session_survives_a_new_store_and_the_file_holds_no_session_id(tmp_path):
+    path = tmp_path / "state" / "sessions.json"
+    store = auth.SessionStore(timeout_seconds=60, absolute_max_seconds=600, time_fn=lambda: 1000.0, path=path)
+    session = store.create(credential="record-1")
+
+    text = path.read_text(encoding="utf-8")
+    assert session.session_id not in text
+    assert os.stat(path).st_mode & 0o777 == 0o600
+
+    again = auth.SessionStore(timeout_seconds=60, absolute_max_seconds=600, time_fn=lambda: 1030.0, path=path)
+    kept = again.get(session.session_id, credential="record-1")
+    assert kept is not None and kept.csrf_token == session.csrf_token
+    assert again.get(session.session_id, credential="record-2") is None
+    assert auth.SessionStore(time_fn=lambda: 1030.0, path=path).get(session.session_id, credential="record-1") is None
+
+
+def test_a_kept_session_ends_at_its_expiry_and_at_a_sign_out(tmp_path):
+    path = tmp_path / "sessions.json"
+    now = [1000.0]
+    store = auth.SessionStore(timeout_seconds=60, absolute_max_seconds=600, time_fn=lambda: now[0], path=path)
+    first, second = store.create(), store.create()
+    store.destroy(first.session_id)
+    now[0] = 1050.0
+    store.touch(second.session_id)
+
+    assert auth.SessionStore(time_fn=lambda: now[0], path=path).get(first.session_id) is None
+    now[0] = 1100.0
+    assert auth.SessionStore(time_fn=lambda: now[0], path=path).get(second.session_id) is not None
+    now[0] = 1111.0
+    assert auth.SessionStore(time_fn=lambda: now[0], path=path).get(second.session_id) is None
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["", "[]", '{"version": 2, "sessions": {}}', '{"version": 1, "sessions": {"short": {"csrf_token": "t", "created_at": 1}}}',
+     '{"version": 1, "sessions": {"' + "a" * 64 + '": {"csrf_token": "", "created_at": 1}}}'],
+)
+def test_a_store_file_that_is_not_one_starts_with_no_sessions(tmp_path, content):
+    path = tmp_path / "sessions.json"
+    path.write_text(content, encoding="utf-8")
+    store = auth.SessionStore(path=path)
+    assert store.sessions == {}
+    assert store.get(store.create().session_id) is not None
+
+
+def test_a_store_that_cannot_write_its_file_keeps_its_sessions_in_memory(tmp_path):
+    blocked = tmp_path / "file"
+    blocked.write_text("", encoding="utf-8")
+    store = auth.SessionStore(path=blocked / "sessions.json")
+    session = store.create()
+    assert store.get(session.session_id) is not None
+
+
+def test_a_sign_out_the_file_cannot_take_removes_the_file_so_it_never_comes_back(tmp_path, monkeypatch):
+    path = tmp_path / "sessions.json"
+    store = auth.SessionStore(path=path)
+    session = store.create()
+    assert path.exists()
+    monkeypatch.setattr(auth.SessionStore, "_write", lambda self, record: False)
+    store.destroy(session.session_id)
+    assert not path.exists()
+    monkeypatch.undo()
+    assert auth.SessionStore(path=path).get(session.session_id) is None
+
+
+def test_a_store_file_in_a_place_it_cannot_write_to_is_not_read(tmp_path):
+    state = tmp_path / "state"
+    store = auth.SessionStore(path=state / "sessions.json")
+    session = store.create()
+    state.chmod(0o500)
+    try:
+        store.destroy(session.session_id)
+        assert auth.SessionStore(path=state / "sessions.json").get(session.session_id) is None
+    finally:
+        state.chmod(0o700)
+
+
+def test_a_session_read_back_takes_today_s_limits(tmp_path):
+    path = tmp_path / "sessions.json"
+    unbounded = auth.SessionStore(timeout_seconds=0, absolute_max_seconds=0, time_fn=lambda: 1000.0, path=path)
+    session = unbounded.create()
+    assert session.expires_at is None
+    bounded = auth.SessionStore(timeout_seconds=60, absolute_max_seconds=600, time_fn=lambda: 1500.0, path=path)
+    assert bounded.get(session.session_id).expires_at == 1560.0
+    assert auth.SessionStore(timeout_seconds=60, absolute_max_seconds=400, time_fn=lambda: 1500.0, path=path).get(session.session_id) is None

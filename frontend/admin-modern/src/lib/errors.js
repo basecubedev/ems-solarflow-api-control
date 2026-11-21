@@ -4,9 +4,7 @@ import { ApiError } from "../../../shared/lib/api.js";
 
 /**
  * The Admin server's error codes that have a sentence of their own here, in
- * every language. tests/classic-parity.test.js requires every code Classic
- * has words for (ADMIN_ERROR_MESSAGES and AUTH_ERROR_MESSAGES in admin.js) to
- * be in this list.
+ * every language.
  */
 export const KNOWN_ERRORS = Object.freeze([
   "system_transition_in_progress",

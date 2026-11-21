@@ -168,20 +168,10 @@ dashboard answers at the root, exactly as on port 8080:
 http://127.0.0.1:8767/
 ```
 
-The deprecated Classic dashboard has a landing page that links every view for
-the current scenario, and a stable URL per view that opens Classic directly in
-it: `/preview/aggregated`, `/preview/devices`, `/preview/control`,
-`/preview/energy`, `/preview/diagnose`, `/preview/logs`.
-
-```text
-http://127.0.0.1:8767/preview
-```
-
-List the available scenarios or views without starting a server:
+List the available scenarios without starting a server:
 
 ```bash
 python3 scripts/serve_dashboard_preview.py --list-scenarios
-python3 scripts/serve_dashboard_preview.py --list-views
 ```
 
 Scenarios:
@@ -215,8 +205,12 @@ EMS_DASHBOARD_CAPTURE_DOCS=1 npx playwright test \
   --config=playwright.dashboard.config.ts --project=chromium capture-docs
 ```
 
-That run starts its own preview server on port 8128 with `--now` and runs in
-Europe/Berlin, so the pictures show the same day on any date and any host. See
+That run starts its own preview server on port 8128 with `--now` and, on port
+8131, the console's docs preview (`scripts/serve_admin_docs_preview.py
+--ems-preview`), which serves the one app and reads the EMS from the first: the
+dashboard's pages are photographed in the app, the EMS's own Diagnose and
+Maintenance pages on the preview itself. It runs in Europe/Berlin, so the
+pictures show the same day on any date and any host. See
 [the capture index](../assets/screenshots/dashboard/README.md).
 
 ## Authority map and test layering
@@ -611,8 +605,9 @@ asks for a fresh plan; the mutation itself is never retried. The browser is
 never told *which* fact moved — a plan from a replaced run and a plan from a
 moved discovery state are the same repair — and a refusal answering an older
 plan does not re-plan at all, or it would race the request already in flight.
-`tests/test_admin_setup_plan_frontend.py` drives the shipped handler for all
-four codes; it duplicates no backend rule.
+`frontend/admin-modern/tests/setupDraft.test.js` names each refusal by what it
+asks of the reader, and `server-codes.test.js` holds the four codes to the ones
+the server sends; neither duplicates a backend rule.
 
 ### Test layering
 

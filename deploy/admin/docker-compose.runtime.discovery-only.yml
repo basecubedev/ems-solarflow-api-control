@@ -22,6 +22,7 @@ services:
     # sees the real LAN. No Docker port mapping applies.
     network_mode: host
     environment:
+      EMS_ADMIN_EMS_HOST: "127.0.0.1"
       # Same-path mounting keeps install-context resolution consistent with the
       # deployment runtime even though this restricted mode mounts no socket.
       EMS_INSTALL_DIR: "${EMS_INSTALL_DIR}"

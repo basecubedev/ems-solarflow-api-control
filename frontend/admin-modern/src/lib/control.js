@@ -7,8 +7,8 @@
  * unproven state reads as unknown, never as healthy. Where the dashboard
  * switched control on or off, or changed the total limit, at runtime (the
  * config answer's ``overrides``), the view follows the value EMS follows.
- * tests/classic-parity.test.js keeps the statuses and the transports in step
- * with Classic's MAINTENANCE_CONTROL_STATUS_TEXT and transport labels.
+ * tests/control.test.js keeps the statuses and the transports in step with
+ * the server's.
  */
 
 export const CONTROL_STATUSES = Object.freeze({

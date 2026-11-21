@@ -52,9 +52,14 @@ services:
       - "${DOCKER_GID:-999}"
     # Bind published port to loopback so the UI is not reachable off-host by
     # default. To scan the LAN, add the docker-compose.hostnet.yml override.
+    # In this bridge network the Admin reaches the EMS's published dashboard
+    # port through the host, not on its own loopback.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${EMS_ADMIN_BIND:-127.0.0.1}:${EMS_ADMIN_PORT:-8090}:8090"
     environment:
+      EMS_ADMIN_EMS_HOST: "host.docker.internal"
       # Same-path mounting: these point at the real host install root and Admin
       # data dir so ems.paths resolves the live config/data/compose and any bind
       # mount Admin forwards to the host Docker daemon stays a valid host path.

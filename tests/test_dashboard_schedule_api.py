@@ -8,7 +8,6 @@ with -- and decides none of it.
 """
 
 import json
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,17 +16,19 @@ from zoneinfo import ZoneInfo
 import pytest
 
 import emsctl
-from dashboard.schedule_api import RULE_STATUSES, ScheduleApi, _emsctl_line
+from dashboard.schedule_api import ScheduleApi, _emsctl_line
 from ems.runtime_commands import build_validation_context
 from ems.schedule_actions import ACTIONS, CHARGE, FACTOR, GROUPS, SWITCH, WATTS, action_commands
 from ems.runtime_state import RuntimeState
 from ems.schedule_recurrence import PRESETS, localize
 from ems.schedule_store import ScheduleStore
 from tests._emsctl_test_helpers import write_config
+from tests.modern_frontend import js_export
 
 pytestmark = [pytest.mark.contract, pytest.mark.config]
 
 BERLIN = ZoneInfo("Europe/Berlin")
+SCHEDULE_JS = Path(__file__).resolve().parents[1] / "frontend" / "dashboard-modern" / "src" / "lib" / "schedule.js"
 
 
 def at(text):
@@ -408,18 +409,12 @@ def test_a_rule_years_apart_is_waiting_not_finished_and_can_skip_its_next_date(a
     assert skipped["when"]["exceptions"] == ["2028-10-01"]
 
 
-def _js_object_keys(name):
-    source = (Path(__file__).resolve().parent.parent / "dashboard" / "static" / "app.js").read_text()
-    body = re.search(rf"const {name} = \{{(.*?)\n\}};", source, re.S).group(1)
-    return set(re.findall(r"^\s*(\w+):", body, re.M))
-
-
 def test_the_editor_names_every_preset_the_ems_offers_and_custom():
-    assert _js_object_keys("SCHEDULE_PRESET_LABELS") == set(PRESETS) | {"custom"}
-
-
-def test_the_rule_card_styles_every_status_a_rule_can_have():
-    assert _js_object_keys("SCHEDULE_STATUS_TONE") == set(RULE_STATUSES)
+    offered = js_export(SCHEDULE_JS, "PRESET_ORDER")
+    if offered is None:
+        pytest.skip("node is required to read the editor's presets")
+    assert len(offered) == len(set(offered))
+    assert set(offered) == set(PRESETS) | {"custom"}
 
 
 def test_apply_now_inside_a_window_is_ended_when_the_rule_goes_away(api):

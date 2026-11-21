@@ -12,7 +12,8 @@ Every day. **Overview** is the page to leave open.
 
 ## Prerequisites
 
-- The EMS running, and the dashboard reachable at `http://<host>:8080`.
+- The EMS running, and the app reachable at `http://<host>:8090`; without an
+  Admin Console the EMS's own dashboard at `http://<host>:8080`.
 - No sign-in needed for this page.
 
 ## What you see
@@ -26,9 +27,12 @@ Every day. **Overview** is the page to leave open.
 | Page title and subtitle | Here **Overview** — *Your energy system right now* |
 | **EMS active** / **EMS paused** | Whether the control loop is switched on; *Waiting for data* before the first snapshot |
 | **Live · updated 4 s ago** | How the values arrive and how old the newest is. **Live** is the event stream; **Polling** a fallback that asks every 2 s; **Reconnecting**, **Offline** or **Stale** mean the values are not current |
-| **Read-only** / **Write mode** | Whether this browser is signed in, see [Runtime settings](runtime-settings.md#1--sign-in) |
-| **Sign in** / **Sign out** | Starts or ends the session; the dashboard stays readable either way |
+| **All good**, signed in | In one word how the installation is; it leads to the Admin's **Status**, see [Admin console](../admin-console.md) |
+| **Sign in** / **Sign out** | Starts or ends the app's one session, for the Dashboard and the Admin pages; the Dashboard pages stay readable either way, see [Runtime settings](runtime-settings.md#1--sign-in) |
 | The settings button at the right end | The **Appearance** menu, see [Appearance and language](appearance.md) |
+
+The EMS's own dashboard on port 8080, without an Admin Console, shows a
+**Read-only** / **Write mode** pill in place of **All good**.
 
 ### 2 — The four status tiles
 
@@ -128,8 +132,7 @@ yesterday the tile says *no comparison yet*.
 names the source, **SQLite**, the local history that is always there. The
 buttons choose **1 h**, **6 h**, **Today**, **24 h** or **7 d**; **Table**
 lists the values instead. The battery is drawn below zero while charging and
-above zero while discharging into the inverter, as in Classic; the legend and
-the table say **Charge** or **Discharge** with the power. Grid is positive while
+above zero while discharging into the inverter; the legend and the table say **Charge** or **Discharge** with the power. Grid is positive while
 importing. Hatched areas are periods without samples; they stay gaps and are
 never shown as zero.
 
@@ -139,19 +142,19 @@ zooms within today. Longer-range history is on [Analytics](energy.md#the-analyti
 
 ## On a phone
 
-![Overview on a phone: the four status tiles in one column, the start of the energy flow, and the bar at the bottom with Overview, Devices, Energy, Control and More](../../assets/screenshots/dashboard/dashboard-overview-narrow.png)
+![Overview on a phone: the four status tiles in one column, the start of the energy flow, and the bar at the bottom with Overview, Energy, Status, Updates and More](../../assets/screenshots/dashboard/dashboard-overview-narrow.png)
 
 On a narrow screen the side menu gives way to a bar at the bottom with four
-pages — **Overview**, **Devices**, **Energy** and **Control** until you choose
+pages — **Overview**, **Energy**, **Status** and **Updates** until you choose
 others — and **More** for the rest. The status tiles stack in one column. In
 the energy flow the home and the grid sit side by side at the bottom, and the
 inverters' line runs down into the home. Nothing is left out.
 
-![The More sheet on a phone: the other pages as tiles with a lock on those that need a sign-in, the language and colour scheme, the sign-in, and the links to choose the bar's pages and to switch to the classic view](../../assets/screenshots/dashboard/dashboard-phone-more.png)
+![The More sheet on a phone: the other pages as tiles with a lock on those that need a sign-in, the language and colour scheme, the sign-in, and the link to choose the bar's pages](../../assets/screenshots/dashboard/dashboard-phone-more.png)
 
 1. Tap **More**. A sheet opens from the bottom with the other pages, the
-   **Quick settings** (language, colour scheme, sign in or out) and **Switch to
-   classic view**. A lock marks the pages that need a sign-in.
+   **Quick settings** (language, colour scheme, sign in or out). A lock marks
+   the pages that need a sign-in.
 2. On a page that is not in the bar, the fifth button shows that page's name,
    so the bar always says where you are.
 3. To change the bar, tap **Choose the pages in the bar** and tap two pages to

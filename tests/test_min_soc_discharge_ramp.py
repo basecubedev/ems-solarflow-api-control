@@ -830,12 +830,10 @@ def test_the_editors_offer_the_runtime_bounds():
 
     root = Path(__file__).resolve().parents[1]
     modern = (root / "frontend/dashboard-modern/src/widgets/RuntimeEditor.svelte").read_text(encoding="utf-8")
-    classic = (root / "dashboard/static/app.js").read_text(encoding="utf-8")
     assert modern.count(f"min: 0, max: {BATTERY_CARE_MAX_POINTS}, unit") == 3
     assert f'"min_discharge_w", type: "number", label: t("runtime.batteryCareMinDischarge"), min: 0, max: {BATTERY_CARE_MAX_WATTS}, unit: "W"' in modern
     assert f'"pv_margin_percent", type: "number", label: t("runtime.batteryCarePvMargin"), min: 0, max: {BATTERY_CARE_MAX_PERCENT}, unit: "%"' in modern
     assert f'"pv_margin_min_w", type: "number", label: t("runtime.batteryCarePvMarginMin"), min: 0, max: {BATTERY_CARE_MAX_WATTS}, unit: "W"' in modern
-    assert classic.count(f', 0, {BATTERY_CARE_MAX_POINTS}, "%", "1")') == 3
 
 
 def test_a_device_the_allocation_keeps_counts_as_the_allocation_counts_it():

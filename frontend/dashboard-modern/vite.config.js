@@ -9,18 +9,18 @@ import { ROOT, modernBuild, modernPage } from "../shared/vite/page.js";
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 /**
- * uPlot is the vendored copy Classic already serves and the inventory hash-pins,
- * so it is referenced, never bundled; the tags are added after Vite has
- * resolved the page so it does not try to. public/fallback.js runs first and
- * sends demo mode, ?ui=classic and a browser too old for Modern to /classic/.
+ * uPlot is the vendored copy the inventory hash-pins, so it is referenced,
+ * never bundled; the tags are added after Vite has resolved the page so it
+ * does not try to. fallback.js runs first and sends a browser too old for the
+ * app to the page that says so.
  */
 const VENDORED = '<script src="/fallback.js"></script>\n    <link rel="stylesheet" href="/uPlot.min.css">\n    <script src="/uPlot.iife.min.js"></script>';
 
 export default defineConfig({
   root: HERE,
   base: "/",
-  publicDir: resolve(HERE, "public"),
-  plugins: [svelte(), modernPage({ name: "ems-modern-page", icons: resolve(HERE, "src/icons.json"), vendored: VENDORED })],
+  publicDir: false,
+  plugins: [svelte(), modernPage({ name: "ems-modern-page", icons: resolve(HERE, "src/icons.json"), vendored: VENDORED, unsupported: true })],
   build: modernBuild({ outDir: resolve(ROOT, "dashboard/static/modern"), entry: "modern" }),
   server: {
     fs: { allow: [ROOT] },

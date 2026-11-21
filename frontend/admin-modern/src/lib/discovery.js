@@ -1,9 +1,7 @@
 // SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * The network search for devices, as the Classic Maintenance editor runs it
- * (admin/static/admin.js, buildMaintenanceDiscoveryReview and around it):
- * what was found, how it relates to the draft, and the draft change each
+ * The network search for devices from the settings editor: what was found, how it relates to the draft, and the draft change each
  * action makes. Whether two observations are one device is always the
  * server's answer, carried as issued ids and tokens; nothing here compares
  * displayed serials, hosts or names to reach it. Only whether a device the
