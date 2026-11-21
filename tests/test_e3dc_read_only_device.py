@@ -340,7 +340,7 @@ def test_a_failing_refresh_never_breaks_the_control_cycle():
 def test_no_read_only_device_ever_joins_the_controlled_set():
     source = (ROOT / "ems-solarflow-api-control.py").read_text(encoding="utf-8")
     assert "cfg.http_control_device_configs()" in source
-    assert "read_only_devices=e3dc_devices" in source
+    assert "read_only_devices=read_only_devices" in source
     assert "e3dc_sessions.close()" in source
 
 

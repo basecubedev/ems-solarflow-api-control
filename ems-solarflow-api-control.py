@@ -20,7 +20,8 @@ from ems.clients import (
 )
 from ems.control_status import ControlStatusWriter
 from ems.controller import EMSController
-from ems.e3dc_runtime import E3dcSessions, build_e3dc_device_runtime
+from ems.e3dc_runtime import E3dcSessions
+from ems.read_only_devices import build_read_only_devices
 from ems.device_identity import broker_sources_from_config
 from ems.device_settings import offered_by_device
 from ems.logging_utils import log_event, setup_logging
@@ -345,7 +346,7 @@ def main():
         if zendure_mqtt_control_runtime is not None:
             zendure_mqtt_control_runtime.stop()
         sys.exit(1)
-    e3dc_devices = build_e3dc_device_runtime(cfg.CONFIG.get("devices"), e3dc_sessions)
+    read_only_devices = build_read_only_devices(cfg.CONFIG.get("devices"), e3dc_sessions=e3dc_sessions)
 
     if args.preflight:
         ok = run_live_preflight(devices, shelly)
@@ -563,7 +564,7 @@ def main():
         dashboard_store=dashboard_store,
         influx_writer=influx_writer,
         zendure_mqtt_runtime=zendure_mqtt_runtime,
-        read_only_devices=e3dc_devices,
+        read_only_devices=read_only_devices,
         winter_store=None if cfg.SIMULATION_MODE else build_winter_store(),
         scheduler=scheduler,
     )
@@ -665,6 +666,8 @@ def main():
         # owns a network loop/connection/thread; HTTP clients own none). Safe and
         # idempotent, and never masks a primary shutdown error.
         close_grid_meter_client(shelly)
+        if read_only_devices is not None:
+            read_only_devices.close()
         e3dc_sessions.close()
         if influx_writer:
             influx_writer.stop()

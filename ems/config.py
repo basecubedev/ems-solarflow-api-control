@@ -3,6 +3,7 @@
 import copy
 import functools
 import json
+import ipaddress
 import logging
 import math
 import os
@@ -420,6 +421,64 @@ def e3dc_modbus_device_settings(device):
     settings = _modbus_tcp_connection(device, "", f"E3/DC Modbus device {name}")
     settings["name"] = name
     return settings
+
+
+OPENDTU_HTTP_DEFAULT_PORT = 80
+OPENDTU_HTTP_DEFAULT_MAX_AGE_SECONDS = 60
+OPENDTU_INVERTER_SERIAL_PATTERN = re.compile(r"[0-9A-Za-z]{4,20}")
+_HOST_NAME_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
+
+
+def _plain_host(value):
+    """An IPv4 address or a DNS host name, as the Admin's device host check takes them."""
+
+    if len(value) > 253:
+        return False
+    try:
+        return ipaddress.ip_address(value).version == 4
+    except ValueError:
+        pass
+    name = value[:-1] if value.endswith(".") else value
+    return bool(name) and all(_HOST_NAME_LABEL.fullmatch(label) for label in name.split("."))
+
+
+def opendtu_http_device_settings(device):
+    """Validate an ``opendtu_http`` ``devices[]`` entry: one inverter an OpenDTU reads.
+
+    ``serial`` names the inverter; without one the OpenDTU must list exactly
+    one. ``max_age_seconds`` is how old the OpenDTU's last answer from the
+    inverter may be before the device counts as offline.
+    """
+
+    device = device if isinstance(device, dict) else {}
+    name = str(device.get("name") or "").strip()
+    if not name:
+        raise ValueError("OpenDTU device requires a name")
+    owner = f"OpenDTU device {name}"
+    host = str(device.get("ip") or "").strip()
+    if not host:
+        raise ValueError(f"{owner} requires ip")
+    if not _plain_host(host):
+        raise ValueError(f"{owner}: ip must be an IPv4 address or a host name, without a scheme, port or path")
+    serial = device.get("serial")
+    serial = None if serial is None else str(serial).strip()
+    if serial == "":
+        serial = None
+    if serial is not None and not OPENDTU_INVERTER_SERIAL_PATTERN.fullmatch(serial):
+        raise ValueError(f"{owner}: serial must be 4 to 20 letters or digits")
+    return {
+        "name": name,
+        "host": host,
+        "port": _strict_number(device.get("port"), "port", default=OPENDTU_HTTP_DEFAULT_PORT, minimum=1, maximum=65535),
+        "serial": serial,
+        "max_age_seconds": _strict_number(
+            device.get("max_age_seconds"),
+            "max_age_seconds",
+            default=OPENDTU_HTTP_DEFAULT_MAX_AGE_SECONDS,
+            minimum=5,
+            maximum=3600,
+        ),
+    }
 
 
 HOMEWIZARD_P1_DEFAULT_PORT = 443

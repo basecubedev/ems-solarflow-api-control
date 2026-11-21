@@ -307,8 +307,10 @@ def build_telemetry_lines(
             if line:
                 lines.append(line)
             continue
-        fields = {"available": True}
-        fields.update(_device_field_values(tile["state"]))
+        values = _device_field_values(tile["state"])
+        if "history_fields" in tile:
+            values = {name: values[name] for name in tile["history_fields"] if name in values}
+        fields = {"available": True, **values}
         if not tile.get("soc_reported", True):
             fields.pop("soc", None)
         if _is_number(fields.get("output")):

@@ -603,8 +603,10 @@ def build_dashboard_snapshot(
             # A telemetry-only device has no enabled switch of its own and it
             # contributes to the aggregates, so it counts. Its status is
             # already time-based: the MQTT runtime calls a snapshot stale only
-            # past its own stale_after_seconds.
-            unmeasured_devices.append(name)
+            # past its own stale_after_seconds. One whose source answered that
+            # it is off, an inverter at night, measured its 0 W.
+            if not tile.get("measured_offline"):
+                unmeasured_devices.append(name)
 
         pv_total_w += fields["pv_input_w"]
         inverter_total_w += fields["output_w"]
