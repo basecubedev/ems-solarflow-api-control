@@ -1,6 +1,21 @@
 {
   "builds": [
     {
+      "admin_digest": "sha256:7749ea2d42b5a1961a523320dc207c5de609f2f13691bca39d5b80268b522860",
+      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-unified-dashboard-696c8f63db-c586d1d-44936445862-1",
+      "build_id": "dev-feat-unified-dashboard-696c8f63db-c586d1d-44936445862-1",
+      "channel": "development",
+      "created_at": "2026-11-21T18:48:35Z",
+      "display_name": "Feature feat-unified-dashboard",
+      "ems_digest": "sha256:c908f026375202332b8c8d92311b8e7a1a765ec4f44d0db03167fc4bdd798465",
+      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-feat-unified-dashboard-696c8f63db-c586d1d-44936445862-1",
+      "installable": true,
+      "revision": "c586d1d09f18ec70a72f9994bb94860bd9899b46",
+      "run_attempt": 1,
+      "run_id": "44936445862",
+      "tag": "dev-feat-unified-dashboard-696c8f63db-c586d1d-44936445862-1"
+    },
+    {
       "admin_digest": "sha256:1243c8e84bd7296fd9320514945bf08e8511188ee2d3f8802c64a8d50d971d8e",
       "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-unified-dashboard-696c8f63db-3548ad4-44924357515-1",
       "build_id": "dev-feat-unified-dashboard-696c8f63db-3548ad4-44924357515-1",
@@ -14,21 +29,6 @@
       "run_attempt": 1,
       "run_id": "44924357515",
       "tag": "dev-feat-unified-dashboard-696c8f63db-3548ad4-44924357515-1"
-    },
-    {
-      "admin_digest": "sha256:55c56730468dea80f1b0bbe0eb2122c526d9637ebd582752c5956b4620d3c93f",
-      "admin_image": "ghcr.io/basecubedev/ems-solarflow-admin:dev-feat-unified-dashboard-696c8f63db-52de181-44912582628-1",
-      "build_id": "dev-feat-unified-dashboard-696c8f63db-52de181-44912582628-1",
-      "channel": "development",
-      "created_at": "2026-11-21T14:22:31Z",
-      "display_name": "Feature feat-unified-dashboard",
-      "ems_digest": "sha256:8fc182e30d2660c84ace1d3ec4ed532634885f37dafc8c2ef4d50360821ffb14",
-      "ems_image": "ghcr.io/basecubedev/ems-solarflow-api-control:dev-feat-unified-dashboard-696c8f63db-52de181-44912582628-1",
-      "installable": true,
-      "revision": "52de181f9fd2515dbdfc08116bb94c311c56e88e",
-      "run_attempt": 1,
-      "run_id": "44912582628",
-      "tag": "dev-feat-unified-dashboard-696c8f63db-52de181-44912582628-1"
     }
   ]
 }
