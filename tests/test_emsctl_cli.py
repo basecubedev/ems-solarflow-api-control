@@ -474,10 +474,12 @@ def test_the_completion_reads_the_values_of_each_device_action_from_its_command(
     assert DEVICE_VALUE_WORDS["offgrid"] == ["off", "eco", "standard"]
     assert DEVICE_VALUE_WORDS["ac-mode"] == ["output", "input"]
     assert DEVICE_VALUE_WORDS["ac-charge"] == ["on", "off"]
+    assert DEVICE_VALUE_WORDS["ac-discharge"] == ["on", "off"]
     assert DEVICE_VALUE_WORDS["ac-charge-power"] == ["max"]
     assert DEVICE_VALUE_WORDS["fan"] == ["auto", "1", "2", "off", "unmanaged"]
     assert set(DEVICE_VALUE_WORDS) == {
-        "offgrid", "ac-mode", "ac-charge", "ac-charge-power", *(s.command for s in device_settings.SETTINGS)
+        "offgrid", "ac-mode", "ac-charge", "ac-discharge", "ac-charge-power",
+        *(s.command for s in device_settings.SETTINGS),
     }
 
 
@@ -2344,6 +2346,18 @@ def test_a_single_device_can_be_taken_out_of_charging(tmp_path):
     assert runtime_state(tmp_path)["devices"]["WR1"]["ac_charge_enabled"] is False
 
 
+def test_a_single_device_can_be_kept_from_supplying_the_house(tmp_path):
+    assert run_emsctl(tmp_path, "status").returncode == 0
+    assert runtime_state(tmp_path)["devices"]["WR1"]["ac_discharge_enabled"] is True
+
+    assert run_emsctl(tmp_path, "device", "WR1", "ac-discharge", "off").returncode == 0
+    assert runtime_state(tmp_path)["devices"]["WR1"]["ac_discharge_enabled"] is False
+    assert runtime_state(tmp_path)["devices"]["WR1"]["ac_charge_enabled"] is True
+
+    assert run_emsctl(tmp_path, "device", "WR1", "ac-discharge", "on").returncode == 0
+    assert runtime_state(tmp_path)["devices"]["WR1"]["ac_discharge_enabled"] is True
+
+
 def test_an_invalid_ac_charge_value_changes_nothing(tmp_path):
     assert run_emsctl(tmp_path, "status").returncode == 0
     before = (tmp_path / "runtime-state.json").read_text()
@@ -2365,6 +2379,7 @@ def test_the_runtime_toggles_are_the_ones_admin_mirrors(tmp_path):
     from admin.config_runtime_overlap import DEVICE_FIELDS, SECTION_FIELDS
 
     assert "ac_charge_enabled" in DEVICE_FIELDS
+    assert "ac_discharge_enabled" in DEVICE_FIELDS
     assert "enabled" in SECTION_FIELDS["ac_charge_control"]
 
 

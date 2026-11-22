@@ -39,7 +39,11 @@ Per device:
 
 `ac_discharge_enabled: false` forbids output only. The device takes no share of
 the output and is never parked at the standby floor; a discharge that was
-running is ended with a written zero; it may still be charged.
+running is ended with a written zero; it may still be charged. It is the default
+of a runtime switch, **AC discharging** on the device's card on the Control page
+or `emsctl device WR1 ac-discharge on|off`, which takes effect on the next cycle
+without a restart. Charging from surplus while the battery feeds nothing to the
+house is the two switches together: **AC charging** on, **AC discharging** off.
 
 See [technical/configuration.md](technical/configuration.md) for every key.
 

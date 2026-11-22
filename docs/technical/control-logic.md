@@ -351,8 +351,11 @@ before any other write path. A device forbidden to discharge
 sent the exit it is owed while the idle holds: the exit to idle
 (`outputLimit = 0`) to the EMS's own charge it has not left, again once per
 resend window, and the one exit to an AC input found at start. Each is logged as
-`night_min_soc_idle_charge_exit_write`; nothing else is written to such a
-device.
+`night_min_soc_idle_charge_exit_write`. A device forbidden to discharge that
+still has an output, such as one the runtime switch forbade while the idle had
+it parked, leaves the idle's set and gets `outputLimit = 0` (not while it is in
+AC input), logged as `night_min_soc_idle_discharge_forbidden_write`. Nothing else is written to such
+a device.
 
 ## No Export Capacity Hold
 

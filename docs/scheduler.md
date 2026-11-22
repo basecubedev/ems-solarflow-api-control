@@ -18,6 +18,7 @@ hand.
 |---|---|---|
 | Total output limit | `system.max_total_power` | `emsctl system max-power W` |
 | Device output limit | `devices.X.max_power` (0 W keeps it from feeding in) | `emsctl device X max-power W` |
+| Discharging, this device | `devices.X.ac_discharge_enabled`; off ends a running discharge, charging stays allowed | `emsctl device X ac-discharge on\|off` |
 | PV priority | `devices.X.pv_priority_factor` | `emsctl device X pv-priority-factor F` |
 | Off-grid socket | `devices.X.offgrid_socket_mode` | `emsctl device X offgrid off\|eco\|standard` |
 | Charge from the grid | AC role and charge power; 0 W stops | `emsctl device X ac-charge-power W` then `ac-mode input`; `ac-mode output` |

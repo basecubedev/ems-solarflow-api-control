@@ -54,6 +54,7 @@
     const fields = [
       { name: "enabled", type: "toggle", label: t("runtime.deviceEnabled") },
       { name: "ac_charge_enabled", type: "toggle", label: t("runtime.acCharging") },
+      { name: "ac_discharge_enabled", type: "toggle", strict: true, label: t("runtime.acDischarging"), help: t("runtime.acDischargingHelp") },
       { name: "max_power", type: "number", label: t("runtime.maxPower"), min: 0, max: maxPower, unit: "W" },
       { name: "pv_priority_factor", type: "number", label: t("runtime.pvPriority"), min: 0.01, max: 100, step: 0.01, unit: "×" },
       {

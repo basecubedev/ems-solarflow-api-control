@@ -359,8 +359,8 @@ Machine-readable root causes always use this shape:
 
 ## AC charging
 
-AC charging from surplus is off until it is switched on, and can be switched off
-again without restarting the EMS.
+AC charging from surplus is on by default (`ac_charge_control.enabled`) and can
+be switched off and on again without restarting the EMS.
 
 ```bash
 python3 emsctl.py ac-charge status
@@ -383,6 +383,23 @@ instead.
 Charging also requires the device's hardware model to have an established AC
 charge path — a property of the model, not of the installation. A device that
 refuses reports a stable reason rather than failing silently.
+
+## AC discharging
+
+Whether a device may supply the house is a per-device switch of its own,
+seeded from the device's `ac_discharge_enabled`:
+
+```bash
+python3 emsctl.py device WR1 ac-discharge off
+python3 emsctl.py device WR1 ac-discharge on
+```
+
+`off` ends a running discharge on the next cycle and keeps the device at `0`,
+below `min_output_limit` and through the night/minSoc idle too; it may still
+charge from surplus. Like every runtime value it wins over `config.json`: a
+device entry edited by hand to `false` while runtime state says `on` keeps
+discharging, and the EMS warns once per run as `ac_discharge_config_overridden`
+(also after `ac-discharge on` over such an entry, which is then intended).
 
 ## Config Discovery
 

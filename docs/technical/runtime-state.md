@@ -69,14 +69,16 @@ Example:
       "max_power": 800,
       "offgrid_socket_mode": "off",
       "pv_priority_factor": 1.0,
-      "ac_charge_enabled": true
+      "ac_charge_enabled": true,
+      "ac_discharge_enabled": true
     },
     "WR2": {
       "enabled": true,
       "max_power": 800,
       "offgrid_socket_mode": "off",
       "pv_priority_factor": 1.0,
-      "ac_charge_enabled": true
+      "ac_charge_enabled": true,
+      "ac_discharge_enabled": true
     }
   }
 }
@@ -112,6 +114,7 @@ an AC charge surplus is confirmed (see
 |---|---|
 | `enabled` | Skip every write to this device when false, state reconciliation included. If the EMS started a charge on it, one final command ends the charge first |
 | `ac_charge_enabled` | Whether this device may be charged from surplus |
+| `ac_discharge_enabled` | Whether this device may supply the house. `false` ends a running discharge on the next cycle, below `min_output_limit` too, and leaves charging allowed |
 | `max_power` | Runtime per-device power limit |
 | `offgrid_socket_mode` | Operator intent for Zendure offgrid socket mode; the only writer of `gridOffMode`. A legacy config `devices[].grid_off_mode` only seeds it for a new device; when it differs from the runtime value, `event=legacy_grid_off_mode_ignored` names the command that sets it. |
 | `pv_priority_factor` | Runtime PV-first allocation weight override |
@@ -303,7 +306,8 @@ Dashboard runtime-write whitelist:
   `battery_care.min_discharge_w`, `battery_care.pv_margin_percent`,
   `battery_care.pv_margin_min_w`
 - per device: `enabled`, `max_power`, `pv_priority_factor`,
-  `offgrid_socket_mode`, `ac_charge_enabled`, for a device runtime-state holds
+  `offgrid_socket_mode`, `ac_charge_enabled`, `ac_discharge_enabled`, for a
+  device runtime-state holds
   an entry for. EMS seeds one for each device it builds to control when it
   starts, over HTTP or MQTT, keeps it until it starts again, switched off
   meanwhile or not, and prunes the rest then: a device switched off, a

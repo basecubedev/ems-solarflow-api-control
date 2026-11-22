@@ -38,8 +38,9 @@ export function deviceSettings(device, catalogue, offered) {
     .map((setting) => ({ ...setting, offered: has.has(setting.key) }));
 }
 
+/** A ``strict`` toggle shows on only for a stored ``true``, as the EMS reads a value that is no boolean as off. */
 export function normalizeValue(field, value) {
-  if (field.type === "toggle") return Boolean(value);
+  if (field.type === "toggle") return field.strict ? value === true : Boolean(value);
   if (field.type === "number") {
     if (value === null || value === undefined || value === "") return null;
     const number = Number(value);

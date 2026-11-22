@@ -97,6 +97,7 @@ DEVICE_ACTIONS = (
     "pv-priority-factor",
     "ac-mode",
     "ac-charge",
+    "ac-discharge",
     "ac-charge-power",
     "light",
     "fan",
@@ -201,6 +202,7 @@ Runtime control:
   python3 emsctl.py device WR1 max-power 600
   python3 emsctl.py device WR1 ac-charge-power 200
   python3 emsctl.py device WR1 ac-mode input
+  python3 emsctl.py device WR1 ac-discharge off
   python3 emsctl.py device WR1 offgrid eco
 
 Dashboard:
@@ -389,6 +391,9 @@ Actions:
   offgrid off|eco|standard       Set offgrid socket mode
   pv-priority-factor VALUE       Set PV-first allocation weight
   ac-mode [output|input]         Set or show runtime AC mode role
+  ac-charge on|off               Let the device charge from surplus, or not
+  ac-discharge on|off            Let the device supply the house, or not; off
+                                 ends a running discharge, charging stays allowed
   ac-charge-power WATTS|max      Set runtime AC charge inputLimit in watts;
                                  max (the default) charges at the device's maximum
   light on|off|unmanaged         Keep the inverter's light on or off
@@ -404,6 +409,7 @@ Examples:
   python3 emsctl.py device WR1 ac-mode output
   python3 emsctl.py device WR1 ac-charge-power 200
   python3 emsctl.py device WR1 ac-mode input
+  python3 emsctl.py device WR1 ac-discharge off
   python3 emsctl.py device WR1 offgrid eco
   python3 emsctl.py device WR1 pv-priority-factor 1.2
   python3 emsctl.py device WR1 light off
@@ -1332,6 +1338,7 @@ def config_device_defaults(config):
                 minimum=0.01
             ),
             "ac_charge_enabled": bool(item.get("ac_charge_enabled", True)),
+            "ac_discharge_enabled": bool(item.get("ac_discharge_enabled", True)),
         }
         identity = config_mod.config_device_identity(item)
         if identity:
@@ -1602,6 +1609,7 @@ def runtime_defaults(config, existing=None):
                     "offgrid_socket_mode": "off",
                     "pv_priority_factor": 1.0,
                     "ac_charge_enabled": True,
+                    "ac_discharge_enabled": True,
                 }
 
     return {

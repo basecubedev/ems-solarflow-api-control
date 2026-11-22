@@ -776,7 +776,10 @@ def test_a_re_added_device_brings_its_values_to_the_entry_its_serial_still_owns(
 
     wr1 = _runtime(tmp_path)["devices"]["WR1"]
     assert (wr1["max_power"], wr1["enabled"]) == (400, False)
-    assert applied == [[], ["devices[1].max_power", "devices[1].offgrid_socket_mode", "devices[1].pv_priority_factor", "devices[1].ac_charge_enabled"]]
+    assert applied == [[], [
+        "devices[1].max_power", "devices[1].offgrid_socket_mode", "devices[1].pv_priority_factor",
+        "devices[1].ac_charge_enabled", "devices[1].ac_discharge_enabled",
+    ]]
 
 
 def test_the_mirror_writes_what_the_ems_would_seed(tmp_path):

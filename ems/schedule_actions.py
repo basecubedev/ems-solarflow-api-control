@@ -104,6 +104,20 @@ ACTIONS = (
         per_device=True,
     ),
     ScheduleAction(
+        id="device_discharge",
+        group="power",
+        label="Discharging, this device",
+        help=(
+            "Whether this battery may supply the house. Off ends a running discharge; "
+            "charging from surplus stays allowed."
+        ),
+        scope="device",
+        keys=("ac_discharge_enabled",),
+        value_type=SWITCH,
+        command="ac-discharge",
+        per_device=True,
+    ),
+    ScheduleAction(
         id="pv_priority",
         group="power",
         label="PV priority",
@@ -260,8 +274,8 @@ def action_commands(action, value):
     if action.value_type == SWITCH:
         if not isinstance(value, bool):
             raise ScheduleActionError(f"{action.id} takes on or off")
-        if action.command == "ac-charge":
-            return (("ac-charge", "on" if value else "off"),)
+        if action.command:
+            return ((action.command, "on" if value else "off"),)
         return (("enable" if value else "disable", None),)
     if action.value_type == CHARGE:
         watts = _whole_watts(action, value)

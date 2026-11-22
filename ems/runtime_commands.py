@@ -36,6 +36,7 @@ DEVICE_FIELDS = {
     "pv_priority_factor": ("float", (0.01, 100.0)),
     # Stopping a device drawing from the grid must not need a restart.
     "ac_charge_enabled": ("bool", None),
+    "ac_discharge_enabled": ("bool", None),
 }
 
 DEVICE_AC_FIELDS = {
@@ -99,6 +100,7 @@ DEVICE_COMMANDS = {
         "runtime_role", choices=(("output", "ac_output"), ("input", "ac_input"))
     ),
     "ac-charge": RuntimeCommand("ac_charge_enabled", choices=(("on", True), ("off", False))),
+    "ac-discharge": RuntimeCommand("ac_discharge_enabled", choices=(("on", True), ("off", False))),
     "ac-charge-power": RuntimeCommand("ac_charge_power_w"),
     **{
         setting.command: RuntimeCommand(setting.key)

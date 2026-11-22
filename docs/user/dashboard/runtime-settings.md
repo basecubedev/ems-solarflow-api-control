@@ -72,7 +72,7 @@ on the same page.
 | # | Card | Subtitle | Fields |
 | --- | --- | --- | --- |
 | 01 | **EMS / System** | Global limits and loop control | **EMS enabled**, **Max total power** (W), **Min output limit** (W), **Loop interval** (s) |
-| 02, 03, … | One per device (**WR1**, **WR2**, …) | Device runtime values | **Device enabled**, **AC charging**, **Max power** (W), **PV priority** (×), **Off-grid socket**, **AC role**, **AC charge power** (W), and **Light**, **Fan**, **Buzzer** and **Battery heating** where the inverter has them |
+| 02, 03, … | One per device (**WR1**, **WR2**, …) | Device runtime values | **Device enabled**, **AC charging**, **AC discharging**, **Max power** (W), **PV priority** (×), **Off-grid socket**, **AC role**, **AC charge power** (W), and **Light**, **Fan**, **Buzzer** and **Battery heating** where the inverter has them |
 | next | **Winter mode** | Seasonal charging behaviour | **Winter mode** |
 | last | **AC charging** | Charge the batteries from grid surplus | **AC charging** |
 

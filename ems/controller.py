@@ -117,6 +117,7 @@ def finite_grid_load(value):
     return 0.0
 
 
+_ABSENT = object()
 CYCLE_FAILURE_WARN_EVERY = 12
 CYCLE_FAILURES_BEFORE_CHARGE_RELEASE = 3
 
@@ -211,6 +212,7 @@ class EMSController:
         self._reading_base_w = None
         self.control_enabled = None
         self._legacy_grid_off_mode_warned = set()
+        self._discharge_permission_said = set()
         self.device_settings = device_settings.DeviceSettingsReconciler()
         self.device_settings_failing = set()
         # The total before the ramp limits it. The charge direction's exit reads
@@ -1430,7 +1432,7 @@ class EMSController:
         :meth:`end_charges_the_night_idle_does_not_park`).
         """
 
-        self.end_charges_the_night_idle_does_not_park(indexes)
+        self.end_charges_the_night_idle_does_not_park(states, indexes)
 
         for i in indexes:
             dev = self.devices[i]
@@ -1485,7 +1487,7 @@ class EMSController:
             if written and not charge_on_record:
                 self.night_min_soc_idle_parked.add(dev.name)
 
-    def end_charges_the_night_idle_does_not_park(self, indexes):
+    def end_charges_the_night_idle_does_not_park(self, states, indexes):
         """Write the exit owed to a commandable device the night idle never parks.
 
         The idle parks only devices that may supply the house and ends the
@@ -1493,7 +1495,8 @@ class EMSController:
         got neither the resend of an exit to the EMS's own charge nor its one
         exit to an AC input found at start: its charge ran on all night. Such a
         device gets the exit to idle -- ``outputLimit = 0``, the only output it
-        may have -- and nothing else.
+        may have -- and nothing else. The same zero goes to one forbidden while
+        the idle held it at the standby floor, which otherwise kept feeding it.
         """
 
         parked = set(indexes)
@@ -1503,6 +1506,7 @@ class EMSController:
             charge_on_record = getattr(dev, "charge_commanded", False) is True
             charge_exit = self.unproven_charge_exit(dev)
             if not charge_on_record and charge_exit is None:
+                self.end_a_standby_floor_the_device_may_not_feed(dev, states[i])
                 continue
             if self.charge_exit_pending(dev):
                 continue
@@ -1519,6 +1523,27 @@ class EMSController:
             )
             written = self.write_target(dev, 0, charge_exit)
             self.note_unproven_charge_exit(dev, 0, written)
+
+    def end_a_standby_floor_the_device_may_not_feed(self, dev, state):
+        """``outputLimit = 0`` for a device forbidden to discharge that still has an output.
+
+        Not to one in AC input, which a bare ``outputLimit`` does not move and
+        which would be sent it every cycle.
+        """
+
+        self.night_min_soc_idle_parked.discard(dev.name)
+        output_limit = cfg.safe_int(getattr(state, "output_limit", 0), 0)
+        if self.device_may_discharge(dev) or output_limit <= 0:
+            return
+        if getattr(state, "ac_mode", None) == AC_MODE_INPUT:
+            return
+        log_event(
+            logging.INFO,
+            "night_min_soc_idle_discharge_forbidden_write",
+            device=dev.name,
+            current_output_limit_w=output_limit,
+        )
+        self.write_target(dev, 0)
 
     def build_night_min_soc_idle_explanation(
         self,
@@ -3339,12 +3364,41 @@ class EMSController:
         may still be charged. Blocking every write instead kept such a device
         out of a charge it was counted in, and left a running discharge running.
 
-        A property of the device, deliberately not a claim: joining the intent
-        ladder would let a higher-priority claim re-enable output on a device
-        the operator forbade.
+        The operator's switch, runtime state first and the device entry second,
+        deliberately not a claim: joining the intent ladder would let a
+        higher-priority claim re-enable output on a device the operator forbade.
+        A runtime value that is not a boolean forbids, since it is no permission.
         """
 
-        return bool(getattr(dev, "ac_discharge_enabled", True))
+        configured = bool(getattr(dev, "ac_discharge_enabled", True))
+        if not self.runtime_state:
+            return configured
+        value = self.runtime_state.get_device(dev.name, "ac_discharge_enabled", _ABSENT)
+        if value is _ABSENT:
+            return configured
+        if not isinstance(value, bool):
+            self.say_discharge_permission_once(
+                dev, "ac_discharge_runtime_value_invalid", runtime_value=repr(value)
+            )
+            return False
+        if value and not configured:
+            self.say_discharge_permission_once(dev, "ac_discharge_config_overridden")
+        return value
+
+    def say_discharge_permission_once(self, dev, event, **fields):
+        """Warn once per device and event when the runtime switch departs from the device entry."""
+
+        if (dev.name, event) in self._discharge_permission_said:
+            return
+        self._discharge_permission_said.add((dev.name, event))
+        log_event(
+            logging.WARNING,
+            event,
+            device=dev.name,
+            config_ac_discharge_enabled=bool(getattr(dev, "ac_discharge_enabled", True)),
+            hint=f"switch AC discharging on the Control page or with emsctl.py device {dev.name} ac-discharge on|off",
+            **fields,
+        )
 
     def device_may_supply(self, dev):
         """Commandable, and permitted to supply the house."""
