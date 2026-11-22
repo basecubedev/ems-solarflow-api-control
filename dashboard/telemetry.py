@@ -7,6 +7,7 @@ from dataclasses import asdict, is_dataclass
 
 from ems.models import BATTERY_ABSENT, battery_presence, parse_pack_count
 from ems.power_direction import derive_house_load_w
+from ems.pv_inputs import pv_inputs_kept, unused_pv_inputs
 from ems.state_store import describe_full_charge_assist_status
 from ems.mqtt_control.zendure_profiles import (
     device_model_class,
@@ -198,21 +199,41 @@ def device_telemetry_is_measured(controller, name):
         return True
 
 
-def _pv_inputs_w(state):
-    """Each PV input's power, ``None`` for one the device's report did not carry."""
+def _pv_inputs_w(state, unused=frozenset()):
+    """Each PV input's power, ``None`` for one the report did not carry or the config marks empty."""
 
-    reported = getattr(state, "pv_inputs_reported", None) or (True,) * 4
     return [
-        _rounded(getattr(state, f"solar{index}", 0)) if carried else None
-        for index, carried in enumerate(reported, start=1)
+        _rounded(getattr(state, f"solar{index}", 0)) if kept else None
+        for index, kept in enumerate(pv_inputs_kept(state, unused), start=1)
     ]
 
 
-def _state_telemetry_fields(state):
+def _tile_fields(tile, unused_inputs):
+    """A read-only tile's own fields; a PV input list it brings leaves out the inputs marked empty too."""
+
+    fields = dict(tile.get("fields", {}))
+    if isinstance(fields.get("pv_inputs_w"), list):
+        fields["pv_inputs_w"] = [
+            None if index in unused_inputs else value
+            for index, value in enumerate(fields["pv_inputs_w"], start=1)
+        ]
+    return fields
+
+
+def _unused_pv_inputs_of(name):
+    """The inputs the device entry named ``name`` marks empty."""
+
+    from ems import config as cfg
+
+    return unused_pv_inputs(cfg.device_config_entry(name))
+
+
+def _state_telemetry_fields(state, unused_inputs=frozenset()):
     """Map a DeviceState to the shared telemetry fields of a device tile.
 
     Used for both controlled devices and read-only telemetry-only devices so
     the two tile kinds never drift in how they read the same DeviceState.
+    ``unused_inputs`` are the PV inputs the device's entry marks empty.
     """
 
     return {
@@ -220,7 +241,7 @@ def _state_telemetry_fields(state):
         "min_soc": _rounded(getattr(state, "min_soc", 0)),
         "max_soc": _rounded(getattr(state, "max_soc", 0)),
         "pv_input_w": _rounded(getattr(state, "solar", 0)),
-        "pv_inputs_w": _pv_inputs_w(state),
+        "pv_inputs_w": _pv_inputs_w(state, unused_inputs),
         "output_w": _rounded(getattr(state, "output", 0)),
         # Measured, not commanded: the mirror of output_w for the charge
         # direction. A charging device reports output_w == 0, so without this
@@ -575,7 +596,7 @@ def build_dashboard_snapshot(
 
     for index, (dev, state) in enumerate(zip(controller.devices, states)):
         name = dev.name
-        fields = _state_telemetry_fields(state)
+        fields = _state_telemetry_fields(state, _unused_pv_inputs_of(name))
         online = bool(controller.device_online.get(name, True))
         device_enabled = bool(_device_runtime(controller, name, "enabled", True))
 
@@ -658,7 +679,8 @@ def build_dashboard_snapshot(
         name = tile["name"]
         state = tile["state"]
         online = tile["online"]
-        fields = _state_telemetry_fields(state)
+        unused_inputs = _unused_pv_inputs_of(name)
+        fields = _state_telemetry_fields(state, unused_inputs)
 
         if not online:
             fields["battery_packs"] = []
@@ -684,7 +706,7 @@ def build_dashboard_snapshot(
             "read_only": True,
             "enabled": True,
             **fields,
-            **tile.get("fields", {}),
+            **_tile_fields(tile, unused_inputs),
             "soc_reported": soc_reported,
             "hardware": tile.get("hardware")
             or _device_hardware(

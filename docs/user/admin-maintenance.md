@@ -417,6 +417,19 @@ This page edits an existing installation.
   with PV size 0, PV only), the other entries pick one plan for this inverter.
   The plans and their defaults are described in
   [winter-mode.md](../winter-mode.md#device-types-and-policies).
+  There, too, **PV inputs with a module** has a box for each input, **PV 1** to
+  **PV 4**: clear the box of an input with no module and the dashboard no longer
+  shows it, nor does the history record it; the PV total stays as the device
+  reports. The guided setup offers the same boxes under an inverter's advanced
+  settings, an external MQTT inverter and an inverter an OpenDTU reads offer
+  them directly on their cards, an E3/DC none.
+  When the running EMS sees an input stay dark for three days while another
+  input of the same device delivered, or an input marked empty deliver, the
+  card says so (**Check PV inputs**) with a button that marks the input empty
+  or in use. Dark for days can also mean a module that failed or a loose plug:
+  check before you mark it. The button only changes the draft; how the hint is
+  found is in
+  [the configuration reference](../technical/configuration.md#device-settings).
   The default output limit is the generic central default (800 W), not a
   model-specific value — review it for your hardware. PV size is a
   configurable estimate for power sharing; discovery cannot measure the

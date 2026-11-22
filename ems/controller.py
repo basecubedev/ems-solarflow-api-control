@@ -5270,6 +5270,7 @@ class EMSController:
                 telemetry_only_device_tiles,
             )
             from ems.history.influx_writer import build_telemetry_lines
+            from ems.pv_inputs import unused_pv_inputs
 
             lines = build_telemetry_lines(
                 self.devices,
@@ -5280,6 +5281,7 @@ class EMSController:
                 read_only_tiles=telemetry_only_device_tiles(self),
                 consumers=consumer_readings(self),
                 measured=lambda name: device_telemetry_is_measured(self, name),
+                unused_inputs=lambda name: unused_pv_inputs(cfg.device_config_entry(name)),
             )
             writer.enqueue(lines)
         except Exception as e:

@@ -50,6 +50,7 @@ from ems.influx_setup import (
 from ems.power_direction import derive_house_load_w
 from ems.logging_utils import log_event
 from ems.models import BATTERY_ABSENT, battery_presence
+from ems.pv_inputs import pv_inputs_kept
 
 # Shown once when telemetry is being written but the downsampling half of the
 # schema was never created. The dashboard says the same thing for a range it
@@ -190,10 +191,12 @@ _DEVICE_FIELDS = (
 )
 
 
-def _device_field_values(state):
+def _device_field_values(state, unused_inputs=frozenset()):
     """Pull the telemetry field set from a device state, skipping missing ones.
 
     A device without packs has no ``soc``: Analytics averages it across devices.
+    A PV input its report did not carry, or one in ``unused_inputs``, has no
+    ``solarN``.
     """
     fields = {}
     for name in _DEVICE_FIELDS:
@@ -204,11 +207,9 @@ def _device_field_values(state):
             fields[name] = float(value)
     if battery_presence(state) == BATTERY_ABSENT:
         fields.pop("soc", None)
-    reported = getattr(state, "pv_inputs_reported", None)
-    if reported is not None:
-        for index, carried in enumerate(reported, start=1):
-            if not carried:
-                fields.pop(f"solar{index}", None)
+    for index, kept in enumerate(pv_inputs_kept(state, unused_inputs), start=1):
+        if not kept:
+            fields.pop(f"solar{index}", None)
     return fields
 
 
@@ -248,6 +249,7 @@ def build_telemetry_lines(
     read_only_tiles=(),
     consumers=None,
     measured=None,
+    unused_inputs=None,
 ):
     """Build InfluxDB line protocol from one control-loop telemetry snapshot.
 
@@ -272,12 +274,14 @@ def build_telemetry_lines(
     ``house_other``, the house load no consumer measured. ``measured`` says
     whether a device's state is a current reading, by the rule the dashboard
     publishes cells by (``device_telemetry_is_measured``); one held past its
-    last read writes no ``battery_pack`` point.
+    last read writes no ``battery_pack`` point. ``unused_inputs`` gives the PV
+    inputs a device's entry marks empty, by its name; none are written.
     """
     if timestamp_ns is None:
         timestamp_ns = time.time_ns()
 
     online_map = online_map or {}
+    unused_of = unused_inputs or (lambda name: frozenset())
     lines = []
     inverter_total = 0.0
     charge_total = 0.0
@@ -292,7 +296,7 @@ def build_telemetry_lines(
                 lines.append(line)
             continue
         fields = {"available": True}
-        fields.update(_device_field_values(state))
+        fields.update(_device_field_values(state, unused_of(device.name)))
         if _is_number(fields.get("output")):
             inverter_total += fields["output"]
         if _is_number(fields.get("grid_input")):
@@ -312,7 +316,7 @@ def build_telemetry_lines(
             if line:
                 lines.append(line)
             continue
-        values = _device_field_values(tile["state"])
+        values = _device_field_values(tile["state"], unused_of(tile["name"]))
         if "history_fields" in tile:
             values = {name: values[name] for name in tile["history_fields"] if name in values}
         fields = {"available": True, **values}

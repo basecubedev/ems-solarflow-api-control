@@ -126,6 +126,7 @@ from ems.config_mutation import (
     mutation_diff,
 )
 from ems.mqtt_credentials import find_mqtt_credential_consumer_issues
+from ems.pv_inputs import UNUSED_PV_INPUTS_KEY, unused_pv_inputs, unused_pv_inputs_problem
 from ems.device_identity import (
     PHYSICAL_EVIDENCE_KINDS,
     PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
@@ -735,6 +736,7 @@ def _external_device_draft(device, entry_ref, catalog_ids=(None, None)):
         CATALOG_DEVICE_ID_FIELD: catalog_ids[0],
         CATALOG_CONNECTION_ID_FIELD: catalog_ids[1],
         "entry": copy.deepcopy(device),
+        **_pv_inputs_draft(device),
     }
 
 
@@ -742,7 +744,7 @@ def _device_draft(device, broker_sources=None, *, entry_ref=None, catalog_ids=(N
     if is_external_mqtt_device_config(device):
         return _external_device_draft(device, entry_ref, catalog_ids)
     if is_zendure_mqtt_device_config(device):
-        return zendure_mqtt_device_draft(device, broker_sources=broker_sources)
+        return _with_pv_inputs_draft(zendure_mqtt_device_draft(device, broker_sources=broker_sources), device)
     if is_read_only_device_config(device):
         return _read_only_device_draft(device)
     name = str(device.get("name") or "").strip()
@@ -759,24 +761,74 @@ def _device_draft(device, broker_sources=None, *, entry_ref=None, catalog_ids=(N
     for key in _DEVICE_VALUE_FIELDS:
         if key in device:
             draft[key] = device[key]
-    return draft
+    return _with_pv_inputs_draft(draft, device)
+
+
+def _pv_inputs_draft(device):
+    """The empty PV inputs a stored entry names, for an editor that offers them.
+
+    A value the EMS cannot read in full is shown as what it reads, so the boxes
+    say what the EMS does and an apply writes nothing it did not do.
+    """
+
+    value = device.get(UNUSED_PV_INPUTS_KEY)
+    if value is None:
+        return {}
+    if unused_pv_inputs_problem(device) is None:
+        return {UNUSED_PV_INPUTS_KEY: copy.deepcopy(value)}
+    return {UNUSED_PV_INPUTS_KEY: sorted(unused_pv_inputs(device))}
+
+
+def _with_pv_inputs_draft(draft, device):
+    """A Zendure device's draft with its empty PV inputs as ``_pv_inputs_draft`` shows them; a stored null is left out, so it stays."""
+
+    draft = {key: value for key, value in draft.items() if key != UNUSED_PV_INPUTS_KEY}
+    return {**draft, **_pv_inputs_draft(device)}
+
+
+def _apply_pv_inputs(device, item):
+    """Write a draft's empty PV inputs onto an entry its catalogue fields do not reach.
+
+    The set the entry already names leaves it as stored, so a no-op apply never
+    rewrites it, and no input left empty removes the key. A value that is no
+    list of input numbers is written as sent, for the validation to refuse.
+    """
+
+    if UNUSED_PV_INPUTS_KEY not in item:
+        return
+    stored_valid = unused_pv_inputs_problem(device) is None
+    value = item[UNUSED_PV_INPUTS_KEY]
+    if value is None or value == "" or value == []:
+        if unused_pv_inputs(device) or not stored_valid:
+            device.pop(UNUSED_PV_INPUTS_KEY, None)
+        return
+    coerced = coerce_catalog_value({"type": "integer_list"}, value)
+    if unused_pv_inputs_problem({UNUSED_PV_INPUTS_KEY: coerced}) is not None:
+        device[UNUSED_PV_INPUTS_KEY] = coerced
+    elif not stored_valid or set(coerced) != unused_pv_inputs(device):
+        device[UNUSED_PV_INPUTS_KEY] = sorted(set(coerced))
 
 
 class _ReadOnlyKind(NamedTuple):
-    """The optional draft keys of one read-only device kind, and the EMS validator for it."""
+    """The optional draft keys of one read-only device kind, and the EMS validator for it.
+
+    ``pv_inputs`` says whether the kind reads its PV inputs one by one, so its
+    editor offers to mark one empty.
+    """
 
     text_keys: tuple
     number_keys: tuple
     settings: Callable
     invalid_code: str
+    pv_inputs: bool
 
 
 _READ_ONLY_KINDS = {
     E3DC_MODBUS_DEVICE_TYPE: _ReadOnlyKind(
-        (), ("port", "unit_id"), e3dc_modbus_device_settings, "e3dc_modbus_device_invalid"
+        (), ("port", "unit_id"), e3dc_modbus_device_settings, "e3dc_modbus_device_invalid", False
     ),
     OPENDTU_HTTP_DEVICE_TYPE: _ReadOnlyKind(
-        ("serial",), ("port", "max_age_seconds"), opendtu_http_device_settings, "opendtu_http_device_invalid"
+        ("serial",), ("port", "max_age_seconds"), opendtu_http_device_settings, "opendtu_http_device_invalid", True
     ),
 }
 
@@ -798,7 +850,16 @@ def _read_only_device_draft(device):
     for key in (*spec.text_keys, *spec.number_keys):
         if device.get(key) is not None:
             draft[key] = device[key]
+    if spec.pv_inputs:
+        draft.update(_pv_inputs_draft(device))
     return draft
+
+
+def _reads_pv_inputs(device):
+    """Whether the EMS reads a device entry's PV inputs one by one; a read-only kind says so itself."""
+
+    kind = device_config_type(device)
+    return kind not in _READ_ONLY_KINDS or _READ_ONLY_KINDS[kind].pv_inputs
 
 
 def _is_read_only_draft_item(item):
@@ -832,6 +893,8 @@ def _materialize_read_only_device(original, item):
             device[key] = _coerce_number(value)
         else:
             device[key] = value.strip() if isinstance(value, str) else value
+    if spec.pv_inputs:
+        _apply_pv_inputs(device, item)
     enabled = bool(item.get("enabled", True))
     if "enabled" in device or item.get("has_enabled_key") or not enabled:
         device["enabled"] = enabled
@@ -1825,6 +1888,7 @@ def _adopted_external_device(merged, item, name, issues):
     device = external_mqtt_fragment({"name": name, "mqtt": item.get("mqtt")})
     if item.get("enabled") is False:
         device["enabled"] = False
+    _apply_pv_inputs(device, item)
     _resolve_draft_broker_ref(
         merged, item.get("broker"), device["mqtt"], name, issues, local_only=True
     )
@@ -1858,9 +1922,10 @@ def _same_catalog_device(installed, item):
 def _edited_external_device(merged, installed, item, issues):
     """The installed entry with the edits a catalog device allows.
 
-    Its name and whether it is enabled are the operator's; its broker changes
-    only to one the server resolved from current discovery for this very
-    device, and a retired family with it to its successor. Everything else --
+    Its name, whether it is enabled and its empty PV inputs are the
+    operator's; its broker changes only to one the server resolved from
+    current discovery for this very device, and a retired family with it to
+    its successor. Everything else --
     type, device id, any key the entry carries -- is the installed entry's,
     whatever the row says.
     """
@@ -1876,6 +1941,7 @@ def _edited_external_device(merged, installed, item, issues):
     enabled = item.get("enabled")
     if isinstance(enabled, bool) and enabled != config_entry_enabled(installed):
         device["enabled"] = enabled
+    _apply_pv_inputs(device, item)
     if item.get(TRUSTED_CONNECTION_SELECTION_FIELD) is True:
         label = str(device.get("name") or "External device").strip()
         if not _same_catalog_device(installed, item):
@@ -2412,7 +2478,9 @@ def _has_enabled_cloud_control_device(config):
     return False
 
 
-_COMMON_DEVICE_VALUE_KEYS = device_common_field_keys()
+_COMMON_DEVICE_VALUE_KEYS = tuple(
+    key for key in device_common_field_keys() if device_common_defaults().get(key) != []
+)
 
 
 def _append_common_value_warning(validation, device, label, transport_label):
@@ -2420,7 +2488,9 @@ def _append_common_value_warning(validation, device, label, transport_label):
 
     A warning, not an error: legacy configs relying on runtime fallbacks stay
     applyable byte-for-byte, but an incomplete control device can no longer
-    pass preview as silently fully configured.
+    pass preview as silently fully configured. A key whose central default is
+    an empty list (``unused_pv_inputs``) means the same left out, so it is no
+    gap.
     """
 
     if device.get("enabled") is False:
@@ -2511,6 +2581,14 @@ def _validate(config, merge_issues=()):
             if not name:
                 validation["errors"].append(
                     _issue("device_name_empty", f"Inverter {index} needs a config name.")
+                )
+            unused_inputs_problem = unused_pv_inputs_problem(device) if _reads_pv_inputs(device) else None
+            if unused_inputs_problem:
+                validation["errors"].append(
+                    _issue(
+                        "device_unused_pv_inputs_invalid",
+                        f"{label}: {UNUSED_PV_INPUTS_KEY} {unused_inputs_problem}.",
+                    )
                 )
             if is_external_mqtt_device_config(device):
                 hint = _external_edit_hint(device)

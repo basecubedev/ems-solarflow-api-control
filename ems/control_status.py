@@ -159,11 +159,14 @@ class ControlStatusWriter:
     fingerprints of the device entries this EMS read when it started
     (config.LOADED_DEVICES), written with every snapshot as
     ems/device_fingerprints.py records them, so a reader can tell which saved
-    entries are in effect; without them the snapshot names none.
+    entries are in effect; without them the snapshot names none. With a
+    ``pv_input_watch`` (ems/pv_input_watch.py) its hints go into every
+    snapshot as ``pv_input_hints``.
     """
 
-    def __init__(self, path, *, window=GRID_SAMPLE_WINDOW, loaded_devices=None, started_at=None):
+    def __init__(self, path, *, window=GRID_SAMPLE_WINDOW, loaded_devices=None, started_at=None, pv_input_watch=None):
         self.path = Path(path)
+        self.pv_input_watch = pv_input_watch
         self.grid_samples = deque(maxlen=window)
         self.started_at = _iso(time.time() if started_at is None else started_at)
         self.loaded_devices = None if loaded_devices is None else loaded_devices_record(loaded_devices)
@@ -201,6 +204,8 @@ class ControlStatusWriter:
             status["started_at"] = self.started_at
             if self.loaded_devices is not None:
                 status["loaded_devices"] = self.loaded_devices
+            if self.pv_input_watch is not None:
+                status["pv_input_hints"] = self.pv_input_watch.hints(now)
             _write_atomically(self.path, status)
         except Exception as exc:
             # A projection for diagnostics must never stop the loop that

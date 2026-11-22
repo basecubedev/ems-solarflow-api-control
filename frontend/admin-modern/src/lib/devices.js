@@ -54,6 +54,49 @@ export function deviceKind(device) {
   return "local_api";
 }
 
+/** How many PV inputs a device reports one by one, numbered from 1 (``ems.pv_inputs``). */
+export const PV_INPUT_COUNT = 4;
+/** The device kinds whose editor offers to mark a PV input empty: those that read their inputs one by one, which an E3/DC does not. */
+export const PV_INPUT_KINDS = Object.freeze(["local_api", "zendure_mqtt", "external_mqtt", "opendtu_http"]);
+export const UNUSED_PV_INPUTS = "unused_pv_inputs";
+
+/** The input numbers a device marks empty, in order, leaving out any that names no input. */
+export function emptyInputs(device) {
+  const values = Array.isArray(device?.[UNUSED_PV_INPUTS]) ? device[UNUSED_PV_INPUTS] : [];
+  return [...new Set(values.filter((value) => Number.isInteger(value) && value >= 1 && value <= PV_INPUT_COUNT))].sort((a, b) => a - b);
+}
+
+/**
+ * The device with input ``number`` marked empty or in use. A device toggled
+ * back sends nothing new: the saved entry's (``original``) list as it was
+ * written when it names the same inputs, and no key when it holds none.
+ */
+export function setInputEmpty(device, number, empty, original = null) {
+  const next = clone(device);
+  const inputs = new Set(emptyInputs(device));
+  if (empty) inputs.add(number);
+  else inputs.delete(number);
+  const list = [...inputs].sort((a, b) => a - b);
+  const saved = original?.[UNUSED_PV_INPUTS] ?? null;
+  const readable = Array.isArray(saved) && saved.every((value) => Number.isInteger(value) && value >= 1 && value <= PV_INPUT_COUNT);
+  if (readable && String(emptyInputs(original)) === String(list)) next[UNUSED_PV_INPUTS] = clone(saved);
+  else if (list.length || saved !== null) next[UNUSED_PV_INPUTS] = list;
+  else delete next[UNUSED_PV_INPUTS];
+  return next;
+}
+
+/**
+ * The running EMS's hints for one device (``admin/ems_device_states.py``),
+ * as far as the draft has not settled them: a dark input is settled once it
+ * is marked empty, a delivering one once it is no longer marked.
+ */
+export function pvHints(hints, device) {
+  const empty = new Set(emptyInputs(device));
+  return (Array.isArray(hints) ? hints : []).filter(
+    (hint) => hint?.device === device?.original_name && (hint.kind === "dark" ? !empty.has(hint.input) : hint.kind === "delivers" && empty.has(hint.input)),
+  );
+}
+
 /** The draft key a catalogue device path names: devices[].max_power is max_power. */
 export function fieldKey(path) {
   return String(path).replace(/^devices\[\]\./, "");

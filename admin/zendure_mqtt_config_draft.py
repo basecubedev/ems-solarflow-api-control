@@ -432,8 +432,9 @@ CATALOG_DEVICE_ID_FIELD = "catalog_device_id"
 CATALOG_CONNECTION_ID_FIELD = "catalog_connection_id"
 
 EXTERNAL_DEVICE_EDIT_HINT = (
-    "On this page an external device can be renamed, switched off, moved with "
-    "Use connection or removed; anything else about it is changed in config.json."
+    "On this page an external device can be renamed, switched off, have a PV "
+    "input marked empty, moved with Use connection or removed; anything else "
+    "about it is changed in config.json."
 )
 
 

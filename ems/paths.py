@@ -170,6 +170,15 @@ def resolve_control_status_path(runtime_state_path):
     return Path(runtime_state_path).with_name(CONTROL_STATUS_FILENAME)
 
 
+PV_INPUT_WATCH_FILENAME = "pv-input-watch.json"
+
+
+def resolve_pv_input_watch_path(runtime_state_path):
+    """Resolve the PV input watch (ems/pv_input_watch.py) beside the runtime-state file."""
+
+    return Path(runtime_state_path).with_name(PV_INPUT_WATCH_FILENAME)
+
+
 SCHEDULES_FILENAME = "schedules.json"
 
 

@@ -776,6 +776,7 @@ but a read-only one with only a few fields; see
   "pv_kwp": 1.0,
   "pv_priority_factor": 1.0,
   "battery_kwh": 1.0,
+  "unused_pv_inputs": [],
   "ac_discharge_enabled": true,
   "ac_charge_enabled": true,
   "max_charge_power_w": 0,
@@ -809,6 +810,27 @@ Whether a device has a battery at all is not configured: it is the pack count
 the device reports. An inverter without packs, such as a SolarFlow 800 without
 battery, is left out of the dashboard's average SOC and of battery weighting on
 its own, and `battery_kwh: 0` does not mark a device as batteryless.
+
+`unused_pv_inputs` names the PV inputs with no module, by number from 1 to 4,
+for example `[1]`. A device reports every input it has, an empty one as 0 W,
+and nothing in its report tells an empty input from a dark one. The device
+tile leaves a named input out of its **Solar** fold and the InfluxDB history
+does not record it (`solarN`); the PV total, the control and everything else the
+device reports stay as they are. It is optional and the same for every device
+that reports its inputs one by one: a Zendure device, an
+[external device](#external-devices-over-mqtt-external_mqtt) and an
+[inverter an OpenDTU reads](#inverter-read-by-an-opendtu-opendtu_http); an
+E3/DC reports none. A number outside 1 to 4 is not read, and `diagnose` warns
+about it (`device_unused_pv_inputs_invalid`). The EMS reads it when it starts.
+
+While it runs, the EMS also watches each input's highest power of the day. An
+input that stays at or below 1 W through three days in a row on which another
+input of the same device reached 50 W, or an input named here that reaches
+50 W today or did the day before, becomes a hint on the device's card in the
+Admin console, with a button that marks it empty or in use. A day on which no
+input reaches 50 W counts neither way, and a day the input gives any light
+starts the count again. The hint changes nothing by itself; see
+[The PV input watch](runtime-state.md#the-pv-input-watch).
 
 `min_soc` and `max_soc` are static SOC boundaries in percent. Use `0` to leave
 the corresponding value unmanaged. Where winter mode plans nothing for the

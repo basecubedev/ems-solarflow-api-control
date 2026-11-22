@@ -32,6 +32,7 @@ from admin.install_context import detect_install_context
 from ems.device_fingerprints import FINGERPRINT_VERSION, device_fingerprints
 from ems.diagnostics import diagnose_live_snapshot, diagnose_loop_interval
 from ems.paths import resolve_control_status_path
+from ems.pv_inputs import is_pv_input_number, unused_pv_inputs
 
 EMS_DEVICE_STATES = ("running", "off", "waiting", "leaving")
 EMS_DEVICE_CHANGES = ("added", "renamed", "changed", "removed")
@@ -97,18 +98,25 @@ def control_status_path(context, config):
     return resolve_control_status_path(resolve_runtime_state_path(context, config))
 
 
-def read_snapshot(context, config):
-    """What a control snapshot of this install says: ``{fingerprints, reason, started_at}``, fingerprints ``None`` with a reason when it names none this can compare."""
+def _fresh_snapshot(context, config):
+    """The control snapshot of this install while it is fresh, else ``None``."""
 
     try:
         runtime_path = resolve_runtime_state_path(context, config)
     except (OSError, TypeError, ValueError):
-        return {"fingerprints": None, "reason": "stopped", "started_at": None}
+        return None
     live = diagnose_live_snapshot(str(runtime_path), diagnose_loop_interval(config, {}))
-    if live["status"] != "fresh":
+    return live["data"] if live["status"] == "fresh" and isinstance(live["data"], dict) else None
+
+
+def read_snapshot(context, config):
+    """What a control snapshot of this install says: ``{fingerprints, reason, started_at}``, fingerprints ``None`` with a reason when it names none this can compare."""
+
+    data = _fresh_snapshot(context, config)
+    if data is None:
         return {"fingerprints": None, "reason": "stopped", "started_at": None}
-    started_at = live["data"].get("started_at")
-    record = live["data"].get("loaded_devices")
+    started_at = data.get("started_at")
+    record = data.get("loaded_devices")
     if not isinstance(record, dict) or record.get("version") != FINGERPRINT_VERSION or not isinstance(record.get("devices"), list):
         return {"fingerprints": None, "reason": "unnamed", "started_at": started_at}
     return {"fingerprints": record["devices"], "reason": None, "started_at": started_at}
@@ -125,3 +133,46 @@ def ems_device_states(context=None):
     if snapshot["fingerprints"] is None:
         return {"known": False, "reason": snapshot["reason"], "started_at": snapshot["started_at"], "devices": {}}
     return {"known": True, "reason": None, "started_at": snapshot["started_at"], "devices": compare_external_devices(config, snapshot["fingerprints"])}
+
+
+def open_pv_input_hints(hints, config):
+    """The PV input hints (ems/pv_input_watch.py) the saved config has not settled yet.
+
+    A ``dark`` input is settled once its device's saved entry marks it empty,
+    a ``delivers`` one once the entry no longer does; a hint for a device the
+    saved config does not have, or of a shape this cannot read, is dropped.
+    """
+
+    entries = {}
+    for device in config.get("devices") if isinstance(config.get("devices"), list) else []:
+        if isinstance(device, dict) and isinstance(device.get("name"), str):
+            entries.setdefault(device["name"], device)
+    found, seen = [], set()
+    for hint in hints if isinstance(hints, list) else []:
+        if not _readable_hint(hint) or hint["device"] not in entries:
+            continue
+        key = (hint["device"], hint["input"], hint["kind"])
+        marked = hint["input"] in unused_pv_inputs(entries[hint["device"]])
+        if key not in seen and marked == (hint["kind"] == "delivers"):
+            seen.add(key)
+            found.append(hint)
+    return found
+
+
+def _readable_hint(hint):
+    if not isinstance(hint, dict) or not isinstance(hint.get("device"), str) or not is_pv_input_number(hint.get("input")):
+        return False
+    count = hint.get(_HINT_COUNTS.get(hint.get("kind"), ""))
+    return isinstance(count, int) and not isinstance(count, bool) and count >= 0
+
+
+_HINT_COUNTS = {"dark": "days", "delivers": "peak_w"}
+
+
+def pv_input_hints(context=None):
+    """The open PV input hints of this install's running EMS; none while it is stopped."""
+
+    context = context or detect_install_context()
+    config = saved_config(context)
+    data = _fresh_snapshot(context, config) if config is not None else None
+    return open_pv_input_hints(data.get("pv_input_hints"), config) if data is not None else []

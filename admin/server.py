@@ -98,7 +98,7 @@ from admin.setup_planner import (
     submitted_selection_projections,
 )
 from admin.ems_cli import EmsCliDiagnostics
-from admin.ems_device_states import ems_device_states
+from admin.ems_device_states import ems_device_states, pv_input_hints
 from admin.ems_forwarding import ForwardingRefusal, forward, installed_ems
 from admin.embedded_resources import (
     EmbeddedReleaseResources,
@@ -1690,9 +1690,12 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/admin/maintenance/config":
             self._send_json(
-                load_maintenance_config(
-                    identity_token_key=self.server.identity_token_key
-                )
+                {
+                    **load_maintenance_config(
+                        identity_token_key=self.server.identity_token_key
+                    ),
+                    "pv_input_hints": pv_input_hints(self.server.config_apply.install_context_provider()),
+                }
             )
             return
         if path == "/api/admin/maintenance/zendure-mqtt/runtime-status":

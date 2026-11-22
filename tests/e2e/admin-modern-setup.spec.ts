@@ -162,10 +162,17 @@ test.describe("Modern Admin: guided setup, devices to start", { tag: ["@setup"] 
     await expect(page.getByTestId("setup-verdict-state")).toHaveText("Ready");
     expect(plans.length).toBeGreaterThan(0);
     await expect(page.getByTestId("setup-safety").locator('[data-path="system.allow_hardware_writes"] input')).toBeChecked();
+    const inverter = page.getByTestId("setup-inverters").locator("[data-device]").first();
+    await inverter.locator(".summary").click();
+    await inverter.locator("details").filter({ hasText: "Advanced settings" }).locator("summary").click();
+    await expect(inverter.getByTestId("pv-input-2")).toBeChecked();
+    await inverter.getByTestId("pv-input-2").uncheck();
+    await expect(inverter.getByTestId("pv-input-2")).not.toBeChecked();
 
     const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("ems-admin-config-draft") || "{}"));
     expect(stored.schema_version).toBe(1);
     expect(stored.items.map((item: { role: string }) => item.role).sort()).toEqual(["grid_meter", "inverter"]);
+    expect(stored.items.find((item: { role: string }) => item.role === "inverter").config_values.unused_pv_inputs).toEqual([2]);
 
     await page.getByTestId("setup-next").click();
     await expect(page.getByTestId("setup-step-deployment")).toHaveAttribute("aria-selected", "true");

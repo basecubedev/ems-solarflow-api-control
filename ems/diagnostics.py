@@ -54,6 +54,7 @@ from ems.paths import (
 from ems.build_info import collect_build_info
 from ems.control_status import CONTROL_STATUS_SCHEMA_VERSION
 from ems.models import BATTERY_ABSENT
+from ems.pv_inputs import unused_pv_inputs_problem
 from ems.retired_defaults import CONFIG_REVISION_KEY
 from ems.zendure_mqtt import config_entries as zendure_mqtt_entries
 from ems.zendure_mqtt.builtin_broker import (
@@ -1160,6 +1161,9 @@ def diagnose_config_plausibility(checks, args, config_data):
                 f"{device_name} is disabled and does not join the EMS control loop",
                 index=index,
             )
+        unused_inputs_problem = unused_pv_inputs_problem(item)
+        if unused_inputs_problem:
+            diagnose_add(checks, "config", "warning", "device_unused_pv_inputs_invalid", f"devices.{index}.unused_pv_inputs {unused_inputs_problem}", index=index)
         if zendure_mqtt_entries.is_zendure_mqtt_device_config(item):
             diagnose_zendure_mqtt_device_config(
                 checks, index, item, broker_sources=broker_sources

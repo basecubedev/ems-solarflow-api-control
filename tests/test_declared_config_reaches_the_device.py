@@ -44,6 +44,10 @@ NOT_A_CONSTRUCTOR_ARGUMENT = {
     # (`cfg.device_config_entry`), never by a client; tests/test_winter_policies.py
     # holds that a device's override decides its policy.
     "winter_policy": {"http", "mqtt"},
+    # Read by the dashboard tile and the InfluxDB history from the device's
+    # config entry by name, never by a client, so the control path reads the
+    # report as it is; tests/test_unused_pv_inputs.py holds both ends.
+    "unused_pv_inputs": {"http", "mqtt"},
 }
 
 

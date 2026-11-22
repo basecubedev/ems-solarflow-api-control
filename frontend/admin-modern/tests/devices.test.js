@@ -30,6 +30,9 @@ import {
   switchGridType,
   maturityWords,
   operationWords,
+  emptyInputs,
+  pvHints,
+  setInputEmpty,
 } from "../src/lib/devices.js";
 
 const catalog = {
@@ -185,4 +188,38 @@ test("a new OpenDTU inverter is read only, takes the next free OpenDTU name and 
   assert.equal(deviceKind(first), "opendtu_http");
   assert.equal(connectionSource(first), "opendtu_http");
   assert.equal(deviceKind({ kind: "opendtu_http", sn: "x" }), "opendtu_http");
+});
+
+test("the empty PV inputs are the input numbers a device names, in order", () => {
+  assert.deepEqual(emptyInputs({ unused_pv_inputs: [4, 1, 1, 0, 5, "2", 2.5] }), [1, 4]);
+  assert.deepEqual(emptyInputs({}), []);
+});
+
+test("marking an input empty or in use writes the list, and toggling back leaves an entry that had none as it was", () => {
+  const device = { name: "WR1", original_name: "WR1" };
+  const marked = setInputEmpty(device, 3, true);
+  assert.deepEqual(marked.unused_pv_inputs, [3]);
+  assert.equal(device.unused_pv_inputs, undefined);
+  assert.equal("unused_pv_inputs" in setInputEmpty(marked, 3, false), false);
+  assert.deepEqual(setInputEmpty({ ...device, unused_pv_inputs: [1] }, 1, false, { unused_pv_inputs: [1] }).unused_pv_inputs, []);
+  assert.deepEqual(setInputEmpty({ ...device, unused_pv_inputs: [] }, 2, false, { unused_pv_inputs: [] }).unused_pv_inputs, []);
+  const saved = { unused_pv_inputs: [3, 1] };
+  const off = setInputEmpty({ ...device, ...saved }, 2, true, saved);
+  assert.deepEqual(off.unused_pv_inputs, [1, 2, 3]);
+  assert.deepEqual(setInputEmpty(off, 2, false, saved).unused_pv_inputs, [3, 1]);
+  assert.deepEqual(setInputEmpty({ ...device, unused_pv_inputs: [1, 1] }, 4, false, { unused_pv_inputs: [1, 1] }).unused_pv_inputs, [1, 1]);
+  assert.deepEqual(setInputEmpty({ ...device, unused_pv_inputs: [1] }, 4, false, { unused_pv_inputs: [1, 5] }).unused_pv_inputs, [1]);
+});
+
+test("a hint stays open until the draft settles it, and belongs to the device by its saved name", () => {
+  const hints = [
+    { device: "WR1", input: 1, kind: "dark", days: 3 },
+    { device: "WR1", input: 2, kind: "delivers", peak_w: 180 },
+    { device: "WR2", input: 1, kind: "dark", days: 3 },
+  ];
+  const device = { name: "Renamed", original_name: "WR1", unused_pv_inputs: [2] };
+  assert.deepEqual(pvHints(hints, device), hints.slice(0, 2));
+  assert.deepEqual(pvHints(hints, setInputEmpty(device, 1, true)), [hints[1]]);
+  assert.deepEqual(pvHints(hints, setInputEmpty(device, 2, false)), [hints[0]]);
+  assert.deepEqual(pvHints(undefined, device), []);
 });

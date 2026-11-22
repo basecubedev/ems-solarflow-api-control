@@ -606,7 +606,8 @@ def test_config_upgrade_render_uses_device_template_layout():
         '        "Use smart_mode=1 for runtime/RAM mode.",'
     ) in text
     assert (
-        '      "battery_kwh": 1.92,\n\n'
+        '      "battery_kwh": 1.92,\n'
+        '      "unused_pv_inputs": [],\n\n'
         '      "_comment_ac_directions": [\n'
         '        "Which AC directions EMS may command on this device.",'
     ) in text
