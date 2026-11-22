@@ -82,7 +82,7 @@ def _git_info(base_dir):
         "git_describe": None,
         "git_dirty": None,
     }
-    if not os.path.isdir(os.path.join(base_dir, ".git")):
+    if not os.path.exists(os.path.join(base_dir, ".git")):
         return info
 
     commit = _clean(_run_git(["rev-parse", "HEAD"], base_dir))
