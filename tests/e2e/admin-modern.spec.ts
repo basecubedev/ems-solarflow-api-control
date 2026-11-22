@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { expect, test, ADMIN_PASSWORD } from "./fixtures/admin";
 import type { Page, Route } from "@playwright/test";
 import { post } from "./helpers/setup-authority";
-import { E3DC_SYSTEM, apiInverter } from "./helpers/discovery-state";
+import { E3DC_SYSTEM, OPENDTU_INVERTER, apiInverter } from "./helpers/discovery-state";
 import { routeRunnablePlan } from "./helpers/container-plan";
 
 /** The sign-in, opened from the top bar where the address showed the dashboard's pages. */
@@ -1023,6 +1023,40 @@ test.describe("Modern Admin: network search", { tag: ["@smoke"] }, () => {
     await page.reload();
     await expect(page.getByTestId("devices-editor")).toContainText("192.168.50.41");
     await expect(page.getByTestId("devices-editor")).toContainText(`${E3DC_SYSTEM.ip}:502`);
+  });
+
+  test("an inverter an OpenDTU reads is found, added read only with its serial, saved and found in the settings", async ({ page, seedAdminScenario, seedDiscoveryState }) => {
+    test.setTimeout(120_000);
+    await quietNetwork(page);
+    await openModern(page);
+    await seedAdminScenario("mixed_transports");
+    await seedDiscoveryState({ local_api_devices: [OPENDTU_INVERTER] });
+    await page.goto("/#/settings/devices");
+    await page.reload();
+    await page.getByTestId("discovery-start").click();
+    await expect(page.getByTestId("discovery-outcome")).toContainText("The search finished");
+    const found = page.getByTestId("discovery-items").locator("li").filter({ hasText: `SN ${OPENDTU_INVERTER.serial}` });
+    await expect(found).toHaveAttribute("data-role", "read_only_device");
+    await expect(found).toContainText("an inverter this OpenDTU reads");
+    await expect(found.getByRole("button", { name: "Add inverter" })).toHaveCount(0);
+    await found.getByRole("button", { name: "Add as read-only device" }).click();
+    await expect(found.getByRole("button", { name: "Added" })).toBeDisabled();
+    const editor = page.getByTestId("devices-editor");
+    await expect(editor).toContainText(`SN ${OPENDTU_INVERTER.serial}`);
+    await expect(editor).toContainText(OPENDTU_INVERTER.ip);
+    await expect(page.getByTestId("change-count")).toHaveText("1 unsaved change");
+
+    await page.getByTestId("review").click();
+    await expect(page.getByTestId("settings-review")).toContainText("Settings are valid");
+    await page.getByTestId("apply").click();
+    await page.getByRole("dialog", { name: "Save the checked changes?" }).getByTestId("confirm").click();
+    await expect(page.getByTestId("settings-applied")).toBeVisible();
+    await page.reload();
+    await expect(page.getByTestId("devices-editor")).toContainText(`SN ${OPENDTU_INVERTER.serial}`);
+    await page.getByTestId("discovery-start").click();
+    await expect(page.getByTestId("discovery-outcome")).toContainText("The search finished");
+    const again = page.getByTestId("discovery-items").locator("li").filter({ hasText: `SN ${OPENDTU_INVERTER.serial}` });
+    await expect(again.getByRole("button", { name: "In the settings" })).toBeDisabled();
   });
 
   test("a found device is ignored for this search, and clearing leaves the changes alone", async ({ page, seedAdminScenario, seedDiscoveryState }) => {

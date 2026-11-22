@@ -218,12 +218,17 @@ export function newE3dc(devices, endpoint = {}) {
 }
 
 /**
- * A new inverter read from an OpenDTU, named OpenDTU, OpenDTU2 and so on. Its
- * serial, port and maximum age stay unset, so the EMS's defaults apply until
- * one is typed.
+ * A new inverter read from an OpenDTU, named OpenDTU, OpenDTU2 and so on. A
+ * search that found it gives its address and serial; what it does not give,
+ * and a port that is the default, stays unset, so the EMS's defaults apply
+ * until one is typed.
  */
-export function newOpenDtu(devices) {
-  return { kind: "opendtu_http", original_name: null, name: freeName(devices, "OpenDTU"), ip: "", enabled: true, has_enabled_key: true };
+export function newOpenDtu(devices, found = {}) {
+  const device = { kind: "opendtu_http", original_name: null, name: freeName(devices, "OpenDTU"), ip: String(found.ip || "") };
+  if (String(found.serial || "").trim()) device.serial = String(found.serial).trim();
+  const port = Number(found.port);
+  if (Number.isInteger(port) && port > 0 && port <= 65535 && port !== OPENDTU_DEFAULTS.port) device.port = port;
+  return { ...device, enabled: true, has_enabled_key: true };
 }
 
 export function generations(catalog) {

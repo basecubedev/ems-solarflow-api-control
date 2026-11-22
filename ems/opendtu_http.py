@@ -92,6 +92,30 @@ def select_inverter(payload, serial):
     raise OpenDtuAnswerError(f"the OpenDTU lists no inverter {serial}")
 
 
+def listed_inverters(payload):
+    """``(serial, name)`` of each inverter a livedata answer lists, or ``None`` for an answer no OpenDTU gives.
+
+    The answer without ``inv`` lists every inverter beside the OpenDTU's own
+    ``total``; the two together tell an OpenDTU's answer apart. An entry
+    without a serial names no inverter and is left out.
+    """
+
+    if not isinstance(payload, dict):
+        return None
+    total = payload.get("total")
+    inverters = payload.get("inverters")
+    if not isinstance(total, dict) or "Power" not in total or not isinstance(inverters, list):
+        return None
+    listed = []
+    for item in inverters:
+        serial = item.get("serial") if isinstance(item, dict) else None
+        if isinstance(serial, bool) or not isinstance(serial, (str, int)) or not str(serial).strip():
+            continue
+        name = item.get("name")
+        listed.append((str(serial).strip(), name.strip() if isinstance(name, str) else ""))
+    return tuple(listed)
+
+
 def parse_inverter(item):
     """Map one inverter of a livedata answer onto a reading.
 

@@ -22,19 +22,23 @@ import requests
 from admin.models import (
     ROLE_GRID_METER,
     ROLE_INVERTER,
+    ROLE_READ_ONLY_DEVICE,
     DiscoveredDevice,
 )
-from ems import e3dc_modbus, sunspec
+from ems import e3dc_modbus, opendtu_http, sunspec
 from ems.config import (
     E3DC_MODBUS_DEFAULT_PORT,
     E3DC_MODBUS_DEFAULT_UNIT_ID,
     E3DC_MODBUS_GRID_METER_TYPE,
     HOMEWIZARD_P1_DEFAULT_PORT,
     HOMEWIZARD_P1_GRID_METER_TYPE,
+    OPENDTU_HTTP_DEFAULT_PORT,
+    OPENDTU_INVERTER_SERIAL_PATTERN,
     SUNSPEC_MODBUS_GRID_METER_TYPE,
     TIBBER_PULSE_GRID_METER_TYPE,
 )
 from ems.homewizard import HomeWizardError, HomeWizardP1Api
+from ems.read_only_devices import OPENDTU_HTTP_DEVICE_TYPE
 from ems.tibber_pulse import REQUEST_TIMEOUT_SECONDS, BridgeError, TibberPulseBridge
 
 logger = logging.getLogger("admin.discovery")
@@ -478,6 +482,40 @@ def probe_ecotracker(session, ip, timeout_s):
     )
 
 
+def probe_opendtu(session, ip, timeout_s, port=OPENDTU_HTTP_DEFAULT_PORT, failure_details=None):
+    """Offer each inverter an OpenDTU lists at its livedata path as a read-only device.
+
+    The OpenDTU answers without a login only while its read-only access is on,
+    as the EMS needs it to read the inverter at all. An inverter whose serial
+    the EMS would refuse is left out; an OpenDTU that lists none offers
+    nothing.
+    """
+
+    data = _get_json(session, ip, opendtu_http.LIVEDATA_PATH, timeout_s, port=port, failure_details=failure_details)
+    listed = opendtu_http.listed_inverters(data)
+    if listed is None:
+        if data is not None:
+            _record_failure(failure_details, "OpenDTU API response lists no inverters")
+        return None
+    devices = tuple(
+        DiscoveredDevice(
+            ip=ip,
+            api_family=OPENDTU_HTTP_DEVICE_TYPE,
+            device_type=OPENDTU_HTTP_DEVICE_TYPE,
+            role_suggestion=ROLE_READ_ONLY_DEVICE,
+            port=port,
+            display_name=name or "OpenDTU inverter",
+            serial_number=serial,
+            confidence=0.9,
+            config_ready=True,
+            missing_config_fields=[],
+        )
+        for serial, name in listed
+        if OPENDTU_INVERTER_SERIAL_PATTERN.fullmatch(serial)
+    )
+    return devices or None
+
+
 HOMEWIZARD_HANDSHAKE_TIMEOUT_S = 3.0
 
 
@@ -731,6 +769,7 @@ PROBES = (
     probe_shelly_gen2,
     probe_shelly_3em_gen1,
     probe_ecotracker,
+    probe_opendtu,
     probe_homewizard_p1,
     probe_tibber_bridge,
     probe_e3dc_modbus,
@@ -810,7 +849,11 @@ def verify_shelly_meter_endpoint(ip, port=80, timeout_ms=TIMEOUT_MS_DEFAULT,
 
 
 def probe_host(session, ip, timeout_s):
-    """Run every probe family against one host; return the first match or None."""
+    """Run every probe family against one host; return the first match or None.
+
+    A match is one device, or a tuple of the devices one host offers, as an
+    OpenDTU offers each inverter it reads.
+    """
 
     for probe in PROBES:
         try:
@@ -871,12 +914,14 @@ def scan_network(cidr, timeout_ms=TIMEOUT_MS_DEFAULT, max_workers=MAX_WORKERS_DE
     saved = _SavedBridgePasswords(bridge_passwords)
 
     def probe_and_unlock(ip):
-        device = probe_host(session, ip, timeout_s)
-        if device is not None and device.api_family == TIBBER_PULSE_GRID_METER_TYPE:
-            device = unlock_tibber_bridge(
-                session, device, saved.get(), (timeout_s, max(timeout_s, TIBBER_BRIDGE_READ_TIMEOUT_S))
+        found = probe_host(session, ip, timeout_s)
+        if isinstance(found, tuple):
+            return found
+        if found is not None and found.api_family == TIBBER_PULSE_GRID_METER_TYPE:
+            found = unlock_tibber_bridge(
+                session, found, saved.get(), (timeout_s, max(timeout_s, TIBBER_BRIDGE_READ_TIMEOUT_S))
             )
-        return device
+        return () if found is None else (found,)
 
     try:
         with ThreadPoolExecutor(max_workers=min(workers, len(hosts))) as pool:
@@ -884,12 +929,11 @@ def scan_network(cidr, timeout_ms=TIMEOUT_MS_DEFAULT, max_workers=MAX_WORKERS_DE
             for future in as_completed(futures):
                 ip = futures[future]
                 try:
-                    device = future.result()
+                    found = future.result()
                 except Exception as exc:  # defensive: keep the scan alive
                     errors.append({"ip": ip, "error": str(exc)})
                 else:
-                    if device is not None:
-                        devices.append(device)
+                    devices.extend(found)
                 checked += 1
                 if progress_callback is not None:
                     progress_callback({

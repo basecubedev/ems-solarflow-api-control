@@ -242,3 +242,9 @@ test("Setup sends an emptied value as what its input named, a device's power lim
   assert.deepEqual(body.devices[1].config_values, { min_soc: "" });
   assert.equal(draft.items[0].config_values.min_soc, "");
 });
+
+test("an inverter an OpenDTU reads is no Setup candidate: Setup adds Zendure inverters and grid meters", () => {
+  const opendtu = { observation_id: "obs:v1:dtu", ip: "192.168.1.70", api_family: "opendtu_http", role_suggestion: "read_only_device", serial_number: "116180000001" };
+  const zendure = { observation_id: "obs:v1:zen", ip: "192.168.1.20", api_family: "zendure_local_http", role_suggestion: "inverter", serial_number: "SN1" };
+  assert.deepEqual(planCandidates([opendtu, zendure], []).observations.map((entry) => entry.observation_id), ["obs:v1:zen"]);
+});

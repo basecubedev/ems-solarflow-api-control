@@ -33,6 +33,16 @@ export const E3DC_SYSTEM: LocalApiDeviceSpec = {
   model: "S10 E AIO",
 };
 
+export const OPENDTU_INVERTER: LocalApiDeviceSpec = {
+  ip: "192.168.100.95",
+  serial: "116180000001",
+  role: "read_only_device",
+  api_family: "opendtu_http",
+  device_type: "opendtu_http",
+  display_name: "TSUN TSOL-M800",
+  model: "TSUN TSOL-M800",
+};
+
 export function apiInverter(serial: string, ip: string): LocalApiDeviceSpec {
   return {
     ip,

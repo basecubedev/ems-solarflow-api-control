@@ -40,7 +40,7 @@ export type LocalApiDeviceSpec = {
   ip: string;
   serial?: string;
   port?: number;
-  role?: "inverter" | "grid_meter";
+  role?: "inverter" | "grid_meter" | "read_only_device";
   api_family?: string;
   device_type?: string;
   display_name?: string;

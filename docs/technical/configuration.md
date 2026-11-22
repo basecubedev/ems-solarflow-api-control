@@ -1879,7 +1879,9 @@ device stays offline with `event=opendtu_http_read_error`.
 In the Admin console, **Settings & devices** → **Devices** has an **Add an
 OpenDTU inverter (read only)** button under the devices, and a card with its
 name, the OpenDTU's address, the inverter's serial number, port, maximum age and
-**Enabled** switch. The network search does not look for OpenDTUs.
+**Enabled** switch. The network search finds an OpenDTU on port 80 whose
+read-only access is on and offers each inverter it reads, with its serial
+([Admin discovery](admin-discovery.md)).
 
 ### Legacy config compatibility
 

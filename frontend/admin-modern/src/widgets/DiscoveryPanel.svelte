@@ -19,6 +19,7 @@
     isExternalProposal,
     issuedPhysicalIdentity,
     itemAction,
+    readOnlyKind,
     itemKey,
     meterFromProposal,
     mqttDeviceFromProposal,
@@ -26,6 +27,7 @@
     proposalRole,
     proposalTopic,
     switchTransport,
+    updateAddress,
     useExternalConnection,
   } from "../lib/discovery.js";
   import { connectionSource, reasonKey } from "../lib/devices.js";
@@ -79,7 +81,7 @@
     }
     const found = item.discovered || {};
     const configured = item.configured || {};
-    const serial = found.serial_number || configured.sn || "";
+    const serial = found.serial_number || configured.sn || configured.serial || "";
     return [found.ip || configured.ip || "", serial ? `SN ${serial}` : t("devices.serialMissing"), found.api_family || configured.api_family || "", found.device_type || configured.type || ""].filter(Boolean).join(" · ");
   }
 
@@ -111,10 +113,7 @@
     } else if (action.kind === "add") {
       result = addFound(draft, item, catalog);
     } else if (action.kind === "updateAddress") {
-      const next = [...devices];
-      if (!next[item.index]) return;
-      next[item.index] = { ...next[item.index], ip: item.discovered?.ip || next[item.index].ip };
-      result = { devices: next };
+      result = updateAddress(devices, item);
     } else if (action.kind === "switch") {
       result = switchTransport(devices, issuedPhysicalIdentity(item.configured), item.targetSource || "local_api", { discovered: item.discovered }, catalog);
     }
@@ -200,7 +199,9 @@
             {/if}
             {#if item.state === "identity_conflict"}<p class="note warn"><Icon name="triangle-alert" />{t("discovery.note.identityConflict")}</p>{/if}
           {:else if item.role === "read_only_device"}
-            <p class="muted small">{t("discovery.note.e3dc")}</p>
+            <p class="muted small">{t(readOnlyKind(item) === "opendtu_http" ? "discovery.note.opendtu" : "discovery.note.e3dc")}</p>
+            {#if item.state === "unavailable"}<p class="note warn"><Icon name="triangle-alert" />{t("discovery.note.opendtuSerial")}</p>{/if}
+            {#if item.doubts?.length}<p class="note warn"><Icon name="triangle-alert" />{t("discovery.note.opendtuDoubt", { names: item.doubts.join(", ") })}</p>{/if}
           {/if}
           {#if note}<p class="muted small">{note}</p>{/if}
           {#if downgrade}<p class="note warn"><Icon name="triangle-alert" />{t("discovery.note.downgrade", { reason: reasonOf(item.proposal) })}</p>{/if}

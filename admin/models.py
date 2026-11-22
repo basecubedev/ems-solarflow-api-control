@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 ROLE_INVERTER = "inverter"
 ROLE_GRID_METER = "grid_meter"
+ROLE_READ_ONLY_DEVICE = "read_only_device"
 ROLE_UNKNOWN = "unknown"
 
 

@@ -16,6 +16,7 @@ from admin.discovery_preparation import (
     SOURCE_LOCAL_MQTT,
     SOURCE_ZENDURE_MQTT,
 )
+from admin.models import ROLE_READ_ONLY_DEVICE
 from admin.models import SOURCE_LOCAL_MQTT as CANDIDATE_LOCAL_MQTT
 from admin.models import SOURCE_ZENDURE_CLOUD_MQTT as CANDIDATE_ZENDURE_CLOUD
 from admin.observation_identity import stamp_observations
@@ -122,7 +123,7 @@ def _candidate_view(source, raw):
         "api_family": _clean(raw.get("api_family")),
         "device_type": _clean(raw.get("device_type")),
         "stable_id": stable_id,
-        "read_only": catalog is not None,
+        "read_only": catalog is not None or role == ROLE_READ_ONLY_DEVICE,
         "config_hints": {
             key: raw[key]
             for key in CONFIG_HINT_KEYS.get(_clean(raw.get("api_family")), ())

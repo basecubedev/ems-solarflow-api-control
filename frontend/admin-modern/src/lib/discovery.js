@@ -6,10 +6,12 @@
  * server's answer, carried as issued ids and tokens; nothing here compares
  * displayed serials, hosts or names to reach it. Only whether a device the
  * server matched still answers at its saved address is read from the
- * addresses themselves. Everything is pure.
+ * addresses themselves, and a read-only device, which the server issues no
+ * identity for, is matched by the endpoint its saved entry names. Everything
+ * is pure.
  */
 
-import { commonDefaults, deviceKind, fieldKey, nextInverterName, newE3dc, mqttDefaultPort, mqttUsesTls, E3DC_DEFAULTS, IDENTITY_KEYS, READ_ONLY_KINDS } from "./devices.js";
+import { commonDefaults, deviceKind, fieldKey, nextInverterName, newE3dc, newOpenDtu, mqttDefaultPort, mqttUsesTls, E3DC_DEFAULTS, IDENTITY_KEYS, OPENDTU_DEFAULTS, READ_ONLY_KINDS } from "./devices.js";
 
 const OPAQUE = /^opaque:v1:[A-Za-z0-9_-]+$/;
 const CONNECTION = /^conn:v1:[A-Za-z0-9_-]+$/;
@@ -207,10 +209,79 @@ export function meterTypeOf(found) {
 const display = (value) => text(value).toLowerCase();
 const isCandidate = (device) => ["inverter", "grid_meter"].includes(String(device?.role_suggestion || "unknown"));
 const role = (device) => String(device?.role_suggestion || "unknown");
-const isE3dcCandidate = (device) => String(device?.api_family || "").toLowerCase() === "e3dc_modbus";
+const family = (device) => text(device?.api_family).toLowerCase();
 const e3dcSetting = (value, key) => (value == null || text(value) === "" ? E3DC_DEFAULTS[key] : Number(value));
 const sameE3dc = (configured, found) => display(configured?.ip) === display(found?.ip) && e3dcSetting(configured?.port, "port") === e3dcSetting(found?.port, "port");
 const e3dcReachable = (configured) => !scanTarget(`${configured?.ip || ""}/24`).error && e3dcSetting(configured?.port, "port") === E3DC_DEFAULTS.port && e3dcSetting(configured?.unit_id, "unit_id") === E3DC_DEFAULTS.unit_id;
+const opendtuPort = (value) => (value == null || text(value) === "" ? OPENDTU_DEFAULTS.port : Number(value));
+const opendtuEndpoint = (configured, found) => display(configured?.ip) === display(found?.ip) && opendtuPort(configured?.port) === opendtuPort(found?.port);
+const opendtuReachable = (configured) => !scanTarget(`${configured?.ip || ""}/24`).error && opendtuPort(configured?.port) === OPENDTU_DEFAULTS.port;
+
+/**
+ * Whether a saved OpenDTU entry names a found inverter. With a serial, by the
+ * serial wherever the find answered, which is a move when the address or port
+ * the entry names is not the find's. Without one, by its IPv4 address and port
+ * while the OpenDTU there reads this inverter alone, as the EMS then needs it
+ * to. A host name cannot be held against the address a find answered at, so
+ * an entry that names its OpenDTU by one and has no serial names no find.
+ */
+function openDtuMatch(configured, found, { alone = false } = {}) {
+  if (text(configured?.serial)) {
+    if (display(configured.serial) !== display(found?.serial_number)) return null;
+    return { moved: !sameAddress(configured, found) || opendtuPort(configured?.port) !== opendtuPort(found?.port) };
+  }
+  return IP_LITERAL.test(display(configured?.ip)) && alone && opendtuEndpoint(configured, found) ? { moved: false } : null;
+}
+
+/** The names of the OpenDTU entries no find can name: no serial, the OpenDTU named by host name. */
+function openDtuDoubts(devices) {
+  return (devices || [])
+    .filter((device) => deviceKind(device) === "opendtu_http" && !text(device?.serial) && text(device?.ip) && !IP_LITERAL.test(display(device.ip)))
+    .map((device) => text(device.name) || text(device.ip));
+}
+
+/** The role a find the EMS only reads carries, as the server names it. */
+export const READ_ONLY_ROLE = "read_only_device";
+
+/**
+ * The read-only devices a search finds, by the device kind each becomes:
+ * which finds it takes; whether a saved entry names a find, given whether the
+ * find is the only one at its endpoint, and whether it moved; what a saved
+ * entry no find names is (``missing`` when the search would have reached it,
+ * ``unavailable`` when what answered there cannot tell which device it is,
+ * else nothing); the entries a new find may still be, which the search cannot
+ * tell; and the entry a find adds.
+ */
+const READ_ONLY_FINDS = Object.freeze({
+  e3dc_modbus: {
+    takes: (device) => isCandidate(device) && family(device) === "e3dc_modbus",
+    match: (configured, found) => (sameE3dc(configured, found) ? { moved: false } : null),
+    unmatched: (configured) => (e3dcReachable(configured) ? "missing" : null),
+    doubts: () => [],
+    entry: (devices, found) => newE3dc(devices, { ip: found.ip, port: found.port }),
+  },
+  opendtu_http: {
+    takes: (device) => role(device) === READ_ONLY_ROLE && family(device) === "opendtu_http",
+    match: openDtuMatch,
+    unmatched: (configured, taken) => {
+      if (!opendtuReachable(configured)) return null;
+      return !text(configured?.serial) && taken.some((found) => opendtuEndpoint(configured, found)) ? "unavailable" : "missing";
+    },
+    doubts: openDtuDoubts,
+    entry: (devices, found) => newOpenDtu(devices, { ip: found.ip, port: found.port, serial: found.serial_number }),
+  },
+});
+
+/** The device kinds a search finds as read-only devices. */
+export const READ_ONLY_FIND_KINDS = Object.freeze(Object.keys(READ_ONLY_FINDS));
+
+/** The read-only device kind a review item is about, from its find or its saved entry; "" for any other item. */
+export function readOnlyKind(item) {
+  if (item?.role !== READ_ONLY_ROLE) return "";
+  if (item.discovered) return READ_ONLY_FIND_KINDS.find((kind) => READ_ONLY_FINDS[kind].takes(item.discovered)) || "";
+  const kind = deviceKind(item.configured);
+  return READ_ONLY_FINDS[kind] ? kind : "";
+}
 
 export function isGridMeterProposal(proposal) {
   return Boolean(proposal) && String(proposal.target || "device").toLowerCase() === "grid_meter" && Boolean(proposal.grid_meter_fragment);
@@ -405,18 +476,77 @@ export function buildReview(discovered, proposals, draft, saved) {
   supported.forEach((device) => {
     if (!used.has(observationKey(device))) results.push({ role: role(device), state: "new", discovered: device });
   });
-  supported.filter(isE3dcCandidate).forEach((device) => {
-    const configured = devices.find((item) => deviceKind(item) === "e3dc_modbus" && item.original_name != null && sameE3dc(item, device));
-    results.push(configured ? { role: "read_only_device", state: "found", configured, discovered: device } : { role: "read_only_device", state: "new", discovered: device });
-  });
-  devices.forEach((configured, index) => {
-    if (deviceKind(configured) !== "e3dc_modbus" || configured.original_name == null || !e3dcReachable(configured)) return;
-    if (!supported.some((device) => isE3dcCandidate(device) && sameE3dc(configured, device))) results.push({ role: "read_only_device", state: "missing", configured, index });
-  });
+  for (const [kind, finds] of Object.entries(READ_ONLY_FINDS)) {
+    const taken = (discovered || []).filter(finds.takes);
+    const context = (device) => ({
+      alone: taken.filter((other) => display(other.ip) === display(device.ip) && String(other.port ?? "") === String(device.port ?? "")).length === 1,
+    });
+    const doubts = finds.doubts(devices);
+    const chosen = new Set();
+    const rows = taken.map((device) => {
+      const found = context(device);
+      const named = devices
+        .map((item, index) => ({ index, match: deviceKind(item) === kind && item.original_name != null ? finds.match(item, device, found) : null }))
+        .filter((candidate) => candidate.match);
+      return { device, found, named };
+    });
+    const settled = new Set(rows.flatMap((row) => row.named.filter((candidate) => !candidate.match.moved).map((candidate) => candidate.index)));
+    rows.forEach(({ device, found, named }) => {
+      const unmoved = named.find((candidate) => !candidate.match.moved);
+      const free = named.find((candidate) => !settled.has(candidate.index));
+      const pick = unmoved || free || named[0];
+      if (!pick) {
+        results.push({ role: READ_ONLY_ROLE, state: "new", discovered: device, ...found, ...(doubts.length ? { doubts } : {}) });
+        return;
+      }
+      chosen.add(pick.index);
+      const configured = devices[pick.index];
+      const before = (saved?.devices || []).find((entry) => entry?.name === configured.original_name && deviceKind(entry) === kind);
+      const movedSinceSaved = Boolean(before && finds.match(before, device, found)?.moved);
+      const foundElsewhere = !unmoved && !free;
+      const state = !foundElsewhere && (pick.match.moved || movedSinceSaved) ? "conflict" : "found";
+      results.push({ role: READ_ONLY_ROLE, state, configured, discovered: device, index: pick.index, ...found });
+    });
+    devices.forEach((configured, index) => {
+      if (deviceKind(configured) !== kind || configured.original_name == null) return;
+      if (chosen.has(index) || taken.some((device) => finds.match(configured, device, context(device))?.moved === false)) return;
+      const state = finds.unmatched(configured, taken);
+      if (state) results.push({ role: READ_ONLY_ROLE, state, configured, index });
+    });
+  }
   (proposals || []).forEach((proposal) => {
     results.push({ role: String(proposal?.connection_source || "") === "zendure_cloud_mqtt" ? "zendure_mqtt" : "local_mqtt", state: proposalState(proposal, draft, saved), proposal });
   });
   return results;
+}
+
+/** Whether an entry already names a moved find where it answered. */
+function atFind(item, entry) {
+  const kind = readOnlyKind(item);
+  if (!kind) return sameAddress(entry, item.discovered);
+  const match = READ_ONLY_FINDS[kind].match(entry, item.discovered, item);
+  return Boolean(match) && !match.moved;
+}
+
+/**
+ * The draft with the entry a moved find names at the find's address: its IP,
+ * unless a read-only entry names its device by host name, and for an OpenDTU
+ * inverter its port, left unset at the default; null when the item names no
+ * entry.
+ */
+export function updateAddress(devices, item) {
+  const entry = (devices || [])[item?.index];
+  if (!entry) return null;
+  const byName = readOnlyKind(item) && !IP_LITERAL.test(display(entry.ip));
+  const moved = { ...entry, ip: byName ? entry.ip : item.discovered?.ip || entry.ip };
+  if (readOnlyKind(item) === "opendtu_http") {
+    const port = opendtuPort(item.discovered?.port);
+    if (port === OPENDTU_DEFAULTS.port) delete moved.port;
+    else moved.port = port;
+  }
+  const next = [...devices];
+  next[item.index] = moved;
+  return { devices: next };
 }
 
 /** The key a review item keeps across rebuilds, for an ignore that outlives draft changes. */
@@ -424,7 +554,7 @@ export function itemKey(item) {
   if (item.proposal) return `proposal:${item.proposal.id || observationKey(item.proposal)}`;
   const found = item.discovered;
   const base = found ? String(found.id || observationKey(found)) : `configured-${item.index != null ? item.index : item.configured?.name || item.role}`;
-  return `candidate:${base}${item.role === "read_only_device" ? "-read-only" : ""}`;
+  return `candidate:${base}${item.role === READ_ONLY_ROLE ? "-read-only" : ""}`;
 }
 
 /**
@@ -436,7 +566,10 @@ export function itemKey(item) {
 export function alreadyInDraft(item, draft) {
   const found = item?.discovered;
   if (!found || !draft) return false;
-  if (item.role === "read_only_device") return (draft.devices || []).some((device) => deviceKind(device) === "e3dc_modbus" && sameE3dc(device, found));
+  if (item.role === READ_ONLY_ROLE) {
+    const kind = readOnlyKind(item);
+    return Boolean(kind) && (draft.devices || []).some((device) => deviceKind(device) === kind && Boolean(READ_ONLY_FINDS[kind].match(device, found, item)));
+  }
   if ((item.role || role(found)) === "grid_meter") {
     const meter = draft.grid_meter || {};
     return Boolean(meter.present && found.ip && display(meter.ip) === display(found.ip));
@@ -504,17 +637,17 @@ export function itemAction(item, draft, ignored) {
   }
   if (ignored) return { label: "ignored", disabled: true };
   if (item.state === "found") return { label: "inConfig", disabled: true };
-  if (item.state === "missing") return { label: "configured", disabled: true };
+  if (item.state === "missing" || item.state === "unavailable") return { label: "configured", disabled: true };
   if (item.state === "transport") return { label: "useConnection", kind: "switch", disabled: false };
   if (item.state === "identity_conflict") return { label: "identityConflict", disabled: true };
   if (item.state === "conflict") {
     const current = (draft?.devices || [])[item.index];
-    if (current && sameAddress(current, item.discovered)) return { label: "added", disabled: true };
+    if (current && atFind(item, current)) return { label: "added", disabled: true };
     return { label: "updateDraft", kind: "updateAddress", disabled: false };
   }
   if (alreadyInDraft(item, draft)) return { label: "added", disabled: true };
   const which = item.role || role(item.discovered || {});
-  return { label: which === "grid_meter" ? "addGridMeter" : which === "read_only_device" ? "addReadOnly" : "addInverter", kind: "add", disabled: false };
+  return { label: which === "grid_meter" ? "addGridMeter" : which === READ_ONLY_ROLE ? "addReadOnly" : "addInverter", kind: "add", disabled: false };
 }
 
 function withDefaults(device, catalog) {
@@ -662,12 +795,15 @@ export function switchTransport(devices, identity, target, context, catalog) {
   return { devices: next, index };
 }
 
-/** A found device added to the draft: an inverter, the grid meter or a read-only E3/DC; null when it is there already. */
+/** A found device added to the draft: an inverter, the grid meter or a read-only E3/DC or OpenDTU inverter; null when it is there already. */
 export function addFound(draft, item, catalog) {
   const found = item.discovered;
   if (!found || alreadyInDraft(item, draft)) return null;
   const devices = draft.devices || [];
-  if (item.role === "read_only_device") return { devices: [...devices, newE3dc(devices, { ip: found.ip, port: found.port })], index: devices.length };
+  if (item.role === READ_ONLY_ROLE) {
+    const kind = readOnlyKind(item);
+    return kind ? { devices: [...devices, READ_ONLY_FINDS[kind].entry(devices, found)], index: devices.length } : null;
+  }
   if (item.role === "grid_meter") {
     const meter = { present: true, type: meterTypeOf({ device_type: found.device_type || "", api_family: found.api_family || "" }), ip: found.ip || "" };
     if (found.port != null && found.port !== "") meter.port = found.port;
