@@ -825,7 +825,7 @@ class _ReadOnlyKind(NamedTuple):
 
 _READ_ONLY_KINDS = {
     E3DC_MODBUS_DEVICE_TYPE: _ReadOnlyKind(
-        (), ("port", "unit_id"), e3dc_modbus_device_settings, "e3dc_modbus_device_invalid", False
+        (), ("port", "unit_id"), e3dc_modbus_device_settings, "e3dc_modbus_device_invalid", True
     ),
     OPENDTU_HTTP_DEVICE_TYPE: _ReadOnlyKind(
         ("serial",), ("port", "max_age_seconds"), opendtu_http_device_settings, "opendtu_http_device_invalid", True

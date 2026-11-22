@@ -402,13 +402,15 @@
         </div>
       </DeviceCard>
     {:else if kind === "e3dc_modbus"}
-      <DeviceCard id={`e3dc-${index}`} icon="battery" tone="c-bat" title={t("devices.readOnlyDevice", { n: index + 1 })} model={t("devices.model.e3dc")} meta={[device.name || t("settings.unnamed"), endpoint(device), t("devices.readOnly")].join(" · ")} enabled={device.enabled !== false} connection={sourceLabel(device)} open={added === index} onremove={() => remove(index)}>
+      <DeviceCard id={`e3dc-${index}`} icon="battery" tone="c-bat" title={t("devices.readOnlyDevice", { n: index + 1 })} model={t("devices.model.e3dc")} meta={[device.name || t("settings.unnamed"), endpoint(device), t("devices.readOnly")].join(" · ")} enabled={device.enabled !== false} connection={sourceLabel(device)} flag={hintFlag(device)} open={added === index} onremove={() => remove(index)}>
+        {@render inputHints(device, index)}
         <div class="fields">
           {@render enabledField(device, index, "e3dc")}
           <SettingField field={own("e3dcName")} lang={null} value={device.name || ""} onchange={(value) => update(index, { ...device, name: value })} />
           <SettingField field={own("e3dcHost")} lang={null} value={device.ip || ""} onchange={(value) => update(index, { ...device, ip: value })} />
           <SettingField field={{ ...own("e3dcPort"), type: "number" }} lang={null} value={device.port ?? ""} defaultValue={E3DC_DEFAULTS.port} onchange={(value) => update(index, { ...device, port: value })} />
           <SettingField field={{ ...own("e3dcUnit"), type: "number" }} lang={null} value={device.unit_id ?? ""} defaultValue={E3DC_DEFAULTS.unit_id} onchange={(value) => update(index, { ...device, unit_id: value })} />
+          <PvInputsField {device} onchange={(number, empty) => markInput(index, device, number, empty)} />
         </div>
       </DeviceCard>
     {/if}

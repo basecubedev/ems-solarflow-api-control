@@ -119,6 +119,7 @@ def test_one_reading_carries_grid_pv_battery_and_soc_with_their_signs(device):
     assert reading.battery_w == -1500.0
     assert reading.soc == 87.0
     assert reading.inverter_w is None
+    assert reading.dc_strings_w is None
 
 
 def test_import_stays_positive(device):
@@ -139,6 +140,7 @@ def test_the_inverter_is_read_only_when_a_device_needs_it(device):
     finally:
         session.close()
     assert reading.inverter_w == 1234 + 1200 + 1190
+    assert reading.dc_strings_w == (2200.0, 2121.0)
 
 
 @pytest.mark.parametrize("offset", [0, -2])

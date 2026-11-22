@@ -3,9 +3,9 @@
 """Admin Maintenance marks a PV input empty on every device kind that reads its inputs.
 
 A Zendure device takes ``unused_pv_inputs`` through the catalogue's common
-device fields; an external MQTT device and an inverter an OpenDTU reads take it
-beside the few keys their editors own. An E3/DC reads no single input, so its
-editor offers none. The open hints of the running EMS reach the page with the
+device fields; an external MQTT device, an inverter an OpenDTU reads and an
+E3/DC, whose inverter reports its two strings, take it beside the few keys their
+editors own. The open hints of the running EMS reach the page with the
 maintenance view, minus those the saved config has already settled.
 """
 
@@ -55,6 +55,10 @@ _ZENDURE_MQTT = {
 _E3DC = {"name": "E3DC", "type": "e3dc_modbus", "ip": "192.168.1.40"}
 
 
+def _every_kind():
+    return [dict(_ZENDURE), dict(_EXTERNAL), dict(_OPENDTU), copy.deepcopy(_ZENDURE_MQTT), dict(_E3DC)]
+
+
 def _write_devices(base_dir, devices):
     config_dir = base_dir / "config"
     config_dir.mkdir(exist_ok=True)
@@ -90,27 +94,27 @@ def _written(prepared):
     return json.loads(prepared["payload"])["devices"]
 
 
-@pytest.mark.parametrize("index", [0, 1, 2, 3])
+@pytest.mark.parametrize("index", [0, 1, 2, 3, 4])
 def test_each_kind_that_reads_its_inputs_takes_an_empty_one(tmp_path, index):
-    _write_devices(tmp_path, [dict(_ZENDURE), dict(_EXTERNAL), dict(_OPENDTU), copy.deepcopy(_ZENDURE_MQTT)])
+    _write_devices(tmp_path, _every_kind())
 
     written = _written(_apply(tmp_path, lambda devices: devices[index].update({"unused_pv_inputs": [3, 1]})))
 
     assert sorted(written[index]["unused_pv_inputs"]) == [1, 3]
 
 
-@pytest.mark.parametrize("index", [0, 1, 2, 3])
+@pytest.mark.parametrize("index", [0, 1, 2, 3, 4])
 def test_a_stored_null_stays_on_a_no_op_apply(tmp_path, index):
-    devices = [dict(_ZENDURE), dict(_EXTERNAL), dict(_OPENDTU), copy.deepcopy(_ZENDURE_MQTT)]
+    devices = _every_kind()
     devices[index]["unused_pv_inputs"] = None
     _write_devices(tmp_path, devices)
 
     assert _written(_apply(tmp_path, lambda devices: None))[index] == devices[index]
 
 
-@pytest.mark.parametrize("index", [0, 1, 2, 3])
+@pytest.mark.parametrize("index", [0, 1, 2, 3, 4])
 def test_the_draft_shows_what_the_entry_names_and_an_untouched_entry_stays_as_stored(tmp_path, index):
-    devices = [dict(_ZENDURE), dict(_EXTERNAL), dict(_OPENDTU), copy.deepcopy(_ZENDURE_MQTT)]
+    devices = _every_kind()
     devices[index]["unused_pv_inputs"] = [4, 1]
     _write_devices(tmp_path, devices)
 
@@ -118,9 +122,9 @@ def test_the_draft_shows_what_the_entry_names_and_an_untouched_entry_stays_as_st
     assert _written(_apply(tmp_path, lambda devices: None))[index] == devices[index]
 
 
-@pytest.mark.parametrize("index", [1, 2])
+@pytest.mark.parametrize("index", [1, 2, 4])
 def test_no_empty_input_left_removes_the_key_and_a_stored_empty_list_stays(tmp_path, index):
-    devices = [dict(_ZENDURE), dict(_EXTERNAL), dict(_OPENDTU), copy.deepcopy(_ZENDURE_MQTT)]
+    devices = _every_kind()
     devices[index]["unused_pv_inputs"] = [1]
     _write_devices(tmp_path, devices)
     assert "unused_pv_inputs" not in _written(_apply(tmp_path, lambda devices: devices[index].update({"unused_pv_inputs": []})))[index]
@@ -130,23 +134,15 @@ def test_no_empty_input_left_removes_the_key_and_a_stored_empty_list_stays(tmp_p
     assert _written(_apply(tmp_path, lambda devices: None))[index]["unused_pv_inputs"] == []
 
 
-@pytest.mark.parametrize("index", [0, 1, 2, 3])
+@pytest.mark.parametrize("index", [0, 1, 2, 3, 4])
 @pytest.mark.parametrize("value", [[5], [0, 1], ["x"]])
 def test_an_input_number_outside_one_to_four_is_refused(tmp_path, index, value):
-    _write_devices(tmp_path, [dict(_ZENDURE), dict(_EXTERNAL), dict(_OPENDTU), copy.deepcopy(_ZENDURE_MQTT)])
+    _write_devices(tmp_path, _every_kind())
 
     prepared = _apply(tmp_path, lambda devices: devices[index].update({"unused_pv_inputs": value}))
 
     assert prepared["status"] != "ok"
     assert "unused_pv_inputs" in json.dumps(prepared)
-
-
-def test_an_e3dc_takes_no_empty_input_as_it_reads_none(tmp_path):
-    _write_devices(tmp_path, [dict(_ZENDURE), dict(_E3DC)])
-
-    written = _written(_apply(tmp_path, lambda devices: devices[1].update({"unused_pv_inputs": [1]})))
-
-    assert "unused_pv_inputs" not in written[1]
 
 
 def test_the_editor_offers_the_inputs_on_exactly_the_kinds_the_server_takes_them_for():
@@ -209,12 +205,12 @@ def test_a_device_without_the_key_is_not_called_incomplete_for_it(tmp_path):
     assert any(issue["code"] == "device_common_values_missing" for issue in prepared["validation"]["warnings"])
 
 
-@pytest.mark.parametrize("index", [0, 1, 2, 3])
+@pytest.mark.parametrize("index", [0, 1, 2, 3, 4])
 @pytest.mark.parametrize("stored,read", [("1,3", []), ([1.0, 2], [2]), ([5, 1], [1])])
 def test_a_value_the_ems_cannot_read_in_full_is_shown_and_saved_as_what_it_reads(tmp_path, index, stored, read):
     from ems.pv_inputs import unused_pv_inputs
 
-    devices = [dict(_ZENDURE), dict(_EXTERNAL), dict(_OPENDTU), copy.deepcopy(_ZENDURE_MQTT)]
+    devices = _every_kind()
     devices[index]["unused_pv_inputs"] = stored
     _write_devices(tmp_path, devices)
 
@@ -222,14 +218,6 @@ def test_a_value_the_ems_cannot_read_in_full_is_shown_and_saved_as_what_it_reads
     written = _written(_apply(tmp_path, lambda devices: None))[index]
     assert sorted(unused_pv_inputs(written)) == read
     assert written.get("unused_pv_inputs", []) == read
-
-
-def test_a_value_on_an_e3dc_never_blocks_an_apply(tmp_path):
-    _write_devices(tmp_path, [dict(_ZENDURE), {**_E3DC, "unused_pv_inputs": [5]}])
-
-    written = _written(_apply(tmp_path, lambda devices: devices[0].update({"max_power": 700})))
-
-    assert written[1]["unused_pv_inputs"] == [5]
 
 
 def test_a_hint_of_a_shape_this_cannot_read_is_dropped_and_each_is_offered_once():

@@ -819,8 +819,9 @@ does not record it (`solarN`); the PV total, the control and everything else the
 device reports stay as they are. It is optional and the same for every device
 that reports its inputs one by one: a Zendure device, an
 [external device](#external-devices-over-mqtt-external_mqtt) and an
-[inverter an OpenDTU reads](#inverter-read-by-an-opendtu-opendtu_http); an
-E3/DC reports none. A number outside 1 to 4 is not read, and `diagnose` warns
+[inverter an OpenDTU reads](#inverter-read-by-an-opendtu-opendtu_http) and an
+[E3/DC](#e3dc-as-a-read-only-device), whose built-in inverter reports two strings.
+A number outside 1 to 4 is not read, and `diagnose` warns
 about it (`device_unused_pv_inputs_invalid`). The EMS reads it when it starts.
 
 While it runs, the EMS also watches each input's highest power of the day. An
@@ -1772,8 +1773,9 @@ and has not been proven are recorded in
 ### E3/DC as a read-only device
 
 A `devices[]` entry of type `e3dc_modbus` shows the E3/DC on the dashboard as
-its own tile: PV power, battery power and state of charge, inverter AC power
-(the three phases of its built-in inverter), and its grid power. The tile is
+its own tile: PV power and the DC power of its two strings, battery power and
+state of charge, inverter AC power (the three phases of its built-in inverter),
+and its grid power. The tile is
 marked *Telemetry only* and counts in the house totals (PV, battery, inverter
 output), so the flow picture, the energy statistics and the InfluxDB history
 include the E3/DC. The average SOC on the dashboard is a plain mean over all

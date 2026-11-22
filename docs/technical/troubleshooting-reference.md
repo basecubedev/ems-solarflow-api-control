@@ -494,7 +494,7 @@ More detail: [configuration.md](configuration.md).
 | **PV 1** stays at 0 W around the clock | the input has no module: a device reports every input it has, an empty one as 0 W. Mark it empty in the Admin console (`unused_pv_inputs`, see [configuration.md](configuration.md#device-settings)) |
 | An input is missing from the device card's **Solar** fold and from `solarN` in InfluxDB | the device's report does not carry it, or the device entry names it in `unused_pv_inputs` |
 | **Check PV inputs** on a device card in the Admin console | the EMS saw the input stay dark for three days while another input delivered, or an input marked empty deliver; a dark input can also be a failed module or a loose plug |
-| `device_unused_pv_inputs_invalid` in `diagnose` | `unused_pv_inputs` holds something other than a list of input numbers from 1 to 4; the EMS reads only the valid numbers in a list, and the Admin console shows and saves just those; an E3/DC reads no input, and its value is left as it is |
+| `device_unused_pv_inputs_invalid` in `diagnose` | `unused_pv_inputs` holds something other than a list of input numbers from 1 to 4; the EMS reads only the valid numbers in a list, and the Admin console shows and saves just those |
 | `pv_input_watch_unreadable`, `pv_input_watch_save_failed`, `pv_input_watch_failed` | `data/pv-input-watch.json` could not be read or written, or a cycle's inputs could not be taken; the control loop goes on, and only the hints are affected (see [runtime-state.md](runtime-state.md#the-pv-input-watch)) |
 | `pv_input_watch_clock_back` | the clock went back more than a day behind the day the watch held for a device, as after a wrong clock was corrected; the watch takes the new date and goes on |
 

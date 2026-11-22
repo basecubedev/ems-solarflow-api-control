@@ -190,6 +190,8 @@ def test_the_tile_carries_pv_battery_inverter_and_grid(device):
     assert state.soc == 87.0
     assert state.output == 1234 + 1200 + 1190
     assert (state.pack_in, state.pack_out) == (1500.0, 0.0)
+    assert (state.solar1, state.solar2, state.solar3, state.solar4) == (2200.0, 2121.0, 0, 0)
+    assert state.pv_inputs_reported == (True, True, False, False)
     assert tile["fields"] == {
         "grid_power_w": -600.0,
         "output_limit_applicable": False,
@@ -206,6 +208,7 @@ def test_a_device_that_was_never_read_is_an_offline_tile_of_zeros():
         sessions.close()
     assert tile["online"] is False
     assert tile["state"].solar == 0
+    assert tile["state"].pv_inputs_reported == (False, False, False, False)
     assert tile["fields"]["grid_power_w"] is None
 
 
@@ -458,6 +461,7 @@ def test_a_missing_inverter_block_keeps_the_last_known_output_on_the_tile(device
         sessions.close()
     assert tile["online"] is False
     assert tile["state"].output == 3624.0
+    assert (tile["state"].solar1, tile["state"].solar2) == (2200.0, 2121.0)
 
 
 def test_diagnostics_never_list_the_e3dc_as_allocated_or_assisted(tmp_path):
@@ -476,3 +480,16 @@ def test_diagnostics_never_list_the_e3dc_as_allocated_or_assisted(tmp_path):
     assert [row["device"] for row in distribution["devices"]] == ["WR1"]
     report = diagnose_battery_full_charge_assist_report(config, {})
     assert [row["device"] for row in report["devices"]] == ["WR1"]
+
+
+def test_a_string_the_inverter_reads_below_zero_shows_no_power(device):
+    """A dark string's DC power can read a few watts below zero; a PV input never feeds back."""
+
+    device.words[41000 + 25 - 1] = -7 & 0xFFFF
+    runtime, sessions = _refreshed_runtime(device)
+    try:
+        [tile] = runtime.tiles()
+    finally:
+        sessions.close()
+    assert (tile["state"].solar1, tile["state"].solar2) == (0.0, 2121.0)
+    assert tile["state"].pv_inputs_reported == (True, True, False, False)

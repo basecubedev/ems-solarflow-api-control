@@ -56,8 +56,8 @@ export function deviceKind(device) {
 
 /** How many PV inputs a device reports one by one, numbered from 1 (``ems.pv_inputs``). */
 export const PV_INPUT_COUNT = 4;
-/** The device kinds whose editor offers to mark a PV input empty: those that read their inputs one by one, which an E3/DC does not. */
-export const PV_INPUT_KINDS = Object.freeze(["local_api", "zendure_mqtt", "external_mqtt", "opendtu_http"]);
+/** The device kinds whose editor offers to mark a PV input empty: those that read their inputs one by one. */
+export const PV_INPUT_KINDS = Object.freeze(["local_api", "zendure_mqtt", "external_mqtt", "opendtu_http", "e3dc_modbus"]);
 export const UNUSED_PV_INPUTS = "unused_pv_inputs";
 
 /** The input numbers a device marks empty, in order, leaving out any that names no input. */

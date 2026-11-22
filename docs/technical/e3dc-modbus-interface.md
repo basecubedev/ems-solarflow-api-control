@@ -167,7 +167,8 @@ An E3/DC plays two independent roles, both read-only:
   calculation, dashboard, health, diagnostics — is the path every other meter
   takes.
 - **Read-only device** (a `devices[]` entry of type `e3dc_modbus`), which puts
-  PV, battery power and SOC, inverter AC power and grid power on the dashboard.
+  PV and its two strings, battery power and SOC, inverter AC power and grid power
+  on the dashboard.
   It rides the side door the dashboard already has for telemetry-only MQTT
   devices; it is never in the controller's device set.
 
@@ -211,7 +212,11 @@ How the open questions of the probe phase were settled:
   Tests pin all three.
 - **Two requests per cycle.** The whole 40068–40085 power block is read in one
   request; the inverter block (41000, 34 registers) is read only when a device
-  tile needs it, and its three active-power phases are summed. A refused or
+  tile needs it, and its three active-power phases are summed. The same block
+  gives the tile its two PV inputs: the DC power at offsets 25 and 26, which the
+  manual lists as the inverter's DC power, read as the first and second string.
+  A string reading below zero counts as 0 W, since a PV input does not feed
+  back. A refused or
   failed inverter read only leaves the tile without an output value (the tile
   shows offline); it never costs the grid meter its reading, and the inverter
   block then backs off on its own, like the connection does. A reading is
@@ -233,6 +238,8 @@ observed on real hardware yet.
   Admin network scan open their own connection next to a running EMS; a
   refused scan connection would show a configured E3/DC as *Not found* in
   Maintenance.
+- That inverter offsets 25 and 26 carry the first and second string's DC
+  power has not been compared with a real installation's strings.
 - Neither the grid meter, the device tile nor the Admin scan probe has yet
   run against a real E3/DC. Their Modbus reads go through the same code that
   read the S10 M4 below, and they are tested end to end against the probe's
