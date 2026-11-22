@@ -29,6 +29,7 @@ from ems.device_identity import (
     opaque_observation_id,
     resolve_physical_identity,
 )
+from ems.read_only_devices import OPENDTU_HTTP_DEVICE_TYPE
 
 OBSERVATION_ID_FIELD = "observation_id"
 CONNECTION_ID_FIELD = "connection_id"
@@ -39,6 +40,8 @@ IDENTITY_STATUS_FIELD = "identity_status"
 # endpoint stay separate observations, which is what the browser's old
 # type-then-address comparison did before a serial could override it.
 _KIND_FIELDS = ("device_type", "api_family", "role_suggestion")
+
+_SEVERAL_DEVICES_PER_ENDPOINT = frozenset({OPENDTU_HTTP_DEVICE_TYPE})
 
 
 def observation_kind(device):
@@ -70,12 +73,21 @@ def _discriminator(device, fallback):
 
 
 def observation_components(device, *, broker_sources=None, fallback=""):
-    """The components an observation id is derived from: class plus address."""
+    """The components an observation id is derived from: class plus address.
+
+    A device one endpoint reads among several, as an OpenDTU reads each
+    inverter it reaches, adds the serial its find carries, so the inverters
+    stay separate observations.
+    """
 
     coordinates = connection_coordinates(device, broker_sources=broker_sources)
     if coordinates is None:
         coordinates = _discriminator(device, fallback)
-    return (observation_kind(device), *coordinates)
+    kind = observation_kind(device)
+    serial = device.get("serial_number") if isinstance(device, dict) else None
+    if kind in _SEVERAL_DEVICES_PER_ENDPOINT and isinstance(serial, str) and serial.strip():
+        return (kind, *coordinates, "serial", serial.strip().lower())
+    return (kind, *coordinates)
 
 
 def resolve_identity_fields(device, *, key, broker_sources=None, fallback=""):

@@ -370,7 +370,7 @@ This page edits an existing installation.
   Adding hardware works like the guided setup: **Search my network** runs
   discovery (plus a **Scan** of one address or range), lists what it found as
   cards with one-click **Add inverter**, **Use as grid meter** or **Add as
-  read-only device** (an E3/DC, see
+  read-only device** (an E3/DC or an inverter an OpenDTU reads, see
   [device management](admin/device-management.md)) and their match state
   against the current config (**In the settings**, **Not found**, **Address
   changed**), and **Add an inverter**, **Add an inverter over MQTT**, **Add an

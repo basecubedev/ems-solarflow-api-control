@@ -140,7 +140,7 @@
   }
 
   function identity(device) {
-    if (device.read_only === true) return device.device_id ? `ID ${device.device_id}` : t("setup.devices.idMissing");
+    if (device.read_only === true && device.role !== "read_only_device") return device.device_id ? `ID ${device.device_id}` : t("setup.devices.idMissing");
     return device.serial_number ? `SN ${device.serial_number}` : t("setup.devices.snMissing");
   }
 
@@ -330,7 +330,7 @@
             <li class="card-item inner" data-role={device.role_suggestion || "unknown"}>
               <div class="row-wrap"><strong lang="en">{device.display_name || device.device_type || t("setup.devices.device")}</strong><span class="badge">{device.role_suggestion || "unknown"}</span>{#if device.stale}<span class="badge warn">{t("setup.devices.stale")}</span>{/if}</div>
               {@render facts([["IP", device.ip, true], [t("setup.devices.serial"), device.serial_number || t("setup.devices.missing"), Boolean(device.serial_number)], [t("setup.devices.apiFamily"), device.api_family, true], [t("setup.devices.type"), device.device_type, true]])}
-              <p class="muted small">{isReady(device) ? t("setup.devices.configReady") : t("setup.devices.needsInfo")} · {t("setup.devices.match", { percent: Math.round((Number(device.confidence) || 0) * 100) })}</p>
+              <p class="muted small">{device.role_suggestion === "read_only_device" ? t("setup.devices.readOnly") : isReady(device) ? t("setup.devices.configReady") : t("setup.devices.needsInfo")} · {t("setup.devices.match", { percent: Math.round((Number(device.confidence) || 0) * 100) })}</p>
             </li>
           {/each}
         </ul>

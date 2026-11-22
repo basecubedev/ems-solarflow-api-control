@@ -132,8 +132,10 @@ web API without an MQTT broker: name, the OpenDTU's address, the inverter's
 serial number as the OpenDTU shows it (left empty when the OpenDTU reads only
 this one inverter), port (80), maximum age (60 seconds) and **Enabled**. EMS
 only reads it and never sets its limit; like an E3/DC it counts as a read-only
-device, not as an inverter. The search does not look for OpenDTUs; add one by
-hand. See
+device, not as an inverter. The search finds an OpenDTU whose read-only access
+is on and offers each inverter it reads as **Add as read-only device**, which
+fills in the address and the serial; an OpenDTU on another port than 80, or one
+that asks for a login, is added by hand. See
 [Inverter read by an OpenDTU](../../technical/configuration.md#inverter-read-by-an-opendtu-opendtu_http).
 
 ### 5 — Change the grid meter, or an inverter's connection

@@ -301,6 +301,32 @@ placeholder for a later phase.
   - Shelly Pro / Gen2 meter — `GET /rpc/Shelly.GetStatus` → role `grid_meter`
   - Shelly 3EM Gen1 meter — `GET /status` → role `grid_meter`
   - everHome EcoTracker — `GET /v1/json` → role `grid_meter`
+  - OpenDTU — `GET /api/livedata/status` without a login → role
+    `read_only_device`, family `opendtu_http`, one candidate for each inverter
+    the answer lists, named as the OpenDTU names it and carrying its serial.
+    Only an answer that lists `inverters` beside the OpenDTU's own `total`
+    makes candidates, read by `ems.opendtu_http.listed_inverters` beside the
+    EMS's own reader of that answer. An inverter whose serial the EMS
+    would refuse (4 to 20 letters or digits) is left out, and an OpenDTU that
+    lists none, or answers `401` because its read-only access is off, is no
+    candidate. The role is never `inverter`, which names a Zendure the EMS
+    controls over its local API, so Setup lists it as read only and does not
+    take it. Each inverter is an observation of its own, told apart by its
+    serial although they share the OpenDTU's address. Maintenance offers each
+    inverter as *Add as read-only device*, which adds an `opendtu_http` entry
+    with the address and the serial. A saved entry with a serial is the
+    inverter of that serial wherever it answers: at another IPv4 address or
+    port than the entry names it is *Address changed*, *Take the new address*
+    moves the entry there (a host name kept, a port of 80 left unset), and it
+    is never added twice; of two entries for one serial the one at the find's
+    address is the found one. An entry without a serial is the inverter at its
+    IPv4 address only while that OpenDTU reads it alone, as the EMS then needs
+    it to; while it reads several, the entry is *Not usable* and asks for its
+    serial. One that names its OpenDTU by host name and has no serial names no
+    find, since a host name cannot be held against an address: each new
+    inverter then asks whether it is that entry's, rather than being added
+    twice unnoticed. A saved entry at a private IPv4 address on port 80 that no
+    find names where it answers is *Not found*.
   - HomeWizard P1 Meter — one TLS handshake on port 443, no HTTP request: a
     certificate HomeWizard's Appliance Access CA issued for
     `appliance/p1dongle/<serial>` → role `grid_meter`, family `homewizard_p1`,

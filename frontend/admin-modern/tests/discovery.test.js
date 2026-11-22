@@ -20,7 +20,11 @@ import {
   configuredFor,
   entryBroker,
   proposalBroker,
+  readOnlyKind,
+  READ_ONLY_FIND_KINDS,
+  updateAddress,
 } from "../src/lib/discovery.js";
+import { READ_ONLY_KINDS } from "../src/lib/devices.js";
 
 const ID_A = "opaque:v1:aaaa";
 const ID_B = "opaque:v1:bbbb";
@@ -113,7 +117,7 @@ test("a find is added once: an inverter with the defaults, a meter by its family
   assert.deepEqual([added.devices[0].ip, added.devices[0].sn, added.devices[0].max_power, added.devices[0].name], ["192.168.1.20", "SN9", 800, "INV_1"]);
   assert.equal(addFound({ devices: added.devices }, item, catalog), null);
   assert.deepEqual(addFound({}, { role: "grid_meter", discovered: { ip: "192.168.1.30", api_family: "shelly_3em_gen1", port: 80 } }, catalog).grid_meter, { present: true, type: "shelly_3em_gen1", ip: "192.168.1.30", port: 80 });
-  assert.equal(addFound({ devices: [] }, { role: "read_only_device", discovered: { ip: "192.168.1.60", port: 502 } }, catalog).devices[0].kind, "e3dc_modbus");
+  assert.equal(addFound({ devices: [] }, { role: "read_only_device", discovered: { ip: "192.168.1.60", port: 502, api_family: "e3dc_modbus", role_suggestion: "grid_meter" } }, catalog).devices[0].kind, "e3dc_modbus");
   assert.equal(meterTypeOf({ device_type: "EcoTracker" }), "ecotracker");
 });
 
@@ -189,7 +193,7 @@ test("an address the server did not match is never taken for a device", () => {
 
 test("a read-only device in the settings is never reviewed as an inverter the search did not find", () => {
   const saved = { devices: [{ kind: "opendtu_http", name: "OpenDTU", original_name: "OpenDTU", ip: "192.168.1.70" }, { kind: "e3dc_modbus", name: "E3DC", original_name: "E3DC", ip: "192.168.1.90", port: 1502 }] };
-  assert.deepEqual(buildReview([], [], saved, saved), []);
+  assert.deepEqual(buildReview([], [], saved, saved).map((item) => [item.role, item.state, item.configured.kind]), [["read_only_device", "missing", "opendtu_http"]]);
 });
 
 test("an inverter that moved offers its new address until the draft has it", () => {
@@ -227,4 +231,143 @@ test("a found SunSpec meter brings the unit ID it answered at", () => {
   assert.deepEqual(addFound({}, { role: "grid_meter", discovered: found }, catalog).grid_meter, { present: true, type: "sunspec_modbus", ip: "192.168.1.64", port: 502, unit_id: 200 });
   assert.deepEqual(unitValues({ unit_id: "x" }), {});
   assert.equal(meterTypeOf({ api_family: "powerfox_poweropti" }), "powerfox_poweropti");
+});
+
+const opendtu = (serial, extra) => ({ observation_id: `obs:v1:${serial}`, ip: "192.168.1.70", port: 80, api_family: "opendtu_http", device_type: "opendtu_http", role_suggestion: "read_only_device", serial_number: serial, display_name: "TSUN TSOL-M800(DE)", ...extra });
+const savedOpenDtu = (extra) => ({ kind: "opendtu_http", name: "OpenDTU", original_name: "OpenDTU", ip: "192.168.1.70", enabled: true, ...extra });
+
+test("each inverter an OpenDTU reads is offered as a read-only device, never as an inverter", () => {
+  const review = buildReview([opendtu("116180000001"), opendtu("114180000002")], [], { devices: [] }, { devices: [] });
+  assert.deepEqual(review.map((item) => [item.role, item.state, item.discovered.serial_number, readOnlyKind(item)]), [
+    ["read_only_device", "new", "116180000001", "opendtu_http"],
+    ["read_only_device", "new", "114180000002", "opendtu_http"],
+  ]);
+  assert.deepEqual(itemAction(review[0], { devices: [] }, false), { label: "addReadOnly", kind: "add", disabled: false });
+});
+
+test("a found OpenDTU inverter is added with its address and serial, once each", () => {
+  const first = { role: "read_only_device", state: "new", discovered: opendtu("116180000001") };
+  const second = { role: "read_only_device", state: "new", discovered: opendtu("114180000002") };
+  const added = addFound({ devices: [{ name: "INV_1", ip: "192.168.1.20" }] }, first, catalog);
+  assert.deepEqual(added.devices[1], { kind: "opendtu_http", original_name: null, name: "OpenDTU", ip: "192.168.1.70", serial: "116180000001", enabled: true, has_enabled_key: true });
+  assert.equal(added.index, 1);
+  assert.equal(addFound(added, first, catalog), null);
+  assert.deepEqual(itemAction(first, added, false), { label: "added", disabled: true });
+  const both = addFound(added, second, catalog);
+  assert.deepEqual(both.devices.slice(1).map((device) => [device.name, device.serial]), [["OpenDTU", "116180000001"], ["OpenDTU2", "114180000002"]]);
+  assert.equal(addFound({ devices: [] }, { role: "read_only_device", discovered: opendtu("116180000001", { port: 8080 }) }, catalog).devices[0].port, 8080);
+});
+
+test("a saved OpenDTU entry is found by its serial wherever it answers, or by its address while its OpenDTU reads it alone", () => {
+  const find = [opendtu("116180000001")];
+  const state = (entry) => buildReview(find, [], { devices: [entry] }, { devices: [entry] }).map((item) => item.state);
+  assert.deepEqual(state(savedOpenDtu({ serial: "116180000001" })), ["found"]);
+  const lettered = { devices: [savedOpenDtu({ serial: "a1b2c3d4" })] };
+  assert.deepEqual(buildReview([opendtu("A1B2C3D4")], [], lettered, lettered).map((item) => item.state), ["found"]);
+  assert.deepEqual(state(savedOpenDtu()), ["found"]);
+  assert.deepEqual(state(savedOpenDtu({ serial: "114180000002" })), ["new", "missing"]);
+  assert.deepEqual(state(savedOpenDtu({ serial: "116180000001", ip: "opendtu.local" })), ["found"]);
+  const named = { devices: [savedOpenDtu({ ip: "opendtu.local" })] };
+  const [doubted] = buildReview(find, [], named, named);
+  assert.deepEqual([doubted.state, doubted.doubts], ["new", ["OpenDTU"]]);
+  assert.deepEqual(itemAction(doubted, named, false), { label: "addReadOnly", kind: "add", disabled: false });
+  assert.equal("doubts" in buildReview(find, [], { devices: [] }, { devices: [] })[0], false);
+  const typing = { devices: [{ ...savedOpenDtu(), original_name: null, ip: "" }] };
+  assert.deepEqual(itemAction(buildReview(find, [], typing, { devices: [] })[0], typing, false).label, "addReadOnly");
+});
+
+test("a saved OpenDTU inverter whose OpenDTU moved offers the new address and is not added twice", () => {
+  const find = [opendtu("116180000001", { ip: "192.168.1.71" })];
+  const entry = savedOpenDtu({ serial: "116180000001" });
+  const draft = { devices: [entry] };
+  const review = buildReview(find, [], draft, draft);
+  assert.deepEqual(review.map((item) => [item.state, item.index]), [["conflict", 0]]);
+  assert.deepEqual(itemAction(review[0], draft, false), { label: "updateDraft", kind: "updateAddress", disabled: false });
+  assert.equal(addFound(draft, { ...review[0], state: "new" }, catalog), null);
+  const moved = { devices: [{ ...entry, ip: "192.168.1.71" }] };
+  assert.deepEqual(itemAction(review[0], moved, false), { label: "added", disabled: true });
+});
+
+test("an entry without a serial names no inverter of an OpenDTU that reads several, and says it cannot be used", () => {
+  const finds = [opendtu("116180000001"), opendtu("114180000002")];
+  const draft = { devices: [savedOpenDtu()] };
+  const review = buildReview(finds, [], draft, draft);
+  assert.deepEqual(review.map((item) => [item.state, item.discovered?.serial_number, item.alone]), [["new", "116180000001", false], ["new", "114180000002", false], ["unavailable", undefined, undefined]]);
+  assert.deepEqual(itemAction(review[0], draft, false), { label: "addReadOnly", kind: "add", disabled: false });
+  assert.deepEqual(itemAction(review[2], draft, false), { label: "configured", disabled: true });
+  assert.equal(readOnlyKind(review[2]), "opendtu_http");
+  assert.deepEqual(addFound(draft, review[1], catalog).devices[1].serial, "114180000002");
+  const elsewhere = buildReview([opendtu("116180000001", { ip: "192.168.1.71" }), opendtu("114180000002", { ip: "192.168.1.71" })], [], draft, draft);
+  assert.deepEqual(elsewhere.map((item) => item.state), ["new", "new", "missing"]);
+});
+
+test("a taken new address stays a change until it is saved", () => {
+  const find = [opendtu("116180000001", { ip: "192.168.1.71" })];
+  const saved = { devices: [savedOpenDtu({ serial: "116180000001" })] };
+  const [item] = buildReview(find, [], saved, saved);
+  const taken = updateAddress(saved.devices, item);
+  assert.equal(taken.devices[0].ip, "192.168.1.71");
+  const [after] = buildReview(find, [], taken, saved);
+  assert.deepEqual([after.state, itemAction(after, taken, false)], ["conflict", { label: "added", disabled: true }]);
+  assert.deepEqual(buildReview(find, [], taken, taken).map((row) => row.state), ["found"]);
+  assert.equal(updateAddress(saved.devices, { ...item, index: 5 }), null);
+});
+
+test("an OpenDTU found on the default port takes the entry off its own port", () => {
+  const find = [opendtu("116180000001")];
+  const saved = { devices: [savedOpenDtu({ serial: "116180000001", port: 8080 })] };
+  const [item] = buildReview(find, [], saved, saved);
+  assert.equal(item.state, "conflict");
+  const taken = updateAddress(saved.devices, item);
+  assert.equal("port" in taken.devices[0], false);
+  assert.deepEqual(itemAction(item, taken, false), { label: "added", disabled: true });
+  const other = updateAddress(saved.devices, { ...item, discovered: opendtu("116180000001", { port: 8081 }) });
+  assert.equal(other.devices[0].port, 8081);
+  const byName = { devices: [savedOpenDtu({ serial: "116180000001", ip: "opendtu.local", port: 8080 })] };
+  const [named] = buildReview(find, [], byName, byName);
+  const kept = updateAddress(byName.devices, named);
+  assert.deepEqual([named.state, kept.devices[0].ip, "port" in kept.devices[0]], ["conflict", "opendtu.local", false]);
+  assert.deepEqual(itemAction(named, kept, false), { label: "added", disabled: true });
+});
+
+test("an inverter two OpenDTUs list is found where its entry reads it, and not moved to the other", () => {
+  const finds = [opendtu("116180000001"), opendtu("116180000001", { ip: "192.168.1.71", observation_id: "obs:v1:other" })];
+  const saved = { devices: [savedOpenDtu({ serial: "116180000001" })] };
+  const review = buildReview(finds, [], saved, saved);
+  assert.deepEqual(review.map((item) => [item.state, item.index]), [["found", 0], ["found", 0]]);
+  assert.deepEqual(review.map((item) => itemAction(item, saved, false).label), ["inConfig", "inConfig"]);
+});
+
+test("of two saved entries for one inverter the one at its address is the one found", () => {
+  const find = [opendtu("116180000001", { ip: "192.168.1.71" })];
+  const saved = { devices: [savedOpenDtu({ serial: "116180000001" }), savedOpenDtu({ name: "OpenDTU2", original_name: "OpenDTU2", serial: "116180000001", ip: "192.168.1.71" })] };
+  assert.deepEqual(buildReview(find, [], saved, saved).map((item) => [item.state, item.index]), [["found", 1], ["missing", 0]]);
+});
+
+test("a saved OpenDTU entry the search would have reached and did not find is missing", () => {
+  const saved = { devices: [savedOpenDtu({ serial: "116180000001" })] };
+  assert.deepEqual(buildReview([], [], saved, saved).map((item) => [item.role, item.state, readOnlyKind(item)]), [["read_only_device", "missing", "opendtu_http"]]);
+  for (const entry of [savedOpenDtu({ port: 8080 }), savedOpenDtu({ ip: "opendtu.local" }), { ...savedOpenDtu(), original_name: null }]) {
+    assert.deepEqual(buildReview([], [], { devices: [entry] }, { devices: [entry] }), []);
+  }
+});
+
+test("an E3/DC and an OpenDTU found together keep their own kinds", () => {
+  const e3dc = { observation_id: "obs:v1:e3dc", ip: "192.168.1.60", port: 502, api_family: "e3dc_modbus", role_suggestion: "grid_meter" };
+  const review = buildReview([e3dc, opendtu("116180000001")], [], { devices: [] }, { devices: [] });
+  assert.deepEqual(review.map((item) => [item.role, readOnlyKind(item)]), [["grid_meter", ""], ["read_only_device", "e3dc_modbus"], ["read_only_device", "opendtu_http"]]);
+  const draft = { devices: [] };
+  const withE3dc = addFound(draft, review[1], catalog);
+  assert.equal(withE3dc.devices[0].kind, "e3dc_modbus");
+  assert.equal(addFound(withE3dc, review[2], catalog).devices[1].kind, "opendtu_http");
+});
+
+test("a read-only item of no kind the search knows adds nothing", () => {
+  assert.equal(addFound({ devices: [] }, { role: "read_only_device", discovered: { ip: "192.168.1.80", api_family: "unknown_family", role_suggestion: "read_only_device" } }, catalog), null);
+  assert.equal(readOnlyKind({ role: "inverter", discovered: opendtu("116180000001") }), "");
+});
+
+test("every kind the search finds read only is a read-only kind the devices page edits", () => {
+  assert.deepEqual(READ_ONLY_FIND_KINDS.filter((kind) => !READ_ONLY_KINDS.includes(kind)), []);
+  assert.deepEqual([...READ_ONLY_FIND_KINDS].sort(), ["e3dc_modbus", "opendtu_http"]);
 });
