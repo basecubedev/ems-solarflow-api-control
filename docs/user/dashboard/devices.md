@@ -75,8 +75,9 @@ ramp. A lasting gap means something limits the device — the
 
 Under the facts, sections you open by clicking their name:
 
-- **Solar · 4** — the power on each solar input, **PV 1** to **PV 4**, when the
-  inverter has more than one.
+- **Solar · 4** — the power on each solar input the inverter reports, **PV 1**
+  to **PV 4**, when it reports more than one; an input it does not report is
+  left out, keeping the numbers of the others.
 - **Cell voltage · 2** — the lowest and the highest cell of each pack,
   **Pack 1**, **Pack 2**, …, when the device has more than one. The packs are
   numbered in the order of their serial numbers, which need not be the order

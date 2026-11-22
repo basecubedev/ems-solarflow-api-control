@@ -13,7 +13,7 @@
   import RestartEms from "./RestartEms.svelte";
   import { t } from "../i18n/i18n.svelte.js";
   import { prefs } from "../../../shared/state/prefs.svelte.js";
-  import { ADOPT_REFUSALS, BUILTIN_BROKER, MAPPING_EDITOR_ISSUES, MAPPING_ISSUES, MAPPING_STEPS, SILENCE_REASONS, VALUE_REASONS, brokerAddress, emsReads, emsWaiting, groupKey, mappingStep, newDevice, newSource, proposedId, savedKind, targetSources, targetsOf } from "../lib/mqtt.js";
+  import { ADOPT_REFUSALS, BUILTIN_BROKER, MAPPING_EDITOR_ISSUES, MAPPING_ISSUES, MAPPING_STEPS, SILENCE_REASONS, VALUE_REASONS, brokerAddress, emsReads, emsWaiting, groupKey, leftOutTargets, mappingStep, newDevice, newSource, proposedId, savedKind, targetSources, targetsOf } from "../lib/mqtt.js";
   import { mqtt, loadMapping, startTopics, stopTopics, previewMapping, applyMapping, previewValue, watchMapping, watchTopics } from "../state/mqtt.svelte.js";
   import { errorView } from "../lib/errors.js";
 
@@ -448,6 +448,9 @@
     <div class="outcome">
       {#if evaluation.state}
         <p class="note ok" data-testid="mqtt-preview-state"><Icon name="circle-check" />{t("mqtt.mapping.wouldPublish")} <code>{JSON.stringify(evaluation.state)}</code></p>
+        {#each leftOutTargets(evaluation) as item (item.key)}
+          <p class="muted small" data-testid="mqtt-preview-left-out">{t("mqtt.mapping.leftOut", { target: t(`mqtt.target.${item.key}`), reason: reasonText(item.reason) })}</p>
+        {/each}
       {:else}
         <p class="note warn" data-testid="mqtt-preview-silent"><Icon name="triangle-alert" />{t("mqtt.mapping.wouldNotPublish", { reason: reasonText(evaluation.reason) })}</p>
         {#each evaluation.targets.filter((item) => item.reason === "catalog_refused") as item (item.key)}
@@ -514,6 +517,11 @@
           <span class="muted small">{device.id} · {brokerLabel(device.broker_ref)}</span>
           {#if status}
             <Status tone={status.publishing ? "c-ok" : "c-warn"} text={status.publishing ? t("mqtt.mapping.publishing") : reasonText(status.reason)} />
+            {#if status.publishing}
+              {#each leftOutTargets(status) as item (item.key)}
+                <span class="muted small" data-testid="mqtt-left-out">{t("mqtt.mapping.leftOut", { target: t(`mqtt.target.${item.key}`), reason: reasonText(item.reason) })}</span>
+              {/each}
+            {/if}
           {:else if device.enabled !== false}
             <Status tone="c-idle" text={t("mqtt.mapping.firstValue")} />
           {/if}

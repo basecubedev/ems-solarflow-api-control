@@ -1898,6 +1898,10 @@ manufacturer, and any device a bridge can read fits.
 |---|---|---|---|
 | `inverterPower` | AC power the device delivers to the house | W, 0 or more | Required |
 | `solarPower` | PV power at the device's input | W, 0 or more | Optional |
+| `solarPower1` | PV power of input (string) 1 | W, 0 or more | Optional |
+| `solarPower2` | PV power of input (string) 2 | W, 0 or more | Optional |
+| `solarPower3` | PV power of input (string) 3 | W, 0 or more | Optional |
+| `solarPower4` | PV power of input (string) 4 | W, 0 or more | Optional |
 | `batteryPower` | Battery power: positive while charging, negative while discharging | W | Optional |
 | `batterySoc` | Battery state of charge | %, 0 to 100 | Optional |
 
@@ -1942,9 +1946,12 @@ the keys in the table. A key the table does not list —
   JSON number, or text that would be read on its own topic — is skipped while
   the rest of the object is still read.
 - **Both forms may be mixed.** Each key keeps its latest value, from whichever
-  topic it came.
-- **Out of range is not a reading.** A negative `inverterPower` or
-  `solarPower`, a `batterySoc` outside 0 to 100 and any value beyond
+  topic it came, for as long as it keeps arriving: a key that has not arrived
+  within `zendure_mqtt.stale_after_seconds` (60 s) is dropped from the device,
+  while its other keys keep it online as long as `inverterPower` is among them.
+  The history records only the keys a device still sends.
+- **Out of range is not a reading.** A negative `inverterPower`,
+  `solarPower` or `solarPower1` … `solarPower4`, a `batterySoc` outside 0 to 100 and any value beyond
   ±1,000,000 are dropped. Send `0` rather than a small negative standby value:
   a dropped value is no sign of life either. A device that charges its battery
   from the house has no key for that yet.

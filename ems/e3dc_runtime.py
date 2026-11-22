@@ -324,6 +324,7 @@ def e3dc_device_state(reading):
         ac_status=0,
         dc_status=0,
         grid_state=0,
+        pv_inputs_reported=(False, False, False, False),
     )
 
 

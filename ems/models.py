@@ -135,6 +135,9 @@ class DeviceState:
     soc_status: int = 0
     battery_calibration_time: int | None = None
     battery_packs: tuple[PackCells, ...] = ()
+    # Which of solar1..solar4 the report carried; None when nobody said,
+    # which reads as all four.
+    pv_inputs_reported: tuple[bool, ...] | None = None
     ac_mode_reported: bool = True
     min_soc_reported: bool = True
     max_soc_reported: bool = True

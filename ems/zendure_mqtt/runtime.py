@@ -633,6 +633,12 @@ class ZendureMqttTelemetryRuntime:
         return any(broker.enabled for broker in self._brokers)
 
     @property
+    def stale_after_seconds(self) -> float:
+        """How long a snapshot, and an external device's single value, counts as current."""
+
+        return self._stale_after_seconds
+
+    @property
     def broker_configured(self) -> bool:
         return any(broker.configured for broker in self._brokers)
 

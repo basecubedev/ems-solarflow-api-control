@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import logging
+import time
 from datetime import datetime, timezone
 from dataclasses import asdict, is_dataclass
 
@@ -197,6 +198,16 @@ def device_telemetry_is_measured(controller, name):
         return True
 
 
+def _pv_inputs_w(state):
+    """Each PV input's power, ``None`` for one the device's report did not carry."""
+
+    reported = getattr(state, "pv_inputs_reported", None) or (True,) * 4
+    return [
+        _rounded(getattr(state, f"solar{index}", 0)) if carried else None
+        for index, carried in enumerate(reported, start=1)
+    ]
+
+
 def _state_telemetry_fields(state):
     """Map a DeviceState to the shared telemetry fields of a device tile.
 
@@ -209,10 +220,7 @@ def _state_telemetry_fields(state):
         "min_soc": _rounded(getattr(state, "min_soc", 0)),
         "max_soc": _rounded(getattr(state, "max_soc", 0)),
         "pv_input_w": _rounded(getattr(state, "solar", 0)),
-        "pv_inputs_w": [
-            _rounded(getattr(state, field, 0))
-            for field in ("solar1", "solar2", "solar3", "solar4")
-        ],
+        "pv_inputs_w": _pv_inputs_w(state),
         "output_w": _rounded(getattr(state, "output", 0)),
         # Measured, not commanded: the mirror of output_w for the charge
         # direction. A charging device reports output_w == 0, so without this
@@ -280,7 +288,25 @@ def _external_hardware(family, observable):
             for metric in family.keys[key].metrics
         )
 
-    return {"pv": sent("solarPower"), "battery": sent("batteryPower", "batterySoc")}
+    return {
+        "pv": sent("solarPower", "solarPower1", "solarPower2", "solarPower3", "solarPower4"),
+        "battery": sent("batteryPower", "batterySoc"),
+    }
+
+
+# The DeviceState field parse_device reads each external metric into; an
+# external device records only the fields of the metrics it sends.
+EXTERNAL_METRIC_FIELDS = {
+    "outputHomePower": "output",
+    "solarInputPower": "solar",
+    "solarPower1": "solar1",
+    "solarPower2": "solar2",
+    "solarPower3": "solar3",
+    "solarPower4": "solar4",
+    "outputPackPower": "pack_out",
+    "packInputPower": "pack_in",
+    "electricLevel": "soc",
+}
 
 
 def _read_only_device_tiles(controller):
@@ -335,9 +361,19 @@ def _telemetry_only_tiles(controller):
         if not metrics:
             continue
         observable = observable_metrics(metrics)
+        families = [
+            external_topic_family(family)
+            for family in sorted(getattr(snapshot, "topic_families", None) or ())
+        ]
+        external = next((family for family in families if family), None)
+        if external is not None:
+            observable = _with_pv_total(
+                _current_values(observable, snapshot, getattr(runtime, "stale_after_seconds", None))
+            )
+        online = status == "online" and (external is None or external.offerable(observable))
         tile = {
             "name": name,
-            "online": status == "online",
+            "online": online,
             "soc_reported": observable.get("electricLevel") is not None,
             "state": parse_device({
                 "properties": observable,
@@ -346,15 +382,13 @@ def _telemetry_only_tiles(controller):
                 "packData": pack_witness(snapshot),
             }),
         }
-        families = [
-            external_topic_family(family)
-            for family in sorted(getattr(snapshot, "topic_families", None) or ())
-        ]
-        external = next((family for family in families if family), None)
         if external is not None and external.role == CONSUMER:
             tile["consumer_power_w"] = observable.get("consumerPower")
         elif external is not None:
             tile["hardware"] = _external_hardware(external, observable)
+            tile["history_fields"] = tuple(
+                field for metric, field in EXTERNAL_METRIC_FIELDS.items() if metric in observable
+            )
         else:
             tile["hardware_profile"] = resolve_device_profile(
                 zendure_mqtt_hardware_profile(cfg.device_config_entry(name)),
@@ -362,6 +396,35 @@ def _telemetry_only_tiles(controller):
             )
         tiles.append(tile)
     return tiles
+
+
+def _with_pv_total(metrics):
+    """An external device's values, with its strings' sum as its PV when it sends no total."""
+
+    strings = [metrics[key] for key in ("solarPower1", "solarPower2", "solarPower3", "solarPower4") if key in metrics]
+    if "solarInputPower" in metrics or not strings:
+        return metrics
+    return {**metrics, "solarInputPower": sum(strings)}
+
+
+def _current_values(metrics, snapshot, stale_after_seconds):
+    """An external device's values without one it stopped sending.
+
+    Such a device sends each value on its own topic or leaves it out of its
+    bundle, as the MQTT mapping does with a string that went stale (#382), so
+    a value is current only while it arrives. Its other values keep it online
+    while its required one is among them.
+    """
+
+    if stale_after_seconds is None:
+        return metrics
+    received = getattr(snapshot, "metric_monotonic", None) or {}
+    now = time.monotonic()
+    return {
+        key: value
+        for key, value in metrics.items()
+        if key not in received or now - received[key] <= stale_after_seconds
+    }
 
 
 def _split_telemetry_only_tiles(tiles, controlled_names):

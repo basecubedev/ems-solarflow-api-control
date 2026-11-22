@@ -53,7 +53,10 @@ def _codes(document, **kwargs):
 
 
 def test_the_targets_are_the_catalog_keys_and_nothing_else():
-    assert TARGETS == ("inverterPower", "solarPower", "batteryPower", "batterySoc")
+    assert TARGETS == (
+        "inverterPower", "solarPower", "solarPower1", "solarPower2", "solarPower3", "solarPower4",
+        "batteryPower", "batterySoc",
+    )
 
 
 def test_a_valid_document_becomes_its_model_with_every_default_filled_in():

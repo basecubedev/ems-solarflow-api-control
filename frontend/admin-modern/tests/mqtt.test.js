@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { BUILTIN_BROKER, MAPPING_STEPS, emsPlace, mappedIndex, withMappedDevice, withRenamedDevice, UNITS, brokerAddress, deviceFromAnswers, emsDeviceName, freshGroup, groupValues, idFromName, isChangeOnly, likelyValue, mappedProposal, mappingStep, mapsTo, maxAgeFor, EMS_REPORT_GRACE_MS, emsReads, emsSilence, emsWaiting, savedKind, signPreset, sourceFromValue, uniqueId, preferredBroker, unitFactor, unitOf } from "../src/lib/mqtt.js";
+import { BUILTIN_BROKER, MAPPING_STEPS, leftOutTargets, emsPlace, mappedIndex, withMappedDevice, withRenamedDevice, UNITS, brokerAddress, deviceFromAnswers, emsDeviceName, freshGroup, groupValues, idFromName, isChangeOnly, likelyValue, mappedProposal, mappingStep, mapsTo, maxAgeFor, EMS_REPORT_GRACE_MS, emsReads, emsSilence, emsWaiting, savedKind, signPreset, sourceFromValue, uniqueId, preferredBroker, unitFactor, unitOf } from "../src/lib/mqtt.js";
 
 test("each unit is the factor the catalog needs", () => {
   assert.deepEqual(UNITS, { W: 1, kW: 1000, fraction: 100, percent: 1 });
@@ -303,4 +303,14 @@ test("a consumer added without a free label keeps the name it is offered under, 
   const devices = [{ kind: "local_api", name: "Washer" }];
   assert.equal(withMappedDevice(devices, offered, "Washer")[1].name, "External consumer washer");
   assert.equal(withMappedDevice(devices, offered, "Dryer")[1].name, "Dryer");
+});
+
+test("a publishing device names the optional values it leaves out, a silent one none", () => {
+  const targets = [
+    { key: "inverterPower", value: 500, reason: null },
+    { key: "solarPower1", value: null, reason: "stale" },
+  ];
+  assert.deepEqual(leftOutTargets({ state: { inverterPower: 500 }, targets }), [targets[1]]);
+  assert.deepEqual(leftOutTargets({ state: null, targets }), []);
+  assert.deepEqual(leftOutTargets(undefined), []);
 });

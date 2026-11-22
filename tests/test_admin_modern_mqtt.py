@@ -64,3 +64,24 @@ def test_each_list_is_the_servers(name, server):
 
 def test_the_built_in_broker_has_the_servers_name():
     assert f'export const BUILTIN_BROKER = "{BUILTIN_PROFILE_REF}";' in SOURCE
+
+
+def test_the_targets_the_page_keeps_from_going_negative_are_those_the_catalog_refuses_negative():
+    from ems.zendure_mqtt.external_catalog import EMS_CONSUMER, EMS_SOLARFLOW
+
+    refused = {
+        key
+        for family in (EMS_SOLARFLOW, EMS_CONSUMER)
+        for key, spec in family.keys.items()
+        if spec.read(-1) is None
+    }
+
+    assert set(_list("NON_NEGATIVE_TARGETS")) == refused
+
+
+def test_every_target_has_words():
+    strings = (Path(__file__).resolve().parents[1] / "frontend" / "admin-modern" / "src" / "i18n" / "strings.js").read_text(
+        encoding="utf-8"
+    )
+    for target in (*TARGETS, *_list("CONSUMER_TARGETS")):
+        assert f'"mqtt.target.{target}": s(' in strings, target

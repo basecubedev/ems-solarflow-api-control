@@ -7,7 +7,8 @@ at once when it changes, at most once a second; the standard asks a bridge for
 a value at least every 30 seconds. Each message is retained, so discovery finds
 it in its few seconds, and expires after three intervals, so a stopped service
 leaves no ghost behind that the EMS would read as fresh after a reconnect. A
-device with a stale or unreadable source publishes nothing at all.
+device whose required value is stale or unreadable publishes nothing at all; an
+optional value that is not read is left out of its state.
 """
 
 import json

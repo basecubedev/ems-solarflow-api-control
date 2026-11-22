@@ -55,7 +55,7 @@ class TargetReading:
 
 @dataclass(frozen=True)
 class Evaluation:
-    """A device's ``state`` when every source is fresh and every value passes, else a reason."""
+    """A device's ``state`` when its required value is read and every value read passes, else a reason."""
 
     device_id: str
     state: dict | None
@@ -118,7 +118,14 @@ def _first_reason(readings):
 
 
 def evaluate_device(device, latest: Mapping[str, Received], now: float) -> Evaluation:
-    """What ``device`` would publish at ``now`` from ``latest`` (topic → :class:`Received`)."""
+    """What ``device`` would publish at ``now`` from ``latest`` (topic → :class:`Received`).
+
+    A target whose sources are not all read leaves the device silent when it
+    is the catalog's required key, and is left out of the state otherwise, so
+    one stale string does not silence the inverter's power. A value the
+    catalog refuses silences the device whatever its key: that is a mapping to
+    correct, not a reading to skip.
+    """
 
     if not device.enabled:
         return Evaluation(device.id, None, "disabled")
@@ -138,7 +145,8 @@ def evaluate_device(device, latest: Mapping[str, Received], now: float) -> Evalu
         if unread:
             reason = _first_reason(unread)
             targets.append(TargetReading(target.key, None, reason))
-            silent_reason = silent_reason or reason
+            if target.key == device.catalog.required_key:
+                silent_reason = silent_reason or reason
             continue
         total = _clean(
             sum(reading.value for reading in plain + charge)

@@ -884,6 +884,18 @@ place](#the-ems-keeps-the-schema-in-place)) creates a task that is missing, and
 until it has, `influx status` and the EMS log name them under `missing_tasks`.
 The cell history in the downsampled buckets starts when they do.
 
+### PV inputs
+
+`solar1` … `solar4` on `zendure_device` are written only for the inputs a
+device's report carries: a Zendure report's `solarPower1` … `solarPower4`, an
+external device's keys of the same name, an OpenDTU's strings. A reported 0 is
+kept; an input the report does not carry is left out rather than written as 0.
+An E3/DC writes none: the EMS does not read its strings. Points written before this carry 0
+for the inputs a device does not have. An external device records only the
+values it sends (`output`, `solar`, `solarN`, `pack_in`/`pack_out`, `soc`),
+rather than 0 for the rest, and its strings' sum as `solar` when it sends no
+total; every other device writes `solar` and its other fields as before.
+
 ### The device temperature up to v0.10.0
 
 The raw `temp` field holds the device temperature in °C. Zendure devices report
