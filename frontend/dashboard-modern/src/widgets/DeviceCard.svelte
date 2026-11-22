@@ -11,7 +11,7 @@
   import Status from "../../../shared/ui/Status.svelte";
   import { t, fmt, tv, translatedOr } from "../i18n/i18n.svelte.js";
   import { assistView, firmwareFacts } from "../lib/devices.js";
-  import { cellRange, cellText, reportedCells } from "../lib/cells.js";
+  import { cellRange, cellText, packFlowTotal, packReadings, reportedCells } from "../lib/cells.js";
   import { batteryDirection } from "../lib/flow.js";
 
   let { device } = $props();
@@ -27,6 +27,16 @@
   const pvInputs = $derived(d.pvInputsW.filter((value) => value !== null));
   const cells = $derived(reportedCells(d));
   const cellsAll = $derived(cellRange(cells));
+  const packFlow = $derived(packFlowTotal(d.packFlows));
+  const packRows = $derived(
+    packReadings(d).map((pack) => ({
+      pack: pack.pack,
+      text: [
+        pack.low !== null || pack.high !== null ? cellText(f, pack.low, pack.high) : null,
+        pack.watts !== null ? f.power(pack.watts, { signed: true }) : null,
+      ].filter(Boolean).join(" · "),
+    })),
+  );
   const settings = $derived(
     Object.entries(d.settings || {})
       .filter(([, entry]) => entry && entry.reported)
@@ -89,14 +99,15 @@
     {#if d.limitApplicable}<Fact label={t("device.limit")} icon="sliders-horizontal" value={f.power(d.limitW)} missing={d.limitW === null} />{/if}
     {#if d.packs !== null}<Fact label={t("device.packs")} icon="battery" value={String(d.packs)} />{/if}
     {#if cells.length}<Fact label={t("device.cells")} icon="battery-medium" tone="c-bat" value={cellText(f, cellsAll.low, cellsAll.high)} />{/if}
+    {#if packFlow !== null}<Fact label={t("device.packPower")} icon="battery-charging" tone="c-bat" value={f.power(packFlow, { signed: true })} />{/if}
   </div>
 
-  {#if cells.length > 1}
+  {#if packRows.length > 1}
     <details class="more" data-testid="device-cells">
-      <summary><Icon name="chevron-right" />{t("device.cells")} · {cells.length}</summary>
+      <summary><Icon name="chevron-right" />{t("device.packs")} · {packRows.length}</summary>
       <div class="facts body">
-        {#each cells as pack (pack.pack)}
-          <Fact label={t("device.pack", { n: pack.pack })} icon="battery-medium" tone="c-bat" value={cellText(f, pack.low, pack.high)} />
+        {#each packRows as row (row.pack)}
+          <Fact label={t("device.pack", { n: row.pack })} icon="battery-medium" tone="c-bat" value={row.text} />
         {/each}
       </div>
     </details>

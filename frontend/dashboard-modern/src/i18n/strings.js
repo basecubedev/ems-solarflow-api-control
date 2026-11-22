@@ -283,6 +283,7 @@ export const STRINGS = {
   "device.packs": s("Packs", "Packs", "Packs", "Packs"),
   "device.cells": s("Cell voltage", "Zellspannung", "Celspanning", "Tension des cellules"),
   "device.pack": s("Pack {n}", "Pack {n}", "Pack {n}", "Pack {n}"),
+  "device.packPower": s("Pack power", "Pack-Leistung", "Packvermogen", "Puissance des packs"),
   "device.inputLimit": s("AC input limit", "AC-Eingangsgrenze", "AC-ingangslimiet", "Limite d’entrée AC"),
   "device.socRange": s("SoC range", "SoC-Bereich", "SoC-bereik", "Plage de SoC"),
   "device.firmware": s("Firmware status", "Firmware-Status", "Firmwarestatus", "État du firmware"),

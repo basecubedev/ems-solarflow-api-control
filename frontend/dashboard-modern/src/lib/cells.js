@@ -53,6 +53,45 @@ export function cellStyle(id) {
   return kind === "min" ? { label: "series.cellMin", token: "--battery", fill: false } : { label: "series.cellMax", token: "--m-muted", fill: false };
 }
 
+/** A pack's power signed by the direction its state names, null when it names none. */
+function signedFlow(entry) {
+  const watts = finite(entry.power_w);
+  if (watts === null) return null;
+  if (entry.state === 1) return Math.abs(watts);
+  if (entry.state === 2) return -Math.abs(watts);
+  return entry.state === 0 && watts === 0 ? 0 : null;
+}
+
+/**
+ * Each pack's own power from the live data, signed as the device's battery
+ * power is: positive while it charges, negative while it discharges. The
+ * pack names the direction in its state (0 idle, 1 charging, 2 discharging);
+ * a pack whose state names none, or an idle one that reports power, is left
+ * out rather than shown as charging.
+ */
+export function packFlows(entries) {
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .filter((entry) => Number.isInteger(entry?.pack) && entry.pack > 0 && entry.pack <= MAX_PACK_NUMBER)
+    .map((entry) => ({ pack: entry.pack, watts: signedFlow(entry) }))
+    .filter((flow) => flow.watts !== null)
+    .sort((a, b) => a.pack - b.pack);
+}
+
+/** The packs of a normalized device that report their cells or a power with its direction, each with both. */
+export function packReadings(device) {
+  if (!device.hasBattery) return [];
+  const flows = new Map(device.packFlows.map((flow) => [flow.pack, flow.watts]));
+  return device.cells
+    .map((pack) => ({ ...pack, watts: flows.get(pack.pack) ?? null }))
+    .filter((pack) => pack.low !== null || pack.high !== null || pack.watts !== null);
+}
+
+/** What the packs together report, null when none reports its power. */
+export function packFlowTotal(flows) {
+  return flows.length ? flows.reduce((sum, flow) => sum + flow.watts, 0) : null;
+}
+
 /** The packs of a normalized device that report a cell voltage; none on a device without a battery. */
 export function reportedCells(device) {
   return device.hasBattery ? device.cells.filter((pack) => pack.low !== null || pack.high !== null) : [];

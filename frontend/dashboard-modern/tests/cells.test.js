@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createFormat } from "../../shared/lib/format.js";
-import { packCells, cellRange, cellText, cellSeriesIds, cellKind, cellStyle, cellDevices, historyCellDevices, analyticsCellDevices, packsSeen, reportedCells, seriesExtreme, shownPack, voltRange } from "../src/lib/cells.js";
+import { packCells, packFlows, packFlowTotal, packReadings, cellRange, cellText, cellSeriesIds, cellKind, cellStyle, cellDevices, historyCellDevices, analyticsCellDevices, packsSeen, reportedCells, seriesExtreme, shownPack, voltRange } from "../src/lib/cells.js";
 import { normalizeDevice } from "../src/lib/devices.js";
 import { ANALYTICS_VIEWS, CELL_OVERLAYS, requestedSeries, seriesStyle, viewById } from "../src/lib/analytics.js";
 
@@ -21,6 +21,53 @@ test("the live data's packs come in pack order, a missing voltage stays null and
   assert.deepEqual(packCells([{ pack: 17, cell_min_v: 3.2 }]), []);
   assert.deepEqual(packCells(undefined), []);
   assert.deepEqual(packCells({ pack: 1 }), []);
+});
+
+test("a pack's power is signed by the direction its state names, and a pack that names none is left out", () => {
+  const flows = packFlows([
+    { pack: 2, power_w: 30, state: 1 },
+    { pack: 1, power_w: 4, state: 2 },
+    { pack: 3, power_w: -6, state: 2 },
+    { pack: 4, power_w: 0, state: 0 },
+    { pack: 5, power_w: 5, state: 0 },
+    { pack: 8, power_w: 7, state: null },
+    { pack: 6, power_w: null, state: 2 },
+    { pack: 7, cell_min_v: 3.2 },
+    { pack: 17, power_w: 4, state: 2 },
+    null,
+  ]);
+  assert.deepEqual(flows, [
+    { pack: 1, watts: -4 },
+    { pack: 2, watts: 30 },
+    { pack: 3, watts: -6 },
+    { pack: 4, watts: 0 },
+  ]);
+  assert.equal(packFlowTotal(flows), 20);
+  assert.equal(packFlowTotal(packFlows([{ pack: 1, power_w: 4, state: 2 }])), -4);
+  assert.equal(packFlowTotal([]), null);
+  assert.deepEqual(packFlows(undefined), []);
+});
+
+test("the packs a card lists are those that report their cells or a power with its direction", () => {
+  const device = normalizeDevice("Grill", {
+    hardware: { battery: true },
+    battery_packs: [
+      { pack: 1, cell_min_v: 3.2, cell_max_v: 3.22, power_w: 30, state: 1 },
+      { pack: 2, cell_min_v: null, cell_max_v: null, power_w: 4, state: 2 },
+      { pack: 3, cell_min_v: null, cell_max_v: null, power_w: 7, state: null },
+    ],
+  });
+  assert.deepEqual(packReadings(device), [
+    { pack: 1, low: 3.2, high: 3.22, watts: 30 },
+    { pack: 2, low: null, high: null, watts: -4 },
+  ]);
+  assert.deepEqual(packReadings(normalizeDevice("Inverter", { hardware: { battery: false }, battery_packs: [{ pack: 1, cell_min_v: 3.2 }] })), []);
+});
+
+test("a device without a battery has no pack power", () => {
+  const packs = [{ pack: 1, power_w: 4, state: 2 }];
+  assert.deepEqual(normalizeDevice("Grill", { hardware: { battery: true }, battery_packs: packs }).packFlows, [{ pack: 1, watts: -4 }]);
+  assert.deepEqual(normalizeDevice("Inverter", { hardware: { battery: false }, battery_packs: packs }).packFlows, []);
 });
 
 test("the range spans every pack and says nothing where no pack reports", () => {
