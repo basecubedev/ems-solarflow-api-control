@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._published_markdown import published_markdown
+
 pytestmark = [
     pytest.mark.contract,
     pytest.mark.documentation,
@@ -47,7 +49,7 @@ def films():
 def test_the_videos_page_lists_every_film_any_page_links():
     listed = {film_id for _title, film_id, _guide in films()}
     stray = []
-    for page in [README] + sorted(DOCS.rglob("*.md")):
+    for page in published_markdown():
         for film_id in YOUTUBE.findall(read(page)):
             if film_id not in listed:
                 stray.append(f"{page.relative_to(ROOT)}: {film_id}")

@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._published_markdown import published_markdown
+
 pytestmark = [
     pytest.mark.contract,
     pytest.mark.documentation,
@@ -194,7 +196,7 @@ def test_screenshots_are_pngs():
 
 def test_every_committed_screenshot_is_embedded_somewhere():
     used = set()
-    for doc in [ROOT / "README.md"] + sorted((ROOT / "docs").rglob("*.md")):
+    for doc in published_markdown():
         for _, target in embedded_images(doc):
             used.add(target)
         # HTML poster/src attributes count as use too.
@@ -337,7 +339,7 @@ def test_dashboard_previews_match_the_capture_spec():
 
 def test_every_dashboard_preview_is_embedded_and_listed():
     used = set()
-    for doc in [ROOT / "README.md"] + sorted((ROOT / "docs").rglob("*.md")):
+    for doc in published_markdown():
         used |= {target for _, target in embedded_images(doc)}
     listing = read(DASHBOARD_SHOTS / "README.md")
     for path in sorted(DASHBOARD_PREVIEWS.glob("preview-*.jpg")):

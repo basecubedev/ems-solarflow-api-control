@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._published_markdown import published_markdown
+
 pytestmark = [
     pytest.mark.contract,
     pytest.mark.documentation,
@@ -31,7 +33,7 @@ _EXTERNAL = ("http://", "https://", "mailto:", "tel:")
 
 
 def _markdown_files():
-    return [ROOT / "README.md"] + sorted((ROOT / "docs").rglob("*.md"))
+    return published_markdown()
 
 
 def _strip_code(text):

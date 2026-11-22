@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._published_markdown import published_markdown
+
 pytestmark = [pytest.mark.unit, pytest.mark.simulation, pytest.mark.appliance]
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,11 +47,8 @@ def registered():
 
 
 def sources():
-    for path in sorted((ROOT / "appliance").glob("*.py")):
-        yield path
-    for directory in ("docs/appliance", "docs/user/appliance"):
-        for path in sorted((ROOT / directory).rglob("*.md")):
-            yield path
+    yield from sorted((ROOT / "appliance").glob("*.py"))
+    yield from published_markdown("docs/appliance/*.md", "docs/user/appliance/*.md")
 
 
 def test_no_advice_names_a_subcommand_that_does_not_exist():
