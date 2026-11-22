@@ -19,6 +19,8 @@ from ems.clients import (
     wait_for_grid_meter,
 )
 from ems.control_status import ControlStatusWriter
+from ems.pv_input_watch import PvInputWatch
+from ems.pv_inputs import unused_pv_inputs
 from ems.controller import EMSController
 from ems.e3dc_runtime import E3dcSessions
 from ems.read_only_devices import build_read_only_devices
@@ -568,9 +570,20 @@ def main():
         winter_store=None if cfg.SIMULATION_MODE else build_winter_store(),
         scheduler=scheduler,
     )
+    pv_input_watch = None
+    if not cfg.SIMULATION_MODE and not getattr(args, "replay", None):
+        try:
+            pv_input_watch = PvInputWatch(
+                paths.resolve_pv_input_watch_path(cfg.runtime_state_path()),
+                unused_for=lambda name: unused_pv_inputs(cfg.device_config_entry(name)),
+                zone=schedule_zone,
+            )
+        except Exception as e:
+            log_event(logging.WARNING, "pv_input_watch_failed", error=e)
     control_status = ControlStatusWriter(
         paths.resolve_control_status_path(cfg.runtime_state_path()),
         loaded_devices=cfg.LOADED_DEVICES,
+        pv_input_watch=pv_input_watch,
     )
 
     stopped_by = install_stop_signal_handlers()
@@ -588,6 +601,8 @@ def main():
             else:
                 ems.run_guarded()
             cycles += 1
+            if pv_input_watch is not None:
+                pv_input_watch.observe_controller(ems)
             control_status.write(ems)
 
             # Self-heal: re-attempt broker connections that failed at boot.

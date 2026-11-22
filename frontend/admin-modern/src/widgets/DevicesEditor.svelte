@@ -11,6 +11,8 @@
   import { settings, setHardwareValues } from "../state/settings.svelte.js";
   import { sources, saveCredential } from "../state/sources.svelte.js";
   import BridgePasswordField from "./BridgePasswordField.svelte";
+  import PvInputsField from "./PvInputsField.svelte";
+  import PvInputHints from "./PvInputHints.svelte";
   import {
     NO_GRID_METER,
     commonDefaults,
@@ -40,6 +42,8 @@
     operationWords,
     onLocalBroker,
     OPENDTU_DEFAULTS,
+    PV_INPUT_KINDS,
+    pvHints,
     reasonKey,
     removeDevice,
     savedByOriginalName,
@@ -49,8 +53,10 @@
     setGridPassword,
     setGridPort,
     setGridValue,
+    setInputEmpty,
     setMqttValue,
     switchGridType,
+    UNUSED_PV_INPUTS,
     VALIDATION_MATURITIES,
   } from "../lib/devices.js";
   import { CONSUMER_FAMILY } from "../lib/mqtt.js";
@@ -75,6 +81,7 @@
   const meterIsMqtt = $derived(gridIsMqtt(catalog, meterType));
   const meterFields = $derived(gridFields(catalog, meter).filter((field) => field.path !== SERIAL_FIELD && field.path !== PAIRING_NAME_FIELD));
   const named = $derived(broker.managed === "named");
+  const hints = $derived(Array.isArray(config.pv_input_hints) ? config.pv_input_hints : []);
   let ports = {};
   let added = $state(-1);
   let keys = $state([]);
@@ -145,6 +152,14 @@
     added = -1;
     keys = keys.filter((_, position) => position !== index);
     setHardwareValues(removeDevice(draft, index));
+  }
+
+  function markInput(index, device, number, empty) {
+    update(index, setInputEmpty(device, number, empty, savedDevices.get(device.original_name) ?? null));
+  }
+
+  function hintFlag(device) {
+    return pvHints(hints, device).length ? t("devices.pvHint.flag") : "";
   }
 
   function liveFor(device, key) {
@@ -228,7 +243,15 @@
 
 {#snippet deviceField(device, index, field)}
   {@const key = fieldKey(field.path)}
-  <SettingField {field} value={device[key]} live={liveFor(device, key)} defaultValue={defaults[key]} onchange={(value) => update(index, setDeviceValue(device, key, value, savedDevices.get(device.original_name) ?? null))} />
+  {#if key === UNUSED_PV_INPUTS}
+    <PvInputsField {device} onchange={(number, empty) => markInput(index, device, number, empty)} />
+  {:else}
+    <SettingField {field} value={device[key]} live={liveFor(device, key)} defaultValue={defaults[key]} onchange={(value) => update(index, setDeviceValue(device, key, value, savedDevices.get(device.original_name) ?? null))} />
+  {/if}
+{/snippet}
+
+{#snippet inputHints(device, index)}
+  {#if PV_INPUT_KINDS.includes(deviceKind(device))}<PvInputHints hints={pvHints(hints, device)} onchange={(number, empty) => markInput(index, device, number, empty)} />{/if}
 {/snippet}
 
 {#snippet gridField(field)}
@@ -302,7 +325,8 @@
   {#each devices as device, index (keys[index] ?? `extra-${index}`)}
     {@const kind = deviceKind(device)}
     {#if kind === "local_api"}
-      <DeviceCard id={`inverter-${index}`} icon="zap" tone="c-inv" title={t("devices.inverter", { n: index + 1 })} model={t("devices.model.local")} meta={localSummary(device)} enabled={device.enabled !== false} connection={sourceLabel(device)} open={added === index} onremove={() => remove(index)}>
+      <DeviceCard id={`inverter-${index}`} icon="zap" tone="c-inv" title={t("devices.inverter", { n: index + 1 })} model={t("devices.model.local")} meta={localSummary(device)} enabled={device.enabled !== false} connection={sourceLabel(device)} flag={hintFlag(device)} open={added === index} onremove={() => remove(index)}>
+        {@render inputHints(device, index)}
         <div class="fields">{@render enabledField(device, index, "local")}</div>
         {@render levelled(fields.identity, { device, index })}
         {@render levelled(fields.common, { device, index })}
@@ -311,7 +335,8 @@
       {@const control = mqttControl(device, catalog)}
       {@const model = hardwareModel(catalog, device.hardware_model)}
       {@const modelWords = model?.label ? catalogText(model.label) : { text: t("devices.mqtt.unknownModel") }}
-      <DeviceCard id={`mqtt-${index}`} icon="zap" tone="c-inv" title={t("devices.inverter", { n: index + 1 })} model={modelWords.text + (device.alternative_layout ? ` · ${t("devices.mqtt.alternativeLayout")}` : "")} modelLang={modelWords.lang} meta={mqttSummary(device)} enabled={device.enabled !== false} connection={sourceLabel(device)} open={added === index} onremove={() => remove(index)}>
+      <DeviceCard id={`mqtt-${index}`} icon="zap" tone="c-inv" title={t("devices.inverter", { n: index + 1 })} model={modelWords.text + (device.alternative_layout ? ` · ${t("devices.mqtt.alternativeLayout")}` : "")} modelLang={modelWords.lang} meta={mqttSummary(device)} enabled={device.enabled !== false} connection={sourceLabel(device)} flag={hintFlag(device)} open={added === index} onremove={() => remove(index)}>
+        {@render inputHints(device, index)}
         <div class="fields">
           <SettingField field={own("name")} lang={null} value={device.name || ""} onchange={(value) => update(index, { ...device, name: value })} />
           <SettingField field={own("serial")} lang={null} value={device.serial_number || ""} onchange={(value) => update(index, { ...device, serial_number: value })} />
@@ -350,11 +375,13 @@
       {@const mqtt = device.mqtt || device.entry?.mqtt || {}}
       {@const state = externalState(device)}
       {@const consumer = mqtt.topic_family === CONSUMER_FAMILY}
-      <DeviceCard id={`external-${index}`} icon={consumer ? "plug-zap" : "zap"} tone={consumer ? "c-out" : "c-inv"} title={t(consumer ? "devices.consumer" : "devices.inverter", { n: index + 1 })} model={`${device.catalog_label || device.display_name || t("devices.external.label")} · ${t(`devices.external.model.${device.catalog_retired ? (device.proposal_id ? "readOnApply" : "notRead") : "read"}`)}`} meta={[device.name || t("settings.unnamed"), mqtt.device_id ? `ID ${mqtt.device_id}` : t("devices.idMissing"), t("devices.external.broker", { ref: mqtt.broker_ref || "default" }), t(`devices.external.state.${state}`)].join(" · ")} enabled={device.enabled !== false} onremove={() => remove(index)}>
+      <DeviceCard id={`external-${index}`} icon={consumer ? "plug-zap" : "zap"} tone={consumer ? "c-out" : "c-inv"} title={t(consumer ? "devices.consumer" : "devices.inverter", { n: index + 1 })} model={`${device.catalog_label || device.display_name || t("devices.external.label")} · ${t(`devices.external.model.${device.catalog_retired ? (device.proposal_id ? "readOnApply" : "notRead") : "read"}`)}`} meta={[device.name || t("settings.unnamed"), mqtt.device_id ? `ID ${mqtt.device_id}` : t("devices.idMissing"), t("devices.external.broker", { ref: mqtt.broker_ref || "default" }), t(`devices.external.state.${state}`)].join(" · ")} enabled={device.enabled !== false} flag={consumer ? "" : hintFlag(device)} onremove={() => remove(index)}>
+        {#if !consumer}{@render inputHints(device, index)}{/if}
         <p class="note"><Icon name="info" />{t(`devices.external.note.${device.catalog_retired ? (device.proposal_id ? "moving" : "retired") : device.entry ? "installed" : "added"}`)}</p>
         <div class="fields">
           <SettingField field={own("name")} lang={null} value={device.name || ""} onchange={(value) => update(index, { ...device, name: value })} />
           {@render enabledField(device, index, "external")}
+          {#if !consumer}<PvInputsField {device} onchange={(number, empty) => markInput(index, device, number, empty)} />{/if}
         </div>
         <div class="facts-list">
           {@render fact(t("devices.external.profile"), String(mqtt.broker_ref || "default"), t("devices.external.profileHint"), true)}
@@ -362,7 +389,8 @@
         </div>
       </DeviceCard>
     {:else if kind === "opendtu_http"}
-      <DeviceCard id={`opendtu-${index}`} icon="solar-panel" tone="c-pv" title={t("devices.readOnlyDevice", { n: index + 1 })} model={t("devices.model.opendtu")} meta={[device.name || t("settings.unnamed"), endpoint(device), device.serial ? `SN ${device.serial}` : "", t("devices.readOnly")].filter(Boolean).join(" · ")} enabled={device.enabled !== false} connection={sourceLabel(device)} open={added === index} onremove={() => remove(index)}>
+      <DeviceCard id={`opendtu-${index}`} icon="solar-panel" tone="c-pv" title={t("devices.readOnlyDevice", { n: index + 1 })} model={t("devices.model.opendtu")} meta={[device.name || t("settings.unnamed"), endpoint(device), device.serial ? `SN ${device.serial}` : "", t("devices.readOnly")].filter(Boolean).join(" · ")} enabled={device.enabled !== false} connection={sourceLabel(device)} flag={hintFlag(device)} open={added === index} onremove={() => remove(index)}>
+        {@render inputHints(device, index)}
         <div class="fields">
           {@render enabledField(device, index, "opendtu")}
           <SettingField field={own("name")} lang={null} value={device.name || ""} onchange={(value) => update(index, { ...device, name: value })} />
@@ -370,6 +398,7 @@
           <SettingField field={own("opendtuSerial")} lang={null} value={device.serial ?? ""} onchange={(value) => update(index, { ...device, serial: value })} />
           <SettingField field={{ ...own("opendtuPort"), type: "number" }} lang={null} value={device.port ?? ""} defaultValue={OPENDTU_DEFAULTS.port} onchange={(value) => update(index, { ...device, port: value })} />
           <SettingField field={{ ...own("opendtuMaxAge"), type: "number" }} lang={null} value={device.max_age_seconds ?? ""} defaultValue={OPENDTU_DEFAULTS.max_age_seconds} onchange={(value) => update(index, { ...device, max_age_seconds: value })} />
+          <PvInputsField {device} onchange={(number, empty) => markInput(index, device, number, empty)} />
         </div>
       </DeviceCard>
     {:else if kind === "e3dc_modbus"}

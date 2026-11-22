@@ -330,7 +330,7 @@ def _value_problem(field, raw, coerced):
             return "must be a list of whole numbers"
         if field_type == "month_list" and not all(1 <= item <= 12 for item in coerced):
             return "must list months from 1 to 12"
-        return None
+        return next(filter(None, (_range_problem(field, item) for item in coerced)), None)
     if field_type == "string_list" and not isinstance(coerced, list):
         return "must be a list of texts"
     return None

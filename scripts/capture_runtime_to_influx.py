@@ -36,6 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ems import config as ems_config
+from ems.pv_inputs import pv_inputs_kept, unused_pv_inputs
 from ems.clients import ShellyClient, ZendureClient, create_session, fetch_all_devices
 from ems.logging_utils import log_event, setup_logging
 from ems.power_direction import derive_house_load_w
@@ -111,7 +112,7 @@ def read_runtime_state(path):
         return None
 
 
-def build_device_fields(device_state):
+def build_device_fields(device_state, unused_inputs=frozenset()):
     # Numeric telemetry is written as float so the type matches the native EMS
     # writer (ems.history.influx_writer); mixing int/float for the same field
     # would make InfluxDB reject writes with a field type conflict.
@@ -157,9 +158,8 @@ def build_device_fields(device_state):
         "output_active": device_state.output > 0,
         "fault_active": device_state.fault_level > 0,
     }
-    reported = getattr(device_state, "pv_inputs_reported", None)
-    for index, carried in enumerate(reported or (), start=1):
-        if not carried:
+    for index, kept in enumerate(pv_inputs_kept(device_state, unused_inputs), start=1):
+        if not kept:
             fields.pop(f"solar{index}", None)
     return fields
 
@@ -264,6 +264,10 @@ def main():
         )
         for item in ems_config.http_control_device_configs(config.get("devices", []))
     ]
+    unused_by_name = {
+        item.get("name"): unused_pv_inputs(item)
+        for item in ems_config.http_control_device_configs(config.get("devices", []))
+    }
 
     if not devices:
         raise SystemExit("No devices configured in config.json")
@@ -334,7 +338,7 @@ def main():
                     "source": "zendure",
                     "run_id": args.run_id
                 },
-                build_device_fields(state),
+                build_device_fields(state, unused_by_name.get(device.name, frozenset())),
                 timestamp_ns
             )
             if line:

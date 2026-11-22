@@ -20,6 +20,10 @@ data/control-status.json
 data/schedules.json
 = schedule rules and the switch point last applied to each runtime value;
   see scheduler.md
+
+data/pv-input-watch.json
+= each PV input's highest power of the day and the dark days in a row, behind
+  the Admin console's PV input hints; see "The PV input watch" below
 ```
 
 The EMS creates the runtime state file on first start from config defaults. The
@@ -437,11 +441,47 @@ Shape (`schema_version: 1`):
 | `grid_meter.reading_in_dead_time` | `true` when a set write dead time held the cycle's new reading, which was not regulated on ([Dead time after a write](control-logic.md#dead-time-after-a-write)) |
 | `devices.<name>` | `online`, `last_seen_at`, `max_power_w`, `soc`, `min_soc`, `pv_input_w`, `output_w`, `output_limit_w`, `battery_charge_w`, `battery_discharge_w`, `battery`, `allocated_target_w`, `effective_target_w`, `limiting_reason`; telemetry fields are `null` for a device that never answered. `battery` is `yes`, `no` or `unknown` from the pack count the device reports; `diagnose --control` and `--control-quality` leave a `no` device out of their SOC analysis. `settings` holds each [device setting](#device-settings) the device has or that is set, as `{offered, reported, desired}` |
 | `grid_samples` | The last 30 cycles' `{cycle_at, grid_power_w, measured_at, reading_repeated, reading_in_dead_time}` |
+| `pv_input_hints` | The [PV input watch](#the-pv-input-watch)'s hints for the devices it saw since the EMS started: `{device, input, kind, days}` for an input that stayed dark (`kind` `dark`, `days` the dark days counted in its run, a day on which no input reached 50 W left out) and `{device, input, kind, peak_w}` for one `unused_pv_inputs` names that delivered today or the day before (`kind` `delivers`). Left out by simulation and replay runs |
 | `loaded_devices` | `{version, devices}`: one `{name, device_id, enabled, digest}` per device entry `config.json` held when this EMS started, after the startup upgrade; `device_id` is the id an MQTT mapping publishes an external device as (`null` otherwise), and `digest` covers the whole entry, `enabled` included. `ems/device_fingerprints.py` makes them, for the EMS and for the Admin console, which compares them with the file as saved now; `version` names the rule, so an Admin of another release does not compare. Left out by an EMS that was not given the devices it read |
 
 When a cycle fails before it decides, the `control` values are `null` rather
 than carried over; device telemetry is the last reading the EMS holds, dated by
 `last_seen_at`.
+
+## The PV input watch
+
+`pv-input-watch.json` sits beside the runtime-state file. After every cycle the
+EMS takes the PV inputs of each device the dashboard shows and that is online,
+controlled or read-only, and keeps each input's highest power of the day, a
+day beginning at midnight local time. When a day ends, an input that stayed at
+or below 1 W while another input of the same device reached 50 W counts one
+dark day; a day the input went above 1 W, or that its report did not carry it,
+starts the count again, and a day on which no input reached 50 W leaves it as
+it is. The days count in a row as the calendar has them: a day the EMS did not
+see the device, because it was stopped or the device offline all day, starts
+every count of that device again. Three dark days make a `dark` hint, until
+the input goes above 1 W again, the same day included; an input
+`unused_pv_inputs` names that reaches 50 W today or reached it the day before a
+`delivers` hint. Either lasts only while the device was seen today or the day
+before. Both go into the [live control snapshot](#live-control-snapshot)
+as `pv_input_hints`. The watch keeps each device by its name, so a renamed
+device starts afresh, and a name not seen for 30 days is dropped. A clock that
+goes back more than a day behind the day the watch holds, as when a wrong clock
+is corrected, is taken as the new date (`event=pv_input_watch_clock_back`); a
+smaller step back is left alone until the clock reaches the day again.
+
+The Admin console shows each hint the saved config has not settled on the
+device's card, with a button that marks the input empty or in use in the
+draft; nothing changes until the settings are applied. The EMS never changes
+the config itself. The file is written when a day ends and at most every ten
+minutes after a new peak, so a restart keeps the count. A file that is no JSON
+starts a new one (`event=pv_input_watch_unreadable`); one of another format
+version, or a device in it this cannot read, is left out without an event. A
+failure to write it never interrupts the control loop
+(`event=pv_input_watch_save_failed` once, `event=pv_input_watch_save_recovered`
+when a write succeeds again). Deleting it while the EMS is stopped starts every
+count afresh; a running EMS writes what it holds again. Simulation and replay
+runs neither read nor write it.
 
 ## Winter Fields
 

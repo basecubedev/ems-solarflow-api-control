@@ -133,6 +133,7 @@
       "pv_kwp": 1.0,
       "pv_priority_factor": 1.0,
       "battery_kwh": 1.0,
+      "unused_pv_inputs": [],
 
       "_comment_ac_directions": [
         "Which AC directions EMS may command on this device.",
@@ -166,6 +167,7 @@
       "pv_kwp": 1.0,
       "pv_priority_factor": 1.0,
       "battery_kwh": 1.0,
+      "unused_pv_inputs": [],
 
       "_comment_ac_directions": [
         "Which AC directions EMS may command on this device.",

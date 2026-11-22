@@ -5,11 +5,12 @@
   import Status from "../../../../shared/ui/Status.svelte";
   import DeviceCard from "../DeviceCard.svelte";
   import SettingField from "../SettingField.svelte";
+  import PvInputsField from "../PvInputsField.svelte";
   import CatalogText from "../CatalogText.svelte";
   import HomeWizardPairing from "../HomeWizardPairing.svelte";
   import { HOMEWIZARD_TYPE, PAIRING_NAME_FIELD, SERIAL_FIELD, TOKEN_FIELD } from "../../lib/homewizard.js";
   import { t, tn, say, catalogText } from "../../i18n/i18n.svelte.js";
-  import { generations, hardwareModels, maturityWords, mqttDefaultPort, operationWords, reasonKey } from "../../lib/devices.js";
+  import { generations, hardwareModels, maturityWords, mqttDefaultPort, operationWords, reasonKey, setInputEmpty, UNUSED_PV_INPUTS } from "../../lib/devices.js";
   import { isExternalProposal, observationKey, sourcesOf } from "../../lib/discovery.js";
   import { CONTINUITY, D0_TYPE, DEFAULT_GRID_METER, DEFAULT_INVERTER, SWITCH_REASONS, candidateState, catalogSection, deviceFieldKey, deviceValue, featureValue, formGeneration, gridFields, gridMeterType, hasSource, inverterCards, isReady, manualControl, meterIsMqtt, modelsForGeneration, pendingConfirmations, selectionControllable, setupDeviceFallbacks, topicMode, unselectedProposals } from "../../lib/setupDraft.js";
   import { setup } from "../../state/setup.svelte.js";
@@ -162,7 +163,12 @@
 {#snippet fieldList(list, item)}
   <div class="fields">
     {#each list as field (field.path)}
-      <SettingField {field} value={deviceValue(item, field, template)} defaultValue={fallbacks[deviceFieldKey(field.path)]} onchange={(value) => setItemField(item.source_id, field, value)} />
+      {#if deviceFieldKey(field.path) === UNUSED_PV_INPUTS}
+        {@const inputs = { [UNUSED_PV_INPUTS]: deviceValue(item, field, template) }}
+        <PvInputsField device={inputs} onchange={(number, empty) => setItemField(item.source_id, field, setInputEmpty(inputs, number, empty, { [UNUSED_PV_INPUTS]: [] })[UNUSED_PV_INPUTS])} />
+      {:else}
+        <SettingField {field} value={deviceValue(item, field, template)} defaultValue={fallbacks[deviceFieldKey(field.path)]} onchange={(value) => setItemField(item.source_id, field, value)} />
+      {/if}
     {/each}
   </div>
 {/snippet}

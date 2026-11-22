@@ -831,6 +831,39 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
     await expect(editor.locator('[data-device="opendtu-3"]')).toContainText("Balcony · 192.168.50.70 · SN 116491234567 · read only");
   });
 
+  test("an input the EMS saw dark for days is marked empty from its hint, another by its box, checked and saved", async ({ page, seedAdminScenario }) => {
+    await openModern(page);
+    await seedAdminScenario("mixed_transports");
+    await seedAdminScenario("ems_started_pv_hint");
+    await page.goto("/#/settings/devices");
+    await page.reload();
+    const card = page.getByTestId("devices-editor").locator('[data-device="inverter-0"]');
+    await expect(card.locator(".side")).toContainText("Check PV inputs");
+    await card.locator(".summary").click();
+    const hint = card.getByTestId("pv-hint");
+    await expect(hint).toContainText("PV 1 has delivered nothing for 3 days while the other inputs did.");
+
+    await hint.getByTestId("pv-hint-apply").click();
+    await expect(card.getByTestId("pv-hint")).toHaveCount(0);
+    await expect(card.locator(".side")).not.toContainText("Check PV inputs");
+    await card.locator("details.level").filter({ hasText: "Advanced settings" }).locator("summary").click();
+    await expect(card.getByTestId("pv-input-1")).not.toBeChecked();
+    await expect(card.getByTestId("pv-input-4")).toBeChecked();
+    await card.getByTestId("pv-input-4").uncheck();
+
+    await page.getByTestId("review").click();
+    await expect(page.getByTestId("settings-review")).toContainText("Settings are valid");
+    await page.getByTestId("apply").click();
+    await page.getByRole("dialog", { name: "Save the checked changes?" }).getByTestId("confirm").click();
+    await expect(page.getByTestId("settings-applied")).toBeVisible();
+
+    const saved = await (await page.request.get("/api/admin/maintenance/config")).json();
+    const written = JSON.parse(readFileSync(saved.config_path, "utf8"));
+    expect(written.devices[0].unused_pv_inputs).toEqual([1, 4]);
+    await page.reload();
+    await expect(card.locator(".side")).not.toContainText("Check PV inputs");
+  });
+
   test("the grid meter's type changes its fields, and removing it leaves none", async ({ page, seedAdminScenario }) => {
     await seededAt(page, seedAdminScenario, "#/settings/devices");
     const meter = page.getByTestId("devices-editor").locator('[data-device="grid-meter"]');

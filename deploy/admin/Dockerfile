@@ -89,6 +89,8 @@ COPY ems/winter_policies.py ./ems/winter_policies.py
 COPY ems/config.py ./ems/config.py
 COPY ems/retired_defaults.py ./ems/retired_defaults.py
 COPY ems/read_only_devices.py ./ems/read_only_devices.py
+# Which PV inputs a device entry marks empty, read by the config checks.
+COPY ems/pv_inputs.py ./ems/pv_inputs.py
 COPY ems/e3dc_modbus.py ./ems/e3dc_modbus.py
 COPY ems/sunspec.py ./ems/sunspec.py
 COPY ems/modbus_meters.py ./ems/modbus_meters.py

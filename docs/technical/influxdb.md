@@ -889,7 +889,9 @@ The cell history in the downsampled buckets starts when they do.
 `solar1` … `solar4` on `zendure_device` are written only for the inputs a
 device's report carries: a Zendure report's `solarPower1` … `solarPower4`, an
 external device's keys of the same name, an OpenDTU's strings. A reported 0 is
-kept; an input the report does not carry is left out rather than written as 0.
+kept; an input the report does not carry is left out rather than written as 0,
+and so is one the device's entry names in
+[`unused_pv_inputs`](configuration.md#device-settings), an input with no module.
 An E3/DC writes none: the EMS does not read its strings. Points written before this carry 0
 for the inputs a device does not have. An external device records only the
 values it sends (`output`, `solar`, `solarN`, `pack_in`/`pack_out`, `soc`),

@@ -620,13 +620,13 @@ def _build_test_mdns_provider():
     return provider, seeded
 
 
-def write_started_ems_snapshot(context=None, *, release="this"):
+def write_started_ems_snapshot(context=None, *, release="this", pv_input_hints=None):
     """Writes the snapshot of an EMS that has just read the config as saved now, fresh for half an hour.
 
     ``release`` says which EMS writes it: ``this`` one, one of an ``earlier``
     release, which says neither when it started nor what it read, or one of a
     ``later`` release, which names what it read by a rule this one cannot
-    compare.
+    compare. ``pv_input_hints`` are the hints its PV input watch offers.
     """
 
     context = context or detect_install_context()
@@ -643,6 +643,8 @@ def write_started_ems_snapshot(context=None, *, release="this"):
         status["loaded_devices"] = loaded_devices_record(device_fingerprints(config))
     if release == "later":
         status["loaded_devices"]["version"] = FINGERPRINT_VERSION + 1
+    if pv_input_hints is not None:
+        status["pv_input_hints"] = pv_input_hints
     path.write_text(json.dumps(status), encoding="utf-8")
 
 
@@ -2130,6 +2132,13 @@ def build_test_runtime(*, data_dir):
             return {"ok": True, "scenario": scenario, "manifests": manifests}
         elif scenario == "ems_started":
             write_started_ems_snapshot()
+        elif scenario == "ems_started_pv_hint":
+            first = next(
+                device["name"]
+                for device in (saved_config(detect_install_context()) or {}).get("devices", [])
+                if isinstance(device, dict) and device.get("name")
+            )
+            write_started_ems_snapshot(pv_input_hints=[{"device": first, "input": 1, "kind": "dark", "days": 3}])
         elif scenario == "older_ems_started":
             write_started_ems_snapshot(release="earlier")
         elif scenario == "later_ems_started":
