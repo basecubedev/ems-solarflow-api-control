@@ -445,13 +445,35 @@ def build_validation_context(config=None, runtime_state=None):
     }
 
 
-def attach_limits(payload, validation_context, offered_settings=None):
-    """The runtime payload with its bounds, each device's settings and the catalogue's defaults."""
+def switch_defaults(defaults):
+    """The value the EMS reads a runtime switch as, where config decides it, from the runtime defaults.
+
+    A stored value that is no word ``safe_bool`` knows reads as this: the system
+    switch as ``system.enabled``, a device's AC charging as its entry's
+    ``ac_charge_enabled``. Every other switch falls back to a fixed value.
+    """
+
+    defaults = defaults if isinstance(defaults, dict) else {}
+    system = defaults.get("system") if isinstance(defaults.get("system"), dict) else {}
+    devices = defaults.get("devices") if isinstance(defaults.get("devices"), dict) else {}
+    return {
+        "system": {"enabled": bool(system.get("enabled", True))},
+        "devices": {
+            name: {"ac_charge_enabled": bool(entry.get("ac_charge_enabled", True))}
+            for name, entry in devices.items()
+            if isinstance(entry, dict)
+        },
+    }
+
+
+def attach_limits(payload, validation_context, offered_settings=None, defaults=None):
+    """The runtime payload with its bounds, each device's settings, the catalogue's defaults and the switch defaults."""
 
     result = copy.deepcopy(payload) if isinstance(payload, dict) else {}
     result["_limits"] = effective_limits(validation_context)
     result["_limits"]["device_settings_offered"] = dict(offered_settings or {})
     result["_limits"]["catalogue_defaults"] = catalogue_runtime_defaults()
+    result["_limits"]["switch_defaults"] = switch_defaults(defaults)
     return result
 
 

@@ -38,9 +38,33 @@ export function deviceSettings(device, catalogue, offered) {
     .map((setting) => ({ ...setting, offered: has.has(setting.key) }));
 }
 
-/** A ``strict`` toggle shows on only for a stored ``true``, as the EMS reads a value that is no boolean as off. */
+/** The words the EMS's ``safe_bool`` reads as on and as off, compared trimmed and in lower case. */
+export const ON_WORDS = Object.freeze(["on", "true", "1", "yes", "enabled"]);
+export const OFF_WORDS = Object.freeze(["off", "false", "0", "no", "disabled"]);
+
+function storedBool(value, fallback) {
+  if (typeof value === "boolean") return value;
+  if (value === null || value === undefined) return fallback;
+  const word = String(value).trim().toLowerCase();
+  if (ON_WORDS.includes(word)) return true;
+  if (OFF_WORDS.includes(word)) return false;
+  return fallback;
+}
+
+/** The EMS's default for a switch config decides, from ``/api/runtime``'s ``switch_defaults``: the system's without a device. */
+export function switchDefault(limits, device, key) {
+  const scope = device ? limits?.switch_defaults?.devices?.[device] : limits?.switch_defaults?.system;
+  return scope?.[key] !== false;
+}
+
+/**
+ * A toggle shows a stored value as the EMS reads it: a boolean as it is, an on
+ * or off word as that, anything else as the field's ``fallback``, the EMS's own
+ * default for that switch. A ``strict`` toggle shows on only for a stored
+ * ``true``, as the EMS reads a value that is no boolean as off.
+ */
 export function normalizeValue(field, value) {
-  if (field.type === "toggle") return field.strict ? value === true : Boolean(value);
+  if (field.type === "toggle") return field.strict ? value === true : storedBool(value, field.fallback === true);
   if (field.type === "number") {
     if (value === null || value === undefined || value === "") return null;
     const number = Number(value);
@@ -60,7 +84,9 @@ export function reseed(fields, { values = {}, baseline = {}, initial = {}, fresh
   fields.forEach((field) => {
     const edited = !fresh && normalizeValue(field, values[field.name]) !== normalizeValue(field, baseline[field.name]);
     if (edited) return;
-    next[field.name] = field.type === "number" ? initial[field.name] ?? "" : initial[field.name];
+    if (field.type === "number") next[field.name] = initial[field.name] ?? "";
+    else if (field.type === "toggle") next[field.name] = normalizeValue(field, initial[field.name]);
+    else next[field.name] = initial[field.name];
     base[field.name] = initial[field.name];
   });
   return { values: next, baseline: base };
@@ -118,8 +144,8 @@ function settingsKept(device, payload, runtime) {
 }
 
 function offNote(device, payload, runtime) {
-  const emsOff = runtime?.system?.enabled === false;
-  const deviceOff = runtime?.devices?.[device]?.enabled === false && payload.enabled !== true;
+  const emsOff = !storedBool(runtime?.system?.enabled, switchDefault(runtime?._limits, null, "enabled"));
+  const deviceOff = !storedBool(runtime?.devices?.[device]?.enabled, true) && payload.enabled !== true;
   if (emsOff && deviceOff) return { key: "runtime.warn.bothOff", vars: { device } };
   if (emsOff) return { key: "runtime.warn.emsOff" };
   if (deviceOff) return { key: "runtime.warn.deviceOutside", vars: { device } };
@@ -133,7 +159,7 @@ function offNote(device, payload, runtime) {
 export function changeWarning(endpoint, payload, runtime) {
   if (endpoint === SYSTEM_ENDPOINT && payload.enabled === false) {
     const kept = Object.entries(runtime?.devices || {}).some(
-      ([name, entry]) => entry?.enabled !== false && settingsKept(name, {}, runtime).length,
+      ([name, entry]) => storedBool(entry?.enabled, true) && settingsKept(name, {}, runtime).length,
     );
     return [{ key: "runtime.warn.systemOff" }, kept ? { key: "runtime.warn.systemOffKept" } : null].filter(Boolean);
   }

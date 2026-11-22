@@ -11,7 +11,7 @@
   import { t, translatedOr } from "../i18n/i18n.svelte.js";
   import { auth } from "../state/auth.svelte.js";
   import { live, loadRuntime } from "../state/live.svelte.js";
-  import { SYSTEM_ENDPOINT, WINTER_ENDPOINT, AC_CHARGE_ENDPOINT, BATTERY_CARE_ENDPOINT, deviceEndpoint, acRole, settingWord, deviceSettings, withDefault } from "../lib/runtime.js";
+  import { SYSTEM_ENDPOINT, WINTER_ENDPOINT, AC_CHARGE_ENDPOINT, BATTERY_CARE_ENDPOINT, deviceEndpoint, acRole, settingWord, deviceSettings, switchDefault, withDefault } from "../lib/runtime.js";
 
   const runtime = $derived(live.runtime || {});
   const limits = $derived(runtime._limits || {});
@@ -33,7 +33,7 @@
   }
 
   const batteryCareFields = $derived([
-    { name: "enabled", type: "toggle", label: t("runtime.batteryCare") },
+    { name: "enabled", type: "toggle", fallback: true, label: t("runtime.batteryCare") },
     { name: "summer_full_points", type: "number", label: t("runtime.batteryCareSummer"), min: 0, max: 50, unit: "%" },
     { name: "winter_full_points", type: "number", label: t("runtime.batteryCareWinter"), min: 0, max: 50, unit: "%" },
     { name: "pv_only_points", type: "number", label: t("runtime.batteryCarePvOnly"), min: 0, max: 50, unit: "%" },
@@ -43,7 +43,7 @@
   ].map((field) => withDefault(field, defaults.battery_care?.[field.name])));
 
   const systemFields = $derived([
-    { name: "enabled", type: "toggle", label: t("runtime.emsEnabled") },
+    { name: "enabled", type: "toggle", fallback: switchDefault(limits, null, "enabled"), label: t("runtime.emsEnabled") },
     { name: "max_total_power", type: "number", label: t("runtime.maxTotal"), min: 0, max: Number(limits.system?.max_total_power || 5000), unit: "W" },
     { name: "min_output_limit", type: "number", label: t("runtime.minOutput"), min: 0, max: Number(limits.system?.min_output_limit || 5000), unit: "W" },
     { name: "loop_interval", type: "number", label: t("runtime.loop"), min: 1, max: 3600, unit: "s" },
@@ -52,8 +52,8 @@
   function deviceFields(name, device) {
     const maxPower = Number(limits.devices?.[name] || limits.fallback_device_max_power || 5000);
     const fields = [
-      { name: "enabled", type: "toggle", label: t("runtime.deviceEnabled") },
-      { name: "ac_charge_enabled", type: "toggle", label: t("runtime.acCharging") },
+      { name: "enabled", type: "toggle", fallback: true, label: t("runtime.deviceEnabled") },
+      { name: "ac_charge_enabled", type: "toggle", fallback: switchDefault(limits, name, "ac_charge_enabled"), label: t("runtime.acCharging") },
       { name: "ac_discharge_enabled", type: "toggle", strict: true, label: t("runtime.acDischarging"), help: t("runtime.acDischargingHelp") },
       { name: "max_power", type: "number", label: t("runtime.maxPower"), min: 0, max: maxPower, unit: "W" },
       { name: "pv_priority_factor", type: "number", label: t("runtime.pvPriority"), min: 0.01, max: 100, step: 0.01, unit: "×" },

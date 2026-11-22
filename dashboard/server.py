@@ -877,6 +877,7 @@ class DashboardRequestHandler(BaseHTTPRequestHandler):
                         runtime_payload(self.server.runtime_state),
                         self.server.runtime_validation,
                         _offered_device_settings(self.server),
+                        getattr(self.server.runtime_state, "defaults", None),
                     ),
                 )
             )
