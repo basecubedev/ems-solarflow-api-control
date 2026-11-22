@@ -760,9 +760,11 @@ More detail: [winter-mode.md](../winter-mode.md).
 
 ## Device Settings
 
-Each Zendure device entry defines static installation data. An E3/DC shown on
-the dashboard is a `devices[]` entry too, but a read-only one with only a few
-fields; see [E3/DC as a read-only device](#e3dc-as-a-read-only-device).
+Each Zendure device entry defines static installation data. An E3/DC or an
+inverter an OpenDTU reads, shown on the dashboard, is a `devices[]` entry too,
+but a read-only one with only a few fields; see
+[E3/DC as a read-only device](#e3dc-as-a-read-only-device) and
+[Inverter read by an OpenDTU](#inverter-read-by-an-opendtu-opendtu_http).
 
 ```json
 {
@@ -1793,6 +1795,69 @@ E3/DC is chosen as grid meter, and says so in the preview; **Settings &
 devices** → **Devices** has an **Add an E3/DC (read only)** button under the
 devices, and an E3/DC device card with its name, host or IP, port, Modbus unit
 ID and **Enabled** switch.
+
+### Inverter read by an OpenDTU (`opendtu_http`)
+
+A `devices[]` entry of type `opendtu_http` reads one inverter an
+[OpenDTU](https://www.opendtu.solar/) reaches, over the OpenDTU's local web API,
+without an MQTT broker. Every 5 seconds, on a thread of its own, it sends one
+`GET /api/livedata/status?inv=<serial>` and takes:
+
+- the AC power (`AC["0"].Power`) as the inverter's output,
+- each string's power (`DC["0"].Power`, `DC["1"].Power`, …) as `solar1`,
+  `solar2`, … and their sum as the PV power,
+- `limit_absolute` as the inverter's limit, shown read-only; `-1`, the
+  OpenDTU's word for a limit it cannot compute, is left out.
+
+The control loop only takes the last result, so a slow or unreachable OpenDTU
+never holds a cycle up; a result older than 30 seconds counts as no read. The
+tile is marked *Telemetry only*, counts in the house totals like an external
+device and has no battery. The device is **offline** while the OpenDTU does not
+reach the inverter (`reachable` false, at night), while its last answer from the
+inverter is older than `max_age_seconds` (`data_age`), or while the OpenDTU
+does not answer; an offline device counts 0 W, not its last values. An inverter
+the OpenDTU does not reach after it last fed at most 25 W, as at dusk, has
+measured that 0 W, so the energy statistics go on through the night. One the
+OpenDTU loses while it fed more, a radio link gone in daylight, and the other
+two cases leave the cycle unmeasured, as any device that is not read does. A request that fails backs off (1, 2, 4 … at most
+30 seconds). The EMS only ever sends `GET`; it never sets the limit, and like
+an E3/DC the device is **never a controlled device**.
+
+The history writes it as `zendure_device` with `device=<name>` and
+`source=read_only`, with only what the inverter reports: `output`, `solar`,
+one `solarN` per string (at most four), and `output_limit` when known;
+`available=false` while offline. A series written by the MQTT mapping under the
+same device name therefore goes on. Remove that mapped device from the EMS when
+the OpenDTU is read this way; read both ways at once, its output and PV count
+twice in the house totals.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `name` | required | Config name; shown on the dashboard, unique among all devices. |
+| `type` | required | `opendtu_http`. |
+| `ip` | required | IPv4 address or host name of the OpenDTU, without a scheme, port or path. |
+| `serial` | — | The inverter's serial as the OpenDTU shows it. Without it the OpenDTU must list exactly one inverter, whose serial the EMS then asks it for. |
+| `port` | `80` | The OpenDTU's web port. |
+| `max_age_seconds` | `60` | How old the OpenDTU's last answer from the inverter may be, `5`–`3600`. |
+| `enabled` | `true` | `false` hides the device and stops reading it. |
+
+Reading works without a password as long as **Allow read-only access** is on in
+the OpenDTU's security settings; otherwise the OpenDTU answers `401` and the
+device stays offline with `event=opendtu_http_read_error`.
+
+```json
+{
+  "devices": [
+    {"name": "WR1", "ip": "192.0.2.10", "sn": "EXAMPLE0000001"},
+    {"name": "TSUN OpenDTU", "type": "opendtu_http", "ip": "192.0.2.70", "serial": "116491234567"}
+  ]
+}
+```
+
+In the Admin console, **Settings & devices** → **Devices** has an **Add an
+OpenDTU inverter (read only)** button under the devices, and a card with its
+name, the OpenDTU's address, the inverter's serial number, port, maximum age and
+**Enabled** switch. The network search does not look for OpenDTUs.
 
 ### Legacy config compatibility
 

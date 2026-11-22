@@ -187,6 +187,11 @@ test("an address the server did not match is never taken for a device", () => {
   assert.deepEqual(buildReview(stranger, [], saved, saved).map((item) => item.state), ["missing", "new"]);
 });
 
+test("a read-only device in the settings is never reviewed as an inverter the search did not find", () => {
+  const saved = { devices: [{ kind: "opendtu_http", name: "OpenDTU", original_name: "OpenDTU", ip: "192.168.1.70" }, { kind: "e3dc_modbus", name: "E3DC", original_name: "E3DC", ip: "192.168.1.90", port: 1502 }] };
+  assert.deepEqual(buildReview([], [], saved, saved), []);
+});
+
 test("an inverter that moved offers its new address until the draft has it", () => {
   const draft = { devices: [{ name: "A", ip: "192.168.1.10", physical_device_id: ID_A, connection_id: CONN_A }] };
   const item = { role: "inverter", state: "conflict", configured: draft.devices[0], discovered: { ip: "192.168.1.11", physical_device_id: ID_A }, index: 0 };

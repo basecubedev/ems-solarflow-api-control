@@ -61,7 +61,14 @@ from ems.zendure_mqtt.builtin_broker import (
     builtin_broker_root_causes,
     builtin_profile_users,
 )
-from ems.read_only_devices import is_e3dc_modbus_device_config, is_read_only_device_config
+from ems.read_only_devices import (
+    E3DC_MODBUS_DEVICE_TYPE,
+    OPENDTU_HTTP_DEVICE_TYPE,
+    device_config_type,
+    is_e3dc_modbus_device_config,
+    is_opendtu_http_device_config,
+    is_read_only_device_config,
+)
 from ems.state_store import full_charge_assist_solar_phase
 
 
@@ -1180,6 +1187,14 @@ def diagnose_config_plausibility(checks, args, config_data):
                 diagnose_add(checks, "config", "error", "e3dc_modbus_device_invalid", f"devices.{index}: {exc}", index=index)
             else:
                 diagnose_add(checks, "config", "ok", "e3dc_modbus_device_read_only", f"devices.{index} is an E3/DC read over Modbus TCP; the EMS never controls it", index=index)
+            continue
+        if is_opendtu_http_device_config(item):
+            try:
+                config_mod.opendtu_http_device_settings(item)
+            except ValueError as exc:
+                diagnose_add(checks, "config", "error", "opendtu_http_device_invalid", f"devices.{index}: {exc}", index=index)
+            else:
+                diagnose_add(checks, "config", "ok", "opendtu_http_device_read_only", f"devices.{index} is an inverter read through an OpenDTU's web API; the EMS never controls it", index=index)
             continue
         name = item.get("name")
         path = f"devices.{index}"
@@ -2388,6 +2403,50 @@ def _diagnose_e3dc_modbus(checks, grid_meter, grid_tracker):
     return grid_tracker
 
 
+def _diagnose_opendtu_http_device(checks, device, name):
+    """Read one inverter an OpenDTU reads, once, as the EMS would."""
+
+    read_tracker = CommHealth(name, kind="read")
+    try:
+        settings = config_mod.opendtu_http_device_settings(device)
+    except ValueError as exc:
+        read_tracker.record_failure(error=exc, latency_ms=None)
+        diagnose_add(checks, "hardware", "warning", "opendtu_http_device_invalid", f"OpenDTU device {name} probe skipped: {exc}", device=name)
+        return read_tracker
+
+    from ems.opendtu_http import OpenDtuDevice
+
+    started = time.monotonic()
+    reader = OpenDtuDevice(settings)
+    reader.poll_once()
+    status = reader.status()
+    latency_ms = (time.monotonic() - started) * 1000.0
+    if status.online:
+        read_tracker.record_success(latency_ms)
+        reading = status.reading
+        diagnose_add(
+            checks, "hardware", "ok", "opendtu_http_device_read_ok",
+            f"OpenDTU device {name} returned the inverter's AC power and its strings",
+            device=name, output_w=round(reading.output_w, 1), solar_w=round(reading.solar_w, 1),
+            strings=len(reading.pv_inputs_w), limit_w=reading.limit_w,
+        )
+    elif status.measured_zero:
+        read_tracker.record_success(latency_ms)
+        diagnose_add(
+            checks, "hardware", "info", "opendtu_http_inverter_unreachable",
+            f"OpenDTU device {name} answered, but does not reach the inverter; normal at night",
+            device=name,
+        )
+    else:
+        read_tracker.record_failure(error=status.error, latency_ms=None)
+        diagnose_add(
+            checks, "hardware", "warning", "opendtu_http_device_read_failed",
+            f"OpenDTU device {name} could not be read: {status.error}",
+            device=name,
+        )
+    return read_tracker
+
+
 def _diagnose_e3dc_modbus_device(checks, device, name):
     read_tracker = CommHealth(name, kind="read")
     try:
@@ -2437,6 +2496,12 @@ def _diagnose_e3dc_modbus_device(checks, device, name):
             hint=_E3DC_MODBUS_SWITCH_HINT,
         )
     return read_tracker
+
+
+READ_ONLY_HARDWARE_PROBES = {
+    E3DC_MODBUS_DEVICE_TYPE: _diagnose_e3dc_modbus_device,
+    OPENDTU_HTTP_DEVICE_TYPE: _diagnose_opendtu_http_device,
+}
 
 
 def diagnose_hardware(checks, config_data, runtime_data=None):
@@ -2560,8 +2625,9 @@ def diagnose_hardware(checks, config_data, runtime_data=None):
         if zendure_mqtt_entries.is_mqtt_telemetry_device_config(device):
             continue
         name = str(device.get("name") or f"device-{index}")
-        if is_e3dc_modbus_device_config(device):
-            read_tracker = _diagnose_e3dc_modbus_device(checks, device, name)
+        if is_read_only_device_config(device):
+            probe = READ_ONLY_HARDWARE_PROBES[device_config_type(device)]
+            read_tracker = probe(checks, device, name)
             health["devices"].append({"name": name, "read": read_tracker.snapshot(), "write": None})
             continue
         read_tracker = CommHealth(name, kind="read")

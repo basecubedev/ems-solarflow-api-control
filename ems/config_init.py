@@ -9,10 +9,16 @@ import os
 
 from ems import config as config_mod
 from ems.config_catalog import grid_meter_port_carries_over, grid_meter_variant_field_spec
-from ems.read_only_devices import E3DC_MODBUS_DEVICE_TYPE, is_read_only_device_config
+from ems.read_only_devices import (
+    E3DC_MODBUS_DEVICE_TYPE,
+    OPENDTU_HTTP_DEVICE_TYPE,
+    device_config_type,
+    is_read_only_device_config,
+)
 from ems.influx_setup import DOCKER_FIRST_SECRET_FILE
 from ems.paths import resolve_template_path
 
+READ_ONLY_DEVICE_LABELS = {E3DC_MODBUS_DEVICE_TYPE: "E3/DC", OPENDTU_HTTP_DEVICE_TYPE: "OpenDTU"}
 
 GRID_METER_CHOICES = (
     ("shelly", "Shelly Pro 3EM / Shelly Plus/Pro Gen2/Gen3"),
@@ -1123,7 +1129,8 @@ def print_summary(config, config_path):
             if is_read_only_device_config(device):
                 print(
                     f"    {device.get('name', '(unnamed)')}: "
-                    f"{device.get('ip') or '(no IP)'}, E3/DC, read-only"
+                    f"{device.get('ip') or '(no IP)'}, "
+                    f"{READ_ONLY_DEVICE_LABELS[device_config_type(device)]}, read-only"
                 )
                 continue
             print(

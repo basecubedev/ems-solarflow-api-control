@@ -9,7 +9,7 @@
  * addresses themselves. Everything is pure.
  */
 
-import { commonDefaults, deviceKind, fieldKey, nextInverterName, newE3dc, mqttDefaultPort, mqttUsesTls, E3DC_DEFAULTS, IDENTITY_KEYS } from "./devices.js";
+import { commonDefaults, deviceKind, fieldKey, nextInverterName, newE3dc, mqttDefaultPort, mqttUsesTls, E3DC_DEFAULTS, IDENTITY_KEYS, READ_ONLY_KINDS } from "./devices.js";
 
 const OPAQUE = /^opaque:v1:[A-Za-z0-9_-]+$/;
 const CONNECTION = /^conn:v1:[A-Za-z0-9_-]+$/;
@@ -376,7 +376,7 @@ export function buildReview(discovered, proposals, draft, saved) {
   const devices = draft?.devices || [];
   devices.forEach((configured, index) => {
     const kind = deviceKind(configured);
-    if (kind === "external_mqtt" || kind === "e3dc_modbus") return;
+    if (kind === "external_mqtt" || READ_ONLY_KINDS.includes(kind)) return;
     const match = findInverter(configured, supported, used);
     if (!match) {
       if (kind !== "zendure_mqtt" && configured.original_name != null) results.push({ role: "inverter", state: "missing", configured, index });

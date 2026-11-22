@@ -3,16 +3,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  connectionSource,
   d0Serial,
   deviceFallbacks,
+  deviceKind,
   editableDraft,
   modelsForGeneration,
   mqttControl,
   mqttDefaultPort,
   mqttUsesTls,
   portOrDefault,
+  newE3dc,
   newLocalInverter,
   newMqttInverter,
+  newOpenDtu,
   nextInverterName,
   reasonKey,
   removeDevice,
@@ -171,4 +175,14 @@ test("an MQTT broker without a port listens on 8883 with TLS and on 1883 without
   assert.equal(mqttDefaultPort(true), 8883);
   assert.equal(mqttDefaultPort(false), 1883);
   assert.equal(mqttDefaultPort(undefined), 1883);
+});
+
+test("a new OpenDTU inverter is read only, takes the next free OpenDTU name and leaves its optional values to the EMS", () => {
+  const first = newOpenDtu([{ name: "INV_1" }]);
+  assert.deepEqual(first, { kind: "opendtu_http", original_name: null, name: "OpenDTU", ip: "", enabled: true, has_enabled_key: true });
+  assert.equal(newOpenDtu([{ name: "OpenDTU" }, { name: "OpenDTU2" }]).name, "OpenDTU3");
+  assert.equal(newE3dc([{ name: "E3DC" }]).name, "E3DC2");
+  assert.equal(deviceKind(first), "opendtu_http");
+  assert.equal(connectionSource(first), "opendtu_http");
+  assert.equal(deviceKind({ kind: "opendtu_http", sn: "x" }), "opendtu_http");
 });

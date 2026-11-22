@@ -42,7 +42,8 @@ a device** tile and **Open the devices** lead straight here.
   EMS name, address, serial and power, its connection (**Local connection**,
   *Zendure via your own MQTT broker*, *Zendure via the Zendure cloud*) and
   **Enabled** or **Disabled**. Under them **Add an inverter**, **Add an
-  inverter over MQTT** and **Add an E3/DC (read only)**.
+  inverter over MQTT**, **Add an E3/DC (read only)** and **Add an OpenDTU
+  inverter (read only)**.
 
 **What it changes:** nothing. This is the saved configuration.
 
@@ -124,6 +125,16 @@ device, not as an inverter, and at least one Zendure inverter is still needed.
 The search finds an E3/DC with the default unit ID 1 and offers it twice: as a
 grid meter (**Use as grid meter**) and as a read-only device (**Add as
 read-only device**); one set to another unit ID is added by hand.
+
+**An inverter read by an OpenDTU.** **Add an OpenDTU inverter (read only)**
+creates a card for one inverter an OpenDTU reaches, read over the OpenDTU's
+web API without an MQTT broker: name, the OpenDTU's address, the inverter's
+serial number as the OpenDTU shows it (left empty when the OpenDTU reads only
+this one inverter), port (80), maximum age (60 seconds) and **Enabled**. EMS
+only reads it and never sets its limit; like an E3/DC it counts as a read-only
+device, not as an inverter. The search does not look for OpenDTUs; add one by
+hand. See
+[Inverter read by an OpenDTU](../../technical/configuration.md#inverter-read-by-an-opendtu-opendtu_http).
 
 ### 5 — Change the grid meter, or an inverter's connection
 

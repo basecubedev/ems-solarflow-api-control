@@ -80,6 +80,7 @@ KINDS = {
     "external_disabled": _external("external_disabled", "cellar-battery", enabled=False),
     "e3dc": {"name": "e3dc", "type": "e3dc_modbus", "ip": "192.0.2.60"},
     "e3dc_disabled": {"name": "e3dc_disabled", "type": "e3dc_modbus", "ip": "192.0.2.61", "enabled": False},
+    "opendtu": {"name": "opendtu", "type": "opendtu_http", "ip": "192.0.2.70", "serial": "116491234567"},
 }
 
 _BROKERS = {
@@ -127,6 +128,7 @@ EXPECTED = {
     "external_disabled":  (False, False, None,           False, False, False, True,  True),
     "e3dc":               (False, False, None,           False, False, False, False, False),
     "e3dc_disabled":      (False, False, None,           False, False, False, False, False),
+    "opendtu":            (False, False, None,           False, False, False, False, False),
 }
 # fmt: on
 

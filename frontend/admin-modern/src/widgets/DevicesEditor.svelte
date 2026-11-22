@@ -33,11 +33,13 @@
     newE3dc,
     newLocalInverter,
     newMqttInverter,
+    newOpenDtu,
     manualBroker,
     mqttDefaultPort,
     mqttUsesTls,
     operationWords,
     onLocalBroker,
+    OPENDTU_DEFAULTS,
     reasonKey,
     removeDevice,
     savedByOriginalName,
@@ -155,6 +157,7 @@
     if (source === "zendure_mqtt") return t("settings.source.zendure_cloud_mqtt");
     if (source === "local_mqtt") return t("settings.source.local_mqtt");
     if (source === "modbus_tcp") return t("settings.kind.e3dc_modbus");
+    if (source === "opendtu_http") return t("settings.kind.opendtu_http");
     if (source === "local_api") return t("settings.kind.local_api");
     return "";
   }
@@ -358,7 +361,18 @@
           {@render fact(t("devices.external.deviceId"), String(mqtt.device_id || "") || t("devices.external.missing"), t("devices.external.deviceIdHint"), Boolean(mqtt.device_id))}
         </div>
       </DeviceCard>
-    {:else}
+    {:else if kind === "opendtu_http"}
+      <DeviceCard id={`opendtu-${index}`} icon="solar-panel" tone="c-pv" title={t("devices.readOnlyDevice", { n: index + 1 })} model={t("devices.model.opendtu")} meta={[device.name || t("settings.unnamed"), endpoint(device), device.serial ? `SN ${device.serial}` : "", t("devices.readOnly")].filter(Boolean).join(" · ")} enabled={device.enabled !== false} connection={sourceLabel(device)} open={added === index} onremove={() => remove(index)}>
+        <div class="fields">
+          {@render enabledField(device, index, "opendtu")}
+          <SettingField field={own("name")} lang={null} value={device.name || ""} onchange={(value) => update(index, { ...device, name: value })} />
+          <SettingField field={own("opendtuHost")} lang={null} value={device.ip || ""} onchange={(value) => update(index, { ...device, ip: value })} />
+          <SettingField field={own("opendtuSerial")} lang={null} value={device.serial ?? ""} onchange={(value) => update(index, { ...device, serial: value })} />
+          <SettingField field={{ ...own("opendtuPort"), type: "number" }} lang={null} value={device.port ?? ""} defaultValue={OPENDTU_DEFAULTS.port} onchange={(value) => update(index, { ...device, port: value })} />
+          <SettingField field={{ ...own("opendtuMaxAge"), type: "number" }} lang={null} value={device.max_age_seconds ?? ""} defaultValue={OPENDTU_DEFAULTS.max_age_seconds} onchange={(value) => update(index, { ...device, max_age_seconds: value })} />
+        </div>
+      </DeviceCard>
+    {:else if kind === "e3dc_modbus"}
       <DeviceCard id={`e3dc-${index}`} icon="battery" tone="c-bat" title={t("devices.readOnlyDevice", { n: index + 1 })} model={t("devices.model.e3dc")} meta={[device.name || t("settings.unnamed"), endpoint(device), t("devices.readOnly")].join(" · ")} enabled={device.enabled !== false} connection={sourceLabel(device)} open={added === index} onremove={() => remove(index)}>
         <div class="fields">
           {@render enabledField(device, index, "e3dc")}
@@ -375,6 +389,7 @@
     <button class="btn secondary small" type="button" onclick={() => add(newLocalInverter(devices, catalog))} data-testid="add-inverter"><Icon name="package-plus" size="sm" />{t("devices.add.local")}</button>
     <button class="btn secondary small" type="button" onclick={openMqttForm} disabled={Boolean(mqttForm)} data-testid="add-mqtt-inverter"><Icon name="radio-tower" size="sm" />{t("devices.add.mqtt")}</button>
     <button class="btn secondary small" type="button" onclick={() => add(newE3dc(devices))} data-testid="add-e3dc"><Icon name="eye" size="sm" />{t("devices.add.e3dc")}</button>
+    <button class="btn secondary small" type="button" onclick={() => add(newOpenDtu(devices))} data-testid="add-opendtu"><Icon name="eye" size="sm" />{t("devices.add.opendtu")}</button>
   </div>
 </div>
 

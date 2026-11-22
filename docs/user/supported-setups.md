@@ -320,6 +320,14 @@ with `inverterPower` and `solarPower`, published by the MQTT mapping for an
 OpenDTU. The other topics and keys have been read end to end against a real
 broker in tests only.
 
+An inverter an OpenDTU reads can also be read straight from the OpenDTU's own
+web API, without a broker: a `devices[]` entry of type `opendtu_http` with the
+OpenDTU's address and the inverter's serial
+([configuration reference](../technical/configuration.md#inverter-read-by-an-opendtu-opendtu_http)).
+It is **Reverse-engineered**: written from OpenDTU's
+[web API documentation](https://www.opendtu.solar/firmware/web_api/) and a
+user's sample answer, not yet confirmed on an installation.
+
 A consumer is part of the house load the grid meter already measures. The
 dashboard shows where that load goes and what each consumer cost
 ([Consumers](dashboard/consumers.md)); it never changes what EMS regulates.
