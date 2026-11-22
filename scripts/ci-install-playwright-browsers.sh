@@ -12,6 +12,14 @@
 # keeps the lock, so before the next attempt whatever apt left running is ended
 # and dpkg is told to finish what it had begun; a plain retry could never get
 # the lock.
+#
+# With PLAYWRIGHT_APT_ARCHIVES set, apt keeps the .deb archives it downloads in
+# that directory and installs from what is already there, so a CI cache of it
+# leaves the mirror only the package index and what changed. Afterwards apt
+# drops the archives the index no longer offers, so a cache carried over from an
+# older runner image does not grow, apt goes back to its own archive directory
+# for the rest of the job, and the directory is handed back to the calling user,
+# as apt writes it as root.
 set -euo pipefail
 
 if [ "$#" -eq 0 ]; then
@@ -23,6 +31,7 @@ attempts="${PLAYWRIGHT_INSTALL_ATTEMPTS:-3}"
 limit="${PLAYWRIGHT_INSTALL_TIMEOUT:-300}"
 backoff="${PLAYWRIGHT_INSTALL_BACKOFF:-10}"
 apt_conf_dir="${PLAYWRIGHT_APT_CONF_DIR:-/etc/apt/apt.conf.d}"
+apt_archives="${PLAYWRIGHT_APT_ARCHIVES:-}"
 
 as_root() {
   if [ "$(id -u)" -eq 0 ]; then
@@ -33,12 +42,27 @@ as_root() {
 }
 
 configure_apt() {
-  printf '%s\n' \
-    'Acquire::Retries "5";' \
-    'Acquire::http::Timeout "30";' \
-    'Acquire::https::Timeout "30";' \
-    'DPkg::Lock::Timeout "180";' \
-    | as_root tee "$apt_conf_dir/80-ci-playwright-install" >/dev/null
+  local archives="$1"
+  {
+    printf '%s\n' \
+      'Acquire::Retries "5";' \
+      'Acquire::http::Timeout "30";' \
+      'Acquire::https::Timeout "30";' \
+      'DPkg::Lock::Timeout "180";'
+    if [ -n "$archives" ]; then
+      printf 'Dir::Cache::Archives "%s/";\n' "$archives"
+      printf '%s\n' 'APT::Keep-Downloaded-Packages "true";'
+    fi
+  } | as_root tee "$apt_conf_dir/80-ci-playwright-install" >/dev/null
+}
+
+hand_back_archives() {
+  if [ -n "$apt_archives" ]; then
+    as_root apt-get autoclean -qq || echo "Could not drop obsolete archives from $apt_archives." >&2
+    configure_apt "" || echo "Could not point apt back at its own archive directory." >&2
+    as_root chown -R "$(id -u):$(id -g)" "$apt_archives" \
+      || echo "Could not hand $apt_archives back; the cache may not save it." >&2
+  fi
 }
 
 release_apt() {
@@ -48,9 +72,13 @@ release_apt() {
   as_root dpkg --configure -a || true
 }
 
-configure_apt
+if [ -n "$apt_archives" ]; then
+  mkdir -p "$apt_archives/partial"
+fi
+configure_apt "$apt_archives"
 for attempt in $(seq 1 "$attempts"); do
   if timeout --kill-after=30 "$limit" npx playwright install --with-deps "$@"; then
+    hand_back_archives
     exit 0
   fi
   echo "Playwright install attempt ${attempt} of ${attempts} failed or stalled." >&2

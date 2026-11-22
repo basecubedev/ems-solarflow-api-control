@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: 2026 basecubedev
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: Install Playwright browsers
+description: >-
+  Installs the named Playwright browsers and their system packages through
+  scripts/ci-install-playwright-browsers.sh, with the browser downloads and the
+  packages' .deb archives cached between runs, so a slow apt mirror is asked only
+  for what the cache does not hold. Needs the repository checked out and npm ci run.
+inputs:
+  browsers:
+    description: Space-separated Playwright browser names, for example "chromium firefox".
+    required: true
+runs:
+  using: composite
+  steps:
+    - id: key
+      shell: bash
+      env:
+        BROWSERS: ${{ inputs.browsers }}
+      run: |
+        version="$(node -p "require('./package-lock.json').packages['node_modules/playwright-core'].version")"
+        browsers="$(printf '%s' "$BROWSERS" | tr -s ' ' '+')"
+        prefix="playwright-${RUNNER_OS}-${ImageOS:-image}-${version}-${browsers}-"
+        echo "prefix=${prefix}" >> "$GITHUB_OUTPUT"
+        echo "key=${prefix}${ImageVersion:-version}" >> "$GITHUB_OUTPUT"
+    - uses: actions/cache@v6
+      with:
+        path: |
+          ~/.cache/ms-playwright
+          ~/.cache/playwright-apt
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: ${{ steps.key.outputs.prefix }}
+    - shell: bash
+      env:
+        BROWSERS: ${{ inputs.browsers }}
+      run: |
+        read -r -a browsers <<< "$BROWSERS"
+        PLAYWRIGHT_APT_ARCHIVES="$HOME/.cache/playwright-apt" scripts/ci-install-playwright-browsers.sh "${browsers[@]}"

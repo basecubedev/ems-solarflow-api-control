@@ -116,11 +116,15 @@ def test_every_project_the_job_runs_is_a_browser_it_installed():
             runs = " ".join(str(step.get("run", "")) for step in steps)
             if CONFIG not in runs:
                 continue
-            installed = re.search(r"ci-install-playwright-browsers\.sh ([a-z ]+)", runs)
+            installed = [
+                str((step.get("with") or {}).get("browsers", ""))
+                for step in steps
+                if step.get("uses") == "./.github/actions/playwright-browsers"
+            ]
             assert installed, f"{path.name}:{name} installs no browser"
-            assert projects <= set(installed.group(1).split()), (
+            assert projects <= set(" ".join(installed).split()), (
                 f"{path.name}:{name} runs {sorted(projects)} "
-                f"but installs {installed.group(1).split()}"
+                f"but installs {' '.join(installed).split()}"
             )
             checked += 1
     assert checked, f"no job actually runs {CONFIG}"

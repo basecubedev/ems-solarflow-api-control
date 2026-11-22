@@ -91,7 +91,10 @@ updates:
       prefix: "deps(docker)"
 
   - package-ecosystem: "github-actions"
-    directory: "/"
+    # The local actions under .github/actions pin actions of their own.
+    directories:
+      - "/"
+      - "/.github/actions/*"
     schedule:
       interval: "weekly"
       day: "monday"
