@@ -83,7 +83,7 @@ def test_the_live_data_carries_each_pack_s_power_and_state():
     fields = _state_telemetry_fields(parse_device(IDLE_AT_MIN_SOC))
 
     assert fields["battery_packs"] == [
-        {"pack": 1, "cell_min_v": 3.25, "cell_max_v": 3.26, "power_w": 4.0, "state": 2}
+        {"pack": 1, "cell_min_v": 3.25, "cell_max_v": 3.26, "power_w": 4.0, "state": 2, "temp_c": None}
     ]
 
 

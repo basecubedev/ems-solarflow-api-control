@@ -11,6 +11,7 @@ test("a value that is not a number renders as a dash, never as zero", () => {
     assert.equal(f.energy(value), MISSING);
     assert.equal(f.percent(value), MISSING);
     assert.equal(f.voltage(value), MISSING);
+    assert.equal(f.temperature(value), MISSING);
     assert.equal(f.money(value), MISSING);
   }
   assert.equal(f.power(0), "0\u00a0W");
@@ -30,6 +31,13 @@ test("a cell voltage keeps two decimals in the reader's language", () => {
   assert.equal(createFormat("en").voltage(3.2), "3.20\u00a0V");
   assert.equal(createFormat("en").voltage(3.175), "3.18\u00a0V");
   assert.equal(createFormat("de").voltage(3.17), "3,17\u00a0V");
+});
+
+test("a temperature keeps one decimal in the reader's language, below zero too", () => {
+  assert.equal(createFormat("en").temperature(13), "13.0\u00a0°C");
+  assert.equal(createFormat("de").temperature(24.95), "25,0\u00a0°C");
+  assert.equal(createFormat("en").temperature(-4.5), "−4.5\u00a0°C");
+  assert.equal(createFormat("en").temperature(0), "0.0\u00a0°C");
 });
 
 test("energy under one kilowatt-hour is shown in watt-hours", () => {

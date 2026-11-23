@@ -279,6 +279,7 @@ def _pack_cells(number, pack):
         cell_max_v=high,
         power_w=zendure_pack_power_w(pack.get("power")),
         state=zendure_pack_state(pack.get("state")),
+        temp_c=zendure_temperature_c(pack.get("maxTemp")),
     )
 
 

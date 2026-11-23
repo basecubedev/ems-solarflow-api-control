@@ -11,7 +11,7 @@
   import Status from "../../../shared/ui/Status.svelte";
   import { t, fmt, tv, translatedOr } from "../i18n/i18n.svelte.js";
   import { assistView, firmwareFacts } from "../lib/devices.js";
-  import { cellRange, cellText, packFlowTotal, packReadings, reportedCells } from "../lib/cells.js";
+  import { cellRange, cellText, packFlowTotal, packReadings, reportedCells, temperatureRange, temperatureText } from "../lib/cells.js";
   import { batteryDirection } from "../lib/flow.js";
 
   let { device } = $props();
@@ -28,12 +28,14 @@
   const cells = $derived(reportedCells(d));
   const cellsAll = $derived(cellRange(cells));
   const packFlow = $derived(packFlowTotal(d.packFlows));
+  const packTemps = $derived(temperatureRange(d.packTemps));
   const packRows = $derived(
     packReadings(d).map((pack) => ({
       pack: pack.pack,
       text: [
         pack.low !== null || pack.high !== null ? cellText(f, pack.low, pack.high) : null,
         pack.watts !== null ? f.power(pack.watts, { signed: true }) : null,
+        pack.celsius !== null ? f.temperature(pack.celsius) : null,
       ].filter(Boolean).join(" · "),
     })),
   );
@@ -100,6 +102,8 @@
     {#if d.packs !== null}<Fact label={t("device.packs")} icon="battery" value={String(d.packs)} />{/if}
     {#if cells.length}<Fact label={t("device.cells")} icon="battery-medium" tone="c-bat" value={cellText(f, cellsAll.low, cellsAll.high)} />{/if}
     {#if packFlow !== null}<Fact label={t("device.packPower")} icon="battery-charging" tone="c-bat" value={f.power(packFlow, { signed: true })} />{/if}
+    {#if d.temperatureC !== null}<Fact label={t("device.inverterTemp")} icon="thermometer" value={show(f.temperature(d.temperatureC))} missing={!d.online} wide />{/if}
+    {#if d.hasBattery && d.packTemps.length}<Fact label={t("device.packTemp")} icon="thermometer" tone="c-bat" value={show(temperatureText(f, packTemps.low, packTemps.high))} missing={!d.online} wide />{/if}
   </div>
 
   {#if packRows.length > 1}

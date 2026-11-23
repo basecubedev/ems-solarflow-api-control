@@ -9,7 +9,7 @@
 
 export const LOCALES = Object.freeze({ en: "en-GB", de: "de-DE", nl: "nl-NL", fr: "fr-FR" });
 export const MISSING = "—";
-const MINUS = "−";
+export const MINUS = "−";
 
 /** [unit, seconds per unit, use below this many seconds]; a year is everything past. */
 const RELATIVE_UNITS = Object.freeze([
@@ -101,6 +101,13 @@ export function createFormat(lang) {
     const number = finite(value);
     if (number === null) return MISSING;
     return `${two.format(number)}\u00a0V`;
+  }
+
+  /** A device or pack temperature, which the devices report to a tenth of a degree. */
+  function temperature(value) {
+    const number = finite(value);
+    if (number === null) return MISSING;
+    return `${number < 0 ? MINUS : ""}${one.format(Math.abs(number))}\u00a0°C`;
   }
 
   function money(value, currency = "EUR") {
@@ -202,5 +209,5 @@ export function createFormat(lang) {
     return `${one.format(parsed / (1024 * 1024 * 1024))}\u00a0GB`;
   }
 
-  return { lang, locale, power, energy, percent, voltage, money, number, time, date, dateTime, when, month, monthYear, weekday, relative, bytes };
+  return { lang, locale, power, energy, percent, voltage, temperature, money, number, time, date, dateTime, when, month, monthYear, weekday, relative, bytes };
 }

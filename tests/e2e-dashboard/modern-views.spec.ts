@@ -202,8 +202,8 @@ test.describe("Modern dashboard views: only the parts a system has @smoke", () =
     await shapeLive(page, withHardware((name) => (name === "WR1" ? PV_ONLY : BATTERY_ONLY)));
     await openModern(page, "#/devices");
     const facts = (name) => deviceCard(page, name).locator(".facts.main .fact-label");
-    await expect(facts("WR1")).toHaveText(["Solar", "Output", "Target", "Limit"]);
-    await expect(facts("WR2")).toHaveText(["Output", "Battery", "Target", "Limit", "Packs"]);
+    await expect(facts("WR1")).toHaveText(["Solar", "Output", "Target", "Limit", "Inverter temperature"]);
+    await expect(facts("WR2")).toHaveText(["Output", "Battery", "Target", "Limit", "Packs", "Inverter temperature"]);
     await expect(deviceCard(page, "WR1").locator(".soc")).toHaveCount(0);
     await expect(deviceCard(page, "WR2").locator(".soc")).toBeVisible();
     await expect(deviceCard(page, "WR2").locator("details.more summary", { hasText: "Solar" })).toHaveCount(0);
@@ -527,6 +527,28 @@ test.describe("Modern dashboard views: cell voltage @smoke", () => {
     const packs = two.getByTestId("device-cells");
     await packs.locator("summary").click();
     await expect(packs.locator(".fact-value")).toHaveText(["3.20–3.22 V · +30 W", "3.30–3.33 V · −10 W"]);
+  });
+
+  test("a device card names its inverter's and its packs' temperature, and leaves out one it does not report", async ({ page }) => {
+    await shapeLive(page, (body) => {
+      withCells(body);
+      body.devices.WR1.temperature_c = 31.5;
+      body.devices.WR1.battery_packs[0] = { ...body.devices.WR1.battery_packs[0], temp_c: 13 };
+      body.devices.WR2.temperature_c = null;
+      body.devices.WR2.battery_packs[0] = { ...body.devices.WR2.battery_packs[0], temp_c: 25 };
+      body.devices.WR2.battery_packs[1] = { ...body.devices.WR2.battery_packs[1], temp_c: 13.4 };
+    });
+    await openModern(page, "#/devices");
+    const fact = (card, label) => card.locator(".facts.main .fact").filter({ hasText: label }).locator(".fact-value");
+    const one = deviceCard(page, "WR1");
+    await expect(fact(one, "Inverter temperature")).toHaveText("31.5 °C");
+    await expect(fact(one, "Pack temperature")).toHaveText("13.0 °C");
+    const two = deviceCard(page, "WR2");
+    await expect(two.locator(".fact").filter({ hasText: "Inverter temperature" })).toHaveCount(0);
+    await expect(fact(two, "Pack temperature")).toHaveText("13.4–25.0 °C");
+    const packs = two.getByTestId("device-cells");
+    await packs.locator("summary").click();
+    await expect(packs.locator(".fact-value")).toHaveText(["3.20–3.22 V · 25.0 °C", "3.30–3.33 V · 13.4 °C"]);
   });
 
   test("a device without cell readings shows no cell voltage and no cell chart", async ({ page }) => {
