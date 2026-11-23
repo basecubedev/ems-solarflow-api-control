@@ -1061,7 +1061,7 @@ def test_the_shipped_band_does_not_flutter_against_a_steady_surplus():
 def lagging_load_signal():
     """The load filter's lag is what makes a collapsed band flutter against a steady surplus."""
 
-    with patch.dict(cfg.OUTPUT_CONTROL_CONFIG, {"filter_enabled": True}):
+    with patch.dict(cfg.OUTPUT_CONTROL_CONFIG, {"filter_enabled": True, "median_window": 2, "ema_alpha": 0.85}):
         yield
 
 

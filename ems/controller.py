@@ -1106,10 +1106,13 @@ class EMSController:
         """
 
         defaults = cfg.OUTPUT_CONTROL_DEFAULTS
+        caps = discharge_caps or [None] * len(self.devices)
         if not self.output_control_bool("device_ramp_enabled", defaults["device_ramp_enabled"]):
             adjusted_targets = []
-            for dev, target in zip(self.devices, targets):
-                if not self.device_output_control_allowed(dev):
+            for dev, target, cap in zip(self.devices, targets, caps):
+                if self.device_output_control_allowed(dev):
+                    target = self.device_target_within_limits(dev, target, cap)
+                else:
                     target = 0
                 self.commanded_device_targets[dev.name] = target
                 adjusted_targets.append(target)
@@ -1142,7 +1145,6 @@ class EMSController:
             * multiplier
         )
         ramped_targets = []
-        caps = discharge_caps or [None] * len(self.devices)
 
         for dev, target, cap in zip(self.devices, targets, caps):
             if not self.device_output_control_allowed(dev):
@@ -1176,15 +1178,20 @@ class EMSController:
                     ramp_limit_w=round(limit)
                 )
 
-            ramped = max(
-                self.device_charge_floor_w(dev), min(dev.max_power, ramped)
-            )
-            if cap is not None:
-                ramped = min(ramped, cap)
+            ramped = self.device_target_within_limits(dev, ramped, cap)
             self.commanded_device_targets[dev.name] = ramped
             ramped_targets.append(ramped)
 
         return ramped_targets
+
+    def device_target_within_limits(self, dev, target, cap):
+        """``target`` held between the device's charge floor and its ``max_power``, and below ``cap``.
+
+        ``cap`` is the battery care ceiling, or None.
+        """
+
+        bounded = max(self.device_charge_floor_w(dev), min(dev.max_power, target))
+        return bounded if cap is None else min(bounded, cap)
 
     def log_pv_priority_change(self, explanation, assist_held=()):
         """Record at INFO when the exclusive PV-first claim moves.

@@ -632,7 +632,8 @@ logs show target oscillation, stale telemetry, or excessive write frequency.
 The total's down-ramp (`ramp_down_w_per_cycle`) is intentional: while a device
 charges, it limits how fast the charge grows, and a device raises its charge
 slowly. The per-device ramp is off: the total's ramp already limits what the
-devices do together, see [configuration.md](technical/configuration.md). The values below are the defaults for
+devices do together. The load filter is on with a window of 1 and an EMA of
+1.0, which pass every reading unchanged, see [configuration.md](technical/configuration.md). The values below are the defaults for
 newly created configurations; an existing `config.json` keeps whatever it
 already sets (see [Compatibility](#compatibility-note) below).
 
@@ -642,10 +643,10 @@ already sets (see [Compatibility](#compatibility-note) below).
     "output_control": {
       "load_deadband_w": 5,
       "target_deadband_w": 5,
-      "filter_enabled": false,
+      "filter_enabled": true,
       "filter_method": "median_ema",
-      "median_window": 2,
-      "ema_alpha": 0.85,
+      "median_window": 1,
+      "ema_alpha": 1.0,
       "sign_change_fast_response_enabled": true,
       "sign_change_threshold_w": 50,
       "sign_change_filter_reset_factor": 1.0,

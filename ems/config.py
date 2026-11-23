@@ -50,10 +50,10 @@ BATTERY_CARE_WATT_KEYS = ("min_discharge_w", "pv_margin_min_w")
 OUTPUT_CONTROL_DEFAULTS = {
     "load_deadband_w": 5,
     "target_deadband_w": 5,
-    "filter_enabled": False,
+    "filter_enabled": True,
     "filter_method": "median_ema",
-    "median_window": 2,
-    "ema_alpha": 0.85,
+    "median_window": 1,
+    "ema_alpha": 1.0,
     "sign_change_fast_response_enabled": True,
     "sign_change_threshold_w": 50,
     "sign_change_filter_reset_factor": 1.0,
@@ -3527,6 +3527,25 @@ def safe_bool(value, default=False):
         return False
 
     return default
+
+
+def load_filter_smooths(output_control):
+    """Whether the load filter changes a reading, read as the controller reads ``output_control``.
+
+    It must be on with the median/EMA method, and a window above 1 or an EMA
+    below 1. The shipped filter is on with a window of 1 and an EMA of 1.0,
+    which pass every reading unchanged.
+    """
+
+    defaults = OUTPUT_CONTROL_DEFAULTS
+    values = output_control if isinstance(output_control, dict) else {}
+    if not safe_bool(values.get("filter_enabled", defaults["filter_enabled"]), defaults["filter_enabled"]):
+        return False
+    if str(values.get("filter_method", defaults["filter_method"])) != "median_ema":
+        return False
+    window = safe_int(values.get("median_window", defaults["median_window"]), defaults["median_window"], minimum=1)
+    alpha = min(1.0, safe_float(values.get("ema_alpha", defaults["ema_alpha"]), defaults["ema_alpha"], minimum=0.0))
+    return window > 1 or alpha < 1.0
 
 
 def device_power_ceiling(value, fallback=None):

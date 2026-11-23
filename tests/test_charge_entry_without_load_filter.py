@@ -24,10 +24,11 @@ pytestmark = [
 ]
 
 
-def test_without_the_filter_a_surplus_still_starts_a_charge():
+@pytest.mark.parametrize("output_control", [{"filter_enabled": False}, {}])
+def test_without_the_filter_or_with_the_shipped_one_a_surplus_still_starts_a_charge(output_control):
     """The charge entry read the filter's output, and without the filter it read none."""
 
-    with patch.dict(cfg.OUTPUT_CONTROL_CONFIG, {"filter_enabled": False}):
+    with patch.dict(cfg.OUTPUT_CONTROL_CONFIG, output_control):
         harness = Harness([ac_device()], load=-900, min_output_limit=ADMIN_STANDBY_FLOOR_W)
         harness.run(cycles=15, states=[no_pv_state(soc=50)])
 
