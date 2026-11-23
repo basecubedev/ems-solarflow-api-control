@@ -70,12 +70,20 @@ def test_the_shipped_defaults_leave_the_filter_off_with_its_light_settings_ready
 
 @pytest.mark.parametrize("before, after", [(200, 1200), (1200, 200)])
 def test_a_load_step_is_counted_once_by_the_shipped_defaults(before, after):
-    """With the filter on, this loop overshot a 1000 W step by 182 W and swung for 40 s."""
-
     outputs = run_step(before, after)
 
     settled = outputs[FIRST_CYCLE_AFTER_STEP:]
     assert settled == [after] * len(settled)
+
+
+def test_the_filter_switched_on_overshoots_a_rise_and_swings_as_the_docs_say():
+    """docs/technical/configuration.md quotes these figures: about 180 W over, about 40 s to stay within 25 W."""
+
+    after = run_step(200, 1200, filter_enabled=True)[FIRST_CYCLE_AFTER_STEP:]
+
+    assert 170 <= max(after) - 1200 <= 190
+    outside = [index for index, output in enumerate(after) if abs(output - 1200) > 25]
+    assert 35 <= (outside[-1] + 1) * INTERVAL_S <= 45
 
 
 @pytest.mark.parametrize("before, after", [(200, 1200), (1200, 200)])

@@ -571,9 +571,9 @@ shows at the grid after about 2 s and battery output reaches it before the next
 5 s cycle, and the filter then counted a load step twice: a median over two
 readings is their mean, the older one being the error the last write already
 corrected. In the control-loop simulation with those dynamics and the ramps out
-of the way (`tests/test_grid_filter_default.py`), a 1000 W step overshot by
-about 180 W and swung for about 40 s with the filter, and settled in the next
-cycle without it. Switch it on for a meter whose readings jump; the settings below apply
+of the way (`tests/test_grid_filter_default.py`), a 1000 W rise overshot by
+about 180 W and took about 40 s to stay within 25 W with the filter, and settled
+in the next cycle without it. Switch it on for a meter whose readings jump; the settings below apply
 only while it is on, and their defaults (`median_ema`, a window of 2, an EMA of
 0.85) are a light filter.
 
