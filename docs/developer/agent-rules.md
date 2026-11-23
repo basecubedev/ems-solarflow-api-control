@@ -541,12 +541,34 @@ Never convert “in progress”, “likely green”, “passed previously” or 
 run” into success. An RC or stable recommendation requires completed relevant
 gates and no known blocker.
 
+### Review until a round finds nothing
+
+Every change is reviewed before it is pushed, and reviewed again after every
+round that found something, until a round finds no defect (owner's decision,
+2026-11-23). Two rounds that each found something are not a review that ended:
+a pull request went out that way on 2026-11-23, and the review run after its
+merge found a rollback that stopped surplus charging.
+
+- A round is done by a reviewer that did not write the change, briefed with
+  the code and its intent rather than the author's verdict, one at a time.
+- Each defect it finds is fixed, with a test that fails without the fix where
+  a test can show it (§6), and folded into the commit it corrects (§17); the
+  folded state is the next round's subject. A question only the owner can
+  decide is asked, and nothing is built on it until it is answered.
+- A round is clean when it reports no defect, high, medium or low; nits are
+  fixed or listed in the report. Content changed after the clean round needs
+  another; a reworded commit message whose tree is unchanged needs only its new
+  text checked, since a message makes claims too.
+- The final report names the number of rounds, what each found, and that the
+  last was clean (§19). "Reviewed" without that is not a claim to make.
+
 ## 19. Final-report requirements
 
 Implementation reports MUST include, as relevant: starting and final branch and
 HEAD; working-tree status; root cause; authority/source-of-truth decision;
-production files changed; tests added; focused, full and browser results; CI
-status; commits; push status; and remaining limitations. Disclose skipped tests,
+production files changed; tests added; focused, full and browser results;
+review rounds, what each found and whether the last was clean; CI status;
+commits; push status; and remaining limitations. Disclose skipped tests,
 environment failures, accepted limitations and untested hardware behavior.
 
 ## 20. Prohibited anti-patterns
