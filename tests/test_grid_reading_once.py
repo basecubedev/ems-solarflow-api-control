@@ -13,6 +13,7 @@ every few cycles.
 
 import logging
 import statistics
+from collections import deque
 from unittest.mock import patch
 
 import pytest
@@ -915,7 +916,7 @@ def test_a_repeated_reading_feeds_nothing_to_the_load_filter(monkeypatch):
 def leaving_controller(monkeypatch, repeated):
     ems = controller_for_totals(monkeypatch)
     ems.commanded_total_w = -300
-    ems.load_history.extend([100, 120])
+    ems.load_history = deque([100, 120], maxlen=2)
     ems.filtered_load_w = 110
     ems.charges_being_left.add("WR1")
     ems.grid_reading_repeated = repeated

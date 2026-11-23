@@ -3273,12 +3273,13 @@ def test_emsctl_diagnose_control_names_the_limit_the_cycle_named(tmp_path):
 @pytest.mark.parametrize(
     "output_control, said, not_said",
     [
-        ({"filter_enabled": True}, "Filter adjusted measurement to 131 W import", "Regulated on"),
+        ({"median_window": 2, "ema_alpha": 0.85}, "Filter adjusted measurement to 131 W import", "Regulated on"),
+        ({}, "Regulated on 131 W import, the reading less the writes it cannot show yet", "Filter adjusted"),
         ({"filter_enabled": False}, "Regulated on 131 W import, the reading less the writes it cannot show yet", "Filter adjusted"),
     ],
 )
-def test_the_control_path_credits_the_load_filter_only_while_it_runs(tmp_path, output_control, said, not_said):
-    """Without the filter, a reading corrected for a write is not the filter's doing."""
+def test_the_control_path_credits_the_load_filter_only_while_it_smooths(tmp_path, output_control, said, not_said):
+    """The shipped filter passes every reading on, so a reading corrected for a write is not the filter's doing."""
 
     write_control_runtime(tmp_path)
     write_live_control_status(tmp_path)

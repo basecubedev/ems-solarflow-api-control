@@ -5,7 +5,7 @@
     "Example profiles: docs/configuration-examples.md."
   ],
   "config_schema_version": 3,
-  "config_defaults_revision": 3,
+  "config_defaults_revision": 4,
 
   "config_upgrade": {
     "_comment": [
@@ -46,10 +46,10 @@
       ],
       "load_deadband_w": 5,
       "target_deadband_w": 5,
-      "filter_enabled": false,
+      "filter_enabled": true,
       "filter_method": "median_ema",
-      "median_window": 2,
-      "ema_alpha": 0.85,
+      "median_window": 1,
+      "ema_alpha": 1.0,
       "sign_change_fast_response_enabled": true,
       "sign_change_threshold_w": 50,
       "sign_change_filter_reset_factor": 1.0,

@@ -357,7 +357,7 @@
           {
             "path": "system.output_control.filter_enabled",
             "label": "Filter load signal",
-            "description": "Smooths measured grid power before EMS reacts to it. Off by default, so EMS acts on every reading at once; switch it on for a meter whose readings jump.",
+            "description": "Smooths measured grid power before EMS reacts to it. On by default with a median window of 1 and an EMA strength of 1, which pass every reading on unchanged; for a meter whose readings jump, set the window to 2 and the strength to 0.85.",
             "type": "boolean",
             "level": "expert",
             "scope": "both",
@@ -367,7 +367,7 @@
             "backup_recommended": true,
             "risk": "control_stability",
             "group": "output_control",
-            "default": false,
+            "default": true,
             "template": true,
             "secret": false
           },
@@ -405,7 +405,7 @@
             "risk": "control_stability",
             "min": 1,
             "group": "output_control",
-            "default": 2,
+            "default": 1,
             "template": true,
             "secret": false
           },
@@ -424,7 +424,7 @@
             "min": 0,
             "max": 1,
             "group": "output_control",
-            "default": 0.85,
+            "default": 1.0,
             "template": true,
             "secret": false
           },

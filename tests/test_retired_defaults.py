@@ -54,7 +54,15 @@ def test_every_retired_default_is_a_tuning_value_the_template_has_replaced():
                 assert not isinstance(retired, (bool, str)), entry.path
             assert not same_value(current, retired), entry.path
         for path, values in entry.shipped_with:
-            assert any(same_value(_at(TEMPLATE, path), value) for value in values), (entry.path, path)
+            moved_alongside = [
+                retired for other in RETIRED_DEFAULTS
+                if other.path == path and other.revision == entry.revision for retired in other.values
+            ]
+            assert any(
+                same_value(_at(TEMPLATE, path), value) or any(same_value(value, moved) for moved in moved_alongside)
+                for value in values
+            ), (entry.path, path)
+        assert 0 <= entry.shipped_from_revision < entry.revision, entry.path
     assert TEMPLATE[CONFIG_REVISION_KEY] == DEFAULTS_REVISION
     assert config_catalog.build_default_template()[CONFIG_REVISION_KEY] == DEFAULTS_REVISION
 
@@ -65,10 +73,18 @@ def test_the_switches_the_refresh_moves_say_why():
     switches = {entry.path: entry.switch_reason for entry in RETIRED_DEFAULTS if entry.switch_reason is not None}
 
     assert list(switches) == [
-        "system.output_control.filter_enabled",
         "system.output_control.device_ramp_enabled",
+        "system.output_control.filter_enabled",
     ]
     assert all(reason.strip() for reason in switches.values())
+
+
+def test_the_entries_are_read_in_the_order_of_their_revisions():
+    """Each revision's settings are read as the revisions before it left them."""
+
+    revisions = [entry.revision for entry in RETIRED_DEFAULTS]
+
+    assert revisions == sorted(revisions)
 
 
 def test_an_old_default_moves_and_a_changed_value_stays():
@@ -154,64 +170,138 @@ def test_a_value_set_after_the_refresh_stays_even_at_an_old_default(tmp_path):
     assert backups == []
 
 
-def _filter_config(revision):
-    return {
+PASSES_EVERY_READING = {"filter_enabled": True, "median_window": 1, "ema_alpha": 1.0}
+
+
+def _filter_config(revision, filter_enabled=True, **output_control):
+    values = {
         "config_schema_version": 3,
-        CONFIG_REVISION_KEY: revision,
-        "system": {"output_control": {"filter_enabled": True, "median_window": 2, "ema_alpha": 0.85}},
+        "system": {"output_control": {
+            "filter_enabled": filter_enabled, "median_window": 2, "ema_alpha": 0.85, **output_control
+        }},
         "devices": [],
     }
+    if revision is not None:
+        values[CONFIG_REVISION_KEY] = revision
+    return values
 
 
-def test_a_load_filter_still_on_from_the_template_is_switched_off_once(tmp_path):
-    raw, path, messages, backups = _startup(tmp_path, _filter_config(1))
+def _refreshed(messages):
+    return next(message for level, message in messages if "Config defaults refreshed" in message)
+
+
+@pytest.mark.parametrize("revision", [None, 1])
+def test_a_load_filter_from_a_release_s_template_passes_every_reading_after_the_refresh(tmp_path, revision):
+    raw, path, messages, backups = _startup(tmp_path, _filter_config(revision))
 
     written = json.loads(path.read_text())
-    assert written["system"]["output_control"] == {"filter_enabled": False, "median_window": 2, "ema_alpha": 0.85}
+    assert written["system"]["output_control"] == PASSES_EVERY_READING
     assert written[CONFIG_REVISION_KEY] == DEFAULTS_REVISION
     assert len(backups) == 1
-    refreshed = next(message for level, message in messages if "Config defaults refreshed" in message)
-    assert "system.output_control.filter_enabled: true -> false" in refreshed
+    assert "system.output_control.median_window: 2 -> 1" in _refreshed(messages)
+    assert "filter_enabled" not in _refreshed(messages)
 
 
-def test_a_load_filter_switched_on_after_the_refresh_stays_on(tmp_path):
-    raw, path, messages, backups = _startup(tmp_path, _filter_config(DEFAULTS_REVISION))
+@pytest.mark.parametrize("revision", [2, 3])
+def test_a_load_filter_main_s_template_switched_off_is_on_again_and_passes_every_reading(tmp_path, revision):
+    """A release before main's switch reads a filter switched off as no surplus charge, so a rollback must find it on."""
 
-    assert json.loads(path.read_text())["system"]["output_control"]["filter_enabled"] is True
+    raw, path, messages, backups = _startup(tmp_path, _filter_config(revision, filter_enabled=False))
+
+    assert json.loads(path.read_text())["system"]["output_control"] == PASSES_EVERY_READING
+    assert len(backups) == 1
+    assert "system.output_control.filter_enabled: false -> true" in _refreshed(messages)
+
+
+@pytest.mark.parametrize("revision", [2, 3])
+def test_a_load_filter_switched_on_after_main_s_switch_keeps_its_light_settings(tmp_path, revision):
+    """Main's template shipped it off; on there, someone chose the filter for a meter whose readings jump."""
+
+    values = _filter_config(revision)
+
+    raw, path, messages, backups = _startup(tmp_path, values)
+
+    assert json.loads(path.read_text())["system"]["output_control"] == values["system"]["output_control"]
     assert backups == []
 
 
+@pytest.mark.parametrize("revision", [None, 1])
+@pytest.mark.parametrize(
+    "settings, after",
+    [
+        ({"median_window": 2, "ema_alpha": 0.85}, {"median_window": 1, "ema_alpha": 1.0}),
+        ({}, {}),
+    ],
+)
+def test_a_load_filter_switched_off_by_hand_before_main_s_switch_stays_off(tmp_path, revision, settings, after):
+    """No template before revision 2 shipped the filter off, so that file's off was someone's choice.
+
+    Without a window or an EMA in the file, only the revision the off was
+    shipped from tells it apart from main's.
+    """
+
+    values = {"config_schema_version": 3, "system": {"output_control": {"filter_enabled": False, **settings}}, "devices": []}
+    if revision is not None:
+        values[CONFIG_REVISION_KEY] = revision
+
+    raw, path, messages, backups = _startup(tmp_path, values)
+
+    assert json.loads(path.read_text())["system"]["output_control"] == {"filter_enabled": False, **after}
+
+
+@pytest.mark.parametrize(
+    "output_control, moved",
+    [
+        ({"filter_enabled": True}, {}),
+        ({"filter_enabled": True, "median_window": 3, "ema_alpha": 0.65}, {"median_window": "3 -> 1", "ema_alpha": "0.65 -> 1.0"}),
+        ({"filter_enabled": True, "median_window": 3, "ema_alpha": 0.85}, {"median_window": "3 -> 1", "ema_alpha": "0.85 -> 1.0"}),
+    ],
+)
+def test_a_first_release_s_load_filter_passes_every_reading_after_its_settings_move_twice(tmp_path, output_control, moved):
+    """v0.4.0 to v0.4.2 shipped a window of 3 and an EMA of 0.65 or 0.85; each moves once to today's, said once."""
+
+    values = {"config_schema_version": 3, "system": {"output_control": output_control}, "devices": []}
+
+    raw, path, messages, backups = _startup(tmp_path, values)
+
+    written = json.loads(path.read_text())["system"]["output_control"]
+    assert written == {key: PASSES_EVERY_READING[key] for key in output_control}
+    for key, change in moved.items():
+        assert _refreshed(messages).count(f"system.output_control.{key}:") == 1
+        assert f"system.output_control.{key}: {change}" in _refreshed(messages)
+
+
+@pytest.mark.parametrize("filter_enabled", [True, False])
+def test_a_load_filter_set_after_the_refresh_stays(tmp_path, filter_enabled):
+    raw, path, messages, backups = _startup(tmp_path, _filter_config(DEFAULTS_REVISION, filter_enabled=filter_enabled))
+
+    assert json.loads(path.read_text())["system"]["output_control"] == _filter_config(
+        DEFAULTS_REVISION, filter_enabled=filter_enabled
+    )["system"]["output_control"]
+    assert backups == []
+
+
+@pytest.mark.parametrize("filter_enabled", [True, False])
+@pytest.mark.parametrize("revision", [1, 3])
 @pytest.mark.parametrize(
     "tuned",
     [{"median_window": 5}, {"ema_alpha": 0.4}, {"median_window": 1, "ema_alpha": 1.0},
-     {"median_window": 3}, {"ema_alpha": 0.65}],
+     {"median_window": 3}, {"ema_alpha": 0.65}, {"median_window": 2, "ema_alpha": 1.0},
+     {"median_window": 1, "ema_alpha": 0.85}],
 )
-def test_a_load_filter_tuned_by_hand_stays_on(tmp_path, tuned):
+def test_a_load_filter_tuned_by_hand_stays(tmp_path, tuned, revision, filter_enabled):
     """A window or EMA other than the template's says someone chose the filter, as for a meter whose readings jump.
 
     An older release's 3 or 0.65 in a file that records a revision was set
     after the refresh that moved them, so by hand too.
     """
 
-    values = _filter_config(1)
-    values["system"]["output_control"].update(tuned)
+    values = _filter_config(revision, filter_enabled=filter_enabled, **tuned)
 
     raw, path, messages, backups = _startup(tmp_path, values)
 
-    assert json.loads(path.read_text())["system"]["output_control"] == {**values["system"]["output_control"]}
+    assert json.loads(path.read_text())["system"]["output_control"] == values["system"]["output_control"]
     assert backups == []
-
-
-@pytest.mark.parametrize(
-    "output_control",
-    [{"filter_enabled": True}, {"filter_enabled": True, "median_window": 3, "ema_alpha": 0.65}],
-)
-def test_a_load_filter_with_settings_a_release_shipped_is_switched_off(tmp_path, output_control):
-    values = {"config_schema_version": 3, "system": {"output_control": output_control}, "devices": []}
-
-    raw, path, messages, backups = _startup(tmp_path, values)
-
-    assert json.loads(path.read_text())["system"]["output_control"]["filter_enabled"] is False
 
 
 def _ramp_config(revision, **output_control):

@@ -11,10 +11,14 @@ exactly an old default before the refresh cannot be told apart and moves too.
 
 Only tuning values are listed. A switch, a write gate, a path or an identity is
 never refreshed, and neither is ``system.min_output_limit`` 0, which switches
-the standby floor off and is as likely chosen. Two switches are moved, the load
-filter and the per-device ramp, the owner's call (2026-11-23), each with its
-reason in ``switch_reason`` and only while its own settings show it was left as
-shipped (``shipped_with``).
+the standby floor off and is as likely chosen. Two switches are moved, the
+owner's call (2026-11-23), each with its reason in ``switch_reason`` and only
+while its own settings show it was left as shipped (``shipped_with``): the
+per-device ramp is switched off, and a load filter that main's template had
+switched off for one day is switched on again. The shipped filter passes every
+reading unchanged (a window of 1, an EMA of 1.0) rather than being off, because
+a release before 2026-11-23 reads a filter switched off as no surplus charge,
+so a rollback keeps charging.
 Each entry was the template's value in the releases it names. Two are the
 owner's call (2026-11-13): battery
 care's first points, which main carried that day only, its PV-only 0 among
@@ -29,7 +33,7 @@ Import-side-effect-free.
 import copy
 from dataclasses import dataclass
 
-DEFAULTS_REVISION = 3
+DEFAULTS_REVISION = 4
 CONFIG_REVISION_KEY = "config_defaults_revision"
 RUNTIME_REVISION_KEY = "defaults_revision"
 
@@ -46,8 +50,11 @@ class RetiredDefault:
     the template's rather than a choice. ``shipped_with`` names settings that
     tell a value left as shipped from a tuned one: the entry moves a value only
     while each of them is absent or at one of the values listed for it. They are
-    read after the earlier revisions' entries, so an older default of theirs has
-    already become today's, and only today's is listed.
+    read as the earlier revisions' entries left them and before the entries of
+    the entry's own revision move them: an older default of theirs has already
+    become the one this revision starts from. ``shipped_from_revision`` names
+    the first revision whose template carried the value; a file recording an
+    earlier one got it by hand.
     """
 
     path: str
@@ -57,14 +64,15 @@ class RetiredDefault:
     replacement: object = TODAYS_DEFAULT
     switch_reason: str | None = None
     shipped_with: tuple = ()
+    shipped_from_revision: int = 0
 
 
 RETIRED_DEFAULTS = (
     RetiredDefault("system.loop_interval", (3,), "v0.4.2-v0.7.0"),
     RetiredDefault("system.deadband", (10,), "v0.1.0-v0.7.0"),
     RetiredDefault("system.output_control.target_deadband_w", (10,), "v0.4.0-v0.7.0"),
-    RetiredDefault("system.output_control.median_window", (3,), "v0.4.0-v0.4.2"),
-    RetiredDefault("system.output_control.ema_alpha", (0.65,), "v0.4.0"),
+    RetiredDefault("system.output_control.median_window", (3,), "v0.4.0-v0.4.2", replacement=2),
+    RetiredDefault("system.output_control.ema_alpha", (0.65,), "v0.4.0", replacement=0.85),
     RetiredDefault("system.output_control.ramp_up_w_per_cycle", (300,), "v0.4.0-v0.4.2"),
     RetiredDefault("system.output_control.ramp_down_w_per_cycle", (500,), "v0.4.0-v0.7.0"),
     RetiredDefault("system.output_control.device_ramp_up_w_per_cycle", (250,), "v0.4.0-v0.4.2"),
@@ -80,15 +88,12 @@ RETIRED_DEFAULTS = (
     RetiredDefault("battery_care.winter_full_points", (10,), "main 2026-11-13"),
     RetiredDefault("battery_care.pv_only_points", (0,), "main 2026-11-13"),
     RetiredDefault(
-        "system.output_control.filter_enabled", (True,), "v0.4.0-v0.10.7", revision=2,
-        switch_reason=(
-            "The template switched the load filter on for every installation; measured on a "
-            "SolarFlow 800 Pro 2 it counted a load step twice (issue #341)."
-        ),
-        shipped_with=(
-            ("system.output_control.median_window", (2,)),
-            ("system.output_control.ema_alpha", (0.85,)),
-        ),
+        "system.output_control.median_window", (2,), "v0.5.0-v0.10.7", revision=2,
+        shipped_with=(("system.output_control.ema_alpha", (0.85,)),),
+    ),
+    RetiredDefault(
+        "system.output_control.ema_alpha", (0.85,), "v0.4.1-v0.10.7", revision=2,
+        shipped_with=(("system.output_control.median_window", (2,)),),
     ),
     RetiredDefault(
         "system.output_control.device_ramp_enabled", (True,), "v0.4.0-v0.10.7", revision=3,
@@ -100,6 +105,33 @@ RETIRED_DEFAULTS = (
             ("system.output_control.ramp_enabled", (True,)),
             ("system.output_control.device_ramp_up_w_per_cycle", (400,)),
             ("system.output_control.device_ramp_down_w_per_cycle", (200,)),
+        ),
+    ),
+    RetiredDefault(
+        "system.output_control.filter_enabled", (False,), "main 2026-11-23", revision=4,
+        shipped_from_revision=2,
+        switch_reason=(
+            "Main's template switched the load filter off (issue #341); a release before that reads "
+            "a filter switched off as no surplus charge, so the shipped filter is on again and "
+            "passes every reading unchanged."
+        ),
+        shipped_with=(
+            ("system.output_control.median_window", (2,)),
+            ("system.output_control.ema_alpha", (0.85,)),
+        ),
+    ),
+    RetiredDefault(
+        "system.output_control.median_window", (2,), "main 2026-11-23", revision=4, shipped_from_revision=2,
+        shipped_with=(
+            ("system.output_control.filter_enabled", (False,)),
+            ("system.output_control.ema_alpha", (0.85,)),
+        ),
+    ),
+    RetiredDefault(
+        "system.output_control.ema_alpha", (0.85,), "main 2026-11-23", revision=4, shipped_from_revision=2,
+        shipped_with=(
+            ("system.output_control.filter_enabled", (False,)),
+            ("system.output_control.median_window", (2,)),
         ),
     ),
 )
@@ -151,15 +183,22 @@ def refresh_retired_defaults(data, current, after_revision, up_to_revision=DEFAU
     """``data`` with every value still at a retired default moved to ``current``'s.
 
     Only entries retired after ``after_revision`` and up to ``up_to_revision``
-    count. A path ``data`` lacks, one ``current`` has no value for, and one
-    whose current value is the same are left alone. Returns a deep copy and
-    the changes as ``{"path", "from", "to"}``.
+    count, in the order of their revisions. A path ``data`` lacks, one
+    ``current`` has no value for, and one whose current value is the same are
+    left alone. Returns a deep copy and the changes as ``{"path", "from",
+    "to"}``, one per path: a value two revisions move goes from where it stood
+    to where the last one leaves it.
     """
 
     refreshed = copy.deepcopy(data)
-    changes = []
+    changes = {}
+    baseline, baseline_revision = refreshed, None
     for entry in RETIRED_DEFAULTS:
+        if entry.revision != baseline_revision:
+            baseline, baseline_revision = copy.deepcopy(refreshed), entry.revision
         if not after_revision < entry.revision <= up_to_revision:
+            continue
+        if after_revision < entry.shipped_from_revision:
             continue
         keys = entry.path.split(".")
         found, stored = _lookup(refreshed, keys)
@@ -168,11 +207,12 @@ def refresh_retired_defaults(data, current, after_revision, up_to_revision=DEFAU
             continue
         if not any(same_value(stored, retired) for retired in entry.values):
             continue
-        if not _left_as_shipped(refreshed, entry.shipped_with):
+        if not _left_as_shipped(baseline, entry.shipped_with):
             continue
         new = default if entry.replacement is TODAYS_DEFAULT else entry.replacement
         if same_value(stored, new) or same_value(stored, default):
             continue
         _lookup(refreshed, keys[:-1])[1][keys[-1]] = copy.deepcopy(new)
-        changes.append({"path": entry.path, "from": stored, "to": copy.deepcopy(new)})
-    return refreshed, changes
+        first = changes.get(entry.path, {"from": stored})["from"]
+        changes[entry.path] = {"path": entry.path, "from": first, "to": copy.deepcopy(new)}
+    return refreshed, list(changes.values())

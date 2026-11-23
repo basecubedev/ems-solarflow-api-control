@@ -142,9 +142,10 @@ existing comments.
 
 Some defaults turned out not to be good, and a later release replaced them:
 `system.loop_interval` 3 is 5 now, `ac_charge_control.max_total_charge_power_w`
-1200 is no limit, battery care's 5, 10 and 0 points are 3, 4 and 1, and the
-load filter (`system.output_control.filter_enabled`) and the per-device ramp
-(`system.output_control.device_ramp_enabled`) are off. A value
+1200 is no limit, battery care's 5, 10 and 0 points are 3, 4 and 1, the load
+filter's window and EMA (`system.output_control.median_window`, `ema_alpha`)
+of 2 and 0.85 are 1 and 1.0, which pass every reading unchanged, and the
+per-device ramp (`system.output_control.device_ramp_enabled`) is off. A value
 in `config.json` that still equals such an old default was most likely never
 changed by hand, so the EMS moves it to today's default once:
 
@@ -171,24 +172,35 @@ changed by hand, so the EMS moves it to today's default once:
 - Only tuning values are refreshed: never a switch, a write gate, a path or an
   address, nor `system.min_output_limit` 0, which turns the standby floor off
   and is as likely chosen. Two switches are moved, on the owner's decision
-  (2026-11-23), since the template switched them on for every installation:
-  the load filter, while its window and EMA are the template's (2 and 0.85),
-  and the per-device ramp, while the total's ramp is on and the device ramp's
-  own limits are the template's (400 and 200). A first release's 3 and 0.65,
-  or 250 and 400, count as the template's only in a file the refresh moves them
-  in; set later, they were set by hand. One tuned by hand stays on, and so does
-  one switched on again after the refresh. The 1200 W charge limit and battery care's first
-  points, PV-only 0 among them, are refreshed on the owner's decision. The
+  (2026-11-23). The per-device ramp, which the template switched on for every
+  installation, is switched off while the total's ramp is on and the device
+  ramp's own limits are the template's (400 and 200). The load filter is left
+  on, or switched on again where main's template switched it off for a day
+  (defaults revisions 2 and 3), and passes every reading unchanged: a window
+  and EMA a release shipped (2 and 0.85) become 1 and 1.0. A filter
+  switched on after that day keeps its window and EMA, and one a file switched
+  off before it stays off. A first release's 3 and 0.65, or 250 and 400, count
+  as the template's only in a file the refresh moves them in; set later, they
+  were set by hand. A setting tuned by hand stays as it is, and so does a switch
+  set again after the refresh. The refresh writes no filter setting the file
+  leaves out (an `apply` start adds it at today's value): it follows today's
+  default (on, a window of 1, an EMA of 1.0), so a filter tuned with only some
+  of its settings in the file keeps those and takes today's for the rest;
+  write all three to keep one exactly. The 1200 W charge limit and battery
+  care's first points, PV-only 0 among them, are refreshed on the owner's decision. The
   limit is cleared (null) rather than set to 0: both mean no limit now, but a
   release before 2026-11-13 reads 0 as no charging at all and null as its own
   1200 W, so going back to it keeps charging. `ems/retired_defaults.py` lists
   them with the releases that shipped each.
-- Going back to a release older than the one that switched the load filter
-  off keeps it off, and while it is off those releases start an AC charge from
-  a surplus only out of the night/min-SoC idle. Switch `filter_enabled` on
-  again before going back, or restore the backup taken before the refresh.
-  The per-device ramp needs nothing: every release since v0.4.0 runs with it
-  off.
+- Going back to an older release keeps surplus charging wherever the load
+  filter is on, as the refresh leaves it unless the file switched it off by
+  hand. With a window of 1 and an EMA of 1.0 in the file it passes every
+  reading unchanged there too; a setting the file leaves out takes that
+  release's own default (2 and 0.85 from v0.5.0 to v0.10.7). Those releases start an
+  AC charge from a surplus only out of the night/min-SoC idle while the filter
+  is switched off, which is why it ships on; switch it on before going back
+  if the file has it off. The per-device ramp needs nothing: every release
+  since v0.4.0 runs with it off.
 - Restoring the backup taken before the refresh brings the old values back,
   and the next start refreshes them again; to keep one, set it again after
   the refresh. A `config.template.json` older than the EMS, such as one a
@@ -565,24 +577,28 @@ is only slightly different (Admin label: **System deadband**). New
 configurations default to 5 W.
 
 `filter_enabled` smooths the grid reading before the EMS acts on it (Admin
-label: **Filter load signal**). It is off by default: the EMS acts on each
-reading once, as it comes. Measured on a SolarFlow 800 Pro 2, a written target
-shows at the grid after about 2 s and battery output reaches it before the next
-5 s cycle, and the filter then counted a load step twice: a median over two
+label: **Filter load signal**). It is on by default with a window of 1 and an
+EMA of 1.0, which pass every reading unchanged: the EMS acts on each reading
+once, as it comes. Measured on a SolarFlow 800 Pro 2, a written target shows at
+the grid after about 2 s and battery output reaches it before the next 5 s
+cycle, and a smoothing filter then counted a load step twice: a median over two
 readings is their mean, the older one being the error the last write already
 corrected. In the control-loop simulation with those dynamics and the ramps out
 of the way (`tests/test_grid_filter_default.py`), a 1000 W rise overshot by
-about 180 W and took about 40 s to stay within 25 W with the filter, and settled
-in the next cycle without it. Switch it on for a meter whose readings jump; the settings below apply
-only while it is on, and their defaults (`median_ema`, a window of 2, an EMA of
-0.85) are a light filter.
+about 180 W and took about 40 s to stay within 25 W with a window of 2 and an
+EMA of 0.85, and settled in the next cycle with the defaults. Set those two for
+a meter whose readings jump; the settings below apply only while the filter is
+on. It ships on rather than off because a release before 2026-11-23 reads it
+switched off as no surplus charge, so going back to one keeps charging; switched
+off, this release acts on each reading as with the defaults.
 
 `filter_method` selects the filter. The default is `median_ema`.
 
-`median_window` is the number of load samples used for median filtering.
+`median_window` is the number of load samples used for median filtering. The
+default, 1, passes each reading on; 2 is a light filter.
 
-`ema_alpha` controls exponential smoothing. Higher values react faster; 1
-follows the median alone.
+`ema_alpha` controls exponential smoothing. Higher values react faster; 1, the
+default, follows the median alone; 0.85 is a light filter.
 
 `sign_change_fast_response_enabled` lets the median/EMA filter react faster
 when `raw_load` has already crossed zero with meaningful magnitude but the
@@ -601,8 +617,8 @@ limit in its direction.
 
 `ramp_up_w_per_cycle` limits how fast the total target can rise (Admin label:
 **System ramp up**). New configurations default to 500 W per cycle, 750 W while
-the house imports `large_import_bypass_w` or more. With the load filter off, it
-limits how far one wrong reading, or a load of a few seconds, moves the output
+the house imports `large_import_bypass_w` or more. With the default filter,
+which passes every reading on, it limits how far one wrong reading, or a load of a few seconds, moves the output
 in a cycle.
 
 `ramp_down_w_per_cycle` limits how fast the total target can fall (Admin label:

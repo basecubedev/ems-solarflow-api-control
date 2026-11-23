@@ -3463,11 +3463,10 @@ def diagnose_control_staleness(live):
     return staleness
 
 
-def diagnose_load_filter_on(config_data):
-    """Whether the config switches the median/EMA load filter on, by the shipped default where it says nothing."""
+def diagnose_load_filter_smooths(config_data):
+    """Whether the config's load filter changes a reading, by the shipped defaults where it says nothing."""
 
-    value = diagnose_nested_get(config_data, [("system", "output_control", "filter_enabled")])
-    return config_mod.safe_bool(value, config_mod.OUTPUT_CONTROL_DEFAULTS["filter_enabled"])
+    return config_mod.load_filter_smooths(diagnose_nested_get(config_data, [("system", "output_control")]))
 
 
 def diagnose_control_report(config_data, runtime_path, sample_seconds=0, *, config_readable=True):
@@ -3499,7 +3498,7 @@ def diagnose_control_report(config_data, runtime_path, sample_seconds=0, *, conf
     elif meter.get("reading_repeated") is True:
         control_path.append("Reading already regulated on by an earlier cycle")
     elif filtered is not None and grid is not None and abs(filtered - grid) >= 1:
-        if diagnose_load_filter_on(config_data):
+        if diagnose_load_filter_smooths(config_data):
             control_path.append(f"Filter adjusted measurement to {diagnose_format_watts(filtered)}")
         else:
             control_path.append(
