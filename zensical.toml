@@ -131,6 +131,7 @@ nav = [
   ] },
   { "Developer" = [
     { "Agent rules" = "developer/agent-rules.md" },
+    { "Code intelligence" = "developer/code-intelligence.md" },
     { "Review coverage" = "developer/review-coverage.md" },
     { "Developer setup" = "developer/developer-setup.md" },
     { "Development notes" = "developer/development.md" },

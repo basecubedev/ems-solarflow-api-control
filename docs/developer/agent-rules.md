@@ -368,17 +368,22 @@ videos before committing unless requested.
 
 When GitNexus is available and indexed, use impact analysis before editing
 important symbols, query/context for unfamiliar flows, and `detect_changes`
-before committing. Tool-managed GitNexus blocks MUST NOT be edited manually.
+before committing. Tool-managed GitNexus blocks MUST NOT be edited manually;
+the one exception is the owner's cut of the block in `CLAUDE.md`, below.
 Repository-local GitNexus CLI and MCP invocations MUST use
 `scripts/gitnexus-project` so `.gitnexusrc` and the analyzer writer lock apply.
 Repository-local analyze invocations MUST pass `--force` until the documented
 GitNexus 1.6.9 incremental LadybugDB/FTS failure is resolved.
 
 The GitNexus block in `AGENTS.md` and `CLAUDE.md` is **frozen on purpose**:
-`scripts/gitnexus-project` passes `--skip-agents-md`, and the symbol and
-relationship counts in it are stale by design. Nothing reads them, and a commit
-that refreshes them collides with every other branch that did the same. Refresh
-the index; do not commit its counts.
+`scripts/gitnexus-project` passes `--skip-agents-md`, so the analyzer never
+rewrites it. In `AGENTS.md` its symbol and relationship counts are stale by
+design; nothing reads them, and a commit that refreshes them collides with
+every other branch that did the same. In `CLAUDE.md`, which every session
+loads, the block was cut by hand to the rules that bind every session (owner's
+decision, 2026-11-23); the full reference is
+[code-intelligence.md](code-intelligence.md). Refresh the index; do not commit
+its counts, and do not run `analyze` outside the launcher.
 
 A stale index is an agent's to fix, not to work around: re-running the analysis
 through `scripts/gitnexus-project` is pre-authorized and needs no separate

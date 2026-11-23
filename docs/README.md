@@ -156,6 +156,7 @@ For contributors and maintainers. Git clone and build-from-source belong here.
 | Topic | Document | Use |
 |---|---|---|
 | Agent rules | [developer/agent-rules.md](developer/agent-rules.md) | Canonical project-wide rules for coding agents and maintainers. |
+| Code intelligence | [developer/code-intelligence.md](developer/code-intelligence.md) | GitNexus and Serena for coding agents: which tool answers which question, and the rules that follow. |
 | Review coverage | [developer/review-coverage.md](developer/review-coverage.md) | What whole-system reviews covered, what they fixed and what is still open. Read it before starting a review. |
 | Developer setup | [developer/developer-setup.md](developer/developer-setup.md) | Source checkout, venv, local config and dry-run validation. |
 | Development notes | [developer/development.md](developer/development.md) | Module layout and developer workflow. |

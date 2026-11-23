@@ -11,7 +11,10 @@ never replace it.
      --skip-agents-md, so it is no longer refreshed: the symbol and relationship
      counts in it are deliberately stale. Nothing reads them, and updating them
      on a branch conflicts with every other branch that did the same. The project
-     name and the tool rules are what the block is for, and neither changes. -->
+     name and the tool rules are what the block is for, and neither changes.
+     Refresh a stale index only through `scripts/gitnexus-project analyze --force`
+     (docs/developer/agent-rules.md §13); the run.cjs and npx line inside the block
+     predates that rule. -->
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
