@@ -276,7 +276,14 @@ def _plausibly_sensitive_external_identifier(value):
 
 
 def _fail_closed_external_identifiers(payload, *, trusted_device_names=()):
-    """Collect device-bound strings when no trusted config is available."""
+    """Collect device-bound strings when no trusted config is available.
+
+    The settings catalogue's defaults at ``_limits.catalogue_defaults`` are left
+    out: their ``devices`` holds one set of defaults for every device, keyed by
+    setting name, and read as device names a long setting name was masked
+    wherever it appeared (issue #406). A key of that name anywhere else is
+    walked like any other.
+    """
 
     identifiers = {}
     trusted_device_names = set(trusted_device_names)
@@ -326,8 +333,18 @@ def _fail_closed_external_identifiers(payload, *, trusted_device_names=()):
             for child in node:
                 visit(child, device_scope=device_scope)
 
-    visit(payload)
+    visit(_without_catalogue_defaults(payload))
     return identifiers
+
+
+def _without_catalogue_defaults(payload):
+    """``payload`` without ``_limits.catalogue_defaults``, the settings catalogue's defaults."""
+
+    limits = payload.get("_limits") if isinstance(payload, dict) else None
+    if not isinstance(limits, dict) or "catalogue_defaults" not in limits:
+        return payload
+    kept = {key: value for key, value in limits.items() if key != "catalogue_defaults"}
+    return {**payload, "_limits": kept}
 
 
 def _external_context_device_names(context):

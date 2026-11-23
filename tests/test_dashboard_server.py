@@ -25,7 +25,7 @@ from dashboard.server import (
 )
 from dashboard.auth import LoginRateLimiter
 from dashboard.static_files import build_static_asset_index, lookup_static_asset
-from ems.runtime_commands import build_validation_context
+from ems.runtime_commands import attach_limits, build_validation_context, catalogue_runtime_defaults
 
 pytestmark = [
     pytest.mark.integration,
@@ -821,6 +821,62 @@ def test_fail_closed_learned_device_alias_round_trips_without_config(tmp_path):
 
     assert raw_name not in json.dumps(safe)
     assert _resolve_external_device_name(server, alias) == raw_name
+
+
+@pytest.mark.parametrize("configured", [False, True], ids=["no_config", "local_api_device"])
+def test_the_catalogue_s_device_defaults_are_not_taken_for_device_names(tmp_path, configured):
+    """Issue #406: /api/runtime showed pv_priority_factor as …ctor.
+
+    The catalogue's defaults for every device are keyed by setting name under
+    ``devices``; read as device names, a long one was masked wherever it
+    appeared, the device's own runtime values among them.
+    """
+
+    config_path = tmp_path / "config.json"
+    if configured:
+        config_path.write_text(
+            json.dumps({"devices": [{"name": "SolarFlow2400Pro", "ip": "192.0.2.10", "sn": "SN"}]}),
+            encoding="utf-8",
+        )
+    server = SimpleNamespace(config_path=str(config_path), runtime_validation={})
+    payload = attach_limits(
+        {"devices": {"SolarFlow2400Pro": {"pv_priority_factor": 1.0, "enabled": True}}}, {}
+    )
+
+    safe = _external_mqtt_status_payload(server, payload)
+
+    device = next(iter(safe["devices"].values()))
+    assert device == {"pv_priority_factor": 1.0, "enabled": True}
+    assert safe["_limits"]["catalogue_defaults"] == catalogue_runtime_defaults()
+
+
+def test_a_device_name_beside_the_catalogue_defaults_is_still_masked_without_config(tmp_path):
+    raw_name = "Roof MISSING_CONFIG_CLOUD_ROUTE_7501"
+    server = SimpleNamespace(config_path=str(tmp_path / "missing.json"), runtime_validation={})
+
+    safe = _external_mqtt_status_payload(server, attach_limits({"devices": {raw_name: {"enabled": True}}}, {}))
+
+    assert raw_name not in json.dumps(safe)
+    assert safe["_limits"]["catalogue_defaults"] == catalogue_runtime_defaults()
+
+
+@pytest.mark.parametrize(
+    "place",
+    [
+        lambda name: {"catalogue_defaults": {"devices": {name: {"enabled": True}}}},
+        lambda name: {"devices": {"WR1": {"catalogue_defaults": {"devices": {name: {}}}}}},
+        lambda name: {"status": {"_limits": {"catalogue_defaults": {"devices": {name: {}}}}}},
+    ],
+)
+def test_only_the_catalogue_s_own_place_is_left_out_of_masking(tmp_path, place):
+    """A key of the same name anywhere else, as a hand edit could put one, still has its device names masked."""
+
+    raw_name = "Roof MISSING_CONFIG_CLOUD_ROUTE_7502"
+    server = SimpleNamespace(config_path=str(tmp_path / "missing.json"), runtime_validation={})
+
+    safe = _external_mqtt_status_payload(server, attach_limits(place(raw_name), {}))
+
+    assert raw_name not in json.dumps(safe)
 
 
 def test_valid_cloud_context_preserves_ordinary_status_reason_and_detail(tmp_path):
