@@ -337,98 +337,35 @@ backup/restore workflow), `technical/admin-architecture.md` (architecture
 rules), and `technical/admin-discovery.md` (full Admin reference).
 Update the relevant doc when changing behavior described there.
 
-<!-- The block below is written by GitNexus. `scripts/gitnexus-project` passes
-     --skip-agents-md, so it is no longer refreshed: the symbol and relationship
-     counts in it are deliberately stale. Nothing reads them, and updating them
-     on a branch conflicts with every other branch that did the same. The project
-     name and the tool rules are what the block is for, and neither changes. -->
+<!-- The block below was written by GitNexus. `scripts/gitnexus-project` passes
+     --skip-agents-md, so GitNexus no longer rewrites it. Since 2026-11-23 (owner's
+     decision) it holds only the project name and the rules that bind every
+     session; the full tool reference is docs/developer/code-intelligence.md. -->
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **ems-solarflow-api-control** (34272 symbols, 81411 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **ems-solarflow-api-control**.
 
-> Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
+- **MUST run `impact` (upstream) before editing a function, class or method**,
+  report its blast radius, and **warn the owner on HIGH or CRITICAL** risk.
+- **MUST run `detect_changes` before committing** (against `main` for a branch).
+- Explore flows with `query` and `context`. Rename only through the call graph
+  (GitNexus `rename`) or the language server (Serena `rename_symbol`), never by
+  find-and-replace; `impact` first either way.
+- Stale index: `scripts/gitnexus-project analyze --force` (agent-rules §13),
+  never `analyze` directly, which would rewrite this block.
 
-## Always Do
-
-- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
-- **MUST run `detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows. For regression review, compare against the default branch: `detect_changes({scope: "compare", base_ref: "main"})`.
-- **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
-- When exploring unfamiliar code, use `query({search_query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
-- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `context({name: "symbolName"})`.
-- For security review, `explain({target: "fileOrSymbol"})` lists taint findings (source→sink flows; needs `analyze --pdg`).
-
-## Never Do
-
-- NEVER edit a function, class, or method without first running `impact` on it.
-- NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
-- NEVER rename symbols with find-and-replace — use `rename` which understands the call graph.
-- NEVER commit changes without running `detect_changes()` to check affected scope.
-
-## Resources
-
-| Resource | Use for |
-|----------|---------|
-| `gitnexus://repo/ems-solarflow-api-control/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/ems-solarflow-api-control/clusters` | All functional areas |
-| `gitnexus://repo/ems-solarflow-api-control/processes` | All execution flows |
-| `gitnexus://repo/ems-solarflow-api-control/process/{name}` | Step-by-step execution trace |
-
-## CLI
-
-| Task | Read this skill file |
-|------|---------------------|
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
-| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
-| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
-| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
-| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
-
+Tools, resources and CLI: [docs/developer/code-intelligence.md](docs/developer/code-intelligence.md).
 <!-- gitnexus:end -->
 
 # Serena — Language-Server Intelligence
 
-Serena runs a Python language server over this repo. It is registered globally in
-`~/.claude.json` as `serena start-mcp-server --context=claude-code-pragmatic
---project-from-cwd`, so it activates itself from the working directory — no
-`activate_project` call per session, and no project pinned across repos. Its state
-lives in `.serena/`, git-excluded alongside `.gitnexus/` via `.git/info/exclude`.
-
-Serena and GitNexus overlap on symbol lookup but are not interchangeable:
-
-- **GitNexus answers "what does this touch"** — call graph, execution flows, blast
-  radius, risk. It reads a snapshot written by the last `analyze` run, so it lags
-  behind edits made in the current session, silently.
-- **Serena answers "what is this right now"** — the language server always reflects
-  the working tree, including edits made a minute ago.
-
-## Which tool for what
-
-| Question | Tool |
-|---|---|
-| Blast radius before an edit, risk level | GitNexus `impact` — mandatory, see above |
-| Execution flows, call chains, "how does X work" | GitNexus `query` / `context` |
-| Scope check before committing | GitNexus `detect_changes` |
-| Taint / source→sink findings | GitNexus `explain` |
-| Current body or signature of a symbol | Serena `find_symbol` with `include_body` |
-| Structure of a file not yet read | Serena `get_symbols_overview` |
-| Callers/usages, resolved through the type system | Serena `find_referencing_symbols` |
-| Replace a whole function, method or class | Serena `replace_symbol_body` |
-| Type/syntax errors after an edit | Serena `get_diagnostics_for_file` |
-| Config, docs, JSON/YAML, a few lines at a known path | built-in Read / Grep / Edit |
-
-## Rules that follow from the split
-
-- The GitNexus `impact`-before-edit mandate stands unchanged. Serena does not
-  replace it — a language server has no notion of blast radius.
-- After editing a symbol in this session, trust Serena over GitNexus for that
-  symbol's contents until the index has been re-analyzed. When the two disagree
-  about what the code says, the language server is newer.
-- Do not read a whole module to find one function. `get_symbols_overview`, then
-  `find_symbol`. `ems/controller.py` and `emsctl.py` are large enough that this
-  is the difference between a page and a wall of context.
-- Never rename by find-and-replace. Serena `rename_symbol` is language-server-exact;
-  GitNexus `rename` is call-graph-aware. Run `impact` first either way.
-- Both toolsets are read-mostly and safe to use freely. Neither is a substitute for
-  the safety rules in "Safety Model" — no tool output authorizes a write-gate change.
+Serena runs a Python language server over the working tree; it activates itself
+from the working directory and keeps its state in `.serena/` (git-excluded).
+GitNexus answers "what does this touch" from its last index; Serena answers
+"what is this right now". After editing a symbol, trust Serena over GitNexus
+until the index is re-analyzed. Read a large module through
+`get_symbols_overview` and `find_symbol` rather than whole, `ems/controller.py`
+and `emsctl.py` above all. Neither tool authorizes a
+write-gate change. Which tool answers which question:
+[docs/developer/code-intelligence.md](docs/developer/code-intelligence.md).
