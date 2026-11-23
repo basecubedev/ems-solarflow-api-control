@@ -112,7 +112,7 @@ Then it applies:
 - load deadband
 - no-export-capacity hold
 - target deadband
-- median/EMA filtering
+- median/EMA filtering, when `filter_enabled` switches it on (off by default)
 - optional sign-change fast response for large import/export direction flips
 - total ramp limit
 - per-device ramp limit
@@ -196,7 +196,8 @@ from before, and adding it counts that write's correction a second time. A
 meter that pushes its readings — an MQTT meter, the Tibber Pulse bridge's
 stream — delivers such a reading whenever one arrives between a cycle's read
 and its write: the next cycle added it, and in the simulation a 500 W load step
-then swung the output between nothing and the device maximum for good.
+then swung the output between nothing and the device maximum for good, with
+the load filter on.
 
 Each new reading is therefore corrected by exactly what it cannot show: the
 targets that went out to the devices after it arrived, and a target an MQTT
@@ -232,7 +233,8 @@ itself took before the EMS got the reading is not known either.
 A device that follows its targets more slowly than the next reading comes
 shows a write only after that reading, and no correction can tell how much of
 it the reading already shows. In the simulation a device that delivered its
-target 1.5 s late under a 1 s loop swung between nothing and its maximum.
+target 1.5 s late under a 1 s loop swung by several hundred watts for good,
+with the load filter on between nothing and its maximum.
 `system.output_control.write_dead_time_seconds` (default `0`, off; up to 10 s)
 covers that: a new reading that reaches the EMS before the last move of the
 power plus that time is left alone like a

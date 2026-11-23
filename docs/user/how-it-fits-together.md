@@ -81,7 +81,7 @@ The EMS repeats one cycle, by default every five seconds:
 ```mermaid
 flowchart LR
     read["1 · Read<br/>grid meter and<br/>every device"]
-    target["2 · Target<br/>how much the house<br/>needs, smoothed"]
+    target["2 · Target<br/>how much the house<br/>needs"]
     share["3 · Share<br/>across inverters,<br/>solar first"]
     limits["4 · Limits<br/>ramps, device limits,<br/>deadband"]
     gates{"5 · Safety gates<br/>writes allowed?"}
@@ -96,12 +96,12 @@ flowchart LR
 - **Read.** The grid meter says what the house is taking from the grid; each
   Zendure device reports its battery, solar input and current output.
 - **Target.** From that, the EMS works out how much the inverters should deliver
-  so the meter sits near zero without running backwards, and smooths it so the
-  output does not jump with every kettle.
+  so the meter sits near zero without running backwards. Each reading counts
+  once; a meter whose readings jump can have them smoothed first.
 - **Share.** The target is split across the inverters, preferring those with
   solar power available.
-- **Limits.** Each device's ramp, minimum and maximum apply, and tiny changes
-  are not written at all.
+- **Limits.** Each device's ramp, minimum and maximum apply, so the output does
+  not jump with every kettle, and tiny changes are not written at all.
 - **Safety gates.** A write happens only when writes are allowed for that
   device's connection — the local API, a local MQTT broker or Zendure cloud
   MQTT. [Safety](safety.md) explains the gates.

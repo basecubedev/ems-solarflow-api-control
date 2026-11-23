@@ -1057,7 +1057,15 @@ def test_the_shipped_band_does_not_flutter_against_a_steady_surplus():
     assert count_direction_changes(harness, item, 200) <= 2
 
 
-def test_a_collapsed_band_flutters_and_the_rate_cap_is_what_bounds_it():
+@pytest.fixture
+def lagging_load_signal():
+    """The load filter's lag is what makes a collapsed band flutter against a steady surplus."""
+
+    with patch.dict(cfg.OUTPUT_CONTROL_CONFIG, {"filter_enabled": True}):
+        yield
+
+
+def test_a_collapsed_band_flutters_and_the_rate_cap_is_what_bounds_it(lagging_load_signal):
     """Entry and exit at the same threshold defeats the asymmetry entirely.
 
     Kept as a test rather than only as a config warning: it records what the
@@ -1072,7 +1080,7 @@ def test_a_collapsed_band_flutters_and_the_rate_cap_is_what_bounds_it():
     assert len(harness.controller.charge_direction.entries) <= 12
 
 
-def test_the_rate_limit_is_said_once_per_episode_not_once_per_cycle():
+def test_the_rate_limit_is_said_once_per_episode_not_once_per_cycle(lagging_load_signal):
     """Sixty identical lines bury every other event instead of surfacing this one."""
 
     harness, item = collapsed_band_harness(0)

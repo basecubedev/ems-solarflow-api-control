@@ -641,7 +641,7 @@ already sets (see [Compatibility](#compatibility-note) below).
     "output_control": {
       "load_deadband_w": 5,
       "target_deadband_w": 5,
-      "filter_enabled": true,
+      "filter_enabled": false,
       "filter_method": "median_ema",
       "median_window": 2,
       "ema_alpha": 0.85,

@@ -357,7 +357,7 @@
           {
             "path": "system.output_control.filter_enabled",
             "label": "Filter load signal",
-            "description": "Smooths measured grid power before EMS reacts to it.",
+            "description": "Smooths measured grid power before EMS reacts to it. Off by default, so EMS acts on every reading at once; switch it on for a meter whose readings jump.",
             "type": "boolean",
             "level": "expert",
             "scope": "both",
@@ -367,14 +367,14 @@
             "backup_recommended": true,
             "risk": "control_stability",
             "group": "output_control",
-            "default": true,
+            "default": false,
             "template": true,
             "secret": false
           },
           {
             "path": "system.output_control.filter_method",
             "label": "Filter method",
-            "description": "Chooses the smoothing method for grid power measurements.",
+            "description": "Chooses the smoothing method for grid power measurements. Used only while the load filter is on.",
             "type": "select",
             "level": "expert",
             "scope": "both",
@@ -394,7 +394,7 @@
           {
             "path": "system.output_control.median_window",
             "label": "Median window",
-            "description": "Number of samples used by the median filter. Higher values smooth more but react slower.",
+            "description": "Number of samples used by the median filter. Higher values smooth more but react slower. Used only while the load filter is on.",
             "type": "number",
             "level": "expert",
             "scope": "both",
@@ -412,7 +412,7 @@
           {
             "path": "system.output_control.ema_alpha",
             "label": "EMA strength",
-            "description": "Controls how strongly recent measurements affect the smoothed value.",
+            "description": "Controls how strongly recent measurements affect the smoothed value. Used only while the load filter is on.",
             "type": "number",
             "level": "expert",
             "scope": "both",
@@ -431,7 +431,7 @@
           {
             "path": "system.output_control.sign_change_fast_response_enabled",
             "label": "Fast response on direction change",
-            "description": "Lets EMS react faster when grid power changes from import to export or back.",
+            "description": "Lets EMS react faster when grid power changes from import to export or back. Used only while the load filter is on.",
             "type": "boolean",
             "level": "expert",
             "scope": "both",
@@ -448,7 +448,7 @@
           {
             "path": "system.output_control.sign_change_threshold_w",
             "label": "Direction change threshold",
-            "description": "Minimum change needed before fast response is triggered.",
+            "description": "Minimum change needed before fast response is triggered. Used only while the load filter is on.",
             "type": "number",
             "level": "expert",
             "scope": "both",
@@ -467,7 +467,7 @@
           {
             "path": "system.output_control.sign_change_filter_reset_factor",
             "label": "Filter reset factor",
-            "description": "Controls how much the filter is reset during a fast response event.",
+            "description": "Controls how much the filter is reset during a fast response event. Used only while the load filter is on.",
             "type": "number",
             "level": "expert",
             "scope": "both",

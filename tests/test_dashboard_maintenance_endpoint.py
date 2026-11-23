@@ -14,6 +14,7 @@ from dashboard import maintenance
 from dashboard.auth import write_password_file
 from ems import backup as backup_mod
 from ems import config as config_mod
+from ems.retired_defaults import DEFAULTS_REVISION
 from test_dashboard_server import (
     StoreStub,
     json_response,
@@ -961,7 +962,7 @@ def test_config_upgrade_apply_moves_old_defaults_and_records_the_revision(tmp_pa
         assert payload["applied"]["defaults_refreshed"] == 2
         assert payload["applied_count"] >= 2 + payload["applied"]["keys_added"]
         written = json.loads((tmp_path / "config.json").read_text())
-        assert written["config_defaults_revision"] == 1
+        assert written["config_defaults_revision"] == DEFAULTS_REVISION
         assert written["system"]["loop_interval"] == 5
         assert written["ac_charge_control"]["max_total_charge_power_w"] is None
     finally:

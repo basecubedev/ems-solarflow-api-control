@@ -19,6 +19,7 @@ from ems.config import (
     OUTPUT_CONTROL_DEFAULTS,
     WINTER_DEFAULTS,
 )
+from ems.retired_defaults import DEFAULTS_REVISION
 
 pytestmark = [
     pytest.mark.config,
@@ -1063,7 +1064,7 @@ def test_startup_config_upgrade_check_reports_without_writing(tmp_path):
     """A missing key is reported, never written: the EMS fills it in memory."""
 
     values = minimal_upgrade_config()
-    values["config_defaults_revision"] = 1
+    values["config_defaults_revision"] = DEFAULTS_REVISION
     config_path = prepare_startup_upgrade_fixture(tmp_path, values)
     original_text = config_path.read_text()
     messages = []
@@ -1171,7 +1172,7 @@ def test_startup_config_upgrade_apply_skips_when_backup_fails(tmp_path):
 
 def test_startup_config_upgrade_invalid_mode_falls_back_to_check(tmp_path):
     values = minimal_upgrade_config()
-    values["config_defaults_revision"] = 1
+    values["config_defaults_revision"] = DEFAULTS_REVISION
     values["config_upgrade"] = {"on_startup": "something-else"}
     config_path = prepare_startup_upgrade_fixture(tmp_path, values)
     original_text = config_path.read_text()

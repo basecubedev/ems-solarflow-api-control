@@ -56,7 +56,7 @@ Household loads can change within seconds. EMS SolarFlow includes control logic 
 
 It provides:
 
-- smoothing of noisy grid-meter readings
+- optional smoothing of a grid meter whose readings jump
 - fast reaction to significant changes between grid import and export
 - controlled increases and reductions in output
 - suppression of very small, unnecessary adjustments

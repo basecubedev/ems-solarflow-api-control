@@ -107,8 +107,8 @@ flowchart TD
 | `system.soc_reconcile_interval` | SOC / mode reconciliation | Controls how often SOC/mode reconciliation is checked, measured in EMS cycles. `0` disables cyclic reconciliation. | [configuration.md](configuration.md), [safety.md](../user/safety.md) |
 | `system.output_control.load_deadband_w` | Load filtering / total target stabilization | Holds the current total target when the filtered load is within this small-load band. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
 | `system.output_control.target_deadband_w` | Total target calculation | Holds the current commanded total when the newly desired total is only slightly different. This is earlier than final `system.deadband`. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
-| `system.output_control.filter_enabled` | Load filtering | Enables or disables load filtering before total target calculation. | [configuration.md](configuration.md) |
-| `system.output_control.filter_method` | Load filtering | Selects the filter method. The current tuned method is `median_ema`. | [configuration.md](configuration.md) |
+| `system.output_control.filter_enabled` | Load filtering | Enables load filtering before total target calculation. Off by default: each reading counts as it came; the filter settings below apply only while it is on. | [configuration.md](configuration.md) |
+| `system.output_control.filter_method` | Load filtering | Selects the filter method once the filter is on. The one method is `median_ema`. | [configuration.md](configuration.md) |
 | `system.output_control.median_window` | Load filtering | Sets how many load samples are used by the median stage. | [configuration.md](configuration.md) |
 | `system.output_control.ema_alpha` | Load filtering | Controls how quickly the EMA follows the median load value. Higher reacts faster. | [configuration.md](configuration.md) |
 | `system.output_control.sign_change_fast_response_enabled` | Sign-change fast response | Lets the filter react faster when raw load has crossed zero but the smoothed value still points the other way. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
@@ -140,8 +140,9 @@ telemetry, SOC, current output, current `outputLimit`, pack power, and detected
 capability state. Config values do not replace these measurements; they shape
 how the EMS reacts to them.
 
-Filters and smoothing reduce noise or slow changes. `load_deadband_w` suppresses
-small filtered load changes before the total target moves. `target_deadband_w`
+Filters and smoothing reduce noise or slow changes. The median/EMA load filter
+is off by default and is meant for a meter whose readings jump.
+`load_deadband_w` suppresses small load changes before the total target moves. `target_deadband_w`
 suppresses small total-target changes against the controller's current
 commanded total. Ramps limit how far the total target or device targets can move
 per cycle.

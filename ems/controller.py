@@ -220,8 +220,8 @@ class EMSController:
         self.desired_total_w = None
         self.load_history = deque(
             maxlen=cfg.safe_int(
-                cfg.OUTPUT_CONTROL_CONFIG.get("median_window", 3),
-                3,
+                cfg.OUTPUT_CONTROL_CONFIG.get("median_window"),
+                cfg.OUTPUT_CONTROL_DEFAULTS["median_window"],
                 minimum=1
             )
         )
@@ -314,11 +314,12 @@ class EMSController:
         return raw_load >= import_limit or raw_load <= -export_limit
 
     def filter_output_control_load(self, raw_load):
-        if not self.output_control_bool("filter_enabled", True):
+        defaults = cfg.OUTPUT_CONTROL_DEFAULTS
+        if not self.output_control_bool("filter_enabled", defaults["filter_enabled"]):
             self.filtered_load_w = raw_load
             return raw_load
 
-        window = self.output_control_int("median_window", 3, minimum=1)
+        window = self.output_control_int("median_window", defaults["median_window"], minimum=1)
 
         if self.load_history.maxlen != window:
             self.load_history = deque(
@@ -336,7 +337,7 @@ class EMSController:
             median = (values[mid - 1] + values[mid]) / 2
 
         method = str(
-            cfg.OUTPUT_CONTROL_CONFIG.get("filter_method", "median_ema")
+            cfg.OUTPUT_CONTROL_CONFIG.get("filter_method", defaults["filter_method"])
         )
 
         if method != "median_ema":
@@ -345,7 +346,7 @@ class EMSController:
 
         alpha = min(
             1.0,
-            self.output_control_float("ema_alpha", 0.65, minimum=0.0)
+            self.output_control_float("ema_alpha", defaults["ema_alpha"], minimum=0.0)
         )
         previous_filtered = self.filtered_load_w
 

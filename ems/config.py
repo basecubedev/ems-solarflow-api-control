@@ -50,7 +50,7 @@ BATTERY_CARE_WATT_KEYS = ("min_discharge_w", "pv_margin_min_w")
 OUTPUT_CONTROL_DEFAULTS = {
     "load_deadband_w": 5,
     "target_deadband_w": 5,
-    "filter_enabled": True,
+    "filter_enabled": False,
     "filter_method": "median_ema",
     "median_window": 2,
     "ema_alpha": 0.85,

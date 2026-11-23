@@ -173,7 +173,9 @@ never delayed by a threshold, a confirmation count or the rate limit. Behind a
 meter slower than the loop it waits only for the reading that shows the house
 needs the power: a cycle that repeats that reading judges the exit on the total
 the reading asks for, unfiltered. A short load spike that such a reading
-catches can end a charge that a meter read every cycle would ride out.
+catches can end the charge. With the load filter on, a meter read every cycle
+rides out a one-reading spike; with it off, the default, a spike counts on
+every meter.
 
 The first discharge after a charge is what the house draws. Until the device
 has switched — on an 800 Pro 2 about three seconds for the direction and five

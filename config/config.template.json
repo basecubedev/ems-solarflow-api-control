@@ -5,7 +5,7 @@
     "Example profiles: docs/configuration-examples.md."
   ],
   "config_schema_version": 3,
-  "config_defaults_revision": 1,
+  "config_defaults_revision": 2,
 
   "config_upgrade": {
     "_comment": [
@@ -46,7 +46,7 @@
       ],
       "load_deadband_w": 5,
       "target_deadband_w": 5,
-      "filter_enabled": true,
+      "filter_enabled": false,
       "filter_method": "median_ema",
       "median_window": 2,
       "ema_alpha": 0.85,
