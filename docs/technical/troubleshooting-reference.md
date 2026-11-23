@@ -620,16 +620,13 @@ Check these settings:
 ```json
 {
   "system": {
-    "loop_interval": 2,
+    "loop_interval": 4,
     "output_control": {
-      "filter_enabled": true,
-      "ema_alpha": 0.85,
+      "filter_enabled": false,
       "ramp_enabled": true,
       "ramp_up_w_per_cycle": 600,
       "ramp_down_w_per_cycle": 700,
-      "device_ramp_enabled": true,
-      "device_ramp_up_w_per_cycle": 500,
-      "device_ramp_down_w_per_cycle": 600,
+      "device_ramp_enabled": false,
       "large_import_bypass_w": 600,
       "large_export_bypass_w": 600,
       "bypass_ramp_multiplier": 1.5,
@@ -644,11 +641,11 @@ Tuning hints:
 
 | Symptom | Setting | Direction |
 |---|---|---|
-| Control loop reacts too late | `loop_interval` | lower carefully |
-| Filter is too smooth | `ema_alpha` | increase |
+| Control loop reacts too late | `loop_interval` | lower carefully, not below the time a device needs to follow a write (about 2 s on a SolarFlow 800 Pro 2, plus its ramp); shorter needs `write_dead_time_seconds` |
+| The load filter is on and reacts late | `filter_enabled` | switch off, the default; or raise `ema_alpha` |
 | Total target rises too slowly | `ramp_up_w_per_cycle` | increase |
 | Total target falls too slowly | `ramp_down_w_per_cycle` | increase |
-| Per-device target changes too slowly | `device_ramp_*_w_per_cycle` | increase |
+| Per-device target changes too slowly | `device_ramp_enabled` | switch off, the default; or increase `device_ramp_*_w_per_cycle` |
 | Stale telemetry slows response | `telemetry_max_age_seconds` / `stale_telemetry_ramp_factor` | check telemetry freshness first |
 
 Validate after tuning:
@@ -691,9 +688,7 @@ Check these settings:
     "output_control": {
       "load_deadband_w": 5,
       "target_deadband_w": 5,
-      "filter_enabled": true,
-      "median_window": 3,
-      "ema_alpha": 0.85,
+      "filter_enabled": false,
       "ramp_enabled": true
     }
   }
@@ -706,9 +701,9 @@ Tuning hints:
 |---|---|---|
 | too many small target changes | `target_deadband_w` or `deadband` | increase |
 | noisy load input | `load_deadband_w` | increase |
-| output follows every spike | `ema_alpha` | decrease |
+| output follows every spike of a meter whose readings jump | `filter_enabled`, then `ema_alpha` | switch the filter on (off by default); with it on, lower `ema_alpha` |
 | target jumps too hard | `ramp_up_w_per_cycle` / `ramp_down_w_per_cycle` | decrease |
-| output swings between nothing and the maximum behind a meter read every cycle, each swing a few cycles long | `write_dead_time_seconds` | set to the time the device takes to follow a write, neither shorter nor longer; longer slows the regulation, shorter makes a charge switch back and forth ([Dead time after a write](control-logic.md#dead-time-after-a-write)) |
+| output swings by several hundred watts behind a meter read every cycle (with the load filter on, between nothing and the maximum), each swing a few cycles long | `write_dead_time_seconds` | set to the time the device takes to follow a write, neither shorter nor longer; longer slows the regulation, shorter makes a charge switch back and forth ([Dead time after a write](control-logic.md#dead-time-after-a-write)) |
 | devices fight each other | disable other controllers | check Zendure app, HEMS, smart-home automations |
 
 Relevant events (`output_control_deadband_hold` is a `debug` trace; the actual

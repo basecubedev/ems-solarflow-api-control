@@ -11,8 +11,12 @@ exactly an old default before the refresh cannot be told apart and moves too.
 
 Only tuning values are listed. A switch, a write gate, a path or an identity is
 never refreshed, and neither is ``system.min_output_limit`` 0, which switches
-the standby floor off and is as likely chosen. Each entry was the template's
-value in the releases it names. Two are the owner's call (2026-11-13): battery
+the standby floor off and is as likely chosen. Two switches are moved, the load
+filter and the per-device ramp, the owner's call (2026-11-23), each with its
+reason in ``switch_reason`` and only while its own settings show it was left as
+shipped (``shipped_with``).
+Each entry was the template's value in the releases it names. Two are the
+owner's call (2026-11-13): battery
 care's first points, which main carried that day only, its PV-only 0 among
 them, and the 1200 W installation charge limit. That one is cleared to null
 rather than set to today's 0: both mean no limit now, but a release before
@@ -25,7 +29,7 @@ Import-side-effect-free.
 import copy
 from dataclasses import dataclass
 
-DEFAULTS_REVISION = 1
+DEFAULTS_REVISION = 3
 CONFIG_REVISION_KEY = "config_defaults_revision"
 RUNTIME_REVISION_KEY = "defaults_revision"
 
@@ -38,6 +42,12 @@ class RetiredDefault:
     """A dotted path, the defaults it had, the releases that shipped them.
 
     ``replacement`` is what the value becomes; by default today's default.
+    ``switch_reason`` says why a switch is moved at all: an old setting that was
+    the template's rather than a choice. ``shipped_with`` names settings that
+    tell a value left as shipped from a tuned one: the entry moves a value only
+    while each of them is absent or at one of the values listed for it. They are
+    read after the earlier revisions' entries, so an older default of theirs has
+    already become today's, and only today's is listed.
     """
 
     path: str
@@ -45,6 +55,8 @@ class RetiredDefault:
     shipped: str
     revision: int = 1
     replacement: object = TODAYS_DEFAULT
+    switch_reason: str | None = None
+    shipped_with: tuple = ()
 
 
 RETIRED_DEFAULTS = (
@@ -67,6 +79,29 @@ RETIRED_DEFAULTS = (
     RetiredDefault("battery_care.summer_full_points", (5,), "main 2026-11-13"),
     RetiredDefault("battery_care.winter_full_points", (10,), "main 2026-11-13"),
     RetiredDefault("battery_care.pv_only_points", (0,), "main 2026-11-13"),
+    RetiredDefault(
+        "system.output_control.filter_enabled", (True,), "v0.4.0-v0.10.7", revision=2,
+        switch_reason=(
+            "The template switched the load filter on for every installation; measured on a "
+            "SolarFlow 800 Pro 2 it counted a load step twice (issue #341)."
+        ),
+        shipped_with=(
+            ("system.output_control.median_window", (2,)),
+            ("system.output_control.ema_alpha", (0.85,)),
+        ),
+    ),
+    RetiredDefault(
+        "system.output_control.device_ramp_enabled", (True,), "v0.4.0-v0.10.7", revision=3,
+        switch_reason=(
+            "The template ramped every device below the total's ramp; measured on a SolarFlow "
+            "800 Pro 2 it held a single device back while the total counted it (issue #341)."
+        ),
+        shipped_with=(
+            ("system.output_control.ramp_enabled", (True,)),
+            ("system.output_control.device_ramp_up_w_per_cycle", (400,)),
+            ("system.output_control.device_ramp_down_w_per_cycle", (200,)),
+        ),
+    ),
 )
 
 
@@ -104,6 +139,14 @@ def _lookup(data, keys):
     return True, node
 
 
+def _left_as_shipped(data, companions):
+    for path, values in companions:
+        found, stored = _lookup(data, path.split("."))
+        if found and not any(same_value(stored, value) for value in values):
+            return False
+    return True
+
+
 def refresh_retired_defaults(data, current, after_revision, up_to_revision=DEFAULTS_REVISION):
     """``data`` with every value still at a retired default moved to ``current``'s.
 
@@ -124,6 +167,8 @@ def refresh_retired_defaults(data, current, after_revision, up_to_revision=DEFAU
         if not found or not has_default:
             continue
         if not any(same_value(stored, retired) for retired in entry.values):
+            continue
+        if not _left_as_shipped(refreshed, entry.shipped_with):
             continue
         new = default if entry.replacement is TODAYS_DEFAULT else entry.replacement
         if same_value(stored, new) or same_value(stored, default):

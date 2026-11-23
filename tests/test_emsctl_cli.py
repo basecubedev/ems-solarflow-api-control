@@ -16,6 +16,7 @@ from ems import config as cfg
 from ems import config_init as config_init_mod
 from ems import device_settings
 from ems import runtime_commands
+from ems.retired_defaults import DEFAULTS_REVISION
 
 from _emsctl_test_helpers import (
     EMSCTL,
@@ -1579,7 +1580,7 @@ def test_config_upgrade_interactive_can_write_without_backup(
     assert "Continuing without backup" in output
     written = json.loads(config_path.read_text())
     assert written["config_schema_version"] == 3
-    assert (written["config_defaults_revision"], written["system"]["deadband"]) == (1, 2)
+    assert (written["config_defaults_revision"], written["system"]["deadband"]) == (DEFAULTS_REVISION, 2)
 
 
 def test_config_upgrade_uses_existing_backup_tool_when_selected(

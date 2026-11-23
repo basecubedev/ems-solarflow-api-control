@@ -299,9 +299,10 @@ def test_a_device_slower_than_the_loop_settles_behind_a_dead_time_that_covers_it
     """A device that delivers its target after the next read keeps the loop swinging.
 
     Each reading still showed the output from before the last write, and the
-    loop added that write's correction again: the output went from nothing to
-    the device maximum and back. Readings that come before the device can
-    have followed are left alone.
+    loop added that write's correction again: the output swung by several
+    hundred watts for good, with the load filter on from nothing to the device
+    maximum and back. Readings that come before the device can have followed
+    are left alone.
     """
 
     house = step(200, 700, STEP_AT_S)
@@ -314,8 +315,7 @@ def test_a_device_slower_than_the_loop_settles_behind_a_dead_time_that_covers_it
 
     assert settles(outputs, 700)
     assert max(outputs) < 1000
-    assert max(swinging[cycles // 2:]) == 1200
-    assert min(swinging[cycles // 2:]) < 300
+    assert max(swinging[cycles // 2:]) - min(swinging[cycles // 2:]) >= 500
 
 
 @pytest.mark.parametrize("push_offsets", [[2.9], [0.1, 1.1, 2.1]])

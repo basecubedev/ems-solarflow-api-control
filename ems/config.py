@@ -50,7 +50,7 @@ BATTERY_CARE_WATT_KEYS = ("min_discharge_w", "pv_margin_min_w")
 OUTPUT_CONTROL_DEFAULTS = {
     "load_deadband_w": 5,
     "target_deadband_w": 5,
-    "filter_enabled": True,
+    "filter_enabled": False,
     "filter_method": "median_ema",
     "median_window": 2,
     "ema_alpha": 0.85,
@@ -59,10 +59,8 @@ OUTPUT_CONTROL_DEFAULTS = {
     "sign_change_filter_reset_factor": 1.0,
     "ramp_enabled": True,
     "ramp_up_w_per_cycle": 500,
-    # Slower down-ramp reduces undershoot when inverter output reacts more
-    # slowly than the EMS target.
     "ramp_down_w_per_cycle": 300,
-    "device_ramp_enabled": True,
+    "device_ramp_enabled": False,
     "device_ramp_up_w_per_cycle": 400,
     "device_ramp_down_w_per_cycle": 200,
     "large_import_bypass_w": 600,

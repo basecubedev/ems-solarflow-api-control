@@ -632,12 +632,15 @@ def test_the_explanation_names_the_ramp_only_where_it_holds():
 
 
 def test_a_falling_ceiling_applies_in_the_same_cycle_not_at_the_ramp_pace():
+    """The per-device ramp is off by default; switched on, it still never holds a device above its ceiling."""
+
     ems = controller()
-    ems.commanded_device_targets["WR1"] = 800
-    assert ems.apply_device_ramp([0], 0, [0]) == [0]
-    assert ems.commanded_device_targets["WR1"] == 0
-    ems.commanded_device_targets["WR1"] = 800
-    assert ems.apply_device_ramp([0], 0) == [600]
+    with patch.dict("ems.controller.cfg.OUTPUT_CONTROL_CONFIG", {"device_ramp_enabled": True}):
+        ems.commanded_device_targets["WR1"] = 800
+        assert ems.apply_device_ramp([0], 0, [0]) == [0]
+        assert ems.commanded_device_targets["WR1"] == 0
+        ems.commanded_device_targets["WR1"] = 800
+        assert ems.apply_device_ramp([0], 0) == [600]
 
 
 def test_a_battery_on_its_floor_keeps_the_full_standby_floor():

@@ -629,9 +629,10 @@ python3 -B ems-solarflow-api-control.py --dry-run --once
 Most installations should keep these defaults. Change them only when the live
 logs show target oscillation, stale telemetry, or excessive write frequency.
 
-The slower down-ramps (`ramp_down_w_per_cycle`, `device_ramp_down_w_per_cycle`)
-are intentional: they help prevent undershoot when the inverter output reacts
-more slowly than the EMS control target. The values below are the defaults for
+The total's down-ramp (`ramp_down_w_per_cycle`) is intentional: while a device
+charges, it limits how fast the charge grows, and a device raises its charge
+slowly. The per-device ramp is off: the total's ramp already limits what the
+devices do together, see [configuration.md](technical/configuration.md). The values below are the defaults for
 newly created configurations; an existing `config.json` keeps whatever it
 already sets (see [Compatibility](#compatibility-note) below).
 
@@ -641,7 +642,7 @@ already sets (see [Compatibility](#compatibility-note) below).
     "output_control": {
       "load_deadband_w": 5,
       "target_deadband_w": 5,
-      "filter_enabled": true,
+      "filter_enabled": false,
       "filter_method": "median_ema",
       "median_window": 2,
       "ema_alpha": 0.85,
@@ -651,7 +652,7 @@ already sets (see [Compatibility](#compatibility-note) below).
       "ramp_enabled": true,
       "ramp_up_w_per_cycle": 500,
       "ramp_down_w_per_cycle": 300,
-      "device_ramp_enabled": true,
+      "device_ramp_enabled": false,
       "device_ramp_up_w_per_cycle": 400,
       "device_ramp_down_w_per_cycle": 200,
       "large_import_bypass_w": 600,

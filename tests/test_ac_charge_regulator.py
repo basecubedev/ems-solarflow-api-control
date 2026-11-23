@@ -1057,7 +1057,15 @@ def test_the_shipped_band_does_not_flutter_against_a_steady_surplus():
     assert count_direction_changes(harness, item, 200) <= 2
 
 
-def test_a_collapsed_band_flutters_and_the_rate_cap_is_what_bounds_it():
+@pytest.fixture
+def lagging_load_signal():
+    """The load filter's lag is what makes a collapsed band flutter against a steady surplus."""
+
+    with patch.dict(cfg.OUTPUT_CONTROL_CONFIG, {"filter_enabled": True}):
+        yield
+
+
+def test_a_collapsed_band_flutters_and_the_rate_cap_is_what_bounds_it(lagging_load_signal):
     """Entry and exit at the same threshold defeats the asymmetry entirely.
 
     Kept as a test rather than only as a config warning: it records what the
@@ -1072,7 +1080,7 @@ def test_a_collapsed_band_flutters_and_the_rate_cap_is_what_bounds_it():
     assert len(harness.controller.charge_direction.entries) <= 12
 
 
-def test_the_rate_limit_is_said_once_per_episode_not_once_per_cycle():
+def test_the_rate_limit_is_said_once_per_episode_not_once_per_cycle(lagging_load_signal):
     """Sixty identical lines bury every other event instead of surfacing this one."""
 
     harness, item = collapsed_band_harness(0)
@@ -1339,7 +1347,7 @@ def test_a_running_charge_moves_its_power_with_one_value_in_the_closed_loop():
     harness.run(cycles=20, states=[item])
 
     entry, *ramp = hardware.writes
-    assert entry == {"smartMode": 1, "acMode": 1, "outputLimit": 0, "inputLimit": 200}
+    assert entry == {"smartMode": 1, "acMode": 1, "outputLimit": 0, "inputLimit": 300}
     assert ramp, "the charge power never moved"
     assert all(set(write) == {"inputLimit"} for write in ramp), ramp
     assert item.ac_mode == 1
@@ -2643,13 +2651,14 @@ def metered_loop(item, transport, **hardware_options):
     return harness, hardware, targets
 
 
+@pytest.mark.parametrize("device_ramp", [False, True], ids=["device_ramp_off", "device_ramp_on"])
 @pytest.mark.parametrize(
     ("transport", "charge_w"),
     [("http", 300), ("mqtt", 300), ("http", 1000), ("mqtt", 800)],
     ids=["live_300w-http", "live_300w-mqtt", "large_1000w-http", "large_800w-mqtt"],
 )
 def test_the_first_discharge_after_a_charge_is_what_the_house_draws(
-    transport, charge_w
+    transport, charge_w, device_ramp
 ):
     """Live test 2026-10-04: leaving a charge exported what the charge had drawn.
 
@@ -2659,8 +2668,9 @@ def test_the_first_discharge_after_a_charge_is_what_the_house_draws(
     house's. It vanishes when the device switches, but the meter shows it until
     then, and the filter remembered it for cycles after. Here the device draws
     for a poll or two after the exit and the meter includes it. A large charge
-    also took the device ramp: measured from the charge it left, the first
-    discharge was held at zero and the integrator wound up the difference.
+    also took the device ramp, where it is switched on: measured from the
+    charge it left, the first discharge was held at zero and the integrator
+    wound up the difference.
     """
 
     item = pv_less_state(soc=50)
@@ -2668,12 +2678,13 @@ def test_the_first_discharge_after_a_charge_is_what_the_house_draws(
         item, transport, surplus_w=HOUSE_W + charge_w + 150
     )
     harness.feature["max_total_charge_power_w"] = charge_w
-    harness.run(cycles=30, states=[item])
-    assert item.ac_mode == 1 and item.grid_input == charge_w, "no steady charge"
+    with patch.dict("ems.controller.cfg.OUTPUT_CONTROL_CONFIG", {"device_ramp_enabled": device_ramp}):
+        harness.run(cycles=30, states=[item])
+        assert item.ac_mode == 1 and item.grid_input == charge_w, "no steady charge"
 
-    hardware.surplus_w = 0
-    charged = len(targets)
-    harness.run(cycles=10, states=[item])
+        hardware.surplus_w = 0
+        charged = len(targets)
+        harness.run(cycles=10, states=[item])
     after = targets[charged:]
     first_discharge = next(i for i, target in enumerate(after) if target >= 0)
 

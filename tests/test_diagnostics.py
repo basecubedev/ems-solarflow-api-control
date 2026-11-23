@@ -3266,3 +3266,24 @@ def test_emsctl_diagnose_control_names_the_limit_the_cycle_named(tmp_path):
         for item in payload["control"]["device_distribution"]["devices"]
     }
     assert reasons["WR1"] == "limited by deadband"
+
+
+@pytest.mark.parametrize(
+    "output_control, said, not_said",
+    [
+        ({"filter_enabled": True}, "Filter adjusted measurement to 131 W import", "Regulated on"),
+        ({"filter_enabled": False}, "Regulated on 131 W import, the reading less the writes it cannot show yet", "Filter adjusted"),
+    ],
+)
+def test_the_control_path_credits_the_load_filter_only_while_it_runs(tmp_path, output_control, said, not_said):
+    """Without the filter, a reading corrected for a write is not the filter's doing."""
+
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path)
+
+    control = diagnostics.diagnose_control_report(
+        {"system": {"output_control": output_control}}, str(tmp_path / "runtime-state.json")
+    )
+
+    assert said in control["control_path"]
+    assert not any(not_said in line for line in control["control_path"])

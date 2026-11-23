@@ -220,8 +220,8 @@ class EMSController:
         self.desired_total_w = None
         self.load_history = deque(
             maxlen=cfg.safe_int(
-                cfg.OUTPUT_CONTROL_CONFIG.get("median_window", 3),
-                3,
+                cfg.OUTPUT_CONTROL_CONFIG.get("median_window"),
+                cfg.OUTPUT_CONTROL_DEFAULTS["median_window"],
                 minimum=1
             )
         )
@@ -300,24 +300,27 @@ class EMSController:
         )
 
     def output_control_bypass_active(self, raw_load):
+        defaults = cfg.OUTPUT_CONTROL_DEFAULTS
         import_limit = self.output_control_float(
             "large_import_bypass_w",
-            600,
+            defaults["large_import_bypass_w"],
             minimum=0
         )
         export_limit = self.output_control_float(
             "large_export_bypass_w",
-            500,
+            defaults["large_export_bypass_w"],
             minimum=0
         )
 
         return raw_load >= import_limit or raw_load <= -export_limit
 
     def filter_output_control_load(self, raw_load):
-        if not self.output_control_bool("filter_enabled", True):
+        defaults = cfg.OUTPUT_CONTROL_DEFAULTS
+        if not self.output_control_bool("filter_enabled", defaults["filter_enabled"]):
+            self.filtered_load_w = raw_load
             return raw_load
 
-        window = self.output_control_int("median_window", 3, minimum=1)
+        window = self.output_control_int("median_window", defaults["median_window"], minimum=1)
 
         if self.load_history.maxlen != window:
             self.load_history = deque(
@@ -335,15 +338,16 @@ class EMSController:
             median = (values[mid - 1] + values[mid]) / 2
 
         method = str(
-            cfg.OUTPUT_CONTROL_CONFIG.get("filter_method", "median_ema")
+            cfg.OUTPUT_CONTROL_CONFIG.get("filter_method", defaults["filter_method"])
         )
 
         if method != "median_ema":
+            self.filtered_load_w = raw_load
             return raw_load
 
         alpha = min(
             1.0,
-            self.output_control_float("ema_alpha", 0.65, minimum=0.0)
+            self.output_control_float("ema_alpha", defaults["ema_alpha"], minimum=0.0)
         )
         previous_filtered = self.filtered_load_w
 
@@ -915,10 +919,11 @@ class EMSController:
             )
         desired = self.commanded_total_w
         held = False
+        defaults = cfg.OUTPUT_CONTROL_DEFAULTS
 
         load_deadband = self.output_control_float(
             "load_deadband_w",
-            5,
+            defaults["load_deadband_w"],
             minimum=0
         )
 
@@ -982,7 +987,7 @@ class EMSController:
 
         target_deadband = self.output_control_float(
             "target_deadband_w",
-            10,
+            defaults["target_deadband_w"],
             minimum=0
         )
 
@@ -1017,19 +1022,19 @@ class EMSController:
 
         if (
             not held
-            and self.output_control_bool("ramp_enabled", True)
+            and self.output_control_bool("ramp_enabled", defaults["ramp_enabled"])
             and delta != 0
         ):
             if delta > 0:
                 ramp_limit = self.output_control_float(
                     "ramp_up_w_per_cycle",
-                    300,
+                    defaults["ramp_up_w_per_cycle"],
                     minimum=0
                 )
             else:
                 ramp_limit = self.output_control_float(
                     "ramp_down_w_per_cycle",
-                    500,
+                    defaults["ramp_down_w_per_cycle"],
                     minimum=0
                 )
 
@@ -1038,14 +1043,14 @@ class EMSController:
             if bypass:
                 ramp_limit *= self.output_control_float(
                     "bypass_ramp_multiplier",
-                    1.5,
+                    defaults["bypass_ramp_multiplier"],
                     minimum=1.0
                 )
 
             if stale:
                 stale_limit = ramp_limit * self.output_control_float(
                     "stale_telemetry_ramp_factor",
-                    0.5,
+                    defaults["stale_telemetry_ramp_factor"],
                     minimum=0.0
                 )
                 if self.commanded_total_w < 0 < delta:
@@ -1100,7 +1105,8 @@ class EMSController:
         total said what the house draws, which the integrator then wound up.
         """
 
-        if not self.output_control_bool("device_ramp_enabled", True):
+        defaults = cfg.OUTPUT_CONTROL_DEFAULTS
+        if not self.output_control_bool("device_ramp_enabled", defaults["device_ramp_enabled"]):
             adjusted_targets = []
             for dev, target in zip(self.devices, targets):
                 if not self.device_output_control_allowed(dev):
@@ -1113,7 +1119,7 @@ class EMSController:
         multiplier = (
             self.output_control_float(
                 "bypass_ramp_multiplier",
-                1.5,
+                defaults["bypass_ramp_multiplier"],
                 minimum=1.0
             )
             if bypass
@@ -1122,7 +1128,7 @@ class EMSController:
         up_limit = (
             self.output_control_float(
                 "device_ramp_up_w_per_cycle",
-                250,
+                defaults["device_ramp_up_w_per_cycle"],
                 minimum=0
             )
             * multiplier
@@ -1130,7 +1136,7 @@ class EMSController:
         down_limit = (
             self.output_control_float(
                 "device_ramp_down_w_per_cycle",
-                400,
+                defaults["device_ramp_down_w_per_cycle"],
                 minimum=0
             )
             * multiplier
@@ -1657,7 +1663,7 @@ class EMSController:
             raw_requested_total_w=allocated_total,
             max_total_power_w=max_power,
             load_w=load,
-            filtered_load_w=self.filtered_load_w,
+            filtered_load_w=load,
             min_output_limit_w=min_output_limit,
             undistributed_target_w=0,
         )

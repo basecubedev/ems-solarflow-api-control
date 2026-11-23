@@ -12,6 +12,7 @@ every few cycles.
 """
 
 import logging
+import statistics
 from unittest.mock import patch
 
 import pytest
@@ -442,9 +443,9 @@ def test_a_charge_ends_on_a_deficit_as_soon_as_behind_a_meter_read_every_cycle(c
     """The exit may reuse a reading; only the entry and the total may not.
 
     Judged on new readings only, a load that rose kept the charge drawing for a
-    whole meter period more: the filter halves the first reading of a deficit,
-    and the next reading came 15 s or 30 s later, while about 260 W were still
-    drawn for the charge on top of the deficit.
+    whole meter period more: the load filter, on by default then, halved the
+    first reading of a deficit, and the next reading came 15 s or 30 s later,
+    while about 260 W were still drawn for the charge on top of the deficit.
     """
 
     def cycles_to_exit(loop):
@@ -497,16 +498,28 @@ def test_a_charge_ends_on_a_small_surplus_left_as_soon_as_behind_a_meter_read_ev
 
 @pytest.mark.parametrize("cycles_per_reading", [1, 3])
 def test_after_a_charge_ends_the_device_covers_the_house_without_charging_again(cycles_per_reading):
+    """Judged over the last readings: read every cycle, this device swings around the house.
+
+    It applies a command one poll late, so a meter read every cycle shows the
+    output from before the last write, the swing ``test_write_dead_time``
+    names. One final value only caught the swing at a lucky moment.
+    """
+
     loop = FollowingChargeLoop(cycles_per_reading, house=-600)
     loop.run(30 * cycles_per_reading)
     assert loop.item.ac_mode == 1, "the regulator never charged the device"
     loop.run_to_reading()
+    outputs = []
 
-    entries = charge_entries(loop, 40 * cycles_per_reading, lambda cycle: 400)
+    def house(cycle):
+        outputs.append(loop.item.output)
+        return 400
+
+    entries = charge_entries(loop, 40 * cycles_per_reading, house)
 
     assert entries == 0
     assert loop.item.ac_mode == 2
-    assert loop.item.output == pytest.approx(400, abs=40)
+    assert statistics.mean(outputs[-10 * cycles_per_reading:]) == pytest.approx(400, abs=100)
 
 
 @pytest.mark.parametrize("cycles_per_reading", [2, 3, 6])

@@ -50,10 +50,25 @@ def test_every_retired_default_is_a_tuning_value_the_template_has_replaced():
         assert entry.values and entry.shipped, entry.path
         assert 1 <= entry.revision <= DEFAULTS_REVISION, entry.path
         for retired in entry.values:
-            assert not isinstance(retired, (bool, str)), entry.path
+            if entry.switch_reason is None:
+                assert not isinstance(retired, (bool, str)), entry.path
             assert not same_value(current, retired), entry.path
+        for path, values in entry.shipped_with:
+            assert any(same_value(_at(TEMPLATE, path), value) for value in values), (entry.path, path)
     assert TEMPLATE[CONFIG_REVISION_KEY] == DEFAULTS_REVISION
     assert config_catalog.build_default_template()[CONFIG_REVISION_KEY] == DEFAULTS_REVISION
+
+
+def test_the_switches_the_refresh_moves_say_why():
+    """A switch is as likely chosen as left, so moving one is the owner's call, said once."""
+
+    switches = {entry.path: entry.switch_reason for entry in RETIRED_DEFAULTS if entry.switch_reason is not None}
+
+    assert list(switches) == [
+        "system.output_control.filter_enabled",
+        "system.output_control.device_ramp_enabled",
+    ]
+    assert all(reason.strip() for reason in switches.values())
 
 
 def test_an_old_default_moves_and_a_changed_value_stays():
@@ -137,6 +152,135 @@ def test_a_value_set_after_the_refresh_stays_even_at_an_old_default(tmp_path):
     assert json.loads(path.read_text())["ac_charge_control"]["max_total_charge_power_w"] == 1200
     assert raw["battery_care"]["summer_full_points"] == 5
     assert backups == []
+
+
+def _filter_config(revision):
+    return {
+        "config_schema_version": 3,
+        CONFIG_REVISION_KEY: revision,
+        "system": {"output_control": {"filter_enabled": True, "median_window": 2, "ema_alpha": 0.85}},
+        "devices": [],
+    }
+
+
+def test_a_load_filter_still_on_from_the_template_is_switched_off_once(tmp_path):
+    raw, path, messages, backups = _startup(tmp_path, _filter_config(1))
+
+    written = json.loads(path.read_text())
+    assert written["system"]["output_control"] == {"filter_enabled": False, "median_window": 2, "ema_alpha": 0.85}
+    assert written[CONFIG_REVISION_KEY] == DEFAULTS_REVISION
+    assert len(backups) == 1
+    refreshed = next(message for level, message in messages if "Config defaults refreshed" in message)
+    assert "system.output_control.filter_enabled: true -> false" in refreshed
+
+
+def test_a_load_filter_switched_on_after_the_refresh_stays_on(tmp_path):
+    raw, path, messages, backups = _startup(tmp_path, _filter_config(DEFAULTS_REVISION))
+
+    assert json.loads(path.read_text())["system"]["output_control"]["filter_enabled"] is True
+    assert backups == []
+
+
+@pytest.mark.parametrize(
+    "tuned",
+    [{"median_window": 5}, {"ema_alpha": 0.4}, {"median_window": 1, "ema_alpha": 1.0},
+     {"median_window": 3}, {"ema_alpha": 0.65}],
+)
+def test_a_load_filter_tuned_by_hand_stays_on(tmp_path, tuned):
+    """A window or EMA other than the template's says someone chose the filter, as for a meter whose readings jump.
+
+    An older release's 3 or 0.65 in a file that records a revision was set
+    after the refresh that moved them, so by hand too.
+    """
+
+    values = _filter_config(1)
+    values["system"]["output_control"].update(tuned)
+
+    raw, path, messages, backups = _startup(tmp_path, values)
+
+    assert json.loads(path.read_text())["system"]["output_control"] == {**values["system"]["output_control"]}
+    assert backups == []
+
+
+@pytest.mark.parametrize(
+    "output_control",
+    [{"filter_enabled": True}, {"filter_enabled": True, "median_window": 3, "ema_alpha": 0.65}],
+)
+def test_a_load_filter_with_settings_a_release_shipped_is_switched_off(tmp_path, output_control):
+    values = {"config_schema_version": 3, "system": {"output_control": output_control}, "devices": []}
+
+    raw, path, messages, backups = _startup(tmp_path, values)
+
+    assert json.loads(path.read_text())["system"]["output_control"]["filter_enabled"] is False
+
+
+def _ramp_config(revision, **output_control):
+    return {
+        "config_schema_version": 3,
+        CONFIG_REVISION_KEY: revision,
+        "system": {"output_control": output_control},
+        "devices": [],
+    }
+
+
+SHIPPED_DEVICE_RAMP = {"device_ramp_enabled": True, "device_ramp_up_w_per_cycle": 400, "device_ramp_down_w_per_cycle": 200}
+
+
+@pytest.mark.parametrize("revision", [1, 2])
+def test_a_device_ramp_still_on_from_the_template_is_switched_off_once(tmp_path, revision):
+    raw, path, messages, backups = _startup(tmp_path, _ramp_config(revision, **SHIPPED_DEVICE_RAMP))
+
+    written = json.loads(path.read_text())
+    assert written["system"]["output_control"] == {**SHIPPED_DEVICE_RAMP, "device_ramp_enabled": False}
+    assert written[CONFIG_REVISION_KEY] == DEFAULTS_REVISION
+    assert len(backups) == 1
+    refreshed = next(message for level, message in messages if "Config defaults refreshed" in message)
+    assert "system.output_control.device_ramp_enabled: true -> false" in refreshed
+
+
+@pytest.mark.parametrize(
+    "tuned",
+    [{"device_ramp_up_w_per_cycle": 300}, {"device_ramp_down_w_per_cycle": 100},
+     {"device_ramp_up_w_per_cycle": 250}, {"device_ramp_down_w_per_cycle": 400}],
+)
+def test_a_device_ramp_tuned_by_hand_stays_on(tmp_path, tuned):
+    values = _ramp_config(1, **{**SHIPPED_DEVICE_RAMP, **tuned})
+
+    raw, path, messages, backups = _startup(tmp_path, values)
+
+    assert json.loads(path.read_text())["system"]["output_control"] == values["system"]["output_control"]
+    assert backups == []
+
+
+def test_a_device_ramp_is_left_on_where_the_total_s_ramp_is_off(tmp_path):
+    """Then it is the only ramp there is."""
+
+    values = _ramp_config(2, ramp_enabled=False, **SHIPPED_DEVICE_RAMP)
+
+    raw, path, messages, backups = _startup(tmp_path, values)
+
+    assert json.loads(path.read_text())["system"]["output_control"] == values["system"]["output_control"]
+    assert backups == []
+
+
+def test_a_device_ramp_switched_on_after_the_refresh_stays_on(tmp_path):
+    raw, path, messages, backups = _startup(tmp_path, _ramp_config(DEFAULTS_REVISION, **SHIPPED_DEVICE_RAMP))
+
+    assert json.loads(path.read_text())["system"]["output_control"]["device_ramp_enabled"] is True
+    assert backups == []
+
+
+def test_a_device_ramp_at_the_first_releases_limits_is_switched_off_after_they_move(tmp_path):
+    values = {
+        "config_schema_version": 3,
+        "system": {"output_control": {"device_ramp_enabled": True, "device_ramp_up_w_per_cycle": 250,
+                                      "device_ramp_down_w_per_cycle": 400}},
+        "devices": [],
+    }
+
+    raw, path, messages, backups = _startup(tmp_path, values)
+
+    assert json.loads(path.read_text())["system"]["output_control"] == {**SHIPPED_DEVICE_RAMP, "device_ramp_enabled": False}
 
 
 def test_a_config_without_an_old_default_only_records_the_revision(tmp_path):
@@ -284,7 +428,7 @@ def test_the_refresh_keeps_the_file_s_own_order_and_spacing(tmp_path):
     )
 
     assert path.read_text() == (
-        '{\n  "devices": [],\n\n  "config_schema_version": 3,\n  "config_defaults_revision": 1,\n'
+        f'{{\n  "devices": [],\n\n  "config_schema_version": 3,\n  "config_defaults_revision": {DEFAULTS_REVISION},\n'
         '  "system": { "loop_interval": 5, "deadband": 7 }\n}\n'
     )
 
@@ -542,6 +686,6 @@ def test_the_refresh_keeps_each_device_s_own_layout(tmp_path):
     )
 
     assert path.read_text() == (
-        '{\n  "config_schema_version": 3,\n  "config_defaults_revision": 1,\n  "system": { "loop_interval": 5 },\n'
+        f'{{\n  "config_schema_version": 3,\n  "config_defaults_revision": {DEFAULTS_REVISION},\n  "system": {{ "loop_interval": 5 }},\n'
         '  "devices": [\n    { "name": "A", "sn": "X" },\n    {\n      "sn": "Y",\n\n      "name": "B"\n    }\n  ]\n}\n'
     )
