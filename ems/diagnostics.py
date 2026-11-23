@@ -3493,7 +3493,12 @@ def diagnose_control_report(config_data, runtime_path, sample_seconds=0, *, conf
         control_path.append(f"Controller mode: {mode}")
     if grid is not None:
         control_path.append(f"Grid {'import' if grid > 0 else 'export' if grid < 0 else 'neutral'} detected ({diagnose_format_watts(grid)})")
-    if filtered is not None and grid is not None and abs(filtered - grid) >= 1:
+    meter = {} if mode == "night_min_soc_idle" else diagnose_live_block(live_data, "grid_meter")
+    if meter.get("reading_in_dead_time") is True:
+        control_path.append("Reading held: it came before the last write could show in it")
+    elif meter.get("reading_repeated") is True:
+        control_path.append("Reading already regulated on by an earlier cycle")
+    elif filtered is not None and grid is not None and abs(filtered - grid) >= 1:
         if diagnose_load_filter_on(config_data):
             control_path.append(f"Filter adjusted measurement to {diagnose_format_watts(filtered)}")
         else:

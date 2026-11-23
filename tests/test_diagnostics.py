@@ -8,6 +8,7 @@ import subprocess
 import threading
 import zipfile
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -15,6 +16,7 @@ import pytest
 import emsctl
 from ems.diagnostics import diagnose_config_plausibility
 from ems import diagnostics
+from ems import paths as ems_paths
 from ems.state_store import BatteryFullChargeStateStore
 
 from _emsctl_test_helpers import (
@@ -3287,3 +3289,54 @@ def test_the_control_path_credits_the_load_filter_only_while_it_runs(tmp_path, o
 
     assert said in control["control_path"]
     assert not any(not_said in line for line in control["control_path"])
+
+
+@pytest.mark.parametrize("filter_enabled", [True, False])
+@pytest.mark.parametrize(
+    "left_alone, said",
+    [
+        ({"in_dead_time": (0,)}, "Reading held: it came before the last write could show in it"),
+        ({"repeated": (0,)}, "Reading already regulated on by an earlier cycle"),
+    ],
+)
+def test_the_control_path_names_a_reading_the_cycle_left_alone(tmp_path, filter_enabled, left_alone, said):
+    """Such a cycle did not regulate the output on its reading; the load it records is an earlier reading's."""
+
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, grid=(0,), filtered_load_w=500, **left_alone)
+
+    control = diagnostics.diagnose_control_report(
+        {"system": {"output_control": {"filter_enabled": filter_enabled}}}, str(tmp_path / "runtime-state.json")
+    )
+
+    assert said in control["control_path"]
+    assert not any("Regulated on" in line or "Filter adjusted" in line for line in control["control_path"])
+
+
+@pytest.mark.parametrize("filter_enabled", [True, False])
+def test_the_control_path_leaves_out_a_regulated_load_equal_to_the_reading(tmp_path, filter_enabled):
+    write_control_runtime(tmp_path)
+    write_live_control_status(tmp_path, grid=(131,), filtered_load_w=131)
+
+    control = diagnostics.diagnose_control_report(
+        {"system": {"output_control": {"filter_enabled": filter_enabled}}}, str(tmp_path / "runtime-state.json")
+    )
+
+    assert "Grid import detected (131 W import)" in control["control_path"]
+    assert not any("Regulated on" in line or "Filter adjusted" in line for line in control["control_path"])
+
+
+@pytest.mark.parametrize("left_alone", [{"repeated": (0,)}, {"in_dead_time": (0,)}])
+def test_the_night_idle_names_no_reading_left_alone(tmp_path, left_alone):
+    """The idle regulates nothing and records every reading, a repeated one too."""
+
+    write_control_runtime(tmp_path)
+    status = write_live_control_status(tmp_path, grid=(120,), filtered_load_w=120, **left_alone)
+    status["cycle"]["mode"] = "night_min_soc_idle"
+    status_path = ems_paths.resolve_control_status_path(str(tmp_path / "runtime-state.json"))
+    Path(status_path).write_text(json.dumps(status))
+
+    control = diagnostics.diagnose_control_report({}, str(tmp_path / "runtime-state.json"))
+
+    assert "Controller mode: night_min_soc_idle" in control["control_path"]
+    assert not any("Reading held" in line or "already regulated on" in line for line in control["control_path"])
