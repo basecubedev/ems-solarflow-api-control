@@ -643,6 +643,20 @@ def test_a_falling_ceiling_applies_in_the_same_cycle_not_at_the_ramp_pace():
         assert ems.apply_device_ramp([0], 0) == [600]
 
 
+@pytest.mark.parametrize("device_ramp_enabled", [False, True])
+def test_a_device_s_target_stays_within_its_limits_with_the_device_ramp_on_or_off(device_ramp_enabled):
+    """The allocation already keeps them; the device stage holds them again whether it ramps or not."""
+
+    ems = controller()
+    with patch.dict("ems.controller.cfg.OUTPUT_CONTROL_CONFIG", {"device_ramp_enabled": device_ramp_enabled}):
+        ems.commanded_device_targets["WR1"] = 0
+        assert ems.apply_device_ramp([800], 0, [0]) == [0]
+        ems.commanded_device_targets["WR1"] = 800
+        assert ems.apply_device_ramp([5000], 0) == [800]
+        ems.commanded_device_targets["WR1"] = 0
+        assert ems.apply_device_ramp([-500], 0) == [0]
+
+
 def test_a_battery_on_its_floor_keeps_the_full_standby_floor():
     ems = controller(devices=[device("Floor"), device("Above")])
     ems.charge_commanded_by_ems = lambda dev: False
