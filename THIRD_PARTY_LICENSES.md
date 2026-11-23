@@ -87,7 +87,7 @@ with another command is not seen and needs its row by hand.
 
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream | Image | Installed as | Notices |
 |---|---|---|---|:---:|:---:|---|---|---|---|
-| `influx` | 2.8.0, commit `8cdf401` (from the `influxdb:2.9` build stage) | MIT | InfluxDB backup/restore from inside the EMS container without a Docker socket | ✅ | ✅ | https://github.com/influxdata/influx-cli | `Dockerfile` | `/usr/local/bin/influx` | `third_party/influx-cli/LICENSE`, `third_party/influx-cli/THIRD_PARTY_NOTICES` |
+| `influx` | 2.9.1, commit `54431c5` (from the `influxdb:2.10` build stage) | MIT | InfluxDB backup/restore from inside the EMS container without a Docker socket | ✅ | ✅ | https://github.com/influxdata/influx-cli | `Dockerfile` | `/usr/local/bin/influx` | `third_party/influx-cli/LICENSE`, `third_party/influx-cli/THIRD_PARTY_NOTICES` |
 | `docker/cli` | 27.5.1 | Apache-2.0 AND MIT | Admin Console controls the host Docker engine through the mounted socket; client only, never a daemon. The static build links musl (MIT) in | ✅ | ✅ | https://github.com/docker/cli | `deploy/admin/Dockerfile` | `/usr/local/bin/docker` | `third_party/docker-cli/LICENSE`, `third_party/docker-cli/NOTICE`, `third_party/docker-cli/THIRD_PARTY_NOTICES`, `third_party/docker-cli/MUSL.COPYRIGHT` |
 | `docker/compose` | 2.32.4 | Apache-2.0 | Compose plugin for the Admin Console's container lifecycle operations | ✅ | ✅ | https://github.com/docker/compose | `deploy/admin/Dockerfile` | `/usr/local/lib/docker/cli-plugins/docker-compose` | `third_party/docker-compose/LICENSE`, `third_party/docker-compose/NOTICE`, `third_party/docker-compose/THIRD_PARTY_NOTICES` |
 
@@ -121,7 +121,7 @@ stays under the terms it states. Both image builds run
 `scripts/binary_notices.py check` on the binary they ship and fail when it was
 built from another revision than its notices name, or holds a module they do
 not list. The Docker CLI is built vendored and records no modules, so for it
-the check compares the version alone. A moved `influxdb:2.9` tag or a version
+the check compares the version alone. A moved `influxdb:2.10` tag or a version
 bump therefore stops the build with the command that regenerates the file.
 
 ## Development Dependencies
@@ -343,7 +343,7 @@ credentials fail the workflow before any tag moves.
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream |
 |---|---|---|---|:---:|:---:|---|
 | `python:3.14-slim` | 3.14-slim | PSF-2.0 (CPython) AND mixed (Debian base) | Base layer of the EMS image and the Admin image | ✅ | ✅ | https://hub.docker.com/_/python |
-| `influxdb:2.9` | 2.9 | MIT | EMS image build stage; only `/usr/local/bin/influx` is copied out of it | ❌ | ✅ | https://hub.docker.com/_/influxdb |
+| `influxdb:2.10` | 2.10 | MIT | EMS image build stage; only `/usr/local/bin/influx` is copied out of it | ❌ | ✅ | https://hub.docker.com/_/influxdb |
 | `influxdb:2.9.1` | 2.9.1 | MIT | Optional bundled Analytics database, pinned in `deploy/docker/compose.influxdb.yml` and repeated by `tools/bundled_influxdb.py` | ✅ | ❌ | https://hub.docker.com/_/influxdb |
 | `eclipse-mosquitto:2` | 2 | EPL-2.0 OR BSD-3-Clause | Local development broker and the ephemeral broker for optional real-MQTT tests | ❌ | ❌ | https://hub.docker.com/_/eclipse-mosquitto |
 | `eclipse-mosquitto:2.1.2-alpine` | 2.1.2-alpine | EPL-2.0 OR BSD-3-Clause (Mosquitto) AND mixed (Alpine base) | Optional built-in MQTT broker the Admin pulls and starts in the `ems-mqtt` project when an operator switches it on | ✅ | ❌ | https://hub.docker.com/_/eclipse-mosquitto |
