@@ -141,7 +141,7 @@
       {#if needsAck}
         <label class="check prerelease" data-testid="plan-prerelease-ack"><input type="checkbox" bind:checked={acknowledged} />{t("plan.prereleaseAck", { track: t(`track.${plan.track}`) })}</label>
       {/if}
-      {#if plan.warning}<p class="warning" lang="en"><Icon name="triangle-alert" size="sm" />{plan.warning}</p>{/if}
+      {#if options.note}<p class="warning" data-testid="plan-note"><Icon name="triangle-alert" size="sm" />{t(options.note)}</p>{:else if plan.warning}<p class="warning" lang="en"><Icon name="triangle-alert" size="sm" />{plan.warning}</p>{/if}
       {#if (plan.preserves || []).length}<p class="note"><Icon name="shield-check" /><span>{t("plan.preserves")} <span lang="en">{plan.preserves.join(", ")}</span></span></p>{/if}
       {#if flow.dialogError}<p class="form-error" role="alert" lang={langOf(flow.dialogError)} data-testid="plan-error">{say(flow.dialogError)}</p>{/if}
     </div>

@@ -475,6 +475,7 @@ test.describe("plan, confirm, follow, acknowledge", () => {
     await createPassword(page);
     await page.getByTestId("quick-shutdown").click();
     await expect(page.getByTestId("plan-confirm")).toHaveText("Shut down");
+    await expect(page.getByTestId("plan-note")).toContainText("disconnect its power supply and connect it again");
     await confirmPlan(page);
     await expect(page.getByTestId("reconnect-detail")).toContainText("switch the Raspberry Pi back on");
   });
@@ -500,6 +501,7 @@ test.describe("plan, confirm, follow, acknowledge", () => {
     await createPassword(page);
     await page.getByTestId("quick-reboot").click();
     await expect(page.getByTestId("plan-confirm")).toHaveText("Restart");
+    await expect(page.getByTestId("plan-note")).toContainText("The EMS stops controlling the devices");
     await confirmPlan(page);
     await expect(page.getByTestId("reconnect-detail")).toContainText("restarting");
     await page.getByTestId("reconnect-check").click();

@@ -148,3 +148,9 @@ test("the support archives still kept are listed, newest first, by record", () =
   const payload = { recent: [archive(1, "succeeded"), archive(5, "succeeded"), archive(4, "failed_terminal"), archive(3, "succeeded"), { type: "updates.install", operation_id: "9".repeat(32), state: "succeeded", started_at: 9 }] };
   assert.deepEqual(keptArchives(payload).map((item) => item.at), [5, 3]);
 });
+
+test("a restart or shutdown plan carries the note that says what stops", async () => {
+  const { powerPlan } = await import("../src/lib/plans.js");
+  assert.equal(powerPlan("reboot").note, "plan.note.reboot");
+  assert.equal(powerPlan("shutdown").note, "plan.note.shutdown");
+});

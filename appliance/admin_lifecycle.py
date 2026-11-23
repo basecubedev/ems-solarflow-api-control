@@ -2104,6 +2104,13 @@ class AdminLifecycleService:
                 "it finishes",
             )
 
+    def admin_transition(self):
+        """Admin's own transition record, classified; see ``admin_transition.read_transition``."""
+
+        return admin_transition.read_transition(
+            admin_transition.transition_path(self.paths, self.deployment())
+        )
+
     def _require_no_admin_transition(self):
         """Stand back while the Admin console is replacing itself.
 
@@ -2115,9 +2122,7 @@ class AdminLifecycleService:
         problem.
         """
 
-        record = admin_transition.read_transition(
-            admin_transition.transition_path(self.paths, self.deployment())
-        )
+        record = self.admin_transition()
         self.last_admin_transition = record
         if admin_transition.blocks_admin_mutation(record):
             raise AdminLifecycleError(

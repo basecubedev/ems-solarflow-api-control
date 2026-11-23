@@ -9,6 +9,7 @@ runs, and the check path must never modify a package or an index.
 import contextlib
 import fcntl
 import os
+import re
 import subprocess
 import sys
 
@@ -1012,6 +1013,44 @@ def test_a_power_action_confirmed_while_apt_installs_does_not_go_down(tmp_path, 
     assert operation.state == STATE_FAILED_TERMINAL, operation.to_dict()
     assert operation.error["code"] == "package_operation_active"
     assert not [c for c in services.host.calls if c[0] == "systemctl" and call in c[1]], services.host.calls
+
+
+def test_the_restart_plan_says_what_stops_until_the_raspberry_pi_is_back(tmp_path):
+    """Issue #416: the confirmation names what stops."""
+
+    planned = handlers_for(appliance(tmp_path)).dispatch({"operation": "system.plan_reboot"})
+
+    warning = planned["plan"]["warning"]
+    assert "stops controlling the devices" in warning
+    assert "dashboard, the Admin console and this page" in warning
+    assert "power supply" not in warning
+
+
+def test_the_shutdown_plan_says_how_to_start_the_raspberry_pi_again(tmp_path):
+    """Issue #416: a Raspberry Pi that was shut down only starts again on power."""
+
+    planned = handlers_for(appliance(tmp_path)).dispatch({"operation": "system.plan_shutdown"})
+
+    warning = planned["plan"]["warning"]
+    assert "stops controlling the devices" in warning
+    assert "does not start again by itself" in warning
+    assert "disconnect its power supply and connect it again" in warning
+
+
+@pytest.mark.parametrize("action", ["reboot", "shutdown"])
+def test_the_modern_page_says_in_english_what_the_agent_says(action):
+    """Modern translates the note, Classic shows the agent's text: the English two are one text."""
+
+    from pathlib import Path
+
+    from appliance.agent import POWER_WARNINGS
+
+    strings = (Path(__file__).resolve().parents[1] / "frontend/appliance-modern/src/i18n/strings.js").read_text(
+        encoding="utf-8"
+    )
+    english = re.search(rf'"plan\.note\.{action}": s\("((?:[^"\\]|\\.)*)"', strings)
+
+    assert english and english.group(1) == POWER_WARNINGS[action]
 
 
 def test_a_reboot_systemctl_refused_is_audited_as_failed(tmp_path):

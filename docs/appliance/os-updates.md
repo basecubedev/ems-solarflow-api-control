@@ -425,11 +425,32 @@ firmware or the operating system — see
 
 ## Reboot and shutdown
 
-**Overview → Power** offers *Restart Raspberry Pi* and *Shut down*. Before
-either, the plan shows the running host operations, the EMS and Admin state and
-warns when a package installation is active. An active package operation blocks
-the confirmation. After a reboot request the UI shows a reconnect screen and
-checks periodically whether the appliance is reachable again.
+**Overview → Power** offers *Restart Raspberry Pi* and *Shut down*, so a
+board can be restarted or switched off cleanly without a login on its console.
+Before either, the plan shows the EMS and Admin state and says what stops: the
+EMS no longer controls the devices, and the dashboard, the Admin console and
+the appliance page are unreachable until the board is back. A shut-down
+Raspberry Pi does not start again by itself; the plan says so, and that its
+power supply has to be disconnected and connected again (a Raspberry Pi 5 also
+starts on its power button).
+
+The confirmation is refused, and Confirm checks again, while
+
+- a package installation holds the package manager's lock (an OS update from
+  this page or an `apt` run over SSH), with `package_operation_active`;
+- the Admin console is replacing itself through System Build, Guided Upgrade
+  or a guided setup, with `admin_transition_in_flight`. An expired or
+  unreadable record of that, or an Admin deployment that cannot be read, does
+  not refuse it: that is the wedged state a restart is for
+  ([admin-recovery.md](admin-recovery.md));
+- another appliance operation, such as an Admin or Appliance Manager update, is
+  planned or running: one operation at a time.
+
+A backup restore or an InfluxDB upgrade running in the Admin console is not
+visible to the appliance and does not refuse them: wait for it to finish
+before restarting. Both are written to the audit log like every other
+operation. After a reboot request the page shows a reconnect screen and checks
+periodically whether the appliance is reachable again.
 
 ## From the console
 
