@@ -33,6 +33,7 @@ from tools.check_third_party_licenses import (
     fix_versions,
     python_version_cell,
     workflow_action_versions,
+    workflow_actions,
     normalize_python_name,
     DOCKERFILES,
     dockerfile_binaries,
@@ -68,7 +69,7 @@ COPIED_FILES = (
     "Dockerfile",
     "deploy/admin/Dockerfile",
 )
-COPIED_TREES = ("dashboard/static", "admin/static", ".github/workflows", "third_party")
+COPIED_TREES = ("dashboard/static", "admin/static", ".github/workflows", ".github/actions", "third_party")
 
 # Image references that belong to this project rather than a third party.
 OWN_IMAGE_PREFIXES = ("ghcr.io/basecubedev/", "ems-solarflow-")
@@ -565,7 +566,28 @@ def test_an_undocumented_github_action_is_rejected(repo_copy):
     )
     problems = [problem for problem in collect_problems(repo_copy) if "GitHub Actions" in problem]
 
-    assert problems == [".github/workflows uses 'example/new-action', which is not in the 'GitHub Actions' section"]
+    assert problems == ["a workflow or local action uses 'example/new-action', which is not in the 'GitHub Actions' section"]
+
+
+def test_an_action_a_local_action_uses_needs_its_row_and_its_version_too(repo_copy):
+    """A composite action under .github/actions pins actions the workflows never name."""
+
+    local = repo_copy / ".github" / "actions" / "added" / "action.yml"
+    local.parent.mkdir(parents=True)
+    local.write_text(
+        "runs:\n  using: composite\n  steps:\n      - uses: example/composite-only@v3\n"
+        "      - uses: actions/setup-node@v9\n",
+        encoding="utf-8",
+    )
+
+    assert "example/composite-only" in workflow_actions(repo_copy)
+    assert workflow_action_versions(repo_copy)["actions/setup-node"] >= {"v9"}
+    assert any("example/composite-only" in problem for problem in collect_problems(repo_copy))
+
+
+def test_the_cache_the_playwright_action_keeps_is_inventoried():
+    assert "actions/cache" in workflow_actions(ROOT)
+    assert "actions/cache" in set(component_keys(sections()["GitHub Actions"]))
 
 
 def test_a_github_action_no_workflow_uses_is_rejected(repo_copy):

@@ -903,7 +903,8 @@ external device's keys of the same name, an OpenDTU's strings. A reported 0 is
 kept; an input the report does not carry is left out rather than written as 0,
 and so is one the device's entry names in
 [`unused_pv_inputs`](configuration.md#device-settings), an input with no module.
-An E3/DC writes none: the EMS does not read its strings. Points written before this carry 0
+An E3/DC writes `solar1` and `solar2`, the two strings its built-in inverter reports, whenever
+its tile reads that inverter. Points written before this carry 0
 for the inputs a device does not have. An external device records only the
 values it sends (`output`, `solar`, `solarN`, `pack_in`/`pack_out`, `soc`),
 rather than 0 for the rest, and its strings' sum as `solar` when it sends no

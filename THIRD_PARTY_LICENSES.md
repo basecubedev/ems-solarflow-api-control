@@ -200,14 +200,16 @@ installed by any manifest in this repository.
 
 ### GitHub Actions
 
-Used by the workflows under `.github/workflows/`. They run on GitHub-hosted
-runners and are never part of a build artifact.
+Used by the workflows under `.github/workflows/` and the local actions under
+`.github/actions/`. They run on GitHub-hosted runners and are never part of a
+build artifact.
 
 | Component | Version | License (SPDX) | Used for | Runtime | Distributed | Upstream |
 |---|---|---|---|:---:|:---:|---|
 | `actions/checkout` | v7 | MIT | Checks out the repository in every job | ❌ | ❌ | https://github.com/actions/checkout |
 | `actions/setup-python` | v7 | MIT | Provisions the CI Python versions | ❌ | ❌ | https://github.com/actions/setup-python |
 | `actions/setup-node` | v7 | MIT | Provisions Node for Playwright and the frontend runners | ❌ | ❌ | https://github.com/actions/setup-node |
+| `actions/cache` | v6 | MIT | Keeps the Playwright browsers and their system packages between CI runs | ❌ | ❌ | https://github.com/actions/cache |
 | `actions/upload-artifact` | v7 | MIT | Publishes test reports and traces | ❌ | ❌ | https://github.com/actions/upload-artifact |
 | `actions/download-artifact` | v8 | MIT | Collects the appliance build outputs between jobs for signing and publishing | ❌ | ❌ | https://github.com/actions/download-artifact |
 | `actions/upload-pages-artifact` | v5 | MIT | Hands the built documentation website to GitHub Pages | ❌ | ❌ | https://github.com/actions/upload-pages-artifact |

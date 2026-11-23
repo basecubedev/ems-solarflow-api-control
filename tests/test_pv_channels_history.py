@@ -76,6 +76,22 @@ def test_an_e3dc_records_no_pv_input_it_does_not_have():
     assert not any(f"solar{n}=" in lines[0] for n in range(1, 5))
 
 
+def test_an_e3dc_records_the_two_strings_its_inverter_reads():
+    from ems.e3dc_runtime import E3dcReading
+
+    reading = E3dcReading(
+        pv_w=4321.0, battery_w=0.0, grid_w=0.0, soc=50.0, inverter_w=1000.0,
+        taken_monotonic=1.0, round_trip_ms=5.0, dc_strings_w=(2200.0, 2121.0),
+    )
+    lines = build_telemetry_lines(
+        [], [], {}, 0, timestamp_ns=1,
+        read_only_tiles=[{"name": "E3DC", "source": "e3dc", "online": True, "state": e3dc_device_state(reading)}],
+    )
+
+    assert "solar1=2200" in lines[0] and "solar2=2121" in lines[0]
+    assert "solar3=" not in lines[0] and "solar4=" not in lines[0]
+
+
 def test_an_external_device_maps_its_strings_beside_the_total():
     readings = EMS_SOLARFLOW.readings("state", '{"inverterPower": 400, "solarPower": 420, "solarPower1": 220, "solarPower2": 200}')
     state = parse_device({"properties": readings})

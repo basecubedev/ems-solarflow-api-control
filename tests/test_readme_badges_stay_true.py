@@ -23,7 +23,10 @@ means the badge understates the total, which is the safe direction to be wrong
 in.
 
 The number is floored to a hundred rather than tracked exactly, so ordinary work
-does not have to touch the README. It moves when a hundred tests do.
+does not have to touch the README. It moves when a hundred tests do, and it may
+lag one hundred behind: two pull requests that each pass beside the badge as it
+stands can cross a hundred together once both are merged, which turned main red
+on 2026-11-22 with no pull request at fault. Two hundreds behind is stale.
 """
 
 import functools
@@ -84,18 +87,46 @@ def collected_tests():
     return int(match.group(1))
 
 
+BADGE_STEP = 100
+
+
+def badge_count_problem(claimed, actual):
+    """Why a badge claiming ``claimed`` is wrong for ``actual`` tests, or ``None``."""
+
+    floored = math.floor(actual / BADGE_STEP) * BADGE_STEP
+    if claimed % BADGE_STEP == 0 and floored - BADGE_STEP <= claimed <= floored:
+        return None
+    return (
+        f"the badge claims {claimed}+ and {actual} tests are collected; "
+        f"set it to {floored}. Round down to the hundred -- a badge that "
+        "overstates is believed by people who will not run the suite"
+    )
+
+
+@pytest.mark.parametrize(
+    ("claimed", "actual", "right"),
+    [
+        (19700, 19723, True),
+        (19600, 19723, True),
+        (19500, 19723, False),
+        (19800, 19723, False),
+        (19650, 19723, False),
+        (19700, 19700, True),
+        (19600, 19700, True),
+        (19700, 19699, False),
+    ],
+)
+def test_the_badge_may_lag_one_hundred_and_never_lead(claimed, actual, right):
+    assert (badge_count_problem(claimed, actual) is None) is right
+
+
 def test_the_test_count_badge_is_the_floored_truth():
     claimed = COUNT_BADGE.search(readme())
     assert claimed, "the automated-tests badge is gone or its shape changed"
 
-    actual = collected_tests()
-    expected = math.floor(actual / 100) * 100
+    problem = badge_count_problem(int(claimed.group(1)), collected_tests())
 
-    assert int(claimed.group(1)) == expected, (
-        f"the badge claims {claimed.group(1)}+ and {actual} tests are collected; "
-        f"set it to {expected}. Round down to the hundred -- a badge that "
-        "overstates is believed by people who will not run the suite"
-    )
+    assert problem is None, problem
 
 
 def test_the_badge_never_claims_more_than_exists():

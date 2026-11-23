@@ -421,8 +421,8 @@ This page edits an existing installation.
   **PV 4**: clear the box of an input with no module and the dashboard no longer
   shows it, nor does the history record it; the PV total stays as the device
   reports. The guided setup offers the same boxes under an inverter's advanced
-  settings, an external MQTT inverter and an inverter an OpenDTU reads offer
-  them directly on their cards, an E3/DC none.
+  settings, an external MQTT inverter, an inverter an OpenDTU reads and an E3/DC
+  offer them directly on their cards.
   When the running EMS sees an input stay dark for three days while another
   input of the same device delivered, or an input marked empty deliver, the
   card says so (**Check PV inputs**) with a button that marks the input empty

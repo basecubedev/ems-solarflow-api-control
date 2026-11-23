@@ -31,6 +31,8 @@ on:
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/playwright-e2e.yml"
+      - ".github/actions/playwright-browsers/**"
+      - "scripts/ci-install-playwright-browsers.sh"
   push:
     branches:
       - main
@@ -69,7 +71,9 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browser
-        run: scripts/ci-install-playwright-browsers.sh chromium
+        uses: ./.github/actions/playwright-browsers
+        with:
+          browsers: chromium
 
       - name: Run the Chromium critical group
         env:
@@ -113,7 +117,9 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browser
-        run: scripts/ci-install-playwright-browsers.sh firefox
+        uses: ./.github/actions/playwright-browsers
+        with:
+          browsers: firefox
 
       - name: Run the Firefox smoke group
         env:
@@ -159,7 +165,9 @@ jobs:
         run: npm ci
 
       - name: Install Playwright WebKit
-        run: scripts/ci-install-playwright-browsers.sh webkit
+        uses: ./.github/actions/playwright-browsers
+        with:
+          browsers: webkit
 
       - name: Run Playwright tests (WebKit)
         env:
@@ -203,7 +211,9 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browsers
-        run: scripts/ci-install-playwright-browsers.sh chromium firefox
+        uses: ./.github/actions/playwright-browsers
+        with:
+          browsers: chromium firefox
 
       - name: Run the appliance manager suite
         env:
@@ -263,7 +273,9 @@ jobs:
           git diff --exit-code -- dashboard/static/modern admin/static/modern appliance/static/modern
 
       - name: Install Playwright browsers
-        run: scripts/ci-install-playwright-browsers.sh chromium firefox
+        uses: ./.github/actions/playwright-browsers
+        with:
+          browsers: chromium firefox
 
       - name: Run the dashboard cockpit suite
         env:
@@ -321,7 +333,9 @@ jobs:
         run: npm ci
 
       - name: Install Playwright browser
-        run: scripts/ci-install-playwright-browsers.sh ${{ matrix.browser }}
+        uses: ./.github/actions/playwright-browsers
+        with:
+          browsers: ${{ matrix.browser }}
 
       - name: Run the full Admin suite
         env:

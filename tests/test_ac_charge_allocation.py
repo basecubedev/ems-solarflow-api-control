@@ -287,6 +287,29 @@ def test_the_charging_docs_give_each_model_its_rated_charge_power():
             assert f"({profile.rated_charge_power_w} W)" in ac, model
 
 
+def test_the_mqtt_doc_sends_a_charge_to_exactly_the_models_with_a_charge_path():
+    """The examples in the MQTT power-control reference are a claim about what a
+    negative target does; they went stale once already, still rejecting a charge
+    for every ZenSDK model after the regulator charged them over MQTT."""
+
+    import re
+
+    from ems.mqtt_control.zendure_profiles import HARDWARE_PROFILES
+
+    examples = {}
+    for cells in _table_rows("docs/technical/zendure-mqtt-power-control.md", "## Operation and target validation"):
+        named = re.fullmatch(r"`([a-z0-9_]+)` −500", cells[0])
+        if named:
+            examples[named.group(1)] = cells[1]
+
+    assert examples, "the MQTT doc lists no profile examples under its validation table"
+    for name, result in examples.items():
+        profile = HARDWARE_PROFILES[name]
+        assert ("charge command" in result) == profile.supports_charge, name
+        assert ("`charge_target_unsupported`" in result) == (not profile.supports_charge), name
+    assert {profile.supports_charge for profile in map(HARDWARE_PROFILES.get, examples)} == {True, False}
+
+
 def test_every_charging_model_names_what_the_permission_rests_on():
     """A catalogue claim must never be indistinguishable from an observation."""
 

@@ -78,8 +78,9 @@ neither, the row keeps the other three tiles), without a battery the
 each row of the flow and the power chart show the parts of their own device.
 
 An E3/DC storage system configured as a read-only device appears the same way,
-with **Telemetry only**: PV, **Output** (its inverter's AC power), battery power
-and SOC, plus a **Grid** value with the grid power the E3/DC measures. It has no
+with **Telemetry only**: PV with its two strings in the **Solar** fold,
+**Output** (its inverter's AC power), battery power and SOC, plus a **Grid** value
+with the grid power the E3/DC measures. It has no
 **Limit** and no **Firmware status** section, because the EMS never controls it
 and it has no Zendure firmware states. See
 [E3/DC as a read-only device](technical/configuration.md#e3dc-as-a-read-only-device).

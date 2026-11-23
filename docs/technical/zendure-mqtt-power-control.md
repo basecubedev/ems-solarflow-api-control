@@ -203,16 +203,19 @@ through the same resolver (`zendure_mqtt_power_write_profile`).
 
 ## Supported hardware matrix
 
-| Hardware profile | Discovery | Telemetry | Discharge | Idle | Charge adapter | Automatic charge | Validation            |
-| ---------------- | --------: | --------: | --------: | ---: | -------------: | ---------------: | --------------------- |
-| SolarFlow ZenSDK |       yes |       yes |       yes |  yes |             no |               no | Validated (800 Pro 2) |
-| Hyper 2000       |       yes |       yes |       yes |  yes |            yes |               no | Reverse-engineered    |
-| AIO 2400         |       yes |       yes |       yes |  yes |             no |               no | Reverse-engineered    |
-| Hub 1200         |       yes |       yes |       yes |  yes |             no |               no | Reverse-engineered    |
-| Hub 2000         |       yes |       yes |       yes |  yes |             no |               no | Reverse-engineered    |
-| ACE 1500         |       yes |       yes |        no |   no |             no |               no | deferred              |
-| SuperBase        |       yes |       yes |        no |   no |             no |               no | deferred              |
-| Unknown          |   partial |       yes |        no |   no |             no |               no | telemetry-only        |
+| Hardware profile | Discovery | Telemetry | Discharge | Idle | Validation            |
+| ---------------- | --------: | --------: | --------: | ---: | --------------------- |
+| SolarFlow ZenSDK |       yes |       yes |       yes |  yes | Validated (800 Pro 2) |
+| Hyper 2000       |       yes |       yes |       yes |  yes | Reverse-engineered    |
+| AIO 2400         |       yes |       yes |       yes |  yes | Reverse-engineered    |
+| Hub 1200         |       yes |       yes |       yes |  yes | Reverse-engineered    |
+| Hub 2000         |       yes |       yes |       yes |  yes | Reverse-engineered    |
+| ACE 1500         |       yes |       yes |        no |   no | deferred              |
+| SuperBase        |       yes |       yes |        no |   no | deferred              |
+| Unknown          |   partial |       yes |        no |   no | telemetry-only        |
+
+Charging is decided per model, not per row: [Which models charge](../ac-charging.md#which-models-charge)
+lists the models whose profile declares an AC charge path, with the evidence for each.
 
 Write profiles: ZenSDK → `zensdk_properties_write` (properties/write); Hyper/AIO →
 `legacy_object_device_automation` (object `function/invoke`); Hub 1200/2000 →
@@ -240,11 +243,11 @@ hardware-verified. Local-broker scalar control is **unverified and disabled**;
 enabling it requires hardware evidence that such a broker relays the command,
 not a code change alone.
 
-**Charge adapter vs automatic charge.** The Hyper 2000 adapter can build a signed
-charge command, but the automatic EMS controller only ever emits discharge/idle
-targets. Diagnostics surface this honestly: `supported_operations` lists what the
-adapter understands, `controller_reachable_operations` lists what the controller
-can actually emit (never charge).
+**Charge over MQTT.** The AC charge regulator commands a charge over MQTT as it
+does over the local API, to the models whose profile declares a charge path, and
+only while AC charging is switched on. Diagnostics list `supported_operations`, what
+the adapter understands, beside `controller_reachable_operations`, what the automatic
+controller emits.
 
 **Validation maturity.** `Validated` = confirmed on real hardware — the ZenSDK
 row is validated on the maintainer's SolarFlow 800 Pro 2 (Local API and Zendure
@@ -402,13 +405,14 @@ requested operation from the **sign** of the target (`> 0` discharge, `0` idle,
 `< 0` charge) and checks the model's capability for that operation, rejecting an
 unsupported one with a machine-readable error and no publish:
 
-| Profile / target        | Result                                            |
-| ----------------------- | ------------------------------------------------- |
-| `solarflow_zensdk` −500 | rejected `charge_target_unsupported` (no publish) |
-| `hub_2000` −500         | rejected `charge_target_unsupported` (no publish) |
-| `aio_2400` −500         | rejected `charge_target_unsupported` (no publish) |
-| `hyper_2000` −500       | adapter-supported charge command                  |
-| telemetry-only + any    | rejected `telemetry_only_hardware` (no publish)   |
+| Profile / target           | Result                                            |
+| -------------------------- | ------------------------------------------------- |
+| `solarflow_800_pro_2` −500 | ZenSDK charge command                             |
+| `solarflow_800_plus` −500  | rejected `charge_target_unsupported` (no publish) |
+| `hub_2000` −500            | rejected `charge_target_unsupported` (no publish) |
+| `aio_2400` −500            | rejected `charge_target_unsupported` (no publish) |
+| `hyper_2000` −500          | `function/invoke` charge command                  |
+| telemetry-only + any       | rejected `telemetry_only_hardware` (no publish)   |
 
 The `properties/write` path (ZenSDK and the custom escape hatch) **never**
 publishes a negative `outputLimit`. Targets are strictly validated — only an
@@ -439,9 +443,9 @@ Idle deliberately stays in smart output regulation at 0 W instead of dropping to
 `smartMode: 0` standby (as the reference `power_off` does): the EMS five-second
 loop crosses 0 W routinely and must not toggle a flash-persistent operating mode
 on every crossing; long standby phases are governed upstream (strict night
-idle). AC charge (`{"smartMode": 1, "acMode": 1, "outputLimit": 0,
-"inputLimit": <w>}`) is known from the reference implementation but **fails
-closed** — no ZenSDK profile enables charge until it is validated on hardware.
+idle). A charge carries `{"smartMode": 1, "acMode": 1, "outputLimit": 0,
+"inputLimit": <w>}` and goes only to a model whose profile declares a charge path;
+every other ZenSDK model rejects a negative target before anything is published.
 
 **Write topic.** For a known/profile-backed device, `properties/write` commands
 are always addressed on the **canonical** `iot/<productKey>/<deviceId>/

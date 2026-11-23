@@ -20,12 +20,16 @@ from ems.logging_utils import log_event
 from ems.models import DeviceState
 
 
+DC_STRING_POWER_KEYS = ("dc_power_l1", "dc_power_l2")
+
+
 @dataclass(frozen=True)
 class E3dcReading:
     """One consistent snapshot of the power block (and the inverter, if read).
 
     ``inverter_w`` is ``None`` when the inverter block was not read or did not
-    answer; the grid, PV and battery values stand on their own.
+    answer; the grid, PV and battery values stand on their own. ``dc_strings_w``
+    is the DC power of each string from that same block, and ``None`` with it.
     """
 
     pv_w: float
@@ -35,6 +39,7 @@ class E3dcReading:
     inverter_w: float | None
     taken_monotonic: float
     round_trip_ms: float
+    dc_strings_w: tuple[float, ...] | None = None
 
 
 def _field_value(fields, first, registers, key):
@@ -142,7 +147,8 @@ class E3dcModbusSession:
         battery_w = float(value("battery_power"))
         grid_w = float(value("grid_power"))
         soc = float(value("battery_soc"))
-        inverter_w = self._read_inverter() if self._inverter_due() else None
+        inverter = self._read_inverter() if self._inverter_due() else None
+        inverter_w, dc_strings_w = inverter or (None, None)
         return E3dcReading(
             pv_w=pv_w,
             battery_w=battery_w,
@@ -151,6 +157,7 @@ class E3dcModbusSession:
             inverter_w=inverter_w,
             taken_monotonic=self._clock(),
             round_trip_ms=round_trip_ms,
+            dc_strings_w=dc_strings_w,
         )
 
     def _inverter_due(self):
@@ -159,7 +166,10 @@ class E3dcModbusSession:
         return self._inverter_retry_at is None or self._clock() >= self._inverter_retry_at
 
     def _read_inverter(self):
-        """The inverter's AC power, or ``None``; it never fails the grid reading.
+        """``(AC power, DC power of each string)`` of the inverter, or ``None``.
+
+        It never fails the grid reading. A string's DC power below zero is a dark
+        string's offset, not power fed back, and reads as 0 W.
 
         The inverter block is for the device tile only, and it backs off on its
         own: a block the E3/DC refuses or lets time out is not asked for again
@@ -179,6 +189,10 @@ class E3dcModbusSession:
                 _field_value(modbus.INVERTER_FIELDS, 0, inverter, key)
                 for key in ("active_power_l1", "active_power_l2", "active_power_l3")
             ))
+            dc_strings_w = tuple(
+                max(0.0, float(_field_value(modbus.INVERTER_FIELDS, 0, inverter, key)))
+                for key in DC_STRING_POWER_KEYS
+            )
         except modbus.ModbusExceptionResponse as exc:
             self._inverter_failed(exc)
             return None
@@ -197,7 +211,7 @@ class E3dcModbusSession:
             )
         self._inverter_failures = 0
         self._inverter_retry_at = None
-        return value
+        return value, dc_strings_w
 
     def _inverter_failed(self, exc):
         self._inverter_failures += 1
@@ -295,9 +309,13 @@ def e3dc_device_state(reading):
 
     ``battery_w`` is positive while charging, the dashboard's own convention,
     so it splits into ``pack_out`` (into the pack) and ``pack_in`` (out of it).
+    The inverter's strings are its PV inputs; without an inverter reading the
+    tile reports none.
     """
 
     battery_w = reading.battery_w if reading else 0.0
+    strings = ((reading.dc_strings_w if reading else None) or ())[:4]
+    solar = list(strings) + [0] * (4 - len(strings))
     return DeviceState(
         soc=reading.soc if reading else 0,
         min_soc=0,
@@ -310,10 +328,10 @@ def e3dc_device_state(reading):
         voltage=0,
         rssi=0,
         remain_minutes=0,
-        solar1=0,
-        solar2=0,
-        solar3=0,
-        solar4=0,
+        solar1=solar[0],
+        solar2=solar[1],
+        solar3=solar[2],
+        solar4=solar[3],
         output_limit=0,
         soc_limit=0,
         pack_state=0,
@@ -324,7 +342,7 @@ def e3dc_device_state(reading):
         ac_status=0,
         dc_status=0,
         grid_state=0,
-        pv_inputs_reported=(False, False, False, False),
+        pv_inputs_reported=tuple(index < len(strings) for index in range(4)),
     )
 
 
@@ -362,7 +380,11 @@ class E3dcDeviceRuntime:
             if reading is None:
                 continue
             if reading.inverter_w is None and device.reading is not None:
-                reading = replace(reading, inverter_w=device.reading.inverter_w)
+                reading = replace(
+                    reading,
+                    inverter_w=device.reading.inverter_w,
+                    dc_strings_w=device.reading.dc_strings_w,
+                )
             device.reading = reading
 
     def tiles(self):

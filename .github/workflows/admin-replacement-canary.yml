@@ -48,10 +48,12 @@ jobs:
             --source-tag "$SOURCE_TAG" \
             --target-tag "$TARGET_TAG" \
             --github-output "$GITHUB_OUTPUT"
+      - name: Install Node dependencies
+        run: npm ci
       - name: Install Chromium dependencies
-        run: |
-          npm ci
-          scripts/ci-install-playwright-browsers.sh chromium
+        uses: ./.github/actions/playwright-browsers
+        with:
+          browsers: chromium
       - name: Run real Docker replacement and reconnect
         env:
           ADMIN_REPLACEMENT_RUNTIME: ${{ runner.temp }}/ems-admin-replacement-${{ github.run_id }}-${{ github.run_attempt }}

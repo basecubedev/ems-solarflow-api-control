@@ -5,7 +5,8 @@
 
 Direct declarations only: every entry in the requirements files and in
 ``package.json``, every optional platform package in ``package-lock.json``,
-every GitHub Action a workflow uses, and every static asset that does not carry
+every GitHub Action a workflow or a local action under ``.github/actions`` uses,
+and every static asset that does not carry
 the project license header must have a row in the inventory. Every Version
 cell a manifest decides -- a requirement's constraint, a package's locked
 version, the major version a workflow uses an action at -- reads what the
@@ -78,6 +79,7 @@ COMPONENT_SECTIONS = (
 
 APPLIANCE_CONTROL = "packaging/appliance/debian/control"
 WORKFLOW_DIR = ".github/workflows"
+LOCAL_ACTION_DIR = ".github/actions"
 
 PYTHON_RUNTIME_MANIFESTS = ("requirements.txt", "deploy/admin/requirements.txt")
 PYTHON_DEV_MANIFESTS = ("requirements-dev.txt", "requirements-docs.txt")
@@ -715,21 +717,29 @@ def _check_appliance(root, sections, problems):
             )
 
 
-def workflow_actions(root):
-    """The third-party actions the workflows use, as ``owner/repository``.
+def _action_sources(root):
+    """The workflow files and the local actions' ``action.yml`` files, which name the actions CI runs."""
 
-    A local ``./`` workflow is project code and a ``docker://`` step names an
-    image, so neither is an action; an action in a subdirectory, such as
-    ``github/codeql-action/init``, is its repository."""
-
-    workflows = Path(root) / WORKFLOW_DIR
-    actions = set()
+    sources = []
     for pattern in _WORKFLOW_FILES:
-        for path in sorted(workflows.glob(pattern)):
-            for reference in _USES.findall(path.read_text(encoding="utf-8")):
-                if reference.startswith(("./", "docker://")):
-                    continue
-                actions.add("/".join(reference.partition("@")[0].split("/")[:2]))
+        sources += sorted((Path(root) / WORKFLOW_DIR).glob(pattern))
+        sources += sorted((Path(root) / LOCAL_ACTION_DIR).glob(f"*/action{pattern[1:]}"))
+    return sources
+
+
+def workflow_actions(root):
+    """The third-party actions the workflows and the local actions use, as ``owner/repository``.
+
+    A local ``./`` workflow or action is project code and a ``docker://`` step
+    names an image, so neither is an action; an action in a subdirectory, such
+    as ``github/codeql-action/init``, is its repository."""
+
+    actions = set()
+    for path in _action_sources(root):
+        for reference in _USES.findall(path.read_text(encoding="utf-8")):
+            if reference.startswith(("./", "docker://")):
+                continue
+            actions.add("/".join(reference.partition("@")[0].split("/")[:2]))
     return actions
 
 
@@ -740,9 +750,9 @@ def _check_github_actions(root, sections, problems):
     documented = set(component_keys(section))
     used = workflow_actions(root)
     for action in sorted(used - documented):
-        problems.append(f"{WORKFLOW_DIR} uses {action!r}, which is not in the {GITHUB_ACTIONS!r} section")
+        problems.append(f"a workflow or local action uses {action!r}, which is not in the {GITHUB_ACTIONS!r} section")
     for stale in sorted(documented - used):
-        problems.append(f"{GITHUB_ACTIONS!r} lists {stale!r}, which no workflow uses")
+        problems.append(f"{GITHUB_ACTIONS!r} lists {stale!r}, which no workflow or local action uses")
 
 
 def workflow_action_versions(root):
@@ -751,17 +761,15 @@ def workflow_action_versions(root):
     A commit pin is read by the tag its trailing comment names, the form
     Dependabot keeps up to date beside it."""
 
-    workflows = Path(root) / WORKFLOW_DIR
     versions = {}
-    for pattern in _WORKFLOW_FILES:
-        for path in sorted(workflows.glob(pattern)):
-            for name, ref, comment in _ACTION_VERSION.findall(path.read_text(encoding="utf-8")):
-                if name.startswith(("./", "docker:")):
-                    continue
-                tag = comment if _COMMIT.match(ref) and comment else ref
-                major = _MAJOR.search(tag)
-                action = "/".join(name.split("/")[:2])
-                versions.setdefault(action, set()).add(major.group(1) if major else tag)
+    for path in _action_sources(root):
+        for name, ref, comment in _ACTION_VERSION.findall(path.read_text(encoding="utf-8")):
+            if name.startswith(("./", "docker:")):
+                continue
+            tag = comment if _COMMIT.match(ref) and comment else ref
+            major = _MAJOR.search(tag)
+            action = "/".join(name.split("/")[:2])
+            versions.setdefault(action, set()).add(major.group(1) if major else tag)
     return versions
 
 

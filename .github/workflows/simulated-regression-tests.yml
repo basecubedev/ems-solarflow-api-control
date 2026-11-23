@@ -323,7 +323,9 @@ jobs:
 
       - name: Install Playwright browsers
         timeout-minutes: 18
-        run: scripts/ci-install-playwright-browsers.sh chromium firefox
+        uses: ./.github/actions/playwright-browsers
+        with:
+          browsers: chromium firefox
 
       - name: Pull the broker image before the tests need it
         run: |

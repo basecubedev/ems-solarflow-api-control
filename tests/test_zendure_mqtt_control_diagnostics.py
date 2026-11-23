@@ -5,13 +5,14 @@
 ``describe()`` reports explicit ``control_requested`` / ``control_supported`` /
 ``control_ready`` fields, the resolved hardware identity and power-write profile,
 the block reason when control is unavailable, and the operations the adapter
-supports versus the operations the automatic controller can actually reach — so
-Hyper charge-adapter support is visibly distinct from automatic-controller
-support.
+supports beside the operations the automatic controller can reach. The AC charge
+regulator charges an MQTT device like a local-API one, so a model with a charge
+path lists charge in both.
 """
 
 import pytest
 
+from ems.mqtt_control.zendure_profiles import HARDWARE_PROFILES
 from ems.zendure_mqtt.device_client import ZendureMqttDeviceClient
 from ems.zendure_mqtt.topics import FAMILY_LEGACY_JSON
 
@@ -48,18 +49,29 @@ def _device(hardware_profile=None, **kwargs):
     )
 
 
-def test_hyper_diagnostics_distinguish_adapter_charge_from_controller():
+def test_hyper_diagnostics_list_charge_as_reachable_by_the_controller():
     d = _device("hyper_2000").describe(now_monotonic=0.0)
     assert d["control_requested"] is True
     assert d["control_supported"] is True
     assert d["hardware_profile"] == "hyper_2000"
     assert d["power_write_profile"] == "legacy_object_device_automation"
     assert set(d["supported_operations"]) == {"discharge", "idle", "charge"}
-    # The adapter understands charge; the automatic controller does not emit it.
-    assert set(d["controller_reachable_operations"]) == {"discharge", "idle"}
+    assert set(d["controller_reachable_operations"]) == {"discharge", "idle", "charge"}
     assert d["control_block_reason"] is None
     assert d["last_command_state"] is None
     assert isinstance(d["control_ready"], bool)
+
+
+@pytest.mark.parametrize("profile", sorted(HARDWARE_PROFILES))
+def test_the_controller_reaches_every_operation_a_model_supports(profile):
+    """The regulator commands a charge to any model whose profile declares one
+    (``tests/test_ac_charge_regulator.py`` drives it over MQTT), so nothing a
+    model supports is out of the automatic controller's reach."""
+
+    d = _device(profile).describe(now_monotonic=0.0)
+
+    assert d["controller_reachable_operations"] == d["supported_operations"]
+    assert ("charge" in d["controller_reachable_operations"]) == HARDWARE_PROFILES[profile].supports_charge
 
 
 def test_deferred_profile_diagnostics_report_block_reason():

@@ -154,8 +154,22 @@ def test_local_git_helpers_via_run_git_stub(monkeypatch, tmp_path):
     assert info["build_label"] == "v0.6.3-2-gabcdef-dirty"
 
 
+def test_a_git_worktree_is_read_like_a_checkout(monkeypatch, tmp_path):
+    """In a linked worktree ``.git`` is a file naming the real git directory."""
+
+    (tmp_path / ".git").write_text("gitdir: /elsewhere/.git/worktrees/x\n", encoding="utf-8")
+    monkeypatch.setattr(
+        build_info, "_run_git", lambda args, cwd: "abcdef1234567890abcdef" if args == ["rev-parse", "HEAD"] else None
+    )
+
+    info = collect_build_info(base_dir=str(tmp_path), environ={})
+
+    assert info["git_commit"] == "abcdef1234567890abcdef"
+    assert info["build_label"] == "abcdef123456"
+
+
 def test_missing_dot_git_dir_yields_none(monkeypatch, tmp_path):
-    # _git_info short-circuits without a .git directory; _run_git is never called.
+    # _git_info short-circuits without a .git entry; _run_git is never called.
     def _fail(*args, **kwargs):  # pragma: no cover - must not run
         raise AssertionError("_run_git should not be called without .git")
 

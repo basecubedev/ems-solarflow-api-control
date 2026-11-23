@@ -86,10 +86,9 @@ from ems.zendure_mqtt.write_protocols import (
 # builder; every other case keeps the properties/write path.
 _INVOKE_WRITE_PROFILES = (WRITE_PROFILE_LEGACY_HUB, WRITE_PROFILE_LEGACY_OBJECT)
 
-# Operations the automatic EMS controller can actually emit. It commands output
-# (discharge) and stop (idle) but never AC charge, so a charge-capable adapter is
-# still not reachable by the automatic controller — diagnostics surface both.
-_CONTROLLER_EMITTED_OPERATIONS = frozenset({OPERATION_DISCHARGE, OPERATION_IDLE})
+# Operations the automatic EMS controller emits: output (discharge), stop (idle)
+# and, through the AC charge regulator while AC charging is on, charge.
+_CONTROLLER_EMITTED_OPERATIONS = frozenset({OPERATION_DISCHARGE, OPERATION_IDLE, OPERATION_CHARGE})
 
 # Safe default acknowledgement timeout: a published command with no correlated
 # reply within this many seconds is timed out (never retried indefinitely).
@@ -1731,8 +1730,8 @@ class ZendureMqttDeviceClient:
 
         Explicit ``control_requested``/``control_supported``/``control_ready``
         fields replace an ambiguous single flag, and the operations the adapter
-        supports are reported separately from the operations the automatic
-        controller can actually emit (it never emits AC charge).
+        supports are reported beside the operations the automatic controller
+        emits; it charges only while AC charging is switched on.
         """
 
         if now_monotonic is not None:

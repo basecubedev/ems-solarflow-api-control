@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._published_markdown import published_markdown
+
 pytestmark = [
     pytest.mark.contract,
     pytest.mark.documentation,
@@ -157,7 +159,7 @@ def test_the_videos_are_made_from_the_screenshots_they_sit_beside():
 
 
 def test_no_committed_markdown_references_missing_admin_media():
-    docs = [ROOT / "README.md"] + sorted((ROOT / "docs").rglob("*.md"))
+    docs = published_markdown()
     for doc in docs:
         text = read(doc)
         # Image embeds, HTML src/poster attributes (video <source> included) and

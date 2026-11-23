@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
-import { changedPayload, changeWarning, deviceEndpoint, endpointDevice, acRole, deviceSettings, normalizeValue, reseed, withDefault, SYSTEM_ENDPOINT } from "../src/lib/runtime.js";
+import { changedPayload, changeWarning, deviceEndpoint, endpointDevice, acRole, deviceSettings, normalizeValue, reseed, switchDefault, withDefault, OFF_WORDS, ON_WORDS, SYSTEM_ENDPOINT } from "../src/lib/runtime.js";
 
 const fields = [
   { name: "enabled", type: "toggle" },
@@ -119,10 +119,47 @@ test("a change while the EMS is off says when it takes effect", () => {
   assert.ok(keys.includes("runtime.warn.emsOff"));
 });
 
+test("an EMS or device switched off by a stored word is off for the warnings too", () => {
+  const emsWord = { system: { enabled: "off" }, devices: { WR1: { enabled: true } } };
+  assert.ok(changeWarning(deviceEndpoint("WR1"), { offgrid_socket_mode: "eco" }, emsWord).map((item) => item.key).includes("runtime.warn.emsOff"));
+  const configuredOff = { system: { enabled: "maybe" }, devices: { WR1: { enabled: true } }, _limits: { switch_defaults: { system: { enabled: false } } } };
+  assert.ok(changeWarning(deviceEndpoint("WR1"), { offgrid_socket_mode: "eco" }, configuredOff).map((item) => item.key).includes("runtime.warn.emsOff"));
+  const deviceWord = { system: { enabled: true }, devices: { WR1: { enabled: "no" } } };
+  assert.ok(changeWarning(deviceEndpoint("WR1"), { offgrid_socket_mode: "eco" }, deviceWord).map((item) => item.key).includes("runtime.warn.deviceOutside"));
+});
+
 test("device settings: offered ones, plus any the device still has a value for", () => {
   const catalogue = [{ key: "light", values: [] }, { key: "fan", values: [] }, { key: "buzzer", values: [] }];
   const settings = deviceSettings({ buzzer: "on" }, catalogue, ["light"]);
   assert.deepEqual(settings.map((s) => [s.key, s.offered]), [["light", true], ["buzzer", false]]);
+});
+
+test("a toggle reads a stored word as the EMS does, and anything else as its fallback", () => {
+  const loose = { name: "enabled", type: "toggle" };
+  const onByDefault = { name: "enabled", type: "toggle", fallback: true };
+  assert.deepEqual([...ON_WORDS, " On ", "YES", 1].map((value) => normalizeValue(loose, value)), Array(ON_WORDS.length + 3).fill(true));
+  assert.deepEqual([...OFF_WORDS, " Off ", "NO", 0].map((value) => normalizeValue(onByDefault, value)), Array(OFF_WORDS.length + 3).fill(false));
+  assert.deepEqual(["maybe", "", null, undefined].map((value) => normalizeValue(loose, value)), [false, false, false, false]);
+  assert.deepEqual(["maybe", "", null, undefined].map((value) => normalizeValue(onByDefault, value)), [true, true, true, true]);
+});
+
+test("a switch config decides falls back to what the EMS was configured with", () => {
+  const limits = { switch_defaults: { system: { enabled: false }, devices: { WR1: { ac_charge_enabled: false }, WR2: { ac_charge_enabled: true } } } };
+  assert.equal(switchDefault(limits, null, "enabled"), false);
+  assert.equal(switchDefault(limits, "WR1", "ac_charge_enabled"), false);
+  assert.equal(switchDefault(limits, "WR2", "ac_charge_enabled"), true);
+  assert.equal(switchDefault({}, "WR3", "ac_charge_enabled"), true);
+  assert.equal(normalizeValue({ type: "toggle", fallback: switchDefault(limits, "WR1", "ac_charge_enabled") }, "maybe"), false);
+});
+
+test("a toggle shows the stored value as the EMS reads it, and an untouched one sends nothing", () => {
+  const toggles = [{ name: "enabled", type: "toggle" }, { name: "ac_discharge_enabled", type: "toggle", strict: true }];
+  const initial = { enabled: "off", ac_discharge_enabled: "on" };
+  const seeded = reseed(toggles, { initial, fresh: true });
+  assert.deepEqual(seeded.values, { enabled: false, ac_discharge_enabled: false });
+  assert.deepEqual(seeded.baseline, initial);
+  assert.deepEqual(changedPayload(toggles, seeded.values, initial), {});
+  assert.deepEqual(changedPayload(toggles, { ...seeded.values, enabled: true }, initial), { enabled: true });
 });
 
 test("a strict toggle shows on only for a stored true, as the EMS reads anything else as off", () => {

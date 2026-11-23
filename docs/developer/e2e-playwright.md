@@ -82,12 +82,19 @@ The former `playwright-chromium-smoke` job is now
 `playwright-chromium-critical`; branch protection referring to the old name has
 to be repointed.
 
-Every CI job installs its browsers with
-`scripts/ci-install-playwright-browsers.sh <browser>...`, never with
-`npx playwright install` directly (`tests/test_ci_playwright_install.py`). The
-system packages come from the runner's apt mirror, which stalls now and then:
-the script makes apt give up on a stalled transfer and wait for the dpkg lock,
-and before a retry it ends the apt-get a killed attempt left holding that lock.
+Every CI job installs its browsers with the local action
+`./.github/actions/playwright-browsers` (`with: browsers: <browser>...`), never
+with `npx playwright install` directly (`tests/test_ci_playwright_install.py`).
+The system packages come from the runner's apt mirror, which stalls now and then
+or serves a package a minute. The action caches the browser downloads and the
+packages' `.deb` archives, keyed on the runner image, the Playwright version and
+the browsers; a new runner image starts from the previous image's cache, and apt
+drops the archives its index no longer offers. The mirror is asked only for the
+package index and what the cache does not hold. The action then runs
+`scripts/ci-install-playwright-browsers.sh`, which makes apt give up on a stalled
+transfer and wait for the dpkg lock, and before a retry ends the apt-get a killed
+attempt left holding that lock. A pull request that changes the action or the
+script runs the browser jobs.
 
 ## Groups
 
