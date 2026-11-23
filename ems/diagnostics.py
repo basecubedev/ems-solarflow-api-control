@@ -3463,6 +3463,13 @@ def diagnose_control_staleness(live):
     return staleness
 
 
+def diagnose_load_filter_on(config_data):
+    """Whether the config switches the median/EMA load filter on, by the shipped default where it says nothing."""
+
+    value = diagnose_nested_get(config_data, [("system", "output_control", "filter_enabled")])
+    return config_mod.safe_bool(value, config_mod.OUTPUT_CONTROL_DEFAULTS["filter_enabled"])
+
+
 def diagnose_control_report(config_data, runtime_path, sample_seconds=0, *, config_readable=True):
     runtime_data, runtime_error = diagnose_control_load_runtime(runtime_path)
     loop_interval = diagnose_loop_interval(config_data, runtime_data)
@@ -3486,8 +3493,13 @@ def diagnose_control_report(config_data, runtime_path, sample_seconds=0, *, conf
         control_path.append(f"Controller mode: {mode}")
     if grid is not None:
         control_path.append(f"Grid {'import' if grid > 0 else 'export' if grid < 0 else 'neutral'} detected ({diagnose_format_watts(grid)})")
-    if filtered is not None and grid is not None:
-        control_path.append(f"Filter adjusted measurement to {diagnose_format_watts(filtered)}")
+    if filtered is not None and grid is not None and abs(filtered - grid) >= 1:
+        if diagnose_load_filter_on(config_data):
+            control_path.append(f"Filter adjusted measurement to {diagnose_format_watts(filtered)}")
+        else:
+            control_path.append(
+                f"Regulated on {diagnose_format_watts(filtered)}, the reading less the writes it cannot show yet"
+            )
     if snapshot.get("deadband_active") is True:
         control_path.append(f"Deadband active within +/-{int(snapshot.get('deadband_w') or 0)} W")
     elif snapshot.get("deadband_active") is False:
@@ -3681,7 +3693,7 @@ def diagnose_control_text(control):
         "",
         f"Live Snapshot:        {diagnose_live_snapshot_text(control.get('runtime_state', {}))}",
         f"Grid Power:           {diagnose_format_watts(snapshot.get('grid_power_w'))}",
-        f"Filtered Grid:        {diagnose_format_watts(snapshot.get('filtered_grid_power_w'))}",
+        f"Regulated On:         {diagnose_format_watts(snapshot.get('filtered_grid_power_w'))}",
         f"Target Output:        {diagnose_format_watts(snapshot.get('target_output_w'))}",
         f"Final Output:         {diagnose_format_watts(snapshot.get('final_output_w'))}",
         "",

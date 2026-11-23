@@ -315,6 +315,7 @@ class EMSController:
 
     def filter_output_control_load(self, raw_load):
         if not self.output_control_bool("filter_enabled", True):
+            self.filtered_load_w = raw_load
             return raw_load
 
         window = self.output_control_int("median_window", 3, minimum=1)
@@ -339,6 +340,7 @@ class EMSController:
         )
 
         if method != "median_ema":
+            self.filtered_load_w = raw_load
             return raw_load
 
         alpha = min(
@@ -1657,7 +1659,7 @@ class EMSController:
             raw_requested_total_w=allocated_total,
             max_total_power_w=max_power,
             load_w=load,
-            filtered_load_w=self.filtered_load_w,
+            filtered_load_w=load,
             min_output_limit_w=min_output_limit,
             undistributed_target_w=0,
         )
