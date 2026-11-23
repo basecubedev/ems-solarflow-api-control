@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from ems import config as target_cfg
+from ems.config import OUTPUT_CONTROL_DEFAULTS
 from ems.controller import EMSController, finite_grid_load
 from ems.models import DeviceCapabilities, DeviceState
 from ems.target_control import calculate_targets
@@ -18,30 +19,6 @@ pytestmark = [
     pytest.mark.power_control,
     pytest.mark.regression,
 ]
-
-
-BASE_OUTPUT_CONTROL = {
-    "load_deadband_w": 5,
-    "target_deadband_w": 10,
-    "filter_enabled": True,
-    "filter_method": "median_ema",
-    "median_window": 2,
-    "ema_alpha": 0.85,
-    "sign_change_fast_response_enabled": True,
-    "sign_change_threshold_w": 50,
-    "sign_change_filter_reset_factor": 1.0,
-    "ramp_enabled": True,
-    "ramp_up_w_per_cycle": 500,
-    "ramp_down_w_per_cycle": 500,
-    "device_ramp_enabled": True,
-    "device_ramp_up_w_per_cycle": 400,
-    "device_ramp_down_w_per_cycle": 400,
-    "large_import_bypass_w": 600,
-    "large_export_bypass_w": 600,
-    "bypass_ramp_multiplier": 1.5,
-    "telemetry_max_age_seconds": 10,
-    "stale_telemetry_ramp_factor": 0.5,
-}
 
 
 TARGET_CONTROL_DEFAULTS = {
@@ -124,7 +101,7 @@ def state(
 
 
 def controller(monkeypatch, devices=None, output_control=None):
-    config = dict(BASE_OUTPUT_CONTROL)
+    config = dict(OUTPUT_CONTROL_DEFAULTS)
     if output_control:
         config.update(output_control)
 
@@ -218,7 +195,7 @@ def test_total_target_fixture_regressions(monkeypatch, case):
 def test_non_finite_grid_reading_holds_target_and_spares_the_filter(
     monkeypatch, reading
 ):
-    ems = controller(monkeypatch)
+    ems = controller(monkeypatch, output_control={"filter_enabled": True})
     states = [state(output=300, output_limit=300)]
     ems.stabilized_total_target(finite_grid_load(300), states, 800)
     held = ems.stabilized_total_target(finite_grid_load(reading), states, 800)
@@ -226,6 +203,18 @@ def test_non_finite_grid_reading_holds_target_and_spares_the_filter(
 
     assert held == held and held <= 800
     assert after == after
+    assert after < held
+
+
+@pytest.mark.parametrize("reading", [float("nan"), float("inf"), None, "x"])
+def test_non_finite_grid_reading_holds_the_target_without_the_filter(monkeypatch, reading):
+    ems = controller(monkeypatch)
+    states = [state(output=300, output_limit=300)]
+    before = ems.stabilized_total_target(finite_grid_load(300), states, 800)
+    held = ems.stabilized_total_target(finite_grid_load(reading), states, 800)
+    after = ems.stabilized_total_target(finite_grid_load(-200), states, 800)
+
+    assert held == before
     assert after < held
 
 
@@ -249,6 +238,7 @@ def test_output_filter_first_cycle_median_and_ema(monkeypatch):
     ems = controller(
         monkeypatch,
         output_control={
+            "filter_enabled": True,
             "median_window": 3,
             "ema_alpha": 0.5,
             "sign_change_fast_response_enabled": False,
@@ -264,6 +254,7 @@ def test_sign_change_fast_response_resets_stale_filter_direction(monkeypatch):
     fast = controller(
         monkeypatch,
         output_control={
+            "filter_enabled": True,
             "median_window": 3,
             "ema_alpha": 0.2,
             "sign_change_fast_response_enabled": True,
@@ -279,6 +270,7 @@ def test_sign_change_fast_response_resets_stale_filter_direction(monkeypatch):
     slow = controller(
         monkeypatch,
         output_control={
+            "filter_enabled": True,
             "median_window": 3,
             "ema_alpha": 0.2,
             "sign_change_fast_response_enabled": False,
@@ -295,6 +287,7 @@ def test_repeated_small_sign_changes_around_zero_stay_bounded(monkeypatch):
     ems = controller(
         monkeypatch,
         output_control={
+            "filter_enabled": True,
             "median_window": 3,
             "ema_alpha": 0.65,
             "sign_change_fast_response_enabled": True,

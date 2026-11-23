@@ -540,7 +540,7 @@
           {
             "path": "system.output_control.device_ramp_enabled",
             "label": "Enable per-device ramp",
-            "description": "Limits how quickly each single device target may change.",
+            "description": "Limits how quickly each single device target may change. Off by default: the system ramp already limits the total.",
             "type": "boolean",
             "level": "expert",
             "scope": "both",
@@ -550,7 +550,7 @@
             "backup_recommended": true,
             "risk": "control_stability",
             "group": "output_control",
-            "default": true,
+            "default": false,
             "template": true,
             "secret": false
           },
@@ -588,7 +588,7 @@
             "unit": "W/cycle",
             "min": 0,
             "group": "output_control",
-            "default": 400,
+            "default": 200,
             "template": true,
             "secret": false
           },

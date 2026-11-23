@@ -300,14 +300,15 @@ class EMSController:
         )
 
     def output_control_bypass_active(self, raw_load):
+        defaults = cfg.OUTPUT_CONTROL_DEFAULTS
         import_limit = self.output_control_float(
             "large_import_bypass_w",
-            600,
+            defaults["large_import_bypass_w"],
             minimum=0
         )
         export_limit = self.output_control_float(
             "large_export_bypass_w",
-            500,
+            defaults["large_export_bypass_w"],
             minimum=0
         )
 
@@ -918,10 +919,11 @@ class EMSController:
             )
         desired = self.commanded_total_w
         held = False
+        defaults = cfg.OUTPUT_CONTROL_DEFAULTS
 
         load_deadband = self.output_control_float(
             "load_deadband_w",
-            5,
+            defaults["load_deadband_w"],
             minimum=0
         )
 
@@ -985,7 +987,7 @@ class EMSController:
 
         target_deadband = self.output_control_float(
             "target_deadband_w",
-            10,
+            defaults["target_deadband_w"],
             minimum=0
         )
 
@@ -1020,19 +1022,19 @@ class EMSController:
 
         if (
             not held
-            and self.output_control_bool("ramp_enabled", True)
+            and self.output_control_bool("ramp_enabled", defaults["ramp_enabled"])
             and delta != 0
         ):
             if delta > 0:
                 ramp_limit = self.output_control_float(
                     "ramp_up_w_per_cycle",
-                    300,
+                    defaults["ramp_up_w_per_cycle"],
                     minimum=0
                 )
             else:
                 ramp_limit = self.output_control_float(
                     "ramp_down_w_per_cycle",
-                    500,
+                    defaults["ramp_down_w_per_cycle"],
                     minimum=0
                 )
 
@@ -1041,14 +1043,14 @@ class EMSController:
             if bypass:
                 ramp_limit *= self.output_control_float(
                     "bypass_ramp_multiplier",
-                    1.5,
+                    defaults["bypass_ramp_multiplier"],
                     minimum=1.0
                 )
 
             if stale:
                 stale_limit = ramp_limit * self.output_control_float(
                     "stale_telemetry_ramp_factor",
-                    0.5,
+                    defaults["stale_telemetry_ramp_factor"],
                     minimum=0.0
                 )
                 if self.commanded_total_w < 0 < delta:
@@ -1103,7 +1105,8 @@ class EMSController:
         total said what the house draws, which the integrator then wound up.
         """
 
-        if not self.output_control_bool("device_ramp_enabled", True):
+        defaults = cfg.OUTPUT_CONTROL_DEFAULTS
+        if not self.output_control_bool("device_ramp_enabled", defaults["device_ramp_enabled"]):
             adjusted_targets = []
             for dev, target in zip(self.devices, targets):
                 if not self.device_output_control_allowed(dev):
@@ -1116,7 +1119,7 @@ class EMSController:
         multiplier = (
             self.output_control_float(
                 "bypass_ramp_multiplier",
-                1.5,
+                defaults["bypass_ramp_multiplier"],
                 minimum=1.0
             )
             if bypass
@@ -1125,7 +1128,7 @@ class EMSController:
         up_limit = (
             self.output_control_float(
                 "device_ramp_up_w_per_cycle",
-                250,
+                defaults["device_ramp_up_w_per_cycle"],
                 minimum=0
             )
             * multiplier
@@ -1133,7 +1136,7 @@ class EMSController:
         down_limit = (
             self.output_control_float(
                 "device_ramp_down_w_per_cycle",
-                400,
+                defaults["device_ramp_down_w_per_cycle"],
                 minimum=0
             )
             * multiplier

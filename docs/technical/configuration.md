@@ -143,7 +143,8 @@ existing comments.
 Some defaults turned out not to be good, and a later release replaced them:
 `system.loop_interval` 3 is 5 now, `ac_charge_control.max_total_charge_power_w`
 1200 is no limit, battery care's 5, 10 and 0 points are 3, 4 and 1, and the
-load filter (`system.output_control.filter_enabled`) is off. A value
+load filter (`system.output_control.filter_enabled`) and the per-device ramp
+(`system.output_control.device_ramp_enabled`) are off. A value
 in `config.json` that still equals such an old default was most likely never
 changed by hand, so the EMS moves it to today's default once:
 
@@ -169,11 +170,14 @@ changed by hand, so the EMS moves it to today's default once:
   keys" adds keys only.
 - Only tuning values are refreshed: never a switch, a write gate, a path or an
   address, nor `system.min_output_limit` 0, which turns the standby floor off
-  and is as likely chosen. The one switch moved is the load filter: the
-  template switched it on for every installation, so one still on with a
-  window and an EMA a release shipped (2 or 3, 0.85 or 0.65) is switched off
-  once (owner's decision, 2026-11-23). A filter tuned by hand stays on, and so
-  does one switched on again after the refresh. The 1200 W charge limit and battery care's first
+  and is as likely chosen. Two switches are moved, on the owner's decision
+  (2026-11-23), since the template switched them on for every installation:
+  the load filter, while its window and EMA are the template's (2 and 0.85),
+  and the per-device ramp, while the total's ramp is on and the device ramp's
+  own limits are the template's (400 and 200). A first release's 3 and 0.65,
+  or 250 and 400, count as the template's only in a file the refresh moves them
+  in; set later, they were set by hand. One tuned by hand stays on, and so does
+  one switched on again after the refresh. The 1200 W charge limit and battery care's first
   points, PV-only 0 among them, are refreshed on the owner's decision. The
   limit is cleared (null) rather than set to 0: both mean no limit now, but a
   release before 2026-11-13 reads 0 as no charging at all and null as its own
@@ -183,6 +187,8 @@ changed by hand, so the EMS moves it to today's default once:
   off keeps it off, and while it is off those releases start an AC charge from
   a surplus only out of the night/min-SoC idle. Switch `filter_enabled` on
   again before going back, or restore the backup taken before the refresh.
+  The per-device ramp needs nothing: every release since v0.4.0 runs with it
+  off.
 - Restoring the backup taken before the refresh brings the old values back,
   and the next start refreshes them again; to keep one, set it again after
   the refresh. A `config.template.json` older than the EMS, such as one a
@@ -590,25 +596,37 @@ a percentage of system power.
 pulled toward `raw_load` during a sign-change mismatch. `1.0` resets directly to
 `raw_load`. Lower values keep a softer transition.
 
-`ramp_enabled` limits total target changes per cycle.
+`ramp_enabled` limits total target changes per cycle. A ramp of `0` sets no
+limit in its direction.
 
 `ramp_up_w_per_cycle` limits how fast the total target can rise (Admin label:
-**System ramp up**). New configurations default to 500 W per cycle.
+**System ramp up**). New configurations default to 500 W per cycle, 750 W while
+the house imports `large_import_bypass_w` or more. With the load filter off, it
+limits how far one wrong reading, or a load of a few seconds, moves the output
+in a cycle.
 
 `ramp_down_w_per_cycle` limits how fast the total target can fall (Admin label:
-**System ramp down**). New configurations default to 300 W per cycle — the
-slower down-ramp helps prevent undershoot when inverter output reacts more
-slowly than the EMS control target.
+**System ramp down**). New configurations default to 300 W per cycle. While a
+device charges, a falling total is a growing charge, and a SolarFlow 800 Pro 2
+raises its AC charge by only some 100 W per second after a 2 s dead time
+(70–170 W/s measured): without the limit, a surplus that grew, or one reading of
+a surplus, is answered with a charge several hundred watts beyond what the
+device reaches before the next reading, and the total overshoots.
 
-`device_ramp_enabled` limits per-device target changes.
+`device_ramp_enabled` limits per-device target changes. It is off by default:
+the total ramp already limits what the devices do together, and a per-device
+ramp below it held a single device back while the total counted on it, so the
+total overshot. In the control-loop simulation (`tests/test_ramp_defaults.py`),
+one device with it on went 900, 600, 400 and 200 W over a 1000 W drop and then
+to nothing, and 600, 800 and 700 W over a 500 W rise.
 
-`device_ramp_up_w_per_cycle` limits per-device upward changes (Admin label:
-**Device ramp up**). New configurations default to 400 W per cycle.
+`device_ramp_up_w_per_cycle` limits per-device upward changes while the
+per-device ramp is on (Admin label: **Device ramp up**), 400 W per cycle by
+default.
 
-`device_ramp_down_w_per_cycle` limits per-device downward changes (Admin label:
-**Device ramp down**). New configurations default to 200 W per cycle — the
-reduced down-ramp avoids repeatedly lowering the target while the inverter is
-still reacting to an earlier command.
+`device_ramp_down_w_per_cycle` limits per-device downward changes while the
+per-device ramp is on (Admin label: **Device ramp down**), 200 W per cycle by
+default.
 
 `large_import_bypass_w` can bypass normal smoothing during large imports.
 

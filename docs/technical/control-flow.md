@@ -117,9 +117,9 @@ flowchart TD
 | `system.output_control.ramp_enabled` | Total ramp / bypass / stale telemetry | Enables per-cycle ramp limits for the combined target. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
 | `system.output_control.ramp_up_w_per_cycle` | Total ramp / bypass / stale telemetry | Limits how quickly the combined target can rise per EMS cycle. | [configuration.md](configuration.md) |
 | `system.output_control.ramp_down_w_per_cycle` | Total ramp / bypass / stale telemetry | Limits how quickly the combined target can fall per EMS cycle. | [configuration.md](configuration.md) |
-| `system.output_control.device_ramp_enabled` | Device ramp | Enables per-device target ramping after allocation. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
-| `system.output_control.device_ramp_up_w_per_cycle` | Device ramp | Limits how quickly each device target can rise per EMS cycle. | [configuration.md](configuration.md) |
-| `system.output_control.device_ramp_down_w_per_cycle` | Device ramp | Limits how quickly each device target can fall per EMS cycle. | [configuration.md](configuration.md) |
+| `system.output_control.device_ramp_enabled` | Device ramp | Enables per-device target ramping after allocation; off by default. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
+| `system.output_control.device_ramp_up_w_per_cycle` | Device ramp | Limits how quickly each device target can rise per EMS cycle while the device ramp is on. | [configuration.md](configuration.md) |
+| `system.output_control.device_ramp_down_w_per_cycle` | Device ramp | Limits how quickly each device target can fall per EMS cycle while the device ramp is on. | [configuration.md](configuration.md) |
 | `system.output_control.large_import_bypass_w` | Total ramp / bypass | Detects large import situations. The controller increases ramp speed during bypass behavior. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
 | `system.output_control.large_export_bypass_w` | Total ramp / bypass | Detects large export situations. The controller increases ramp speed during bypass behavior. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |
 | `system.output_control.bypass_ramp_multiplier` | Total ramp and device ramp | Multiplies total and per-device ramp limits during large import/export bypass situations. | [configuration.md](configuration.md), [control-logic.md](control-logic.md) |

@@ -23,7 +23,7 @@ control chain, see [control-flow.md](control-flow.md).
 8. Decide the charge direction.
 9. Allocate target across devices, each at most its
    [battery care](#battery-care) ceiling.
-10. Apply device ramp and limits.
+10. Apply device limits, and the device ramp when it is switched on.
 11. Apply `min_output_limit` while enabled (output direction only, never above
     a device's battery care ceiling).
 12. Apply deadband and write gates.
@@ -115,7 +115,8 @@ Then it applies:
 - median/EMA filtering, when `filter_enabled` switches it on (off by default)
 - optional sign-change fast response for large import/export direction flips
 - total ramp limit
-- per-device ramp limit
+- per-device ramp limit, when `device_ramp_enabled` switches it on (off by
+  default)
 - stale telemetry ramp reduction
 - large import/export ramp bypass multiplier
 

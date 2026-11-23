@@ -100,8 +100,9 @@ flowchart LR
   once; a meter whose readings jump can have them smoothed first.
 - **Share.** The target is split across the inverters, preferring those with
   solar power available.
-- **Limits.** Each device's ramp, minimum and maximum apply, so the output does
-  not jump with every kettle, and tiny changes are not written at all.
+- **Limits.** The total moves by at most a few hundred watts per cycle, so one
+  stray reading or a kettle of a few seconds moves the output only so far; each
+  device's minimum and maximum apply, and tiny changes are not written at all.
 - **Safety gates.** A write happens only when writes are allowed for that
   device's connection — the local API, a local MQTT broker or Zendure cloud
   MQTT. [Safety](safety.md) explains the gates.

@@ -626,9 +626,7 @@ Check these settings:
       "ramp_enabled": true,
       "ramp_up_w_per_cycle": 600,
       "ramp_down_w_per_cycle": 700,
-      "device_ramp_enabled": true,
-      "device_ramp_up_w_per_cycle": 500,
-      "device_ramp_down_w_per_cycle": 600,
+      "device_ramp_enabled": false,
       "large_import_bypass_w": 600,
       "large_export_bypass_w": 600,
       "bypass_ramp_multiplier": 1.5,
@@ -647,7 +645,7 @@ Tuning hints:
 | The load filter is on and reacts late | `filter_enabled` | switch off, the default; or raise `ema_alpha` |
 | Total target rises too slowly | `ramp_up_w_per_cycle` | increase |
 | Total target falls too slowly | `ramp_down_w_per_cycle` | increase |
-| Per-device target changes too slowly | `device_ramp_*_w_per_cycle` | increase |
+| Per-device target changes too slowly | `device_ramp_enabled` | switch off, the default; or increase `device_ramp_*_w_per_cycle` |
 | Stale telemetry slows response | `telemetry_max_age_seconds` / `stale_telemetry_ramp_factor` | check telemetry freshness first |
 
 Validate after tuning:

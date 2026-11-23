@@ -59,10 +59,8 @@ OUTPUT_CONTROL_DEFAULTS = {
     "sign_change_filter_reset_factor": 1.0,
     "ramp_enabled": True,
     "ramp_up_w_per_cycle": 500,
-    # Slower down-ramp reduces undershoot when inverter output reacts more
-    # slowly than the EMS target.
     "ramp_down_w_per_cycle": 300,
-    "device_ramp_enabled": True,
+    "device_ramp_enabled": False,
     "device_ramp_up_w_per_cycle": 400,
     "device_ramp_down_w_per_cycle": 200,
     "large_import_bypass_w": 600,
