@@ -168,3 +168,12 @@ test("a strict toggle shows on only for a stored true, as the EMS reads anything
   assert.deepEqual(["on", 1, "true", null, undefined, false, true].map((value) => normalizeValue(strict, value)), [false, false, false, false, false, false, true]);
   assert.equal(normalizeValue(loose, "on"), true);
 });
+
+test("a grid target is a number like any other: stored signed, an emptied one not sent", () => {
+  const field = { name: "grid_target_charge_w", type: "gridTarget", min: -200, max: 200 };
+  assert.equal(normalizeValue(field, "-10"), -10);
+  assert.equal(normalizeValue(field, ""), null);
+  assert.deepEqual(changedPayload([field], { grid_target_charge_w: -10 }, { grid_target_charge_w: 0 }), { grid_target_charge_w: -10 });
+  assert.deepEqual(changedPayload([field], { grid_target_charge_w: "" }, { grid_target_charge_w: -10 }), {});
+  assert.deepEqual(reseed([field], { initial: { grid_target_charge_w: -10 }, fresh: true }).values, { grid_target_charge_w: -10 });
+});

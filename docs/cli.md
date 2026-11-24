@@ -123,7 +123,13 @@ Modes:
   hints.
 - `--control-quality` or `--quality` evaluates real operation over those
   samples: export/import quality, a coarse regulation quality score, PV usage
-  plausibility, SOC balancing, and higher-level root-cause hints.
+  plausibility, SOC balancing, and higher-level root-cause hints. The status,
+  its warnings, the score and the meter's sign changes are judged from the
+  [grid target](technical/control-logic.md#grid-target) in effect at each
+  sample, so a target the regulation holds counts as on target. The import and
+  export fields describe the meter readings themselves; the fields named for
+  the target (`max_below_target_w`, `below_target_duration_percent`, …) give
+  the readings less the target.
 - `--support-bundle` creates a redacted ZIP with a stable file layout:
   `diagnosis.json`, `diagnosis.txt`, `control-diagnostics.json`,
   `control-diagnostics.txt`, `control-quality.json`, `control-quality.txt`,
@@ -316,9 +322,9 @@ Control quality interpretation:
   peaks.
 - `excellent`, `good`, `acceptable`, `poor`, and `critical` are intended for
   triage. Use the detailed export/import metrics to understand the cause.
-- Export peaks mean grid power went negative during the sample window. Short
-  small peaks can be normal; long or large peaks indicate the zero-export
-  target is not being held consistently.
+- Export peaks mean grid power went below the grid target (0 W unless one is
+  set) during the sample window. Short small peaks can be normal; long or large
+  peaks indicate the target is not being held consistently.
 - PV diagnostics can show that PV telemetry is missing, PV is likely limited by
   system/device limits, or PV is available but not used. It cannot prove a
   hardware fault without additional read-only hardware checks.
@@ -637,7 +643,16 @@ python3 emsctl.py system disable
 python3 emsctl.py system max-power 1600
 python3 emsctl.py system loop-interval 5
 python3 emsctl.py system min-output-limit 30
+python3 emsctl.py system grid-target-discharge 10
+python3 emsctl.py system grid-target-charge -10
 ```
+
+`grid-target-discharge` and `grid-target-charge` set
+`system.grid_target_discharge_w` and `system.grid_target_charge_w`, the meter
+reading the regulation settles on while the battery discharges and while a
+surplus charge runs: -200 to 200 W, import positive, export negative; `0` aims
+for 0 W, as before. Neither starts a charge
+([Grid target](technical/control-logic.md#grid-target)).
 
 ## Battery Care Commands
 

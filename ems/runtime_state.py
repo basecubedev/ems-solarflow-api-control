@@ -807,7 +807,9 @@ def build_runtime_defaults(devices):
             "enabled": cfg.SYSTEM_ENABLED,
             "max_total_power": cfg.MAX_TOTAL_POWER,
             "loop_interval": cfg.LOOP_INTERVAL,
-            "min_output_limit": cfg.MIN_OUTPUT_LIMIT
+            "min_output_limit": cfg.MIN_OUTPUT_LIMIT,
+            "grid_target_discharge_w": cfg.GRID_TARGET_DISCHARGE_W,
+            "grid_target_charge_w": cfg.GRID_TARGET_CHARGE_W,
         },
         "winter": {
             "enabled": cfg.winter_config_bool("enabled", False)

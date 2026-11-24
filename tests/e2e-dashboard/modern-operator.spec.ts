@@ -87,6 +87,32 @@ test.describe("Modern dashboard operator: runtime settings @smoke", () => {
     ]);
   });
 
+  test("each grid target is a direction and watts, says what it means and goes out signed", async ({ page }) => {
+    const writes = await runtimeStore(page);
+    await openSignedIn(page, "#/control");
+    const system = form(page, "/api/runtime/system");
+    const discharge = system.getByRole("group", { name: "Grid target while discharging" });
+    const charge = system.getByRole("group", { name: "Grid target while charging" });
+    const meaning = (key) => system.locator(`[data-testid="grid-target-meaning"][data-field="${key}"]`);
+    await expect(discharge.getByRole("spinbutton", { name: "Watts" })).toHaveAttribute("max", "200");
+    await expect(meaning("grid_target_charge_w")).toHaveText("The meter aims for 0 W.");
+    await expect(system.getByText("Whether a charge starts or ends is judged on the surplus itself. A charge target with more export than the stop threshold starts a charge only once the surplus exceeds that export by the charge hysteresis.")).toBeVisible();
+    await expect(charge.getByRole("combobox", { name: "Direction" })).toHaveValue("export");
+    await charge.getByRole("spinbutton", { name: "Watts" }).fill("10");
+    await expect(meaning("grid_target_charge_w")).toHaveText("While charging, the meter settles on 10 W of export: a margin so the battery does not charge from the grid.");
+    await discharge.getByRole("spinbutton", { name: "Watts" }).fill("15");
+    await expect(meaning("grid_target_discharge_w")).toHaveText("While discharging, the meter settles on 15 W of import: a margin so the battery does not feed the grid.");
+    await discharge.getByRole("combobox", { name: "Direction" }).selectOption("export");
+    await expect(meaning("grid_target_discharge_w")).toHaveText("While discharging, the meter settles on 15 W of export: the battery feeds that much into the grid.");
+    await save(page, system);
+    await expect.poll(() => writes).toEqual([
+      { target: "system", method: "PATCH", body: { grid_target_discharge_w: -15, grid_target_charge_w: -10 }, csrf: CSRF },
+    ]);
+    await expect(system.getByRole("status")).toHaveText("Saved");
+    await expect(discharge.getByRole("combobox", { name: "Direction" })).toHaveValue("export");
+    await expect(discharge.getByRole("spinbutton", { name: "Watts" })).toHaveValue("15");
+  });
+
   test("the minimum output goes out as a number, and once stored a second Save sends nothing", async ({ page }) => {
     const writes = await runtimeStore(page);
     await openSignedIn(page, "#/control");
@@ -563,6 +589,26 @@ test.describe("Modern dashboard operator: schedule @smoke", () => {
     await page.getByRole("spinbutton", { name: "Set to", exact: true }).fill("400");
     await expect(preview).toContainText("400 W");
     await expect(page.getByTestId("schedule-save")).toBeEnabled();
+  });
+
+  test("a grid target rule is a direction and watts, and keeps export as a negative value", async ({ page, request }) => {
+    await openSignedIn(page, "#/schedule");
+    await page.getByRole("button", { name: "New rule" }).click();
+    await page.getByLabel("Name").fill("Evening margin");
+    await page.getByLabel("Action").selectOption("grid_target_charge");
+    await expect(page.getByRole("combobox", { name: "Set to: Direction", exact: true })).toHaveValue("export");
+    await page.getByRole("spinbutton", { name: "Set to", exact: true }).fill("10");
+    await page.getByRole("combobox", { name: "Then set to: Direction" }).selectOption("import");
+    await page.getByRole("spinbutton", { name: "Then set to" }).fill("5");
+    const preview = page.getByTestId("schedule-preview");
+    await expect(page.getByTestId("grid-target-meaning").first()).toHaveText("While charging, the meter settles on 10 W of export: a margin so the battery does not charge from the grid.");
+    await expect(page.getByText("as import or export: 10 W of export is a margin", { exact: false })).toBeVisible();
+    await expect(preview).toContainText("10 W export");
+    await expect(preview).toContainText("5 W import");
+    await page.getByTestId("schedule-save").click();
+    await expect.poll(async () => (await storedRule(request, "Evening margin"))?.action).toEqual(
+      expect.objectContaining({ id: "grid_target_charge", value: -10, end_value: 5 }),
+    );
   });
 
   test("a rule on a device no longer offered keeps it in the editor instead of moving to another", async ({ page, request }) => {

@@ -831,6 +831,7 @@ def build_dashboard_snapshot(
             "effective_target_total_w": _rounded(effective_total_w),
             "commanded_total_w": _rounded(controller.commanded_total_w),
             "filtered_load_w": _rounded(controller.filtered_load_w),
+            "grid_target_w": _rounded(getattr(controller, "grid_target_w", 0) or 0),
             "night_min_soc_idle": bool(night_min_soc_idle),
             # A projection of the cycle's charge direction, never operator
             # state: the regulator's decision is rebuilt every loop and must not

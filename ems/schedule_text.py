@@ -7,7 +7,7 @@ list all show the same sentence, so it is written once, here.
 Import-side-effect-free.
 """
 
-from ems.schedule_actions import CHARGE, CHOICE, SWITCH, WATTS
+from ems.schedule_actions import CHARGE, CHOICE, GRID_WATTS, SWITCH, WATTS
 
 DAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 MONTH_NAMES = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
@@ -46,6 +46,10 @@ def describe_value(action, value):
         return "stop" if value == 0 else f"{value} W"
     if action.value_type == WATTS:
         return f"{value} W"
+    if action.value_type == GRID_WATTS:
+        if value == 0:
+            return "0 W"
+        return f"{abs(value)} W {'import' if value > 0 else 'export'}"
     if action.value_type == CHOICE:
         return str(action.choice_label(value)).lower()
     return str(value)

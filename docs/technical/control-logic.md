@@ -19,8 +19,9 @@ control chain, see [control-flow.md](control-flow.md).
 4. Detect runtime capabilities.
 5. Run state reconciliation when due.
 6. Detect strict night/minSoc idle.
-7. Stabilize total target.
-8. Decide the charge direction.
+7. Stabilize total target, measured from the
+   [grid target](#grid-target).
+8. Decide the charge direction, on the surplus before the grid target.
 9. Allocate target across devices, each at most its
    [battery care](#battery-care) ceiling.
 10. Apply device limits, and the device ramp when it is switched on.
@@ -131,6 +132,59 @@ is sized from what the house draws instead of integrated, see
 The sign-change fast response only adjusts the filtered load value inside the
 median/EMA stage. It does not bypass total ramping, per-device ramping, write
 deadbands, write gates, or state reconciliation safeguards.
+
+### Grid target
+
+Two grid targets set the meter reading the regulation settles on, each signed
+in watts, import positive and export negative, from -200 to 200 W:
+`system.grid_target_discharge_w` while the battery discharges and
+`system.grid_target_charge_w` while a surplus charge runs. Both default to 0,
+where the EMS aims for 0 W at the meter, as it always has. A cycle reads the
+charge target when a charge is running as it starts, otherwise the discharge
+target. The load filter reads the meter itself; the target is subtracted from
+the filtered reading, so both deadbands, the large import/export bypass, the
+ramps and the totals all measure from the target and the load deadband is
+centred on it. A target changed at runtime counts from the next new meter
+reading, and the filter's history never carries a target. When the direction
+changes, the other target takes over with the next cycle; the cycle that ends
+a charge already sizes the discharge after it on the discharge target, unless
+the meter is held, which sizes nothing.
+
+- A discharge target of 10 W leaves a margin of import, so the battery does
+  not feed the grid: 35 W of house load without PV settle at about 25 W from
+  the battery and 10 W from the grid. One of -10 W feeds 10 W of battery power
+  into the grid: the battery settles at about 45 W.
+- A charge target of -10 W leaves a margin of export, so the battery does not
+  charge from the grid: 80 W of surplus charge about 70 W. One of 10 W charges
+  10 W from the grid on top: about 90 W.
+
+No target starts a charge. Entry and exit ([Direction](#direction)) read the
+surplus before the target is subtracted, exactly as at 0 W: a balanced meter is
+no surplus however far below a target it sits, the export a discharge target
+asks for is the battery's and no surplus either, and a charge ends when its
+surplus is gone, not when the meter reaches the target. Entry also needs the
+discharge total at zero, so with an export target while discharging, a charge
+starts only once the surplus alone covers that export. A target cannot push the
+discharge total below zero: the total's floor stays zero outside a charge.
+
+A charge target asking for more export than the stop threshold would leave a
+surplus between the two nothing to charge, and the battery would feed the
+rest. So that export raises both thresholds: the stop threshold becomes the
+export, and the start threshold at least the export plus the configured band,
+the start threshold less the stop threshold (the hysteresis, unless that is
+larger than the start threshold itself). With the defaults (start 150 W, hysteresis 50 W) a charge target of
+-200 W starts a charge on 250 W of surplus, charging about 50 W, and ends it once
+the surplus is 200 W or less; a charge target from -100 W upwards leaves the
+thresholds as configured. The check that the chargeable devices can take more
+than the stop threshold keeps the configured one.
+
+The meter reading itself is unchanged wherever it is shown or recorded; the
+dashboard's grid meter card and Control page, and `diagnose --control`, show
+the target in effect beside it. Both are runtime values
+(`emsctl system grid-target-discharge W`, `emsctl system grid-target-charge W`,
+the Control page, a [schedule](../scheduler.md)), with the static values as
+their defaults. `system.min_output_limit` still applies: a floor above the
+house load less the target leaves the difference as export.
 
 ### One correction per reading
 
@@ -649,7 +703,8 @@ within a window rather than in a row is equally deliberate: one brief dip costs
 a single observation instead of discarding the whole confirmation.
 
 Once charging, that surplus has been consumed by the charging itself and the
-meter reads roughly balanced, so the exit reads the desired total instead —
+meter reads roughly balanced (at the [grid target](#grid-target)), so the exit
+reads the desired total instead —
 the commanded charge plus the current load, **before** the ramp limits how far
 it may move this cycle. Reading the ramped value would make an exit that is
 meant to be immediate wait for the ramp.

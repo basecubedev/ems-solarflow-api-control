@@ -29,6 +29,8 @@ hand.
 | Device control | `devices.X.enabled` | `emsctl device X enable\|disable` |
 | Light, Fan, Buzzer, Battery heating | `devices.X.light`, `.fan`, `.buzzer`, `.auto_heat`; *Device decides* hands one back | `emsctl device X light on\|off\|unmanaged`, `fan auto\|1\|2\|off\|unmanaged`, `buzzer …`, `auto-heat …` |
 | Minimum output limit | `system.min_output_limit` | `emsctl system min-output-limit W` |
+| Grid target while discharging | `system.grid_target_discharge_w`; import or export, in `emsctl schedule` a negative value for export | `emsctl system grid-target-discharge W` |
+| Grid target while charging | `system.grid_target_charge_w`; likewise | `emsctl system grid-target-charge W` |
 
 That is every runtime value the EMS has except `system.loop_interval`, a tuning
 value rather than a control target; a test keeps the list complete. Values are

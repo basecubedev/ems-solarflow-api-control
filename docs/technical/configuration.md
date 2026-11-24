@@ -344,6 +344,19 @@ value used by strict night/minSoc idle. Use `0` to disable this floor and the
 idle parking behavior. [Battery care](control-logic.md#battery-care) can hold
 a battery below this floor.
 
+`system.grid_target_discharge_w` and `system.grid_target_charge_w` (-200 to
+200 W, default 0 each) are the default runtime grid targets, the meter reading
+the regulation settles on while the battery discharges and while a surplus
+charge runs, in watts: import positive, export negative. 0 aims for 0 W. A
+discharge target of a few watts of import is a margin so the battery does not
+feed the grid; a charge target of a few watts of export, such as `-10`, is a
+margin so the battery does not charge from the grid. Surplus charging still
+starts and ends on the surplus itself, so no target starts a charge; a charge
+target with more export than the stop threshold raises the stop threshold to
+that export and the start threshold with it
+([Grid target](control-logic.md#grid-target)). A release before them ignores
+the keys and aims for 0 W.
+
 `battery_care` (Admin: **Battery care**, on by default) discharges a battery
 gently close to its minSoc: up to `pv_only_points` (default `1`) above its
 minSoc the device keeps its PV and its battery adds only a margin,

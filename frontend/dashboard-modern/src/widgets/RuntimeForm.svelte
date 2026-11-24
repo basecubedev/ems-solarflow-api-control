@@ -4,10 +4,11 @@
   import { untrack } from "svelte";
   import Icon from "../../../shared/ui/Icon.svelte";
   import ConfirmDialog from "../../../shared/ui/ConfirmDialog.svelte";
-  import { t } from "../i18n/i18n.svelte.js";
+  import { t, fmt } from "../i18n/i18n.svelte.js";
   import { authorizedSend } from "../state/auth.svelte.js";
   import { loadRuntime, live } from "../state/live.svelte.js";
   import { changedPayload, changeWarning, normalizeValue, reseed } from "../lib/runtime.js";
+  import { gridTargetMeaning, gridTargetParts, gridTargetValue } from "../lib/gridTarget.js";
   import { errorText } from "../lib/errors.js";
   import { unreadableInput } from "../../../shared/lib/forms.js";
 
@@ -25,6 +26,8 @@
   let feedback = $state({ text: "", error: false });
   let busy = $state(false);
   let confirm = $state({ open: false, lines: [], payload: null });
+  let directions = $state({});
+  const uid = $props.id();
 
   const signature = $derived(JSON.stringify(fields.map((field) => [field.name, normalizeValue(field, initial[field.name])])));
 
@@ -115,6 +118,40 @@
             <span class="unit">{field.unit}</span>
           </span>
         </label>
+      {:else if field.type === "gridTarget"}
+        {@const parts = gridTargetParts(values[field.name], directions[field.name] || gridTargetParts(field.default, field.direction).direction)}
+        {@const meaning = gridTargetMeaning(field.phase, values[field.name], field.default)}
+        <div class="row" role="group" aria-labelledby="{uid}-{field.name}">
+          <span id="{uid}-{field.name}">{field.label}</span>
+          <span class="number">
+            <select
+              class="input"
+              aria-label={t("gridTarget.direction")}
+              value={parts.direction}
+              onchange={(event) => {
+                directions[field.name] = event.currentTarget.value;
+                values[field.name] = gridTargetValue(event.currentTarget.value, parts.watts);
+              }}
+            >
+              <option value="import">{t("gridTarget.import")}</option>
+              <option value="export">{t("gridTarget.export")}</option>
+            </select>
+            <input
+              class="input num watts"
+              type="number"
+              name={field.name}
+              min="0"
+              max={field.max}
+              step="1"
+              aria-label={t("gridTarget.watts")}
+              placeholder={field.default !== undefined ? t("common.defaultValue", { value: Math.abs(field.default) }) : ""}
+              value={parts.watts}
+              oninput={(event) => (values[field.name] = gridTargetValue(parts.direction, event.currentTarget.value))}
+            />
+            <span class="unit">W</span>
+          </span>
+        </div>
+        <p class="help meaning" data-testid="grid-target-meaning" data-field={field.name}>{t(meaning.key, { w: fmt().power(meaning.watts) })}</p>
       {:else if field.type === "select"}
         <label class="row">
           <span>{field.label}</span>
@@ -161,6 +198,8 @@
   .row > span:first-child { color: var(--m-muted); }
   .number { display: inline-flex; align-items: center; gap: 6px; }
   .number .input { width: 136px; text-align: right; }
+  .number select.input { width: auto; text-align: left; }
+  .number .watts { width: 88px; }
   .row select.input { width: auto; max-width: 100%; margin-left: auto; }
   .unit { color: var(--m-muted); font-size: 12px; min-width: 14px; }
   .readonly .value { font-size: 12.5px; }

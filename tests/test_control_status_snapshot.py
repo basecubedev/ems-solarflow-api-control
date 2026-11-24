@@ -133,6 +133,7 @@ def test_a_control_cycle_produces_the_snapshot_with_the_cycle_it_ran(tmp_path):
     assert snapshot["control"] == {
         "grid_power_w": 240.0,
         "filtered_load_w": explanation.filtered_load_w,
+        "grid_target_w": explanation.grid_target_w,
         "commanded_total_w": explanation.commanded_total_w,
         "allocated_target_total_w": explanation.allocated_target_total_w,
         "effective_target_total_w": explanation.effective_target_total_w,
@@ -154,6 +155,7 @@ def test_a_control_cycle_produces_the_snapshot_with_the_cycle_it_ran(tmp_path):
     assert snapshot["grid_samples"] == [{
         "cycle_at": snapshot["cycle"]["fetched_at"],
         "grid_power_w": 240.0,
+        "grid_target_w": 0.0,
         "measured_at": snapshot["grid_meter"]["measured_at"],
         "reading_repeated": False,
         "reading_in_dead_time": False,

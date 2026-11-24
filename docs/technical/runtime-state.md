@@ -46,7 +46,9 @@ Example:
     "enabled": true,
     "max_total_power": 800,
     "loop_interval": 5,
-    "min_output_limit": 35
+    "min_output_limit": 35,
+    "grid_target_discharge_w": 0,
+    "grid_target_charge_w": 0
   },
   "winter": {
     "enabled": true
@@ -92,6 +94,8 @@ Example:
 | `max_total_power` | Runtime total power limit |
 | `loop_interval` | Runtime loop interval |
 | `min_output_limit` | Runtime guard against very low enabled `outputLimit` writes |
+| `grid_target_discharge_w` | The meter reading the regulation settles on while the battery discharges, -200 to 200 W, import positive, export negative; 0 aims for 0 W ([Grid target](control-logic.md#grid-target)). A value outside that range, or not a number, reads as 0 |
+| `grid_target_charge_w` | The same while a surplus charge runs |
 
 `min_output_limit=35` is the current template default and is useful on
 installations where `outputLimit=0` behaves like a stop, idle, or sleep state. A battery
@@ -439,12 +443,13 @@ Shape (`schema_version: 1`):
 | `started_at` | When the EMS process that wrote the snapshot started (ISO-8601, UTC); a restarted EMS writes another one |
 | `cycle.fetched_at`, `cycle.failed_cycles`, `cycle.mode` | When device telemetry was read, consecutive failed cycles, the controller's allocation mode |
 | `control.grid_power_w`, `control.filtered_load_w` | Grid meter reading the cycle used and the load it regulated on: the reading less the writes it cannot show yet, smoothed while the load filter is on with the `median_ema` method and a window above 1 or an EMA below 1, which by default it is not (positive is import). Outside the night/min-SoC idle, which regulates nothing and records every reading, a cycle that left its reading alone (`grid_meter.reading_repeated` or `reading_in_dead_time`) did not regulate the output on it, though a running charge may still end on it, and records the load of the last reading it regulated on; `diagnose --control` then names why instead of a regulated load |
+| `control.grid_target_w` | The [grid target](control-logic.md#grid-target) the cycle's reading was regulated on, import positive and export negative: the charge target while a charge ran as the cycle started, otherwise the discharge target. The cycle that ends a charge still names the charge target, though it sizes the discharge after it on the discharge target; the night/min-SoC idle, which regulates nothing, names the discharge target |
 | `control.commanded_total_w`, `control.allocated_target_total_w`, `control.effective_target_total_w` | The cycle's totals; `effective_target_total_w` is what the EMS commands |
 | `grid_meter.consecutive_read_failures`, `grid_meter.measured_at` | From the meter's health record; `null` for a meter without one |
 | `grid_meter.reading_repeated` | `true` when the cycle saw a reading an earlier cycle had already regulated on ([One correction per reading](control-logic.md#one-correction-per-reading)) |
 | `grid_meter.reading_in_dead_time` | `true` when a set write dead time held the cycle's new reading, which was not regulated on ([Dead time after a write](control-logic.md#dead-time-after-a-write)) |
 | `devices.<name>` | `online`, `last_seen_at`, `max_power_w`, `soc`, `min_soc`, `pv_input_w`, `output_w`, `output_limit_w`, `battery_charge_w`, `battery_discharge_w`, `battery`, `allocated_target_w`, `effective_target_w`, `limiting_reason`; telemetry fields are `null` for a device that never answered. `battery` is `yes`, `no` or `unknown` from the pack count the device reports; `diagnose --control` and `--control-quality` leave a `no` device out of their SOC analysis. `settings` holds each [device setting](#device-settings) the device has or that is set, as `{offered, reported, desired}` |
-| `grid_samples` | The last 30 cycles' `{cycle_at, grid_power_w, measured_at, reading_repeated, reading_in_dead_time}` |
+| `grid_samples` | The last 30 cycles' `{cycle_at, grid_power_w, grid_target_w, measured_at, reading_repeated, reading_in_dead_time}`; `grid_target_w` is the cycle's grid target, from which `diagnose --control-quality` judges the regulation |
 | `pv_input_hints` | The [PV input watch](#the-pv-input-watch)'s hints for the devices it saw since the EMS started: `{device, input, kind, days}` for an input that stayed dark (`kind` `dark`, `days` the dark days counted in its run, a day on which no input reached 50 W left out) and `{device, input, kind, peak_w}` for one `unused_pv_inputs` names that delivered today or the day before (`kind` `delivers`). Left out by simulation and replay runs |
 | `loaded_devices` | `{version, devices}`: one `{name, device_id, enabled, digest}` per device entry `config.json` held when this EMS started, after the startup upgrade; `device_id` is the id an MQTT mapping publishes an external device as (`null` otherwise), and `digest` covers the whole entry, `enabled` included. `ems/device_fingerprints.py` makes them, for the EMS and for the Admin console, which compares them with the file as saved now; `version` names the rule, so an Admin of another release does not compare. Left out by an EMS that was not given the devices it read |
 

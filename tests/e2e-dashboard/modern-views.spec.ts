@@ -430,6 +430,44 @@ test.describe("Modern dashboard views: moving a zoomed chart @smoke", () => {
   });
 });
 
+test.describe("Modern dashboard views: grid target", () => {
+  test("the grid meter and the Control page show an import target beside the reading", async ({ page }) => {
+    await shapeLive(page, (body) => {
+      body.controller = { ...(body.controller || {}), grid_target_w: 10 };
+      body.control_explain = { ...(body.control_explain || {}), grid_target_w: 10 };
+    });
+    await openModern(page, "#/devices");
+    const meter = page.getByTestId("grid-meter");
+    await expect(meter.locator(".fact").filter({ hasText: "Grid target" }).locator(".fact-value")).toHaveText("10 W import");
+    await openModern(page, "#/control");
+    await expect(page.locator(".fact").filter({ hasText: "Grid target" }).locator(".fact-value")).toHaveText("10 W import");
+  });
+
+  test("an export target shows as export", async ({ page }) => {
+    await shapeLive(page, (body) => {
+      body.controller = { ...(body.controller || {}), grid_target_w: -10 };
+      body.control_explain = { ...(body.control_explain || {}), grid_target_w: -10 };
+    });
+    await openModern(page, "#/devices");
+    await expect(page.getByTestId("grid-meter").locator(".fact").filter({ hasText: "Grid target" }).locator(".fact-value")).toHaveText("10 W export");
+    await openModern(page, "#/control");
+    await expect(page.locator(".fact").filter({ hasText: "Grid target" }).locator(".fact-value")).toHaveText("10 W export");
+  });
+
+  test("a target of 0 W shows no target", async ({ page }) => {
+    await shapeLive(page, (body) => {
+      body.controller = { ...(body.controller || {}), grid_target_w: 0 };
+      body.control_explain = { ...(body.control_explain || {}), grid_target_w: 0 };
+    });
+    await openModern(page, "#/devices");
+    await expect(page.getByTestId("grid-meter")).toBeVisible();
+    await expect(page.getByTestId("grid-meter").locator(".fact").filter({ hasText: "Grid target" })).toHaveCount(0);
+    await openModern(page, "#/control");
+    await expect(page.getByTestId("control-sentence")).toBeVisible();
+    await expect(page.locator(".fact").filter({ hasText: "Grid target" })).toHaveCount(0);
+  });
+});
+
 /** WR1 with one pack, WR2 with two, each pack's cells apart from the others'. */
 function withCells(body) {
   body.devices.WR1.battery_packs = [{ pack: 1, cell_min_v: 3.17, cell_max_v: 3.18 }];

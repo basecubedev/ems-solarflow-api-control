@@ -46,7 +46,8 @@ limit.*
 | Figure | Meaning |
 | --- | --- |
 | **Measured load** | The grid meter's reading after filtering and deadbands — not the raw reading |
-| **Requested** | The requested total (`commanded_total_w` plus filtered load) |
+| **Grid target** | The target in effect, as import or export, shown while it is not 0 W ([Grid target](../../technical/control-logic.md#grid-target)) |
+| **Requested** | The requested total (`commanded_total_w` plus filtered load, less the grid target) |
 | **Effective target** | The system target after limits |
 | **Commanded** | The value being commanded |
 | **Max total power** | The configured ceiling for the whole installation |

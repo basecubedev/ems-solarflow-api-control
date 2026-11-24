@@ -3079,7 +3079,12 @@ def diagnose_control_snapshot(config_data, runtime_data, live_data, runtime_path
     )
     if deadband_w is None:
         deadband_w = 10.0
-    deadband_active = abs(filtered_grid) <= deadband_w if filtered_grid is not None else None
+    grid_target_w = diagnose_float(control.get("grid_target_w"))
+    deadband_active = (
+        abs(filtered_grid - (grid_target_w or 0.0)) <= deadband_w
+        if filtered_grid is not None
+        else None
+    )
     flags = config_mod.config_control_flags(config_data if config_readable else None)
     placeholders = (
         config_mod.stored_config_placeholder_paths(config_data) if config_readable else []
@@ -3088,6 +3093,7 @@ def diagnose_control_snapshot(config_data, runtime_data, live_data, runtime_path
     return {
         "grid_power_w": diagnose_float(control.get("grid_power_w")),
         "filtered_grid_power_w": filtered_grid,
+        "grid_target_w": grid_target_w,
         "target_output_w": diagnose_float(control.get("effective_target_total_w")),
         "final_output_w": diagnose_sum_devices(diagnose_live_devices(live_data), ("output_w",)),
         "deadband_active": deadband_active,
@@ -3144,6 +3150,16 @@ def diagnose_ac_charging_snapshot(config_data, runtime_data, runtime_devices):
     stop = None
     if start is not None and hysteresis is not None:
         stop = max(0.0, start - hysteresis)
+    runtime_system = runtime_data.get("system") if isinstance(runtime_data.get("system"), dict) else {}
+    configured_system = config_data.get("system") if isinstance(config_data.get("system"), dict) else {}
+    charge_target = config_mod.grid_target_w(
+        runtime_system.get("grid_target_charge_w", configured_system.get("grid_target_charge_w"))
+    )
+    raised = stop is not None and -charge_target > stop
+    if raised:
+        from ems.ac_charge_control import charge_thresholds_w
+
+        start, stop = charge_thresholds_w(start, stop, charge_target)
 
     permitted = []
     refused = []
@@ -3171,6 +3187,8 @@ def diagnose_ac_charging_snapshot(config_data, runtime_data, runtime_devices):
         "ac_charging_enabled": enabled,
         "ac_charge_start_w": start,
         "ac_charge_stop_w": stop,
+        "ac_charge_grid_target_w": charge_target,
+        "ac_charge_band_raised_by_grid_target": raised,
         "ac_charge_system_limit_w": diagnose_float(system_limit),
         "ac_charge_installation_limit_w": config_mod.installation_charge_limit_w(
             system_limit
@@ -3229,6 +3247,7 @@ def diagnose_live_grid_samples(live_data):
             continue
         samples.append({
             "grid_power_w": value,
+            "grid_target_w": diagnose_float(item.get("grid_target_w")) or 0.0,
             "timestamp": item.get("measured_at"),
             "cycle_at": item.get("cycle_at"),
             "reading_repeated": item.get("reading_repeated") is True,
@@ -3293,7 +3312,7 @@ def diagnose_meter_quality(samples, live_data=None, loop_interval=None):
         }
     sign_changes = 0
     previous_sign = 0
-    for value in values:
+    for value in _deviations_from_target(samples):
         sign = 1 if value > 0 else -1 if value < 0 else 0
         if previous_sign and sign and sign != previous_sign:
             sign_changes += 1
@@ -3663,6 +3682,8 @@ def diagnose_ac_charging_text(snapshot):
             f"enters above {diagnose_format_threshold_watts(start)} of surplus, "
             f"leaves below {diagnose_format_threshold_watts(stop)}"
         )
+        if snapshot.get("ac_charge_band_raised_by_grid_target"):
+            band += ", raised by the charge grid target"
 
     return [
         "AC Charging:          enabled",
@@ -3697,6 +3718,7 @@ def diagnose_control_text(control):
         "",
         f"Live Snapshot:        {diagnose_live_snapshot_text(control.get('runtime_state', {}))}",
         f"Grid Power:           {diagnose_format_watts(snapshot.get('grid_power_w'))}",
+        f"Grid Target:          {diagnose_format_watts(snapshot.get('grid_target_w'))}",
         f"Regulated On:         {diagnose_format_watts(snapshot.get('filtered_grid_power_w'))}",
         f"Target Output:        {diagnose_format_watts(snapshot.get('target_output_w'))}",
         f"Final Output:         {diagnose_format_watts(snapshot.get('final_output_w'))}",
@@ -3812,12 +3834,34 @@ def diagnose_quality_root_cause(code, severity, title, message, suggested_next_c
     }
 
 
+def _deviations_from_target(samples):
+    """Each sample's meter reading less the grid target in effect when it was taken."""
+
+    return [
+        diagnose_float(sample.get("grid_power_w")) - (diagnose_float(sample.get("grid_target_w")) or 0.0)
+        for sample in samples
+        if diagnose_float(sample.get("grid_power_w")) is not None
+    ]
+
+
 def diagnose_export_import_quality(samples):
+    """How the meter kept to its aim, judged from the grid target in effect.
+
+    The import and export fields describe the meter readings as they are.
+    The fields named for the target measure each reading less the grid target
+    in effect when it was taken, and the status and its warnings are judged on
+    those: a held export target is no export peak, and an import target the
+    regulation misses by going to 0 W is. At a grid target of 0 both are the
+    same.
+    """
+
     values = [
         diagnose_float(sample.get("grid_power_w"))
         for sample in samples
         if diagnose_float(sample.get("grid_power_w")) is not None
     ]
+    deviations = _deviations_from_target(samples)
+    targeted = any(diagnose_float(sample.get("grid_target_w")) for sample in samples)
     if not values:
         return {
             "status": "warning",
@@ -3825,27 +3869,46 @@ def diagnose_export_import_quality(samples):
             "message": "No grid power samples available",
         }
 
+    sample_count = len(values)
+    if targeted:
+        peak_text, duration_text, average_text = (
+            "Readings below the grid target by up to {} W detected.",
+            "Time below the grid target is {}%.",
+            "Average shortfall below the grid target is {} W.",
+        )
+    else:
+        peak_text, duration_text, average_text = (
+            "Export peaks up to {} W detected.",
+            "Export duration is {}%.",
+            "Average export is {} W.",
+        )
+
+    def share(items):
+        return round((len(items) / sample_count) * 100, 2)
+
     imports = [value for value in values if value > NEAR_ZERO_BAND_W]
     exports = [value for value in values if value < -NEAR_ZERO_BAND_W]
     near_zero = [value for value in values if abs(value) <= NEAR_ZERO_BAND_W]
-    sample_count = len(values)
-    max_export = min(values)
-    average_export = sum(exports) / len(exports) if exports else 0
-    export_duration = round((len(exports) / sample_count) * 100, 2)
+    above = [value for value in deviations if value > NEAR_ZERO_BAND_W]
+    below = [value for value in deviations if value < -NEAR_ZERO_BAND_W]
+    near = [value for value in deviations if abs(value) <= NEAR_ZERO_BAND_W]
+    max_below = min(deviations)
+    average_below = sum(below) / len(below) if below else 0
+    below_duration = share(below)
     status = "ok"
     warnings = []
-    if max_export <= -EXPORT_PEAK_ERROR_W:
+    if max_below <= -EXPORT_PEAK_ERROR_W:
         status = "error"
-        warnings.append(f"Export peaks up to {round(max_export)} W detected.")
-    elif max_export <= -EXPORT_PEAK_WARNING_W:
+        warnings.append(peak_text.format(round(max_below)))
+    elif max_below <= -EXPORT_PEAK_WARNING_W:
         status = "warning"
-        warnings.append(f"Export peaks up to {round(max_export)} W detected.")
-    if export_duration > EXPORT_DURATION_WARNING_PERCENT:
+        warnings.append(peak_text.format(round(max_below)))
+    if below_duration > EXPORT_DURATION_WARNING_PERCENT:
         status = "warning" if status == "ok" else status
-        warnings.append(f"Export duration is {export_duration}%.")
-    if abs(average_export) > EXPORT_AVERAGE_WARNING_W:
+        warnings.append(duration_text.format(below_duration))
+    if abs(average_below) > EXPORT_AVERAGE_WARNING_W:
         status = "warning" if status == "ok" else status
-        warnings.append(f"Average export is {round(average_export)} W.")
+        warnings.append(average_text.format(round(average_below)))
 
     return {
         "status": status,
@@ -3854,12 +3917,20 @@ def diagnose_export_import_quality(samples):
         "min_grid_power_w": min(values),
         "max_grid_power_w": max(values),
         "average_import_w": round(sum(imports) / len(imports), 2) if imports else 0,
-        "average_export_w": round(average_export, 2),
+        "average_export_w": round(sum(exports) / len(exports), 2) if exports else 0,
         "max_import_peak_w": max(values),
-        "max_export_peak_w": max_export,
-        "export_duration_percent": export_duration,
-        "import_duration_percent": round((len(imports) / sample_count) * 100, 2),
-        "near_zero_duration_percent": round((len(near_zero) / sample_count) * 100, 2),
+        "max_export_peak_w": min(values),
+        "export_duration_percent": share(exports),
+        "import_duration_percent": share(imports),
+        "near_zero_duration_percent": share(near_zero),
+        "measured_from_grid_target": targeted,
+        "average_deviation_w": round(sum(deviations) / sample_count, 2),
+        "max_above_target_w": max(deviations),
+        "max_below_target_w": max_below,
+        "average_below_target_w": round(average_below, 2),
+        "below_target_duration_percent": below_duration,
+        "above_target_duration_percent": share(above),
+        "near_target_duration_percent": share(near),
         "warnings": warnings,
     }
 
@@ -3879,11 +3950,11 @@ def diagnose_quality_score(export_import):
     # start at 100 and subtract bounded penalties for average grid deviation,
     # export duration, export peak severity, and import peaks. This keeps the
     # score intentionally coarse while making the dominant problem visible.
-    avg_abs = abs(export_import["average_grid_power_w"])
-    near_zero = export_import["near_zero_duration_percent"]
-    export_peak = abs(min(0, export_import["max_export_peak_w"]))
-    import_peak = max(0, export_import["max_import_peak_w"])
-    export_duration = export_import["export_duration_percent"]
+    avg_abs = abs(export_import["average_deviation_w"])
+    near_zero = export_import["near_target_duration_percent"]
+    export_peak = abs(min(0, export_import["max_below_target_w"]))
+    import_peak = max(0, export_import["max_above_target_w"])
+    export_duration = export_import["below_target_duration_percent"]
     deviation_penalty = min(35, avg_abs / 2)
     duration_penalty = min(25, export_duration * 0.4)
     export_peak_penalty = min(25, max(0, export_peak - NEAR_ZERO_BAND_W) / 8)
@@ -4113,7 +4184,9 @@ def diagnose_control_quality_report(config_data, runtime_path, sample_seconds=0)
             "export_peaks_detected",
             export_import["status"],
             "Export peaks detected",
-            "Grid export peaks were detected during the sample window.",
+            "The grid meter went below the grid target during the sample window."
+            if export_import.get("measured_from_grid_target")
+            else "Grid export peaks were detected during the sample window.",
             "Check grid meter freshness and current output/device limits.",
         ))
     if quality_score.get("classification") in ("poor", "critical"):
@@ -4179,6 +4252,15 @@ def diagnose_control_quality_text(report):
             f"Max Export:           {diagnose_format_watts(export_import['max_export_peak_w'])}",
             f"Export Duration:      {round(export_import['export_duration_percent'])} %",
             f"Near Zero:            {round(export_import['near_zero_duration_percent'])} %",
+        ])
+        if export_import.get("measured_from_grid_target"):
+            lines.extend([
+                f"Max Above Target:     {round(export_import['max_above_target_w'])} W",
+                f"Max Below Target:     {round(export_import['max_below_target_w'])} W",
+                f"Below Target:         {round(export_import['below_target_duration_percent'])} %",
+                f"Near Target:          {round(export_import['near_target_duration_percent'])} %",
+            ])
+        lines.extend([
             "",
             f"Result: {export_import['status'].upper()}",
         ])
@@ -4192,9 +4274,9 @@ def diagnose_control_quality_text(report):
         lines.append("Quality Score:        unknown")
     else:
         lines.extend([
-            "Target:               0 W grid exchange",
+            "Target:               the grid target in effect" if export_import.get("measured_from_grid_target") else "Target:               0 W grid exchange",
             f"Average Deviation:    {diagnose_format_watts(score['average_absolute_deviation_w'])}",
-            f"Near-Zero Share:      {round(score['near_zero_percent'])} %",
+            f"{'Near-Target Share:' if export_import.get('measured_from_grid_target') else 'Near-Zero Share:':<22}{round(score['near_zero_percent'])} %",
             f"Export Penalty:       {score['export_penalty']}",
             f"Quality Score:        {score['score']} / 100",
             f"Classification:       {score['classification']}",

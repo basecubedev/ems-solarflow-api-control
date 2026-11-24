@@ -48,6 +48,8 @@ SAMPLES = {
     "buzzer": ["off", "on"],
     "auto_heat": ["on", "off"],
     "minimum_output_limit": [40],
+    "grid_target_discharge": [10, -10],
+    "grid_target_charge": [-10, 0],
 }
 
 

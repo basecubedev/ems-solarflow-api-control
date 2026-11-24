@@ -88,6 +88,8 @@ SYSTEM_ACTIONS = (
     "max-power",
     "loop-interval",
     "min-output-limit",
+    "grid-target-discharge",
+    "grid-target-charge",
 )
 DEVICE_ACTIONS = (
     "enable",
@@ -235,6 +237,8 @@ System runtime control:
   python3 emsctl.py system disable
   python3 emsctl.py system max-power 1200
   python3 emsctl.py system min-output-limit 35
+  python3 emsctl.py system grid-target-discharge 10
+  python3 emsctl.py system grid-target-charge -10
   python3 emsctl.py system loop-interval 5
 
 Device runtime control:
@@ -363,6 +367,12 @@ Actions:
   max-power VALUE    Set max_total_power in watts
   loop-interval SEC  Set loop_interval in seconds
   min-output-limit W Set min_output_limit in watts
+  grid-target-discharge W
+                     Set grid_target_discharge_w, the meter reading while
+                     discharging: -200 to 200 W, import positive, export negative
+  grid-target-charge W
+                     Set grid_target_charge_w, the meter reading while
+                     charging: -200 to 200 W, import positive, export negative
 
 Examples:
   python3 emsctl.py system disable
@@ -1630,6 +1640,8 @@ def runtime_defaults(config, existing=None):
                 "system.min_output_limit",
                 minimum=0
             ),
+            "grid_target_discharge_w": config_mod.grid_target_w(system.get("grid_target_discharge_w", 0)),
+            "grid_target_charge_w": config_mod.grid_target_w(system.get("grid_target_charge_w", 0)),
         },
         "winter": {
             "enabled": config_section(config, "winter").get("enabled", False)
@@ -2810,6 +2822,8 @@ def run_interactive(args, config):
         ("system-max-power", "System max-power"),
         ("system-loop-interval", "System loop-interval"),
         ("system-min-output-limit", "System min-output-limit"),
+        ("system-grid-target-discharge", "System grid-target-discharge"),
+        ("system-grid-target-charge", "System grid-target-charge"),
         ("winter-status", "Winter status"),
         ("winter-enable", "Winter enable"),
         ("winter-disable", "Winter disable"),
@@ -2854,6 +2868,8 @@ def run_interactive(args, config):
                     "max-power",
                     "loop-interval",
                     "min-output-limit",
+                    "grid-target-discharge",
+                    "grid-target-charge",
                 ):
                     value = prompt_text(f"system {action}")
                     if value is None:

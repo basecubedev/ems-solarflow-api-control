@@ -56,6 +56,7 @@ EXCLUDED_KEYS = {
 
 SWITCH = "switch"
 WATTS = "watts"
+GRID_WATTS = "grid_watts"
 FACTOR = "factor"
 CHOICE = "choice"
 CHARGE = "charge"
@@ -227,6 +228,32 @@ ACTIONS = (
         for setting in SETTINGS
     ),
     ScheduleAction(
+        id="grid_target_discharge",
+        group="power",
+        label="Grid target while discharging",
+        help=(
+            "The meter reading the battery's discharge settles on, as import or export: 10 W of import "
+            "is a margin so the battery does not feed the grid."
+        ),
+        scope="system",
+        keys=("grid_target_discharge_w",),
+        value_type=GRID_WATTS,
+        command="grid-target-discharge",
+    ),
+    ScheduleAction(
+        id="grid_target_charge",
+        group="power",
+        label="Grid target while charging",
+        help=(
+            "The meter reading a surplus charge settles on, as import or export: 10 W of export is a "
+            "margin so the battery does not charge from the grid."
+        ),
+        scope="system",
+        keys=("grid_target_charge_w",),
+        value_type=GRID_WATTS,
+        command="grid-target-charge",
+    ),
+    ScheduleAction(
         id="minimum_output_limit",
         group="advanced",
         label="Minimum output limit",
@@ -284,6 +311,10 @@ def action_commands(action, value):
         return (("ac-charge-power", watts), ("ac-mode", "input"))
     if action.value_type == WATTS:
         return ((action.command, _whole_watts(action, value)),)
+    if action.value_type == GRID_WATTS:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ScheduleActionError(f"{action.id} takes whole watts")
+        return ((action.command, value),)
     if action.value_type == CHOICE:
         if value not in action.choices:
             raise ScheduleActionError(f"{action.id} takes one of: {', '.join(action.choices)}")

@@ -14,7 +14,12 @@ import math
 from dataclasses import dataclass
 
 from ems import device_settings
-from ems.config import BATTERY_CARE_MAX_PERCENT, BATTERY_CARE_MAX_POINTS, BATTERY_CARE_MAX_WATTS
+from ems.config import (
+    BATTERY_CARE_MAX_PERCENT,
+    BATTERY_CARE_MAX_POINTS,
+    BATTERY_CARE_MAX_WATTS,
+    GRID_TARGET_MAX_W,
+)
 from ems.logging_utils import log_event
 
 
@@ -27,6 +32,8 @@ SYSTEM_FIELDS = {
     "max_total_power": ("int", (0, GENERIC_MAX_POWER_W)),
     "loop_interval": ("int", (1, 3600)),
     "min_output_limit": ("int", (0, GENERIC_MAX_POWER_W)),
+    "grid_target_discharge_w": ("int", (-GRID_TARGET_MAX_W, GRID_TARGET_MAX_W)),
+    "grid_target_charge_w": ("int", (-GRID_TARGET_MAX_W, GRID_TARGET_MAX_W)),
 }
 
 DEVICE_FIELDS = {
@@ -88,6 +95,8 @@ SYSTEM_COMMANDS = {
     "max-power": RuntimeCommand("max_total_power"),
     "loop-interval": RuntimeCommand("loop_interval"),
     "min-output-limit": RuntimeCommand("min_output_limit"),
+    "grid-target-discharge": RuntimeCommand("grid_target_discharge_w"),
+    "grid-target-charge": RuntimeCommand("grid_target_charge_w"),
 }
 
 DEVICE_COMMANDS = {
@@ -491,6 +500,8 @@ def effective_limits(validation_context=None):
                 GENERIC_MAX_POWER_W,
                 minimum=0,
             ),
+            "grid_target_discharge_w": GRID_TARGET_MAX_W,
+            "grid_target_charge_w": GRID_TARGET_MAX_W,
         },
         "devices": dict(context.get("device_max_power") or {}),
         "fallback_device_max_power": _safe_int(

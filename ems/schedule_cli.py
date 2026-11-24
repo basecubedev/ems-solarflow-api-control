@@ -15,7 +15,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from ems.schedule_actions import ACTIONS, CHARGE, CHOICE, FACTOR, SWITCH, WATTS, schedule_action
+from ems.schedule_actions import ACTIONS, CHARGE, CHOICE, FACTOR, GRID_WATTS, SWITCH, WATTS, schedule_action
 from ems.schedule_model import EDITABLE_FIELDS, ScheduleRule, ScheduleRuleError, rule_payload
 from ems.schedule_recurrence import WEEKDAYS, ScheduleTimeError, parse_day, parse_local, preset_repeat
 from ems.schedule_store import ScheduleStoreError
@@ -122,7 +122,7 @@ def _rule_options(parser):
     target.add_argument("--device", help="The device the rule sets.")
     target.add_argument("--system", action="store_true", help="The rule sets a system value.")
     parser.add_argument("--action", choices=[action.id for action in ACTIONS])
-    parser.add_argument("--value", help="on/off, watts, a factor, a mode, or stop.")
+    parser.add_argument("--value", help="on/off, watts (a grid target negative for export), a factor, a mode, or stop.")
     parser.add_argument("--end-value", help="The value a window sets when it ends.")
     parser.add_argument("--at", help="A single switch point: HH:MM or YYYY-MM-DDTHH:MM.")
     parser.add_argument("--from", dest="window_from", help="A window's start: HH:MM or YYYY-MM-DDTHH:MM.")
@@ -264,6 +264,10 @@ def parse_value(action, text):
     if action.value_type in (WATTS, CHARGE):
         if not re.fullmatch(r"\d+", word):
             raise ScheduleCommandError(f"{action.id} takes whole watts")
+        return int(word)
+    if action.value_type == GRID_WATTS:
+        if not re.fullmatch(r"-?\d+", word):
+            raise ScheduleCommandError(f"{action.id} takes whole watts, negative for export")
         return int(word)
     if action.value_type == FACTOR:
         try:
