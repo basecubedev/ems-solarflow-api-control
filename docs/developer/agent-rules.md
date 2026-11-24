@@ -449,8 +449,8 @@ git stash list
 ```
 
 Preserve unrelated work. Never use `git reset --hard`, `git clean -fd`, a force
-checkout over user changes, unrelated stash mutation, history rewriting, or a
-push without explicit instruction.
+checkout over user changes, unrelated stash mutation, history rewriting beyond
+the folding below, or a push without explicit instruction.
 
 A file that is copied aside so it can be put back — a stylesheet perturbed to
 prove a contract bites, a config swapped to measure a baseline — is copied to a
@@ -467,8 +467,13 @@ logical, in English, and have no Co-Author trailers. Use test-before-fix commits
 when explicitly required.
 
 Commits are folded by theme: one finished change per commit, with its tests and
-documentation. A correction found in review is folded into the commit it
-corrects before the branch is pushed, never stacked on top as a separate fix.
+documentation. A correction found in review, and any later fix that belongs to
+an existing commit of the branch, is folded into the commit it corrects, never
+stacked on top as a separate fix. Folding is allowed after a push as well: the
+branch is then pushed with `git push --force-with-lease=<branch>:<old head>`,
+never a bare `--force`, and never onto `main`. A pull request that conflicts
+with `main` is brought up to date the same way, its commits put onto
+`origin/main` in a worktree of their own, not `main` merged into it.
 
 Do not commit generated reports, local state, traces, screenshots, temporary
 archives, secrets or unintended scratch files. After commit, run
