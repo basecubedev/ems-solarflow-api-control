@@ -1,6 +1,7 @@
 <!-- SPDX-FileCopyrightText: 2026 basecubedev -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <script>
+  import { tick } from "svelte";
   import Card from "../../../shared/ui/Card.svelte";
   import { unreadableInput } from "../../../shared/lib/forms.js";
   import Icon from "../../../shared/ui/Icon.svelte";
@@ -15,6 +16,7 @@
   import SettingField from "../widgets/SettingField.svelte";
   import CatalogText from "../widgets/CatalogText.svelte";
   import SettingsSection from "../widgets/SettingsSection.svelte";
+  import DefaultsOverview from "../widgets/DefaultsOverview.svelte";
   import DevicesEditor from "../widgets/DevicesEditor.svelte";
   import DiscoveryPanel from "../widgets/DiscoveryPanel.svelte";
   import SourcesPanel from "../widgets/SourcesPanel.svelte";
@@ -29,13 +31,13 @@
   import { system, ensure, reload } from "../state/system.svelte.js";
   import { inEffectAfter } from "../lib/services.js";
   import { settings, setValue, setHardwareValues, discard, discardHardware, previewDraft, applyDraft, applyNow, resetOverrides } from "../state/settings.svelte.js";
-  import { EDIT_TABS, changeGroups, restartNeeded, fieldMatches, levelled, liveOverride, openHistory, previewValue, safetyBlocks, sharedRisk, tabSections } from "../lib/settings.js";
+  import { EDIT_TABS, changeGroups, departureMatches, departures, restartNeeded, fieldMatches, levelled, liveOverride, openHistory, previewValue, safetyBlocks, sharedRisk, tabSections } from "../lib/settings.js";
   import { errorView } from "../lib/errors.js";
   import { href } from "../app/router.svelte.js";
 
   ensure("config");
 
-  const TABS = ["features", "addons", ...EDIT_TABS.filter((name) => name !== "features"), "devices"];
+  const TABS = ["features", "addons", ...EDIT_TABS.filter((name) => name !== "features"), "devices", "defaults"];
 
   /** The tab in the address, #/settings/<tab>, so another page can open one. */
   function hashTab() {
@@ -185,8 +187,14 @@
     const count = (sections) => sections.reduce((sum, section) => sum + sectionFields(section).filter((field) => fieldMatches(field, query, shownText)).length, 0);
     return { features: count(tabSections(config, "features")), expert: count(tabSections(config, "expert")), safety: blocks.reduce((sum, block) => sum + block.fields.length, 0) };
   });
-  const TAB_LOOKS = { features: { icon: "toggle-right", tone: "c-out" }, addons: { icon: "boxes", tone: "c-grid" }, safety: { icon: "shield-check", tone: "c-soc" }, expert: { icon: "wrench", tone: "c-pv" }, devices: { icon: "zap", tone: "c-inv" } };
-  const tabOptions = $derived(TABS.map((value) => ({ value, ...TAB_LOOKS[value], label: searching && !["devices", "addons"].includes(value) ? `${t(`settings.tab.${value}`)} (${hits[value] || 0})` : t(`settings.tab.${value}`) })));
+  const departed = $derived(ok ? departures(config).map((group) => ({ ...group, rows: group.rows.filter((row) => departureMatches(group, row, query, shownText)) })).filter((group) => group.rows.length) : []);
+  const departedCount = $derived(departed.reduce((sum, group) => sum + group.rows.length, 0));
+  const TAB_LOOKS = { features: { icon: "toggle-right", tone: "c-out" }, addons: { icon: "boxes", tone: "c-grid" }, safety: { icon: "shield-check", tone: "c-soc" }, expert: { icon: "wrench", tone: "c-pv" }, devices: { icon: "zap", tone: "c-inv" }, defaults: { icon: "file-cog", tone: "c-acc" } };
+  const tabLabel = (value) => {
+    if (value === "defaults") return `${t("settings.tab.defaults")} (${departedCount})`;
+    return searching && !["devices", "addons"].includes(value) ? `${t(`settings.tab.${value}`)} (${hits[value] || 0})` : t(`settings.tab.${value}`);
+  };
+  const tabOptions = $derived(TABS.map((value) => ({ value, ...TAB_LOOKS[value], label: tabLabel(value) })));
 
   const preview = $derived(settings.preview);
   const groups = $derived(changeGroups(preview?.diff));
@@ -204,13 +212,42 @@
   const restartWaits = $derived(needsRestart && inEffectAfter(system.plan.data, system.plan.askedAt, applied?.at ?? 0) !== true);
   const rollback = $derived(settings.applyError?.payload?.credential_rollback || settings.applyError?.credential_rollback || null);
 
+  /** The device whose card the Devices tab opens at a field, as Show asked. */
+  let focus = $state(null);
+
   function choose(value) {
+    focus = null;
     tab = value;
     globalThis.history?.replaceState(null, "", `${href("settings")}/${value}`);
   }
 
+  function shownAt(row, index) {
+    if (row.device !== undefined) return index < 0 ? "[data-testid=\"devices-editor\"]" : `[data-device$="-${index}"] [data-path="${row.field.path}"]`;
+    if (row.section !== undefined) return `[data-section="${row.section}"]`;
+    return `[data-path="${row.field.path}"]`;
+  }
+
+  /**
+   * A departure's field on the tab that edits it: a setting found by its path,
+   * a section's switch at the head of its section, a device's field in its
+   * opened card. The field is scrolled to and takes the focus.
+   */
+  async function show(row) {
+    query = row.search;
+    choose(row.tab);
+    const index = row.device === undefined ? -1 : devices.findIndex((device) => device?.original_name === row.device);
+    if (index >= 0) focus = { device: index, path: row.field.path };
+    await tick();
+    const place = document.querySelector(shownAt(row, index));
+    place?.scrollIntoView({ block: "center" });
+    place?.querySelector("input, select")?.focus({ preventScroll: true });
+  }
+
   $effect(() => {
-    const follow = () => (tab = hashTab());
+    const follow = () => {
+      focus = null;
+      tab = hashTab();
+    };
     globalThis.addEventListener("hashchange", follow);
     return () => globalThis.removeEventListener("hashchange", follow);
   });
@@ -290,6 +327,11 @@
         <Empty text={searching ? t("settings.edit.noMatch") : t("settings.edit.noSafety")} icon="shield-alert" />
       {/if}
     </Card>
+  {:else if tab === "defaults"}
+    <Card icon={TAB_LOOKS.defaults.icon} tone={TAB_LOOKS.defaults.tone} title={t("settings.defaults.title")} subtitle={t("settings.defaults.sub")} span="span-12">
+      {#if settings.changes}<p class="note" role="note" data-testid="defaults-unsaved"><Icon name="info" /><span>{t("settings.defaults.unsaved")}</span></p>{/if}
+      <DefaultsOverview groups={departed} {searching} onshow={show} />
+    </Card>
   {:else}
     <Card icon="search" tone="c-out" title={t("discovery.title")} subtitle={t("discovery.sub")} span="span-12">
       <DiscoveryPanel {config} />
@@ -301,7 +343,7 @@
       <MqttMappingPanel adoption={mqttAdoption} />
     </Card>
     <Card icon="zap" tone="c-inv" title={t("settings.devices")} subtitle={tn("settings.devicesSub", devices.length)} span="span-12">
-      <DevicesEditor {config} />
+      <DevicesEditor {config} {focus} />
     </Card>
   {/if}
 

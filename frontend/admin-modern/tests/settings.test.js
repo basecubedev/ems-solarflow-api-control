@@ -9,6 +9,8 @@ import {
   choices,
   defaultHint,
   departedDefault,
+  departureMatches,
+  departures,
   nameableDefault,
   sentDraft,
   sentFeatures,
@@ -23,6 +25,7 @@ import {
   sectionTab,
   sharedRisk,
   shownValue,
+  spelledSwitch,
   storable,
   switchedOn,
   tabSections,
@@ -374,4 +377,141 @@ test("a list departs from its default by its items, not by the spacing around th
   const phases = { path: "x.channels", type: "string_list", default: ["L1 total", "L2"] };
   assert.equal(departedDefault(phases, "L1 total ,L2"), undefined);
   assert.deepEqual(departedDefault(phases, "L1total, L2"), ["L1 total", "L2"]);
+});
+
+test("the departures list every saved value and live override away from its default, by section, then by device", () => {
+  const care = {
+    id: "battery_care",
+    path: "battery_care",
+    setup_group: "features",
+    fields: [
+      { path: "battery_care.points", type: "number", level: "normal", default: 3 },
+      { path: "battery_care.old", type: "number", level: "deprecated", default: 1 },
+      { path: "battery_care.key", type: "text", level: "normal", default: "k", secret: true },
+    ],
+  };
+  const tuned = {
+    ...system,
+    fields: [...system.fields, { path: "system.deadband", type: "number", level: "expert", default: 2 }, { path: "system.min_output_limit", type: "number", group: "limits", level: "normal", default: 35 }],
+  };
+  const catalog = {
+    feature_sections: [tuned, winter, care],
+    hardware_sections: [{ id: "devices", fields: [
+      { path: "devices[].name", type: "text", default: "WR1", example_default: true, installation_value: true },
+      { path: "devices[].max_power", type: "number", default: 800, installation_value: true },
+      { path: "devices[].min_soc", type: "number", level: "normal", default: 15 },
+      { path: "devices[].winter_policy", type: "select", level: "advanced", options: ["auto", "off"], default: "auto" },
+    ] }],
+  };
+  const live = (effective, config) => ({ source: "dashboard_override", effective_value: effective, config_value: config });
+  const config = {
+    catalog,
+    draft: {
+      features: {
+        "system.allow_hardware_writes": false,
+        "system.deadband": 10,
+        "system.min_output_limit": 35,
+        "winter.enabled": true,
+        "winter.months": [11, 12, 1],
+        "battery_care.points": 5,
+        "battery_care.old": 4,
+        "battery_care.key": "secret",
+      },
+      devices: [
+        { original_name: "WR1", name: "WR1", max_power: 2400, min_soc: 20, winter_policy: "auto" },
+        { original_name: "WR2", name: "WR2", min_soc: 15 },
+        { original_name: "WR3", name: "WR3", min_soc: 15 },
+      ],
+    },
+    overrides: {
+      "system.deadband": live(2, 10),
+      "system.min_output_limit": live(50, 35),
+      "winter.months": { source: "config", effective_value: "11,12", config_value: "11,12" },
+      devices: { WR2: { min_soc: live(25, 15) }, WR3: { min_soc: live(15, 15) } },
+    },
+  };
+  const shown = departures(config).map((group) => [group.id, group.rows.map((row) => [row.field.path, row.value, row.live?.effective_value, row.standard, row.tab, row.search])]);
+  assert.deepEqual(shown, [
+    ["section:system", [
+      ["system.allow_hardware_writes", false, undefined, true, "safety", "system.allow_hardware_writes"],
+      ["system.deadband", 10, 2, 2, "expert", "system.deadband"],
+      ["system.min_output_limit", undefined, 50, 35, "safety", "system.min_output_limit"],
+    ]],
+    ["section:winter", [["winter.enabled", true, undefined, false, "features", ""]]],
+    ["section:battery_care", [["battery_care.points", 5, undefined, 3, "features", "battery_care.points"]]],
+    ["device:0", [["devices[].min_soc", 20, undefined, 15, "devices", ""]]],
+    ["device:1", [["devices[].min_soc", undefined, 25, 15, "devices", ""]]],
+  ]);
+  assert.equal(departures(config)[3].device.name, "WR1");
+});
+
+test("a config at its defaults, or one that holds nothing, departs from none", () => {
+  const atDefaults = { catalog: { feature_sections: [system, winter] }, draft: { features: { "system.allow_hardware_writes": true, "winter.enabled": false, "winter.months": "1, 11, 12" }, devices: [] }, overrides: {} };
+  assert.deepEqual(departures(atDefaults), []);
+  assert.deepEqual(departures({ catalog: { feature_sections: [system, winter] }, draft: { features: {} } }), []);
+  assert.deepEqual(departures(null), []);
+});
+
+test("a connection the catalogue marks is never a departure, saved or running", () => {
+  const dashboard = {
+    id: "dashboard",
+    path: "dashboard",
+    setup_group: "features",
+    fields: [
+      { path: "dashboard.port", type: "number", level: "normal", default: 8080, connection: true },
+      { path: "dashboard.history_hours", type: "number", level: "normal", default: 48 },
+    ],
+  };
+  const common = { path: "devices[].min_soc", type: "number", level: "normal", default: 15 };
+  const catalog = { feature_sections: [dashboard], hardware_sections: [{ id: "devices", fields: [common, { path: "devices[].port", type: "number", level: "normal", default: 80, connection: true }] }] };
+  const config = {
+    catalog,
+    draft: { features: { "dashboard.port": 8081, "dashboard.history_hours": 72 }, devices: [{ original_name: "WR1", name: "WR1", min_soc: 15, port: 8080 }] },
+    overrides: { "dashboard.port": { source: "dashboard_override", effective_value: 9090, config_value: 8081 } },
+  };
+  const shown = departures(config).map((group) => [group.id, group.rows.map((row) => row.field.path)]);
+  assert.deepEqual(shown, [["section:dashboard", ["dashboard.history_hours"]]]);
+});
+
+test("a switch the file spells as text is always a departure, listed with its text", () => {
+  const gate = system.fields[0];
+  assert.deepEqual(["false", "true", 0, 1, "garbage"].map((value) => spelledSwitch(gate, value)), [true, true, true, true, true]);
+  assert.deepEqual([true, false, null, undefined].map((value) => spelledSwitch(gate, value)), [false, false, false, false]);
+  assert.equal(spelledSwitch(system.fields[1], "40"), false);
+  const config = { catalog: { feature_sections: [system] }, draft: { features: { "system.allow_hardware_writes": "true" } } };
+  assert.deepEqual(departures(config).map((group) => group.rows.map((row) => [row.field.path, row.value, row.standard])), [[["system.allow_hardware_writes", "true", true]]]);
+});
+
+test("a device's departures name its card, and only a card that holds the tuning lists them", () => {
+  const catalog = {
+    feature_sections: [winter],
+    hardware_sections: [{ id: "devices", fields: [
+      { path: "devices[].min_soc", type: "number", level: "normal", default: 15 },
+      { path: "devices[].legacy", type: "number", level: "deprecated", default: 1 },
+    ] }],
+  };
+  const live = (effective, source = "dashboard_override") => ({ source, effective_value: effective, config_value: 15 });
+  const config = {
+    catalog,
+    draft: {
+      features: { "winter.enabled": true },
+      devices: [
+        { original_name: "Hyper", name: "Hyper", kind: "zendure_mqtt", min_soc: 30, legacy: 4 },
+        { original_name: "Piko", name: "Piko", kind: "external_mqtt" },
+        { original_name: "DTU", name: "DTU", kind: "opendtu_http" },
+        { original_name: "WR", name: "WR" },
+      ],
+    },
+    overrides: { devices: { Piko: { min_soc: live(40) }, DTU: { min_soc: live(40) }, WR: { min_soc: live(40, "config") } } },
+  };
+  const groups = departures(config);
+  assert.deepEqual(groups.map((group) => [group.id, group.rows.map((row) => [row.field.path, row.device, row.section, row.search])]), [
+    ["section:winter", [["winter.enabled", undefined, "winter", ""]]],
+    ["device:0", [["devices[].min_soc", "Hyper", undefined, ""]]],
+  ]);
+  assert.equal(departureMatches(groups[1], groups[1].rows[0], "hyp"), true);
+  assert.equal(departureMatches(groups[1], groups[1].rows[0], "minimum"), false);
+  assert.equal(departureMatches(groups[1], groups[1].rows[0], "min_soc"), true);
+  assert.equal(departureMatches(groups[0], groups[0].rows[0], "hyp"), false);
+  assert.equal(departureMatches(groups[0], groups[0].rows[0], ""), true);
 });

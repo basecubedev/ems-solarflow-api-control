@@ -54,6 +54,9 @@ export function deviceKind(device) {
   return "local_api";
 }
 
+/** The device kinds whose card in the Devices tab holds the tuning every inverter shares (``deviceFields(catalog).common``). */
+export const TUNED_KINDS = Object.freeze(["local_api", "zendure_mqtt"]);
+
 /** How many PV inputs a device reports one by one, numbered from 1 (``ems.pv_inputs``). */
 export const PV_INPUT_COUNT = 4;
 /** The device kinds whose editor offers to mark a PV input empty: those that read their inputs one by one. */

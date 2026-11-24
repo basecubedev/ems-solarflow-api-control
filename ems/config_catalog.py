@@ -82,6 +82,7 @@ def _field(
     editable=True,
     installation_value=False,
     example_default=False,
+    connection=False,
 ):
     """One catalogue field.
 
@@ -91,6 +92,11 @@ def _field(
     it. An emptied one still names the value the EMS falls back to, unless
     ``example_default`` says its default is an example and nothing more, as an
     address or a serial number is.
+
+    ``connection`` marks where something is reached rather than how the EMS
+    behaves: an address, a port, a URL, a database the EMS writes to, the
+    user a broker knows it by. The overview of settings that differ from the
+    defaults leaves it out.
     """
     if restart_required is not None:
         requires_restart = restart_required
@@ -128,6 +134,8 @@ def _field(
         item["installation_value"] = True
     if example_default:
         item["example_default"] = True
+    if connection:
+        item["connection"] = True
     return item
 
 
@@ -1908,6 +1916,7 @@ _SECTIONS = [
                 "Broker host",
                 "Hostname or IP of the MQTT broker carrying Zendure telemetry.",
                 "text",
+                connection=True,
             ),
             _field(
                 "zendure_mqtt.port",
@@ -1916,6 +1925,7 @@ _SECTIONS = [
                 "number",
                 minimum=1,
                 maximum=65535,
+                connection=True,
             ),
             _field(
                 "zendure_mqtt.tls",
@@ -1938,6 +1948,7 @@ _SECTIONS = [
                 "text",
                 level="advanced",
                 risk="secret",
+                connection=True,
             ),
             _field(
                 "zendure_mqtt.password",
@@ -1996,6 +2007,7 @@ _SECTIONS = [
                 "Network address the dashboard listens on. Most Docker setups should keep 0.0.0.0.",
                 "text",
                 level="advanced",
+                connection=True,
             ),
             _field(
                 "dashboard.port",
@@ -2004,6 +2016,7 @@ _SECTIONS = [
                 "number",
                 minimum=1,
                 maximum=65535,
+                connection=True,
             ),
             _field(
                 "dashboard.database_path",
@@ -2168,6 +2181,7 @@ _SECTIONS = [
                 "InfluxDB URL used by EMS when it runs inside Docker.",
                 "text",
                 level="advanced",
+                connection=True,
             ),
             _field(
                 "influxdb.host_url",
@@ -2175,6 +2189,7 @@ _SECTIONS = [
                 "InfluxDB URL used by host-side commands or native EMS runs.",
                 "text",
                 level="advanced",
+                connection=True,
             ),
             _field(
                 "influxdb.org",
@@ -2182,6 +2197,7 @@ _SECTIONS = [
                 "InfluxDB organization name.",
                 "text",
                 level="advanced",
+                connection=True,
             ),
             _field(
                 "influxdb.token",
@@ -2197,6 +2213,7 @@ _SECTIONS = [
                 "Environment variable name used to read the InfluxDB token.",
                 "text",
                 level="expert",
+                connection=True,
             ),
             _field(
                 "influxdb.bucket_prefix",
@@ -2205,6 +2222,7 @@ _SECTIONS = [
                 "text",
                 level="advanced",
                 risk="storage",
+                connection=True,
             ),
             _field(
                 "influxdb.raw_write_interval_seconds",
