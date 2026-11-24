@@ -709,7 +709,12 @@ config upgrade does enable it for an installation that predates the feature, and
   "entry_confirm_cycles": 5,
   "entry_window_cycles": 7,
   "max_charge_entries_per_hour": 12,
-  "max_total_charge_power_w": 0
+  "max_total_charge_power_w": 0,
+  "surplus_export_devices": 1,
+  "surplus_export_min_headroom_percent": 5,
+  "surplus_export_limit_w": 0,
+  "surplus_export_limit_seconds": 120,
+  "surplus_export_hold_minutes": 15
 }
 ```
 
@@ -722,6 +727,11 @@ config upgrade does enable it for an installation that predates the feature, and
 | `entry_window_cycles` | How many recent observations those are counted within |
 | `max_charge_entries_per_hour` | Safety limit on how often a device may enter charging; it also bounds how often the full-charge assist takes its AC input back after failed cycles returned it |
 | `max_total_charge_power_w` | Highest combined charging power across all devices; `0` (the default) sets none beyond the devices' own |
+| `surplus_export_devices` | How many full devices may pass all their PV out at once (`gridReverse = 1`, the app's export switch) while another device can charge it; every other device the EMS manages gets `gridReverse = 2`. `0` stops the EMS setting the switch; the device keeps the value last written. Default `1` |
+| `surplus_export_min_headroom_percent` | Room (`socSet` minus SoC) the charging device needs before the first full device starts passing its PV; once passing, any room keeps it. Default `5` |
+| `surplus_export_limit_w` | Refuses the export again when the meter shows more feed-in than this for `surplus_export_limit_seconds` while a device passes its PV; `0` (the default) sets no limit |
+| `surplus_export_limit_seconds` | How long the feed-in must stay above `surplus_export_limit_w`. Default `120` |
+| `surplus_export_hold_minutes` | How long the export stays refused after that, or after no charge followed an allowed export within the grace (at least 120 s). Default `15` |
 
 The lower edge of the charge band is **derived**, not configured:
 

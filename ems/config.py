@@ -148,7 +148,12 @@ AC_CHARGE_CONTROL_DEFAULTS = {
     # the same thing. Keys for it were drafted and deliberately not built, so
     # they are not shipped either -- a setting that changes nothing is worse
     # than an absent one.
-    "max_total_charge_power_w": 0
+    "max_total_charge_power_w": 0,
+    "surplus_export_devices": 1,
+    "surplus_export_min_headroom_percent": 5,
+    "surplus_export_limit_w": 0,
+    "surplus_export_limit_seconds": 120,
+    "surplus_export_hold_minutes": 15,
 }
 
 CONFIG_UPGRADE_DEFAULTS = {

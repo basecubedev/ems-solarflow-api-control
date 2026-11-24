@@ -241,16 +241,15 @@ OBSERVED_ON_HARDWARE = {
 
 # Reported and deliberately not carried into DeviceState, grouped by why.
 DELIBERATELY_UNREAD = {
-    # Device-internal thermal management; the EMS reads hyperTmp for display and
-    # commands nothing about cooling.
-    "Fanmode", "Fanspeed", "heatState",
+    # Device-internal thermal management; the EMS reads hyperTmp for display.
+    "heatState",
     # Cloud/lifecycle bookkeeping, none of it a control input.
     "IOTState", "OTAState", "bindstate", "dataReady", "factoryModeState",
-    "pass", "ts", "tsZone", "writeRsp",
+    "ts", "tsZone", "writeRsp",
     # Device features the EMS does not implement. Reading them would imply it
     # has an opinion about them.
-    "VoltWakeup", "gridOffPower", "gridStandard", "lampSwitch", "oldMode",
-    "phaseSwitch", "reverseState", "socCompSwitch",
+    "VoltWakeup", "gridOffPower", "gridStandard", "oldMode",
+    "phaseSwitch", "socCompSwitch",
     # PV presence is derived from solarInputPower, a power rather than an enum
     # and already the basis for every PV decision; a second, coarser signal for
     # the same fact would be a competing authority.
@@ -296,6 +295,10 @@ def test_every_property_real_hardware_reports_is_read_or_explicitly_ignored():
 
     # Guards the guard: a typo in the ignore list must not silently widen it.
     assert DELIBERATELY_UNREAD <= OBSERVED_ON_HARDWARE
+    # And the other way: a field parse_device reads is not one it leaves unread.
+    from ems.models import DEVICE_STATE_PROPERTIES
+
+    assert DELIBERATELY_UNREAD.isdisjoint(DEVICE_STATE_PROPERTIES)
 
 
 # Where each AC-charging setting is consumed. A key in the defaults that is in
@@ -311,6 +314,11 @@ AC_CHARGE_SETTING_CONSUMERS = {
     "entry_window_cycles": "ChargeDirectionSettings.entry_window_cycles",
     "max_charge_entries_per_hour": "ChargeDirectionSettings.max_entries_per_hour",
     "max_total_charge_power_w": "EMSController.commanded_total_floor_w",
+    "surplus_export_devices": "surplus_export.settings_from_config -> plan_surplus_export",
+    "surplus_export_min_headroom_percent": "surplus_export.settings_from_config -> plan_surplus_export",
+    "surplus_export_limit_w": "surplus_export.settings_from_config -> _export_limit_clock",
+    "surplus_export_limit_seconds": "surplus_export.settings_from_config -> _export_limit_clock",
+    "surplus_export_hold_minutes": "surplus_export.settings_from_config -> _export_limit_clock",
 }
 
 

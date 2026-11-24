@@ -13,7 +13,7 @@ export const CONTROL_CODES = Object.freeze([
   "battery_discharge_required", "discharge_capacity", "pv_only_final_limits", "device_output_limits",
   "undistributed_target", "min_output_limit", "cannot_export", "no_pv_only_available", "cannot_discharge",
   "no_battery_available", "no_usable_battery", "pv_only_limit", "max_output_limit", "no_allocation", "no_battery",
-  "battery_care", "full_charge_assist_solar",
+  "battery_care", "full_charge_assist_solar", "surplus_export",
   "below_min_soc", "soc_protection", "offline", "device_disabled", "control_disabled", "not_controllable",
   "runtime_role_ac_input", "runtime_role_ac_output", "runtime_role_blocked", "ac_discharge_disabled",
   "winter_solar_charge", "already_parked", "already_at_min_output_limit", "park_at_min_output_limit", "deadband",

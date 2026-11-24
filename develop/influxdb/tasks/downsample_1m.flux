@@ -13,6 +13,7 @@ numeric_fields = [
   "solar4",
   "output",
   "output_limit",
+  "grid_input",
   "pack_in",
   "pack_out",
   "voltage",
@@ -20,7 +21,10 @@ numeric_fields = [
   "remain_minutes",
   "house_load",
   "house_other",
+  "grid_power",
+  "target_output",
   "power",
+  "surplus_export_w",
 ]
 
 state_fields = [
@@ -37,6 +41,11 @@ state_fields = [
   "pv_present",
   "output_active",
   "fault_active",
+  "pass_state",
+  "reverse_state",
+  "grid_reverse",
+  "surplus_export",
+  "ac_charging",
 ]
 
 from(bucket: "zendure_raw")

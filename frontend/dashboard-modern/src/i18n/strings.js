@@ -588,6 +588,7 @@ export const STRINGS = {
   "code.max_output_limit": s("Device output limit", "Ausgangsgrenze des Geräts", "Uitgangslimiet van het apparaat", "Limite de sortie de l’appareil"),
   "code.battery_care": s("Battery care", "Akkuschonung", "Accuzorg", "Préservation de la batterie"),
   "code.full_charge_assist_solar": s("Full-charge assist charges the battery from its PV", "Die Vollladehilfe lädt den Akku mit seiner PV", "De volledig-ladenhulp laadt de batterij met zijn PV", "L’aide à la charge complète charge la batterie avec son PV"),
+  "code.surplus_export": s("Full battery passes its PV to another device's charge", "Voller Akku gibt seine PV an die Ladung eines anderen Geräts", "Volle accu geeft zijn PV door aan de lading van een ander apparaat", "Batterie pleine qui transmet son PV à la charge d'un autre appareil"),
   "code.no_allocation": s("No share of the target", "Kein Anteil am Ziel", "Geen aandeel in het doel", "Aucune part de la consigne"),
   "code.no_battery": s("Device reports no battery pack", "Gerät meldet keinen Akkupack", "Apparaat meldt geen accupack", "L’appareil ne signale pas de batterie"),
   "code.below_min_soc": s("Battery at or below minimum SoC", "Akku auf oder unter Min-SoC", "Batterij op of onder minimum-SoC", "Batterie au SoC minimum ou en dessous"),

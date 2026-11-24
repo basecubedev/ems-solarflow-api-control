@@ -55,6 +55,7 @@ DEVICE_STATE_PROPERTIES = frozenset(
         "outputLimit", "socLimit", "packState", "faultLevel", "smartMode",
         "gridOffMode", "acMode", "acStatus", "dcStatus", "gridState", "inputLimit",
         "packNum", "socStatus", "batCalTime", "gridInputPower", "gridReverse",
+        "pass", "reverseState",
         "chargeLimit", "chargeMaxLimit",
         "lampSwitch", "Fanmode", "Fanspeed", "buzzerSwitch", "autoHeat",
     }
@@ -91,6 +92,8 @@ class DeviceState:
     ``smartMode``, ``gridOffMode``, ``inputLimit``); the value then reads 0,
     which is not a state the device is in (K10, K20). ``setting_properties``
     holds the ``ems.device_settings`` properties the report carries.
+    ``pass_state`` and ``reverse_state`` are the report's ``pass`` and
+    ``reverseState``, None when it carries none: recorded, never acted on.
     """
 
     soc: float
@@ -136,9 +139,12 @@ class DeviceState:
     # was asked for; this is what flows.
     grid_input: int = 0
     # Whether the device exports surplus on its own rather than curtailing at
-    # max SoC. Read only: it changes what the device does when no EMS is
-    # watching, so it is reported, never set.
+    # max SoC. Only ems.surplus_export sets it: 1 while another device can take
+    # that surplus in, 2 on every other device it manages.
     grid_reverse: int = 0
+    grid_reverse_reported: bool = False
+    pass_state: int | None = None
+    reverse_state: int | None = None
     # None when the device never reported the field; 0 is an observed "no pack".
     pack_num: int | None = None
     soc_status: int = 0

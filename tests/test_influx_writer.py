@@ -1308,3 +1308,120 @@ def test_a_database_that_starts_refusing_is_named_at_once_not_after_the_outage_p
 
     assert caplog.text.count("event=influx_writer_write_error") == 2
     assert "500 Server Error" in caplog.text
+
+
+def test_the_bypass_fields_are_written_and_the_surplus_power_is_always_a_float():
+    devices = [_Dev("WR1"), _Dev("WR2")]
+    passing = _state(output=700, output_limit=300, grid_reverse=1, grid_reverse_reported=True, pass_state=2, reverse_state=1)
+    taking = _state(output=0, output_limit=0, grid_reverse=2, grid_reverse_reported=True, pass_state=None, reverse_state=0)
+    silent = _state(output=0, output_limit=0, grid_reverse=0, grid_reverse_reported=False)
+
+    exporting = build_telemetry_lines(
+        devices, [passing, taking], {"WR1": True, "WR2": True}, -100.0, target=0.0,
+        timestamp_ns=1, surplus_exporting=frozenset({"WR1"}), ac_charging=True,
+    )
+    quiet = build_telemetry_lines(
+        devices, [silent, taking], {"WR1": True, "WR2": True}, 0.0, target=0.0,
+        timestamp_ns=1, surplus_exporting=frozenset(), ac_charging=False,
+    )
+
+    wr1, wr2 = (line for line in exporting if line.startswith("zendure_device"))
+    assert "surplus_export=true" in wr1 and "grid_reverse=1.0" in wr1
+    assert "pass_state=2.0" in wr1 and "reverse_state=1.0" in wr1
+    assert "surplus_export=false" in wr2 and "pass_state" not in wr2
+    runtime = next(line for line in exporting if line.startswith("ems_runtime"))
+    assert "surplus_export_w=400.0" in runtime and "ac_charging=true" in runtime
+    silent_line = next(line for line in quiet if line.startswith("zendure_device"))
+    assert "grid_reverse" not in silent_line
+    quiet_runtime = next(line for line in quiet if line.startswith("ems_runtime"))
+    assert "surplus_export_w=0.0" in quiet_runtime and "ac_charging=false" in quiet_runtime
+
+
+def test_a_device_in_bypass_that_went_offline_adds_nothing_to_the_surplus_power():
+    devices = [_Dev("WR1"), _Dev("WR2")]
+    passing = _state(output=700, output_limit=300, grid_reverse=1, grid_reverse_reported=True)
+
+    lines = build_telemetry_lines(
+        devices, [passing, passing], {"WR1": False, "WR2": True}, -100.0, target=0.0,
+        timestamp_ns=1, surplus_exporting=frozenset({"WR1", "WR2"}), ac_charging=True,
+    )
+
+    runtime = next(line for line in lines if line.startswith("ems_runtime"))
+    assert "surplus_export_w=400.0" in runtime
+
+
+RAW_ONLY_FIELDS = {"rssi": "written raw and never downsampled, as before the surplus export"}
+FIELDS_OF_THE_STANDALONE_COLLECTOR = {
+    "pv_present": "scripts/capture_runtime_to_influx.py",
+    "output_active": "scripts/capture_runtime_to_influx.py",
+    "fault_active": "scripts/capture_runtime_to_influx.py",
+}
+
+
+def test_every_field_the_writer_sends_is_downsampled_and_every_downsampled_field_is_sent():
+    """Two lists that must agree: what the EMS writes and what downsampling carries.
+
+    A field written but in neither list is lost after the raw retention; a
+    bool among the numeric fields would be averaged. The exceptions are named.
+    """
+
+    from ems.history.influx_writer import _DEVICE_FIELDS
+    from ems.history.schema import NUMERIC_FIELDS, STATE_FIELDS
+
+    values = {name: 1.0 for name in _DEVICE_FIELDS}
+    values.update(grid_reverse=1, grid_reverse_reported=True, battery_packs=(), pack_num=1)
+    lines = build_telemetry_lines(
+        [_Dev("WR1")], [SimpleNamespace(**values)], {"WR1": True}, -10.0, target=5.0,
+        timestamp_ns=1, surplus_exporting=frozenset({"WR1"}), ac_charging=True, consumers={"c": 1.0},
+    )
+    written = {}
+    for line in lines:
+        body = line.split(" ", 1)[1].rsplit(" ", 1)[0]
+        for pair in body.split(","):
+            name, value = pair.split("=", 1)
+            written[name] = value
+    schema = set(NUMERIC_FIELDS) | set(STATE_FIELDS)
+
+    assert set(written) - schema == set(RAW_ONLY_FIELDS)
+    assert schema - set(written) == set(FIELDS_OF_THE_STANDALONE_COLLECTOR)
+    assert {name for name, value in written.items() if value in ("true", "false")} <= set(STATE_FIELDS)
+
+
+def test_the_controller_hands_the_bypass_and_the_charge_state_to_the_influx_lines():
+    from ems.controller import EMSController
+
+    captured = []
+
+    class Sink:
+        def enqueue(self, lines):
+            captured.append(list(lines))
+
+    fake = SimpleNamespace(
+        influx_writer=Sink(),
+        devices=[_Dev("WR1")],
+        device_online={"WR1": True},
+        surplus_export_plan=SimpleNamespace(exporting=frozenset({"WR1"})),
+        charge_direction=SimpleNamespace(charging=True),
+    )
+    EMSController.publish_to_influx(fake, -100.0, [_state(output_limit=0)], target=0.0)
+
+    assert any("surplus_export=true" in line for line in captured[0])
+    assert any("ac_charging=true" in line for line in captured[0])
+
+
+def test_the_developer_flux_mirror_carries_the_downsampled_fields():
+    import re
+    from pathlib import Path
+
+    from ems.history.schema import NUMERIC_FIELDS, STATE_FIELDS
+
+    text = (Path(__file__).resolve().parents[1] / "develop" / "influxdb" / "tasks" / "downsample_1m.flux").read_text(
+        encoding="utf-8"
+    )
+
+    def listed(name):
+        block = re.search(name + r" = \[(.*?)\]", text, re.S).group(1)
+        return re.findall(r'"([^"]+)"', block)
+
+    assert listed("numeric_fields") == NUMERIC_FIELDS
+    assert listed("state_fields") == STATE_FIELDS

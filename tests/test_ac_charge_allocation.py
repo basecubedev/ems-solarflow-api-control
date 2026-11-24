@@ -184,14 +184,13 @@ def test_a_device_with_no_reported_ceiling_and_no_rating_charges_nothing():
     assert resolve_max_charge_power_w(_device(max_power="?"), _state(soc=50, charge_max_limit_w="?")) == 0
 
 
-def test_the_surplus_export_setting_is_read_but_decides_nothing_yet():
-    """gridReverse is carried so the state is visible, not acted on.
+def test_the_export_switch_changes_no_charge_headroom_and_no_charge_ceiling():
+    """gridReverse is ems.surplus_export's to read and to set, not the charge allocation's.
 
-    A device with surplus export enabled and a full battery stops curtailing:
-    its PV leaves whatever the EMS allocates, which makes it a source rather
-    than an actuator. The EMS does not model that role yet, so the value is
-    reported rather than quietly changing an allocation. The day it does change
-    one, this test fails and the change is deliberate.
+    A device with export allowed and a full battery stops curtailing: its PV
+    leaves whatever the EMS allocates. ``ems.surplus_export`` models that role
+    (tests/test_surplus_export_control.py); what a device may take in by AC
+    stays the same either way.
     """
 
     telemetry = {"electricLevel": 50, "socSet": 1000, "packNum": 2, "chargeMaxLimit": 1000}

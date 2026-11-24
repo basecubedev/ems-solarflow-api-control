@@ -155,6 +155,7 @@ construction, controller startup, main loop. All real implementation lives in `e
 - `paths.py` — shared project-path resolvers (`BASE_DIR`, `resolve_*_path`); import-side-effect-free
 - `runtime_commands.py` — the one command path for runtime-state edits (whitelist, validators, emsctl-named commands); emsctl, the dashboard, the Admin mirror and the scheduler all write through it
 - `device_settings.py` — light, fan, buzzer and battery heating: the settings the operator can hand to the EMS and the one reconciler that keeps them (state gates, off is off, local API only)
+- `surplus_export.py` — a full device's firmware bypass (`gridReverse = 1`, `outputLimit` ignored) allowed only while another device can AC-charge its PV, refused otherwise; the bypass device is told its house share and kept out of the charge it fed; import-side-effect-free
 - `file_io.py` — the cross-process file lock, atomic write and file signature that `runtime-state.json` and `schedules.json` share
 - `scheduler.py` — fires due schedule switch points through `runtime_commands`; `schedule_store.py` (`schedules.json`), `schedule_model.py`, `schedule_recurrence.py`, `schedule_actions.py`, `schedule_text.py` and `schedule_cli.py` (`emsctl schedule`) around it; see `docs/scheduler.md`
 
@@ -289,11 +290,16 @@ hardware generations are not yet validated on physical hardware (see
 
 State reconciliation writes (`minSoc`, `socSet`, `smartMode`, `gridOffMode`,
 full-charge-assist `socSet`/`acMode`/`inputLimit`, the device settings
-`lampSwitch`/`Fanmode`/`Fanspeed`/`buzzerSwitch`/`autoHeat`)
+`lampSwitch`/`Fanmode`/`Fanspeed`/`buzzerSwitch`/`autoHeat`, the surplus
+export's `gridReverse`)
 additionally require `allow_state_reconciliation_writes=true` and control
 switched on (system and device: off is off, see `device_state_writes_allowed`),
 and are API-only (MQTT control devices are output-only,
-`supports_state_reconciliation=False`).
+`supports_state_reconciliation=False`). One exception, like the command that
+ends a charge the EMS started: an export the EMS allowed (`gridReverse = 1`) is
+refused once more behind the write gates alone when control or the device is
+switched off, after failed cycles and on every clean stop
+(`grid_export_end_allowed`).
 
 The EMS must not run in parallel with another controller writing Zendure
 `outputLimit`.

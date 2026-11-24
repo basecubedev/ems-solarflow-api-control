@@ -47,6 +47,7 @@ NUMERIC_FIELDS = [
     "grid_power",
     "target_output",
     "power",
+    "surplus_export_w",
 ]
 
 STATE_FIELDS = [
@@ -63,6 +64,11 @@ STATE_FIELDS = [
     "pv_present",
     "output_active",
     "fault_active",
+    "pass_state",
+    "reverse_state",
+    "grid_reverse",
+    "surplus_export",
+    "ac_charging",
 ]
 
 MEASUREMENT_FILTER = (

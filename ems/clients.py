@@ -328,6 +328,9 @@ def parse_device(data):
         charge_max_limit_w=_reported_charge_ceiling(props),
         grid_input=props.get("gridInputPower") or 0,
         grid_reverse=props.get("gridReverse") or 0,
+        grid_reverse_reported=_whole_number(props.get("gridReverse")) is not None,
+        pass_state=_whole_number(props.get("pass")),
+        reverse_state=_whole_number(props.get("reverseState")),
         pack_num=_observed_pack_count(data, props),
         soc_status=props.get("socStatus") or 0,
         battery_calibration_time=props.get("batCalTime"),
@@ -340,6 +343,14 @@ def parse_device(data):
         input_limit_reported=props.get("inputLimit") is not None,
         setting_properties=device_settings.reported_properties(props),
     )
+
+
+def _whole_number(value):
+    """``value`` as an int when the report carries it as a whole number, else None."""
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value) if float(value).is_integer() else None
 
 
 def _reported_charge_ceiling(props):
