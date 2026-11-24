@@ -78,11 +78,11 @@ MAX_CONSUMER_NAME = 256
 # and a downsampling step: a short dip of the lowest cell is what it is read for.
 PACK_CELL_SERIES = {"cell_min": "cell_min_v", "cell_max": "cell_max_v"}
 PACK_CELL_REDUCERS = {"cell_min_v": "min", "cell_max_v": "max"}
-# A pack's own power and state go to the raw bucket only. power_w carries no
-# direction -- state does -- so a window's mean across a change of direction
-# means nothing, and a field added to the cell task would leave every
+# A pack's own power, state and temperature go to the raw bucket only. power_w
+# carries no direction -- state does -- so a window's mean across a change of
+# direction means nothing, and a field added to the cell task would leave every
 # installation's existing task "kept" until an operator synced by hand.
-PACK_RAW_FIELDS = ("power_w", "state")
+PACK_RAW_FIELDS = ("power_w", "state", "temp_c")
 _REDUCE = {"min": min, "max": max}
 
 # Per-device snapshot fields (under payload["devices"][name]) used when the

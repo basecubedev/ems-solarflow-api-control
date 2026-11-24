@@ -110,17 +110,24 @@ themselves, positive while charging and negative while discharging. It shows a
 standby drain of a few watts that the device-level battery power, 0 W while the
 device stands idle at its minimum SoC, does not. Only a pack whose state names
 the direction counts (charging, discharging, or idle at 0 W); one that reports
-power without it is left out rather than shown as charging. The folded **Packs**
-section lists every pack that reports its cells or such a power.
-The live snapshot carries them per device as `devices.<name>.battery_packs`, a
+power without it is left out rather than shown as charging. **Inverter
+temperature** and **Pack temperature**, the coolest to the warmest pack, are
+main facts too when the device reports them, over the local API and MQTT alike;
+one it does not report is left out, never shown as 0 °C. The folded **Packs**
+section lists every pack that reports its cells, such a power or its
+temperature.
+The live snapshot carries the inverter's as `devices.<name>.temperature_c` and
+the packs per device as `devices.<name>.battery_packs`, a
 list of `{"pack": 1, "cell_min_v": 3.17, "cell_max_v": 3.18, "power_w": 4,
-"state": 2}`: Zendure's `packData[].minVol` and `maxVol`, hundredths of a volt,
+"state": 2, "temp_c": 13.0}`: Zendure's `packData[].minVol` and `maxVol`, hundredths of a volt,
 in volts, `null` where a pack reports none or a value no cell can have (outside
 1.5–5.0 V, or a lowest cell above the highest); `packData[].power` in whole
 watts, whose sign is not a direction (`state` names it), a 16-bit value of 32768–65535 read as the
 negative number it encodes (as `batcur` 65535 is −1), `null` outside ±10 kW; and
 `packData[].state`, 0 idle, 1 charging, 2 discharging, `null` for any other
-value. The card takes the
+value; and `packData[].maxTemp`, tenths of a kelvin like the inverter's
+`hyperTmp`, in °C, `null` where a pack reports none or a value outside -60 to
+120 °C. The card takes the
 direction from `state`; the EMS's control does not read either. The packs are numbered from 1 in the order of their
 serial numbers, which are not published; adding or removing a pack renumbers
 the ones after it, so from then on a number's history goes on with another

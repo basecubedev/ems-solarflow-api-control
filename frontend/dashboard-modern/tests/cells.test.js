@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createFormat } from "../../shared/lib/format.js";
-import { packCells, packFlows, packFlowTotal, packReadings, cellRange, cellText, cellSeriesIds, cellKind, cellStyle, cellDevices, historyCellDevices, analyticsCellDevices, packsSeen, reportedCells, seriesExtreme, shownPack, voltRange } from "../src/lib/cells.js";
+import { packCells, packFlows, packFlowTotal, packReadings, packTemperatures, temperatureRange, temperatureText, cellRange, cellText, cellSeriesIds, cellKind, cellStyle, cellDevices, historyCellDevices, analyticsCellDevices, packsSeen, reportedCells, seriesExtreme, shownPack, voltRange } from "../src/lib/cells.js";
 import { normalizeDevice } from "../src/lib/devices.js";
 import { ANALYTICS_VIEWS, CELL_OVERLAYS, requestedSeries, seriesStyle, viewById } from "../src/lib/analytics.js";
 
@@ -58,10 +58,49 @@ test("the packs a card lists are those that report their cells or a power with i
     ],
   });
   assert.deepEqual(packReadings(device), [
-    { pack: 1, low: 3.2, high: 3.22, watts: 30 },
-    { pack: 2, low: null, high: null, watts: -4 },
+    { pack: 1, low: 3.2, high: 3.22, watts: 30, celsius: null },
+    { pack: 2, low: null, high: null, watts: -4, celsius: null },
   ]);
   assert.deepEqual(packReadings(normalizeDevice("Inverter", { hardware: { battery: false }, battery_packs: [{ pack: 1, cell_min_v: 3.2 }] })), []);
+});
+
+test("each pack's temperature comes in pack order, and a pack that reports none is left out", () => {
+  assert.deepEqual(
+    packTemperatures([
+      { pack: 2, temp_c: 25 },
+      { pack: 1, temp_c: 13 },
+      { pack: 3, temp_c: null },
+      { pack: 4 },
+      { pack: 5, temp_c: 0 },
+      { pack: 17, temp_c: 20 },
+      null,
+    ]),
+    [{ pack: 1, celsius: 13 }, { pack: 2, celsius: 25 }, { pack: 5, celsius: 0 }],
+  );
+  assert.deepEqual(packTemperatures(undefined), []);
+});
+
+test("a pack that reports only its temperature is still listed on the card", () => {
+  const device = normalizeDevice("Shed", {
+    hardware: { battery: true },
+    temperature_c: 31.5,
+    battery_packs: [{ pack: 1, cell_min_v: null, cell_max_v: null, temp_c: 13 }],
+  });
+  assert.equal(device.temperatureC, 31.5);
+  assert.deepEqual(packReadings(device), [{ pack: 1, low: null, high: null, watts: null, celsius: 13 }]);
+  assert.equal(normalizeDevice("Shed", { temperature_c: null }).temperatureC, null);
+  assert.deepEqual(normalizeDevice("Inverter", { hardware: { battery: false }, battery_packs: [{ pack: 1, temp_c: 13 }] }).packTemps, []);
+});
+
+test("the pack temperatures read lowest to highest, one value when they agree, a dash when none reports", () => {
+  const en = createFormat("en");
+  assert.deepEqual(temperatureRange([{ pack: 1, celsius: 25 }, { pack: 2, celsius: 13 }]), { low: 13, high: 25 });
+  assert.deepEqual(temperatureRange([]), { low: null, high: null });
+  assert.equal(temperatureText(en, 13, 25), "13.0–25.0\u00a0°C");
+  assert.equal(temperatureText(en, -2, 4), "−2.0 – 4.0\u00a0°C");
+  assert.equal(temperatureText(en, -6, -2), "−6.0 – −2.0\u00a0°C");
+  assert.equal(temperatureText(en, 13, 13), "13.0\u00a0°C");
+  assert.equal(temperatureText(en, null, null), "—");
 });
 
 test("a device without a battery has no pack power", () => {

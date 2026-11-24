@@ -8,7 +8,7 @@
  */
 
 import { finite } from "../../../shared/lib/format.js";
-import { packCells, packFlows } from "./cells.js";
+import { packCells, packFlows, packTemperatures } from "./cells.js";
 
 function deviceName(device, index) {
   return String(device?.device || device?.name || `Device ${index + 1}`);
@@ -53,6 +53,8 @@ export function normalizeDevice(name, raw) {
     packs: packs !== null && packs > 0 ? packs : null,
     cells: packCells(device.battery_packs),
     packFlows: hardware.battery !== false ? packFlows(device.battery_packs) : [],
+    packTemps: hardware.battery !== false ? packTemperatures(device.battery_packs) : [],
+    temperatureC: finite(device.temperature_c),
     inputLimitW: inputLimit !== null && inputLimit > 0 ? inputLimit : null,
     capability: device.capability || null,
     settings: device.settings || null,

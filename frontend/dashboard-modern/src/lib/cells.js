@@ -7,7 +7,7 @@
  * stays null.
  */
 
-import { finite } from "../../../shared/lib/format.js";
+import { finite, MINUS } from "../../../shared/lib/format.js";
 
 /** The highest pack number the history serves (ems.models.MAX_PACK_NUMBER). */
 export const MAX_PACK_NUMBER = 16;
@@ -78,13 +78,38 @@ export function packFlows(entries) {
     .sort((a, b) => a.pack - b.pack);
 }
 
-/** The packs of a normalized device that report their cells or a power with its direction, each with both. */
+/** Each pack's temperature from the live data, in pack order; a pack that reports none is left out. */
+export function packTemperatures(entries) {
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .filter((entry) => Number.isInteger(entry?.pack) && entry.pack > 0 && entry.pack <= MAX_PACK_NUMBER)
+    .map((entry) => ({ pack: entry.pack, celsius: finite(entry.temp_c) }))
+    .filter((reading) => reading.celsius !== null)
+    .sort((a, b) => a.pack - b.pack);
+}
+
+/** The coolest and the warmest pack, null where no pack reports. */
+export function temperatureRange(temperatures) {
+  const values = temperatures.map((reading) => reading.celsius);
+  return values.length ? { low: Math.min(...values), high: Math.max(...values) } : { low: null, high: null };
+}
+
+/** "13.0–25.0 °C", one temperature when both agree or only one is known, a dash when none is. */
+export function temperatureText(f, low, high) {
+  if (low === null && high === null) return f.temperature(null);
+  if (low === null || high === null || low === high) return f.temperature(low ?? high);
+  const lowText = low < 0 ? `${MINUS}${f.number(-low, 1)}` : f.number(low, 1);
+  return `${lowText}${low < 0 ? " – " : "–"}${f.temperature(high)}`;
+}
+
+/** The packs of a normalized device that report their cells, a power with its direction or a temperature, each with all three. */
 export function packReadings(device) {
   if (!device.hasBattery) return [];
   const flows = new Map(device.packFlows.map((flow) => [flow.pack, flow.watts]));
+  const temperatures = new Map((device.packTemps || []).map((reading) => [reading.pack, reading.celsius]));
   return device.cells
-    .map((pack) => ({ ...pack, watts: flows.get(pack.pack) ?? null }))
-    .filter((pack) => pack.low !== null || pack.high !== null || pack.watts !== null);
+    .map((pack) => ({ ...pack, watts: flows.get(pack.pack) ?? null, celsius: temperatures.get(pack.pack) ?? null }))
+    .filter((pack) => pack.low !== null || pack.high !== null || pack.watts !== null || pack.celsius !== null);
 }
 
 /** What the packs together report, null when none reports its power. */

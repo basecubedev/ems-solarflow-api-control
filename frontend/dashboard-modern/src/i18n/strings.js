@@ -285,6 +285,8 @@ export const STRINGS = {
   "device.pack": s("Pack {n}", "Pack {n}", "Pack {n}", "Pack {n}"),
   "device.packPower": s("Pack power", "Pack-Leistung", "Packvermogen", "Puissance des packs"),
   "device.gridTarget": s("Grid target", "Netz-Sollwert", "Netdoel", "Consigne réseau"),
+  "device.inverterTemp": s("Inverter temperature", "Wechselrichter-Temperatur", "Omvormertemperatuur", "Température de l’onduleur"),
+  "device.packTemp": s("Pack temperature", "Pack-Temperatur", "Packtemperatuur", "Température des packs"),
   "device.inputLimit": s("AC input limit", "AC-Eingangsgrenze", "AC-ingangslimiet", "Limite d’entrée AC"),
   "device.socRange": s("SoC range", "SoC-Bereich", "SoC-bereik", "Plage de SoC"),
   "device.firmware": s("Firmware status", "Firmware-Status", "Firmwarestatus", "État du firmware"),

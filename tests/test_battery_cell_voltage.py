@@ -276,8 +276,8 @@ def test_the_live_data_names_each_pack_by_number_and_no_serial():
     fields = _state_telemetry_fields(state)
 
     assert fields["battery_packs"] == [
-        {"pack": 1, "cell_min_v": 3.2, "cell_max_v": 3.22, "power_w": None, "state": None},
-        {"pack": 2, "cell_min_v": 3.3, "cell_max_v": None, "power_w": None, "state": None},
+        {"pack": 1, "cell_min_v": 3.2, "cell_max_v": 3.22, "power_w": None, "state": None, "temp_c": None},
+        {"pack": 2, "cell_min_v": 3.3, "cell_max_v": None, "power_w": None, "state": None, "temp_c": None},
     ]
     assert "PACK-A" not in repr(fields)
     assert _state_telemetry_fields(zero_device_state())["battery_packs"] == []
@@ -481,7 +481,7 @@ def test_a_device_offline_or_out_of_date_publishes_no_cells():
     snapshot = _snapshot_of(states, {"Live": True, "Offline": False, "Stale": True}, fresh=lambda name: name != "Stale")
 
     assert snapshot["devices"]["Live"]["battery_packs"] == [
-        {"pack": 1, "cell_min_v": 3.17, "cell_max_v": 3.18, "power_w": None, "state": None}
+        {"pack": 1, "cell_min_v": 3.17, "cell_max_v": 3.18, "power_w": None, "state": None, "temp_c": None}
     ]
     assert snapshot["devices"]["Offline"]["battery_packs"] == []
     assert snapshot["devices"]["Stale"]["battery_packs"] == []
