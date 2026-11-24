@@ -14,9 +14,10 @@
     PRESET_ORDER, WEEKDAYS, WINTER_MONTHS, STATUSES, actionById, newDraft, draftFromRule, rulePayload,
     valueLimit, whenParts, offsetText, shiftDate, daysBetween,
   } from "../lib/schedule.js";
+  import { gridTargetMeaning, gridTargetParts, gridTargetValue } from "../lib/gridTarget.js";
 
   const TONES = { waiting: "c-ok", paused: "c-idle", orphaned: "c-warn", refused: "c-warn", finished: "c-idle", broken: "c-fault" };
-  const KNOWN_ACTIONS = ["total_output_limit", "device_output_limit", "device_discharge", "pv_priority", "offgrid_socket", "charge_from_grid", "surplus_charging", "device_surplus_charging", "winter_mode", "ems_control", "device_control", "light", "fan", "buzzer", "auto_heat", "minimum_output_limit"];
+  const KNOWN_ACTIONS = ["total_output_limit", "device_output_limit", "device_discharge", "pv_priority", "offgrid_socket", "charge_from_grid", "surplus_charging", "device_surplus_charging", "winter_mode", "ems_control", "device_control", "light", "fan", "buzzer", "auto_heat", "minimum_output_limit", "grid_target_discharge", "grid_target_charge"];
   const KNOWN_GROUPS = ["power", "offgrid_socket", "ac_charging", "battery", "control", "device_settings", "advanced"];
 
   let overview = $state.raw(null);
@@ -29,6 +30,7 @@
   let deleting = $state(null);
   let previewTimer = null;
   let previewSequence = 0;
+  let directions = $state({});
 
   const f = $derived(fmt());
   const action = $derived(draft ? actionById(overview, draft.action) : null);
@@ -101,6 +103,7 @@
 
   function startNew() {
     draft = newDraft(overview);
+    directions = {};
     preview = null;
     previewOk = false;
   }
@@ -110,6 +113,7 @@
     draft.action = id;
     draft.value = "";
     draft.end_value = "";
+    directions = {};
     draft.device = next?.per_device ? next.devices[0] || null : null;
   }
 
@@ -190,6 +194,27 @@
       <option value="">{t("schedule.choose")}</option>
       {#each action.choices as choice (choice)}<option value={choice}>{choiceLabel(action, choice)}</option>{/each}
     </select>
+  {:else if action?.value_type === "grid_watts"}
+    {@const parts = gridTargetParts(value, directions[name] || (action.id === "grid_target_charge" ? "export" : "import"))}
+    <span class="number">
+      <select
+        class="input"
+        aria-label={`${name}: ${t("gridTarget.direction")}`}
+        value={parts.direction}
+        onchange={(e) => {
+          directions[name] = e.currentTarget.value;
+          onchange(gridTargetValue(e.currentTarget.value, parts.watts));
+        }}
+      >
+        <option value="import">{t("gridTarget.import")}</option>
+        <option value="export">{t("gridTarget.export")}</option>
+      </select>
+      <input class="input num" type="number" min="0" max={valueLimit(action, draft.device, overview)} step="1" value={parts.watts} oninput={(e) => onchange(gridTargetValue(parts.direction, e.currentTarget.value))} aria-label={name} /><span>W</span>
+    </span>
+    {#if value !== "" && value !== null && value !== undefined}
+      {@const meaning = gridTargetMeaning(action.id === "grid_target_charge" ? "charge" : "discharge", value)}
+      <span class="meaning" data-testid="grid-target-meaning">{t(meaning.key, { w: f.power(meaning.watts) })}</span>
+    {/if}
   {:else if action?.value_type === "factor"}
     <span class="number"><input class="input num" type="number" min="0.01" max="100" step="0.01" {value} oninput={(e) => onchange(e.currentTarget.value)} aria-label={name} /><span>×</span></span>
   {:else if action}
@@ -392,7 +417,7 @@
               {/if}
               <div class="row-wrap actions">
                 {#if rule.status !== "broken"}
-                  <button class="btn secondary small" type="button" onclick={() => { draft = draftFromRule(rule, overview); preview = null; previewOk = false; }}><Icon name="pencil" size="sm" />{t("schedule.editShort")}</button>
+                  <button class="btn secondary small" type="button" onclick={() => { draft = draftFromRule(rule, overview); directions = {}; preview = null; previewOk = false; }}><Icon name="pencil" size="sm" />{t("schedule.editShort")}</button>
                   <button class="btn secondary small" type="button" onclick={() => ruleAction("toggle", rule)}>{rule.enabled ? t("schedule.switchOff") : t("schedule.switchOn")}</button>
                   <button class="btn secondary small" type="button" disabled={!rule.next} onclick={() => ruleAction("skip", rule)}><Icon name="skip-forward" size="sm" />{t("schedule.skip")}</button>
                   <button class="btn secondary small" type="button" disabled={rule.status === "paused"} onclick={() => ruleAction("apply", rule)}>{t("schedule.applyNow")}</button>
@@ -431,6 +456,7 @@
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--s3); }
   .number { display: inline-flex; gap: 6px; align-items: center; }
   .number .input { width: auto; min-width: 80px; }
+  .meaning { display: block; font-size: 12px; color: var(--m-muted); }
   .readonly { font-size: 13px; padding: 8px 0; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
   .chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--m-line-strong); font-size: 12.5px; cursor: pointer; }

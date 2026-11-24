@@ -138,6 +138,23 @@ def _entry_confirmed(state, settings):
     return confirmed >= max(1, settings.entry_confirm_cycles)
 
 
+def charge_thresholds_w(start_w, stop_w, charge_target_w):
+    """The charge band's edges, ``(start_w, stop_w)``, with the grid target a charge settles on.
+
+    A charge settles the meter at its target, so one asking for more export
+    than the stop threshold would charge nothing, or discharge, on a surplus
+    between the two. The stop threshold then is that export, and the start
+    threshold at least that export plus the configured band (start less stop):
+    a charge starts only on a surplus that leaves something to charge, and
+    ends once none is left. Any other target leaves the band as configured.
+    """
+
+    export_w = max(0, -charge_target_w)
+    if export_w <= stop_w:
+        return start_w, stop_w
+    return max(start_w, export_w + start_w - stop_w), export_w
+
+
 def decide_charge_direction(
     previous,
     *,

@@ -345,7 +345,7 @@ def test_catalogue_runtime_defaults_leave_out_installation_values():
 
     index = get_config_feature_field_index()
     expected = {
-        "system": ("loop_interval", "min_output_limit"),
+        "system": ("loop_interval", "min_output_limit", "grid_target_discharge_w", "grid_target_charge_w"),
         "devices": ("pv_priority_factor",),
         "battery_care": (
             "summer_full_points",

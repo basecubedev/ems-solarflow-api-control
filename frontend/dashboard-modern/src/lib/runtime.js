@@ -57,6 +57,8 @@ export function switchDefault(limits, device, key) {
   return scope?.[key] !== false;
 }
 
+const NUMERIC = new Set(["number", "gridTarget"]);
+
 /**
  * A toggle shows a stored value as the EMS reads it: a boolean as it is, an on
  * or off word as that, anything else as the field's ``fallback``, the EMS's own
@@ -65,7 +67,7 @@ export function switchDefault(limits, device, key) {
  */
 export function normalizeValue(field, value) {
   if (field.type === "toggle") return field.strict ? value === true : storedBool(value, field.fallback === true);
-  if (field.type === "number") {
+  if (NUMERIC.has(field.type)) {
     if (value === null || value === undefined || value === "") return null;
     const number = Number(value);
     return Number.isFinite(number) ? number : null;
@@ -84,7 +86,7 @@ export function reseed(fields, { values = {}, baseline = {}, initial = {}, fresh
   fields.forEach((field) => {
     const edited = !fresh && normalizeValue(field, values[field.name]) !== normalizeValue(field, baseline[field.name]);
     if (edited) return;
-    if (field.type === "number") next[field.name] = initial[field.name] ?? "";
+    if (NUMERIC.has(field.type)) next[field.name] = initial[field.name] ?? "";
     else if (field.type === "toggle") next[field.name] = normalizeValue(field, initial[field.name]);
     else next[field.name] = initial[field.name];
     base[field.name] = initial[field.name];
@@ -118,7 +120,7 @@ export function changedPayload(fields, values, initial) {
     if (entered === null && before === null) return;
     const current = entered ?? field.default ?? null;
     if (current === before) return;
-    if (field.type === "number" && current === null && !field.clearable) return;
+    if (NUMERIC.has(field.type) && current === null && !field.clearable) return;
     payload[field.name] = current;
   });
   return payload;

@@ -314,3 +314,20 @@ def test_every_overlap_key_defaults_to_what_the_ems_applies(tmp_path, system):
         if entry["source"] != "config"
     )
     assert overrides == []
+
+
+@pytest.mark.parametrize("key", ["grid_target_discharge_w", "grid_target_charge_w"])
+def test_a_grid_target_shows_as_the_ems_reads_it(key):
+    """A hand-entered 250 W is out of range, and the EMS aims for 0 W; the Admin must not show 250 as in effect."""
+
+    from admin.config_runtime_overlap import config_effective_value
+
+    config = _config()
+    config["system"][key] = 250
+    prov = compute_overlap_provenance(config, {"system": {key: -10}})
+    stale = compute_overlap_provenance(_config(), {"system": {key: 250}})
+
+    assert prov[f"system.{key}"]["config_value"] == 0
+    assert prov[f"system.{key}"]["effective_value"] == -10
+    assert stale[f"system.{key}"]["effective_value"] == 0
+    assert config_effective_value(config, "system", None, key) == 0

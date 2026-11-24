@@ -11,11 +11,13 @@
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { live } from "../state/live.svelte.js";
   import { channelKwh } from "../lib/energy.js";
+  import { gridTargetText } from "../lib/gridTarget.js";
 
   const f = $derived(fmt());
   const snapshot = $derived(live.snapshot);
   const valid = $derived(snapshot?.grid_power_valid !== false);
   const today = $derived(snapshot?.energy_stats?.today);
+  const gridTarget = $derived(Number(snapshot?.controller?.grid_target_w) || 0);
 </script>
 
 <article class="card meter" data-testid="grid-meter">
@@ -31,6 +33,7 @@
   <div class="facts two">
     <Fact label={t("device.grid")} icon="utility-pole" tone="c-grid" value={valid ? f.power(snapshot?.grid_power_w, { signed: true }) : "—"} missing={!valid} />
     <Fact label={t("flow.home")} icon="house" tone="c-out" value={f.power(snapshot?.home_load_w)} />
+    {#if gridTarget}<Fact label={t("device.gridTarget")} icon="crosshair" tone="c-grid" value={gridTargetText(t, f, gridTarget)} wide />{/if}
     <Fact label={t("flow.importedToday")} value={f.energy(channelKwh(today, "grid_import").kwh)} />
     <Fact label={t("flow.exportedToday")} value={f.energy(channelKwh(today, "grid_export").kwh)} />
   </div>

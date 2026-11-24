@@ -71,7 +71,7 @@ on the same page.
 
 | # | Card | Subtitle | Fields |
 | --- | --- | --- | --- |
-| 01 | **EMS / System** | Global limits and loop control | **EMS enabled**, **Max total power** (W), **Min output limit** (W), **Loop interval** (s) |
+| 01 | **EMS / System** | Global limits and loop control | **EMS enabled**, **Max total power** (W), **Min output limit** (W), **Grid target while discharging** and **Grid target while charging** (each a direction, import or export, and up to 200 W, with a sentence under it saying what that means; [Grid target](../../technical/control-logic.md#grid-target)), **Loop interval** (s) |
 | 02, 03, … | One per device (**WR1**, **WR2**, …) | Device runtime values | **Device enabled**, **AC charging**, **AC discharging**, **Max power** (W), **PV priority** (×), **Off-grid socket**, **AC role**, **AC charge power** (W), and **Light**, **Fan**, **Buzzer** and **Battery heating** where the inverter has them |
 | next | **Winter mode** | Seasonal charging behaviour | **Winter mode** |
 | last | **AC charging** | Charge the batteries from grid surplus | **AC charging** |
@@ -150,6 +150,9 @@ Do not take the form's word for it. Look further down the page:
 - **Device enabled** off → that device's row under **Decision per device**.
 - **Min output limit** → **Min output**, and stage 04 **Adjustments and
   limits** per device.
+- **Grid target while discharging** and **while charging** → **Grid target**,
+  the one in effect, beside **Measured load**, and on the Overview's grid meter
+  card.
 
 ## Schedules
 
@@ -191,6 +194,7 @@ with values set by hand: [Schedules](../../scheduler.md).
 | EMS enabled | Yes, next cycle | Yes, runtime state | No |
 | Max total power | Yes | Yes | No |
 | Min output limit | Yes | Yes | No |
+| Grid target while discharging, while charging | Yes | Yes | No |
 | Loop interval | Yes | Yes | No |
 | Device enabled | Yes | Yes | No |
 | Device max power | Yes | Yes | No |

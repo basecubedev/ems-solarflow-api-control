@@ -73,6 +73,7 @@ class ControlExplanation:
     filtered_load_w: float | None = None
     min_output_limit_w: float | None = None
     undistributed_target_w: float = 0
+    grid_target_w: float | None = None
 
     def to_dict(self):
         return asdict(self)

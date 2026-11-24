@@ -94,6 +94,7 @@ test("every generated key family is complete", () => {
     ...["ok", "warning", "error", "devices"].map((key) => `diagnose.metric.${key}`),
     ...["output", "input", "mixed"].map((key) => `analytics.role.${key}`),
     ...["inputs", "weighting", "raw", "adjust", "final"].map((key) => `control.deviceStage.${key}`),
+    ...["discharge", "charge"].flatMap((phase) => ["import", "export"].map((way) => `gridTarget.meaning.${phase}.${way}`)),
     batteryReading(-1).key,
     batteryReading(1).key,
   ];
@@ -109,7 +110,7 @@ test("no orphan keys: each key is used literally or belongs to a generated famil
     "maint.type.", "maint.kind.", "maint.influx.", "schedule.preset.", "schedule.weekday.", "schedule.freq.", "schedule.pos.",
     "schedule.status.", "schedule.group.", "schedule.action.", "schedule.choice.", "runtime.offgrid.",
     "runtime.warn.", "setting.", "settingValue.", "control.write.", "control.stage.", "control.deviceStage.", "status.", "transport.",
-    "flow.", "assist.", "consumers.order.", "consumers.periodSub.", "error.", "schedule.monthly.", "schedule.ends.", "energy.periodSub.", "energy.context.", "limit.reason.", "note.",
+    "flow.", "assist.", "consumers.order.", "consumers.periodSub.", "error.", "schedule.monthly.", "schedule.ends.", "energy.periodSub.", "energy.context.", "limit.reason.", "note.", "gridTarget.meaning.",
   ];
   const orphans = Object.keys(STRINGS).filter((key) => !APP_KEYS.includes(key) && !text.includes(`"${key}"`) && !families.some((prefix) => key.startsWith(prefix)));
   assert.deepEqual(orphans, []);

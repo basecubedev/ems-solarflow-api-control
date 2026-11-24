@@ -201,6 +201,8 @@ export function valueLimit(action, device, overview) {
   const limits = overview?.limits || {};
   if (action.id === "total_output_limit") return limits.system?.max_total_power ?? 5000;
   if (action.id === "minimum_output_limit") return limits.system?.min_output_limit ?? 5000;
+  if (action.id === "grid_target_discharge") return limits.system?.grid_target_discharge_w ?? 200;
+  if (action.id === "grid_target_charge") return limits.system?.grid_target_charge_w ?? 200;
   if (action.id === "charge_from_grid") return limits.ac_charge_power_max ?? 5000;
   if (action.id === "device_output_limit") return (limits.devices || {})[device] ?? limits.fallback_device_max_power ?? 5000;
   return 5000;

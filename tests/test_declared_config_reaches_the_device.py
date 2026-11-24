@@ -351,6 +351,7 @@ def test_the_named_thresholds_actually_reach_the_direction_settings():
     cfg.AC_CHARGE_CONTROL_CONFIG = dict(previous, **_Runtime.data["ac_charge_control"])
     try:
         controller = EMSController.__new__(EMSController)
+        controller.runtime_state = None
         settings = controller.charge_settings()
     finally:
         cfg.AC_CHARGE_CONTROL_CONFIG = previous

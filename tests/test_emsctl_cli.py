@@ -2228,6 +2228,7 @@ def test_interactive_menu_rereads_runtime_state_before_each_action(
         (["system", "max-power", "99999"], "between 0 and 900"),
         (["system", "max-power", "inf"], "must be an integer"),
         (["system", "max-power", "300.7"], "must be an integer"),
+        (["system", "grid-target-charge", "-201"], "between -200 and 200"),
         (["device", "WR1", "max-power", "5000"], "between 0 and 800"),
         (["device", "WR1", "pv-priority-factor", "1e300"], "between 0.01 and 100"),
         (["device", "WR1", "ac-charge-power", "99999"], "between 0 and 5000"),
@@ -2245,6 +2246,18 @@ def test_emsctl_runtime_edits_share_the_dashboard_bounds(tmp_path, argv, message
     assert message in result.stdout + result.stderr
     assert "Traceback" not in result.stderr
     assert (tmp_path / "runtime-state.json").read_text() == before
+
+
+@pytest.mark.parametrize(
+    "action, key", [("grid-target-discharge", "grid_target_discharge_w"), ("grid-target-charge", "grid_target_charge_w")]
+)
+def test_emsctl_takes_a_negative_grid_target_as_export(tmp_path, action, key):
+    assert run_emsctl(tmp_path, "status").returncode == 0
+
+    result = run_emsctl(tmp_path, "system", action, "-10")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert runtime_state(tmp_path)["system"][key] == -10
 
 
 @pytest.mark.parametrize(

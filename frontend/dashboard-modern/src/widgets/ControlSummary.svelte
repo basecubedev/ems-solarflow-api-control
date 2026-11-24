@@ -11,6 +11,7 @@
   import { t, fmt, codesText } from "../i18n/i18n.svelte.js";
   import { live } from "../state/live.svelte.js";
   import { activeLimits, inactiveLimits, codeItems, has, LIMIT_REASONS, limitValueText, noteText } from "../lib/control.js";
+  import { gridTargetText } from "../lib/gridTarget.js";
 
   const f = $derived(fmt());
   const snapshot = $derived(live.snapshot);
@@ -38,6 +39,7 @@
     </p>
     <div class="facts eight">
       <Fact label={t("control.load")} icon="house" tone="c-out" value={f.power(explain.filtered_load_w)} />
+      {#if Number(explain.grid_target_w)}<Fact label={t("device.gridTarget")} icon="crosshair" tone="c-grid" value={gridTargetText(t, f, explain.grid_target_w)} />{/if}
       <Fact label={t("control.requested")} icon="gauge" tone="c-inv" value={f.power(explain.requested_total_w)} />
       <Fact label={t("control.effective")} icon="crosshair" tone="c-inv" value={f.power(explain.effective_target_total_w)} />
       <Fact label={t("control.commanded")} icon="send" tone="c-inv" value={f.power(explain.commanded_total_w)} />

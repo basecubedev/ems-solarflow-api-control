@@ -1001,6 +1001,8 @@ def default_safe_config():
             "deadband": 2,
             "runtime_state_path": "runtime-state.json",
             "min_output_limit": 0,
+            "grid_target_discharge_w": 0,
+            "grid_target_charge_w": 0,
             "loop_interval": 5,
             "output_control": copy.deepcopy(OUTPUT_CONTROL_DEFAULTS),
             "soc_reconcile_interval": 0,
@@ -2291,6 +2293,9 @@ LOOP_INTERVAL = 5
 OUTPUT_CONTROL_CONFIG = OUTPUT_CONTROL_DEFAULTS.copy()
 RUNTIME_STATE_PATH = "runtime-state.json"
 MIN_OUTPUT_LIMIT = 0
+GRID_TARGET_DISCHARGE_W = 0
+GRID_TARGET_CHARGE_W = 0
+GRID_TARGET_MAX_W = 200
 DRY_RUN = True
 SIMULATION_MODE = False
 
@@ -2430,6 +2435,7 @@ def initialize(args, base_dir):
     global ARGS, BASE_DIR, CONFIG, SYSTEM_ENABLED
     global MAX_TOTAL_POWER, MAX_DEVICE_POWER, DEADBAND, LOOP_INTERVAL
     global OUTPUT_CONTROL_CONFIG, RUNTIME_STATE_PATH, MIN_OUTPUT_LIMIT
+    global GRID_TARGET_DISCHARGE_W, GRID_TARGET_CHARGE_W
     global DRY_RUN, SIMULATION_MODE, ALLOW_HARDWARE_WRITES
     global ALLOW_MQTT_LOCAL_CONTROL_WRITES, ALLOW_MQTT_ZENDURE_CONTROL_WRITES
     global ALLOW_STATE_RECONCILIATION_WRITES
@@ -2469,6 +2475,8 @@ def initialize(args, base_dir):
         )
     except (TypeError, ValueError):
         MIN_OUTPUT_LIMIT = 0
+    GRID_TARGET_DISCHARGE_W = grid_target_w(CONFIG["system"].get("grid_target_discharge_w"))
+    GRID_TARGET_CHARGE_W = grid_target_w(CONFIG["system"].get("grid_target_charge_w"))
 
     system_config = CONFIG["system"]
     DRY_RUN = config_dry_run(system_config) or args.dry_run
@@ -3206,6 +3214,24 @@ def dashboard_file_path(key, default):
         return path
 
     return os.path.join(BASE_DIR, path)
+
+
+def grid_target_w(value):
+    """A meter reading regulation settles on, in watts: import positive, export negative.
+
+    From ``-GRID_TARGET_MAX_W`` to ``GRID_TARGET_MAX_W``; anything else reads
+    as 0, the EMS's aim before the setting existed.
+    """
+
+    if isinstance(value, bool):
+        return 0
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0
+    if not math.isfinite(number) or abs(number) > GRID_TARGET_MAX_W:
+        return 0
+    return int(number)
 
 
 def safe_int(value, default=0, minimum=None):

@@ -24,6 +24,10 @@
     if (auth.authenticated) loadRuntime();
   });
 
+  function gridTargetMax(phase) {
+    return Number(limits.system?.[`grid_target_${phase}_w`] ?? 200);
+  }
+
   function settingLabel(key) {
     return translatedOr(`setting.${key}`, catalogue.find((setting) => setting.key === key)?.label || key);
   }
@@ -46,6 +50,8 @@
     { name: "enabled", type: "toggle", fallback: switchDefault(limits, null, "enabled"), label: t("runtime.emsEnabled") },
     { name: "max_total_power", type: "number", label: t("runtime.maxTotal"), min: 0, max: Number(limits.system?.max_total_power || 5000), unit: "W" },
     { name: "min_output_limit", type: "number", label: t("runtime.minOutput"), min: 0, max: Number(limits.system?.min_output_limit || 5000), unit: "W" },
+    { name: "grid_target_discharge_w", type: "gridTarget", phase: "discharge", direction: "import", label: t("gridTarget.whileDischarging"), min: -gridTargetMax("discharge"), max: gridTargetMax("discharge"), unit: "W" },
+    { name: "grid_target_charge_w", type: "gridTarget", phase: "charge", direction: "export", label: t("gridTarget.whileCharging"), help: t("gridTarget.help"), min: -gridTargetMax("charge"), max: gridTargetMax("charge"), unit: "W" },
     { name: "loop_interval", type: "number", label: t("runtime.loop"), min: 1, max: 3600, unit: "s" },
   ].map((field) => withDefault(field, defaults.system?.[field.name])));
 

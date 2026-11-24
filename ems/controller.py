@@ -19,6 +19,7 @@ from ems.ac_charge_control import (
     allocate_charge_targets,
     charge_entries_within_limit,
     charge_headroom_weight,
+    charge_thresholds_w,
     count_silent_charge_cycles,
     decide_charge_direction,
     resolve_max_charge_power_w,
@@ -207,8 +208,11 @@ class EMSController:
         self.grid_reading_in_dead_time = False
         self.grid_reading_never_used = False
         self.grid_reading_correction_w = 0
+        self.grid_target_w = 0
         self.write_dead_time = WriteDeadTime()
         self._reading_goal = None
+        self._reading_asked_w = None
+        self._total_target_w = None
         self._reading_base_w = None
         self.control_enabled = None
         self._legacy_grid_off_mode_warned = set()
@@ -218,6 +222,7 @@ class EMSController:
         # The total before the ramp limits it. The charge direction's exit reads
         # this, so a sudden house load does not wait for the ramp.
         self.desired_total_w = None
+        self._desired_before_limits_w = None
         self.load_history = deque(
             maxlen=cfg.safe_int(
                 cfg.OUTPUT_CONTROL_CONFIG.get("median_window"),
@@ -450,6 +455,7 @@ class EMSController:
         self.commanded_total_w = max(
             self.commanded_total_floor_w(), min(max_power, initial)
         )
+        self._total_target_w = None
 
         log_event(
             logging.INFO,
@@ -891,6 +897,19 @@ class EMSController:
             return self.commanded_total_w
         return goal[1]
 
+    def reading_asked_w(self):
+        """What the last reading asked before the floor held it, while its goal stands.
+
+        The goal itself never carries the floor (:meth:`reading_goal_w`); what
+        the reading asked below it is what a change of grid target moves from,
+        on a repeated reading as on the reading's own cycle.
+        """
+
+        goal = self._reading_goal
+        if goal is None or goal[0] != self.commanded_total_w or self._reading_asked_w is None:
+            return self.reading_goal_w()
+        return min(goal[1], self._reading_asked_w)
+
     def stabilized_total_target(
         self,
         raw_load,
@@ -900,11 +919,15 @@ class EMSController:
         standby_total_w=0,
         active_device_count=None,
         new_reading=True,
+        grid_target_w=0,
     ):
         """The total to command this cycle, from the reading and what is commanded.
 
         ``new_reading`` false says an earlier cycle already used this reading:
         it is neither added to the total again nor fed to the load filter.
+        The filter reads the meter itself; ``grid_target_w`` is subtracted after
+        it, so a target changed at runtime counts from the next new reading and
+        a filtered history never carries an old one.
         """
 
         if self.commanded_total_w is None:
@@ -917,7 +940,9 @@ class EMSController:
             filtered_load = (
                 raw_load if self.filtered_load_w is None else self.filtered_load_w
             )
+        deviation = filtered_load - grid_target_w
         desired = self.commanded_total_w
+        before_limits = None
         held = False
         defaults = cfg.OUTPUT_CONTROL_DEFAULTS
 
@@ -928,7 +953,7 @@ class EMSController:
         )
 
         if (
-            raw_load > 0
+            raw_load - grid_target_w > 0
             and not has_export_capacity
             # Never freeze a charge in place. The hold exists so a positive load
             # cannot ramp the discharge target up against devices that have
@@ -957,6 +982,7 @@ class EMSController:
             )
         elif not new_reading:
             desired = self.reading_goal_w()
+            before_limits = self.reading_asked_w()
             held = desired == self.commanded_total_w
             log_event(
                 logging.DEBUG,
@@ -965,7 +991,7 @@ class EMSController:
                 commanded_total_w=round(self.commanded_total_w, 1),
                 goal_total_w=round(desired, 1),
             )
-        elif abs(filtered_load) <= load_deadband:
+        elif abs(deviation) <= load_deadband:
             held = True
             log_event(
                 logging.DEBUG,
@@ -977,9 +1003,10 @@ class EMSController:
                 deadband_w=load_deadband
             )
         else:
-            desired = self.commanded_total_w + filtered_load
+            desired = self.commanded_total_w + deviation
 
         floor = self.commanded_total_floor_w()
+        self._desired_before_limits_w = desired if before_limits is None else before_limits
         asked = max(floor, desired)
         desired = max(floor, min(max_power, desired))
         if not new_reading and desired == self.commanded_total_w:
@@ -1009,7 +1036,7 @@ class EMSController:
 
         ramped = desired
         delta = desired - self.commanded_total_w
-        bypass = self.output_control_bypass_active(raw_load)
+        bypass = self.output_control_bypass_active(raw_load - grid_target_w)
         stale = self.telemetry_stale()
 
         if bypass:
@@ -1090,6 +1117,9 @@ class EMSController:
         self.desired_total_w = desired
         self.commanded_total_w = ramped
         self._reading_goal = (ramped, asked)
+        self._reading_asked_w = self._desired_before_limits_w
+        if new_reading:
+            self._total_target_w = grid_target_w
         return ramped
 
     def apply_device_ramp(self, targets, raw_load, discharge_caps=None):
@@ -1288,7 +1318,9 @@ class EMSController:
         # The total before the ramp limits it. The charge direction's exit reads
         # this, so a sudden house load does not wait for the ramp.
         self.desired_total_w = None
+        self._desired_before_limits_w = None
         self._reading_goal = None
+        self._total_target_w = None
         self._reading_base_w = None
         self.load_history.clear()
         self.commanded_device_targets = {}
@@ -1671,6 +1703,7 @@ class EMSController:
             max_total_power_w=max_power,
             load_w=load,
             filtered_load_w=load,
+            grid_target_w=self.grid_target_w,
             min_output_limit_w=min_output_limit,
             undistributed_target_w=0,
         )
@@ -1846,6 +1879,73 @@ class EMSController:
             minimum=minimum
         )
 
+    def move_total_to_target(self, shift_w, ceiling, *, has_export_capacity, standby_total_w):
+        """Move the commanded total by ``shift_w``, the change of grid target as a charge ends.
+
+        The total was integrated on the target of its last new reading,
+        mostly the charge target; on the discharge target the same reading
+        asks for ``shift_w`` more. It moves from what
+        the reading asked, where the charge's floor held the total above it:
+        moved from the floor, a charge ended at its limit discharged into the
+        export it had been absorbing. It stays within the floor and
+        ``ceiling``, and without export capacity is never raised past the
+        standby total, as the integrator holds it. A reading goal moves with
+        it, so a repeated reading carries on towards the same correction.
+        """
+
+        before = self.commanded_total_w
+        asked = self._desired_before_limits_w
+        base = before if asked is None else min(before, asked)
+        moved = max(self.commanded_total_floor_w(), min(ceiling, base + shift_w))
+        if not has_export_capacity:
+            moved = min(moved, max(before, standby_total_w))
+        goal = self._reading_goal
+        if goal is not None and goal[0] == before:
+            goal_asked = goal[1] if asked is None else min(goal[1], asked)
+            self._reading_goal = (moved, goal_asked + shift_w)
+            self._reading_asked_w = goal_asked + shift_w
+        self.commanded_total_w = moved
+        self._total_target_w = None
+        return moved
+
+    def surplus_total_w(self, desired_total_w, floor):
+        """The desired total before the grid target, as the charge direction judges a charge on it.
+
+        A charge at its limit holds the total at the floor, or at the commanded
+        total the target deadband keeps when the limit moves a few watts. The
+        target is added to what the reading asked for there, not to the total
+        held: added to it, a charge at a limit no larger than the stop threshold
+        plus the target read as a surplus gone and ended on its first cycle.
+        """
+
+        shifted = desired_total_w + self.grid_target_w
+        before = self._desired_before_limits_w
+        if before is not None and before < floor:
+            return min(shifted, max(desired_total_w, before + self.grid_target_w))
+        return shifted
+
+    def read_grid_target_w(self, charging=None):
+        """The meter reading this cycle regulates to: import positive, export negative.
+
+        A charge running when the cycle starts reads the charge target, any
+        other cycle the discharge target, and so does the discharge a cycle
+        sizes once it has ended a charge; each the runtime value, else the
+        configured one. ``charging`` asks for one of the two whatever the
+        direction. The regulation reads the meter less this target, so the
+        load filter, the deadbands and the totals all measure from it. Whether
+        a charge starts or ends is judged on the surplus before it
+        (``take_charge_decision``): no target starts a charge from the grid or
+        keeps one going once its surplus is gone.
+        """
+
+        if self.charge_direction.charging if charging is None else charging:
+            key, configured = "grid_target_charge_w", cfg.GRID_TARGET_CHARGE_W
+        else:
+            key, configured = "grid_target_discharge_w", cfg.GRID_TARGET_DISCHARGE_W
+        if not self.runtime_state:
+            return configured
+        return cfg.grid_target_w(self.runtime_state.get_system(key, configured))
+
     def runtime_device_bool(self, device_name, key, default):
         if not self.runtime_state:
             return default
@@ -1927,9 +2027,16 @@ class EMSController:
         return ac_output_intent(dev.name, "invalid_runtime_role_fallback")
 
     def charge_settings(self):
+        """The charge direction's thresholds, raised by an export charge target (:func:`charge_thresholds_w`)."""
+
+        start_w, stop_w = charge_thresholds_w(
+            cfg.ac_charge_control_int("charge_start_w", 150, minimum=0),
+            cfg.ac_charge_stop_w(),
+            self.read_grid_target_w(charging=True),
+        )
         return ChargeDirectionSettings(
-            start_w=cfg.ac_charge_control_int("charge_start_w", 150, minimum=0),
-            stop_w=cfg.ac_charge_stop_w(),
+            start_w=start_w,
+            stop_w=stop_w,
             entry_confirm_cycles=cfg.ac_charge_control_int(
                 "entry_confirm_cycles", 5, minimum=1
             ),
@@ -2997,7 +3104,7 @@ class EMSController:
         """
 
         usable = self.usable_charge_capacity_w()
-        stop_w = self.charge_settings().stop_w
+        stop_w = cfg.ac_charge_stop_w()
         if usable > stop_w:
             self.charge_capacity_below_stop = False
             return True
@@ -3166,6 +3273,7 @@ class EMSController:
         sized = house_w if has_export_capacity else min(house_w, standby_total_w)
         self.commanded_total_w = min(max_power, sized)
         self._reading_goal = None
+        self._total_target_w = None
         self.load_history.clear()
         self.filtered_load_w = None
         log_event(
@@ -5525,7 +5633,9 @@ class EMSController:
         load = finite_grid_load(reading.power_w)
         self.update_grid_meter_holding(load)
         self.note_grid_reading(reading)
-        control_load = load - self.grid_reading_correction_w
+        self.grid_target_w = self.read_grid_target_w()
+        metered_load = load - self.grid_reading_correction_w
+        control_load = metered_load - self.grid_target_w
         self.refresh_read_only_devices()
 
         # =====================
@@ -5918,19 +6028,20 @@ class EMSController:
             stabilized_total = min(self.commanded_total_w, discharge_ceiling)
         else:
             stabilized_total = self.stabilized_total_target(
-                control_load,
+                metered_load,
                 states,
                 discharge_ceiling,
                 has_export_capacity=has_export_capacity,
                 standby_total_w=standby_total_w,
                 active_device_count=len(active_indexes),
                 new_reading=not self.grid_reading_unused,
+                grid_target_w=self.grid_target_w,
             )
 
         charge_desired_w = (
-            self.desired_total_w
+            self.surplus_total_w(self.desired_total_w, self.commanded_total_floor_w())
             if self.desired_total_w is not None
-            else stabilized_total
+            else stabilized_total + self.grid_target_w
         )
         if self.grid_reading_unused and self.charge_direction.charging:
             charge_desired_w = self.unused_reading_charge_total_w(
@@ -5938,6 +6049,7 @@ class EMSController:
                 load,
                 [dev.name for dev in self.devices if self.device_commandable(dev)],
             )
+        charging_at_start = self.charge_direction.charging
         charge_decision = self.take_charge_decision(
             meter_fresh,
             commanded_total_w=stabilized_total,
@@ -5948,6 +6060,23 @@ class EMSController:
         )
 
         if not charge_decision.charging:
+            leaving_target_w = self.read_grid_target_w()
+            total_target_w = self._total_target_w
+            if charging_at_start and not self.grid_meter_holding:
+                control_load += self.grid_target_w - leaving_target_w
+            if (
+                charging_at_start
+                and not self.grid_meter_holding
+                and total_target_w is not None
+                and total_target_w != leaving_target_w
+                and self.commanded_total_w is not None
+            ):
+                stabilized_total = self.move_total_to_target(
+                    total_target_w - leaving_target_w,
+                    discharge_ceiling,
+                    has_export_capacity=has_export_capacity,
+                    standby_total_w=standby_total_w,
+                )
             stabilized_total = self.discharge_total_leaving_a_charge(
                 control_load,
                 states,
@@ -6013,6 +6142,7 @@ class EMSController:
         control_explanation.effective_target_total_w = sum(effective_targets)
         control_explanation.commanded_total_w = self.commanded_total_w
         control_explanation.filtered_load_w = self.filtered_load_w
+        control_explanation.grid_target_w = self.grid_target_w
         control_explanation.min_output_limit_w = min_output_limit
         assist_held = {
             i

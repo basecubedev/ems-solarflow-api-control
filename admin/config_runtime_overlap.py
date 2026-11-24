@@ -369,6 +369,11 @@ _EMS_SECTION_READS = {
     ),
 }
 
+_EMS_SYSTEM_READS = {
+    "grid_target_discharge_w": cfg.grid_target_w,
+    "grid_target_charge_w": cfg.grid_target_w,
+}
+
 
 def _entry(config_value, runtime_section, key, value_type, default):
     config_effective = config_value if config_value is not None else default
@@ -409,8 +414,16 @@ def compute_overlap_provenance(config, runtime_data):
     runtime_system = runtime_data.get("system")
     config_system = config.get("system") if isinstance(config.get("system"), dict) else {}
     for key, (value_type, _rule) in SYSTEM_FIELDS.items():
+        config_value = config_system.get(key)
+        runtime_section = runtime_system
+        read = _EMS_SYSTEM_READS.get(key)
+        if read is not None:
+            if config_value is not None:
+                config_value = read(config_value)
+            if isinstance(runtime_system, dict) and key in runtime_system:
+                runtime_section = {key: read(runtime_system[key])}
         result["system." + key] = _entry(
-            config_system.get(key), runtime_system, key, value_type,
+            config_value, runtime_section, key, value_type,
             _SYSTEM_DEFAULTS.get(key),
         )
 
@@ -499,6 +512,8 @@ def config_effective_value(config, kind, holder, key):
         return None
     if kind == "section" and raw is not None and (holder, key) in _EMS_SECTION_READS:
         raw = _EMS_SECTION_READS[(holder, key)](raw)
+    if kind == "system" and raw is not None and key in _EMS_SYSTEM_READS:
+        raw = _EMS_SYSTEM_READS[key](raw)
     effective = raw if raw is not None else default
     return _coerce(effective, value_type)
 

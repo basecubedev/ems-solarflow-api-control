@@ -48,6 +48,7 @@ def _control_block(explanation):
         return {
             "grid_power_w": None,
             "filtered_load_w": None,
+            "grid_target_w": None,
             "commanded_total_w": None,
             "allocated_target_total_w": None,
             "effective_target_total_w": None,
@@ -55,6 +56,7 @@ def _control_block(explanation):
     return {
         "grid_power_w": _number(explanation.load_w),
         "filtered_load_w": _number(explanation.filtered_load_w),
+        "grid_target_w": _number(explanation.grid_target_w),
         "commanded_total_w": _number(explanation.commanded_total_w),
         "allocated_target_total_w": _number(explanation.allocated_target_total_w),
         "effective_target_total_w": _number(explanation.effective_target_total_w),
@@ -182,6 +184,7 @@ class ControlStatusWriter:
         self.grid_samples.append({
             "cycle_at": cycle_at,
             "grid_power_w": grid_power,
+            "grid_target_w": status["control"]["grid_target_w"],
             "measured_at": status["grid_meter"]["measured_at"],
             "reading_repeated": status["grid_meter"]["reading_repeated"],
             "reading_in_dead_time": status["grid_meter"]["reading_in_dead_time"],
