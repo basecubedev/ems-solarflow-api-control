@@ -117,8 +117,11 @@ confirmation starts it, and the page follows it to **Update complete**. See
 
 ![Settings and devices on the Features tab: the tabs Features, Safety, Expert and Devices, Search settings, and the features with Winter mode opened](../assets/screenshots/admin/admin-settings-features.png)
 
-**Settings & devices** has four tabs — **Features**, **Safety**, **Expert** and
-**Devices** — and **Search settings** across all of them. There is no
+**Settings & devices** has six tabs — **Features**, **Add-ons**, **Safety**,
+**Expert**, **Devices** and **Customized** — and **Search settings** across all
+of them. **Customized** lists every setting that differs from this release's
+defaults, connections aside, with its saved value, any value the Dashboard
+runs instead, and the default, and **Show** leads to the field. There is no
 Basic/Expert switch as on the dashboard: everyday settings are on
 **Features** and **Safety**, the system basics and control tuning on
 **Expert**, and each feature folds its rarer fields away under **Advanced

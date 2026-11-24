@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { commonDefaults, deviceFallbacks, held, mqttDefaultPort, mqttUsesTls, sentDevices } from "./devices.js";
+import { TUNED_KINDS, commonDefaults, deviceFallbacks, deviceFields, deviceKind, fieldKey, held, mqttDefaultPort, mqttUsesTls, sentDevices } from "./devices.js";
 /**
  * The saved settings as the Maintenance config view describes them
  * (admin/maintenance_config.py), and the editor's draft of them. The draft is
@@ -347,6 +347,79 @@ export function overrideTargets(overrides) {
 export function liveOverride(overrides, path) {
   const entry = mapping(mapping(overrides)[path]);
   return entry.source === "dashboard_override" ? entry : null;
+}
+
+/** A switch the file spells as anything but true or false, which the EMS reads field by field ("false" on a write gate closes it). */
+export function spelledSwitch(field, value) {
+  return field?.type === "boolean" && value !== null && value !== undefined && typeof value !== "boolean";
+}
+
+/**
+ * One setting held against its default: the saved value when it departs, and
+ * the dashboard's live value when it runs instead of the saved one. Null when
+ * the field names no default, or neither value departs from it. A switch
+ * spelled as text always departs: its text is no default, and what it does
+ * depends on how the EMS reads that switch.
+ */
+function departure(field, value, live, fallback = field?.default) {
+  const standard = nameableDefault(field, fallback);
+  if (standard === undefined) return null;
+  const running = live?.source === "dashboard_override" ? live : null;
+  const saved = spelledSwitch(field, value) || departedDefault(field, value, fallback) !== undefined;
+  if (!saved && !(running && departedDefault(field, running.effective_value, fallback) !== undefined)) return null;
+  return { field, value: saved ? value : undefined, live: running, standard };
+}
+
+/**
+ * Every setting the saved config, or the dashboard at runtime, holds away from
+ * this release's defaults, by the rule of the editor's "Default: X" badge:
+ * the settings of every section, its switch included, and the tuning of each
+ * device whose card holds it. Connections, the fields the catalogue marks as
+ * such (addresses, ports, URLs, a broker's user), and the grid meter, a hardware
+ * section, describe the installation and are not listed. Groups follow
+ * the catalogue's sections, then one per device; each row names the tab that
+ * edits it, the search that finds it there (none for a section's switch,
+ * which stands at the section's head, or a device's field) and, for those,
+ * the section or the device's saved name, which still finds it in a draft
+ * that removed a device before it. A value the config does not hold runs its
+ * default and is no departure.
+ */
+export function departures(config) {
+  const saved = mapping(config?.draft?.features);
+  const overrides = mapping(config?.overrides);
+  const groups = [];
+  for (const section of sections(config)) {
+    const own = switchPath(section);
+    const rows = [];
+    for (const field of section.fields || []) {
+      if (!field?.path || HIDDEN_LEVELS.has(field.level) || field.connection) continue;
+      const row = departure(field, saved[field.path], liveOverride(overrides, field.path));
+      if (!row) continue;
+      rows.push(field.path === own ? { ...row, tab: sectionTab(section), search: "", section: section.id } : { ...row, tab: isSafetyField(field) ? "safety" : sectionTab(section), search: field.path });
+    }
+    if (rows.length) groups.push({ id: `section:${section.id}`, section, rows });
+  }
+  const common = deviceFields(config?.catalog).common.filter((field) => !HIDDEN_LEVELS.has(field.level) && !field.connection);
+  const devices = Array.isArray(config?.draft?.devices) ? config.draft.devices : [];
+  devices.forEach((device, index) => {
+    if (!TUNED_KINDS.includes(deviceKind(device))) return;
+    const live = mapping(mapping(overrides.devices)[device?.original_name]);
+    const rows = [];
+    for (const field of common) {
+      const key = fieldKey(field.path);
+      const row = departure(field, device?.[key], live[key]);
+      if (row) rows.push({ ...row, tab: "devices", search: "", device: device?.original_name ?? "" });
+    }
+    if (rows.length) groups.push({ id: `device:${index}`, device, rows });
+  });
+  return groups;
+}
+
+/** Whether a departure matches the search: by its field, as fieldMatches reads it, or by the name of its device. */
+export function departureMatches(group, row, query, shown = (text) => text) {
+  const needle = String(query || "").trim().toLowerCase();
+  if (fieldMatches(row?.field, query, shown)) return true;
+  return Boolean(group?.device) && String(group.device.name || "").toLowerCase().includes(needle);
 }
 
 /**

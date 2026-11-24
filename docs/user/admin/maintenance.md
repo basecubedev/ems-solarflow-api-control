@@ -190,18 +190,43 @@ see [Guided Upgrade, step 7](guided-upgrade.md#7--update-the-bundled-influxdb).
 
 **Where:** **Settings & devices**.
 
-**What you see:** four tabs and a search box over all of them:
+**What you see:** six tabs and a search box over all of them:
 
 | Tab | Holds |
 | --- | --- |
 | **Features** | Winter mode, battery care, full-charge assist, AC charging, energy savings, the dashboard, analytics — each switched on or off, opened to set how it works |
+| **Add-ons** | The built-in MQTT broker on this host, for devices that speak MQTT |
 | **Safety** | What EMS may write to your devices, dry run and simulation, and the output limits |
 | **Expert** | The system basics and the control tuning; change them in small steps |
 | **Devices** | The grid meter, the Zendure MQTT broker and every device, the network search — see [Device management](device-management.md) |
+| **Customized** | Every setting that differs from this release's defaults, in one list — see below |
 
 **Search settings** finds a setting by its name, its description or its config
 path across the tabs, and each tab counts its matches. Switching a tab never
 reloads and never touches your unsaved changes.
+
+**Customized** answers *what did I change?* Its name counts the settings that
+differ from the defaults this release ships, *Customized (3)*, and the list
+groups them by feature and by device. Each row shows the setting with its
+config path, the saved value (**Saved: …**), the value the Dashboard set at
+runtime when one runs instead (**Running: …**), and the default
+(**Default: …**). **Show** takes you to the field: a setting on its tab with
+the search set to its config path, a feature's switch at the head of its
+feature, a device's setting in its opened card. The list only shows; it
+changes nothing. To go back to a default, set the field to it, or empty it,
+and save. A setting the config file does not hold runs its default and is not
+listed. Never listed are the connections (addresses, ports, a broker's user,
+the grid meter), the values that describe your installation, such as a
+device's power limit, PV size and battery size, and passwords. A switch the
+file spells as text, `"false"` for instance, is always listed, with its text:
+the EMS reads a
+safety switch spelled so as its safe side, so write `true` or `false` without
+quotes. A value an earlier
+release shipped as its default and a later one replaced is listed too, until
+the EMS's refresh moves it to today's (see
+[Old defaults](../../technical/configuration.md#old-defaults)). The list reads the
+saved settings: unsaved changes join it once they are saved, and the tab says
+so while some wait.
 
 **What you enter:** the change you want. Each field names its unit, says what
 it does and, when it is empty, which default applies (*35 (default)*); saving

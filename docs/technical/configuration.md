@@ -207,6 +207,11 @@ changed by hand, so the EMS moves it to today's default once:
   checkout left beside a newer image, refreshes nothing and records nothing.
 - Runtime values still at an old default follow the config's once it records
   the revision, see [runtime-state.md](runtime-state.md#old-defaults).
+- The Admin's **Settings & devices → Customized** lists every setting that
+  differs from today's defaults, connections and values that describe the
+  installation aside: an old default the refresh has not moved among them,
+  and every tuned one it keeps; see
+  [Maintenance](../user/admin/maintenance.md#3--change-settings).
 
 After upgrading:
 

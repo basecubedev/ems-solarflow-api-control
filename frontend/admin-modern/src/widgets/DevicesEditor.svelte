@@ -62,7 +62,8 @@
   import { CONSUMER_FAMILY } from "../lib/mqtt.js";
   import { unreadableInput } from "../../../shared/lib/forms.js";
 
-  let { config } = $props();
+  /** focus: a device's index and a field path to open its card at, as the Customized tab's Show asks. */
+  let { config, focus = null } = $props();
 
 
   const catalog = $derived(config.catalog);
@@ -162,6 +163,11 @@
     return pvHints(hints, device).length ? t("devices.pvHint.flag") : "";
   }
 
+  /** Whether a folded group of a device's fields holds the field Show asked for. */
+  function focused(target, group) {
+    return target.index !== undefined && focus?.device === target.index && group.some((field) => field.path === focus.path);
+  }
+
   function liveFor(device, key) {
     const entry = config.overrides?.devices?.[device?.original_name]?.[key];
     return entry?.source === "dashboard_override" ? entry : null;
@@ -233,7 +239,7 @@
   {#if normal.length}<div class="fields">{#each normal as field (field.path)}{@render row(target, field)}{/each}</div>{/if}
   {#each [["advanced", advanced], ["expert", expert]] as [level, group] (level)}
     {#if group.length}
-      <details class="level">
+      <details class="level" open={focused(target, group)}>
         <summary>{t(`settings.edit.level.${level}`)} <span class="muted num">({group.length})</span></summary>
         <div class="fields">{#each group as field (field.path)}{@render row(target, field)}{/each}</div>
       </details>
@@ -325,7 +331,7 @@
   {#each devices as device, index (keys[index] ?? `extra-${index}`)}
     {@const kind = deviceKind(device)}
     {#if kind === "local_api"}
-      <DeviceCard id={`inverter-${index}`} icon="zap" tone="c-inv" title={t("devices.inverter", { n: index + 1 })} model={t("devices.model.local")} meta={localSummary(device)} enabled={device.enabled !== false} connection={sourceLabel(device)} flag={hintFlag(device)} open={added === index} onremove={() => remove(index)}>
+      <DeviceCard id={`inverter-${index}`} icon="zap" tone="c-inv" title={t("devices.inverter", { n: index + 1 })} model={t("devices.model.local")} meta={localSummary(device)} enabled={device.enabled !== false} connection={sourceLabel(device)} flag={hintFlag(device)} open={added === index || focus?.device === index} onremove={() => remove(index)}>
         {@render inputHints(device, index)}
         <div class="fields">{@render enabledField(device, index, "local")}</div>
         {@render levelled(fields.identity, { device, index })}
@@ -335,7 +341,7 @@
       {@const control = mqttControl(device, catalog)}
       {@const model = hardwareModel(catalog, device.hardware_model)}
       {@const modelWords = model?.label ? catalogText(model.label) : { text: t("devices.mqtt.unknownModel") }}
-      <DeviceCard id={`mqtt-${index}`} icon="zap" tone="c-inv" title={t("devices.inverter", { n: index + 1 })} model={modelWords.text + (device.alternative_layout ? ` · ${t("devices.mqtt.alternativeLayout")}` : "")} modelLang={modelWords.lang} meta={mqttSummary(device)} enabled={device.enabled !== false} connection={sourceLabel(device)} flag={hintFlag(device)} open={added === index} onremove={() => remove(index)}>
+      <DeviceCard id={`mqtt-${index}`} icon="zap" tone="c-inv" title={t("devices.inverter", { n: index + 1 })} model={modelWords.text + (device.alternative_layout ? ` · ${t("devices.mqtt.alternativeLayout")}` : "")} modelLang={modelWords.lang} meta={mqttSummary(device)} enabled={device.enabled !== false} connection={sourceLabel(device)} flag={hintFlag(device)} open={added === index || focus?.device === index} onremove={() => remove(index)}>
         {@render inputHints(device, index)}
         <div class="fields">
           <SettingField field={own("name")} lang={null} value={device.name || ""} onchange={(value) => update(index, { ...device, name: value })} />

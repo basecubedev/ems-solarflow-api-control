@@ -321,11 +321,17 @@ docker compose -f docker-compose.admin.yml up -d
 
 This page edits an existing installation.
 
-- **Four tabs over one draft** — Features, Safety, Expert, Devices — with
-  **Search settings** across every setting and one bar at the foot of the page
-  that counts your unsaved changes. Switching a tab never reloads and never
-  discards unsaved changes; they also survive a reload, and **Discard** drops
-  them.
+- **Six tabs** — Features, Add-ons, Safety, Expert and Devices edit one draft,
+  Customized lists the saved settings — with **Search settings** across every
+  setting and one bar at the foot of the page that counts your unsaved
+  changes. Switching a tab never reloads and never discards unsaved changes;
+  they also survive a reload, and **Discard** drops them.
+- **Customized** lists, read-only, every saved setting that differs from this
+  release's defaults and every value the Dashboard runs instead of a default,
+  grouped by feature and device, each with **Saved**, **Running** and
+  **Default**; **Show** takes you to the field, a device's in its opened card.
+  Connections, values that describe the installation (a device's power limit,
+  PV size, battery size) and passwords are never listed.
 - **Safety** holds the switches that decide whether EMS may change your
   inverters, with nothing hidden behind a disclosure. They are **on by
   default**: a fresh installation controls your inverters without you enabling

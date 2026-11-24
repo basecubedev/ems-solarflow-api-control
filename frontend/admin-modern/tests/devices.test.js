@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   connectionSource,
   d0Serial,
@@ -33,7 +34,10 @@ import {
   emptyInputs,
   pvHints,
   setInputEmpty,
+  TUNED_KINDS,
 } from "../src/lib/devices.js";
+
+const EDITOR = readFileSync(new URL("../src/widgets/DevicesEditor.svelte", import.meta.url), "utf8");
 
 const catalog = {
   default_device: { common: { max_power: 800, min_soc: 10 } },
@@ -222,4 +226,13 @@ test("a hint stays open until the draft settles it, and belongs to the device by
   assert.deepEqual(pvHints(hints, setInputEmpty(device, 1, true)), [hints[1]]);
   assert.deepEqual(pvHints(hints, setInputEmpty(device, 2, false)), [hints[0]]);
   assert.deepEqual(pvHints(undefined, device), []);
+});
+
+test("the kinds whose card renders the shared tuning are the tuned kinds the defaults overview lists it for", () => {
+  const branches = [...EDITOR.matchAll(/^( *)\{(?:#if|:else if) kind === "([a-z0-9_]+)"\}/gm)];
+  const end = EDITOR.indexOf(`\n${branches[0][1]}{/if}`, branches.at(-1).index);
+  const bodies = branches.map((match, index) => [match[2], EDITOR.slice(match.index, branches[index + 1]?.index ?? end)]);
+  assert.ok(bodies.length >= 5 && end > 0);
+  const rendering = bodies.filter(([, body]) => body.includes("fields.common")).map(([kind]) => kind);
+  assert.deepEqual(rendering.sort(), [...TUNED_KINDS].sort());
 });

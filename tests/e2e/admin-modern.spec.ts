@@ -769,6 +769,71 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
     await expect(ceiling).toHaveValue("800");
   });
 
+  test("the Customized tab lists each saved value away from its default and leads to where it is set", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings/defaults");
+    await expect(page.getByRole("button", { name: "Customized (0)", exact: true })).toBeVisible();
+    await expect(page.getByText("Every setting follows its default.")).toBeVisible();
+
+    await page.goto("/#/settings/safety");
+    await page.locator('[data-path="system.min_output_limit"] input').fill("40");
+    await page.getByRole("button", { name: "Customized (0)", exact: true }).click();
+    await expect(page.getByTestId("defaults-unsaved")).toBeVisible();
+    await expect(page.getByTestId("settings-defaults")).toHaveCount(0);
+    await page.getByTestId("review").click();
+    await expect(page.getByTestId("settings-review")).toContainText("Settings are valid");
+    await page.getByTestId("apply").click();
+    await page.getByRole("dialog", { name: "Save the checked changes?" }).getByTestId("confirm").click();
+    await expect(page.getByTestId("settings-applied")).toBeVisible();
+
+    const row = page.getByTestId("settings-defaults").locator('[data-path="system.min_output_limit"]');
+    await expect(page.getByRole("button", { name: "Customized (1)", exact: true })).toBeVisible();
+    await expect(row.locator(".badge.saved")).toHaveText("Saved: 40");
+    await expect(row.locator(".badge.default")).toHaveText("Default: 35");
+    await expect(row.locator(".badge.live")).toHaveCount(0);
+    await expect(page.getByTestId("defaults-unsaved")).toHaveCount(0);
+
+    await row.getByRole("button", { name: "Show" }).click();
+    await expect(page).toHaveURL(/#\/settings\/safety$/);
+    await expect(page.getByTestId("settings-search")).toHaveValue("system.min_output_limit");
+    await expect(page.locator('[data-path="system.min_output_limit"] input')).toHaveValue("40");
+  });
+
+  test("Show on a device's departure opens that device's card at the field, folded group included, after an unsaved removal too", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings/devices");
+    const editor = page.getByTestId("devices-editor");
+    const field = '[data-path="devices[].pv_priority_factor"]';
+    const hyper = editor.locator('[data-device="mqtt-1"]');
+    await hyper.locator(".summary").click();
+    await hyper.locator("details.level", { has: page.locator(field) }).locator("summary").click();
+    await hyper.locator(`${field} input`).fill("2");
+    await page.getByTestId("review").click();
+    await expect(page.getByTestId("settings-review")).toContainText("Settings are valid");
+    await page.getByTestId("apply").click();
+    await page.getByRole("dialog", { name: "Save the checked changes?" }).getByTestId("confirm").click();
+    await expect(page.getByTestId("settings-applied")).toBeVisible();
+
+    await expect(page.getByRole("button", { name: "Customized (1)", exact: true })).toBeVisible();
+    await editor.locator('[data-device="inverter-0"]').getByTestId("device-remove").click();
+    await expect(page.getByTestId("change-count")).toContainText("unsaved change");
+    await expect(editor.locator('[data-device="mqtt-0"]')).toContainText("Local MQTT inverter");
+    await page.getByRole("button", { name: "Customized (1)", exact: true }).click();
+    const group = page.getByTestId("settings-defaults").locator('[data-group="device:1"]');
+    await expect(group.locator("h3")).toContainText("Local MQTT inverter");
+    const row = group.locator(`${field}`);
+    await expect(row.locator(".badge.saved")).toHaveText("Saved: 2");
+    await expect(row.locator(".badge.default")).toHaveText("Default: 1");
+    await page.getByTestId("settings-search").fill("local mqtt");
+    await expect(row).toBeVisible();
+    await row.getByRole("button", { name: /^Show / }).click();
+
+    await expect(page).toHaveURL(/#\/settings\/devices$/);
+    const moved = editor.locator(`[data-device="mqtt-0"] ${field} input`);
+    await expect(moved).toBeVisible();
+    await expect(moved).toHaveValue("2");
+    await expect(moved).toBeFocused();
+    await expect(editor.locator(`[data-device="mqtt-1"] ${field}`)).toBeHidden();
+  });
+
   test("the overview's Control & safety card opens the safety settings", async ({ page, seedAdminScenario }) => {
     await seededAt(page, seedAdminScenario, "#/status");
     await page.getByRole("link", { name: "Change", exact: true }).click();
