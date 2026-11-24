@@ -15,13 +15,15 @@ states the appliance exists to fix.
 """
 
 import json
+import os
+import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from appliance import admin_transition
+from appliance import admin_deployment, admin_transition
 from appliance.agent import AgentHandlers
-from appliance.operations import STATE_SUCCEEDED
+from appliance.operations import STATE_FAILED_TERMINAL, STATE_SUCCEEDED
 from tests.helpers.appliance import (
     ADMIN_CONTAINER,
     ADMIN_REPOSITORY,
@@ -617,3 +619,150 @@ def test_a_failed_install_does_not_recover_over_a_transition_the_new_admin_start
     assert operation.state == "manual_action_required", operation.to_dict()
     assert operation.stage == "admin_transition_in_flight"
     assert "nothing was restored" in operation.error["message"]
+
+
+# --- restarting or shutting down the host -------------------------------------
+
+POWER_PLANS = (("system.plan_reboot", "reboot"), ("system.plan_shutdown", "poweroff"))
+
+
+@pytest.mark.parametrize("plan", [plan for plan, _ in POWER_PLANS])
+def test_a_restart_or_shutdown_is_not_planned_while_admin_replaces_itself(tmp_path, plan):
+    """Issue #416: a restart in the middle of an Admin update interrupts the update."""
+
+    services = healthy_appliance(tmp_path)
+    write_transition(services, live_transition())
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    planned = handlers.dispatch({"operation": plan})
+
+    assert [blocker["code"] for blocker in planned["plan"]["blockers"]] == ["admin_transition_in_flight"]
+    assert "replacing itself" in planned["plan"]["blockers"][0]["message"]
+
+
+@pytest.mark.parametrize(
+    "transition",
+    [
+        {**live_transition(), "expires_at": stamp(-60)},
+        live_transition(stage="completed"),
+        b"{not json",
+    ],
+    ids=["expired", "finished", "unreadable"],
+)
+@pytest.mark.parametrize("plan", [plan for plan, _ in POWER_PLANS])
+def test_a_transition_that_is_not_live_does_not_hold_the_host_up(tmp_path, transition, plan):
+    """A wedged Admin record is a reason to restart, not a reason to refuse one."""
+
+    services = healthy_appliance(tmp_path)
+    write_transition(services, transition)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+
+    planned = handlers.dispatch({"operation": plan})
+
+    assert planned["plan"]["blockers"] == []
+
+
+@pytest.mark.parametrize(("plan", "call"), POWER_PLANS)
+def test_an_admin_update_started_after_the_plan_still_stops_the_power_action(tmp_path, plan, call):
+    """The Admin can begin replacing itself between the plan and Confirm."""
+
+    services = healthy_appliance(tmp_path)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    planned = handlers.dispatch({"operation": plan})
+    assert planned["plan"]["blockers"] == []
+    write_transition(services, live_transition())
+    services.host.calls.clear()
+
+    handlers.dispatch(
+        {
+            "operation": "operations.execute",
+            "operation_id": planned["operation"]["operation_id"],
+            "confirmation_token": planned["confirmation_token"],
+        }
+    )
+
+    operation = services.operations.get(planned["operation"]["operation_id"])
+    assert operation.state == STATE_FAILED_TERMINAL, operation.to_dict()
+    assert operation.error["code"] == "admin_transition_in_flight"
+    assert not [c for c in services.host.calls if c[0] == "systemctl" and call in c[1]], services.host.calls
+
+
+def _undecodable_compose(services):
+    services.admin.deployment().compose_file.write_bytes(b"services:\n  admin:\n    image: \xff\xfe\n")
+
+
+def _undecodable_env(services):
+    services.admin.deployment().env_file.write_bytes(b"EMS_ADMIN_TAG=\xff\xfe\n")
+
+
+def _nul_in_the_data_dir(services):
+    env_file = services.admin.deployment().env_file
+    env_file.write_text(
+        env_file.read_text(encoding="utf-8") + "EMS_ADMIN_DATA_DIR=/srv/ad\x00min\n", encoding="utf-8"
+    )
+
+
+def _fifo_where_the_compose_file_would_be(services):
+    for name in admin_deployment.COMPOSE_CANDIDATES:
+        (services.paths.install_root / name).unlink(missing_ok=True)
+    os.mkfifo(services.paths.install_root / admin_deployment.COMPOSE_CANDIDATES[0])
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [_undecodable_compose, _undecodable_env, _nul_in_the_data_dir, _fifo_where_the_compose_file_would_be],
+    ids=["compose_not_utf8", "env_not_utf8", "nul_in_data_dir", "fifo_compose"],
+)
+@pytest.mark.parametrize("plan", [plan for plan, _ in POWER_PLANS])
+def test_a_damaged_admin_deployment_does_not_take_the_restart_away(tmp_path, damage, plan):
+    """The restart is the way out of a broken Admin deployment, so reading it may not fail it.
+
+    The planner runs on a thread joined with a deadline only so that a read
+    which blocks fails the test instead of hanging the run.
+    """
+
+    services = healthy_appliance(tmp_path)
+    damage(services)
+    handlers = AgentHandlers(services, executor=lambda target: target())
+    answers = []
+    planner = threading.Thread(
+        target=lambda: answers.append(handlers.dispatch({"operation": plan})), daemon=True
+    )
+
+    planner.start()
+    planner.join(timeout=30)
+
+    assert not planner.is_alive(), "planning blocked on the damaged deployment"
+    assert answers and answers[0]["plan"]["blockers"] == []
+
+
+def test_a_transition_path_with_a_nul_is_unreadable_not_an_exception(tmp_path):
+    """Status and the Admin operations read the record without the power path's guard."""
+
+    record = admin_transition.read_transition(tmp_path / "ad\x00min" / "pending-transition.json")
+
+    assert record["state"] == admin_transition.STATE_UNREADABLE
+    assert not admin_transition.blocks_admin_mutation(record)
+
+
+def test_the_deployment_is_read_only_from_a_regular_file_of_bounded_size(tmp_path):
+    regular = tmp_path / "compose.yml"
+    regular.write_text("services: {}\n", encoding="utf-8")
+    linked = tmp_path / "linked.yml"
+    linked.symlink_to(regular)
+    fifo = tmp_path / "fifo.yml"
+    os.mkfifo(fifo)
+    large = tmp_path / "large.yml"
+    large.write_bytes(b"#" * (admin_transition.MAX_DEPLOYMENT_FILE_BYTES + 1))
+    undecodable = tmp_path / "latin1.yml"
+    undecodable.write_bytes(b"image: \xff\n")
+
+    read = admin_transition._regular_text
+
+    assert read(regular) == "services: {}\n"
+    assert read(linked) == "services: {}\n"
+    assert read(fifo) == ""
+    assert read(large) == ""
+    assert read(undecodable) == ""
+    assert read(tmp_path / "missing.yml") == ""
+    assert read(tmp_path) == ""

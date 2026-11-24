@@ -508,9 +508,10 @@ the only side that can be halfway through — with a worker running and a durabl
 record of where it got to — so the appliance yields to it.
 
 While that record is live, **Install, Roll back, Repair, Start, Stop and
-Restart are refused** with `admin_transition_in_flight`. The message names the
-stage Admin reached and the file holding it. Reading still works: status,
-version, health and logs are unaffected.
+Restart are refused** with `admin_transition_in_flight`, and so are restarting
+and shutting down the Raspberry Pi ([os-updates.md](os-updates.md#reboot-and-shutdown)).
+The message names the stage Admin reached and the file holding it. Reading
+still works: status, version, health and logs are unaffected.
 
 The record is read again right before an Install or Roll back stops the
 running Admin, because verifying the target takes time in which Admin can start

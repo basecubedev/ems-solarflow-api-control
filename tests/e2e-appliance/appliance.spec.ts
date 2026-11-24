@@ -1161,7 +1161,7 @@ test.describe("network and power", () => {
     ]);
     await expect(page.locator("#dialog-title")).toContainText("Restart the Raspberry Pi");
     await expect(page.locator("#dialog-confirm")).toHaveText("Restart");
-    await expect(page.locator("#dialog")).toContainText("EMS control stops");
+    await expect(page.locator("#dialog")).toContainText("The EMS stops controlling the devices");
     await page.locator("#dialog-cancel").click();
     await expect(page.locator("#reconnect")).toBeHidden();
   });

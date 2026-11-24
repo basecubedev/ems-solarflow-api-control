@@ -23,6 +23,7 @@ from appliance import (
     admin_bootstrap,
     admin_deployment,
     admin_lifecycle,
+    admin_transition,
     commands,
     config as appliance_config,
     docker_backend,
@@ -147,6 +148,17 @@ AUDIT_DETAIL_FIELDS = (
 # none is kept: the daily security update left one cancelled banner and one
 # audited failure for every quiet day.
 NOTHING_TO_DO_CODES = frozenset({"no_updates_available"})
+
+_POWER_STOPS = (
+    "The EMS stops controlling the devices, and the dashboard, the Admin console and "
+    "this page are unreachable"
+)
+POWER_WARNINGS = {
+    "reboot": _POWER_STOPS + " until the Raspberry Pi has started again.",
+    "shutdown": _POWER_STOPS
+    + ". The Raspberry Pi does not start again by itself: disconnect its power supply "
+    "and connect it again.",
+}
 
 
 class AgentError(Exception):
@@ -533,19 +545,30 @@ class AgentHandlers:
             "action": action,
             "blockers": self._power_blockers(),
             "docker": status.docker_state(),
-            "warning": "EMS control stops while the appliance is "
-            + ("restarting." if action == "reboot" else "powered off."),
+            "warning": POWER_WARNINGS[action],
         }
 
     def _power_blockers(self):
-        if self.services.packages.lock_state() != packages.LOCK_HELD:
-            return []
-        return [
-            {
-                "code": "package_operation_active",
-                "message": "a package installation is running; wait until it finishes",
-            }
-        ]
+        blockers = []
+        if self.services.packages.lock_state() == packages.LOCK_HELD:
+            blockers.append(
+                {
+                    "code": "package_operation_active",
+                    "message": "a package installation is running; wait until it finishes",
+                }
+            )
+        try:
+            transition = self.services.admin.admin_transition()
+        except (OSError, ValueError) as exc:
+            transition = {"state": admin_transition.STATE_UNREADABLE, "reason": str(exc)}
+        if admin_transition.blocks_admin_mutation(transition):
+            blockers.append(
+                {
+                    "code": "admin_transition_in_flight",
+                    "message": admin_transition.refusal_message(transition),
+                }
+            )
+        return blockers
 
     # --- execution -------------------------------------------------------
 

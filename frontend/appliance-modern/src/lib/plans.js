@@ -83,6 +83,7 @@ export function powerPlan(action) {
     endpoint: POWER_ENDPOINTS[action],
     title: { key: `plan.title.${action}` },
     confirm: action === "reboot" ? "plan.restart" : "plan.shutDown",
+    note: `plan.note.${action}`,
     danger: true,
   };
 }

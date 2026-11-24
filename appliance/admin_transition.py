@@ -45,6 +45,7 @@ STATE_SUBDIR = "state"
 TRANSITION_FILE = "pending-transition.json"
 
 MAX_TRANSITION_BYTES = 256 * 1024
+MAX_DEPLOYMENT_FILE_BYTES = 1024 * 1024
 # Admin's own DEFAULT_TRANSITION_TTL_SECONDS, pinned by a contract test: it
 # renews the expiry this far ahead on every step, so a record that expires
 # later than that was not written by Admin, and would block for ever.
@@ -74,23 +75,52 @@ def admin_data_dir(paths, deployment=None):
     """
 
     if deployment is not None:
-        try:
-            compose = read_service_environment(
-                deployment.compose_file.read_text(encoding="utf-8"), deployment.service
-            )
-        except OSError:
-            compose = {}
+        compose = read_service_environment(_regular_text(deployment.compose_file), deployment.service)
         configured = str(compose.get(ENV_ADMIN_DATA_DIR) or "").strip()
         if configured.startswith("/"):
             return Path(configured)
-        try:
-            values = read_env(deployment.env_file.read_text(encoding="utf-8"))
-        except OSError:
-            values = {}
+        values = read_env(_regular_text(deployment.env_file))
         configured = str(values.get(ENV_ADMIN_DATA_DIR) or "").strip()
         if configured.startswith("/"):
             return Path(configured)
     return Path(paths.install_root).joinpath(*ADMIN_DATA_SUBPATH)
+
+
+def _regular_text(path):
+    """A regular file's text, or "" for one that is missing, not regular, too large or not UTF-8.
+
+    The deployment names its compose file even when none exists, and a FIFO
+    there blocked the reader for good. Opened without blocking and checked on
+    the open handle, so nothing put there between a check and the read can
+    block it either; a link to a regular file is followed, as compose follows it.
+    """
+
+    try:
+        handle = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    except (OSError, ValueError):
+        return ""
+    try:
+        if not stat.S_ISREG(os.fstat(handle).st_mode):
+            return ""
+        chunks = []
+        remaining = MAX_DEPLOYMENT_FILE_BYTES + 1
+        while remaining > 0:
+            chunk = os.read(handle, min(remaining, 65536))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+    except OSError:
+        return ""
+    finally:
+        os.close(handle)
+    raw = b"".join(chunks)
+    if len(raw) > MAX_DEPLOYMENT_FILE_BYTES:
+        return ""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return ""
 
 
 def transition_path(paths, deployment=None):
@@ -123,7 +153,7 @@ def read_transition(path, *, now=None):
         raw = _read_bounded(path)
     except FileNotFoundError:
         return {"state": STATE_NONE, "path": str(path)}
-    except OSError as exc:
+    except (OSError, ValueError) as exc:
         return {"state": STATE_UNREADABLE, "path": str(path), "reason": str(exc)}
 
     if len(raw) > MAX_TRANSITION_BYTES:
