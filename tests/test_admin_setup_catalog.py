@@ -72,8 +72,9 @@ def test_device_output_limit_is_configured_per_device():
     assert device_limit["label"] == "Device output limit"
 
     global_cap = fields["system.max_device_power"]
-    # The global cap must not masquerade as the normal per-device output setting.
-    assert global_cap["label"] == "Global per-device cap"
+    # The fallback must not masquerade as the normal per-device output setting.
+    assert global_cap["label"] == "Fallback device limit"
+    assert "none of its own" in global_cap["description"]
     assert global_cap["label"] != "Per-device output limit"
     assert global_cap["level"] in ("advanced", "expert")
     assert global_cap["level"] != "normal"

@@ -27,7 +27,7 @@ from ems.read_only_devices import build_read_only_devices
 from ems.device_identity import broker_sources_from_config
 from ems.device_settings import offered_by_device
 from ems.logging_utils import log_event, setup_logging
-from ems.runtime_commands import build_validation_context
+from ems.runtime_commands import LiveValidationContext
 from ems.runtime_state import build_runtime_defaults, start_runtime_state
 from ems.schedule_store import ScheduleStore
 from ems.scheduler import Scheduler, local_zone
@@ -370,7 +370,7 @@ def main():
         cfg.config_path(),
         cfg.runtime_defaults_revision(),
     )
-    runtime_validation = build_validation_context(cfg.CONFIG, runtime_state)
+    runtime_validation = LiveValidationContext(cfg.config_path(), cfg.CONFIG, runtime_state)
     schedule_zone = local_zone()
     schedule_store = ScheduleStore(paths.resolve_schedules_path(cfg.runtime_state_path()))
     schedule_devices = cfg.device_identities([dev.name for dev in devices])
@@ -463,7 +463,7 @@ def main():
                     schedule_store,
                     runtime_state=runtime_state,
                     devices=lambda: schedule_devices,
-                    validation_context=lambda: runtime_validation,
+                    validation_context=runtime_validation,
                     zone=schedule_zone,
                     clock=lambda: datetime.now(timezone.utc),
                     scheduler=scheduler,

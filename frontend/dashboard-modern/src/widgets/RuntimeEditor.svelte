@@ -8,7 +8,8 @@
   import Card from "../../../shared/ui/Card.svelte";
   import Empty from "../../../shared/ui/Empty.svelte";
   import RuntimeForm from "./RuntimeForm.svelte";
-  import { t, translatedOr } from "../i18n/i18n.svelte.js";
+  import { t, fmt, translatedOr } from "../i18n/i18n.svelte.js";
+  import { useShell } from "../../../shared/shell/context.js";
   import { auth } from "../state/auth.svelte.js";
   import { live, loadRuntime } from "../state/live.svelte.js";
   import { SYSTEM_ENDPOINT, WINTER_ENDPOINT, AC_CHARGE_ENDPOINT, BATTERY_CARE_ENDPOINT, deviceEndpoint, acRole, settingWord, deviceSettings, switchDefault, withDefault } from "../lib/runtime.js";
@@ -19,6 +20,20 @@
   const catalogue = $derived(limits.device_settings || []);
   const unsupported = $derived(new Set(limits.ac_role_unsupported || []));
   const devices = $derived(Object.entries(runtime.devices || {}));
+  const shell = useShell();
+  const settingsHref = shell?.pageSet?.pages?.some((page) => page.id === "settings") ? shell.nav.href("settings") : null;
+
+  /** A number field whose maximum is someone's limit: it names the limit and, where this app has it, the page that sets it. */
+  function bounded(field, bound, max) {
+    const tab = bound === "installation" ? "safety" : "devices";
+    return {
+      ...field,
+      max,
+      bound,
+      help: t(`runtime.bound.${bound}`, { max: `${fmt().number(max)}\u00a0W` }),
+      link: settingsHref ? { href: `${settingsHref}/${tab}`, label: t(`runtime.bound.open.${tab}`) } : null,
+    };
+  }
 
   $effect(() => {
     if (auth.authenticated) loadRuntime();
@@ -48,7 +63,7 @@
 
   const systemFields = $derived([
     { name: "enabled", type: "toggle", fallback: switchDefault(limits, null, "enabled"), label: t("runtime.emsEnabled") },
-    { name: "max_total_power", type: "number", label: t("runtime.maxTotal"), min: 0, max: Number(limits.system?.max_total_power || 5000), unit: "W" },
+    bounded({ name: "max_total_power", type: "number", label: t("runtime.maxTotal"), min: 0, unit: "W" }, "installation", Number(limits.system?.max_total_power || 5000)),
     { name: "min_output_limit", type: "number", label: t("runtime.minOutput"), min: 0, max: Number(limits.system?.min_output_limit || 5000), unit: "W" },
     { name: "grid_target_discharge_w", type: "gridTarget", phase: "discharge", direction: "import", label: t("gridTarget.whileDischarging"), min: -gridTargetMax("discharge"), max: gridTargetMax("discharge"), unit: "W" },
     { name: "grid_target_charge_w", type: "gridTarget", phase: "charge", direction: "export", label: t("gridTarget.whileCharging"), help: t("gridTarget.help"), min: -gridTargetMax("charge"), max: gridTargetMax("charge"), unit: "W" },
@@ -61,7 +76,7 @@
       { name: "enabled", type: "toggle", fallback: true, label: t("runtime.deviceEnabled") },
       { name: "ac_charge_enabled", type: "toggle", fallback: switchDefault(limits, name, "ac_charge_enabled"), label: t("runtime.acCharging") },
       { name: "ac_discharge_enabled", type: "toggle", strict: true, label: t("runtime.acDischarging"), help: t("runtime.acDischargingHelp") },
-      { name: "max_power", type: "number", label: t("runtime.maxPower"), min: 0, max: maxPower, unit: "W" },
+      bounded({ name: "max_power", type: "number", label: t("runtime.maxPower"), min: 0, unit: "W" }, "device", maxPower),
       { name: "pv_priority_factor", type: "number", label: t("runtime.pvPriority"), min: 0.01, max: 100, step: 0.01, unit: "×" },
       {
         name: "offgrid_socket_mode",

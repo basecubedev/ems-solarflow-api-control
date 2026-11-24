@@ -84,6 +84,20 @@ too. **Max total power** and a device's **Max power** have none: the shipped
 value is the example installation's, not yours. **AC charge power** shows
 *Device max* instead, see below.
 
+**Max total power** and a device's **Max power** each name the limit they stop
+at, under the field: the installation limit (`system.max_total_power`, in the
+Admin console under **Settings & devices → Safety**) or that device's own limit
+(`devices[].max_power`, under **Devices**). A value above it is not sent; the
+form says which limit it passed and where to change it, with a link to that
+page when the dashboard runs inside the Admin console. The installation limit
+and the limit of each device the EMS runs (its own, or the fallback for one
+without) saved there count here at once, without a restart; a new device and a
+transport switch need the restart the Admin console asks for. A hand-set
+`system.max_total_power_limit` in `config.json` takes the installation limit's
+place; the form still names Safety. Raising the runtime value past the
+installation limit is not possible here on purpose: that limit is changed in
+the Admin console, where a change is previewed and confirmed.
+
 **AC charging** on the **AC charging** card switches charging from surplus on
 or off for the whole installation; the **AC charging** switch on a device card
 allows or forbids it for that device. A device charges from surplus only while

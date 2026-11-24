@@ -87,6 +87,36 @@ test.describe("Modern dashboard operator: runtime settings @smoke", () => {
     ]);
   });
 
+  test("a total above the installation limit names that limit and where to change it, and sends nothing", async ({ page }) => {
+    const writes = await runtimeStore(page);
+    await openSignedIn(page, "#/control");
+    const system = form(page, "/api/runtime/system");
+    const total = system.locator('input[name="max_total_power"]');
+    const limit = Number(await total.getAttribute("max"));
+    expect(limit).toBeGreaterThan(0);
+    await expect(system.getByText(/: the installation limit\. Change it in the Admin console under Safety\./)).toBeVisible();
+    await expect(system.getByRole("link", { name: "Open Safety" })).toHaveCount(0);
+
+    await total.fill(String(limit + 100));
+    await save(page, system);
+    await expect(system.getByRole("status")).toContainText(`${(limit + 100).toLocaleString("en")} W is more than Max total power allows.`);
+    await expect(system.getByRole("status")).toContainText(`At most ${limit.toLocaleString("en")} W: the installation limit.`);
+    await expect(system.getByRole("status")).toContainText("the installation limit. Change it in the Admin console under Safety.");
+    expect(writes).toEqual([]);
+  });
+
+  test("a device's power above its own limit names that limit, and sends nothing", async ({ page }) => {
+    const writes = await runtimeStore(page);
+    await openSignedIn(page, "#/control");
+    const device = form(page, "/api/runtime/device/WR1");
+    const power = device.locator('input[name="max_power"]');
+    const limit = Number(await power.getAttribute("max"));
+    await power.fill(String(limit + 1));
+    await save(page, device);
+    await expect(device.getByRole("status")).toContainText("this device's limit. Change it in the Admin console under Devices.");
+    expect(writes).toEqual([]);
+  });
+
   test("each grid target is a direction and watts, says what it means and goes out signed", async ({ page }) => {
     const writes = await runtimeStore(page);
     await openSignedIn(page, "#/control");
@@ -314,16 +344,16 @@ test.describe("Modern dashboard operator: runtime settings @smoke", () => {
     await expect(card.getByRole("status")).toHaveText("Saved");
   });
 
-  test("a value the EMS refuses is said in the field's own words and the edit stays", async ({ page }) => {
+  test("a value within the page's bound that the EMS refuses is said in the field's own words and the edit stays", async ({ page }) => {
     await page.route("**/api/runtime/device/WR1", (route) =>
-      route.fulfill({ status: 400, json: { error: "invalid_runtime_update", message: "max_power must be between 0 and 800" } }));
+      route.fulfill({ status: 400, json: { error: "invalid_runtime_update", message: "max_power must be between 0 and 600" } }));
     await openSignedIn(page, "#/control");
     const device = form(page, "/api/runtime/device/WR1");
-    await device.locator('input[name="max_power"]').fill("900");
+    await device.locator('input[name="max_power"]').fill("700");
     await save(page, device);
-    await expect(device.getByRole("status")).toHaveText("Max power must be between 0 and 800");
+    await expect(device.getByRole("status")).toHaveText("Max power must be between 0 and 600");
     await expect(device.getByRole("status")).toHaveClass(/form-error/);
-    await expect(device.locator('input[name="max_power"]')).toHaveValue("900");
+    await expect(device.locator('input[name="max_power"]')).toHaveValue("700");
   });
 });
 
