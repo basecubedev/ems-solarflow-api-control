@@ -509,6 +509,11 @@ This page edits an existing installation.
   status and support data retain trusted physical serials and useful non-secret
   context, but remove credentials and expose only masked shapes for Cloud route,
   product and topic identifiers — never their full account-scoped values.
+  The names your configuration gives the devices stay readable, in log lines
+  (`device=<name>`) too, whatever transport a device uses. A name that is or
+  contains a Cloud route is masked like the route; so is a Cloud device's name
+  while its route is missing from the configuration, and the name after
+  `device=` in log lines while no readable configuration is known.
 
   **Search my network** searches all three sources, like the setup flow: the
   local network (mDNS refresh plus network scans), local MQTT brokers (a fresh
