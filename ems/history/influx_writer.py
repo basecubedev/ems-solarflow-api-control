@@ -188,6 +188,8 @@ _DEVICE_FIELDS = (
     "voltage",
     "temp",
     "remain_minutes",
+    "pass_state",
+    "reverse_state",
 )
 
 
@@ -207,6 +209,8 @@ def _device_field_values(state, unused_inputs=frozenset()):
             fields[name] = float(value)
     if battery_presence(state) == BATTERY_ABSENT:
         fields.pop("soc", None)
+    if getattr(state, "grid_reverse_reported", False) and _is_number(state.grid_reverse):
+        fields["grid_reverse"] = float(state.grid_reverse)
     for index, kept in enumerate(pv_inputs_kept(state, unused_inputs), start=1):
         if not kept:
             fields.pop(f"solar{index}", None)
@@ -251,6 +255,8 @@ def build_telemetry_lines(
     consumers=None,
     measured=None,
     unused_inputs=None,
+    surplus_exporting=frozenset(),
+    ac_charging=None,
 ):
     """Build InfluxDB line protocol from one control-loop telemetry snapshot.
 
@@ -277,6 +283,12 @@ def build_telemetry_lines(
     publishes cells by (``device_telemetry_is_measured``); one held past its
     last read writes no ``battery_pack`` point. ``unused_inputs`` gives the PV
     inputs a device's entry marks empty, by its name; none are written.
+
+    ``surplus_exporting`` names the devices passing their PV past their limit
+    (``ems.surplus_export``): each device point says ``surplus_export``, and
+    the ``ems_runtime`` point adds ``surplus_export_w``, what those devices
+    deliver beyond the limit they were told, and ``ac_charging``, whether the
+    EMS holds the charge direction.
     """
     if timestamp_ns is None:
         timestamp_ns = time.time_ns()
@@ -298,6 +310,7 @@ def build_telemetry_lines(
             continue
         fields = {"available": True}
         fields.update(_device_field_values(state, unused_of(device.name)))
+        fields["surplus_export"] = device.name in surplus_exporting
         if _is_number(fields.get("output")):
             inverter_total += fields["output"]
         if _is_number(fields.get("grid_input")):
@@ -360,10 +373,24 @@ def build_telemetry_lines(
             lines.append(line)
 
     if _is_number(target):
+        runtime_fields = {
+            "target_output": float(target),
+            "surplus_export_w": float(
+                sum(
+                    max(0.0, float(state.output or 0) - float(state.output_limit or 0))
+                    for device, state in zip(devices, states)
+                    if state is not None
+                    and device.name in surplus_exporting
+                    and bool(online_map.get(device.name, True))
+                )
+            ),
+        }
+        if ac_charging is not None:
+            runtime_fields["ac_charging"] = bool(ac_charging)
         line = build_line_protocol(
             "ems_runtime",
             {"source": "ems"},
-            {"target_output": float(target)},
+            runtime_fields,
             timestamp_ns,
         )
         if line:

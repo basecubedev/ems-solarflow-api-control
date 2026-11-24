@@ -252,10 +252,17 @@ class DeviceSettingsReconciler:
     sends have gone that long unshown, it is said once and held for
     ``HOLD_SECONDS`` before the next round, unless its value changes, it is
     handed back, or the device shows it.
+
+    ``settings``, ``offered`` and ``listed`` default to the operator's settings
+    here; a setting the EMS decides itself, such as the grid export of
+    ``ems.surplus_export``, is kept by its own instance under the same rules.
     """
 
-    def __init__(self, *, clock=time.monotonic):
+    def __init__(self, *, clock=time.monotonic, settings=None, offered=None, listed=None):
         self._clock = clock
+        self._settings = SETTINGS if settings is None else tuple(settings)
+        self._offered = offered_settings if offered is None else offered
+        self._listed = model_settings if listed is None else listed
         self._sent = {}
         self._noted = set()
         self._held = {}
@@ -275,11 +282,11 @@ class DeviceSettingsReconciler:
         """
 
         name = dev.name
-        offered = {setting.key for setting in offered_settings(dev, reported)}
-        listed = set(model_settings(dev))
+        offered = {setting.key for setting in self._offered(dev, reported)}
+        listed = set(self._listed(dev))
         now = self._clock()
         written = 0
-        for setting in SETTINGS:
+        for setting in self._settings:
             slot = (name, setting.key)
             word = self._wanted(name, setting, stored.get(setting.key))
             if word is None or (setting.key in offered and reported_word(setting, reported) == word):

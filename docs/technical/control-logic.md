@@ -919,6 +919,111 @@ on the assist's record -- a switch-off's, a stop's, a release after failed
 cycles -- or by the assist itself once a report carries `acMode` (see
 [battery-full-charge-assist.md](../battery-full-charge-assist.md#over-a-report-without-a-field-it-writes)).
 
+### A full device passes its PV to the charge
+
+A Zendure device whose battery is full and whose `gridReverse` is `1` (the
+Zendure app's export switch; the switch writes nothing else, checked on a
+SolarFlow 800 Pro 2 on 2026-11-24) passes all its PV to its AC output and
+ignores the `outputLimit` it is given: the firmware's bypass. A report of a
+full SolarFlow Pro shows it (Zendure-HA #1667): `outputLimit` 204 W, output
+635 W at 674 W of PV. With `gridReverse = 2` the same device curtails its panels
+to the limit. Not measured on our own hardware yet: whether a limit above the
+PV draws on the battery during the bypass, and whether `inverseMaxPower` caps
+the bypass.
+
+The EMS uses the bypass only while another device can take that PV in
+(`ems/surplus_export.py`):
+
+- It allows the export (`gridReverse = 1`) on at most
+  `ac_charge_control.surplus_export_devices` full devices (default 1) while
+  another device may charge from AC and is not full; the first one waits for
+  `surplus_export_min_headroom_percent` of room in that device. A device keeps
+  its place while it stays full or within two points of its ceiling, so a SoC
+  flickering at the top does not switch it with every report, and is no taker
+  meanwhile; free places go to the full device with the most PV. A device not
+  yet allowed needs more than 50 W of PV, and one allowed keeps it while it has
+  any, so a PV reading flickering at dusk does not switch it; nothing switches
+  at night. A taker lost while the export is allowed ends it only after 60 s
+  while a device that may take PV in and has room is still there -- its charge
+  eligibility can flicker; AC charging, the device or its permission switched
+  off, an operator role or the full-charge assist taking it, or the taker
+  full, ends it at once.
+- It refuses the export (`gridReverse = 2`) on every other device it manages,
+  and on all of them when every battery is full, AC charging is off, or the
+  installation has one device. A device whose `ac_discharge_enabled` is off,
+  or that is switched off, is never allowed; an export the EMS allowed it before
+  is refused again, one set in the app stays.
+- A device that may charge is not one that does: a surplus below
+  `charge_start_w`, or the hourly entry cap, starts no charge. An export the
+  meter shows, also beyond the [grid target](#grid-target) (more than 25 W,
+  or a meter without a reading) that no charge
+  follows within the grace -- three charge-entry windows at the loop interval,
+  at least 120 s -- is refused for `surplus_export_hold_minutes`. While the house takes all the PV nothing
+  leaves, and the export stays allowed.
+- A charge that takes less than the bypass passes leaves the rest to the grid.
+  With `surplus_export_limit_w` set, feed-in above it for
+  `surplus_export_limit_seconds` while a device passes its PV refuses the
+  export for `surplus_export_hold_minutes`. Off by default.
+- `surplus_export_devices: 0` stops the EMS setting the switch; the device
+  keeps the value it last wrote.
+
+The switch is written like the device settings: over the local API only, to an
+identified model whose report carries `gridReverse`, behind
+`allow_state_reconciliation_writes`, and nothing while the EMS or the device is
+switched off. While the report does not show it, it goes out again after 30 s,
+three times, then after an hour. Where the EMS stops supervising a device it
+allowed the export on, it refuses it once more behind the write gates alone,
+as it ends a charge it started: control or the device switched off, failed
+cycles that return the charges (while they last, nothing is allowed, so a cycle
+failing after its writes does not switch it back and forth), and every stop
+the EMS takes part in. It writes the refusal whatever the last report shows: a
+report fetched before an allow took effect still shows the refusal. Unlike a
+running charge, which a requested stop keeps and which ends at its SoC ceiling,
+an allowed export would never end, so a restart refuses it too and the next
+start allows it again; a killed process writes nothing.
+
+What the bypass passes beyond the house shows on the meter as export, and the
+[AC charge regulator](#ac-charging-from-surplus) charges it into the other
+device. The device in bypass is no actuator then:
+
+- **It is taken for one** when its export is allowed, its battery is full and it
+  delivers more than its limit plus 25 W; it stays one until its export is
+  refused or its battery leaves full. `pass` and `reverseState` are recorded,
+  not relied on: their meaning is documented nowhere, and `pass = 2` was seen on
+  a device at its `minSoc` floor whose limit still held.
+- **It gets no allocation.** The integrator's total is what the other devices
+  deliver, so the discharge side reaches its floor and the charge can start.
+  `max_total_power` less what the devices in bypass deliver is what the others
+  may share. Sizing the total when a charge is left counts only what the devices
+  outside a bypass feed out.
+- **It is told what the house draws beyond the other devices' targets**,
+  within what `max_total_power` leaves beside theirs, split by output between
+  several and held between `min_output_limit` and its `max_power`, so the
+  limits add up to no more than the house or the installation takes but for
+  the standby floor each device in bypass keeps. A device the EMS does not
+  command counts at what it was last given, one held at its share at that
+  share. Not
+  capped at what it delivers now: a device that follows its limit after all --
+  no PV left, or a firmware whose battery adds to it -- must be told more again. A written 0 W can end a bypass, so a `min_output_limit` of 0 risks
+  it. When the bypass ends it falls to what the house needs, and only the charge
+  it fed drops out; the charge exit is immediate. Outside a charge, the share
+  it was told is added back to the integrator's total, so it goes on feeding the
+  house rather than dropping to the standby floor. Its writes are left out of
+  the [write dead time](#dead-time-after-a-write): it follows none of them.
+- **It stays out of the charge it fed** -- its eligibility, the charge capacity
+  and the devices counted as taking PV in; a device allowed to export stays out
+  of a charge that is about to start as well. Leaving full it may charge at once,
+  and the running charge would turn it to AC input: its relay moves and the
+  surplus it fed ends with it. Until that charge ends it also keeps the share it
+  was last told rather than the standby floor the charge direction gives a
+  device that does not charge.
+
+The dashboard names such a device's limit `surplus_export`. InfluxDB records
+`pass_state`, `reverse_state`, `grid_reverse` and `surplus_export` per device,
+and `surplus_export_w` (what devices in bypass deliver beyond their limit) and
+`ac_charging` on `ems_runtime`; an existing installation's downsampled buckets
+carry them after `emsctl.py influx sync`.
+
 ## Deadband
 
 The EMS compares the calculated target with what the device is currently doing,

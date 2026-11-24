@@ -22,7 +22,12 @@ note that a config upgrade turns it on for an installation that predates it.
     "entry_confirm_cycles": 5,
     "entry_window_cycles": 7,
     "max_charge_entries_per_hour": 12,
-    "max_total_charge_power_w": 0
+    "max_total_charge_power_w": 0,
+    "surplus_export_devices": 1,
+    "surplus_export_min_headroom_percent": 5,
+    "surplus_export_limit_w": 0,
+    "surplus_export_limit_seconds": 120,
+    "surplus_export_hold_minutes": 15
   }
 }
 ```
@@ -271,6 +276,12 @@ the process goes on, so that release keeps the resend window and goes out
 again while the charge is on record, and a cycle that runs through lets the
 regulator charge again after its entry confirmation. The charge is bounded by
 the device's own maximum SoC either way. See [user/safety.md](user/safety.md).
+
+An export the EMS allowed a full device (`gridReverse = 1`, see
+[control-logic.md](technical/control-logic.md#a-full-device-passes-its-pv-to-the-charge))
+is refused again on every clean stop, a requested restart included, and when
+control or the device is switched off or cycles keep failing: unlike a charge,
+it would never end by itself.
 
 **While the regulator charges a device, it owns that device's AC direction.**
 Every cycle each device gets a default claim of `ac_output`, and the state

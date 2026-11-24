@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from ems import config as cfg
 from ems import device_settings
+from ems import surplus_export
 from ems.ac_charge_control import (
     CHARGE_SILENCE_CYCLES,
     OWN_DRAIN_MARGIN_W,
@@ -92,6 +93,8 @@ from ems.target_control import (
     detect_capabilities,
     derive_soc_runtime_state,
     firmware_recovery_or_ac_charge_active,
+    is_full_soc_device,
+    uncommanded_delivery_ceiling,
     min_soc_ramp_cap_w,
     pv_power,
 )
@@ -219,6 +222,20 @@ class EMSController:
         self._discharge_permission_said = set()
         self.device_settings = device_settings.DeviceSettingsReconciler()
         self.device_settings_failing = set()
+        self.grid_export = device_settings.DeviceSettingsReconciler(
+            settings=(surplus_export.GRID_EXPORT,),
+            offered=surplus_export.grid_export_offered,
+            listed=surplus_export.grid_export_listed,
+        )
+        self.grid_export_failing = set()
+        self.surplus_export_plan = surplus_export.SurplusExportPlan(
+            state=surplus_export.SurplusExportState()
+        )
+        self.surplus_export_views = ()
+        self.surplus_export_charge_sources = set()
+        self.surplus_export_told = {}
+        self.surplus_export_left = frozenset()
+        self.grid_export_words = {}
         # The total before the ramp limits it. The charge direction's exit reads
         # this, so a sudden house load does not wait for the ramp.
         self.desired_total_w = None
@@ -430,16 +447,23 @@ class EMSController:
         alone is zero, and the next cycle read a meter the charge itself had
         balanced as no surplus and ended the charge -- every time something
         reset the output memory, switching control back on among them.
+
+        A device in bypass (``ems.surplus_export``) counts in neither: it
+        delivers its PV whatever the total says.
         """
 
+        exporting = self.surplus_export_plan.exporting
+        beside = [
+            state for dev, state in zip(self.devices, states) if dev.name not in exporting
+        ]
         limit_total = sum(
             state.output_limit
-            for state in states
+            for state in beside
             if state.output_limit > 0
         )
 
         if self.charge_direction.charging:
-            initial = sum(state.output for state in states) - sum(
+            initial = sum(state.output for state in beside) - sum(
                 cfg.safe_int(getattr(state, "grid_input", 0), 0, minimum=0)
                 for dev, state in zip(self.devices, states)
                 if self.charge_commanded_by_ems(dev)
@@ -449,7 +473,7 @@ class EMSController:
             initial = limit_total
             source = "output_limit"
         else:
-            initial = sum(state.output for state in states)
+            initial = sum(state.output for state in beside)
             source = "output"
 
         self.commanded_total_w = max(
@@ -1789,19 +1813,26 @@ class EMSController:
         below what it delivers now, so the ceiling never takes away output
         that is there. A device the full-charge assist holds to its PV
         ceiling (``assist_caps``) is held at its minSoc too: the allocation
-        hands it that ceiling, not its PV.
+        hands it that ceiling, not its PV. A device in bypass
+        (``ems.surplus_export``) is no part of it: ``max_power`` is already what
+        it leaves the others.
         """
 
         assist_caps = assist_caps or [None] * len(discharge_caps)
+        exporting = self.surplus_export_plan.exporting
         held = [
-            cap is not None and (state.soc > state.min_soc or assist is not None)
-            for cap, state, assist in zip(discharge_caps, states, assist_caps)
+            cap is not None
+            and dev.name not in exporting
+            and (state.soc > state.min_soc or assist is not None)
+            for dev, cap, state, assist in zip(self.devices, discharge_caps, states, assist_caps)
         ]
         if not any(held):
             return max_power
         deliverable = 0
         for index, dev in enumerate(self.devices):
             state = states[index]
+            if dev.name in exporting:
+                continue
             capability = capabilities[index] if capabilities else None
             if capability is not None and not capability.can_export:
                 continue
@@ -2910,7 +2941,8 @@ class EMSController:
         owns the AC mode — and whether the device can absorb anything at all.
         Any one of them saying no is enough. A device whose direction the
         full-charge assist holds for its charge on record takes no charge of
-        the regulator's over it (R19-1).
+        the regulator's over it (R19-1), and a device whose PV fed the running
+        charge takes no part of it (``update_surplus_export_charge_sources``).
 
         Capacity belongs here and not only in the allocator: without it the
         system would enter charge direction with nothing to allocate to, and the
@@ -2933,6 +2965,9 @@ class EMSController:
             return False
 
         if self.full_charge_assist_holds_direction(dev):
+            return False
+
+        if dev.name in self.surplus_export_charge_sources:
             return False
 
         if charge_headroom_weight(state, dev, capability) <= 0:
@@ -3268,7 +3303,13 @@ class EMSController:
             for state in leaving
         )
         house_w = derive_house_load_w(
-            sum(state.output for state in states), load, draw_w
+            sum(
+                state.output
+                for dev, state in zip(self.devices, states)
+                if dev.name not in self.surplus_export_plan.exporting
+            ),
+            load,
+            draw_w,
         )
         sized = house_w if has_export_capacity else min(house_w, standby_total_w)
         self.commanded_total_w = min(max_power, sized)
@@ -3577,7 +3618,9 @@ class EMSController:
         Its transport's gates must be open, and control must be on: with the EMS
         switched off, or ``dev`` taken out of its control, no reconciler writes
         (OFF-1, owner 2026-10-10: off is off). The one command that ends a
-        charge the EMS started is a power command and is not held here.
+        charge the EMS started is a power command and is not held here, and
+        neither is the refusal of an export the EMS allowed
+        (:meth:`grid_export_end_allowed`).
         """
 
         return not self.control_switched_off(dev) and cfg.state_reconciliation_writes_allowed(
@@ -4747,8 +4790,15 @@ class EMSController:
         return result
 
     def note_power_sent(self, dev, result):
-        """Tell the write dead time what a device's transport did with a target."""
+        """Tell the write dead time what a device's transport did with a target.
 
+        A device in bypass follows none of its targets, so the dead time
+        forgets it: its first target after the bypass counts as no change.
+        """
+
+        if dev.name in self.surplus_export_plan.exporting:
+            self.write_dead_time.forget(dev.name)
+            return
         if result.status is WriteDispatchStatus.PUBLISHED:
             self.write_dead_time.note_published(dev.name, result.target_w, time.monotonic())
         elif result.status is WriteDispatchStatus.QUEUED_LATEST:
@@ -5295,6 +5345,330 @@ class EMSController:
                 error=e
             )
 
+    def plan_surplus_export(self, states, chargeable, load, interval):
+        """Decide which full device may pass its PV out this cycle, and who does.
+
+        ``ems.surplus_export`` decides; this reads the devices for it. A device
+        is managed when its export switch is one the state reconciler writes:
+        state reconciliation on its transport, an identified local model whose
+        report carries ``gridReverse``, the device active and control on, and
+        no run of failed cycles that returned the charges: a cycle failing
+        after this one's writes would otherwise allow and refuse in turn.
+        Returns the plan; the devices that left their bypass this cycle are in
+        ``surplus_export_left``. The grace before an export no charge follows
+        is refused covers three charge-entry windows at this loop interval, at
+        least ``START_GRACE_SECONDS``.
+        """
+
+        views = []
+        supervised = not self.charges_returned_after_failed_cycles()
+        for dev, state, may_charge in zip(self.devices, states, chargeable):
+            online = bool(self.device_online.get(dev.name, False))
+            reported = surplus_export.reported_grid_export(state)
+            views.append(
+                surplus_export.DeviceView(
+                    name=dev.name,
+                    online=online,
+                    managed=online
+                    and supervised
+                    and not self.control_switched_off(dev)
+                    and self.device_active(dev)
+                    and bool(surplus_export.grid_export_offered(dev, reported)),
+                    may_output=self.device_may_discharge(dev)
+                    and self.device_output_control_allowed(dev),
+                    may_take=online
+                    and self.charge_permitted(dev)
+                    and self.device_active(dev)
+                    and self.device_intent_allows_command(dev)
+                    and not self.full_charge_assist_holds_direction(dev),
+                    full=online and is_full_soc_device(state),
+                    chargeable=bool(may_charge),
+                    headroom_percent=max(0.0, float(state.max_soc) - float(state.soc)),
+                    solar_w=float(pv_power(state)),
+                    output_w=float(state.output or 0),
+                    output_limit_w=float(state.output_limit or 0),
+                    grid_reverse=reported.get(surplus_export.GRID_REVERSE_PROPERTY),
+                )
+            )
+        previous = self.surplus_export_plan
+        settings = surplus_export.settings_from_config(cfg.AC_CHARGE_CONTROL_CONFIG)
+        window = cfg.ac_charge_control_int("entry_window_cycles", 7, minimum=1)
+        settings = replace(
+            settings,
+            grace_seconds=max(surplus_export.START_GRACE_SECONDS, 3.0 * window * interval),
+        )
+        plan = surplus_export.plan_surplus_export(
+            views,
+            previous.state,
+            settings,
+            grid_power_w=load if math.isfinite(load) else None,
+            beyond_target_w=load - self.grid_target_w if math.isfinite(load) else None,
+            charging=self.charge_direction.charging,
+            now=time.monotonic(),
+        )
+        if (
+            plan.reason != previous.reason
+            or plan.state.allowed != previous.state.allowed
+            or plan.exporting != previous.exporting
+        ):
+            log_event(
+                logging.INFO,
+                "surplus_export",
+                reason=plan.reason,
+                allowed=",".join(plan.state.allowed),
+                exporting=",".join(sorted(plan.exporting)),
+            )
+        self.surplus_export_left = frozenset(previous.exporting - plan.exporting)
+        self.surplus_export_plan = plan
+        self.surplus_export_views = tuple(views)
+        return plan
+
+    def update_surplus_export_charge_sources(self):
+        """Note the devices whose PV feeds the running charge, so none of them joins it.
+
+        Leaving full, such a device may charge at once, and the running charge
+        would turn it to AC input: its relay moves and the surplus it fed ends
+        with it. It stays out of every charge decision -- eligibility, the
+        charge capacity, the plan's takers -- until that charge ends. Outside a
+        charge the devices allowed to export are kept out, so none joins the
+        charge it is about to feed. Read from the previous cycle's plan, before
+        this cycle's eligibility.
+        """
+
+        plan = self.surplus_export_plan
+        if self.charge_direction.charging:
+            self.surplus_export_charge_sources |= set(plan.exporting) | set(plan.state.allowed)
+            return
+        self.surplus_export_charge_sources = set(plan.state.allowed)
+        self.surplus_export_told = {
+            name: told for name, told in self.surplus_export_told.items() if name in plan.exporting
+        }
+
+    def apply_grid_export(self, dev, state):
+        """Set ``dev``'s export switch to this cycle's plan, as the state reconciler writes.
+
+        Over the local API only, behind the state gates, and off is off -- with
+        one exception: a device whose export this EMS allowed and that leaves
+        its supervision (control or the device switched off, the device no
+        longer managed) is refused it once more behind the write gates alone,
+        as the charge the EMS started is ended. A failure is logged once and
+        never ends the cycle that regulates the output.
+        """
+
+        word = self.surplus_export_plan.grid_export.get(dev.name)
+        allowed = self.device_state_writes_allowed(dev)
+        reason = "surplus_export"
+        held_allowed = self.grid_export_words.get(dev.name) == "allow"
+        if word is None and held_allowed:
+            word, allowed, reason = "refuse", self.grid_export_end_allowed(dev), "surplus_export_end"
+        elif word is None:
+            self.grid_export.forget(dev.name)
+            self.grid_export_words.pop(dev.name, None)
+            return
+        try:
+            self.reconcile_grid_export(
+                dev,
+                state,
+                word,
+                allowed=allowed,
+                reason=reason,
+                assume_allowed=word == "refuse" and held_allowed,
+            )
+        except Exception as exc:
+            if dev.name not in self.grid_export_failing:
+                self.grid_export_failing.add(dev.name)
+                logging.warning(
+                    "event=grid_export_failed device=%s error=%s", dev.name, exc, exc_info=True
+                )
+            return
+        self.grid_export_failing.discard(dev.name)
+
+    def surplus_export_targets(
+        self, targets, effective_targets, states, load, min_output_limit, enabled, max_power
+    ):
+        """Tell each device in bypass its share of the house load (``ems.surplus_export``).
+
+        It delivers its PV whatever it is told; the share is what it falls to
+        when the bypass ends, and the device ramp starts from it then. The share
+        is what the house draws beyond what the other devices are told, within
+        what ``max_power`` (the installation's) leaves them, so the limits never
+        add up to more than the house or the installation takes; it is held
+        between ``min_output_limit`` and the device's ``max_power``. A device that left its bypass during the charge it fed
+        keeps the share it was last told until that charge ends: in the charge
+        direction it would be parked at the standby floor, and the house would
+        draw what it supplied. A device that may not supply the house or is not
+        commandable, or control switched off, keeps the target it has.
+        """
+
+        exporting = self.surplus_export_plan.exporting
+        holding = (
+            set(self.surplus_export_charge_sources) - set(exporting)
+            if self.charge_direction.charging
+            else set()
+        )
+        if not exporting and not holding:
+            return targets, effective_targets
+        house_w = derive_house_load_w(
+            sum(state.output for state in states),
+            load if math.isfinite(load) else 0.0,
+            sum(cfg.safe_int(getattr(state, "grid_input", 0), 0, minimum=0) for state in states),
+        )
+        others = sum(
+            self.surplus_export_other_w(dev, state, target, holding)
+            for dev, state, target in zip(self.devices, states, effective_targets)
+            if dev.name not in exporting
+        )
+        needed = min(max(0.0, house_w - others), max(0.0, max_power - others))
+        shares = surplus_export.house_shares(self.surplus_export_views, exporting, needed)
+        targets = list(targets)
+        effective_targets = list(effective_targets)
+        for i, dev in enumerate(self.devices):
+            if i >= len(effective_targets) or not enabled:
+                continue
+            if not (self.device_commandable(dev) and self.device_may_discharge(dev)):
+                continue
+            if dev.name in shares:
+                told = min(max(shares[dev.name], min_output_limit), max(0, int(dev.max_power)))
+                self.surplus_export_told[dev.name] = told
+            elif dev.name in holding and dev.name in self.surplus_export_told:
+                told = self.surplus_export_told[dev.name]
+            else:
+                continue
+            targets[i] = told
+            effective_targets[i] = told
+            self.commanded_device_targets[dev.name] = told
+        return targets, effective_targets
+
+    def surplus_export_other_w(self, dev, state, target, holding):
+        """What a device beside the bypass is counted at: what it goes on feeding the house.
+
+        Its target; the share it is held at while the charge it fed runs; and
+        for a device the EMS does not command this cycle, what it was last
+        given, which it keeps delivering.
+        """
+
+        if dev.name in holding and dev.name in self.surplus_export_told:
+            return self.surplus_export_told[dev.name]
+        if not self.device_commandable(dev):
+            return uncommanded_delivery_ceiling(state)
+        return max(0, target)
+
+    def power_beside_bypass_w(self, max_power, states):
+        """``max_total_power`` less what the devices in bypass deliver, for the others to share.
+
+        A device in bypass delivers its PV past any limit, and the installation
+        limit covers it all the same.
+        """
+
+        delivered = sum(
+            max(0, cfg.safe_int(getattr(state, "output", 0), 0))
+            for dev, state in zip(self.devices, states)
+            if dev.name in self.surplus_export_plan.exporting
+        )
+        return max(0, max_power - delivered)
+
+    def reconcile_grid_export(self, dev, state, word, *, allowed, reason, assume_allowed=False):
+        """Hand ``dev``'s export switch to its one writer, the reconciler, for ``word``.
+
+        An allow the device answered, or a value it shows, is what this EMS
+        holds it at (``grid_export_words``); a write the gates withheld is not.
+        ``assume_allowed`` refuses what this EMS believes it allowed by a write
+        whatever the report shows: a report fetched before an answered allow
+        took effect still shows the refusal, and trusting it would leave the
+        export allowed.
+        """
+
+        reported = surplus_export.reported_grid_export(state)
+        if assume_allowed:
+            reported = {surplus_export.GRID_REVERSE_PROPERTY: surplus_export.EXPORT_ALLOWED}
+        written = self.grid_export.reconcile(
+            dev,
+            reported,
+            {surplus_export.GRID_EXPORT.key: word},
+            allowed=allowed,
+            gate_fields=lambda: self.state_write_gate_fields(dev),
+            write=lambda properties, fields: write_device_properties(
+                dev,
+                properties,
+                reason=reason,
+                field=",".join(properties),
+                error_event="write_grid_export_error",
+                log_fields=fields,
+            ),
+        )
+        shown = device_settings.reported_word(surplus_export.GRID_EXPORT, reported)
+        if written or shown == word:
+            self.grid_export_words[dev.name] = word
+        return written
+
+    def grid_export_end_allowed(self, dev):
+        """Whether the write gates let the export be refused to a device that leaves supervision."""
+
+        return cfg.state_reconciliation_writes_allowed(getattr(dev, "control_gate", "api"))
+
+    def grid_export_allowed_by_ems(self):
+        """The devices whose export switch this EMS last set to allow."""
+
+        return sorted(name for name, word in self.grid_export_words.items() if word == "allow")
+
+    def restore_grid_export(self, reason="stop"):
+        """Refuse the export again on each device this EMS holds allowed, when nothing will supervise it.
+
+        Called on every stop the EMS takes part in, a restart someone asked for
+        included (owner 2026-11-24: a kept charge ends at its SoC ceiling, an
+        allowed export never does), and after failed cycles as the charges are
+        released: a full battery whose export is allowed passes its PV out with
+        no EMS to take it into another device. Written by the
+        reconciler that set it, from the device's last report, also to one the
+        last cycle missed, behind the write gates alone, as the end of a charge
+        is; a killed process writes nothing.
+        """
+
+        for dev in self.devices:
+            if dev.name not in self.grid_export_allowed_by_ems():
+                continue
+            try:
+                written = self.reconcile_grid_export(
+                    dev,
+                    self.last_states.get(dev.name),
+                    "refuse",
+                    allowed=self.grid_export_end_allowed(dev),
+                    reason=f"surplus_export_{reason}",
+                    assume_allowed=True,
+                )
+            except Exception as exc:
+                log_event(logging.WARNING, "grid_export_restore_failed", device=dev.name, reason=reason, error=exc)
+                continue
+            log_event(
+                logging.INFO,
+                "grid_export_refused" if written else "grid_export_restore_not_written",
+                device=dev.name,
+                reason=reason,
+            )
+
+    def take_over_left_bypass(self):
+        """Hand the integrator the share a device was told when its bypass ends outside a charge.
+
+        The total left it out while it passed its PV; added back, the device
+        goes on feeding the house what it was told rather than the standby
+        floor, until the meter says otherwise. In a charge, the held share does
+        it (:meth:`surplus_export_targets`).
+        """
+
+        if self.charge_direction.charging or self.commanded_total_w is None:
+            return
+        added = sum(self.surplus_export_told.get(name, 0) for name in self.surplus_export_left)
+        if added <= 0:
+            return
+        self.commanded_total_w += added
+        log_event(
+            logging.INFO,
+            "surplus_export_share_taken_over",
+            devices=",".join(sorted(self.surplus_export_left)),
+            added_w=added,
+            commanded_total_w=round(self.commanded_total_w, 1),
+        )
+
     def apply_device_settings(self, dev, state):
         """Keep light, fan, buzzer and battery heating where the operator set them.
 
@@ -5457,6 +5831,12 @@ class EMSController:
                 consumers=consumer_readings(self),
                 measured=lambda name: device_telemetry_is_measured(self, name),
                 unused_inputs=lambda name: unused_pv_inputs(cfg.device_config_entry(name)),
+                surplus_exporting=getattr(
+                    getattr(self, "surplus_export_plan", None), "exporting", frozenset()
+                ),
+                ac_charging=getattr(
+                    getattr(self, "charge_direction", None), "charging", None
+                ),
             )
             writer.enqueue(lines)
         except Exception as e:
@@ -5503,6 +5883,7 @@ class EMSController:
                 )
             if self.charges_returned_after_failed_cycles():
                 self.release_charging_devices(failed_cycles=self.cycle_failures)
+                self.restore_grid_export(reason="failed_cycles")
                 self.cycles_through_since_release = 0
             elif self.cycles_through_since_release is not None:
                 self.cycles_through_since_release = 0
@@ -5910,7 +6291,13 @@ class EMSController:
 
         self.end_charges_on_disable(enabled)
 
+        self.update_surplus_export_charge_sources()
         chargeable = self.resolve_charge_eligibility(states, capabilities)
+        self.plan_surplus_export(states, chargeable, load, interval)
+        self.take_over_left_bypass()
+        for dev, state in zip(self.devices, raw_states):
+            if state:
+                self.apply_grid_export(dev, state)
         meter_fresh = self.grid_meter_reading_is_fresh()
         releasable_output_w = sum(
             cfg.safe_int(getattr(state, "output", 0), 0, minimum=0)
@@ -5998,8 +6385,12 @@ class EMSController:
 
         assist_caps = self.full_charge_assist_caps(states)
         discharge_caps = [
-            care if assist is None else assist if care is None else min(care, assist)
-            for care, assist in zip(self.min_soc_ramp_caps(states), assist_caps)
+            0
+            if dev.name in self.surplus_export_plan.exporting
+            else care if assist is None else assist if care is None else min(care, assist)
+            for dev, care, assist in zip(
+                self.devices, self.min_soc_ramp_caps(states), assist_caps
+            )
         ]
         floor_caps = [
             cap
@@ -6012,8 +6403,9 @@ class EMSController:
                 assist_caps,
             )
         ]
+        power_beside_bypass = self.power_beside_bypass_w(max_power, states)
         discharge_ceiling = self.discharge_ceiling_w(
-            max_power, discharge_caps, states, capabilities, assist_caps
+            power_beside_bypass, discharge_caps, states, capabilities, assist_caps
         )
         has_export_capacity = self.has_output_control_export_capacity(
             states,
@@ -6138,6 +6530,9 @@ class EMSController:
             min_output_limit,
             floor_caps
         )
+        targets, effective_targets = self.surplus_export_targets(
+            targets, effective_targets, states, load, min_output_limit, enabled, max_power
+        )
         control_explanation.allocated_target_total_w = sum(targets)
         control_explanation.effective_target_total_w = sum(effective_targets)
         control_explanation.commanded_total_w = self.commanded_total_w
@@ -6164,6 +6559,8 @@ class EMSController:
                 device_explanation.limiting_reason = capabilities[i].reason
             if i in assist_held:
                 device_explanation.limiting_reason = "full_charge_assist_solar"
+            if dev.name in self.surplus_export_plan.exporting:
+                device_explanation.limiting_reason = "surplus_export"
             if i < len(targets):
                 device_explanation.allocated_target_w = targets[i]
             if i < len(effective_targets):

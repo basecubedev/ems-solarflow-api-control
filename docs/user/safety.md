@@ -36,7 +36,7 @@ So:
 
 ## Features that write on their own
 
-Two features are enabled in the template and act without an operator:
+Three features in the template act without an operator; turn off any you do not want:
 
 - **Winter mode** (`winter.enabled: true`, months 10 to 3) raises `minSoc`
   once a day up to `winter_min_soc` (40 %). On a device with PV, `minSoc`
@@ -51,8 +51,8 @@ Two features are enabled in the template and act without an operator:
   battery from midnight of the due day; with `enable_ac_charge_mode: true` it
   charges from the grid at 600 W from `force_time` (14:00 local time; in Docker
   the container's [time zone](../docker.md#time-zone)) if it is not full yet.
-
-Turn either off in the config if you do not want it.
+- **Export of a full battery** (`ac_charge_control.surplus_export_devices`): the app's export switch (`gridReverse`) is allowed on one
+  full device only while another can charge its PV, else refused; `0` stops EMS setting it ([details](../technical/control-logic.md#a-full-device-passes-its-pv-to-the-charge)).
 
 ## Before the first live run
 
@@ -146,7 +146,7 @@ Either switch stops a running charge in the same cycle. Stopping a device that
 is drawing from the grid is the one action that must never wait for a threshold,
 a counter or a restart. Disabling the EMS (`system.enabled`) or one device does
 too: a charging device gets one final command that ends the charge, and then the
-EMS writes nothing more to it, whether the charge was the regulator's or the
+EMS writes nothing more to it but the refusal of an export it allowed, whether the charge was the regulator's or the
 full-charge assist's. A park at 0 W ends the EMS's charge the same way. An AC
 input role that charges, at its entered power or the device maximum, takes it
 over: only the role back to output, or 0 W, ends that one — not these switches.
@@ -160,7 +160,7 @@ costs nothing like drawing from the grid on one does.
 
 ### What happens if the EMS stops while charging
 
-**Stopping the EMS leaves the devices as they are.** That is deliberate: a stop
+**Stopping the EMS leaves the devices as they are**, but for refusing a full battery's export it allowed. That is deliberate: a stop
 by SIGTERM or SIGHUP — `docker stop`, `docker compose down`, `systemctl stop` —
 is usually a restart, and resetting every device for the length of an update
 would drop the house's cover and throw away a charge that then has to re-confirm

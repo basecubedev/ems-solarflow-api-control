@@ -651,8 +651,10 @@ def main():
         # A stop someone asked for is usually a restart -- an update, a config
         # change, a host reboot -- and the operator's instruction is that the
         # last state survives it. Discharging devices already do: nothing resets
-        # their outputLimit, here or anywhere. Charging is the only state this
-        # block ever touched, so honouring that means leaving it alone.
+        # their outputLimit, here or anywhere. Charging is the only device power
+        # state this block ever touched, so honouring that means leaving it
+        # alone. The export a full device was allowed is refused on every stop:
+        # a charge ends at its SoC ceiling, an allowed export never does.
         #
         # A stop the EMS reached by itself is different: --once, --max-cycles,
         # --duration, or an unhandled error. Nothing is coming back to supervise
@@ -677,6 +679,7 @@ def main():
                 )
         else:
             ems.release_charging_devices()
+        ems.restore_grid_export()
         # Release the grid-meter client's runtime resources (the MQTT grid meter
         # owns a network loop/connection/thread; HTTP clients own none). Safe and
         # idempotent, and never masks a primary shutdown error.
