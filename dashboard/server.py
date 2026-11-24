@@ -635,6 +635,17 @@ class DashboardHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
+    @property
+    def runtime_validation(self):
+        """The runtime validation context; a live one (``LiveValidationContext``) is asked for its current."""
+
+        value = self.__dict__.get("_runtime_validation")
+        return value() if callable(value) else value
+
+    @runtime_validation.setter
+    def runtime_validation(self, value):
+        self.__dict__["_runtime_validation"] = value
+
     def __init__(
         self,
         address,

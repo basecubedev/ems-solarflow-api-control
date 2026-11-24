@@ -7,7 +7,7 @@
   import { t, fmt } from "../i18n/i18n.svelte.js";
   import { authorizedSend } from "../state/auth.svelte.js";
   import { loadRuntime, live } from "../state/live.svelte.js";
-  import { changedPayload, changeWarning, normalizeValue, reseed } from "../lib/runtime.js";
+  import { changedPayload, changeWarning, normalizeValue, reseed, boundExceeded } from "../lib/runtime.js";
   import { gridTargetMeaning, gridTargetParts, gridTargetValue } from "../lib/gridTarget.js";
   import { errorText } from "../lib/errors.js";
   import { unreadableInput } from "../../../shared/lib/forms.js";
@@ -23,7 +23,7 @@
   let values = $state({});
   let baseline = $state.raw({});
   let seeded = $state("");
-  let feedback = $state({ text: "", error: false });
+  let feedback = $state({ text: "", error: false, link: null });
   let busy = $state(false);
   let confirm = $state({ open: false, lines: [], payload: null });
   let directions = $state({});
@@ -81,6 +81,11 @@
       return;
     }
     const payload = changedPayload(fields, values, baseline);
+    const over = boundExceeded(fields, payload);
+    if (over) {
+      feedback = { text: `${t("runtime.overBound", { value: `${fmt().number(payload[over.name], Number.isInteger(payload[over.name]) ? 0 : 1)}\u00a0${over.unit || "W"}`, field: over.label })} ${over.help}`, error: true, link: over.link };
+      return;
+    }
     if (!Object.keys(payload).length) {
       feedback = { text: t("runtime.nothing"), error: false };
       return;
@@ -162,12 +167,12 @@
       {:else}
         <div class="row readonly"><span>{field.label}</span><span class="value">{field.value}</span></div>
       {/if}
-      {#if field.help}<p class="help">{field.help}</p>{/if}
+      {#if field.help}<p class="help">{field.help}{#if field.link}{" "}<a href={field.link.href}>{field.link.label}</a>{/if}</p>{/if}
     {/each}
   </div>
   <div class="foot">
     <button class="btn small" type="submit" disabled={busy}>{t("common.save")}</button>
-    <span class="feedback" class:form-error={feedback.error} class:form-ok={!feedback.error && feedback.text === t("common.saved")} role="status" aria-live="polite">{feedback.text}</span>
+    <span class="feedback" class:form-error={feedback.error} class:form-ok={!feedback.error && feedback.text === t("common.saved")} role="status" aria-live="polite">{feedback.text}{#if feedback.link}{" "}<a href={feedback.link.href} data-testid="runtime-bound-link">{feedback.link.label}</a>{/if}</span>
   </div>
 </form>
 

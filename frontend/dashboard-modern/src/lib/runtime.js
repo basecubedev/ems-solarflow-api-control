@@ -106,6 +106,26 @@ export function withDefault(field, value) {
 }
 
 /**
+ * The first field a payload sends above the bound it carries, or null.
+ *
+ * A field's ``bound`` says whose limit its maximum is: "installation" (the
+ * Admin console's Safety page) or "device" (that device's own limit). The EMS
+ * refuses such a value either way; caught here, the refusal can say why.
+ */
+export function boundExceeded(fields, payload) {
+  return (
+    fields.find(
+      (field) =>
+        field.type === "number" &&
+        field.bound &&
+        typeof payload[field.name] === "number" &&
+        Number.isFinite(field.max) &&
+        payload[field.name] > field.max,
+    ) || null
+  );
+}
+
+/**
  * The fields to send: one that equals its initial value is not sent, nor an
  * empty number with no stored value. Unlike Classic, an emptied number goes
  * out as its default; one without a default is not sent, except from a

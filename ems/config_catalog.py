@@ -765,7 +765,9 @@ _SECTIONS = [
             _field(
                 "system.max_total_power",
                 "Maximum system output",
-                "Maximum combined output of all controlled inverters.",
+                "Maximum combined output of all controlled inverters. Set it where the inverters at one grid "
+                "connection must stay below a limit together, such as 800 VA for a plug-in system; Max total "
+                "power on the dashboard stops here.",
                 "number",
                 unit="W",
                 minimum=0,
@@ -844,9 +846,9 @@ _SECTIONS = [
             ),
             _field(
                 "system.max_device_power",
-                "Global per-device cap",
-                "Upper safety cap applied to each device. Most users should "
-                "configure the device output limit in the Devices section instead.",
+                "Fallback device limit",
+                "The output limit of a device that has none of its own. A device with its own output limit, "
+                "set under Devices, is bounded by that alone.",
                 "number",
                 level="advanced",
                 unit="W",

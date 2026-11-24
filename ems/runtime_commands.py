@@ -9,8 +9,11 @@ one set of validators, one writer that re-reads the file before it saves.
 
 import copy
 import functools
+import json
 import logging
 import math
+import os
+import threading
 from dataclasses import dataclass
 
 from ems import device_settings
@@ -386,6 +389,66 @@ def _back_to_ac_output(key, value):
 def ac_role_supported(device_name, validation_context=None):
     context = validation_context if isinstance(validation_context, dict) else {}
     return device_name not in set(context.get("ac_role_unsupported") or ())
+
+
+class LiveValidationContext:
+    """The validation context with the live limits re-read when ``config.json`` changes; call it for the current one.
+
+    The Admin console applies ``system.max_total_power`` and the output limit
+    of each device the EMS runs -- its own, or the fallback for one without --
+    without a restart. A context built once at start kept refusing what the
+    new limit allows and kept naming the old limit. Only those limits follow
+    the file: everything else stays what the EMS started with, which devices
+    it runs and which of them cannot take an AC role among it, because a saved
+    transport switch only takes effect at the restart. A config that cannot be
+    read keeps the last limits.
+    """
+
+    def __init__(self, config_path, config, runtime_state=None):
+        from ems.file_io import file_signature
+
+        self._path = config_path
+        self._runtime_state = runtime_state
+        self._lock = threading.Lock()
+        self._signature = self._stat(file_signature)
+        self._started = build_validation_context(config, runtime_state)
+        self._context = self._started
+
+    def _stat(self, signature):
+        try:
+            return signature(os.stat(self._path))
+        except (OSError, TypeError, ValueError):
+            return None
+
+    def __call__(self):
+        from ems.config import apply_runtime_config_defaults
+        from ems.file_io import file_signature
+
+        with self._lock:
+            signature = self._stat(file_signature)
+            if signature is not None and signature != self._signature:
+                try:
+                    with open(self._path, encoding="utf-8") as handle:
+                        loaded = json.load(handle)
+                except (OSError, ValueError):
+                    return self._context
+                if isinstance(loaded, dict):
+                    self._context = self._with_live_limits(apply_runtime_config_defaults(loaded))
+                    self._signature = signature
+            return self._context
+
+    def _with_live_limits(self, config):
+        started = self._started
+        fresh = build_validation_context(config, self._runtime_state)
+        return {
+            **started,
+            "system_max_total_power": fresh["system_max_total_power"],
+            "min_output_limit_max": fresh["min_output_limit_max"],
+            "device_max_power": {
+                name: fresh["device_max_power"].get(name, limit)
+                for name, limit in started["device_max_power"].items()
+            },
+        }
 
 
 def build_validation_context(config=None, runtime_state=None):

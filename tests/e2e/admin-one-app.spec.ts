@@ -195,6 +195,17 @@ test.describe("One app for the dashboard and the console", { tag: ["@authority"]
     await expect(page.getByText("The runtime state did not answer. Asking again…")).toHaveCount(0);
   });
 
+  test("the Control page's installation limit leads to the Safety settings that set it", async ({ page, baseURL }) => {
+    await installConfig(baseURL);
+    await page.goto("/#/status");
+    await signIn(page);
+    await page.locator('aside.sidebar a[data-page="control"]').click();
+    const system = page.locator('form[data-endpoint="/api/runtime/system"]');
+    await expect(system.getByText(/: the installation limit\. Change it in the Admin console under Safety\./)).toBeVisible({ timeout: 10_000 });
+    await system.getByRole("link", { name: "Open Safety" }).click();
+    await expect(page).toHaveURL(/#\/settings\/safety$/);
+  });
+
   test("a browser too old for the app is told so instead of a blank page", async ({ page }) => {
     await page.addInitScript(() => {
       delete (HTMLElement.prototype as unknown as Record<string, unknown>).popover;

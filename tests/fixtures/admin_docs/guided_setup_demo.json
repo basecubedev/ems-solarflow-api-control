@@ -246,8 +246,8 @@
           },
           {
             "path": "system.max_device_power",
-            "label": "Global per-device cap",
-            "description": "Upper safety cap applied to each device. Most users should configure the device output limit in the Devices section instead.",
+            "label": "Fallback device limit",
+            "description": "The output limit of a device that has none of its own. A device with its own output limit, set under Devices, is bounded by that alone.",
             "type": "number",
             "level": "advanced",
             "scope": "both",

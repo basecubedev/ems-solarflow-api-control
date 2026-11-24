@@ -389,3 +389,133 @@ def test_catalogue_runtime_defaults_travel_with_the_limits_and_cannot_be_changed
     assert limits["catalogue_defaults"] == runtime_commands.catalogue_runtime_defaults()
     limits["catalogue_defaults"]["system"]["min_output_limit"] = 0
     assert runtime_commands.catalogue_runtime_defaults()["system"]["min_output_limit"] == 35
+
+
+def test_the_validation_context_follows_a_config_saved_while_the_ems_runs(tmp_path):
+    """The Admin console applies system.max_total_power live; a context built once kept the old limit."""
+
+    import json
+
+    from ems.runtime_commands import LiveValidationContext
+
+    path = tmp_path / "config.json"
+    config = {"system": {"max_total_power": 800}, "devices": [{"name": "WR1", "max_power": 600}]}
+    path.write_text(json.dumps(config), encoding="utf-8")
+    live = LiveValidationContext(str(path), config)
+
+    assert live()["system_max_total_power"] == 800
+    path.write_text(json.dumps({**config, "system": {"max_total_power": 1600}}), encoding="utf-8")
+    assert live()["system_max_total_power"] == 1600
+    assert live()["device_max_power"]["WR1"] == 600
+
+    path.write_text("{ not json", encoding="utf-8")
+    assert live()["system_max_total_power"] == 1600
+    path.unlink()
+    assert live()["system_max_total_power"] == 1600
+
+
+def test_the_dashboard_asks_a_live_validation_context_for_its_current_limits():
+    from dashboard.server import DashboardHTTPServer
+
+    server = DashboardHTTPServer.__new__(DashboardHTTPServer)
+    answers = iter([{"system_max_total_power": 800}, {"system_max_total_power": 1600}])
+    server.runtime_validation = lambda: next(answers)
+
+    assert server.runtime_validation["system_max_total_power"] == 800
+    assert server.runtime_validation["system_max_total_power"] == 1600
+    server.runtime_validation = {"system_max_total_power": 900}
+    assert server.runtime_validation == {"system_max_total_power": 900}
+
+
+def _live_context(tmp_path, config):
+    import json
+
+    from ems.runtime_commands import LiveValidationContext
+
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(config), encoding="utf-8")
+    return path, LiveValidationContext(str(path), config)
+
+
+def test_a_saved_transport_switch_does_not_let_an_mqtt_device_take_an_ac_role_before_the_restart(tmp_path):
+    """Over MQTT the EMS cannot switch acMode; the device stays on MQTT until the EMS restarts."""
+
+    import json
+
+    mqtt = {"name": "WR1", "type": "zendure_mqtt", "max_power": 800, "mqtt": {"device_id": "abc"}}
+    config = {"system": {"max_total_power": 800}, "devices": [mqtt]}
+    path, live = _live_context(tmp_path, config)
+    assert live()["ac_role_unsupported"] == ["WR1"]
+
+    switched = {"name": "WR1", "ip": "192.0.2.10", "sn": "SN", "max_power": 800}
+    path.write_text(json.dumps({**config, "system": {"max_total_power": 900}, "devices": [switched]}), encoding="utf-8")
+
+    assert live()["system_max_total_power"] == 900
+    assert live()["ac_role_unsupported"] == ["WR1"]
+    with pytest.raises(runtime_commands.RuntimeWriteError):
+        runtime_commands.validate_device_values("WR1", {"runtime_role": "ac_input"}, live())
+
+
+def test_only_the_limits_the_admin_applies_live_follow_the_file(tmp_path):
+    import json
+
+    config = {
+        "system": {"max_total_power": 800, "max_device_power": 600},
+        "devices": [{"name": "WR1", "max_power": 700}, {"name": "WR2"}],
+    }
+    path, live = _live_context(tmp_path, config)
+    changed = {
+        "system": {"max_total_power": 1600, "max_device_power": 1200},
+        "devices": [{"name": "WR1", "max_power": 750}, {"name": "WR2"}, {"name": "WR3", "max_power": 500}],
+    }
+    path.write_text(json.dumps(changed), encoding="utf-8")
+
+    context = live()
+    assert context["system_max_total_power"] == 1600
+    assert context["min_output_limit_max"] == 1600
+    assert context["device_max_power"] == {"WR1": 750, "WR2": 1200}
+    assert context["fallback_device_max_power"] == 600
+
+
+def test_the_live_limits_are_the_ones_the_admin_applies_without_a_restart():
+    """Paired with the Admin's applies_live and live_device_paths: a limit that follows the file must apply live there."""
+
+    from admin.config_runtime_overlap import applies_live, live_device_paths
+
+    devices = [{"name": "WR1", "ip": "192.0.2.10", "sn": "S1", "max_power": 700}, {"name": "WR2", "ip": "192.0.2.11", "sn": "S2"}]
+    before = {"system": {"max_total_power": 800, "max_device_power": 600}, "devices": devices}
+    after = {**before, "system": {"max_total_power": 800, "max_device_power": 1200}}
+    runtime = {"WR1": {"identity": "S1"}, "WR2": {"identity": "S2"}}
+
+    assert applies_live("system.max_total_power")
+    assert applies_live("devices[0].max_power", before)
+    assert "devices[1].max_power" in live_device_paths(before, after, runtime)
+    assert "devices[0].max_power" not in live_device_paths(before, after, runtime)
+
+
+def test_the_ems_hands_the_live_context_itself_to_every_reader():
+    """A snapshot taken at start, ``LiveValidationContext(...)()``, would freeze the limits again."""
+
+    import ast
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "ems-solarflow-api-control.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    built = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "runtime_validation" for target in node.targets)
+    ]
+    assert len(built) == 1
+    assert isinstance(built[0].value, ast.Call) and getattr(built[0].value.func, "id", "") == "LiveValidationContext"
+    called = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "runtime_validation"
+    ]
+    assert called == []
+    handed = [
+        keyword.arg for node in ast.walk(tree) if isinstance(node, ast.Call)
+        for keyword in node.keywords
+        if isinstance(keyword.value, ast.Name) and keyword.value.id == "runtime_validation"
+    ]
+    assert sorted(handed) == ["runtime_validation", "validation_context", "validation_context"]

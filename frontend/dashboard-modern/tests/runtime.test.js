@@ -169,6 +169,19 @@ test("a strict toggle shows on only for a stored true, as the EMS reads anything
   assert.equal(normalizeValue(loose, "on"), true);
 });
 
+test("a value above a field's bound is caught before it is sent, and only for a field that names its bound", async () => {
+  const { boundExceeded } = await import("../src/lib/runtime.js");
+  const total = { name: "max_total_power", type: "number", max: 1600, bound: "installation" };
+  const device = { name: "max_power", type: "number", max: 800, bound: "device" };
+  const loop = { name: "loop_interval", type: "number", max: 3600 };
+  assert.equal(boundExceeded([total, device], { max_total_power: 1700 }), total);
+  assert.equal(boundExceeded([total, device], { max_power: 801 }), device);
+  assert.equal(boundExceeded([total, device], { max_total_power: 1600, max_power: 800 }), null);
+  assert.equal(boundExceeded([loop], { loop_interval: 9999 }), null);
+  assert.equal(boundExceeded([total], {}), null);
+  assert.equal(boundExceeded([total], { max_total_power: null }), null);
+});
+
 test("a grid target is a number like any other: stored signed, an emptied one not sent", () => {
   const field = { name: "grid_target_charge_w", type: "gridTarget", min: -200, max: 200 };
   assert.equal(normalizeValue(field, "-10"), -10);
