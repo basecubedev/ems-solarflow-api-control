@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { adminSend } from "./auth.svelte.js";
 import { system, reload } from "./system.svelte.js";
-import { changeCount, fieldIndex, liveEdits, overrideTargets, sameAsSaved, sentDraft, storable, writeAtOnce } from "../lib/settings.js";
+import { applyAndRead, changeCount, fieldIndex, liveEdits, overrideTargets, sameAsSaved, sentDraft, storable, writeAtOnce } from "../lib/settings.js";
 import { editableDraft } from "../lib/devices.js";
 
 const EDITS_KEY = "ems-admin.settings-edits";
@@ -225,25 +225,26 @@ export async function applyDraft({ backup = true } = {}) {
   settings.applying = true;
   settings.applyError = null;
   try {
-    const result = await adminSend(PATHS.apply, { body: { draft: body, revision, confirm: true, backup } });
-    if (result?.ok === false) {
-      settings.applyError = result;
+    const { applied, error } = await applyAndRead(
+      () => adminSend(PATHS.apply, { body: { draft: body, revision, confirm: true, backup } }),
+      () => reload("config"),
+    );
+    if (error) {
+      settings.applyError = error;
+      if (error?.payload?.validation) {
+        settings.preview = error.payload;
+        settings.previewedFor = JSON.stringify(draft);
+      }
       return;
     }
-    settings.applied = { result, diff: changes, at: Date.now() };
+    settings.applied = { ...applied, diff: changes };
     setEdits({});
     setHardware({ values: {}, base: "" });
     settings.preview = null;
     settings.previewedFor = "";
-  } catch (error) {
-    settings.applyError = error;
-    if (error?.payload?.validation) {
-      settings.preview = error.payload;
-      settings.previewedFor = JSON.stringify(draft);
-    }
   } finally {
     settings.applying = false;
-    reload("config", "overview", "plan");
+    reload("overview", "plan");
   }
 }
 

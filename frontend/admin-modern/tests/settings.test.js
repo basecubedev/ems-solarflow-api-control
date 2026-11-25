@@ -271,6 +271,47 @@ test("a change written at once is built on the config as it is now and applied w
   assert.deepEqual([sent[1][1].revision, sent[1][1].confirm, sent[1][1].backup], ["r2", true, true]);
 });
 
+test("a reviewed draft is saved only once the config has been read back", async () => {
+  const { applyAndRead } = await import("../src/lib/settings.js");
+  let release;
+  const read = new Promise((resolve) => (release = resolve));
+  const steps = [];
+  const answer = applyAndRead(
+    async () => {
+      steps.push("apply");
+      return { ok: true, backup: "b1" };
+    },
+    () => {
+      steps.push("reload");
+      return read;
+    },
+  ).then((outcome) => {
+    steps.push("answer");
+    return outcome;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(steps, ["apply", "reload"]);
+  release();
+  const outcome = await answer;
+  assert.deepEqual(steps, ["apply", "reload", "answer"]);
+  assert.deepEqual(outcome.applied.result, { ok: true, backup: "b1" });
+  assert.equal(typeof outcome.applied.at, "number");
+  assert.equal(outcome.error, undefined);
+});
+
+test("a refused or failed apply still reads the config back, and a failed read hides no save", async () => {
+  const { applyAndRead } = await import("../src/lib/settings.js");
+  const reads = [];
+  const reload = async () => reads.push("reload");
+  const refusal = { ok: false, error: "config_changed" };
+  assert.deepEqual(await applyAndRead(async () => refusal, reload), { error: refusal });
+  const failure = new Error("offline");
+  assert.deepEqual(await applyAndRead(async () => Promise.reject(failure), reload), { error: failure });
+  assert.equal(reads.length, 2);
+  const saved = await applyAndRead(async () => ({ ok: true }), async () => Promise.reject(new Error("read failed")));
+  assert.deepEqual(saved.applied.result, { ok: true });
+});
+
 test("a change written at once is refused when the config moved on, and nothing is applied", async () => {
   const { writeAtOnce } = await import("../src/lib/settings.js");
   const sent = [];
