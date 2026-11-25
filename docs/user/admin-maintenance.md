@@ -326,14 +326,15 @@ This page edits an existing installation.
   setting and one bar at the foot of the page that counts your unsaved
   changes. Switching a tab never reloads and never discards unsaved changes;
   they also survive a reload, and **Discard** drops them.
-- **Customized** lists, read-only, every saved setting that differs from this
-  release's defaults and every value the Dashboard runs instead of a default,
-  grouped by feature and device, each with **Saved**, **Running** and
-  **Default**; **Show** takes you to the field, a device's in its opened card.
+- **Customized** lists, read-only, every setting that differs from this
+  release's defaults, an operating setting as EMS runs it, grouped by feature
+  and device, each with its value and **Default**; **Show** takes you to the
+  field, a device's in its opened card.
   Connections, values that describe the installation (a device's power limit,
   PV size, battery size) and passwords are never listed.
 - **Safety** holds the switches that decide whether EMS may change your
-  inverters, with nothing hidden behind a disclosure. They are **on by
+  inverters and the limits it never goes above, with nothing hidden behind a
+  disclosure. They are **on by
   default**: a fresh installation controls your inverters without you enabling
   anything, and the switches exist to stop it. A switch your settings file does
   not mention is shown at that default; nothing is written until you change it.
@@ -349,19 +350,25 @@ This page edits an existing installation.
   whole number; a value you did not change is left as it is stored. The
   operating settings (control on or off, loop interval, standby floor, grid
   targets, winter mode, AC charging and battery care on or off and its values,
-  and per device PV priority, AC charging and discharging and the off-grid
-  socket) live in `data/runtime-state.json`, where the Dashboard changes them
-  too: they show the value EMS runs, and saving writes them there, live at
-  once, never into `config.json`. Saving writes the rest into `config.json`,
-  and the power limits and a device's activation also into the runtime state,
-  so they go live immediately instead of waiting for an EMS restart. A device you
-  switch off, or turn telemetry-only while it keeps its serial number, is taken
-  out of control at once; one you switch back on keeps the values set for it on
-  the Dashboard, except those you changed here. Saving still never moves
-  `data/` history,
-  `docker-compose.yml`, or databases. A power limit the Dashboard runs below
-  its saved value shows **Running: …**, and **Put saved values back** makes
-  the live EMS use the saved values again. A field whose value differs from its default shows
+  and per device PV priority and AC charging and discharging) live in
+  `data/runtime-state.json`, where the Dashboard changes them too: they show
+  the value EMS runs, and saving writes those you changed here there, live at
+  once, never into `config.json`; a value the Dashboard or a schedule changed
+  after the page loaded stays. A switched-off device that ran keeps its values
+  there for when it runs again, and saving changes them there; a device that
+  never ran (just added) keeps them in `config.json` until it runs. Saving
+  writes the rest into `config.json`.
+  The power limits are hard limits: **Maximum system output** (Safety) and
+  each device's **Device output limit** (Devices), with **Fallback device
+  limit** for a device without its own. Below each, **Operating value: …**
+  names the power EMS runs, changed on the Dashboard and never above the
+  limit; lowering a limit below it lowers it at once, raising a limit leaves
+  it. A device's **Enabled** is its activation; **Control off on the
+  Dashboard** beside it says that EMS reads and shows the device but does not
+  write to it. A device you switch off, or turn telemetry-only while it keeps
+  its serial number, is taken out of control at once; one you switch back on
+  is controlled again. Saving still never moves `data/` history,
+  `docker-compose.yml`, or databases. A field whose value differs from its default shows
   **Default: …**, for information only, except values that describe the
   installation, such as power limits and battery size. An emptied field names
   in grey the value it falls back to, and saving makes that the value the EMS

@@ -310,6 +310,55 @@ export function restartNeeded(diff, result) {
   return (sync.skipped || []).length > 0 || (sync.warnings || []).length > 0;
 }
 
+/**
+ * The operating settings a save could not hand to the EMS (``operating_sync``
+ * skipped): they are in neither file, so the page names them instead of
+ * saying the EMS uses them.
+ */
+export function operatingSkipped(result) {
+  const skipped = mapping(result?.operating_sync).skipped;
+  return (Array.isArray(skipped) ? skipped : []).map((entry) => String(mapping(entry).path ?? "")).filter(Boolean);
+}
+
+/**
+ * The devices of a draft without their operating values: each device's own
+ * (the keys its ``operating_base`` names) and that base. The runtime state
+ * holds those, and the dashboard, a schedule or emsctl changes them without
+ * touching the saved config, so they are no sign that the config changed.
+ */
+export function installedDevices(devices) {
+  if (!Array.isArray(devices)) return devices ?? null;
+  return devices.map((device) => {
+    const base = mapping(device).operating_base;
+    if (!base || typeof base !== "object") return device;
+    const kept = { ...device };
+    for (const key of [...Object.keys(base), "operating_base"]) delete kept[key];
+    return kept;
+  });
+}
+
+/**
+ * Stored device edits laid over the devices the page loaded now: each
+ * operating value the stored device still holds as it loaded it takes the
+ * value the EMS runs now, and every device takes the base it was loaded with
+ * now, so a value the dashboard or a schedule changed meanwhile is neither
+ * shown stale nor put back. A value changed here stays.
+ */
+export function withFreshOperating(devices, loaded) {
+  if (!Array.isArray(devices)) return devices;
+  const now = new Map((Array.isArray(loaded) ? loaded : []).filter((device) => device?.original_name).map((device) => [device.original_name, device]));
+  return devices.map((device) => {
+    const base = mapping(device).operating_base;
+    const fresh = now.get(device?.original_name);
+    if (!base || typeof base !== "object" || !fresh?.operating_base) return device;
+    const next = { ...device, operating_base: { ...fresh.operating_base } };
+    for (const [key, value] of Object.entries(base)) {
+      if (same(device[key], value) && Object.hasOwn(fresh, key)) next[key] = fresh[key];
+    }
+    return next;
+  });
+}
+
 /** A value in the preview as text. */
 export function previewValue(value) {
   if (value === null || value === undefined) return "—";
@@ -318,35 +367,17 @@ export function previewValue(value) {
 }
 
 /**
- * The dashboard's runtime overrides that "Put live values back" resets, in the
- * shape POST /api/admin/maintenance/config/reset-runtime takes.
+ * The operating value the EMS runs below a hard limit the editor shows, from
+ * the config answer's ``operating`` (admin/operation_settings.py): the total
+ * below ``system.max_total_power``, a device's power below its own limit, and
+ * a device's control switch beside its activation. Changed on the dashboard;
+ * null where the answer names none.
  */
-export function overrideTargets(overrides) {
-  const targets = [];
-  for (const [path, entry] of Object.entries(mapping(overrides))) {
-    if (path === "devices" || entry?.source !== "dashboard_override") continue;
-    const dot = path.indexOf(".");
-    if (dot < 0) continue;
-    const head = path.slice(0, dot);
-    const key = path.slice(dot + 1);
-    targets.push(head === "system" ? { scope: "system", key } : { scope: "section", section: head, key });
-  }
-  for (const [name, fields] of Object.entries(mapping(mapping(overrides).devices))) {
-    for (const [key, entry] of Object.entries(mapping(fields))) {
-      if (entry?.source !== "dashboard_override") continue;
-      const target = { scope: "device", name, key };
-      const token = String(entry.physical_identity_token || "").trim();
-      if (token.startsWith("opaque:v1:")) target.physical_identity_token = token;
-      targets.push(target);
-    }
-  }
-  return targets;
-}
-
-/** The live value the dashboard set for a path, when it differs from the saved config. */
-export function liveOverride(overrides, path) {
-  const entry = mapping(mapping(overrides)[path]);
-  return entry.source === "dashboard_override" ? entry : null;
+export function operatingValue(operating, path, device = null) {
+  const view = mapping(operating);
+  if (device === null) return Object.hasOwn(view, path) && view[path] !== null && view[path] !== undefined ? view[path] : null;
+  const values = mapping(mapping(view.devices)[device]);
+  return Object.hasOwn(values, path) && values[path] !== null && values[path] !== undefined ? values[path] : null;
 }
 
 /** A switch the file spells as anything but true or false, which the EMS reads field by field ("false" on a write gate closes it). */
@@ -355,24 +386,21 @@ export function spelledSwitch(field, value) {
 }
 
 /**
- * One setting held against its default: the saved value when it departs, and
- * the dashboard's live value when it runs instead of the saved one. Null when
- * the field names no default, or neither value departs from it. A switch
+ * One setting held against its default: its value when it departs. Null when
+ * the field names no default, or the value does not depart from it. A switch
  * spelled as text always departs: its text is no default, and what it does
  * depends on how the EMS reads that switch.
  */
-function departure(field, value, live, fallback = field?.default) {
+function departure(field, value, fallback = field?.default) {
   const standard = nameableDefault(field, fallback);
   if (standard === undefined) return null;
-  const running = live?.source === "dashboard_override" ? live : null;
-  const saved = spelledSwitch(field, value) || departedDefault(field, value, fallback) !== undefined;
-  if (!saved && !(running && departedDefault(field, running.effective_value, fallback) !== undefined)) return null;
-  return { field, value: saved ? value : undefined, live: running, standard };
+  if (!spelledSwitch(field, value) && departedDefault(field, value, fallback) === undefined) return null;
+  return { field, value, standard };
 }
 
 /**
- * Every setting the saved config, or the dashboard at runtime, holds away from
- * this release's defaults, by the rule of the editor's "Default: X" badge:
+ * Every setting held away from this release's defaults, by the rule of the
+ * editor's "Default: X" badge, an operating setting as the EMS runs it:
  * the settings of every section, its switch included, and the tuning of each
  * device whose card holds it. Connections, the fields the catalogue marks as
  * such (addresses, ports, URLs, a broker's user), and the grid meter, a hardware
@@ -386,14 +414,13 @@ function departure(field, value, live, fallback = field?.default) {
  */
 export function departures(config) {
   const saved = mapping(config?.draft?.features);
-  const overrides = mapping(config?.overrides);
   const groups = [];
   for (const section of sections(config)) {
     const own = switchPath(section);
     const rows = [];
     for (const field of section.fields || []) {
       if (!field?.path || HIDDEN_LEVELS.has(field.level) || field.connection) continue;
-      const row = departure(field, saved[field.path], liveOverride(overrides, field.path));
+      const row = departure(field, saved[field.path]);
       if (!row) continue;
       rows.push(field.path === own ? { ...row, tab: sectionTab(section), search: "", section: section.id } : { ...row, tab: isSafetyField(field) ? "safety" : sectionTab(section), search: field.path });
     }
@@ -403,11 +430,10 @@ export function departures(config) {
   const devices = Array.isArray(config?.draft?.devices) ? config.draft.devices : [];
   devices.forEach((device, index) => {
     if (!TUNED_KINDS.includes(deviceKind(device))) return;
-    const live = mapping(mapping(overrides.devices)[device?.original_name]);
     const rows = [];
     for (const field of common) {
       const key = fieldKey(field.path);
-      const row = departure(field, device?.[key], live[key]);
+      const row = departure(field, device?.[key]);
       if (row) rows.push({ ...row, tab: "devices", search: "", device: device?.original_name ?? "" });
     }
     if (rows.length) groups.push({ id: `device:${index}`, device, rows });

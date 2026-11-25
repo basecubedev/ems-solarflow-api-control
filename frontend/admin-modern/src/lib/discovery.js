@@ -766,6 +766,7 @@ export function switchTransport(devices, identity, target, context, catalog) {
     const key = fieldKey(field.path);
     if (!IDENTITY_KEYS.includes(key) && current[key] != null) kept[key] = current[key];
   }
+  if (current.operating_base && typeof current.operating_base === "object") kept.operating_base = { ...current.operating_base };
   let replacement;
   if (target === "local_api") {
     const found = context?.discovered || {};

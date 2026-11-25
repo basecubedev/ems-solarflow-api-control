@@ -1,14 +1,16 @@
 # Runtime State
 
-`data/runtime-state.json` stores temporary mutable operator state in new
-generated configs.
+`data/runtime-state.json` stores the operating settings, the values an
+operator changes while the EMS runs, in new generated configs. It is their
+only home ([settings-operation-store.md](../developer/settings-operation-store.md)):
+back it up with the rest, and do not delete it to reset values.
 
 ```text
 config.json
 = static installation, safety flags, IPs, serial numbers, technical defaults
 
 data/runtime-state.json
-= temporary local runtime/operator data
+= operating settings: the values an operator changes while the EMS runs
 
 data/ems_state.sqlite
 = durable core EMS lifecycle state such as battery full-charge assist tracking
@@ -26,8 +28,17 @@ data/pv-input-watch.json
   the Admin console's PV input hints; see "The PV input watch" below
 ```
 
-The EMS creates the runtime state file on first start from config defaults. The
-file is ignored by Git and is recreated automatically if missing. Older
+The EMS creates the runtime state file on first start from config defaults. A
+file first written while `config.json` still held the template's placeholders,
+which force control off, is marked (`seeded_from_placeholders`) and built
+afresh from the config at the first start without them, so a new installation
+runs with the values it was set up with. Until then, and before any EMS start
+while the config still holds placeholders, **Settings & devices** writes the
+operating values it changes into `config.json`, which that start reads;
+values the dashboard or `emsctl` set meanwhile are not kept. The file is ignored by Git. A missing file is recreated with the built-in defaults,
+not with the values it held: once a live start has moved the operating values
+out of `config.json`, deleting it switches control back on and allows every
+device to discharge again. Older
 root-level `runtime-state.json` files from previous setups are no longer
 required after switching to `data/runtime-state.json` and may be removed
 manually.
@@ -206,8 +217,8 @@ running EMS last saw it, beside the value set.
 
 ## One command path
 
-Every edit of an operator value -- `emsctl`, the dashboard, the Admin's [config
-→ runtime mirror](#config--runtime-convergence-admin-maintenance) -- goes
+Every edit of an operator value -- `emsctl`, the dashboard, the Admin's
+[settings](#admin-save--runtime-state) -- goes
 through `ems/runtime_commands.py`: one whitelist, one set of validators, named
 commands that are `emsctl`'s (`system max-power`, `device NAME offgrid`, `winter
 enable`, …), and one writer. The writer re-reads the file immediately before it
@@ -237,9 +248,9 @@ The EMS is authoritative for runtime device state. On every load it reconciles
 the device entries against the configured (controllable) devices, so the file
 stays clean as devices are added, renamed, or removed in `config.json`. The
 Admin Console never edits `runtime-state.json` to reconcile the device lifecycle
-(add/rename/remove) — that stays EMS-authoritative. It does mirror a small,
-whitelisted set of overlapping scalar values into runtime-state on Apply; see
-[Config → runtime convergence](#config--runtime-convergence-admin-maintenance).
+(add/rename/remove) — that stays EMS-authoritative. It writes the operating
+settings an Apply changed, and what a saved device activation or a lowered limit
+means for them; see [Admin save → runtime state](#admin-save--runtime-state).
 
 Devices are matched to their config entry by a stable `identity` (serial), so:
 
@@ -289,124 +300,98 @@ EMS that already runs, because Compose leaves a running service alone when only
 its mounted config changed. A running EMS reloading the file, a `--preflight`
 run, the Admin's maintenance mirror and `emsctl` never settle the request.
 
-## Config → runtime convergence (Admin maintenance)
+## Admin save → runtime state
 
-A few scalar values are writable in **both** `config.json` (the Admin console) and
-`runtime-state.json` (the dashboard's **Control** page and `emsctl`). For these keys the
-live EMS resolves the runtime value first, with the config value as the fallback,
-so an Admin edit to `config.json` alone would not take effect until a restart —
-and the runtime value would keep winning even then.
+Every setting lives in one file ([configuration.md](configuration.md#config-vs-runtime-state),
+[settings-operation-store.md](../developer/settings-operation-store.md)). The
+operating settings (`OPERATION_SETTING_PATHS`, `OPERATION_DEVICE_KEYS` in
+`ems/runtime_commands.py`) live here only: **Settings & devices** shows each as
+the EMS runs it, and an Apply writes a changed one here through the runtime
+service (`admin/operation_settings.py`), creating this file where the EMS has
+not yet, with the config's defaults revision. Only a value the page changed
+from the one it loaded is written (the draft carries the loaded ones as
+`operating_base`), so a value the dashboard, the scheduler or `emsctl` set
+after the page loaded stays. A device the running EMS keeps no runtime entry
+and no parked values for (added since it started, never run) keeps its
+operating values in its config entry until a live start with the device built
+moves them; one that ran keeps them parked (below). The preview lists the
+others as taking effect at once.
 
-To keep the two stores coherent, the Admin's **Save and apply** on **Settings &
-devices** mirrors the keys it actually changed into runtime-state,
-one-directionally (config/Admin → runtime; runtime is never merged back into
-config). The overlapping keys are exactly the
-Dashboard runtime-write whitelist:
+When the EMS prunes the entry of a device it no longer builds (switched off,
+telemetry-only), it parks that entry's operating values under
+`parked_devices`, keyed by the device's serial or else its name. A device
+built again gets them back (`runtime_device_values_restored`), over what its
+config entry seeds: they are the values it ran with. Its power and its
+control switch are not parked: it comes back at its limit with control on. A
+device whose serial was changed by hand, as for a replaced inverter, starts
+like a new one from what its entry holds. A
+device removed from
+`config.json` loses its parked values at the next start, so one added back
+starts from what its entry holds. **Settings & devices**
+shows such a device's parked values and changes them where they are parked; a
+device that never ran keeps its values in its config entry instead. A save
+that changes the serial a device's entry is keyed by writes the device's
+values into its config entry, since the next start finds no entry for the new
+serial. While a fresh setup's reset request still names the
+installed config, an Admin save writes the operating values it changes into
+`config.json` instead, since the next EMS start builds this file from that
+config.
 
-- `system.enabled`, `system.max_total_power`, `system.loop_interval`,
-  `system.min_output_limit`
-- `winter.enabled`, `ac_charge_control.enabled`
-- `battery_care.enabled`, `battery_care.summer_full_points`,
-  `battery_care.winter_full_points`, `battery_care.pv_only_points`,
-  `battery_care.min_discharge_w`, `battery_care.pv_margin_percent`,
-  `battery_care.pv_margin_min_w`
-- per device: `enabled`, `max_power`, `pv_priority_factor`,
-  `offgrid_socket_mode`, `ac_charge_enabled`, `ac_discharge_enabled`, for a
-  device runtime-state holds
-  an entry for. EMS seeds one for each device it builds to control when it
-  starts, over HTTP or MQTT, keeps it until it starts again, switched off
-  meanwhile or not, and prunes the rest then: a device switched off, a
-  read-only one, and one read over MQTT without control (`external_mqtt`, or
-  `zendure_mqtt` without `write_output_limit`), which it builds from
-  `config.json` alone. The mirror works per device, not per config entry: the
-  entries that name one serial (or, without a serial, one name) are one device,
-  and its runtime entry is the one the EMS starts with
-  (`ems.runtime_state.runtime_device_for`): the entry stamped with that serial,
-  else the one under the name that carries no other serial. A device renamed
-  since the EMS started, or two devices that swapped names, so reach the entry
-  the running EMS reads for them, and the EMS carries that entry, values
-  included, over to the new name at its next start. The serial is read as the
-  EMS stamps it (`sn`, else `serial_number`, else `mqtt.device_id`, as text).
-  One config entry speaks for the device: the one the EMS builds to control
-  (switched on, over HTTP or MQTT), else the first one it would build if it
-  were switched on, else the first; a telemetry-only or external entry never
-  speaks for a device another entry controls. The mirror keeps one rule: the
-  runtime entry holds the effective values of the speaking entry, the ones the
-  EMS seeds at its start (the configured one, else the EMS default, coerced as
-  the EMS does: a `max_power` of 0 is the installation's ceiling, a fraction of
-  a watt is dropped, a priority of 0 is 1; a test pairs
-  `admin/config_runtime_overlap.py` `_effective_values` with
-  `build_runtime_defaults`), except where the Dashboard set a value the config
-  has not changed since. Each save writes the effective values that
-  differ from the speaking entry of the replaced config, a key removed from
-  the entry (the default it falls back to) and a changed system default such
-  as `max_device_power` included, and `enabled` when whether the EMS builds the
-  device changed (`admin/config_runtime_overlap.py` `device_runtime_plan`). So
-  a device is compared with itself, never by list position: removing a device
-  neither replays its neighbour's unchanged values over a live override nor
-  hides the neighbour's real change; a switched-off duplicate never writes into
-  the running device; switching a device off or turning it telemetry-only takes
-  it out of control at once and a telemetry entry never switches control on;
-  switching a device back on leaves its live overrides alone, while a value
-  saved meanwhile is already there; and when another entry for the device
-  takes over, its values arrive with it. A device switched on under another
-  entry than the one the running EMS drives it as is switched on, and the save
-  reports that the EMS keeps that entry until it restarts, so the console
-  offers the restart. A switch-off is written before the
-  values that come with it and a switch-on after them. A device the replaced
-  config did not hold brings its effective values to a runtime entry its serial
-  still owns, as one removed and added again without a restart in between,
-  because the EMS would keep that entry's values at its next start; it never
-  switches the device on, and a new device has no entry and starts from config.
-  One that only gained its serial in this save, at the same address, is the
-  entry of its name. Left
-  alone are a device either config holds several buildable entries for, one
-  whose runtime serial several entries carry, an entry whose `sn` and
-  `serial_number` disagree, and an entry that changed or lost its serial in
-  this save, a transport switch to a route without that serial included: none
-  of these is tied to a running device by its name. One limit remains: when a
-  serial moves to an entry that named another one (crosswise serials corrected
-  in two saves), the EMS's next start hands that entry the runtime values the
-  serial carried. Its fields then read **Running: …**, and **Put saved values
-  back** applies the saved ones. The change summary marks a device row live
-  exactly when the mirror writes that key (`live_device_paths`, validated as
-  the mirror validates), a removed key included. Its rows still compare devices
-  by list position, so after a removal a row can show a neighbour's values
-  under the removed device's position or miss a change of the neighbour that
-  the mirror writes; a device taken out of control because no entry is built
-  for it any more, and a device whose default a system setting changed, get no
-  row of their own; and where several entries stand for one device, the write
-  names the entry that speaks for it, which need not be the row that was
-  changed. A removed device is never mirrored, so never live.
+A save of the installation reaches the running EMS through this file in two
+ways, written by `admin/runtime_convergence.py` through the same validated
+writers the dashboard uses:
 
-Every key on this list is seeded from `config.json` by the EMS when it loads
-runtime-state, so the Dashboard's runtime controls always show the value the
-EMS applies. A key the Dashboard could write but the EMS did not seed would
-read as *off* in the Dashboard while the EMS applied the config default; that
-is how `ac_charge_control.enabled` shipped, and a contract test now walks the
-whitelist against the seeded defaults.
+- **A device's activation takes its control along.** Switching a device off
+  in `config.json`, or turning it telemetry-only, takes it out of control at
+  once; switching it on switches its control on; a telemetry entry never
+  switches control on. Control on or off is otherwise a setting of its own,
+  changed on the dashboard: the device stays active, read and shown, and the
+  EMS stops writing to it.
+- **A lowered limit holds the operating value at it.** Where the save lowers
+  `system.max_total_power` (or `system.max_total_power_limit`), a device's
+  `max_power` or the fallback `system.max_device_power` below the operating
+  value this file holds, the operating value is set to the new limit. A raised
+  limit leaves the operating value where it is; it is changed on the
+  dashboard, up to the limit. The runtime service refuses a value above the
+  limit it reads live from `config.json`, and the EMS holds every operating
+  power at that live limit each cycle, warning once per run and setting
+  (`operating_power_above_limit`), so a value written by hand never drives the
+  devices past it either.
 
-The mirror reuses the same validated whitelist writers the Dashboard uses (so the
-safety property — only whitelisted keys ever reach runtime-state — is preserved)
-and is **best-effort**: `config.json` is already written when it runs, so a value
-above the runtime power ceiling, a device that owns no runtime entry (renamed
-while its entry carried no serial yet), or a read-only/absent runtime file is
-reported as a per-key skip and never fails the save. New devices are seeded from
-config by the EMS on its next start. The entry a write goes to is
-looked up again under the runtime-state file lock, so an EMS start that re-keys
-the entries in between cannot turn it onto another device, and the mirror runs
-inside the Admin's apply transaction, so an earlier save cannot mirror its
-values over a later one's. The operating settings themselves
-(`OPERATION_SETTING_PATHS`, `OPERATION_DEVICE_KEYS` in `ems/runtime_commands.py`)
-have no config value to mirror: **Settings & devices** shows them as the EMS
-runs them and an Apply writes a changed one here directly
-(`admin/operation_settings.py`), creating this file where the EMS has not yet.
-For the power limits it marks a field whose live Dashboard value differs from
-the installed config value with **Running: …**, and its **Put saved
-values back** action writes the installed config values back into runtime-state,
-into the entry of the device the field's entry speaks for, and only for that entry;
-`enabled` is written as whether the EMS builds the device (it always writes the value; it never just clears the override, because the EMS loads
-`config.json` once per process).
+A device's writes go to the runtime entry the device owns. EMS seeds one for
+each device it builds to control when it starts, over HTTP or MQTT, keeps it
+until it starts again, switched off meanwhile or not, and prunes the rest then:
+a device switched off, a read-only one, and one read over MQTT without control
+(`external_mqtt`, or `zendure_mqtt` without `write_output_limit`). The entries
+that name one serial (or, without a serial, one name) are one device, and its
+runtime entry is the one the EMS starts with
+(`ems.runtime_state.runtime_device_for`): the entry stamped with that serial,
+else the one under the name that carries no other serial. A device renamed
+since the EMS started, or two devices that swapped names, so reach the entry
+the running EMS reads for them. The serial is read as the EMS stamps it (`sn`,
+else `serial_number`, else `mqtt.device_id`, as text). One config entry speaks
+for the device: the one the EMS builds to control, else the first one it would
+build if it were switched on, else the first; a telemetry-only or external
+entry never speaks for a device another entry controls
+(`admin/config_runtime_overlap.py` `device_runtime_plan`). Left alone are a
+device either config holds several buildable entries for, one whose runtime
+serial several entries carry, an entry whose `sn` and `serial_number`
+disagree, and an entry that changed or lost its serial in this save: none of
+these is tied to a running device by its name; the EMS holds their power at
+the limit from its next start. A device switched on under another entry than
+the one the running EMS drives it as is switched on, and the save reports that
+the EMS keeps that entry until it restarts, so the console offers the restart.
+A switch-off is written before the values that come with it and a switch-on
+after them.
+
+Every operating setting is seeded by the EMS when it loads runtime-state, so
+the dashboard always shows the value the EMS applies; a contract test walks
+the whitelist against the seeded defaults. The writes are **best-effort**:
+`config.json` is already written when they run, so a device that owns no
+runtime entry or a read-only or absent runtime file is reported as a per-key
+skip and never fails the save. The entry a write goes to is looked up again
+under the runtime-state file lock, and the writes run inside the Admin's apply
+transaction, so an earlier save cannot write over a later one.
 
 ## Old defaults
 

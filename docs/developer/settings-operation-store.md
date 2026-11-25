@@ -1,6 +1,6 @@
 # One value per setting: installation and operation
 
-Status: owner-approved design (2026-11-25), implemented in phases on
+Status: owner-approved design (2026-11-25), implemented in four phases on
 `feat/settings-operation-store`.
 
 ## Problem
@@ -37,7 +37,8 @@ Owner decisions (2026-11-25):
   today (winter months, minimum SoC, full-charge assist, control tuning) move
   later, one by one, each with live reading in the EMS.
 - Hard caps stay in `config.json` and change only in the Admin's Safety tab:
-  the total (`system.max_total_power_limit`) and each device's own
+  the total (`system.max_total_power`, or `system.max_total_power_limit`
+  where a config sets it) and each device's own
   `devices[].max_power`; `system.max_device_power` is only the fallback for a
   device without its own. The operating values below them live in the
   operation store, changeable everywhere, never above the cap.
@@ -61,8 +62,9 @@ Into the operation store, out of `config.json`:
 
 Pairs, cap in `config.json`, operating value in the operation store:
 
-- total power: cap `system.max_total_power_limit` (filled from today's
-  `system.max_total_power` where absent), operating `system.max_total_power`
+- total power: cap `system.max_total_power` in `config.json` (or
+  `system.max_total_power_limit` where a config sets it), operating
+  `system.max_total_power` in the operation store
 - device power: cap `devices[].max_power`, operating `devices.<name>.max_power`
 
 Two settings that share the name `enabled` per device, and stay apart:
@@ -101,7 +103,7 @@ buzzer, battery heating).
 
 ## Implementation steps
 
-Phases 1 to 3 are done. The steps as built:
+All four phases are done. The steps as built:
 
 Phase 2, Admin reads and writes operating values where the dashboard does:
 
@@ -112,13 +114,16 @@ Phase 2, Admin reads and writes operating values where the dashboard does:
   each operating value as the EMS takes it (runtime first, then the config,
   then the default).
 - `admin/maintenance_config.py`: the draft carries the operating values for
-  those paths and device keys; `_merge_draft` never writes them into the
-  config; the apply writes the changed ones through the runtime writer
+  those paths and device keys, and the values it loaded (`operating_base`);
+  `_merge_draft` writes them into the config only for a new device and a
+  device the running EMS keeps no runtime entry for; the apply writes those
+  the page changed from the loaded ones through the runtime writer
   (`admin/runtime_convergence.py`), creating `runtime-state.json` where it is
-  missing; the preview lists them as taking effect at once.
-- The override provenance, the reset-runtime endpoint and the UI's
-  "Running: …", "Put saved values back" and Customized running column go;
-  the Admin bundle is rebuilt.
+  missing, so a value set elsewhere after the page loaded stays; the preview
+  lists them as taking effect at once, and the result names any it could not
+  hand over.
+- The operating settings leave the override provenance; the power limits and
+  the device activation keep it until phase 4 replaces it.
 
 Phase 3, switch-over:
 
@@ -128,8 +133,18 @@ Phase 3, switch-over:
   (`ems.config.move_startup_operating_values`): the runtime state, which the
   start filled from its own values first and the config's second, is saved
   before the config is rewritten behind the upgrade backup, with the config's
-  own layout, and only if the file is unchanged since it was read. A disabled
-  device keeps its values; it has no runtime entry.
+  own layout, and only while the file is what the start read; not when the
+  runtime state could not be read. Only a built device's values leave; a
+  device the EMS does not build keeps its values in its entry. When the EMS
+  prunes the runtime entry of a device it no longer builds, it parks the
+  entry's operating values (`parked_devices`); the device gets them back when
+  built again, over what its config entry seeds. The Admin shows and changes
+  a parked device's values where they are parked; a device that never ran
+  keeps them in its config entry, and so does one whose serial a save
+  changes, since its next start finds no runtime entry for the new serial.
+- While a fresh setup's reset request names the installed config, an Admin
+  save writes the operating values it changes into `config.json`: the next
+  start builds the runtime state from that config.
 - The template keeps the operating keys as the starting values of a config
   that Guided Setup or a hand writes, and the catalogue's defaults come from
   it; `emsctl config init` writes the ones it asks about (control, minimum
@@ -141,9 +156,23 @@ Phase 3, switch-over:
 
 Phase 4, caps:
 
-- The Safety tab shows each cap with the operating value below it; changing
-  a cap below the operating value clamps the operating value; labels name
-  `system.max_device_power` as the fallback for a device without its own.
+- The EMS holds each operating power at the limit the live validation context
+  names each cycle (`EMSController.within_power_limit`, warned once per run as
+  `operating_power_above_limit`), so a runtime value written by hand, or kept
+  from before a limit was lowered, never drives the devices past it.
+- An Admin save that lowers a limit below the operating value sets the
+  operating value to the limit; a raised limit leaves it
+  (`admin/runtime_convergence.py`). The save no longer mirrors any other value:
+  the operating settings are written through `admin/operation_settings.py`,
+  and a device's activation still takes its control along.
+- The Maintenance load answers `operating` (the total, and each device's power
+  and control switch) instead of the override provenance; the limit fields
+  show **Operating value: …** below them, a device's activation shows
+  **Control off on the Dashboard** where that is so, and the control card
+  shows the total the EMS runs below its limit. The reset-runtime endpoint,
+  "Running: …", "Put saved values back" and the Customized tab's running
+  column are gone. The device limit's help names the dashboard value and the
+  fallback (`system.max_device_power`, "Fallback device limit").
 
 Backlog 59 (a device switch spelled as text) is settled by phase 3: the device
 switches that move leave `config.json`, and the operation store's writer

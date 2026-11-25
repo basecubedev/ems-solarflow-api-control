@@ -1,14 +1,13 @@
 // SPDX-FileCopyrightText: 2026 basecubedev
 // SPDX-License-Identifier: AGPL-3.0-or-later
 /**
- * What the saved settings allow EMS to do to the inverters: the control
- * state from the Maintenance config summary (admin/maintenance_config.py).
- * It states what the config permits, never that EMS is running, and an
- * unproven state reads as unknown, never as healthy. Where the dashboard
- * switched control on or off, or changed the total limit, at runtime (the
- * config answer's ``overrides``), the view follows the value EMS follows.
- * tests/control.test.js keeps the statuses and the transports in step with
- * the server's.
+ * What the settings allow EMS to do to the inverters: the control state from
+ * the Maintenance config summary (admin/maintenance_config.py), which takes
+ * control on or off as the EMS runs it. It states what the settings permit,
+ * never that EMS is running, and an unproven state reads as unknown, never as
+ * healthy. The total output is the operating value the EMS runs below its
+ * limit (the config answer's ``operating``). tests/control.test.js keeps the
+ * statuses and the transports in step with the server's.
  */
 
 export const CONTROL_STATUSES = Object.freeze({
@@ -23,36 +22,13 @@ export const CONTROL_STATUSES = Object.freeze({
 
 export const CONTROL_TRANSPORTS = Object.freeze(["api", "mqtt_local", "mqtt_zendure"]);
 
-/**
- * The server's status ladder (_control_state), most fundamental cause first;
- * tests/control.test.js holds this order to the server source. Used only to
- * place a runtime-switched "enabled" on it.
- */
-export const CONTROL_LADDER = Object.freeze(["safe_mode", "disabled", "simulated", "calculating_only", "may_control", "not_writing"]);
-
 const finiteNumber = (value) => (typeof value === "number" && Number.isFinite(value) ? value : null);
 const mapping = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : {});
 
-function liveEntry(overrides, path, type) {
-  const entry = mapping(mapping(overrides)[path]);
-  return entry.source === "dashboard_override" && typeof entry.effective_value === type ? entry.effective_value : null;
-}
-
-function statusWith(source, enabled) {
-  if (Array.isArray(source.placeholder_fields) && source.placeholder_fields.length) return "safe_mode";
-  if (!enabled) return "disabled";
-  if (source.simulation_mode) return "simulated";
-  if (source.dry_run) return "calculating_only";
-  const transports = Array.isArray(source.transports) ? source.transports : [];
-  return transports.some((entry) => entry?.armed && Number(entry.device_count) > 0) ? "may_control" : "not_writing";
-}
-
-export function controlView(control, overrides) {
+export function controlView(control, operating = null) {
   const source = control && typeof control === "object" && !Array.isArray(control) ? control : null;
-  let status = source && Object.hasOwn(CONTROL_STATUSES, source.status) && source.status !== "unknown" ? source.status : "unknown";
-  const liveEnabled = status === "unknown" ? null : liveEntry(overrides, "system.enabled", "boolean");
-  if (liveEnabled !== null) status = statusWith(source, liveEnabled);
-  const view = { status, tone: CONTROL_STATUSES[status], transports: [], envelope: {}, notes: [], live: false };
+  const status = source && Object.hasOwn(CONTROL_STATUSES, source.status) ? source.status : "unknown";
+  const view = { status, tone: CONTROL_STATUSES[status], transports: [], envelope: {}, notes: [] };
   if (status === "unknown") {
     view.notes.push({ key: "control.note.provenance" });
     return view;
@@ -65,10 +41,11 @@ export function controlView(control, overrides) {
       return { gate: entry.control_gate, state, devices, tone: state === "writing" ? "c-ok" : "c-idle" };
     });
   const envelope = source.envelope && typeof source.envelope === "object" ? source.envelope : {};
-  const liveTotal = liveEntry(overrides, "system.max_total_power", "number");
-  view.live = liveEnabled !== null || liveTotal !== null;
+  const limit = finiteNumber(envelope.total_output_w);
+  const running = finiteNumber(mapping(operating)["system.max_total_power"]);
   view.envelope = {
-    totalW: liveTotal !== null ? liveTotal : finiteNumber(envelope.total_output_w),
+    totalW: running !== null && limit !== null ? Math.min(running, limit) : running ?? limit,
+    totalLimitW: limit,
     deviceW: finiteNumber(envelope.device_output_w),
     socMin: finiteNumber(envelope.soc_min),
     socMax: finiteNumber(envelope.soc_max),
@@ -78,8 +55,7 @@ export function controlView(control, overrides) {
   if (placeholders.length) view.notes.push({ key: "control.note.placeholders", vars: { fields: placeholders.join(", ") } });
   if (view.transports.some((entry) => entry.state === "writing")) view.notes.push({ key: "control.note.singleController" });
   if (source.state_reconciliation === true) view.notes.push({ key: "control.note.stateReconciliation" });
-  const devices = Object.values(mapping(mapping(overrides).devices));
-  if (devices.some((entry) => mapping(mapping(entry).enabled).source === "dashboard_override")) view.notes.push({ key: "control.note.devicesLive" });
-  view.notes.push({ key: view.live ? "control.note.live" : "control.note.provenance" });
+  if (Object.values(mapping(mapping(operating).devices)).some((entry) => mapping(entry).control === false)) view.notes.push({ key: "control.note.devicesOff" });
+  view.notes.push({ key: "control.note.provenance" });
   return view;
 }

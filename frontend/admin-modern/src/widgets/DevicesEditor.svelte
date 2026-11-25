@@ -8,7 +8,7 @@
   import HomeWizardPairing from "./HomeWizardPairing.svelte";
   import { HOMEWIZARD_TYPE, PAIRING_NAME_FIELD, SERIAL_FIELD, TOKEN_FIELD } from "../lib/homewizard.js";
   import { t, say, catalogText } from "../i18n/i18n.svelte.js";
-  import { settings, setHardwareValues } from "../state/settings.svelte.js";
+  import { settings, setHardwareValues, operatingLine } from "../state/settings.svelte.js";
   import { sources, saveCredential } from "../state/sources.svelte.js";
   import BridgePasswordField from "./BridgePasswordField.svelte";
   import PvInputsField from "./PvInputsField.svelte";
@@ -168,11 +168,6 @@
     return target.index !== undefined && focus?.device === target.index && group.some((field) => field.path === focus.path);
   }
 
-  function liveFor(device, key) {
-    const entry = config.overrides?.devices?.[device?.original_name]?.[key];
-    return entry?.source === "dashboard_override" ? entry : null;
-  }
-
   function sourceLabel(device) {
     const source = connectionSource(device);
     if (source === "zendure_mqtt") return t("settings.source.zendure_cloud_mqtt");
@@ -252,7 +247,7 @@
   {#if key === UNUSED_PV_INPUTS}
     <PvInputsField {device} onchange={(number, empty) => markInput(index, device, number, empty)} />
   {:else}
-    <SettingField {field} value={device[key]} live={liveFor(device, key)} defaultValue={defaults[key]} onchange={(value) => update(index, setDeviceValue(device, key, value, savedDevices.get(device.original_name) ?? null))} />
+    <SettingField {field} value={device[key]} operating={operatingLine(config.operating, key, device?.original_name ?? "")} defaultValue={defaults[key]} onchange={(value) => update(index, setDeviceValue(device, key, value, savedDevices.get(device.original_name) ?? null))} />
   {/if}
 {/snippet}
 
@@ -285,7 +280,7 @@
 {/snippet}
 
 {#snippet enabledField(device, index, kind)}
-  <SettingField field={{ path: "enabled", type: "boolean", label: t("devices.field.enabled"), description: t(`devices.enabledHint.${kind}`) }} lang={null} value={device.enabled !== false} live={liveFor(device, "enabled")} onchange={(value) => update(index, { ...device, enabled: value })} />
+  <SettingField field={{ path: "enabled", type: "boolean", label: t("devices.field.enabled"), description: t(`devices.enabledHint.${kind}`) }} lang={null} value={device.enabled !== false} operating={operatingLine(config.operating, "control", device?.original_name ?? "")} onchange={(value) => update(index, { ...device, enabled: value })} />
 {/snippet}
 
 <div class="editor" data-testid="devices-editor">

@@ -7,18 +7,21 @@
   import { controlView } from "../lib/control.js";
 
   /**
-   * control: the "control" block of the Maintenance config summary, which reads
-   * the saved file only; overrides: the same answer's runtime overrides, which
-   * the view follows where the dashboard changed a control setting.
+   * control: the "control" block of the Maintenance config summary, control on
+   * or off as the EMS runs it; operating: the same answer's operating values,
+   * the total among them, which the EMS runs below its limit.
    */
-  let { control, overrides = null } = $props();
-  const view = $derived(controlView(control, overrides));
-  const LIVE_NOTES = ["control.note.live", "control.note.devicesLive"];
+  let { control, operating = null } = $props();
+  const view = $derived(controlView(control, operating));
+  const WARN_NOTES = ["control.note.devicesOff"];
   const f = $derived(fmt());
 
   function limits(envelope) {
     const parts = [];
-    if (envelope.totalW !== null) parts.push(t("control.limit.total", { power: f.power(envelope.totalW) }));
+    if (envelope.totalW !== null) {
+      const below = envelope.totalLimitW !== null && envelope.totalW < envelope.totalLimitW;
+      parts.push(below ? t("control.limit.totalBelow", { power: f.power(envelope.totalW), limit: f.power(envelope.totalLimitW) }) : t("control.limit.total", { power: f.power(envelope.totalW) }));
+    }
     if (envelope.deviceW !== null) parts.push(t("control.limit.device", { power: f.power(envelope.deviceW) }));
     return parts.join(" · ");
   }
@@ -48,7 +51,7 @@
       {#if window(view.envelope)}<div class="fact"><div class="fact-label">{t("control.chargeWindow")}</div><div class="fact-value num wrap">{window(view.envelope)}</div></div>{/if}
     </div>
   {/if}
-  {#each view.notes as note (note.key)}<p class="note" class:warn={LIVE_NOTES.includes(note.key)} data-testid={LIVE_NOTES.includes(note.key) ? "control-live" : undefined}><Icon name={LIVE_NOTES.includes(note.key) ? "triangle-alert" : "info"} />{t(note.key, note.vars)}</p>{/each}
+  {#each view.notes as note (note.key)}<p class="note" class:warn={WARN_NOTES.includes(note.key)} data-testid={WARN_NOTES.includes(note.key) ? "control-devices-off" : undefined}><Icon name={WARN_NOTES.includes(note.key) ? "triangle-alert" : "info"} />{t(note.key, note.vars)}</p>{/each}
 </div>
 
 <style>

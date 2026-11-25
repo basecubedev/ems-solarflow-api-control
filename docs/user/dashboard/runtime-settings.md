@@ -231,18 +231,20 @@ These are two different files with two different jobs.
 
 | | `config/config.json` | `data/runtime-state.json` |
 | --- | --- | --- |
-| What | Static installation configuration | Mutable operator state |
-| Owner | Admin Console apply / config path | EMS runtime writer, `emsctl.py`, the dashboard, the scheduler |
-| Contains | Devices, transports, grid meter, write gates, features | Live overrides such as those above |
+| What | The installation | The operation |
+| Owner | Admin Console apply / config path | One service for the EMS, `emsctl.py`, the dashboard, the Admin Console and the scheduler |
+| Contains | Devices, transports, grid meter, write gates, the power limits, features | The settings on this page |
 | Changing it | Usually needs an EMS restart | Takes effect next cycle |
 
-They overlap on a whitelisted set of keys. When the Admin Console applies a
-maintenance change, it mirrors those keys into runtime state so the two converge
-— **config → runtime, one direction only**.
+Every setting lives in one of the two. A value the dashboard shows here is the
+one the Admin Console shows and changes too. **Max total power** and a device's
+**Max power** are operating values below a limit that stays in `config.json`:
+lowering that limit in the Admin Console lowers the operating value with it at
+once, raising it leaves the operating value for you to raise here.
 
-> A config-only edit that is not mirrored will not change a running system by
-> itself. If you changed something in the Admin Console and nothing happened,
-> check whether it needs a restart.
+> A setting that lives in `config.json` takes effect at the next EMS start.
+> If you changed something in the Admin Console and nothing happened, check
+> whether it needs a restart.
 
 Reference: [Runtime state](../../technical/runtime-state.md) ·
 [Configuration](../../technical/configuration.md).
@@ -285,9 +287,8 @@ config at the next EMS start: a device you switched off is active again, and AC
 role goes back to Output with no AC charge power (see
 [runtime state](../../technical/runtime-state.md#fresh-setup-reset)). On the
 Admin's **Settings & devices** page shows and changes the same values: a
-**Save and apply** that changes one writes it here right away, and **Put saved
-values back** sets the power limits back to the saved ones. AC role, AC charge
-power and the other operating values have no second value in the config.
+**Save and apply** that changes one writes it here right away. None of them
+has a second value in the config; the power limits above them do.
 
 ## Warnings and common problems
 

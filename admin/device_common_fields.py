@@ -55,12 +55,26 @@ def installation_device_value_fields():
     """The common device fields a config entry holds: without the operating ones.
 
     An operating device value (``ems.runtime_commands.OPERATION_DEVICE_KEYS``)
-    lives in the runtime state and is never written into the config.
+    lives in the runtime state, except for a device the running EMS keeps no
+    runtime entry for (operating_device_value_fields).
     """
 
     from ems.runtime_commands import OPERATION_DEVICE_KEYS
 
     return {key: field for key, field in common_device_value_fields().items() if key not in OPERATION_DEVICE_KEYS}
+
+
+def operating_device_value_fields():
+    """The common device fields that are operating values.
+
+    A config entry holds them only for a device the running EMS keeps no
+    runtime entry for, a new one among them, until a live start moves them
+    (admin/operation_settings.py config_held_device_names).
+    """
+
+    from ems.runtime_commands import OPERATION_DEVICE_KEYS
+
+    return {key: field for key, field in common_device_value_fields().items() if key in OPERATION_DEVICE_KEYS}
 
 
 def apply_common_device_values(device, item, fields=None, *, issues=None):

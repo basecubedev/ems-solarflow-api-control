@@ -122,10 +122,11 @@ python3 ems-solarflow-api-control.py
 
 - `config.json` — static installation config (versioned template: `config.template.json`).
 - `data/runtime-state.json` — mutable runtime/operator state, created and
-  updated by the EMS and by `emsctl.py`. The Admin console also mirrors the
-  whitelisted overlapping keys it changed into it on maintenance apply (config →
-  runtime convergence, one-directional, via the same `ems/runtime_commands.py`
-  whitelist). Not a second static config.
+  updated by the EMS, `emsctl.py`, the dashboard, the Admin console and the
+  scheduler through `ems/runtime_commands.py`. It holds the operating settings
+  (`OPERATION_SETTING_PATHS`, `OPERATION_DEVICE_KEYS`), `config.json` the
+  installation and the hard power limits; every setting lives in one of the two
+  (`docs/developer/settings-operation-store.md`).
 
 The entry script (`ems-solarflow-api-control.py`) only does bootstrap/coordination:
 CLI parsing, config loading, logging setup, client construction, runtime-state
@@ -153,7 +154,7 @@ construction, controller startup, main loop. All real implementation lives in `e
 - `control_status.py` — per-cycle live control snapshot (`control-status.json` beside runtime-state) that `diagnose --control` reads; non-authoritative, never raises into the loop
 - `device_fingerprints.py` — one fingerprint per device entry of `config.json`; the EMS writes those it read at start into the control snapshot, the Admin compares them with the file as saved (`admin/ems_device_states.py`); import-side-effect-free
 - `paths.py` — shared project-path resolvers (`BASE_DIR`, `resolve_*_path`); import-side-effect-free
-- `runtime_commands.py` — the one command path for runtime-state edits (whitelist, validators, emsctl-named commands); emsctl, the dashboard, the Admin mirror and the scheduler all write through it
+- `runtime_commands.py` — the one command path for runtime-state edits (whitelist, validators, emsctl-named commands); emsctl, the dashboard, the Admin console and the scheduler all write through it
 - `device_settings.py` — light, fan, buzzer and battery heating: the settings the operator can hand to the EMS and the one reconciler that keeps them (state gates, off is off, local API only)
 - `surplus_export.py` — a full device's firmware bypass (`gridReverse = 1`, `outputLimit` ignored) allowed only while another device can AC-charge its PV, refused otherwise; the bypass device is told its house share and kept out of the charge it fed; import-side-effect-free
 - `file_io.py` — the cross-process file lock, atomic write and file signature that `runtime-state.json` and `schedules.json` share

@@ -573,6 +573,7 @@ def main():
         read_only_devices=read_only_devices,
         winter_store=None if cfg.SIMULATION_MODE else build_winter_store(),
         scheduler=scheduler,
+        power_limits=runtime_validation,
     )
     pv_input_watch = None
     if not cfg.SIMULATION_MODE and not getattr(args, "replay", None):

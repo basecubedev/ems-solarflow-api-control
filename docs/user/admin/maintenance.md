@@ -57,7 +57,6 @@ Read this before clicking something you are unsure about.
 | Settings & devices — editing and searching | Yes | No | No |
 | Settings & devices — **Check changes** | Yes | No | No |
 | Settings & devices — **Save and apply** | No | Yes, after the check | No |
-| **Put saved values back** | No | No (runtime state only) | No |
 | Older MQTT device setup — review | Yes | No | No |
 | **Apply the migration** | No | Yes | No |
 | **Move the settings** (old place) | No | Yes | No |
@@ -209,9 +208,7 @@ reloads and never touches your unsaved changes.
 differ from the defaults this release ships, *Customized (3)*, and the list
 groups them by feature and by device. Each row shows the setting with its
 config path, the value (**Saved: …**; an operating setting has the one value
-EMS runs, wherever it was set), for a power limit the value the Dashboard runs
-instead (**Running: …**), and the default
-(**Default: …**). **Show** takes you to the field: a setting on its tab with
+EMS runs, wherever it was set) and the default (**Default: …**). **Show** takes you to the field: a setting on its tab with
 the search set to its config path, a feature's switch at the head of its
 feature, a device's setting in its opened card. The list only shows; it
 changes nothing. To go back to a default, set the field to it, or empty it,
@@ -315,9 +312,15 @@ goes. Otherwise *EMS uses the new values without a restart.*
 
 **Values changed in the dashboard.** An operating setting has one value: the
 one the Dashboard and this page both show and change, stored in the runtime
-state. Only a power limit the Dashboard runs below its saved value is marked
-**Running: …** beside its field, with a note at the top of the page; **Put
-saved values back** makes EMS use the saved limits again, at once.
+state. Saving writes only the ones you changed on this page: a value the
+Dashboard or a schedule changed after the page loaded stays as it is. A power limit is a hard limit, set here: **Maximum system output** on
+Safety, each device's **Device output limit** on Devices, and **Fallback
+device limit** for a device without its own. Below it, **Operating value: …**
+names the power EMS runs, set on the Dashboard and never above the limit;
+lowering the limit below it lowers it at once, raising the limit leaves it. A
+device's **Enabled** is whether EMS reads and shows it at all; **Control off
+on the Dashboard** beside it means EMS reads and shows it but does not write
+to it until its control is switched on there again.
 
 ### 6 — Look at the system's files
 
@@ -358,11 +361,11 @@ first.
   from a weaker source.
 - Your unsaved changes live in the browser until you save them. They survive a
   reload; they are never saved for you.
-- Saving writes `config.json`, and mirrors the values the dashboard can also
-  change (system power and loop limits, winter on or off, each device's
-  enabled state, maximum power and PV priority) into `data/runtime-state.json`,
-  so they take effect at once. It never moves `data/` history,
-  `docker-compose.yml` or databases.
+- Saving writes the operating settings into `data/runtime-state.json`, where
+  the Dashboard changes them too, and the rest into `config.json`; a device
+  switched on or off takes its control along, and a lowered power limit
+  lowers the operating value above it, both at once. It never moves `data/`
+  history, `docker-compose.yml` or databases.
 
 ## Expected result
 
@@ -379,7 +382,7 @@ when the change needs it.
 | *Saved settings are newer than the running EMS* | EMS still runs the settings from before your save | **Restart EMS now** |
 | *Something changed since the check* | You edited after **Check changes** | **Check changes** again |
 | *The devices, grid meter or broker changed elsewhere since you began changing them* | Another session saved device changes | **Discard device changes**, then make yours again |
-| A dashboard value seems ignored | The field shows **Running: …** | **Put saved values back**, or save the field again |
+| A power set on the dashboard is not reached | The limit's field shows **Operating value: …** at the limit | Raise the limit here, then the operating value on the Dashboard |
 | *No answer came back, so whether it ran is unknown.* after a restart or a reset | The request got no reply | The page reads the state again; look at it before you try again |
 | *No settings file was found yet* on Settings & devices | Nothing is installed | [Guided setup](guided-setup.md) |
 

@@ -5,7 +5,8 @@
 The list is drawn in the browser (``frontend/admin-modern/src/lib/settings.js``,
 ``departures``) from the view the Maintenance config route answers. These tests
 feed it the real view of real files, so the template, the catalogue, the
-runtime overrides and the browser's reading of them are held together.
+operating values in the runtime state and the browser's reading of them are
+held together.
 """
 
 import copy
@@ -43,7 +44,7 @@ def _install(base_dir, config, runtime=None):
 
 
 def _departures(base_dir):
-    """The rows the tab lists for the install at ``base_dir``: group, path, saved, running, default."""
+    """The rows the tab lists for the install at ``base_dir``: group, path, value, default."""
 
     node = shutil.which("node")
     if not node:
@@ -56,7 +57,7 @@ def _departures(base_dir):
         f"const fs = await import('node:fs'); const m = await import({json.dumps(SETTINGS.as_uri())});"
         f"const view = JSON.parse(fs.readFileSync({json.dumps(str(payload))}, 'utf8'));"
         "process.stdout.write(JSON.stringify(m.departures(view).flatMap((group) => group.rows.map((row) =>"
-        " [group.id, row.field.path, row.value ?? null, row.live ? row.live.effective_value : null, row.standard]))));"
+        " [group.id, row.field.path, row.value ?? null, row.standard]))));"
     )
     result = subprocess.run(
         [node, "--input-type=module", "-e", script], cwd=ROOT, capture_output=True, text=True, timeout=60
@@ -109,8 +110,8 @@ def test_an_operating_value_is_listed_once_as_the_ems_runs_it(tmp_path):
     rows = {row[1]: row for row in _departures(tmp_path)}
 
     assert "system.min_output_limit" not in rows
-    assert rows["system.loop_interval"] == ["section:system", "system.loop_interval", 7, None, 5]
-    assert rows["devices[].pv_priority_factor"] == ["device:1", "devices[].pv_priority_factor", 2.0, None, 1.0]
+    assert rows["system.loop_interval"] == ["section:system", "system.loop_interval", 7, 5]
+    assert rows["devices[].pv_priority_factor"] == ["device:1", "devices[].pv_priority_factor", 2.0, 1.0]
     assert len(rows) == 2
 
 
@@ -133,8 +134,8 @@ def test_a_switch_spelled_as_text_is_listed_with_its_text_whatever_it_says(tmp_p
     rows = _departures(tmp_path)
 
     assert sorted(rows) == [
-        ["section:system", "system.allow_hardware_writes", "true", None, True],
-        ["section:system", "system.dry_run", "false", None, False],
+        ["section:system", "system.allow_hardware_writes", "true", True],
+        ["section:system", "system.dry_run", "false", False],
     ]
 
 
@@ -166,8 +167,8 @@ def test_a_broker_that_skips_tls_verification_is_listed_beside_its_hidden_addres
     _install(tmp_path, config)
 
     assert sorted(_departures(tmp_path)) == [
-        ["section:zendure_mqtt", "zendure_mqtt.keepalive_seconds", 60, None, 30],
-        ["section:zendure_mqtt", "zendure_mqtt.tls_insecure", True, None, False],
+        ["section:zendure_mqtt", "zendure_mqtt.keepalive_seconds", 60, 30],
+        ["section:zendure_mqtt", "zendure_mqtt.tls_insecure", True, False],
     ]
 
 

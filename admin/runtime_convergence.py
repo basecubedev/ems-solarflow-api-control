@@ -1,12 +1,15 @@
 # SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Config -> runtime-state convergence for Admin maintenance (Tier 2).
+"""What an Admin save hands the running EMS through the runtime state (Tier 2).
 
-When Admin applies a maintenance config, the whitelisted overlapping keys it
-changed are mirrored into runtime-state through the same validated writers the
-Dashboard uses, so the change goes live within one EMS control loop instead of
-waiting for a restart. Convergence is one-directional (config/Admin -> runtime);
-runtime is never merged back into config.
+docs/developer/settings-operation-store.md: ``config.json`` holds the
+installation, ``runtime-state.json`` the operation. An Admin save writes the
+operating settings it changed through the runtime service
+(admin/operation_settings.py) and, here, what a change of the installation
+means for the operation: a device switched on or off takes its control along,
+and an operating power above a limit the save lowered is held at that limit.
+Both go through the validated writers the dashboard uses, so they take effect
+within one EMS control loop.
 
 A device's keys reach the runtime entry the device owns by the rule the EMS
 starts with (``ems.runtime_state.owned_runtime_device``): the entry stamped with
@@ -14,23 +17,21 @@ its serial, so a rename or a name swap that the running EMS has not loaded yet
 still reaches the device it means, and the EMS carries that entry, values
 included, over to the new name at its next start.
 
-Best-effort: config.json is already the durable source of truth when this runs,
-so any runtime write problem (a value above the runtime power ceiling, a device
-not yet in runtime, a read-only file) is recorded as a per-key skip/warning and
-never fails the apply. A new device has no runtime entry and is skipped: the EMS
-seeds its values from config on its next start.
+Best-effort: config.json is already saved when this runs, so any runtime write
+problem (a device not yet in runtime, a read-only file) is recorded as a
+per-key skip or warning and never fails the apply. A new device has no runtime
+entry and is skipped: the EMS seeds its values on its next start.
 """
 
 import os
 import re
 
 from admin.config_runtime_overlap import (
-    config_effective_value,
     device_group,
     device_runtime_plan,
     device_state,
+    read_runtime_state,
     resolve_runtime_state_path,
-    values_differ,
 )
 from ems.runtime_commands import (
     DEVICE_FIELDS,
@@ -42,6 +43,7 @@ from ems.runtime_commands import (
     apply_system_update,
     build_validation_context,
 )
+from ems.config import recorded_defaults_revision
 from ems.read_only_devices import is_read_only_device_config
 from ems.runtime_state import RuntimeState, owned_runtime_device
 
@@ -89,20 +91,6 @@ def _devices(config):
     return devices if isinstance(devices, list) else []
 
 
-def _changed_scalars(previous, merged):
-    """``(path, value)`` for each system and section key the saved config changed."""
-
-    for head, fields in (("system", SYSTEM_FIELDS), *SECTION_FIELDS.items()):
-        before = previous.get(head) if isinstance(previous, dict) else None
-        after = merged.get(head)
-        before = before if isinstance(before, dict) else {}
-        after = after if isinstance(after, dict) else {}
-        for key in fields:
-            value = after.get(key)
-            if value is not None and values_differ(before.get(key), value):
-                yield f"{head}.{key}", value
-
-
 def _named_device(config, name):
     for device in _devices(config):
         if isinstance(device, dict) and str(device.get("name") or "").strip() == name:
@@ -111,6 +99,11 @@ def _named_device(config, name):
 
 
 def _apply_one(runtime_state, validation_context, kind, holder, key, value):
+    if kind == "parked":
+        name, identity = holder
+        if not runtime_state.update_parked(name, identity, {key: value}):
+            raise RuntimeWriteError(f"no parked values for device {name}")
+        return
     if kind == "system":
         apply_system_update(runtime_state, {key: value}, validation_context, source="admin")
     elif kind == "section":
@@ -141,8 +134,10 @@ def write_targets(context, config, targets, *, create=False):
     """Write ``targets`` through the runtime service; ``create`` makes a missing runtime state first.
 
     An operating setting lives only in the runtime state, so a change of one
-    creates the file where the EMS has not yet; a mirror of a config value
-    leaves a missing file to the EMS, which seeds it from the config.
+    creates the file where the EMS has not yet, recording the config's
+    defaults revision as the EMS would, so its first start takes no value set
+    here for an old default; a mirror of a config value leaves a missing file
+    to the EMS, which seeds it from the config.
     """
 
     result = {"applied": [], "skipped": [], "warnings": []}
@@ -150,7 +145,12 @@ def write_targets(context, config, targets, *, create=False):
         return result
     path = resolve_runtime_state_path(context, config)
     if create and not os.path.exists(path):
-        RuntimeState(path, {"devices": {}}).load_or_create()
+        try:
+            RuntimeState(path, {"devices": {}}, recorded_defaults_revision(config), refresh_defaults=False).load_or_create()
+        except OSError as exc:
+            for display_path, *_ in targets:
+                result["skipped"].append({"path": display_path, "reason": f"runtime_write_failed: {exc}"})
+            return result
     if not os.path.exists(path):
         for display_path, *_ in targets:
             result["skipped"].append({"path": display_path, "reason": RUNTIME_ABSENT_REASON})
@@ -178,58 +178,42 @@ def write_targets(context, config, targets, *, create=False):
 
 
 def mirror_changed_keys_to_runtime(context, *, previous, merged):
-    """Mirror the overlapping whitelisted keys the apply changed into runtime-state.
+    """Hand an Admin save to the running EMS through the runtime state.
 
     ``previous`` is the config the apply replaced and ``merged`` the one it
-    wrote. Device values come from device_runtime_plan and go to the entry the
-    device owns, by name and serial (``apply_configured_device_update``).
+    wrote. Two things follow from a save (docs/developer/settings-operation-store.md):
+    a device switched on or off takes its control along, and an operating
+    power above a limit the save lowered is held at that limit. A limit raised
+    leaves the operating value where it is: it is changed on the dashboard, up
+    to the limit. Device values come from device_runtime_plan, which names the
+    runtime entry each device owns, by name and serial, and leaves alone a
+    device it cannot tie to one.
     """
 
+    path = resolve_runtime_state_path(context, merged)
+    runtime_data = read_runtime_state(path)
+    runtime_devices = runtime_data.get("devices") if isinstance(runtime_data.get("devices"), dict) else {}
     targets = []
-    for path, value in _changed_scalars(previous, merged):
-        classified = _classify(path, merged)
-        if classified:
-            kind, holder, key = classified
-            targets.append((path, kind, holder, key, value))
-    for path, name, identity, key, value in device_runtime_plan(previous, merged):
-        if _classify(path, merged):
-            targets.append((path, "device", (name, identity, None), key, value))
+    for display_path, name, identity, key, value in device_runtime_plan(previous, merged):
+        if not _classify(display_path, merged):
+            continue
+        if key == "max_power":
+            entry = owned_runtime_device(runtime_devices, name, identity)
+            held = runtime_devices.get(entry) if entry is not None else None
+            if not isinstance(held, dict) or not _above(held.get("max_power"), value):
+                continue
+        elif key != "enabled":
+            continue
+        targets.append((display_path, "device", (name, identity, None), key, value))
+    system = runtime_data.get("system") if isinstance(runtime_data.get("system"), dict) else {}
+    limit = build_validation_context(merged, None)["system_max_total_power"]
+    if _above(system.get("max_total_power"), limit):
+        targets.append(("system.max_total_power", "system", None, "max_total_power", limit))
     return write_targets(context, merged, targets)
 
 
-def reset_targets_to_config(context, config, requests):
-    """Write installed config values back into runtime-state for the given keys.
-
-    ``requests`` is a list of ``{"scope","key",...}`` targets: ``system``/
-    ``section`` (with ``section``) / ``device`` (with ``name``). Reset always
-    *writes* the effective config value, never clears the override, because the
-    EMS loads config once per process and a cleared key would fall back to a
-    stale value.
-    """
-
-    targets = []
-    for item in requests:
-        if not isinstance(item, dict):
-            continue
-        scope = item.get("scope")
-        key = item.get("key")
-        if scope == "system":
-            kind, holder, display = "system", None, "system." + str(key)
-        elif scope == "section":
-            holder = item.get("section")
-            kind, display = "section", str(holder) + "." + str(key)
-        elif scope == "device":
-            holder = item.get("name")
-            kind, display = "device", "devices." + str(holder) + "." + str(key)
-        else:
-            continue
-        value = config_effective_value(config, kind, holder, key)
-        if value is None:
-            continue
-        if kind == "device":
-            holder, value = device_holder(config, holder, key, value)
-        targets.append((display, kind, holder, key, value))
-    return write_targets(context, config, targets)
+def _above(value, limit):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value > limit
 
 
 def device_holder(config, name, key, value):

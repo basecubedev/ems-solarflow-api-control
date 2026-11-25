@@ -169,8 +169,11 @@ class EMSController:
         zendure_mqtt_runtime=None,
         read_only_devices=None,
         scheduler=None,
+        power_limits=None,
     ):
         self.devices = devices
+        self._power_limits = power_limits
+        self._power_limit_said = set()
         self.shelly = shelly
         self.scheduler = scheduler
         self._schedule_failure = None
@@ -1899,6 +1902,37 @@ class EMSController:
             self.runtime_state.get_system(key, default),
             default
         )
+
+    def power_limits(self):
+        """The hard power limits of ``config.json`` as they stand now: the live validation context, or none."""
+
+        if self._power_limits is None:
+            return {}
+        limits = self._power_limits()
+        return limits if isinstance(limits, dict) else {}
+
+    def within_power_limit(self, setting, value, limit):
+        """An operating power value held at its hard limit, warned about once per setting and run.
+
+        docs/developer/settings-operation-store.md: the operating value lives
+        in the runtime state, the limit in ``config.json``; a runtime value above
+        the limit, written by hand or kept from before the limit was lowered,
+        never runs.
+        """
+
+        if not isinstance(limit, int) or isinstance(limit, bool) or value <= limit:
+            return value
+        if setting not in self._power_limit_said:
+            self._power_limit_said.add(setting)
+            log_event(
+                logging.WARNING,
+                "operating_power_above_limit",
+                setting=setting,
+                operating_w=value,
+                limit_w=limit,
+                hint="lower it on the dashboard or raise the limit in the Admin console's Safety tab",
+            )
+        return limit
 
     def runtime_system_int(self, key, default, minimum=0):
         if not self.runtime_state:
@@ -6026,10 +6060,11 @@ class EMSController:
         # RUNTIME cfg.CONFIG
         # =====================
 
-        max_power = self.runtime_system_int(
-            "max_total_power",
-            cfg.MAX_TOTAL_POWER,
-            minimum=0
+        limits = self.power_limits()
+        max_power = self.within_power_limit(
+            "system.max_total_power",
+            self.runtime_system_int("max_total_power", cfg.MAX_TOTAL_POWER, minimum=0),
+            limits.get("system_max_total_power"),
         )
         enabled = self.runtime_system_bool(
             "enabled",
@@ -6047,12 +6082,12 @@ class EMSController:
             minimum=0
         )
 
+        device_limits = limits.get("device_max_power") if isinstance(limits.get("device_max_power"), dict) else {}
         for dev in self.devices:
-            dev.max_power = self.runtime_device_int(
-                dev.name,
-                "max_power",
-                dev.max_power,
-                minimum=0
+            dev.max_power = self.within_power_limit(
+                f"devices.{dev.name}.max_power",
+                self.runtime_device_int(dev.name, "max_power", dev.max_power, minimum=0),
+                device_limits.get(dev.name),
             )
             dev.pv_priority_factor = self.runtime_device_float(
                 dev.name,

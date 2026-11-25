@@ -312,7 +312,9 @@ Admin changes them, and come back when it is built again. Nothing moves when the
 runtime-state file cannot be read or `config.json` changed since the start
 read it. The config upgrade never adds an operating value back and `diagnose`
 does not miss one.
-Deleting the runtime-state file resets the operating values to the defaults.
+Deleting the runtime-state file resets the operating values to the built-in
+defaults, not to saved ones: control comes back on and every device may
+discharge again. Do not delete it to reset values.
 
 ## Former Home Assistant Section
 
@@ -392,7 +394,8 @@ while the new target is within this many watts of the value the device already
 holds; it is distinct from `system.output_control.target_deadband_w`, which acts
 on the total system target. New configurations default to 2 W.
 
-`system.runtime_state_path` is the path to temporary mutable runtime state. The
+`system.runtime_state_path` is the path to the runtime state, the only home of
+the operating settings (see [Config vs Runtime-State](#config-vs-runtime-state)). The
 default for new generated configs is `data/runtime-state.json`. Older
 root-level `runtime-state.json` files from previous setups are no longer
 required after switching to `data/runtime-state.json` and may be removed
@@ -603,10 +606,12 @@ root CSS class by the frontend.
 Dashboard and Admin runtime writes are constrained by the configured system and
 device power limits. For example, a runtime `max_total_power` update cannot
 exceed the configured `system.max_total_power`, and a device runtime `max_power`
-update cannot exceed that device's configured `max_power`. The Admin's **Save
-and apply** mirrors the overlapping keys it changed into runtime-state through this
-same whitelist; a mirrored value the runtime validator rejects is skipped with a
-warning while the config write stands. Pure-config keys (ports, credentials,
+update cannot exceed that device's configured `max_power`; the EMS holds an
+operating value above its limit at the limit (`operating_power_above_limit`).
+The Admin's **Save and apply** writes the operating settings it changed through
+this same whitelist, and lowers an operating power above a limit it lowered; a
+value the runtime validator rejects is refused before anything is saved.
+Pure-config keys (ports, credentials,
 `grid_meter.*`, `min_soc`, …) are not runtime-writable and still take effect only
 after an EMS restart.
 

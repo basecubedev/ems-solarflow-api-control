@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 basecubedev
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Config -> runtime-state convergence (Tier 2) for Admin maintenance."""
+"""What an Admin save hands the running EMS through the runtime state (Tier 2)."""
 
 import copy
 import json
@@ -8,10 +8,7 @@ import json
 import pytest
 
 from admin.install_context import detect_install_context
-from admin.runtime_convergence import (
-    mirror_changed_keys_to_runtime,
-    reset_targets_to_config,
-)
+from admin.runtime_convergence import mirror_changed_keys_to_runtime
 
 pytestmark = [
     pytest.mark.admin,
@@ -114,22 +111,16 @@ def _mirror(tmp_path, previous, merged):
     return mirror_changed_keys_to_runtime(_context(tmp_path), previous=previous, merged=merged)
 
 
-def test_mirror_changed_system_key(tmp_path):
+def test_an_operating_setting_still_in_a_saved_config_is_not_mirrored(tmp_path):
+    """It lives in the runtime state; the Admin writes a change of it there itself (admin/operation_settings.py)."""
+
     _seed_runtime(tmp_path)
     config = _config(loop_interval=7)
-    result = _mirror(tmp_path, _config(), config)
-    assert result["applied"] == ["system.loop_interval"]
-    assert result["skipped"] == []
-    assert _runtime(tmp_path)["system"]["loop_interval"] == 7
-
-
-def test_mirror_winter_enabled(tmp_path):
-    _seed_runtime(tmp_path)
-    config = _config()
     config["winter"]["enabled"] = True
     result = _mirror(tmp_path, _config(), config)
-    assert result["applied"] == ["winter.enabled"]
-    assert _runtime(tmp_path)["winter"]["enabled"] is True
+    assert (result["applied"], result["skipped"]) == ([], [])
+    assert _runtime(tmp_path)["system"]["loop_interval"] == 3
+    assert _runtime(tmp_path)["winter"]["enabled"] is False
 
 
 def test_mirror_device_key(tmp_path):
@@ -151,84 +142,50 @@ def test_pure_config_key_is_not_mirrored(tmp_path):
     assert _runtime(tmp_path)["system"]["loop_interval"] == 3
 
 
-def test_value_over_runtime_ceiling_is_skipped(tmp_path):
+def test_a_lowered_total_limit_holds_the_operating_total_at_it(tmp_path):
     _seed_runtime(tmp_path)
-    config = _config(max_total_power=6000, max_total_power_limit=3000)
-    result = _mirror(tmp_path, _config(), config)
-    assert result["applied"] == []
-    assert result["skipped"][0]["path"] == "system.max_total_power"
-    assert _runtime(tmp_path)["system"]["max_total_power"] == 1600
-
-
-def test_a_configured_total_above_5000_w_reaches_the_runtime(tmp_path):
-    _seed_runtime(tmp_path)
-    config = _config(max_total_power=7200)
+    config = _config(max_total_power_limit=1000)
     result = _mirror(tmp_path, _config(), config)
     assert result["applied"] == ["system.max_total_power"]
-    assert _runtime(tmp_path)["system"]["max_total_power"] == 7200
+    assert _runtime(tmp_path)["system"]["max_total_power"] == 1000
 
 
-def test_a_new_device_is_skipped_and_not_created(tmp_path):
+def test_a_raised_limit_leaves_the_operating_value_where_it_is(tmp_path):
+    """The operating value is changed on the dashboard, up to the limit; a total above 5000 W is a limit like any other."""
+
+    _seed_runtime(tmp_path)
+    config = _config(max_total_power=7200)
+    config["devices"][0]["max_power"] = 1200
+    result = _mirror(tmp_path, _config(), config)
+    assert (result["applied"], result["skipped"]) == ([], [])
+    assert _runtime(tmp_path)["system"]["max_total_power"] == 1600
+    assert _runtime(tmp_path)["devices"]["WR1"]["max_power"] == 800
+
+
+def test_a_new_device_is_not_created(tmp_path):
     _seed_runtime(tmp_path)
     config = _config()
     config["devices"].append(
         {"name": "WR2", "ip": "192.168.1.101", "sn": "BBB", "max_power": 700}
     )
     result = _mirror(tmp_path, _config(), config)
-    assert result["applied"] == []
-    assert result["skipped"][0]["path"] == "devices[1].max_power"
+    assert (result["applied"], result["skipped"]) == ([], [])
     assert "WR2" not in _runtime(tmp_path)["devices"]
 
 
-def test_missing_runtime_file_is_skipped_and_not_created(tmp_path):
-    config = _config(loop_interval=7)
+def test_missing_runtime_file_is_not_created(tmp_path):
+    config = _config(max_total_power=1000)
     result = _mirror(tmp_path, _config(), config)
-    assert result["applied"] == []
-    assert result["skipped"][0]["reason"] == "runtime_state_absent"
+    assert (result["applied"], result["skipped"]) == ([], [])
     assert not (tmp_path / "runtime-state.json").exists()
 
 
-def test_mirror_preserves_untouched_override(tmp_path):
+def test_an_operating_value_within_a_lowered_limit_stays(tmp_path):
     _seed_runtime(tmp_path, system={"max_total_power": 900})
-    config = _config(loop_interval=7)
-    _mirror(tmp_path, _config(), config)
-    data = _runtime(tmp_path)
-    assert data["system"]["loop_interval"] == 7
-    assert data["system"]["max_total_power"] == 900
-
-
-def test_reset_writes_config_value_not_delete(tmp_path):
-    _seed_runtime(tmp_path, system={"loop_interval": 5})
-    config = _config(loop_interval=3)
-    result = reset_targets_to_config(
-        _context(tmp_path), config, [{"scope": "system", "key": "loop_interval"}]
-    )
-    assert result["applied"] == ["system.loop_interval"]
-    data = _runtime(tmp_path)
-    assert "loop_interval" in data["system"]
-    assert data["system"]["loop_interval"] == 3
-
-
-def test_reset_device_key_to_config(tmp_path):
-    _seed_runtime(
-        tmp_path,
-        devices={
-            "WR1": {
-                "enabled": True,
-                "max_power": 600,
-                "offgrid_socket_mode": "off",
-                "pv_priority_factor": 1.0,
-            }
-        },
-    )
-    config = _config()
-    result = reset_targets_to_config(
-        _context(tmp_path),
-        config,
-        [{"scope": "device", "name": "WR1", "key": "max_power"}],
-    )
-    assert result["applied"] == ["devices.WR1.max_power"]
-    assert _runtime(tmp_path)["devices"]["WR1"]["max_power"] == 800
+    config = _config(max_total_power=1000)
+    result = _mirror(tmp_path, _config(), config)
+    assert result["applied"] == []
+    assert _runtime(tmp_path)["system"]["max_total_power"] == 900
 
 
 def test_a_renamed_device_whose_entry_carries_no_serial_is_skipped(tmp_path):
@@ -239,8 +196,7 @@ def test_a_renamed_device_whose_entry_carries_no_serial_is_skipped(tmp_path):
     config["devices"][0]["name"] = "WRX"
     config["devices"][0]["max_power"] = 500
     result = _mirror(tmp_path, _config(), config)
-    assert result["applied"] == []
-    assert result["skipped"][0]["path"] == "devices[0].max_power"
+    assert (result["applied"], result["skipped"]) == ([], [])
     data = _runtime(tmp_path)
     assert "WRX" not in data["devices"]
     assert data["devices"]["WR1"]["max_power"] == 800
@@ -307,17 +263,17 @@ def test_removing_a_device_leaves_the_next_devices_live_override_alone(tmp_path)
 
 
 def test_removing_a_device_does_not_hide_the_next_devices_change(tmp_path):
-    """List positions shift: the removed WR1 had 800 W where WR2 now asks for 800 W."""
+    """List positions shift: WR2 moves to the place of the removed WR1 and lowers its limit in the same save."""
 
     _seed_two(tmp_path)
     previous = _two_devices()
     merged = copy.deepcopy(previous)
     del merged["devices"][0]
-    merged["devices"][0]["max_power"] = 800
+    merged["devices"][0]["max_power"] = 400
 
     result = _mirror(tmp_path, previous, merged)
 
-    assert _runtime(tmp_path)["devices"]["WR2"]["max_power"] == 800
+    assert _runtime(tmp_path)["devices"]["WR2"]["max_power"] == 400
     assert result["applied"] == ["devices[0].max_power"]
 
 
@@ -332,22 +288,6 @@ def test_a_device_without_a_serial_never_reaches_an_entry_another_serial_holds(t
 
     assert _runtime(tmp_path)["devices"]["WR1"]["enabled"] is True
     assert [entry["path"] for entry in result["skipped"]] == ["devices[0].enabled"]
-
-
-def test_a_reset_after_a_name_swap_reaches_the_device_by_its_serial(tmp_path):
-    _seed_two(tmp_path, WR1={"max_power": 400})
-    config = _two_devices()
-    config["devices"][0]["name"], config["devices"][1]["name"] = "WR2", "WR1"
-
-    result = reset_targets_to_config(
-        _context(tmp_path),
-        config,
-        [{"scope": "device", "name": "WR2", "key": "max_power"}],
-    )
-
-    devices = _runtime(tmp_path)["devices"]
-    assert (devices["WR1"]["max_power"], devices["WR2"]["max_power"]) == (800, 600)
-    assert result["applied"] == ["devices.WR2.max_power"]
 
 
 def _with_spare(config):
@@ -376,27 +316,12 @@ def test_an_unrelated_save_leaves_a_device_with_a_switched_off_duplicate_alone(t
     _seed_two(tmp_path, WR1={"enabled": False})
     previous = _with_spare(_two_devices())
     merged = copy.deepcopy(previous)
-    merged["system"]["loop_interval"] = 7
+    merged["system"]["max_total_power"] = 1200
 
     result = _mirror(tmp_path, previous, merged)
 
     assert _runtime(tmp_path)["devices"]["WR1"]["enabled"] is False
-    assert (result["applied"], result["skipped"]) == (["system.loop_interval"], [])
-
-
-def test_a_reset_for_a_switched_off_duplicate_does_not_reach_the_running_device(tmp_path):
-    _seed_two(tmp_path, WR1={"max_power": 400})
-    config = _with_spare(_two_devices())
-
-    result = reset_targets_to_config(
-        _context(tmp_path),
-        config,
-        [{"scope": "device", "name": "WR1 spare", "key": "max_power"}],
-    )
-
-    assert _runtime(tmp_path)["devices"]["WR1"]["max_power"] == 400
-    assert result["applied"] == []
-    assert result["skipped"][0]["reason"] == "device WR1 spare does not speak for a device with a runtime entry"
+    assert (result["applied"], result["skipped"]) == (["system.max_total_power"], [])
 
 
 def test_an_entry_whose_sn_and_serial_number_disagree_reaches_no_entry(tmp_path):
@@ -568,37 +493,23 @@ def test_a_serial_written_as_a_number_is_the_serial_the_ems_stamps(tmp_path):
     assert result["applied"] == ["devices[1].max_power"]
 
 
-def test_a_reset_for_a_device_the_config_does_not_hold_writes_nothing(tmp_path):
-    _seed_runtime(tmp_path, devices={"WR9": {"enabled": False, "max_power": 400}})
-
-    result = reset_targets_to_config(
-        _context(tmp_path),
-        _config(),
-        [{"scope": "device", "name": "WR9", "key": "enabled"}],
-    )
-
-    assert _runtime(tmp_path)["devices"]["WR9"]["enabled"] is False
-    assert result["applied"] == []
-
-
 def test_a_value_saved_while_a_device_is_switched_off_is_there_when_it_comes_back(tmp_path):
-    """Off, then grid charging stopped, then on: three saves and no EMS restart."""
+    """Off, then its limit lowered, then on: three saves and no EMS restart."""
 
     _seed_two(tmp_path)
     first = _two_devices()
-    first["devices"][0]["ac_charge_enabled"] = True
     second = copy.deepcopy(first)
     second["devices"][0]["enabled"] = False
     third = copy.deepcopy(second)
-    third["devices"][0]["ac_charge_enabled"] = False
+    third["devices"][0]["max_power"] = 500
     fourth = copy.deepcopy(third)
     fourth["devices"][0]["enabled"] = True
 
     applied = [_mirror(tmp_path, before, after)["applied"] for before, after in ((first, second), (second, third), (third, fourth))]
 
     wr1 = _runtime(tmp_path)["devices"]["WR1"]
-    assert (wr1["enabled"], wr1["ac_charge_enabled"]) == (True, False)
-    assert applied == [["devices[0].enabled"], ["devices[0].ac_charge_enabled"], ["devices[0].enabled"]]
+    assert (wr1["enabled"], wr1["max_power"]) == (True, 500)
+    assert applied == [["devices[0].enabled"], ["devices[0].max_power"], ["devices[0].enabled"]]
 
 
 def test_a_telemetry_entry_listed_first_does_not_speak_for_a_device_switched_off_and_on(tmp_path):
@@ -618,7 +529,7 @@ def test_a_telemetry_entry_listed_first_does_not_speak_for_a_device_switched_off
 
 
 def test_a_handover_over_two_saves_brings_the_new_entrys_values(tmp_path):
-    """HTTP off, then the MQTT control entry for the same route on: with nothing built the MQTT entry speaks, so its values arrive with the switch-off."""
+    """HTTP off, then the MQTT control entry for the same route on: with nothing built the MQTT entry speaks, so its lower limit holds the entry's power with the switch-off; the other operating values stay."""
 
     _seed_two(tmp_path)
     control = {
@@ -640,8 +551,8 @@ def test_a_handover_over_two_saves_brings_the_new_entrys_values(tmp_path):
     applied = [_mirror(tmp_path, before, after)["applied"] for before, after in ((first, second), (second, third))]
 
     wr1 = _runtime(tmp_path)["devices"]["WR1"]
-    assert (wr1["enabled"], wr1["max_power"], wr1["ac_charge_enabled"]) == (True, 500, False)
-    assert applied == [["devices[0].enabled", "devices[0].max_power", "devices[0].ac_charge_enabled"], ["devices[0].enabled"]]
+    assert (wr1["enabled"], wr1["max_power"], "ac_charge_enabled" in wr1) == (True, 500, False)
+    assert applied == [["devices[0].enabled", "devices[0].max_power"], ["devices[0].enabled"]]
 
 
 def test_a_device_switched_on_under_another_entry_asks_for_the_restart(tmp_path):
@@ -695,8 +606,8 @@ def test_a_telemetry_entry_for_the_same_route_leaves_the_devices_values_live(tmp
     result = _mirror(tmp_path, previous, merged)
 
     wr1 = _runtime(tmp_path)["devices"]["WR1"]
-    assert (wr1["max_power"], wr1["ac_charge_enabled"]) == (400, False)
-    assert result["applied"] == ["devices[0].max_power", "devices[0].ac_charge_enabled"]
+    assert (wr1["max_power"], wr1["ac_charge_enabled"]) == (400, True)
+    assert result["applied"] == ["devices[0].max_power"]
 
 
 def test_a_removed_key_brings_the_default_the_ems_falls_back_to(tmp_path):
@@ -762,7 +673,7 @@ def test_a_device_that_gains_its_serial_keeps_its_live_entry(tmp_path):
 
 
 def test_a_re_added_device_brings_its_values_to_the_entry_its_serial_still_owns(tmp_path):
-    """Removed and added again without a restart: the EMS would keep the old entry's values, so the new ones go there now."""
+    """Removed and added again without a restart: the EMS would keep the old entry's values, so the new limit holds its power now."""
 
     _seed_two(tmp_path, WR1={"max_power": 1200, "enabled": False})
     first = _two_devices()
@@ -776,10 +687,7 @@ def test_a_re_added_device_brings_its_values_to_the_entry_its_serial_still_owns(
 
     wr1 = _runtime(tmp_path)["devices"]["WR1"]
     assert (wr1["max_power"], wr1["enabled"]) == (400, False)
-    assert applied == [[], [
-        "devices[1].max_power", "devices[1].offgrid_socket_mode", "devices[1].pv_priority_factor",
-        "devices[1].ac_charge_enabled", "devices[1].ac_discharge_enabled",
-    ]]
+    assert applied == [[], ["devices[1].max_power"]]
 
 
 def test_the_mirror_writes_what_the_ems_would_seed(tmp_path):
@@ -844,51 +752,19 @@ def test_a_save_that_only_turns_1_0_into_1_writes_nothing(tmp_path):
     assert result["applied"] == []
 
 
-def test_mixed_valid_and_invalid_keys_apply_per_key(tmp_path):
-    _seed_runtime(tmp_path)
-    config = _config(loop_interval=7, max_total_power=6000, max_total_power_limit=3000)
-    result = _mirror(tmp_path, _config(), config)
-    assert result["applied"] == ["system.loop_interval"]
-    assert [entry["path"] for entry in result["skipped"]] == ["system.max_total_power"]
-    data = _runtime(tmp_path)
-    assert data["system"]["loop_interval"] == 7
-    assert data["system"]["max_total_power"] == 1600
-
-
-def test_reset_writes_config_default_when_config_silent(tmp_path):
-    _seed_runtime(
-        tmp_path,
-        devices={
-            "WR1": {
-                "enabled": False,
-                "max_power": 800,
-                "offgrid_socket_mode": "off",
-                "pv_priority_factor": 1.0,
-            }
-        },
-    )
-    config = _config()
-    del config["devices"][0]["enabled"]
-    result = reset_targets_to_config(
-        _context(tmp_path),
-        config,
-        [{"scope": "device", "name": "WR1", "key": "enabled"}],
-    )
-    assert result["applied"] == ["devices.WR1.enabled"]
-    assert _runtime(tmp_path)["devices"]["WR1"]["enabled"] is True
-
-
 @pytest.mark.power_control
-def test_converged_value_wins_over_config_default_in_resolver(tmp_path):
+def test_a_held_value_is_what_the_ems_resolves(tmp_path):
     from ems.runtime_state import RuntimeState
 
     _seed_runtime(tmp_path)
-    config = _config(loop_interval=7)
+    config = _config(max_total_power=1000)
     _mirror(tmp_path, _config(), config)
 
     runtime_state = RuntimeState(
         str(tmp_path / "runtime-state.json"),
-        {"system": {"loop_interval": 3}, "devices": {}},
+        {"system": {"max_total_power": 1600}, "devices": {}},
     )
     runtime_state.load_if_changed(force=True)
-    assert runtime_state.get_system("loop_interval", 3) == 7
+    assert runtime_state.get_system("max_total_power", 1600) == 1000
+
+

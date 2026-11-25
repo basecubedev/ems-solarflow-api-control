@@ -24,17 +24,24 @@ from admin.config_preview import (
 )
 from admin.config_runtime_overlap import (
     applies_live,
+    device_group,
     live_device_paths,
-    overlap_provenance_for_context,
     read_runtime_state,
     resolve_runtime_state_path,
     runtime_device_entries,
+    values_differ,
 )
-from ems.runtime_commands import OPERATION_SETTING_PATHS
+from ems.runtime_commands import OPERATION_DEVICE_KEYS, OPERATION_SETTING_PATHS, build_validation_context
 from admin.operation_settings import (
+    OPERATING_BASE_KEY,
     adopt_operating_values,
-    installation_provenance,
+    config_held_device_names,
+    held_by_config,
+    operating_feature_edits,
     operating_from,
+    operating_powers,
+    operating_provenance,
+    unbuilt_devices,
     operation_changes,
 )
 from admin.connection_planner import (
@@ -43,6 +50,7 @@ from admin.connection_planner import (
 )
 from admin.device_common_fields import (
     apply_common_device_values,
+    operating_device_value_fields,
     common_device_value_fields,
 )
 from admin.inverter_names import next_compact_inverter_name
@@ -150,7 +158,6 @@ from ems.device_identity import (
     identity_evidence_conflict,
     opaque_config_entry_id,
     opaque_connection_id,
-    resolve_inverter_identity,
     resolve_inverter_identity_evidence,
     resolve_physical_identity,
     supplied_identity_token,
@@ -570,17 +577,11 @@ def load_maintenance_config(base_dir=None, *, identity_token_key=None):
         }
 
     draft = build_maintenance_draft(config, identity_token_key=identity_token_key)
-    provenance = overlap_provenance_for_context(context, config)
+    provenance = operating_provenance(context, config)
     adopt_operating_values(draft, *operating_from(provenance))
-    overrides = installation_provenance(provenance)
-    _attach_runtime_override_identity_tokens(
-        overrides,
-        config,
-        identity_token_key=identity_token_key,
-    )
     browser_fields = {
         "draft": copy.deepcopy(draft),
-        "overrides": overrides,
+        "operating": operating_powers(provenance, build_validation_context(config, None), set().union(*unbuilt_devices(context, config))),
     }
     redact_config_for_browser(
         browser_fields,
@@ -599,45 +600,10 @@ def load_maintenance_config(base_dir=None, *, identity_token_key=None):
         "revision": hashlib.sha256(raw).hexdigest(),
         "summary": _summary(config, draft, _runtime_control_enabled(context, config)),
         "draft": browser_fields["draft"],
-        "overrides": browser_fields["overrides"],
+        "operating": browser_fields["operating"],
         "catalog": _catalog(),
         "warnings": [],
     }
-
-
-def _attach_runtime_override_identity_tokens(
-    overrides, config, *, identity_token_key
-):
-    """Bind device override rows to raw config identities without exposing names.
-
-    Cloud route values can occur in a configured display name, so the browser's
-    override map is masked along with the draft.  Each field row carries the
-    same server-issued equality token as its device draft; reset requests can
-    therefore resolve the installed device without trusting or reconstructing
-    the masked display name.
-    """
-
-    if identity_token_key is None or not isinstance(overrides, dict):
-        return
-    device_overrides = overrides.get("devices")
-    if not isinstance(device_overrides, dict):
-        return
-    broker_sources = broker_sources_from_config(config)
-    for device in _config_devices(config):
-        name = str(device.get("name") or "").strip()
-        fields = device_overrides.get(name)
-        if not name or not isinstance(fields, dict):
-            continue
-        identity = resolve_inverter_identity(
-            device,
-            broker_sources=broker_sources,
-            token_key=identity_token_key,
-        )
-        if identity is None or identity.opaque_token is None:
-            continue
-        for entry in fields.values():
-            if isinstance(entry, dict):
-                entry[PHYSICAL_IDENTITY_TOKEN_FIELD] = identity.opaque_token
 
 
 def build_maintenance_draft(config, *, identity_token_key=None):
@@ -1175,7 +1141,12 @@ def _control_state(config, runtime_enabled=None):
 def _runtime_control_enabled(context, config):
     """Control on or off as the operator set it at runtime, or ``None`` when the runtime state holds no such value."""
 
-    system = read_runtime_state(resolve_runtime_state_path(context, config)).get("system")
+    if held_by_config(context, config):
+        return None
+    try:
+        system = read_runtime_state(resolve_runtime_state_path(context, config)).get("system")
+    except (OSError, TypeError, ValueError):
+        return None
     value = system.get("enabled") if isinstance(system, dict) else None
     return value if isinstance(value, bool) else None
 
@@ -1298,10 +1269,14 @@ def preview_maintenance_config(draft, base_dir=None, *, identity_token_key=None)
 
     draft = draft if isinstance(draft, dict) else {}
     merge_issues = []
+    resolved = {"names": {}, "placed": {}}
     merged = _merge_draft(
-        current, draft, merge_issues, identity_token_key=identity_token_key
+        current, draft, merge_issues, identity_token_key=identity_token_key,
+        held_in_config=config_held_device_names(context, current),
+        operating_in_config=held_by_config(context, current),
+        resolved=resolved,
     )
-    operating, _targets = _operating_changes(context, current, draft, merge_issues)
+    operating, _targets = _operating_changes(context, current, draft, merge_issues, merged, resolved)
     history = _consumer_history(current, merged, draft, context)
     validation = _validate(merged, merge_issues)
     # Read-only preview surfaces the global MQTT credentials_ref contract early
@@ -1336,16 +1311,37 @@ def preview_maintenance_config(draft, base_dir=None, *, identity_token_key=None)
     )
 
 
-def _operating_changes(context, current, draft, merge_issues):
-    """The draft's operating changes and their writes; a refused value joins ``merge_issues``."""
+def _operating_changes(context, current, draft, merge_issues, merged, resolved):
+    """The draft's operating changes and their writes; a refused value joins ``merge_issues``.
 
-    changes, targets, issues = operation_changes(context, current, draft)
+    Values are checked against the limits of ``merged``, the config the apply
+    writes, as the runtime service checks the write; ``resolved`` names the
+    config entry the merge took each draft device for (``names``) and where
+    it placed it in ``merged`` (``placed``), both by draft position.
+    """
+
+    changes, targets, issues = operation_changes(context, current, draft, merged=merged, resolved=resolved)
     merge_issues.extend(_issue(issue["code"], issue["message"]) for issue in issues)
     return changes, targets
 
 
 def _with_operating(diff, operating):
-    """The config diff with the operating changes as rows that take effect at once."""
+    """The config diff with the operating changes as rows that take effect at once.
+
+    An operating value the config diff itself names goes into ``config.json``
+    (a device that never ran, a serial change, a pending setup reset): it
+    takes effect at the next start, not at once. Where the same value also
+    takes effect at once, only that row is listed.
+    """
+
+    live = {row.get("path") for row in operating or [] if isinstance(row, dict)}
+    for bucket in ("changes", "added", "removed"):
+        rows = [row for row in diff.get(bucket) or [] if not (isinstance(row, dict) and row.get("path") in live)]
+        for row in rows:
+            if isinstance(row, dict) and _is_operating_path(row.get("path")):
+                row["applies_live"] = False
+        if bucket in diff:
+            diff[bucket] = rows
 
     if operating:
         diff["changes"] = list(diff.get("changes") or []) + operating
@@ -1382,10 +1378,14 @@ def prepare_maintenance_config_apply(
 
     draft = draft if isinstance(draft, dict) else {}
     merge_issues = []
+    resolved = {"names": {}, "placed": {}}
     merged = _merge_draft(
-        current, draft, merge_issues, identity_token_key=identity_token_key
+        current, draft, merge_issues, identity_token_key=identity_token_key,
+        held_in_config=config_held_device_names(context, current),
+        operating_in_config=held_by_config(context, current),
+        resolved=resolved,
     )
-    operating, targets = _operating_changes(context, current, draft, merge_issues)
+    operating, targets = _operating_changes(context, current, draft, merge_issues, merged, resolved)
     history = _consumer_history(current, merged, draft, context)
     validation = _validate(merged, merge_issues)
     diff = _with_operating(summarize_config_changes(current, merged, runtime_device_entries(context, merged)), operating)
@@ -1432,7 +1432,9 @@ def prepare_maintenance_config_apply(
     return result
 
 
-def _merge_draft(current, draft, issues, *, identity_token_key=None):
+def _merge_draft(
+    current, draft, issues, *, identity_token_key=None, held_in_config=frozenset(), operating_in_config=False, resolved=None
+):
     """Merge the draft onto a copy of the current config.
 
     ``issues`` collects actionable ``{code, message}`` errors raised while
@@ -1447,10 +1449,14 @@ def _merge_draft(current, draft, issues, *, identity_token_key=None):
         issues,
         identity_token_key=identity_token_key,
         removed_external=draft.get(_REMOVED_EXTERNAL_FIELD),
+        held_in_config=held_in_config,
+        resolved=resolved,
     )
     _merge_grid_meter(merged, draft.get("grid_meter"), issues)
     _merge_zendure_mqtt_broker(merged, draft.get("zendure_mqtt"))
     _merge_features(merged, draft.get("features"), issues)
+    if operating_in_config:
+        _merge_features(merged, operating_feature_edits(draft), issues, operating=True)
     return merged
 
 
@@ -1523,6 +1529,7 @@ def materialize_maintenance_device(
     connection_switched=False,
     broker_sources=None,
     issues=None,
+    keep_operating=False,
 ):
     """Materialize one maintenance draft entry into a config device.
 
@@ -1534,6 +1541,12 @@ def materialize_maintenance_device(
     for an MQTT device moved to another concrete MQTT connection — its stale
     connection keys go first, so the selected broker, route, topic identity and
     write profile are projected as one whole instead of patched field by field.
+    The operating values of the draft entry are kept in the config device for
+    a new device, where ``keep_operating`` says the running EMS keeps no
+    runtime entry for it (admin/operation_settings.py config_held_device_names),
+    and where the save changes the serial its runtime entry is keyed by: the
+    next start finds no entry for the new serial and seeds it from the config.
+    A transport switch fills no operating default the device does not hold.
     Missing common defaults materialize for brand-new devices and transport
     switches only — an untouched existing device keeps its byte-exact stored
     shape so a no-op apply never rewrites config.
@@ -1557,14 +1570,27 @@ def materialize_maintenance_device(
         )
     else:
         _apply_device_fields(device, draft_item, refused)
+    if new_device:
+        apply_common_device_values(device, draft_item, operating_device_value_fields(), issues=refused)
+    elif keep_operating:
+        apply_common_device_values(device, _operating_edits(existing_device, draft_item), operating_device_value_fields(), issues=refused)
     if issues is not None:
         label = str(device.get("name") or draft_item.get("name") or "Device").strip()
         _refused_values(issues, refused, label)
     if new_device or switched:
         for key, value in defaults.items():
-            if key not in device:
+            if key not in device and (new_device or keep_operating or key not in OPERATION_DEVICE_KEYS):
                 device[key] = copy.deepcopy(value)
+    if not new_device and _identity_of(existing_device) != _identity_of(device):
+        apply_common_device_values(device, draft_item, operating_device_value_fields(), issues=refused)
     return device
+
+
+def _identity_of(device):
+    """The serial, else the name, the EMS keys a device's runtime entry by."""
+
+    group = device_group(device)
+    return group[1] if group is not None else None
 
 
 PROPOSAL_IDENTITY_MISMATCH_CODE = "mqtt_proposal_identity_mismatch"
@@ -2054,8 +2080,44 @@ def _external_devices_not_kept(originals, settled_ids, issues):
     return dropped
 
 
+def _operating_edits(existing_device, item):
+    """The operating values ``item`` changes from those its page loaded, else from those ``existing_device`` holds.
+
+    An item the page added (no ``original_name``) that the merge matched to
+    an existing entry by its serial brings all of its values, as a new device does.
+    """
+
+    base = item.get(OPERATING_BASE_KEY) if isinstance(item.get(OPERATING_BASE_KEY), dict) else None
+    if not item.get("original_name"):
+        return {key: item[key] for key in operating_device_value_fields() if key in item}
+    edits = {}
+    for key in operating_device_value_fields():
+        if key not in item:
+            continue
+        before = base.get(key) if base is not None and key in base else existing_device.get(key, _NO_VALUE)
+        if before is _NO_VALUE or values_differ(before, item[key]):
+            if base is not None or before is not _NO_VALUE:
+                edits[key] = item[key]
+    return edits
+
+
+_NO_VALUE = object()
+
+
+def _is_operating_path(path):
+    text = str(path or "")
+    if text in OPERATION_SETTING_PATHS:
+        return True
+    head, _, key = text.rpartition(".")
+    return head.startswith("devices[") and key in OPERATION_DEVICE_KEYS
+
+
+def _held_in_config(original, held_in_config):
+    return isinstance(original, dict) and str(original.get("name") or "").strip() in held_in_config
+
+
 def _merge_devices(
-    merged, devices, issues, *, identity_token_key=None, removed_external=None
+    merged, devices, issues, *, identity_token_key=None, removed_external=None, held_in_config=frozenset(), resolved=None
 ):
     if not isinstance(devices, list):
         return
@@ -2102,7 +2164,7 @@ def _merge_devices(
     defaults = device_common_defaults()
 
     result = []
-    for item in devices:
+    for position, item in enumerate(devices):
         if not isinstance(item, dict) or item.get("removed") is True:
             continue
         if item.get("kind") == EXTERNAL_MQTT_TYPE and _is_adopted_external_device(item):
@@ -2150,6 +2212,8 @@ def _merge_devices(
         )
         if original is not None:
             claimed_ids.add(id(original))
+            if resolved is not None:
+                resolved["names"][position] = str(original.get("name") or "").strip()
         if original is None and "name" not in item:
             item = copy.deepcopy(item)
             item["name"] = next_compact_inverter_name(
@@ -2216,6 +2280,7 @@ def _merge_devices(
                 connection_switched=connection_switched,
                 broker_sources=broker_sources,
                 issues=issues,
+                keep_operating=_held_in_config(original, held_in_config),
             )
             # A newly added device, a transport switch and an MQTT device moved
             # to another concrete connection provision their broker; an ordinary
@@ -2235,8 +2300,11 @@ def _merge_devices(
                 transport="local_api",
                 defaults=defaults,
                 issues=issues,
+                keep_operating=_held_in_config(original, held_in_config),
             )
         result.append(device)
+        if resolved is not None:
+            resolved["placed"][position] = len(result) - 1
     removed_ids = _removed_external_devices(removed_external, external_by_ref, issues)
     if removed_ids & kept_external_ids:
         issues.append(
@@ -2478,11 +2546,12 @@ def _grid_meter_mqtt_container(target):
     return nested
 
 
-def _merge_features(merged, features, issues):
+def _merge_features(merged, features, issues, *, operating=False):
     """The settings draft onto ``merged``, its operating settings left out.
 
     Those live in the runtime state and are written there by the apply
-    (``admin.operation_settings``), never into the config.
+    (``admin.operation_settings``), except while a fresh setup's reset is
+    pending (``operating``: the changed ones, held_by_config).
 
     Switching analytics on here puts the bundled InfluxDB secret where Docker
     reads it, as Setup does: a config that ran Setup with analytics off still
@@ -2495,7 +2564,7 @@ def _merge_features(merged, features, issues):
     analytics_was_on = resolve_influxdb_config(merged)["enabled"]
     result = apply_config_changes(
         merged,
-        [ConfigChange(path, value) for path, value in features.items() if path not in OPERATION_SETTING_PATHS],
+        [ConfigChange(path, value) for path, value in features.items() if operating or path not in OPERATION_SETTING_PATHS],
         MAINTENANCE_POLICY,
         field_index=_maintenance_field_index(),
     )
@@ -2530,7 +2599,9 @@ def _has_enabled_cloud_control_device(config):
 
 
 _COMMON_DEVICE_VALUE_KEYS = tuple(
-    key for key in device_common_field_keys() if device_common_defaults().get(key) != []
+    key
+    for key in device_common_field_keys()
+    if device_common_defaults().get(key) != [] and key not in OPERATION_DEVICE_KEYS
 )
 
 

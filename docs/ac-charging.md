@@ -250,12 +250,11 @@ input at 0 W ends the EMS's charge by its setpoint alone on the local API —
 is not moved out and back; over MQTT, where nothing keeps that role, it is the
 exit to idle.
 
-Both switches live in [runtime-state](technical/runtime-state.md), which the
-EMS seeds from `config.json` when it loads it. The Dashboard therefore shows
-the value the EMS applies, the same value the Admin's **Features** tab on
-**Settings & devices** shows until an operator flips a switch at runtime. The
-Admin edits `config.json` and mirrors the flag into runtime-state on **Save and
-apply**; it never reads the runtime switch back into the config.
+Both switches are operating values and live in
+[runtime-state](technical/runtime-state.md) only. A value in `config.json` seeds
+it only where the runtime state holds none yet; otherwise the next live start
+keeps the running value, removes the file's and warns that it was not taken. The Dashboard and the Admin's
+**Settings & devices** show and change the same value, the one the EMS applies.
 
 ## Safety
 

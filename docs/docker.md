@@ -290,7 +290,7 @@ docker compose exec ems python3 emsctl.py --config /app/config/config.json statu
 
 ```text
 ./config/config.json                 user configuration
-./data/runtime-state.json            temporary runtime state
+./data/runtime-state.json            operating settings (control, targets, per-device switches)
 ./data/control-status.json           live control snapshot read by diagnose and the Admin console
 ./data/ems_dashboard.sqlite          dashboard statistics database
 ./data/ems_dashboard.sqlite-wal      normal SQLite WAL file

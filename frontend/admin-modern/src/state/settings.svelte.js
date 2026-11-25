@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { adminSend } from "./auth.svelte.js";
 import { system, reload } from "./system.svelte.js";
-import { applyAndRead, changeCount, fieldIndex, liveEdits, overrideTargets, sameAsSaved, sentDraft, storable, writeAtOnce } from "../lib/settings.js";
+import { applyAndRead, changeCount, fieldIndex, installedDevices, liveEdits, withFreshOperating, operatingValue, sameAsSaved, sentDraft, storable, writeAtOnce } from "../lib/settings.js";
 import { editableDraft } from "../lib/devices.js";
+import { t, fmt } from "../i18n/i18n.svelte.js";
 
 const EDITS_KEY = "ems-admin.settings-edits";
 const HARDWARE_KEY = "ems-admin.settings-hardware";
@@ -16,7 +17,6 @@ const HARDWARE = Object.freeze(["devices", "grid_meter", "zendure_mqtt", "remove
 const PATHS = {
   preview: "/api/admin/maintenance/config/preview",
   apply: "/api/admin/maintenance/config/apply",
-  reset: "/api/admin/maintenance/config/reset-runtime",
 };
 
 function mapping(value) {
@@ -50,8 +50,12 @@ function storeHardware(hardware) {
   }
 }
 
+function freshDevices(values, editable) {
+  return Array.isArray(values?.devices) ? { devices: withFreshOperating(values.devices, editable?.devices) } : {};
+}
+
 function hardwareOf(draft) {
-  return JSON.stringify(HARDWARE.slice(0, 3).map((key) => draft?.[key] ?? null));
+  return JSON.stringify(HARDWARE.slice(0, 3).map((key) => (key === "devices" ? installedDevices(draft?.devices) : draft?.[key] ?? null)));
 }
 
 function storeEdits(edits) {
@@ -81,8 +85,6 @@ class SettingsEditor {
   applying = $state(false);
   applied = $state.raw(null);
   applyError = $state.raw(null);
-  resetting = $state(false);
-  resetError = $state.raw(null);
 
   saved = $derived(system.config.data?.status === "ok" && system.config.data.draft ? system.config.data : null);
   fields = $derived(fieldIndex(this.saved));
@@ -90,13 +92,12 @@ class SettingsEditor {
   base = $derived(this.saved ? hardwareOf(this.saved.draft) : "");
   hardwareStale = $derived(Object.keys(this.hardware.values).length > 0 && this.hardware.base !== this.base);
   editable = $derived(this.saved ? editableDraft(this.saved.draft, this.saved.catalog) : null);
-  draft = $derived(this.saved ? { ...this.editable, ...this.hardware.values, features: { ...mapping(this.saved.draft.features), ...this.live } } : null);
+  draft = $derived(this.saved ? { ...this.editable, ...this.hardware.values, ...freshDevices(this.hardware.values, this.editable), features: { ...mapping(this.saved.draft.features), ...this.live } } : null);
   changes = $derived(this.saved ? changeCount(this.draft, this.saved.draft) : 0);
   fresh = $derived(
     Boolean(this.preview) && this.previewedFor === JSON.stringify(this.draft) && (this.preview.revision === undefined || this.preview.revision === this.saved?.revision),
   );
   reviewed = $derived(this.fresh && !this.hardwareStale && this.preview?.status === "ok" && Boolean(this.preview?.revision) && Boolean(this.preview?.validation?.ok));
-  overrides = $derived(overrideTargets(this.saved?.overrides));
 }
 
 export const settings = new SettingsEditor();
@@ -274,18 +275,17 @@ export async function applyNow(build, { decide = null } = {}) {
   }
 }
 
-/** Puts the dashboard's runtime overrides back to the saved config values, at once. */
-export async function resetOverrides() {
-  const targets = settings.overrides;
-  if (settings.resetting || !targets.length) return;
-  settings.resetting = true;
-  settings.resetError = null;
-  try {
-    await adminSend(PATHS.reset, { body: { targets, confirm: true } });
-  } catch (error) {
-    settings.resetError = error;
-  } finally {
-    settings.resetting = false;
-    reload("config");
-  }
+/**
+ * The line a field shows for the operating value the EMS runs below it, from
+ * the config answer's ``operating``: the total below ``system.max_total_power``,
+ * a device's power below its ``max_power``, and a device's control switched off
+ * beside its activation (``control``). Null for any other field, or where the
+ * answer names none.
+ */
+export function operatingLine(operating, path, device = null) {
+  const value = operatingValue(operating, path, device);
+  if (value === null) return null;
+  if (path === "control") return value === false ? { text: t("settings.operating.controlOff"), hint: t("settings.operating.controlHint") } : null;
+  if (typeof value !== "number") return null;
+  return { text: t("settings.operating.power", { power: fmt().power(value) }), hint: t("settings.operating.powerHint") };
 }
