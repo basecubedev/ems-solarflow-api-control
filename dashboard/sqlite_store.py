@@ -111,13 +111,15 @@ class DashboardStore:
     """Small SQLite store for live dashboard snapshots."""
 
     def __init__(self, path, retention_hours=48, energy_savings=None):
+        from ems.config import safe_bool
+
         self.path = os.fspath(path)
         self.retention_hours = max(1, int(retention_hours or 48))
         self.energy_savings = {
             **DEFAULT_ENERGY_SAVINGS,
             **(energy_savings or {}),
         }
-        self.energy_enabled = _as_bool(self.energy_savings.get("enabled"), True)
+        self.energy_enabled = safe_bool(self.energy_savings.get("enabled"), True)
         self.energy_price_per_kwh = _as_float(
             self.energy_savings.get("price_per_kwh"),
             DEFAULT_ENERGY_SAVINGS["price_per_kwh"],
@@ -1351,16 +1353,6 @@ def _parse_timestamp(value):
         return parsed.replace(tzinfo=timezone.utc)
 
     return parsed
-
-
-def _as_bool(value, default=False):
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return default
-    if isinstance(value, str):
-        return value.strip().lower() in ("1", "true", "yes", "on")
-    return bool(value)
 
 
 def _as_float(value, default=0.0, minimum=None):
