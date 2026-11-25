@@ -507,7 +507,7 @@ def test_a_restore_as_root_gives_a_replaced_file_back_to_its_owner(tmp_path, mon
         handle.write('{"changed": true}')
     owner = os.stat(config_path)
     calls = []
-    monkeypatch.setattr(backup.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(backup, "_running_as_root", lambda: True)
     monkeypatch.setattr(backup.os, "fchown", lambda fd, uid, gid: calls.append((uid, gid)))
 
     backup.restore_backup(path, base_dir=base, on_conflict="replace")

@@ -1052,12 +1052,15 @@ def _staging_beside(database_path, staging_dirs):
     Not the system temp directory, which in the Admin container is a 16 MiB
     tmpfs a grown dashboard database does not fit, and not the backup folder,
     which the appliance exports and watches. The snapshot folders a killed
-    backup left in that directory are swept first.
+    backup, and the part folders a killed restore, left in that directory are
+    swept first.
     """
 
     parent = os.path.dirname(os.path.abspath(database_path))
     if parent not in staging_dirs:
-        backup_staging.sweep_abandoned(parent, (backup_staging.DATABASE_SNAPSHOTS,))
+        backup_staging.sweep_abandoned(
+            parent, (backup_staging.DATABASE_SNAPSHOTS, backup_staging.RESTORE_PARTS)
+        )
         try:
             staging_dirs[parent] = backup_staging.claim_staging(
                 parent, backup_staging.DATABASE_SNAPSHOTS
@@ -1802,22 +1805,32 @@ def _atomic_write(target, data):
     parent = os.path.dirname(target) or "."
     try:
         os.makedirs(parent, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=parent, prefix=".restore-")
     except OSError as exc:
         raise BackupError(f"restore could not write {target}: {exc}") from exc
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            _keep_replaced_file_identity(handle.fileno(), target)
-            handle.write(data)
-        os.replace(tmp, target)
-    except OSError as exc:
-        raise BackupError(f"restore could not write {target}: {exc}") from exc
-    finally:
+    with _restore_staging(parent, target) as staging:
         try:
-            if os.path.exists(tmp):
-                os.remove(tmp)
-        except OSError:
-            pass
+            with os.fdopen(staging.create("restore.part"), "wb") as handle:
+                _keep_replaced_file_identity(handle.fileno(), target)
+                handle.write(data)
+            staging.move_into_place("restore.part", target)
+        except OSError as exc:
+            raise BackupError(f"restore could not write {target}: {exc}") from exc
+
+
+def _restore_staging(parent, target):
+    """A claimed staging folder in ``parent`` for one restored file, after
+    sweeping the ones a killed restore left there (``ems.backup_staging``).
+
+    It sits in the target's own directory, so the rename into place stays
+    atomic, and a restore killed before that rename leaves a folder the next
+    restore or database backup can prove abandoned instead of a loose copy.
+    """
+
+    try:
+        backup_staging.sweep_abandoned(parent, (backup_staging.RESTORE_PARTS,))
+        return backup_staging.claim_staging(parent, backup_staging.RESTORE_PARTS)
+    except OSError as exc:
+        raise BackupError(f"restore could not write {target}: {exc}") from exc
 
 
 def _restore_private(target, data):
@@ -1828,6 +1841,10 @@ def _restore_private(target, data):
     except OSError as exc:
         raise BackupError(f"restore could not write {target}: {exc}") from exc
     _atomic_write(target, data)
+
+
+def _running_as_root():
+    return os.geteuid() == 0
 
 
 def _keep_replaced_file_identity(fd, target):
@@ -1846,7 +1863,7 @@ def _keep_replaced_file_identity(fd, target):
         return
     try:
         os.fchmod(fd, stat.S_IMODE(current.st_mode))
-        if os.geteuid() == 0:
+        if _running_as_root():
             os.fchown(fd, current.st_uid, current.st_gid)
     except OSError as exc:
         logging.getLogger(__name__).warning(
@@ -1870,17 +1887,19 @@ def _restore_sqlite(target, data):
         _atomic_write(target, data)
         return
     parent = os.path.dirname(target) or "."
-    try:
-        fd, staged = tempfile.mkstemp(dir=parent, prefix=".restore-", suffix=".sqlite")
-    except OSError as exc:
-        raise BackupError(f"restore could not write {target}: {exc}") from exc
+    with _restore_staging(parent, target) as staging:
+        _restore_sqlite_from(staging, target, data)
+
+
+def _restore_sqlite_from(staging, target, data):
     replace_file = False
     try:
-        with os.fdopen(fd, "wb") as handle:
+        with os.fdopen(staging.create("restore.sqlite"), "wb") as handle:
+            _keep_replaced_file_identity(handle.fileno(), target)
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        source = sqlite3.connect(staged)
+        source = sqlite3.connect(f"file:{staging.reach('restore.sqlite')}?immutable=1", uri=True)
         try:
             source.execute("PRAGMA schema_version").fetchone()
             try:
@@ -1901,14 +1920,9 @@ def _restore_sqlite(target, data):
                     os.remove(target + suffix)
                 except FileNotFoundError:
                     pass
-            os.replace(staged, target)
+            staging.move_into_place("restore.sqlite", target)
     except (OSError, sqlite3.Error) as exc:
         raise BackupError(f"restore could not write {target}: {exc}") from exc
-    finally:
-        try:
-            os.remove(staged)
-        except OSError:
-            pass
 
 
 def _dry_run_action(entry):
