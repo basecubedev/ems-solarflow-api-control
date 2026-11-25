@@ -226,7 +226,8 @@ failed run.
 
 **A file EMS writes later is not automatically readable.** The script sets the
 default ACL for the same reason, but a file's mask is re-derived from its create
-mode, and `ems/backup.py` writes every archive with `tempfile.mkstemp` — 0600.
+mode, and `ems/backup.py` creates every archive 0600 (in its staging folder,
+`ems/backup_staging.py`).
 Measured on a POSIX-ACL filesystem:
 
 ```text

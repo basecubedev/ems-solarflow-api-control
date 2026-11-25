@@ -18,7 +18,6 @@ import hmac
 import json
 import os
 import shutil
-import tempfile
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -286,6 +285,7 @@ from dashboard.api_paths import is_ems_api_path
 from dashboard.console_address import CONSOLE_IDENTITY, CONSOLE_PATH
 from dashboard.static_files import SHARED_ROOT_FILES, build_static_asset_index, lookup_static_asset, modern_asset_path, modern_redirect
 from ems import backup as backup_mod
+from ems import backup_staging
 from ems.device_identity import (
     PHYSICAL_IDENTITY_ALIAS_TOKENS_FIELD,
     PHYSICAL_IDENTITY_TOKEN_FIELD,
@@ -5209,10 +5209,11 @@ class AdminHandler(BaseHTTPRequestHandler):
     def _handle_backup_import(self):
         """Take an archive back, so a re-flashed machine can be restored.
 
-        The upload is streamed into the backup directory as a temporary file and
-        only adopted once it verifies. Every refusal removes that file before it
-        answers, so a caller that reads the directory the moment it gets the
-        reply never sees a leftover.
+        The upload is streamed into a claimed staging folder in the backup
+        directory and only adopted once it verifies. Every refusal removes that
+        folder before it answers, so a caller that reads the directory the
+        moment it gets the reply never sees a leftover; one a killed upload left
+        is swept by the next import or backup (``ems.backup_staging``).
         """
 
         if self._reject_unrelated_transition_write():
@@ -5236,24 +5237,22 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
 
         os.makedirs(backup_dir, exist_ok=True)
-        handle = tempfile.NamedTemporaryFile(
-            dir=backup_dir, prefix=".import-", suffix=".part", delete=False
+        backup_staging.sweep_abandoned(
+            backup_dir, (backup_staging.ARCHIVE_PARTS, backup_staging.IMPORT_UPLOADS)
         )
-        temp_path = handle.name
         result = None
         error = None
-        try:
-            if self._copy_body(handle, length):
-                handle.close()
-                result = service.import_backup(name, temp_path)
-            else:
-                error = "the upload ended early"
-        except BackupRestoreError as exc:
-            error = str(exc)
-        finally:
-            handle.close()
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+        with backup_staging.claim_staging(backup_dir, backup_staging.IMPORT_UPLOADS) as staging:
+            temp_path = staging.new_file("upload.part")
+            try:
+                with open(temp_path, "wb") as handle:
+                    complete = self._copy_body(handle, length)
+                if complete:
+                    result = service.import_backup(name, temp_path)
+                else:
+                    error = "the upload ended early"
+            except BackupRestoreError as exc:
+                error = str(exc)
         if error is not None:
             self._send_json({"ok": False, "error": error}, status=400)
             return

@@ -25,6 +25,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from ems import backup_crypto
+from ems import backup_staging
 from ems import influx_setup
 from ems.build_info import collect_build_info
 from ems.config import resolve_influxdb_config, safe_bool
@@ -781,9 +782,11 @@ def _emit_archive(
 ):
     """Write (and optionally encrypt) the final archive; return its path.
 
-    The archive is built into a temp file and then atomically linked to a unique
-    destination, so an existing backup of the same type/purpose/second is never
-    overwritten. Temp files are always cleaned up, including on failure.
+    The archive is built in a claimed staging folder in the backup folder and
+    then atomically linked to a unique destination, so an existing backup of
+    the same type/purpose/second is never overwritten. The folder is removed
+    when the archive is done or fails; one a killed backup left is swept by the
+    next (:mod:`ems.backup_staging`).
     """
 
     _reject_symlink_sources(included)
@@ -800,24 +803,20 @@ def _emit_archive(
         backup_dir, backup_filename(backup_type, backup_purpose, encrypted, timestamp)
     )
 
-    fd, tmp_archive = tempfile.mkstemp(suffix=".part", dir=backup_dir)
-    os.close(fd)
-    tmp_plain = None
-    try:
+    backup_staging.sweep_abandoned(
+        backup_dir, (backup_staging.ARCHIVE_PARTS, backup_staging.IMPORT_UPLOADS)
+    )
+    with backup_staging.claim_staging(backup_dir, backup_staging.ARCHIVE_PARTS) as staging:
+        tmp_archive = staging.new_file("archive.part")
         if not encrypted:
             _write_tar(tmp_archive, manifest, included, compression_level)
         else:
-            fd_plain, tmp_plain = tempfile.mkstemp(suffix=".tar.gz", dir=backup_dir)
-            os.close(fd_plain)
+            tmp_plain = staging.new_file("archive.tar.gz")
             _write_tar(tmp_plain, manifest, included, compression_level)
             backup_crypto.encrypt_file(
                 tmp_plain, tmp_archive, password, **(encryption_options or {})
             )
         return _link_unique(tmp_archive, preferred_path)
-    finally:
-        for path in (tmp_archive, tmp_plain):
-            if path and os.path.exists(path):
-                os.remove(path)
 
 
 def create_config_backup(
@@ -982,10 +981,9 @@ def create_database_backup(
     staging_dirs = {}
     try:
         staged = []
-        for entry in present:
+        for index, entry in enumerate(present):
             staging = _staging_beside(entry["abs_path"], staging_dirs)
-            staged_path = os.path.join(staging, *entry["arcname"].split("/"))
-            os.makedirs(os.path.dirname(staged_path) or staging, exist_ok=True)
+            staged_path = staging.new_file(f"{index}.sqlite")
             _sqlite_backup_copy(entry["abs_path"], staged_path)
             staged.append({
                 "abs_path": staged_path,
@@ -1045,21 +1043,25 @@ def create_database_backup(
         )
     finally:
         for staging in staging_dirs.values():
-            shutil.rmtree(staging, ignore_errors=True)
+            staging.release()
 
 
 def _staging_beside(database_path, staging_dirs):
-    """The hidden staging directory beside ``database_path``, made once per directory.
+    """The claimed staging folder beside ``database_path``, made once per directory.
 
     Not the system temp directory, which in the Admin container is a 16 MiB
     tmpfs a grown dashboard database does not fit, and not the backup folder,
-    which the appliance exports and watches.
+    which the appliance exports and watches. The snapshot folders a killed
+    backup left in that directory are swept first.
     """
 
     parent = os.path.dirname(os.path.abspath(database_path))
     if parent not in staging_dirs:
+        backup_staging.sweep_abandoned(parent, (backup_staging.DATABASE_SNAPSHOTS,))
         try:
-            staging_dirs[parent] = tempfile.mkdtemp(prefix=".ems-db-backup-", dir=parent)
+            staging_dirs[parent] = backup_staging.claim_staging(
+                parent, backup_staging.DATABASE_SNAPSHOTS
+            )
         except OSError as exc:
             raise BackupError(
                 f"cannot stage a snapshot beside {database_path}: {exc}"

@@ -107,6 +107,7 @@ COPY ems/device_identity.py ./ems/device_identity.py
 COPY ems/external_status.py ./ems/external_status.py
 COPY ems/backup.py ./ems/backup.py
 COPY ems/backup_crypto.py ./ems/backup_crypto.py
+COPY ems/backup_staging.py ./ems/backup_staging.py
 COPY ems/influx_setup.py ./ems/influx_setup.py
 # The bundled InfluxDB pin and version order the Admin reads.
 COPY ems/influx_image.py ./ems/influx_image.py
