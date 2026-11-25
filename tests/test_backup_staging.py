@@ -29,6 +29,7 @@ from ems.backup_staging import (
     CLAIM_NAME,
     DATABASE_SNAPSHOTS,
     IMPORT_UPLOADS,
+    RESTORE_PARTS,
     claim_staging,
     sweep_abandoned,
 )
@@ -634,3 +635,187 @@ def test_a_release_whose_closes_fail_still_drops_the_lock_and_raises_nothing(tmp
     finally:
         os.close(probe)
     assert folder._claim_fd is None and folder._folder_fd is None
+
+
+def _recording_claims(monkeypatch):
+    claimed = []
+    real_claim = staging.claim_staging
+
+    def recording(parent, kind):
+        folder = real_claim(parent, kind)
+        claimed.append((os.fspath(parent), kind, folder.path))
+        return folder
+
+    monkeypatch.setattr(backup.backup_staging, "claim_staging", recording)
+    return claimed
+
+
+def test_a_restored_file_is_staged_in_a_claimed_folder_beside_it_and_nothing_stays(tmp_path, monkeypatch):
+    """Backlog 60: a restore killed before its rename left a .restore-* copy for good."""
+
+    target = tmp_path / "config" / "config.json"
+    target.parent.mkdir()
+    target.write_text("{}")
+    os.chmod(target, 0o640)
+    claimed = _recording_claims(monkeypatch)
+
+    backup._atomic_write(str(target), b'{"restored": true}')
+
+    assert claimed == [(str(target.parent), RESTORE_PARTS, claimed[0][2])]
+    assert os.path.dirname(claimed[0][2]) == str(target.parent)
+    assert target.read_bytes() == b'{"restored": true}'
+    assert stat.S_IMODE(os.stat(target).st_mode) == 0o640
+    assert os.listdir(target.parent) == ["config.json"]
+
+
+def test_a_staging_folder_swapped_for_a_link_cannot_redirect_a_restore(tmp_path, monkeypatch):
+    """A parent another account may write lets it rename the folder away and
+    put a link to its own directory in its place; the restore keeps writing
+    through the folder it made and checked."""
+
+    target = tmp_path / "config" / "config.json"
+    target.parent.mkdir()
+    target.write_text("{}")
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "restore.part").write_text("not yours")
+    real_create = staging.StagingFolder.create
+
+    def create_then_swap(self, name):
+        fd = real_create(self, name)
+        os.rename(self.path, str(tmp_path / "moved-away"))
+        os.symlink(victim, self.path)
+        return fd
+
+    monkeypatch.setattr(staging.StagingFolder, "create", create_then_swap)
+
+    backup._atomic_write(str(target), b'{"restored": true}')
+
+    assert target.read_bytes() == b'{"restored": true}' and not target.is_symlink()
+    assert (victim / "restore.part").read_text() == "not yours"
+    assert sorted(os.listdir(victim)) == ["restore.part"]
+
+
+def test_a_new_restored_file_stays_private(tmp_path):
+    target = tmp_path / "data" / "runtime-state.json"
+
+    backup._atomic_write(str(target), b"{}")
+
+    assert stat.S_IMODE(os.stat(target).st_mode) == 0o600
+    assert os.listdir(target.parent) == ["runtime-state.json"]
+
+
+def test_a_restore_sweeps_what_a_killed_restore_left_and_keeps_a_running_one(tmp_path, holders):
+    data = tmp_path / "data"
+    data.mkdir()
+    left = abandoned(data, RESTORE_PARTS)
+    running = holders(data, RESTORE_PARTS)
+
+    backup._atomic_write(str(data / "runtime-state.json"), b"{}")
+
+    assert not os.path.exists(left)
+    assert sorted(os.listdir(data)) == sorted(["runtime-state.json", os.path.basename(running.path)])
+
+
+def test_a_restore_into_a_folder_that_takes_no_staging_fails_as_a_restore_error(tmp_path, monkeypatch):
+    database = tmp_path / "ems_dashboard.sqlite"
+    database.write_bytes(_sqlite_bytes(tmp_path, "live"))
+
+    def refuse(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(staging.tempfile, "mkdtemp", refuse)
+    with pytest.raises(backup.BackupError, match="No space left"):
+        backup._atomic_write(str(tmp_path / "config.json"), b"{}")
+    with pytest.raises(backup.BackupError, match="No space left"):
+        backup._restore_sqlite(str(database), b"{}")
+
+
+def _sqlite_bytes(tmp_path, value):
+    import sqlite3
+
+    path = tmp_path / f"source-{value}.sqlite"
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE t (x TEXT)")
+    conn.execute("INSERT INTO t VALUES (?)", (value,))
+    conn.commit()
+    conn.close()
+    data = path.read_bytes()
+    path.unlink()
+    return data
+
+
+def test_a_restored_database_is_staged_in_a_claimed_folder_and_nothing_stays(tmp_path, monkeypatch):
+    import sqlite3
+
+    data = tmp_path / "data"
+    data.mkdir()
+    target = data / "ems_dashboard.sqlite"
+    target.write_bytes(_sqlite_bytes(tmp_path, "old"))
+    left = abandoned(data, RESTORE_PARTS)
+    restored = _sqlite_bytes(tmp_path, "new")
+    claimed = _recording_claims(monkeypatch)
+
+    backup._restore_sqlite(str(target), restored)
+    monkeypatch.undo()
+
+    assert [(parent, kind) for parent, kind, _ in claimed] == [(str(data), RESTORE_PARTS)]
+    conn = sqlite3.connect(target)
+    assert conn.execute("SELECT x FROM t").fetchall() == [("new",)]
+    conn.close()
+    assert not os.path.exists(left)
+    assert os.listdir(data) == ["ems_dashboard.sqlite"]
+
+
+def test_a_corrupt_database_replaced_by_a_restore_keeps_its_mode(tmp_path):
+    import sqlite3
+
+    target = tmp_path / "ems_dashboard.sqlite"
+    target.write_bytes(b"this is not a database" * 100)
+    os.chmod(target, 0o644)
+
+    backup._restore_sqlite(str(target), _sqlite_bytes(tmp_path, "new"))
+
+    assert stat.S_IMODE(os.stat(target).st_mode) == 0o644
+    conn = sqlite3.connect(target)
+    assert conn.execute("SELECT x FROM t").fetchall() == [("new",)]
+    conn.close()
+    assert os.listdir(tmp_path) == ["ems_dashboard.sqlite"]
+
+
+def test_a_database_backup_also_sweeps_restore_parts_beside_the_databases(tmp_path):
+    base, config = write_db_project(tmp_path)
+    data_dir = os.path.join(base, "data")
+    left = abandoned(data_dir, RESTORE_PARTS)
+
+    create_db(base, config)
+
+    assert not os.path.exists(left)
+
+
+def test_a_swapped_staging_folder_cannot_feed_a_database_restore(tmp_path, monkeypatch):
+    import sqlite3
+
+    data = tmp_path / "data"
+    data.mkdir()
+    target = data / "ems_dashboard.sqlite"
+    target.write_bytes(_sqlite_bytes(tmp_path, "old"))
+    restored = _sqlite_bytes(tmp_path, "mine")
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "restore.sqlite").write_bytes(_sqlite_bytes(tmp_path, "theirs"))
+    real_create = staging.StagingFolder.create
+
+    def create_then_swap(self, name):
+        fd = real_create(self, name)
+        os.rename(self.path, str(tmp_path / "moved-away"))
+        os.symlink(victim, self.path)
+        return fd
+
+    monkeypatch.setattr(staging.StagingFolder, "create", create_then_swap)
+    backup._restore_sqlite(str(target), restored)
+    monkeypatch.undo()
+
+    conn = sqlite3.connect(target)
+    assert conn.execute("SELECT x FROM t").fetchall() == [("mine",)]
+    conn.close()

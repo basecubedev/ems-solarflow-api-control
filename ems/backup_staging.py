@@ -35,7 +35,8 @@ from datetime import datetime, timezone
 DATABASE_SNAPSHOTS = ".ems-db-backup-"
 ARCHIVE_PARTS = ".ems-backup-part-"
 IMPORT_UPLOADS = ".ems-backup-import-"
-KINDS = (DATABASE_SNAPSHOTS, ARCHIVE_PARTS, IMPORT_UPLOADS)
+RESTORE_PARTS = ".ems-restore-part-"
+KINDS = (DATABASE_SNAPSHOTS, ARCHIVE_PARTS, IMPORT_UPLOADS, RESTORE_PARTS)
 
 CLAIM_NAME = ".ems-staging-claim"
 CLAIM_OWNER = "ems-backup"
