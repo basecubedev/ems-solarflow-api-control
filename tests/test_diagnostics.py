@@ -16,6 +16,7 @@ import pytest
 import emsctl
 from ems.diagnostics import diagnose_config_plausibility
 from ems import diagnostics
+from ems.runtime_commands import OPERATION_DEVICE_KEYS
 from ems import paths as ems_paths
 from ems.state_store import BatteryFullChargeStateStore
 
@@ -153,7 +154,9 @@ def test_diagnose_asks_an_mqtt_control_device_for_every_template_key_it_reads():
     assert missing == sorted(
         f"devices.0.{key}"
         for key in template["devices"][0]
-        if not key.startswith("_comment") and key not in ("name", "ip", "sn", "smart_mode", "min_soc", "max_soc", "winter_policy")
+        if not key.startswith("_comment")
+        and key not in ("name", "ip", "sn", "smart_mode", "min_soc", "max_soc", "winter_policy")
+        and key not in OPERATION_DEVICE_KEYS
     )
 
 

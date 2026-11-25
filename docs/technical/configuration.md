@@ -266,31 +266,53 @@ compatibility, not the application version.
 
 ## Config vs Runtime-State
 
-`config.json` contains static installation and safety settings:
+Every setting lives in one of the two files, split by kind
+(design: [settings-operation-store.md](../developer/settings-operation-store.md)).
 
-- grid meter type and IP
-- Zendure device IPs and serial numbers
-- static device metadata
-- safety flags
-- output-control defaults
-- winter defaults
+`config.json` is the installation, written by the Admin save with a backup and
+taken at the next start: the grid meter, devices and their connections,
+credentials, write gates, the safety caps (`system.max_total_power`,
+`system.max_total_power_limit`, each device's `max_power`), ports, paths and
+every feature setting that still needs a restart.
 
-`data/runtime-state.json` contains temporary mutable operator/runtime values in
-new generated configs:
+`data/runtime-state.json` is the operation, written by one service
+(`ems.runtime_commands`) for the dashboard, the Admin, `emsctl` and the
+scheduler, and taken at once:
 
-- EMS enabled state
-- runtime max total power
-- runtime loop interval
-- runtime minimum output limit
-- per-device enabled state
-- per-device runtime max power
-- per-device offgrid socket mode
-- per-device runtime PV priority factor
-- winter and AC charging runtime toggles
+- `system.enabled`, `loop_interval`, `min_output_limit`,
+  `grid_target_charge_w`, `grid_target_discharge_w`
+- `winter.enabled`, `ac_charge_control.enabled`
+- `battery_care.enabled`, `min_discharge_w`, `pv_margin_min_w`,
+  `pv_margin_percent`, `pv_only_points`, `summer_full_points`,
+  `winter_full_points`
+- per device: `pv_priority_factor`, `ac_charge_enabled`,
+  `ac_discharge_enabled`, `offgrid_socket_mode`, control on or off
+  (`enabled`), the AC role and AC charge power, and the device settings
+- the operating power below each cap: `system.max_total_power` and a
+  device's `max_power`
 
-The EMS creates the runtime-state file automatically on first start. Deleting it
-resets runtime values from `config.json` defaults. Do not maintain runtime
-state as a second static config.
+A device's activation, `devices[].enabled` in `config.json`, is a different
+setting from its control switch in the runtime state: a device switched off in
+`config.json` is not read, shown or controlled.
+
+An operating value written into `config.json` by hand, by an older release or
+by `emsctl config init` (control on or off, the minimum output limit and
+winter mode, which it asks about) is a starting value. The EMS creates the runtime-state
+file at its first start from them, and a live start that may write
+`config.json` (not dry-run, not simulation or replay, config upgrade not
+`disabled`, old defaults refreshed) moves each value the runtime state holds
+out of `config.json`, behind the upgrade backup, and logs "Operating values
+moved". A value the file held differently from the running one is not taken:
+the running value stays, and the log names both, at the first move as
+information (the dashboard's changes never reached the file before), after it
+as a warning, since only a hand edit puts one there. A device the EMS does not build (switched off, telemetry-only) keeps
+its values in its entry until it is switched on; those the runtime state
+held for it when it was switched off wait there (`parked_devices`), where the
+Admin changes them, and come back when it is built again. Nothing moves when the
+runtime-state file cannot be read or `config.json` changed since the start
+read it. The config upgrade never adds an operating value back and `diagnose`
+does not miss one.
+Deleting the runtime-state file resets the operating values to the defaults.
 
 ## Former Home Assistant Section
 
@@ -308,8 +330,10 @@ type now.
 
 ## System Settings
 
-`system.enabled` is the default EMS enabled state used when runtime-state is
-created.
+`system.enabled` is the EMS's control switch, an operating value (see
+[Config vs Runtime-State](#config-vs-runtime-state)); a value here seeds the
+runtime state only where it holds none yet, otherwise the next live start
+keeps the running value and warns that this one was not taken.
 
 `system.dry_run` calculates targets but blocks Zendure hardware writes. The
 template value is `false` for normal standalone control after required
@@ -752,7 +776,7 @@ config upgrade does enable it for an installation that predates the feature, and
 
 | Key | Meaning |
 |---|---|
-| `enabled` | Whether the EMS may charge from surplus at all. Also runtime-toggleable. |
+| `enabled` | Whether the EMS may charge from surplus at all. An operating value, kept in the runtime state. |
 | `charge_start_w` | Surplus needed before charging starts |
 | `charge_hysteresis_w` | How far below the start threshold charging continues |
 | `entry_confirm_cycles` | Observations that must show surplus before charging starts; one per new meter reading |
@@ -796,8 +820,8 @@ See [control-logic.md](control-logic.md) for the direction rules and
 
 | Key | Default | Meaning |
 |---|---|---|
-| `ac_discharge_enabled` | `true` | Whether the EMS may command this device to supply the house. `false` forbids output only: a positive target becomes `0` and is written, so a running discharge ends; the device takes no output share and is never parked at the standby floor; it may still be charged. Also runtime-toggleable, and the runtime value wins: a runtime `true` over a `false` here is logged once per run as `ac_discharge_config_overridden`; a runtime value that is not a boolean forbids output (`ac_discharge_runtime_value_invalid`). |
-| `ac_charge_enabled` | `true` | Whether this device may be charged from surplus. Whether the *model* can is decided separately by the hardware catalogue. Also runtime-toggleable. |
+| `ac_discharge_enabled` | `true` | Whether the EMS may command this device to supply the house. `false` forbids output only: a positive target becomes `0` and is written, so a running discharge ends; the device takes no output share and is never parked at the standby floor; it may still be charged. An operating value, kept in the runtime state; a runtime value that is not a boolean forbids output (`ac_discharge_runtime_value_invalid`). |
+| `ac_charge_enabled` | `true` | Whether this device may be charged from surplus. Whether the *model* can is decided separately by the hardware catalogue. An operating value, kept in the runtime state. |
 | `max_charge_power_w` | `0` | Highest charging power for this device. `0` uses the ceiling the device reports for itself, or its model's rated charge power when it reports none. |
 
 ### Why the charge limit is not the output limit
@@ -840,11 +864,10 @@ put on a probe here, `vendor_catalogue` for the rest.
 
 ## Winter Settings
 
-Winter mode is optional but enabled by default for new configs; set
-`winter.enabled` to `false` in `config.json` to opt out.
-
-`winter.enabled` enables the static winter feature default. The runtime winter
-toggle can still enable or disable winter behavior through runtime-state.
+Winter mode is optional but enabled by default. `winter.enabled` is an
+operating value: switch it on the dashboard, in the Admin settings or with
+`emsctl.py winter enable|disable`; a value in `config.json` seeds the runtime state only
+where it holds none yet (see [Config vs Runtime-State](#config-vs-runtime-state)).
 
 `winter.months` defines active winter months as numbers from `1` to `12`.
 
@@ -971,8 +994,8 @@ telemetry is not read, shown on the dashboard or counted either. A config whose 
 are disabled has no control device and does not start.
 
 Static device metadata stays in `config.json`, not in runtime-state.
-`pv_priority_factor` is an exception: the config value remains the installation
-default, while runtime-state can override the active weighting.
+`pv_priority_factor`, `ac_charge_enabled`, `ac_discharge_enabled` and
+`offgrid_socket_mode` are operating values and live in the runtime state.
 
 A device this project cannot control -- no local API, its values published on
 MQTT by something else -- is not a `devices[]` entry of the kind described above

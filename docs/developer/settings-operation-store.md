@@ -101,8 +101,7 @@ buzzer, battery heating).
 
 ## Implementation steps
 
-Phase 1 is done (commit "every reader takes an operating value as the EMS
-does"). The steps of the others:
+Phases 1 to 3 are done. The steps as built:
 
 Phase 2, Admin reads and writes operating values where the dashboard does:
 
@@ -123,14 +122,22 @@ Phase 2, Admin reads and writes operating values where the dashboard does:
 
 Phase 3, switch-over:
 
-- A live start, after the old-defaults refresh recorded its revision and
-  behind a backup, moves each operating value still in `config.json` into
-  `runtime-state.json` (the runtime value wins where both hold one) and
-  removes it from the config; logged like the switch rewrite.
-- The template and the generated template module drop those keys; Guided
-  Setup, `emsctl config init` and `apply_setup_features` seed the operation
-  store instead.
-- The `ac_discharge_config_overridden` event goes with the config key.
+- A live start that may write `config.json` (the gate of the old-defaults
+  refresh, the config upgrade not `disabled`, the defaults revision recorded)
+  moves each operating value the runtime state holds out of `config.json`
+  (`ems.config.move_startup_operating_values`): the runtime state, which the
+  start filled from its own values first and the config's second, is saved
+  before the config is rewritten behind the upgrade backup, with the config's
+  own layout, and only if the file is unchanged since it was read. A disabled
+  device keeps its values; it has no runtime entry.
+- The template keeps the operating keys as the starting values of a config
+  that Guided Setup or a hand writes, and the catalogue's defaults come from
+  it; `emsctl config init` writes the ones it asks about (control, minimum
+  output limit, winter mode). The config upgrade and `diagnose` skip them
+  (`ems.config.without_operating_values`), so a moved value is never added
+  back or reported missing, and the next live start moves a seeded one.
+- The `ac_discharge_config_overridden` event is gone: the runtime switch is
+  the one permission.
 
 Phase 4, caps:
 

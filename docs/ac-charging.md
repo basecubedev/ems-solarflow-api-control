@@ -122,8 +122,9 @@ are read-only:
    above zero while the EMS commands a charge is the proof.
 3. **Does the EMS complain?** `event=ac_charge_not_delivered` is the negative
    result: the command was accepted and nothing flowed for six cycles. If it
-   fires repeatedly, the catalogue row is wrong for that model — set
-   `ac_charge_enabled` to `false` for the device and please report it.
+   fires repeatedly, the catalogue row is wrong for that model — switch AC
+   charging off for the device (dashboard, or `emsctl.py device NAME ac-charge
+   off`) and please report it.
 4. **What does the device say about itself?**
 
    ```bash
@@ -480,8 +481,8 @@ slack.
 
 `ac_charge_not_delivered` names the device, so this is diagnosable rather than
 silent — but until you act on it the fleet charges at part of its capacity. Turn
-`ac_charge_enabled` off for that device and please report it, so the catalogue
-row can be corrected.
+AC charging off for that device on the dashboard (or `emsctl.py device NAME
+ac-charge off`) and please report it, so the catalogue row can be corrected.
 
 It is not dropped from the allocation automatically on purpose. Doing that needs
 a signal that a device is not charging, and both available witnesses can be
@@ -640,5 +641,5 @@ enabled from the catalogue rather than from a measurement. It fires once when a
 commanded charge has produced no measured AC input for six consecutive cycles,
 and carries the model and its `charge_evidence`. It **changes nothing** — the
 charge keeps being commanded. If it repeats on your hardware, that model's
-catalogue row is likely wrong; turn `ac_charge_enabled` off for the device and
-please report it.
+catalogue row is likely wrong; turn AC charging off for the device on the
+dashboard (or `emsctl.py device NAME ac-charge off`) and please report it.

@@ -489,6 +489,7 @@ def diagnose_device_template(item, template_device):
 
 
 def diagnose_missing_template_keys(config_data, template_data):
+    template_data = config_mod.without_operating_values(template_data)
     missing = []
 
     def walk(current, template, prefix):

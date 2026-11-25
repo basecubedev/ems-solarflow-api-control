@@ -3543,12 +3543,10 @@ class EMSController:
                 dev, "ac_discharge_runtime_value_invalid", runtime_value=repr(value)
             )
             return False
-        if value and not configured:
-            self.say_discharge_permission_once(dev, "ac_discharge_config_overridden")
         return value
 
     def say_discharge_permission_once(self, dev, event, **fields):
-        """Warn once per device and event when the runtime switch departs from the device entry."""
+        """Warn once per device and event about the runtime switch of AC discharging."""
 
         if (dev.name, event) in self._discharge_permission_said:
             return
