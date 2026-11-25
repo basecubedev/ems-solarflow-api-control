@@ -1034,6 +1034,93 @@ def test_raw_write_interval_throttles_influx(monkeypatch):
     assert len(store.records) == 3
 
 
+def _publish_cycle(fake, cycle_started_at, published_at, monkeypatch):
+    from ems.controller import EMSController
+
+    monkeypatch.setattr(time, "time", lambda: published_at)
+    EMSController.publish_to_dashboard(
+        fake, 200.0, [_state()], [400], [400], 400, 400, True, 1800, 50,
+        cycle_started_at=cycle_started_at,
+    )
+
+
+@pytest.mark.parametrize("delays", [(0.4, 0.1, 0.6, 0.2), (0.1, 0.9, 0.3, 0.8)])
+def test_intervals_equal_to_the_loop_keep_every_cycle_despite_read_jitter(
+    monkeypatch, delays
+):
+    """Issue #341: a 5 s write interval at a 5 s loop recorded every other cycle.
+
+    The device reads before the publish take a little longer or shorter each
+    cycle, so measured at the publish two cycles were 4.5 s apart about half
+    the time and the snapshot fell back to 10 s. Cycles start a loop interval
+    apart, and both throttles measure from there.
+    """
+    import dashboard.telemetry as telemetry
+    from ems import config as cfg
+
+    monkeypatch.setattr(
+        telemetry, "build_dashboard_snapshot", lambda *a, **k: {"snap": True}
+    )
+    monkeypatch.setattr(cfg, "DASHBOARD_CONFIG", {"write_interval_seconds": 5})
+    monkeypatch.setattr(cfg, "INFLUXDB_CONFIG", {"raw_write_interval_seconds": 5})
+
+    store = _CountingStore()
+    writer = _CountingSink()
+    fake = _dashboard_fake(store, writer)
+
+    for cycle, delay in enumerate(delays):
+        started = 1000.0 + 5.0 * cycle
+        _publish_cycle(fake, started, started + delay, monkeypatch)
+
+    assert len(store.records) == len(delays)
+    assert len(writer.batches) == len(delays)
+
+
+def test_a_write_interval_longer_than_the_loop_still_waits_for_it(monkeypatch):
+    """Measuring from the cycle start does not write more often than asked."""
+    import dashboard.telemetry as telemetry
+    from ems import config as cfg
+
+    monkeypatch.setattr(
+        telemetry, "build_dashboard_snapshot", lambda *a, **k: {"snap": True}
+    )
+    monkeypatch.setattr(cfg, "DASHBOARD_CONFIG", {"write_interval_seconds": 7})
+    monkeypatch.setattr(cfg, "INFLUXDB_CONFIG", {"raw_write_interval_seconds": 0})
+
+    store = _CountingStore()
+    fake = _dashboard_fake(store, _CountingSink())
+
+    for cycle in range(5):
+        started = 1000.0 + 5.0 * cycle
+        _publish_cycle(fake, started, started + 0.5, monkeypatch)
+
+    assert len(store.records) == 3
+
+
+def test_a_control_cycle_hands_its_start_to_the_publish(monkeypatch):
+    """run_once passes the time it started at, not a time taken later."""
+
+    from unittest.mock import Mock
+
+    from ems.controller import EMSController
+    from tests.test_pv_priority_runtime import RuntimeStateStub, ShellyStub, device, state
+
+    controller = EMSController(
+        devices=[device()], shelly=ShellyStub(), sleep_enabled=False, runtime_state=RuntimeStateStub()
+    )
+    controller.set_output_limit = Mock()
+    seen = []
+    controller.publish_to_dashboard = lambda *args, **kwargs: seen.append(kwargs.get("cycle_started_at"))
+    clock = iter(range(1000, 10**6))
+    monkeypatch.setattr(time, "time", lambda: float(next(clock)))
+    with patch("ems.controller.fetch_all_devices", return_value=[state()]), patch(
+        "ems.controller.cfg.SYSTEM_ENABLED", False
+    ), patch("ems.controller.cfg.SOC_RECONCILE_INTERVAL", 0):
+        controller.run_once()
+
+    assert seen == [1000.0]
+
+
 def test_influx_failure_does_not_stop_publish(monkeypatch):
     """An Influx enqueue error is contained and never reaches the loop."""
     import dashboard.telemetry as telemetry

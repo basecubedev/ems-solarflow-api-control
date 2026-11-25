@@ -824,6 +824,12 @@ The raw cadence can optionally be throttled with
 N > 0     = write at most one raw sample every N seconds
 ```
 
+Both intervals are measured from the start of an EMS cycle, not from the moment
+the sample is written, which moves with how long the device reads took. An
+interval equal to `system.loop_interval` therefore keeps every cycle, and a
+longer one waits for the first cycle that starts at least that long after the
+last sample (a 7 s interval at a 5 s loop writes every 10 s).
+
 Spike visibility is ultimately bounded by this sampling cadence:
 **InfluxDB can only show spikes that were actually sampled by the EMS loop.**
 A spike shorter than the EMS loop interval can still be missed if it occurs

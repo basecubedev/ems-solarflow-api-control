@@ -467,6 +467,25 @@ export function refused(answer) {
 }
 
 /**
+ * The reviewed draft written through ``send()``, answered only once
+ * ``reload()`` has read the config back: "Saved" must not stand above the
+ * config it replaced, and a device edit made after it must start from the new
+ * one. Answers ``{ applied: { result, at } }``, or ``{ error }`` for a refusal
+ * or a failed request; the config is read back either way.
+ */
+export async function applyAndRead(send, reload) {
+  let outcome;
+  try {
+    const result = await send();
+    outcome = result?.ok === false ? { error: result } : { applied: { result, at: Date.now() } };
+  } catch (error) {
+    outcome = { error };
+  }
+  await reload().catch(() => null);
+  return outcome;
+}
+
+/**
  * One hardware change written straight to the config. ``read()`` answers the
  * config as it is now, ``{ saved, editable, error }``, so a change another console
  * saved meanwhile is the base rather than undone; ``build(editable)`` makes the

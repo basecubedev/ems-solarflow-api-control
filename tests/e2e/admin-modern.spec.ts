@@ -680,6 +680,41 @@ test.describe("Modern Admin: settings", { tag: ["@smoke"] }, () => {
     await expect(page.getByTestId("settings-changes")).toHaveCount(0);
   });
 
+  test("Saved shows only once the saved settings have been read back", async ({ page, seedAdminScenario }) => {
+    await seededAt(page, seedAdminScenario, "#/settings");
+    await page.locator('[data-section="winter"]').getByRole("checkbox", { name: "Winter mode on or off" }).click();
+    await page.getByTestId("review").click();
+    await expect(page.getByTestId("settings-review")).toContainText("Settings are valid");
+    let release;
+    const held = new Promise((resolve) => (release = resolve));
+    let readBack;
+    const reading = new Promise((resolve) => (readBack = resolve));
+    let answered = false;
+    page.on("response", (response) => {
+      if (response.url().endsWith("/api/admin/maintenance/config/apply")) answered = true;
+    });
+    const config = /\/api\/admin\/maintenance\/config(\?.*)?$/;
+    const hold = async (route) => {
+      if (route.request().method() === "GET") {
+        if (answered) readBack();
+        await held;
+      }
+      await route.fallback();
+    };
+    await page.route(config, hold);
+    try {
+      await page.getByTestId("apply").click();
+      await page.getByRole("dialog", { name: "Save the checked changes?" }).getByTestId("confirm").click();
+      await reading;
+      await expect(page.getByTestId("apply")).toHaveText(/Saving…/);
+      await expect(page.getByTestId("settings-applied")).toHaveCount(0);
+    } finally {
+      release();
+    }
+    await expect(page.getByTestId("settings-applied")).toContainText("Saved, with a backup of the previous settings:");
+    await page.unroute(config, hold);
+  });
+
   test("battery care is a feature right after winter mode, with its own name, mark, switch and every setting in view", async ({ page, seedAdminScenario }) => {
     await seededAt(page, seedAdminScenario, "#/settings");
     const sections = await page.locator("[data-section]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-section")));

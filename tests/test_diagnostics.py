@@ -2650,6 +2650,10 @@ def test_the_sample_window_check_reads_enabled_the_way_the_store_does():
     # Disabled statistics cannot be misconfigured into silence.
     assert "energy_sample_window_below_write_interval" not in codes_for(False)
     assert "energy_sample_window_valid" not in codes_for(False)
+    for enabled in ("enabled", "maybe", 0.0, None):
+        assert "energy_sample_window_below_write_interval" in codes_for(enabled), enabled
+    for disabled in ("disabled", "off", "false", 0):
+        assert "energy_sample_window_below_write_interval" not in codes_for(disabled), disabled
 
 
 def test_an_unreadable_sample_window_is_an_error_not_an_ok():

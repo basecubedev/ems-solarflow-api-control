@@ -1693,3 +1693,19 @@ def test_a_day_recorded_before_the_upgrade_keeps_its_whole_import(tmp_path):
     assert after["today"]["ratios"]["self_sufficiency"] == pytest.approx(
         1 - 1200 / 2200, abs=1e-6
     )
+
+
+@pytest.mark.parametrize(
+    ("stored", "enabled"),
+    [
+        ("enabled", True), ("disabled", False), ("off", False), ("no", False), ("0", False),
+        ("true", True), ("on", True), ("maybe", True), (None, True), (False, False), (True, True),
+    ],
+)
+def test_energy_savings_reads_its_switch_as_the_ems_reads_switches(tmp_path, stored, enabled):
+    """The store read "enabled" and any word it did not know as off; the EMS's
+    safe_bool reads "enabled" as on and an unknown word as the default, on."""
+
+    store = DashboardStore(tmp_path / "dash.sqlite", energy_savings={"enabled": stored})
+
+    assert store.energy_enabled is enabled

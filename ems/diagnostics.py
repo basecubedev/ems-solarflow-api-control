@@ -903,22 +903,6 @@ def diagnose_git_info(checks):
         diagnose_add(checks, "project", "ok", "git_clean", "Git working tree is clean")
 
 
-def diagnose_truthy(value, default=True):
-    """Read a config flag the way the runtime does.
-
-    ``diagnose_bool`` answers whether a value *is* a boolean, which is a
-    different question: used as a truth test it reads ``1`` as "not enabled".
-    """
-
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in ("1", "true", "yes", "on")
-    return bool(value)
-
-
 def diagnose_template_placeholders(checks, config_data):
     paths = config_mod.stored_config_placeholder_paths(config_data)
     if paths is None:
@@ -992,7 +976,7 @@ def diagnose_config_plausibility(checks, args, config_data):
         diagnose_add(checks, "config", "error", "energy_savings_not_object", "energy_savings must be an object")
     elif not isinstance(dashboard_config, dict):
         diagnose_add(checks, "config", "error", "dashboard_not_object", "dashboard must be an object")
-    elif diagnose_truthy(energy_savings.get("enabled", True)):
+    elif config_mod.safe_bool(energy_savings.get("enabled", True), True):
         write_interval = diagnose_float(dashboard_config.get("write_interval_seconds", 5))
         max_sample_delta = diagnose_float(
             energy_savings.get("max_sample_delta_seconds", 20)

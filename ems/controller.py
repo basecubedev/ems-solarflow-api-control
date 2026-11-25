@@ -5722,19 +5722,24 @@ class EMSController:
         enabled,
         max_power,
         min_output_limit,
-        night_min_soc_idle=False
+        night_min_soc_idle=False,
+        cycle_started_at=None,
     ):
         """Persist one read-only dashboard snapshot.
 
         Reuses the single telemetry collection of this cycle for both storage
         targets: the SQLite dashboard store and (when enabled) the native
         InfluxDB writer. The hardware is never polled a second time.
+
+        Both write intervals are measured from ``cycle_started_at``: cycles
+        start a loop interval apart, while the publish point moves with the
+        time the device reads took.
         """
 
         if not self.dashboard_store and not self.influx_writer:
             return
 
-        now = time.time()
+        now = time.time() if cycle_started_at is None else cycle_started_at
 
         # InfluxDB raw telemetry is written every EMS loop (or at the optional
         # influxdb.raw_write_interval_seconds cadence), decoupled from the
@@ -6360,7 +6365,8 @@ class EMSController:
                 enabled,
                 max_power,
                 min_output_limit,
-                night_min_soc_idle=True
+                night_min_soc_idle=True,
+                cycle_started_at=start,
             )
 
             for dev in self.devices:
@@ -6625,7 +6631,8 @@ class EMSController:
             sum(effective_targets),
             enabled,
             max_power,
-            min_output_limit
+            min_output_limit,
+            cycle_started_at=start,
         )
 
         # =====================
